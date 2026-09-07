@@ -34,6 +34,8 @@ interface WsJwtPayload {
  * authenticateClient() implementation. The validated session generation is
  * also persisted on socket.data so outbound room delivery can re-check the
  * current server-side generation before emitting to a previously joined socket.
+ * Any failed revalidation clears those server-attached identity fields, and a
+ * guarded message-time failure disconnects the stale socket immediately.
  */
 @Injectable()
 export class WsJwtGuard implements CanActivate {
@@ -48,14 +50,20 @@ export class WsJwtGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const client = context.switchToWs().getClient<Socket>();
-    await this.authenticateClient(client);
-    return true;
+    try {
+      await this.authenticateClient(client);
+      return true;
+    } catch (error) {
+      client.disconnect(true);
+      throw error;
+    }
   }
 
   async authenticateClient(client: Socket): Promise<void> {
     const token = this.extractToken(client);
 
     if (!token) {
+      this.clearAuthentication(client);
       this.logger.warn(`WsJwtGuard: no token provided, rejecting socket ${client.id}`);
       throw new WsException('Unauthorized: no token provided');
     }
@@ -103,9 +111,23 @@ export class WsJwtGuard implements CanActivate {
       client.data.userRoles = payload.roles ?? [];
       client.data.authenticatedSessionVersion = userVersion;
     } catch {
+      this.clearAuthentication(client);
       this.logger.warn(`WsJwtGuard: invalid token on socket ${client.id}`);
       throw new WsException('Unauthorized: invalid, expired, or revoked token');
     }
+  }
+
+  private clearAuthentication(client: Socket): void {
+    const authenticatedClient = client as Socket & Partial<WsAuthenticatedSocket>;
+    delete authenticatedClient.userId;
+    delete authenticatedClient.userEmail;
+    delete authenticatedClient.userRoles;
+    delete authenticatedClient.authenticatedSessionVersion;
+
+    delete client.data.userId;
+    delete client.data.userEmail;
+    delete client.data.userRoles;
+    delete client.data.authenticatedSessionVersion;
   }
 
   private extractToken(client: Socket): string | null {
