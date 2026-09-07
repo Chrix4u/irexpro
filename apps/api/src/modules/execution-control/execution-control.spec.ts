@@ -283,8 +283,6 @@ describe('ExecutionControlService', () => {
     });
 
     it('reactivates at the same scope after the prior control expired in time (A2)', async () => {
-      // The prior row still occupies the (scope, scopeKey) slot but its
-      // expiry has passed — reactivation MUST succeed deterministically.
       controlRepo.findOne.mockResolvedValue(
         makeControl({
           id: 'ctl-old',
@@ -295,20 +293,18 @@ describe('ExecutionControlService', () => {
       const view = await service.activateControl(baseDto(), 'admin-1');
 
       expect(view.scope).toBe(ExecutionControlScope.GLOBAL);
-      // Old row flipped to EXPIRED (retained as a record — not deleted)
       expect(controlRepo.update).toHaveBeenCalledWith(
-        { id: 'ctl-old' },
+        { id: 'ctl-old', status: ExecutionControlStatus.ACTIVE },
         { status: ExecutionControlStatus.EXPIRED },
       );
       expect(controlRepo.delete).not.toHaveBeenCalled();
-      // A NEW row is inserted with status ACTIVE
       expect(controlRepo.save).toHaveBeenCalledTimes(1);
       expect(controlRepo.create).toHaveBeenCalledWith(
         expect.objectContaining({ status: ExecutionControlStatus.ACTIVE }),
       );
     });
 
-    it('reactivates when the prior slot row already has status EXPIRED (A2)', async () => {
+    it('ignores a historical EXPIRED row during active-slot discovery (A2)', async () => {
       controlRepo.findOne.mockResolvedValue(
         makeControl({ id: 'ctl-old', status: ExecutionControlStatus.EXPIRED }),
       );
@@ -316,17 +312,11 @@ describe('ExecutionControlService', () => {
       const view = await service.activateControl(baseDto(), 'admin-1');
 
       expect(view.scope).toBe(ExecutionControlScope.GLOBAL);
-      expect(controlRepo.update).toHaveBeenCalledWith(
-        { id: 'ctl-old' },
-        { status: ExecutionControlStatus.EXPIRED },
-      );
+      expect(controlRepo.update).not.toHaveBeenCalled();
       expect(controlRepo.save).toHaveBeenCalledTimes(1);
     });
 
     it('translates a concurrent-activation 23505 unique violation into ConflictException (A2)', async () => {
-      // No slot row visible to this writer (the concurrent winner's row is
-      // not visible to findOne in this mock) — the INSERT hits the partial
-      // unique index and must surface as a conflict, never a 500.
       controlRepo.findOne.mockResolvedValue(null);
       controlRepo.save.mockRejectedValue(
         Object.assign(new Error('duplicate key value violates unique constraint'), {
@@ -365,7 +355,6 @@ describe('ExecutionControlService', () => {
 
       const views = await service.listActiveControls();
       expect(views.map((v) => v.id)).toEqual(['ctl-a']);
-      // Every active-inventory view explicitly carries status = ACTIVE.
       expect(views.every((v) => v.status === ExecutionControlStatus.ACTIVE)).toBe(true);
     });
   });
@@ -394,7 +383,6 @@ describe('ExecutionControlService', () => {
       ]);
 
       const views = await service.listControlsIncludingExpired();
-      // Reads already ignore this row — the inventory must not present it as ACTIVE.
       expect(views[0].status).toBe(ExecutionControlStatus.EXPIRED);
     });
 
