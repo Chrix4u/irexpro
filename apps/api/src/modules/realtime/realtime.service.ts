@@ -106,10 +106,7 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    const userStateCache = new Map<
-      string,
-      { status: UserStatus; sessionVersion: number } | null
-    >();
+    const userStateCache = new Map<string, { status: UserStatus; sessionVersion: number } | null>();
 
     for (const socket of sockets) {
       const socketUserId =
