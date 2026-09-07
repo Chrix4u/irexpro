@@ -16,6 +16,10 @@ import { DomainEventBus } from '../events/event-bus.service';
  * Proves:
  * - activate → expire → re-activate at the same (scope, scopeKey) succeeds
  *   deterministically (the original non-partial unique index blocked this);
+ * - repeated A → B → C replacement preserves historical EXPIRED rows without
+ *   allowing an older row to shadow the current time-expired ACTIVE row;
+ * - concurrent replacement of a time-expired ACTIVE row produces exactly one
+ *   new ACTIVE winner while retaining the expired predecessor as history;
  * - concurrent activations produce exactly ONE active control;
  * - all four scopes (GLOBAL / PROVIDER / USER / BROKER_CONNECTION) are
  *   enforced end-to-end on the real store, with unrelated scopes unaffected;
@@ -116,7 +120,16 @@ describe('ExecutionControlService — real PostgreSQL lifecycle (architect A2)',
   ): Promise<ExecutionControl[]> => {
     const where: FindOptionsWhere<ExecutionControl> = { scope };
     where.scopeKey = scopeKey === null ? IsNull() : scopeKey;
-    return controlRepo.find({ where });
+    return controlRepo.find({ where, order: { activatedAt: 'ASC' } });
+  };
+
+  const expireInTime = async (id: string): Promise<void> => {
+    await dataSource.query(
+      `UPDATE "platform"."execution_controls"
+       SET "expires_at" = now() - interval '1 minute'
+       WHERE "id" = $1`,
+      [id],
+    );
   };
 
   it('activate → expire → re-activate at the same scope/key succeeds deterministically (A2)', async () => {
@@ -131,12 +144,7 @@ describe('ExecutionControlService — real PostgreSQL lifecycle (architect A2)',
     expect(blocked.allowed).toBe(false);
 
     // Expire the row in time (simulates the expiry passing).
-    await dataSource.query(
-      `UPDATE "platform"."execution_controls"
-       SET "expires_at" = now() - interval '1 minute'
-       WHERE "id" = $1`,
-      [first.id],
-    );
+    await expireInTime(first.id);
 
     // Expired-in-time rows are ignored immediately.
     const unblocked = await service.checkExecutionPermission({ userId: 'user-1' });
@@ -160,6 +168,83 @@ describe('ExecutionControlService — real PostgreSQL lifecycle (architect A2)',
     const blockedAgain = await service.checkExecutionPermission({ userId: 'user-1' });
     expect(blockedAgain.allowed).toBe(false);
     expect(blockedAgain.blockedBy?.reason).toBe('second incident');
+  });
+
+  it('A → expire A → B → expire B → C succeeds and preserves A/B as EXPIRED history (A2 multi-cycle)', async () => {
+    const first = await service.activateControl(
+      activateDto(ExecutionControlScope.USER, 'user-cycle', 'cycle A'),
+      admin,
+    );
+    await expireInTime(first.id);
+
+    const second = await service.activateControl(
+      activateDto(ExecutionControlScope.USER, 'user-cycle', 'cycle B'),
+      admin,
+    );
+    expect(second.id).not.toBe(first.id);
+    await expireInTime(second.id);
+
+    // This third activation is the regression boundary. An unqualified slot
+    // lookup can rediscover historical row A, fail to retire B, and then hit
+    // a false 23505 while attempting to insert C.
+    const third = await service.activateControl(
+      activateDto(ExecutionControlScope.USER, 'user-cycle', 'cycle C'),
+      admin,
+    );
+
+    expect(third.id).not.toBe(first.id);
+    expect(third.id).not.toBe(second.id);
+
+    const rows = await activeRows(ExecutionControlScope.USER, 'user-cycle');
+    expect(rows).toHaveLength(3);
+
+    const active = rows.filter((row) => row.status === ExecutionControlStatus.ACTIVE);
+    const expired = rows.filter((row) => row.status === ExecutionControlStatus.EXPIRED);
+    expect(active).toHaveLength(1);
+    expect(active[0].id).toBe(third.id);
+    expect(active[0].reason).toBe('cycle C');
+    expect(expired).toHaveLength(2);
+    expect(new Set(expired.map((row) => row.id))).toEqual(new Set([first.id, second.id]));
+
+    const blocked = await service.checkExecutionPermission({ userId: 'user-cycle' });
+    expect(blocked.allowed).toBe(false);
+    expect(blocked.blockedBy?.reason).toBe('cycle C');
+  });
+
+  it('two concurrent replacements of a time-expired ACTIVE row yield one new ACTIVE winner (A2)', async () => {
+    const seeded = await service.activateControl(
+      activateDto(ExecutionControlScope.PROVIDER, 'oanda', 'seeded outage'),
+      admin,
+    );
+    await expireInTime(seeded.id);
+
+    const results = await Promise.allSettled([
+      service.activateControl(
+        activateDto(ExecutionControlScope.PROVIDER, 'oanda', 'replacement A'),
+        admin,
+      ),
+      service.activateControl(
+        activateDto(ExecutionControlScope.PROVIDER, 'oanda', 'replacement B'),
+        admin,
+      ),
+    ]);
+
+    const fulfilled = results.filter((result) => result.status === 'fulfilled');
+    const rejected = results.filter((result) => result.status === 'rejected');
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(ConflictException);
+
+    const winner = (fulfilled[0] as PromiseFulfilledResult<Awaited<ReturnType<typeof service.activateControl>>>).value;
+    const rows = await activeRows(ExecutionControlScope.PROVIDER, 'oanda');
+    expect(rows).toHaveLength(2);
+
+    const active = rows.filter((row) => row.status === ExecutionControlStatus.ACTIVE);
+    const expired = rows.filter((row) => row.status === ExecutionControlStatus.EXPIRED);
+    expect(active).toHaveLength(1);
+    expect(active[0].id).toBe(winner.id);
+    expect(expired).toHaveLength(1);
+    expect(expired[0].id).toBe(seeded.id);
   });
 
   it('concurrent activations at the same scope/key produce exactly one active control (A2)', async () => {
