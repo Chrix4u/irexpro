@@ -66,6 +66,12 @@ jobs:
       - name: Enforce GitHub Actions supply-chain policy
         run: node scripts/security/check-workflow-supply-chain.mjs
 
+      - name: Test checkout credential-privacy policy
+        run: node scripts/security/check-checkout-credential-privacy.mjs --self-test
+
+      - name: Enforce checkout credential-privacy policy
+        run: node scripts/security/check-checkout-credential-privacy.mjs
+
       - name: Test release dependency-audit install safety
         run: node scripts/security/check-release-audit-install-safety.mjs --self-test
 
