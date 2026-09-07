@@ -66,6 +66,12 @@ jobs:
       - name: Enforce GitHub Actions supply-chain policy
         run: node scripts/security/check-workflow-supply-chain.mjs
 
+      - name: Test release dependency-audit install safety
+        run: node scripts/security/check-release-audit-install-safety.mjs --self-test
+
+      - name: Enforce release dependency-audit install safety
+        run: node scripts/security/check-release-audit-install-safety.mjs
+
       - name: Test Python lock integrity workflow policy
         run: node scripts/security/check-python-lock-integrity-workflow.mjs --self-test
 
@@ -113,8 +119,8 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
 
-      - name: Install dependencies from frozen lockfile
-        run: pnpm install --frozen-lockfile
+      - name: Install dependencies from frozen lockfile without lifecycle scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Capture full production dependency audit
         shell: bash
