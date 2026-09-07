@@ -57,8 +57,8 @@ export interface ExecutionControlView {
  *   "enabled/disabled" boolean to misread.
  * - EXPIRED rows are retained as records: reads ignore them and they never
  *   block a future activation at the same (scope, scopeKey). Reactivation
- *   flips the prior row to status = EXPIRED and inserts a NEW ACTIVE row,
- *   so activation/expiry history is preserved per row.
+ *   retires only the persisted ACTIVE row for the slot and inserts a NEW
+ *   ACTIVE row, so activation/expiry history is preserved per row.
  * - Checks cascade: GLOBAL > PROVIDER > USER > BROKER_CONNECTION; the first
  *   active control wins and is reported.
  * - CONCURRENCY: the partial unique index uq_exec_controls_active_scope
@@ -182,13 +182,12 @@ export class ExecutionControlService {
   /**
    * Activate an emergency control at (scope, scopeKey).
    *
-   * Lifecycle: if a prior row occupies the slot and is expired (or already
-   * status = EXPIRED), it is flipped to EXPIRED (retained as a record) and a
-   * NEW ACTIVE row is inserted — reactivation after expiry always succeeds
-   * deterministically. If the slot holds an unexpired ACTIVE control, the
-   * activation is rejected with ConflictException. Under concurrent
-   * activation the partial unique index guarantees a single winner; the
-   * loser's 23505 is translated to ConflictException.
+   * Lifecycle: only the persisted ACTIVE row can occupy the slot. Historical
+   * EXPIRED rows never participate in discovery. If the ACTIVE row is expired
+   * in time, retire that exact row conditionally and insert a NEW ACTIVE row.
+   * If it is still effective, reject with ConflictException. Under concurrent
+   * replacement the partial unique index remains the final single-winner
+   * backstop; the loser's 23505 is translated to ConflictException.
    */
   async activateControl(
     dto: ActivateExecutionControlDto,
@@ -197,18 +196,16 @@ export class ExecutionControlService {
   ): Promise<ExecutionControlView> {
     const scopeKey = this.normalizeScopeKey(dto.scope, dto.scopeKey);
 
-    const slot = await this.findControlSlot(dto.scope, scopeKey);
-    if (slot && this.isEffectivelyActive(slot)) {
+    const activeControl = await this.findCurrentActiveControl(dto.scope, scopeKey);
+    if (activeControl && this.isEffectivelyActive(activeControl)) {
       throw new ConflictException(
         `Execution control already active for scope=${dto.scope}` +
           `${scopeKey ? ` key=${scopeKey}` : ''}`,
       );
     }
 
-    // Lazy expiry flip: the prior row (expired in time or already EXPIRED)
-    // stops occupying the ACTIVE slot but is retained as a record.
-    if (slot) {
-      await this.controlRepo.update({ id: slot.id }, { status: ExecutionControlStatus.EXPIRED });
+    if (activeControl) {
+      await this.retireExpiredActiveControl(activeControl);
     }
 
     let control: ExecutionControl;
@@ -303,28 +300,47 @@ export class ExecutionControlService {
     );
   }
 
-  private async findActiveControl(
+  /**
+   * Discover only the persisted ACTIVE row that can occupy the partial-unique
+   * slot. Historical EXPIRED rows are intentionally excluded so multi-cycle
+   * reactivate/expire history cannot shadow the current row.
+   */
+  private async findCurrentActiveControl(
     scope: ExecutionControlScope,
     scopeKey: string | null,
   ): Promise<ExecutionControl | null> {
-    const where: Record<string, unknown> = { scope };
-    if (scopeKey !== null) where.scopeKey = scopeKey;
-    else where.scopeKey = null;
-    const control = await this.controlRepo.findOne({ where });
-    if (!control) return null;
-    if (!this.isEffectivelyActive(control)) return null;
+    const where: Record<string, unknown> = {
+      scope,
+      scopeKey,
+      status: ExecutionControlStatus.ACTIVE,
+    };
+    const control = await this.controlRepo.findOne({
+      where,
+      order: { activatedAt: 'DESC' },
+    });
+    if (!control || control.status !== ExecutionControlStatus.ACTIVE) return null;
     return control;
   }
 
-  /** Raw row occupying the (scope, scopeKey) slot, regardless of status. */
-  private async findControlSlot(
-    scope: ExecutionControlScope,
-    scopeKey: string | null,
-  ): Promise<ExecutionControl | null> {
-    const where: Record<string, unknown> = { scope };
-    if (scopeKey !== null) where.scopeKey = scopeKey;
-    else where.scopeKey = null;
-    return this.controlRepo.findOne({ where });
+  /**
+   * Retire exactly the time-expired ACTIVE row observed by discovery. The
+   * status predicate makes a concurrent retire/replacement race benign: if
+   * another writer already changed this row, zero affected rows is accepted
+   * and the subsequent insert is still arbitrated by the partial unique index.
+   */
+  private async retireExpiredActiveControl(control: ExecutionControl): Promise<void> {
+    const result = await this.controlRepo.update(
+      { id: control.id, status: ExecutionControlStatus.ACTIVE },
+      { status: ExecutionControlStatus.EXPIRED },
+    );
+    const affected =
+      (result as { affected?: number }).affected ??
+      (result as { raw?: { rowCount?: number } }).raw?.rowCount;
+    if (affected === 0) {
+      this.logger.warn(
+        `Execution control ${control.id} was already retired by a concurrent writer; continuing replacement`,
+      );
+    }
   }
 
   /** A row blocks execution only when ACTIVE and not yet expired. */

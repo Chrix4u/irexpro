@@ -33,6 +33,7 @@ describe('AuthService MFA login enforcement', () => {
     preferredCurrency: null,
     mfaEnabled: true,
     mfaSecret: 'v1.encrypted.secret.envelope',
+    mfaSetupExpiresAt: null,
     sessionVersion: 3,
     createdAt: new Date(),
     updatedAt: new Date(),
