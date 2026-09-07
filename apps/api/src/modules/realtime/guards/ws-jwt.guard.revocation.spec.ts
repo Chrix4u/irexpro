@@ -154,7 +154,7 @@ describe('WsJwtGuard — Sprint 48 revocation enforcement', () => {
   it('clears stale identity and disconnects when a guarded message has no token', async () => {
     const { guard, client, context } = setup();
     attachStaleIdentity(client);
-    client.handshake.auth = {};
+    (client.handshake as { auth: Record<string, unknown> }).auth = {};
 
     await expect(guard.canActivate(context)).rejects.toThrow('Unauthorized: no token provided');
     expect(client.disconnect).toHaveBeenCalledWith(true);
