@@ -15,9 +15,7 @@ describe('UsersController — admin UUID route boundary', () => {
     const source = fs.readFileSync(controllerPath, 'utf8');
 
     expect(source).toContain("getUserById(@Param('id', ParseUUIDPipe) id: string)");
-    expect(source).toContain(
-      "getUserOnboardingStatus(@Param('id', ParseUUIDPipe) id: string)",
-    );
+    expect(source).toContain("getUserOnboardingStatus(@Param('id', ParseUUIDPipe) id: string)");
   });
 
   it.each(['not-a-uuid', `${USER_ID}\nforged-log-line`, 'x'.repeat(4096)])(
