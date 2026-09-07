@@ -6,9 +6,12 @@
  * exercises every export with a zero-dependency test harness, so all
  * validation, mapping, derivation, and state-machine logic for the account
  * hub lives here: Personal Information editing (Phase E/F), password change
- * validation (Phase I), the MFA TOTP enrollment reducer (Phase G), and the
- * verification resend-cooldown/expiry helpers (Phase H). Screens under
- * `src/screens/account/` import from this module; they only render and
+ * validation (Phase I), the MFA TOTP enrollment reducer (Phase G), the
+ * verification resend-cooldown/expiry helpers (Phase H), the security-activity
+ * timeline labels/tones (Phase J), the self-contained JWT/session/device view
+ * helpers (Phase J), account-status guidance (Phase K), and the pre-auth
+ * appeal validation (Phase K). Screens under `src/screens/account/` (and the
+ * pre-auth AppealScreen) import from this module; they only render and
  * orchestrate.
  *
  * All `@irexpro/types` imports are type-only (erased at compile time), so the
@@ -17,6 +20,7 @@
 
 import type {
   MyProfileView,
+  SecurityEventSeverity,
   TradingExperienceLevel,
   UpdateMyProfileRequest,
   UserStatus,
@@ -697,4 +701,352 @@ export function verificationExpiryHint(kind: 'email' | 'phone'): string {
     return 'The link expires in about 15 minutes.';
   }
   return 'The code expires in about 10 minutes.';
+}
+
+// ─── Security activity timeline (Sprint 55 Phase J) ─────────────────────────
+//
+// The backend projects ONLY the caller's audit rows filtered to a server-side
+// security-action allowlist (SecurityEventView: id/action/createdAt/severity).
+// Known actions map to friendly labels; ANY other value renders as a generic
+// label — never an error, never an assumed meaning.
+
+const SECURITY_EVENT_LABELS: Readonly<Record<string, string>> = {
+  USER_LOGIN_SUCCESS: 'Successful sign-in',
+  USER_LOGIN_FAILED: 'Failed sign-in attempt',
+  USER_LOGOUT: 'Signed out',
+  USER_PASSWORD_CHANGED: 'Password changed',
+  USER_PASSWORD_RESET_REQUESTED: 'Password reset requested',
+  USER_PASSWORD_RESET_COMPLETED: 'Password reset completed',
+  USER_MFA_ENABLED: 'Two-factor authentication enabled',
+  USER_MFA_DISABLED: 'Two-factor authentication disabled',
+  USER_MFA_SETUP_STARTED: 'MFA setup started',
+  USER_MFA_CHALLENGE_FAILED: 'Failed MFA verification',
+  USER_EMAIL_VERIFIED: 'Email verified',
+  USER_PHONE_VERIFIED: 'Phone verified',
+  USER_PHONE_VERIFICATION_FAILED: 'Failed phone verification',
+  USER_SESSIONS_REVOKED_OTHERS: 'Other sessions signed out',
+  USER_SUSPENDED: 'Account suspended',
+  USER_REACTIVATED: 'Account reactivated',
+  USER_PERMANENTLY_LOCKED: 'Account locked',
+  USER_CLOSED: 'Account closed',
+  USER_REGISTERED: 'Account created',
+  USER_PASSWORD_CHANGE_FAILED: 'Failed password change',
+};
+
+/** Generic fallback for any action outside the known allowlist. */
+const SECURITY_EVENT_FALLBACK_LABEL = 'Account security event';
+
+/** Friendly label for a security-event action; unknown actions never error. */
+export function securityEventLabel(action: string): string {
+  return SECURITY_EVENT_LABELS[action] ?? SECURITY_EVENT_FALLBACK_LABEL;
+}
+
+/** Visual tone for a timeline row: INFO/absent → neutral, WARNING → warning, CRITICAL → danger. */
+export function securityEventTone(
+  severity?: SecurityEventSeverity,
+): 'neutral' | 'warning' | 'danger' {
+  if (severity === 'WARNING') return 'warning';
+  if (severity === 'CRITICAL') return 'danger';
+  return 'neutral';
+}
+
+const MINUTE_MS = 60_000;
+const HOUR_MS = 3_600_000;
+const DAY_MS = 86_400_000;
+const RELATIVE_DAYS_LIMIT = 7 * DAY_MS;
+
+/**
+ * Compact relative time: "just now", "5m ago", "3h ago", "2d ago".
+ *
+ * Events older than a week fall back to the ISO date portion of the timestamp
+ * (e.g. "2025-06-01"). A timestamp that cannot be parsed is returned as-is —
+ * the server value is shown honestly rather than fabricated. Small negative
+ * deltas (server clock slightly ahead) are treated as "just now".
+ */
+export function formatRelativeTime(iso: string, nowMs: number): string {
+  const timeMs = Date.parse(iso);
+  if (Number.isNaN(timeMs)) return iso;
+
+  const elapsedMs = nowMs - timeMs;
+  if (elapsedMs < MINUTE_MS) return 'just now';
+  if (elapsedMs < HOUR_MS) return `${Math.floor(elapsedMs / MINUTE_MS)}m ago`;
+  if (elapsedMs < DAY_MS) return `${Math.floor(elapsedMs / HOUR_MS)}h ago`;
+  if (elapsedMs < RELATIVE_DAYS_LIMIT) return `${Math.floor(elapsedMs / DAY_MS)}d ago`;
+  return iso.slice(0, 10);
+}
+
+// ─── Session / device view (Sprint 55 Phase J) ──────────────────────────────
+//
+// Self-contained JWT payload decoding. React Native's Hermes engine has no
+// Node Buffer and historically no atob; Node has no btoa — so the base64url
+// decoder below is implemented manually (character lookup + 6-bit
+// accumulation) and multi-byte UTF-8 is decoded by hand. It is pure string
+// math: identical behavior in Hermes and Node, and it returns null for any
+// malformed input instead of throwing.
+
+const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+const BASE64_DECODE_LOOKUP: Readonly<Record<string, number>> = (() => {
+  const lookup: Record<string, number> = {};
+  for (let i = 0; i < BASE64_ALPHABET.length; i += 1) {
+    lookup[BASE64_ALPHABET.charAt(i)] = i;
+  }
+  return lookup;
+})();
+
+/**
+ * Decode one base64url (or standard base64) segment into raw bytes.
+ * Returns null when the segment contains an invalid character or has an
+ * impossible length (a lone 6-bit group). Padding ('=') is ignored.
+ */
+function decodeBase64UrlBytes(segment: string): number[] | null {
+  const compact = segment.replace(/=/gu, '');
+  if (compact.length % 4 === 1) return null;
+
+  const bytes: number[] = [];
+  let buffer = 0;
+  let bits = 0;
+  for (let i = 0; i < compact.length; i += 1) {
+    const char = compact.charAt(i);
+    const value = char === '-' ? 62 : char === '_' ? 63 : BASE64_DECODE_LOOKUP[char];
+    if (value === undefined) return null;
+
+    buffer = (buffer << 6) | value;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      bytes.push((buffer >> bits) & 0xff);
+      // Drop the consumed high bits so `buffer` never grows past 13 bits
+      // (shifts stay inside the 32-bit bitwise range for any input length).
+      buffer &= (1 << bits) - 1;
+    }
+  }
+  return bytes;
+}
+
+/**
+ * Decode UTF-8 bytes to a string without TextDecoder (not guaranteed in
+ * Hermes builds). Returns null for truncated or malformed sequences
+ * (including overlong encodings and stray continuation bytes).
+ */
+function utf8BytesToString(bytes: number[]): string | null {
+  let result = '';
+  let index = 0;
+  while (index < bytes.length) {
+    const lead = bytes[index];
+
+    if (lead < 0x80) {
+      result += String.fromCharCode(lead);
+      index += 1;
+      continue;
+    }
+
+    const continuation = (leadBits: number, length: number, start: number): number | null => {
+      let accumulator = leadBits;
+      for (let k = 1; k < length; k += 1) {
+        const byte = bytes[start + k];
+        if (byte === undefined || (byte & 0xc0) !== 0x80) return null;
+        accumulator = (accumulator << 6) | (byte & 0x3f);
+      }
+      return accumulator;
+    };
+
+    if (lead >= 0xc0 && lead <= 0xdf) {
+      const codePoint = continuation(lead & 0x1f, 2, index);
+      if (codePoint === null || codePoint < 0x80) return null;
+      result += String.fromCharCode(codePoint);
+      index += 2;
+    } else if (lead >= 0xe0 && lead <= 0xef) {
+      const codePoint = continuation(lead & 0x0f, 3, index);
+      if (codePoint === null || codePoint < 0x800) return null;
+      result += String.fromCharCode(codePoint);
+      index += 3;
+    } else if (lead >= 0xf0 && lead <= 0xf7) {
+      const codePoint = continuation(lead & 0x07, 4, index);
+      if (codePoint === null || codePoint < 0x10000 || codePoint > 0x10ffff) return null;
+      const adjusted = codePoint - 0x10000;
+      result += String.fromCharCode(0xd800 + (adjusted >> 10), 0xdc00 + (adjusted & 0x3ff));
+      index += 4;
+    } else {
+      return null;
+    }
+  }
+  return result;
+}
+
+/**
+ * Decode the payload segment of a JWT without verifying the signature.
+ *
+ * Pure convenience for reading NON-SECRET claims (iat/exp) of the token the
+ * device already holds. Returns null for malformed input: wrong segment
+ * count, invalid base64, broken UTF-8, or a payload that is not a JSON
+ * object. Never throws, never verifies, never logs.
+ */
+export function decodeJwtPayload(jwt: string): Record<string, unknown> | null {
+  const segments = jwt.split('.');
+  if (segments.length !== 3) return null;
+
+  const bytes = decodeBase64UrlBytes(segments[1]);
+  if (bytes === null) return null;
+
+  const text = utf8BytesToString(bytes);
+  if (text === null) return null;
+
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Malformed JSON payload → null, never an exception.
+  }
+  return null;
+}
+
+/**
+ * Start/expiry of the CURRENT session, derived from the access token's own
+ * iat/exp claims (seconds since epoch → milliseconds). Null when the token is
+ * malformed or the numeric claims are missing. Values are real claims only —
+ * nothing is inferred or fabricated on the device.
+ */
+export function currentSessionView(accessToken: string): {
+  startedAt: number;
+  expiresAt: number;
+} | null {
+  const payload = decodeJwtPayload(accessToken);
+  if (payload === null) return null;
+
+  const issuedAt = payload.iat;
+  const expiresAt = payload.exp;
+  if (typeof issuedAt !== 'number' || !Number.isFinite(issuedAt)) return null;
+  if (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt)) return null;
+
+  return { startedAt: issuedAt * 1000, expiresAt: expiresAt * 1000 };
+}
+
+const OS_DISPLAY_NAMES: Readonly<Record<string, string>> = {
+  android: 'Android',
+  ios: 'iOS',
+  macos: 'macOS',
+  web: 'Web',
+  windows: 'Windows',
+};
+
+/**
+ * Human device label from the platform shape ("Android 15", "iOS 18.2").
+ * `Version` is a number on Android and a string on iOS; both are stringified.
+ */
+export function deviceSummary(platform: { OS: string; Version: string | number }): string {
+  const os = platform.OS.trim();
+  const version = String(platform.Version).trim();
+  const osName =
+    OS_DISPLAY_NAMES[os.toLowerCase()] ?? (os.charAt(0).toUpperCase() + os.slice(1));
+  if (version.length === 0) return osName;
+  return `${osName} ${version}`;
+}
+
+const MONTH_LABELS = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+] as const;
+
+/** Device-local date-time label, e.g. "Jun 12, 2025, 14:30" (no Intl dependency). */
+function formatDateTime(ms: number): string {
+  const date = new Date(ms);
+  if (Number.isNaN(date.getTime())) return '';
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  return `${MONTH_LABELS[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}, ${hours}:${minutes}`;
+}
+
+/** Human start/expiry strings for the current-session view. */
+export function formatSessionTimestamps(view: {
+  startedAt: number;
+  expiresAt: number;
+}): { started: string; expires: string } {
+  return { started: formatDateTime(view.startedAt), expires: formatDateTime(view.expiresAt) };
+}
+
+// ─── Account access status guidance (Sprint 55 Phase K) ─────────────────────
+
+/**
+ * Honest per-status copy for the Account Access screen. Mirrors the backend's
+ * restriction semantics exactly — including that suspension/locking revokes
+ * existing sessions server-side. Never exposes administrative review details.
+ */
+export function accountStatusGuidance(status: UserStatus): string {
+  switch (status) {
+    case 'ACTIVE':
+      return 'Your account is active.';
+    case 'PENDING_VERIFICATION':
+      return 'Verify your email or phone to activate trading features.';
+    case 'SUSPENDED':
+      return 'Your account is suspended. Trading and account changes are blocked. Existing sessions were revoked when the restriction was applied.';
+    case 'PERMANENTLY_LOCKED':
+      return 'Your account has been permanently locked. Signing in, trading, and account changes are no longer available.';
+    case 'CLOSED':
+      return 'This account is closed.';
+    default:
+      return 'Your account status is unavailable right now.';
+  }
+}
+
+/**
+ * Whether the status carries access restrictions (sessions revoked,
+ * sign-in blocked, trading halted). PENDING_VERIFICATION is not a restriction —
+ * sessions stay alive and only trading features wait for verification.
+ */
+export function isRestrictedAccountStatus(status: UserStatus): boolean {
+  return status === 'SUSPENDED' || status === 'PERMANENTLY_LOCKED' || status === 'CLOSED';
+}
+
+// ─── Pre-auth account appeal (Sprint 55 Phase K) ────────────────────────────
+//
+// Mirrors the backend submit-account-appeal DTO: identifier 1–255 characters,
+// reason 20–2000 characters. The appeal endpoint is PUBLIC and enumeration-
+// safe, so validation is the only client-side gate — the response is always
+// generic.
+
+export const APPEAL_IDENTIFIER_MAX_LENGTH = 255;
+export const APPEAL_REASON_MIN_LENGTH = 20;
+export const APPEAL_REASON_MAX_LENGTH = 2000;
+
+/** Fields of the appeal form that can carry a validation error. */
+export type AppealField = 'identifier' | 'reason';
+
+export interface AppealSubmissionInput {
+  identifier: string;
+  reason: string;
+}
+
+export interface AppealFieldError {
+  field: AppealField;
+  error: string;
+}
+
+/**
+ * Submit-time gate for the appeal form: identifier required (1–255 after
+ * trim), reason 20–2000 after trim. Returns the first failing field or null
+ * when the submission is client-valid.
+ */
+export function validateAppealSubmission(
+  input: AppealSubmissionInput,
+): AppealFieldError | null {
+  const identifier = input.identifier.trim();
+  if (identifier.length === 0) {
+    return { field: 'identifier', error: 'Enter your email or phone number.' };
+  }
+  if (identifier.length > APPEAL_IDENTIFIER_MAX_LENGTH) {
+    return { field: 'identifier', error: 'Identifier must be 255 characters or fewer.' };
+  }
+
+  const reason = input.reason.trim();
+  if (reason.length < APPEAL_REASON_MIN_LENGTH) {
+    return { field: 'reason', error: 'Describe the issue in at least 20 characters.' };
+  }
+  if (reason.length > APPEAL_REASON_MAX_LENGTH) {
+    return { field: 'reason', error: 'Reason must be 2000 characters or fewer.' };
+  }
+
+  return null;
 }

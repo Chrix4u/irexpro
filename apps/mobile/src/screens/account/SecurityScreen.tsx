@@ -4,24 +4,34 @@ import { useAuth } from '@/context/auth-context';
 import { Card, StatusPill, palette } from '@/components/ui';
 import ChangePasswordScreen from '@/screens/account/ChangePasswordScreen';
 import MfaScreen from '@/screens/account/MfaScreen';
+import SecurityActivityScreen from '@/screens/account/SecurityActivityScreen';
+import SessionsScreen from '@/screens/account/SessionsScreen';
 import VerificationScreen from '@/screens/account/VerificationScreen';
 
-type SecurityPanel = 'overview' | 'password' | 'mfa' | 'verification';
+type SecurityPanel =
+  | 'overview'
+  | 'password'
+  | 'mfa'
+  | 'verification'
+  | 'sessions'
+  | 'activity';
 
 /**
- * Security hub sub-screen of the Account tab (Sprint 55 Phase G/H/I).
+ * Security hub sub-screen of the Account tab (Sprint 55 Phase G/H/I/J).
  *
  * Replaces the former interim "Security" expandable card with a dedicated
  * drill-in hub: chevron rows for Password, Two-Factor Authentication (with a
- * live enabled/disabled pill derived from the authenticated identity), and
- * Email & Phone Verification. The screen manages its own depth-2 state with
- * the same back-header pattern as Personal Information — no navigation
- * library, no new native modules.
+ * live enabled/disabled pill derived from the authenticated identity), Email
+ * & Phone Verification, Sessions & Devices, and Security Activity. The screen
+ * manages its own depth-2 state with the same back-header pattern as
+ * Personal Information — no navigation library, no new native modules.
  *
  * Each row swaps in a dedicated screen that owns its own side effects:
  *   password     → ChangePasswordScreen   (revokes ALL sessions on success)
  *   mfa          → MfaScreen              (TOTP enrollment / disable)
  *   verification → VerificationScreen     (email link + phone code)
+ *   sessions     → SessionsScreen         (revoke-others + token rotation)
+ *   activity     → SecurityActivityScreen (security-event timeline)
  * All error copy inside those screens goes through the sanitized
  * accountSecurityError / verificationCodeError mappers.
  */
@@ -51,6 +61,12 @@ export default function SecurityScreen({
   }
   if (panel === 'verification') {
     return <VerificationScreen onBack={goOverview} refreshIdentity={refreshIdentity} />;
+  }
+  if (panel === 'sessions') {
+    return <SessionsScreen onBack={goOverview} />;
+  }
+  if (panel === 'activity') {
+    return <SecurityActivityScreen onBack={goOverview} />;
   }
 
   return (
@@ -126,6 +142,40 @@ export default function SecurityScreen({
             <Text style={styles.sectionRowTitle}>Email &amp; Phone Verification</Text>
             <Text style={styles.sectionRowSubtitle}>
               Verify the contact details on your account
+            </Text>
+          </View>
+          <Text style={styles.sectionChevron}>›</Text>
+        </Pressable>
+      </Card>
+
+      <Card style={styles.flushCard}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Sessions and devices"
+          onPress={() => setPanel('sessions')}
+          style={styles.sectionRow}
+        >
+          <View style={styles.sectionRowCopy}>
+            <Text style={styles.sectionRowTitle}>Sessions &amp; Devices</Text>
+            <Text style={styles.sectionRowSubtitle}>
+              This device&apos;s session, sign out other devices or everywhere
+            </Text>
+          </View>
+          <Text style={styles.sectionChevron}>›</Text>
+        </Pressable>
+      </Card>
+
+      <Card style={styles.flushCard}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Security activity"
+          onPress={() => setPanel('activity')}
+          style={styles.sectionRow}
+        >
+          <View style={styles.sectionRowCopy}>
+            <Text style={styles.sectionRowTitle}>Security Activity</Text>
+            <Text style={styles.sectionRowSubtitle}>
+              Recent security events on your account
             </Text>
           </View>
           <Text style={styles.sectionChevron}>›</Text>

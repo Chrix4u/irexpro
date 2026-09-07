@@ -13,23 +13,25 @@ import {
   accountStatusMeta,
   deriveInitials,
 } from '@/lib/account-security-logic';
+import AccountAccessScreen from '@/screens/account/AccountAccessScreen';
 import PersonalInformationScreen from '@/screens/account/PersonalInformationScreen';
 import SecurityScreen from '@/screens/account/SecurityScreen';
-import { SessionSecuritySection } from '@/screens/account/interim-sections';
-import type { AccountBusyAction } from '@/screens/account/interim-sections';
+
+/** Single-flight busy marker owned by the Account hub. */
+type AccountBusyAction = 'logout' | null;
 
 /**
  * Account hub — Sprint 55 restructure of the Account tab.
  *
  * An identity-first hub: an identity card (initials avatar, name, contact
  * rows with verification badges, account status, MFA indicator) plus section
- * navigation. "Personal Information" and "Security" open dedicated sub-screens
- * (production-grade profile editing; password change, TOTP MFA enrollment,
- * and contact verification); the sub-screen swap mirrors how AppShell swaps
- * Login/ForgotPassword (state + onBack, no navigation library).
+ * navigation. "Personal Information", "Security", and "Account Access" each
+ * open a dedicated sub-screen (production-grade profile editing; password
+ * change, TOTP MFA enrollment, contact verification, Sessions & Devices, and
+ * the Security Activity timeline; honest account-status guidance with appeal
+ * direction); the sub-screen swap mirrors how AppShell swaps
+ * Login/ForgotPassword/Appeal (state + onBack, no navigation library).
  *
- * "Account Access" remains an INTERIM expandable section embedding the former
- * session-security card (Task 40-c replaces it with a dedicated screen).
  * "Sign Out" always calls the auth-context logout under the single-flight
  * busy guard owned here.
  */
@@ -46,7 +48,6 @@ export default function AccountScreen() {
   } = useAuth();
 
   const [subScreen, setSubScreen] = useState<AccountSubScreen>(null);
-  const [accessExpanded, setAccessExpanded] = useState(false);
   const [busy, setBusy] = useState<AccountBusyAction>(null);
 
   function startAction(action: Exclude<AccountBusyAction, null>): boolean {
@@ -95,6 +96,10 @@ export default function AccountScreen() {
         clearSession={clearSession}
       />
     );
+  }
+
+  if (subScreen === 'access') {
+    return <AccountAccessScreen onBack={() => setSubScreen(null)} />;
   }
 
   if (!user) {
@@ -229,21 +234,18 @@ export default function AccountScreen() {
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Account Access"
-          accessibilityState={{ expanded: accessExpanded }}
-          onPress={() => setAccessExpanded((current) => !current)}
+          onPress={() => setSubScreen('access')}
           style={styles.sectionRow}
         >
           <View style={styles.sectionRowCopy}>
             <Text style={styles.sectionRowTitle}>Account Access</Text>
-            <Text style={styles.sectionRowSubtitle}>Session security and sign-out</Text>
+            <Text style={styles.sectionRowSubtitle}>
+              Account status, restrictions and how to appeal
+            </Text>
           </View>
-          <Text style={styles.sectionIndicator}>{accessExpanded ? '−' : '+'}</Text>
+          <Text style={styles.sectionChevron}>›</Text>
         </Pressable>
       </Card>
-
-      {accessExpanded ? (
-        <SessionSecuritySection busy={busy} onLogout={() => void handleLogout()} />
-      ) : null}
 
       <Card style={styles.flushCard}>
         <Pressable
@@ -304,6 +306,5 @@ const styles = StyleSheet.create({
   sectionRowTitle: { color: palette.text, fontSize: 15, fontWeight: '700' },
   sectionRowSubtitle: { color: palette.muted, fontSize: 12, lineHeight: 18, marginTop: 3 },
   sectionChevron: { color: palette.dim, fontSize: 20, lineHeight: 24 },
-  sectionIndicator: { color: palette.dim, fontSize: 20, lineHeight: 24, fontWeight: '700' },
   signOutTitle: { color: palette.danger.text, fontSize: 15, fontWeight: '700' },
 });
