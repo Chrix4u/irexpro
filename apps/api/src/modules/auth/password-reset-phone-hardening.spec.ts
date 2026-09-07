@@ -173,7 +173,7 @@ describe('PasswordResetService phone-code hardening', () => {
     await module.close();
   });
 
-  it('atomically consumes a correct phone code before changing password and session version', async () => {
+  it('atomically consumes a correct phone code, retires pending MFA, then revokes sessions', async () => {
     const { module, service } = await createService(PEPPER);
     const { rawCode, token } = await issuePhoneReset(service);
     userRepo.findOne.mockResolvedValueOnce({
@@ -192,13 +192,41 @@ describe('PasswordResetService phone-code hardening', () => {
       expect.objectContaining({ id: token.id, attemptCount: 0 }),
       { usedAt: expect.any(Date) },
     );
-    expect(queryRunner.manager.update).toHaveBeenCalledWith(User, 'phone-user', {
+    expect(queryRunner.manager.update).toHaveBeenNthCalledWith(2, User, 'phone-user', {
       passwordHash: expect.stringMatching(/^\$argon2/),
     });
-    expect(queryRunner.manager.update).toHaveBeenCalledWith(User, 'phone-user', {
+    expect(queryRunner.manager.update).toHaveBeenNthCalledWith(
+      3,
+      User,
+      { id: 'phone-user', mfaEnabled: false },
+      { mfaSecret: null, mfaSetupExpiresAt: null },
+    );
+    expect(queryRunner.manager.update).toHaveBeenNthCalledWith(4, User, 'phone-user', {
       sessionVersion: expect.any(Function),
     });
     expect(queryRunner.commitTransaction).toHaveBeenCalledTimes(1);
+    await module.close();
+  });
+
+  it('preserves enabled MFA by scoping phone-reset secret cleanup to pending enrollment only', async () => {
+    const { module, service } = await createService(PEPPER);
+    const { rawCode, token } = await issuePhoneReset(service);
+    userRepo.findOne.mockResolvedValueOnce({
+      id: 'phone-user',
+      email: null,
+      phone: '+233241234567',
+      status: UserStatus.ACTIVE,
+    });
+    resetTokenRepo.findOne.mockResolvedValueOnce({ ...token, attemptCount: 0, usedAt: null });
+
+    await service.resetWithCode('+233241234567', rawCode, 'NewStrongPassword123!');
+
+    const mfaClears = queryRunner.manager.update.mock.calls.filter(
+      ([entity, , patch]) =>
+        entity === User && patch?.mfaSecret === null && patch?.mfaSetupExpiresAt === null,
+    );
+    expect(mfaClears).toHaveLength(1);
+    expect(mfaClears[0][1]).toEqual({ id: 'phone-user', mfaEnabled: false });
     await module.close();
   });
 

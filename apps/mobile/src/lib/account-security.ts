@@ -4,18 +4,13 @@ import { api } from '@/lib/api';
 
 /**
  * Start MFA enrollment using the backend's required current-password
- * re-authentication. The shared ApiClient's historical beginMfaSetup method
- * does not yet carry the password body, so mobile uses the client's typed
- * low-level request until that cross-app contract is corrected separately.
+ * re-authentication.
  *
  * The returned secret and otpauth URI are enrollment material: callers must
  * keep them memory-only and must never persist or log them.
  */
 export function beginMfaSetup(password: string): Promise<MfaSetupResponse> {
-  return api.request<MfaSetupResponse>('/auth/mfa/setup', {
-    method: 'POST',
-    body: JSON.stringify({ password }),
-  });
+  return api.beginMfaSetup(password);
 }
 
 /** Return user-facing error copy without reflecting request secrets or raw payloads. */

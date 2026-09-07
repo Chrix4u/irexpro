@@ -80,6 +80,11 @@ export class User {
   @Exclude()
   mfaSecret: string | null;
 
+  /** Expiry for a not-yet-confirmed TOTP enrollment. Null once MFA is active. */
+  @Column({ name: 'mfa_setup_expires_at', type: 'timestamptz', nullable: true })
+  @Exclude()
+  mfaSetupExpiresAt: Date | null;
+
   /**
    * Server-side authentication generation.
    *

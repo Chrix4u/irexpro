@@ -28,7 +28,7 @@ env:
 jobs:
   real-postgres-uuid-ossp:
     name: Real PostgreSQL 16 + uuid-ossp (Scenario D)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     env:
@@ -40,7 +40,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16-bookworm
+        image: postgres:16-bookworm@sha256:92620daddcd947f8d5ab5ba66e848702fe443d87fed30c4cea8e389fd78dfc55 # Docker Official Image
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: ci_disposable_password
@@ -101,7 +101,7 @@ jobs:
 
   existing-db-upgrade:
     name: Existing PostgreSQL 16 Upgrade (Scenario E)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     env:
@@ -113,7 +113,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16-bookworm
+        image: postgres:16-bookworm@sha256:92620daddcd947f8d5ab5ba66e848702fe443d87fed30c4cea8e389fd78dfc55 # Docker Official Image
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: ci_disposable_password
@@ -174,7 +174,7 @@ jobs:
 
   existing-db-domain-upgrade:
     name: Existing PostgreSQL 16 Domain Upgrade (Scenario F)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     env:
@@ -186,7 +186,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16-bookworm
+        image: postgres:16-bookworm@sha256:92620daddcd947f8d5ab5ba66e848702fe443d87fed30c4cea8e389fd78dfc55 # Docker Official Image
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: ci_disposable_password
