@@ -6,7 +6,7 @@ import AppErrorBoundary from '@/components/AppErrorBoundary';
 import LoginScreen from './src/screens/LoginScreen';
 import ForgotPasswordScreen from './src/screens/ForgotPasswordScreen';
 import DashboardScreen from './src/screens/DashboardScreen';
-import AccountScreen from './src/screens/AccountScreen';
+import AccountScreen from './src/screens/account/AccountScreen';
 import PaymentsScreen from './src/screens/PaymentsScreen';
 
 /**

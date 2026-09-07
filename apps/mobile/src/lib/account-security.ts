@@ -2,6 +2,12 @@ import { ApiClientError } from '@irexpro/api-client';
 import type { MfaSetupResponse } from '@irexpro/types';
 import { api } from '@/lib/api';
 
+// Sprint 55: normalizeCountryCode / isValidCountryCode moved to the
+// RN-IMPORT-FREE pure module `account-security-logic.ts` so they can be
+// unit-tested by a zero-dependency harness. Re-exported here to keep this
+// module's public surface stable for existing importers.
+export { normalizeCountryCode, isValidCountryCode } from '@/lib/account-security-logic';
+
 /**
  * Start MFA enrollment using the backend's required current-password
  * re-authentication.
@@ -36,14 +42,6 @@ export function accountSecurityError(error: unknown): string {
   }
 
   return 'The security action could not be completed.';
-}
-
-export function normalizeCountryCode(value: string): string {
-  return value.trim().toUpperCase();
-}
-
-export function isValidCountryCode(value: string): boolean {
-  return /^[A-Z]{2}$/u.test(normalizeCountryCode(value));
 }
 
 export function isSixDigitCode(value: string): boolean {
