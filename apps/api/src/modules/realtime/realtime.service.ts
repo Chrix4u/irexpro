@@ -1,5 +1,7 @@
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
 import { Server } from 'socket.io';
+import { Repository } from 'typeorm';
 import { DomainEventBus } from '../events/event-bus.service';
 import { DomainEventType } from '../events/enums/domain-event-type.enum';
 import {
@@ -13,20 +15,17 @@ import {
   AiSignalEventPayload,
   SystemNotificationPayload,
 } from '../events/interfaces/domain-event.interface';
+import { User, UserStatus } from '../users/entities/user.entity';
 import { RealtimeEvent } from './events/realtime-event.enum';
 
 /**
  * RealtimeService — Manages WebSocket room membership and event emission.
  *
- * This service:
- *   1. Subscribes to DomainEventBus events in onModuleInit
- *   2. Forwards events to the appropriate Socket.IO rooms
- *   3. Provides explicit emit methods for services that need direct emission
- *
- * Room naming convention:
- *   user:{userId}              — per-user room
- *   trading-session:{sessionId} — per-session room
- *   admin:global               — admin broadcast room
+ * Outbound delivery is session-aware: room membership by itself is never
+ * treated as continuing authorization. Before a user/session-room payload is
+ * emitted, each socket's authenticated session generation is compared with
+ * the current identity.users row. Revoked or inactive sockets are disconnected
+ * and receive no payload. Store-read failures fail closed.
  *
  * Payload safety: no credentials, no tokens, no stack traces ever emitted.
  *
@@ -38,11 +37,13 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
   private server: Server | null = null;
   private readonly unsubscribers: Array<() => void> = [];
 
-  constructor(private readonly eventBus: DomainEventBus) {}
+  constructor(
+    private readonly eventBus: DomainEventBus,
+    @InjectRepository(User)
+    private readonly userRepo: Repository<User>,
+  ) {}
 
-  /**
-   * Called by RealtimeGateway once the WebSocket server is ready.
-   */
+  /** Called by RealtimeGateway once the WebSocket server is ready. */
   setServer(server: Server): void {
     this.server = server;
   }
@@ -57,22 +58,20 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
     this.unsubscribers.length = 0;
   }
 
-  // ─── Direct emit methods ───────────────────────────────────────────────────
-
-  emitToUser(userId: string, event: RealtimeEvent, payload: Record<string, unknown>): void {
-    if (!this.server) return;
-    this.server.to(`user:${userId}`).emit(event, payload);
-    this.logger.debug(`Emitted ${event} to user:${userId}`);
+  async emitToUser(
+    userId: string,
+    event: RealtimeEvent,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    await this.emitToValidatedRoom(`user:${userId}`, event, payload, userId);
   }
 
-  emitToTradingSession(
+  async emitToTradingSession(
     sessionId: string,
     event: RealtimeEvent,
     payload: Record<string, unknown>,
-  ): void {
-    if (!this.server) return;
-    this.server.to(`trading-session:${sessionId}`).emit(event, payload);
-    this.logger.debug(`Emitted ${event} to trading-session:${sessionId}`);
+  ): Promise<void> {
+    await this.emitToValidatedRoom(`trading-session:${sessionId}`, event, payload);
   }
 
   emitToAdmins(event: RealtimeEvent, payload: Record<string, unknown>): void {
@@ -81,14 +80,92 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
     this.logger.debug(`Emitted ${event} to admin:global`);
   }
 
-  // ─── DomainEventBus subscriptions ─────────────────────────────────────────
+  private async emitToValidatedRoom(
+    room: string,
+    event: RealtimeEvent,
+    payload: Record<string, unknown>,
+    expectedUserId?: string,
+  ): Promise<void> {
+    if (!this.server) return;
+
+    let sockets: Awaited<ReturnType<ReturnType<Server['in']>['fetchSockets']>>;
+    try {
+      sockets = await this.server.in(room).fetchSockets();
+    } catch (error) {
+      this.logger.error(
+        `Realtime room lookup failed closed for ${room}: ${(error as Error).message}`,
+      );
+      return;
+    }
+
+    const userStateCache = new Map<string, { status: UserStatus; sessionVersion: number } | null>();
+
+    for (const socket of sockets) {
+      const socketUserId =
+        typeof socket.data?.userId === 'string' ? (socket.data.userId as string) : null;
+      const authenticatedVersion = Number.isInteger(socket.data?.authenticatedSessionVersion)
+        ? (socket.data.authenticatedSessionVersion as number)
+        : null;
+
+      if (
+        !socketUserId ||
+        authenticatedVersion === null ||
+        (expectedUserId !== undefined && socketUserId !== expectedUserId)
+      ) {
+        socket.disconnect(true);
+        continue;
+      }
+
+      let current = userStateCache.get(socketUserId);
+      if (current === undefined) {
+        try {
+          const user = await this.userRepo.findOne({
+            where: { id: socketUserId },
+            select: ['id', 'status', 'sessionVersion'],
+          });
+          current = user
+            ? {
+                status: user.status,
+                sessionVersion: Number.isInteger(user.sessionVersion) ? user.sessionVersion : 0,
+              }
+            : null;
+          userStateCache.set(socketUserId, current);
+        } catch (error) {
+          this.logger.error(
+            `Realtime session state unavailable for user ${socketUserId}: ${(error as Error).message}`,
+          );
+          socket.disconnect(true);
+          continue;
+        }
+      }
+
+      if (
+        !current ||
+        current.status === UserStatus.SUSPENDED ||
+        current.status === UserStatus.PERMANENTLY_LOCKED ||
+        current.status === UserStatus.CLOSED
+      ) {
+        socket.disconnect(true);
+        continue;
+      }
+
+      if (current.sessionVersion !== authenticatedVersion) {
+        socket.disconnect(true);
+        continue;
+      }
+
+      socket.emit(event, payload);
+    }
+
+    this.logger.debug(`Validated outbound ${event} delivery for ${room}`);
+  }
 
   private subscribeToEvents(): void {
     this.unsubscribers.push(
       this.eventBus.subscribe<TradingSessionEventPayload>(
         DomainEventType.TRADING_SESSION_STARTED,
         ({ userId, payload }) => {
-          this.emitToUser(userId, RealtimeEvent.TRADING_SESSION_STARTED, {
+          void this.emitToUser(userId, RealtimeEvent.TRADING_SESSION_STARTED, {
             sessionId: payload.sessionId,
             brokerConnectionId: payload.brokerConnectionId,
             status: payload.status,
@@ -100,7 +177,7 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
       this.eventBus.subscribe<TradingSessionEventPayload>(
         DomainEventType.TRADING_SESSION_STOPPED,
         ({ userId, payload }) => {
-          this.emitToUser(userId, RealtimeEvent.TRADING_SESSION_STOPPED, {
+          void this.emitToUser(userId, RealtimeEvent.TRADING_SESSION_STOPPED, {
             sessionId: payload.sessionId,
             status: payload.status,
             endedAt: payload.endedAt,
@@ -111,7 +188,7 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
       this.eventBus.subscribe<TradeEventPayload>(
         DomainEventType.TRADE_PENDING,
         ({ userId, payload }) => {
-          this.emitToUser(userId, RealtimeEvent.TRADE_PENDING, {
+          void this.emitToUser(userId, RealtimeEvent.TRADE_PENDING, {
             tradeId: payload.tradeId,
             instrument: payload.instrument,
             direction: payload.direction,
@@ -124,7 +201,7 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
       this.eventBus.subscribe<TradeEventPayload>(
         DomainEventType.TRADE_OPENED,
         ({ userId, payload }) => {
-          this.emitToUser(userId, RealtimeEvent.TRADE_OPENED, {
+          void this.emitToUser(userId, RealtimeEvent.TRADE_OPENED, {
             tradeId: payload.tradeId,
             instrument: payload.instrument,
             direction: payload.direction,
@@ -133,7 +210,7 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
             status: payload.status,
           });
           if (payload.sessionId) {
-            this.emitToTradingSession(payload.sessionId, RealtimeEvent.TRADE_OPENED, {
+            void this.emitToTradingSession(payload.sessionId, RealtimeEvent.TRADE_OPENED, {
               tradeId: payload.tradeId,
               instrument: payload.instrument,
               direction: payload.direction,
@@ -148,7 +225,7 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
       this.eventBus.subscribe<TradeEventPayload>(
         DomainEventType.TRADE_REJECTED,
         ({ userId, payload }) => {
-          this.emitToUser(userId, RealtimeEvent.TRADE_REJECTED, {
+          void this.emitToUser(userId, RealtimeEvent.TRADE_REJECTED, {
             tradeId: payload.tradeId,
             instrument: payload.instrument,
             direction: payload.direction,
@@ -161,7 +238,7 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
       this.eventBus.subscribe<TradeEventPayload>(
         DomainEventType.TRADE_CLOSED,
         ({ userId, payload }) => {
-          this.emitToUser(userId, RealtimeEvent.TRADE_CLOSED, {
+          void this.emitToUser(userId, RealtimeEvent.TRADE_CLOSED, {
             tradeId: payload.tradeId,
             instrument: payload.instrument,
             direction: payload.direction,
@@ -176,7 +253,7 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
       this.eventBus.subscribe<RiskDecisionEventPayload>(
         DomainEventType.RISK_SIGNAL_APPROVED,
         ({ userId, payload }) => {
-          this.emitToUser(userId, RealtimeEvent.RISK_SIGNAL_APPROVED, {
+          void this.emitToUser(userId, RealtimeEvent.RISK_SIGNAL_APPROVED, {
             instrument: payload.instrument,
             direction: payload.direction,
             decision: payload.decision,
@@ -187,7 +264,7 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
       this.eventBus.subscribe<RiskDecisionEventPayload>(
         DomainEventType.RISK_SIGNAL_REJECTED,
         ({ userId, payload }) => {
-          this.emitToUser(userId, RealtimeEvent.RISK_SIGNAL_REJECTED, {
+          void this.emitToUser(userId, RealtimeEvent.RISK_SIGNAL_REJECTED, {
             instrument: payload.instrument,
             direction: payload.direction,
             decision: payload.decision,
@@ -197,12 +274,10 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
         },
       ),
 
-      // Sprint 50 PR-3 — normalized order lifecycle (safe fields only;
-      // mirrors the frontend-safe OrderView projection)
       this.eventBus.subscribe<OrderEventPayload>(
         DomainEventType.ORDER_SUBMITTED,
         ({ userId, payload }) => {
-          this.emitToUser(userId, RealtimeEvent.ORDER_SUBMITTED, {
+          void this.emitToUser(userId, RealtimeEvent.ORDER_SUBMITTED, {
             orderId: payload.orderId,
             clientOrderId: payload.clientOrderId,
             instrument: payload.instrument,
@@ -217,7 +292,7 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
       this.eventBus.subscribe<OrderEventPayload>(
         DomainEventType.ORDER_ACKNOWLEDGED,
         ({ userId, payload }) => {
-          this.emitToUser(userId, RealtimeEvent.ORDER_ACKNOWLEDGED, {
+          void this.emitToUser(userId, RealtimeEvent.ORDER_ACKNOWLEDGED, {
             orderId: payload.orderId,
             clientOrderId: payload.clientOrderId,
             instrument: payload.instrument,
@@ -230,7 +305,7 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
       this.eventBus.subscribe<OrderEventPayload>(
         DomainEventType.ORDER_FILLED,
         ({ userId, payload }) => {
-          this.emitToUser(userId, RealtimeEvent.ORDER_FILLED, {
+          void this.emitToUser(userId, RealtimeEvent.ORDER_FILLED, {
             orderId: payload.orderId,
             clientOrderId: payload.clientOrderId,
             instrument: payload.instrument,
@@ -244,7 +319,7 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
       this.eventBus.subscribe<OrderEventPayload>(
         DomainEventType.ORDER_REJECTED,
         ({ userId, payload }) => {
-          this.emitToUser(userId, RealtimeEvent.ORDER_REJECTED, {
+          void this.emitToUser(userId, RealtimeEvent.ORDER_REJECTED, {
             orderId: payload.orderId,
             clientOrderId: payload.clientOrderId,
             instrument: payload.instrument,
@@ -257,7 +332,7 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
       this.eventBus.subscribe<OrderEventPayload>(
         DomainEventType.ORDER_RECONCILIATION_PENDING,
         ({ userId, payload }) => {
-          this.emitToUser(userId, RealtimeEvent.ORDER_RECONCILIATION_PENDING, {
+          void this.emitToUser(userId, RealtimeEvent.ORDER_RECONCILIATION_PENDING, {
             orderId: payload.orderId,
             clientOrderId: payload.clientOrderId,
             instrument: payload.instrument,
@@ -270,7 +345,7 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
       this.eventBus.subscribe<BrokerStatusEventPayload>(
         DomainEventType.BROKER_STATUS_CHANGED,
         ({ userId, payload }) => {
-          this.emitToUser(userId, RealtimeEvent.BROKER_CONNECTION_STATUS_CHANGED, {
+          void this.emitToUser(userId, RealtimeEvent.BROKER_CONNECTION_STATUS_CHANGED, {
             connectionId: payload.connectionId,
             status: payload.status,
             previousStatus: payload.previousStatus,
@@ -279,11 +354,10 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
         },
       ),
 
-      // Sprint 50 — authorization state machine transitions (safe fields only)
       this.eventBus.subscribe<BrokerAuthorizationEventPayload>(
         DomainEventType.BROKER_AUTHORIZATION_CHANGED,
         ({ userId, payload }) => {
-          this.emitToUser(userId, RealtimeEvent.BROKER_AUTHORIZATION_CHANGED, {
+          void this.emitToUser(userId, RealtimeEvent.BROKER_AUTHORIZATION_CHANGED, {
             connectionId: payload.connectionId,
             brokerId: payload.brokerId,
             status: payload.status,
@@ -292,11 +366,10 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
         },
       ),
 
-      // Sprint 50 — emergency control plane changes (admin-facing rooms)
       this.eventBus.subscribe<ExecutionControlEventPayload>(
         DomainEventType.EXECUTION_CONTROL_CHANGED,
         ({ userId, payload }) => {
-          this.emitToUser(userId, RealtimeEvent.EXECUTION_CONTROL_CHANGED, {
+          void this.emitToUser(userId, RealtimeEvent.EXECUTION_CONTROL_CHANGED, {
             scope: payload.scope,
             scopeKey: payload.scopeKey ?? null,
             action: payload.action,
@@ -308,7 +381,7 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
       this.eventBus.subscribe<AiSignalEventPayload>(
         DomainEventType.AI_SIGNAL_RECEIVED,
         ({ userId, payload }) => {
-          this.emitToUser(userId, RealtimeEvent.AI_SIGNAL_RECEIVED, {
+          void this.emitToUser(userId, RealtimeEvent.AI_SIGNAL_RECEIVED, {
             signalId: payload.signalId,
             instrument: payload.instrument,
             direction: payload.direction,
@@ -321,7 +394,7 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
       this.eventBus.subscribe<AiSignalEventPayload>(
         DomainEventType.AI_SIGNAL_IGNORED,
         ({ userId, payload }) => {
-          this.emitToUser(userId, RealtimeEvent.AI_SIGNAL_IGNORED, {
+          void this.emitToUser(userId, RealtimeEvent.AI_SIGNAL_IGNORED, {
             signalId: payload.signalId,
             instrument: payload.instrument,
             direction: payload.direction,
@@ -333,7 +406,7 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
       this.eventBus.subscribe<SystemNotificationPayload>(
         DomainEventType.SYSTEM_NOTIFICATION,
         ({ userId, payload }) => {
-          this.emitToUser(userId, RealtimeEvent.SYSTEM_NOTIFICATION, {
+          void this.emitToUser(userId, RealtimeEvent.SYSTEM_NOTIFICATION, {
             title: payload.title,
             message: payload.message,
             severity: payload.severity,
