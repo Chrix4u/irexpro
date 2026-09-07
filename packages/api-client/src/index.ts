@@ -1,4 +1,4 @@
-import {
+import type {
   ApiError,
   AuthActionResponse,
   AuthTokens,
@@ -81,8 +81,8 @@ export interface ApiClient {
   logout(): Promise<LogoutResponse>;
   /** GET /auth/me (requires Authorization: Bearer) → current user */
   me(): Promise<AuthUser>;
-  /** Begin TOTP enrollment. Returned secret/URI must remain memory-only. */
-  beginMfaSetup(): Promise<MfaSetupResponse>;
+  /** Begin TOTP enrollment after current-password re-authentication. Returned secret/URI must remain memory-only. */
+  beginMfaSetup(password: string): Promise<MfaSetupResponse>;
   /** Verify a six-digit TOTP and enable MFA. Existing sessions are revoked. */
   enableMfa(code: string): Promise<AuthActionResponse>;
   /** Disable MFA with current password + six-digit TOTP. Existing sessions are revoked. */
@@ -265,8 +265,11 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
 
     me: () => request<AuthUser>('/auth/me'),
 
-    beginMfaSetup: () =>
-      request<MfaSetupResponse>('/auth/mfa/setup', { method: 'POST' }),
+    beginMfaSetup: (password) =>
+      request<MfaSetupResponse>('/auth/mfa/setup', {
+        method: 'POST',
+        body: JSON.stringify({ password }),
+      }),
 
     enableMfa: (code) =>
       request<AuthActionResponse>('/auth/mfa/enable', {

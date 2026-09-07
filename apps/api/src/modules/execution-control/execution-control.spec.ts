@@ -282,7 +282,7 @@ describe('ExecutionControlService', () => {
     });
 
     it('reactivates at the same scope after the prior control expired in time (A2)', async () => {
-      // The prior row still occupies the (scope, scopeKey) slot but its
+      // The prior ACTIVE row still occupies the (scope, scopeKey) slot but its
       // expiry has passed — reactivation MUST succeed deterministically.
       controlRepo.findOne.mockResolvedValue(
         makeControl({
@@ -294,20 +294,20 @@ describe('ExecutionControlService', () => {
       const view = await service.activateControl(baseDto(), 'admin-1');
 
       expect(view.scope).toBe(ExecutionControlScope.GLOBAL);
-      // Old row flipped to EXPIRED (retained as a record — not deleted)
+      // Retire exactly the ACTIVE row conditionally; history is not deleted.
       expect(controlRepo.update).toHaveBeenCalledWith(
-        { id: 'ctl-old' },
+        { id: 'ctl-old', status: ExecutionControlStatus.ACTIVE },
         { status: ExecutionControlStatus.EXPIRED },
       );
       expect(controlRepo.delete).not.toHaveBeenCalled();
-      // A NEW row is inserted with status ACTIVE
+      // A NEW row is inserted with status ACTIVE.
       expect(controlRepo.save).toHaveBeenCalledTimes(1);
       expect(controlRepo.create).toHaveBeenCalledWith(
         expect.objectContaining({ status: ExecutionControlStatus.ACTIVE }),
       );
     });
 
-    it('reactivates when the prior slot row already has status EXPIRED (A2)', async () => {
+    it('ignores a historical EXPIRED row during slot discovery (A2)', async () => {
       controlRepo.findOne.mockResolvedValue(
         makeControl({ id: 'ctl-old', status: ExecutionControlStatus.EXPIRED }),
       );
@@ -315,10 +315,7 @@ describe('ExecutionControlService', () => {
       const view = await service.activateControl(baseDto(), 'admin-1');
 
       expect(view.scope).toBe(ExecutionControlScope.GLOBAL);
-      expect(controlRepo.update).toHaveBeenCalledWith(
-        { id: 'ctl-old' },
-        { status: ExecutionControlStatus.EXPIRED },
-      );
+      expect(controlRepo.update).not.toHaveBeenCalled();
       expect(controlRepo.save).toHaveBeenCalledTimes(1);
     });
 

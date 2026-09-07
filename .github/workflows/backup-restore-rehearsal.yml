@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 env:
-  POSTGRES_IMAGE: postgres:16-bookworm
+  POSTGRES_CONTAINER_IMAGE: postgres:16-bookworm@sha256:92620daddcd947f8d5ab5ba66e848702fe443d87fed30c4cea8e389fd78dfc55 # Docker Official Image
   POSTGRES_PASSWORD: ci_disposable_restore_password
   SOURCE_DB: irexpro_backup_source
   RESTORE_DB: irexpro_backup_restore
@@ -26,7 +26,7 @@ jobs:
     timeout-minutes: 15
     services:
       postgres:
-        image: postgres:16-bookworm
+        image: postgres:16-bookworm@sha256:92620daddcd947f8d5ab5ba66e848702fe443d87fed30c4cea8e389fd78dfc55 # Docker Official Image
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: ci_disposable_restore_password
@@ -64,7 +64,7 @@ jobs:
           # container; without it Docker closes stdin and creates an empty dump.
           docker run --rm -i --network host \
             -e PGPASSWORD="$POSTGRES_PASSWORD" \
-            "$POSTGRES_IMAGE" \
+            "$POSTGRES_CONTAINER_IMAGE" \
             psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U postgres -d "$SOURCE_DB" <<'SQL'
           CREATE TABLE rehearsal_parent (
             id integer PRIMARY KEY,
@@ -90,7 +90,7 @@ jobs:
           docker run --rm --network host \
             -e PGPASSWORD="$POSTGRES_PASSWORD" \
             -v "$PWD/security-artifacts:/evidence" \
-            "$POSTGRES_IMAGE" \
+            "$POSTGRES_CONTAINER_IMAGE" \
             pg_dump -h 127.0.0.1 -U postgres -d "$SOURCE_DB" \
               --format=custom --no-owner --no-privileges \
               --file=/evidence/synthetic-restore.dump
@@ -103,14 +103,14 @@ jobs:
           set -euo pipefail
           docker run --rm --network host \
             -e PGPASSWORD="$POSTGRES_PASSWORD" \
-            "$POSTGRES_IMAGE" \
+            "$POSTGRES_CONTAINER_IMAGE" \
             psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U postgres -d postgres \
               -c "CREATE DATABASE $RESTORE_DB"
 
           docker run --rm --network host \
             -e PGPASSWORD="$POSTGRES_PASSWORD" \
             -v "$PWD/security-artifacts:/evidence" \
-            "$POSTGRES_IMAGE" \
+            "$POSTGRES_CONTAINER_IMAGE" \
             pg_restore -h 127.0.0.1 -U postgres -d "$RESTORE_DB" \
               --no-owner --no-privileges --exit-on-error \
               /evidence/synthetic-restore.dump
@@ -120,12 +120,12 @@ jobs:
           set -euo pipefail
           parent_count="$(docker run --rm --network host \
             -e PGPASSWORD="$POSTGRES_PASSWORD" \
-            "$POSTGRES_IMAGE" \
+            "$POSTGRES_CONTAINER_IMAGE" \
             psql -At -h 127.0.0.1 -U postgres -d "$RESTORE_DB" \
               -c 'SELECT count(*) FROM rehearsal_parent')"
           child_count="$(docker run --rm --network host \
             -e PGPASSWORD="$POSTGRES_PASSWORD" \
-            "$POSTGRES_IMAGE" \
+            "$POSTGRES_CONTAINER_IMAGE" \
             psql -At -h 127.0.0.1 -U postgres -d "$RESTORE_DB" \
               -c 'SELECT count(*) FROM rehearsal_child')"
 
@@ -134,7 +134,7 @@ jobs:
 
           if docker run --rm --network host \
             -e PGPASSWORD="$POSTGRES_PASSWORD" \
-            "$POSTGRES_IMAGE" \
+            "$POSTGRES_CONTAINER_IMAGE" \
             psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U postgres -d "$RESTORE_DB" \
               -c 'INSERT INTO rehearsal_child (id, parent_id, amount) VALUES (99, 999, 1)'; then
             echo 'Foreign-key verification unexpectedly succeeded' >&2
@@ -143,7 +143,7 @@ jobs:
 
           if docker run --rm --network host \
             -e PGPASSWORD="$POSTGRES_PASSWORD" \
-            "$POSTGRES_IMAGE" \
+            "$POSTGRES_CONTAINER_IMAGE" \
             psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U postgres -d "$RESTORE_DB" \
               -c 'INSERT INTO rehearsal_child (id, parent_id, amount) VALUES (98, 1, 0)'; then
             echo 'CHECK-constraint verification unexpectedly succeeded' >&2
@@ -173,7 +173,7 @@ jobs:
           set +e
           docker run --rm --network host \
             -e PGPASSWORD="$POSTGRES_PASSWORD" \
-            "$POSTGRES_IMAGE" \
+            "$POSTGRES_CONTAINER_IMAGE" \
             psql -h 127.0.0.1 -U postgres -d postgres \
               -c "DROP DATABASE IF EXISTS $RESTORE_DB WITH (FORCE)"
           rm -f security-artifacts/synthetic-restore.dump
