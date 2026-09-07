@@ -26,7 +26,7 @@ describe('WsJwtGuard — Sprint 48 revocation enforcement', () => {
     return { guard, jwtService, userRepo, client, context };
   }
 
-  it('accepts a current access token and attaches only safe identity fields', async () => {
+  it('accepts a current access token and attaches only safe identity/session fields', async () => {
     const { guard, jwtService, userRepo, client, context } = setup();
     jwtService.verify.mockReturnValue({
       sub: userId,
@@ -47,6 +47,7 @@ describe('WsJwtGuard — Sprint 48 revocation enforcement', () => {
       userId,
       userEmail: 'user@example.com',
       userRoles: ['USER'],
+      authenticatedSessionVersion: 3,
     });
   });
 

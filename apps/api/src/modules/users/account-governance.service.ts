@@ -282,13 +282,18 @@ export class AccountGovernanceService {
   private applyAppealDecision(user: User, decision: AccountAppealDecision): void {
     switch (decision) {
       case AccountAppealDecision.REACTIVATE:
+        // Reactivation must not reset or roll back the session generation.
+        // The generation was already advanced when the restrictive state was
+        // entered, so every pre-restriction token stays revoked.
         user.status = UserStatus.ACTIVE;
         user.deletedAt = null;
         return;
       case AccountAppealDecision.PERMANENTLY_LOCK:
+        this.advanceSessionVersion(user);
         user.status = UserStatus.PERMANENTLY_LOCKED;
         return;
       case AccountAppealDecision.DELETE:
+        this.advanceSessionVersion(user);
         user.status = UserStatus.CLOSED;
         user.deletedAt = new Date();
         return;
@@ -298,16 +303,31 @@ export class AccountGovernanceService {
   private applyAdminStatusAction(user: User, action: AccountStatusAction): void {
     switch (action) {
       case AccountStatusAction.DEACTIVATE:
+        this.advanceSessionVersion(user);
         user.status = UserStatus.SUSPENDED;
         return;
       case AccountStatusAction.PERMANENTLY_LOCK:
+        this.advanceSessionVersion(user);
         user.status = UserStatus.PERMANENTLY_LOCKED;
         return;
       case AccountStatusAction.DELETE:
+        this.advanceSessionVersion(user);
         user.status = UserStatus.CLOSED;
         user.deletedAt = new Date();
         return;
     }
+  }
+
+  /**
+   * Advance the token generation before persisting any restrictive account
+   * state. JwtStrategy and refresh rotation both compare the token-carried
+   * generation with this value, so advancing it revokes all existing sessions.
+   * The containing governance transaction persists status + generation
+   * atomically.
+   */
+  private advanceSessionVersion(user: User): void {
+    const currentVersion = Number.isInteger(user.sessionVersion) ? user.sessionVersion : 0;
+    user.sessionVersion = currentVersion + 1;
   }
 
   /** Prevent direct controls from weakening a locked or closed account state. */

@@ -14,7 +14,12 @@ describe('RealtimeGateway — connection-time authentication', () => {
     const userRepo = { findOne: jest.fn() };
     const guard = new WsJwtGuard(jwtService as never, configService as never, userRepo as never);
     const realtimeService = { setServer: jest.fn() };
-    const gateway = new RealtimeGateway(realtimeService as never, guard);
+    const tradingSessionRepo = { findOne: jest.fn() };
+    const gateway = new RealtimeGateway(
+      realtimeService as never,
+      guard,
+      tradingSessionRepo as never,
+    );
     const client = {
       id: 'socket-connection-1',
       handshake: { auth: { token: 'socket-token' }, headers: {} },
@@ -25,7 +30,7 @@ describe('RealtimeGateway — connection-time authentication', () => {
       leave: jest.fn(),
     };
 
-    return { gateway, guard, jwtService, userRepo, client };
+    return { gateway, guard, jwtService, userRepo, tradingSessionRepo, client };
   }
 
   function currentAccessPayload() {
@@ -38,7 +43,7 @@ describe('RealtimeGateway — connection-time authentication', () => {
     };
   }
 
-  it('fully validates a current access token before keeping the socket connected', async () => {
+  it('fully validates a current access token and records its generation on the socket', async () => {
     const { gateway, jwtService, userRepo, client } = setup();
     jwtService.verify.mockReturnValue(currentAccessPayload());
     userRepo.findOne.mockResolvedValue({
@@ -57,6 +62,7 @@ describe('RealtimeGateway — connection-time authentication', () => {
       userId,
       userEmail: 'user@example.com',
       userRoles: ['USER'],
+      authenticatedSessionVersion: 3,
     });
     expect(client.emit).not.toHaveBeenCalled();
     expect(client.disconnect).not.toHaveBeenCalled();
@@ -90,6 +96,7 @@ describe('RealtimeGateway — connection-time authentication', () => {
 
     expect(client.emit).toHaveBeenCalledWith('error', { message: 'Unauthorized' });
     expect(client.disconnect).toHaveBeenCalledWith(true);
+    expect(client.data).toEqual({});
   });
 
   it('disconnects an invalid or expired JWT without exposing validation details', async () => {
