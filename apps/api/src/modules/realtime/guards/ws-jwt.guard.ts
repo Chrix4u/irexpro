@@ -11,6 +11,7 @@ export interface WsAuthenticatedSocket extends Socket {
   userId: string;
   userEmail: string | null;
   userRoles: string[];
+  authenticatedSessionVersion: number;
 }
 
 interface WsJwtPayload {
@@ -30,8 +31,9 @@ interface WsJwtPayload {
  * stale tokens, and tokens for inactive users are rejected before room join.
  *
  * Connection-time and per-message authentication intentionally share the same
- * authenticateClient() implementation so a socket cannot remain connected with
- * credentials that would be rejected by guarded message handlers.
+ * authenticateClient() implementation. The validated session generation is
+ * also persisted on socket.data so outbound room delivery can re-check the
+ * current server-side generation before emitting to a previously joined socket.
  */
 @Injectable()
 export class WsJwtGuard implements CanActivate {
@@ -94,10 +96,12 @@ export class WsJwtGuard implements CanActivate {
       (client as WsAuthenticatedSocket).userId = user.id;
       (client as WsAuthenticatedSocket).userEmail = user.email;
       (client as WsAuthenticatedSocket).userRoles = payload.roles ?? [];
+      (client as WsAuthenticatedSocket).authenticatedSessionVersion = userVersion;
 
       client.data.userId = user.id;
       client.data.userEmail = user.email;
       client.data.userRoles = payload.roles ?? [];
+      client.data.authenticatedSessionVersion = userVersion;
     } catch {
       this.logger.warn(`WsJwtGuard: invalid token on socket ${client.id}`);
       throw new WsException('Unauthorized: invalid, expired, or revoked token');
