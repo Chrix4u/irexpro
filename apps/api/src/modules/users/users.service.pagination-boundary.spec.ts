@@ -13,9 +13,7 @@ describe('UsersService — admin user pagination boundary', () => {
 
   async function expectPagination(page: unknown, limit: unknown, skip: number, take: number) {
     await service.findAll(page as number, limit as number);
-    expect(userRepo.findAndCount).toHaveBeenCalledWith(
-      expect.objectContaining({ skip, take }),
-    );
+    expect(userRepo.findAndCount).toHaveBeenCalledWith(expect.objectContaining({ skip, take }));
   }
 
   it('preserves defaults and ordinary valid pagination', async () => {
