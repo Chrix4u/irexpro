@@ -17,7 +17,8 @@ import { TradingSession } from '../execution/entities/trading-session.entity';
  * trading-session access lets the gateway authorize session-room membership
  * from persisted ownership instead of trusting client-supplied identity data.
  * WsMessageRateGuard runs first on guarded messages to bound repeated auth and
- * ownership-validation work per socket.
+ * ownership-validation work per socket. Realtime JWT verification is pinned to
+ * the same HS256-only policy as HTTP bearer authentication.
  */
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { TradingSession } from '../execution/entities/trading-session.entity';
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
         secret: configService.get<string>('jwt.secret'),
+        verifyOptions: { algorithms: ['HS256'] },
       }),
     }),
   ],
