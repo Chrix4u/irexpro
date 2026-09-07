@@ -19,6 +19,7 @@ function makeUser(overrides: Partial<User> = {}): User {
     email: 'locked@example.com',
     phone: '+233241234567',
     status: UserStatus.SUSPENDED,
+    sessionVersion: 3,
     deletedAt: null,
     profile: {
       firstName: 'Amina',
@@ -214,9 +215,10 @@ describe('AccountGovernanceService', () => {
   });
 
   describe('resolveAppeal', () => {
-    it('reactivates a soft-deleted account, resolves the appeal, and emits auditable events', async () => {
+    it('reactivates a soft-deleted account without restoring its pre-restriction session generation', async () => {
       const targetUser = makeUser({
         status: UserStatus.CLOSED,
+        sessionVersion: 8,
         deletedAt: new Date('2026-07-01T00:00:00.000Z'),
       });
       const pendingAppeal = makeAppeal({ userId: targetUser.id, user: targetUser });
@@ -241,6 +243,7 @@ describe('AccountGovernanceService', () => {
 
       expect(targetUser.status).toBe(UserStatus.ACTIVE);
       expect(targetUser.deletedAt).toBeNull();
+      expect(targetUser.sessionVersion).toBe(8);
       expect(queryRunner.commitTransaction).toHaveBeenCalledTimes(1);
       expect(queryRunner.release).toHaveBeenCalledTimes(1);
       expect(result).toEqual(
@@ -257,6 +260,31 @@ describe('AccountGovernanceService', () => {
         AuditAction.ACCOUNT_APPEAL_RESOLVED,
         AuditAction.USER_REACTIVATED,
       ]);
+    });
+
+    it('advances the session generation when an appeal resolves to a restrictive state', async () => {
+      const targetUser = makeUser({ status: UserStatus.SUSPENDED, sessionVersion: 5 });
+      const pendingAppeal = makeAppeal({ userId: targetUser.id, user: targetUser });
+      manager.findOne.mockResolvedValueOnce(pendingAppeal).mockResolvedValueOnce(targetUser);
+      appealRepo.findOne.mockResolvedValue(
+        makeAppeal({
+          userId: targetUser.id,
+          user: targetUser,
+          status: AccountAppealStatus.RESOLVED,
+          decision: AccountAppealDecision.PERMANENTLY_LOCK,
+          reviewerUserId: '33333333-3333-4333-8333-333333333333',
+          resolvedAt: new Date('2026-08-02T12:00:00.000Z'),
+        }),
+      );
+
+      await service.resolveAppeal(pendingAppeal.id, '33333333-3333-4333-8333-333333333333', {
+        decision: AccountAppealDecision.PERMANENTLY_LOCK,
+      });
+
+      expect(targetUser.status).toBe(UserStatus.PERMANENTLY_LOCKED);
+      expect(targetUser.sessionVersion).toBe(6);
+      expect(manager.save).toHaveBeenCalledWith(User, targetUser);
+      expect(queryRunner.commitTransaction).toHaveBeenCalledTimes(1);
     });
 
     it('rejects a previously resolved appeal without changing the account', async () => {
@@ -299,8 +327,8 @@ describe('AccountGovernanceService', () => {
       expect(dataSource.createQueryRunner).not.toHaveBeenCalled();
     });
 
-    it('deactivates an eligible account and does not copy the reason into audit metadata', async () => {
-      const targetUser = makeUser({ status: UserStatus.ACTIVE });
+    it('deactivates an eligible account, advances session generation, and keeps the reason out of audit metadata', async () => {
+      const targetUser = makeUser({ status: UserStatus.ACTIVE, sessionVersion: 7 });
       manager.findOne.mockResolvedValue(targetUser);
       const reason = 'Repeated account-access policy breach';
 
@@ -312,9 +340,28 @@ describe('AccountGovernanceService', () => {
 
       expect(result).toEqual({ id: targetUser.id, status: UserStatus.SUSPENDED, deletedAt: null });
       expect(targetUser.status).toBe(UserStatus.SUSPENDED);
+      expect(targetUser.sessionVersion).toBe(8);
+      expect(manager.save).toHaveBeenCalledWith(User, targetUser);
       const auditRecord = auditService.log.mock.calls[0][0] as { metadata: unknown };
       expect(JSON.stringify(auditRecord.metadata)).not.toContain(reason);
       expect(auditRecord).toEqual(expect.objectContaining({ action: AuditAction.USER_SUSPENDED }));
+    });
+
+    it('advances the session generation again when a suspended account is closed', async () => {
+      const targetUser = makeUser({ status: UserStatus.SUSPENDED, sessionVersion: 4 });
+      manager.findOne.mockResolvedValue(targetUser);
+
+      const result = await service.applyAdminAction(
+        targetUser.id,
+        '33333333-3333-4333-8333-333333333333',
+        { action: AccountStatusAction.DELETE, reason: 'Confirmed account closure' },
+      );
+
+      expect(targetUser.status).toBe(UserStatus.CLOSED);
+      expect(targetUser.sessionVersion).toBe(5);
+      expect(targetUser.deletedAt).toBeInstanceOf(Date);
+      expect(result.status).toBe(UserStatus.CLOSED);
+      expect(manager.save).toHaveBeenCalledWith(User, targetUser);
     });
 
     it('does not allow a direct action to weaken a permanently locked account', async () => {
