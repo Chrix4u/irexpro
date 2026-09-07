@@ -235,7 +235,9 @@ describe('ExecutionControlService — real PostgreSQL lifecycle (architect A2)',
     expect(rejected).toHaveLength(1);
     expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(ConflictException);
 
-    const winner = (fulfilled[0] as PromiseFulfilledResult<Awaited<ReturnType<typeof service.activateControl>>>).value;
+    const winner = (
+      fulfilled[0] as PromiseFulfilledResult<Awaited<ReturnType<typeof service.activateControl>>>
+    ).value;
     const rows = await activeRows(ExecutionControlScope.PROVIDER, 'oanda');
     expect(rows).toHaveLength(2);
 
