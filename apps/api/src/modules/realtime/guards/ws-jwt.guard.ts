@@ -5,6 +5,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { WsException } from '@nestjs/websockets';
 import { Socket } from 'socket.io';
 import { Repository } from 'typeorm';
+import { normalizeCanonicalUuid } from '../../../common/utils/uuid.util';
 import { User, UserStatus } from '../../users/entities/user.entity';
 
 export interface WsAuthenticatedSocket extends Socket {
@@ -80,6 +81,10 @@ export class WsJwtGuard implements CanActivate {
       if (!payload.sub || typeof payload.sub !== 'string') {
         throw new Error('missing subject');
       }
+      const subject = normalizeCanonicalUuid(payload.sub);
+      if (!subject) {
+        throw new Error('invalid subject');
+      }
       // Token purpose is explicit and fail-closed, matching the HTTP bearer
       // boundary. Missing tokenType is not treated as a legacy access token.
       if (payload.tokenType !== 'access') {
@@ -87,7 +92,7 @@ export class WsJwtGuard implements CanActivate {
       }
 
       const user = await this.userRepo.findOne({
-        where: { id: payload.sub },
+        where: { id: subject },
         select: ['id', 'email', 'status', 'sessionVersion'],
       });
 
