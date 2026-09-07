@@ -34,9 +34,9 @@ import { PasswordResetDeliveryService } from './password-reset-delivery.service'
  *   - Request metadata is bounded to its database contract before persistence.
  *   - Request response is generic to prevent account enumeration.
  *   - Raw token/code/pepper is NEVER logged.
- *   - Successful password reset advances User.sessionVersion in the same DB
- *     transaction as the password change, immediately revoking all access and
- *     refresh JWTs issued before the reset.
+ *   - Successful password reset advances User.sessionVersion and retires any
+ *     pending (not yet enabled) MFA enrollment in the same DB transaction as
+ *     the password change. Active MFA secrets are preserved.
  */
 @Injectable()
 export class PasswordResetService {
@@ -342,6 +342,16 @@ export class PasswordResetService {
 
       const passwordHash = await this.hashNewPassword(password);
       await queryRunner.manager.update(User, resetToken.userId, { passwordHash });
+
+      // Pending TOTP setup was authorized under the pre-reset password state.
+      // Clear it transactionally, but scope the update to mfaEnabled=false so
+      // an already-active MFA secret is never removed by password reset.
+      await queryRunner.manager.update(
+        User,
+        { id: resetToken.userId, mfaEnabled: false },
+        { mfaSecret: null, mfaSetupExpiresAt: null },
+      );
+
       await queryRunner.manager.update(User, resetToken.userId, {
         sessionVersion: () => '"session_version" + 1',
       });
@@ -385,6 +395,15 @@ export class PasswordResetService {
       // Keep the password update as a separate statement so audit/tests can
       // verify that only the hash is written here.
       await queryRunner.manager.update(User, resetToken.userId, { passwordHash });
+
+      // A pending MFA enrollment was authorized using the old password. Retire
+      // only that pending state; the predicate deliberately preserves enabled
+      // MFA and its TOTP secret.
+      await queryRunner.manager.update(
+        User,
+        { id: resetToken.userId, mfaEnabled: false },
+        { mfaSecret: null, mfaSetupExpiresAt: null },
+      );
 
       // Revoke every JWT issued before the reset in the SAME transaction.
       // A successful reset therefore cannot commit while old sessions remain

@@ -16,6 +16,8 @@ import { AuditService } from '../audit/audit.service';
 import { User } from '../users/entities/user.entity';
 import { buildOtpAuthUri, generateBase32Secret, verifyTotp } from './utils/totp.util';
 
+const DEFAULT_MFA_SETUP_TTL_SECONDS = 10 * 60;
+
 @Injectable()
 export class MfaService {
   private readonly logger = new Logger(MfaService.name);
@@ -49,7 +51,8 @@ export class MfaService {
 
     const secret = generateBase32Secret();
     const encryptedSecret = this.encryptSecret(secret);
-    await this.userRepo.update(user.id, { mfaSecret: encryptedSecret });
+    const mfaSetupExpiresAt = new Date(Date.now() + this.mfaSetupTtlMs());
+    await this.userRepo.update(user.id, { mfaSecret: encryptedSecret, mfaSetupExpiresAt });
 
     await this.auditService.log({
       actorUserId: user.id,
@@ -78,6 +81,14 @@ export class MfaService {
       throw new BadRequestException('Start MFA setup before enabling it');
     }
 
+    // Legacy pending rows have no expiry and therefore fail closed. Expired
+    // enrollment material is retired before returning so it cannot be replayed.
+    if (!user.mfaSetupExpiresAt || user.mfaSetupExpiresAt.getTime() <= Date.now()) {
+      await this.userRepo.update(user.id, { mfaSecret: null, mfaSetupExpiresAt: null });
+      await this.auditChallengeFailure(user.id, 'enable', ipAddress);
+      throw new BadRequestException('MFA setup expired; start setup again');
+    }
+
     const secret = this.decryptSecretOrFailClosed(user.mfaSecret);
     if (!verifyTotp(secret, code)) {
       await this.auditChallengeFailure(user.id, 'enable', ipAddress);
@@ -86,6 +97,7 @@ export class MfaService {
 
     await this.userRepo.update(user.id, {
       mfaEnabled: true,
+      mfaSetupExpiresAt: null,
       sessionVersion: () => '"session_version" + 1',
     });
 
@@ -116,6 +128,7 @@ export class MfaService {
     await this.userRepo.update(user.id, {
       mfaEnabled: false,
       mfaSecret: null,
+      mfaSetupExpiresAt: null,
       sessionVersion: () => '"session_version" + 1',
     });
 
@@ -155,6 +168,16 @@ export class MfaService {
       ipAddress,
       metadata: { result: 'failed', operation, method: 'totp' },
     });
+  }
+
+  private mfaSetupTtlMs(): number {
+    const configured = this.configService.get<number>('auth.mfaSetupTtlSeconds');
+    const seconds = configured ?? DEFAULT_MFA_SETUP_TTL_SECONDS;
+    if (!Number.isSafeInteger(seconds) || seconds <= 0 || seconds > 24 * 60 * 60) {
+      this.logger.error('Invalid MFA setup TTL configuration; enrollment failed closed.');
+      throw new ServiceUnavailableException('MFA is temporarily unavailable');
+    }
+    return seconds * 1000;
   }
 
   private encryptionKey(): Buffer {

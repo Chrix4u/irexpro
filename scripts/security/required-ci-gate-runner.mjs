@@ -1,4 +1,4 @@
-import { runGate } from './required-ci-gate.mjs';
+import { GitHubApiError, runGate } from './required-ci-gate.mjs';
 
 const DEFAULT_MAX_ATTEMPTS = 5;
 const DEFAULT_BASE_DELAY_SECONDS = 2;
@@ -20,6 +20,19 @@ function errorMessage(error) {
 }
 
 export function isTransientGateError(error) {
+  if (error instanceof GitHubApiError) {
+    if (error.status === 408 || error.status === 425 || error.status === 429 || error.status >= 500) {
+      return true;
+    }
+    if (
+      error.status === 403 &&
+      (error.retryAfterSeconds !== null || error.rateLimitRemaining === 0)
+    ) {
+      return true;
+    }
+    return false;
+  }
+
   const message = errorMessage(error);
   const statusMatch = message.match(/GitHub API request failed \((\d{3})\)/);
   if (statusMatch) {
@@ -36,6 +49,21 @@ export function retryDelaySeconds(attempt, baseDelaySeconds, maxDelaySeconds) {
   return Math.min(maxDelaySeconds, baseDelaySeconds * 2 ** Math.max(0, attempt - 1));
 }
 
+export function retryHintDelaySeconds(error, nowEpochSeconds = Math.floor(Date.now() / 1000)) {
+  if (!(error instanceof GitHubApiError)) return null;
+  if (error.retryAfterSeconds !== null && error.retryAfterSeconds >= 0) {
+    return error.retryAfterSeconds;
+  }
+  if (
+    error.rateLimitRemaining === 0 &&
+    error.rateLimitResetEpochSeconds !== null &&
+    error.rateLimitResetEpochSeconds > nowEpochSeconds
+  ) {
+    return error.rateLimitResetEpochSeconds - nowEpochSeconds + 1;
+  }
+  return null;
+}
+
 function assertEqual(actual, expected, label) {
   if (actual !== expected) {
     throw new Error(`${label}: expected ${expected}, got ${actual}`);
@@ -44,12 +72,21 @@ function assertEqual(actual, expected, label) {
 
 export function runSelfTests() {
   assertEqual(
-    isTransientGateError(new Error('GitHub API request failed (502) for /actions/runs')),
+    isTransientGateError(new GitHubApiError({
+      status: 502,
+      path: '/actions/runs',
+      requestId: 'test',
+    })),
     true,
     '502 is transient',
   );
   assertEqual(
-    isTransientGateError(new Error('GitHub API request failed (429) for /actions/runs')),
+    isTransientGateError(new GitHubApiError({
+      status: 429,
+      path: '/actions/runs',
+      requestId: 'test',
+      retryAfterSeconds: 4,
+    })),
     true,
     '429 is transient',
   );
@@ -59,14 +96,54 @@ export function runSelfTests() {
     'network timeout is transient',
   );
   assertEqual(
-    isTransientGateError(new Error('GitHub API request failed (404) for /pulls/123')),
+    isTransientGateError(new GitHubApiError({
+      status: 404,
+      path: '/pulls/123',
+      requestId: 'test',
+    })),
     false,
     '404 is not transient',
   );
   assertEqual(
-    isTransientGateError(new Error('GitHub API request failed (403) for /actions/runs')),
+    isTransientGateError(new GitHubApiError({
+      status: 403,
+      path: '/actions/runs',
+      requestId: 'test',
+    })),
     false,
-    '403 is not blindly retried',
+    'ordinary 403 is not blindly retried',
+  );
+  assertEqual(
+    isTransientGateError(new GitHubApiError({
+      status: 403,
+      path: '/actions/runs',
+      requestId: 'test',
+      rateLimitRemaining: 0,
+      rateLimitResetEpochSeconds: 1_700_000_100,
+    })),
+    true,
+    'rate-limited 403 is transient',
+  );
+  assertEqual(
+    retryHintDelaySeconds(new GitHubApiError({
+      status: 429,
+      path: '/actions/runs',
+      requestId: 'test',
+      retryAfterSeconds: 7,
+    }), 1_700_000_000),
+    7,
+    'Retry-After hint is honored',
+  );
+  assertEqual(
+    retryHintDelaySeconds(new GitHubApiError({
+      status: 403,
+      path: '/actions/runs',
+      requestId: 'test',
+      rateLimitRemaining: 0,
+      rateLimitResetEpochSeconds: 1_700_000_010,
+    }), 1_700_000_000),
+    11,
+    'rate-limit reset hint is honored with one-second cushion',
   );
   assertEqual(
     isTransientGateError(new Error('API CI failed the required gate: conclusion=failure')),
@@ -114,8 +191,6 @@ export async function runGateWithTransientRetries() {
         );
       }
 
-      // Preserve one overall deadline across retries instead of restarting the
-      // gate's full polling timeout after each transient failure.
       process.env.REQUIRED_WORKFLOW_TIMEOUT_SECONDS = String(remainingSeconds);
 
       try {
@@ -126,13 +201,15 @@ export async function runGateWithTransientRetries() {
           throw error;
         }
 
-        const delaySeconds = retryDelaySeconds(
+        const backoffSeconds = retryDelaySeconds(
           attempt,
           baseDelaySeconds,
           maxDelaySeconds,
         );
+        const hintedSeconds = retryHintDelaySeconds(error);
+        const requestedDelaySeconds = Math.max(backoffSeconds, hintedSeconds ?? 0);
         const delayMilliseconds = Math.min(
-          delaySeconds * 1000,
+          requestedDelaySeconds * 1000,
           Math.max(0, deadline - Date.now()),
         );
         if (delayMilliseconds <= 0) throw error;

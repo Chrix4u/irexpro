@@ -175,6 +175,18 @@ export function runSelfTests() {
     'restore runbook change',
   );
 
+  const rateLimited = new GitHubApiError({
+    status: 403,
+    path: '/actions/runs',
+    requestId: 'test-request',
+    retryAfterSeconds: 7,
+    rateLimitRemaining: 0,
+    rateLimitResetEpochSeconds: 1_700_000_000,
+  });
+  assertEqual(rateLimited.status, 403, 'GitHubApiError status');
+  assertEqual(rateLimited.retryAfterSeconds, 7, 'GitHubApiError Retry-After');
+  assertEqual(rateLimited.rateLimitRemaining, 0, 'GitHubApiError rate-limit remaining');
+
   console.log(`Required CI gate self-tests passed (${WORKFLOW_RULES.length} workflow rules).`);
 }
 
@@ -194,6 +206,33 @@ function positiveIntegerEnvironment(name, fallback) {
   return value;
 }
 
+function integerHeader(headers, name) {
+  const raw = headers.get(name);
+  if (raw === null || raw.trim() === '') return null;
+  const value = Number.parseInt(raw, 10);
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+export class GitHubApiError extends Error {
+  constructor({
+    status,
+    path,
+    requestId,
+    retryAfterSeconds = null,
+    rateLimitRemaining = null,
+    rateLimitResetEpochSeconds = null,
+  }) {
+    super(`GitHub API request failed (${status}) for ${path}; request_id=${requestId}`);
+    this.name = 'GitHubApiError';
+    this.status = status;
+    this.path = path;
+    this.requestId = requestId;
+    this.retryAfterSeconds = retryAfterSeconds;
+    this.rateLimitRemaining = rateLimitRemaining;
+    this.rateLimitResetEpochSeconds = rateLimitResetEpochSeconds;
+  }
+}
+
 async function githubJson(path, token, apiUrl) {
   const response = await fetch(`${apiUrl}${path}`, {
     headers: {
@@ -206,9 +245,14 @@ async function githubJson(path, token, apiUrl) {
 
   if (!response.ok) {
     const requestId = response.headers.get('x-github-request-id') ?? 'unknown';
-    throw new Error(
-      `GitHub API request failed (${response.status}) for ${path}; request_id=${requestId}`,
-    );
+    throw new GitHubApiError({
+      status: response.status,
+      path,
+      requestId,
+      retryAfterSeconds: integerHeader(response.headers, 'retry-after'),
+      rateLimitRemaining: integerHeader(response.headers, 'x-ratelimit-remaining'),
+      rateLimitResetEpochSeconds: integerHeader(response.headers, 'x-ratelimit-reset'),
+    });
   }
   return response.json();
 }

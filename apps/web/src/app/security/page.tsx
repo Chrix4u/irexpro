@@ -63,14 +63,21 @@ export default function SecurityPage() {
     );
   }
 
-  async function beginMfaSetup() {
+  async function beginMfaSetup(event: FormEvent) {
+    event.preventDefault();
+    if (!mfaPassword) return;
+
     setMfaBusy(true);
     setMfaError(null);
     setMfaMessage(null);
     setMfaSetup(null);
     setMfaCode('');
+
+    const currentPassword = mfaPassword;
+    setMfaPassword('');
+
     try {
-      const setup = await api.beginMfaSetup();
+      const setup = await api.beginMfaSetup(currentPassword);
       setMfaSetup(setup);
       setMfaMessage('Add this account to your authenticator app, then confirm a current 6-digit code.');
     } catch (error) {
@@ -191,9 +198,23 @@ export default function SecurityPage() {
           {mfaMessage && <Alert variant="info">{mfaMessage}</Alert>}
 
           {!user.mfaEnabled && !mfaSetup && (
-            <Button onClick={beginMfaSetup} loading={mfaBusy}>
-              Start authenticator setup
-            </Button>
+            <form onSubmit={beginMfaSetup}>
+              <Alert variant="info">
+                Confirm your current password before generating authenticator setup material.
+              </Alert>
+              <Input
+                label="Current password"
+                type="password"
+                value={mfaPassword}
+                onChange={(event) => setMfaPassword(event.target.value)}
+                autoComplete="current-password"
+                required
+                disabled={mfaBusy}
+              />
+              <Button type="submit" loading={mfaBusy} disabled={!mfaPassword}>
+                Start authenticator setup
+              </Button>
+            </form>
           )}
 
           {!user.mfaEnabled && mfaSetup && (
@@ -230,6 +251,7 @@ export default function SecurityPage() {
                   onClick={() => {
                     setMfaSetup(null);
                     setMfaCode('');
+                    setMfaPassword('');
                     setMfaMessage(null);
                   }}
                 >
