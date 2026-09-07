@@ -918,8 +918,10 @@ export function currentSessionView(accessToken: string): {
 
   const issuedAt = payload.iat;
   const expiresAt = payload.exp;
-  if (typeof issuedAt !== 'number' || !Number.isFinite(issuedAt)) return null;
-  if (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt)) return null;
+  // Real epoch-seconds claims are positive finite numbers; anything else
+  // (missing, string, non-finite, or a pre-epoch negative value) is malformed.
+  if (typeof issuedAt !== 'number' || !Number.isFinite(issuedAt) || issuedAt < 0) return null;
+  if (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt) || expiresAt < 0) return null;
 
   return { startedAt: issuedAt * 1000, expiresAt: expiresAt * 1000 };
 }
