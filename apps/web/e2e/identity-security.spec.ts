@@ -74,14 +74,17 @@ test.describe('Sprint 49 identity security UX', () => {
     expect(loginBody).not.toHaveProperty('mfaRequired');
   });
 
-  test('MFA setup material remains memory-only and is never written to browser storage', async ({ page }) => {
+  test('MFA setup material remains memory-only and current-password re-authentication stays out of browser storage', async ({ page }) => {
     const setupSecret = 'JBSWY3DPEHPK3PXP';
+    const currentPassword = 'not-a-real-current-password';
+    let setupBody: Record<string, unknown> | null = null;
     await silenceFavicon(page);
     await page.route('**/api/v1/**', async (route) => {
       const path = apiPath(route);
       if (path === 'auth/refresh') return route.fulfill(json(200, TOKENS));
       if (path === 'auth/me') return route.fulfill(json(200, BASE_USER));
       if (path === 'auth/mfa/setup') {
+        setupBody = route.request().postDataJSON() as Record<string, unknown>;
         return route.fulfill(json(200, {
           secret: setupSecret,
           otpauthUri: `otpauth://totp/iRexPro:test?secret=${setupSecret}`,
@@ -92,15 +95,24 @@ test.describe('Sprint 49 identity security UX', () => {
 
     await page.goto('/security');
     await expect(page.getByRole('heading', { level: 1, name: 'Account Security' })).toBeVisible();
-    await page.getByRole('button', { name: 'Start authenticator setup' }).click();
+    const setupButton = page.getByRole('button', { name: 'Start authenticator setup' });
+    await expect(setupButton).toBeDisabled();
+    await page.getByLabel('Current password').fill(currentPassword);
+    await expect(setupButton).toBeEnabled();
+    await setupButton.click();
+
+    expect(setupBody).toEqual({ password: currentPassword });
     await expect(page.getByText(setupSecret)).toBeVisible();
 
     const storageSnapshot = await page.evaluate(() => ({
       local: Object.values(localStorage),
       session: Object.values(sessionStorage),
     }));
-    expect(JSON.stringify(storageSnapshot)).not.toContain(setupSecret);
+    const serializedStorage = JSON.stringify(storageSnapshot);
+    expect(serializedStorage).not.toContain(setupSecret);
+    expect(serializedStorage).not.toContain(currentPassword);
     expect(page.url()).not.toContain(setupSecret);
+    expect(page.url()).not.toContain(currentPassword);
     await assertNoHorizontalOverflow(page);
   });
 
