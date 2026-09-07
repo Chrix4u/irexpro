@@ -27,8 +27,8 @@ export class UsersService {
   }
 
   async findAll(page?: number, limit?: number): Promise<{ users: User[]; total: number }> {
-    const pageNum = Number(page) || 1;
-    const limitNum = Math.min(Number(limit) || 20, 100);
+    const pageNum = this.positiveSafeIntegerOrDefault(page, 1);
+    const limitNum = Math.min(this.positiveSafeIntegerOrDefault(limit, 20), 100);
     const [users, total] = await this.userRepo.findAndCount({
       relations: ['profile'],
       order: { createdAt: 'DESC' },
@@ -100,6 +100,11 @@ export class UsersService {
         );
       }
     }
+  }
+
+  private positiveSafeIntegerOrDefault(value: unknown, fallback: number): number {
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
   }
 
   private isValidDateOfBirth(value: string): boolean {
