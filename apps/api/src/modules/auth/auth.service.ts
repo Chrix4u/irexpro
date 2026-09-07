@@ -22,6 +22,7 @@ import { UserRole } from '../users/entities/user-role.entity';
 import { Role, RoleName } from '../users/entities/role.entity';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../../common/enums/audit-action.enum';
+import { normalizeCanonicalUuid } from '../../common/utils/uuid.util';
 import { JwtPayload } from './strategies/jwt.strategy';
 import { MfaService } from './mfa.service';
 
@@ -295,12 +296,17 @@ export class AuthService {
       throw new UnauthorizedException('Invalid or expired refresh token');
     }
 
+    const subject = normalizeCanonicalUuid(payload.sub);
+    if (!subject) {
+      throw new UnauthorizedException('Invalid or expired refresh token');
+    }
+
     if (payload.tokenType !== 'refresh') {
       throw new UnauthorizedException('Invalid or expired refresh token');
     }
 
     const user = await this.userRepo.findOne({
-      where: { id: payload.sub },
+      where: { id: subject },
       relations: ['userRoles', 'userRoles.role'],
     });
 
