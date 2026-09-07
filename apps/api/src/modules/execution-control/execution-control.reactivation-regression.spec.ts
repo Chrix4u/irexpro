@@ -110,9 +110,7 @@ describe('ExecutionControlService multi-cycle reactivation regression', () => {
     const { service, repo } = makeHarness();
     repo.findOne.mockResolvedValue(control());
 
-    await expect(service.activateControl(globalDto, 'admin-1')).rejects.toThrow(
-      ConflictException,
-    );
+    await expect(service.activateControl(globalDto, 'admin-1')).rejects.toThrow(ConflictException);
     expect(repo.update).not.toHaveBeenCalled();
     expect(repo.save).not.toHaveBeenCalled();
   });
