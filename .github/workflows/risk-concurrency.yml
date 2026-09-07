@@ -32,12 +32,12 @@ env:
 jobs:
   real-postgres-concurrency:
     name: Real PostgreSQL 16 Execution Concurrency
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     services:
       postgres:
-        image: postgres:16-bookworm
+        image: postgres:16-bookworm@sha256:92620daddcd947f8d5ab5ba66e848702fe443d87fed30c4cea8e389fd78dfc55 # Docker Official Image
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: ci_disposable_password

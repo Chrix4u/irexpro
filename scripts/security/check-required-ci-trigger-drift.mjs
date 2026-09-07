@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 
 const GATE_PATH = 'scripts/security/required-ci-gate.mjs';
 
-const WORKFLOW_FILES = new Map([
+export const WORKFLOW_FILES = new Map([
   ['Release Security', '.github/workflows/release-security.yml'],
   ['API CI', '.github/workflows/api-ci.yml'],
   ['Risk Execution Concurrency', '.github/workflows/risk-concurrency.yml'],
@@ -198,6 +198,11 @@ export function runSelfTests() {
       'always-required',
     ),
     'unexpected always-workflow path filter should be detected',
+  );
+  assert(WORKFLOW_FILES.has('Mobile CI'), 'required workflow registry must include Mobile CI');
+  assert(
+    WORKFLOW_FILES.get('Mobile CI') === '.github/workflows/mobile-ci.yml',
+    'Mobile CI workflow mapping must remain canonical',
   );
 
   console.log('Required CI trigger drift guard self-tests passed.');
