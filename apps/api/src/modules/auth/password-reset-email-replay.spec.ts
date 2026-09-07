@@ -76,7 +76,7 @@ describe('PasswordResetService email replay safety', () => {
     await module.close();
   });
 
-  it('consumes the email token before mutating password or session version', async () => {
+  it('consumes the email token, retires only pending MFA, then revokes sessions', async () => {
     resetTokenRepo.findOne.mockResolvedValueOnce(activeEmailToken);
 
     await service.resetWithToken('valid-email-reset-token', 'NewStrongPassword123!');
@@ -90,10 +90,29 @@ describe('PasswordResetService email replay safety', () => {
     expect(queryRunner.manager.update).toHaveBeenNthCalledWith(2, User, 'user-1', {
       passwordHash: expect.stringMatching(/^\$argon2/),
     });
-    expect(queryRunner.manager.update).toHaveBeenNthCalledWith(3, User, 'user-1', {
+    expect(queryRunner.manager.update).toHaveBeenNthCalledWith(
+      3,
+      User,
+      { id: 'user-1', mfaEnabled: false },
+      { mfaSecret: null, mfaSetupExpiresAt: null },
+    );
+    expect(queryRunner.manager.update).toHaveBeenNthCalledWith(4, User, 'user-1', {
       sessionVersion: expect.any(Function),
     });
     expect(queryRunner.commitTransaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves enabled MFA by never issuing an unconditional secret-clearing update', async () => {
+    resetTokenRepo.findOne.mockResolvedValueOnce(activeEmailToken);
+
+    await service.resetWithToken('valid-email-reset-token', 'NewStrongPassword123!');
+
+    const mfaClears = queryRunner.manager.update.mock.calls.filter(
+      ([entity, , patch]) =>
+        entity === User && patch?.mfaSecret === null && patch?.mfaSetupExpiresAt === null,
+    );
+    expect(mfaClears).toHaveLength(1);
+    expect(mfaClears[0][1]).toEqual({ id: 'user-1', mfaEnabled: false });
   });
 
   it('rejects a concurrent replay before any user mutation when token consumption loses the race', async () => {

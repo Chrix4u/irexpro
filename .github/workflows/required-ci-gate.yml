@@ -57,6 +57,12 @@ jobs:
       - name: Test main ruleset policy verifier
         run: node scripts/security/verify-main-ruleset.mjs --self-test
 
+      - name: Test workflow container digest policy
+        run: node scripts/security/check-workflow-container-digests.mjs --self-test
+
+      - name: Enforce workflow container digest policy
+        run: node scripts/security/check-workflow-container-digests.mjs
+
       - name: Wait for applicable exact-head workflows
         env:
           GITHUB_TOKEN: ${{ github.token }}

@@ -18,6 +18,7 @@ function buildUser(): User {
     preferredCurrency: 'GHS',
     mfaEnabled: true,
     mfaSecret: 'totp-secret',
+    mfaSetupExpiresAt: new Date('2026-09-05T12:10:00.000Z'),
     sessionVersion: 27,
     createdAt: new Date('2026-01-01T00:00:00.000Z'),
     updatedAt: new Date('2026-09-05T12:00:00.000Z'),
@@ -46,6 +47,7 @@ describe('User serialization privacy', () => {
 
     expect(plain).not.toHaveProperty('passwordHash');
     expect(plain).not.toHaveProperty('mfaSecret');
+    expect(plain).not.toHaveProperty('mfaSetupExpiresAt');
     expect(plain).not.toHaveProperty('failedLoginAttempts');
     expect(plain).not.toHaveProperty('loginLockedUntil');
     expect(plain).not.toHaveProperty('sessionVersion');

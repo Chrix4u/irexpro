@@ -72,6 +72,9 @@ jobs:
       - name: Install dependencies from frozen lockfile
         run: pnpm install --frozen-lockfile
 
+      - name: Test shared API client contracts
+        run: pnpm --filter @irexpro/api-client test
+
       - name: Verify configured Expo assets exist
         shell: bash
         run: |

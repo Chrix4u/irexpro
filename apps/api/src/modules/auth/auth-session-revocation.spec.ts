@@ -272,6 +272,12 @@ describe('Sprint 48 — server-side auth session revocation', () => {
     expect(queryRunner.manager.update).toHaveBeenNthCalledWith(
       3,
       User,
+      { id: userId, mfaEnabled: false },
+      { mfaSecret: null, mfaSetupExpiresAt: null },
+    );
+    expect(queryRunner.manager.update).toHaveBeenNthCalledWith(
+      4,
+      User,
       userId,
       expect.objectContaining({ sessionVersion: expect.any(Function) }),
     );
