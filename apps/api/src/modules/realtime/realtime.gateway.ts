@@ -15,6 +15,7 @@ import { Server, Socket } from 'socket.io';
 import { Repository } from 'typeorm';
 import { TradingSession } from '../execution/entities/trading-session.entity';
 import { WsJwtGuard } from './guards/ws-jwt.guard';
+import { WsMessageRateGuard } from './guards/ws-message-rate.guard';
 import { RealtimeService } from './realtime.service';
 
 /**
@@ -31,12 +32,14 @@ import { RealtimeService } from './realtime.service';
  *   All connections must provide a valid JWT in:
  *     socket.handshake.auth.token  OR  Authorization: Bearer <token>
  *   Invalid, expired, revoked, or unauthenticated connections are rejected
- *   immediately in handleConnection(). Guarded messages revalidate the same
- *   server-side session state so revocation after connection still fails closed.
+ *   immediately in handleConnection(). Guarded messages are rate-limited before
+ *   revalidating the same server-side session state so abuse cannot multiply
+ *   JWT/session/database work.
  *
  * Security rules:
  *   - Users can only join their own rooms. Trading-session ownership is read
  *     from persisted state; client-supplied ownership claims are never trusted.
+ *   - Guarded message handlers rate-limit before JWT/session/database validation
  *   - No broker secrets, tokens, or stack traces are ever emitted
  *   - Payloads are type-checked via RealtimeService methods
  *   - Browser-origin policy is owned centrally by RealtimeIoAdapter at bootstrap
@@ -84,7 +87,7 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   /**
    * After JWT validation, join the user's personal room.
    */
-  @UseGuards(WsJwtGuard)
+  @UseGuards(WsMessageRateGuard, WsJwtGuard)
   @SubscribeMessage('authenticate')
   handleAuthenticate(
     @ConnectedSocket() client: Socket,
@@ -104,7 +107,7 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection, OnGa
    * authoritative persisted session row. The message carries only sessionId;
    * any extra client fields are ignored and cannot influence authorization.
    */
-  @UseGuards(WsJwtGuard)
+  @UseGuards(WsMessageRateGuard, WsJwtGuard)
   @SubscribeMessage('join-session')
   async handleJoinSession(
     @ConnectedSocket() client: Socket,
@@ -144,7 +147,7 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   /**
    * Leave a trading session room.
    */
-  @UseGuards(WsJwtGuard)
+  @UseGuards(WsMessageRateGuard, WsJwtGuard)
   @SubscribeMessage('leave-session')
   handleLeaveSession(
     @ConnectedSocket() client: Socket,
