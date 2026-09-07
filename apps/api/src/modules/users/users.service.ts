@@ -27,8 +27,10 @@ export class UsersService {
   }
 
   async findAll(page?: number, limit?: number): Promise<{ users: User[]; total: number }> {
-    const pageNum = this.positiveSafeIntegerOrDefault(page, 1);
+    const requestedPage = this.positiveSafeIntegerOrDefault(page, 1);
     const limitNum = Math.min(this.positiveSafeIntegerOrDefault(limit, 20), 100);
+    const maxPageForSafeOffset = Math.floor(Number.MAX_SAFE_INTEGER / limitNum) + 1;
+    const pageNum = Math.min(requestedPage, maxPageForSafeOffset);
     const [users, total] = await this.userRepo.findAndCount({
       relations: ['profile'],
       order: { createdAt: 'DESC' },
