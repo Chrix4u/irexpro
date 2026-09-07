@@ -38,7 +38,7 @@ describe('RealtimeGateway — connection-time authentication', () => {
     };
   }
 
-  it('fully validates a current access token before keeping the socket connected', async () => {
+  it('fully validates a current access token and records its generation on the socket', async () => {
     const { gateway, jwtService, userRepo, client } = setup();
     jwtService.verify.mockReturnValue(currentAccessPayload());
     userRepo.findOne.mockResolvedValue({
@@ -57,6 +57,7 @@ describe('RealtimeGateway — connection-time authentication', () => {
       userId,
       userEmail: 'user@example.com',
       userRoles: ['USER'],
+      authenticatedSessionVersion: 3,
     });
     expect(client.emit).not.toHaveBeenCalled();
     expect(client.disconnect).not.toHaveBeenCalled();
@@ -90,6 +91,7 @@ describe('RealtimeGateway — connection-time authentication', () => {
 
     expect(client.emit).toHaveBeenCalledWith('error', { message: 'Unauthorized' });
     expect(client.disconnect).toHaveBeenCalledWith(true);
+    expect(client.data).toEqual({});
   });
 
   it('disconnects an invalid or expired JWT without exposing validation details', async () => {
