@@ -29,6 +29,8 @@ interface WsJwtPayload {
  * JwtStrategy. A socket handshake must present an ACCESS token whose
  * sessionVersion still matches identity.users.session_version. Refresh tokens,
  * stale tokens, and tokens for inactive users are rejected before room join.
+ * Realtime verification is explicitly pinned to HS256, matching the HTTP bearer
+ * boundary and the repository's configured token issuer.
  *
  * Connection-time and per-message authentication intentionally share the same
  * authenticateClient() implementation. The validated session generation is
@@ -70,7 +72,10 @@ export class WsJwtGuard implements CanActivate {
 
     try {
       const secret = this.configService.get<string>('jwt.secret');
-      const payload = this.jwtService.verify<WsJwtPayload>(token, { secret });
+      const payload = this.jwtService.verify<WsJwtPayload>(token, {
+        secret,
+        algorithms: ['HS256'],
+      });
 
       if (!payload.sub || typeof payload.sub !== 'string') {
         throw new Error('missing subject');
