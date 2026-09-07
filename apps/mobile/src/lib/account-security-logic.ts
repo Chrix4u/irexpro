@@ -1,12 +1,15 @@
 /**
- * Pure account/profile logic for the mobile Account hub.
+ * Pure account/security logic for the mobile Account hub.
  *
  * RN-IMPORT-FREE MODULE: this file must never import `react`,
  * `react-native`, or any Expo package — only plain TypeScript. A later task
  * exercises every export with a zero-dependency test harness, so all
- * validation, mapping, and derivation logic for Personal Information
- * editing lives here. Screens under `src/screens/account/` import from this
- * module; they only render and orchestrate.
+ * validation, mapping, derivation, and state-machine logic for the account
+ * hub lives here: Personal Information editing (Phase E/F), password change
+ * validation (Phase I), the MFA TOTP enrollment reducer (Phase G), and the
+ * verification resend-cooldown/expiry helpers (Phase H). Screens under
+ * `src/screens/account/` import from this module; they only render and
+ * orchestrate.
  *
  * All `@irexpro/types` imports are type-only (erased at compile time), so the
  * module stays runtime-dependency free.
@@ -415,4 +418,283 @@ export function verificationBadges(view: {
     email: typeof view.emailVerifiedAt === 'string' && view.emailVerifiedAt.length > 0,
     phone: typeof view.phoneVerifiedAt === 'string' && view.phoneVerifiedAt.length > 0,
   };
+}
+
+// ─── Password change (Sprint 55 Phase I) ────────────────────────────────────
+//
+// Mirrors the backend POST /auth/change-password policy exactly: the new
+// password is 12–128 characters and must contain at least one letter and one
+// number (identical to reset-password). currentPassword is 1–128 characters.
+
+export const PASSWORD_MIN_LENGTH = 12;
+export const PASSWORD_MAX_LENGTH = 128;
+
+const HAS_LETTER_PATTERN = /[A-Za-z]/u;
+const HAS_NUMBER_PATTERN = /[0-9]/u;
+
+/**
+ * New-password policy check (null = valid).
+ * Order of checks mirrors the backend DTO so the first client-side error is
+ * the same one the server would report.
+ */
+export function validateNewPasswordPolicy(pw: string): string | null {
+  if (pw.length < PASSWORD_MIN_LENGTH) {
+    return `New password must be at least ${PASSWORD_MIN_LENGTH} characters.`;
+  }
+  if (pw.length > PASSWORD_MAX_LENGTH) {
+    return `New password must be ${PASSWORD_MAX_LENGTH} characters or fewer.`;
+  }
+  if (!HAS_LETTER_PATTERN.test(pw)) {
+    return 'New password must include at least one letter.';
+  }
+  if (!HAS_NUMBER_PATTERN.test(pw)) {
+    return 'New password must include at least one number.';
+  }
+  return null;
+}
+
+/** Fields of the change-password form that can carry a validation error. */
+export type ChangePasswordField = 'currentPassword' | 'newPassword' | 'confirmPassword';
+
+export interface ChangePasswordSubmissionInput {
+  currentPassword: string;
+  newPassword: string;
+  confirmPassword: string;
+}
+
+export interface ChangePasswordFieldError {
+  field: ChangePasswordField;
+  error: string;
+}
+
+/**
+ * Submit-time gate for the change-password form.
+ *
+ * Returns the first failing field (currentPassword required/≤128, new
+ * password policy, confirm match) or null when the whole submission is
+ * client-valid. Screens keep the submit button disabled until this returns
+ * null; the re-check on submit is a guard, not the only line of defense.
+ */
+export function validateChangePasswordSubmission(
+  input: ChangePasswordSubmissionInput,
+): ChangePasswordFieldError | null {
+  if (input.currentPassword.length === 0) {
+    return { field: 'currentPassword', error: 'Enter your current password.' };
+  }
+  if (input.currentPassword.length > PASSWORD_MAX_LENGTH) {
+    return { field: 'currentPassword', error: 'Current password must be 128 characters or fewer.' };
+  }
+
+  const policyError = validateNewPasswordPolicy(input.newPassword);
+  if (policyError) {
+    return { field: 'newPassword', error: policyError };
+  }
+
+  if (input.confirmPassword.length === 0) {
+    return { field: 'confirmPassword', error: 'Enter the new password again.' };
+  }
+  if (input.confirmPassword !== input.newPassword) {
+    return { field: 'confirmPassword', error: 'New passwords do not match.' };
+  }
+
+  return null;
+}
+
+// ─── Six-digit verification code ────────────────────────────────────────────
+
+const SIX_DIGIT_CODE_PATTERN = /^\d{6}$/u;
+
+/**
+ * Whether a value is a six-digit numeric code (TOTP or SMS verification).
+ * Absorbs the former `isSixDigitCode` from account-security.ts — whitespace
+ * is tolerated around the digits, exactly as before.
+ */
+export function validateSixDigitCode(code: string): boolean {
+  return SIX_DIGIT_CODE_PATTERN.test(code.trim());
+}
+
+// ─── MFA TOTP enrollment state machine (Sprint 55 Phase G) ─────────────────
+//
+// Pure reducer for authenticator enrollment. The SCREEN drives all side
+// effects (API calls, alerts); this machine owns the only place the one-time
+// enrollment material (secret + otpauth URI) may live in memory.
+//
+// INVARIANT (provable by a zero-dependency harness):
+//   material !== null  ⟺  status === 'verifying'
+// Every terminal transition (CODE_ACCEPTED / CODE_REJECTED) and every reset
+// (RESTART / CANCEL) sets material to null, so the secret provably leaves
+// memory at the logic level the moment enrollment ends, is discarded, or is
+// restarted. `failureReason` is non-null only while status === 'failed'.
+//
+// State meanings:
+//   idle       nothing in progress (entry point; also the post-wipe reset)
+//   password   collecting the current password for re-authentication
+//   enrolling  beginMfaSetup request in flight (no material yet)
+//   verifying  material received; user adds the authenticator + submits codes
+//   succeeded  enableMfa accepted — all sessions revoked server-side
+//   failed     enrollment was rejected terminally (e.g. setup expired) and
+//              must be restarted; reason preserved in failureReason
+
+export type MfaEnrollmentStatus =
+  | 'idle'
+  | 'password'
+  | 'enrolling'
+  | 'verifying'
+  | 'succeeded'
+  | 'failed';
+
+/** One-time TOTP enrollment material. Must never be persisted or logged. */
+export interface MfaEnrollmentMaterial {
+  secret: string;
+  otpauthUri: string;
+}
+
+export interface MfaEnrollmentState {
+  status: MfaEnrollmentStatus;
+  /** Non-null ONLY while status === 'verifying' (see invariant above). */
+  material: MfaEnrollmentMaterial | null;
+  /** Sanitized rejection copy; non-null ONLY while status === 'failed'. */
+  failureReason: string | null;
+}
+
+export type MfaEnrollmentEvent =
+  /** idle → password: the user chose to start enrollment. */
+  | { type: 'START' }
+  /** password → enrolling: the begin-setup request is leaving. */
+  | { type: 'BEGIN_REQUESTED' }
+  /** enrolling → verifying: one-time material received (kept in memory only). */
+  | { type: 'ENROLLMENT_RECEIVED'; material: MfaEnrollmentMaterial }
+  /** enrolling → password: the begin-setup request failed; retry password entry. */
+  | { type: 'BEGIN_FAILED' }
+  /** verifying → succeeded: the TOTP was accepted (material WIPED). */
+  | { type: 'CODE_ACCEPTED' }
+  /** verifying → failed: terminal rejection, e.g. expired setup (material WIPED, reason kept). */
+  | { type: 'CODE_REJECTED'; reason: string }
+  /**
+   * failed → password: start a fresh enrollment. Note: re-entering 'verifying'
+   * is only possible via ENROLLMENT_RECEIVED — CODE_REJECTED wipes the
+   * material, so a retry necessarily begins with a new server-issued secret.
+   */
+  | { type: 'RETRY' }
+  /** any → idle: flow-initiated reset (e.g. after an expired enrollment). Wipes material + reason. */
+  | { type: 'RESTART' }
+  /** any → idle: user discarded the enrollment. Wipes material + reason. */
+  | { type: 'CANCEL' };
+
+export const MFA_ENROLLMENT_INITIAL_STATE: MfaEnrollmentState = {
+  status: 'idle',
+  material: null,
+  failureReason: null,
+};
+
+function mfaEnrollmentReset(status: MfaEnrollmentStatus): MfaEnrollmentState {
+  return { status, material: null, failureReason: null };
+}
+
+/**
+ * Advance the enrollment machine. Events that do not match the current state
+ * are ignored (returned unchanged) — the screen never needs to guard against
+ * racing transitions. Terminal and reset events always null the material.
+ */
+export function mfaEnrollmentReducer(
+  state: MfaEnrollmentState,
+  event: MfaEnrollmentEvent,
+): MfaEnrollmentState {
+  switch (event.type) {
+    case 'START':
+      if (state.status !== 'idle') return state;
+      return mfaEnrollmentReset('password');
+
+    case 'BEGIN_REQUESTED':
+      if (state.status !== 'password') return state;
+      return mfaEnrollmentReset('enrolling');
+
+    case 'ENROLLMENT_RECEIVED':
+      if (state.status !== 'enrolling') return state;
+      return { status: 'verifying', material: event.material, failureReason: null };
+
+    case 'BEGIN_FAILED':
+      if (state.status !== 'enrolling') return state;
+      return mfaEnrollmentReset('password');
+
+    case 'CODE_ACCEPTED':
+      if (state.status !== 'verifying') return state;
+      // Sensitive-memory wipe at the logic level.
+      return mfaEnrollmentReset('succeeded');
+
+    case 'CODE_REJECTED':
+      if (state.status !== 'verifying') return state;
+      // Sensitive-memory wipe at the logic level; reason kept for the UI.
+      return { status: 'failed', material: null, failureReason: event.reason };
+
+    case 'RETRY':
+      if (state.status !== 'failed') return state;
+      return mfaEnrollmentReset('password');
+
+    case 'RESTART':
+      return MFA_ENROLLMENT_INITIAL_STATE;
+
+    case 'CANCEL':
+      return MFA_ENROLLMENT_INITIAL_STATE;
+
+    default:
+      return state;
+  }
+}
+
+/**
+ * Server-side rejection marker for an expired MFA enrollment (the backend
+ * answers 400 with "MFA setup expired; start setup again" and exposes no
+ * expiry field in the enrollment response — clients must match the message).
+ * Detection only: raw server messages are NEVER rendered.
+ */
+const MFA_SETUP_EXPIRED_MESSAGE_PATTERN = /mfa setup expired/iu;
+
+export function isMfaSetupExpiredRejectionMessage(message: string): boolean {
+  return MFA_SETUP_EXPIRED_MESSAGE_PATTERN.test(message);
+}
+
+// ─── Verification resend cooldown + expiry hints (Sprint 55 Phase H) ────────
+
+/** Client-side resend cooldown shared by the email and phone sections. */
+export const RESEND_COOLDOWN_SECONDS = 60;
+
+/**
+ * Remaining cooldown in whole seconds, clamped to ≥ 0.
+ *
+ * `elapsedMs` is measured from the moment the request SUCCEEDED (cooldowns
+ * are never started by failed requests). Ceil rounding guarantees the button
+ * never re-enables early.
+ */
+export function resendCooldown(initialSeconds: number, elapsedMs: number): number {
+  if (initialSeconds <= 0) return 0;
+  const remainingMs = initialSeconds * 1000 - elapsedMs;
+  if (remainingMs <= 0) return 0;
+  return Math.ceil(remainingMs / 1000);
+}
+
+/**
+ * Human label for a cooldown: "45s" below a minute, "1:05" (m:ss) above.
+ * Never fabricates a countdown for server-side expiry windows — this formats
+ * only the client-owned 60-second resend cooldown.
+ */
+export function formatCooldown(seconds: number): string {
+  const safe = Math.max(0, Math.floor(seconds));
+  if (safe < 60) return `${safe}s`;
+  const minutes = Math.floor(safe / 60);
+  const rest = safe % 60;
+  return `${minutes}:${String(rest).padStart(2, '0')}`;
+}
+
+/**
+ * Honest expiry copy for verification channels. The server exposes no expiry
+ * timestamps in the request responses, so these are static, approximate
+ * statements of the backend's documented token/code TTLs — never a live
+ * countdown.
+ */
+export function verificationExpiryHint(kind: 'email' | 'phone'): string {
+  if (kind === 'email') {
+    return 'The link expires in about 15 minutes.';
+  }
+  return 'The code expires in about 10 minutes.';
 }

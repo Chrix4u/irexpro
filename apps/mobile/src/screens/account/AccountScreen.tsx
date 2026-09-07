@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import type { MfaSetupResponse } from '@irexpro/types';
 import { useAuth } from '@/context/auth-context';
 import {
   Banner,
@@ -11,42 +10,30 @@ import {
 } from '@/components/ui';
 import { api } from '@/lib/api';
 import {
-  accountSecurityError,
-  beginMfaSetup,
-  isSixDigitCode,
-} from '@/lib/account-security';
-import {
   accountStatusMeta,
   deriveInitials,
 } from '@/lib/account-security-logic';
 import PersonalInformationScreen from '@/screens/account/PersonalInformationScreen';
-import {
-  AuthenticatorMfaSection,
-  ContactVerificationSection,
-  SessionSecuritySection,
-} from '@/screens/account/interim-sections';
+import SecurityScreen from '@/screens/account/SecurityScreen';
+import { SessionSecuritySection } from '@/screens/account/interim-sections';
 import type { AccountBusyAction } from '@/screens/account/interim-sections';
 
 /**
  * Account hub — Sprint 55 restructure of the Account tab.
  *
- * Replaces the former monolithic AccountScreen with an identity-first hub:
- * an identity card (initials avatar, name, contact rows with verification
- * badges, account status, MFA indicator) plus section navigation. "Personal
- * Information" opens a dedicated sub-screen (production-grade profile
- * editing); the sub-screen swap mirrors how AppShell swaps
+ * An identity-first hub: an identity card (initials avatar, name, contact
+ * rows with verification badges, account status, MFA indicator) plus section
+ * navigation. "Personal Information" and "Security" open dedicated sub-screens
+ * (production-grade profile editing; password change, TOTP MFA enrollment,
+ * and contact verification); the sub-screen swap mirrors how AppShell swaps
  * Login/ForgotPassword (state + onBack, no navigation library).
  *
- * "Security" and "Account Access" are INTERIM expandable sections embedding
- * the former screen's Contact verification / Authenticator MFA / Session
- * security cards (identical behavior, single-flight busy guard owned here,
- * MFA enrollment material kept memory-only). Tasks 40-b/40-c replace them
- * with dedicated screens; "Sign Out" always calls the auth-context logout.
+ * "Account Access" remains an INTERIM expandable section embedding the former
+ * session-security card (Task 40-c replaces it with a dedicated screen).
+ * "Sign Out" always calls the auth-context logout under the single-flight
+ * busy guard owned here.
  */
-
 export type AccountSubScreen = 'personal' | 'security' | 'access' | null;
-
-type ExpandableSection = 'security' | 'access';
 
 export default function AccountScreen() {
   const {
@@ -59,22 +46,12 @@ export default function AccountScreen() {
   } = useAuth();
 
   const [subScreen, setSubScreen] = useState<AccountSubScreen>(null);
-  const [expandedSection, setExpandedSection] = useState<ExpandableSection | null>(null);
-  const [phoneCode, setPhoneCode] = useState('');
-  const [mfaPassword, setMfaPassword] = useState('');
-  const [mfaCode, setMfaCode] = useState('');
-  const [mfaSetup, setMfaSetup] = useState<MfaSetupResponse | null>(null);
+  const [accessExpanded, setAccessExpanded] = useState(false);
   const [busy, setBusy] = useState<AccountBusyAction>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
-
-  // ── Interim account actions (carried over from the former screen) ────────
 
   function startAction(action: Exclude<AccountBusyAction, null>): boolean {
     if (busy) return false;
     setBusy(action);
-    setNotice(null);
-    setActionError(null);
     return true;
   }
 
@@ -88,131 +65,6 @@ export default function AccountScreen() {
     }
     const refreshed = await api.me();
     setSession(refreshed, accessToken);
-  }
-
-  async function handleEmailVerificationRequest() {
-    if (!startAction('email-request')) return;
-    try {
-      const response = await api.requestEmailVerification();
-      setNotice(response.message);
-    } catch (error) {
-      setActionError(accountSecurityError(error));
-    } finally {
-      finishAction();
-    }
-  }
-
-  async function handlePhoneVerificationRequest() {
-    if (!startAction('phone-request')) return;
-    try {
-      const response = await api.requestPhoneVerification();
-      setNotice(response.message);
-    } catch (error) {
-      setActionError(accountSecurityError(error));
-    } finally {
-      finishAction();
-    }
-  }
-
-  async function handlePhoneVerificationConfirm() {
-    if (!startAction('phone-confirm')) return;
-    try {
-      if (!isSixDigitCode(phoneCode)) {
-        setActionError('Enter the six-digit verification code.');
-        return;
-      }
-      const response = await api.confirmPhoneVerification(phoneCode.trim());
-      setPhoneCode('');
-      await refreshIdentity();
-      setNotice(response.message);
-    } catch (error) {
-      setActionError(accountSecurityError(error));
-    } finally {
-      finishAction();
-    }
-  }
-
-  async function handleBeginMfaSetup() {
-    if (!startAction('mfa-setup')) return;
-    try {
-      if (!mfaPassword) {
-        setActionError('Enter your current password to begin MFA setup.');
-        return;
-      }
-      // Never leave the password in component state longer than the local
-      // variable needs it: clear it as the request begins, not after.
-      const password = mfaPassword;
-      setMfaPassword('');
-      const setup = await beginMfaSetup(password);
-      // Enrollment material remains component-memory-only. Never persist or log it.
-      setMfaSetup(setup);
-      setMfaCode('');
-      setNotice('MFA enrollment started. Add the account to your authenticator, then verify a code.');
-    } catch (error) {
-      setActionError(accountSecurityError(error));
-    } finally {
-      finishAction();
-    }
-  }
-
-  async function handleEnableMfa() {
-    if (!startAction('mfa-enable')) return;
-    try {
-      if (!mfaSetup) {
-        setActionError('Begin MFA setup before verifying an authenticator code.');
-        return;
-      }
-      if (!isSixDigitCode(mfaCode)) {
-        setActionError('Enter the six-digit code from your authenticator app.');
-        return;
-      }
-
-      await api.enableMfa(mfaCode.trim());
-      // The backend revokes every existing session when MFA is enabled.
-      // Clear the local token pair immediately rather than leave stale credentials active.
-      setMfaSetup(null);
-      setMfaCode('');
-      await clearSession();
-    } catch (error) {
-      setActionError(accountSecurityError(error));
-    } finally {
-      finishAction();
-    }
-  }
-
-  async function handleDisableMfa() {
-    if (!startAction('mfa-disable')) return;
-    try {
-      if (!mfaPassword) {
-        setActionError('Enter your current password to disable MFA.');
-        return;
-      }
-      if (!isSixDigitCode(mfaCode)) {
-        setActionError('Enter the six-digit code from your authenticator app.');
-        return;
-      }
-      // Same hardening as MFA setup: the password leaves component state the
-      // moment the request begins.
-      const password = mfaPassword;
-      const code = mfaCode.trim();
-      setMfaPassword('');
-
-      await api.disableMfa(code, password);
-      setMfaCode('');
-      // Disabling MFA also revokes all existing sessions server-side.
-      await clearSession();
-    } catch (error) {
-      setActionError(accountSecurityError(error));
-    } finally {
-      finishAction();
-    }
-  }
-
-  function handleCancelMfaSetup() {
-    setMfaSetup(null);
-    setMfaCode('');
-    setNotice(null);
-    setActionError(null);
   }
 
   async function handleLogout() {
@@ -231,6 +83,16 @@ export default function AccountScreen() {
       <PersonalInformationScreen
         onBack={() => setSubScreen(null)}
         refreshIdentity={refreshIdentity}
+      />
+    );
+  }
+
+  if (subScreen === 'security') {
+    return (
+      <SecurityScreen
+        onBack={() => setSubScreen(null)}
+        refreshIdentity={refreshIdentity}
+        clearSession={clearSession}
       />
     );
   }
@@ -257,13 +119,6 @@ export default function AccountScreen() {
   const fullName =
     [user.firstName?.trim(), user.lastName?.trim()].filter(Boolean).join(' ') || 'Add your name';
 
-  const securityExpanded = expandedSection === 'security';
-  const accessExpanded = expandedSection === 'access';
-
-  function toggleSection(section: ExpandableSection) {
-    setExpandedSection((current) => (current === section ? null : section));
-  }
-
   return (
     <ScrollView
       style={styles.container}
@@ -277,11 +132,7 @@ export default function AccountScreen() {
         stays in memory only while you use it.
       </Text>
 
-      {(actionError || authError) ? (
-        <Banner variant="error">{actionError ?? authError}</Banner>
-      ) : null}
-
-      {notice ? <Banner variant="success">{notice}</Banner> : null}
+      {authError ? <Banner variant="error">{authError}</Banner> : null}
 
       <Card>
         <View style={styles.identityHeader}>
@@ -361,56 +212,25 @@ export default function AccountScreen() {
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Security"
-          accessibilityState={{ expanded: securityExpanded }}
-          onPress={() => toggleSection('security')}
+          onPress={() => setSubScreen('security')}
           style={styles.sectionRow}
         >
           <View style={styles.sectionRowCopy}>
             <Text style={styles.sectionRowTitle}>Security</Text>
             <Text style={styles.sectionRowSubtitle}>
-              Contact verification and authenticator MFA
+              Password, two-factor authentication, email &amp; phone verification
             </Text>
           </View>
-          <Text style={styles.sectionIndicator}>{securityExpanded ? '−' : '+'}</Text>
+          <Text style={styles.sectionChevron}>›</Text>
         </Pressable>
       </Card>
-
-      {securityExpanded ? (
-        <>
-          <ContactVerificationSection
-            busy={busy}
-            email={user.email}
-            phone={user.phone}
-            emailVerified={emailVerified}
-            phoneVerified={phoneVerified}
-            phoneCode={phoneCode}
-            onPhoneCodeChange={setPhoneCode}
-            onRequestEmailVerification={() => void handleEmailVerificationRequest()}
-            onRequestPhoneVerification={() => void handlePhoneVerificationRequest()}
-            onConfirmPhoneVerification={() => void handlePhoneVerificationConfirm()}
-          />
-          <AuthenticatorMfaSection
-            busy={busy}
-            mfaEnabled={mfaEnabled}
-            mfaSetup={mfaSetup}
-            mfaPassword={mfaPassword}
-            mfaCode={mfaCode}
-            onMfaPasswordChange={setMfaPassword}
-            onMfaCodeChange={setMfaCode}
-            onBeginMfaSetup={() => void handleBeginMfaSetup()}
-            onEnableMfa={() => void handleEnableMfa()}
-            onDisableMfa={() => void handleDisableMfa()}
-            onCancelMfaSetup={handleCancelMfaSetup}
-          />
-        </>
-      ) : null}
 
       <Card style={styles.flushCard}>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Account Access"
           accessibilityState={{ expanded: accessExpanded }}
-          onPress={() => toggleSection('access')}
+          onPress={() => setAccessExpanded((current) => !current)}
           style={styles.sectionRow}
         >
           <View style={styles.sectionRowCopy}>
