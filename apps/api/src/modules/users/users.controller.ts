@@ -1,4 +1,14 @@
-import { Body, Controller, Get, Header, Param, Patch, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Header,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { UsersService } from './users.service';
 import { OnboardingService } from './onboarding.service';
@@ -31,7 +41,7 @@ export class UsersController {
   }
 
   /**
-   * Sprint 29: update the current user's profile for onboarding.
+   * Sprint 29: update the current user's onboarding profile.
    * Uses a proper DTO with validation (no more raw Record<string, unknown>).
    * Updates BOTH User-level fields (countryCode, timezone, preferredCurrency)
    * AND UserProfile fields (firstName, lastName, tradingExperienceLevel).
@@ -87,7 +97,7 @@ export class UsersController {
   @Header('Cache-Control', 'no-store')
   @Header('Pragma', 'no-cache')
   @ApiOperation({ summary: '[Admin] Get user by ID' })
-  async getUserById(@Param('id') id: string) {
+  async getUserById(@Param('id', ParseUUIDPipe) id: string) {
     return this.usersService.findById(id);
   }
 
@@ -102,7 +112,7 @@ export class UsersController {
   @Header('Cache-Control', 'no-store')
   @Header('Pragma', 'no-cache')
   @ApiOperation({ summary: '[Admin] Get user onboarding status by ID (Sprint 29)' })
-  async getUserOnboardingStatus(@Param('id') id: string) {
+  async getUserOnboardingStatus(@Param('id', ParseUUIDPipe) id: string) {
     return this.onboardingService.getOnboardingStatus(id);
   }
 }
