@@ -149,10 +149,7 @@ export class AccountGovernanceService {
     requestedPage = 1,
     requestedLimit = 20,
   ): Promise<AccountAppealListResponse> {
-    const { page, limit, skip } = this.normalizeAppealPagination(
-      requestedPage,
-      requestedLimit,
-    );
+    const { page, limit, skip } = this.normalizeAppealPagination(requestedPage, requestedLimit);
     const [appeals, total] = await this.appealRepo.findAndCount({
       where: status ? { status } : {},
       relations: ['user', 'user.profile'],
@@ -417,14 +414,10 @@ export class AccountGovernanceService {
     requestedPage: number,
     requestedLimit: number,
   ): { page: number; limit: number; skip: number } {
-    const limitCandidate = Number.isFinite(requestedLimit)
-      ? Math.trunc(requestedLimit)
-      : 20;
+    const limitCandidate = Number.isFinite(requestedLimit) ? Math.trunc(requestedLimit) : 20;
     const limit = Math.min(100, Math.max(1, limitCandidate));
 
-    const pageCandidate = Number.isFinite(requestedPage)
-      ? Math.trunc(requestedPage)
-      : 1;
+    const pageCandidate = Number.isFinite(requestedPage) ? Math.trunc(requestedPage) : 1;
     const positivePage = Math.max(1, pageCandidate);
     const maxPageForSafeOffset = Math.floor(Number.MAX_SAFE_INTEGER / limit) + 1;
     const page = Math.min(positivePage, maxPageForSafeOffset);
