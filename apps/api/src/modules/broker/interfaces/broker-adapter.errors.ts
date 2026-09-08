@@ -23,6 +23,10 @@ export enum BrokerErrorCode {
   INSUFFICIENT_MARGIN = 'INSUFFICIENT_MARGIN',
   INVALID_INSTRUMENT = 'INVALID_INSTRUMENT',
   INVALID_LOT_SIZE = 'INVALID_LOT_SIZE',
+  // Sprint 50 PR-3 — normalized order model validation (fail-closed:
+  // an adapter must never silently downgrade a non-market order kind)
+  INVALID_ORDER_TYPE = 'INVALID_ORDER_TYPE',
+  INVALID_PRICE = 'INVALID_PRICE',
   DUPLICATE_ORDER = 'DUPLICATE_ORDER',
   MARKET_CLOSED = 'MARKET_CLOSED',
   POSITION_NOT_FOUND = 'POSITION_NOT_FOUND',

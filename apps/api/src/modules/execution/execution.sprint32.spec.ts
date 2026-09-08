@@ -3,11 +3,10 @@ import { Logger } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { ExecutionService } from './execution.service';
+import { ExecutionOrchestrator } from './orchestration/execution-orchestrator.service';
 import { Trade, TradeStatus } from './entities/trade.entity';
 import { TradingSession } from './entities/trading-session.entity';
 import { BrokerService } from '../broker/broker.service';
-import { BrokerAdapterRegistry } from '../broker/adapters/broker-adapter.registry';
-import { CredentialEncryptionService } from '../broker/services/credential-encryption.service';
 import { AuditService } from '../audit/audit.service';
 import { AuditSeverity } from '../audit/entities/audit-log.entity';
 import { RiskDecision } from '../risk/interfaces/risk.interface';
@@ -34,21 +33,17 @@ const approvedDecision = (): RiskDecision => ({
   maxDailyTrades: 10,
 });
 
-const mockAdapter = () => ({
-  setMode: jest.fn(),
-  connect: jest.fn().mockResolvedValue(undefined),
-  placeOrder: jest.fn().mockResolvedValue({
-    success: true,
-    externalOrderId: 'ext-001',
-    filledPrice: '1.08500',
-    status: 'FILLED',
+// Sprint 50 PR-3: dispatch is mocked at the orchestrator seam — adapter-level
+// behavior is covered by the dedicated execution-orchestrator.spec.ts suite.
+const mockOrchestrator = () => ({
+  assertDispatchable: jest.fn().mockResolvedValue(undefined),
+  dispatchOrder: jest.fn().mockResolvedValue({
+    outcome: 'FILLED',
+    order: { id: 'order-1', status: 'FILLED' },
+    providerOrderId: 'ext-001',
+    filledQuantity: '0.05',
+    avgFillPrice: '1.08500',
   }),
-  closeOrder: jest.fn().mockResolvedValue({ success: true, filledPrice: '1.09000' }),
-  getOrderStatus: jest.fn().mockResolvedValue({ status: 'OPEN' }),
-});
-
-const mockEncryptionService = () => ({
-  decrypt: jest.fn().mockReturnValue({ apiKey: 'test-key', apiSecret: 'test-secret' }),
 });
 
 // ─── Test suite ───────────────────────────────────────────────────────────────
@@ -57,11 +52,11 @@ describe('ExecutionService — Sprint 32 Idempotency', () => {
   let service: ExecutionService;
   let tradeRepo: Record<string, jest.Mock>;
   let sessionRepo: Record<string, jest.Mock>;
-  let mockAdapterInstance: ReturnType<typeof mockAdapter>;
+  let mockOrchestratorInstance: ReturnType<typeof mockOrchestrator>;
   let auditService: { log: jest.Mock };
 
   beforeEach(async () => {
-    mockAdapterInstance = mockAdapter();
+    mockOrchestratorInstance = mockOrchestrator();
     tradeRepo = {
       findOne: jest.fn().mockResolvedValue(null),
       find: jest.fn().mockResolvedValue([]),
@@ -84,11 +79,7 @@ describe('ExecutionService — Sprint 32 Idempotency', () => {
         { provide: getRepositoryToken(Trade), useValue: tradeRepo },
         { provide: getRepositoryToken(TradingSession), useValue: sessionRepo },
         { provide: BrokerService, useValue: {} },
-        {
-          provide: BrokerAdapterRegistry,
-          useValue: { getAdapter: jest.fn().mockReturnValue(mockAdapterInstance) },
-        },
-        { provide: CredentialEncryptionService, useValue: mockEncryptionService() },
+        { provide: ExecutionOrchestrator, useValue: mockOrchestratorInstance },
         { provide: AuditService, useValue: auditService },
         {
           provide: DataSource,
@@ -103,7 +94,9 @@ describe('ExecutionService — Sprint 32 Idempotency', () => {
                 async (cb: (manager: { query: jest.Mock }) => Promise<unknown>) => {
                   const mockTradeRow = {
                     id: 'trade-1',
-                    status: 'OPEN',
+                    // A freshly reserved trade slot is PENDING (the INSERT
+                    // writes 'PENDING'); the dispatch outcome then opens it.
+                    status: 'PENDING',
                     instrument: 'EURUSD',
                     direction: 'BUY',
                     lot_size: '0.05',
@@ -175,7 +168,7 @@ describe('ExecutionService — Sprint 32 Idempotency', () => {
     const result = await service.executeTrade('user-1', approvedDecision());
 
     expect(result).toEqual(existingTrade);
-    expect(mockAdapterInstance.placeOrder).not.toHaveBeenCalled();
+    expect(mockOrchestratorInstance.dispatchOrder).not.toHaveBeenCalled();
     expect(auditService.log).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'TRADE_DUPLICATE_SUPPRESSED',
@@ -195,7 +188,7 @@ describe('ExecutionService — Sprint 32 Idempotency', () => {
     await expect(service.executeTrade('user-1', approvedDecision())).rejects.toThrow(
       'connection refused',
     );
-    expect(mockAdapterInstance.placeOrder).not.toHaveBeenCalled();
+    expect(mockOrchestratorInstance.dispatchOrder).not.toHaveBeenCalled();
   });
 
   // ── Successful execution cannot duplicate ──────────────────────────────────
@@ -203,7 +196,7 @@ describe('ExecutionService — Sprint 32 Idempotency', () => {
   it('does not call broker placeOrder twice for the same signalId', async () => {
     // First call succeeds (default mock returns RESERVED_NEW with PENDING trade)
     await service.executeTrade('user-1', approvedDecision());
-    expect(mockAdapterInstance.placeOrder).toHaveBeenCalledTimes(1);
+    expect(mockOrchestratorInstance.dispatchOrder).toHaveBeenCalledTimes(1);
 
     // Second call with same signal → idempotency SELECT finds existing trade
     // → DUPLICATE_EXISTING → no broker submission
@@ -224,7 +217,7 @@ describe('ExecutionService — Sprint 32 Idempotency', () => {
 
     await service.executeTrade('user-1', approvedDecision());
     // placeOrder still only called once (the second call returned the existing trade)
-    expect(mockAdapterInstance.placeOrder).toHaveBeenCalledTimes(1);
+    expect(mockOrchestratorInstance.dispatchOrder).toHaveBeenCalledTimes(1);
   });
 
   // ── findTradeBySignalId (Risk-layer idempotency helper) ────────────────────
@@ -351,7 +344,7 @@ describe('ExecutionService — Sprint 32 Idempotency', () => {
     expect(rejectedError.message).toContain('Daily trade limit reached');
 
     // Broker should have been called exactly once (for the fulfilled request)
-    expect(mockAdapterInstance.placeOrder).toHaveBeenCalledTimes(1);
+    expect(mockOrchestratorInstance.dispatchOrder).toHaveBeenCalledTimes(1);
   });
 
   // ── Concurrent SAME-signal idempotency ────────────────────────────────────
@@ -402,6 +395,6 @@ describe('ExecutionService — Sprint 32 Idempotency', () => {
     expect(fulfilled.length).toBe(2); // both return a trade (one new, one existing)
 
     // Broker should have been called exactly once (the first request)
-    expect(mockAdapterInstance.placeOrder).toHaveBeenCalledTimes(1);
+    expect(mockOrchestratorInstance.dispatchOrder).toHaveBeenCalledTimes(1);
   });
 });

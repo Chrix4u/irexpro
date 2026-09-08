@@ -71,6 +71,61 @@ describe('PaperBrokerAdapter', () => {
     expect(result.externalOrderId).toContain('paper-order');
   });
 
+  // ─── Sprint 50 PR-3 — honest order-kind semantics ─────────────────────────
+
+  it('MARKET orders fill immediately with the requested quantity', async () => {
+    await adapter.connect(dummyCreds);
+    const result = await adapter.placeOrder({
+      idempotencyKey: 'test-key-mkt',
+      instrument: 'EURUSD',
+      direction: 'BUY',
+      lotSize: '0.02',
+      stopLoss: '1.09000',
+      takeProfit: '1.11000',
+      orderKind: 'MARKET',
+    });
+    expect(result.status).toBe('FILLED');
+    expect(result.filledQuantity).toBe('0.02');
+    expect(result.filledPrice).toBe('1.10005');
+  });
+
+  it('LIMIT orders are accepted as WORKING orders (never silently filled)', async () => {
+    await adapter.connect(dummyCreds);
+    const result = await adapter.placeOrder({
+      idempotencyKey: 'test-key-lmt',
+      instrument: 'EURUSD',
+      direction: 'BUY',
+      lotSize: '0.01',
+      stopLoss: '1.09000',
+      takeProfit: '1.11000',
+      orderKind: 'LIMIT',
+      limitPrice: '1.09500',
+    });
+    expect(result.success).toBe(true);
+    expect(result.status).toBe('PENDING');
+    expect(result.brokerMessage).toContain('LIMIT');
+    expect(result.filledPrice).toBeUndefined();
+  });
+
+  it('STOP/STOP_LIMIT orders are accepted as WORKING orders', async () => {
+    await adapter.connect(dummyCreds);
+    for (const kind of ['STOP', 'STOP_LIMIT'] as const) {
+      const result = await adapter.placeOrder({
+        idempotencyKey: `test-key-${kind}`,
+        instrument: 'EURUSD',
+        direction: 'SELL',
+        lotSize: '0.01',
+        stopLoss: '1.11000',
+        takeProfit: '1.09000',
+        orderKind: kind,
+        stopPrice: '1.10500',
+        limitPrice: kind === 'STOP_LIMIT' ? '1.10450' : undefined,
+      });
+      expect(result.status).toBe('PENDING');
+      expect(result.externalOrderId).toContain('paper-order');
+    }
+  });
+
   it('placeOrder never calls external broker API', async () => {
     // PaperBrokerAdapter has no HTTP client — no external call possible.
     // Verify it doesn't throw and returns a local result immediately.

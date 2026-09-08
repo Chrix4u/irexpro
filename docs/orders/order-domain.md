@@ -1,9 +1,11 @@
-# Order & Position Domain — Sprint 50 PR-2
+# Order & Position Domain — Sprint 50 PR-2 + PR-3
 
 Normalized order/position domain: **order model, state machines, idempotency**
-(Directive PHASE C). This is the domain layer; execution orchestration
-(PR-3) wires it into the broker adapters, and user/admin HTTP surface
-arrives in PR-5/PR-6.
+(Directive PHASE C) — now **orchestrated end-to-end** by the execution
+orchestration slice (Directive PHASE D + F, PR-3): every provider dispatch
+flows through `ExecutionOrchestrator` → idempotent order reservation →
+adapter dispatch → response mapping → machine-guarded transitions.
+User/admin HTTP surface arrives in PR-5/PR-6.
 
 ## The problem this slice solves
 
@@ -100,8 +102,13 @@ orders.
 
 ## Roadmap (later PRs)
 
-- **PR-3**: execution orchestration routes through the order domain
-  (risk-gated submit → adapter dispatch → fill events → trade link).
+- ~~**PR-3**: execution orchestration routes through the order domain~~
+  **DONE** — `ExecutionOrchestrator` (modules/execution/orchestration/):
+  fail-closed pre-dispatch gates (emergency control plane + LIVE
+  authorization), exactly-once dispatch per `clientOrderId`, pure
+  provider-response mapping, `order.*` events + `ORDER_*` audit trail,
+  close-position orchestration, and reconciliation-resolution of linked
+  orders. Signal path: `sig-{signalId}`; close path: `close-{tradeId}[-n]`.
 - **PR-5**: user-facing order APIs (place/cancel/list) using
   `clientOrderId`.
 - **PR-6**: admin/observability projections.

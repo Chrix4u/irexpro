@@ -78,14 +78,18 @@ describe('RealtimeService', () => {
       const socket = makeSocket();
       fetchSockets.mockResolvedValue([socket]);
 
-      await service.emitToUser('user-1', RealtimeEvent.TRADE_OPENED, { tradeId: 't1' });
+      await service.emitToUser('user-1', RealtimeEvent.TRADE_OPENED, {
+        tradeId: 't1',
+      });
 
       expect(mockServer.in).toHaveBeenCalledWith('user:user-1');
       expect(userRepo.findOne).toHaveBeenCalledWith({
         where: { id: 'user-1' },
         select: ['id', 'status', 'sessionVersion'],
       });
-      expect(socket.emit).toHaveBeenCalledWith(RealtimeEvent.TRADE_OPENED, { tradeId: 't1' });
+      expect(socket.emit).toHaveBeenCalledWith(RealtimeEvent.TRADE_OPENED, {
+        tradeId: 't1',
+      });
       expect(socket.disconnect).not.toHaveBeenCalled();
     });
 
@@ -94,7 +98,9 @@ describe('RealtimeService', () => {
       fetchSockets.mockResolvedValue([socket]);
       userRepo.findOne.mockResolvedValue(activeUser({ sessionVersion: 4 }));
 
-      await service.emitToUser('user-1', RealtimeEvent.SYSTEM_NOTIFICATION, { title: 'private' });
+      await service.emitToUser('user-1', RealtimeEvent.SYSTEM_NOTIFICATION, {
+        title: 'private',
+      });
 
       expect(socket.emit).not.toHaveBeenCalled();
       expect(socket.disconnect).toHaveBeenCalledWith(true);
@@ -122,7 +128,9 @@ describe('RealtimeService', () => {
       userRepo.findOne.mockRejectedValue(new Error('database unavailable'));
 
       await expect(
-        service.emitToUser('user-1', RealtimeEvent.SYSTEM_NOTIFICATION, { title: 'private' }),
+        service.emitToUser('user-1', RealtimeEvent.SYSTEM_NOTIFICATION, {
+          title: 'private',
+        }),
       ).resolves.toBeUndefined();
 
       expect(socket.emit).not.toHaveBeenCalled();
@@ -136,7 +144,9 @@ describe('RealtimeService', () => {
       const wrongUser = makeSocket({ userId: 'user-2' });
       fetchSockets.mockResolvedValue([missingGeneration, wrongUser]);
 
-      await service.emitToUser('user-1', RealtimeEvent.SYSTEM_NOTIFICATION, { title: 'private' });
+      await service.emitToUser('user-1', RealtimeEvent.SYSTEM_NOTIFICATION, {
+        title: 'private',
+      });
 
       expect(userRepo.findOne).not.toHaveBeenCalled();
       expect(missingGeneration.emit).not.toHaveBeenCalled();
@@ -146,8 +156,14 @@ describe('RealtimeService', () => {
     });
 
     it('validates each identity in a trading-session room and emits only to current sockets', async () => {
-      const currentSocket = makeSocket({ userId: 'user-1', authenticatedSessionVersion: 3 });
-      const staleSocket = makeSocket({ userId: 'user-2', authenticatedSessionVersion: 6 });
+      const currentSocket = makeSocket({
+        userId: 'user-1',
+        authenticatedSessionVersion: 3,
+      });
+      const staleSocket = makeSocket({
+        userId: 'user-2',
+        authenticatedSessionVersion: 6,
+      });
       fetchSockets.mockResolvedValue([currentSocket, staleSocket]);
       userRepo.findOne.mockImplementation(async ({ where }: { where: { id: string } }) =>
         where.id === 'user-1'
@@ -226,6 +242,106 @@ describe('RealtimeService', () => {
       expect(emittedPayload).not.toHaveProperty('credentialIv');
       expect(emittedPayload).not.toHaveProperty('accessToken');
       expect(emittedPayload).not.toHaveProperty('refreshToken');
+    });
+
+    it('forwards ORDER_SUBMITTED after current-session validation without internal identity', async () => {
+      const socket = makeSocket();
+      fetchSockets.mockResolvedValue([socket]);
+
+      eventBus.publish(DomainEventType.ORDER_SUBMITTED, 'user-1', {
+        orderId: 'o-1',
+        userId: 'user-1',
+        clientOrderId: 'sig-signal-1',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        orderKind: 'MARKET',
+        status: 'SUBMITTED',
+        requestedQuantity: '0.05',
+        tradeId: 't-1',
+      });
+      await flushAsyncDelivery();
+
+      expect(socket.emit).toHaveBeenCalledWith(
+        RealtimeEvent.ORDER_SUBMITTED,
+        expect.objectContaining({
+          orderId: 'o-1',
+          clientOrderId: 'sig-signal-1',
+          orderKind: 'MARKET',
+        }),
+      );
+      const emittedPayload = socket.emit.mock.calls[0][1] as Record<string, unknown>;
+      expect(emittedPayload).not.toHaveProperty('idempotencyKey');
+      expect(emittedPayload).not.toHaveProperty('userId');
+    });
+
+    it('forwards ORDER_FILLED with decimal-string fill fields', async () => {
+      const socket = makeSocket();
+      fetchSockets.mockResolvedValue([socket]);
+
+      eventBus.publish(DomainEventType.ORDER_FILLED, 'user-1', {
+        orderId: 'o-1',
+        userId: 'user-1',
+        clientOrderId: 'sig-signal-1',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        orderKind: 'MARKET',
+        status: 'FILLED',
+        requestedQuantity: '0.05',
+        filledQuantity: '0.05',
+        avgFillPrice: '1.08500',
+      });
+      await flushAsyncDelivery();
+
+      expect(socket.emit).toHaveBeenCalledWith(
+        RealtimeEvent.ORDER_FILLED,
+        expect.objectContaining({ filledQuantity: '0.05', avgFillPrice: '1.08500' }),
+      );
+    });
+
+    it('forwards ORDER_REJECTED with the sanitized reason field', async () => {
+      const socket = makeSocket();
+      fetchSockets.mockResolvedValue([socket]);
+
+      eventBus.publish(DomainEventType.ORDER_REJECTED, 'user-1', {
+        orderId: 'o-2',
+        userId: 'user-1',
+        clientOrderId: 'sig-signal-2',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        orderKind: 'MARKET',
+        status: 'REJECTED',
+        requestedQuantity: '0.05',
+        reason: 'Insufficient margin',
+      });
+      await flushAsyncDelivery();
+
+      expect(socket.emit).toHaveBeenCalledWith(
+        RealtimeEvent.ORDER_REJECTED,
+        expect.objectContaining({ orderId: 'o-2', reason: 'Insufficient margin' }),
+      );
+    });
+
+    it('forwards ORDER_RECONCILIATION_PENDING after session revalidation', async () => {
+      const socket = makeSocket();
+      fetchSockets.mockResolvedValue([socket]);
+
+      eventBus.publish(DomainEventType.ORDER_RECONCILIATION_PENDING, 'user-1', {
+        orderId: 'o-3',
+        userId: 'user-1',
+        clientOrderId: 'sig-signal-3',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        orderKind: 'MARKET',
+        status: 'RECONCILIATION_PENDING',
+        requestedQuantity: '0.05',
+        reason: 'dispatch timeout',
+      });
+      await flushAsyncDelivery();
+
+      expect(socket.emit).toHaveBeenCalledWith(
+        RealtimeEvent.ORDER_RECONCILIATION_PENDING,
+        expect.objectContaining({ orderId: 'o-3', status: 'RECONCILIATION_PENDING' }),
+      );
     });
 
     it('cleans up subscriptions on onModuleDestroy', async () => {

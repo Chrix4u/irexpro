@@ -185,6 +185,21 @@ export interface BrokerOrderRequest {
   comment?: string;
   /** Opaque provider account reference; memory-only and never audited. */
   connectionReference?: string;
+
+  // ─── Sprint 50 PR-3 — normalized order model passthrough ──────────────────
+  // All OPTIONAL for backward compatibility with market-only call sites.
+  // Adapters that only support market orders must REJECT other kinds loudly
+  // (fail-closed) rather than silently downgrading them to market orders.
+  /** Default 'MARKET' when omitted. */
+  orderKind?: 'MARKET' | 'LIMIT' | 'STOP' | 'STOP_LIMIT';
+  /** Default 'GTC' when omitted. */
+  timeInForce?: 'GTC' | 'DAY' | 'IOC' | 'FOK';
+  /** Required for LIMIT / STOP_LIMIT (decimal string). */
+  limitPrice?: string;
+  /** Required for STOP / STOP_LIMIT (decimal string). */
+  stopPrice?: string;
+  /** Caller-supplied stable identifier — the provider-side dedup surface. */
+  clientOrderId?: string;
 }
 
 export interface BrokerOrderModification {
@@ -197,6 +212,10 @@ export interface BrokerOrderResult {
   success: boolean;
   externalOrderId?: string;
   filledPrice?: string;
+  /** Sprint 50 PR-3: filled quantity when the provider reports partial fills
+   * (decimal string). When omitted on a FILLED result, orchestrators may
+   * conservatively assume the full requested quantity was filled. */
+  filledQuantity?: string;
   filledAt?: Date;
   status: 'FILLED' | 'PENDING' | 'REJECTED' | 'FAILED';
   brokerMessage?: string;

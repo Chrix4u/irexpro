@@ -457,6 +457,35 @@ describe('OrderService', () => {
       );
     });
 
+    it("unwraps TypeORM's [rows, rowCount] UPDATE shape (real-PG driver contract)", async () => {
+      // TypeORM's Postgres driver returns [rows, rowCount] for UPDATE queries
+      // even with RETURNING * — the hydrated result must still be the row.
+      orderRepo.findOne.mockResolvedValueOnce(entity({ status: OrderStatus.ACKNOWLEDGED }));
+      (dataSource as unknown as { query: jest.Mock }).query = jest.fn(
+        async (_sql: string, _params?: unknown[]) => [
+          [
+            rawRow({
+              status: OrderStatus.FILLED,
+              filled_quantity: '0.5000',
+              avg_fill_price: '1.08500000',
+              provider_order_id: 'prov-77',
+            }),
+          ],
+          1,
+        ],
+      );
+
+      const updated = await service.applyFill('order-1', {
+        quantity: '0.5000',
+        price: '1.08500000',
+        providerOrderId: 'prov-77',
+      });
+      expect(updated.id).toBe('order-1');
+      expect(updated.status).toBe(OrderStatus.FILLED);
+      expect(updated.filledQuantity).toBe('0.5000');
+      expect(updated.providerOrderId).toBe('prov-77');
+    });
+
     it('overfill (0 rows affected, still fillable) fails closed with Conflict', async () => {
       orderRepo.findOne
         .mockResolvedValueOnce(

@@ -304,31 +304,154 @@ export class MetaTraderAdapter implements IBrokerAdapter {
       const lotSize = parseFloat(order.lotSize);
       const sl = parseFloat(order.stopLoss);
       const tp = parseFloat(order.takeProfit);
-      // idempotencyKey embedded in comment AND clientId for broker-side dedup
+      // idempotencyKey embedded in comment AND clientId for broker-side dedup;
+      // the caller-supplied clientOrderId (when present) is the preferred
+      // stable identifier — it survives retries of the whole pipeline.
       const opts = {
         comment: `${order.idempotencyKey}`,
-        clientId: order.idempotencyKey,
+        clientId: order.clientOrderId ?? order.idempotencyKey,
       };
 
+      // Sprint 50 PR-3 — normalized order-kind dispatch. Prices are validated
+      // BEFORE any SDK call (fail-fast, never silently downgrade a non-market
+      // order to a market order).
+      const kind = order.orderKind ?? 'MARKET';
+      const limitPrice = this.requirePositiveNumber(order.limitPrice, 'limitPrice');
+      const stopPrice = this.requirePositiveNumber(order.stopPrice, 'stopPrice');
+
       let result: any;
-      if (order.direction === 'BUY') {
-        result = await conn.createMarketBuyOrder(order.instrument, lotSize, sl, tp, opts);
+      if (kind === 'MARKET') {
+        if (order.direction === 'BUY') {
+          result = await conn.createMarketBuyOrder(order.instrument, lotSize, sl, tp, opts);
+        } else {
+          result = await conn.createMarketSellOrder(order.instrument, lotSize, sl, tp, opts);
+        }
+      } else if (kind === 'LIMIT') {
+        if (limitPrice == null) {
+          throw new BrokerAdapterError(
+            BrokerErrorCode.INVALID_PRICE,
+            'LIMIT order requires a positive limitPrice',
+          );
+        }
+        if (order.direction === 'BUY') {
+          result = await conn.createLimitBuyOrder(
+            order.instrument,
+            lotSize,
+            limitPrice,
+            sl,
+            tp,
+            opts,
+          );
+        } else {
+          result = await conn.createLimitSellOrder(
+            order.instrument,
+            lotSize,
+            limitPrice,
+            sl,
+            tp,
+            opts,
+          );
+        }
+      } else if (kind === 'STOP') {
+        if (stopPrice == null) {
+          throw new BrokerAdapterError(
+            BrokerErrorCode.INVALID_PRICE,
+            'STOP order requires a positive stopPrice',
+          );
+        }
+        if (order.direction === 'BUY') {
+          result = await conn.createStopBuyOrder(
+            order.instrument,
+            lotSize,
+            stopPrice,
+            sl,
+            tp,
+            opts,
+          );
+        } else {
+          result = await conn.createStopSellOrder(
+            order.instrument,
+            lotSize,
+            stopPrice,
+            sl,
+            tp,
+            opts,
+          );
+        }
+      } else if (kind === 'STOP_LIMIT') {
+        if (limitPrice == null || stopPrice == null) {
+          throw new BrokerAdapterError(
+            BrokerErrorCode.INVALID_PRICE,
+            'STOP_LIMIT order requires positive stopPrice and limitPrice',
+          );
+        }
+        if (order.direction === 'BUY') {
+          result = await conn.createStopLimitBuyOrder(
+            order.instrument,
+            lotSize,
+            stopPrice,
+            limitPrice,
+            sl,
+            tp,
+            opts,
+          );
+        } else {
+          result = await conn.createStopLimitSellOrder(
+            order.instrument,
+            lotSize,
+            stopPrice,
+            limitPrice,
+            sl,
+            tp,
+            opts,
+          );
+        }
       } else {
-        result = await conn.createMarketSellOrder(order.instrument, lotSize, sl, tp, opts);
+        throw new BrokerAdapterError(
+          BrokerErrorCode.INVALID_ORDER_TYPE,
+          `Unsupported order kind: ${String(kind)}`,
+        );
       }
 
       const success = result?.stringCode === MT_SUCCESS_CODE;
+      // Pending orders (LIMIT/STOP/STOP_LIMIT) rest at the provider when
+      // accepted — they are NOT filled. MetaAPI reports the orderId; the
+      // positionId appears when the order eventually triggers.
+      const isPendingOrder = kind !== 'MARKET';
       return {
         success,
         externalOrderId: result?.positionId ?? result?.orderId,
-        filledAt: success ? new Date() : undefined,
-        status: success ? 'FILLED' : result?.numericCode === 10004 ? 'REJECTED' : 'FAILED',
+        filledAt: success && !isPendingOrder ? new Date() : undefined,
+        status: success
+          ? isPendingOrder
+            ? 'PENDING'
+            : 'FILLED'
+          : result?.numericCode === 10004
+            ? 'REJECTED'
+            : 'FAILED',
         brokerMessage: result?.message,
         rawResponse: result,
       };
     } catch (err) {
       throw this.mapError(err);
     }
+  }
+
+  /**
+   * Parse a decimal string into a positive finite number, or null when the
+   * value is absent/unparseable. Validation of REQUIRED-ness is the caller's
+   * (fail-fast before any SDK call).
+   */
+  private requirePositiveNumber(value: string | undefined, field: string): number | null {
+    if (value == null || value.trim() === '') return null;
+    const parsed = parseFloat(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.INVALID_PRICE,
+        `${field} must be a positive decimal string (got: ${value})`,
+      );
+    }
+    return parsed;
   }
 
   async modifyOrder(

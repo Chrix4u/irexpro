@@ -263,7 +263,7 @@ export class OrderService {
       throw new ConflictException(`Order ${orderId} is not fillable (status: ${current.status})`);
     }
 
-    const rows = await this.dataSource.query(
+    const result = await this.dataSource.query(
       `UPDATE trading.orders
        SET
          filled_quantity = filled_quantity + $2::numeric,
@@ -288,6 +288,14 @@ export class OrderService {
        RETURNING *`,
       [orderId, fill.quantity, fill.price, fill.providerOrderId ?? null, current.status],
     );
+
+    // TypeORM's Postgres driver returns [rows, rowCount] for UPDATE queries
+    // (even with RETURNING *) — unwrap the nested rows array before use.
+    // INSERT/SELECT queries return the flat rows array directly.
+    const rows: Record<string, unknown>[] =
+      Array.isArray(result) && Array.isArray(result[0])
+        ? (result[0] as Record<string, unknown>[])
+        : (result as unknown as Record<string, unknown>[]);
 
     if (rows.length === 0) {
       // Either a concurrent state change or an overfill — both fail closed.
@@ -316,6 +324,15 @@ export class OrderService {
   async findByClientOrderId(userId: string, clientOrderId: string): Promise<Order | null> {
     const key = this.generateIdempotencyKey(userId, clientOrderId);
     return this.orderRepo.findOne({ where: { idempotencyKey: key } });
+  }
+
+  /**
+   * Find the order linked to a position (trade). Used by the trade
+   * reconciliation job to resolve order-side RECONCILIATION_PENDING states
+   * once the provider-observed position state is known.
+   */
+  async findByTradeId(tradeId: string): Promise<Order | null> {
+    return this.orderRepo.findOne({ where: { tradeId } });
   }
 
   async listOrdersByUser(userId: string, limit = 50): Promise<Order[]> {
@@ -439,18 +456,27 @@ export class OrderService {
     }
   }
 
-  /** Deterministic client-facing idempotency key. */
-  private generateIdempotencyKey(userId: string, clientOrderId: string): string {
+  /**
+   * Deterministic client-facing idempotency key (SHA-256(userId:clientOrderId)).
+   * Public: the execution orchestrator embeds the same key in the provider
+   * order request for broker-side deduplication.
+   */
+  generateIdempotencyKey(userId: string, clientOrderId: string): string {
     return crypto.createHash('sha256').update(`${userId}:${clientOrderId}`).digest('hex');
   }
 
-  /** Advisory lock key scoped to a single user (positive 32-bit). */
+  /**
+   * Advisory lock key scoped to a single user (positive 32-bit).
+   *
+   * Sprint 50 PR-3: derived from a SHA-256 digest instead of the legacy
+   * char-code loop — CodeQL flagged the unbounded-length iteration over
+   * user-controlled input; the digest also distributes better. Lock-key
+   * VALUES change vs. the legacy hash, which only affects transient
+   * in-flight locks (never persisted state).
+   */
   private computeUserLockKey(userId: string): number {
-    let hash = 0;
-    for (let i = 0; i < userId.length; i++) {
-      hash = (hash * 31 + userId.charCodeAt(i)) & 0x7fffffff;
-    }
-    return hash;
+    const digest = crypto.createHash('sha256').update(userId).digest();
+    return digest.readUInt32BE(0) & 0x7fffffff;
   }
 
   /** SQLSTATE 23505 — unique constraint violation. */

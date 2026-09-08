@@ -223,19 +223,35 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     this._orderCounter += 1;
     const orderId = `paper-order-${this._orderCounter.toString().padStart(6, '0')}`;
 
+    // Sprint 50 PR-3 — honest order-kind semantics: MARKET orders fill
+    // immediately at the deterministic paper price; LIMIT/STOP/STOP_LIMIT
+    // orders are accepted as WORKING orders resting at the paper provider
+    // (never silently downgraded to market fills).
+    const kind = order.orderKind ?? 'MARKET';
+
     this.logger.log(
       `PaperBrokerAdapter: simulated order placed ` +
         `id=${orderId} instrument=${order.instrument} dir=${order.direction} ` +
-        `lot=${order.lotSize} [PAPER_ONLY — no real order placed]`,
+        `lot=${order.lotSize} kind=${kind} [PAPER_ONLY — no real order placed]`,
     );
+
+    if (kind === 'MARKET') {
+      return {
+        success: true,
+        externalOrderId: orderId,
+        filledPrice: '1.10005',
+        filledQuantity: order.lotSize,
+        filledAt: new Date(),
+        status: 'FILLED',
+        brokerMessage: 'PAPER_ONLY simulated fill',
+      };
+    }
 
     return {
       success: true,
       externalOrderId: orderId,
-      filledPrice: '1.10005',
-      filledAt: new Date(),
-      status: 'FILLED',
-      brokerMessage: 'PAPER_ONLY simulated fill',
+      status: 'PENDING',
+      brokerMessage: `PAPER_ONLY simulated working ${kind} order`,
     };
   }
 

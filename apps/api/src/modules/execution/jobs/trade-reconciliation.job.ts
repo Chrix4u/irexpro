@@ -10,6 +10,8 @@ import { CredentialEncryptionService } from '../../broker/services/credential-en
 import { AuditService } from '../../audit/audit.service';
 import { AuditAction } from '../../../common/enums/audit-action.enum';
 import { TradeStateMachine } from '../orders/trade-state-machine';
+import { OrderService } from '../orders/order.service';
+import { OrderStatus } from '../orders/order.enums';
 
 export const TRADE_RECONCILIATION_QUEUE = 'trade-reconciliation';
 export const TRADE_RECONCILIATION_JOB = 'reconcile-open-trades';
@@ -25,6 +27,10 @@ export const RECONCILIATION_INTERVAL_MS = 60_000; // 60 seconds
  *   3. If position still open: no-op
  *   4. For RECONCILIATION_PENDING trades: retry submission
  *
+ * Sprint 50 PR-3: when a provider-observed trade outcome resolves a trade,
+ * the linked order (if RECONCILIATION_PENDING) is resolved to the matching
+ * order-domain state — the order and position aggregates never diverge.
+ *
  * See: docs/architecture/12-execution-engine-architecture.md §7.1
  */
 @Injectable()
@@ -39,6 +45,7 @@ export class TradeReconciliationJob extends WorkerHost {
     private adapterRegistry: BrokerAdapterRegistry,
     private encryptionService: CredentialEncryptionService,
     private auditService: AuditService,
+    private orderService: OrderService,
   ) {
     super();
   }
@@ -141,6 +148,12 @@ export class TradeReconciliationJob extends WorkerHost {
         closeReason: TradeCloseReason.BROKER_CLOSE,
       });
 
+      // Sprint 50 PR-3: the position existed and is now provider-observed
+      // closed — the linked entry order (if unresolved) must have FILLED.
+      await this.resolveLinkedOrder(trade.id, OrderStatus.FILLED, {
+        reason: 'Provider-observed position closed — entry order resolved FILLED',
+      });
+
       await this.auditService.log({
         actorUserId: trade.userId,
         action: AuditAction.TRADE_CLOSED,
@@ -168,9 +181,59 @@ export class TradeReconciliationJob extends WorkerHost {
       // Sprint 50 PR-2: guard the recovery transition.
       TradeStateMachine.assertTransition(trade.status, TradeStatus.OPEN);
       await this.tradeRepo.update(trade.id, { status: TradeStatus.OPEN });
+
+      // Sprint 50 PR-3: the position is provider-observed open — the linked
+      // order (if unresolved) is acknowledged at the provider.
+      await this.resolveLinkedOrder(trade.id, OrderStatus.ACKNOWLEDGED, {
+        reason: 'Provider-observed position open — order resolved ACKNOWLEDGED',
+      });
+
       this.logger.log(`Trade ${trade.id} recovered: RECONCILIATION_PENDING → OPEN`);
     }
 
     return false;
+  }
+
+  /**
+   * Sprint 50 PR-3 — resolve the trade's linked order when reconciliation
+   * observes the provider-side truth. DEFENSIVE: an order-resolution failure
+   * is logged but NEVER breaks trade reconciliation (the trade outcome is
+   * authoritative; the next run retries the order resolution).
+   */
+  private async resolveLinkedOrder(
+    tradeId: string,
+    resolvedTo: OrderStatus,
+    context: { reason: string },
+  ): Promise<void> {
+    try {
+      const order = await this.orderService.findByTradeId(tradeId);
+      if (!order || order.status !== OrderStatus.RECONCILIATION_PENDING) {
+        return; // no linked order, or already resolved
+      }
+
+      await this.orderService.resolveReconciliation(order.id, resolvedTo, {
+        rejectReason: context.reason.slice(0, 500),
+      });
+
+      await this.auditService.log({
+        actorUserId: order.userId,
+        action: AuditAction.ORDER_RECONCILED,
+        resourceType: 'Order',
+        resourceId: order.id,
+        metadata: {
+          clientOrderId: order.clientOrderId,
+          resolvedTo,
+          reason: context.reason,
+          source: 'trade-reconciliation',
+        },
+      });
+
+      this.logger.log(`Order ${order.id} (trade ${tradeId}) reconciled → ${resolvedTo}`);
+    } catch (err) {
+      this.logger.warn(
+        `Order resolution failed for trade ${tradeId} (will retry next run): ` +
+          `${(err as Error).message}`,
+      );
+    }
   }
 }

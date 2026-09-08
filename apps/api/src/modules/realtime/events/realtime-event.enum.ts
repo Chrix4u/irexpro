@@ -21,6 +21,13 @@ export enum RealtimeEvent {
   TRADE_CLOSED = 'trade.closed',
   TRADE_RECONCILIATION_PENDING = 'trade.reconciliation_pending',
 
+  // Order lifecycle (Sprint 50 PR-3 — execution orchestration slice)
+  ORDER_SUBMITTED = 'order.submitted',
+  ORDER_ACKNOWLEDGED = 'order.acknowledged',
+  ORDER_FILLED = 'order.filled',
+  ORDER_REJECTED = 'order.rejected',
+  ORDER_RECONCILIATION_PENDING = 'order.reconciliation_pending',
+
   // Risk decisions
   RISK_SIGNAL_APPROVED = 'risk.signal.approved',
   RISK_SIGNAL_REJECTED = 'risk.signal.rejected',

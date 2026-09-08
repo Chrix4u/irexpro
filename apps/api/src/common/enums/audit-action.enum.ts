@@ -94,6 +94,16 @@ export enum AuditAction {
   // Sprint 32: idempotency — a duplicate trade intent was suppressed
   TRADE_DUPLICATE_SUPPRESSED = 'TRADE_DUPLICATE_SUPPRESSED',
 
+  // Order lifecycle (Sprint 50 PR-3 — execution orchestration slice)
+  ORDER_SUBMITTED = 'ORDER_SUBMITTED',
+  ORDER_ACKNOWLEDGED = 'ORDER_ACKNOWLEDGED',
+  ORDER_FILLED = 'ORDER_FILLED',
+  ORDER_REJECTED = 'ORDER_REJECTED',
+  ORDER_RECONCILIATION_PENDING = 'ORDER_RECONCILIATION_PENDING',
+  ORDER_RECONCILED = 'ORDER_RECONCILED',
+  // Sprint 50 PR-3: idempotency — a duplicate order submission was suppressed
+  ORDER_DUPLICATE_SUPPRESSED = 'ORDER_DUPLICATE_SUPPRESSED',
+
   // AI trading session
   AI_TRADING_ENABLED = 'AI_TRADING_ENABLED',
   AI_TRADING_DISABLED = 'AI_TRADING_DISABLED',

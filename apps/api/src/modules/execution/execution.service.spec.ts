@@ -1,18 +1,19 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ForbiddenException, Logger } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Logger } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { ExecutionService } from './execution.service';
+import { ExecutionOrchestrator } from './orchestration/execution-orchestrator.service';
 import { Trade, TradeCloseReason, TradeStatus } from './entities/trade.entity';
 import { TradingSession, TradingSessionStatus } from './entities/trading-session.entity';
+import { Order } from './orders/order.entity';
 import { BrokerService } from '../broker/broker.service';
-import { BrokerAdapterRegistry } from '../broker/adapters/broker-adapter.registry';
-import { CredentialEncryptionService } from '../broker/services/credential-encryption.service';
 import { AuditService } from '../audit/audit.service';
 import { AuditSeverity } from '../audit/entities/audit-log.entity';
 import { RiskDecision, RiskRejectionCode } from '../risk/interfaces/risk.interface';
 import { BrokerConnectionStatus, BrokerMode } from '../broker/interfaces/broker-adapter.interface';
 import { DomainEventBus } from '../events/event-bus.service';
+import { ProviderDispatchOutcome } from './orchestration/execution-intent.interface';
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -55,11 +56,27 @@ const mockBrokerConnection = {
   encryptionKeyId: 'key-1',
 };
 
+const mockOrder = { id: 'order-1', clientOrderId: 'sig-sig-001', status: 'FILLED' } as Order;
+
+/** A canonical FILLED dispatch outcome (provider executed the order). */
+const filledOutcome: ProviderDispatchOutcome = {
+  outcome: 'FILLED',
+  order: mockOrder,
+  orderId: mockOrder.id,
+  providerOrderId: 'ext-order-1',
+  filledQuantity: '0.05',
+  avgFillPrice: '1.08502',
+};
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe('ExecutionService', () => {
   let module: TestingModule;
   let service: ExecutionService;
+  let orchestrator: {
+    assertDispatchable: jest.Mock;
+    dispatchOrder: jest.Mock;
+  };
   let tradeRepo: jest.Mocked<{
     findOne: jest.Mock;
     find: jest.Mock;
@@ -74,34 +91,15 @@ describe('ExecutionService', () => {
     save: jest.Mock;
     update: jest.Mock;
   }>;
-  let mockAdapter: {
-    setMode: jest.Mock;
-    connect: jest.Mock;
-    placeOrder: jest.Mock;
-    closeOrder: jest.Mock;
-    getOrderStatus: jest.Mock;
-  };
   let auditService: { log: jest.Mock };
   let dataSource: { query: jest.Mock; transaction: jest.Mock };
 
   beforeEach(async () => {
     jest.clearAllMocks();
 
-    mockAdapter = {
-      setMode: jest.fn(),
-      connect: jest.fn().mockResolvedValue({ success: true }),
-      placeOrder: jest.fn().mockResolvedValue({
-        success: true,
-        externalOrderId: 'ext-order-1',
-        filledPrice: '1.08502',
-        status: 'FILLED',
-      }),
-      closeOrder: jest.fn().mockResolvedValue({
-        success: true,
-        filledPrice: '1.09000', // exit price comes through as filledPrice
-        status: 'FILLED',
-      }),
-      getOrderStatus: jest.fn().mockResolvedValue({ status: 'OPEN' }),
+    orchestrator = {
+      assertDispatchable: jest.fn().mockResolvedValue(undefined),
+      dispatchOrder: jest.fn().mockResolvedValue(filledOutcome),
     };
 
     tradeRepo = {
@@ -174,14 +172,10 @@ describe('ExecutionService', () => {
             findConnectionById: jest.fn().mockResolvedValue(mockBrokerConnection),
           },
         },
-        {
-          provide: BrokerAdapterRegistry,
-          useValue: { getAdapter: jest.fn().mockReturnValue(mockAdapter) },
-        },
-        {
-          provide: CredentialEncryptionService,
-          useValue: { decrypt: jest.fn().mockReturnValue({ accountId: 'acc-1', apiKey: 'k' }) },
-        },
+        // Sprint 50 PR-3: the provider dispatch pipeline is mocked at the
+        // orchestrator seam — adapter-level behavior is covered by the
+        // dedicated execution-orchestrator.spec.ts suite.
+        { provide: ExecutionOrchestrator, useValue: orchestrator },
         { provide: AuditService, useValue: auditService },
         { provide: DataSource, useValue: dataSource },
         {
@@ -224,14 +218,38 @@ describe('ExecutionService', () => {
       );
     });
 
-    it('never calls broker when decision is not APPROVED', async () => {
+    it('never dispatches when decision is not APPROVED', async () => {
       await expect(service.executeTrade('user-1', rejectedDecision)).rejects.toThrow();
-      expect(mockAdapter.placeOrder).not.toHaveBeenCalled();
+      expect(orchestrator.dispatchOrder).not.toHaveBeenCalled();
     });
 
-    it('APPROVED decision passes the gate and proceeds to broker', async () => {
+    it('APPROVED decision passes the gate and proceeds to dispatch', async () => {
       await service.executeTrade('user-1', approvedDecision);
-      expect(mockAdapter.placeOrder).toHaveBeenCalledTimes(1);
+      expect(orchestrator.dispatchOrder).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // ─── Pre-dispatch gates (orchestrator validation pipeline) ────────────────
+
+  describe('Pre-dispatch gates', () => {
+    it('runs assertDispatchable before reserving the trade slot', async () => {
+      await service.executeTrade('user-1', approvedDecision);
+      expect(orchestrator.assertDispatchable).toHaveBeenCalledWith({
+        userId: 'user-1',
+        connection: expect.objectContaining({ id: 'conn-1' }),
+      });
+    });
+
+    it('blocked dispatch (control plane / authorization) rejects before any reservation', async () => {
+      orchestrator.assertDispatchable.mockRejectedValueOnce(
+        new ForbiddenException('Execution blocked by platform control plane'),
+      );
+      await expect(service.executeTrade('user-1', approvedDecision)).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(orchestrator.dispatchOrder).not.toHaveBeenCalled();
+      // No PENDING trade was reserved (dataSource.transaction never ran).
+      expect(dataSource.transaction).not.toHaveBeenCalled();
     });
   });
 
@@ -239,21 +257,12 @@ describe('ExecutionService', () => {
 
   describe('Idempotency', () => {
     it('returns existing trade when idempotency_key already exists (duplicate signal)', async () => {
-      // Sprint 32 Gate 3: the idempotency check is now inside the advisory-lock
-      // transaction. When a trade with the same idempotency_key already exists,
-      // the SELECT inside the transaction finds it and returns DUPLICATE_EXISTING.
       const existingTrade = {
         id: 'trade-existing',
         status: 'OPEN',
         instrument: 'EURUSD',
         direction: 'BUY',
       };
-
-      // Override the mock manager to return the existing trade on SELECT
-      const mockMgr = (dataSource as { transaction: jest.Mock }).transaction.mock.calls[0]?.[0]
-        ? undefined // not used — we override below
-        : undefined;
-      void mockMgr; // suppress unused
 
       // Re-setup the transaction mock to return existing trade
       (dataSource as { transaction: jest.Mock }).transaction.mockImplementationOnce(
@@ -273,7 +282,7 @@ describe('ExecutionService', () => {
       const result = await service.executeTrade('user-1', approvedDecision);
 
       expect(result).toEqual(existingTrade);
-      expect(mockAdapter.placeOrder).not.toHaveBeenCalled();
+      expect(orchestrator.dispatchOrder).not.toHaveBeenCalled();
       // Audit the suppression
       expect(auditService.log).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -288,29 +297,33 @@ describe('ExecutionService', () => {
   // ─── Successful execution ─────────────────────────────────────────────────
 
   describe('Successful APPROVED execution', () => {
-    it('creates a PENDING trade before calling broker (via atomic reservation)', async () => {
-      // Sprint 32 Gate 3: the PENDING INSERT is now inside the advisory-lock
-      // transaction (raw SQL INSERT ... RETURNING). The mock manager handles it.
-      // We verify the broker was called AFTER the reservation (trade was PENDING).
+    it('reserves the trade slot, then dispatches through the order domain', async () => {
       await service.executeTrade('user-1', approvedDecision);
-      // The broker placeOrder should have been called (the reservation succeeded)
-      expect(mockAdapter.placeOrder).toHaveBeenCalled();
+      expect(orchestrator.dispatchOrder).toHaveBeenCalledTimes(1);
     });
 
-    it('calls placeOrder with Risk Engine-validated values', async () => {
+    it('builds the execution intent from the Risk Engine-validated order', async () => {
       await service.executeTrade('user-1', approvedDecision);
-      expect(mockAdapter.placeOrder).toHaveBeenCalledWith(
+      expect(orchestrator.dispatchOrder).toHaveBeenCalledWith(
         expect.objectContaining({
+          userId: 'user-1',
+          clientOrderId: 'sig-sig-001',
+          tradeId: 'trade-1',
+          signalId: 'sig-001',
+          orderKind: 'MARKET',
+          timeInForce: 'GTC',
           instrument: 'EURUSD',
           direction: 'BUY',
-          lotSize: '0.05',
+          requestedQuantity: '0.05',
           stopLoss: '1.07500',
           takeProfit: '1.09500',
+          providerAction: 'PLACE',
         }),
+        expect.objectContaining({ id: 'conn-1' }),
       );
     });
 
-    it('updates trade to OPEN with externalOrderId on broker success', async () => {
+    it('updates trade to OPEN with externalOrderId on FILLED dispatch', async () => {
       await service.executeTrade('user-1', approvedDecision);
       expect(tradeRepo.update).toHaveBeenCalledWith(
         'trade-1',
@@ -326,6 +339,25 @@ describe('ExecutionService', () => {
       await service.executeTrade('user-1', approvedDecision);
       expect(auditService.log).toHaveBeenCalledTimes(2);
     });
+
+    it('WORKING dispatch keeps the trade PENDING with the provider id recorded', async () => {
+      orchestrator.dispatchOrder.mockResolvedValueOnce({
+        outcome: 'WORKING',
+        order: mockOrder,
+        orderId: mockOrder.id,
+        providerOrderId: 'ext-working-1',
+      });
+      const trade = await service.executeTrade('user-1', approvedDecision);
+      expect(tradeRepo.update).toHaveBeenCalledWith('trade-1', {
+        externalOrderId: 'ext-working-1',
+      });
+      // No status transition — the position is not yet open.
+      expect(tradeRepo.update).not.toHaveBeenCalledWith(
+        'trade-1',
+        expect.objectContaining({ status: expect.any(String) }),
+      );
+      expect(trade.status).toBe('PENDING');
+    });
   });
 
   // ─── Broker rejects order ─────────────────────────────────────────────────
@@ -338,11 +370,12 @@ describe('ExecutionService', () => {
       jest.restoreAllMocks();
     });
 
-    it('sets trade to REJECTED when broker returns success=false', async () => {
-      mockAdapter.placeOrder.mockResolvedValueOnce({
-        success: false,
-        brokerMessage: 'Insufficient margin',
-        status: 'FAILED',
+    it('sets trade to REJECTED when the dispatch outcome is REJECTED', async () => {
+      orchestrator.dispatchOrder.mockResolvedValueOnce({
+        outcome: 'REJECTED',
+        order: mockOrder,
+        orderId: mockOrder.id,
+        reason: 'Insufficient margin',
       });
 
       await service.executeTrade('user-1', approvedDecision);
@@ -364,8 +397,24 @@ describe('ExecutionService', () => {
       jest.restoreAllMocks();
     });
 
-    it('sets trade to RECONCILIATION_PENDING on broker exception', async () => {
-      mockAdapter.placeOrder.mockRejectedValueOnce(new Error('MetaAPI network error'));
+    it('sets trade to RECONCILIATION_PENDING when the dispatch outcome is UNKNOWN', async () => {
+      orchestrator.dispatchOrder.mockResolvedValueOnce({
+        outcome: 'UNKNOWN',
+        order: mockOrder,
+        orderId: mockOrder.id,
+        reason: 'MetaAPI network error',
+      });
+
+      await service.executeTrade('user-1', approvedDecision);
+
+      expect(tradeRepo.update).toHaveBeenCalledWith(
+        'trade-1',
+        expect.objectContaining({ status: TradeStatus.RECONCILIATION_PENDING }),
+      );
+    });
+
+    it('sets trade to RECONCILIATION_PENDING when the orchestrator itself throws', async () => {
+      orchestrator.dispatchOrder.mockRejectedValueOnce(new Error('order store unavailable'));
 
       await service.executeTrade('user-1', approvedDecision);
 
@@ -379,6 +428,22 @@ describe('ExecutionService', () => {
   // ─── closeTrade ───────────────────────────────────────────────────────────
 
   describe('closeTrade()', () => {
+    // Factory: each test gets a FRESH object — closeTrade mutates the
+    // returned trade entity in place, and a shared fixture would leak state
+    // across tests.
+    const openTrade = () => ({
+      id: 'trade-1',
+      userId: 'user-1',
+      status: TradeStatus.OPEN,
+      externalOrderId: 'ext-1',
+      brokerConnectionId: 'conn-1',
+      instrument: 'EURUSD',
+      direction: 'BUY',
+      lotSize: '0.05',
+      signalId: null,
+      openedAt: new Date(),
+    });
+
     it('throws ForbiddenException when trade not found', async () => {
       tradeRepo.findOne.mockResolvedValue(null);
       await expect(
@@ -397,27 +462,102 @@ describe('ExecutionService', () => {
       ).rejects.toThrow(ForbiddenException);
     });
 
-    it('calls closeOrder on broker and updates trade to CLOSED', async () => {
-      tradeRepo.findOne.mockResolvedValue({
-        id: 'trade-1',
-        userId: 'user-1',
-        status: TradeStatus.OPEN,
-        externalOrderId: 'ext-1',
-        brokerConnectionId: 'conn-1',
-        openedAt: new Date(),
+    it('dispatches a CLOSE_POSITION order and updates trade to CLOSED on fill', async () => {
+      tradeRepo.findOne.mockResolvedValue(openTrade());
+      orchestrator.dispatchOrder.mockResolvedValueOnce({
+        outcome: 'FILLED',
+        order: mockOrder,
+        orderId: mockOrder.id,
+        providerOrderId: 'close-ext-1',
+        filledQuantity: '0.05',
+        avgFillPrice: '1.09000',
       });
 
       await service.closeTrade('trade-1', 'user-1', TradeCloseReason.MANUAL_CLOSE);
 
-      expect(mockAdapter.closeOrder).toHaveBeenCalledWith('ext-1');
+      expect(orchestrator.dispatchOrder).toHaveBeenCalledWith(
+        expect.objectContaining({
+          providerAction: 'CLOSE_POSITION',
+          providerReferenceId: 'ext-1',
+          // Closing a BUY position sells.
+          direction: 'SELL',
+          requestedQuantity: '0.05',
+          clientOrderId: 'close-trade-1',
+          tradeId: 'trade-1',
+        }),
+        expect.anything(),
+      );
       expect(tradeRepo.update).toHaveBeenCalledWith(
         'trade-1',
         expect.objectContaining({
           status: TradeStatus.CLOSED,
           closeReason: TradeCloseReason.MANUAL_CLOSE,
           exitPrice: '1.09000',
-          // realisedPnl populated later by TradeReconciliationJob (not available from closeOrder result)
         }),
+      );
+    });
+
+    it('FAIL-CLOSED: provider-refused close throws ConflictException and trade stays OPEN', async () => {
+      tradeRepo.findOne.mockResolvedValue(openTrade());
+      orchestrator.dispatchOrder.mockResolvedValueOnce({
+        outcome: 'REJECTED',
+        order: mockOrder,
+        orderId: mockOrder.id,
+        reason: 'Market closed',
+      });
+
+      await expect(
+        service.closeTrade('trade-1', 'user-1', TradeCloseReason.MANUAL_CLOSE),
+      ).rejects.toThrow(ConflictException);
+      expect(tradeRepo.update).not.toHaveBeenCalledWith(
+        'trade-1',
+        expect.objectContaining({ status: TradeStatus.CLOSED }),
+      );
+    });
+
+    it('unresolved close outcome (UNKNOWN) flags the trade for reconciliation', async () => {
+      tradeRepo.findOne.mockResolvedValue(openTrade());
+      orchestrator.dispatchOrder.mockResolvedValueOnce({
+        outcome: 'UNKNOWN',
+        order: mockOrder,
+        orderId: mockOrder.id,
+        reason: 'close request timeout',
+      });
+
+      await service.closeTrade('trade-1', 'user-1', TradeCloseReason.MANUAL_CLOSE);
+
+      expect(tradeRepo.update).toHaveBeenCalledWith(
+        'trade-1',
+        expect.objectContaining({ status: TradeStatus.RECONCILIATION_PENDING }),
+      );
+    });
+
+    it('idempotent: a concurrent duplicate close (DUPLICATE outcome) returns the trade unchanged', async () => {
+      tradeRepo.findOne.mockResolvedValue(openTrade());
+      orchestrator.dispatchOrder.mockResolvedValueOnce({
+        outcome: 'DUPLICATE',
+        order: mockOrder,
+        orderId: mockOrder.id,
+      });
+
+      const result = await service.closeTrade('trade-1', 'user-1', TradeCloseReason.MANUAL_CLOSE);
+      expect(result.status).toBe(TradeStatus.OPEN);
+      expect(tradeRepo.update).not.toHaveBeenCalledWith(
+        'trade-1',
+        expect.objectContaining({ status: expect.any(String) }),
+      );
+    });
+
+    it('close retry after a definitive failure mints the next attempt sequence', async () => {
+      tradeRepo.findOne.mockResolvedValue(openTrade());
+      // One prior close attempt exists (e.g. a REJECTED close order).
+      dataSource.query.mockResolvedValueOnce([{ count: '1' }]);
+
+      await service.closeTrade('trade-1', 'user-1', TradeCloseReason.MANUAL_CLOSE);
+
+      expect(orchestrator.dispatchOrder).toHaveBeenCalledWith(
+        expect.objectContaining({ clientOrderId: 'close-trade-1-2' }),
+        expect.anything(),
       );
     });
   });
