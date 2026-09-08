@@ -209,7 +209,9 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
   const refresh = useCallback(() => {
     const socket = socketRef.current;
     if (socket && !socket.connected) socket.connect();
-    setState((prev) => ({ ...prev, lastEventAt: Date.now() }));
+    // Manual reconnect is a transport action, not evidence of fresh server
+    // state. `lastEventAt` changes only when an actual server event arrives,
+    // so stale/fresh presentation cannot be spoofed by tapping reconnect.
   }, []);
 
   const value = useMemo<RealtimeContextValue>(

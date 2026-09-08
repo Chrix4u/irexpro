@@ -41,6 +41,21 @@ describe("deriveRealtimeUrl", () => {
   it("throws on unparseable input", () => {
     expect(() => deriveRealtimeUrl("not a url")).toThrow();
   });
+
+  it("rejects parseable non-HTTP(S) schemes instead of downgrading them to ws", () => {
+    expect(() => deriveRealtimeUrl("ftp://api.example.com/api/v1")).toThrow(
+      "must use http or https",
+    );
+    expect(() => deriveRealtimeUrl("file:///tmp/api")).toThrow(
+      "must use http or https",
+    );
+  });
+
+  it("rejects credential-bearing API base URLs", () => {
+    expect(() =>
+      deriveRealtimeUrl("https://user:password@api.example.com/api/v1"),
+    ).toThrow("must not include credentials");
+  });
 });
 
 describe("reconnectDelayMs (exponential, jittered, capped)", () => {
