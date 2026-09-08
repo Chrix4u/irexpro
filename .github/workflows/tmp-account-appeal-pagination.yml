@@ -18,6 +18,19 @@ jobs:
           ref: security/account-appeal-pagination
           fetch-depth: 0
 
+      - name: Correct helper anchor
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/tmp-account-appeal-pagination.py')
+          text = path.read_text(encoding='utf-8')
+          old = '    "]\\n\\nfunction formatDateTime",'
+          new = '    "];\\n\\nfunction formatDateTime",'
+          if old not in text:
+              raise SystemExit('expected helper anchor not found')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+
       - name: Apply coordinated pagination patch
         run: python3 scripts/tmp-account-appeal-pagination.py
 
