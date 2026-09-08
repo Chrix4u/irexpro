@@ -367,13 +367,15 @@ describe('OrderService', () => {
       expect(updated.status).toBe(OrderStatus.RECONCILIATION_PENDING);
     });
 
-    it('resolveReconciliation allows RECONCILIATION_PENDING → FILLED', async () => {
-      orderRepo.findOne.mockResolvedValueOnce(
-        entity({ status: OrderStatus.RECONCILIATION_PENDING }),
+    it('resolveReconciliation rejects fill-bearing targets before persistence', async () => {
+      await expect(service.resolveReconciliation('order-1', OrderStatus.FILLED)).rejects.toThrow(
+        /applyFill/,
       );
-      orderRepo.findOne.mockResolvedValueOnce(entity({ status: OrderStatus.FILLED }));
-      const updated = await service.resolveReconciliation('order-1', OrderStatus.FILLED);
-      expect(updated.status).toBe(OrderStatus.FILLED);
+      await expect(
+        service.resolveReconciliation('order-1', OrderStatus.PARTIALLY_FILLED),
+      ).rejects.toThrow(/applyFill/);
+      expect(orderRepo.findOne).not.toHaveBeenCalled();
+      expect(orderRepo.update).not.toHaveBeenCalled();
     });
 
     it('resolveReconciliation rejects an illegal target (machine-guarded)', async () => {

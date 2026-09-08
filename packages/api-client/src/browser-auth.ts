@@ -11,6 +11,12 @@ export interface BrowserAuthClient {
   login(body: LoginRequest): Promise<BrowserAuthTokens>;
   refresh(): Promise<BrowserAuthTokens>;
   /**
+   * Revoke every other session while rotating this browser session's HttpOnly
+   * refresh cookie. Returns only a new access token — the refresh token stays
+   * HttpOnly.
+   */
+  revokeOtherSessions(): Promise<BrowserAuthTokens>;
+  /**
    * Revoke the browser session when possible, then deterministically clear the
    * HttpOnly refresh cookie and the caller's in-memory access token.
    */
@@ -26,6 +32,8 @@ export interface BrowserAuthClient {
  * Web/Admin never receive a refresh token in a JavaScript-readable response:
  * - login/register explicitly request cookie transport;
  * - refresh relies on the HttpOnly cookie and receives only a new access token;
+ * - revokeOtherSessions asks the backend to rotate the HttpOnly cookie in place
+ *   of returning a body refresh token;
  * - mobile/native continues to use ApiClient.login/register/refresh and body tokens.
  */
 export function createBrowserAuthClient(api: ApiClient): BrowserAuthClient {
@@ -46,6 +54,12 @@ export function createBrowserAuthClient(api: ApiClient): BrowserAuthClient {
       method: 'POST',
       body: JSON.stringify({}),
     });
+
+  const revokeOtherSessions = () =>
+    api.request<BrowserAuthTokens>(
+      '/auth/sessions/revoke-others?refreshTransport=cookie',
+      { method: 'POST' },
+    );
 
   const clearBrowserCookie = () =>
     api.request<void>('/auth/browser-session', { method: 'DELETE' });
@@ -89,5 +103,5 @@ export function createBrowserAuthClient(api: ApiClient): BrowserAuthClient {
     }
   };
 
-  return { register, login, refresh, logout };
+  return { register, login, refresh, revokeOtherSessions, logout };
 }
