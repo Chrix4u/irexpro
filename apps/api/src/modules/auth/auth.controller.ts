@@ -443,6 +443,7 @@ export class AuthController {
       : undefined;
 
     const tokens = await this.authService.revokeOtherSessions(principal.userId, {
+      authenticatedSessionVersion: principal.authenticatedSessionVersion,
       ipAddress: req.ip,
       inheritRememberMeFrom: cookieRefreshToken,
     });
