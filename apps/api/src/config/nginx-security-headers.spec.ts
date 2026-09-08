@@ -12,7 +12,7 @@ describe('Nginx security policy', () => {
     });
 
     expect(output).toContain(
-      'Nginx transport-security, API boundary, and server-token policy passed.',
+      'Nginx transport-security, API identity, realtime ingress, and server-token policy passed.',
     );
   });
 });

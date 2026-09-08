@@ -21,7 +21,9 @@ import { UserProfile } from '../users/entities/user-profile.entity';
 import { UserRole } from '../users/entities/user-role.entity';
 import { Role, RoleName } from '../users/entities/role.entity';
 import { AuditService } from '../audit/audit.service';
+import { AuditSeverity } from '../audit/entities/audit-log.entity';
 import { AuditAction } from '../../common/enums/audit-action.enum';
+import { normalizeCanonicalUuid } from '../../common/utils/uuid.util';
 import { JwtPayload } from './strategies/jwt.strategy';
 import { MfaService } from './mfa.service';
 
@@ -295,12 +297,17 @@ export class AuthService {
       throw new UnauthorizedException('Invalid or expired refresh token');
     }
 
+    const subject = normalizeCanonicalUuid(payload.sub);
+    if (!subject) {
+      throw new UnauthorizedException('Invalid or expired refresh token');
+    }
+
     if (payload.tokenType !== 'refresh') {
       throw new UnauthorizedException('Invalid or expired refresh token');
     }
 
     const user = await this.userRepo.findOne({
-      where: { id: payload.sub },
+      where: { id: subject },
       relations: ['userRoles', 'userRoles.role'],
     });
 
@@ -368,6 +375,206 @@ export class AuthService {
       ipAddress,
       metadata: { result: 'success', scope: 'all_sessions' },
     });
+  }
+
+  /**
+   * Sprint 55 — POST /auth/change-password.
+   *
+   * Mirrors reset-password's transactional semantics exactly:
+   *   - re-authenticate with the CURRENT password first (same boundary as
+   *     MFA setup/disable re-auth); wrong value → 401 and nothing changes;
+   *   - store the new argon2 hash, retire any pending (not yet enabled) MFA
+   *     enrollment — scoped to mfaEnabled=false so active MFA secrets are
+   *     preserved — and revoke EVERY session by bumping session_version, all
+   *     in ONE transaction (no partial state on failure);
+   *   - the session_version bump is a compare-and-set on the version observed
+   *     when the user row was loaded; a lost race fails closed and the whole
+   *     transaction rolls back;
+   *   - audit metadata records sessionsRevoked only — NEVER password content.
+   */
+  async changePassword(
+    userId: string,
+    currentPassword: string,
+    newPassword: string,
+    ipAddress?: string,
+  ): Promise<void> {
+    const user = await this.userRepo.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new UnauthorizedException('User session is no longer valid');
+    }
+
+    const currentPasswordValid = await argon2.verify(user.passwordHash, currentPassword);
+    if (!currentPasswordValid) {
+      await this.auditService.log({
+        actorUserId: user.id,
+        action: AuditAction.USER_PASSWORD_CHANGE_FAILED,
+        resourceType: 'User',
+        resourceId: user.id,
+        ipAddress,
+        // Metadata records the failure reason ONLY; no password material of
+        // any kind ever enters the audit trail.
+        metadata: { result: 'failed', reason: 'invalid_current_password' },
+      });
+      throw new UnauthorizedException('Current password verification failed');
+    }
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      // Keep the password update as a separate statement so tests can verify
+      // that only the one-way hash is written (reset-password convention).
+      const passwordHash = await this.hashPassword(newPassword);
+      await queryRunner.manager.update(User, user.id, { passwordHash });
+
+      // A pending MFA enrollment was authorized using the old password. Retire
+      // only that pending state; the predicate deliberately preserves enabled
+      // MFA and its TOTP secret (reset-password hardening).
+      await queryRunner.manager.update(
+        User,
+        { id: user.id, mfaEnabled: false },
+        { mfaSecret: null, mfaSetupExpiresAt: null },
+      );
+
+      // CAS revocation of every existing session: the update only lands when
+      // the generation still equals the one observed at read time. A concurrent
+      // rotation/logout/reset wins the race and this request fails closed.
+      const currentVersion = this.userSessionVersion(user);
+      const bump = await queryRunner.manager.update(
+        User,
+        { id: user.id, sessionVersion: currentVersion },
+        { sessionVersion: currentVersion + 1 },
+      );
+      if (bump?.affected !== undefined && bump.affected !== 1) {
+        throw new UnauthorizedException('Session state changed concurrently; please retry');
+      }
+
+      await queryRunner.commitTransaction();
+
+      await this.auditService.log({
+        actorUserId: user.id,
+        action: AuditAction.USER_PASSWORD_CHANGED,
+        resourceType: 'User',
+        resourceId: user.id,
+        ipAddress,
+        // Deliberately nothing else — no password material of any kind.
+        metadata: { sessionsRevoked: true },
+      });
+    } catch (err) {
+      if (queryRunner.isTransactionActive) {
+        await queryRunner.rollbackTransaction();
+      }
+      throw err;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  /**
+   * Sprint 55 — POST /auth/sessions/revoke-others.
+   *
+   * Sign-out-everywhere-ELSE for the CALLER: the global session generation is
+   * compare-and-set bumped v → v+1, which invalidates every OTHER session's
+   * access + refresh tokens and disconnects their realtime sockets through the
+   * existing generation checks. The caller is immediately re-issued a fresh
+   * token pair minted at v+1 so the current device stays signed in.
+   *
+   * Critically, v is NOT taken from a later database reload. It is the exact
+   * generation that JwtStrategy validated on the bearer token and retained on
+   * AuthenticatedPrincipal. This prevents an in-flight request authenticated at
+   * v from observing a concurrent v→v+1 rotation and then incorrectly adopting
+   * v+1 as its authority to advance the account again. The conditional UPDATE
+   * therefore has a deterministic single winner for one authenticated token
+   * generation; affected !== 1 → 401 and no tokens/audit success are produced.
+   *
+   * Body transport (mobile, default) mints the new refresh token with
+   * rememberMe=false. Cookie transport inherits the signed rememberMe
+   * preference from the presented cookie refresh token when it verifiably
+   * belongs to the same user (see browserRememberMePreference); anything
+   * unverifiable downgrades conservatively to session-only.
+   */
+  async revokeOtherSessions(
+    userId: string,
+    options: {
+      authenticatedSessionVersion?: number;
+      ipAddress?: string;
+      inheritRememberMeFrom?: string;
+    } = {},
+  ): Promise<BrowserRefreshTokens> {
+    const user = await this.userRepo.findOne({
+      where: { id: userId },
+      relations: ['userRoles', 'userRoles.role'],
+    });
+
+    if (
+      !user ||
+      user.status === UserStatus.SUSPENDED ||
+      user.status === UserStatus.PERMANENTLY_LOCKED ||
+      user.status === UserStatus.CLOSED
+    ) {
+      throw new UnauthorizedException('User session is no longer valid');
+    }
+
+    // HTTP callers always supply the generation retained by JwtStrategy. The
+    // fallback keeps older direct service callers/tests source-compatible, but
+    // the security-sensitive route never relies on a post-authentication reload.
+    const currentVersion =
+      options.authenticatedSessionVersion === undefined
+        ? this.userSessionVersion(user)
+        : options.authenticatedSessionVersion;
+    if (!Number.isInteger(currentVersion) || currentVersion < 0) {
+      throw new UnauthorizedException('User session is no longer valid');
+    }
+
+    const nextVersion = currentVersion + 1;
+    const bump = await this.userRepo.update(
+      { id: user.id, sessionVersion: currentVersion },
+      { sessionVersion: nextVersion },
+    );
+
+    if (bump?.affected !== undefined && bump.affected !== 1) {
+      // Stale-generation race, same failure mode as refresh rotation.
+      throw new UnauthorizedException('Session state changed concurrently; please retry');
+    }
+
+    user.sessionVersion = nextVersion;
+
+    await this.auditService.log({
+      actorUserId: user.id,
+      action: AuditAction.USER_SESSIONS_REVOKED_OTHERS,
+      resourceType: 'User',
+      resourceId: user.id,
+      ipAddress: options.ipAddress,
+      metadata: { sessionsRevoked: 'all_other' },
+      severity: AuditSeverity.INFO,
+    });
+
+    const roles = user.userRoles?.map((ur) => ur.role.name) ?? [RoleName.USER];
+    const rememberMe = this.browserRememberMePreference(options.inheritRememberMeFrom, user.id);
+    const tokens = this.generateTokens(user, roles, rememberMe);
+    return { ...tokens, rememberMe };
+  }
+
+  /**
+   * Cookie-transport persistence preference. Only a literal signed
+   * rememberMe=true carried by a refresh-type token for the SAME user is
+   * honored; a missing, unverifiable, cross-user, or non-refresh token
+   * downgrades conservatively to session-only (mirrors the literal-true
+   * preservation rule in rotateRefreshToken).
+   */
+  private browserRememberMePreference(
+    presentedRefreshToken: string | undefined,
+    userId: string,
+  ): boolean {
+    if (!presentedRefreshToken) return false;
+    try {
+      const payload = this.jwtService.verify<JwtPayload>(presentedRefreshToken);
+      if (payload.sub !== userId || payload.tokenType !== 'refresh') return false;
+      return payload.rememberMe === true;
+    } catch {
+      return false;
+    }
   }
 
   private generateTokens(user: User, roles: string[], rememberMe = false): AuthTokens {

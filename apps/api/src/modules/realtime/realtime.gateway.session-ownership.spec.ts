@@ -2,8 +2,9 @@ import { WsException } from '@nestjs/websockets';
 import { RealtimeGateway } from './realtime.gateway';
 
 /**
- * Security regression for #243: trading-session room ownership must come from
- * authoritative persistence, never from identity claims supplied by the client.
+ * Security regressions for persisted trading-session ownership and identifier
+ * validation. Session ownership must come from authoritative persistence, and
+ * malformed identifiers must never reach persistence or room operations.
  */
 describe('RealtimeGateway — trading-session room ownership', () => {
   const USER = '11111111-1111-4111-8111-111111111111';
@@ -42,6 +43,23 @@ describe('RealtimeGateway — trading-session room ownership', () => {
       select: ['id', 'userId'],
     });
     expect(client.join).toHaveBeenCalledWith(`trading-session:${SESSION}`);
+  });
+
+  it('canonicalizes a valid uppercase UUID before persistence and room use', async () => {
+    const { gateway, tradingSessionRepo, client } = setup();
+    const uppercaseSession = 'ABCDEF12-3456-4789-ABCD-EF1234567890';
+    const canonicalSession = uppercaseSession.toLowerCase();
+    tradingSessionRepo.findOne.mockResolvedValue({ id: canonicalSession, userId: USER });
+
+    await expect(
+      gateway.handleJoinSession(client as never, { sessionId: uppercaseSession }),
+    ).resolves.toEqual({ status: 'joined' });
+
+    expect(tradingSessionRepo.findOne).toHaveBeenCalledWith({
+      where: { id: canonicalSession },
+      select: ['id', 'userId'],
+    });
+    expect(client.join).toHaveBeenCalledWith(`trading-session:${canonicalSession}`);
   });
 
   it('denies a foreign session even when the client omits any ownership claim', async () => {
@@ -98,5 +116,33 @@ describe('RealtimeGateway — trading-session room ownership', () => {
 
     expect(tradingSessionRepo.findOne).not.toHaveBeenCalled();
     expect(client.join).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'not-a-uuid',
+    '33333333-3333-4333-8333-333333333333\nforged-log-line',
+    'x'.repeat(4096),
+  ])('rejects malformed sessionId %p before persistence or room use', async (sessionId) => {
+    const { gateway, tradingSessionRepo, client } = setup();
+
+    await expect(gateway.handleJoinSession(client as never, { sessionId })).rejects.toThrow(
+      'sessionId must be a valid UUID',
+    );
+
+    expect(tradingSessionRepo.findOne).not.toHaveBeenCalled();
+    expect(client.join).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'not-a-uuid',
+    '33333333-3333-4333-8333-333333333333\nforged-log-line',
+    'x'.repeat(4096),
+  ])('rejects malformed leave-session ID %p before room use', (sessionId) => {
+    const { gateway, client } = setup();
+
+    expect(() => gateway.handleLeaveSession(client as never, { sessionId })).toThrow(
+      'sessionId must be a valid UUID',
+    );
+    expect(client.leave).not.toHaveBeenCalled();
   });
 });

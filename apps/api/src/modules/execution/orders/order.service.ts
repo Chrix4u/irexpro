@@ -62,8 +62,11 @@ const CLIENT_ORDER_ID_PATTERN = /^[A-Za-z0-9._-]{1,100}$/;
  * Mirrors the Sprint 32 Gate 3 reservation pattern — a single short DB
  * transaction acquires a per-user advisory lock, checks the idempotency key,
  * and INSERTs the CREATED order. The unique constraint on idempotency_key is
- * the final safety net (SQLSTATE 23505 → DUPLICATE_EXISTING). Broker network
- * I/O happens AFTER this method returns — never inside the transaction.
+ * the final safety net. The INSERT runs behind a savepoint so a PostgreSQL
+ * 23505 can be rolled back locally before reading the winning row; without
+ * that savepoint PostgreSQL would leave the whole transaction aborted.
+ * Broker network I/O happens AFTER this method returns — never inside the
+ * transaction.
  *
  * DECIMAL SAFETY: avg-fill-price is computed inside PostgreSQL numeric
  * arithmetic (exact) — never in JS floats.
@@ -107,8 +110,10 @@ export class OrderService {
         };
       }
 
-      // 3. INSERT the CREATED order inside the same transaction. The unique
-      //    constraint on idempotency_key is the final safety net (23505).
+      // 3. INSERT the CREATED order inside a savepoint. PostgreSQL marks a
+      //    transaction aborted after a constraint error, so the savepoint is
+      //    mandatory if we want to recover from a 23505 and read the winner.
+      await manager.query('SAVEPOINT order_insert');
       try {
         const inserted = await manager.query(
           `INSERT INTO trading.orders
@@ -138,14 +143,17 @@ export class OrderService {
             input.stopPrice ?? null,
           ],
         );
+        await manager.query('RELEASE SAVEPOINT order_insert');
         return { status: 'RESERVED_NEW' as const, order: this.hydrateOrderRow(inserted[0]) };
       } catch (err) {
         if (this.isUniqueConstraintViolation(err)) {
+          await manager.query('ROLLBACK TO SAVEPOINT order_insert');
           const duplicate = await manager.query(
             `SELECT * FROM trading.orders WHERE idempotency_key = $1 LIMIT 1`,
             [idempotencyKey],
           );
           if (duplicate.length > 0) {
+            await manager.query('RELEASE SAVEPOINT order_insert');
             return {
               status: 'DUPLICATE_EXISTING' as const,
               order: this.hydrateOrderRow(duplicate[0]),
@@ -210,14 +218,24 @@ export class OrderService {
   }
 
   /**
-   * RECONCILIATION_PENDING → resolvedTo (any state the machine allows from it).
-   * Provider-observed fill state is authoritative.
+   * Resolve a reconciliation-held order to a NON-FILL-BEARING state.
+   *
+   * FILLED / PARTIALLY_FILLED are intentionally rejected here. Those states
+   * carry economic facts (filled quantity + average fill price) and therefore
+   * must be reached through applyFill(), which performs exact-decimal atomic
+   * accounting. A status-only reconciliation must never invent a fill.
    */
   async resolveReconciliation(
     orderId: string,
     resolvedTo: OrderStatus,
     data: { providerOrderId?: string | null; rejectReason?: string | null } = {},
   ): Promise<Order> {
+    if (resolvedTo === OrderStatus.FILLED || resolvedTo === OrderStatus.PARTIALLY_FILLED) {
+      throw new ConflictException(
+        'Fill-bearing reconciliation must use applyFill with authoritative quantity and price',
+      );
+    }
+
     return this.applyTransition(orderId, resolvedTo, {
       providerOrderId: data.providerOrderId ?? null,
       rejectReason: data.rejectReason ? data.rejectReason.slice(0, 500) : null,
@@ -461,7 +479,7 @@ export class OrderService {
     return digest.readUInt32BE(0) & 0x7fffffff;
   }
 
-  /** SQLSTATE 23505 — unique constraint violation (mirrors execution.service). */
+  /** SQLSTATE 23505 — unique constraint violation. */
   private isUniqueConstraintViolation(err: unknown): boolean {
     const candidate = err as { code?: string; message?: string };
     if (candidate?.code === '23505') return true;

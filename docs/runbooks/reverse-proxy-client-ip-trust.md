@@ -1,8 +1,9 @@
 # Reverse-proxy client IP trust
 
-This runbook defines the client-IP identity boundary for the iRexPro public API.
-It applies to the verified single-VPS deployment where public HTTPS terminates at
-same-host Nginx and Nginx proxies `/api/v1/` to NestJS over loopback.
+This runbook defines the client-IP identity boundary for the iRexPro public API
+and realtime transport. It applies to the verified single-VPS deployment where
+public HTTPS terminates at same-host Nginx and Nginx proxies the NestJS surfaces
+over loopback.
 
 ## Security invariant
 
@@ -25,8 +26,9 @@ forwarding headers into authentication-throttling or audit identities.
 
 ## Nginx contract
 
-For the NestJS API location, Nginx must replace forwarding headers with the
-address it observed for the connection:
+For every public NestJS location, including both the REST API and Socket.IO
+transport, Nginx must replace forwarding headers with the address it observed
+for the connection:
 
 ```nginx
 location ^~ /api/v1/ {
@@ -37,9 +39,24 @@ location ^~ /api/v1/ {
     proxy_set_header X-Forwarded-For $remote_addr;
     proxy_set_header X-Forwarded-Proto $scheme;
 }
+
+location ^~ /socket.io/ {
+    proxy_pass http://irexpro_api;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+}
 ```
 
-Do **not** use `$proxy_add_x_forwarded_for` for the API identity boundary. That
+`/realtime` is the Socket.IO **namespace** used by the application. The default
+Engine.IO HTTP/WebSocket transport path remains `/socket.io/`; that transport
+path must therefore be routed to the NestJS upstream explicitly.
+
+Do **not** use `$proxy_add_x_forwarded_for` for NestJS identity boundaries. That
 variable preserves an incoming `X-Forwarded-For` chain before appending
 `$remote_addr`. The verified topology has one application reverse-proxy hop, so
 there is no reason for NestJS to receive caller-supplied entries.
@@ -52,6 +69,29 @@ The combination is deliberate:
    is the loopback Nginx process.
 4. Direct/non-proxied requests from other peers cannot make Express honor a
    forged forwarding header.
+
+## Realtime rate-limit identity
+
+The copyable Nginx baseline uses **server-wide** Socket.IO request and connection
+ceilings rather than an active per-`$remote_addr` limit. This is intentional:
+when the hostname is behind Cloudflare but trusted Nginx real-IP processing has
+not yet been configured, `$remote_addr` is a Cloudflare edge address and can be
+shared by unrelated users.
+
+Per-client realtime limiting may be added only when one of these boundaries is
+verified:
+
+- a trusted edge such as Cloudflare applies the rate rule using its verified
+  visitor identity; or
+- Nginx `real_ip` processing is configured with maintained official Cloudflare
+  source CIDRs so `$remote_addr` has become the verified visitor address.
+
+Never use raw `CF-Connecting-IP`, `X-Real-IP`, or `X-Forwarded-For` directly in
+application code or a rate-limit key without first establishing the trusted
+proxy-source boundary.
+
+See `docs/runbooks/realtime-ingress-security.md` for the copyable realtime
+transport route, safety caps, and validation procedure.
 
 ## Cloudflare deployments
 
@@ -83,9 +123,8 @@ Operational requirements:
   deployment is intentionally Cloudflare-only, while preserving the access
   needed for certificate issuance and operations.
 - After trusted real-IP processing, Nginx rewrites `$remote_addr` to the
-  verified visitor address, and the API proxy's
-  `X-Forwarded-For $remote_addr` line passes that single verified address to
-  NestJS.
+  verified visitor address, and the NestJS proxy locations' `X-Forwarded-For
+  $remote_addr` lines pass that single verified address upstream.
 
 Do not hard-code Cloudflare CIDRs from an old deployment note into application
 source. The operator must source and maintain the current official network
@@ -100,9 +139,9 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-Verify the API is still reachable only through the intended public proxy and
-that the direct NestJS listener remains loopback/private as documented in
-`production-deployment-vps-webuzo.md`.
+Verify the API and `/socket.io/` transport are reachable only through the
+intended public proxy and that the direct NestJS listener remains
+loopback/private as documented in `production-deployment-vps-webuzo.md`.
 
 For request attribution, use a non-sensitive test endpoint or controlled test
 request and confirm the application-observed IP matches the expected Nginx
