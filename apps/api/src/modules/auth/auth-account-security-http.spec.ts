@@ -219,6 +219,7 @@ describe('Sprint 55 — account security center routes (HTTP)', () => {
 
       expect(response.body).toEqual({ accessToken: 'new-access', refreshToken: 'new-refresh' });
       expect(authService.revokeOtherSessions).toHaveBeenCalledWith(USER_ID, {
+        authenticatedSessionVersion: 4,
         ipAddress: expect.any(String),
         inheritRememberMeFrom: undefined,
       });
