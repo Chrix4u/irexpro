@@ -75,6 +75,9 @@ jobs:
       - name: Test shared API client contracts
         run: pnpm --filter @irexpro/api-client test
 
+      - name: Mobile account-security pure logic tests
+        run: pnpm --filter @irexpro/mobile test
+
       - name: Verify configured Expo assets exist
         shell: bash
         run: |

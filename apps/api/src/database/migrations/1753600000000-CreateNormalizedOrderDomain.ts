@@ -63,6 +63,19 @@ export class CreateNormalizedOrderDomain1753600000000 implements MigrationInterf
             ("filled_quantity" = 0 AND "avg_fill_price" IS NULL)
             OR ("filled_quantity" > 0 AND "avg_fill_price" IS NOT NULL)
           ),
+        CONSTRAINT "chk_orders_status_fill_consistency"
+          CHECK (
+            ("status" = 'FILLED' AND "filled_quantity" = "requested_quantity")
+            OR (
+              "status" = 'PARTIALLY_FILLED'
+              AND "filled_quantity" > 0
+              AND "filled_quantity" < "requested_quantity"
+            )
+            OR (
+              "status" NOT IN ('FILLED', 'PARTIALLY_FILLED')
+              AND "filled_quantity" < "requested_quantity"
+            )
+          ),
         CONSTRAINT "chk_orders_price_kind" CHECK (
           ("order_kind" = 'MARKET' AND "requested_price" IS NULL AND "stop_price" IS NULL)
           OR ("order_kind" = 'LIMIT' AND "requested_price" IS NOT NULL AND "stop_price" IS NULL)
