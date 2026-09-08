@@ -55,10 +55,31 @@ function validatePublicEnv(build) {
   }
 }
 
+function pluginName(plugin) {
+  if (typeof plugin === 'string') return plugin;
+  if (Array.isArray(plugin) && typeof plugin[0] === 'string') return plugin[0];
+  return null;
+}
+
+function pluginOptions(plugin) {
+  if (Array.isArray(plugin) && plugin[1] && typeof plugin[1] === 'object') return plugin[1];
+  return {};
+}
+
+function enablesHermesV1(options) {
+  return options.useHermesV1 === true ||
+    options.android?.useHermesV1 === true ||
+    options.ios?.useHermesV1 === true;
+}
+
 const appJson = readJson('app.json');
 const easJson = readJson('eas.json');
+const packageJson = readJson('package.json');
 const expo = appJson.expo || {};
 const build = easJson.build || {};
+const dependencies = packageJson.dependencies || {};
+const plugins = Array.isArray(expo.plugins) ? expo.plugins : [];
+const pluginNames = plugins.map(pluginName).filter(Boolean);
 
 expect(expo.name === 'iRexPro', 'app.json expo.name must remain iRexPro');
 expect(expo.slug === 'irexpro-mobile', 'app.json expo.slug must remain irexpro-mobile');
@@ -67,10 +88,28 @@ expect(expo.ios?.bundleIdentifier === 'com.irexpro.mobile', 'iOS bundleIdentifie
 expect(expo.android?.package === 'com.irexpro.mobile', 'Android package must remain com.irexpro.mobile');
 expect(isPositiveIntegerString(expo.ios?.buildNumber), 'iOS buildNumber must be a positive integer string used to seed remote EAS versioning');
 expect(isPositiveInteger(expo.android?.versionCode), 'Android versionCode must be a positive integer used to seed remote EAS versioning');
+
 expect(
-  expo.newArchEnabled !== false,
-  'React Native New Architecture must remain enabled; do not restore the SDK 54 Legacy Architecture opt-out',
+  !Object.prototype.hasOwnProperty.call(expo, 'newArchEnabled'),
+  'Expo SDK 55 removed the newArchEnabled app-config option; New Architecture is mandatory and this field must remain absent',
 );
+expect(expo.userInterfaceStyle === 'dark', 'app.json expo.userInterfaceStyle must remain dark');
+expect(pluginNames.includes('expo-secure-store'), 'app.json must retain the expo-secure-store config plugin');
+expect(pluginNames.includes('expo-system-ui'), 'app.json must include expo-system-ui so the global interface style is applied on Android');
+
+expect(/^~55\./.test(dependencies.expo || ''), 'mobile Expo dependency must remain on the SDK 55 release line');
+expect(/^0\.83\./.test(dependencies['react-native'] || ''), 'mobile React Native dependency must remain on the SDK 55 RN 0.83 line');
+expect(/^19\.2\./.test(dependencies.react || ''), 'mobile React dependency must remain on the SDK 55 React 19.2 line');
+expect(/^~55\./.test(dependencies['expo-secure-store'] || ''), 'expo-secure-store must remain Expo SDK 55 aligned');
+expect(/^~55\./.test(dependencies['expo-system-ui'] || ''), 'expo-system-ui must remain Expo SDK 55 aligned');
+
+for (const plugin of plugins) {
+  if (pluginName(plugin) !== 'expo-build-properties') continue;
+  expect(
+    !enablesHermesV1(pluginOptions(plugin)),
+    'Hermes v1 must remain disabled for the SDK 55 checkpoint; do not set useHermesV1=true in expo-build-properties',
+  );
+}
 
 expect(easJson.cli?.appVersionSource === 'remote', 'eas.json cli.appVersionSource must be remote');
 expect(easJson.cli?.requireCommit === true, 'eas.json cli.requireCommit must be true for reproducible release builds');
