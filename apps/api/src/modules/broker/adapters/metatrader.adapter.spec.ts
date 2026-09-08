@@ -76,6 +76,43 @@ const mockConnection = {
     positionId: 'order-abc',
     message: 'Request completed',
   }),
+  // Sprint 50 PR-3 — pending-order SDK primitives (LIMIT/STOP/STOP_LIMIT)
+  createLimitBuyOrder: jest.fn().mockResolvedValue({
+    stringCode: 'TRADE_RETCODE_DONE',
+    numericCode: 10009,
+    orderId: 'pending-limit-buy-1',
+    message: 'Request completed',
+  }),
+  createLimitSellOrder: jest.fn().mockResolvedValue({
+    stringCode: 'TRADE_RETCODE_DONE',
+    numericCode: 10009,
+    orderId: 'pending-limit-sell-1',
+    message: 'Request completed',
+  }),
+  createStopBuyOrder: jest.fn().mockResolvedValue({
+    stringCode: 'TRADE_RETCODE_DONE',
+    numericCode: 10009,
+    orderId: 'pending-stop-buy-1',
+    message: 'Request completed',
+  }),
+  createStopSellOrder: jest.fn().mockResolvedValue({
+    stringCode: 'TRADE_RETCODE_DONE',
+    numericCode: 10009,
+    orderId: 'pending-stop-sell-1',
+    message: 'Request completed',
+  }),
+  createStopLimitBuyOrder: jest.fn().mockResolvedValue({
+    stringCode: 'TRADE_RETCODE_DONE',
+    numericCode: 10009,
+    orderId: 'pending-stop-limit-buy-1',
+    message: 'Request completed',
+  }),
+  createStopLimitSellOrder: jest.fn().mockResolvedValue({
+    stringCode: 'TRADE_RETCODE_DONE',
+    numericCode: 10009,
+    orderId: 'pending-stop-limit-sell-1',
+    message: 'Request completed',
+  }),
   modifyPosition: jest.fn().mockResolvedValue({
     stringCode: 'TRADE_RETCODE_DONE',
     numericCode: 10009,
@@ -366,6 +403,184 @@ describe('MetaTraderAdapter', () => {
       expect(result.success).toBe(true);
       expect(result.status).toBe('FILLED');
       expect(mockConnection.createMarketSellOrder).toHaveBeenCalled();
+    });
+
+    it('prefers the caller-supplied clientOrderId over the idempotency key', async () => {
+      await adapter.placeOrder({
+        idempotencyKey: 'idem-key-abc',
+        clientOrderId: 'stable-client-42',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        lotSize: '0.1',
+        stopLoss: '1.08000',
+        takeProfit: '1.09000',
+      });
+
+      expect(mockConnection.createMarketBuyOrder).toHaveBeenCalledWith(
+        'EURUSD',
+        0.1,
+        1.08,
+        1.09,
+        expect.objectContaining({
+          comment: 'idem-key-abc',
+          clientId: 'stable-client-42',
+        }),
+      );
+    });
+
+    // ─── Sprint 50 PR-3 — normalized order-kind dispatch ──────────────────
+
+    it('LIMIT BUY → createLimitBuyOrder with the limit price, returns PENDING', async () => {
+      const result = await adapter.placeOrder({
+        idempotencyKey: 'idem-l',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        lotSize: '0.1',
+        stopLoss: '1.08000',
+        takeProfit: '1.09000',
+        orderKind: 'LIMIT',
+        limitPrice: '1.08100',
+      });
+
+      expect(mockConnection.createLimitBuyOrder).toHaveBeenCalledWith(
+        'EURUSD',
+        0.1,
+        1.081,
+        1.08,
+        1.09,
+        expect.objectContaining({ comment: 'idem-l' }),
+      );
+      expect(result.success).toBe(true);
+      expect(result.status).toBe('PENDING');
+      expect(result.externalOrderId).toBe('pending-limit-buy-1');
+      expect(result.filledAt).toBeUndefined();
+    });
+
+    it('LIMIT SELL → createLimitSellOrder', async () => {
+      await adapter.placeOrder({
+        idempotencyKey: 'idem-ls',
+        instrument: 'EURUSD',
+        direction: 'SELL',
+        lotSize: '0.1',
+        stopLoss: '1.09000',
+        takeProfit: '1.07000',
+        orderKind: 'LIMIT',
+        limitPrice: '1.08900',
+      });
+      expect(mockConnection.createLimitSellOrder).toHaveBeenCalledWith(
+        'EURUSD',
+        0.1,
+        1.089,
+        1.09,
+        1.07,
+        expect.anything(),
+      );
+    });
+
+    it('STOP BUY → createStopBuyOrder with the stop price, returns PENDING', async () => {
+      const result = await adapter.placeOrder({
+        idempotencyKey: 'idem-sb',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        lotSize: '0.1',
+        stopLoss: '1.08000',
+        takeProfit: '1.09000',
+        orderKind: 'STOP',
+        stopPrice: '1.08600',
+      });
+      expect(mockConnection.createStopBuyOrder).toHaveBeenCalledWith(
+        'EURUSD',
+        0.1,
+        1.086,
+        1.08,
+        1.09,
+        expect.anything(),
+      );
+      expect(result.status).toBe('PENDING');
+    });
+
+    it('STOP_LIMIT → createStopLimitBuyOrder with stop + limit prices', async () => {
+      const result = await adapter.placeOrder({
+        idempotencyKey: 'idem-sl',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        lotSize: '0.1',
+        stopLoss: '1.08000',
+        takeProfit: '1.09000',
+        orderKind: 'STOP_LIMIT',
+        stopPrice: '1.08600',
+        limitPrice: '1.08650',
+      });
+      expect(mockConnection.createStopLimitBuyOrder).toHaveBeenCalledWith(
+        'EURUSD',
+        0.1,
+        1.086,
+        1.0865,
+        1.08,
+        1.09,
+        expect.anything(),
+      );
+      expect(result.status).toBe('PENDING');
+      expect(result.externalOrderId).toBe('pending-stop-limit-buy-1');
+    });
+
+    it('LIMIT order WITHOUT a limitPrice fails fast (INVALID_PRICE, no SDK call)', async () => {
+      await expect(
+        adapter.placeOrder({
+          idempotencyKey: 'idem-bad',
+          instrument: 'EURUSD',
+          direction: 'BUY',
+          lotSize: '0.1',
+          stopLoss: '1.08000',
+          takeProfit: '1.09000',
+          orderKind: 'LIMIT',
+        }),
+      ).rejects.toMatchObject({ code: 'INVALID_PRICE' });
+      expect(mockConnection.createLimitBuyOrder).not.toHaveBeenCalled();
+    });
+
+    it('STOP_LIMIT with a non-positive limitPrice fails fast (never downgraded)', async () => {
+      await expect(
+        adapter.placeOrder({
+          idempotencyKey: 'idem-bad2',
+          instrument: 'EURUSD',
+          direction: 'BUY',
+          lotSize: '0.1',
+          stopLoss: '1.08000',
+          takeProfit: '1.09000',
+          orderKind: 'STOP_LIMIT',
+          stopPrice: '1.08600',
+          limitPrice: '-1',
+        }),
+      ).rejects.toMatchObject({ code: 'INVALID_PRICE' });
+      expect(mockConnection.createStopLimitBuyOrder).not.toHaveBeenCalled();
+    });
+
+    it('unknown order kind fails fast (INVALID_ORDER_TYPE)', async () => {
+      await expect(
+        adapter.placeOrder({
+          idempotencyKey: 'idem-kind',
+          instrument: 'EURUSD',
+          direction: 'BUY',
+          lotSize: '0.1',
+          stopLoss: '1.08000',
+          takeProfit: '1.09000',
+          orderKind: 'TRAILING' as never,
+        }),
+      ).rejects.toMatchObject({ code: 'INVALID_ORDER_TYPE' });
+    });
+
+    it('defaults to MARKET when orderKind is omitted (backward compatible)', async () => {
+      const result = await adapter.placeOrder({
+        idempotencyKey: 'idem-default',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        lotSize: '0.1',
+        stopLoss: '1.08000',
+        takeProfit: '1.09000',
+      });
+      expect(mockConnection.createMarketBuyOrder).toHaveBeenCalled();
+      expect(result.status).toBe('FILLED');
     });
 
     it('returns FAILED status when broker rejects the order', async () => {

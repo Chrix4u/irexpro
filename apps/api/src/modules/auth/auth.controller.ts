@@ -26,14 +26,17 @@ import { Public } from '../../common/decorators/public.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { AuthenticatedPrincipal } from '../../common/interfaces/authenticated-principal.interface';
 import { AuthCookieService } from './auth-cookie.service';
+import { AuditService, UserSecurityEventPage } from '../audit/audit.service';
 import { AuthService } from './auth.service';
 import { AuthUserDto } from './dto/auth-user.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { LoginDto } from './dto/login.dto';
 import { BeginMfaSetupDto, DisableMfaDto, MfaCodeDto } from './dto/mfa.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { RegisterDto } from './dto/register.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { SecurityEventsQueryDto } from './dto/security-events-query.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
 import { VerifyPhoneDto } from './dto/verify-phone.dto';
 import { MfaService } from './mfa.service';
@@ -64,6 +67,7 @@ export class AuthController {
     // if a deliberately minimal test module omits them.
     @Optional() private readonly mfaService?: MfaService,
     @Optional() private readonly verificationService?: VerificationService,
+    @Optional() private readonly auditService?: AuditService,
   ) {}
 
   @Post('register')
@@ -372,5 +376,120 @@ export class AuthController {
       );
     }
     return { message: 'Password has been reset successfully.' };
+  }
+
+  // ── Sprint 55: account security center ─────────────────────────────────────
+
+  @Post('change-password')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { ttl: 15 * 60 * 1000, limit: 5 } })
+  @ApiOperation({
+    summary: 'Change password after current-password re-authentication; revokes all sessions',
+  })
+  @ApiResponse({ status: 200, description: 'Password changed; every session was revoked' })
+  @ApiResponse({ status: 401, description: 'Current password verification failed' })
+  @ApiResponse({ status: 400, description: 'Weak new password or missing fields' })
+  async changePassword(
+    @CurrentUser() principal: AuthenticatedPrincipal,
+    @Body() dto: ChangePasswordDto,
+    @Ip() ip: string,
+  ): Promise<{ message: string }> {
+    await this.authService.changePassword(
+      principal.userId,
+      dto.currentPassword,
+      dto.newPassword,
+      ip,
+    );
+    return {
+      message: 'Password has been changed. All sessions have been revoked — please sign in again.',
+    };
+  }
+
+  @Post('sessions/revoke-others')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
+  @HttpCode(HttpStatus.OK)
+  @Header('Cache-Control', 'no-store')
+  @Header('Pragma', 'no-cache')
+  @Throttle({ default: { ttl: 15 * 60 * 1000, limit: 10 } })
+  @ApiOperation({
+    summary: 'Sign out every OTHER session and re-issue a fresh token pair to the caller',
+  })
+  @ApiResponse({
+    status: 200,
+    description:
+      'Cookie flow returns access token only with a rotated HttpOnly refresh cookie; body/mobile flow returns access and refresh tokens',
+  })
+  @ApiResponse({ status: 401, description: 'Stale session generation — please retry' })
+  async revokeOtherSessions(
+    @CurrentUser() principal: AuthenticatedPrincipal,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+    @Query('refreshTransport') refreshTransport?: string,
+  ) {
+    const browserCookieTransport = refreshTransport === COOKIE_REFRESH_TRANSPORT;
+    if (browserCookieTransport) {
+      this.authCookieService.assertTrustedBrowserRequest(req);
+    }
+
+    // Cookie transport: inherit the signed rememberMe preference from the
+    // presented refresh cookie (same-user, refresh-type) so the caller's
+    // browser persistence choice survives the revocation. Body transport
+    // receives no cookie material at all.
+    const cookieRefreshToken = browserCookieTransport
+      ? this.authCookieService.getRefreshTokenFromCookie(req)
+      : undefined;
+
+    const authenticatedSessionVersion = principal.authenticatedSessionVersion;
+    if (
+      typeof authenticatedSessionVersion !== 'number' ||
+      !Number.isInteger(authenticatedSessionVersion) ||
+      authenticatedSessionVersion < 0
+    ) {
+      throw new UnauthorizedException('User session is no longer valid');
+    }
+
+    const tokens = await this.authService.revokeOtherSessions(principal.userId, {
+      authenticatedSessionVersion,
+      ipAddress: req.ip,
+      inheritRememberMeFrom: cookieRefreshToken,
+    });
+
+    if (browserCookieTransport) {
+      this.authCookieService.setRefreshCookie(res, tokens.refreshToken, tokens.rememberMe);
+    }
+    // Body transport preserves the strict two-token contract (no browser
+    // persistence metadata) exactly like the refresh endpoint's body flow.
+    return authResponseForTransport(
+      { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken },
+      refreshTransport,
+    );
+  }
+
+  @Get('security-events')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
+  @Header('Cache-Control', 'no-store')
+  @Header('Pragma', 'no-cache')
+  @Throttle({ default: { ttl: 60 * 1000, limit: 30 } })
+  @ApiOperation({
+    summary:
+      "List the caller's own security events (server-side allowlist, privacy-safe projection)",
+  })
+  @ApiResponse({ status: 200, description: 'Security events ordered createdAt DESC with hasMore' })
+  @ApiResponse({ status: 400, description: 'Invalid limit/offset query parameters' })
+  async listSecurityEvents(
+    @CurrentUser() principal: AuthenticatedPrincipal,
+    @Query() query: SecurityEventsQueryDto,
+  ): Promise<UserSecurityEventPage> {
+    if (!this.auditService) {
+      throw new ServiceUnavailableException('Security events are temporarily unavailable');
+    }
+    return this.auditService.listUserSecurityEvents(principal.userId, {
+      limit: query.limit,
+      offset: query.offset,
+    });
   }
 }

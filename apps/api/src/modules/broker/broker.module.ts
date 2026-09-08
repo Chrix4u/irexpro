@@ -4,14 +4,17 @@ import { BullModule } from '@nestjs/bullmq';
 import { BrokerService } from './broker.service';
 import { BrokerController } from './broker.controller';
 import { PortfolioController } from './portfolio.controller';
+import { BrokerRegistryController } from './broker-registry.controller';
 import { BrokerConnection } from './entities/broker-connection.entity';
 import { BrokerAccount } from './entities/broker-account.entity';
 import { BrokerAdapterRegistry } from './adapters/broker-adapter.registry';
 import { MetaTraderAdapter } from './adapters/metatrader.adapter';
 import { PaperBrokerAdapter } from './adapters/paper-broker.adapter';
+import { OandaAdapter } from './adapters/oanda/oanda.adapter';
 import { CredentialEncryptionService } from './services/credential-encryption.service';
 import { MetaApiClientService } from './services/metaapi-client.service';
 import { PortfolioReadService } from './services/portfolio-read.service';
+import { BrokerProviderRegistryService } from './registry/broker-provider-registry.service';
 import { BrokerHealthCheckJob, BROKER_HEALTH_QUEUE } from './jobs/broker-health-check.job';
 import { BrokerHealthCheckProducer } from './jobs/broker-health-check.producer';
 import { AuditModule } from '../audit/audit.module';
@@ -40,15 +43,17 @@ import { AuditModule } from '../audit/audit.module';
     BullModule.registerQueue({ name: BROKER_HEALTH_QUEUE }),
     AuditModule,
   ],
-  controllers: [BrokerController, PortfolioController],
+  controllers: [BrokerController, BrokerRegistryController, PortfolioController],
   providers: [
     BrokerService,
     PortfolioReadService,
     CredentialEncryptionService,
     MetaApiClientService,
     BrokerAdapterRegistry,
+    BrokerProviderRegistryService,
     MetaTraderAdapter,
     PaperBrokerAdapter,
+    OandaAdapter,
     BrokerHealthCheckJob,
     BrokerHealthCheckProducer,
   ],
@@ -56,6 +61,7 @@ import { AuditModule } from '../audit/audit.module';
     BrokerService,
     PortfolioReadService,
     BrokerAdapterRegistry,
+    BrokerProviderRegistryService,
     PaperBrokerAdapter,
     // CredentialEncryptionService is exported so that ExecutionModule (which
     // imports BrokerModule) can inject it into ExecutionService, where it is
@@ -75,12 +81,16 @@ export class BrokerModule implements OnModuleInit {
     private registry: BrokerAdapterRegistry,
     private metaTraderAdapter: MetaTraderAdapter,
     private paperBrokerAdapter: PaperBrokerAdapter,
+    private oandaAdapter: OandaAdapter,
   ) {}
 
   onModuleInit() {
     this.registry.register(this.metaTraderAdapter);
     this.registry.register(this.paperBrokerAdapter);
-    // Future: this.registry.register(this.oandaAdapter);
-    // Future: this.registry.register(this.cTraderAdapter);
+    // Sprint 51 PR-7 — OANDA v20 REST native adapter (BETA: implemented +
+    // contract-tested; live verification pending — see
+    // docs/brokers/oanda-v20-adapter.md).
+    this.registry.register(this.oandaAdapter);
+    // Future: this.registry.register(this.cTraderAdapter); // partner approval required
   }
 }

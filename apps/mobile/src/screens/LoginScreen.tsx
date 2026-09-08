@@ -12,7 +12,14 @@ import { api, setAccessToken } from '@/lib/api';
 import { saveTokens } from '@/lib/secure-storage';
 import { useAuth } from '@/context/auth-context';
 
-export default function LoginScreen({ onForgotPassword }: { onForgotPassword?: () => void }) {
+export default function LoginScreen({
+  onForgotPassword,
+  onCantAccessAccount,
+}: {
+  onForgotPassword?: () => void;
+  /** Opens the pre-auth account-appeal flow (restricted/locked accounts). */
+  onCantAccessAccount?: () => void;
+}) {
   const { setSession } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -62,9 +69,25 @@ export default function LoginScreen({ onForgotPassword }: { onForgotPassword?: (
 
       {error && <Text style={styles.error}>{error}</Text>}
 
-      <Pressable style={styles.forgotLink} onPress={onForgotPassword}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Forgot password"
+        onPress={onForgotPassword}
+        style={styles.forgotLink}
+      >
         <Text style={styles.forgotLinkText}>Forgot password?</Text>
       </Pressable>
+
+      {onCantAccessAccount ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Can't access your account?"
+          onPress={onCantAccessAccount}
+          style={styles.helpLink}
+        >
+          <Text style={styles.helpLinkText}>Can&apos;t access your account?</Text>
+        </Pressable>
+      ) : null}
 
       <Pressable style={styles.button} onPress={handleLogin} disabled={loading}>
         {loading ? (
@@ -111,6 +134,8 @@ const styles = StyleSheet.create({
   buttonText: { color: '#06231f', fontWeight: '700', fontSize: 16 },
   error: { color: '#f87171', fontSize: 14, marginBottom: 12 },
   muted: { color: '#6b7494', fontSize: 12, lineHeight: 18 },
-  forgotLink: { alignSelf: 'flex-end', marginBottom: 16 },
+  forgotLink: { alignSelf: 'flex-end', marginBottom: 4 },
   forgotLinkText: { color: '#14b8a6', fontSize: 14, fontWeight: '500' },
+  helpLink: { alignSelf: 'flex-end', minHeight: 46, justifyContent: 'center', marginBottom: 16 },
+  helpLinkText: { color: '#9aa7c7', fontSize: 13 },
 });

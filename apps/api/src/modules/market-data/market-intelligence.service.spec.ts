@@ -8,6 +8,8 @@ describe('MarketIntelligenceService', () => {
     id: '00000000-0000-0000-0000-000000000002',
     brokerId: 'metatrader5',
     accountType: 'DEMO',
+    // A3: usable credential state — the lifecycle gate must pass
+    credentialStatus: 'VERIFIED',
     encryptedCredentials: 'ciphertext',
     credentialIv: 'iv',
     credentialTag: 'tag',
@@ -137,6 +139,22 @@ describe('MarketIntelligenceService', () => {
     ).rejects.toBeInstanceOf(ServiceUnavailableException);
     expect(encryptionService.decrypt).not.toHaveBeenCalled();
     expect(marketDataReader.getCurrentPrice).not.toHaveBeenCalled();
+  });
+
+  it('A3: fails closed BEFORE decrypt when the credential lifecycle state is unusable', async () => {
+    brokerService.findActiveConnectionForUser.mockResolvedValue({
+      ...connection,
+      credentialStatus: 'REVOKED',
+    });
+
+    await expect(
+      createService().getSnapshot(userId, { instrument: 'EURUSD', timeframe: 'H1', limit: 120 }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'MARKET_DATA_UNAVAILABLE' }),
+    });
+    expect(encryptionService.decrypt).not.toHaveBeenCalled();
+    expect(marketDataReader.getCurrentPrice).not.toHaveBeenCalled();
+    expect(marketDataReader.getOHLCV).not.toHaveBeenCalled();
   });
 
   it('rejects paper/synthetic market adapters before decrypting credentials', async () => {

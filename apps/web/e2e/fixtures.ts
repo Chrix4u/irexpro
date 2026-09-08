@@ -115,6 +115,13 @@ export const mockBrokerConnections: BrokerConnectionView[] = [
     accountCurrency: 'USD',
     accountLeverage: 1,
     status: 'CONNECTED',
+    // Sprint 50 authorization state machine: a demo connection that has
+    // completed its handshake is AUTHORIZED (automation gate is only ACTIVE
+    // after explicit live-trading enablement, which this mock has not done).
+    authorizationStatus: 'AUTHORIZED',
+    credentialStatus: 'VERIFIED',
+    authorizedAt: '2025-01-15T09:55:00.000Z',
+    authorizationRevokedAt: null,
     demoValidated: true,
     liveTradingEnabled: false,
     lastHealthCheckAt: '2025-01-15T09:55:00.000Z',

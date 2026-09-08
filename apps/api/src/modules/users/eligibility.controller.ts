@@ -1,4 +1,13 @@
-import { Body, Controller, Get, Header, Param, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Header,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUserId } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -56,7 +65,7 @@ export class EligibilityController {
   @Header('Pragma', 'no-cache')
   @ApiOperation({ summary: '[Admin] Append an immutable jurisdiction review decision' })
   reviewUser(
-    @Param('id') userId: string,
+    @Param('id', ParseUUIDPipe) userId: string,
     @CurrentUserId() reviewerUserId: string,
     @Body() dto: ReviewUserEligibilityDto,
   ) {
@@ -80,7 +89,7 @@ export class EligibilityController {
   @Header('Pragma', 'no-cache')
   @ApiOperation({ summary: '[Admin] Append an immutable KYC review decision' })
   reviewKyc(
-    @Param('id') userId: string,
+    @Param('id', ParseUUIDPipe) userId: string,
     @CurrentUserId() reviewerUserId: string,
     @Body() dto: ReviewUserKycDto,
   ) {

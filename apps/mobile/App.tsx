@@ -5,8 +5,9 @@ import { AuthProvider, useAuth } from '@/context/auth-context';
 import AppErrorBoundary from '@/components/AppErrorBoundary';
 import LoginScreen from './src/screens/LoginScreen';
 import ForgotPasswordScreen from './src/screens/ForgotPasswordScreen';
+import AppealScreen from './src/screens/AppealScreen';
 import DashboardScreen from './src/screens/DashboardScreen';
-import AccountScreen from './src/screens/AccountScreen';
+import AccountScreen from './src/screens/account/AccountScreen';
 import PaymentsScreen from './src/screens/PaymentsScreen';
 
 /**
@@ -28,6 +29,9 @@ import PaymentsScreen from './src/screens/PaymentsScreen';
 
 type Tab = 'dashboard' | 'account' | 'payments';
 
+/** Unauthenticated stack: login, forgot-password, and the pre-auth appeal. */
+type AuthScreen = 'login' | 'forgot-password' | 'appeal';
+
 export default function App() {
   return (
     <SafeAreaProvider>
@@ -43,7 +47,7 @@ export default function App() {
 function AppShell() {
   const { user, loading, error, restoreSession } = useAuth();
   const [tab, setTab] = useState<Tab>('dashboard');
-  const [showForgotPassword, setShowForgotPassword] = useState(false);
+  const [authScreen, setAuthScreen] = useState<AuthScreen>('login');
 
   if (loading && !user) {
     return (
@@ -75,10 +79,15 @@ function AppShell() {
             </Pressable>
           </View>
         ) : null}
-        {showForgotPassword ? (
-          <ForgotPasswordScreen onBack={() => setShowForgotPassword(false)} />
+        {authScreen === 'forgot-password' ? (
+          <ForgotPasswordScreen onBack={() => setAuthScreen('login')} />
+        ) : authScreen === 'appeal' ? (
+          <AppealScreen onBack={() => setAuthScreen('login')} />
         ) : (
-          <LoginScreen onForgotPassword={() => setShowForgotPassword(true)} />
+          <LoginScreen
+            onForgotPassword={() => setAuthScreen('forgot-password')}
+            onCantAccessAccount={() => setAuthScreen('appeal')}
+          />
         )}
       </SafeAreaView>
     );

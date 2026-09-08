@@ -2,7 +2,7 @@
   "name": "@irexpro/types",
   "version": "0.1.0",
   "private": true,
-  "description": "iRexPro — shared frontend-safe TypeScript types (web, admin, mobile). No backend entities or secrets.",
+  "description": "iRexPro \u2014 shared frontend-safe TypeScript types (web, admin, mobile). No backend entities or secrets.",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
@@ -13,6 +13,10 @@
     "./execution": {
       "types": "./src/execution.ts",
       "default": "./src/execution.ts"
+    },
+    "./orders": {
+      "types": "./src/orders.ts",
+      "default": "./src/orders.ts"
     },
     "./portfolio": {
       "types": "./src/portfolio.ts",
@@ -41,6 +45,18 @@
     "./eligibility": {
       "types": "./src/eligibility.ts",
       "default": "./src/eligibility.ts"
+    },
+    "./broker-registry": {
+      "types": "./src/broker-registry.ts",
+      "default": "./src/broker-registry.ts"
+    },
+    "./live-account": {
+      "types": "./src/live-account.ts",
+      "default": "./src/live-account.ts"
+    },
+    "./admin-live-account": {
+      "types": "./src/admin-live-account.ts",
+      "default": "./src/admin-live-account.ts"
     }
   },
   "scripts": {

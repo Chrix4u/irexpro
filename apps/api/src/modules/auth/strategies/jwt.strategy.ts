@@ -6,6 +6,7 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 import { Repository } from 'typeorm';
 import { User, UserStatus } from '../../users/entities/user.entity';
 import { AuthenticatedPrincipal } from '../../../common/interfaces/authenticated-principal.interface';
+import { normalizeCanonicalUuid } from '../../../common/utils/uuid.util';
 
 export interface JwtPayload {
   sub: string;
@@ -32,7 +33,9 @@ export interface JwtPayload {
  *
  * Logout, password reset, and refresh rotation advance session_version, so
  * stale access tokens are rejected immediately rather than remaining valid
- * until their normal expiry.
+ * until their normal expiry. The matched generation is retained on the
+ * sanitized principal so downstream auth mutations can bind their CAS to the
+ * exact token generation that passed this validation boundary.
  */
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -54,6 +57,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw new UnauthorizedException('Invalid token: missing subject');
     }
 
+    const subject = normalizeCanonicalUuid(payload.sub);
+    if (!subject) {
+      throw new UnauthorizedException('Invalid token: invalid subject');
+    }
+
     // Token purpose is explicit and fail-closed. Newly issued iRexPro JWTs
     // always carry a tokenType claim, so absence is not treated as a legacy
     // access-token fallback.
@@ -62,7 +70,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     }
 
     const user = await this.userRepo.findOne({
-      where: { id: payload.sub },
+      where: { id: subject },
       select: ['id', 'email', 'phone', 'status', 'sessionVersion'],
     });
 
@@ -87,6 +95,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       phone: user.phone,
       roles: payload.roles ?? [],
       status: user.status,
+      authenticatedSessionVersion: userVersion,
     };
   }
 }

@@ -1,6 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Exclude, Expose } from 'class-transformer';
 import { BrokerConnectionStatus, BrokerMode } from '../interfaces/broker-adapter.interface';
+import { BrokerAuthorizationStatus } from '../authorization/broker-authorization-status';
+import { BrokerCredentialStatus } from '../authorization/broker-credential-status';
 
 /**
  * BrokerConnectionResponseDto — Safe response DTO for broker connections.
@@ -45,6 +47,30 @@ export class BrokerConnectionResponseDto {
   @Expose()
   @ApiProperty({ enum: BrokerConnectionStatus })
   status: BrokerConnectionStatus;
+
+  @Expose()
+  @ApiProperty({
+    enum: BrokerAuthorizationStatus,
+    description:
+      'Authorization state machine (Sprint 50). ACTIVE is the ONLY executable state. ' +
+      'Backend-authoritative — frontend state can never enable execution.',
+  })
+  authorizationStatus: BrokerAuthorizationStatus;
+
+  @Expose()
+  @ApiProperty({
+    enum: BrokerCredentialStatus,
+    description: 'Credential lifecycle status (metadata only — never secrets).',
+  })
+  credentialStatus: BrokerCredentialStatus;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'When authorization was granted (ACTIVE).' })
+  authorizedAt: Date | null;
+
+  @Expose()
+  @ApiPropertyOptional({ description: 'When authorization was revoked.' })
+  authorizationRevokedAt: Date | null;
 
   @Expose()
   @ApiProperty()

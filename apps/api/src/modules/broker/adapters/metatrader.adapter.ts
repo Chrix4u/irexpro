@@ -11,6 +11,7 @@ import {
   BrokerOrderModification,
   BrokerOrderRequest,
   BrokerOrderResult,
+  BrokerOrderState,
   BrokerPosition,
   BrokerPrice,
   DecryptedBrokerCredentials,
@@ -172,6 +173,56 @@ export class MetaTraderAdapter implements IBrokerAdapter {
     }
   }
 
+  // ─── Provider order state (Sprint 50 PR-4 — reconciliation read surface) ──
+
+  /**
+   * List OPEN (working) MetaTrader orders via the RPC connection.
+   *
+   * MetaAPI getOrders() returns pending orders (LIMIT/STOP/STOP_LIMIT) plus
+   * market orders in transient request states — exactly the working set
+   * reconciliation needs to diff against internal non-terminal orders.
+   * Completed orders are NOT included (they live in history; getOrderById
+   * resolves those).
+   */
+  async listOrders(): Promise<BrokerOrderState[]> {
+    const conn = await this.getActiveConnection();
+    try {
+      const orders = await conn.getOrders();
+      return (orders ?? []).map((o: any) => this.mapOrderState(o));
+    } catch (err) {
+      throw this.mapError(err);
+    }
+  }
+
+  /**
+   * Look up a single order by ticket — open orders first, then history.
+   *
+   * Resolves uncertain execution results by stable identifier (Directive
+   * §26): if the provider known the ticket we learn its ACTUAL state without
+   * re-submitting anything. MetaAPI history lookups may still be
+   * synchronizing; a `synchronizing` result is treated as "not found yet"
+   * (null) — the next reconciliation run retries. NEVER guesses.
+   */
+  async getOrderById(providerOrderId: string): Promise<BrokerOrderState | null> {
+    const conn = await this.getActiveConnection();
+    try {
+      // 1. Open (working) orders — authoritative while the order is live.
+      const orders = await conn.getOrders();
+      const open = (orders ?? []).find((o: any) => String(o.id) === providerOrderId);
+      if (open) return this.mapOrderState(open);
+
+      // 2. History (completed) orders by ticket. When history sync is still
+      //    in progress the result is incomplete — return null so the caller
+      //    retries later rather than concluding "provider never knew it".
+      const history = await conn.getHistoryOrdersByTicket(providerOrderId);
+      if (!history || history.synchronizing) return null;
+      const done = (history.historyOrders ?? []).find((o: any) => String(o.id) === providerOrderId);
+      return done ? this.mapOrderState(done) : null;
+    } catch (err) {
+      throw this.mapError(err);
+    }
+  }
+
   /**
    * Sprint 32 Gate 4: calculate required margin using MetaAPI's native
    * calculate-margin capability.
@@ -304,31 +355,154 @@ export class MetaTraderAdapter implements IBrokerAdapter {
       const lotSize = parseFloat(order.lotSize);
       const sl = parseFloat(order.stopLoss);
       const tp = parseFloat(order.takeProfit);
-      // idempotencyKey embedded in comment AND clientId for broker-side dedup
+      // idempotencyKey embedded in comment AND clientId for broker-side dedup;
+      // the caller-supplied clientOrderId (when present) is the preferred
+      // stable identifier — it survives retries of the whole pipeline.
       const opts = {
         comment: `${order.idempotencyKey}`,
-        clientId: order.idempotencyKey,
+        clientId: order.clientOrderId ?? order.idempotencyKey,
       };
 
+      // Sprint 50 PR-3 — normalized order-kind dispatch. Prices are validated
+      // BEFORE any SDK call (fail-fast, never silently downgrade a non-market
+      // order to a market order).
+      const kind = order.orderKind ?? 'MARKET';
+      const limitPrice = this.requirePositiveNumber(order.limitPrice, 'limitPrice');
+      const stopPrice = this.requirePositiveNumber(order.stopPrice, 'stopPrice');
+
       let result: any;
-      if (order.direction === 'BUY') {
-        result = await conn.createMarketBuyOrder(order.instrument, lotSize, sl, tp, opts);
+      if (kind === 'MARKET') {
+        if (order.direction === 'BUY') {
+          result = await conn.createMarketBuyOrder(order.instrument, lotSize, sl, tp, opts);
+        } else {
+          result = await conn.createMarketSellOrder(order.instrument, lotSize, sl, tp, opts);
+        }
+      } else if (kind === 'LIMIT') {
+        if (limitPrice == null) {
+          throw new BrokerAdapterError(
+            BrokerErrorCode.INVALID_PRICE,
+            'LIMIT order requires a positive limitPrice',
+          );
+        }
+        if (order.direction === 'BUY') {
+          result = await conn.createLimitBuyOrder(
+            order.instrument,
+            lotSize,
+            limitPrice,
+            sl,
+            tp,
+            opts,
+          );
+        } else {
+          result = await conn.createLimitSellOrder(
+            order.instrument,
+            lotSize,
+            limitPrice,
+            sl,
+            tp,
+            opts,
+          );
+        }
+      } else if (kind === 'STOP') {
+        if (stopPrice == null) {
+          throw new BrokerAdapterError(
+            BrokerErrorCode.INVALID_PRICE,
+            'STOP order requires a positive stopPrice',
+          );
+        }
+        if (order.direction === 'BUY') {
+          result = await conn.createStopBuyOrder(
+            order.instrument,
+            lotSize,
+            stopPrice,
+            sl,
+            tp,
+            opts,
+          );
+        } else {
+          result = await conn.createStopSellOrder(
+            order.instrument,
+            lotSize,
+            stopPrice,
+            sl,
+            tp,
+            opts,
+          );
+        }
+      } else if (kind === 'STOP_LIMIT') {
+        if (limitPrice == null || stopPrice == null) {
+          throw new BrokerAdapterError(
+            BrokerErrorCode.INVALID_PRICE,
+            'STOP_LIMIT order requires positive stopPrice and limitPrice',
+          );
+        }
+        if (order.direction === 'BUY') {
+          result = await conn.createStopLimitBuyOrder(
+            order.instrument,
+            lotSize,
+            stopPrice,
+            limitPrice,
+            sl,
+            tp,
+            opts,
+          );
+        } else {
+          result = await conn.createStopLimitSellOrder(
+            order.instrument,
+            lotSize,
+            stopPrice,
+            limitPrice,
+            sl,
+            tp,
+            opts,
+          );
+        }
       } else {
-        result = await conn.createMarketSellOrder(order.instrument, lotSize, sl, tp, opts);
+        throw new BrokerAdapterError(
+          BrokerErrorCode.INVALID_ORDER_TYPE,
+          `Unsupported order kind: ${String(kind)}`,
+        );
       }
 
       const success = result?.stringCode === MT_SUCCESS_CODE;
+      // Pending orders (LIMIT/STOP/STOP_LIMIT) rest at the provider when
+      // accepted — they are NOT filled. MetaAPI reports the orderId; the
+      // positionId appears when the order eventually triggers.
+      const isPendingOrder = kind !== 'MARKET';
       return {
         success,
         externalOrderId: result?.positionId ?? result?.orderId,
-        filledAt: success ? new Date() : undefined,
-        status: success ? 'FILLED' : result?.numericCode === 10004 ? 'REJECTED' : 'FAILED',
+        filledAt: success && !isPendingOrder ? new Date() : undefined,
+        status: success
+          ? isPendingOrder
+            ? 'PENDING'
+            : 'FILLED'
+          : result?.numericCode === 10004
+            ? 'REJECTED'
+            : 'FAILED',
         brokerMessage: result?.message,
         rawResponse: result,
       };
     } catch (err) {
       throw this.mapError(err);
     }
+  }
+
+  /**
+   * Parse a decimal string into a positive finite number, or null when the
+   * value is absent/unparseable. Validation of REQUIRED-ness is the caller's
+   * (fail-fast before any SDK call).
+   */
+  private requirePositiveNumber(value: string | undefined, field: string): number | null {
+    if (value == null || value.trim() === '') return null;
+    const parsed = parseFloat(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.INVALID_PRICE,
+        `${field} must be a positive decimal string (got: ${value})`,
+      );
+    }
+    return parsed;
   }
 
   async modifyOrder(
@@ -512,6 +686,86 @@ export class MetaTraderAdapter implements IBrokerAdapter {
       commission: this.toDecimalString(p.commission),
       swap: this.toDecimalString(p.swap),
     };
+  }
+
+  /**
+   * Sprint 50 PR-4 — normalize a MetatraderOrder (open or history) into the
+   * reconciliation BrokerOrderState contract.
+   *
+   * - Filled quantity = requested volume − remaining currentVolume (MetaAPI
+   *   reports both; the difference is the filled part).
+   * - Unrecognized ORDER_STATE_* values map to UNKNOWN — reconciliation
+   *   must fail closed on ambiguity, never guess an interpretation.
+   * - Unknown order types map to null orderKind (kind is informational for
+   *   reconciliation; state is what drives resolution).
+   */
+  private mapOrderState(o: any): BrokerOrderState {
+    const requested = typeof o.volume === 'number' ? o.volume : 0;
+    const remaining = typeof o.currentVolume === 'number' ? o.currentVolume : requested;
+    const filled = Math.max(0, requested - remaining);
+    const isBuy = String(o.type ?? '').includes('BUY');
+
+    return {
+      providerOrderId: String(o.id),
+      clientOrderId: o.clientId ? String(o.clientId) : null,
+      status: this.mapOrderStatus(String(o.state ?? '')),
+      instrument: o.symbol ?? '',
+      direction: isBuy ? 'BUY' : 'SELL',
+      requestedQuantity: this.toDecimalString(requested),
+      filledQuantity: this.toDecimalString(filled),
+      // For working pending orders MetaAPI reports openPrice as the order's
+      // price level; a fill price is only meaningful once volume filled.
+      avgFillPrice: filled > 0 ? this.toDecimalString(o.openPrice) : null,
+      orderKind: this.mapOrderKind(String(o.type ?? '')),
+      limitPrice: this.toDecimalString(o.openPrice),
+      stopPrice: o.stopLoss !== undefined ? this.toDecimalString(o.stopLoss) : null,
+      timeInForce: null,
+      placedAt: o.time ?? null,
+      updatedAt: o.doneTime ?? null,
+    };
+  }
+
+  private mapOrderStatus(state: string): BrokerOrderState['status'] {
+    switch (state) {
+      case 'ORDER_STATE_STARTED':
+      case 'ORDER_STATE_PLACED':
+      case 'ORDER_STATE_REQUEST_ADD':
+      case 'ORDER_STATE_REQUEST_MODIFY':
+      case 'ORDER_STATE_REQUEST_CANCEL':
+        return 'WORKING';
+      case 'ORDER_STATE_PARTIAL':
+        return 'PARTIALLY_FILLED';
+      case 'ORDER_STATE_FILLED':
+        return 'FILLED';
+      case 'ORDER_STATE_CANCELED':
+        return 'CANCELLED';
+      case 'ORDER_STATE_REJECTED':
+        return 'REJECTED';
+      case 'ORDER_STATE_EXPIRED':
+        return 'EXPIRED';
+      default:
+        // Fail-closed: unrecognized provider state must never be guessed.
+        return 'UNKNOWN';
+    }
+  }
+
+  private mapOrderKind(type: string): BrokerOrderState['orderKind'] {
+    switch (type) {
+      case 'ORDER_TYPE_BUY':
+      case 'ORDER_TYPE_SELL':
+        return 'MARKET';
+      case 'ORDER_TYPE_BUY_LIMIT':
+      case 'ORDER_TYPE_SELL_LIMIT':
+        return 'LIMIT';
+      case 'ORDER_TYPE_BUY_STOP':
+      case 'ORDER_TYPE_SELL_STOP':
+        return 'STOP';
+      case 'ORDER_TYPE_BUY_STOP_LIMIT':
+      case 'ORDER_TYPE_SELL_STOP_LIMIT':
+        return 'STOP_LIMIT';
+      default:
+        return null;
+    }
   }
 
   private mapClosedDeal(d: any): BrokerClosedTrade {

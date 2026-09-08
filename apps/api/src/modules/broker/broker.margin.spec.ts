@@ -4,6 +4,7 @@ import { BrokerService } from './broker.service';
 import { BrokerConnection } from './entities/broker-connection.entity';
 import { BrokerAccount } from './entities/broker-account.entity';
 import { BrokerAdapterRegistry } from './adapters/broker-adapter.registry';
+import { BrokerProviderRegistryService } from './registry/broker-provider-registry.service';
 import { CredentialEncryptionService } from './services/credential-encryption.service';
 import { AuditService } from '../audit/audit.service';
 import { DomainEventBus } from '../events/event-bus.service';
@@ -30,6 +31,9 @@ describe('BrokerService — account-scoped required margin', () => {
               id: 'conn-1',
               brokerId: 'metatrader5',
               accountType: BrokerMode.LIVE,
+              // A3: connected + usable credential state
+              status: 'CONNECTED',
+              credentialStatus: 'VERIFIED',
               encryptedCredentials: 'cipher',
               credentialIv: 'iv',
               credentialTag: 'tag',
@@ -41,6 +45,10 @@ describe('BrokerService — account-scoped required margin', () => {
         {
           provide: BrokerAdapterRegistry,
           useValue: { getAdapter: jest.fn().mockReturnValue(adapter) },
+        },
+        {
+          provide: BrokerProviderRegistryService,
+          useValue: { supportsEnvironment: jest.fn().mockReturnValue(true) },
         },
         {
           provide: CredentialEncryptionService,
@@ -86,6 +94,9 @@ describe('BrokerService — account-scoped required margin', () => {
               id: 'conn-2',
               brokerId: 'metatrader5',
               accountType: BrokerMode.LIVE,
+              // A3: connected + usable credential state
+              status: 'CONNECTED',
+              credentialStatus: 'VERIFIED',
               encryptedCredentials: 'cipher',
               credentialIv: 'iv',
               credentialTag: 'tag',
@@ -97,6 +108,10 @@ describe('BrokerService — account-scoped required margin', () => {
         {
           provide: BrokerAdapterRegistry,
           useValue: { getAdapter: jest.fn().mockReturnValue(adapter) },
+        },
+        {
+          provide: BrokerProviderRegistryService,
+          useValue: { supportsEnvironment: jest.fn().mockReturnValue(true) },
         },
         {
           provide: CredentialEncryptionService,

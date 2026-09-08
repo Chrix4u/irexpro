@@ -791,3 +791,334 @@ h2 { font-size: 1.3rem; font-weight: 600; }
   .admin-appeals-grid { grid-template-columns: minmax(0, 1fr); }
   .admin-account-access__actions .btn { width: 100%; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SPRINT 50 — ADMIN LIVE OPERATIONS (PR-6, Directive §39)
+   ───────────────────────────────────────────────────────────────────────────
+   Appended per Sprint 50 PR-6. Adds:
+   - segmented filter control (aria-pressed buttons, ≥44px touch targets)
+   - responsive data tables: the TABLE container may scroll horizontally
+     (architect §12); the PAGE never does
+   - stat-card semantic variants (success / warning / error value coloring)
+   - emergency execution-control list cards (§39 "active controls")
+   - provider capability chips (capped, "+N more" indicator)
+   - pagination footer (Prev/Next + windowed total)
+
+   All colors reuse the existing design tokens (--success/--warning/--error/
+   --brand). No new visual language.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Segmented filter control ─────────────────────────────────────────────── */
+.filter-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.filter-group__btn {
+  min-height: 44px;
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-family: var(--font);
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.filter-group__btn:hover:not(:disabled) {
+  border-color: var(--brand);
+  color: var(--text);
+}
+
+.filter-group__btn:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.filter-group__btn[aria-pressed='true'] {
+  background: rgba(217, 119, 6, 0.12);
+  border-color: var(--brand);
+  color: var(--brand-light);
+}
+
+.filter-group__btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* ── Responsive data tables ───────────────────────────────────────────────── */
+/* The container MAY scroll horizontally (§12); the page must not. */
+.admin-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.admin-table {
+  width: 100%;
+  min-width: 720px; /* forces container (not page) scrolling on phones */
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.admin-table th {
+  text-align: left;
+  padding: var(--space-3) var(--space-3);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+  white-space: nowrap;
+}
+
+.admin-table td {
+  padding: var(--space-3) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+  color: var(--text);
+}
+
+.admin-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.admin-table tbody tr:hover {
+  background: rgba(217, 119, 6, 0.04);
+}
+
+.admin-table__cell-strong {
+  font-weight: 600;
+}
+
+.admin-table__cell-muted {
+  color: var(--text-muted);
+}
+
+.admin-table__cell-mono {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  word-break: break-all;
+}
+
+.admin-table__badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  max-width: 260px;
+}
+
+.admin-table__error-cell {
+  max-width: 220px;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+/* ── Stat-card semantic variants (value + accent coloring) ───────────────── */
+.stat-card--success { border-color: var(--success-border); }
+.stat-card--success .stat-card__value { color: var(--success); }
+
+.stat-card--warning { border-color: var(--warning-border); }
+.stat-card--warning .stat-card__value { color: var(--warning); }
+
+.stat-card--error { border-color: var(--error-border); }
+.stat-card--error .stat-card__value { color: var(--error); }
+
+/* ── Active execution controls (§39 system suspension inventory) ─────────── */
+.admin-control-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.admin-control-card {
+  border: 1px solid var(--error-border);
+  border-left: 3px solid var(--error);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  padding: var(--space-3) var(--space-4);
+}
+
+.admin-control-card--scoped {
+  /* PROVIDER / USER / BROKER_CONNECTION scopes: warning accent. */
+  border-color: var(--warning-border);
+  border-left-color: var(--warning);
+}
+
+.admin-control-card__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.admin-control-card__target {
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.admin-control-card__reason {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  margin-bottom: var(--space-2);
+  overflow-wrap: anywhere;
+}
+
+.admin-control-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-6);
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.admin-control-card__meta-item {
+  min-width: 0;
+}
+
+.admin-control-card__meta-label {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.68rem;
+  display: block;
+}
+
+/* ── Provider capability chips ────────────────────────────────────────────── */
+.admin-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  max-width: 320px;
+}
+
+.admin-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.5rem;
+  border-radius: var(--radius-full);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.admin-chip--more {
+  background: transparent;
+  border-style: dashed;
+  color: var(--text-muted);
+}
+
+/* ── Table footer / pagination ────────────────────────────────────────────── */
+.admin-table-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.admin-table-footer__count {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.admin-pagination {
+  display: flex;
+  gap: var(--space-2);
+}
+
+@media (pointer: coarse) {
+  .admin-pagination .btn {
+    min-height: 44px;
+  }
+}
+
+/* ── Cross-link row (overview → detail pages) ─────────────────────────────── */
+.admin-liveops-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* ── Overview header (generatedAt + refresh) ──────────────────────────────── */
+.admin-liveops-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.admin-liveops-header__meta {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+@media (max-width: 700px) {
+  .admin-table {
+    min-width: 640px;
+  }
+
+  .admin-table th,
+  .admin-table td {
+    padding: var(--space-2);
+  }
+
+  .admin-table-footer {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .admin-pagination {
+    justify-content: space-between;
+  }
+
+  .admin-pagination .btn {
+    flex: 1 1 44%;
+  }
+}
+
+/* ── Audit investigation filter form ──────────────────────────────────────── */
+.admin-audit-filter-form {
+  margin-bottom: var(--space-4);
+}
+
+.admin-audit-filter-form__fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-3);
+}
+
+.admin-audit-filter-form__fields .input-group {
+  margin-bottom: 0;
+}
+
+.admin-audit-filter-form__actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+@media (max-width: 700px) {
+  .admin-audit-filter-form__actions .btn {
+    width: 100%;
+  }
+}

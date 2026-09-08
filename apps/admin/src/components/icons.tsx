@@ -121,6 +121,16 @@ export function AuditIcon(props: IconProps) {
   );
 }
 
+/** Live Ops — heartbeat / activity pulse (Sprint 50 live operations). */
+export function PulseIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M2 12h4l2.5-7 4 14 2.5-7h3.5" />
+      <path d="M20.5 12h1.5" />
+    </Svg>
+  );
+}
+
 /** Log out — door + arrow. */
 export function LogoutIcon(props: IconProps) {
   return (

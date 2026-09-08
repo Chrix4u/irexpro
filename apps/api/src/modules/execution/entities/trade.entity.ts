@@ -107,6 +107,28 @@ export class Trade {
   @Column({ name: 'external_order_id', type: 'varchar', length: 255, nullable: true })
   externalOrderId: string | null;
 
+  /**
+   * Sprint 50 PR-2 — provider POSITION identifier, distinct from the order
+   * identifier on netting-style brokers where order and position IDs differ.
+   * Conservative backfill: NULL (unknown) for all pre-existing rows.
+   */
+  @Column({ name: 'external_position_id', type: 'varchar', length: 255, nullable: true })
+  externalPositionId: string | null;
+
+  /**
+   * Sprint 50 PR-2 — total commission charged for this position (account
+   * currency, decimal string). NULL until the provider reports it.
+   */
+  @Column({ name: 'commission', type: 'numeric', precision: 18, scale: 8, nullable: true })
+  commission: string | null;
+
+  /**
+   * Sprint 50 PR-2 — accumulated swap/financing (account currency, decimal
+   * string). NULL until the provider reports it.
+   */
+  @Column({ name: 'swap', type: 'numeric', precision: 18, scale: 8, nullable: true })
+  swap: string | null;
+
   // ─── Lifecycle state ──────────────────────────────────────────────────────
 
   @Column({ name: 'status', type: 'enum', enum: TradeStatus, default: TradeStatus.PENDING })

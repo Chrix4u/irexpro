@@ -1,4 +1,5 @@
 import { Logger, UseGuards } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
 import {
   ConnectedSocket,
   MessageBody,
@@ -11,8 +12,13 @@ import {
   WsException,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
+import { Repository } from 'typeorm';
+import { TradingSession } from '../execution/entities/trading-session.entity';
 import { WsJwtGuard } from './guards/ws-jwt.guard';
+import { WsMessageRateGuard } from './guards/ws-message-rate.guard';
 import { RealtimeService } from './realtime.service';
+
+const CANONICAL_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * RealtimeGateway — WebSocket gateway for real-time events.
@@ -20,19 +26,24 @@ import { RealtimeService } from './realtime.service';
  * Namespace: /realtime
  *
  * Rooms:
- *   user:{userId}               — joined automatically on authenticated connection
- *   trading-session:{sessionId} — joined via 'join-session' message
+ *   user:{userId}               — joined after authenticated message handling
+ *   trading-session:{sessionId} — joined only after persisted ownership check
  *   admin:global                — admin-only room (future)
  *
  * Authentication:
  *   All connections must provide a valid JWT in:
  *     socket.handshake.auth.token  OR  Authorization: Bearer <token>
  *   Invalid, expired, revoked, or unauthenticated connections are rejected
- *   immediately in handleConnection(). Guarded messages revalidate the same
- *   server-side session state so revocation after connection still fails closed.
+ *   immediately in handleConnection(). Guarded messages are rate-limited before
+ *   revalidating the same server-side session state so abuse cannot multiply
+ *   JWT/session/database work.
  *
  * Security rules:
- *   - Users can only join their own rooms (enforced by extracting userId from JWT)
+ *   - Users can only join their own rooms. Trading-session ownership is read
+ *     from persisted state; client-supplied ownership claims are never trusted.
+ *   - Trading-session identifiers are validated and canonicalized before any
+ *     persistence lookup, room operation, or identifier-bearing log entry.
+ *   - Guarded message handlers rate-limit before JWT/session/database validation
  *   - No broker secrets, tokens, or stack traces are ever emitted
  *   - Payloads are type-checked via RealtimeService methods
  *   - Browser-origin policy is owned centrally by RealtimeIoAdapter at bootstrap
@@ -52,6 +63,8 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   constructor(
     private readonly realtimeService: RealtimeService,
     private readonly wsJwtGuard: WsJwtGuard,
+    @InjectRepository(TradingSession)
+    private readonly tradingSessionRepo: Repository<TradingSession>,
   ) {}
 
   afterInit(server: Server): void {
@@ -77,9 +90,8 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection, OnGa
 
   /**
    * After JWT validation, join the user's personal room.
-   * Called automatically when the client authenticates.
    */
-  @UseGuards(WsJwtGuard)
+  @UseGuards(WsMessageRateGuard, WsJwtGuard)
   @SubscribeMessage('authenticate')
   handleAuthenticate(
     @ConnectedSocket() client: Socket,
@@ -95,32 +107,40 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   }
 
   /**
-   * Join a trading session room to receive session-scoped trade events.
-   * Only the session owner (matching JWT userId) may join the session room.
+   * Join a trading-session room only after verifying ownership against the
+   * authoritative persisted session row. The message carries only sessionId;
+   * any extra client fields are ignored and cannot influence authorization.
    */
-  @UseGuards(WsJwtGuard)
+  @UseGuards(WsMessageRateGuard, WsJwtGuard)
   @SubscribeMessage('join-session')
-  handleJoinSession(
+  async handleJoinSession(
     @ConnectedSocket() client: Socket,
-    @MessageBody() data: { sessionId: string; sessionUserId: string },
-  ): { status: string } {
+    @MessageBody() data: { sessionId: string },
+  ): Promise<{ status: string }> {
     const userId = client.data.userId as string;
+    const sessionId = this.requireSessionId(data?.sessionId);
 
-    if (!data?.sessionId) {
-      throw new WsException('sessionId is required');
-    }
-
-    // Security: only the session owner can join the session room
-    if (data.sessionUserId && data.sessionUserId !== userId) {
-      this.logger.warn(
-        `User ${userId} tried to join session room owned by ${data.sessionUserId} — REJECTED`,
+    let session: Pick<TradingSession, 'id' | 'userId'> | null;
+    try {
+      session = await this.tradingSessionRepo.findOne({
+        where: { id: sessionId },
+        select: ['id', 'userId'],
+      });
+    } catch (error) {
+      this.logger.error(
+        `Realtime session ownership lookup failed for socket ${client.id}: ${(error as Error).message}`,
       );
-      throw new WsException("Forbidden: cannot join another user's session room");
+      throw new WsException('Forbidden: cannot join trading session');
     }
 
-    const roomName = `trading-session:${data.sessionId}`;
-    client.join(roomName);
-    this.logger.log(`Socket ${client.id} (user=${userId}) joined room: ${roomName}`);
+    if (!session || session.userId !== userId) {
+      this.logger.warn(`Socket ${client.id} denied trading-session room membership`);
+      throw new WsException('Forbidden: cannot join trading session');
+    }
+
+    const roomName = `trading-session:${sessionId}`;
+    await client.join(roomName);
+    this.logger.log(`Socket ${client.id} (user=${userId}) joined authorized session room`);
 
     return { status: 'joined' };
   }
@@ -128,18 +148,26 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   /**
    * Leave a trading session room.
    */
-  @UseGuards(WsJwtGuard)
+  @UseGuards(WsMessageRateGuard, WsJwtGuard)
   @SubscribeMessage('leave-session')
   handleLeaveSession(
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { sessionId: string },
   ): { status: string } {
-    if (!data?.sessionId) {
-      throw new WsException('sessionId is required');
-    }
-    const roomName = `trading-session:${data.sessionId}`;
+    const sessionId = this.requireSessionId(data?.sessionId);
+    const roomName = `trading-session:${sessionId}`;
     client.leave(roomName);
     this.logger.log(`Socket ${client.id} left room: ${roomName}`);
     return { status: 'left' };
+  }
+
+  private requireSessionId(value: unknown): string {
+    if (typeof value !== 'string' || value.length === 0) {
+      throw new WsException('sessionId is required');
+    }
+    if (!CANONICAL_UUID_PATTERN.test(value)) {
+      throw new WsException('sessionId must be a valid UUID');
+    }
+    return value.toLowerCase();
   }
 }

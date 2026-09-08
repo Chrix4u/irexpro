@@ -7,6 +7,7 @@ import { RiskViolation } from './entities/risk-violation.entity';
 import { BrokerService } from '../broker/broker.service';
 import { AuditService } from '../audit/audit.service';
 import { ExecutionService } from '../execution/execution.service';
+import { ExecutionControlService } from '../execution-control/execution-control.service';
 import { ProposedTrade, RiskRejectionCode } from './interfaces/risk.interface';
 import { DomainEventBus } from '../events/event-bus.service';
 import { AllowedTradingMode } from './entities/risk-profile.entity';
@@ -64,6 +65,8 @@ const mockViolationRepo = () => ({
 const mockBrokerService = () => ({
   hasActiveConnection: jest.fn().mockResolvedValue(true),
   findActiveConnectionForUser: jest.fn().mockResolvedValue({ id: 'conn-1' }),
+  // Sprint 50 — LIVE authorization gate (mocked permissive)
+  isConnectionExecutable: jest.fn().mockReturnValue(true),
   getBrokerAccountState: jest.fn().mockResolvedValue({
     balance: '10000.00',
     equity: '10050.00',
@@ -71,6 +74,12 @@ const mockBrokerService = () => ({
     currency: 'USD',
   }),
   getRequiredMargin: jest.fn().mockResolvedValue('100.00'),
+});
+
+// Sprint 50 — emergency control plane mock (default: execution allowed)
+const mockExecutionControlService = () => ({
+  checkExecutionPermission: jest.fn().mockResolvedValue({ allowed: true }),
+  assertExecutionAllowed: jest.fn().mockResolvedValue(undefined),
 });
 
 const mockAuditService = () => ({
@@ -104,6 +113,7 @@ describe('RiskService — Sprint 32 Production Hardening', () => {
         { provide: BrokerService, useValue: brokerService },
         { provide: AuditService, useValue: mockAuditService() },
         { provide: ExecutionService, useValue: executionService },
+        { provide: ExecutionControlService, useValue: mockExecutionControlService() },
         { provide: DomainEventBus, useValue: { publish: jest.fn() } },
         { provide: Logger, useValue: { log: jest.fn(), warn: jest.fn(), error: jest.fn() } },
       ],

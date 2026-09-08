@@ -11,6 +11,7 @@ import {
   BrokerOrderModification,
   BrokerOrderRequest,
   BrokerOrderResult,
+  BrokerOrderState,
   BrokerPosition,
   BrokerPrice,
   DecryptedBrokerCredentials,
@@ -18,6 +19,7 @@ import {
   OHLCV,
   RequiredMarginParams,
 } from '../interfaces/broker-adapter.interface';
+import { BrokerAdapterError, BrokerErrorCode } from '../interfaces/broker-adapter.errors';
 
 /**
  * PaperBrokerAdapter — safe simulated broker for paper trading only.
@@ -29,10 +31,29 @@ import {
  * - Cannot be enabled for live trading.
  * - liveTradingEnabled is always false.
  *
+ * Sprint 50 PR-4 — HONEST PROVIDER STATE: the adapter now tracks the orders
+ * and positions it "fills" in-memory so that its read surface
+ * (listOrders/getOrderById/getOpenPositions/getPositionById/
+ * getClosedTrades/closeOrder) reflects the simulated account truthfully.
+ * Reconciliation against a paper connection therefore observes real
+ * (simulated) provider state instead of an always-empty universe — which
+ * previously made every OPEN paper trade look broker-closed.
+ *
+ * State is keyed by externalOrderId in a single in-memory map. The paper
+ * adapter serves test/dev accounts only — per-connection isolation is NOT
+ * provided (same as the pre-existing single simulated balance).
+ *
  * Use cases:
  * - Paper-mode end-to-end signal pipeline tests
  * - Development/CI testing without real broker credentials
- * - Verifying the Strategy → Risk → Execution pathway without side effects
+ * - Verifying the Strategy → Risk → Execution → Reconciliation pathway
+ *
+ * Sprint 51 PR-7 — CONTRACT-SUITE HARDENING: every data operation now fails
+ * closed with BrokerAdapterError(NOT_CONNECTED) before connect(), matching
+ * the shared adapter contract suite (Directive §AN #1) enforced for every
+ * adapter. The resting order state also carries the caller's idempotency
+ * key as its clientOrderId fallback (same convention as the MetaTrader
+ * adapter) so idempotency passthrough is observable on the read surface.
  *
  * See: docs/architecture/09-broker-integration-architecture.md
  */
@@ -52,12 +73,29 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   private _balance = '10000.00';
   private readonly _currency = 'USD';
 
+  /** Sprint 50 PR-4 — in-memory simulated provider state. */
+  private readonly _openOrders = new Map<string, BrokerOrderState>();
+  private readonly _openPositions = new Map<string, BrokerPosition>();
+  private readonly _closedPositions = new Map<string, BrokerClosedTrade>();
+
   setMode(mode: BrokerMode): void {
     if (mode === BrokerMode.LIVE) {
       this.logger.warn('PaperBrokerAdapter cannot be set to LIVE mode. Ignoring setMode(LIVE).');
       return;
     }
     this._mode = mode;
+  }
+
+  /** Directive §AN #1 — fail closed before connect(): never fabricate data. */
+  private assertConnected(): void {
+    if (!this._connected) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.NOT_CONNECTED,
+        'PaperBrokerAdapter is not connected. Call connect() first.',
+        undefined,
+        false,
+      );
+    }
   }
 
   // ─── Connection lifecycle ──────────────────────────────────────────────────
@@ -98,6 +136,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   // ─── Account state ────────────────────────────────────────────────────────
 
   async getAccountInfo(): Promise<BrokerAccountInfo> {
+    this.assertConnected();
     return {
       accountId: 'paper-account-001',
       currency: this._currency,
@@ -111,6 +150,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   }
 
   async getAccountBalance(): Promise<BrokerBalance> {
+    this.assertConnected();
     return {
       balance: this._balance,
       equity: this._balance,
@@ -120,7 +160,8 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   }
 
   async getOpenPositions(): Promise<BrokerPosition[]> {
-    return [];
+    this.assertConnected();
+    return Array.from(this._openPositions.values());
   }
 
   /**
@@ -134,6 +175,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
    * Returns null if the instrument is not found or the price is unavailable.
    */
   async getRequiredMargin(params: RequiredMarginParams): Promise<string | null> {
+    this.assertConnected();
     try {
       const instruments = await this.getInstrumentList();
       const instrument = instruments.find((i) => i.symbol === params.instrument);
@@ -159,13 +201,27 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     }
   }
 
-  async getPositionById(_externalOrderId: string): Promise<BrokerPosition | null> {
-    return null;
+  async getPositionById(externalOrderId: string): Promise<BrokerPosition | null> {
+    this.assertConnected();
+    return this._openPositions.get(externalOrderId) ?? null;
+  }
+
+  // ─── Provider order state (Sprint 50 PR-4 — reconciliation read surface) ──
+
+  async listOrders(): Promise<BrokerOrderState[]> {
+    this.assertConnected();
+    return Array.from(this._openOrders.values());
+  }
+
+  async getOrderById(providerOrderId: string): Promise<BrokerOrderState | null> {
+    this.assertConnected();
+    return this._openOrders.get(providerOrderId) ?? null;
   }
 
   // ─── Market data ──────────────────────────────────────────────────────────
 
   async getInstrumentList(): Promise<BrokerInstrument[]> {
+    this.assertConnected();
     return [
       {
         symbol: 'EURUSD',
@@ -180,6 +236,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   }
 
   async getCurrentPrice(instrument: string): Promise<BrokerPrice> {
+    this.assertConnected();
     return {
       instrument: instrument.toUpperCase(),
       bid: '1.10000',
@@ -190,6 +247,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   }
 
   async getOHLCV(instrument: string, timeframe: string, count: number): Promise<OHLCV[]> {
+    this.assertConnected();
     // Return deterministic mock candles for paper testing
     const candles: OHLCV[] = [];
     const base = 1.1;
@@ -220,22 +278,79 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   // ─── Order management ─────────────────────────────────────────────────────
 
   async placeOrder(order: BrokerOrderRequest): Promise<BrokerOrderResult> {
+    this.assertConnected();
     this._orderCounter += 1;
     const orderId = `paper-order-${this._orderCounter.toString().padStart(6, '0')}`;
+
+    // Sprint 50 PR-3 — honest order-kind semantics: MARKET orders fill
+    // immediately at the deterministic paper price; LIMIT/STOP/STOP_LIMIT
+    // orders are accepted as WORKING orders resting at the paper provider
+    // (never silently downgraded to market fills).
+    //
+    // Sprint 50 PR-4 — the fill/rest is now REFLECTED in the in-memory
+    // provider state so reconciliation observes the truth: market orders
+    // open a simulated position; working orders rest in _openOrders.
+    const kind = order.orderKind ?? 'MARKET';
+    const now = new Date();
 
     this.logger.log(
       `PaperBrokerAdapter: simulated order placed ` +
         `id=${orderId} instrument=${order.instrument} dir=${order.direction} ` +
-        `lot=${order.lotSize} [PAPER_ONLY — no real order placed]`,
+        `lot=${order.lotSize} kind=${kind} [PAPER_ONLY — no real order placed]`,
     );
+
+    if (kind === 'MARKET') {
+      const fillPrice = '1.10005';
+      this._openPositions.set(orderId, {
+        externalOrderId: orderId,
+        instrument: order.instrument,
+        direction: order.direction,
+        lotSize: order.lotSize,
+        openPrice: fillPrice,
+        currentPrice: fillPrice,
+        stopLoss: order.stopLoss ?? '0',
+        takeProfit: order.takeProfit ?? '0',
+        unrealisedPnl: '0.00',
+        openedAt: now,
+        commission: '0.00',
+        swap: '0.00',
+      });
+      return {
+        success: true,
+        externalOrderId: orderId,
+        filledPrice: fillPrice,
+        filledQuantity: order.lotSize,
+        filledAt: now,
+        status: 'FILLED',
+        brokerMessage: 'PAPER_ONLY simulated fill',
+      };
+    }
+
+    this._openOrders.set(orderId, {
+      providerOrderId: orderId,
+      // Idempotency passthrough (Directive §AN #6): the caller's stable
+      // clientOrderId is preferred; the idempotencyKey is the fallback —
+      // same convention as the MetaTrader adapter's clientId.
+      clientOrderId: order.clientOrderId ?? order.idempotencyKey,
+      status: 'WORKING',
+      instrument: order.instrument,
+      direction: order.direction,
+      requestedQuantity: order.lotSize,
+      filledQuantity: '0.0000',
+      avgFillPrice: null,
+      orderKind: kind,
+      limitPrice: order.limitPrice ?? null,
+      stopPrice: order.stopPrice ?? null,
+      timeInForce: order.timeInForce ?? 'GTC',
+      placedAt: now,
+      updatedAt: now,
+    });
 
     return {
       success: true,
       externalOrderId: orderId,
-      filledPrice: '1.10005',
-      filledAt: new Date(),
-      status: 'FILLED',
-      brokerMessage: 'PAPER_ONLY simulated fill',
+      status: 'PENDING',
+      brokerMessage: `PAPER_ONLY simulated working ${kind} order`,
     };
   }
 
@@ -243,6 +358,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     externalOrderId: string,
     _modifications: BrokerOrderModification,
   ): Promise<BrokerOrderResult> {
+    this.assertConnected();
     return {
       success: true,
       externalOrderId,
@@ -252,16 +368,53 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   }
 
   async closeOrder(externalOrderId: string, _lotSize?: string): Promise<BrokerOrderResult> {
+    this.assertConnected();
+    // Sprint 50 PR-4 — closing a simulated position MOVES it to the closed
+    // list with deterministic exit economics so getClosedTrades() reflects
+    // the truth. Closing an unknown id fails honestly (no silent success).
+    const position = this._openPositions.get(externalOrderId);
+    const now = new Date();
+
+    if (!position) {
+      return {
+        success: false,
+        externalOrderId,
+        status: 'REJECTED',
+        brokerMessage: 'PAPER_ONLY: unknown position — nothing to close',
+      };
+    }
+
+    const closePrice = '1.10005';
+    this._openPositions.delete(externalOrderId);
+    this._closedPositions.set(externalOrderId, {
+      externalOrderId,
+      instrument: position.instrument,
+      direction: position.direction,
+      lotSize: position.lotSize,
+      openPrice: position.openPrice,
+      closePrice,
+      stopLoss: position.stopLoss,
+      takeProfit: position.takeProfit,
+      realisedPnl: '0.00', // deterministic paper close: flat
+      openedAt: position.openedAt,
+      closedAt: now,
+      commission: '0.00',
+      swap: '0.00',
+      closeReason: 'MANUAL',
+    });
+
     return {
       success: true,
       externalOrderId,
-      filledAt: new Date(),
+      filledPrice: closePrice,
+      filledAt: now,
       status: 'FILLED',
       brokerMessage: 'PAPER_ONLY simulated close',
     };
   }
 
   async closeAllOrders(): Promise<BrokerCloseAllResult> {
+    this.assertConnected();
     this.logger.log('PaperBrokerAdapter: closeAllOrders called [PAPER_ONLY]');
     return { closedCount: 0, failedCount: 0, errors: [] };
   }
@@ -269,6 +422,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   // ─── Trade history ────────────────────────────────────────────────────────
 
   async getClosedTrades(_from: Date, _to: Date): Promise<BrokerClosedTrade[]> {
-    return [];
+    this.assertConnected();
+    return Array.from(this._closedPositions.values());
   }
 }

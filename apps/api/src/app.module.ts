@@ -32,6 +32,9 @@ import { AiEngineClientModule } from './modules/ai-engine-client/ai-engine-clien
 import { PerformanceFeesModule } from './modules/performance-fees/performance-fees.module';
 import { BrokerReconciliationModule } from './modules/broker-reconciliation/broker-reconciliation.module';
 import { PerformanceBillingModule } from './modules/performance-billing/performance-billing.module';
+import { ExecutionControlModule } from './modules/execution-control/execution-control.module';
+import { LiveAccountModule } from './modules/live-account/live-account.module';
+import { AdminLiveAccountModule } from './modules/admin-live-account/admin-live-account.module';
 
 @Module({
   imports: [
@@ -96,6 +99,16 @@ import { PerformanceBillingModule } from './modules/performance-billing/performa
     PerformanceFeesModule,
     BrokerReconciliationModule,
     PerformanceBillingModule,
+    // Sprint 50 — server-side emergency control plane (fail-closed).
+    // Registered before execution-side consumers so the DI graph resolves
+    // ExecutionControlService for the RiskModule gate.
+    ExecutionControlModule,
+    // Sprint 50 PR-5 — user Live Account read API (Directive PHASE J).
+    // Read-only aggregation over PR-1..PR-4 state.
+    LiveAccountModule,
+    // Sprint 50 PR-6 — admin live-operations + audit investigation read API
+    // (Directive PHASE L §39). ADMIN/SUPER_ADMIN RBAC at the controllers.
+    AdminLiveAccountModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: AllExceptionsFilter },

@@ -26,7 +26,7 @@ env:
 jobs:
   tracked-secret-scan:
     name: Tracked Source Secret Scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
 
     steps:
@@ -66,6 +66,18 @@ jobs:
       - name: Enforce GitHub Actions supply-chain policy
         run: node scripts/security/check-workflow-supply-chain.mjs
 
+      - name: Test checkout credential-privacy policy
+        run: node scripts/security/check-checkout-credential-privacy.mjs --self-test
+
+      - name: Enforce checkout credential-privacy policy
+        run: node scripts/security/check-checkout-credential-privacy.mjs
+
+      - name: Test release dependency-audit install safety
+        run: node scripts/security/check-release-audit-install-safety.mjs --self-test
+
+      - name: Enforce release dependency-audit install safety
+        run: node scripts/security/check-release-audit-install-safety.mjs
+
       - name: Test Python lock integrity workflow policy
         run: node scripts/security/check-python-lock-integrity-workflow.mjs --self-test
 
@@ -86,7 +98,7 @@ jobs:
 
   node-dependency-audit:
     name: VPS Production Dependency Audit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     steps:
@@ -113,8 +125,8 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
 
-      - name: Install dependencies from frozen lockfile
-        run: pnpm install --frozen-lockfile
+      - name: Install dependencies from frozen lockfile without lifecycle scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Capture full production dependency audit
         shell: bash
@@ -149,7 +161,7 @@ jobs:
 
   python-lock-and-audit:
     name: Python Lock Integrity & Audit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     steps:
@@ -231,7 +243,7 @@ jobs:
 
   sbom:
     name: CycloneDX SBOM
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     steps:
@@ -271,7 +283,7 @@ jobs:
 
   codeql:
     name: CodeQL Static Analysis
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     permissions:
       contents: read

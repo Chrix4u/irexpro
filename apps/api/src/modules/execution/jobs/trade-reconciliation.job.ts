@@ -1,170 +1,112 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Injectable, Logger } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
 import { Job } from 'bullmq';
-import { Trade, TradeCloseReason, TradeStatus } from '../entities/trade.entity';
-import { BrokerService } from '../../broker/broker.service';
-import { BrokerAdapterRegistry } from '../../broker/adapters/broker-adapter.registry';
-import { CredentialEncryptionService } from '../../broker/services/credential-encryption.service';
-import { AuditService } from '../../audit/audit.service';
-import { AuditAction } from '../../../common/enums/audit-action.enum';
+import { BrokerConnection } from '../../broker/entities/broker-connection.entity';
+import { StateReconciliationService } from '../reconciliation/state-reconciliation.service';
+import { ReconciliationRunOutcome } from '../reconciliation/state-reconciliation.service';
 
 export const TRADE_RECONCILIATION_QUEUE = 'trade-reconciliation';
 export const TRADE_RECONCILIATION_JOB = 'reconcile-open-trades';
 export const RECONCILIATION_INTERVAL_MS = 60_000; // 60 seconds
 
 /**
- * TradeReconciliationJob — Periodic sync of OPEN/PENDING_RECONCILIATION
- * trades with broker-side state.
+ * TradeReconciliationJob — the scheduled reconciliation worker (Directive
+ * PHASE G + §29).
  *
- * Runs every 60 seconds. For each OPEN trade:
- *   1. Calls broker adapter to check if position still exists
- *   2. If position closed by broker (SL/TP hit): updates trade to CLOSED with P&L
- *   3. If position still open: no-op
- *   4. For RECONCILIATION_PENDING trades: retry submission
+ * Sprint 50 PR-4 REFACTOR: the per-trade inline logic moved into
+ * StateReconciliationService, which reconciles the FULL connection state
+ * (orders + positions + account snapshot) with persisted runs and
+ * discrepancy records. The job now:
+ *   1. Discovers candidate connections (internal state worth reconciling).
+ *   2. Runs ONE full state reconciliation per connection — SEQUENTIALLY.
+ *   3. Aggregates outcomes; per-connection failures never break the loop.
  *
- * See: docs/architecture/12-execution-engine-architecture.md §7.1
+ * WHY SEQUENTIAL: broker adapters are stateful singletons (MetaTrader sets
+ * currentAccountId per connect) — the previous Promise.allSettled over
+ * trades from DIFFERENT connections could interleave adapter sessions.
+ * Sequential per-connection runs are correct for that model.
+ *
+ * Queue semantics (§29): the BullMQ repeatable job provides stable job
+ * identity + exactly-one-run-per-interval; producers strip stale
+ * repeatables on boot so restarts never duplicate the schedule. Runs are
+ * idempotent (guarded mutations + OPEN-row dedup).
+ *
+ * See: docs/reconciliation/state-reconciliation.md
  */
 @Injectable()
 @Processor(TRADE_RECONCILIATION_QUEUE)
 export class TradeReconciliationJob extends WorkerHost {
   private readonly logger = new Logger(TradeReconciliationJob.name);
 
-  constructor(
-    @InjectRepository(Trade)
-    private tradeRepo: Repository<Trade>,
-    private brokerService: BrokerService,
-    private adapterRegistry: BrokerAdapterRegistry,
-    private encryptionService: CredentialEncryptionService,
-    private auditService: AuditService,
-  ) {
+  constructor(private readonly stateReconciliation: StateReconciliationService) {
     super();
   }
 
-  async process(job: Job): Promise<{ reconciled: number; closed: number; errors: number }> {
-    this.logger.debug(`Running trade reconciliation job ${job.id}`);
+  async process(job: Job): Promise<{
+    connectionsReconciled: number;
+    discrepanciesDetected: number;
+    discrepanciesNew: number;
+    discrepanciesAutoResolved: number;
+    discrepanciesOpen: number;
+    failedConnections: number;
+  }> {
+    this.logger.debug(`Running reconciliation worker cycle ${job.id}`);
 
-    const openTrades = await this.tradeRepo.find({
-      where: [{ status: TradeStatus.OPEN }, { status: TradeStatus.RECONCILIATION_PENDING }],
-    });
+    const connections: BrokerConnection[] =
+      await this.stateReconciliation.findReconcilableConnections();
 
-    if (openTrades.length === 0) {
-      return { reconciled: 0, closed: 0, errors: 0 };
+    if (connections.length === 0) {
+      return {
+        connectionsReconciled: 0,
+        discrepanciesDetected: 0,
+        discrepanciesNew: 0,
+        discrepanciesAutoResolved: 0,
+        discrepanciesOpen: 0,
+        failedConnections: 0,
+      };
     }
 
-    this.logger.log(`Reconciling ${openTrades.length} open/pending trades`);
+    this.logger.log(`Reconciling ${connections.length} connection(s)`);
 
-    let closed = 0;
-    let errors = 0;
+    let discrepanciesDetected = 0;
+    let discrepanciesNew = 0;
+    let discrepanciesAutoResolved = 0;
+    let discrepanciesOpen = 0;
+    let failedConnections = 0;
 
-    await Promise.allSettled(
-      openTrades.map(async (trade) => {
-        try {
-          const wasClosed = await this.reconcileTrade(trade);
-          if (wasClosed) closed++;
-        } catch (err) {
-          errors++;
-          this.logger.error(
-            `Reconciliation error for trade ${trade.id}: ${(err as Error).message}`,
-          );
-        }
-      }),
-    );
-
-    this.logger.log(
-      `Reconciliation complete: ${openTrades.length} checked, ${closed} closed, ${errors} errors`,
-    );
-
-    return { reconciled: openTrades.length, closed, errors };
-  }
-
-  private async reconcileTrade(trade: Trade): Promise<boolean> {
-    if (!trade.externalOrderId) {
-      return false;
-    }
-
-    const connection = await this.brokerService.findConnectionById(
-      trade.brokerConnectionId,
-      trade.userId,
-    );
-
-    const credentials = this.encryptionService.decrypt({
-      ciphertext: connection.encryptedCredentials!,
-      iv: connection.credentialIv!,
-      tag: connection.credentialTag!,
-      keyId: connection.encryptionKeyId!,
-    });
-
-    const adapter = this.adapterRegistry.getAdapter(connection.brokerId);
-    adapter.setMode(connection.accountType);
-    await adapter.connect(credentials);
-
-    // Zero credentials immediately after use
-    (Object.keys(credentials) as (keyof typeof credentials)[]).forEach((k) => {
-      (credentials as unknown as Record<string, unknown>)[k] = null;
-    });
-
-    // Check if position still open at broker: null = closed/not found
-    const position = await adapter.getPositionById(trade.externalOrderId);
-
-    if (position === null) {
-      // Position not found at broker — it was closed (SL/TP hit or manual)
-      let exitPrice: string | null = null;
-      let realisedPnl: string | null = null;
-
+    // Sequential per connection (stateful adapter model — see class docs).
+    for (const connection of connections) {
       try {
-        const closedTrades = await adapter.getClosedTrades(
-          trade.openedAt ?? new Date(0),
-          new Date(),
-        );
-        const match = closedTrades.find((ct) => ct.externalOrderId === trade.externalOrderId);
-        if (match) {
-          exitPrice = match.closePrice;
-          realisedPnl = match.realisedPnl;
-        }
+        const outcome: ReconciliationRunOutcome =
+          await this.stateReconciliation.runForConnection(connection);
+        discrepanciesDetected += outcome.discrepanciesDetected;
+        discrepanciesNew += outcome.discrepanciesNew;
+        discrepanciesAutoResolved += outcome.discrepanciesAutoResolved;
+        discrepanciesOpen += outcome.discrepanciesOpen;
+        if (outcome.status === 'FAILED') failedConnections++;
       } catch (err) {
-        this.logger.warn(
-          `Could not fetch closed trade details for ${trade.id}: ${(err as Error).message}`,
+        // runForConnection handles its own failures; this guards the loop.
+        failedConnections++;
+        this.logger.error(
+          `Reconciliation run threw for connection ${connection.id}: ${(err as Error).message}`,
         );
       }
-
-      await this.tradeRepo.update(trade.id, {
-        status: TradeStatus.CLOSED,
-        exitPrice,
-        realisedPnl,
-        closedAt: new Date(),
-        closeReason: TradeCloseReason.BROKER_CLOSE,
-      });
-
-      await this.auditService.log({
-        actorUserId: trade.userId,
-        action: AuditAction.TRADE_CLOSED,
-        resourceType: 'Trade',
-        resourceId: trade.id,
-        metadata: {
-          closeReason: TradeCloseReason.BROKER_CLOSE,
-          exitPrice,
-          realisedPnl,
-          externalOrderId: trade.externalOrderId,
-          source: 'reconciliation',
-        },
-      });
-
-      this.logger.log(
-        `Trade ${trade.id} reconciled as CLOSED. ` +
-          `exitPrice=${exitPrice ?? 'unknown'} pnl=${realisedPnl ?? 'unknown'}`,
-      );
-
-      return true;
     }
 
-    // Position still open — recover RECONCILIATION_PENDING → OPEN
-    if (trade.status === TradeStatus.RECONCILIATION_PENDING) {
-      await this.tradeRepo.update(trade.id, { status: TradeStatus.OPEN });
-      this.logger.log(`Trade ${trade.id} recovered: RECONCILIATION_PENDING → OPEN`);
-    }
+    this.logger.log(
+      `Reconciliation cycle complete: ${connections.length} connections, ` +
+        `${discrepanciesDetected} detected (${discrepanciesNew} new), ` +
+        `${discrepanciesAutoResolved} auto-resolved, ${discrepanciesOpen} open, ` +
+        `${failedConnections} failed`,
+    );
 
-    return false;
+    return {
+      connectionsReconciled: connections.length,
+      discrepanciesDetected,
+      discrepanciesNew,
+      discrepanciesAutoResolved,
+      discrepanciesOpen,
+      failedConnections,
+    };
   }
 }

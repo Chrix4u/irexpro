@@ -1,4 +1,4 @@
-import {
+import type {
   ApiError,
   AuthActionResponse,
   AuthTokens,
@@ -31,6 +31,9 @@ import {
   SupportedBroker,
   UpdateMyProfileRequest,
   UpdateRiskProfileRequest,
+  ChangePasswordRequest,
+  MyProfileView,
+  SecurityEventListResponse,
 } from '@irexpro/types';
 
 /**
@@ -81,8 +84,8 @@ export interface ApiClient {
   logout(): Promise<LogoutResponse>;
   /** GET /auth/me (requires Authorization: Bearer) → current user */
   me(): Promise<AuthUser>;
-  /** Begin TOTP enrollment. Returned secret/URI must remain memory-only. */
-  beginMfaSetup(): Promise<MfaSetupResponse>;
+  /** Begin TOTP enrollment after current-password re-authentication. Returned secret/URI must remain memory-only. */
+  beginMfaSetup(password: string): Promise<MfaSetupResponse>;
   /** Verify a six-digit TOTP and enable MFA. Existing sessions are revoked. */
   enableMfa(code: string): Promise<AuthActionResponse>;
   /** Disable MFA with current password + six-digit TOTP. Existing sessions are revoked. */
@@ -115,11 +118,36 @@ export interface ApiClient {
   /** Admin-only account-access action. */
   updateAccountStatus(userId: string, body: UpdateAccountStatusRequest): Promise<AdminAccountStatusView>;
 
+  // ── Sprint 55: Account security center ──────────────────────────────────
+  /**
+   * POST /auth/change-password (requires Authorization: Bearer) → { message }.
+   * Current-password re-auth; success revokes ALL sessions and retires pending
+   * MFA enrollment. Both fields are secrets — never log, persist, or cache them.
+   */
+  changePassword(body: ChangePasswordRequest): Promise<AuthActionResponse>;
+  /**
+   * POST /auth/sessions/revoke-others (requires Authorization: Bearer) →
+   * { accessToken, refreshToken }. Revokes every session except the caller's
+   * and returns a fresh token pair for the caller (body transport; browsers use
+   * the cookie-transport facade in ./browser-auth).
+   */
+  revokeOtherSessions(): Promise<AuthTokens>;
+  /**
+   * GET /auth/security-events (requires Authorization: Bearer) →
+   * { events, hasMore }. Privacy-safe projection of the caller's security
+   * audit trail, newest first. Omitted query params fall back to the server
+   * defaults (limit 20, offset 0).
+   */
+  listSecurityEvents(query?: {
+    limit?: number;
+    offset?: number;
+  }): Promise<SecurityEventListResponse>;
+
   // ── Sprint 29: Users / onboarding / risk / broker ─────────────────────────
-  /** GET /users/me → current user profile (full entity with profile relation). */
-  getMyProfile(): Promise<unknown>;
-  /** PATCH /users/me → update profile fields (onboarding). */
-  updateMyProfile(body: UpdateMyProfileRequest): Promise<unknown>;
+  /** GET /users/me → current user profile view (privacy-safe projection). */
+  getMyProfile(): Promise<MyProfileView>;
+  /** PATCH /users/me → update profile fields (incl. optional dateOfBirth) → updated view. */
+  updateMyProfile(body: UpdateMyProfileRequest): Promise<MyProfileView>;
   /** GET /users/me/onboarding-status → onboarding checklist status. */
   getOnboardingStatus(): Promise<OnboardingStatus>;
   /** GET /risk/profile → user risk profile (auto-created with defaults). */
@@ -265,8 +293,11 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
 
     me: () => request<AuthUser>('/auth/me'),
 
-    beginMfaSetup: () =>
-      request<MfaSetupResponse>('/auth/mfa/setup', { method: 'POST' }),
+    beginMfaSetup: (password) =>
+      request<MfaSetupResponse>('/auth/mfa/setup', {
+        method: 'POST',
+        body: JSON.stringify({ password }),
+      }),
 
     enableMfa: (code) =>
       request<AuthActionResponse>('/auth/mfa/enable', {
@@ -335,11 +366,37 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
         body: JSON.stringify(body),
       }),
 
+    // Sprint 55: account security center
+    changePassword: (body) =>
+      request<AuthActionResponse>('/auth/change-password', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+
+    revokeOtherSessions: () =>
+      request<AuthTokens>('/auth/sessions/revoke-others', { method: 'POST' }),
+
+    listSecurityEvents: (query) => {
+      // Mirror of the listAccountAppeals convention: build the query string
+      // ONLY from provided params so absent ones are omitted entirely.
+      const params = new URLSearchParams();
+      if (query?.limit !== undefined) {
+        params.set('limit', String(query.limit));
+      }
+      if (query?.offset !== undefined) {
+        params.set('offset', String(query.offset));
+      }
+      const search = params.toString();
+      return request<SecurityEventListResponse>(
+        search ? `/auth/security-events?${search}` : '/auth/security-events',
+      );
+    },
+
     // Sprint 29: users / onboarding / risk / broker
-    getMyProfile: () => request<unknown>('/users/me'),
+    getMyProfile: () => request<MyProfileView>('/users/me'),
 
     updateMyProfile: (body) =>
-      request<unknown>('/users/me', {
+      request<MyProfileView>('/users/me', {
         method: 'PATCH',
         body: JSON.stringify(body),
       }),
