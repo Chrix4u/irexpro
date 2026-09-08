@@ -63,6 +63,14 @@ export enum AuditAction {
   BROKER_CREDENTIAL_ENCRYPTION_FAILED = 'BROKER_CREDENTIAL_ENCRYPTION_FAILED',
   BROKER_LIVE_TRADING_ENABLED = 'BROKER_LIVE_TRADING_ENABLED',
   BROKER_LIVE_TRADING_DISABLED = 'BROKER_LIVE_TRADING_DISABLED',
+  // Sprint 56 / Task 48-D — evidence-based write path for
+  // BrokerConnection.demoValidated: a DEMO connection validation checklist
+  // run (sanitized step evidence in metadata — never credentials). PASSED is
+  // the only action that confirms/sets demoValidated to true on top of the
+  // weak connect-implies-validated proxy write; FAILED revokes a blessed or
+  // stale true (fail-closed).
+  BROKER_DEMO_VALIDATION_PASSED = 'BROKER_DEMO_VALIDATION_PASSED',
+  BROKER_DEMO_VALIDATION_FAILED = 'BROKER_DEMO_VALIDATION_FAILED',
 
   // Sprint 50 — Live Account foundation (authorization state machine,
   // credential lifecycle, provider registry, emergency control plane)

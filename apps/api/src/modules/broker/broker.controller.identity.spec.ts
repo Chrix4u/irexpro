@@ -2,6 +2,7 @@ import { BrokerController } from './broker.controller';
 import { BrokerService } from './broker.service';
 import { ConnectBrokerDto } from './dto/connect-broker.dto';
 import { BrokerMode } from './interfaces/broker-adapter.interface';
+import { BrokerDemoValidationService } from './services/broker-demo-validation.service';
 
 /**
  * BrokerController regression tests — Hotfix amendment.
@@ -18,6 +19,7 @@ import { BrokerMode } from './interfaces/broker-adapter.interface';
 describe('BrokerController (Hotfix — UUID identity regression)', () => {
   let controller: BrokerController;
   let brokerService: Record<string, jest.Mock>;
+  let demoValidationService: Record<string, jest.Mock>;
 
   const USER_ID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
   const OTHER_USER_ID = 'b2c3d4e5-f6a7-8901-bcde-f12345678901';
@@ -57,7 +59,27 @@ describe('BrokerController (Hotfix — UUID identity regression)', () => {
       enableLiveTrading: jest.fn().mockResolvedValue(undefined),
     };
 
-    controller = new BrokerController(brokerService as unknown as BrokerService);
+    // Sprint 56 / Task 48-D: the controller gained a second dependency
+    // (BrokerDemoValidationService — the validate-demo route). Mocked here
+    // with the same Record<string, jest.Mock> style as brokerService.
+    demoValidationService = {
+      validateDemoConnection: jest.fn().mockResolvedValue({
+        connectionId: CONNECTION_ID,
+        brokerId: 'paper-broker',
+        accountType: 'DEMO',
+        demoValidated: true,
+        overall: 'PASS',
+        summary: { passed: 14, failed: 0, skipped: 0 },
+        steps: [],
+        startedAt: '2024-01-02T03:04:05.000Z',
+        finishedAt: '2024-01-02T03:04:06.000Z',
+      }),
+    };
+
+    controller = new BrokerController(
+      brokerService as unknown as BrokerService,
+      demoValidationService as unknown as BrokerDemoValidationService,
+    );
   });
 
   // ── UUID string passed to service (not object) ────────────────────────────

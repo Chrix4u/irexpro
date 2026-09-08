@@ -16,6 +16,8 @@ import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@ne
 import { BrokerService } from './broker.service';
 import { ConnectBrokerDto } from './dto/connect-broker.dto';
 import { BrokerConnectionResponseDto } from './dto/broker-connection-response.dto';
+import { BrokerDemoValidationService } from './services/broker-demo-validation.service';
+import type { BrokerDemoValidationResult } from './services/broker-demo-validation.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUserId } from '../../common/decorators/current-user.decorator';
 
@@ -37,7 +39,10 @@ import { CurrentUserId } from '../../common/decorators/current-user.decorator';
 export class BrokerController {
   private readonly logger = new Logger(BrokerController.name);
 
-  constructor(private readonly brokerService: BrokerService) {}
+  constructor(
+    private readonly brokerService: BrokerService,
+    private readonly demoValidationService: BrokerDemoValidationService,
+  ) {}
 
   // ─── Supported brokers ────────────────────────────────────────────────────
 
@@ -146,6 +151,37 @@ export class BrokerController {
     @CurrentUserId() userId: string,
   ): Promise<void> {
     await this.brokerService.deleteConnection(connectionId, userId);
+  }
+
+  // ─── DEMO validation (the evidence-based write path for demoValidated) ─────
+
+  @Post(':connectionId/validate-demo')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Validate a DEMO connection through the evidence-based checklist',
+    description:
+      'Connects the DEMO connection and exercises the trading surface the ' +
+      'broker actually implements (account info, market data, positions, a ' +
+      'small market order with partial/full close and closed-trade history, a ' +
+      'pending limit order with modification and cancellation where ' +
+      "supported, margin info). A PASS sets the connection's demoValidated " +
+      'flag to true — the prerequisite for enabling LIVE trading; a FAIL ' +
+      'revokes it (overriding the weak connect-implies-validated write). The ' +
+      'response carries the sanitized step-by-step evidence (no credentials); ' +
+      'the full evidence is also recorded in the audit trail.',
+  })
+  @ApiParam({ name: 'connectionId', description: 'Broker connection UUID (DEMO)' })
+  @ApiResponse({
+    status: 200,
+    description: 'Sanitized checklist result + resulting demoValidated flag',
+  })
+  @ApiResponse({ status: 400, description: 'Connection is not a DEMO connection' })
+  @ApiResponse({ status: 404, description: 'Connection not found or not owned by the user' })
+  async validateDemoConnection(
+    @Param('connectionId', ParseUUIDPipe) connectionId: string,
+    @CurrentUserId() userId: string,
+  ): Promise<BrokerDemoValidationResult> {
+    return this.demoValidationService.validateDemoConnection(connectionId, userId);
   }
 
   // ─── Live trading gate ─────────────────────────────────────────────────────

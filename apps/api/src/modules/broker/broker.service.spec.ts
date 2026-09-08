@@ -333,6 +333,106 @@ describe('BrokerService', () => {
       expect(mockAdapter.connect).toHaveBeenCalledTimes(1);
       expect(auditService.log).toHaveBeenCalled();
     });
+
+    // ─── Sprint 56 / Task 48-D — the connect-time demoValidated auto-write ────
+    // This is the WEAK connect-implies-validated proxy: connectBroker
+    // dual-writes demoValidated: true when a DEMO connection reaches
+    // CONNECTED. BrokerDemoValidationService (the evidence-based
+    // re-validation service) builds ON TOP of it — PASS confirms the proxy,
+    // FAIL revokes it — so its behavior is pinned here.
+
+    it('dual-writes demoValidated: true on a successful DEMO connect (connect-implies-validated proxy)', async () => {
+      const mockAdapter = {
+        setMode: jest.fn(),
+        connect: jest.fn().mockResolvedValue({
+          success: true,
+          accountId: '123456',
+          accountType: BrokerMode.DEMO,
+          currency: 'USD',
+          serverTime: new Date(),
+        }),
+      };
+      registry.getAdapter.mockReturnValue(mockAdapter);
+
+      const mockConn = {
+        id: 'conn-1',
+        userId: 'user-1',
+        brokerId: 'metatrader5',
+        accountType: BrokerMode.DEMO,
+        demoValidated: false,
+        encryptedCredentials: 'ciphertext',
+        credentialIv: 'iv',
+        credentialTag: 'tag',
+        encryptionKeyId: 'env-key-v1',
+        authorizationStatus: BrokerAuthorizationStatus.NOT_CONNECTED,
+        credentialStatus: 'CREATED',
+        consecutiveFailureCount: 0,
+      };
+      connectionRepo.findOne
+        .mockResolvedValueOnce(mockConn)
+        .mockResolvedValueOnce({ ...mockConn, status: BrokerConnectionStatus.CONNECTED });
+      connectionRepo.update.mockResolvedValue({ affected: 1 });
+      accountRepo.findOne.mockResolvedValue(null);
+      accountRepo.create.mockReturnValue({});
+      accountRepo.save.mockResolvedValue({});
+
+      await service.connectBroker('conn-1', 'user-1');
+
+      const connectedPatch = connectionRepo.update.mock.calls
+        .map((call) => call[1])
+        .find((patch) => patch.status === BrokerConnectionStatus.CONNECTED);
+      expect(connectedPatch).toBeDefined();
+      // The weak proxy write rides inside the CONNECTED transition (DEMO only).
+      expect(connectedPatch).toMatchObject({
+        demoValidated: true,
+        credentialStatus: 'VERIFIED',
+      });
+    });
+
+    it('does NOT write demoValidated for LIVE connections (the proxy is DEMO-only)', async () => {
+      const mockAdapter = {
+        setMode: jest.fn(),
+        connect: jest.fn().mockResolvedValue({
+          success: true,
+          accountId: '123456',
+          accountType: BrokerMode.LIVE,
+          currency: 'USD',
+          serverTime: new Date(),
+        }),
+      };
+      registry.getAdapter.mockReturnValue(mockAdapter);
+
+      const mockConn = {
+        id: 'conn-live',
+        userId: 'user-1',
+        brokerId: 'metatrader5',
+        accountType: BrokerMode.LIVE,
+        encryptedCredentials: 'ciphertext',
+        credentialIv: 'iv',
+        credentialTag: 'tag',
+        encryptionKeyId: 'env-key-v1',
+        authorizationStatus: BrokerAuthorizationStatus.NOT_CONNECTED,
+        credentialStatus: 'CREATED',
+        consecutiveFailureCount: 0,
+      };
+      connectionRepo.findOne
+        .mockResolvedValueOnce(mockConn)
+        .mockResolvedValueOnce({ ...mockConn, status: BrokerConnectionStatus.CONNECTED });
+      connectionRepo.update.mockResolvedValue({ affected: 1 });
+      accountRepo.findOne.mockResolvedValue(null);
+      accountRepo.create.mockReturnValue({});
+      accountRepo.save.mockResolvedValue({});
+
+      await service.connectBroker('conn-live', 'user-1');
+
+      const connectedPatch = connectionRepo.update.mock.calls
+        .map((call) => call[1])
+        .find((patch) => patch.status === BrokerConnectionStatus.CONNECTED);
+      expect(connectedPatch).toBeDefined();
+      // LIVE connects never touch demoValidated — evidence-based validation
+      // is a DEMO-only concept (enableLiveTrading checks the DEMO flag).
+      expect('demoValidated' in connectedPatch).toBe(false);
+    });
   });
 
   // ─── enableLiveTrading ────────────────────────────────────────────────────

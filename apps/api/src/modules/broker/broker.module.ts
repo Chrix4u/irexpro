@@ -11,9 +11,12 @@ import { BrokerAdapterRegistry } from './adapters/broker-adapter.registry';
 import { MetaTraderAdapter } from './adapters/metatrader.adapter';
 import { PaperBrokerAdapter } from './adapters/paper-broker.adapter';
 import { OandaAdapter } from './adapters/oanda/oanda.adapter';
+import { CTraderAdapter } from './adapters/ctrader/ctrader.adapter';
+import { CTraderClientService } from './adapters/ctrader/ctrader-client.service';
 import { CredentialEncryptionService } from './services/credential-encryption.service';
 import { MetaApiClientService } from './services/metaapi-client.service';
 import { PortfolioReadService } from './services/portfolio-read.service';
+import { BrokerDemoValidationService } from './services/broker-demo-validation.service';
 import { BrokerProviderRegistryService } from './registry/broker-provider-registry.service';
 import { BrokerHealthCheckJob, BROKER_HEALTH_QUEUE } from './jobs/broker-health-check.job';
 import { BrokerHealthCheckProducer } from './jobs/broker-health-check.producer';
@@ -47,13 +50,22 @@ import { AuditModule } from '../audit/audit.module';
   providers: [
     BrokerService,
     PortfolioReadService,
+    // Sprint 56 / Task 48-D — evidence-based write path for
+    // BrokerConnection.demoValidated
+    // (POST /broker/connections/:connectionId/validate-demo).
+    BrokerDemoValidationService,
     CredentialEncryptionService,
     MetaApiClientService,
+    // Sprint 56 / Task 48-B — the platform-level cTrader Open API connection
+    // manager (JSON-WebSocket, OAuth2, heartbeat, rate limits, reconnect).
+    // Owns ALL cTrader provider connections; the adapter stays a mapping layer.
+    CTraderClientService,
     BrokerAdapterRegistry,
     BrokerProviderRegistryService,
     MetaTraderAdapter,
     PaperBrokerAdapter,
     OandaAdapter,
+    CTraderAdapter,
     BrokerHealthCheckJob,
     BrokerHealthCheckProducer,
   ],
@@ -82,6 +94,7 @@ export class BrokerModule implements OnModuleInit {
     private metaTraderAdapter: MetaTraderAdapter,
     private paperBrokerAdapter: PaperBrokerAdapter,
     private oandaAdapter: OandaAdapter,
+    private cTraderAdapter: CTraderAdapter,
   ) {}
 
   onModuleInit() {
@@ -91,6 +104,13 @@ export class BrokerModule implements OnModuleInit {
     // contract-tested; live verification pending — see
     // docs/brokers/oanda-v20-adapter.md).
     this.registry.register(this.oandaAdapter);
-    // Future: this.registry.register(this.cTraderAdapter); // partner approval required
+    // Sprint 56 / Task 48-B — universal cTrader Open API engine (BETA:
+    // implemented + contract-tested; connections fail closed until the
+    // operator supplies CTRADER_CLIENT_ID/CTRADER_CLIENT_SECRET — Spotware
+    // partner approval — and production-LIVE stays UNVERIFIED). The
+    // Pepperstone / IC Markets catalog entries share this one engine.
+    this.registry.register(this.cTraderAdapter);
+    this.registry.registerBrokerAlias('pepperstone-ctrader', this.cTraderAdapter);
+    this.registry.registerBrokerAlias('icmarkets-ctrader', this.cTraderAdapter);
   }
 }
