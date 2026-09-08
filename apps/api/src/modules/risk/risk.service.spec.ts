@@ -7,6 +7,7 @@ import { RiskViolation } from './entities/risk-violation.entity';
 import { BrokerService } from '../broker/broker.service';
 import { AuditService } from '../audit/audit.service';
 import { ExecutionService } from '../execution/execution.service';
+import { ExecutionControlService } from '../execution-control/execution-control.service';
 import { ProposedTrade, RiskRejectionCode } from './interfaces/risk.interface';
 import { DomainEventBus } from '../events/event-bus.service';
 
@@ -59,6 +60,9 @@ const mockViolationRepo = () => ({
 const mockBrokerService = () => ({
   hasActiveConnection: jest.fn().mockResolvedValue(true),
   findActiveConnectionForUser: jest.fn().mockResolvedValue({ id: 'conn-1' }),
+  // Sprint 50 — LIVE authorization gate (mocked permissive; the dedicated
+  // execution-control spec exercises the real fail-closed behavior)
+  isConnectionExecutable: jest.fn().mockReturnValue(true),
   getBrokerAccountState: jest.fn().mockResolvedValue({
     balance: '10000.00',
     equity: '10050.00',
@@ -82,6 +86,13 @@ const mockExecutionService = () => ({
   reserveDailyTradeSlot: jest.fn().mockResolvedValue({ allowed: true, currentCount: 0 }),
 });
 
+// Sprint 50 — emergency control plane mock (default: execution allowed)
+const mockExecutionControlService = () => ({
+  checkExecutionPermission: jest.fn().mockResolvedValue({ allowed: true }),
+  assertExecutionAllowed: jest.fn().mockResolvedValue(undefined),
+  listActiveControls: jest.fn().mockResolvedValue([]),
+});
+
 // ─── Test suite ───────────────────────────────────────────────────────────────
 
 describe('RiskService', () => {
@@ -90,6 +101,8 @@ describe('RiskService', () => {
   let profileRepo: ReturnType<typeof mockProfileRepo>;
   let violationRepo: ReturnType<typeof mockViolationRepo>;
   let brokerService: ReturnType<typeof mockBrokerService>;
+  let executionControlService: ReturnType<typeof mockExecutionControlService>;
+  let auditService: ReturnType<typeof mockAuditService>;
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -102,6 +115,7 @@ describe('RiskService', () => {
         { provide: BrokerService, useFactory: mockBrokerService },
         { provide: AuditService, useFactory: mockAuditService },
         { provide: ExecutionService, useFactory: mockExecutionService },
+        { provide: ExecutionControlService, useFactory: mockExecutionControlService },
         {
           provide: DomainEventBus,
           useValue: { publish: jest.fn(), subscribe: jest.fn().mockReturnValue(() => {}) },
@@ -113,6 +127,8 @@ describe('RiskService', () => {
     profileRepo = module.get(getRepositoryToken(RiskProfile));
     violationRepo = module.get(getRepositoryToken(RiskViolation));
     brokerService = module.get(BrokerService);
+    executionControlService = module.get(ExecutionControlService);
+    auditService = module.get(AuditService);
   });
 
   afterEach(async () => {
@@ -188,6 +204,138 @@ describe('RiskService', () => {
   });
 
   // ─── Step 1b: Broker connection ───────────────────────────────────────────
+
+  describe('Step 1a-pre/1c-pre — Emergency control plane: ALL FOUR SCOPES (architect correction A1)', () => {
+    beforeEach(() => {
+      // The authoritative connection context used by the 1c-pre gate.
+      (brokerService.findActiveConnectionForUser as jest.Mock).mockResolvedValue({
+        id: 'conn-1',
+        brokerId: 'metatrader5',
+        accountType: 'DEMO',
+      });
+    });
+
+    const blocked = (scope: string, scopeKey: string | null, reason = 'incident') => ({
+      allowed: false,
+      blockedBy: { scope, scopeKey, reason },
+    });
+
+    it('evaluates the control plane with the COMPLETE context after connection discovery', async () => {
+      await service.validateProposedTrade('user-1', validTrade());
+
+      const contexts = (
+        executionControlService.checkExecutionPermission as jest.Mock
+      ).mock.calls.map((c) => c[0]);
+      // Early fail-fast check (GLOBAL/USER) …
+      expect(contexts[0]).toEqual({ userId: 'user-1' });
+      // … followed by the full four-scope context once the connection is known
+      expect(contexts[1]).toEqual({
+        userId: 'user-1',
+        brokerId: 'metatrader5',
+        brokerConnectionId: 'conn-1',
+      });
+    });
+
+    it('GLOBAL blocks everyone (fail-fast, before connection discovery)', async () => {
+      (executionControlService.checkExecutionPermission as jest.Mock).mockResolvedValue(
+        blocked('GLOBAL', null, 'global incident'),
+      );
+
+      const result = await service.validateProposedTrade('user-42', validTrade());
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.EXECUTION_CONTROL_ACTIVE);
+        expect(result.rejectionReason).toContain('scope=GLOBAL');
+      }
+    });
+
+    it('PROVIDER blocks only the affected provider — via the full-context gate', async () => {
+      // Early check ({ userId } only) passes …
+      (executionControlService.checkExecutionPermission as jest.Mock).mockImplementation(
+        async (ctx: { brokerId?: string }) =>
+          ctx.brokerId === 'metatrader5'
+            ? blocked('PROVIDER', 'metatrader5', 'MetaApi outage')
+            : { allowed: true },
+      );
+
+      const result = await service.validateProposedTrade('user-1', validTrade());
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.EXECUTION_CONTROL_ACTIVE);
+        expect(result.rejectionReason).toContain('scope=PROVIDER');
+        expect(result.rejectionReason).toContain('key=metatrader5');
+      }
+    });
+
+    it('BROKER_CONNECTION blocks only the targeted connection — via the full-context gate', async () => {
+      (executionControlService.checkExecutionPermission as jest.Mock).mockImplementation(
+        async (ctx: { brokerConnectionId?: string }) =>
+          ctx.brokerConnectionId === 'conn-1'
+            ? blocked('BROKER_CONNECTION', 'conn-1', 'connection quarantined')
+            : { allowed: true },
+      );
+
+      const result = await service.validateProposedTrade('user-1', validTrade());
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.EXECUTION_CONTROL_ACTIVE);
+        expect(result.rejectionReason).toContain('scope=BROKER_CONNECTION');
+      }
+    });
+
+    it('USER scope blocks via the early gate (before broker discovery)', async () => {
+      (executionControlService.checkExecutionPermission as jest.Mock).mockResolvedValue(
+        blocked('USER', 'user-1', 'account under investigation'),
+      );
+
+      const result = await service.validateProposedTrade('user-1', validTrade());
+      expect(result.decision).toBe('REJECTED');
+      // Blocked BEFORE broker discovery: findActiveConnectionForUser never called
+      expect(brokerService.findActiveConnectionForUser).not.toHaveBeenCalled();
+    });
+
+    it('an unrelated provider/connection remains unaffected (allowed through both gates)', async () => {
+      (brokerService.findActiveConnectionForUser as jest.Mock).mockResolvedValue({
+        id: 'conn-other',
+        brokerId: 'oanda',
+        accountType: 'DEMO',
+      });
+      (executionControlService.checkExecutionPermission as jest.Mock).mockImplementation(
+        async (ctx: { userId: string; brokerId?: string; brokerConnectionId?: string }) =>
+          ctx.brokerId === 'metatrader5' || ctx.brokerConnectionId === 'conn-1'
+            ? blocked('PROVIDER', 'metatrader5', 'unrelated provider blocked')
+            : { allowed: true },
+      );
+
+      const result = await service.validateProposedTrade('user-2', validTrade());
+      expect(result.decision).toBe('APPROVED');
+    });
+
+    it('control-store failure is FAIL CLOSED at BOTH gates (architect A1)', async () => {
+      (executionControlService.checkExecutionPermission as jest.Mock).mockRejectedValue(
+        new Error('control store connection refused'),
+      );
+
+      const result = await service.validateProposedTrade('user-1', validTrade());
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.EXECUTION_CONTROL_ACTIVE);
+        expect(result.rejectionReason).toContain('EXECUTION_CONTROL_CHECK_FAILED');
+      }
+    });
+
+    it('control-plane blocks write the structured audit record', async () => {
+      (executionControlService.checkExecutionPermission as jest.Mock).mockResolvedValue(
+        blocked('PROVIDER', 'metatrader5', 'MetaApi outage'),
+      );
+
+      await service.validateProposedTrade('user-1', validTrade());
+
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'EXECUTION_CONTROL_BLOCKED' }),
+      );
+    });
+  });
 
   describe('Step 1b — Broker connection check', () => {
     it('REJECTS with BROKER_DISCONNECTED when no active broker', async () => {

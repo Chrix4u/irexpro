@@ -507,6 +507,37 @@ export type BrokerConnectionStatus =
   | 'ERROR'
   | 'SUSPENDED';
 
+/**
+ * Sprint 50 — authorization state machine (Directive §15).
+ * ACTIVE is the ONLY state where automation/execution is permitted.
+ * Backend-authoritative: frontend state can never enable execution.
+ */
+export type BrokerAuthorizationStatus =
+  | 'NOT_CONNECTED'
+  | 'CONNECTING'
+  | 'CONNECTED'
+  | 'VERIFYING'
+  | 'AUTHORIZATION_REQUIRED'
+  | 'AUTHORIZED'
+  | 'READY'
+  | 'ACTIVE'
+  | 'SUSPENDED'
+  | 'REVOKED'
+  | 'ERROR'
+  | 'DISCONNECTED';
+
+/**
+ * Sprint 50 — credential lifecycle (Directive §14). Metadata only;
+ * never carries credential material.
+ */
+export type BrokerCredentialStatus =
+  | 'CREATED'
+  | 'VERIFIED'
+  | 'ROTATED'
+  | 'REVOKED'
+  | 'EXPIRED'
+  | 'INVALID';
+
 export interface BrokerConnectionView {
   id: string;
   userId: string;
@@ -518,6 +549,12 @@ export interface BrokerConnectionView {
   accountCurrency: string | null;
   accountLeverage: number | null;
   status: BrokerConnectionStatus;
+  /** Sprint 50 — authoritative automation gate (only ACTIVE executes). */
+  authorizationStatus: BrokerAuthorizationStatus;
+  /** Sprint 50 — credential lifecycle metadata (no secrets). */
+  credentialStatus: BrokerCredentialStatus;
+  authorizedAt: string | null;
+  authorizationRevokedAt: string | null;
   demoValidated: boolean;
   liveTradingEnabled: boolean;
   lastHealthCheckAt: string | null;

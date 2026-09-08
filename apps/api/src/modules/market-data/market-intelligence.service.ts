@@ -2,6 +2,7 @@ import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common'
 import { AuditAction } from '../../common/enums/audit-action.enum';
 import { BrokerService } from '../broker/broker.service';
 import { CredentialEncryptionService } from '../broker/services/credential-encryption.service';
+import { BrokerCredentialLifecycle } from '../broker/authorization/broker-credential-status';
 import { AuditService } from '../audit/audit.service';
 import { AuditSeverity } from '../audit/entities/audit-log.entity';
 import { MarketIntelligenceQueryDto } from './dto/market-intelligence-query.dto';
@@ -75,6 +76,15 @@ export class MarketIntelligenceService {
       throw new ServiceUnavailableException({
         code: 'MARKET_DATA_UNAVAILABLE',
         message: 'Live market data requires an active broker connection',
+      });
+    }
+
+    // A3 (architect correction): credential-lifecycle gate before decrypt —
+    // unusable credential states never produce a provider-backed read.
+    if (!BrokerCredentialLifecycle.isUsable(connection.credentialStatus)) {
+      throw new ServiceUnavailableException({
+        code: 'MARKET_DATA_UNAVAILABLE',
+        message: 'Broker credentials are not usable for market data reads (fail-closed)',
       });
     }
 

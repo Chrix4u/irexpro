@@ -32,6 +32,7 @@ import { AiEngineClientModule } from './modules/ai-engine-client/ai-engine-clien
 import { PerformanceFeesModule } from './modules/performance-fees/performance-fees.module';
 import { BrokerReconciliationModule } from './modules/broker-reconciliation/broker-reconciliation.module';
 import { PerformanceBillingModule } from './modules/performance-billing/performance-billing.module';
+import { ExecutionControlModule } from './modules/execution-control/execution-control.module';
 
 @Module({
   imports: [
@@ -96,6 +97,10 @@ import { PerformanceBillingModule } from './modules/performance-billing/performa
     PerformanceFeesModule,
     BrokerReconciliationModule,
     PerformanceBillingModule,
+    // Sprint 50 — server-side emergency control plane (fail-closed).
+    // Registered before execution-side consumers so the DI graph resolves
+    // ExecutionControlService for the RiskModule gate.
+    ExecutionControlModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: AllExceptionsFilter },

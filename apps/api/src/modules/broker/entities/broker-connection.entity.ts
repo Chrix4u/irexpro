@@ -9,6 +9,8 @@ import {
 } from 'typeorm';
 import { Exclude } from 'class-transformer';
 import { BrokerConnectionStatus, BrokerMode } from '../interfaces/broker-adapter.interface';
+import { BrokerAuthorizationStatus } from '../authorization/broker-authorization-status';
+import { BrokerCredentialStatus } from '../authorization/broker-credential-status';
 
 /**
  * BrokerConnection — persisted broker integration record per user.
@@ -66,6 +68,37 @@ export class BrokerConnection {
   })
   status: BrokerConnectionStatus;
 
+  // ─── Authorization state machine (Sprint 50, Directive §15) ───────────────
+
+  /**
+   * AUTHORITATIVE automation gate. Only ACTIVE permits execution.
+   * Transitions validated server-side by BrokerAuthorizationStateMachine —
+   * the frontend can never enable execution by mutating view state.
+   * Legacy booleans below are dual-written for backward compatibility.
+   */
+  @Column({
+    name: 'authorization_status',
+    type: 'varchar',
+    length: 30,
+    default: BrokerAuthorizationStatus.NOT_CONNECTED,
+  })
+  authorizationStatus: BrokerAuthorizationStatus;
+
+  /** Lifecycle of the stored (encrypted) credential set (Directive §14). */
+  @Column({
+    name: 'credential_status',
+    type: 'varchar',
+    length: 20,
+    default: BrokerCredentialStatus.CREATED,
+  })
+  credentialStatus: BrokerCredentialStatus;
+
+  @Column({ name: 'authorized_at', type: 'timestamptz', nullable: true })
+  authorizedAt: Date | null;
+
+  @Column({ name: 'authorization_revoked_at', type: 'timestamptz', nullable: true })
+  authorizationRevokedAt: Date | null;
+
   // ─── Encrypted credential fields — NEVER exposed in responses ────────────
 
   /**
@@ -109,10 +142,11 @@ export class BrokerConnection {
   @Column({ name: 'last_error_message', type: 'text', nullable: true })
   lastErrorMessage: string | null;
 
-  /** DEMO mode must be tested before LIVE mode is ever enabled. */
+  /** LEGACY (dual-written): DEMO mode must be tested before LIVE mode is enabled. */
   @Column({ name: 'demo_validated', type: 'boolean', default: false })
   demoValidated: boolean;
 
+  /** LEGACY (dual-written): mirrors authorizationStatus === ACTIVE. */
   @Column({ name: 'live_trading_enabled', type: 'boolean', default: false })
   liveTradingEnabled: boolean;
 

@@ -61,6 +61,23 @@ export interface BrokerStatusEventPayload {
   reason?: string;
 }
 
+/** Sprint 50 — authorization state machine transition (safe fields only). */
+export interface BrokerAuthorizationEventPayload {
+  userId: string;
+  connectionId: string;
+  brokerId?: string;
+  status: string;
+  previousStatus?: string;
+}
+
+/** Sprint 50 — emergency control plane change (safe fields only). */
+export interface ExecutionControlEventPayload {
+  scope: string;
+  scopeKey?: string | null;
+  action: 'activated' | 'deactivated';
+  reason?: string;
+}
+
 export interface AiSignalEventPayload {
   signalId: string;
   userId: string;

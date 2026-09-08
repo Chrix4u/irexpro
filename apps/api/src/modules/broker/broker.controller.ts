@@ -156,15 +156,57 @@ export class BrokerController {
     summary: 'Enable LIVE trading for a connection (requires prior DEMO validation)',
     description:
       'DEMO mode must have been previously validated. ' +
-      'LIVE and DEMO are separate connection records — never the same credentials.',
+      'LIVE and DEMO are separate connection records — never the same credentials. ' +
+      'Advances the authorization state machine to ACTIVE (the only executable state).',
   })
   @ApiParam({ name: 'connectionId', description: 'Broker connection UUID' })
   @ApiResponse({ status: 204, description: 'Live trading enabled' })
-  @ApiResponse({ status: 403, description: 'DEMO not yet validated' })
+  @ApiResponse({ status: 403, description: 'DEMO not yet validated / provider lacks LIVE support' })
+  @ApiResponse({ status: 409, description: 'Authorization state cannot become ACTIVE' })
   async enableLiveTrading(
     @Param('connectionId', ParseUUIDPipe) connectionId: string,
     @CurrentUserId() userId: string,
   ): Promise<void> {
     await this.brokerService.enableLiveTrading(connectionId, userId);
+  }
+
+  // ─── Authorization lifecycle (Sprint 50) ──────────────────────────────────
+
+  @Post(':connectionId/revoke-authorization')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Revoke automation authorization for a connection',
+    description:
+      'Transitions the authorization state machine to REVOKED and fail-closes ' +
+      'live trading. Re-authorization requires the full path again.',
+  })
+  @ApiParam({ name: 'connectionId', description: 'Broker connection UUID' })
+  @ApiResponse({ status: 204, description: 'Authorization revoked' })
+  @ApiResponse({ status: 409, description: 'State cannot be revoked from current status' })
+  async revokeAuthorization(
+    @Param('connectionId', ParseUUIDPipe) connectionId: string,
+    @CurrentUserId() userId: string,
+  ): Promise<void> {
+    await this.brokerService.revokeAuthorization(connectionId, userId);
+  }
+
+  @Post(':connectionId/rotate-credentials')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Rotate stored credentials (validated before persisting)',
+    description:
+      'Validates the new credential set against the broker BEFORE replacing the ' +
+      'stored ciphertext. On failure the old set is kept. Credentials are ' +
+      'write-only and never returned.',
+  })
+  @ApiParam({ name: 'connectionId', description: 'Broker connection UUID' })
+  @ApiResponse({ status: 204, description: 'Credentials rotated' })
+  @ApiResponse({ status: 400, description: 'Validation failed — old credentials kept' })
+  async rotateCredentials(
+    @Param('connectionId', ParseUUIDPipe) connectionId: string,
+    @Body() dto: ConnectBrokerDto,
+    @CurrentUserId() userId: string,
+  ): Promise<void> {
+    await this.brokerService.rotateCredentials(connectionId, dto, userId);
   }
 }

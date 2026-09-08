@@ -9,6 +9,8 @@ import {
   TradeEventPayload,
   RiskDecisionEventPayload,
   BrokerStatusEventPayload,
+  BrokerAuthorizationEventPayload,
+  ExecutionControlEventPayload,
   AiSignalEventPayload,
   SystemNotificationPayload,
 } from '../events/interfaces/domain-event.interface';
@@ -134,8 +136,6 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
             : null;
           userStateCache.set(socketUserId, current);
         } catch (error) {
-          // A room whose authorization state cannot be re-read is not safe to
-          // deliver to. Disconnect the affected socket and skip the payload.
           this.logger.error(
             `Realtime session state unavailable for user ${socketUserId}: ${(error as Error).message}`,
           );
@@ -288,6 +288,30 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
             connectionId: payload.connectionId,
             status: payload.status,
             previousStatus: payload.previousStatus,
+            reason: payload.reason,
+          });
+        },
+      ),
+
+      this.eventBus.subscribe<BrokerAuthorizationEventPayload>(
+        DomainEventType.BROKER_AUTHORIZATION_CHANGED,
+        ({ userId, payload }) => {
+          void this.emitToUser(userId, RealtimeEvent.BROKER_AUTHORIZATION_CHANGED, {
+            connectionId: payload.connectionId,
+            brokerId: payload.brokerId,
+            status: payload.status,
+            previousStatus: payload.previousStatus,
+          });
+        },
+      ),
+
+      this.eventBus.subscribe<ExecutionControlEventPayload>(
+        DomainEventType.EXECUTION_CONTROL_CHANGED,
+        ({ userId, payload }) => {
+          void this.emitToUser(userId, RealtimeEvent.EXECUTION_CONTROL_CHANGED, {
+            scope: payload.scope,
+            scopeKey: payload.scopeKey ?? null,
+            action: payload.action,
             reason: payload.reason,
           });
         },

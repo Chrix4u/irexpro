@@ -41,6 +41,10 @@
     "./eligibility": {
       "types": "./src/eligibility.ts",
       "default": "./src/eligibility.ts"
+    },
+    "./broker-registry": {
+      "types": "./src/broker-registry.ts",
+      "default": "./src/broker-registry.ts"
     }
   },
   "scripts": {

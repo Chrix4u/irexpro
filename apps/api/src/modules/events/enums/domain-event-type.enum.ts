@@ -25,6 +25,11 @@ export enum DomainEventType {
 
   // Broker connection
   BROKER_STATUS_CHANGED = 'broker.connection.status_changed',
+  // Sprint 50 — authorization state machine transitions
+  BROKER_AUTHORIZATION_CHANGED = 'broker.connection.authorization_changed',
+
+  // Sprint 50 — emergency control plane
+  EXECUTION_CONTROL_CHANGED = 'execution.control.changed',
 
   // Subscription
   SUBSCRIPTION_STATUS_CHANGED = 'subscription.status_changed',

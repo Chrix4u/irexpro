@@ -24,16 +24,24 @@ describe('BrokerConnection schema reconciliation (hotfix)', () => {
     __dirname,
     '../../database/migrations/1752100000000-ReconcileBrokerConnectionSchema.ts',
   );
+  // Sprint 50 — authorization state machine columns live in their own migration
+  const authorizationMigrationPath = path.resolve(
+    __dirname,
+    '../../database/migrations/1753400000000-AddBrokerAuthorizationStateMachine.ts',
+  );
 
   let entitySource: string;
   let baselineSource: string;
   let reconcileSource: string;
+  let authorizationSource: string;
 
   beforeAll(() => {
     entitySource = fs.readFileSync(entityPath, 'utf-8');
     baselineSource = fs.readFileSync(baselineMigrationPath, 'utf-8');
     expect(fs.existsSync(reconcileMigrationPath)).toBe(true);
     reconcileSource = fs.readFileSync(reconcileMigrationPath, 'utf-8');
+    expect(fs.existsSync(authorizationMigrationPath)).toBe(true);
+    authorizationSource = fs.readFileSync(authorizationMigrationPath, 'utf-8');
   });
 
   /**
@@ -128,7 +136,12 @@ describe('BrokerConnection schema reconciliation (hotfix)', () => {
 
     const baselineColumns = extractMigrationColumnNames(baselineSource);
     const reconcileColumns = extractMigrationColumnNames(reconcileSource);
-    const allMigrationColumns = new Set([...baselineColumns, ...reconcileColumns]);
+    const authorizationColumns = extractMigrationColumnNames(authorizationSource);
+    const allMigrationColumns = new Set([
+      ...baselineColumns,
+      ...reconcileColumns,
+      ...authorizationColumns,
+    ]);
 
     // Every entity column must appear in at least one migration
     const missing: string[] = [];
