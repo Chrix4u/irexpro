@@ -63,7 +63,11 @@ describe('BrokerService — Sprint 50 authorization lifecycle', () => {
   };
   let accountRepo: { findOne: jest.Mock; create: jest.Mock; save: jest.Mock; update: jest.Mock };
   let adapter: ReturnType<typeof mockAdapter>;
-  let providerRegistry: { supportsEnvironment: jest.Mock; isConnectable: jest.Mock };
+  let providerRegistry: {
+    supportsEnvironment: jest.Mock;
+    isConnectable: jest.Mock;
+    isProductionLiveEligible: jest.Mock;
+  };
   let encryption: { encrypt: jest.Mock; decrypt: jest.Mock };
   let audit: { log: jest.Mock };
   let eventBus: { publish: jest.Mock };
@@ -87,6 +91,10 @@ describe('BrokerService — Sprint 50 authorization lifecycle', () => {
     providerRegistry = {
       supportsEnvironment: jest.fn().mockReturnValue(true),
       isConnectable: jest.fn().mockReturnValue(true),
+      // Phase H: fixtures use metatrader5 (the one VERIFIED provider) —
+      // default true mirrors the real registry for that broker. Tests that
+      // simulate an UNVERIFIED provider (e.g. oanda BETA) override this.
+      isProductionLiveEligible: jest.fn().mockReturnValue(true),
     };
     encryption = {
       encrypt: jest.fn().mockReturnValue({ ciphertext: 'c1', iv: 'i1', tag: 't1', keyId: 'k1' }),
@@ -206,6 +214,47 @@ describe('BrokerService — Sprint 50 authorization lifecycle', () => {
       );
     });
 
+    it('Phase H: rejects LIVE for a production-LIVE UNVERIFIED provider even though the adapter exists (fail closed)', async () => {
+      // OANDA-shaped: supportsEnvironment(LIVE) is true (the catalog declares
+      // LIVE environments) but productionLiveVerification is UNVERIFIED.
+      providerRegistry.supportsEnvironment.mockReturnValue(true);
+      providerRegistry.isProductionLiveEligible.mockReturnValue(false);
+
+      await expect(
+        service.createConnection(
+          {
+            brokerId: 'oanda',
+            accountType: BrokerMode.LIVE,
+            accountId: 'x',
+          } as never,
+          'user-1',
+        ),
+      ).rejects.toThrow(ForbiddenException);
+      expect(providerRegistry.isProductionLiveEligible).toHaveBeenCalledWith('oanda');
+      // Fail-closed before any persistence: nothing saved, nothing encrypted.
+      expect(connectionRepo.save).not.toHaveBeenCalled();
+      expect(connectionRepo.create).not.toHaveBeenCalled();
+    });
+
+    it('Phase H: the same UNVERIFIED provider remains DEMO-connectable (BETA is DEMO-only, not blocked)', async () => {
+      providerRegistry.supportsEnvironment.mockReturnValue(true);
+      providerRegistry.isProductionLiveEligible.mockReturnValue(false);
+
+      await service.createConnection(
+        { brokerId: 'oanda', accountType: BrokerMode.DEMO, accountId: '123' } as never,
+        'user-1',
+      );
+
+      expect(connectionRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          brokerId: 'oanda',
+          accountType: BrokerMode.DEMO,
+          authorizationStatus: BrokerAuthorizationStatus.NOT_CONNECTED,
+        }),
+      );
+      expect(connectionRepo.save).toHaveBeenCalledTimes(1);
+    });
+
     it('initializes the state machine at NOT_CONNECTED / CREATED', async () => {
       await service.createConnection(
         { brokerId: 'metatrader5', accountType: BrokerMode.DEMO, accountId: '123' } as never,
@@ -231,6 +280,27 @@ describe('BrokerService — Sprint 50 authorization lifecycle', () => {
       await expect(service.enableLiveTrading('conn-1', 'user-1')).rejects.toThrow(
         ForbiddenException,
       );
+    });
+
+    it('Phase H: rejects on a production-LIVE UNVERIFIED provider even with a validated DEMO (fail closed)', async () => {
+      // OANDA-shaped: LIVE environment supported, DEMO validated, CONNECTED
+      // LIVE connection — still rejected because production verification
+      // evidence is absent.
+      providerRegistry.supportsEnvironment.mockReturnValue(true);
+      providerRegistry.isProductionLiveEligible.mockReturnValue(false);
+      connectionRepo.findOne.mockResolvedValue(
+        baseConnection({
+          brokerId: 'oanda',
+          authorizationStatus: BrokerAuthorizationStatus.CONNECTED,
+        }),
+      );
+
+      await expect(service.enableLiveTrading('conn-1', 'user-1')).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(providerRegistry.isProductionLiveEligible).toHaveBeenCalledWith('oanda');
+      // Fail-closed BEFORE the state machine write and the demo lookup.
+      expect(connectionRepo.update).not.toHaveBeenCalled();
     });
 
     it('rejects CONNECTED→ACTIVE transition when no DEMO was validated (unchanged invariant)', async () => {

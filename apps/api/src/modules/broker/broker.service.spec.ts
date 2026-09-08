@@ -50,6 +50,9 @@ const mockProviderRegistry = () => ({
   isConnectable: jest.fn().mockReturnValue(true),
   hasCapability: jest.fn().mockReturnValue(true),
   supportsEnvironment: jest.fn().mockReturnValue(true),
+  // Phase H: fixtures are metatrader5 (the VERIFIED provider); the real
+  // fail-closed semantics are proven in broker-authorization-lifecycle.spec.
+  isProductionLiveEligible: jest.fn().mockReturnValue(true),
   catalogVersion: 'v1',
 });
 

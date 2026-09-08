@@ -12,19 +12,24 @@
 
 | Status | Meaning |
 | --- | --- |
-| SUPPORTED | Adapter registered at runtime; capability contract tested |
+| SUPPORTED | Adapter registered at runtime; capability contract tested; live-verified or fully covered by integration tests |
+| BETA | Adapter implemented + registered + shared §AN contract suite passing; NOT yet live-verified against the provider |
 | NOT_STARTED | Catalog entry exists; no adapter (fail closed at runtime) |
 | PARTNER_APPROVAL_REQUIRED | Planned route needs operator/partner approval before build |
 | RESEARCH_REQUIRED | Candidate broker; official API/eligibility must be verified first |
+
+**BETA ≠ production-LIVE.** Implementation status describes the adapter
+evidence only — it is never production-LIVE approval. See
+[Production-LIVE verification](#production-live-verification) below.
 
 ## Matrix
 
 | Broker / Platform | Connection route | Adapter in repo | Demo | Live | Environments | Auth model | Status | Test coverage |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| MetaTrader 4/5 (via MetaApi) | METATRADER | `metatrader.adapter.ts` (591 LOC) | ✅ | ✅ | DEMO, LIVE | API token (`METAAPI_TOKEN`) | **SUPPORTED** | Margin, connection, schema specs + provider contract tests |
+| MetaTrader 4/5 (via MetaApi) | METATRADER | `metatrader.adapter.ts` (591 LOC) | ✅ | ✅ | DEMO, LIVE | API token (`METAAPI_TOKEN`) | **SUPPORTED** — production-LIVE **VERIFIED** (`evidenceRef: production operation — MetaApi bridge, live in production`) | Margin, connection, schema specs + provider contract tests |
 | iRexPro Paper Broker | PAPER | `paper-broker.adapter.ts` | ✅ | ❌ (by design) | DEMO | Session (internal) | **SUPPORTED** | Paper adapter specs; LIVE-isolation enforced by registry |
-| OANDA (v20 REST + streaming) | NATIVE_API | — | ⚠️ | ⚠️ | DEMO, LIVE planned | Personal access token | **NOT_STARTED** | None — catalog entry only (fail closed) |
-| cTrader Open API (multi-broker) | CTRADER | — | ⚠️ | ⚠️ | DEMO, LIVE planned | OAuth 2.0 (per-broker app approval) | **PARTNER_APPROVAL_REQUIRED** | None — requires OAuth app + partner approval |
+| OANDA (v20 REST) | NATIVE_API | `oanda/oanda.adapter.ts` (Sprint 51 PR-7) | ⚠️ | ❌ fail-closed | DEMO (fxpractice) — LIVE (fxtrade) declared but **UNVERIFIED** | Personal access token (encrypted at rest) | **BETA** — production-LIVE **UNVERIFIED** | Shared §AN contract suite + 107 unit/contract tests; live verification pending (see `oanda-v20-adapter.md`) |
+| cTrader Open API (multi-broker) | CTRADER | — | ⚠️ | ⚠️ | DEMO, LIVE planned | OAuth 2.0 (per-broker app approval) | **PARTNER_APPROVAL_REQUIRED** — honestly blocked on partner approval; no adapter, no fabrication | None — requires OAuth app + partner approval |
 | Pepperstone (via cTrader/MT4/MT5) | CTRADER / METATRADER | — (reuse cTrader/MT adapter) | ⚠️ | ⚠️ | TBD | TBD | RESEARCH_REQUIRED | None |
 | IC Markets (via cTrader/MT4/MT5) | CTRADER / METATRADER | — (reuse adapters) | ⚠️ | ⚠️ | TBD | TBD | RESEARCH_REQUIRED | None |
 | FP Markets (via cTrader/MT4/MT5) | CTRADER / METATRADER | — (reuse adapters) | ⚠️ | ⚠️ | TBD | TBD | RESEARCH_REQUIRED | None |
@@ -51,6 +56,71 @@ The runtime source of truth for this matrix is
 
 Clients (web, admin, mobile) MUST render `GET /api/v1/broker/registry` —
 never maintain independent broker lists (Directive §AU).
+
+## Production-LIVE verification
+
+Implementation status (`SUPPORTED` / `BETA` / …) and `adapterAvailable`
+describe **what is built**, not **what is approved for production LIVE
+execution**. The registry therefore carries a separate, server-authoritative
+`productionLiveVerification` object on every entry (architect Phase H):
+
+```jsonc
+{
+  "status": "UNVERIFIED" | "VERIFIED",
+  "verifiedAt": "<ISO date> | null",
+  "evidenceRef": "<doc/ticket id — never secrets> | null"
+}
+```
+
+Semantics:
+
+- **Absent or `UNVERIFIED` ⇒ production-LIVE fails closed.**
+  `BrokerProviderRegistryService.isProductionLiveEligible(id)` returns
+  `false`, and `BrokerService` rejects with `ForbiddenException`:
+  - `createConnection` with `accountType: LIVE` —
+    *"Broker X is not production-LIVE verified — LIVE connections are
+    fail-closed (BETA is DEMO-only)"*
+  - `enableLiveTrading` on any connection —
+    *"Broker X is not production-LIVE verified — LIVE trading is fail-closed
+    (BETA is DEMO-only)"*
+- **`isConnectable` is unchanged** (adapter presence): a BETA provider
+  remains connectable for **DEMO** use — the two facts are rendered
+  distinctly by UI consumers.
+- `VERIFIED` requires **operator-attested evidence**, recorded as
+  `verifiedAt` + `evidenceRef` (a doc/ticket reference — never secrets).
+
+Current evidence state:
+
+| Broker | `productionLiveVerification` | Effect |
+| --- | --- | --- |
+| metatrader5 | `VERIFIED`, `verifiedAt: null`, `evidenceRef: "production operation — MetaApi bridge, live in production"` | LIVE allowed (all other gates still apply) |
+| oanda | `UNVERIFIED` | LIVE connections + enable-live fail closed; DEMO connectable |
+| paper-broker | not set (materialized `UNVERIFIED`) — LIVE unsupported by design (DEMO-only environments array) | LIVE already rejected by the §11 environment gate |
+| ctrader | not set (materialized `UNVERIFIED`) — partner-blocked, no adapter | Not connectable at all; LIVE fail-closed |
+
+### Evidence required before OANDA's production status changes
+
+OANDA stays `UNVERIFIED` until an operator attests
+**practice-account verification records** — the full operator checklist in
+`docs/brokers/oanda-v20-adapter.md` ("Requirements before SUPPORTED"),
+minimally:
+
+1. **Connect**: a real DEMO BrokerConnection against
+   `https://api-fxpractice.oanda.com` (OANDA practice personal access
+   token) that connects end-to-end.
+2. **Account-info round-trip**: `GET /v3/accounts/{id}/summary` reads back
+   balance/margin fields correctly for that connection.
+3. **Order round-trip on the practice account**: market fill, resting
+   limit, SL/TP modification, partial close, close-all, and history —
+   recorded against the practice account.
+
+The records (dates, ticket ids, screenshots or exported provider
+confirmations) are documented in `docs/brokers/oanda-v20-adapter.md`; then
+and only then does `BROKER_CATALOG`'s OANDA entry change to
+`productionLiveVerification: { status: 'VERIFIED', verifiedAt, evidenceRef }`
+(and the status may move toward `SUPPORTED` per the full checklist). Until
+then **no LIVE OANDA connection can be created or enabled** — fail closed,
+by code, not by convention.
 
 ## Research checklist for every RESEARCH_REQUIRED broker (Directive §AA)
 

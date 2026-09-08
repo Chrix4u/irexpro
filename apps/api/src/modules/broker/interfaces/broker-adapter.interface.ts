@@ -114,6 +114,31 @@ export interface IBrokerAdapter {
   getOrderById(providerOrderId: string): Promise<BrokerOrderState | null>;
 }
 
+// ─── Adapter operational metadata (Sprint 51 PR-7 — Directive §AL/§AM) ───────
+
+/**
+ * OPTIONAL metadata surface for adapters that want to expose provider API +
+ * adapter version information to registries and observability tooling.
+ *
+ * Metadata is informational ONLY — it is never used for capability gating
+ * (capabilities live in the broker catalog, Directive §M) and never carries
+ * credential material.
+ */
+export interface AdapterMetadata {
+  /** Provider API generation the adapter implements (e.g. 'v20'). */
+  readonly providerApiVersion: string;
+  /** Semantic version of the adapter implementation itself. */
+  readonly adapterVersion: string;
+  /**
+   * Conservative OPERATIONAL defaults for capacity planning/metadata —
+   * NOT provider-published limits and NOT enforced by the adapter.
+   */
+  readonly rateLimitProfile: {
+    readonly requestsPerSecond: number;
+    readonly burst: number;
+  };
+}
+
 // ─── Enums ────────────────────────────────────────────────────────────────────
 
 export enum BrokerMode {

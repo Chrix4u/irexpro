@@ -36,6 +36,18 @@ export enum BrokerErrorCode {
   BROKER_SERVER_ERROR = 'BROKER_SERVER_ERROR',
   DECRYPTION_FAILED = 'DECRYPTION_FAILED',
   NOT_CONNECTED = 'NOT_CONNECTED',
+  // Sprint 51 PR-7 — provider-specific mapping surface (OANDA v20). Added
+  // ADDITIVELY: existing members and their semantics are untouched.
+  /** Provider rejected the credential outright (e.g. OANDA 401 access_denied). */
+  AUTHORIZATION_EXPIRED = 'AUTHORIZATION_EXPIRED',
+  /** The provider account the credential addresses does not exist / is not accessible. */
+  ACCOUNT_NOT_FOUND = 'ACCOUNT_NOT_FOUND',
+  /** The provider account exists but is administratively disabled. */
+  ACCOUNT_DISABLED = 'ACCOUNT_DISABLED',
+  /** The provider rejected the request payload itself (validation failure). */
+  INVALID_REQUEST = 'INVALID_REQUEST',
+  /** Provider-side or network-level outage (retryable). */
+  PROVIDER_UNAVAILABLE = 'PROVIDER_UNAVAILABLE',
   UNKNOWN = 'UNKNOWN',
 }
 
@@ -44,4 +56,22 @@ export const RETRYABLE_BROKER_ERRORS = new Set<BrokerErrorCode>([
   BrokerErrorCode.CONNECTION_TIMEOUT,
   BrokerErrorCode.RATE_LIMITED,
   BrokerErrorCode.BROKER_SERVER_ERROR,
+  // Sprint 51 PR-7 — PROVIDER_UNAVAILABLE is the OANDA-mapped 5xx / network
+  // outage code; retrying later can succeed. All other new members
+  // (AUTHORIZATION_EXPIRED, ACCOUNT_NOT_FOUND, ACCOUNT_DISABLED,
+  // INVALID_REQUEST) are NOT retryable — retrying cannot change the outcome.
+  BrokerErrorCode.PROVIDER_UNAVAILABLE,
 ]);
+
+/**
+ * Redact secret material from a message before it is surfaced in errors,
+ * broker messages, or logs (Directive §AN #5 — secret redaction).
+ *
+ * Pure string helper: replaces every occurrence of the secret with the
+ * literal `[REDACTED]`. When the secret is empty/undefined the text is
+ * returned unchanged (nothing to redact — never throws).
+ */
+export function redactSecret(text: string, secret: string | undefined): string {
+  if (!secret || secret.length === 0) return text;
+  return text.split(secret).join('[REDACTED]');
+}

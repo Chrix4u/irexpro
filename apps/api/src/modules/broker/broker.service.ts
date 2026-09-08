@@ -184,6 +184,20 @@ export class BrokerService {
       );
     }
 
+    // Phase H (architect): production-LIVE eligibility fails closed —
+    // implementation status (BETA) and adapter availability are NOT
+    // production-LIVE approval. LIVE connections require VERIFIED
+    // operator evidence; UNVERIFIED providers are DEMO-only.
+    if (
+      dto.accountType === BrokerMode.LIVE &&
+      !this.providerRegistry.isProductionLiveEligible(dto.brokerId)
+    ) {
+      throw new ForbiddenException(
+        `Broker ${dto.brokerId} is not production-LIVE verified — ` +
+          'LIVE connections are fail-closed (BETA is DEMO-only)',
+      );
+    }
+
     const credentials: DecryptedBrokerCredentials = {
       apiKey: dto.apiKey,
       apiSecret: dto.apiSecret,
@@ -499,7 +513,9 @@ export class BrokerService {
    *   1. DEMO connection exists and demoValidated = true (existing invariant)
    *   2. The connection is currently CONNECTED
    *   3. The provider explicitly supports LIVE (registry gate, Directive §11)
-   *   4. The user explicitly enables it
+   *   4. The provider is production-LIVE VERIFIED (Phase H fail-closed gate —
+   *      BETA/UNVERIFIED providers are DEMO-only)
+   *   5. The user explicitly enables it
    *
    * Live trading without prior DEMO validation is an architectural violation.
    */
@@ -513,6 +529,16 @@ export class BrokerService {
     // Registry gate: provider must explicitly support LIVE execution
     if (!this.providerRegistry.supportsEnvironment(connection.brokerId, BrokerMode.LIVE)) {
       throw new ForbiddenException(`Broker ${connection.brokerId} does not support LIVE execution`);
+    }
+
+    // Phase H (architect): production-LIVE eligibility fails closed —
+    // BETA/UNVERIFIED providers can never enable LIVE trading, even with
+    // a validated DEMO connection and a LIVE account row.
+    if (!this.providerRegistry.isProductionLiveEligible(connection.brokerId)) {
+      throw new ForbiddenException(
+        `Broker ${connection.brokerId} is not production-LIVE verified — ` +
+          'LIVE trading is fail-closed (BETA is DEMO-only)',
+      );
     }
 
     // State machine gate: must be in a pre-authorization state

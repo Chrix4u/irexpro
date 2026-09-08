@@ -29,7 +29,10 @@ export class BrokerRegistryController {
     description:
       'Returns broker definitions with implementation status, capabilities, ' +
       'connection routes, supported environments and authentication type. ' +
-      'Statuses are evidence-based: SUPPORTED requires a registered adapter.',
+      'Statuses are evidence-based: SUPPORTED requires a registered adapter. ' +
+      'Each entry also carries productionLiveVerification (Phase H): BETA ≠ ' +
+      'production-LIVE — UNVERIFIED/absent means LIVE execution is fail-closed ' +
+      'server-side (BETA providers are DEMO-only).',
   })
   @ApiResponse({ status: 200, description: 'Broker registry catalog' })
   async getCatalog(): Promise<{ catalogVersion: string; brokers: BrokerRegistryEntry[] }> {

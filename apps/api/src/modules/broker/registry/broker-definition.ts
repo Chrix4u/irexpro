@@ -35,6 +35,22 @@ export enum BrokerAvailabilityStatus {
   UNAVAILABLE = 'UNAVAILABLE',
 }
 
+/**
+ * Production-LIVE verification evidence (architect Phase H).
+ *
+ * SEPARATE from implementation status: `status: BETA` means the adapter is
+ * implemented + contract-tested; it does NOT mean production-LIVE execution
+ * was ever verified. Absent / UNVERIFIED ⇒ LIVE execution fails closed
+ * (BETA providers are DEMO-only until operator-attested evidence exists).
+ */
+export interface BrokerProductionLiveVerification {
+  status: 'UNVERIFIED' | 'VERIFIED';
+  /** When verification happened (operator-attested evidence, e.g. practice-account validation records). */
+  verifiedAt?: string | null;
+  /** Short evidence reference (doc/ticket id — never secrets). */
+  evidenceRef?: string | null;
+}
+
 export interface BrokerDefinition {
   /** Catalog id (stable, e.g. "metatrader5"). */
   id: string;
@@ -46,6 +62,12 @@ export interface BrokerDefinition {
   adapterId: string | null;
   /** Implementation status — MUST reflect actual evidence. */
   status: BrokerAvailabilityStatus;
+  /**
+   * Production-LIVE verification evidence — absent/UNVERIFIED means LIVE
+   * execution is fail-closed (BrokerProviderRegistryService.
+   * isProductionLiveEligible returns false; BETA is DEMO-only).
+   */
+  productionLiveVerification?: BrokerProductionLiveVerification;
   /** Connectivity routes this broker can be reached through. */
   connectionRoutes: BrokerConnectionRoute[];
   /** Normalized capabilities (Directive §M). */

@@ -14,13 +14,25 @@ import {
  *
  * STATUS HONESTY (Directive §AB): every entry's status MUST match actual
  * implementation evidence in this repository:
- * - metatrader5  → SUPPORTED (full IBrokerAdapter via MetaApi, tested)
+ * - metatrader5  → SUPPORTED (full IBrokerAdapter via MetaApi, tested;
+ *   production-LIVE VERIFIED — live-proven in production via the MetaApi
+ *   bridge)
  * - paper-broker → SUPPORTED (deterministic simulation adapter, tested; cannot go LIVE)
- * - OANDA / cTrader → NOT_STARTED (no adapter exists — registry comments in
- *   broker.module.ts are the only trace; do not fabricate support)
+ * - OANDA        → BETA (Sprint 51 PR-7: full v20 REST adapter implemented +
+ *   shared §AN contract suite + unit specs; NOT yet live-verified against a
+ *   real OANDA practice account — see docs/brokers/oanda-v20-adapter.md)
+ * - cTrader → NOT_STARTED / PARTNER_APPROVAL_REQUIRED (no adapter — OAuth app +
+ *   partner approval required before any build; do not fabricate support)
  * - Pepperstone / IC Markets / FP Markets via cTrader → PARTNER_APPROVAL_REQUIRED
  *   (requires operator research + partner approval before any build — see
  *   docs/brokers/provider-matrix.md)
+ *
+ * PRODUCTION-LIVE VERIFICATION (architect Phase H): `status` describes
+ * implementation evidence only — it is NOT production-LIVE approval. The
+ * separate `productionLiveVerification` field records operator-attested
+ * LIVE evidence; absent/UNVERIFIED fails closed (LIVE connections and
+ * enable-live are rejected — BETA is DEMO-only). Only metatrader5 carries
+ * VERIFIED evidence today.
  */
 
 export const BROKER_CATALOG: readonly BrokerDefinition[] = [
@@ -32,6 +44,15 @@ export const BROKER_CATALOG: readonly BrokerDefinition[] = [
       'position, margin and history support with per-account RPC pooling.',
     adapterId: 'metatrader5',
     status: BrokerAvailabilityStatus.SUPPORTED,
+    // Production-LIVE verified: MetaTrader via MetaApi is the live-proven
+    // production route (docs/brokers/provider-matrix.md). No single
+    // attestation date exists in the repo history, so verifiedAt is null —
+    // evidenceRef describes the production-operation evidence instead.
+    productionLiveVerification: {
+      status: 'VERIFIED',
+      verifiedAt: null,
+      evidenceRef: 'production operation — MetaApi bridge, live in production',
+    },
     connectionRoutes: [BrokerConnectionRoute.METATRADER],
     capabilities: [
       BrokerCapability.ACCOUNT_READ,
@@ -85,17 +106,37 @@ export const BROKER_CATALOG: readonly BrokerDefinition[] = [
   },
   {
     id: 'oanda',
-    name: 'OANDA',
-    description: 'Native REST + streaming v20 API. Research complete; adapter NOT implemented yet.',
-    adapterId: null,
-    status: BrokerAvailabilityStatus.NOT_STARTED,
+    name: 'OANDA (v20 REST — BETA)',
+    description:
+      'Native OANDA v20 REST adapter (Sprint 51 PR-7). Accounts, pricing, ' +
+      'instruments, market/limit/stop orders, positions (trades), history, ' +
+      'and error normalization are implemented and contract-tested. BETA: ' +
+      'not yet live-verified against a real OANDA practice account; v20 ' +
+      'streaming (SSE price streams) is not implemented — REST polling only.',
+    adapterId: 'oanda',
+    status: BrokerAvailabilityStatus.BETA,
+    // Phase H: adapter implemented + contract-tested, but production-LIVE is
+    // UNVERIFIED — no operator-attested practice-account validation records
+    // exist yet. LIVE fails closed (isProductionLiveEligible === false);
+    // required evidence is documented in docs/brokers/oanda-v20-adapter.md
+    // ("Requirements before SUPPORTED").
+    productionLiveVerification: { status: 'UNVERIFIED' },
     connectionRoutes: [BrokerConnectionRoute.NATIVE_API],
     capabilities: [
+      BrokerCapability.ACCOUNT_READ,
+      BrokerCapability.BALANCE_READ,
+      BrokerCapability.POSITION_READ,
+      BrokerCapability.ORDER_READ,
+      BrokerCapability.HISTORY_READ,
+      BrokerCapability.MARKET_DATA,
       BrokerCapability.REST,
-      BrokerCapability.WEBSOCKET,
       BrokerCapability.API_TOKEN,
       BrokerCapability.DEMO,
       BrokerCapability.LIVE,
+      BrokerCapability.ORDER_PLACEMENT,
+      BrokerCapability.ORDER_MODIFICATION,
+      BrokerCapability.CLOSE_ALL,
+      BrokerCapability.MARGIN_CALCULATION,
     ],
     authenticationType: 'API_TOKEN',
     environments: ['DEMO', 'LIVE'],

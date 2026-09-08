@@ -10,6 +10,7 @@ import { BrokerAccount } from './entities/broker-account.entity';
 import { BrokerAdapterRegistry } from './adapters/broker-adapter.registry';
 import { MetaTraderAdapter } from './adapters/metatrader.adapter';
 import { PaperBrokerAdapter } from './adapters/paper-broker.adapter';
+import { OandaAdapter } from './adapters/oanda/oanda.adapter';
 import { CredentialEncryptionService } from './services/credential-encryption.service';
 import { MetaApiClientService } from './services/metaapi-client.service';
 import { PortfolioReadService } from './services/portfolio-read.service';
@@ -52,6 +53,7 @@ import { AuditModule } from '../audit/audit.module';
     BrokerProviderRegistryService,
     MetaTraderAdapter,
     PaperBrokerAdapter,
+    OandaAdapter,
     BrokerHealthCheckJob,
     BrokerHealthCheckProducer,
   ],
@@ -79,12 +81,16 @@ export class BrokerModule implements OnModuleInit {
     private registry: BrokerAdapterRegistry,
     private metaTraderAdapter: MetaTraderAdapter,
     private paperBrokerAdapter: PaperBrokerAdapter,
+    private oandaAdapter: OandaAdapter,
   ) {}
 
   onModuleInit() {
     this.registry.register(this.metaTraderAdapter);
     this.registry.register(this.paperBrokerAdapter);
-    // Future: this.registry.register(this.oandaAdapter);
-    // Future: this.registry.register(this.cTraderAdapter);
+    // Sprint 51 PR-7 — OANDA v20 REST native adapter (BETA: implemented +
+    // contract-tested; live verification pending — see
+    // docs/brokers/oanda-v20-adapter.md).
+    this.registry.register(this.oandaAdapter);
+    // Future: this.registry.register(this.cTraderAdapter); // partner approval required
   }
 }
