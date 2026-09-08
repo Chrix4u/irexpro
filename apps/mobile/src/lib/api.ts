@@ -39,13 +39,22 @@ export interface MobileApiClient extends ApiClient {
   getBrokerRegistry(): Promise<BrokerRegistryCatalog>;
 }
 
-const baseApi = createApiClient({
-  baseUrl,
-  includeCredentials: false,
-  getAccessToken: () => cachedAccessToken,
-});
+/**
+ * Build the mobile API facade on top of the shared transport.
+ * Exported so contract tests can validate the mobile-only registry extension
+ * without mutating or widening the shared ApiClient interface.
+ */
+export function createMobileApiClient(apiBaseUrl: string): MobileApiClient {
+  const baseApi = createApiClient({
+    baseUrl: apiBaseUrl,
+    includeCredentials: false,
+    getAccessToken: () => cachedAccessToken,
+  });
 
-export const api: MobileApiClient = Object.assign(baseApi, {
-  getBrokerRegistry: () =>
-    baseApi.request<BrokerRegistryCatalog>('/broker/registry'),
-});
+  return Object.assign(baseApi, {
+    getBrokerRegistry: () =>
+      baseApi.request<BrokerRegistryCatalog>('/broker/registry'),
+  });
+}
+
+export const api: MobileApiClient = createMobileApiClient(baseUrl);
