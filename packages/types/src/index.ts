@@ -206,6 +206,14 @@ export interface AccountAppealAdminView {
   } | null;
 }
 
+export interface AccountAppealListResponse {
+  items: AccountAppealAdminView[];
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+}
+
 export interface ResolveAccountAppealRequest {
   decision: AccountAppealDecision;
   reviewerNote?: string;

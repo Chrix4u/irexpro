@@ -79,11 +79,21 @@ describe('AccountGovernanceController', () => {
     expect(roles).toEqual(expect.arrayContaining([RoleName.ADMIN, RoleName.SUPER_ADMIN]));
   });
 
-  it('passes an optional queue status through unchanged', async () => {
-    service.listAppeals.mockResolvedValue([]);
+  it('passes the validated queue status and pagination contract through unchanged', async () => {
+    service.listAppeals.mockResolvedValue({
+      items: [],
+      page: 2,
+      limit: 10,
+      total: 0,
+      totalPages: 0,
+    });
 
-    await controller.listAppeals(AccountAppealStatus.PENDING);
+    await controller.listAppeals({
+      status: AccountAppealStatus.PENDING,
+      page: 2,
+      limit: 10,
+    });
 
-    expect(service.listAppeals).toHaveBeenCalledWith(AccountAppealStatus.PENDING);
+    expect(service.listAppeals).toHaveBeenCalledWith(AccountAppealStatus.PENDING, 2, 10);
   });
 });
