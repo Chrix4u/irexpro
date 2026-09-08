@@ -145,6 +145,61 @@ async function testRevokeOtherSessionsContract() {
   assert.equal(init.headers['Content-Type'], 'application/json');
 }
 
+async function testListAccountAppealsContract() {
+  const scenarios = [
+    {
+      label: 'status and page supplied',
+      args: { status: 'PENDING', page: 2, limit: 20 },
+      expectedPath: '/admin/account-appeals?status=PENDING&page=2&limit=20',
+    },
+    {
+      label: 'no args lets the server apply defaults',
+      args: undefined,
+      expectedPath: '/admin/account-appeals',
+    },
+    {
+      label: 'page only omits absent filters',
+      args: { page: 3 },
+      expectedPath: '/admin/account-appeals?page=3',
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    const calls = [];
+    const responseBody = {
+      items: [],
+      page: scenario.args?.page ?? 1,
+      limit: scenario.args?.limit ?? 20,
+      total: 47,
+      totalPages: 3,
+    };
+    const fakeFetch = async (url, init) => {
+      calls.push({ url, init });
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => responseBody,
+      };
+    };
+
+    const { createApiClient } = loadApiClient(fakeFetch);
+    const client = createApiClient({
+      baseUrl: 'https://api.example.test/api/v1',
+      getAccessToken: () => 'fixture-access-token',
+    });
+
+    const result = await client.listAccountAppeals(scenario.args);
+
+    assert.deepEqual(result, responseBody);
+    assert.equal(calls.length, 1, `account appeals (${scenario.label}) must issue one request`);
+    const [{ url, init }] = calls;
+    assert.equal(url, `https://api.example.test/api/v1${scenario.expectedPath}`);
+    assert.equal(init.method ?? 'GET', 'GET');
+    assert.equal(init.headers.Authorization, 'Bearer fixture-access-token');
+  }
+}
+
 async function testListSecurityEventsContract() {
   const scenarios = [
     {
@@ -313,6 +368,8 @@ async function main() {
   console.log('api-client change-password contract test passed.');
   await testRevokeOtherSessionsContract();
   console.log('api-client revoke-others contract test passed.');
+  await testListAccountAppealsContract();
+  console.log('api-client account-appeals pagination contract test passed.');
   await testListSecurityEventsContract();
   console.log('api-client security-events contract test passed.');
   await testUpdateMyProfileContract();

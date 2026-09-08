@@ -21,6 +21,7 @@ import type {
   ResetPasswordRequest,
   ResetPasswordResponse,
   AccountAppealAdminView,
+  AccountAppealListResponse,
   AccountAppealStatus,
   AdminAccountStatusView,
   ResolveAccountAppealRequest,
@@ -108,8 +109,12 @@ export interface ApiClient {
   // ── Sprint 43: Account governance ───────────────────────────────────────
   /** Public, generic-response account-access appeal request. */
   submitAccountAppeal(body: SubmitAccountAppealRequest): Promise<SubmitAccountAppealResponse>;
-  /** Admin-only appeal queue. */
-  listAccountAppeals(status?: AccountAppealStatus): Promise<AccountAppealAdminView[]>;
+  /** Admin-only appeal queue with bounded, server-authoritative pagination. */
+  listAccountAppeals(query?: {
+    status?: AccountAppealStatus;
+    page?: number;
+    limit?: number;
+  }): Promise<AccountAppealListResponse>;
   /** Admin-only review decision. */
   resolveAccountAppeal(
     appealId: string,
@@ -349,10 +354,16 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
         body: JSON.stringify(body),
       }),
 
-    listAccountAppeals: (status?: AccountAppealStatus) =>
-      request<AccountAppealAdminView[]>(
-        status ? `/admin/account-appeals?status=${encodeURIComponent(status)}` : '/admin/account-appeals',
-      ),
+    listAccountAppeals: (query) => {
+      const params = new URLSearchParams();
+      if (query?.status !== undefined) params.set('status', query.status);
+      if (query?.page !== undefined) params.set('page', String(query.page));
+      if (query?.limit !== undefined) params.set('limit', String(query.limit));
+      const search = params.toString();
+      return request<AccountAppealListResponse>(
+        search ? `/admin/account-appeals?${search}` : '/admin/account-appeals',
+      );
+    },
 
     resolveAccountAppeal: (appealId, body) =>
       request<AccountAppealAdminView>(`/admin/account-appeals/${encodeURIComponent(appealId)}/resolve`, {

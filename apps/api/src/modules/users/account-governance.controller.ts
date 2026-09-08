@@ -8,7 +8,6 @@ import {
   HttpStatus,
   Ip,
   Param,
-  ParseEnumPipe,
   ParseUUIDPipe,
   Patch,
   Post,
@@ -23,8 +22,8 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { RoleName } from './entities/role.entity';
-import { AccountAppealStatus } from './entities/account-appeal.entity';
 import { AccountGovernanceService, PublicAppealResult } from './account-governance.service';
+import { ListAccountAppealsQueryDto } from './dto/list-account-appeals-query.dto';
 import { ResolveAccountAppealDto } from './dto/resolve-account-appeal.dto';
 import { SubmitAccountAppealDto } from './dto/submit-account-appeal.dto';
 import { UpdateAccountStatusDto } from './dto/update-account-status.dto';
@@ -64,11 +63,8 @@ export class AccountGovernanceController {
   @Header('Cache-Control', 'no-store')
   @Header('Pragma', 'no-cache')
   @ApiOperation({ summary: '[Admin] List account-access appeals' })
-  async listAppeals(
-    @Query('status', new ParseEnumPipe(AccountAppealStatus, { optional: true }))
-    status?: AccountAppealStatus,
-  ) {
-    return this.governanceService.listAppeals(status);
+  async listAppeals(@Query() query: ListAccountAppealsQueryDto) {
+    return this.governanceService.listAppeals(query.status, query.page, query.limit);
   }
 
   @Post('admin/account-appeals/:id/resolve')

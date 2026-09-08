@@ -35,6 +35,8 @@ const REVIEW_DECISIONS: Array<{
   },
 ];
 
+const APPEAL_PAGE_SIZE = 20;
+
 function formatDateTime(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
@@ -54,6 +56,10 @@ function appealContact(appeal: AccountAppealAdminView): string {
 export default function AccountAppealsPage() {
   const { hasAdminRole } = useAuth();
   const [appeals, setAppeals] = useState<AccountAppealAdminView[]>([]);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
+  const [refreshKey, setRefreshKey] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -65,10 +71,26 @@ export default function AccountAppealsPage() {
   useEffect(() => {
     if (!hasAdminRole) return;
     let cancelled = false;
+    setLoading(true);
+    setError(null);
+    setSelectedId(null);
     (async () => {
       try {
-        const pendingAppeals = await api.listAccountAppeals("PENDING");
-        if (!cancelled) setAppeals(pendingAppeals);
+        const response = await api.listAccountAppeals({
+          status: "PENDING",
+          page,
+          limit: APPEAL_PAGE_SIZE,
+        });
+        if (cancelled) return;
+        const canonicalPage =
+          response.totalPages === 0 ? 1 : Math.min(page, response.totalPages);
+        if (canonicalPage !== page) {
+          setPage(canonicalPage);
+          return;
+        }
+        setAppeals(response.items);
+        setTotal(response.total);
+        setTotalPages(response.totalPages);
       } catch (requestError) {
         if (!cancelled) {
           setError(
@@ -84,7 +106,7 @@ export default function AccountAppealsPage() {
     return () => {
       cancelled = true;
     };
-  }, [hasAdminRole]);
+  }, [hasAdminRole, page, refreshKey]);
 
   const selectedAppeal =
     appeals.find((appeal) => appeal.id === selectedId) ?? null;
@@ -117,12 +139,26 @@ export default function AccountAppealsPage() {
         decision,
         ...(reviewerNote.trim() ? { reviewerNote: reviewerNote.trim() } : {}),
       });
+      const nextTotal = Math.max(0, total - 1);
+      const nextTotalPages =
+        nextTotal === 0 ? 0 : Math.ceil(nextTotal / APPEAL_PAGE_SIZE);
+      const nextPage =
+        nextTotalPages === 0 ? 1 : Math.min(page, nextTotalPages);
+
       setAppeals((current) =>
         current.filter((appeal) => appeal.id !== selectedAppeal.id),
       );
+      setTotal(nextTotal);
+      setTotalPages(nextTotalPages);
       setSelectedId(null);
       setReviewerNote("");
       setConfirmed(false);
+
+      if (nextPage !== page) {
+        setPage(nextPage);
+      } else {
+        setRefreshKey((current) => current + 1);
+      }
     } catch (requestError) {
       setError(
         requestError instanceof Error
@@ -158,7 +194,7 @@ export default function AccountAppealsPage() {
       {error && <Alert variant="error">{error}</Alert>}
 
       <div className="admin-appeals-grid">
-        <Card title={`Pending requests (${appeals.length})`}>
+        <Card title={`Pending requests (${total})`}>
           {loading ? (
             <p className="muted">Loading account reviews…</p>
           ) : appeals.length === 0 ? (
@@ -189,6 +225,41 @@ export default function AccountAppealsPage() {
                   </button>
                 );
               })}
+            </div>
+          )}
+          {totalPages > 1 && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "0.75rem",
+                marginTop: "1rem",
+              }}
+            >
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                disabled={loading || page <= 1}
+                onClick={() => setPage((current) => Math.max(1, current - 1))}
+              >
+                Previous
+              </Button>
+              <span className="text-sm muted" aria-live="polite">
+                Page {page} of {totalPages}
+              </span>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                disabled={loading || page >= totalPages}
+                onClick={() =>
+                  setPage((current) => Math.min(totalPages, current + 1))
+                }
+              >
+                Next
+              </Button>
             </div>
           )}
         </Card>

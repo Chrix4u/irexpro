@@ -46,6 +46,14 @@ export interface AccountAppealAdminView {
   } | null;
 }
 
+export interface AccountAppealListResponse {
+  items: AccountAppealAdminView[];
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+}
+
 export interface AdminAccountStatusView {
   id: string;
   status: UserStatus;
@@ -136,14 +144,28 @@ export class AccountGovernanceService {
     return { message: PUBLIC_APPEAL_MESSAGE };
   }
 
-  async listAppeals(status?: AccountAppealStatus): Promise<AccountAppealAdminView[]> {
-    const appeals = await this.appealRepo.find({
+  async listAppeals(
+    status?: AccountAppealStatus,
+    requestedPage = 1,
+    requestedLimit = 20,
+  ): Promise<AccountAppealListResponse> {
+    const { page, limit, skip } = this.normalizeAppealPagination(requestedPage, requestedLimit);
+    const [appeals, total] = await this.appealRepo.findAndCount({
       where: status ? { status } : {},
       relations: ['user', 'user.profile'],
       withDeleted: true,
-      order: { createdAt: 'ASC' },
+      order: { createdAt: 'ASC', id: 'ASC' },
+      skip,
+      take: limit,
     });
-    return appeals.map((appeal) => this.toAdminAppealView(appeal));
+
+    return {
+      items: appeals.map((appeal) => this.toAdminAppealView(appeal)),
+      page,
+      limit,
+      total,
+      totalPages: total === 0 ? 0 : Math.ceil(total / limit),
+    };
   }
 
   async resolveAppeal(
@@ -380,6 +402,28 @@ export class AccountGovernanceService {
       'code' in err &&
       (err as { code?: unknown }).code === '23505'
     );
+  }
+
+  /**
+   * Normalize pagination at the service boundary as defense in depth. HTTP
+   * validation rejects malformed query values, but direct/internal callers
+   * must never be able to produce negative, fractional, non-finite, or
+   * overflow-scale TypeORM offsets.
+   */
+  private normalizeAppealPagination(
+    requestedPage: number,
+    requestedLimit: number,
+  ): { page: number; limit: number; skip: number } {
+    const limitCandidate = Number.isFinite(requestedLimit) ? Math.trunc(requestedLimit) : 20;
+    const limit = Math.min(100, Math.max(1, limitCandidate));
+
+    const pageCandidate = Number.isFinite(requestedPage) ? Math.trunc(requestedPage) : 1;
+    const positivePage = Math.max(1, pageCandidate);
+    const maxPageForSafeOffset = Math.floor(Number.MAX_SAFE_INTEGER / limit) + 1;
+    const page = Math.min(positivePage, maxPageForSafeOffset);
+    const skip = (page - 1) * limit;
+
+    return { page, limit, skip };
   }
 
   /** Explicit allowlist for admin browser responses; never serialize entities. */

@@ -50,7 +50,7 @@ describe('AccountGovernanceService', () => {
   const userRepo = { findOne: jest.fn() };
   const appealRepo = {
     create: jest.fn(),
-    find: jest.fn(),
+    findAndCount: jest.fn(),
     findOne: jest.fn(),
     save: jest.fn(),
   };
@@ -190,27 +190,65 @@ describe('AccountGovernanceService', () => {
   });
 
   describe('listAppeals', () => {
-    it('maps an explicit frontend-safe view rather than serializing the user entity', async () => {
+    it('returns a bounded oldest-first page with total metadata and a frontend-safe projection', async () => {
       const user = makeUser({
         passwordHash: 'never-expose-password-hash',
       } as Partial<User>);
-      appealRepo.find.mockResolvedValue([makeAppeal({ user })]);
+      appealRepo.findAndCount.mockResolvedValue([[makeAppeal({ user })], 41]);
 
-      const result = await service.listAppeals(AccountAppealStatus.PENDING);
+      const result = await service.listAppeals(AccountAppealStatus.PENDING, 2, 20);
 
-      expect(result).toEqual([
-        expect.objectContaining({
-          id: '22222222-2222-4222-8222-222222222222',
-          user: expect.objectContaining({ id: user.id, email: user.email, status: user.status }),
-        }),
-      ]);
+      expect(result).toEqual({
+        items: [
+          expect.objectContaining({
+            id: '22222222-2222-4222-8222-222222222222',
+            user: expect.objectContaining({ id: user.id, email: user.email, status: user.status }),
+          }),
+        ],
+        page: 2,
+        limit: 20,
+        total: 41,
+        totalPages: 3,
+      });
       expect(JSON.stringify(result)).not.toContain('never-expose-password-hash');
-      expect(appealRepo.find).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { status: AccountAppealStatus.PENDING },
-          withDeleted: true,
-        }),
+      expect(appealRepo.findAndCount).toHaveBeenCalledWith({
+        where: { status: AccountAppealStatus.PENDING },
+        relations: ['user', 'user.profile'],
+        withDeleted: true,
+        order: { createdAt: 'ASC', id: 'ASC' },
+        skip: 20,
+        take: 20,
+      });
+    });
+
+    it('normalizes hostile direct-call pagination before constructing TypeORM offsets', async () => {
+      appealRepo.findAndCount.mockResolvedValue([[], 0]);
+
+      const invalidResult = await service.listAppeals(
+        undefined,
+        Number.POSITIVE_INFINITY,
+        Number.NaN,
       );
+      expect(invalidResult).toEqual({
+        items: [],
+        page: 1,
+        limit: 20,
+        total: 0,
+        totalPages: 0,
+      });
+      expect(appealRepo.findAndCount).toHaveBeenLastCalledWith(
+        expect.objectContaining({ skip: 0, take: 20 }),
+      );
+
+      await service.listAppeals(undefined, Number.MAX_VALUE, 500.75);
+      const options = appealRepo.findAndCount.mock.calls.at(-1)?.[0] as {
+        skip: number;
+        take: number;
+      };
+      expect(options.take).toBe(100);
+      expect(Number.isSafeInteger(options.skip)).toBe(true);
+      expect(options.skip).toBeGreaterThanOrEqual(0);
+      expect(options.skip).toBeLessThanOrEqual(Number.MAX_SAFE_INTEGER);
     });
   });
 
