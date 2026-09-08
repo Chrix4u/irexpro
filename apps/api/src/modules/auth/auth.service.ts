@@ -476,14 +476,17 @@ export class AuthService {
    *
    * Sign-out-everywhere-ELSE for the CALLER: the global session generation is
    * compare-and-set bumped v → v+1, which invalidates every OTHER session's
-   * access + refresh tokens (JwtStrategy/JWT revalidation) and disconnects
-   * their realtime sockets via the existing per-message checks — no guard or
-   * strategy changes required. The caller is then immediately re-issued a
-   * fresh token pair minted at v+1 so the current device stays signed in.
+   * access + refresh tokens and disconnects their realtime sockets through the
+   * existing generation checks. The caller is immediately re-issued a fresh
+   * token pair minted at v+1 so the current device stays signed in.
    *
-   * The CAS uses the same single-statement conditional UPDATE (and the same
-   * stale-generation failure mode) as refresh rotation: affected !== 1 → 401
-   * and NO tokens are minted, NO audit success is recorded.
+   * Critically, v is NOT taken from a later database reload. It is the exact
+   * generation that JwtStrategy validated on the bearer token and retained on
+   * AuthenticatedPrincipal. This prevents an in-flight request authenticated at
+   * v from observing a concurrent v→v+1 rotation and then incorrectly adopting
+   * v+1 as its authority to advance the account again. The conditional UPDATE
+   * therefore has a deterministic single winner for one authenticated token
+   * generation; affected !== 1 → 401 and no tokens/audit success are produced.
    *
    * Body transport (mobile, default) mints the new refresh token with
    * rememberMe=false. Cookie transport inherits the signed rememberMe
@@ -493,7 +496,11 @@ export class AuthService {
    */
   async revokeOtherSessions(
     userId: string,
-    options: { ipAddress?: string; inheritRememberMeFrom?: string } = {},
+    options: {
+      authenticatedSessionVersion?: number;
+      ipAddress?: string;
+      inheritRememberMeFrom?: string;
+    } = {},
   ): Promise<BrowserRefreshTokens> {
     const user = await this.userRepo.findOne({
       where: { id: userId },
@@ -509,7 +516,17 @@ export class AuthService {
       throw new UnauthorizedException('User session is no longer valid');
     }
 
-    const currentVersion = this.userSessionVersion(user);
+    // HTTP callers always supply the generation retained by JwtStrategy. The
+    // fallback keeps older direct service callers/tests source-compatible, but
+    // the security-sensitive route never relies on a post-authentication reload.
+    const currentVersion =
+      options.authenticatedSessionVersion === undefined
+        ? this.userSessionVersion(user)
+        : options.authenticatedSessionVersion;
+    if (!Number.isInteger(currentVersion) || currentVersion < 0) {
+      throw new UnauthorizedException('User session is no longer valid');
+    }
+
     const nextVersion = currentVersion + 1;
     const bump = await this.userRepo.update(
       { id: user.id, sessionVersion: currentVersion },
