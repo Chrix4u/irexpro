@@ -18,6 +18,10 @@
       "types": "./src/execution.ts",
       "default": "./src/execution.ts"
     },
+    "./live-account": {
+      "types": "./src/live-account.ts",
+      "default": "./src/live-account.ts"
+    },
     "./portfolio": {
       "types": "./src/portfolio.ts",
       "default": "./src/portfolio.ts"

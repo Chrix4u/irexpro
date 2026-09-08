@@ -11,6 +11,15 @@ export const BROKER_HEALTH_QUEUE = 'broker-health-check';
 export const BROKER_HEALTH_JOB = 'health-check-all';
 
 /**
+ * Log-privacy helper (Phase F): account identifiers never reach the logs in
+ * full — only the last 4 characters survive.
+ */
+function maskLikeId(value: string | null | undefined): string {
+  if (!value || value.length < 4) return '•••';
+  return `•••${String(value).slice(-4)}`;
+}
+
+/**
  * BrokerHealthCheckJob — BullMQ processor for periodic broker connection health checks.
  *
  * Runs on a configurable interval (default 60s via BrokerHealthCheckProducer).
@@ -60,7 +69,7 @@ export class BrokerHealthCheckJob extends WorkerHost {
           } else {
             failed++;
             this.logger.warn(
-              `Health check failed for connection ${conn.id} (broker=${conn.brokerId}, account=${conn.accountId})`,
+              `Health check failed for connection ${conn.id} (broker=${conn.brokerId}, account=${maskLikeId(conn.accountId)})`,
             );
           }
         } catch (err) {

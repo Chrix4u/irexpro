@@ -44,6 +44,7 @@ const SECONDARY_NAV: NavDestination[] = [
   { href: '/ai', label: 'AI Command Center', Icon: AiIcon, matchPrefix: true },
   { href: '/strategy-lab', label: 'Strategy Lab', Icon: AiIcon, matchPrefix: true },
   { href: '/portfolio', label: 'Portfolio & Risk', Icon: PortfolioIcon, matchPrefix: true },
+  { href: '/live-account', label: 'Live Account', Icon: PortfolioIcon, matchPrefix: true },
   { href: '/onboarding/profile', label: 'Profile', Icon: UserIcon },
   { href: '/security', label: 'Security', Icon: ShieldIcon },
   { href: '/onboarding/risk', label: 'Risk limits', Icon: ShieldIcon },

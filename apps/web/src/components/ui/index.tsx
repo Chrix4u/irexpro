@@ -181,7 +181,10 @@ const WORKSPACE_NAV: WorkspaceNavGroup[] = [
   },
   {
     label: 'Portfolio',
-    items: [{ href: '/portfolio', label: 'Portfolio & Risk', Icon: PortfolioIcon, matchPrefix: true }],
+    items: [
+      { href: '/portfolio', label: 'Portfolio & Risk', Icon: PortfolioIcon, matchPrefix: true },
+      { href: '/live-account', label: 'Live Account', Icon: PortfolioIcon, matchPrefix: true },
+    ],
   },
   {
     label: 'Account',

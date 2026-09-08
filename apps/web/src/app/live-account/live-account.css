@@ -1,0 +1,588 @@
+/* Sprint 50 PR-5 — Live Account dashboard presentation layer (Directive §38).
+ *
+ * These styles arrange the server-authoritative Live Account read models
+ * (overview / orders / positions / activity). They never derive balances,
+ * environment, or execution-permission state — every value is rendered
+ * exactly as the backend contract provides it.
+ *
+ * §36 environment semantics are enforced visually:
+ *   LIVE    → unmistakable red/rose treatment (real funds at risk)
+ *   DEMO    → amber treatment (simulated funds)
+ *   PAPER   → neutral slate treatment (simulated)
+ *   UNKNOWN → cautionary deep-amber treatment (provenance unprovable —
+ *             never presented as the simulated PAPER mode)
+ */
+
+/* ── Page root (follows terminal-foundation width discipline) ─────────────── */
+.live-account {
+  max-width: 1280px;
+}
+
+/* ── §36 Environment banner — the critical strip ───────────────────────────── */
+.live-env-banner {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: center;
+  margin-bottom: var(--space-6);
+  padding: var(--space-4) var(--space-5, 1.25rem);
+  border-radius: var(--radius-lg);
+}
+
+.live-env-banner__marker {
+  width: 10px;
+  height: 34px;
+  border-radius: var(--radius-full);
+  background: currentColor;
+}
+
+.live-env-banner__title {
+  display: block;
+  font-size: clamp(0.95rem, 2.4vw, 1.18rem);
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.live-env-banner__meta {
+  margin: 0.3rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.live-env-banner--live {
+  border: 2px solid rgba(239, 68, 68, 0.6);
+  background:
+    radial-gradient(circle at 0% 0%, rgba(239, 68, 68, 0.22), transparent 18rem),
+    linear-gradient(90deg, rgba(239, 68, 68, 0.18), rgba(120, 20, 30, 0.12));
+  color: #fecaca;
+}
+
+.live-env-banner--live .live-env-banner__title,
+.live-env-banner--live .live-env-banner__marker {
+  color: #f87171; /* rose-400 — high contrast against the red wash */
+}
+
+.live-env-banner--demo {
+  border: 2px solid rgba(245, 158, 11, 0.55);
+  background:
+    radial-gradient(circle at 0% 0%, rgba(245, 158, 11, 0.18), transparent 18rem),
+    linear-gradient(90deg, rgba(245, 158, 11, 0.14), rgba(120, 84, 12, 0.1));
+  color: #fde68a;
+}
+
+.live-env-banner--demo .live-env-banner__title,
+.live-env-banner--demo .live-env-banner__marker {
+  color: #fbbf24; /* amber-400 */
+}
+
+.live-env-banner--paper {
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  background: linear-gradient(90deg, rgba(148, 163, 184, 0.14), rgba(148, 163, 184, 0.05));
+  color: var(--text-secondary);
+}
+
+.live-env-banner--paper .live-env-banner__title,
+.live-env-banner--paper .live-env-banner__marker {
+  color: #cbd5e1; /* slate-300 */
+}
+
+/* §36 UNKNOWN — environment truth could not be established. Cautionary
+ * deep-amber treatment (amber-800 #92400e border, white text): visually
+ * distinct from PAPER's neutral info styling so unproven provenance is
+ * never mistaken for the safe simulated mode. */
+.live-env-banner--unknown {
+  border: 2px solid rgba(146, 64, 14, 0.8);
+  background:
+    radial-gradient(circle at 0% 0%, rgba(146, 64, 14, 0.3), transparent 18rem),
+    linear-gradient(90deg, rgba(146, 64, 14, 0.26), rgba(120, 53, 15, 0.16));
+  color: #ffffff;
+}
+
+.live-env-banner--unknown .live-env-banner__title,
+.live-env-banner--unknown .live-env-banner__marker {
+  color: #fcd34d; /* amber-300 — cautionary */
+}
+
+/* Neutral "environment not yet confirmed" slot — never claims a mode. */
+.live-env-banner--loading {
+  border: 1px dashed rgba(148, 163, 184, 0.35);
+  background: rgba(148, 163, 184, 0.05);
+  color: var(--text-secondary);
+}
+
+.live-env-banner--loading .live-env-banner__title,
+.live-env-banner--loading .live-env-banner__marker {
+  color: var(--text-secondary);
+}
+
+@media (max-width: 430px) {
+  .live-env-banner {
+    gap: var(--space-3);
+    padding: var(--space-4);
+  }
+
+  .live-env-banner__title {
+    letter-spacing: 0.03em;
+  }
+}
+
+/* ── Section heading (matches cockpit section rhythm) ──────────────────────── */
+.live-section {
+  margin: var(--space-6) 0 0;
+  min-width: 0;
+}
+
+.live-section__heading {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.live-section__heading h2 {
+  margin: 0;
+}
+
+.live-section__heading p {
+  max-width: 720px;
+  margin: var(--space-2) 0 0;
+  line-height: 1.6;
+}
+
+/* ── Connections grid — multi-column desktop, stacked mobile ───────────────── */
+.live-connections-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.live-connection-card {
+  min-width: 0;
+  background: linear-gradient(145deg, rgba(20, 27, 43, 0.96), rgba(13, 20, 34, 0.92));
+  border-color: rgba(148, 163, 184, 0.13);
+  box-shadow: 0 16px 50px rgba(0, 0, 0, 0.12);
+}
+
+.live-connection-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
+}
+
+.live-connection-name {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.live-connection-name strong {
+  overflow-wrap: anywhere;
+}
+
+.live-connection-name span {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  overflow-wrap: anywhere;
+}
+
+.live-badge-row {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
+}
+
+.live-card-links {
+  display: flex;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-top: var(--space-3);
+}
+
+/* ── Execution health tiles (§38 stat tiles) ───────────────────────────────── */
+.live-stat-tiles {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: var(--radius-lg);
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.live-stat-tile {
+  min-width: 0;
+  min-height: 94px;
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0.45rem;
+  background: rgba(11, 17, 30, 0.92);
+}
+
+.live-stat-tile strong {
+  width: 100%;
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 1.2rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-stat-tile__label {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.live-stat-tile--warning {
+  background: linear-gradient(145deg, rgba(245, 158, 11, 0.16), rgba(11, 17, 30, 0.92));
+}
+
+.live-stat-tile--warning strong,
+.live-stat-tile--warning .live-stat-tile__label {
+  color: var(--warning);
+}
+
+@media (max-width: 1180px) {
+  .live-stat-tiles {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 960px) {
+  .live-stat-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 430px) {
+  .live-stat-tiles {
+    grid-template-columns: 1fr;
+  }
+
+  .live-stat-tile {
+    min-height: 78px;
+    padding: 0.85rem 1rem;
+  }
+}
+
+/* ── Record rows (positions / orders — follows trade-page record pattern) ──── */
+.live-records-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.live-record {
+  min-width: 0;
+  padding: var(--space-4);
+  border: 1px solid rgba(148, 163, 184, 0.11);
+  border-radius: var(--radius-md);
+  background: rgba(8, 14, 25, 0.42);
+}
+
+.live-record__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.live-record__header strong {
+  overflow-wrap: anywhere;
+}
+
+.live-record__meta {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.live-record__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin: var(--space-3) 0 0;
+}
+
+.live-record__grid dt {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.live-record__grid dd {
+  margin: 0.2rem 0 0;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.live-record--pending {
+  border-color: rgba(245, 158, 11, 0.4);
+  background: rgba(245, 158, 11, 0.06);
+}
+
+.live-record__subtle {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+@media (max-width: 700px) {
+  .live-records-grid,
+  .live-connections-grid,
+  .live-reconciliation-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 430px) {
+  .live-record__grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Orders filter toggle (§38 orders WORKING / HISTORY / ALL) ──────────────── */
+.live-filter-group {
+  display: inline-flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}
+
+.live-filter-group button {
+  min-height: 44px;
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-family: var(--font);
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.live-filter-group button:hover:not(:disabled) {
+  border-color: var(--brand);
+  color: var(--text);
+}
+
+.live-filter-group button[aria-pressed='true'] {
+  border-color: rgba(45, 212, 191, 0.45);
+  background: linear-gradient(90deg, rgba(13, 148, 136, 0.22), rgba(13, 148, 136, 0.08));
+  color: var(--brand-muted);
+}
+
+.live-filter-group button:focus-visible {
+  outline: 2px solid var(--brand-light);
+  outline-offset: 2px;
+}
+
+.live-load-more {
+  display: flex;
+  justify-content: center;
+  margin-top: var(--space-4);
+}
+
+.live-list-count {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+/* ── Alerts panel (server-derived alerts, §38) ─────────────────────────────── */
+.live-alert-list {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.live-alert-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: start;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+}
+
+.live-alert-item__dot {
+  width: 9px;
+  height: 9px;
+  margin-top: 0.45rem;
+  border-radius: var(--radius-full);
+  background: currentColor;
+}
+
+.live-alert-item strong {
+  display: block;
+  overflow-wrap: anywhere;
+  font-size: 0.86rem;
+}
+
+.live-alert-item p {
+  margin: 0.25rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.live-alert-item__meta {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-top: var(--space-2);
+  color: var(--text-muted);
+  font-size: 0.74rem;
+}
+
+.live-alert-item--critical {
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.08);
+  color: #fca5a5;
+}
+
+.live-alert-item--warning {
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  background: rgba(245, 158, 11, 0.07);
+  color: #fcd34d;
+}
+
+.live-alert-item--info {
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(148, 163, 184, 0.07);
+  color: #cbd5e1; /* slate-300 */
+}
+
+/* ── Activity timeline (bounded, scrollable — §38) ──────────────────────────── */
+.live-activity-list {
+  max-height: 420px;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  display: grid;
+  gap: var(--space-2);
+  padding-right: var(--space-2);
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.live-activity-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.live-activity-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.live-activity-list::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: var(--radius-full);
+  border: 1px solid transparent;
+  background-clip: padding-box;
+}
+
+.live-activity-list::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+  background-clip: padding-box;
+  border: 1px solid transparent;
+}
+
+.live-activity-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid rgba(148, 163, 184, 0.09);
+  border-radius: var(--radius-md);
+  background: rgba(8, 14, 25, 0.34);
+}
+
+.live-activity-row__main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.live-activity-row__dot {
+  flex: 0 0 8px;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+}
+
+.live-activity-row__dot--info { background: var(--text-muted); }
+.live-activity-row__dot--warning { background: var(--warning); }
+.live-activity-row__dot--critical { background: var(--error); }
+
+.live-activity-row__text {
+  min-width: 0;
+  display: grid;
+  gap: 0.15rem;
+}
+
+.live-activity-row__label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.live-activity-row__context {
+  display: block;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 400;
+}
+
+.live-activity-row__time {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+}
+
+/* ── Reconciliation blocks (per connection) ─────────────────────────────────── */
+.live-reconciliation-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+  align-items: start;
+}
+
+/* ── Duo grid (alerts + activity side by side on desktop) ───────────────────── */
+.live-duo-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+  align-items: start;
+}
+
+/* When the overview fails, the activity card renders alone — span full width. */
+.live-duo-grid > :only-child {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 960px) {
+  .live-duo-grid {
+    grid-template-columns: 1fr;
+  }
+}

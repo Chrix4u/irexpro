@@ -33,6 +33,7 @@ import { PerformanceFeesModule } from './modules/performance-fees/performance-fe
 import { BrokerReconciliationModule } from './modules/broker-reconciliation/broker-reconciliation.module';
 import { PerformanceBillingModule } from './modules/performance-billing/performance-billing.module';
 import { ExecutionControlModule } from './modules/execution-control/execution-control.module';
+import { LiveAccountModule } from './modules/live-account/live-account.module';
 
 @Module({
   imports: [
@@ -101,6 +102,9 @@ import { ExecutionControlModule } from './modules/execution-control/execution-co
     // Registered before execution-side consumers so the DI graph resolves
     // ExecutionControlService for the RiskModule gate.
     ExecutionControlModule,
+    // Sprint 50 PR-5 — user Live Account read API (Directive PHASE J).
+    // Read-only aggregation over PR-1..PR-4 state.
+    LiveAccountModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
