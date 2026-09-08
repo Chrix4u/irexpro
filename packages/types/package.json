@@ -14,6 +14,10 @@
       "types": "./src/execution.ts",
       "default": "./src/execution.ts"
     },
+    "./orders": {
+      "types": "./src/orders.ts",
+      "default": "./src/orders.ts"
+    },
     "./portfolio": {
       "types": "./src/portfolio.ts",
       "default": "./src/portfolio.ts"

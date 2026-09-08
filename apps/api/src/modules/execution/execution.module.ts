@@ -6,6 +6,8 @@ import { ExecutionReadService } from './execution-read.service';
 import { ExecutionService } from './execution.service';
 import { Trade } from './entities/trade.entity';
 import { TradingSession } from './entities/trading-session.entity';
+import { Order } from './orders/order.entity';
+import { OrderService } from './orders/order.service';
 import {
   TradeReconciliationJob,
   TRADE_RECONCILIATION_QUEUE,
@@ -27,7 +29,7 @@ import { AuditModule } from '../audit/audit.module';
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Trade, TradingSession]),
+    TypeOrmModule.forFeature([Trade, TradingSession, Order]),
     BullModule.registerQueue({ name: TRADE_RECONCILIATION_QUEUE }),
     forwardRef(() => RiskModule),
     BrokerModule,
@@ -37,9 +39,10 @@ import { AuditModule } from '../audit/audit.module';
   providers: [
     ExecutionService,
     ExecutionReadService,
+    OrderService,
     TradeReconciliationJob,
     TradeReconciliationProducer,
   ],
-  exports: [ExecutionService, ExecutionReadService],
+  exports: [ExecutionService, ExecutionReadService, OrderService],
 })
 export class ExecutionModule {}

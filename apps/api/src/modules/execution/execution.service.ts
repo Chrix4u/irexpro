@@ -15,6 +15,7 @@ import { BrokerOrderRequest } from '../broker/interfaces/broker-adapter.interfac
 import { RETRYABLE_BROKER_ERRORS } from '../broker/interfaces/broker-adapter.errors';
 import { DomainEventBus } from '../events/event-bus.service';
 import { DomainEventType } from '../events/enums/domain-event-type.enum';
+import { TradeStateMachine } from './orders/trade-state-machine';
 
 const EXECUTION_TIMEOUT_MS = 10_000;
 const MAX_RETRY_ATTEMPTS = 3;
@@ -226,6 +227,9 @@ export class ExecutionService {
 
       if (result.success && result.externalOrderId) {
         // ── Step 6a: Trade opened ──────────────────────────────────────────
+        // Sprint 50 PR-2: every status mutation is guarded by the explicit
+        // TradeStateMachine (no scattered unvalidated updates).
+        TradeStateMachine.assertTransition(trade.status, TradeStatus.OPEN);
         await this.tradeRepo.update(trade.id, {
           status: TradeStatus.OPEN,
           externalOrderId: result.externalOrderId,
@@ -267,6 +271,7 @@ export class ExecutionService {
         });
       } else {
         // ── Step 6b: Broker rejected ───────────────────────────────────────
+        TradeStateMachine.assertTransition(trade.status, TradeStatus.REJECTED);
         await this.tradeRepo.update(trade.id, {
           status: TradeStatus.REJECTED,
           brokerRejectionReason: result.brokerMessage ?? 'Broker rejected order',
@@ -300,6 +305,9 @@ export class ExecutionService {
         (err as Error).stack,
       );
 
+      // Sprint 50 PR-2: guard the transition (fail-closed — an illegal
+      // transition surfaces loudly instead of silently corrupting state).
+      TradeStateMachine.assertTransition(trade.status, TradeStatus.RECONCILIATION_PENDING);
       await this.tradeRepo.update(trade.id, {
         status: TradeStatus.RECONCILIATION_PENDING,
         brokerRejectionReason: `Execution error: ${(err as Error).message}`,
@@ -373,6 +381,9 @@ export class ExecutionService {
     // filledPrice = exit price for close order; P&L populated by reconciliation job
     const exitPrice = result.filledPrice ?? null;
 
+    // Sprint 50 PR-2: guard the transition (the OPEN check above makes this
+    // always valid today; the guard keeps it that way forever).
+    TradeStateMachine.assertTransition(trade.status, TradeStatus.CLOSED);
     await this.tradeRepo.update(trade.id, {
       status: TradeStatus.CLOSED,
       exitPrice,

@@ -9,6 +9,7 @@ import { BrokerAdapterRegistry } from '../../broker/adapters/broker-adapter.regi
 import { CredentialEncryptionService } from '../../broker/services/credential-encryption.service';
 import { AuditService } from '../../audit/audit.service';
 import { AuditAction } from '../../../common/enums/audit-action.enum';
+import { TradeStateMachine } from '../orders/trade-state-machine';
 
 export const TRADE_RECONCILIATION_QUEUE = 'trade-reconciliation';
 export const TRADE_RECONCILIATION_JOB = 'reconcile-open-trades';
@@ -129,6 +130,9 @@ export class TradeReconciliationJob extends WorkerHost {
         );
       }
 
+      // Sprint 50 PR-2: guard the transition (OPEN/RECONCILIATION_PENDING →
+      // CLOSED are both legal; any other state surfaces loudly).
+      TradeStateMachine.assertTransition(trade.status, TradeStatus.CLOSED);
       await this.tradeRepo.update(trade.id, {
         status: TradeStatus.CLOSED,
         exitPrice,
@@ -161,6 +165,8 @@ export class TradeReconciliationJob extends WorkerHost {
 
     // Position still open — recover RECONCILIATION_PENDING → OPEN
     if (trade.status === TradeStatus.RECONCILIATION_PENDING) {
+      // Sprint 50 PR-2: guard the recovery transition.
+      TradeStateMachine.assertTransition(trade.status, TradeStatus.OPEN);
       await this.tradeRepo.update(trade.id, { status: TradeStatus.OPEN });
       this.logger.log(`Trade ${trade.id} recovered: RECONCILIATION_PENDING → OPEN`);
     }
