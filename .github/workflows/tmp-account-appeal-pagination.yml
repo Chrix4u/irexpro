@@ -1,0 +1,54 @@
+name: Temporary account appeal pagination patch
+
+on:
+  push:
+    branches:
+      - security/account-appeal-pagination
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, 'Security: paginate admin account appeal queue') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: security/account-appeal-pagination
+          fetch-depth: 0
+
+      - name: Apply coordinated pagination patch
+        run: python3 scripts/tmp-account-appeal-pagination.py
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run focused backend tests
+        run: pnpm --filter @irexpro/api exec jest account-governance.service.spec.ts account-governance.controller.spec.ts --runInBand
+
+      - name: Run shared API client contract tests
+        run: node packages/api-client/scripts/test-contracts.cjs
+
+      - name: Build admin app
+        env:
+          NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:3010/api/v1
+        run: pnpm --filter @irexpro/admin build
+
+      - name: Commit permanent pagination change
+        run: |
+          git rm .github/workflows/tmp-account-appeal-pagination.yml scripts/tmp-account-appeal-pagination.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/api packages/types packages/api-client apps/admin
+          git commit -m "Security: paginate admin account appeal queue"
+          git push origin HEAD:security/account-appeal-pagination
