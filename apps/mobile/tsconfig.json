@@ -8,7 +8,8 @@
     "noEmit": true,
     "paths": {
       "@/*": ["./src/*"]
-    }
+    },
+    "types": ["node", "react", "jest"]
   },
   "include": ["**/*.ts", "**/*.tsx"]
 }
