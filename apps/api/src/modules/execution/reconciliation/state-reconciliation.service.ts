@@ -51,6 +51,31 @@ const RECONCILABLE_ORDER_STATUSES = [
 /** Trade statuses holding (or possibly holding) provider positions. */
 const RECONCILABLE_TRADE_STATUSES = [TradeStatus.OPEN, TradeStatus.RECONCILIATION_PENDING] as const;
 
+/** Keep reconciliation error handling aligned with the execution boundary. */
+const SECRET_LIKE_RUN = /[A-Za-z0-9]{16,}/g;
+const RECONCILIATION_REASON_MAX_LENGTH = 500;
+
+/**
+ * Provider/runtime errors can include credential material in their message.
+ * Bound and redact them before they reach persistence, audits, or logs.
+ */
+function sanitizeReconciliationReason(reason: unknown): string {
+  let raw = 'unknown error';
+  if (reason instanceof Error) {
+    raw = reason.message;
+  } else if (typeof reason === 'string') {
+    raw = reason;
+  } else if (
+    reason &&
+    typeof reason === 'object' &&
+    'message' in reason &&
+    typeof (reason as { message?: unknown }).message === 'string'
+  ) {
+    raw = (reason as { message: string }).message;
+  }
+  return raw.slice(0, RECONCILIATION_REASON_MAX_LENGTH).replace(SECRET_LIKE_RUN, '[redacted]');
+}
+
 /**
  * StateReconciliationService — ONE authoritative reconciliation loop over
  * internal state vs provider state per broker connection (Directive PHASE G;
@@ -241,7 +266,7 @@ export class StateReconciliationService {
           errors++;
           this.logger.warn(
             `Trade resolution failed for ${trade.id} (retried next run): ` +
-              `${(err as Error).message}`,
+              sanitizeReconciliationReason(err),
           );
         }
       }
@@ -274,7 +299,7 @@ export class StateReconciliationService {
           errors++;
           this.logger.warn(
             `Order resolution failed for ${order.id} (retried next run): ` +
-              `${(err as Error).message}`,
+              sanitizeReconciliationReason(err),
           );
         }
       }
@@ -401,7 +426,8 @@ export class StateReconciliationService {
     } catch (err) {
       // Provider read failure or unexpected error → FAILED run, CRITICAL
       // audit, surfaced error summary (§29 "failed jobs require visibility").
-      const message = (err as Error).message ?? 'unknown error';
+      // Redact before the failure reaches any durable or observable sink.
+      const message = sanitizeReconciliationReason(err);
       await this.persistence.failRun(run.id, message);
       await this.auditService
         .log({
@@ -410,7 +436,7 @@ export class StateReconciliationService {
           resourceType: 'BrokerConnection',
           resourceId: connection.id,
           severity: AuditSeverity.CRITICAL,
-          metadata: { runId: run.id, brokerId: connection.brokerId, reason: message.slice(0, 500) },
+          metadata: { runId: run.id, brokerId: connection.brokerId, reason: message },
         })
         .catch(() => undefined);
       this.logger.error(`Reconciliation run ${run.id} FAILED: ${message}`);
@@ -529,7 +555,7 @@ export class StateReconciliationService {
       );
       return await adapter.getClosedTrades(earliest ?? new Date(0), new Date());
     } catch (err) {
-      this.logger.warn(`Closed-trade lookup unavailable: ${(err as Error).message}`);
+      this.logger.warn(`Closed-trade lookup unavailable: ${sanitizeReconciliationReason(err)}`);
       return [];
     }
   }
@@ -603,7 +629,7 @@ export class StateReconciliationService {
         },
       });
     } catch (err) {
-      this.logger.warn(`Discrepancy audit failed: ${(err as Error).message}`);
+      this.logger.warn(`Discrepancy audit failed: ${sanitizeReconciliationReason(err)}`);
     }
   }
 }
