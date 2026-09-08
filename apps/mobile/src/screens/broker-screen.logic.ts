@@ -158,7 +158,9 @@ export function credentialFields(
 
 /**
  * Build the create/test request body from form state. The environment is
- * validated against the entry's supported environments (fail-closed).
+ * validated against the entry's supported environments and the independent
+ * production-LIVE verification gate (fail-closed even if a stale/direct caller
+ * bypasses the selector UI).
  */
 export function buildConnectionRequest(
   entry: BrokerRegistryEntry,
@@ -168,6 +170,11 @@ export function buildConnectionRequest(
 ): CreateBrokerConnectionRequest | { error: string } {
   if (!entry.environments.includes(environment)) {
     return { error: `${entry.name} does not support ${environment} accounts` };
+  }
+  if (environment === "LIVE" && !isLiveSelectable(entry)) {
+    return {
+      error: `${entry.name} is not production-verified for LIVE accounts`,
+    };
   }
   if (accountId.trim().length === 0) {
     return { error: "Account ID is required" };
