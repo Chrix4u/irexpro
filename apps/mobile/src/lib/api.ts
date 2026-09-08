@@ -1,5 +1,6 @@
 import type { ApiClient } from '@irexpro/api-client';
 import { createApiClient } from '@irexpro/api-client';
+import type { BrokerRegistryCatalog } from '@irexpro/types';
 
 /**
  * Shared API client for the mobile app.
@@ -33,8 +34,18 @@ export function getAccessTokenValue(): string | null {
   return cachedAccessToken;
 }
 
-export const api: ApiClient = createApiClient({
+export interface MobileApiClient extends ApiClient {
+  /** GET /broker/registry → server-authoritative catalog wrapper. */
+  getBrokerRegistry(): Promise<BrokerRegistryCatalog>;
+}
+
+const baseApi = createApiClient({
   baseUrl,
   includeCredentials: false,
   getAccessToken: () => cachedAccessToken,
+});
+
+export const api: MobileApiClient = Object.assign(baseApi, {
+  getBrokerRegistry: () =>
+    baseApi.request<BrokerRegistryCatalog>('/broker/registry'),
 });
