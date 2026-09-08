@@ -222,6 +222,139 @@ export interface AdminAccountStatusView {
   deletedAt: string | null;
 }
 
+// ── Sprint 55: Account security center ──────────────────────────────────────
+//
+// Contracts pinned by the Phase A audit for the account & security center
+// (mobile-first, shared by every client). The backend implements to match
+// these — they are the source of truth:
+//   POST /auth/change-password        (JWT) → AuthActionResponse. Revokes ALL
+//                                     sessions + retires pending MFA (same as
+//                                     reset-password). 401 = wrong current
+//                                     password; 400 = weak new password.
+//   POST /auth/sessions/revoke-others (JWT) → bumps the global sessionVersion
+//                                     (CAS) and immediately re-issues a fresh
+//                                     token pair to the CALLER. Body transport
+//                                     (mobile) returns AuthTokens; browser
+//                                     cookie transport (?refreshTransport=cookie
+//                                     + trusted origin) returns { accessToken }
+//                                     with the rotated refresh cookie.
+//   GET  /auth/security-events        (JWT) → SecurityEventListResponse — ONLY
+//                                     the caller's own audit rows, filtered to
+//                                     a server-side security-action allowlist.
+//   GET  /users/me                    (JWT) → MyProfileView (typed view — was
+//                                     `unknown` in api-client). PATCH /users/me
+//                                     keeps UpdateMyProfileRequest (extended
+//                                     with dateOfBirth below).
+//
+// Deliberately NOT added: RevokeOtherSessionsResponse (the api-client method
+// reuses AuthTokens) and AccountSessionView / MobileAccountProfile /
+// AccountSecurityStatus (sessions are client-derived; AuthUser already covers
+// security status).
+
+/**
+ * POST /auth/change-password request body (JWT-authenticated).
+ *
+ * Password policy is identical to reset-password: newPassword is 12–128
+ * characters and must contain at least one letter and one number;
+ * currentPassword is 1–128 characters. On success the backend revokes ALL
+ * of the user's sessions (sessionVersion bump) and retires any pending MFA
+ * enrollment — the caller is signed out everywhere and must log in again.
+ *
+ * SECURITY: both fields are secrets. Clients MUST never log, persist, or
+ * cache either value beyond the in-flight request.
+ */
+export interface ChangePasswordRequest {
+  /** Current account password (1–128 characters). Wrong value → 401. */
+  currentPassword: string;
+  /** New password (12–128 chars, ≥1 letter, ≥1 number). Weak value → 400. */
+  newPassword: string;
+}
+
+/**
+ * GET /users/me response view (frontend-safe, account-center projection).
+ *
+ * Narrow, deliberately privacy-safe subset of the serialized user + profile:
+ * NO secrets (passwordHash, mfaSecret), NO deletedAt, NO roles (userRoles),
+ * NO address fields — only what the account center renders. Pins the typed
+ * contract the api-client previously returned as `unknown`.
+ */
+export interface MyProfileView {
+  id: string;
+  /** Contact email; null when the account was registered by phone. */
+  email: string | null;
+  /** Contact phone in international format (e.g. +233241234567); null if unset. */
+  phone: string | null;
+  status: UserStatus;
+  /** ISO-8601 timestamp of email verification; null when not yet verified. */
+  emailVerifiedAt: string | null;
+  /** ISO-8601 timestamp of phone verification; null when not yet verified. */
+  phoneVerifiedAt: string | null;
+  /** ISO-3166-1 alpha-2 country code, uppercase (e.g. "GH"); null if unset. */
+  countryCode: string | null;
+  /** IANA timezone name (e.g. "Africa/Accra"); null if unset. */
+  timezone: string | null;
+  /** ISO-4217 alpha-3 preferred currency (e.g. "USD"); null if unset. */
+  preferredCurrency: string | null;
+  /** Whether TOTP multi-factor authentication is currently enabled. */
+  mfaEnabled: boolean;
+  /** ISO-8601 timestamp of the most recent successful login; null if never. */
+  lastLoginAt: string | null;
+  /** ISO-8601 account creation timestamp. */
+  createdAt: string;
+  /** Self-reported onboarding profile details. */
+  profile: {
+    /** Legal first name; null if unset. */
+    firstName: string | null;
+    /** Legal last name; null if unset. */
+    lastName: string | null;
+    /** Date of birth in YYYY-MM-DD calendar format; null if unset. */
+    dateOfBirth: string | null;
+    /** Self-reported trading experience level; null if unset. */
+    tradingExperienceLevel: TradingExperienceLevel | null;
+    /** KYC review state; "NONE" means never submitted. */
+    kycStatus: 'NONE' | 'PENDING' | 'APPROVED' | 'REJECTED';
+  };
+}
+
+/** Severity classification for user-facing security events. */
+export type SecurityEventSeverity = 'INFO' | 'WARNING' | 'CRITICAL';
+
+/**
+ * One privacy-safe row from GET /auth/security-events.
+ *
+ * The backend returns ONLY the caller's own audit rows, filtered to a
+ * server-side security-action allowlist. This is a deliberate privacy-safe
+ * projection: ipAddress, userAgent, metadata, and correlationId are NEVER
+ * included.
+ */
+export interface SecurityEventView {
+  id: string;
+  /**
+   * Server-defined audit action name from the security allowlist (e.g.
+   * "LOGIN_SUCCESS", "PASSWORD_CHANGED"). Clients map known actions to
+   * friendly labels; UNKNOWN actions must render generically — never error
+   * or assume meaning.
+   */
+  action: string;
+  /** ISO-8601 timestamp of when the event was recorded. */
+  createdAt: string;
+  /** Severity hint for visual treatment; absent on rows without one. */
+  severity?: SecurityEventSeverity;
+}
+
+/**
+ * GET /auth/security-events response.
+ *
+ * Paginated via `limit` (1–100, default 20) + `offset` query parameters.
+ * Events are ordered createdAt DESC. `hasMore` is true when at least one
+ * further row exists beyond the returned page.
+ */
+export interface SecurityEventListResponse {
+  events: SecurityEventView[];
+  /** True when more rows exist beyond this page (fetch with offset). */
+  hasMore: boolean;
+}
+
 // ── Subscriptions / plans ───────────────────────────────────────────────────
 //
 // Subscription-retirement (SUBSCRIPTION-RETIREMENT-IMPL):
@@ -482,6 +615,12 @@ export type TradingExperienceLevel = 'BEGINNER' | 'INTERMEDIATE' | 'ADVANCED' | 
 export interface UpdateMyProfileRequest {
   firstName?: string;
   lastName?: string;
+  /**
+   * Date of birth in YYYY-MM-DD calendar format (valid past date).
+   * Changing an already-set DOB resets the account's KYC status
+   * server-side — the profile must pass KYC review again.
+   */
+  dateOfBirth?: string;
   countryCode?: string;
   timezone?: string;
   preferredCurrency?: string;
