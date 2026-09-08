@@ -1,5 +1,6 @@
 import type { ApiClient } from '@irexpro/api-client';
 import { createApiClient } from '@irexpro/api-client';
+import type { BrokerRegistryCatalog } from '@irexpro/types';
 
 /**
  * Shared API client for the mobile app.
@@ -25,8 +26,35 @@ export function setAccessToken(token: string | null): void {
   cachedAccessToken = token;
 }
 
-export const api: ApiClient = createApiClient({
-  baseUrl,
-  includeCredentials: false,
-  getAccessToken: () => cachedAccessToken,
-});
+/**
+ * Read the current in-memory access token for the realtime auth handshake.
+ * Reconnects call this getter again so token rotation is never captured stale.
+ */
+export function getAccessTokenValue(): string | null {
+  return cachedAccessToken;
+}
+
+export interface MobileApiClient extends ApiClient {
+  /** GET /broker/registry → server-authoritative catalog wrapper. */
+  getBrokerRegistry(): Promise<BrokerRegistryCatalog>;
+}
+
+/**
+ * Build the mobile API facade on top of the shared transport.
+ * Exported so contract tests can validate the mobile-only registry extension
+ * without mutating or widening the shared ApiClient interface.
+ */
+export function createMobileApiClient(apiBaseUrl: string): MobileApiClient {
+  const baseApi = createApiClient({
+    baseUrl: apiBaseUrl,
+    includeCredentials: false,
+    getAccessToken: () => cachedAccessToken,
+  });
+
+  return Object.assign(baseApi, {
+    getBrokerRegistry: () =>
+      baseApi.request<BrokerRegistryCatalog>('/broker/registry'),
+  });
+}
+
+export const api: MobileApiClient = createMobileApiClient(baseUrl);
