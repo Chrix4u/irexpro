@@ -3,7 +3,7 @@ import { Type } from 'class-transformer';
 import { IsEnum, IsInt, IsOptional, Max, Min } from 'class-validator';
 import { AccountAppealStatus } from '../entities/account-appeal.entity';
 
-/** Validated, bounded query contract for the PII-bearing admin appeal queue. */
+/** Validated, bounded query contract for the privacy-sensitive admin appeal queue. */
 export class ListAccountAppealsQueryDto {
   @ApiPropertyOptional({ enum: AccountAppealStatus })
   @IsOptional()
