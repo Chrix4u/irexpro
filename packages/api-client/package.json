@@ -22,6 +22,10 @@
       "types": "./src/live-account.ts",
       "default": "./src/live-account.ts"
     },
+    "./admin-live-account": {
+      "types": "./src/admin-live-account.ts",
+      "default": "./src/admin-live-account.ts"
+    },
     "./portfolio": {
       "types": "./src/portfolio.ts",
       "default": "./src/portfolio.ts"

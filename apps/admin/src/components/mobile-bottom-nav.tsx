@@ -12,6 +12,7 @@ import {
   AuditIcon,
   LogoutIcon,
   CloseIcon,
+  PulseIcon,
   type IconProps,
 } from '@/components/icons';
 
@@ -30,6 +31,7 @@ const PRIMARY_NAV: NavDestination[] = [
 ];
 
 const SECONDARY_NAV: NavDestination[] = [
+  { href: '/admin/live-ops', label: 'Live ops', Icon: PulseIcon },
   { href: '/admin/account-appeals', label: 'Account reviews', Icon: UsersIcon },
   { href: '/admin/eligibility-reviews', label: 'Eligibility reviews', Icon: AuditIcon },
   { href: '/admin/kyc-reviews', label: 'KYC reviews', Icon: UsersIcon },

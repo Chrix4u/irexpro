@@ -34,6 +34,7 @@ import { BrokerReconciliationModule } from './modules/broker-reconciliation/brok
 import { PerformanceBillingModule } from './modules/performance-billing/performance-billing.module';
 import { ExecutionControlModule } from './modules/execution-control/execution-control.module';
 import { LiveAccountModule } from './modules/live-account/live-account.module';
+import { AdminLiveAccountModule } from './modules/admin-live-account/admin-live-account.module';
 
 @Module({
   imports: [
@@ -105,6 +106,9 @@ import { LiveAccountModule } from './modules/live-account/live-account.module';
     // Sprint 50 PR-5 — user Live Account read API (Directive PHASE J).
     // Read-only aggregation over PR-1..PR-4 state.
     LiveAccountModule,
+    // Sprint 50 PR-6 — admin live-operations + audit investigation read API
+    // (Directive PHASE L §39). ADMIN/SUPER_ADMIN RBAC at the controllers.
+    AdminLiveAccountModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: AllExceptionsFilter },

@@ -12,6 +12,7 @@ import {
   PaymentsIcon,
   PlugIcon,
   AuditIcon,
+  PulseIcon,
 } from '@/components/icons';
 
 /**
@@ -28,6 +29,7 @@ const NAV: Array<{ href: string; label: string; Icon: ComponentType<IconProps> }
   { href: '/admin/kyc-reviews', label: 'KYC Reviews', Icon: UsersIcon },
   { href: '/admin/payments', label: 'Payments', Icon: PaymentsIcon },
   { href: '/admin/brokers', label: 'Brokers', Icon: PlugIcon },
+  { href: '/admin/live-ops', label: 'Live Ops', Icon: PulseIcon },
   { href: '/admin/audit', label: 'Audit Log', Icon: AuditIcon },
 ];
 

@@ -30,7 +30,7 @@ export interface ExecutionPermission {
   };
 }
 
-/** Safe view of an active control (returned to admins). */
+/** Safe view of a control (returned to admins). */
 export interface ExecutionControlView {
   id: string;
   scope: ExecutionControlScope;
@@ -39,6 +39,12 @@ export interface ExecutionControlView {
   activatedByUserId: string;
   activatedAt: Date;
   expiresAt: Date | null;
+  /**
+   * Effective lifecycle status: ACTIVE = currently blocking; EXPIRED =
+   * retained record (persisted EXPIRED, or persisted ACTIVE whose expiry has
+   * already passed — reads ignore it either way).
+   */
+  status: ExecutionControlStatus;
 }
 
 /**
@@ -51,8 +57,8 @@ export interface ExecutionControlView {
  *   "enabled/disabled" boolean to misread.
  * - EXPIRED rows are retained as records: reads ignore them and they never
  *   block a future activation at the same (scope, scopeKey). Reactivation
- *   flips the prior ACTIVE row to status = EXPIRED and inserts a NEW ACTIVE
- *   row, so activation/expiry history is preserved per row.
+ *   retires only the persisted ACTIVE row for the slot and inserts a NEW
+ *   ACTIVE row, so activation/expiry history is preserved per row.
  * - Checks cascade: GLOBAL > PROVIDER > USER > BROKER_CONNECTION; the first
  *   active control wins and is reported.
  * - CONCURRENCY: the partial unique index uq_exec_controls_active_scope
@@ -156,15 +162,21 @@ export class ExecutionControlService {
   /** List active (non-expired) controls. */
   async listActiveControls(): Promise<ExecutionControlView[]> {
     const controls = await this.findActiveControls();
-    return controls.map((c) => ({
-      id: c.id,
-      scope: c.scope,
-      scopeKey: c.scopeKey,
-      reason: c.reason,
-      activatedByUserId: c.activatedByUserId,
-      activatedAt: c.activatedAt,
-      expiresAt: c.expiresAt,
-    }));
+    // findActiveControls already guarantees effective-ACTIVE rows, so every
+    // view below carries status = ACTIVE (via toView).
+    return controls.map((c) => this.toView(c));
+  }
+
+  /**
+   * List ALL control rows — both statuses — with their EFFECTIVE status
+   * (a persisted-ACTIVE row whose expiry has passed reports EXPIRED: reads
+   * already ignore it). Admin inventory use only: expired rows are retained
+   * as records, never block execution, and reactivation replaces them.
+   * Permission checks never consume this method.
+   */
+  async listControlsIncludingExpired(): Promise<ExecutionControlView[]> {
+    const controls = await this.controlRepo.find();
+    return controls.map((c) => this.toView(c));
   }
 
   /**
@@ -380,6 +392,9 @@ export class ExecutionControlService {
       activatedByUserId: c.activatedByUserId,
       activatedAt: c.activatedAt,
       expiresAt: c.expiresAt,
+      status: this.isEffectivelyActive(c)
+        ? ExecutionControlStatus.ACTIVE
+        : ExecutionControlStatus.EXPIRED,
     };
   }
 
