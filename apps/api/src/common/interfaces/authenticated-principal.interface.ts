@@ -14,7 +14,9 @@ import { UserStatus } from '../../modules/users/entities/user.entity';
  * This interface defines the ONLY fields that should be on request.user.
  * It contains no secrets — passwordHash, mfaSecret, refresh tokens, reset
  * tokens, userRoles entities, and encrypted broker credentials are NEVER
- * present.
+ * present. The validated session generation is deliberately retained because
+ * mutating auth endpoints must bind compare-and-set updates to the exact
+ * bearer-token generation that authenticated the request.
  */
 export interface AuthenticatedPrincipal {
   /** The user's UUID (from JWT payload.sub). */
@@ -27,4 +29,12 @@ export interface AuthenticatedPrincipal {
   roles: string[];
   /** The user's status (ACTIVE, SUSPENDED, etc.). */
   status: UserStatus;
+  /**
+   * Server-validated session generation carried by the access token.
+   * JwtStrategy always populates it in production. It remains optional at the
+   * structural interface boundary so legacy focused test fixtures that do not
+   * exercise generation-bound mutations stay source-compatible; sensitive
+   * endpoints must validate its presence before use.
+   */
+  authenticatedSessionVersion?: number;
 }

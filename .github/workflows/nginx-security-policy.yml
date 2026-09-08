@@ -1,0 +1,63 @@
+name: Nginx Security Policy
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'infrastructure/nginx/**'
+      - 'scripts/security/check-nginx-security-headers.mjs'
+      - 'docs/runbooks/realtime-ingress-security.md'
+      - 'docs/runbooks/reverse-proxy-client-ip-trust.md'
+      - 'docs/runbooks/production-deployment-vps-webuzo.md'
+      - '.github/workflows/nginx-security-policy.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'infrastructure/nginx/**'
+      - 'scripts/security/check-nginx-security-headers.mjs'
+      - 'docs/runbooks/realtime-ingress-security.md'
+      - 'docs/runbooks/reverse-proxy-client-ip-trust.md'
+      - 'docs/runbooks/production-deployment-vps-webuzo.md'
+      - '.github/workflows/nginx-security-policy.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nginx-security-policy-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+  CANDIDATE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  validate:
+    name: Validate Nginx security policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+
+      - name: Verify exact candidate checkout
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+      - name: Setup Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Run adversarial Nginx policy self-tests
+        run: node scripts/security/check-nginx-security-headers.mjs --self-test
+
+      - name: Enforce canonical Nginx security policy
+        run: node scripts/security/check-nginx-security-headers.mjs

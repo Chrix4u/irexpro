@@ -49,6 +49,11 @@ const mockQueryRunner = {
 };
 const mockDataSource = { createQueryRunner: jest.fn(() => mockQueryRunner) };
 
+const REFRESH_USER_ID = '11111111-1111-4111-8111-111111111111';
+const PHONE_REFRESH_USER_ID = '22222222-2222-4222-8222-222222222222';
+const SUB_REFRESH_USER_ID = '33333333-3333-4333-8333-333333333333';
+const MISSING_REFRESH_USER_ID = '44444444-4444-4444-8444-444444444444';
+
 describe('AuthService', () => {
   let module: TestingModule;
   let service: AuthService;
@@ -253,14 +258,14 @@ describe('AuthService', () => {
   describe('refreshTokens (Sprint 25 — mobile JSON body + web/admin cookie)', () => {
     it('should return new tokens when given a valid refresh token (mobile flow)', async () => {
       const mockPayload = {
-        sub: 'user-id',
+        sub: REFRESH_USER_ID,
         email: 'test@example.com',
         roles: [RoleName.USER],
         tokenType: 'refresh' as const,
       };
       mockJwtService.verify.mockReturnValueOnce(mockPayload);
       mockUserRepo.findOne.mockResolvedValueOnce({
-        id: 'user-id',
+        id: REFRESH_USER_ID,
         email: 'test@example.com',
         status: UserStatus.ACTIVE,
         userRoles: [{ role: { name: RoleName.USER } }],
@@ -283,7 +288,7 @@ describe('AuthService', () => {
 
     it('should reject a signed JWT with no explicit tokenType before user lookup', async () => {
       mockJwtService.verify.mockReturnValueOnce({
-        sub: 'user-id',
+        sub: REFRESH_USER_ID,
         email: 'test@example.com',
         roles: [RoleName.USER],
         sessionVersion: 1,
@@ -295,7 +300,7 @@ describe('AuthService', () => {
 
     it('should reject an access token at the refresh boundary before user lookup', async () => {
       mockJwtService.verify.mockReturnValueOnce({
-        sub: 'user-id',
+        sub: REFRESH_USER_ID,
         email: 'test@example.com',
         roles: [RoleName.USER],
         tokenType: 'access',
@@ -308,7 +313,7 @@ describe('AuthService', () => {
 
     it('should throw UnauthorizedException if user is not found', async () => {
       const mockPayload = {
-        sub: 'nonexistent',
+        sub: MISSING_REFRESH_USER_ID,
         email: 'x@example.com',
         roles: [],
         tokenType: 'refresh' as const,
@@ -321,14 +326,14 @@ describe('AuthService', () => {
 
     it('should throw UnauthorizedException if user status is SUSPENDED', async () => {
       const mockPayload = {
-        sub: 'user-id',
+        sub: REFRESH_USER_ID,
         email: 'test@example.com',
         roles: [],
         tokenType: 'refresh' as const,
       };
       mockJwtService.verify.mockReturnValueOnce(mockPayload);
       mockUserRepo.findOne.mockResolvedValueOnce({
-        id: 'user-id',
+        id: REFRESH_USER_ID,
         status: UserStatus.SUSPENDED,
         userRoles: [],
       });
@@ -338,14 +343,14 @@ describe('AuthService', () => {
 
     it('should throw UnauthorizedException if user status is CLOSED', async () => {
       const mockPayload = {
-        sub: 'user-id',
+        sub: REFRESH_USER_ID,
         email: 'test@example.com',
         roles: [],
         tokenType: 'refresh' as const,
       };
       mockJwtService.verify.mockReturnValueOnce(mockPayload);
       mockUserRepo.findOne.mockResolvedValueOnce({
-        id: 'user-id',
+        id: REFRESH_USER_ID,
         status: UserStatus.CLOSED,
         userRoles: [],
       });
@@ -355,14 +360,14 @@ describe('AuthService', () => {
 
     it('should throw UnauthorizedException if user status is PERMANENTLY_LOCKED', async () => {
       const mockPayload = {
-        sub: 'user-id',
+        sub: REFRESH_USER_ID,
         email: 'test@example.com',
         roles: [],
         tokenType: 'refresh' as const,
       };
       mockJwtService.verify.mockReturnValueOnce(mockPayload);
       mockUserRepo.findOne.mockResolvedValueOnce({
-        id: 'user-id',
+        id: REFRESH_USER_ID,
         status: UserStatus.PERMANENTLY_LOCKED,
         userRoles: [],
       });
@@ -374,14 +379,14 @@ describe('AuthService', () => {
 
     it('should refresh successfully when user email is null (phone-only user)', async () => {
       const mockPayload = {
-        sub: 'phone-user-id',
+        sub: PHONE_REFRESH_USER_ID,
         email: null,
         roles: [RoleName.USER],
         tokenType: 'refresh' as const,
       };
       mockJwtService.verify.mockReturnValueOnce(mockPayload);
       mockUserRepo.findOne.mockResolvedValueOnce({
-        id: 'phone-user-id',
+        id: PHONE_REFRESH_USER_ID,
         email: null,
         phone: '+233241234567',
         status: UserStatus.ACTIVE,
@@ -398,14 +403,14 @@ describe('AuthService', () => {
 
     it('should refresh successfully when roles array is empty', async () => {
       const mockPayload = {
-        sub: 'user-id',
+        sub: REFRESH_USER_ID,
         email: 'test@example.com',
         roles: [],
         tokenType: 'refresh' as const,
       };
       mockJwtService.verify.mockReturnValueOnce(mockPayload);
       mockUserRepo.findOne.mockResolvedValueOnce({
-        id: 'user-id',
+        id: REFRESH_USER_ID,
         email: 'test@example.com',
         status: UserStatus.ACTIVE,
         userRoles: [],
@@ -421,14 +426,14 @@ describe('AuthService', () => {
 
     it('should load the user by payload.sub (not by email)', async () => {
       const mockPayload = {
-        sub: 'sub-user-id',
+        sub: SUB_REFRESH_USER_ID,
         email: 'old@example.com',
         roles: [],
         tokenType: 'refresh' as const,
       };
       mockJwtService.verify.mockReturnValueOnce(mockPayload);
       mockUserRepo.findOne.mockResolvedValueOnce({
-        id: 'sub-user-id',
+        id: SUB_REFRESH_USER_ID,
         email: 'new@example.com',
         status: UserStatus.ACTIVE,
         userRoles: [{ role: { name: RoleName.USER } }],
@@ -438,7 +443,7 @@ describe('AuthService', () => {
 
       expect(mockUserRepo.findOne).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { id: 'sub-user-id' },
+          where: { id: SUB_REFRESH_USER_ID },
         }),
       );
       expect(result).toHaveProperty('accessToken');
@@ -448,14 +453,14 @@ describe('AuthService', () => {
 
     it('should allow refresh for PENDING_VERIFICATION users (no activation flow exists)', async () => {
       const mockPayload = {
-        sub: 'user-id',
+        sub: REFRESH_USER_ID,
         email: 'test@example.com',
         roles: [],
         tokenType: 'refresh' as const,
       };
       mockJwtService.verify.mockReturnValueOnce(mockPayload);
       mockUserRepo.findOne.mockResolvedValueOnce({
-        id: 'user-id',
+        id: REFRESH_USER_ID,
         email: 'test@example.com',
         status: UserStatus.PENDING_VERIFICATION,
         userRoles: [{ role: { name: RoleName.USER } }],
@@ -483,14 +488,14 @@ describe('AuthService', () => {
 
     it('should not include passwordHash or mfaSecret in the generated token payload', async () => {
       const mockPayload = {
-        sub: 'user-id',
+        sub: REFRESH_USER_ID,
         email: 'test@example.com',
         roles: [],
         tokenType: 'refresh' as const,
       };
       mockJwtService.verify.mockReturnValueOnce(mockPayload);
       mockUserRepo.findOne.mockResolvedValueOnce({
-        id: 'user-id',
+        id: REFRESH_USER_ID,
         email: 'test@example.com',
         status: UserStatus.ACTIVE,
         passwordHash: 'super_secret_hash',
@@ -507,7 +512,7 @@ describe('AuthService', () => {
       const signedPayload = calls[0][0];
       expect(signedPayload).not.toHaveProperty('passwordHash');
       expect(signedPayload).not.toHaveProperty('mfaSecret');
-      expect(signedPayload.sub).toBe('user-id');
+      expect(signedPayload.sub).toBe(REFRESH_USER_ID);
     });
   });
 

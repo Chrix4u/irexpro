@@ -9,6 +9,7 @@ import {
   Ip,
   Param,
   ParseEnumPipe,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -78,7 +79,7 @@ export class AccountGovernanceController {
   @Header('Pragma', 'no-cache')
   @ApiOperation({ summary: '[Admin] Resolve an account-access appeal' })
   async resolveAppeal(
-    @Param('id') appealId: string,
+    @Param('id', ParseUUIDPipe) appealId: string,
     @CurrentUserId() reviewerUserId: string,
     @Body() dto: ResolveAccountAppealDto,
   ) {
@@ -93,7 +94,7 @@ export class AccountGovernanceController {
   @Header('Pragma', 'no-cache')
   @ApiOperation({ summary: '[Admin] Deactivate, permanently lock, or soft-delete an account' })
   async updateAccountStatus(
-    @Param('id') userId: string,
+    @Param('id', ParseUUIDPipe) userId: string,
     @CurrentUserId() actorUserId: string,
     @Body() dto: UpdateAccountStatusDto,
   ) {

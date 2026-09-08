@@ -14,6 +14,7 @@ import { User, UserStatus } from '../../users/entities/user.entity';
  *   - mfaSecret is absent
  *   - userRoles are absent
  *   - roles are preserved from the JWT payload
+ *   - the server-validated session generation is retained for downstream CAS-bound auth mutations
  *   - email and phone are nullable
  *   - SUSPENDED/PERMANENTLY_LOCKED/CLOSED users are rejected
  *   - missing subject is rejected
@@ -98,6 +99,12 @@ describe('JwtStrategy (Hotfix — sanitized principal)', () => {
     expect(result.roles).toEqual(['USER', 'ADMIN']);
   });
 
+  it('should preserve the server-validated session generation for downstream auth CAS operations', async () => {
+    userRepo.findOne.mockResolvedValue({ ...mockUser, sessionVersion: 7 });
+    const result = await strategy.validate({ ...validPayload, sessionVersion: 7 });
+    expect(result.authenticatedSessionVersion).toBe(7);
+  });
+
   it('should handle nullable email', async () => {
     userRepo.findOne.mockResolvedValue({ ...mockUser, email: null });
     const result = await strategy.validate({ ...validPayload, email: null });
@@ -164,7 +171,15 @@ describe('JwtStrategy (Hotfix — sanitized principal)', () => {
     expect(result).toHaveProperty('phone');
     expect(result).toHaveProperty('roles');
     expect(result).toHaveProperty('status');
-    // Verify the shape matches exactly 5 keys (no extras like passwordHash)
-    expect(Object.keys(result).sort()).toEqual(['email', 'phone', 'roles', 'status', 'userId']);
+    expect(result).toHaveProperty('authenticatedSessionVersion');
+    // Verify the shape matches exactly the sanitized principal keys (no secrets/extras).
+    expect(Object.keys(result).sort()).toEqual([
+      'authenticatedSessionVersion',
+      'email',
+      'phone',
+      'roles',
+      'status',
+      'userId',
+    ]);
   });
 });
