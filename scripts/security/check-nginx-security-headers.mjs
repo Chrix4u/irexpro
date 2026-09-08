@@ -5,6 +5,10 @@ const nginxPath = fileURLToPath(
   new URL('../../infrastructure/nginx/irexpro-staging.example.conf', import.meta.url),
 );
 const canonicalSource = readFileSync(nginxPath, 'utf8');
+const productionRunbookPath = fileURLToPath(
+  new URL('../../docs/runbooks/production-deployment-vps-webuzo.md', import.meta.url),
+);
+const productionRunbookSource = readFileSync(productionRunbookPath, 'utf8');
 
 const HSTS = 'add_header Strict-Transport-Security "max-age=31536000" always;';
 const REQUIRED_STATIC_HEADERS = [
@@ -69,6 +73,61 @@ function extractBlocks(text, opening, errors) {
   }
 
   return blocks;
+}
+
+export function validateProductionRunbookRealtimePolicy(source) {
+  const errors = [];
+  const sectionStart = source.indexOf('## 8. Nginx reverse proxy + TLS');
+  const sectionEnd = source.indexOf('\n---\n\n## 9.', sectionStart);
+  if (sectionStart === -1 || sectionEnd === -1) {
+    return ['production deployment runbook must retain the section 8 Nginx boundary'];
+  }
+
+  const section = source.slice(sectionStart, sectionEnd);
+  for (const directive of [REALTIME_REQUEST_ZONE, REALTIME_CONNECTION_ZONE]) {
+    if (!section.includes(directive)) {
+      errors.push(`production runbook is missing realtime safety-zone directive: ${directive}`);
+    }
+  }
+
+  const apiLocations = extractBlocks(section, 'location ^~ /api/v1/ {', errors);
+  if (apiLocations.length !== 1) {
+    errors.push(`production runbook must show exactly 1 public API location, found ${apiLocations.length}`);
+  } else {
+    const apiLocation = apiLocations[0];
+    if (!apiLocation.includes('proxy_set_header X-Forwarded-For $remote_addr;')) {
+      errors.push('production runbook API location must use server-observed $remote_addr');
+    }
+    if (apiLocation.includes('$proxy_add_x_forwarded_for')) {
+      errors.push('production runbook API location must not preserve caller forwarding chains');
+    }
+  }
+
+  const realtimeLocations = extractBlocks(section, 'location ^~ /socket.io/ {', errors);
+  if (realtimeLocations.length !== 1) {
+    errors.push(
+      `production runbook must show exactly 1 Socket.IO transport location, found ${realtimeLocations.length}`,
+    );
+  } else {
+    const realtimeLocation = realtimeLocations[0];
+    for (const directive of REQUIRED_REALTIME_DIRECTIVES) {
+      if (!realtimeLocation.includes(directive)) {
+        errors.push(`production runbook Socket.IO location is missing: ${directive}`);
+      }
+    }
+    if (realtimeLocation.includes('$proxy_add_x_forwarded_for')) {
+      errors.push('production runbook Socket.IO location must not preserve caller forwarding chains');
+    }
+    if (/\bCF-Connecting-IP\b/i.test(realtimeLocation)) {
+      errors.push('production runbook Socket.IO location must not trust CF-Connecting-IP directly');
+    }
+  }
+
+  if (!/\|\s*`location \^~ \/socket\.io\/`\s*\|/.test(section)) {
+    errors.push('production runbook route table must document the /socket.io/ NestJS transport');
+  }
+
+  return errors;
 }
 
 export function validateNginxPolicy(source) {
@@ -187,10 +246,24 @@ function expectRejected(label, source) {
   }
 }
 
+function expectRunbookRejected(label, source) {
+  const errors = validateProductionRunbookRealtimePolicy(source);
+  if (errors.length === 0) {
+    throw new Error(`self-test failed: production-runbook ${label} mutation was incorrectly accepted`);
+  }
+}
+
 function runSelfTest() {
   const baselineErrors = validateNginxPolicy(canonicalSource);
   if (baselineErrors.length > 0) {
     throw new Error(`canonical fixture failed before adversarial tests: ${baselineErrors.join('; ')}`);
+  }
+
+  const runbookBaselineErrors = validateProductionRunbookRealtimePolicy(productionRunbookSource);
+  if (runbookBaselineErrors.length > 0) {
+    throw new Error(
+      `production runbook failed before adversarial tests: ${runbookBaselineErrors.join('; ')}`,
+    );
   }
 
   expectRejected(
@@ -219,6 +292,25 @@ function runSelfTest() {
     ),
   );
 
+  expectRunbookRejected(
+    'missing Socket.IO route',
+    productionRunbookSource.replace('location ^~ /socket.io/ {', 'location ^~ /socket-disabled/ {'),
+  );
+  expectRunbookRejected(
+    'forwarded-chain preservation',
+    productionRunbookSource.replaceAll(
+      'proxy_set_header X-Forwarded-For $remote_addr;',
+      'proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;',
+    ),
+  );
+  expectRunbookRejected(
+    'missing realtime request cap',
+    productionRunbookSource.replace(
+      'limit_req zone=irexpro_realtime_requests burst=400 nodelay;',
+      '# removed by adversarial self-test',
+    ),
+  );
+
   console.log('Nginx security-policy adversarial self-tests passed.');
 }
 
@@ -230,7 +322,10 @@ if (process.argv.includes('--self-test')) {
     process.exitCode = 1;
   }
 } else {
-  const errors = validateNginxPolicy(canonicalSource);
+  const errors = [
+    ...validateNginxPolicy(canonicalSource),
+    ...validateProductionRunbookRealtimePolicy(productionRunbookSource),
+  ];
   if (errors.length > 0) {
     for (const error of errors) {
       console.error(`Nginx security policy failed: ${error}`);
