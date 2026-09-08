@@ -85,7 +85,9 @@ describe('Order integrity regressions', () => {
 
         if (sql.startsWith('SELECT * FROM trading.orders WHERE idempotency_key')) {
           if (transactionAborted) {
-            throw new Error('current transaction is aborted, commands ignored until end of transaction block');
+            throw new Error(
+              'current transaction is aborted, commands ignored until end of transaction block',
+            );
           }
           if (firstIdempotencySelect) {
             firstIdempotencySelect = false;
