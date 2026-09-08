@@ -25,6 +25,14 @@ export function setAccessToken(token: string | null): void {
   cachedAccessToken = token;
 }
 
+/**
+ * Read the current in-memory access token for the realtime auth handshake.
+ * Reconnects call this getter again so token rotation is never captured stale.
+ */
+export function getAccessTokenValue(): string | null {
+  return cachedAccessToken;
+}
+
 export const api: ApiClient = createApiClient({
   baseUrl,
   includeCredentials: false,
