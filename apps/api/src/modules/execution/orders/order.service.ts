@@ -218,14 +218,24 @@ export class OrderService {
   }
 
   /**
-   * RECONCILIATION_PENDING → resolvedTo (any state the machine allows from it).
-   * Provider-observed fill state is authoritative.
+   * Resolve a reconciliation-held order to a NON-FILL-BEARING state.
+   *
+   * FILLED / PARTIALLY_FILLED are intentionally rejected here. Those states
+   * carry economic facts (filled quantity + average fill price) and therefore
+   * must be reached through applyFill(), which performs exact-decimal atomic
+   * accounting. A status-only reconciliation must never invent a fill.
    */
   async resolveReconciliation(
     orderId: string,
     resolvedTo: OrderStatus,
     data: { providerOrderId?: string | null; rejectReason?: string | null } = {},
   ): Promise<Order> {
+    if (resolvedTo === OrderStatus.FILLED || resolvedTo === OrderStatus.PARTIALLY_FILLED) {
+      throw new ConflictException(
+        'Fill-bearing reconciliation must use applyFill with authoritative quantity and price',
+      );
+    }
+
     return this.applyTransition(orderId, resolvedTo, {
       providerOrderId: data.providerOrderId ?? null,
       rejectReason: data.rejectReason ? data.rejectReason.slice(0, 500) : null,
