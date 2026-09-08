@@ -22,7 +22,6 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { RoleName } from './entities/role.entity';
-import { AccountAppealStatus } from './entities/account-appeal.entity';
 import { AccountGovernanceService, PublicAppealResult } from './account-governance.service';
 import { ListAccountAppealsQueryDto } from './dto/list-account-appeals-query.dto';
 import { ResolveAccountAppealDto } from './dto/resolve-account-appeal.dto';
