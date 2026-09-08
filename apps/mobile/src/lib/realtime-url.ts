@@ -23,6 +23,22 @@ export function deriveRealtimeUrl(apiBaseUrl: string): string {
   } catch {
     throw new Error(`Invalid EXPO_PUBLIC_API_BASE_URL: ${trimmed}`);
   }
+
+  // Fail closed on unexpected schemes. Without this guard, any parseable
+  // non-HTTPS scheme would previously fall through to `ws:`. The API base
+  // is build-time configuration, but treating its protocol as an explicit
+  // allowlist prevents accidental or malicious configuration drift.
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("EXPO_PUBLIC_API_BASE_URL must use http or https");
+  }
+
+  // Credentials do not belong in a public API origin. Although URL
+  // reconstruction below would drop them, reject such configuration rather
+  // than silently accepting a credential-bearing source URL.
+  if (url.username || url.password) {
+    throw new Error("EXPO_PUBLIC_API_BASE_URL must not include credentials");
+  }
+
   // The /api/v1 suffix (if present) is a REST route prefix, not the socket
   // origin — strip path segments so the socket connects to the API origin.
   const wsProtocol = url.protocol === "https:" ? "wss:" : "ws:";
