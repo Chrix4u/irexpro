@@ -85,4 +85,75 @@ describe('BrokerAdapterRegistry', () => {
     const retrieved = registry.getAdapter('metatrader5');
     expect(retrieved.brokerName).toBe('MT5 v2');
   });
+
+  // ─── Broker aliases (Task 48-B — universal cTrader engine sharing) ─────────
+
+  describe('registerBrokerAlias', () => {
+    it('resolves aliases to the SAME adapter instance (pepperstone/icmarkets → ctrader)', () => {
+      const ctrader = makeAdapter('ctrader', 'cTrader (Open API)');
+      registry.register(ctrader);
+      registry.registerBrokerAlias('pepperstone-ctrader', ctrader);
+      registry.registerBrokerAlias('icmarkets-ctrader', ctrader);
+
+      expect(registry.getAdapter('ctrader')).toBe(ctrader);
+      expect(registry.getAdapter('pepperstone-ctrader')).toBe(ctrader);
+      expect(registry.getAdapter('icmarkets-ctrader')).toBe(ctrader);
+      expect(registry.getAdapter('pepperstone-ctrader').brokerId).toBe('ctrader');
+    });
+
+    it('isSupported() returns true for every alias key', () => {
+      const ctrader = makeAdapter('ctrader', 'cTrader');
+      registry.register(ctrader);
+      registry.registerBrokerAlias('pepperstone-ctrader', ctrader);
+      registry.registerBrokerAlias('icmarkets-ctrader', ctrader);
+
+      expect(registry.isSupported('ctrader')).toBe(true);
+      expect(registry.isSupported('pepperstone-ctrader')).toBe(true);
+      expect(registry.isSupported('icmarkets-ctrader')).toBe(true);
+      expect(registry.isSupported('fpmarkets-ctrader')).toBe(false);
+    });
+
+    it('getSupportedBrokerIds() includes every alias key', () => {
+      const ctrader = makeAdapter('ctrader', 'cTrader');
+      registry.register(ctrader);
+      registry.registerBrokerAlias('pepperstone-ctrader', ctrader);
+      registry.registerBrokerAlias('icmarkets-ctrader', ctrader);
+
+      const ids = registry.getSupportedBrokerIds();
+      expect(ids).toContain('ctrader');
+      expect(ids).toContain('pepperstone-ctrader');
+      expect(ids).toContain('icmarkets-ctrader');
+    });
+
+    it('getSupportedBrokers() stays DEDUPLICATED — one summary per adapter', () => {
+      const ctrader = makeAdapter('ctrader', 'cTrader (Open API)');
+      registry.register(makeAdapter('oanda', 'OANDA'));
+      registry.register(ctrader);
+      registry.registerBrokerAlias('pepperstone-ctrader', ctrader);
+      registry.registerBrokerAlias('icmarkets-ctrader', ctrader);
+
+      const brokers = registry.getSupportedBrokers();
+      expect(brokers).toHaveLength(2); // oanda + ctrader — aliases deduplicated
+      expect(brokers.filter((b) => b.brokerId === 'ctrader')).toHaveLength(1);
+      expect(brokers.map((b) => b.brokerId).sort()).toEqual(['ctrader', 'oanda']);
+    });
+
+    it('falls back to a plain registration when the alias equals the adapter brokerId', () => {
+      const ctrader = makeAdapter('ctrader', 'cTrader');
+      registry.registerBrokerAlias('ctrader', ctrader);
+
+      expect(registry.isSupported('ctrader')).toBe(true);
+      expect(registry.getAdapter('ctrader')).toBe(ctrader);
+      expect(registry.getSupportedBrokerIds()).toEqual(['ctrader']);
+    });
+
+    it('a later primary registration can replace an alias mapping', () => {
+      const shared = makeAdapter('ctrader', 'cTrader shared');
+      registry.registerBrokerAlias('pepperstone-ctrader', shared);
+      const dedicated = makeAdapter('pepperstone-ctrader', 'Pepperstone dedicated');
+      registry.register(dedicated);
+
+      expect(registry.getAdapter('pepperstone-ctrader')).toBe(dedicated);
+    });
+  });
 });

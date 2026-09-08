@@ -86,6 +86,12 @@ export default () => ({
   broker: {
     encryptionKey: process.env.BROKER_ENCRYPTION_KEY,
     metaApiToken: process.env.METAAPI_TOKEN,
+    // Sprint 56 / Task 48-B — platform cTrader Open API app credentials.
+    // OPTIONAL: without them the cTrader adapter still registers (the catalog
+    // stays truthful) but connections fail closed with a clear
+    // AUTHENTICATION_FAILED configuration message. NEVER log these values.
+    ctraderClientId: process.env.CTRADER_CLIENT_ID,
+    ctraderClientSecret: process.env.CTRADER_CLIENT_SECRET,
   },
   internalApi: {
     key: process.env.NESTJS_INTERNAL_API_KEY,

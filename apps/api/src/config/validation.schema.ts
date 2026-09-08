@@ -69,6 +69,13 @@ export const validationSchema = Joi.object({
   // In production: store in AWS Secrets Manager / HashiCorp Vault
   METAAPI_TOKEN: Joi.string().optional().allow(''),
 
+  // cTrader Open API platform application credentials (Sprint 56 / Task 48-B).
+  // OPTIONAL — the adapter registers truthfully without them, but connections
+  // fail closed with a clear configuration message. Register the platform app
+  // at https://openapi.ctrader.com (Spotware approval flow). NEVER log these.
+  CTRADER_CLIENT_ID: Joi.string().optional().allow(''),
+  CTRADER_CLIENT_SECRET: Joi.string().optional().allow(''),
+
   // Internal API key for Python AI Engine → NestJS communication.
   // Must match NESTJS_INTERNAL_API_KEY in services/ai-engine/.env.
   // In production: store in AWS Secrets Manager / HashiCorp Vault.

@@ -14,6 +14,12 @@ export interface BrokerSummary {
  * BrokerService calls getAdapter(brokerId) to retrieve the correct implementation.
  * No broker-specific logic ever leaks into BrokerService or above.
  *
+ * Broker aliases (Task 48-B / Sprint 56): multiple catalog brokerIds (e.g.
+ * 'pepperstone-ctrader', 'icmarkets-ctrader') can share ONE adapter instance
+ * (the universal cTrader engine) via registerBrokerAlias(). Aliases resolve
+ * through getAdapter/isSupported exactly like primary registrations;
+ * getSupportedBrokers() stays deduplicated (one summary per adapter).
+ *
  * See: docs/architecture/09-broker-integration-architecture.md §5
  */
 @Injectable()
@@ -24,6 +30,23 @@ export class BrokerAdapterRegistry {
   register(adapter: IBrokerAdapter): void {
     this.adapters.set(adapter.brokerId, adapter);
     this.logger.log(`Registered broker adapter: ${adapter.brokerId} (${adapter.brokerName})`);
+  }
+
+  /**
+   * Registers an additional catalog brokerId backed by an EXISTING adapter
+   * (e.g. 'pepperstone-ctrader' → the universal cTrader engine). The alias
+   * resolves to the SAME adapter instance; capabilities/status truth stays
+   * in the broker catalog (Directive §M) — the registry never re-declares it.
+   */
+  registerBrokerAlias(aliasBrokerId: string, adapter: IBrokerAdapter): void {
+    if (aliasBrokerId === adapter.brokerId) {
+      this.register(adapter);
+      return;
+    }
+    this.adapters.set(aliasBrokerId, adapter);
+    this.logger.log(
+      `Registered broker alias: ${aliasBrokerId} → adapter ${adapter.brokerId} (${adapter.brokerName})`,
+    );
   }
 
   getAdapter(brokerId: string): IBrokerAdapter {
@@ -37,12 +60,24 @@ export class BrokerAdapterRegistry {
     return adapter;
   }
 
+  /**
+   * Summaries of registered adapters — DEDUPLICATED by adapter brokerId so
+   * alias registrations (which map extra keys onto one instance) never
+   * duplicate entries.
+   */
   getSupportedBrokers(): BrokerSummary[] {
-    return Array.from(this.adapters.values()).map((a) => ({
-      brokerId: a.brokerId,
-      brokerName: a.brokerName,
-      supportsDemo: a.supportsDemo,
-    }));
+    const seen = new Set<string>();
+    const summaries: BrokerSummary[] = [];
+    for (const adapter of this.adapters.values()) {
+      if (seen.has(adapter.brokerId)) continue; // alias re-registration
+      seen.add(adapter.brokerId);
+      summaries.push({
+        brokerId: adapter.brokerId,
+        brokerName: adapter.brokerName,
+        supportsDemo: adapter.supportsDemo,
+      });
+    }
+    return summaries;
   }
 
   getSupportedBrokerIds(): string[] {
