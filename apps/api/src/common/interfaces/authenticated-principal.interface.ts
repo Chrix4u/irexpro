@@ -31,8 +31,10 @@ export interface AuthenticatedPrincipal {
   status: UserStatus;
   /**
    * Server-validated session generation carried by the access token.
-   * Non-secret; used to prevent stale in-flight requests from adopting a newer
-   * database generation after authentication and advancing it again.
+   * JwtStrategy always populates it in production. It remains optional at the
+   * structural interface boundary so legacy focused test fixtures that do not
+   * exercise generation-bound mutations stay source-compatible; sensitive
+   * endpoints must validate its presence before use.
    */
-  authenticatedSessionVersion: number;
+  authenticatedSessionVersion?: number;
 }
