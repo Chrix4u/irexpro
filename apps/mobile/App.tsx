@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { AuthProvider, useAuth } from '@/context/auth-context';
+import { RealtimeProvider } from '@/context/realtime-context';
 import AppErrorBoundary from '@/components/AppErrorBoundary';
 import LoginScreen from './src/screens/LoginScreen';
 import ForgotPasswordScreen from './src/screens/ForgotPasswordScreen';
@@ -9,6 +10,8 @@ import AppealScreen from './src/screens/AppealScreen';
 import DashboardScreen from './src/screens/DashboardScreen';
 import AccountScreen from './src/screens/account/AccountScreen';
 import PaymentsScreen from './src/screens/PaymentsScreen';
+import BrokerScreen from './src/screens/BrokerScreen';
+import LiveAccountScreen from './src/screens/LiveAccountScreen';
 
 /**
  * iRexPro mobile app entry (Expo + React Native + TypeScript).
@@ -25,9 +28,13 @@ import PaymentsScreen from './src/screens/PaymentsScreen';
  *
  * Tokens are never stored in AsyncStorage. The app talks only to the public API
  * (EXPO_PUBLIC_API_BASE_URL), never directly to the internal AI engine.
+ *
+ * RealtimeProvider is mounted only inside the authenticated branch. Logout or
+ * session revocation therefore unmounts the provider and disconnects the
+ * realtime socket so no authenticated channel outlives the session.
  */
 
-type Tab = 'dashboard' | 'account' | 'payments';
+type Tab = 'dashboard' | 'brokers' | 'live' | 'account' | 'payments';
 
 /** Unauthenticated stack: login, forgot-password, and the pre-auth appeal. */
 type AuthScreen = 'login' | 'forgot-password' | 'appeal';
@@ -94,34 +101,48 @@ function AppShell() {
   }
 
   return (
-    <View style={styles.shell}>
-      <SafeAreaView style={styles.content} edges={['top', 'left', 'right']}>
-        {tab === 'dashboard' && <DashboardScreen />}
-        {tab === 'account' && <AccountScreen />}
-        {tab === 'payments' && <PaymentsScreen />}
-      </SafeAreaView>
-      <SafeAreaView
-        style={styles.tabBar}
-        edges={['bottom', 'left', 'right']}
-        accessibilityRole="tablist"
-      >
-        <TabButton
-          label="Dashboard"
-          active={tab === 'dashboard'}
-          onPress={() => setTab('dashboard')}
-        />
-        <TabButton
-          label="Payments"
-          active={tab === 'payments'}
-          onPress={() => setTab('payments')}
-        />
-        <TabButton
-          label="Account"
-          active={tab === 'account'}
-          onPress={() => setTab('account')}
-        />
-      </SafeAreaView>
-    </View>
+    <RealtimeProvider>
+      <View style={styles.shell}>
+        <SafeAreaView style={styles.content} edges={['top', 'left', 'right']}>
+          {tab === 'dashboard' && <DashboardScreen />}
+          {tab === 'brokers' && <BrokerScreen />}
+          {tab === 'live' && <LiveAccountScreen />}
+          {tab === 'account' && <AccountScreen />}
+          {tab === 'payments' && <PaymentsScreen />}
+        </SafeAreaView>
+        <SafeAreaView
+          style={styles.tabBar}
+          edges={['bottom', 'left', 'right']}
+          accessibilityRole="tablist"
+        >
+          <TabButton
+            label="Dashboard"
+            active={tab === 'dashboard'}
+            onPress={() => setTab('dashboard')}
+          />
+          <TabButton
+            label="Brokers"
+            active={tab === 'brokers'}
+            onPress={() => setTab('brokers')}
+          />
+          <TabButton
+            label="Live"
+            active={tab === 'live'}
+            onPress={() => setTab('live')}
+          />
+          <TabButton
+            label="Payments"
+            active={tab === 'payments'}
+            onPress={() => setTab('payments')}
+          />
+          <TabButton
+            label="Account"
+            active={tab === 'account'}
+            onPress={() => setTab('account')}
+          />
+        </SafeAreaView>
+      </View>
+    </RealtimeProvider>
   );
 }
 
