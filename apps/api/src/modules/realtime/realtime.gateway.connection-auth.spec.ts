@@ -57,6 +57,7 @@ describe('RealtimeGateway — connection-time authentication', () => {
 
     expect(jwtService.verify).toHaveBeenCalledWith('socket-token', {
       secret: 'test-jwt-secret-32-chars-minimum!!!',
+      algorithms: ['HS256'],
     });
     expect(client.data).toEqual({
       userId,

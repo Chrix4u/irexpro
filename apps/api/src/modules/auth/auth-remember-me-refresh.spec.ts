@@ -4,6 +4,8 @@ import { AuthService } from './auth.service';
 import { RoleName } from '../users/entities/role.entity';
 import { User, UserStatus } from '../users/entities/user.entity';
 
+const USER_ID = '11111111-1111-4111-8111-111111111111';
+
 function makeAuthService() {
   const userRepo = {
     findOne: jest.fn(),
@@ -32,7 +34,7 @@ function makeAuthService() {
   );
 
   const activeUser = {
-    id: 'user-1',
+    id: USER_ID,
     email: 'user@example.com',
     status: UserStatus.ACTIVE,
     sessionVersion: 1,
@@ -50,7 +52,7 @@ describe('remember-me refresh rotation', () => {
   it('carries signed rememberMe=true through browser refresh rotation', async () => {
     const { service, jwtService } = makeAuthService();
     jwtService.verify.mockReturnValue({
-      sub: 'user-1',
+      sub: USER_ID,
       email: 'user@example.com',
       roles: [RoleName.USER],
       tokenType: 'refresh',
@@ -76,7 +78,7 @@ describe('remember-me refresh rotation', () => {
   it('downgrades a legacy refresh token without rememberMe to session-only', async () => {
     const { service, jwtService } = makeAuthService();
     jwtService.verify.mockReturnValue({
-      sub: 'user-1',
+      sub: USER_ID,
       email: 'user@example.com',
       roles: [RoleName.USER],
       tokenType: 'refresh',
@@ -96,7 +98,7 @@ describe('remember-me refresh rotation', () => {
   it('keeps native/body refresh responses limited to the two-token contract', async () => {
     const { service, jwtService } = makeAuthService();
     jwtService.verify.mockReturnValue({
-      sub: 'user-1',
+      sub: USER_ID,
       email: 'user@example.com',
       roles: [RoleName.USER],
       tokenType: 'refresh',
