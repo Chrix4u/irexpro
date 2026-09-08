@@ -778,6 +778,12 @@ A version-controlled example is also at
   or route unpredictably.
 - Use `location ^~ /api/v1/` (with `^~`) for the NestJS API so it takes
   precedence over the frontend `location /` catch-all.
+- Route the default Socket.IO / Engine.IO transport path with an explicit
+  `location ^~ /socket.io/` block to the NestJS API. `/realtime` is the
+  application namespace; it is not the HTTP/WebSocket transport path.
+- For every public NestJS location, overwrite `X-Forwarded-For` with
+  server-observed `$remote_addr`; never preserve caller-supplied forwarding
+  chains with `$proxy_add_x_forwarded_for` at the application identity boundary.
 - The AI engine (port `8011`) is **never** publicly proxied. The NestJS API
   talks to it internally at `http://127.0.0.1:8011`. Do NOT add a public
   `location` block for the AI engine through Nginx or Cloudflare.
@@ -788,6 +794,12 @@ A version-controlled example is also at
 ```nginx
 # /etc/nginx/conf.d/irexpro.conf  (AlmaLinux/Webuzo)
 # or /etc/nginx/sites-available/irexpro.conf  (Ubuntu)
+
+# Socket.IO single-VPS safety zones. These are deliberately server-wide until
+# trusted real-IP processing is configured; do not key active limits directly
+# to unverified forwarding headers.
+limit_req_zone $server_name zone=irexpro_realtime_requests:1m rate=200r/s;
+limit_conn_zone $server_name zone=irexpro_realtime_connections:1m;
 
 # Upstreams — match the ports in apps/api/.env (APP_PORT) and
 # services/ai-engine/.env (AI_ENGINE_PORT). The AI engine upstream is defined
@@ -811,13 +823,37 @@ server {
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;
 
+    # ── Socket.IO / Engine.IO transport — NestJS realtime gateway ──
+    # `/realtime` is the Socket.IO namespace; `/socket.io/` is the default
+    # Engine.IO transport path and must not fall through to Next.js.
+    location ^~ /socket.io/ {
+        client_max_body_size 64k;
+
+        limit_req zone=irexpro_realtime_requests burst=400 nodelay;
+        limit_conn irexpro_realtime_connections 1000;
+        limit_req_status 429;
+        limit_conn_status 429;
+
+        proxy_pass http://irexpro_api;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 75s;
+        proxy_send_timeout 75s;
+        proxy_buffering off;
+    }
+
     # ── NestJS API (public) — takes precedence over the frontend catch-all ──
     location ^~ /api/v1/ {
         proxy_pass http://irexpro_api;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";   # WebSocket for realtime gateway
@@ -902,6 +938,7 @@ any frontend.
 | Nginx location | Proxies to | Purpose |
 |---|---|---|
 | `location ^~ /api/v1/` | `http://127.0.0.1:3010` (NestJS API) | Public API — takes precedence |
+| `location ^~ /socket.io/` | `http://127.0.0.1:3010` (NestJS realtime transport) | Engine.IO handshake, polling, and WebSocket upgrade; `/realtime` remains the Socket.IO namespace |
 | `location ^~ /_next/static/` | `http://127.0.0.1:3005` (Next.js web) | Web static assets — cache aggressively |
 | `location /` | `http://127.0.0.1:3005` (Next.js web) | Web catch-all |
 
