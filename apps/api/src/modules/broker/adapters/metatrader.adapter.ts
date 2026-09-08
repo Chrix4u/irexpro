@@ -21,6 +21,7 @@ import {
 } from '../interfaces/broker-adapter.interface';
 import { BrokerAdapterError, BrokerErrorCode } from '../interfaces/broker-adapter.errors';
 import { MetaApiClientService } from '../services/metaapi-client.service';
+import { redactString } from '../../../common/utils/redact-sensitive.util';
 
 /** MetaAPI stringCode for a successfully executed trade */
 const MT_SUCCESS_CODE = 'TRADE_RETCODE_DONE';
@@ -800,13 +801,21 @@ export class MetaTraderAdapter implements IBrokerAdapter {
   /**
    * Map MetaAPI / network errors to typed BrokerAdapterError.
    * Never includes raw credentials in the error message.
+   *
+   * Sprint 56 credential redaction (merged from the orphan sprint): raw
+   * provider text may echo credentials (tokens/keys in error bodies). It is
+   * sanitized BEFORE entering any BrokerAdapterError field; the classifier
+   * below still reads the raw text. Complements the interface's
+   * redactSecret() (known-secret replacement) with pattern-based scrubbing
+   * of credential-shaped fragments the adapter does not know verbatim.
    */
   mapError(err: unknown): BrokerAdapterError {
     if (err instanceof BrokerAdapterError) return err;
 
-    const message = (err as any)?.message ?? 'Unknown MetaAPI error';
+    const raw = (err as any)?.message ?? 'Unknown MetaAPI error';
+    const message = redactString(raw);
     const status = (err as any)?.status ?? (err as any)?.statusCode;
-    const lower = message.toLowerCase();
+    const lower = raw.toLowerCase();
 
     if (status === 401 || lower.includes('authentication') || lower.includes('unauthorized')) {
       return new BrokerAdapterError(BrokerErrorCode.AUTHENTICATION_FAILED, message, message, false);
