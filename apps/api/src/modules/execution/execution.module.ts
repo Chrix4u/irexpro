@@ -14,6 +14,12 @@ import {
   TRADE_RECONCILIATION_QUEUE,
 } from './jobs/trade-reconciliation.job';
 import { TradeReconciliationProducer } from './jobs/trade-reconciliation.producer';
+import { StateReconciliationService } from './reconciliation/state-reconciliation.service';
+import { ReconciliationPersistenceService } from './reconciliation/reconciliation-persistence.service';
+import { ReconciliationResolutionService } from './reconciliation/reconciliation-resolution.service';
+import { ReconciliationRun } from './reconciliation/entities/reconciliation-run.entity';
+import { ReconciliationDiscrepancy } from './reconciliation/entities/reconciliation-discrepancy.entity';
+import { BrokerAccount } from '../broker/entities/broker-account.entity';
 import { RiskModule } from '../risk/risk.module';
 import { BrokerModule } from '../broker/broker.module';
 import { AuditModule } from '../audit/audit.module';
@@ -29,6 +35,13 @@ import { ExecutionControlModule } from '../execution-control/execution-control.m
  * provides the fail-closed emergency control plane the orchestrator checks
  * before every dispatch.
  *
+ * Sprint 50 PR-4: the state-reconciliation slice (Directive PHASE G) —
+ * StateReconciliationService (full internal↔provider diff per connection),
+ * ReconciliationPersistenceService (runs + discrepancy persistence), and
+ * ReconciliationResolutionService (safe, machine-guarded convergence). The
+ * scheduled TradeReconciliationJob now drives this service instead of inline
+ * per-trade logic.
+ *
  * Circular dependency with RiskModule (Risk uses ExecutionService for
  * trade counts / daily P&L; Execution uses RiskDecision types).
  * Resolved via forwardRef() on both sides.
@@ -37,7 +50,14 @@ import { ExecutionControlModule } from '../execution-control/execution-control.m
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Trade, TradingSession, Order]),
+    TypeOrmModule.forFeature([
+      Trade,
+      TradingSession,
+      Order,
+      BrokerAccount,
+      ReconciliationRun,
+      ReconciliationDiscrepancy,
+    ]),
     BullModule.registerQueue({ name: TRADE_RECONCILIATION_QUEUE }),
     forwardRef(() => RiskModule),
     BrokerModule,
@@ -50,6 +70,9 @@ import { ExecutionControlModule } from '../execution-control/execution-control.m
     ExecutionOrchestrator,
     ExecutionReadService,
     OrderService,
+    StateReconciliationService,
+    ReconciliationPersistenceService,
+    ReconciliationResolutionService,
     TradeReconciliationJob,
     TradeReconciliationProducer,
   ],

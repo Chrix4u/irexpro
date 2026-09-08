@@ -24,6 +24,9 @@ const makeAdapter = (brokerId: string, brokerName: string): IBrokerAdapter => ({
   closeOrder: jest.fn(),
   closeAllOrders: jest.fn(),
   getClosedTrades: jest.fn(),
+  // Sprint 50 PR-4: provider order-state read surface
+  listOrders: jest.fn(),
+  getOrderById: jest.fn(),
   // Sprint 32 Gate 2: required margin capability
   getRequiredMargin: jest.fn().mockResolvedValue(null),
 });

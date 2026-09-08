@@ -185,6 +185,9 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
       closeOrder: jest.fn(),
       closeAllOrders: jest.fn(),
       getClosedTrades: jest.fn(),
+      // Sprint 50 PR-4: provider order-state read surface
+      listOrders: jest.fn(),
+      getOrderById: jest.fn(),
     } as IBrokerAdapter;
     // Sprint 50 correction round: the connection fixture carries the
     // credential lifecycle state, and the (Phase D) orchestrator boundary

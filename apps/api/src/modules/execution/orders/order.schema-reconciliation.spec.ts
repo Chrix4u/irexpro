@@ -168,7 +168,11 @@ describe('Order domain schema reconciliation', () => {
       path.resolve(__dirname, '../execution.module.ts'),
       'utf-8',
     );
-    expect(moduleSource).toMatch(/TypeOrmModule\.forFeature\(\[Trade, TradingSession, Order\]\)/);
+    // Sprint 50 PR-4: forFeature also registers BrokerAccount + the
+    // reconciliation run/discrepancy entities (state-reconciliation slice).
+    expect(moduleSource).toMatch(
+      /TypeOrmModule\.forFeature\(\[[\s\S]*?\bTrade\b[\s\S]*?\bTradingSession\b[\s\S]*?\bOrder\b[\s\S]*?\]/,
+    );
     expect(moduleSource).toMatch(/providers:\s*\[[\s\S]*?OrderService/);
     expect(moduleSource).toMatch(/exports:\s*\[[\s\S]*?OrderService/);
   });

@@ -11,6 +11,7 @@ import {
   BrokerOrderModification,
   BrokerOrderRequest,
   BrokerOrderResult,
+  BrokerOrderState,
   BrokerPosition,
   BrokerPrice,
   DecryptedBrokerCredentials,
@@ -169,6 +170,56 @@ export class MetaTraderAdapter implements IBrokerAdapter {
       const mapped = this.mapError(err);
       if (mapped.code === BrokerErrorCode.POSITION_NOT_FOUND) return null;
       throw mapped;
+    }
+  }
+
+  // ─── Provider order state (Sprint 50 PR-4 — reconciliation read surface) ──
+
+  /**
+   * List OPEN (working) MetaTrader orders via the RPC connection.
+   *
+   * MetaAPI getOrders() returns pending orders (LIMIT/STOP/STOP_LIMIT) plus
+   * market orders in transient request states — exactly the working set
+   * reconciliation needs to diff against internal non-terminal orders.
+   * Completed orders are NOT included (they live in history; getOrderById
+   * resolves those).
+   */
+  async listOrders(): Promise<BrokerOrderState[]> {
+    const conn = await this.getActiveConnection();
+    try {
+      const orders = await conn.getOrders();
+      return (orders ?? []).map((o: any) => this.mapOrderState(o));
+    } catch (err) {
+      throw this.mapError(err);
+    }
+  }
+
+  /**
+   * Look up a single order by ticket — open orders first, then history.
+   *
+   * Resolves uncertain execution results by stable identifier (Directive
+   * §26): if the provider known the ticket we learn its ACTUAL state without
+   * re-submitting anything. MetaAPI history lookups may still be
+   * synchronizing; a `synchronizing` result is treated as "not found yet"
+   * (null) — the next reconciliation run retries. NEVER guesses.
+   */
+  async getOrderById(providerOrderId: string): Promise<BrokerOrderState | null> {
+    const conn = await this.getActiveConnection();
+    try {
+      // 1. Open (working) orders — authoritative while the order is live.
+      const orders = await conn.getOrders();
+      const open = (orders ?? []).find((o: any) => String(o.id) === providerOrderId);
+      if (open) return this.mapOrderState(open);
+
+      // 2. History (completed) orders by ticket. When history sync is still
+      //    in progress the result is incomplete — return null so the caller
+      //    retries later rather than concluding "provider never knew it".
+      const history = await conn.getHistoryOrdersByTicket(providerOrderId);
+      if (!history || history.synchronizing) return null;
+      const done = (history.historyOrders ?? []).find((o: any) => String(o.id) === providerOrderId);
+      return done ? this.mapOrderState(done) : null;
+    } catch (err) {
+      throw this.mapError(err);
     }
   }
 
@@ -635,6 +686,86 @@ export class MetaTraderAdapter implements IBrokerAdapter {
       commission: this.toDecimalString(p.commission),
       swap: this.toDecimalString(p.swap),
     };
+  }
+
+  /**
+   * Sprint 50 PR-4 — normalize a MetatraderOrder (open or history) into the
+   * reconciliation BrokerOrderState contract.
+   *
+   * - Filled quantity = requested volume − remaining currentVolume (MetaAPI
+   *   reports both; the difference is the filled part).
+   * - Unrecognized ORDER_STATE_* values map to UNKNOWN — reconciliation
+   *   must fail closed on ambiguity, never guess an interpretation.
+   * - Unknown order types map to null orderKind (kind is informational for
+   *   reconciliation; state is what drives resolution).
+   */
+  private mapOrderState(o: any): BrokerOrderState {
+    const requested = typeof o.volume === 'number' ? o.volume : 0;
+    const remaining = typeof o.currentVolume === 'number' ? o.currentVolume : requested;
+    const filled = Math.max(0, requested - remaining);
+    const isBuy = String(o.type ?? '').includes('BUY');
+
+    return {
+      providerOrderId: String(o.id),
+      clientOrderId: o.clientId ? String(o.clientId) : null,
+      status: this.mapOrderStatus(String(o.state ?? '')),
+      instrument: o.symbol ?? '',
+      direction: isBuy ? 'BUY' : 'SELL',
+      requestedQuantity: this.toDecimalString(requested),
+      filledQuantity: this.toDecimalString(filled),
+      // For working pending orders MetaAPI reports openPrice as the order's
+      // price level; a fill price is only meaningful once volume filled.
+      avgFillPrice: filled > 0 ? this.toDecimalString(o.openPrice) : null,
+      orderKind: this.mapOrderKind(String(o.type ?? '')),
+      limitPrice: this.toDecimalString(o.openPrice),
+      stopPrice: o.stopLoss !== undefined ? this.toDecimalString(o.stopLoss) : null,
+      timeInForce: null,
+      placedAt: o.time ?? null,
+      updatedAt: o.doneTime ?? null,
+    };
+  }
+
+  private mapOrderStatus(state: string): BrokerOrderState['status'] {
+    switch (state) {
+      case 'ORDER_STATE_STARTED':
+      case 'ORDER_STATE_PLACED':
+      case 'ORDER_STATE_REQUEST_ADD':
+      case 'ORDER_STATE_REQUEST_MODIFY':
+      case 'ORDER_STATE_REQUEST_CANCEL':
+        return 'WORKING';
+      case 'ORDER_STATE_PARTIAL':
+        return 'PARTIALLY_FILLED';
+      case 'ORDER_STATE_FILLED':
+        return 'FILLED';
+      case 'ORDER_STATE_CANCELED':
+        return 'CANCELLED';
+      case 'ORDER_STATE_REJECTED':
+        return 'REJECTED';
+      case 'ORDER_STATE_EXPIRED':
+        return 'EXPIRED';
+      default:
+        // Fail-closed: unrecognized provider state must never be guessed.
+        return 'UNKNOWN';
+    }
+  }
+
+  private mapOrderKind(type: string): BrokerOrderState['orderKind'] {
+    switch (type) {
+      case 'ORDER_TYPE_BUY':
+      case 'ORDER_TYPE_SELL':
+        return 'MARKET';
+      case 'ORDER_TYPE_BUY_LIMIT':
+      case 'ORDER_TYPE_SELL_LIMIT':
+        return 'LIMIT';
+      case 'ORDER_TYPE_BUY_STOP':
+      case 'ORDER_TYPE_SELL_STOP':
+        return 'STOP';
+      case 'ORDER_TYPE_BUY_STOP_LIMIT':
+      case 'ORDER_TYPE_SELL_STOP_LIMIT':
+        return 'STOP_LIMIT';
+      default:
+        return null;
+    }
   }
 
   private mapClosedDeal(d: any): BrokerClosedTrade {

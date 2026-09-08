@@ -118,3 +118,40 @@ export interface SystemNotificationPayload {
   severity: 'info' | 'warning' | 'error';
   code?: string;
 }
+
+// ─── State reconciliation (Sprint 50 PR-4) ──────────────────────────────────
+
+/**
+ * Frontend-safe payload for a completed reconciliation run. Counters and
+ * identities only — no credentials, no raw provider payloads.
+ */
+export interface ReconciliationRunEventPayload {
+  userId: string;
+  runId: string;
+  brokerConnectionId: string;
+  brokerId: string;
+  status: string;
+  discrepanciesDetected: number;
+  discrepanciesNew: number;
+  discrepanciesOpen: number;
+  completedAt: string;
+}
+
+/**
+ * Frontend-safe payload for ONE discrepancy lifecycle event (detected or
+ * resolved). Identity + classification only; `details` stays server-side
+ * (user APIs expose a curated projection later — PR-5).
+ */
+export interface ReconciliationDiscrepancyEventPayload {
+  userId: string;
+  discrepancyId: string;
+  brokerConnectionId: string;
+  type: string;
+  severity: string;
+  internalRefType?: string | null;
+  internalRefId?: string | null;
+  providerRef?: string | null;
+  clientOrderId?: string | null;
+  /** ISO timestamp of detection (detected) or resolution (resolved). */
+  at: string;
+}

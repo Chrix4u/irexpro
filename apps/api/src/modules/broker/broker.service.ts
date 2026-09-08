@@ -13,6 +13,7 @@ import { BrokerAccount } from './entities/broker-account.entity';
 import { BrokerAdapterRegistry } from './adapters/broker-adapter.registry';
 import { CredentialEncryptionService } from './services/credential-encryption.service';
 import {
+  BrokerAccountInfo,
   BrokerConnectionStatus,
   BrokerMode,
   DecryptedBrokerCredentials,
@@ -64,6 +65,18 @@ export class BrokerService {
   ) {}
 
   // ─── Read operations ──────────────────────────────────────────────────────
+
+  /**
+   * Sprint 50 PR-4 — load connections by id for the reconciliation worker
+   * (it discovers candidate connection ids from internal trading state and
+   * needs the full connection rows to reach their adapters).
+   */
+  async findConnectionsByIds(connectionIds: string[]): Promise<BrokerConnection[]> {
+    if (connectionIds.length === 0) return [];
+    return this.connectionRepo.find({
+      where: connectionIds.map((id) => ({ id }) as never),
+    });
+  }
 
   async findConnectionsByUser(userId: string): Promise<BrokerConnection[]> {
     return this.connectionRepo.find({
@@ -1146,6 +1159,51 @@ export class BrokerService {
           equity: updates?.equity ?? '0',
           syncedAt: new Date(),
         }),
+      );
+    }
+  }
+
+  /**
+   * Sprint 50 PR-4 — full account-snapshot sync from provider-observed state.
+   *
+   * Called by the state reconciliation run AFTER comparing the previously
+   * stored snapshot against the provider's account info (mismatch detection
+   * happens on the PRE-sync stored values — the point is to observe drift,
+   * then converge). Unlike upsertBrokerAccount (balance/equity only), this
+   * refreshes margin, freeMargin, marginLevel, leverage, currency and the
+   * open-positions count — fields the health check never populated.
+   *
+   * Idempotent upsert keyed on broker_connection_id (unique constraint).
+   */
+  async applyProviderAccountSnapshot(
+    connectionId: string,
+    account: BrokerAccountInfo,
+    openPositionsCount: number,
+  ): Promise<void> {
+    const existing = await this.accountRepo.findOne({
+      where: { brokerConnectionId: connectionId },
+    });
+
+    const patch = {
+      balance: account.balance,
+      equity: account.equity,
+      margin: account.margin,
+      freeMargin: account.freeMargin,
+      marginLevel: account.marginLevel,
+      currency: account.currency,
+      leverage: account.leverage,
+      openPositionsCount,
+      syncedAt: new Date(),
+    };
+
+    if (existing) {
+      await this.accountRepo.update(existing.id, patch as never);
+    } else {
+      await this.accountRepo.save(
+        this.accountRepo.create({
+          brokerConnectionId: connectionId,
+          ...patch,
+        } as never),
       );
     }
   }

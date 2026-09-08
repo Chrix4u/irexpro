@@ -91,6 +91,27 @@ export interface IBrokerAdapter {
   // ─── Trade history ────────────────────────────────────────────────────────
 
   getClosedTrades(from: Date, to: Date): Promise<BrokerClosedTrade[]>;
+
+  // ─── Provider order state (Sprint 50 PR-4 — reconciliation read surface) ──
+
+  /**
+   * List OPEN (working) orders known to the provider for the connected
+   * account — pending LIMIT/STOP/STOP_LIMIT orders plus market orders in
+   * transient states. Does NOT include history (completed) orders.
+   *
+   * Reconciliation compares this list against internal non-terminal orders
+   * to detect missing/unknown/stale order state. Adapters that cannot list
+   * orders must throw (fail-closed) — never return a fabricated empty list.
+   */
+  listOrders(): Promise<BrokerOrderState[]>;
+
+  /**
+   * Look up a single provider order by its stable identifier — including
+   * COMPLETED (history) orders. Returns null when the provider knows no
+   * such order. Used to resolve uncertain execution results by stable
+   * identifier (Directive §26) without re-submitting anything.
+   */
+  getOrderById(providerOrderId: string): Promise<BrokerOrderState | null>;
 }
 
 // ─── Enums ────────────────────────────────────────────────────────────────────
@@ -229,6 +250,47 @@ export interface BrokerCloseAllResult {
 }
 
 // ─── Position / trade types ───────────────────────────────────────────────────
+
+// ─── Provider order state (Sprint 50 PR-4 — reconciliation) ────────────────
+
+/**
+ * Provider-side view of ONE order (working or completed), normalized for
+ * reconciliation. All quantities/prices are decimal strings — never floats.
+ * `raw` is the provider payload retained in-memory only — never persisted.
+ */
+export interface BrokerOrderState {
+  /** Provider-assigned order identifier (ticket number). */
+  providerOrderId: string;
+  /** Caller-supplied stable identifier, when the provider echoes it. */
+  clientOrderId?: string | null;
+  /** Normalized provider order state. UNKNOWN = unrecognized provider value
+   * (fail-closed: reconciliation must NOT guess an interpretation). */
+  status:
+    | 'WORKING'
+    | 'PARTIALLY_FILLED'
+    | 'FILLED'
+    | 'CANCELLED'
+    | 'REJECTED'
+    | 'EXPIRED'
+    | 'UNKNOWN';
+  instrument: string;
+  direction: 'BUY' | 'SELL';
+  /** Requested quantity (lots, decimal string). */
+  requestedQuantity: string;
+  /** Filled quantity so far (lots, decimal string). */
+  filledQuantity: string;
+  /** Volume-weighted average fill price, when any fill occurred. */
+  avgFillPrice?: string | null;
+  orderKind?: 'MARKET' | 'LIMIT' | 'STOP' | 'STOP_LIMIT' | null;
+  limitPrice?: string | null;
+  stopPrice?: string | null;
+  timeInForce?: string | null;
+  placedAt?: Date | null;
+  /** When the order reached a terminal provider state, if known. */
+  updatedAt?: Date | null;
+  /** In-memory only — never logged or persisted. */
+  raw?: unknown;
+}
 
 export interface BrokerPosition {
   externalOrderId: string;
