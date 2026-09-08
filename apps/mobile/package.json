@@ -10,7 +10,7 @@
     "ios": "expo start --ios",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
-    "test": "node scripts/test-account-security.cjs",
+    "test": "node scripts/test-account-security.cjs && jest",
     "test:broker-mobile": "jest",
     "test:broker-mobile:watch": "jest --watch",
     "validate:release-config": "node ./scripts/validate-release-config.cjs",
