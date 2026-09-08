@@ -334,3 +334,80 @@ enum BrokerErrorCode {
 | Order placement times out | Retry up to 3 times; if still failing, record as RECONCILIATION_PENDING |
 | OHLCV data unavailable | AI Signal Engine falls back to cached data; if stale > threshold, suspend signals |
 | Broker returns DUPLICATE_ORDER | Idempotency check; return existing order record without new submission |
+
+---
+
+## 14. Sprint 56 — Server-Authoritative Catalog, Verification Program & Universal cTrader Engine
+
+**Sprint 56 (broker-completion, re-integrated onto the merged main) adds
+four layers to this architecture. Authoritative per-broker status, evidence,
+and blockers live in `docs/brokers/provider-matrix.md`.**
+
+### 14.1 Server-authoritative broker catalog (status honesty + Phase H gate)
+
+The static, versioned `BROKER_CATALOG` (`registry/broker-catalog.ts`) is the
+single server-side source of truth. Every `BrokerDefinition` carries a
+normalized `BrokerCapability` set (Directive §M), connection routes,
+explicit `environments`, an `authenticationType`, and a `status`
+(`BrokerAvailabilityStatus`: SUPPORTED / BETA / NOT_STARTED /
+PARTNER_APPROVAL_REQUIRED / UNAVAILABLE) that MUST match implementation
+evidence. `BrokerProviderRegistryService` overlays live adapter
+availability: **a catalog entry without a registered adapter can never be
+reported as SUPPORTED** — the effective status degrades automatically.
+Clients (web/admin/mobile) derive the catalog from
+`GET /api/v1/broker/registry` — never from client-side lists (Directive §AU).
+
+Implementation status is **separate from production-LIVE approval**
+(`BrokerProductionLiveVerification`: `UNVERIFIED` / `VERIFIED` — architect
+Phase H). `isProductionLiveEligible(id)` is the fail-closed LIVE gate: absent
+or `UNVERIFIED` ⇒ `createConnection(LIVE)` and `enableLiveTrading` reject
+with `ForbiddenException` (BETA providers are DEMO-only). `VERIFIED` requires
+operator-attested evidence (`verifiedAt` + `evidenceRef` — never secrets).
+Only metatrader5 carries `VERIFIED` today (retained production route).
+
+### 14.2 The shared cTrader Open API engine (universal provider)
+
+`adapters/ctrader/` implements one universal engine over the official
+**JSON-over-WebSocket** transport (port 5036 — the only JSON port): OAuth 2.0
+(platform app `CTRADER_CLIENT_ID/SECRET` + user access token via the
+`id.ctrader.com` consent flow), DEMO/LIVE hosts hard-isolated
+(`wss://demo|live.ctraderapi.com:5036`), 10s heartbeats, 50/5 req/s rate
+limits, clientMsgId-echo request matching, and the full trading surface (all
+four order types, modify/cancel/close, positions, reconciliation, deal
+history, native margin). Zero new npm dependencies (Node native WebSocket +
+fetch). `pepperstone-ctrader` and `icmarkets-ctrader` are **alias catalog
+entries sharing this one engine** — duplicated execution engines are
+prohibited. Real-account usage is **partner-approval-blocked**: the operator
+must register and obtain approval for a cTrader Open API application and
+supply its OAuth client credentials; unconfigured credentials fail closed
+without ever opening a socket.
+
+### 14.3 Evidence-based DEMO validation (`validate-demo`)
+
+`POST /broker/connections/:connectionId/validate-demo` is the honest
+`demoValidated` write path: a capability-aware checklist (14 user-facing
+steps from connect through order round-trips to history) runs against the
+real adapter, with every step PASS/FAIL/SKIPPED and sanitized detail
+(credentials never recorded — `redactString` on all evidence). PASS sets
+`demoValidated`; **FAIL revokes a previously-set flag** (fail-closed — the
+`enableLiveTrading` gate re-checks at that moment). This strengthens main's
+connect-time `demoValidated` auto-write (a connect-implies-validated proxy)
+into checklist-driven validation with audit evidence, unblocking the
+DEMO-first LIVE-authorization invariant.
+
+### 14.4 The credential-gated provider-verification harness program
+
+`verification/provider-verification-harness.ts` runs an 18-step canonical
+checklist (connect → account-info → market-data → positions → market order →
+SL/TP modify → partial/full close → trade history → pending order cycle →
+margin → reconciliation → reconnect → provider error path) with strict
+decimal-string money discipline and sanitized evidence records. Operator
+entry points are env-gated specs (`oanda.demo-verification.spec.ts`,
+`ctrader.demo-verification.spec.ts`) that run only with operator-supplied
+real credentials — **CI is credential-free** (the suites report SKIPPED; the
+always-on `paper.harness.spec.ts` proves the machinery). Evidence levels:
+DEMO-VERIFIED (harness run with real practice credentials, recorded in the
+provider matrix) and PRODUCTION-LIVE-VERIFIED (operator-attested
+`evidenceRef` + `verifiedAt` in the catalog). **Unit/contract/sandbox tests
+never flip `productionLiveVerification`** — only an operator edit with
+recorded evidence does.
