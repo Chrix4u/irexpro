@@ -102,7 +102,6 @@ describe("isLiveSelectable (Phase I — production-LIVE release-truth)", () => {
   });
 
   it("absent productionLiveVerification fails closed (older cached wire payloads)", () => {
-    // entry() has no productionLiveVerification field at all.
     expect(isLiveSelectable(entry({}))).toBe(false);
   });
 
@@ -191,6 +190,33 @@ describe("buildConnectionRequest (fail-closed validation)", () => {
       expect(result.brokerId).toBe("oanda");
       expect(result.accountType).toBe("DEMO");
       expect(result.apiKey).toBe("tok-abc");
+    }
+  });
+
+  it("rejects LIVE even when declared if production verification is absent", () => {
+    const result = buildConnectionRequest(entry({}), "LIVE", "acct", "tok");
+    expect("error" in result).toBe(true);
+    if ("error" in result) {
+      expect(result.error).toContain("not production-verified");
+    }
+  });
+
+  it("allows LIVE only when the registry carries VERIFIED production evidence", () => {
+    const result = buildConnectionRequest(
+      entry({
+        productionLiveVerification: {
+          status: "VERIFIED",
+          verifiedAt: "2025-09-01T00:00:00.000Z",
+          evidenceRef: "docs/brokers/provider-matrix.md",
+        },
+      }),
+      "LIVE",
+      "acct",
+      "tok",
+    );
+    expect("error" in result).toBe(false);
+    if (!("error" in result)) {
+      expect(result.accountType).toBe("LIVE");
     }
   });
 
