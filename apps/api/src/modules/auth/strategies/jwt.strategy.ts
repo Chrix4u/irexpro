@@ -33,7 +33,9 @@ export interface JwtPayload {
  *
  * Logout, password reset, and refresh rotation advance session_version, so
  * stale access tokens are rejected immediately rather than remaining valid
- * until their normal expiry.
+ * until their normal expiry. The matched generation is retained on the
+ * sanitized principal so downstream auth mutations can bind their CAS to the
+ * exact token generation that passed this validation boundary.
  */
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -93,6 +95,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       phone: user.phone,
       roles: payload.roles ?? [],
       status: user.status,
+      authenticatedSessionVersion: userVersion,
     };
   }
 }
