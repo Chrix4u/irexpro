@@ -59,7 +59,7 @@ jobs:
 
       - name: Commit permanent pagination change
         run: |
-          git rm .github/workflows/tmp-account-appeal-pagination.yml scripts/tmp-account-appeal-pagination.py
+          git rm -f .github/workflows/tmp-account-appeal-pagination.yml scripts/tmp-account-appeal-pagination.py
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add apps/api packages/types packages/api-client apps/admin
