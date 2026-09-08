@@ -33,7 +33,7 @@ const REVIEW_DECISIONS: Array<{
     description:
       "Closes the account while retaining the record and audit history.",
   },
-]
+];
 
 const APPEAL_PAGE_SIZE = 20;
 
@@ -59,6 +59,7 @@ export default function AccountAppealsPage() {
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
+  const [refreshKey, setRefreshKey] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -76,13 +77,15 @@ export default function AccountAppealsPage() {
     (async () => {
       try {
         const response = await api.listAccountAppeals({
-          status: 'PENDING',
+          status: "PENDING",
           page,
           limit: APPEAL_PAGE_SIZE,
         });
         if (cancelled) return;
-        if (response.totalPages > 0 && page > response.totalPages) {
-          setPage(response.totalPages);
+        const canonicalPage =
+          response.totalPages === 0 ? 1 : Math.min(page, response.totalPages);
+        if (canonicalPage !== page) {
+          setPage(canonicalPage);
           return;
         }
         setAppeals(response.items);
@@ -93,7 +96,7 @@ export default function AccountAppealsPage() {
           setError(
             requestError instanceof Error
               ? requestError.message
-              : 'Unable to load account reviews.',
+              : "Unable to load account reviews.",
           );
         }
       } finally {
@@ -103,7 +106,7 @@ export default function AccountAppealsPage() {
     return () => {
       cancelled = true;
     };
-  }, [hasAdminRole, page]);
+  }, [hasAdminRole, page, refreshKey]);
 
   const selectedAppeal =
     appeals.find((appeal) => appeal.id === selectedId) ?? null;
@@ -136,21 +139,26 @@ export default function AccountAppealsPage() {
         decision,
         ...(reviewerNote.trim() ? { reviewerNote: reviewerNote.trim() } : {}),
       });
-      const remainingItems = appeals.filter(
-        (appeal) => appeal.id !== selectedAppeal.id,
-      );
       const nextTotal = Math.max(0, total - 1);
       const nextTotalPages =
         nextTotal === 0 ? 0 : Math.ceil(nextTotal / APPEAL_PAGE_SIZE);
-      setAppeals(remainingItems);
+      const nextPage =
+        nextTotalPages === 0 ? 1 : Math.min(page, nextTotalPages);
+
+      setAppeals((current) =>
+        current.filter((appeal) => appeal.id !== selectedAppeal.id),
+      );
       setTotal(nextTotal);
       setTotalPages(nextTotalPages);
-      if (remainingItems.length === 0 && page > 1) {
-        setPage(page - 1);
-      }
       setSelectedId(null);
       setReviewerNote("");
       setConfirmed(false);
+
+      if (nextPage !== page) {
+        setPage(nextPage);
+      } else {
+        setRefreshKey((current) => current + 1);
+      }
     } catch (requestError) {
       setError(
         requestError instanceof Error
@@ -222,11 +230,11 @@ export default function AccountAppealsPage() {
           {totalPages > 1 && (
             <div
               style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: '0.75rem',
-                marginTop: '1rem',
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "0.75rem",
+                marginTop: "1rem",
               }}
             >
               <Button
