@@ -442,8 +442,17 @@ export class AuthController {
       ? this.authCookieService.getRefreshTokenFromCookie(req)
       : undefined;
 
+    const authenticatedSessionVersion = principal.authenticatedSessionVersion;
+    if (
+      typeof authenticatedSessionVersion !== 'number' ||
+      !Number.isInteger(authenticatedSessionVersion) ||
+      authenticatedSessionVersion < 0
+    ) {
+      throw new UnauthorizedException('User session is no longer valid');
+    }
+
     const tokens = await this.authService.revokeOtherSessions(principal.userId, {
-      authenticatedSessionVersion: principal.authenticatedSessionVersion,
+      authenticatedSessionVersion,
       ipAddress: req.ip,
       inheritRememberMeFrom: cookieRefreshToken,
     });
