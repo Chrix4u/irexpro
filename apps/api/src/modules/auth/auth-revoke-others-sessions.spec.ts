@@ -15,8 +15,10 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
  * Semantics: compare-and-set bump of the global session generation v → v+1
  * (kills every OTHER session's access/refresh tokens and realtime sockets via
  * the existing global checks) while immediately re-issuing a fresh token pair
- * to the CALLER at v+1. CAS loss (affected !== 1) fails closed exactly like
- * refresh rotation: 401, no minting, no audit.
+ * to the CALLER at v+1. For HTTP callers, v is the exact generation already
+ * validated by JwtStrategy and retained on AuthenticatedPrincipal — never a
+ * later database generation observed after authentication. CAS loss
+ * (affected !== 1) fails closed: 401, no minting, no audit.
  */
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
@@ -115,6 +117,34 @@ describe('Sprint 55 — POST /auth/sessions/revoke-others', () => {
         new UnauthorizedException('Session state changed concurrently; please retry'),
       );
 
+      expect(jwtService.sign).not.toHaveBeenCalled();
+      expect(auditService.log).not.toHaveBeenCalled();
+    });
+
+    it('binds the CAS to the bearer generation that authenticated the request, not a later DB generation', async () => {
+      const { service, userRepo, jwtService, auditService, user } = buildService();
+
+      // Simulate the race boundary: this request passed JwtStrategy at v=4,
+      // then another request advanced the authoritative row to v=5 before this
+      // service method loaded it. The stale request must NOT adopt v=5 and
+      // advance it to v=6.
+      user.sessionVersion = 5;
+      userRepo.update.mockResolvedValueOnce({ affected: 0 });
+
+      await expect(
+        service.revokeOtherSessions(user.id, { authenticatedSessionVersion: 4 }),
+      ).rejects.toThrow(
+        new UnauthorizedException('Session state changed concurrently; please retry'),
+      );
+
+      expect(userRepo.update).toHaveBeenCalledWith(
+        { id: user.id, sessionVersion: 4 },
+        { sessionVersion: 5 },
+      );
+      expect(userRepo.update).not.toHaveBeenCalledWith(
+        { id: user.id, sessionVersion: 5 },
+        { sessionVersion: 6 },
+      );
       expect(jwtService.sign).not.toHaveBeenCalled();
       expect(auditService.log).not.toHaveBeenCalled();
     });
@@ -223,6 +253,7 @@ describe('Sprint 55 — POST /auth/sessions/revoke-others', () => {
       phone: null,
       roles: [RoleName.USER],
       status: UserStatus.ACTIVE,
+      authenticatedSessionVersion: 4,
     } as never;
 
     function buildController() {
@@ -277,6 +308,7 @@ describe('Sprint 55 — POST /auth/sessions/revoke-others', () => {
       const result = await controller.revokeOtherSessions(principal, mockRequest(), res);
 
       expect(authService.revokeOtherSessions).toHaveBeenCalledWith(USER_ID, {
+        authenticatedSessionVersion: 4,
         ipAddress: '127.0.0.1',
         inheritRememberMeFrom: undefined,
       });
@@ -292,6 +324,7 @@ describe('Sprint 55 — POST /auth/sessions/revoke-others', () => {
       const result = await controller.revokeOtherSessions(principal, req, res, 'cookie');
 
       expect(authService.revokeOtherSessions).toHaveBeenCalledWith(USER_ID, {
+        authenticatedSessionVersion: 4,
         ipAddress: '127.0.0.1',
         inheritRememberMeFrom: 'cookie-refresh',
       });
