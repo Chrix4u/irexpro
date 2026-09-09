@@ -581,6 +581,47 @@ export interface SupportedBroker {
   supportsLive: boolean;
 }
 
+// ── Sprint 56 correction round 1: cTrader OAuth connection flow ─────────────
+
+/** A cTID account discovered for an authorized OAuth token (GET 2149 result). */
+export interface BrokerOAuthAccount {
+  /** Global cTrader account id (string form of the int64 id — not a secret). */
+  ctidTraderAccountId: string;
+  /** Server-reported environment of the account (DEMO/LIVE boundary). */
+  isLive: boolean;
+  traderLogin?: number;
+  brokerTitleShort?: string;
+}
+
+/** POST /broker/connections/oauth/authorize response. */
+export interface BrokerOAuthStartResult {
+  /** Official id.ctrader.com consent URL — open in an EXTERNAL browser. */
+  authorizationUrl: string;
+  /** Server-side single-use flow correlation id (keep locally, present with the code). */
+  flowId: string;
+  expiresAt: string;
+}
+
+/** POST /broker/connections/oauth/complete response (NO token material). */
+export interface BrokerOAuthAccountsResult {
+  flowId: string;
+  accounts: BrokerOAuthAccount[];
+}
+
+/** POST /broker/connections/oauth/complete request body. */
+export interface CompleteBrokerOAuthRequest {
+  flowId: string;
+  /** Single-use authorization code delivered by the Spotware redirect (60 s TTL). */
+  code: string;
+}
+
+/** POST /broker/connections/oauth/link request body. */
+export interface LinkBrokerOAuthRequest {
+  flowId: string;
+  ctidTraderAccountId: string;
+  displayName?: string;
+}
+
 /** Request body for POST /broker/connections (create connection). */
 export interface CreateBrokerConnectionRequest {
   brokerId: string;

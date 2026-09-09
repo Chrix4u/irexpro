@@ -9,8 +9,14 @@ import { ConfirmDialog } from '@/components/notifications/ConfirmDialog';
 import { useNotification } from '@/hooks/useNotification';
 import { mapApiError } from '@/lib/error-mapping';
 import { api } from '@/lib/api';
+import { IREXPRO_BROKER_OAUTH_FLOW_KEY } from '@/lib/broker-oauth-flow';
 import { formatEnumLabel } from '@irexpro/types';
-import type { SupportedBroker, BrokerConnectionView, BrokerTestResult } from '@irexpro/types';
+import type {
+  SupportedBroker,
+  BrokerConnectionView,
+  BrokerTestResult,
+  BrokerRegistryEntry,
+} from '@irexpro/types';
 
 /**
  * Onboarding step 3: Broker connection.
@@ -29,6 +35,9 @@ import type { SupportedBroker, BrokerConnectionView, BrokerTestResult } from '@i
  * API calls, ConfirmDialog, and notifications unchanged.
  */
 type BrokerAction = 'testing' | 'saving' | 'connecting' | 'disconnecting' | 'deleting';
+
+/** Connectable statuses per the registry's status-honesty rules (§AB). */
+const REGISTRY_CONNECTABLE_STATUSES: readonly string[] = ['SUPPORTED', 'BETA'];
 
 export default function OnboardingBrokerPage() {
   const router = useRouter();
@@ -56,6 +65,7 @@ export default function OnboardingBrokerPage() {
   });
 
   const [supportedBrokers, setSupportedBrokers] = useState<SupportedBroker[]>([]);
+  const [registryEntries, setRegistryEntries] = useState<BrokerRegistryEntry[]>([]);
   const [connections, setConnections] = useState<BrokerConnectionView[]>([]);
 
   const [selectedBrokerId, setSelectedBrokerId] = useState('');
@@ -69,14 +79,23 @@ export default function OnboardingBrokerPage() {
     let cancelled = false;
     (async () => {
       try {
-        const [brokers, conns] = await Promise.all([
+        const [brokers, conns, registry] = await Promise.all([
           api.listSupportedBrokers(),
           api.listBrokerConnections(),
+          // Directive §AU — the server-authoritative catalog drives the
+          // connection model (OAuth vs credentials) and alias availability.
+          api.listBrokerRegistry().catch(() => null),
         ]);
         if (cancelled) return;
         setSupportedBrokers(brokers);
         setConnections(conns);
-        if (brokers.length > 0) setSelectedBrokerId(brokers[0].brokerId);
+        if (registry) {
+          setRegistryEntries(registry.brokers);
+          const selectable = registry.brokers.filter((e) => e.adapterAvailable);
+          if (selectable.length > 0) setSelectedBrokerId(selectable[0].id);
+        } else if (brokers.length > 0) {
+          setSelectedBrokerId(brokers[0].brokerId);
+        }
       } catch (err) {
         // Silently notify — don't block the page (user can still attempt actions).
         if (!cancelled) notify.error(mapApiError(err).message);
@@ -255,12 +274,47 @@ export default function OnboardingBrokerPage() {
     }
   }
 
+  /**
+   * cTrader-family OAuth connection flow (Sprint 56 correction — audit
+   * point 6): start the server-side flow, keep the flowId locally for the
+   * external-browser round trip, then redirect the user to the official
+   * id.ctrader.com consent screen. iRexPro never sees cTrader passwords —
+   * only the OAuth authorization code comes back via the registered
+   * redirect (handled on /onboarding/broker/callback).
+   */
+  async function handleAuthorizeOAuth() {
+    setError(null);
+    if (!selectedBrokerId) return;
+    setAction('saving');
+    try {
+      const start = await api.startBrokerOAuth(selectedBrokerId);
+      sessionStorage.setItem(IREXPRO_BROKER_OAUTH_FLOW_KEY, start.flowId);
+      window.location.assign(start.authorizationUrl);
+    } catch (err) {
+      setError(mapApiError(err).message);
+      notify.error(mapApiError(err).message);
+      setAction(null);
+    }
+  }
+
   function statusVariant(status: BrokerConnectionView['status']): 'success' | 'error' | 'warning' | 'info' {
     if (status === 'CONNECTED') return 'success';
     if (status === 'ERROR') return 'error';
     if (status === 'DISCONNECTED') return 'warning';
     return 'info';
   }
+
+  // Server-authoritative connection model (Directive §AU): the registry
+  // decides OAuth vs credentials. Fallback to the summary list when the
+  // registry is unreachable (offline-tolerant, same as before).
+  const selectedRegistryEntry = registryEntries.find((e) => e.id === selectedBrokerId);
+  const selectedIsOAuth = selectedRegistryEntry?.authenticationType === 'OAUTH';
+  const selectableEntries = registryEntries.filter(
+    (e) =>
+      e.adapterAvailable &&
+      REGISTRY_CONNECTABLE_STATUSES.includes(e.status) &&
+      e.environments.includes('DEMO'),
+  );
 
   return (
     <DashboardShell user={user} onLogout={logout} activeRoute="/onboarding/broker">
@@ -397,59 +451,105 @@ export default function OnboardingBrokerPage() {
               onChange={(e) => setSelectedBrokerId(e.target.value)}
               disabled={loading}
             >
-              {supportedBrokers.map((b) => (
-                <option key={b.brokerId} value={b.brokerId}>{b.brokerName}</option>
-              ))}
+              {selectableEntries.length > 0
+                ? selectableEntries.map((e) => (
+                    <option key={e.id} value={e.id}>
+                      {e.name}
+                      {e.status === 'BETA' ? ' (Beta)' : ''}
+                    </option>
+                  ))
+                : supportedBrokers.map((b) => (
+                    <option key={b.brokerId} value={b.brokerId}>{b.brokerName}</option>
+                  ))}
             </select>
-            <p className="helper-text">Paper Broker requires no API credentials — just an account ID.</p>
+            <p className="helper-text">
+              {selectedIsOAuth
+                ? 'cTrader-family brokers connect through OAuth authorization — no API keys to paste.'
+                : 'Paper Broker requires no API credentials — just an account ID.'}
+            </p>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 'var(--space-4)' }}>
-            <Input label="Account ID" value={accountId} onChange={(e) => setAccountId(e.target.value)} disabled={loading} placeholder="Your broker account ID" required />
-            <Input label="Display name (optional)" value={displayName} onChange={(e) => setDisplayName(e.target.value)} disabled={loading} placeholder="My demo account" />
-          </div>
+          {selectedIsOAuth ? (
+            /* ── cTrader OAuth connection flow (Sprint 56 correction — audit
+             * point 6): external consent, server-side code exchange, account
+             * discovery + linking. No cTrader password is ever captured. ── */
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+              <Alert variant="info">
+                <span style={{ flex: 1 }}>
+                  🔐 You will be redirected to the official cTrader ID consent screen to
+                  authorize iRexPro. We never see your cTrader password — the connection is
+                  authorized with a one-time code, and your trading accounts are discovered
+                  automatically. Tokens are encrypted (AES-256-GCM) on our servers.
+                </span>
+              </Alert>
+              {selectedRegistryEntry?.status === 'BETA' && (
+                <Alert variant="warning">
+                  <span style={{ flex: 1 }}>
+                    Beta integration — platform compatibility is contract-tested; production-LIVE
+                    verification is pending operator evidence (DEMO accounts only for now).
+                  </span>
+                </Alert>
+              )}
+              <Button
+                type="button"
+                variant="primary"
+                onClick={handleAuthorizeOAuth}
+                disabled={loading}
+                loading={action === 'saving'}
+              >
+                {action === 'saving' ? 'Starting authorization…' : 'Authorize with cTrader ID'}
+              </Button>
+            </div>
+          ) : (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 'var(--space-4)' }}>
+                <Input label="Account ID" value={accountId} onChange={(e) => setAccountId(e.target.value)} disabled={loading} placeholder="Your broker account ID" required />
+                <Input label="Display name (optional)" value={displayName} onChange={(e) => setDisplayName(e.target.value)} disabled={loading} placeholder="My demo account" />
+              </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 'var(--space-4)' }}>
-            <Input label="API key (optional for paper broker)" type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} disabled={loading} placeholder="••••••••" />
-            <Input label="API secret (optional for paper broker)" type="password" value={apiSecret} onChange={(e) => setApiSecret(e.target.value)} disabled={loading} placeholder="••••••••" />
-          </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 'var(--space-4)' }}>
+                <Input label="API key (optional for paper broker)" type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} disabled={loading} placeholder="••••••••" />
+                <Input label="API secret (optional for paper broker)" type="password" value={apiSecret} onChange={(e) => setApiSecret(e.target.value)} disabled={loading} placeholder="••••••••" />
+              </div>
 
-          {/* Security note (info alert) */}
-          <Alert variant="info">
-            <span style={{ flex: 1 }}>
-              🔒 Credentials are encrypted (AES-256-GCM) before storage. They are NEVER returned in API responses or logs.
-            </span>
-          </Alert>
+              {/* Security note (info alert) */}
+              <Alert variant="info">
+                <span style={{ flex: 1 }}>
+                  🔒 Credentials are encrypted (AES-256-GCM) before storage. They are NEVER returned in API responses or logs.
+                </span>
+              </Alert>
 
-          {testResult && (
-            <Alert variant={testResult.success ? 'success' : 'error'}>
-              <span style={{ flex: 1 }}>
-                {testResult.success
-                  ? `✅ Test succeeded! Account ID: ${testResult.accountId ?? '(confirmed)'}`
-                  : `❌ Test failed: ${testResult.errorMessage ?? 'unknown error'}`}
-              </span>
-            </Alert>
+              {testResult && (
+                <Alert variant={testResult.success ? 'success' : 'error'}>
+                  <span style={{ flex: 1 }}>
+                    {testResult.success
+                      ? `✅ Test succeeded! Account ID: ${testResult.accountId ?? '(confirmed)'}`
+                      : `❌ Test failed: ${testResult.errorMessage ?? 'unknown error'}`}
+                  </span>
+                </Alert>
+              )}
+
+              <div style={{ display: 'flex', gap: 'var(--space-3)', marginTop: 'var(--space-4)', flexWrap: 'wrap' }}>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={handleTest}
+                  disabled={loading}
+                  loading={action === 'testing'}
+                >
+                  {action === 'testing' ? 'Testing…' : 'Test credentials'}
+                </Button>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  disabled={loading}
+                  loading={action === 'saving'}
+                >
+                  {action === 'saving' ? 'Saving…' : 'Save connection'}
+                </Button>
+              </div>
+            </>
           )}
-
-          <div style={{ display: 'flex', gap: 'var(--space-3)', marginTop: 'var(--space-4)', flexWrap: 'wrap' }}>
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={handleTest}
-              disabled={loading}
-              loading={action === 'testing'}
-            >
-              {action === 'testing' ? 'Testing…' : 'Test credentials'}
-            </Button>
-            <Button
-              type="submit"
-              variant="primary"
-              disabled={loading}
-              loading={action === 'saving'}
-            >
-              {action === 'saving' ? 'Saving…' : 'Save connection'}
-            </Button>
-          </div>
         </form>
 
         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 'var(--space-4)', flexWrap: 'wrap', gap: 'var(--space-2)' }}>

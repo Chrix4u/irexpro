@@ -30,6 +30,11 @@ import type {
   UpdateAccountStatusRequest,
   RiskProfile,
   SupportedBroker,
+  BrokerRegistryCatalog,
+  BrokerOAuthStartResult,
+  BrokerOAuthAccountsResult,
+  CompleteBrokerOAuthRequest,
+  LinkBrokerOAuthRequest,
   UpdateMyProfileRequest,
   UpdateRiskProfileRequest,
   ChangePasswordRequest,
@@ -163,6 +168,14 @@ export interface ApiClient {
   listSupportedBrokers(): Promise<SupportedBroker[]>;
   /** GET /broker/connections → user's broker connections (no credentials). */
   listBrokerConnections(): Promise<BrokerConnectionView[]>;
+  /** GET /broker/registry → server-authoritative catalog (Directive §AU). */
+  listBrokerRegistry(): Promise<BrokerRegistryCatalog>;
+  /** POST /broker/connections/oauth/authorize → consent URL + flowId (external browser). */
+  startBrokerOAuth(brokerId: string, redirectUri?: string): Promise<BrokerOAuthStartResult>;
+  /** POST /broker/connections/oauth/complete → discovered cTID accounts (no tokens). */
+  completeBrokerOAuth(body: CompleteBrokerOAuthRequest): Promise<BrokerOAuthAccountsResult>;
+  /** POST /broker/connections/oauth/link → link a discovered account (encrypted server-side). */
+  linkBrokerOAuth(body: LinkBrokerOAuthRequest): Promise<BrokerConnectionView>;
   /** POST /broker/connections → create a new broker connection (encrypts credentials). */
   createBrokerConnection(body: CreateBrokerConnectionRequest): Promise<BrokerConnectionView>;
   /** POST /broker/connections/test → test credentials without saving (returns success/error). */
@@ -428,6 +441,27 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
 
     listBrokerConnections: () =>
       request<BrokerConnectionView[]>('/broker/connections'),
+
+    listBrokerRegistry: () =>
+      request<BrokerRegistryCatalog>('/broker/registry'),
+
+    startBrokerOAuth: (brokerId, redirectUri) =>
+      request<BrokerOAuthStartResult>('/broker/connections/oauth/authorize', {
+        method: 'POST',
+        body: JSON.stringify(redirectUri ? { brokerId, redirectUri } : { brokerId }),
+      }),
+
+    completeBrokerOAuth: (body) =>
+      request<BrokerOAuthAccountsResult>('/broker/connections/oauth/complete', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+
+    linkBrokerOAuth: (body) =>
+      request<BrokerConnectionView>('/broker/connections/oauth/link', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
 
     createBrokerConnection: (body) =>
       request<BrokerConnectionView>('/broker/connections', {

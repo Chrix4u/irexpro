@@ -17,6 +17,7 @@ import {
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   Pressable,
@@ -29,6 +30,7 @@ import {
 } from "react-native";
 import type {
   BrokerConnectionView,
+  BrokerOAuthAccount,
   BrokerRegistryEntry,
   CreateBrokerConnectionRequest,
 } from "@irexpro/types";
@@ -42,6 +44,12 @@ import {
   routeLabel,
   statusPresentation,
 } from "./broker-screen.logic";
+import {
+  buildOAuthLinkRequest,
+  mobileOAuthRedirectUri,
+  oauthAccountOptions,
+  parseBrokerOAuthDeepLink,
+} from "./broker-screen-oauth.logic";
 
 const ENVIRONMENT_OPTIONS: ReadonlyArray<"DEMO" | "LIVE"> = ["DEMO", "LIVE"];
 
@@ -302,6 +310,7 @@ function ConnectFlowModal({
   onClose: () => void;
   onConnected: () => Promise<void>;
 }) {
+  const isOAuthBroker = entry.authenticationType === "OAUTH";
   const fields = credentialFields(entry.authenticationType);
   // Environment truth (Phase I): options derive STRICTLY from the entry's
   // declared environments, with LIVE additionally gated by isLiveSelectable
@@ -323,6 +332,108 @@ function ConnectFlowModal({
     ok: boolean;
     message: string;
   } | null>(null);
+
+  // ── cTrader OAuth flow state (Sprint 56 correction round 1 / audit
+  // point 6) — replaces the credential form for OAUTH brokers. The
+  // authorization happens in the EXTERNAL system browser; the app never
+  // sees the cTrader password. The redirect returns via the app's deep
+  // link (irexpro://broker/oauth/callback?code=…).
+  const [oauthBusy, setOauthBusy] = useState<
+    "start" | "complete" | "link" | null
+  >(null);
+  const [oauthFlowId, setOauthFlowId] = useState<string | null>(null);
+  const [oauthAwaitingReturn, setOauthAwaitingReturn] = useState(false);
+  const [oauthAccounts, setOauthAccounts] = useState<
+    BrokerOAuthAccount[] | null
+  >(null);
+
+  const completeOAuth = useCallback(
+    async (flowId: string, code: string) => {
+      setOauthBusy("complete");
+      try {
+        const result = await api.completeBrokerOAuth({ flowId, code });
+        setOauthAccounts(result.accounts);
+        setOauthAwaitingReturn(false);
+        setFeedback({
+          ok: true,
+          message: "Authorized — choose an account to link.",
+        });
+      } catch (err) {
+        setOauthAwaitingReturn(false);
+        setOauthFlowId(null);
+        setFeedback({
+          ok: false,
+          message:
+            err instanceof Error ? err.message : "Authorization failed",
+        });
+      } finally {
+        setOauthBusy(null);
+      }
+    },
+    [],
+  );
+
+  // Deep-link subscription: only while awaiting the browser return.
+  useEffect(() => {
+    if (!isOAuthBroker || !oauthAwaitingReturn || !oauthFlowId) return;
+    const flowId = oauthFlowId;
+    const subscription = Linking.addEventListener("url", ({ url }) => {
+      const parsed = parseBrokerOAuthDeepLink(url);
+      if (parsed) {
+        void completeOAuth(flowId, parsed.code);
+      }
+    });
+    return () => subscription.remove();
+  }, [isOAuthBroker, oauthAwaitingReturn, oauthFlowId, completeOAuth]);
+
+  const startOAuth = useCallback(async () => {
+    setFeedback(null);
+    setOauthBusy("start");
+    try {
+      const start = await api.startBrokerOAuth(
+        entry.id,
+        mobileOAuthRedirectUri(),
+      );
+      setOauthFlowId(start.flowId);
+      setOauthAwaitingReturn(true);
+      await Linking.openURL(start.authorizationUrl);
+      setFeedback({
+        ok: true,
+        message:
+          "Complete the authorization in your browser, then return to the app.",
+      });
+    } catch (err) {
+      setOauthFlowId(null);
+      setFeedback({
+        ok: false,
+        message: err instanceof Error ? err.message : "Authorization failed",
+      });
+    } finally {
+      setOauthBusy(null);
+    }
+  }, [entry.id]);
+
+  const linkOAuthAccount = useCallback(
+    async (account: BrokerOAuthAccount) => {
+      if (!oauthFlowId) return;
+      setOauthBusy("link");
+      try {
+        await api.linkBrokerOAuth(
+          buildOAuthLinkRequest(oauthFlowId, account),
+        );
+        setFeedback({ ok: true, message: "Account linked" });
+        await onConnected();
+      } catch (err) {
+        setFeedback({
+          ok: false,
+          message: err instanceof Error ? err.message : "Linking failed",
+        });
+      } finally {
+        setOauthBusy(null);
+      }
+    },
+    [oauthFlowId, onConnected],
+  );
 
   const submit = async () => {
     const requestOrError = buildConnectionRequest(
@@ -388,105 +499,234 @@ function ConnectFlowModal({
         <ScrollView contentContainerStyle={styles.scrollContent}>
           <Text style={styles.title}>Connect {entry.name}</Text>
 
-          <Text style={styles.label}>Environment</Text>
-          <View style={styles.rowWrap}>
-            {supportedEnvs.map((env) => (
-              <Pressable
-                key={env}
-                accessibilityRole="button"
-                accessibilityLabel={`${env} environment`}
-                style={[
-                  styles.envOption,
-                  environment === env && styles.envOptionActive,
-                ]}
-                onPress={() => setEnvironment(env)}
-              >
+          {isOAuthBroker ? (
+            /* ── cTrader OAuth connection flow (audit point 6): external
+             * consent + server-side code exchange + account discovery +
+             * encrypted linking. NO credential inputs — and never the
+             * cTrader password. ── */
+            <>
+              <Text style={styles.sectionHint}>
+                Authorize iRexPro with your cTrader ID. The consent screen
+                opens in your browser — we never see your password. Your
+                accounts are discovered automatically after authorization.
+              </Text>
+
+              {feedback ? (
                 <Text
-                  style={[
-                    styles.envOptionText,
-                    environment === env && styles.envOptionTextActive,
-                  ]}
+                  style={feedback.ok ? styles.successText : styles.errorText}
+                  accessibilityLiveRegion="polite"
                 >
-                  {env}
+                  {feedback.message}
                 </Text>
+              ) : null}
+
+              {oauthAccounts === null ? (
+                <>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Authorize with cTrader ID"
+                    style={[
+                      styles.primaryButton,
+                      oauthBusy ? styles.buttonDisabled : null,
+                    ]}
+                    disabled={oauthBusy !== null}
+                    onPress={() => void startOAuth()}
+                  >
+                    {oauthBusy === "start" ? (
+                      <ActivityIndicator color="#ffffff" />
+                    ) : (
+                      <Text style={styles.primaryButtonText}>
+                        Authorize with cTrader ID
+                      </Text>
+                    )}
+                  </Pressable>
+                  {oauthBusy === "complete" ? (
+                    <View style={styles.rowWrap}>
+                      <ActivityIndicator size="small" />
+                      <Text style={styles.mutedText}>
+                        Completing authorization…
+                      </Text>
+                    </View>
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  <Text style={styles.label}>Choose an account</Text>
+                  {oauthAccountOptions(oauthAccounts).map((option) => (
+                    <View
+                      key={option.account.ctidTraderAccountId}
+                      style={[
+                        styles.accountOption,
+                        option.selectable ? null : styles.accountOptionDisabled,
+                      ]}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.accountOptionTitle}>
+                          {option.account.brokerTitleShort ?? "cTrader"} ·{" "}
+                          {option.account.isLive ? "LIVE" : "DEMO"}
+                        </Text>
+                        <Text style={styles.mutedText}>
+                          Account {option.account.ctidTraderAccountId}
+                          {option.account.traderLogin !== undefined
+                            ? ` · login ${option.account.traderLogin}`
+                            : ""}
+                        </Text>
+                        {option.note ? (
+                          <Text style={styles.mutedText}>{option.note}</Text>
+                        ) : null}
+                      </View>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={`Link account ${option.account.ctidTraderAccountId}`}
+                        style={[
+                          styles.smallButton,
+                          option.selectable ? null : styles.buttonDisabled,
+                        ]}
+                        disabled={!option.selectable || oauthBusy !== null}
+                        onPress={() => void linkOAuthAccount(option.account)}
+                      >
+                        {oauthBusy === "link" &&
+                        option.selectable ? (
+                          <ActivityIndicator size="small" color="#ffffff" />
+                        ) : (
+                          <Text style={styles.primaryButtonText}>
+                            {option.selectable ? "Link" : "N/A"}
+                          </Text>
+                        )}
+                      </Pressable>
+                    </View>
+                  ))}
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Start a new authorization"
+                    style={styles.secondaryButton}
+                    disabled={oauthBusy !== null}
+                    onPress={() => {
+                      setOauthAccounts(null);
+                      setOauthFlowId(null);
+                      setFeedback(null);
+                    }}
+                  >
+                    <Text style={styles.secondaryButtonText}>
+                      Start a new authorization
+                    </Text>
+                  </Pressable>
+                </>
+              )}
+
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Cancel broker connection"
+                style={styles.secondaryButton}
+                onPress={onClose}
+                disabled={oauthBusy !== null}
+              >
+                <Text style={styles.secondaryButtonText}>Cancel</Text>
               </Pressable>
-            ))}
-          </View>
-
-          <Text style={styles.label}>Account ID</Text>
-          <TextInput
-            accessibilityLabel="Broker account ID"
-            style={styles.input}
-            value={accountId}
-            onChangeText={setAccountId}
-            autoCapitalize="none"
-            autoCorrect={false}
-            placeholder="e.g. 101-004-1234567-001"
-          />
-
-          {fields.apiKey ? (
+            </>
+          ) : (
             <>
-              <Text style={styles.label}>API token</Text>
+              <Text style={styles.label}>Environment</Text>
+              <View style={styles.rowWrap}>
+                {supportedEnvs.map((env) => (
+                  <Pressable
+                    key={env}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${env} environment`}
+                    style={[
+                      styles.envOption,
+                      environment === env && styles.envOptionActive,
+                    ]}
+                    onPress={() => setEnvironment(env)}
+                  >
+                    <Text
+                      style={[
+                        styles.envOptionText,
+                        environment === env && styles.envOptionTextActive,
+                      ]}
+                    >
+                      {env}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+
+              <Text style={styles.label}>Account ID</Text>
               <TextInput
-                accessibilityLabel="Broker API token"
+                accessibilityLabel="Broker account ID"
                 style={styles.input}
-                value={apiKey}
-                onChangeText={setApiKey}
-                secureTextEntry
+                value={accountId}
+                onChangeText={setAccountId}
                 autoCapitalize="none"
                 autoCorrect={false}
-                placeholder="Personal access token"
+                placeholder="e.g. 101-004-1234567-001"
               />
+
+              {fields.apiKey ? (
+                <>
+                  <Text style={styles.label}>API token</Text>
+                  <TextInput
+                    accessibilityLabel="Broker API token"
+                    style={styles.input}
+                    value={apiKey}
+                    onChangeText={setApiKey}
+                    secureTextEntry
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    placeholder="Personal access token"
+                  />
+                </>
+              ) : null}
+
+              {fields.serverUrl ? (
+                <>
+                  <Text style={styles.label}>Server URL (optional)</Text>
+                  <TextInput
+                    accessibilityLabel="Broker server URL"
+                    style={styles.input}
+                    value={serverUrl}
+                    onChangeText={setServerUrl}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    placeholder="https://"
+                  />
+                </>
+              ) : null}
+
+              {feedback ? (
+                <Text
+                  style={feedback.ok ? styles.successText : styles.errorText}
+                  accessibilityLiveRegion="polite"
+                >
+                  {feedback.message}
+                </Text>
+              ) : null}
+
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Test and connect broker"
+                style={[styles.primaryButton, busy ? styles.buttonDisabled : null]}
+                disabled={busy !== null}
+                onPress={() => void submit()}
+              >
+                {busy ? (
+                  <ActivityIndicator color="#ffffff" />
+                ) : (
+                  <Text style={styles.primaryButtonText}>Test & connect</Text>
+                )}
+              </Pressable>
+
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Cancel broker connection"
+                style={styles.secondaryButton}
+                onPress={onClose}
+                disabled={busy !== null}
+              >
+                <Text style={styles.secondaryButtonText}>Cancel</Text>
+              </Pressable>
             </>
-          ) : null}
-
-          {fields.serverUrl ? (
-            <>
-              <Text style={styles.label}>Server URL (optional)</Text>
-              <TextInput
-                accessibilityLabel="Broker server URL"
-                style={styles.input}
-                value={serverUrl}
-                onChangeText={setServerUrl}
-                autoCapitalize="none"
-                autoCorrect={false}
-                placeholder="https://"
-              />
-            </>
-          ) : null}
-
-          {feedback ? (
-            <Text
-              style={feedback.ok ? styles.successText : styles.errorText}
-              accessibilityLiveRegion="polite"
-            >
-              {feedback.message}
-            </Text>
-          ) : null}
-
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Test and connect broker"
-            style={[styles.primaryButton, busy ? styles.buttonDisabled : null]}
-            disabled={busy !== null}
-            onPress={() => void submit()}
-          >
-            {busy ? (
-              <ActivityIndicator color="#ffffff" />
-            ) : (
-              <Text style={styles.primaryButtonText}>Test & connect</Text>
-            )}
-          </Pressable>
-
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Cancel broker connection"
-            style={styles.secondaryButton}
-            onPress={onClose}
-            disabled={busy !== null}
-          >
-            <Text style={styles.secondaryButtonText}>Cancel</Text>
-          </Pressable>
+          )}
         </ScrollView>
       </KeyboardAvoidingView>
     </Modal>
@@ -626,6 +866,31 @@ const styles = StyleSheet.create({
   },
   secondaryButtonText: { color: "#334155", fontSize: 14, fontWeight: "600" },
   buttonDisabled: { opacity: 0.6 },
+  // ── cTrader OAuth flow (Sprint 56 correction round 1 / audit point 6) ──
+  sectionHint: { color: "#475569", fontSize: 14, lineHeight: 20, marginBottom: 12 },
+  mutedText: { color: "#64748b", fontSize: 12, marginTop: 2 },
+  accountOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    borderRadius: 10,
+    backgroundColor: "#f8fafc",
+    marginBottom: 8,
+  },
+  accountOptionDisabled: { opacity: 0.6 },
+  accountOptionTitle: { fontSize: 15, fontWeight: "600", color: "#0f172a" },
+  smallButton: {
+    backgroundColor: "#0d9488",
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    minWidth: 64,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   errorCard: {
     backgroundColor: "#fef2f2",
     borderColor: "#fecdd3",
