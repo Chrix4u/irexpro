@@ -1,5 +1,5 @@
 import { ConfigService } from '@nestjs/config';
-import { CTraderClientService } from './ctrader-client.service';
+import { CTraderClientService, CTRADER_MAX_IN_FLIGHT_REQUESTS } from './ctrader-client.service';
 import { CtraderTransport } from './ctrader-transport';
 import { FakeCtraderTransport, ScriptedCtraderServer } from './ctrader.fake-transport';
 import {
@@ -48,6 +48,15 @@ class TestableCtraderClient extends CTraderClientService {
     transport.connectBehavior = behavior;
     this.createdTransports.push(transport);
     return transport;
+  }
+
+  /** Test seam for the audit-point-4 bounded-transport tests. */
+  setInFlightCeiling(limit: number): void {
+    this.maxInFlightRequests = limit;
+  }
+
+  get inFlightCeiling(): number {
+    return this.maxInFlightRequests;
   }
 }
 
@@ -491,6 +500,232 @@ describe('CTraderClientService', () => {
         expect.objectContaining({ code: BrokerErrorCode.AUTHENTICATION_FAILED }),
       );
       expect(() => parseCtraderTokenResponse('not-an-object')).toThrow(BrokerAdapterError);
+    });
+  });
+
+  // ─── Correction round 1 (audit points 1/2/3/4/5) ───────────────────────────
+
+  describe('bounded serialized transport (audit point 4)', () => {
+    it('enforces the in-flight ceiling: requests past the ceiling fail FAST (retryable, never queued)', async () => {
+      const limited = new TestableCtraderClient(server);
+      limited.setInFlightCeiling(3);
+      // No scripted TRADER_REQ answer → requests stay pending.
+      server.on(CTRADER_PAYLOAD_TYPE.TRADER_REQ, () => null);
+      await limited.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+      const transport = limited.createdTransports[0];
+
+      const pending = [
+        limited.request('DEMO', CTRADER_PAYLOAD_TYPE.TRADER_REQ, { ctidTraderAccountId: 1234567 }),
+        limited.request('DEMO', CTRADER_PAYLOAD_TYPE.TRADER_REQ, { ctidTraderAccountId: 1234567 }),
+        limited.request('DEMO', CTRADER_PAYLOAD_TYPE.TRADER_REQ, { ctidTraderAccountId: 1234567 }),
+      ];
+      await expect(
+        limited.request('DEMO', CTRADER_PAYLOAD_TYPE.TRADER_REQ, { ctidTraderAccountId: 1234567 }),
+      ).rejects.toMatchObject({ code: BrokerErrorCode.RATE_LIMITED, isRetryable: true });
+
+      // Bounded memory: the wire carries exactly the ceiling's worth of
+      // requests — nothing queued past it, no retry/replay duplication.
+      expect(
+        transport.sentMessages.filter((m) => m.payloadType === CTRADER_PAYLOAD_TYPE.TRADER_REQ),
+      ).toHaveLength(3);
+
+      // Disconnect: ALL in-flight requests reject safely (no orphan promises).
+      transport.simulateClose();
+      await Promise.all(
+        pending.map((p) =>
+          expect(p).rejects.toMatchObject({
+            code: BrokerErrorCode.CONNECTION_LOST,
+            isRetryable: true,
+          }),
+        ),
+      );
+    });
+
+    it('correlates concurrent requests to their OWN echoed clientMsgId (no cross-talk)', async () => {
+      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+      const transport = client.createdTransports[0];
+      const before = transport.sentMessages.filter(
+        (m) => m.payloadType === CTRADER_PAYLOAD_TYPE.TRADER_REQ,
+      ).length;
+
+      // 20 CONCURRENT sends in one macrotask — the scripted server echoes
+      // clientMsgId; every request must resolve with ITS OWN id, proving the
+      // correlation map stays consistent under concurrent dispatch.
+      const results = await Promise.all(
+        Array.from({ length: 20 }, (_, i) =>
+          client.request('DEMO', CTRADER_PAYLOAD_TYPE.TRADER_REQ, {
+            ctidTraderAccountId: 1234567,
+            label: `concurrent-${i}`,
+          }),
+        ),
+      );
+      const ids = results.map((r) => r.clientMsgId);
+      expect(new Set(ids).size).toBe(20);
+      // Wire ordering: sent messages preserve issue order (serialized frame
+      // emission — Node's WebSocket.send is atomic per message).
+      const sent = transport.sentMessages
+        .filter((m) => m.payloadType === CTRADER_PAYLOAD_TYPE.TRADER_REQ)
+        .slice(before);
+      expect(sent.map((m) => m.clientMsgId)).toEqual(ids);
+    });
+
+    it('ships the production in-flight ceiling at the documented 500 bound', () => {
+      // Defense-in-depth bound: 50 req/s general (+5/s historical) with a
+      // 10 s request timeout yields a worst legal steady state ≈ 505 — the
+      // ceiling sits exactly at that boundary, so a stalling provider can
+      // never accumulate unbounded pending state even under legal load.
+      expect(CTRADER_MAX_IN_FLIGHT_REQUESTS).toBe(500);
+      expect(new TestableCtraderClient(server).inFlightCeiling).toBe(500);
+    });
+  });
+
+  describe('heartbeat liveness hardening (audit point 3)', () => {
+    it('runs EXACTLY ONE heartbeat timer across reconnects (no duplicate timers)', async () => {
+      jest.useFakeTimers();
+      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+      const transport = client.createdTransports[0];
+      // Loss at t=0 — before the first 10 s heartbeat fires on the old
+      // transport (stopHeartbeat clears the pending timer immediately).
+      transport.simulateClose();
+      await jest.advanceTimersByTimeAsync(3_000);
+      const reconnected = client.createdTransports[1];
+      expect(reconnected).toBeDefined();
+
+      // 40 s on the NEW transport: heartbeats at t=13/23/33/43 s → exactly 4.
+      // A duplicate timer (startHeartbeat without stop) would yield ~8.
+      await jest.advanceTimersByTimeAsync(40_000);
+      const countOn = (t: FakeCtraderTransport) =>
+        t.sentMessages.filter((m) => m.payloadType === 51).length;
+      expect(countOn(transport)).toBe(0);
+      expect(countOn(reconnected)).toBe(4);
+    });
+
+    it('stops heartbeats after exhausted reconnect attempts (no zombie timers)', async () => {
+      jest.useFakeTimers();
+      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+      client.createdTransports[0].simulateClose();
+      // All 5 reconnect attempts fail their connect (3+6+12+24+24 s backoff).
+      client.connectBehaviors.push('fail', 'fail', 'fail', 'fail', 'fail');
+      await jest.advanceTimersByTimeAsync(120_000);
+      const heartbeatsEverywhere = () =>
+        client.createdTransports.reduce(
+          (n, t) => n + t.sentMessages.filter((m) => m.payloadType === 51).length,
+          0,
+        );
+      // The original transport's timer was cleared at the loss (t=0) and no
+      // reconnect ever completed app auth → zero heartbeats anywhere.
+      expect(heartbeatsEverywhere()).toBe(0);
+      // No zombie timer: another minute of wall time adds nothing.
+      await jest.advanceTimersByTimeAsync(60_000);
+      expect(heartbeatsEverywhere()).toBe(0);
+    });
+
+    it('never sends a heartbeat before application authorization completes', async () => {
+      jest.useFakeTimers();
+      // 2100 app auth is REJECTED → the connection never authenticates.
+      server.on(CTRADER_PAYLOAD_TYPE.APPLICATION_AUTH_REQ, (_payload, envelope) => ({
+        clientMsgId: envelope.clientMsgId,
+        payloadType: CTRADER_PAYLOAD_TYPE.OA_ERROR_RES,
+        payload: { errorCode: 'CH_CLIENT_AUTH_FAILURE', description: 'Wrong credentials' },
+      }));
+      await expect(
+        client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN),
+      ).rejects.toMatchObject({ code: BrokerErrorCode.AUTHENTICATION_FAILED });
+      await jest.advanceTimersByTimeAsync(60_000);
+      for (const t of client.createdTransports) {
+        expect(t.sentMessages.filter((m) => m.payloadType === 51)).toHaveLength(0);
+      }
+    });
+
+    it('cleans up the heartbeat on intentional module shutdown', async () => {
+      jest.useFakeTimers();
+      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+      const transport = client.createdTransports[0];
+      await client.onModuleDestroy();
+      const at = transport.sentMessages.filter((m) => m.payloadType === 51).length;
+      await jest.advanceTimersByTimeAsync(30_000);
+      expect(transport.sentMessages.filter((m) => m.payloadType === 51).length).toBe(at);
+    });
+  });
+
+  describe('demo/live connection separation hardening (audit point 2)', () => {
+    it('keeps DEMO and LIVE pools fully isolated: a DEMO loss never disturbs the LIVE session', async () => {
+      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+      await client.ensureAccountSession('LIVE', '7654321', ACCESS_TOKEN);
+      const demoTransport = client.createdTransports[0];
+      const liveTransport = client.createdTransports[1];
+
+      // Hard host isolation (both connections exist simultaneously).
+      expect(demoTransport.connectedUrl).toBe(CTRADER_ENVIRONMENT_URLS.DEMO);
+      expect(liveTransport.connectedUrl).toBe(CTRADER_ENVIRONMENT_URLS.LIVE);
+
+      // DEMO connection dies → the LIVE session stays fully functional.
+      demoTransport.simulateClose();
+      expect(client.hasAccountSession('LIVE', '7654321')).toBe(true);
+      expect(client.hasAccountSession('DEMO', ACCOUNT_ID)).toBe(false);
+
+      // DEMO reconnects onto the DEMO host — the original environment is
+      // preserved across reconnect (never inherited from the other pool).
+      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+      const reconnectedDemo = client.createdTransports.at(-1)!;
+      expect(reconnectedDemo.connectedUrl).toBe(CTRADER_ENVIRONMENT_URLS.DEMO);
+      expect(reconnectedDemo).not.toBe(liveTransport);
+    });
+
+    it('routes a request for the DEMO environment ONLY through the demo-host transport', async () => {
+      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+      await client.ensureAccountSession('LIVE', '7654321', ACCESS_TOKEN);
+      const beforeDemo = client.createdTransports[0].sentMessages.length;
+      const beforeLive = client.createdTransports[1].sentMessages.length;
+
+      await client.request('DEMO', CTRADER_PAYLOAD_TYPE.TRADER_REQ, {
+        ctidTraderAccountId: 1234567,
+      });
+
+      // The demo request rode ONLY the demo transport.
+      expect(client.createdTransports[0].sentMessages.length).toBeGreaterThan(beforeDemo);
+      expect(client.createdTransports[1].sentMessages.length).toBe(beforeLive);
+    });
+  });
+
+  describe('credential secrecy hardening (audit point 1)', () => {
+    it('redacts credential-shaped fragments from provider error text (fail-closed, sanitized)', async () => {
+      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+      // The raw provider error description carries a credential-shaped
+      // fragment — the surfaced BrokerAdapterError must never expose it.
+      server.failWith('access token=SEKRIT-TOKEN-VALUE rejected');
+      const err = await client
+        .request('DEMO', CTRADER_PAYLOAD_TYPE.TRADER_REQ, { ctidTraderAccountId: 1234567 })
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BrokerAdapterError);
+      const adapterErr = err as BrokerAdapterError;
+      expect(adapterErr.message).not.toContain('SEKRIT-TOKEN-VALUE');
+      expect(adapterErr.message).toContain('[REDACTED]');
+      // The provider's raw error code class is surfaced (typed, no secrets).
+      expect(adapterErr.code).toBe(BrokerErrorCode.BROKER_SERVER_ERROR);
+    });
+
+    it('never logs the platform client secret, access tokens, or message payloads', async () => {
+      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+      const logged: string[] = [];
+      const logger = (client as unknown as { logger: Record<string, jest.Mock> }).logger;
+      const spies = ['log', 'warn', 'error'].map((level) =>
+        jest.spyOn(logger, level).mockImplementation((m: unknown) => {
+          logged.push(String(m));
+        }),
+      );
+      try {
+        await client.request('DEMO', CTRADER_PAYLOAD_TYPE.TRADER_REQ, {
+          ctidTraderAccountId: 1234567,
+        });
+      } finally {
+        spies.forEach((s) => s.mockRestore());
+      }
+      const all = logged.join('\n');
+      expect(all).not.toContain('test-client-secret');
+      expect(all).not.toContain(ACCESS_TOKEN);
+      // Payload secrecy: no logged line contains any message payload text.
+      expect(all).not.toContain('ctidTraderAccountId');
     });
   });
 });

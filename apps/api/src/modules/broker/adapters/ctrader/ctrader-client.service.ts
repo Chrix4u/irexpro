@@ -44,6 +44,7 @@ import {
 } from './ctrader-message-types';
 import { CtraderTransport, NodeWebSocketCtraderTransport } from './ctrader-transport';
 import {
+  buildCtraderAuthorizationUrl,
   buildCtraderTokenRequestUrl,
   CtraderOAuthTokens,
   CtraderTokenExchangeRequest,
@@ -62,6 +63,18 @@ const MAX_RECONNECT_ATTEMPTS = RECONNECT_DELAYS_MS.length;
 const GENERAL_RATE_LIMIT_PER_SECOND = 50;
 /** Historical rate limit per connection (requests/second). */
 const HISTORICAL_RATE_LIMIT_PER_SECOND = 5;
+/**
+ * Bounded-transport ceiling: maximum concurrent UNANSWERED requests per
+ * connection (Task 47 correction round — audit point 4 "bounded memory /
+ * fail fast backpressure"). The rate limiter bounds throughput and the 10 s
+ * timeout bounds lifetime, but the pending map itself needs an explicit
+ * ceiling so a stalling provider can never accumulate unbounded state —
+ * requests beyond the ceiling fail fast with a retryable RATE_LIMITED error
+ * (never queued, never slept on, never silently dropped). 500 ≈ the worst
+ * legal steady state (50 r/s general + 5 r/s historical × 10 s timeout).
+ */
+const MAX_IN_FLIGHT_REQUESTS = 500;
+export { MAX_IN_FLIGHT_REQUESTS as CTRADER_MAX_IN_FLIGHT_REQUESTS };
 
 /** Client-side token bucket (sliding refill) used per rate-limit class. */
 class TokenBucket {
@@ -388,6 +401,42 @@ export class CTraderClientService implements OnModuleDestroy {
     return parseCtraderTokenResponse(body);
   }
 
+  /**
+   * Builds the user-consent URL for the PLATFORM application (Sprint 56
+   * correction round — audit point 6). The client id is a PUBLIC OAuth
+   * identifier (it appears in the consent URL every user sees); the client
+   * SECRET never leaves this class.
+   */
+  buildAuthorizationUrl(
+    redirectUri: string,
+    scope: 'trading' | 'accounts' = 'trading',
+  ): string {
+    return buildCtraderAuthorizationUrl(this.clientId, redirectUri, scope);
+  }
+
+  /**
+   * Exchanges a USER authorization code using the PLATFORM application
+   * credentials (authorization-code grant). User-supplied broker credentials
+   * are NEVER application credentials — the platform's own id/secret pair
+   * rides this exchange (audit point 1/6 boundary).
+   */
+  async exchangeAuthorizationCode(code: string, redirectUri: string): Promise<CtraderOAuthTokens> {
+    if (!this.isAvailable()) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.AUTHENTICATION_FAILED,
+        'cTrader Open API application credentials are not configured. ' +
+          'Set CTRADER_CLIENT_ID and CTRADER_CLIENT_SECRET (the platform cTrader app).',
+      );
+    }
+    return this.exchangeToken({
+      grantType: 'authorization_code',
+      code,
+      redirectUri,
+      clientId: this.clientId,
+      clientSecret: this.clientSecret,
+    });
+  }
+
   // ─── Lifecycle ─────────────────────────────────────────────────────────────
 
   async onModuleDestroy(): Promise<void> {
@@ -402,6 +451,12 @@ export class CTraderClientService implements OnModuleDestroy {
   protected createTransport(): CtraderTransport {
     return new NodeWebSocketCtraderTransport();
   }
+
+  /**
+   * Injectable in-flight ceiling (determinism seam for the audit-point-4
+   * tests — production always uses MAX_IN_FLIGHT_REQUESTS).
+   */
+  protected maxInFlightRequests: number = MAX_IN_FLIGHT_REQUESTS;
 
   /**
    * Returns the environment connection, establishing it (transport connect +
@@ -547,6 +602,20 @@ export class CTraderClientService implements OnModuleDestroy {
         new BrokerAdapterError(
           BrokerErrorCode.RATE_LIMITED,
           `cTrader rate limit reached for payloadType ${payloadType} — retry shortly.`,
+          undefined,
+          true,
+        ),
+      );
+    }
+    // Bounded transport (audit point 4): explicit in-flight ceiling — the
+    // pending map can never grow past maxInFlightRequests. Beyond the
+    // ceiling the caller fails FAST (retryable) instead of queueing.
+    if (conn.pending.size >= this.maxInFlightRequests) {
+      return Promise.reject(
+        new BrokerAdapterError(
+          BrokerErrorCode.RATE_LIMITED,
+          `cTrader ${conn.env} connection is at its in-flight request ceiling ` +
+            `(${this.maxInFlightRequests}) — retry when outstanding requests settle.`,
           undefined,
           true,
         ),
