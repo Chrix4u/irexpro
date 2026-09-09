@@ -31,9 +31,11 @@ import type {
   RiskProfile,
   SupportedBroker,
   BrokerRegistryCatalog,
+  BrokerOAuthChannel,
   BrokerOAuthStartResult,
   BrokerOAuthAccountsResult,
   CompleteBrokerOAuthRequest,
+  ExchangeBrokerOAuthHandoffRequest,
   LinkBrokerOAuthRequest,
   UpdateMyProfileRequest,
   UpdateRiskProfileRequest,
@@ -170,10 +172,26 @@ export interface ApiClient {
   listBrokerConnections(): Promise<BrokerConnectionView[]>;
   /** GET /broker/registry → server-authoritative catalog (Directive §AU). */
   listBrokerRegistry(): Promise<BrokerRegistryCatalog>;
-  /** POST /broker/connections/oauth/authorize → consent URL + flowId (external browser). */
-  startBrokerOAuth(brokerId: string, redirectUri?: string): Promise<BrokerOAuthStartResult>;
+  /**
+   * POST /broker/connections/oauth/authorize → consent URL + flowId
+   * (external browser). `channel: 'mobile'` claims a server-assigned HTTPS
+   * callback slot so the provider code is exchanged by the SERVER — the app
+   * only ever receives a one-time handoff token (architect finding 4). Web
+   * callers may keep calling startBrokerOAuth(brokerId).
+   */
+  startBrokerOAuth(
+    brokerId: string,
+    options?: { channel?: BrokerOAuthChannel },
+  ): Promise<BrokerOAuthStartResult>;
   /** POST /broker/connections/oauth/complete → discovered cTID accounts (no tokens). */
   completeBrokerOAuth(body: CompleteBrokerOAuthRequest): Promise<BrokerOAuthAccountsResult>;
+  /**
+   * POST /broker/connections/oauth/handoff → discovered cTID accounts via the
+   * one-time deep-link handoff token (no provider token material ever).
+   */
+  exchangeBrokerOAuthHandoff(
+    body: ExchangeBrokerOAuthHandoffRequest,
+  ): Promise<BrokerOAuthAccountsResult>;
   /** POST /broker/connections/oauth/link → link a discovered account (encrypted server-side). */
   linkBrokerOAuth(body: LinkBrokerOAuthRequest): Promise<BrokerConnectionView>;
   /** POST /broker/connections → create a new broker connection (encrypts credentials). */
@@ -445,14 +463,27 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
     listBrokerRegistry: () =>
       request<BrokerRegistryCatalog>('/broker/registry'),
 
-    startBrokerOAuth: (brokerId, redirectUri) =>
+    startBrokerOAuth: (brokerId, options) =>
       request<BrokerOAuthStartResult>('/broker/connections/oauth/authorize', {
         method: 'POST',
-        body: JSON.stringify(redirectUri ? { brokerId, redirectUri } : { brokerId }),
+        // Architect finding 4: the body carries only the broker id and the
+        // optional channel — NO redirect URI. The server embeds its own
+        // HTTPS callback slot in the authorization URL it returns; custom
+        // app schemes are never registered as OAuth callbacks in production.
+        body: JSON.stringify({
+          brokerId,
+          ...(options?.channel ? { channel: options.channel } : {}),
+        }),
       }),
 
     completeBrokerOAuth: (body) =>
       request<BrokerOAuthAccountsResult>('/broker/connections/oauth/complete', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+
+    exchangeBrokerOAuthHandoff: (body) =>
+      request<BrokerOAuthAccountsResult>('/broker/connections/oauth/handoff', {
         method: 'POST',
         body: JSON.stringify(body),
       }),

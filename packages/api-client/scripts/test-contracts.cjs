@@ -361,6 +361,109 @@ async function testRevokeOtherSessionsNetworkErrorContract() {
   );
 }
 
+async function testStartBrokerOAuthChannelContract() {
+  const scenarios = [
+    {
+      label: 'mobile channel claims a server callback slot',
+      args: ['ctrader', { channel: 'mobile' }],
+      expectedBody: { brokerId: 'ctrader', channel: 'mobile' },
+    },
+    {
+      label: 'no options stays source-compatible for web callers',
+      args: ['ctrader', undefined],
+      expectedBody: { brokerId: 'ctrader' },
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    const calls = [];
+    const responseBody = {
+      authorizationUrl: 'https://id.ctrader.com/oauth/authorize?fixture=1',
+      flowId: 'fixture-flow-id',
+      expiresAt: '2025-01-01T00:00:00.000Z',
+    };
+    const fakeFetch = async (url, init) => {
+      calls.push({ url, init });
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => responseBody,
+      };
+    };
+
+    const { createApiClient } = loadApiClient(fakeFetch);
+    const client = createApiClient({
+      baseUrl: 'https://api.example.test/api/v1',
+      getAccessToken: () => 'fixture-access-token',
+    });
+
+    const result = await client.startBrokerOAuth(...scenario.args);
+
+    assert.deepEqual(result, responseBody);
+    assert.equal(
+      calls.length,
+      1,
+      `oauth authorize (${scenario.label}) must issue exactly one request`,
+    );
+    const [{ url, init }] = calls;
+    assert.equal(url, 'https://api.example.test/api/v1/broker/connections/oauth/authorize');
+    assert.equal(init.method, 'POST');
+    // Finding 4: the body carries ONLY the broker id + optional channel — a
+    // redirect URI (custom app scheme) must NEVER be client-supplied.
+    assert.deepEqual(JSON.parse(init.body), scenario.expectedBody);
+    assert.equal(init.headers.Authorization, 'Bearer fixture-access-token');
+    assert.equal(init.headers['Content-Type'], 'application/json');
+  }
+}
+
+async function testExchangeBrokerOAuthHandoffContract() {
+  const calls = [];
+  const responseBody = {
+    flowId: 'fixture-flow-id',
+    accounts: [
+      {
+        ctidTraderAccountId: '1234567',
+        isLive: false,
+        traderLogin: 1234567,
+        brokerTitleShort: 'cTrader',
+      },
+    ],
+  };
+  const fakeFetch = async (url, init) => {
+    calls.push({ url, init });
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => responseBody,
+    };
+  };
+
+  const { createApiClient } = loadApiClient(fakeFetch);
+  const client = createApiClient({
+    baseUrl: 'https://api.example.test/api/v1',
+    getAccessToken: () => 'fixture-access-token',
+  });
+
+  const result = await client.exchangeBrokerOAuthHandoff({
+    handoffToken: 'fixture-one-time-handoff-token',
+  });
+
+  assert.deepEqual(result, responseBody);
+  assert.equal(calls.length, 1, 'oauth handoff must issue exactly one request');
+  const [{ url, init }] = calls;
+  assert.equal(url, 'https://api.example.test/api/v1/broker/connections/oauth/handoff');
+  assert.equal(init.method, 'POST');
+  // Finding 4: the ONLY mobile-side secret-ish value is the opaque one-time
+  // handoff token — no provider code, access token, or refresh token.
+  assert.deepEqual(JSON.parse(init.body), {
+    handoffToken: 'fixture-one-time-handoff-token',
+  });
+  assert.equal(init.headers.Authorization, 'Bearer fixture-access-token');
+  assert.equal(init.headers['Content-Type'], 'application/json');
+}
+
 async function main() {
   await testMfaSetupPasswordContract();
   console.log('api-client MFA setup contract test passed.');
@@ -378,6 +481,10 @@ async function main() {
   console.log('api-client change-password failure contract test passed.');
   await testRevokeOtherSessionsNetworkErrorContract();
   console.log('api-client revoke-others network-failure contract test passed.');
+  await testStartBrokerOAuthChannelContract();
+  console.log('api-client oauth authorize channel contract test passed.');
+  await testExchangeBrokerOAuthHandoffContract();
+  console.log('api-client oauth handoff contract test passed.');
 }
 
 main().catch((error) => {

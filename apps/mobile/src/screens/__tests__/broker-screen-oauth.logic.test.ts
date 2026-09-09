@@ -1,16 +1,20 @@
 /**
- * BrokerScreen OAuth flow logic tests (Sprint 56 correction round 1 /
- * audit point 6) — pure functions, no React Native required.
+ * BrokerScreen OAuth flow logic tests (Sprint 56 correction round 2 /
+ * architect finding 4) — pure functions, no React Native required.
+ *
+ * The deep link the server handoff redirect produces carries ONLY the
+ * opaque one-time handoff token (never a provider authorization code).
  */
 import type { BrokerOAuthAccount } from "@irexpro/types";
 import {
   BROKER_APP_SCHEME,
-  BROKER_OAUTH_DEEP_LINK_PATH,
+  BROKER_OAUTH_AWAIT_TIMEOUT_MS,
+  BROKER_OAUTH_HANDOFF_PATH,
+  brokerOAuthHandoffLinkBase,
   buildOAuthLinkRequest,
-  mobileOAuthRedirectUri,
   oauthAccountOptions,
   oauthDisplayName,
-  parseBrokerOAuthDeepLink,
+  parseBrokerOAuthHandoffLink,
 } from "../broker-screen-oauth.logic";
 
 const account = (overrides: Partial<BrokerOAuthAccount> = {}): BrokerOAuthAccount => ({
@@ -19,38 +23,76 @@ const account = (overrides: Partial<BrokerOAuthAccount> = {}): BrokerOAuthAccoun
   ...overrides,
 });
 
-describe("mobileOAuthRedirectUri", () => {
-  it("builds the app deep link from the registered scheme", () => {
-    expect(mobileOAuthRedirectUri()).toBe("irexpro://broker/oauth/callback");
+describe("brokerOAuthHandoffLinkBase + wait watchdog constants", () => {
+  it("builds the handoff deep-link base from the registered scheme", () => {
+    expect(brokerOAuthHandoffLinkBase()).toBe("irexpro://broker/oauth/handoff");
     expect(BROKER_APP_SCHEME).toBe("irexpro");
-    expect(BROKER_OAUTH_DEEP_LINK_PATH).toBe("broker/oauth/callback");
+    expect(BROKER_OAUTH_HANDOFF_PATH).toBe("broker/oauth/handoff");
+  });
+
+  it("waits ~10 minutes before timing out the browser return", () => {
+    expect(BROKER_OAUTH_AWAIT_TIMEOUT_MS).toBe(10 * 60 * 1000);
   });
 });
 
-describe("parseBrokerOAuthDeepLink", () => {
-  it("extracts the code from the exact OAuth callback route", () => {
+describe("parseBrokerOAuthHandoffLink", () => {
+  it("extracts the one-time handoff token from the exact route", () => {
     expect(
-      parseBrokerOAuthDeepLink("irexpro://broker/oauth/callback?code=abc123"),
-    ).toEqual({ code: "abc123" });
+      parseBrokerOAuthHandoffLink("irexpro://broker/oauth/handoff?token=abc123"),
+    ).toEqual({ token: "abc123" });
+  });
+
+  it("returns the opaque error reason on the failure/cancel route", () => {
+    expect(
+      parseBrokerOAuthHandoffLink("irexpro://broker/oauth/handoff?error=provider-error"),
+    ).toEqual({ error: "provider-error" });
   });
 
   it("ignores unrelated deep links (never treats them as OAuth completions)", () => {
-    expect(parseBrokerOAuthDeepLink("irexpro://dashboard")).toBeNull();
-    expect(parseBrokerOAuthDeepLink("irexpro://broker/oauth/other?code=abc")).toBeNull();
-    expect(parseBrokerOAuthDeepLink("https://app.example.com/callback?code=abc")).toBeNull();
-    expect(parseBrokerOAuthDeepLink("")).toBeNull();
-  });
-
-  it("rejects a callback without a usable code", () => {
-    expect(parseBrokerOAuthDeepLink("irexpro://broker/oauth/callback")).toBeNull();
-    expect(parseBrokerOAuthDeepLink("irexpro://broker/oauth/callback?code=")).toBeNull();
-    expect(parseBrokerOAuthDeepLink("irexpro://broker/oauth/callback?other=1")).toBeNull();
-  });
-
-  it("tolerates path-leading slashes and extra params", () => {
+    expect(parseBrokerOAuthHandoffLink("irexpro://dashboard")).toBeNull();
+    expect(parseBrokerOAuthHandoffLink("irexpro://broker/oauth/other?token=abc")).toBeNull();
+    // The legacy code-callback route is GONE — it must never complete a flow.
     expect(
-      parseBrokerOAuthDeepLink("irexpro://broker/oauth/callback/?code=x&state=y"),
-    ).toEqual({ code: "x" });
+      parseBrokerOAuthHandoffLink("irexpro://broker/oauth/callback?code=abc"),
+    ).toBeNull();
+    expect(parseBrokerOAuthHandoffLink("")).toBeNull();
+  });
+
+  it("rejects a non-app scheme", () => {
+    expect(
+      parseBrokerOAuthHandoffLink(
+        "https://app.example.com/broker/oauth/handoff?token=abc",
+      ),
+    ).toBeNull();
+    expect(
+      parseBrokerOAuthHandoffLink("otherapp://broker/oauth/handoff?token=abc"),
+    ).toBeNull();
+  });
+
+  it("rejects the route without a usable token or error reason", () => {
+    expect(parseBrokerOAuthHandoffLink("irexpro://broker/oauth/handoff")).toBeNull();
+    expect(parseBrokerOAuthHandoffLink("irexpro://broker/oauth/handoff?token=")).toBeNull();
+    expect(parseBrokerOAuthHandoffLink("irexpro://broker/oauth/handoff?error=")).toBeNull();
+    expect(parseBrokerOAuthHandoffLink("irexpro://broker/oauth/handoff?other=1")).toBeNull();
+  });
+
+  it("tolerates path-leading slashes and ignores extra unrelated params", () => {
+    expect(
+      parseBrokerOAuthHandoffLink(
+        "irexpro://broker/oauth/handoff/?token=x&unrelated=1",
+      ),
+    ).toEqual({ token: "x" });
+    expect(
+      parseBrokerOAuthHandoffLink(
+        "irexpro://broker/oauth/handoff/?error=provider-error&unrelated=1",
+      ),
+    ).toEqual({ error: "provider-error" });
+  });
+
+  it("prefers the token when both params are present (server sends one)", () => {
+    expect(
+      parseBrokerOAuthHandoffLink("irexpro://broker/oauth/handoff?token=t&error=e"),
+    ).toEqual({ token: "t" });
   });
 });
 

@@ -45,10 +45,10 @@ import {
   statusPresentation,
 } from "./broker-screen.logic";
 import {
+  BROKER_OAUTH_AWAIT_TIMEOUT_MS,
   buildOAuthLinkRequest,
-  mobileOAuthRedirectUri,
   oauthAccountOptions,
-  parseBrokerOAuthDeepLink,
+  parseBrokerOAuthHandoffLink,
 } from "./broker-screen-oauth.logic";
 
 const ENVIRONMENT_OPTIONS: ReadonlyArray<"DEMO" | "LIVE"> = ["DEMO", "LIVE"];
@@ -333,11 +333,13 @@ function ConnectFlowModal({
     message: string;
   } | null>(null);
 
-  // ── cTrader OAuth flow state (Sprint 56 correction round 1 / audit
-  // point 6) — replaces the credential form for OAUTH brokers. The
-  // authorization happens in the EXTERNAL system browser; the app never
-  // sees the cTrader password. The redirect returns via the app's deep
-  // link (irexpro://broker/oauth/callback?code=…).
+  // ── cTrader OAuth flow state (Sprint 56 correction round 2 / architect
+  // finding 4) — replaces the credential form for OAUTH brokers. The
+  // authorization happens in the EXTERNAL system browser against a
+  // SERVER-assigned HTTPS callback; the app never sees the cTrader
+  // password, the authorization code, or any provider token. The server
+  // returns via the deep link `irexpro://broker/oauth/handoff?token=…`
+  // carrying ONLY the opaque one-time handoff token.
   const [oauthBusy, setOauthBusy] = useState<
     "start" | "complete" | "link" | null
   >(null);
@@ -347,20 +349,27 @@ function ConnectFlowModal({
     BrokerOAuthAccount[] | null
   >(null);
 
-  const completeOAuth = useCallback(
-    async (flowId: string, code: string) => {
+  const handoffOAuth = useCallback(
+    async (flowId: string, handoffToken: string) => {
       setOauthBusy("complete");
+      setOauthAwaitingReturn(false);
       try {
-        const result = await api.completeBrokerOAuth({ flowId, code });
+        // The handoff token is self-contained (user-bound, single-use) —
+        // the response carries the AUTHORITATIVE flowId used for the
+        // subsequent link, plus sanitized accounts (no token material).
+        const result = await api.exchangeBrokerOAuthHandoff({
+          handoffToken,
+        });
+        setOauthFlowId(result.flowId);
         setOauthAccounts(result.accounts);
-        setOauthAwaitingReturn(false);
         setFeedback({
           ok: true,
           message: "Authorized — choose an account to link.",
         });
       } catch (err) {
-        setOauthAwaitingReturn(false);
-        setOauthFlowId(null);
+        // Clean the flow state for THIS attempt only — a newly started
+        // authorization must not be clobbered by a stale handoff failure.
+        setOauthFlowId((current) => (current === flowId ? null : current));
         setFeedback({
           ok: false,
           message:
@@ -373,27 +382,57 @@ function ConnectFlowModal({
     [],
   );
 
-  // Deep-link subscription: only while awaiting the browser return.
+  // Deep-link subscription: only while awaiting the browser return. The
+  // ONLY accepted completion is the server handoff redirect
+  // (irexpro://broker/oauth/handoff?token=… / ?error=…). Unrelated deep
+  // links are ignored (never treated as OAuth completions).
   useEffect(() => {
     if (!isOAuthBroker || !oauthAwaitingReturn || !oauthFlowId) return;
     const flowId = oauthFlowId;
     const subscription = Linking.addEventListener("url", ({ url }) => {
-      const parsed = parseBrokerOAuthDeepLink(url);
-      if (parsed) {
-        void completeOAuth(flowId, parsed.code);
+      const parsed = parseBrokerOAuthHandoffLink(url);
+      if (!parsed) return;
+      if ("token" in parsed) {
+        void handoffOAuth(flowId, parsed.token);
+        return;
       }
+      // ?error=<reason> — the server reported failure/cancel to the app.
+      setOauthAwaitingReturn(false);
+      setOauthFlowId((current) => (current === flowId ? null : current));
+      setFeedback({
+        ok: false,
+        message: `Authorization was not completed (${parsed.error}). Tap Connect to try again.`,
+      });
     });
     return () => subscription.remove();
-  }, [isOAuthBroker, oauthAwaitingReturn, oauthFlowId, completeOAuth]);
+  }, [isOAuthBroker, oauthAwaitingReturn, oauthFlowId, handoffOAuth]);
+
+  // Watchdog: if no browser return is received within the wait window,
+  // clear the awaiting state with honest feedback. No API call — the
+  // server-side flow TTL governs the real expiry (fail closed there).
+  useEffect(() => {
+    if (!isOAuthBroker || !oauthAwaitingReturn) return;
+    const timer = setTimeout(() => {
+      setOauthAwaitingReturn(false);
+      setOauthFlowId(null);
+      setFeedback({
+        ok: false,
+        message:
+          "The authorization window timed out — no browser return was received.",
+      });
+    }, BROKER_OAUTH_AWAIT_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [isOAuthBroker, oauthAwaitingReturn]);
 
   const startOAuth = useCallback(async () => {
     setFeedback(null);
     setOauthBusy("start");
     try {
-      const start = await api.startBrokerOAuth(
-        entry.id,
-        mobileOAuthRedirectUri(),
-      );
+      // Channel "mobile" claims a server-assigned HTTPS callback slot —
+      // the app custom scheme is never the OAuth callback (finding 4).
+      const start = await api.startBrokerOAuth(entry.id, {
+        channel: "mobile",
+      });
       setOauthFlowId(start.flowId);
       setOauthAwaitingReturn(true);
       await Linking.openURL(start.authorizationUrl);
@@ -404,6 +443,7 @@ function ConnectFlowModal({
       });
     } catch (err) {
       setOauthFlowId(null);
+      setOauthAwaitingReturn(false);
       setFeedback({
         ok: false,
         message: err instanceof Error ? err.message : "Authorization failed",
@@ -500,10 +540,12 @@ function ConnectFlowModal({
           <Text style={styles.title}>Connect {entry.name}</Text>
 
           {isOAuthBroker ? (
-            /* ── cTrader OAuth connection flow (audit point 6): external
-             * consent + server-side code exchange + account discovery +
-             * encrypted linking. NO credential inputs — and never the
-             * cTrader password. ── */
+            /* ── cTrader OAuth connection flow (architect finding 4):
+             * external consent on a SERVER-assigned HTTPS callback +
+             * server-side code exchange + one-time handoff token deep link
+             * + account discovery + encrypted linking. NO credential
+             * inputs — and never the cTrader password, authorization code,
+             * or any provider token. ── */
             <>
               <Text style={styles.sectionHint}>
                 Authorize iRexPro with your cTrader ID. The consent screen
@@ -604,6 +646,7 @@ function ConnectFlowModal({
                     onPress={() => {
                       setOauthAccounts(null);
                       setOauthFlowId(null);
+                      setOauthAwaitingReturn(false);
                       setFeedback(null);
                     }}
                   >

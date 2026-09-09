@@ -583,6 +583,22 @@ export interface SupportedBroker {
 
 // ── Sprint 56 correction round 1: cTrader OAuth connection flow ─────────────
 
+/**
+ * OAuth authorization channel (Sprint 56 correction round 2 / architect
+ * finding 4). "web" (server default) uses the registered HTTPS web callback
+ * page; "mobile" claims a server-assigned HTTPS callback slot so the provider
+ * authorization code is exchanged by the SERVER — the app only ever receives
+ * a one-time handoff token via the deep link.
+ */
+export type BrokerOAuthChannel = 'web' | 'mobile';
+
+/** POST /broker/connections/oauth/authorize request body. */
+export interface BrokerOAuthStartRequest {
+  brokerId: string;
+  /** Callback-slot channel selection (see BrokerOAuthChannel). */
+  channel?: BrokerOAuthChannel;
+}
+
 /** A cTID account discovered for an authorized OAuth token (GET 2149 result). */
 export interface BrokerOAuthAccount {
   /** Global cTrader account id (string form of the int64 id — not a secret). */
@@ -597,22 +613,43 @@ export interface BrokerOAuthAccount {
 export interface BrokerOAuthStartResult {
   /** Official id.ctrader.com consent URL — open in an EXTERNAL browser. */
   authorizationUrl: string;
-  /** Server-side single-use flow correlation id (keep locally, present with the code). */
+  /**
+   * Server-side single-use flow correlation id. Web: kept locally and
+   * presented with the code on complete. Mobile: kept for state only — the
+   * handoff response returns the AUTHORITATIVE flowId.
+   */
   flowId: string;
   expiresAt: string;
 }
 
-/** POST /broker/connections/oauth/complete response (NO token material). */
+/**
+ * POST /broker/connections/oauth/complete and
+ * POST /broker/connections/oauth/handoff response (NO token material).
+ */
 export interface BrokerOAuthAccountsResult {
   flowId: string;
   accounts: BrokerOAuthAccount[];
 }
 
-/** POST /broker/connections/oauth/complete request body. */
+/** POST /broker/connections/oauth/complete request body (web channel). */
 export interface CompleteBrokerOAuthRequest {
   flowId: string;
   /** Single-use authorization code delivered by the Spotware redirect (60 s TTL). */
   code: string;
+}
+
+/**
+ * POST /broker/connections/oauth/handoff request body (Sprint 56 correction
+ * round 2 / architect finding 4 — mobile callback boundary).
+ */
+export interface ExchangeBrokerOAuthHandoffRequest {
+  /**
+   * Opaque one-time handoff token delivered by the SERVER callback redirect
+   * (irexpro://broker/oauth/handoff?token=…). User-bound, single-use,
+   * short-TTL — NOT the provider authorization code, carries no token
+   * material, and is useless to interceptors.
+   */
+  handoffToken: string;
 }
 
 /** POST /broker/connections/oauth/link request body. */
