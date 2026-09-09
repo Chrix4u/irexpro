@@ -83,6 +83,11 @@ export enum AuditAction {
   BROKER_OAUTH_AUTHORIZATION_COMPLETED = 'BROKER_OAUTH_AUTHORIZATION_COMPLETED',
   BROKER_OAUTH_AUTHORIZATION_FAILED = 'BROKER_OAUTH_AUTHORIZATION_FAILED',
   BROKER_OAUTH_ACCOUNT_LINKED = 'BROKER_OAUTH_ACCOUNT_LINKED',
+  // Sprint 56 correction round 2 (architect finding 4) — the mobile OAuth
+  // handoff token was exchanged for its flow (single-use consumption; the
+  // digest-verified token itself is never persisted or logged). Metadata
+  // carries brokerId ONLY — never token material.
+  BROKER_OAUTH_HANDOFF_EXCHANGED = 'BROKER_OAUTH_HANDOFF_EXCHANGED',
 
   // Sprint 50 — Live Account foundation (authorization state machine,
   // credential lifecycle, provider registry, emergency control plane)

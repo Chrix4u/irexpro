@@ -4,10 +4,12 @@ import { BullModule } from '@nestjs/bullmq';
 import { BrokerService } from './broker.service';
 import { BrokerController } from './broker.controller';
 import { BrokerOAuthController } from './broker-oauth.controller';
+import { BrokerOAuthCallbackController } from './broker-oauth-callback.controller';
 import { PortfolioController } from './portfolio.controller';
 import { BrokerRegistryController } from './broker-registry.controller';
 import { BrokerConnection } from './entities/broker-connection.entity';
 import { BrokerAccount } from './entities/broker-account.entity';
+import { BrokerOAuthFlow } from './entities/broker-oauth-flow.entity';
 import { BrokerAdapterRegistry } from './adapters/broker-adapter.registry';
 import { MetaTraderAdapter } from './adapters/metatrader.adapter';
 import { PaperBrokerAdapter } from './adapters/paper-broker.adapter';
@@ -45,12 +47,16 @@ import { AuditModule } from '../audit/audit.module';
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([BrokerConnection, BrokerAccount]),
+    TypeOrmModule.forFeature([BrokerConnection, BrokerAccount, BrokerOAuthFlow]),
     BullModule.registerQueue({ name: BROKER_HEALTH_QUEUE }),
     AuditModule,
   ],
   controllers: [
     BrokerOAuthController,
+    // Sprint 56 correction round 2 (architect finding 4) — the UNAUTHENTICATED
+    // server-side provider callback for mobile flows (public route; carries
+    // no user data, grants nothing without the single-use provider code).
+    BrokerOAuthCallbackController,
     BrokerController,
     BrokerRegistryController,
     PortfolioController,
@@ -68,7 +74,11 @@ import { AuditModule } from '../audit/audit.module';
     BrokerOAuthTokenLifecycleService,
     // Sprint 56 correction round 1 (audit point 6) — the user-facing OAuth
     // connection flow (authorize → external consent → complete → link) with
-    // server-side single-use flow correlation.
+    // server-side single-use flow correlation. Sprint 56 correction round 2
+    // (architect finding 2): the flow store moved from a process-local Map to
+    // the shared broker.broker_oauth_flows table (PostgreSQL) — replica-safe
+    // and restart-safe, with encrypted token columns and CAS state
+    // transitions.
     BrokerOAuthService,
     CredentialEncryptionService,
     MetaApiClientService,

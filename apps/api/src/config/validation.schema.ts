@@ -79,6 +79,14 @@ export const validationSchema = Joi.object({
   // (Sprint 56 correction round). OPTIONAL — the flow fails closed (honest
   // message) when unset. NEVER log these values.
   CTRADER_REDIRECT_URIS: Joi.string().optional().allow(''),
+  // Sprint 56 correction round 2 (architect finding 4) — comma-separated
+  // HTTPS SERVER callback slot URI(s) registered on the cTrader Open API
+  // application for MOBILE flows. OPTIONAL — mobile-channel authorizations
+  // fail closed (honest operator guidance) when unset. NEVER log these.
+  CTRADER_MOBILE_CALLBACK_URIS: Joi.string().optional().allow(''),
+  // Controlled deep link the server callback redirects to with the one-time
+  // handoff token. OPTIONAL — defaults to irexpro://broker/oauth/handoff.
+  CTRADER_MOBILE_DEEP_LINK: Joi.string().optional().allow(''),
 
   // Internal API key for Python AI Engine → NestJS communication.
   // Must match NESTJS_INTERNAL_API_KEY in services/ai-engine/.env.

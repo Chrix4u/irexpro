@@ -3,6 +3,7 @@ import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagg
 import { BrokerOAuthService } from './services/broker-oauth.service';
 import {
   CompleteBrokerOAuthDto,
+  ExchangeBrokerOAuthHandoffDto,
   LinkBrokerOAuthDto,
   StartBrokerOAuthDto,
 } from './dto/broker-oauth.dto';
@@ -12,18 +13,23 @@ import { CurrentUserId } from '../../common/decorators/current-user.decorator';
 
 /**
  * BrokerOAuthController — the user-facing cTrader OAuth connection flow
- * (Sprint 56 correction round 1 / audit point 6).
+ * (Sprint 56 correction round 1 / audit point 6; round 2 / architect findings
+ * 2 + 4).
  *
  * Routes (all authenticated; flow correlation is server-side, single-use,
  * and user-bound — see BrokerOAuthService):
  *   POST /broker/connections/oauth/authorize → consent URL + flowId
- *   POST /broker/connections/oauth/complete  → discovered cTID accounts
+ *   POST /broker/connections/oauth/complete  → discovered cTID accounts (web)
+ *   POST /broker/connections/oauth/handoff   → discovered cTID accounts
+ *                                               (mobile: one-time handoff
+ *                                               token exchange)
  *   POST /broker/connections/oauth/link      → BrokerConnection (encrypted)
  *
  * SECURITY: no endpoint accepts or returns application credentials or OAuth
- * token material. The redirect is handled by the platform's registered
- * redirect URI (web callback page / mobile deep link) which forwards ONLY
- * the single-use authorization code.
+ * token material. The mobile boundary (finding 4) routes the provider
+ * authorization code to the UNAUTHENTICATED server callback
+ * (broker-oauth-callback.controller.ts) which exchanges it server-side; the
+ * mobile app only ever receives the opaque one-time handoff token.
  */
 @ApiTags('broker-oauth')
 @ApiBearerAuth()
@@ -55,18 +61,25 @@ export class BrokerOAuthController {
     @Body() dto: StartBrokerOAuthDto,
     @CurrentUserId() userId: string,
   ): Promise<{ authorizationUrl: string; flowId: string; expiresAt: string }> {
-    return this.oauthService.startAuthorization(userId, dto.brokerId, undefined, dto.redirectUri);
+    return this.oauthService.startAuthorization(
+      userId,
+      dto.brokerId,
+      undefined,
+      dto.redirectUri,
+      dto.channel ?? 'web',
+    );
   }
 
   @Post('complete')
   @ApiOperation({
-    summary: 'Exchange the authorization code and discover cTID accounts',
+    summary: 'Exchange the authorization code and discover cTID accounts (web)',
     description:
       'Validates the server-side flow (owner, single-use, TTL), exchanges the ' +
       'single-use authorization code with the PLATFORM application credentials, and ' +
       'returns every trading account granted to the token (isLive flags included). ' +
-      'The response carries NO token material — tokens are held server-side ' +
-      '(memory-only, bounded TTL) until an account is linked.',
+      'The response carries NO token material — tokens are held server-side in the ' +
+      'shared flow store, AES-256-GCM-encrypted at rest with a bounded TTL, until ' +
+      'an account is linked.',
   })
   @ApiResponse({
     status: HttpStatus.OK,
@@ -81,6 +94,31 @@ export class BrokerOAuthController {
     @CurrentUserId() userId: string,
   ): Promise<{ flowId: string; accounts: unknown[] }> {
     return this.oauthService.completeAuthorization(userId, dto.flowId, dto.code);
+  }
+
+  @Post('handoff')
+  @ApiOperation({
+    summary: 'Exchange the one-time mobile OAuth handoff token (finding 4)',
+    description:
+      'Exchanges the opaque, user-bound, single-use, 120-second handoff token ' +
+      '(delivered to the app via the controlled deep link after the SERVER ' +
+      'callback exchanged the provider code) for the flow id and the ' +
+      'sanitized discovered accounts. The provider authorization code, ' +
+      'provider tokens, and application credentials NEVER reach the mobile ' +
+      'app. Replay, expiry, and cross-user use fail closed as not-found.',
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Flow id + discovered cTID accounts (sanitized — no tokens)',
+    type: Object,
+  })
+  @ApiResponse({ status: 404, description: 'Handoff token unknown, expired, used, or not owned' })
+  @ApiResponse({ status: 409, description: 'Concurrent handoff replay (single consumer wins)' })
+  async exchangeHandoffToken(
+    @Body() dto: ExchangeBrokerOAuthHandoffDto,
+    @CurrentUserId() userId: string,
+  ): Promise<{ flowId: string; accounts: unknown[] }> {
+    return this.oauthService.exchangeHandoffToken(userId, dto.handoffToken);
   }
 
   @Post('link')

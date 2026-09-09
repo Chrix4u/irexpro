@@ -6,6 +6,9 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { getRepositoryToken } from '@nestjs/typeorm';
+import { DataSource, Repository } from 'typeorm';
+import { createHash } from 'crypto';
 import { BrokerOAuthService } from './broker-oauth.service';
 import { BrokerService } from '../broker.service';
 import { CTraderClientService } from '../adapters/ctrader/ctrader-client.service';
@@ -16,11 +19,32 @@ import { BrokerAdapterError, BrokerErrorCode } from '../interfaces/broker-adapte
 import { ConnectBrokerDto } from '../dto/connect-broker.dto';
 import { BrokerConnection } from '../entities/broker-connection.entity';
 import { BrokerMode } from '../interfaces/broker-adapter.interface';
+import { BrokerOAuthFlow } from '../entities/broker-oauth-flow.entity';
+import { CredentialEncryptionService } from './credential-encryption.service';
 
-const USER = 'user-1';
-const FOREIGN_USER = 'user-2';
+/**
+ * BrokerOAuthService unit+store spec (Sprint 56 correction round 2 — architect
+ * findings 2 + 4).
+ *
+ * The flow store is exercised against a REAL in-memory sqlite DataSource
+ * (synchronize: true) — the repository-backed state machine, CAS transitions,
+ * encrypted-at-rest token columns, digest-only handoff tokens, and the lazy
+ * sweep all run against actual rows. Cross-replica behavior (two service
+ * instances sharing one store) is proven separately in
+ * broker-oauth.cross-instance.spec.ts.
+ *
+ * Provider collaborators (BrokerService / CTraderClientService / AuditService
+ * / ConfigService) stay mocked exactly as in the round-1 spec; the encryption
+ * service is REAL so the ciphertext assertions are meaningful.
+ */
+
+const USER = '11111111-1111-1111-1111-111111111111';
+const FOREIGN_USER = '22222222-2222-2222-2222-222222222222';
 const WEB_REDIRECT = 'https://app.irexpro.com/onboarding/broker/callback';
 const MOBILE_REDIRECT = 'irexpro://broker/oauth/callback';
+const MOBILE_SLOT = 'https://api.irexpro.com/api/v1/broker/connections/oauth/callback/m1';
+const MOBILE_SLOT_PATH = '/api/v1/broker/connections/oauth/callback/m1';
+const ENCRYPTION_KEY = 'unit-test-broker-encryption-key-32-bytes!!';
 const AUTHORIZATION_CODE = 'the-single-use-code';
 const ACCESS_TOKEN = 'SEKRIT-ACCESS-TOKEN';
 const REFRESH_TOKEN = 'SEKRIT-REFRESH-TOKEN';
@@ -40,8 +64,11 @@ const discoveredAccounts = (): CtraderDiscoveredAccount[] => [
   },
 ];
 
-describe('BrokerOAuthService (Sprint 56 correction — audit point 6)', () => {
+describe('BrokerOAuthService (Sprint 56 correction round 2 — findings 2 + 4)', () => {
   let service: BrokerOAuthService;
+  let flowRepo: Repository<BrokerOAuthFlow>;
+  let encryption: CredentialEncryptionService;
+  let dataSource: DataSource;
   let brokerService: { createConnection: jest.Mock };
   let ctraderClient: {
     isAvailable: jest.Mock;
@@ -52,15 +79,22 @@ describe('BrokerOAuthService (Sprint 56 correction — audit point 6)', () => {
   let audit: { log: jest.Mock };
   let config: { get: jest.Mock };
 
-  beforeEach(async () => {
-    jest.clearAllMocks();
+  beforeAll(async () => {
+    // REAL in-memory sqlite store — the entity schema is created by
+    // synchronize (the production DDL comes from migration 1753800000000).
+    dataSource = new DataSource({
+      type: 'sqlite',
+      database: ':memory:',
+      synchronize: true,
+      entities: [BrokerOAuthFlow],
+    });
+    await dataSource.initialize();
+    flowRepo = dataSource.getRepository(BrokerOAuthFlow);
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         BrokerOAuthService,
-        {
-          provide: BrokerService,
-          useValue: { createConnection: jest.fn() },
-        },
+        { provide: BrokerService, useValue: { createConnection: jest.fn() } },
         {
           provide: CTraderClientService,
           useValue: {
@@ -86,30 +120,99 @@ describe('BrokerOAuthService (Sprint 56 correction — audit point 6)', () => {
               if (key === 'broker.ctraderRedirectUris') {
                 return `${WEB_REDIRECT},${MOBILE_REDIRECT}`;
               }
+              if (key === 'broker.ctraderMobileCallbackUris') {
+                return MOBILE_SLOT;
+              }
+              if (key === 'BROKER_ENCRYPTION_KEY') {
+                return ENCRYPTION_KEY;
+              }
               return undefined;
             }),
           },
         },
+        CredentialEncryptionService,
+        { provide: getRepositoryToken(BrokerOAuthFlow), useValue: flowRepo },
       ],
     }).compile();
     service = module.get(BrokerOAuthService);
+    encryption = module.get(CredentialEncryptionService);
     brokerService = module.get(BrokerService);
     ctraderClient = module.get(CTraderClientService);
     audit = module.get(AuditService);
     config = module.get(ConfigService);
   });
 
+  afterAll(async () => {
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    // Restore the default collaborator behavior (tests may override it) —
+    // the module is compiled once in beforeAll, so mock state must be reset
+    // per test exactly as the round-1 spec rebuilt its TestingModule.
+    ctraderClient.isAvailable.mockReturnValue(true);
+    ctraderClient.buildAuthorizationUrl.mockReturnValue(
+      'https://id.ctrader.com/my/settings/openapi/grantingaccess/?client_id=pub-client-id&scope=trading&product=web',
+    );
+    ctraderClient.exchangeAuthorizationCode.mockResolvedValue({
+      accessToken: ACCESS_TOKEN,
+      refreshToken: REFRESH_TOKEN,
+      expiresIn: 2_628_000,
+    });
+    ctraderClient.discoverAccounts.mockResolvedValue(discoveredAccounts());
+    brokerService.createConnection.mockReset();
+    // Restore the default config behavior (tests may override it).
+    config.get.mockImplementation((key: string) => {
+      if (key === 'broker.ctraderRedirectUris') {
+        return `${WEB_REDIRECT},${MOBILE_REDIRECT}`;
+      }
+      if (key === 'broker.ctraderMobileCallbackUris') {
+        return MOBILE_SLOT;
+      }
+      if (key === 'BROKER_ENCRYPTION_KEY') {
+        return ENCRYPTION_KEY;
+      }
+      return undefined;
+    });
+    await flowRepo.clear();
+  });
+
+  const startFlow = (channel?: 'web' | 'mobile', redirectUri?: string) =>
+    service.startAuthorization(USER, 'ctrader', undefined, redirectUri, channel);
+
+  const completeFlow = (flowId: string, code = AUTHORIZATION_CODE) =>
+    service.completeAuthorization(USER, flowId, code);
+
+  const authorizedFlowId = async (): Promise<string> => {
+    const start = await startFlow();
+    await completeFlow(start.flowId);
+    return start.flowId;
+  };
+
+  const row = (flowId: string) => flowRepo.findOne({ where: { id: flowId } });
+
   // ─── Step 1: authorize ──────────────────────────────────────────────────────
 
   describe('startAuthorization', () => {
     it('creates a single-use server-side flow and returns the official consent URL', async () => {
-      const result = await service.startAuthorization(USER, 'ctrader', undefined, undefined);
+      const result = await startFlow();
       expect(result.authorizationUrl).toContain('https://id.ctrader.com/');
       expect(result.authorizationUrl).toContain('scope=trading');
       expect(result.flowId).toMatch(/^[0-9a-f-]{36}$/);
       expect(result.expiresAt).toBeDefined();
       // The consent URL is built with the DEFAULT (web) redirect.
       expect(ctraderClient.buildAuthorizationUrl).toHaveBeenCalledWith(WEB_REDIRECT);
+      // The flow is PERSISTED in the shared store (replica-safe), user-bound,
+      // broker-bound, and redirect-bound with the PENDING state + hard TTL.
+      const stored = await row(result.flowId);
+      expect(stored).toMatchObject({
+        userId: USER,
+        brokerId: 'ctrader',
+        redirectUri: WEB_REDIRECT,
+        state: 'PENDING',
+      });
+      expect(stored!.tokenCiphertext).toBeNull();
       // Audit: started, host-only redirect metadata.
       const started = audit.log.mock.calls.find(
         (c) => c[0].action === AuditAction.BROKER_OAUTH_FLOW_STARTED,
@@ -121,15 +224,19 @@ describe('BrokerOAuthService (Sprint 56 correction — audit point 6)', () => {
       });
     });
 
-    it('supports an allowlisted mobile deep-link redirect', async () => {
-      await service.startAuthorization(USER, 'ctrader', undefined, MOBILE_REDIRECT);
-      expect(ctraderClient.buildAuthorizationUrl).toHaveBeenCalledWith(MOBILE_REDIRECT);
+    it('rejects an allowlisted custom-scheme redirect for the WEB channel (finding 4)', async () => {
+      // Custom app schemes are no longer production provider callbacks — the
+      // provider code must be exchanged by the SERVER (registered HTTPS
+      // callback), never delivered raw to a client-controlled scheme.
+      await expect(startFlow('web', MOBILE_REDIRECT)).rejects.toThrow(BadRequestException);
+      expect(ctraderClient.buildAuthorizationUrl).not.toHaveBeenCalled();
+      expect(await flowRepo.count()).toBe(0);
     });
 
     it('rejects redirect URIs outside the server-configured allowlist', async () => {
-      await expect(
-        service.startAuthorization(USER, 'ctrader', undefined, 'https://evil.example.com/cb'),
-      ).rejects.toThrow(BadRequestException);
+      await expect(startFlow('web', 'https://evil.example.com/cb')).rejects.toThrow(
+        BadRequestException,
+      );
       expect(ctraderClient.buildAuthorizationUrl).not.toHaveBeenCalled();
     });
 
@@ -156,14 +263,36 @@ describe('BrokerOAuthService (Sprint 56 correction — audit point 6)', () => {
         BadRequestException,
       );
     });
+
+    it('claims a configured mobile callback slot for the MOBILE channel (client redirect ignored)', async () => {
+      const result = await startFlow('mobile', 'https://evil.example.com/cb');
+      expect(ctraderClient.buildAuthorizationUrl).toHaveBeenCalledWith(MOBILE_SLOT);
+      const stored = await row(result.flowId);
+      expect(stored!.redirectUri).toBe(MOBILE_SLOT);
+      expect(stored!.state).toBe('PENDING');
+    });
+
+    it('fails closed with operator guidance when no mobile callback slot is configured', async () => {
+      config.get.mockImplementation((key: string) =>
+        key === 'broker.ctraderRedirectUris' ? WEB_REDIRECT : undefined,
+      );
+      const err = await startFlow('mobile').catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      expect((err as BadRequestException).message).toContain('CTRADER_MOBILE_CALLBACK_URIS');
+    });
+
+    it('reports all slots busy when the single configured slot is held (serialize)', async () => {
+      await startFlow('mobile');
+      await expect(startFlow('mobile')).rejects.toThrow(ConflictException);
+    });
   });
 
-  // ─── Step 3: complete ───────────────────────────────────────────────────────
+  // ─── Step 3 (web): complete ─────────────────────────────────────────────────
 
   describe('completeAuthorization', () => {
     it('exchanges the code with the PLATFORM app credentials and returns sanitized accounts', async () => {
-      const start = await service.startAuthorization(USER, 'ctrader');
-      const result = await service.completeAuthorization(USER, start.flowId, AUTHORIZATION_CODE);
+      const start = await startFlow();
+      const result = await completeFlow(start.flowId);
 
       expect(ctraderClient.exchangeAuthorizationCode).toHaveBeenCalledWith(
         AUTHORIZATION_CODE,
@@ -182,9 +311,34 @@ describe('BrokerOAuthService (Sprint 56 correction — audit point 6)', () => {
       expect(JSON.stringify(result)).not.toContain(REFRESH_TOKEN);
     });
 
+    it('persists the token bundle ENCRYPTED at rest (ciphertext columns, decryptable server-side)', async () => {
+      const start = await startFlow();
+      await completeFlow(start.flowId);
+
+      const stored = await row(start.flowId);
+      expect(stored!.state).toBe('AUTHORIZED');
+      expect(stored!.tokenCiphertext).toBeTruthy();
+      expect(stored!.tokenIv).toBeTruthy();
+      expect(stored!.tokenTag).toBeTruthy();
+      // Ciphertext is hex — no plaintext token material in ANY persisted
+      // column, and the sanitized accounts column carries no tokens either.
+      const serializedRow = JSON.stringify(stored);
+      expect(serializedRow).not.toContain(ACCESS_TOKEN);
+      expect(serializedRow).not.toContain(REFRESH_TOKEN);
+      expect(serializedRow).not.toContain(AUTHORIZATION_CODE);
+      // The bundle round-trips through the real AES-256-GCM service.
+      const bundle = encryption.decryptJson({
+        ciphertext: stored!.tokenCiphertext!,
+        iv: stored!.tokenIv!,
+        tag: stored!.tokenTag!,
+        keyId: stored!.tokenKeyId!,
+      });
+      expect(bundle).toEqual({ accessToken: ACCESS_TOKEN, refreshToken: REFRESH_TOKEN });
+    });
+
     it('audits completion with counts and expiry ONLY (no tokens)', async () => {
-      const start = await service.startAuthorization(USER, 'ctrader');
-      await service.completeAuthorization(USER, start.flowId, AUTHORIZATION_CODE);
+      const start = await startFlow();
+      await completeFlow(start.flowId);
       const completed = audit.log.mock.calls.find(
         (c) => c[0].action === AuditAction.BROKER_OAUTH_AUTHORIZATION_COMPLETED,
       );
@@ -197,11 +351,12 @@ describe('BrokerOAuthService (Sprint 56 correction — audit point 6)', () => {
         accountCount: 2,
         liveAccountCount: 1,
         demoAccountCount: 1,
+        accessTokenExpiresAt: expect.any(String),
       });
     });
 
     it('treats an unknown flow and a FOREIGN flow identically (no existence oracle)', async () => {
-      const start = await service.startAuthorization(USER, 'ctrader');
+      const start = await startFlow();
       await expect(service.completeAuthorization(FOREIGN_USER, start.flowId, 'x')).rejects.toThrow(
         NotFoundException,
       );
@@ -214,19 +369,16 @@ describe('BrokerOAuthService (Sprint 56 correction — audit point 6)', () => {
       ctraderClient.exchangeAuthorizationCode.mockRejectedValue(
         new BrokerAdapterError(BrokerErrorCode.AUTHENTICATION_FAILED, 'INVALID_CODE'),
       );
-      const start = await service.startAuthorization(USER, 'ctrader');
-      await expect(
-        service.completeAuthorization(USER, start.flowId, AUTHORIZATION_CODE),
-      ).rejects.toThrow(BadRequestException);
-      // The flow is DEAD — even a later VALID code cannot complete it.
+      const start = await startFlow();
+      await expect(completeFlow(start.flowId)).rejects.toThrow(BadRequestException);
+      // The flow is DEAD (row deleted via CAS) — even a later VALID code
+      // cannot complete it.
       ctraderClient.exchangeAuthorizationCode.mockResolvedValue({
         accessToken: ACCESS_TOKEN,
         refreshToken: REFRESH_TOKEN,
         expiresIn: 2_628_000,
       });
-      await expect(
-        service.completeAuthorization(USER, start.flowId, AUTHORIZATION_CODE),
-      ).rejects.toThrow(NotFoundException);
+      await expect(completeFlow(start.flowId)).rejects.toThrow(NotFoundException);
       // Failed-exchange audit recorded (sanitized).
       const failed = audit.log.mock.calls.find(
         (c) => c[0].action === AuditAction.BROKER_OAUTH_AUTHORIZATION_FAILED,
@@ -235,22 +387,28 @@ describe('BrokerOAuthService (Sprint 56 correction — audit point 6)', () => {
       expect(JSON.stringify(failed[0].metadata)).not.toContain(ACCESS_TOKEN);
     });
 
-    it('rejects completing a flow twice (single-use states)', async () => {
-      const start = await service.startAuthorization(USER, 'ctrader');
-      await service.completeAuthorization(USER, start.flowId, AUTHORIZATION_CODE);
-      await expect(
-        service.completeAuthorization(USER, start.flowId, 'another-code'),
-      ).rejects.toThrow(ConflictException);
+    it('consumes the flow when account discovery FAILS (fail-closed)', async () => {
+      ctraderClient.discoverAccounts.mockRejectedValue(
+        new BrokerAdapterError(BrokerErrorCode.BROKER_SERVER_ERROR, 'DISCOVERY'),
+      );
+      const start = await startFlow();
+      await expect(completeFlow(start.flowId)).rejects.toThrow(BadRequestException);
+      await expect(completeFlow(start.flowId)).rejects.toThrow(NotFoundException);
     });
 
-    it('rejects an expired PENDING flow', async () => {
-      jest.useFakeTimers();
-      const start = await service.startAuthorization(USER, 'ctrader');
-      await jest.advanceTimersByTimeAsync(11 * 60_000);
-      await expect(
-        service.completeAuthorization(USER, start.flowId, AUTHORIZATION_CODE),
-      ).rejects.toThrow(ConflictException);
-      jest.useRealTimers();
+    it('rejects completing a flow twice (single-use states)', async () => {
+      const start = await startFlow();
+      await completeFlow(start.flowId);
+      await expect(completeFlow(start.flowId, 'another-code')).rejects.toThrow(ConflictException);
+    });
+
+    it('rejects an expired PENDING flow and sweeps its row', async () => {
+      const start = await startFlow();
+      await flowRepo.update(start.flowId, {
+        expiresAt: new Date(Date.now() - 1_000),
+      });
+      await expect(completeFlow(start.flowId)).rejects.toThrow(ConflictException);
+      expect(await row(start.flowId)).toBeNull();
     });
 
     it('never logs token material (adversarial log spy)', async () => {
@@ -262,14 +420,142 @@ describe('BrokerOAuthService (Sprint 56 correction — audit point 6)', () => {
         }),
       );
       try {
-        const start = await service.startAuthorization(USER, 'ctrader');
-        await service.completeAuthorization(USER, start.flowId, AUTHORIZATION_CODE);
+        const start = await startFlow();
+        await completeFlow(start.flowId);
       } finally {
         spies.forEach((s) => s.mockRestore());
       }
       const all = logged.join('\n');
       expect(all).not.toContain(ACCESS_TOKEN);
       expect(all).not.toContain(REFRESH_TOKEN);
+    });
+  });
+
+  // ─── Steps 2b + 3 (mobile): server callback + handoff exchange ──────────────
+
+  describe('handleMobileCallback + exchangeHandoffToken (finding 4)', () => {
+    it('completes SERVER-side and issues a high-entropy one-time handoff token', async () => {
+      const start = await startFlow('mobile');
+      // The provider code goes to the SERVER callback, never to the app.
+      const result = await service.handleMobileCallback(MOBILE_SLOT_PATH, AUTHORIZATION_CODE);
+      expect(result.status).toBe('ok');
+      if (result.status !== 'ok') return;
+
+      // High-entropy: 32 random bytes → ≥ 43 base64url chars.
+      expect(result.handoffToken.length).toBeGreaterThanOrEqual(43);
+      expect(result.handoffToken).toMatch(/^[A-Za-z0-9_-]+$/);
+      expect(result.flowId).toBe(start.flowId);
+
+      // The exchange used the flow's SLOT redirect URI, server-side.
+      expect(ctraderClient.exchangeAuthorizationCode).toHaveBeenCalledWith(
+        AUTHORIZATION_CODE,
+        MOBILE_SLOT,
+      );
+
+      // The store keeps ONLY the SHA-256 digest — never the raw token — and
+      // the tokens remain encrypted at rest.
+      const stored = await row(start.flowId);
+      expect(stored!.state).toBe('AUTHORIZED');
+      expect(stored!.handoffTokenHash).toBe(
+        createHash('sha256').update(result.handoffToken, 'utf8').digest('hex'),
+      );
+      expect(stored!.handoffTokenHash).not.toBe(result.handoffToken);
+      expect(stored!.handoffExpiresAt!.getTime()).toBeGreaterThan(Date.now() + 60_000);
+      expect(JSON.stringify(stored)).not.toContain(ACCESS_TOKEN);
+      expect(JSON.stringify(stored)).not.toContain(REFRESH_TOKEN);
+    });
+
+    it('exchanges the handoff token for sanitized accounts, single-use', async () => {
+      const start = await startFlow('mobile');
+      const cb = await service.handleMobileCallback(MOBILE_SLOT_PATH, AUTHORIZATION_CODE);
+      expect(cb.status).toBe('ok');
+      if (cb.status !== 'ok') return;
+
+      const exchanged = await service.exchangeHandoffToken(USER, cb.handoffToken);
+      expect(exchanged.flowId).toBe(start.flowId);
+      expect(exchanged.accounts).toHaveLength(2);
+      // No token material in the exchange response.
+      expect(JSON.stringify(exchanged)).not.toContain(ACCESS_TOKEN);
+      expect(JSON.stringify(exchanged)).not.toContain(REFRESH_TOKEN);
+      // Replay fails closed as not-found (digest consumed).
+      await expect(service.exchangeHandoffToken(USER, cb.handoffToken)).rejects.toThrow(
+        NotFoundException,
+      );
+      // Audited with brokerId ONLY.
+      const audited = audit.log.mock.calls.find(
+        (c) => c[0].action === AuditAction.BROKER_OAUTH_HANDOFF_EXCHANGED,
+      );
+      expect(audited).toBeDefined();
+      expect(audited[0].metadata).toEqual({ brokerId: 'ctrader' });
+    });
+
+    it('rejects a FOREIGN user exchanging the handoff token (cross-user = not-found)', async () => {
+      await startFlow('mobile');
+      const cb = await service.handleMobileCallback(MOBILE_SLOT_PATH, AUTHORIZATION_CODE);
+      expect(cb.status).toBe('ok');
+      if (cb.status !== 'ok') return;
+      await expect(service.exchangeHandoffToken(FOREIGN_USER, cb.handoffToken)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('rejects an EXPIRED handoff token (fail closed)', async () => {
+      await startFlow('mobile');
+      const cb = await service.handleMobileCallback(MOBILE_SLOT_PATH, AUTHORIZATION_CODE);
+      expect(cb.status).toBe('ok');
+      if (cb.status !== 'ok') return;
+      await flowRepo.update(cb.flowId, {
+        handoffExpiresAt: new Date(Date.now() - 1_000),
+      });
+      await expect(service.exchangeHandoffToken(USER, cb.handoffToken)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('errors with unknown-or-expired when no PENDING flow holds the slot', async () => {
+      const result = await service.handleMobileCallback(MOBILE_SLOT_PATH, AUTHORIZATION_CODE);
+      expect(result).toEqual({ status: 'error', reason: 'unknown-or-expired' });
+      expect(ctraderClient.exchangeAuthorizationCode).not.toHaveBeenCalled();
+    });
+
+    it('errors with missing-code when the provider redirect carries no code', async () => {
+      await startFlow('mobile');
+      const result = await service.handleMobileCallback(MOBILE_SLOT_PATH, undefined);
+      expect(result).toEqual({ status: 'error', reason: 'missing-code' });
+      expect(ctraderClient.exchangeAuthorizationCode).not.toHaveBeenCalled();
+    });
+
+    it('fails closed HARD on an ambiguous callback (two PENDING flows, one slot) — no exchange', async () => {
+      // Simulate a slot-claim race/corruption: two PENDING rows on one slot.
+      await startFlow('mobile');
+      await startFlow('mobile').catch(() => undefined); // second may Conflict
+      const seeded = flowRepo.create({
+        userId: FOREIGN_USER,
+        brokerId: 'ctrader',
+        redirectUri: MOBILE_SLOT,
+        state: 'PENDING',
+        stateChangedAt: new Date(),
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+      await flowRepo.save(seeded);
+
+      const result = await service.handleMobileCallback(MOBILE_SLOT_PATH, AUTHORIZATION_CODE);
+      expect(result).toEqual({ status: 'error', reason: 'ambiguous' });
+      // NEVER guess — no provider exchange happened at all.
+      expect(ctraderClient.exchangeAuthorizationCode).not.toHaveBeenCalled();
+      expect((await flowRepo.find({ where: { state: 'PENDING' as never } })).length).toBe(2);
+    });
+
+    it('errors with exchange-failed when the server-side code exchange fails (no retry data)', async () => {
+      ctraderClient.exchangeAuthorizationCode.mockRejectedValue(
+        new BrokerAdapterError(BrokerErrorCode.AUTHENTICATION_FAILED, 'INVALID_CODE'),
+      );
+      await startFlow('mobile');
+      const result = await service.handleMobileCallback(MOBILE_SLOT_PATH, AUTHORIZATION_CODE);
+      expect(result).toEqual({ status: 'error', reason: 'exchange-failed' });
+      // The flow is consumed (fail-closed — no replay window) and no token
+      // material leaked anywhere.
+      expect(await flowRepo.count()).toBe(0);
     });
   });
 
@@ -282,15 +568,9 @@ describe('BrokerOAuthService (Sprint 56 correction — audit point 6)', () => {
       accountType: BrokerMode.DEMO,
     } as unknown as BrokerConnection;
 
-    async function authorizedFlow(): Promise<string> {
-      const start = await service.startAuthorization(USER, 'ctrader');
-      await service.completeAuthorization(USER, start.flowId, AUTHORIZATION_CODE);
-      return start.flowId;
-    }
-
     it('links a DEMO account through the CANONICAL createConnection path with encrypted tokens', async () => {
       brokerService.createConnection.mockResolvedValue(linkedConnection);
-      const flowId = await authorizedFlow();
+      const flowId = await authorizedFlowId();
 
       const result = await service.linkAccount(USER, flowId, '1234567', 'My Demo');
 
@@ -300,8 +580,9 @@ describe('BrokerOAuthService (Sprint 56 correction — audit point 6)', () => {
       // The environment derives from the SERVER-REPORTED isLive flag.
       expect(dto.accountType).toBe(BrokerMode.DEMO);
       expect(dto.accountId).toBe('1234567');
-      // The OAuth tokens ride the write-only credential fields (encrypted at
-      // rest inside createConnection — never returned).
+      // The OAuth tokens (decrypted from the store) ride the write-only
+      // credential fields (encrypted at rest inside createConnection — never
+      // returned).
       expect(dto.apiKey).toBe(ACCESS_TOKEN);
       expect(dto.additionalParams).toMatchObject({
         refreshToken: REFRESH_TOKEN,
@@ -329,7 +610,7 @@ describe('BrokerOAuthService (Sprint 56 correction — audit point 6)', () => {
           'Broker ctrader is not production-LIVE verified — LIVE connections are fail-closed (BETA is DEMO-only)',
         ),
       );
-      const flowId = await authorizedFlow();
+      const flowId = await authorizedFlowId();
       await expect(service.linkAccount(USER, flowId, '7654321')).rejects.toThrow(
         ForbiddenException,
       );
@@ -337,29 +618,38 @@ describe('BrokerOAuthService (Sprint 56 correction — audit point 6)', () => {
       expect(dto.accountType).toBe(BrokerMode.LIVE);
     });
 
-    it('consumes the flow after a successful link (single-use)', async () => {
+    it('consumes the flow after a successful link (single-use, tokens zeroed)', async () => {
       brokerService.createConnection.mockResolvedValue(linkedConnection);
-      const flowId = await authorizedFlow();
+      const flowId = await authorizedFlowId();
       await service.linkAccount(USER, flowId, '1234567');
-      await expect(service.linkAccount(USER, flowId, '1234567')).rejects.toThrow(NotFoundException);
+      // The durable CONSUMED row fails closed on a second link (the in-memory
+      // store previously returned NotFound after deletion — the security
+      // property "exactly once" is unchanged).
+      await expect(service.linkAccount(USER, flowId, '1234567')).rejects.toThrow(ConflictException);
+      // The consumed row holds NO token material at all.
+      const stored = await row(flowId);
+      expect(stored!.state).toBe('CONSUMED');
+      expect(stored!.tokenCiphertext).toBeNull();
+      expect(stored!.accounts).toBeNull();
     });
 
     it('keeps the flow alive when linking FAILS (user can pick a DEMO account instead)', async () => {
       brokerService.createConnection.mockRejectedValueOnce(
         new ForbiddenException('not production-LIVE verified'),
       );
-      const flowId = await authorizedFlow();
+      const flowId = await authorizedFlowId();
       await expect(service.linkAccount(USER, flowId, '7654321')).rejects.toThrow(
         ForbiddenException,
       );
-      // The LIVE attempt failed — the DEMO account from the SAME
-      // authorization still links.
+      // The LIVE attempt failed — the flow was RESTORED to AUTHORIZED, so the
+      // DEMO account from the SAME authorization still links.
+      expect((await row(flowId))!.state).toBe('AUTHORIZED');
       brokerService.createConnection.mockResolvedValue(linkedConnection);
       await expect(service.linkAccount(USER, flowId, '1234567')).resolves.toBe(linkedConnection);
     });
 
     it('rejects an account that was not part of the discovery', async () => {
-      const flowId = await authorizedFlow();
+      const flowId = await authorizedFlowId();
       await expect(service.linkAccount(USER, flowId, '9999999')).rejects.toThrow(
         BadRequestException,
       );
@@ -367,52 +657,90 @@ describe('BrokerOAuthService (Sprint 56 correction — audit point 6)', () => {
     });
 
     it('rejects a foreign user on every step (tenant isolation)', async () => {
-      const start = await service.startAuthorization(USER, 'ctrader');
+      const start = await startFlow();
       await expect(service.linkAccount(FOREIGN_USER, start.flowId, '1234567')).rejects.toThrow(
         NotFoundException,
       );
     });
 
     it('rejects linking before authorization completed (state machine)', async () => {
-      const start = await service.startAuthorization(USER, 'ctrader');
+      const start = await startFlow();
       await expect(service.linkAccount(USER, start.flowId, '1234567')).rejects.toThrow(
         ConflictException,
       );
     });
 
     it('rejects an expired AUTHORIZED flow (bounded token retention)', async () => {
-      jest.useFakeTimers();
-      const start = await service.startAuthorization(USER, 'ctrader');
-      await service.completeAuthorization(USER, start.flowId, AUTHORIZATION_CODE);
-      await jest.advanceTimersByTimeAsync(6 * 60_000);
-      await expect(service.linkAccount(USER, start.flowId, '1234567')).rejects.toThrow(
-        ConflictException,
-      );
-      jest.useRealTimers();
+      const flowId = await authorizedFlowId();
+      await flowRepo.update(flowId, { expiresAt: new Date(Date.now() - 1_000) });
+      await expect(service.linkAccount(USER, flowId, '1234567')).rejects.toThrow(ConflictException);
+      expect(await row(flowId)).toBeNull();
+    });
+
+    it('rejects a link while a LINKING claim is fresh (single-use claim)', async () => {
+      const flowId = await authorizedFlowId();
+      await flowRepo.update(flowId, {
+        state: 'LINKING',
+        stateChangedAt: new Date(),
+      });
+      await expect(service.linkAccount(USER, flowId, '1234567')).rejects.toThrow(ConflictException);
+    });
+
+    it('re-claims a STALE linking claim (crash recovery after 60s)', async () => {
+      brokerService.createConnection.mockResolvedValue(linkedConnection);
+      const flowId = await authorizedFlowId();
+      // A crashed/abandoned LINKING claim older than 60 s is re-claimable.
+      await flowRepo.update(flowId, {
+        state: 'LINKING',
+        stateChangedAt: new Date(Date.now() - 61_000),
+      });
+      await expect(service.linkAccount(USER, flowId, '1234567')).resolves.toBe(linkedConnection);
+      expect((await row(flowId))!.state).toBe('CONSUMED');
+    });
+
+    it('consumes the flow when the stored token bundle cannot be decrypted (tampering)', async () => {
+      const flowId = await authorizedFlowId();
+      await flowRepo.update(flowId, {
+        tokenCiphertext: 'deadbeefdeadbeefdeadbeef',
+      });
+      await expect(service.linkAccount(USER, flowId, '1234567')).rejects.toThrow(ConflictException);
+      const stored = await row(flowId);
+      expect(stored!.state).toBe('CONSUMED');
+      expect(stored!.tokenCiphertext).toBeNull();
     });
   });
 
   // ─── Flow-store hygiene ─────────────────────────────────────────────────────
 
   describe('flow store bounds', () => {
-    it('bounds the number of concurrent flows (fail-closed under flood)', async () => {
-      const many = await Promise.all(
-        Array.from({ length: 1000 }, () => service.startAuthorization(USER, 'ctrader')),
+    it('bounds the number of concurrent LIVE flows (fail-closed under flood)', async () => {
+      const seeds = Array.from({ length: 1000 }, (_, i) =>
+        flowRepo.create({
+          userId: USER,
+          brokerId: 'ctrader',
+          redirectUri: `${WEB_REDIRECT}?seed=${i}`,
+          state: 'PENDING',
+          stateChangedAt: new Date(),
+          expiresAt: new Date(Date.now() + 60_000),
+        }),
       );
-      expect(many).toHaveLength(1000);
+      await flowRepo.save(seeds);
       await expect(service.startAuthorization(USER, 'ctrader')).rejects.toThrow(ConflictException);
+      // CONSUMED/expired rows do NOT count toward the budget.
+      await flowRepo.update({ state: 'PENDING' as never }, { state: 'CONSUMED' as never });
+      await expect(service.startAuthorization(USER, 'ctrader')).resolves.toBeDefined();
     });
 
     it('sweeps expired flows so the store stays bounded over time', async () => {
-      jest.useFakeTimers();
-      await service.startAuthorization(USER, 'ctrader'); // expires in 10 min
-      await jest.advanceTimersByTimeAsync(11 * 60_000);
-      // A new start sweeps the expired entry — the store never grows unbounded.
-      await service.startAuthorization(USER, 'ctrader');
-      // The expired flow is gone (NotFound, not Conflict).
-      const logger = (service as unknown as { flows: Map<string, unknown> }).flows;
-      expect(logger.size).toBe(1);
-      jest.useRealTimers();
+      const stale = await startFlow();
+      await flowRepo.update(stale.flowId, {
+        expiresAt: new Date(Date.now() - 2 * 60 * 60_000),
+      });
+      // A new start sweeps rows past the 1h grace horizon.
+      const fresh = await startFlow();
+      expect(await row(stale.flowId)).toBeNull();
+      expect(await row(fresh.flowId)).toBeDefined();
+      expect(await flowRepo.count()).toBe(1);
     });
   });
 });

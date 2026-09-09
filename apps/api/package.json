@@ -84,6 +84,7 @@
     "prettier": "^3.5.0",
     "socket.io-client": "^4.8.3",
     "source-map-support": "^0.5.21",
+    "sqlite3": "^6.0.1",
     "supertest": "^7.0.0",
     "ts-jest": "^29.2.5",
     "ts-node": "^10.9.2",
@@ -98,7 +99,10 @@
     ],
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
-    "testPathIgnorePatterns": ["/node_modules/", "pg-integration"],
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "pg-integration"
+    ],
     "transform": {
       "^.+\\.(t|j)s$": "ts-jest"
     },
