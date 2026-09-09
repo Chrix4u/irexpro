@@ -29,11 +29,18 @@ describe('BrokerConnection schema reconciliation (hotfix)', () => {
     __dirname,
     '../../database/migrations/1753400000000-AddBrokerAuthorizationStateMachine.ts',
   );
+  // Sprint 56 correction round 2 (architect finding 3) — refresh lease +
+  // credential generation columns live in their own migration
+  const refreshProtectionMigrationPath = path.resolve(
+    __dirname,
+    '../../database/migrations/1753850000000-AddBrokerOAuthRefreshProtection.ts',
+  );
 
   let entitySource: string;
   let baselineSource: string;
   let reconcileSource: string;
   let authorizationSource: string;
+  let refreshProtectionSource: string;
 
   beforeAll(() => {
     entitySource = fs.readFileSync(entityPath, 'utf-8');
@@ -42,6 +49,8 @@ describe('BrokerConnection schema reconciliation (hotfix)', () => {
     reconcileSource = fs.readFileSync(reconcileMigrationPath, 'utf-8');
     expect(fs.existsSync(authorizationMigrationPath)).toBe(true);
     authorizationSource = fs.readFileSync(authorizationMigrationPath, 'utf-8');
+    expect(fs.existsSync(refreshProtectionMigrationPath)).toBe(true);
+    refreshProtectionSource = fs.readFileSync(refreshProtectionMigrationPath, 'utf-8');
   });
 
   /**
@@ -97,8 +106,9 @@ describe('BrokerConnection schema reconciliation (hotfix)', () => {
         }
       }
     }
-    // Match ADD COLUMN IF NOT EXISTS column_name
-    const addColumnRegex = /ADD COLUMN IF NOT EXISTS\s+(\w+)/gi;
+    // Match ADD COLUMN IF NOT EXISTS column_name (quoted or unquoted — the
+    // Sprint 56 refresh-protection migration quotes identifiers)
+    const addColumnRegex = /ADD COLUMN IF NOT EXISTS\s+"?(\w+)"?/gi;
     while ((match = addColumnRegex.exec(source)) !== null) {
       if (match[1]) columns.add(match[1]);
     }
@@ -137,10 +147,12 @@ describe('BrokerConnection schema reconciliation (hotfix)', () => {
     const baselineColumns = extractMigrationColumnNames(baselineSource);
     const reconcileColumns = extractMigrationColumnNames(reconcileSource);
     const authorizationColumns = extractMigrationColumnNames(authorizationSource);
+    const refreshProtectionColumns = extractMigrationColumnNames(refreshProtectionSource);
     const allMigrationColumns = new Set([
       ...baselineColumns,
       ...reconcileColumns,
       ...authorizationColumns,
+      ...refreshProtectionColumns,
     ]);
 
     // Every entity column must appear in at least one migration

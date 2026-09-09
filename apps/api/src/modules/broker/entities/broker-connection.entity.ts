@@ -93,6 +93,28 @@ export class BrokerConnection {
   })
   credentialStatus: BrokerCredentialStatus;
 
+  // ─── Concurrent OAuth refresh protection (Sprint 56 correction round 2, ────
+  //     architect finding 3 — per-connection refresh serialization) ───────────
+
+  /**
+   * Monotonic credential rotation generation — CAS token for concurrent
+   * refresh protection. Every successful token-pair rotation increments it;
+   * a refresh that observed a stale generation can never overwrite a newer
+   * one (conditional UPDATE on credential_generation = observed value).
+   */
+  @Column({ name: 'credential_generation', type: 'integer', default: 0 })
+  credentialGeneration: number;
+
+  /**
+   * Refresh lease expiry (timestamptz, NULL = free) — DB-atomic claim that
+   * serializes OAuth refreshes ACROSS API replicas (not merely an in-memory
+   * mutex). Spotware rotates BOTH tokens on refresh and invalidates the
+   * previous pair, so two concurrent refreshes of one credential generation
+   * would permanently kill the credential.
+   */
+  @Column({ name: 'credential_refresh_lease_expires_at', type: 'timestamptz', nullable: true })
+  credentialRefreshLeaseExpiresAt: Date | null;
+
   @Column({ name: 'authorized_at', type: 'timestamptz', nullable: true })
   authorizedAt: Date | null;
 
