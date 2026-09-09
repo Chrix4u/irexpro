@@ -46,6 +46,9 @@ import { DomainEventType } from '../events/enums/domain-event-type.enum';
  * 3. Credentials are NEVER returned from any method or included in any response
  * 4. DEMO mode is mandatory before LIVE mode can be enabled
  * 5. Credential encryption/decryption delegated to CredentialEncryptionService only
+ * 6. Mutable adapter mode/account state is scoped to BrokerConnection.id
+ *    (#291 / correction round 3): testCredentials uses ephemeral adapters;
+ *    persisted-connection operations use registry.getAdapterForConnection().
  *
  * See: docs/architecture/09-broker-integration-architecture.md
  */
@@ -121,7 +124,11 @@ export class BrokerService {
     userId: string,
     ipAddress?: string,
   ): Promise<{ success: boolean; accountId?: string; errorMessage?: string }> {
-    const adapter = this.adapterRegistry.getAdapter(dto.brokerId);
+    // #291 / correction round 3: credential tests run on an EPHEMERAL adapter
+    // context — never the metadata root and never a persisted connection's
+    // session. The adapter disposes its temporary provider sessions in a
+    // finally-safe path (finding 5).
+    const adapter = this.adapterRegistry.createEphemeralAdapter(dto.brokerId);
     adapter.setMode(dto.accountType as BrokerMode);
 
     const credentials: DecryptedBrokerCredentials = {
@@ -277,7 +284,15 @@ export class BrokerService {
     ipAddress?: string,
   ): Promise<BrokerConnection> {
     const connection = await this.findConnectionById(connectionId, userId);
-    const adapter = this.adapterRegistry.getAdapter(connection.brokerId);
+    // #291 / correction round 3: ONE mutable adapter context per persisted
+    // BrokerConnection.id — concurrent operations on the same connection share
+    // it; other connections can never observe its in-flight setMode/account
+    // state. Alias ids (pepperstone-ctrader, icmarkets-ctrader) resolve through
+    // the canonical factory while preserving the requested identity.
+    const adapter = this.adapterRegistry.getAdapterForConnection(
+      connection.id,
+      connection.brokerId,
+    );
 
     if (!connection.encryptedCredentials || !connection.credentialIv || !connection.credentialTag) {
       throw new BadRequestException('Broker connection has no stored credentials');
@@ -462,20 +477,15 @@ export class BrokerService {
   async disconnectBroker(connectionId: string, userId: string, ipAddress?: string): Promise<void> {
     const connection = await this.findConnectionById(connectionId, userId);
 
-    if (connection.status === BrokerConnectionStatus.CONNECTED) {
-      try {
-        const adapter = this.adapterRegistry.getAdapter(connection.brokerId);
-        await adapter.disconnect();
-      } catch (err) {
-        this.logger.warn(
-          `Adapter disconnect error for connection ${connectionId}: ${(err as Error).message}`,
-        );
-      }
-    }
-
-    // A4: guarded on the loaded authorization state — a concurrent
-    // enable-live/revoke/connect that changed the state makes this stale
-    // disconnect fail visibly instead of overwriting the winner.
+    // #291 race finding (a) / correction round 3: the guarded persisted-state
+    // transition MUST win BEFORE any irreversible provider teardown. If a
+    // concurrent enable-live/revoke/connect changed the authoritative state,
+    // this write loses the race (ConflictException) and the provider session
+    // is left INTACT — a lost race must never strand a CONNECTED persisted
+    // state on top of a torn-down provider session. Provider teardown after a
+    // WON transition is best-effort: a failed teardown leaves a provider
+    // session alive under a DISCONNECTED persisted state, which reconnect
+    // resolves safely.
     await this.applyGuardedAuthorizationUpdate(
       connectionId,
       connection.authorizationStatus,
@@ -487,6 +497,24 @@ export class BrokerService {
       },
       'disconnectBroker transition',
     );
+
+    if (connection.status === BrokerConnectionStatus.CONNECTED) {
+      try {
+        const adapter = this.adapterRegistry.getAdapterForConnection(
+          connection.id,
+          connection.brokerId,
+        );
+        await adapter.disconnect();
+      } catch (err) {
+        this.logger.warn(
+          `Adapter disconnect error for connection ${connectionId}: ${(err as Error).message}`,
+        );
+      }
+    }
+
+    // The mutable adapter context must not survive an explicit disconnect,
+    // even when best-effort provider teardown failed (#291).
+    this.adapterRegistry.releaseAdapterForConnection(connectionId);
 
     await this.auditService.log({
       actorUserId: userId,
@@ -510,6 +538,8 @@ export class BrokerService {
     }
 
     await this.connectionRepo.softDelete(connectionId);
+    // Mutable adapter context does not survive a soft-deleted connection (#291).
+    this.adapterRegistry.releaseAdapterForConnection(connectionId);
 
     await this.auditService.log({
       actorUserId: userId,
@@ -698,8 +728,14 @@ export class BrokerService {
       throw new BadRequestException('Credential rotation must use the same account type');
     }
 
-    const adapter = this.adapterRegistry.getAdapter(connection.brokerId);
-    adapter.setMode(connection.accountType);
+    // #291 / correction round 3 (finding 5 reconciliation): the NEW
+    // credential set is validated on an EPHEMERAL adapter context — the
+    // validation session disposes itself in a finally path and can never
+    // invalidate provider sessions owned by this (or any other) persisted
+    // connection. The connection's own adapter context (established with the
+    // OLD credentials) is released ONLY after the rotation actually persists.
+    const validationAdapter = this.adapterRegistry.createEphemeralAdapter(connection.brokerId);
+    validationAdapter.setMode(connection.accountType);
 
     const newCredentials: DecryptedBrokerCredentials = {
       apiKey: dto.apiKey,
@@ -712,7 +748,7 @@ export class BrokerService {
     let testOk = false;
     let testError: string | undefined;
     try {
-      const result = await adapter.testConnection(newCredentials);
+      const result = await validationAdapter.testConnection(newCredentials);
       testOk = result.success;
       testError = result.errorMessage;
     } catch (err) {
@@ -797,7 +833,13 @@ export class BrokerService {
     const connection = await this.connectionRepo.findOne({ where: { id: connectionId } });
     if (!connection || connection.status !== BrokerConnectionStatus.CONNECTED) return false;
 
-    const adapter = this.adapterRegistry.getAdapter(connection.brokerId);
+    // #291 / correction round 3: the health check operates on the SAME
+    // connection-scoped adapter context as connectBroker/dispatch — its
+    // reconnect is idempotent for this connection and invisible to others.
+    const adapter = this.adapterRegistry.getAdapterForConnection(
+      connection.id,
+      connection.brokerId,
+    );
 
     if (!connection.encryptedCredentials || !connection.credentialIv || !connection.credentialTag) {
       this.logger.warn(`Connection ${connectionId} has no credentials — cannot health check`);
@@ -860,59 +902,65 @@ export class BrokerService {
       });
 
       if (failureCount >= SUSPEND_THRESHOLD) {
-        // A4: the SUSPENDED transition is a guarded conditional write on the
-        // loaded authorization state. A concurrent revoke/enable-live that
-        // changed the state means this stale suspension MUST NOT overwrite
-        // the winner — the conflict is logged and the state is left alone
-        // (fail-closed for state, telemetry already recorded above).
-        const canSuspend = this.canTransitionTo(connection, BrokerAuthorizationStatus.SUSPENDED);
+        // A4 + #291 race finding (b): the SUSPENDED transition is a guarded
+        // conditional write on the loaded authorization state. A concurrent
+        // revoke/enable-live that changed the state makes this stale
+        // suspension LOSE the race — and a LOST suspension must have NO
+        // observable side effects: the adapter context is NOT released and
+        // no SUSPENDED audit/event is emitted (the authoritative winner owns
+        // the state). The unconditional unguarded status write that used to
+        // sit in the else branch is gone: every suspension path is guarded,
+        // even when the authorization status itself is not transitioning.
+        let suspensionTransitioned = false;
         try {
-          if (canSuspend) {
-            await this.applyGuardedAuthorizationUpdate(
-              connectionId,
-              connection.authorizationStatus,
-              {
-                status: BrokerConnectionStatus.SUSPENDED,
-                // Fail-closed: suspended connections lose execution authorization
-                authorizationStatus: BrokerAuthorizationStatus.SUSPENDED,
-              },
-              'healthCheck SUSPENDED transition',
-            );
-          } else {
-            await this.connectionRepo.update(connectionId, {
+          await this.applyGuardedAuthorizationUpdate(
+            connectionId,
+            connection.authorizationStatus,
+            {
               status: BrokerConnectionStatus.SUSPENDED,
-            });
-          }
+              // Fail-closed: suspended connections lose execution authorization
+              ...(this.canTransitionTo(connection, BrokerAuthorizationStatus.SUSPENDED)
+                ? { authorizationStatus: BrokerAuthorizationStatus.SUSPENDED }
+                : {}),
+            },
+            'healthCheck SUSPENDED transition',
+          );
+          suspensionTransitioned = true;
         } catch (transitionErr) {
           this.logger.warn(
             `healthCheck suspend lost a concurrent state race for ${connectionId}: ` +
-              `${(transitionErr as Error).message} — leaving the authoritative state untouched`,
+              `${(transitionErr as Error).message} — leaving the authoritative state untouched, ` +
+              'adapter context retained, no SUSPENDED audit/event emitted',
           );
         }
-      }
 
-      if (failureCount >= SUSPEND_THRESHOLD) {
-        this.logger.error(
-          `Broker connection ${connectionId} suspended after ${failureCount} consecutive failures`,
-        );
-        await this.auditService.log({
-          action: AuditAction.BROKER_SUSPENDED_HEALTH_FAILURE,
-          resourceType: 'BrokerConnection',
-          resourceId: connectionId,
-          metadata: {
-            brokerId: connection.brokerId,
+        if (suspensionTransitioned) {
+          // The guarded transition actually succeeded — ONLY NOW may the
+          // mutable adapter context be released and the suspension observed
+          // (audit + realtime event) by the rest of the system.
+          this.adapterRegistry.releaseAdapterForConnection(connectionId);
+          this.logger.error(
+            `Broker connection ${connectionId} suspended after ${failureCount} consecutive failures`,
+          );
+          await this.auditService.log({
+            action: AuditAction.BROKER_SUSPENDED_HEALTH_FAILURE,
+            resourceType: 'BrokerConnection',
+            resourceId: connectionId,
+            metadata: {
+              brokerId: connection.brokerId,
+              userId: connection.userId,
+              failureCount,
+            },
+            severity: AuditSeverity.CRITICAL,
+          });
+          this.eventBus.publish(DomainEventType.BROKER_STATUS_CHANGED, connection.userId, {
             userId: connection.userId,
-            failureCount,
-          },
-          severity: AuditSeverity.CRITICAL,
-        });
-        this.eventBus.publish(DomainEventType.BROKER_STATUS_CHANGED, connection.userId, {
-          userId: connection.userId,
-          connectionId,
-          status: BrokerConnectionStatus.SUSPENDED,
-          previousStatus: BrokerConnectionStatus.CONNECTED,
-          reason: `Suspended after ${failureCount} consecutive health check failures`,
-        });
+            connectionId,
+            status: BrokerConnectionStatus.SUSPENDED,
+            previousStatus: BrokerConnectionStatus.CONNECTED,
+            reason: `Suspended after ${failureCount} consecutive health check failures`,
+          });
+        }
       }
 
       return false;
@@ -940,7 +988,10 @@ export class BrokerService {
       throw new ForbiddenException('Broker connection is not active');
     }
 
-    const adapter = this.adapterRegistry.getAdapter(connection.brokerId);
+    const adapter = this.adapterRegistry.getAdapterForConnection(
+      connection.id,
+      connection.brokerId,
+    );
 
     if (!connection.encryptedCredentials || !connection.credentialIv || !connection.credentialTag) {
       throw new ForbiddenException('Broker connection credentials unavailable');
@@ -998,7 +1049,10 @@ export class BrokerService {
       );
     }
 
-    const adapter = this.adapterRegistry.getAdapter(connection.brokerId);
+    const adapter = this.adapterRegistry.getAdapterForConnection(
+      connection.id,
+      connection.brokerId,
+    );
 
     if (!connection.encryptedCredentials || !connection.credentialIv || !connection.credentialTag) {
       throw new ForbiddenException('Broker connection credentials unavailable');
@@ -1153,7 +1207,10 @@ export class BrokerService {
     if (connection.status !== BrokerConnectionStatus.CONNECTED) return null;
     if (!BrokerCredentialLifecycle.isUsable(connection.credentialStatus)) return null;
 
-    const adapter = this.adapterRegistry.getAdapter(connection.brokerId);
+    const adapter = this.adapterRegistry.getAdapterForConnection(
+      connection.id,
+      connection.brokerId,
+    );
     adapter.setMode(connection.accountType);
 
     let credentials: DecryptedBrokerCredentials | null = null;

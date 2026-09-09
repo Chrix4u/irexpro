@@ -45,7 +45,7 @@ describe('BrokerService — account-scoped required margin', () => {
         { provide: getRepositoryToken(BrokerAccount), useValue: {} },
         {
           provide: BrokerAdapterRegistry,
-          useValue: { getAdapter: jest.fn().mockReturnValue(adapter) },
+          useValue: { getAdapterForConnection: jest.fn().mockReturnValue(adapter) },
         },
         {
           provide: BrokerProviderRegistryService,
@@ -117,7 +117,7 @@ describe('BrokerService — account-scoped required margin', () => {
         { provide: getRepositoryToken(BrokerAccount), useValue: {} },
         {
           provide: BrokerAdapterRegistry,
-          useValue: { getAdapter: jest.fn().mockReturnValue(adapter) },
+          useValue: { getAdapterForConnection: jest.fn().mockReturnValue(adapter) },
         },
         {
           provide: BrokerProviderRegistryService,

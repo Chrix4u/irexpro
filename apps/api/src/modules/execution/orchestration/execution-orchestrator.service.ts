@@ -437,7 +437,13 @@ export class ExecutionOrchestrator {
       keyId: connection.encryptionKeyId!,
     });
 
-    const adapter = this.adapterRegistry.getAdapter(connection.brokerId);
+    // #291 / correction round 3: dispatch uses the connection-scoped adapter
+    // context — the same mutable context connectBroker/healthCheck operate on,
+    // never a process-global singleton's setMode/current-account state.
+    const adapter = this.adapterRegistry.getAdapterForConnection(
+      connection.id,
+      connection.brokerId,
+    );
     adapter.setMode(connection.accountType);
     await adapter.connect(credentials);
     const connectionReference = credentials.accountId;

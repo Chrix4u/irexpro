@@ -124,7 +124,7 @@ describe('StateReconciliationService — Phase E: credential lifecycle + securit
         },
         {
           provide: BrokerAdapterRegistry,
-          useValue: { getAdapter: jest.fn().mockReturnValue(adapter) },
+          useValue: { getAdapterForConnection: jest.fn().mockReturnValue(adapter) },
         },
         { provide: CredentialEncryptionService, useValue: encryptionService },
         { provide: ReconciliationPersistenceService, useValue: persistence },
@@ -177,7 +177,7 @@ describe('StateReconciliationService', () => {
   let orderRepo: { find: jest.Mock; createQueryBuilder: jest.Mock };
   let accountRepo: { findOne: jest.Mock; createQueryBuilder: jest.Mock };
   let brokerService: { applyProviderAccountSnapshot: jest.Mock; findConnectionsByIds: jest.Mock };
-  let adapterRegistry: { getAdapter: jest.Mock };
+  let adapterRegistry: { getAdapterForConnection: jest.Mock };
   let encryptionService: { decrypt: jest.Mock };
   let persistence: {
     createRun: jest.Mock;
@@ -253,7 +253,7 @@ describe('StateReconciliationService', () => {
       applyProviderAccountSnapshot: jest.fn().mockResolvedValue(undefined),
       findConnectionsByIds: jest.fn().mockResolvedValue([]),
     };
-    adapterRegistry = { getAdapter: jest.fn().mockReturnValue(adapter) };
+    adapterRegistry = { getAdapterForConnection: jest.fn().mockReturnValue(adapter) };
     encryptionService = { decrypt: jest.fn() };
     persistence = {
       createRun: jest

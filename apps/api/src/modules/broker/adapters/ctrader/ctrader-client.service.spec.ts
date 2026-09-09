@@ -12,6 +12,7 @@ import { buildCtraderAuthorizationUrl, parseCtraderTokenResponse } from './ctrad
 
 const ACCOUNT_ID = '1234567';
 const ACCESS_TOKEN = 'test-access-token';
+const OWNER = 'spec-owner';
 
 function fakeConfigService(values: Record<string, string> = {}): ConfigService {
   return {
@@ -77,7 +78,7 @@ describe('CTraderClientService', () => {
   // ─── Handshake ordering (app auth 2100 FIRST) ──────────────────────────────
 
   it('sends ProtoOAApplicationAuthReq (2100) before anything else, then account auth (2102)', async () => {
-    await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+    await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, OWNER);
 
     expect(server.requests[0].payloadType).toBe(CTRADER_PAYLOAD_TYPE.APPLICATION_AUTH_REQ);
     expect(server.requests[0].payload).toMatchObject({
@@ -92,8 +93,8 @@ describe('CTraderClientService', () => {
   });
 
   it('is idempotent: a second ensureAccountSession for the same account sends no new 2102', async () => {
-    await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
-    await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+    await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, OWNER);
+    await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, OWNER);
 
     const accountAuths = server.requests.filter(
       (r) => r.payloadType === CTRADER_PAYLOAD_TYPE.ACCOUNT_AUTH_REQ,
@@ -104,7 +105,7 @@ describe('CTraderClientService', () => {
   it('fails closed with AUTHENTICATION_FAILED when the platform cTrader app credentials are unconfigured', async () => {
     const unconfigured = new TestableCtraderClient(server, fakeConfigService());
     await expect(
-      unconfigured.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN),
+      unconfigured.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, OWNER),
     ).rejects.toMatchObject({
       code: BrokerErrorCode.AUTHENTICATION_FAILED,
       message: expect.stringContaining('CTRADER_CLIENT_ID'),
@@ -118,7 +119,7 @@ describe('CTraderClientService', () => {
       payload: { errorCode: 'CH_CLIENT_AUTH_FAILURE', description: 'Wrong credentials' },
     }));
     await expect(
-      client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN),
+      client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, OWNER),
     ).rejects.toMatchObject({ code: BrokerErrorCode.AUTHENTICATION_FAILED });
   });
 
@@ -129,19 +130,19 @@ describe('CTraderClientService', () => {
       payload: {},
     }));
     await expect(
-      client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN),
+      client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, OWNER),
     ).rejects.toMatchObject({ code: BrokerErrorCode.UNKNOWN });
   });
 
   it('exposes session state through hasAccountSession/isEnvConnected and clears it on removal', async () => {
     expect(client.isAvailable()).toBe(true);
-    await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+    await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, OWNER);
     expect(client.hasAccountSession('DEMO', ACCOUNT_ID)).toBe(true);
     expect(client.isEnvConnected('DEMO')).toBe(true);
     // LIVE isolation: a different environment has no connection.
     expect(client.isEnvConnected('LIVE')).toBe(false);
 
-    await client.removeAccountSession('DEMO', ACCOUNT_ID);
+    await client.removeAccountSession('DEMO', ACCOUNT_ID, OWNER);
     expect(client.hasAccountSession('DEMO', ACCOUNT_ID)).toBe(false);
     expect(client.isEnvConnected('DEMO')).toBe(false);
     expect(client.createdTransports[0].isOpen()).toBe(false);
@@ -150,11 +151,11 @@ describe('CTraderClientService', () => {
   // ─── DEMO/LIVE host isolation (hard invariant) ─────────────────────────────
 
   it('connects DEMO and LIVE to their own hosts and never crosses them', async () => {
-    await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+    await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, OWNER);
     expect(client.createdTransports[0].connectedUrl).toBe(CTRADER_ENVIRONMENT_URLS.DEMO);
 
     const liveClient = new TestableCtraderClient(server);
-    await liveClient.ensureAccountSession('LIVE', ACCOUNT_ID, ACCESS_TOKEN);
+    await liveClient.ensureAccountSession('LIVE', ACCOUNT_ID, ACCESS_TOKEN, OWNER);
     expect(liveClient.createdTransports[0].connectedUrl).toBe(CTRADER_ENVIRONMENT_URLS.LIVE);
     expect(liveClient.createdTransports[0].connectedUrl).not.toBe(CTRADER_ENVIRONMENT_URLS.DEMO);
     await liveClient.onModuleDestroy();
@@ -214,7 +215,7 @@ describe('CTraderClientService', () => {
   });
 
   it('rejects pending requests with CONNECTION_LOST when the transport dies', async () => {
-    await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+    await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, OWNER);
     server.on(CTRADER_PAYLOAD_TYPE.TRADER_REQ, () => null);
     const promise = client.request('DEMO', CTRADER_PAYLOAD_TYPE.TRADER_REQ, {
       ctidTraderAccountId: 1234567,
@@ -232,7 +233,7 @@ describe('CTraderClientService', () => {
 
   it('sends a ProtoHeartbeatEvent (payloadType 51) every 10 seconds', async () => {
     jest.useFakeTimers();
-    await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+    await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, OWNER);
     const transport = client.createdTransports[0];
 
     expect(transport.sentMessages.filter((m) => m.payloadType === 51)).toHaveLength(0);
@@ -252,7 +253,7 @@ describe('CTraderClientService', () => {
     jest.useFakeTimers();
     // The handshake (2100 app auth + 2102 account auth) itself consumes 2 of
     // the 50 general-rate tokens — the limiter counts EVERY request.
-    await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+    await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, OWNER);
 
     for (let i = 0; i < 48; i++) {
       await client.request('DEMO', CTRADER_PAYLOAD_TYPE.TRADER_REQ, {
@@ -268,7 +269,7 @@ describe('CTraderClientService', () => {
 
   it('rejects the 6th historical request within a second with RATE_LIMITED (5/s)', async () => {
     jest.useFakeTimers();
-    await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+    await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, OWNER);
 
     for (let i = 0; i < 5; i++) {
       await client.request('DEMO', CTRADER_PAYLOAD_TYPE.DEAL_LIST_REQ, {
@@ -284,7 +285,7 @@ describe('CTraderClientService', () => {
 
   it('refills the bucket after the rate-limit window passes', async () => {
     jest.useFakeTimers();
-    await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+    await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, OWNER);
 
     for (let i = 0; i < 5; i++) {
       await client.request('DEMO', CTRADER_PAYLOAD_TYPE.DEAL_LIST_REQ, {
@@ -309,7 +310,7 @@ describe('CTraderClientService', () => {
 
   it('reconnects with 3s then 6s backoff, re-authenticates the app AND the account', async () => {
     jest.useFakeTimers();
-    await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+    await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, OWNER);
     expect(client.createdTransports).toHaveLength(1);
 
     // First loss → 3s backoff → successful reconnect + re-auth.
@@ -346,7 +347,7 @@ describe('CTraderClientService', () => {
   // ─── Account discovery (2149) ──────────────────────────────────────────────
 
   it('maps discovered accounts with isLive and brokerTitleShort', async () => {
-    await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+    await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, OWNER);
     const accounts = await client.discoverAccounts('DEMO', ACCESS_TOKEN);
 
     expect(accounts).toHaveLength(1);
@@ -359,7 +360,7 @@ describe('CTraderClientService', () => {
   });
 
   it('maps discovery errors (CH_ACCESS_TOKEN_INVALID) to AUTHENTICATION_FAILED', async () => {
-    await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+    await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, OWNER);
     server.on(CTRADER_PAYLOAD_TYPE.GET_ACCOUNTS_BY_ACCESS_TOKEN_REQ, (_payload, envelope) => ({
       clientMsgId: envelope.clientMsgId,
       payloadType: CTRADER_PAYLOAD_TYPE.OA_ERROR_RES,
@@ -374,7 +375,7 @@ describe('CTraderClientService', () => {
 
   it('resolves awaitEvent for server-initiated events and times out otherwise', async () => {
     jest.useFakeTimers();
-    await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+    await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, OWNER);
     const transport = client.createdTransports[0];
 
     const waiter = client.awaitEvent(
@@ -511,7 +512,7 @@ describe('CTraderClientService', () => {
       limited.setInFlightCeiling(3);
       // No scripted TRADER_REQ answer → requests stay pending.
       server.on(CTRADER_PAYLOAD_TYPE.TRADER_REQ, () => null);
-      await limited.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+      await limited.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, OWNER);
       const transport = limited.createdTransports[0];
 
       const pending = [
@@ -542,7 +543,7 @@ describe('CTraderClientService', () => {
     });
 
     it('correlates concurrent requests to their OWN echoed clientMsgId (no cross-talk)', async () => {
-      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, OWNER);
       const transport = client.createdTransports[0];
       const before = transport.sentMessages.filter(
         (m) => m.payloadType === CTRADER_PAYLOAD_TYPE.TRADER_REQ,
@@ -582,7 +583,7 @@ describe('CTraderClientService', () => {
   describe('heartbeat liveness hardening (audit point 3)', () => {
     it('runs EXACTLY ONE heartbeat timer across reconnects (no duplicate timers)', async () => {
       jest.useFakeTimers();
-      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, OWNER);
       const transport = client.createdTransports[0];
       // Loss at t=0 — before the first 10 s heartbeat fires on the old
       // transport (stopHeartbeat clears the pending timer immediately).
@@ -602,7 +603,7 @@ describe('CTraderClientService', () => {
 
     it('stops heartbeats after exhausted reconnect attempts (no zombie timers)', async () => {
       jest.useFakeTimers();
-      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, OWNER);
       client.createdTransports[0].simulateClose();
       // All 5 reconnect attempts fail their connect (3+6+12+24+24 s backoff).
       client.connectBehaviors.push('fail', 'fail', 'fail', 'fail', 'fail');
@@ -629,7 +630,7 @@ describe('CTraderClientService', () => {
         payload: { errorCode: 'CH_CLIENT_AUTH_FAILURE', description: 'Wrong credentials' },
       }));
       await expect(
-        client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN),
+        client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, OWNER),
       ).rejects.toMatchObject({ code: BrokerErrorCode.AUTHENTICATION_FAILED });
       await jest.advanceTimersByTimeAsync(60_000);
       for (const t of client.createdTransports) {
@@ -639,7 +640,7 @@ describe('CTraderClientService', () => {
 
     it('cleans up the heartbeat on intentional module shutdown', async () => {
       jest.useFakeTimers();
-      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, OWNER);
       const transport = client.createdTransports[0];
       await client.onModuleDestroy();
       const at = transport.sentMessages.filter((m) => m.payloadType === 51).length;
@@ -650,8 +651,8 @@ describe('CTraderClientService', () => {
 
   describe('demo/live connection separation hardening (audit point 2)', () => {
     it('keeps DEMO and LIVE pools fully isolated: a DEMO loss never disturbs the LIVE session', async () => {
-      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
-      await client.ensureAccountSession('LIVE', '7654321', ACCESS_TOKEN);
+      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, OWNER);
+      await client.ensureAccountSession('LIVE', '7654321', ACCESS_TOKEN, OWNER);
       const demoTransport = client.createdTransports[0];
       const liveTransport = client.createdTransports[1];
 
@@ -666,15 +667,15 @@ describe('CTraderClientService', () => {
 
       // DEMO reconnects onto the DEMO host — the original environment is
       // preserved across reconnect (never inherited from the other pool).
-      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, OWNER);
       const reconnectedDemo = client.createdTransports.at(-1)!;
       expect(reconnectedDemo.connectedUrl).toBe(CTRADER_ENVIRONMENT_URLS.DEMO);
       expect(reconnectedDemo).not.toBe(liveTransport);
     });
 
     it('routes a request for the DEMO environment ONLY through the demo-host transport', async () => {
-      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
-      await client.ensureAccountSession('LIVE', '7654321', ACCESS_TOKEN);
+      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, OWNER);
+      await client.ensureAccountSession('LIVE', '7654321', ACCESS_TOKEN, OWNER);
       const beforeDemo = client.createdTransports[0].sentMessages.length;
       const beforeLive = client.createdTransports[1].sentMessages.length;
 
@@ -690,7 +691,7 @@ describe('CTraderClientService', () => {
 
   describe('credential secrecy hardening (audit point 1)', () => {
     it('redacts credential-shaped fragments from provider error text (fail-closed, sanitized)', async () => {
-      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, OWNER);
       // The raw provider error description carries a credential-shaped
       // fragment — the surfaced BrokerAdapterError must never expose it.
       server.failWith('access token=SEKRIT-TOKEN-VALUE rejected');
@@ -706,7 +707,7 @@ describe('CTraderClientService', () => {
     });
 
     it('never logs the platform client secret, access tokens, or message payloads', async () => {
-      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, OWNER);
       const logged: string[] = [];
       const logger = (client as unknown as { logger: Record<string, jest.Mock> }).logger;
       const spies = ['log', 'warn', 'error'].map((level) =>
@@ -733,7 +734,7 @@ describe('CTraderClientService', () => {
 
   describe('transport send failures (Task 48-a — bounded outbound serialization)', () => {
     it("rejects IMMEDIATELY with retryable RATE_LIMITED when the transport send throws 'queue-overflow'", async () => {
-      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, OWNER);
       const transport = client.createdTransports[0];
       transport.failNextSends = 1;
       transport.sendFailure = 'queue-overflow';
@@ -760,7 +761,7 @@ describe('CTraderClientService', () => {
     });
 
     it("rejects with retryable CONNECTION_LOST when the transport send throws 'not-open'", async () => {
-      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, OWNER);
       const transport = client.createdTransports[0];
       transport.failNextSends = 1;
       transport.sendFailure = 'not-open';
@@ -776,7 +777,7 @@ describe('CTraderClientService', () => {
 
     it('survives a heartbeat send failure: sanitized warn, interval continues, requests recover', async () => {
       jest.useFakeTimers();
-      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN, OWNER);
       const transport = client.createdTransports[0];
       const logged: string[] = [];
       const logger = (client as unknown as { logger: Record<string, jest.Mock> }).logger;

@@ -75,6 +75,7 @@
  *   getOrderById (ProtoOAOrderDetailsReq).
  */
 import { Injectable, Logger } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import {
   AdapterMetadata,
   BrokerAccountInfo,
@@ -99,6 +100,7 @@ import {
 import { BrokerAdapterError, BrokerErrorCode } from '../../interfaces/broker-adapter.errors';
 import { redactString } from '../../../../common/utils/redact-sensitive.util';
 import { CTraderClientService } from './ctrader-client.service';
+import { assertDiscoveredBrokerIdentity } from './ctrader-broker-identity';
 import {
   addDecimalStrings,
   buildIdempotencyFields,
@@ -221,11 +223,39 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
   readonly rateLimitProfile = { requestsPerSecond: 50, burst: 50 };
 
   private mode: BrokerMode = BrokerMode.DEMO;
-  /** Sessions per ctidTraderAccountId (the adapter is a shared singleton). */
+  /**
+   * Sessions per ctidTraderAccountId established by THIS adapter context.
+   * Correction round 3 (architect findings 1 + 2): each persisted
+   * BrokerConnection.id receives its own adapter context from the
+   * registry's connection-isolation factory — this map is per-context state,
+   * never process-global. Lower-level provider infrastructure (the shared
+   * CTraderClientService environment connections) is leased per context via
+   * `sessionOwnerKey` (finding 4).
+   */
   private readonly sessions = new Map<string, AdapterSession>();
   private currentAccountId: string | null = null;
+  /**
+   * Unique lease-owner key for the client's account-session refcounting
+   * (finding 4). One per adapter context: releasing it releases exactly the
+   * provider sessions this context required — never sessions leased by other
+   * contexts (other BrokerConnections sharing the account).
+   */
+  private readonly sessionOwnerKey: string;
 
-  constructor(private readonly client: CTraderClientService) {}
+  constructor(
+    private readonly client: CTraderClientService,
+    /**
+     * The broker identity this adapter context was created for (alias-aware:
+     * 'ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader' — architect
+     * finding 2). The canonical provider id stays 'ctrader' (brokerId); the
+     * requested identity drives broker-specific identity verification against
+     * the discovered brokerTitleShort (finding 6). Public readonly — a broker
+     * identity string, never a secret; observable for wiring/contract tests.
+     */
+    readonly requestedBrokerId: string = 'ctrader',
+  ) {
+    this.sessionOwnerKey = `ctrader-adapter-${randomUUID()}`;
+  }
 
   setMode(mode: BrokerMode): void {
     this.mode = mode;
@@ -242,12 +272,17 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
 
       // App auth (2100 FIRST) + account auth (2102) — fails closed with a
       // clear message when platform cTrader app credentials are unconfigured.
-      await this.client.ensureAccountSession(env, accountId, accessToken);
+      // The session is LEASED to this adapter context (finding 4): other
+      // contexts sharing the same account keep their sessions alive.
+      await this.client.ensureAccountSession(env, accountId, accessToken, this.sessionOwnerKey);
 
       // Account discovery (2149): verify the account's isLive flag MATCHES
       // the selected environment — the account-level host-isolation guard.
+      // Broker-identity verification (finding 6): the discovered brand must
+      // match the REQUESTED alias when one was selected.
       const discovered = await this.client.discoverAccounts(env, accessToken);
-      this.verifyAccountEnvironment(discovered, accountId, env);
+      const account = this.verifyAccountEnvironment(discovered, accountId, env);
+      assertDiscoveredBrokerIdentity(this.requestedBrokerId, account);
 
       const session: AdapterSession = {
         env,
@@ -275,33 +310,59 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
   }
 
   async disconnect(): Promise<void> {
-    const accountId = this.currentAccountId;
-    if (!accountId) return;
-    const session = this.sessions.get(accountId);
-    if (session) {
-      await this.client.removeAccountSession(session.env, session.accountId);
-      this.sessions.delete(accountId);
-    }
-    if (this.currentAccountId === accountId) {
-      this.currentAccountId = null;
-    }
+    // Lease semantics (findings 1 + 4): release every provider-session lease
+    // THIS adapter context holds. Provider sessions still required by other
+    // BrokerConnection contexts sharing the same cTrader account/environment
+    // survive; the last release tears down the provider session and, when the
+    // environment goes idle, the shared transport itself.
+    await this.releaseAllContextSessions();
+  }
+
+  /**
+   * Releases all account-session leases owned by this adapter context and
+   * clears its local session state. Idempotent; used by disconnect() and the
+   * credential-test finally path (finding 5).
+   */
+  private async releaseAllContextSessions(): Promise<void> {
+    this.sessions.clear();
+    this.currentAccountId = null;
+    await this.client.releaseOwnerSessions(this.sessionOwnerKey);
   }
 
   async testConnection(
     credentials: DecryptedBrokerCredentials,
   ): Promise<BrokerConnectionTestResult> {
+    // Credential tests run on EPHEMERAL adapter contexts (BrokerService uses
+    // registry.createEphemeralAdapter — finding 7). Every provider session
+    // such a context establishes is TEMPORARY: disposal runs in a finally
+    // path so partial failures (2102 succeeded then discovery/trader fetch
+    // failed) can never leak a session, and lease refcounting guarantees
+    // sessions owned by PERSISTED connections sharing the same account are
+    // never invalidated (finding 5).
+    let result: BrokerConnectionTestResult;
     try {
-      const result = await this.connect(credentials);
-      return {
+      const connected = await this.connect(credentials);
+      result = {
         success: true,
-        accountId: result.accountId,
-        accountType: result.accountType,
-        currency: result.currency,
+        accountId: connected.accountId,
+        accountType: connected.accountType,
+        currency: connected.currency,
       };
     } catch (err) {
       const mapped = this.mapError(err);
-      return { success: false, errorCode: mapped.code, errorMessage: mapped.message };
+      result = { success: false, errorCode: mapped.code, errorMessage: mapped.message };
+    } finally {
+      try {
+        await this.releaseAllContextSessions();
+      } catch (disposeErr) {
+        // Disposal failures must never mask the test outcome (sanitized warn
+        // only — the finally path stays exception-safe).
+        this.logger.warn(
+          `Credential-test session disposal failed: ${(disposeErr as Error).message}`,
+        );
+      }
     }
+    return result;
   }
 
   isConnected(): boolean {
@@ -1081,7 +1142,7 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
     discovered: CtraderDiscoveredAccount[],
     accountId: string,
     env: CtraderEnvironment,
-  ): void {
+  ): CtraderDiscoveredAccount {
     const account = discovered.find((entry) => String(entry.ctidTraderAccountId) === accountId);
     if (!account) {
       throw new BrokerAdapterError(
@@ -1097,6 +1158,7 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
           `${account.isLive ? 'LIVE' : 'DEMO'} mode (environments are strictly separated).`,
       );
     }
+    return account;
   }
 
   private async fetchTrader(session: AdapterSession): Promise<CtraderTrader> {
@@ -1293,7 +1355,16 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
       (message) => {
         if (message.payloadType !== CTRADER_PAYLOAD_TYPE.SPOT_EVENT) return false;
         const payload = message.payload as Partial<CtraderSpotEventPayload> | undefined | null;
-        return payload?.symbolId === symbolId && payload.bid != null && payload.ask != null;
+        // Event correlation (architect finding 3): the spot event must belong
+        // to the REQUESTING account AND symbol, with a complete bid/ask
+        // quote. A 2131 event for a DIFFERENT account on the same shared
+        // environment connection can never satisfy this waiter.
+        return (
+          payload?.ctidTraderAccountId === ctid &&
+          payload?.symbolId === symbolId &&
+          payload.bid != null &&
+          payload.ask != null
+        );
       },
       10_000,
     );

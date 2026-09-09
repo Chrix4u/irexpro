@@ -145,6 +145,18 @@ class EnvironmentConnection {
    * MEMORY-ONLY provider credentials — never logged, never persisted.
    */
   readonly accountTokens = new Map<number, string>();
+  /**
+   * Session LEASE owners per account (Sprint 56 correction round 3,
+   * architect finding 4): every adapter context — one per persisted
+   * BrokerConnection.id, or an ephemeral credential-test context — holds a
+   * named lease on the shared provider account session it requires. The
+   * underlying 2102 session, token and transport are provider
+   * infrastructure shared by all lease owners; they are torn down ONLY when
+   * the LAST owner releases. Disconnecting one BrokerConnection can never
+   * remove an account session still required by another connection using
+   * the same cTrader account/environment.
+   */
+  readonly sessionOwners = new Map<number, Set<string>>();
   readonly pending = new Map<string, PendingRequest>();
   readonly waiters = new Set<EventWaiter>();
   heartbeatTimer: NodeJS.Timeout | null = null;
@@ -190,14 +202,24 @@ export class CTraderClientService implements OnModuleDestroy {
    * Brings an environment connection up (app auth 2100 FIRST) and authorizes
    * the trading account on it (2102). Idempotent — existing sessions are
    * reused, which is what makes DEMO+LIVE coexist as two connections.
+   *
+   * LEASE MODEL (architect finding 4): `owner` names the adapter context that
+   * requires this account session (one owner per persisted
+   * BrokerConnection.id; distinct owners for ephemeral credential tests).
+   * Multiple owners share ONE provider session (token + 2102 auth) — that
+   * infrastructure is stateless with respect to adapter context. The session
+   * is removed only when every owner has released (removeAccountSession /
+   * releaseOwnerSessions).
    */
   async ensureAccountSession(
     env: CtraderEnvironment,
     ctidTraderAccountId: string,
     accessToken: string,
+    owner: string,
   ): Promise<void> {
     const conn = await this.ensureEnvConnection(env);
     const accountId = parseCtraderId(ctidTraderAccountId, 'ctidTraderAccountId');
+    this.acquireSessionLease(conn, accountId, owner);
     conn.accountTokens.set(accountId, accessToken);
     if (conn.authorizedAccounts.has(accountId)) {
       return;
@@ -224,16 +246,66 @@ export class CTraderClientService implements OnModuleDestroy {
     );
   }
 
-  /** Drops an account session; closes the environment connection when idle. */
-  async removeAccountSession(env: CtraderEnvironment, ctidTraderAccountId: string): Promise<void> {
+  /**
+   * Releases ONE owner's lease on an account session (architect finding 4).
+   * The provider session (token + 2102 auth) is removed only when NO other
+   * owner still requires it; the environment connection closes when the last
+   * account session goes away. An owner that never held the lease is a no-op.
+   */
+  async removeAccountSession(
+    env: CtraderEnvironment,
+    ctidTraderAccountId: string,
+    owner: string,
+  ): Promise<void> {
     const conn = this.connections.get(env);
     if (!conn) return;
     const accountId = parseCtraderId(ctidTraderAccountId, 'ctidTraderAccountId');
-    conn.accountTokens.delete(accountId);
-    conn.authorizedAccounts.delete(accountId);
+    this.releaseSessionLease(conn, accountId, owner);
+    if (!conn.sessionOwners.has(accountId)) {
+      conn.accountTokens.delete(accountId);
+      conn.authorizedAccounts.delete(accountId);
+    }
     if (conn.accountTokens.size === 0) {
       this.closeEnvironmentConnection(env);
     }
+  }
+
+  /**
+   * Releases EVERY account-session lease held by `owner` across both
+   * environments (architect findings 4 + 5). Used by connection-scoped
+   * adapter contexts on disconnect and by ephemeral credential-test adapters
+   * in a finally-safe disposal path: sessions still leased by OTHER owners
+   * (other BrokerConnections sharing the same cTrader account/environment)
+   * survive untouched.
+   */
+  async releaseOwnerSessions(owner: string): Promise<void> {
+    for (const env of Array.from(this.connections.keys())) {
+      const conn = this.connections.get(env);
+      if (!conn) continue;
+      for (const accountId of Array.from(conn.sessionOwners.keys())) {
+        this.releaseSessionLease(conn, accountId, owner);
+        if (!conn.sessionOwners.has(accountId)) {
+          conn.accountTokens.delete(accountId);
+          conn.authorizedAccounts.delete(accountId);
+        }
+      }
+      if (conn.accountTokens.size === 0) {
+        this.closeEnvironmentConnection(env);
+      }
+    }
+  }
+
+  /** Number of distinct lease owners currently holding an account session. */
+  accountSessionOwnerCount(env: CtraderEnvironment, ctidTraderAccountId: string): number {
+    const conn = this.connections.get(env);
+    if (!conn) return 0;
+    let accountId: number;
+    try {
+      accountId = parseCtraderId(ctidTraderAccountId, 'ctidTraderAccountId');
+    } catch {
+      return 0;
+    }
+    return conn.sessionOwners.get(accountId)?.size ?? 0;
   }
 
   /** True when the account is authorized on a live (open + app-authed) connection. */
@@ -247,6 +319,32 @@ export class CTraderClientService implements OnModuleDestroy {
       return false;
     }
     return conn.authorizedAccounts.has(accountId);
+  }
+
+  private acquireSessionLease(
+    conn: EnvironmentConnection,
+    accountId: number,
+    owner: string,
+  ): void {
+    let owners = conn.sessionOwners.get(accountId);
+    if (!owners) {
+      owners = new Set<string>();
+      conn.sessionOwners.set(accountId, owners);
+    }
+    owners.add(owner);
+  }
+
+  private releaseSessionLease(
+    conn: EnvironmentConnection,
+    accountId: number,
+    owner: string,
+  ): void {
+    const owners = conn.sessionOwners.get(accountId);
+    if (!owners) return;
+    owners.delete(owner);
+    if (owners.size === 0) {
+      conn.sessionOwners.delete(accountId);
+    }
   }
 
   isEnvConnected(env: CtraderEnvironment): boolean {

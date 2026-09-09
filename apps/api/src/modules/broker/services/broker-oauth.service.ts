@@ -22,6 +22,7 @@ import { AuditSeverity } from '../../audit/entities/audit-log.entity';
 import { CTRADER_FAMILY_BROKER_IDS } from '../registry/broker-catalog';
 import { BrokerMode } from '../interfaces/broker-adapter.interface';
 import { BrokerAdapterError, BrokerErrorCode } from '../interfaces/broker-adapter.errors';
+import { brokerIdentityMatches } from '../adapters/ctrader/ctrader-broker-identity';
 import { CredentialEncryptionService } from './credential-encryption.service';
 
 /** Lifetime of a PENDING flow (authorization not yet completed). */
@@ -450,6 +451,21 @@ export class BrokerOAuthService {
       throw new BadRequestException(
         'The selected account was not granted to this authorization — complete the ' +
           'authorization flow again and choose one of the discovered accounts.',
+      );
+    }
+
+    // Broker-identity validation (correction round 3, architect finding 6):
+    // for broker-specific aliases the DISCOVERED brand (2149 brokerTitleShort)
+    // must match the selected alias — an IC-Markets account can never link
+    // under the Pepperstone alias (and vice versa). The generic 'ctrader' id
+    // stays broker-agnostic. Same centralized policy as the adapter connect
+    // path; fail closed with an honest, actionable message.
+    if (!brokerIdentityMatches(flow.brokerId, account.brokerTitleShort)) {
+      throw new BadRequestException(
+        `The selected cTrader account belongs to broker ` +
+          `"${account.brokerTitleShort ?? 'unknown'}" — it cannot be linked as ` +
+          `"${flow.brokerId}". Choose the matching broker entry or the generic ` +
+          'cTrader option, then start the authorization flow again.',
       );
     }
 

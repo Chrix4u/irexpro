@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { IBrokerAdapter } from '../interfaces/broker-adapter.interface';
 
 export interface BrokerSummary {
@@ -8,83 +8,228 @@ export interface BrokerSummary {
 }
 
 /**
- * BrokerAdapterRegistry — Factory registry for all IBrokerAdapter implementations.
+ * Isolation factory for a broker provider (#291 / Sprint 56 correction round 3).
  *
- * Each broker adapter registers itself at module init.
- * BrokerService calls getAdapter(brokerId) to retrieve the correct implementation.
- * No broker-specific logic ever leaks into BrokerService or above.
+ * Receives the REQUESTED broker id — including a catalog alias such as
+ * 'pepperstone-ctrader' or 'icmarkets-ctrader' — so an alias-aware provider
+ * can preserve the requested identity for broker-specific verification. The
+ * returned adapter's `brokerId` MUST stay the canonical provider id (e.g.
+ * 'ctrader'); the requested identity is carried separately by the adapter.
+ */
+export type BrokerAdapterFactory = (requestedBrokerId: string) => IBrokerAdapter;
+
+interface BrokerAdapterRegistration {
+  adapter: IBrokerAdapter;
+  factory?: BrokerAdapterFactory;
+}
+
+interface BrokerAdapterSession {
+  brokerId: string;
+  adapter: IBrokerAdapter;
+}
+
+/**
+ * BrokerAdapterRegistry — provider metadata + connection-scoped adapter sessions.
  *
- * Broker aliases (Task 48-B / Sprint 56): multiple catalog brokerIds (e.g.
- * 'pepperstone-ctrader', 'icmarkets-ctrader') can share ONE adapter instance
- * (the universal cTrader engine) via registerBrokerAlias(). Aliases resolve
- * through getAdapter/isSupported exactly like primary registrations;
- * getSupportedBrokers() stays deduplicated (one summary per adapter).
+ * SECURITY BOUNDARY (#291 / Sprint 56 correction round 3, architect findings 1,
+ * 2 and 7): adapter implementations carry mutable environment/account/session
+ * state (setMode, current account, per-account caches). The registered root
+ * instance is therefore metadata-only. Persisted BrokerConnection operations
+ * MUST use getAdapterForConnection(), which gives one mutable adapter context
+ * per BrokerConnection.id. Pre-persistence credential checks use an ephemeral
+ * factory instance (createEphemeralAdapter). This prevents one
+ * tenant/account/connection from overwriting another's setMode/current-account
+ * state while an async provider call is in flight.
  *
- * See: docs/architecture/09-broker-integration-architecture.md §5
+ * Broker aliases never store adapter instances. They resolve to a canonical
+ * provider registration and therefore share only its factory/provider
+ * infrastructure (the lower-level provider client may remain shared where it
+ * is stateless with respect to adapter context — e.g. the cTrader
+ * environment-connection pool); each persisted connection still receives its
+ * own mutable adapter context. The requested broker id is passed into the
+ * factory so an alias-aware provider can validate provider identity instead
+ * of treating every account on the shared infrastructure as interchangeable.
  */
 @Injectable()
 export class BrokerAdapterRegistry {
   private readonly logger = new Logger(BrokerAdapterRegistry.name);
-  private readonly adapters = new Map<string, IBrokerAdapter>();
-
-  register(adapter: IBrokerAdapter): void {
-    this.adapters.set(adapter.brokerId, adapter);
-    this.logger.log(`Registered broker adapter: ${adapter.brokerId} (${adapter.brokerName})`);
-  }
-
+  private readonly registrations = new Map<string, BrokerAdapterRegistration>();
+  private readonly aliases = new Map<string, string>();
+  private readonly connectionSessions = new Map<string, BrokerAdapterSession>();
   /**
-   * Registers an additional catalog brokerId backed by an EXISTING adapter
-   * (e.g. 'pepperstone-ctrader' → the universal cTrader engine). The alias
-   * resolves to the SAME adapter instance; capabilities/status truth stays
-   * in the broker catalog (Directive §M) — the registry never re-declares it.
+   * A factory is an isolation boundary, not merely a constructor callback. Track
+   * every object it has produced so a cached/singleton factory cannot silently
+   * hand the same mutable adapter to two independent operations.
    */
-  registerBrokerAlias(aliasBrokerId: string, adapter: IBrokerAdapter): void {
-    if (aliasBrokerId === adapter.brokerId) {
-      this.register(adapter);
-      return;
-    }
-    this.adapters.set(aliasBrokerId, adapter);
+  private readonly isolatedAdapterInstances = new WeakSet<IBrokerAdapter>();
+
+  register(adapter: IBrokerAdapter, factory?: BrokerAdapterFactory): void {
+    this.registrations.set(adapter.brokerId, { adapter, factory });
+    this.aliases.delete(adapter.brokerId);
     this.logger.log(
-      `Registered broker alias: ${aliasBrokerId} → adapter ${adapter.brokerId} (${adapter.brokerName})`,
+      `Registered broker adapter: ${adapter.brokerId} (${adapter.brokerName})` +
+        (factory ? ' [connection-isolated]' : ' metadata-only; account operations blocked]'),
     );
   }
 
+  /**
+   * Register a catalog broker id against an existing canonical provider.
+   *
+   * Compatibility: callers may pass either the canonical broker id or its
+   * registered root adapter. The adapter object is used for identity validation
+   * only; it is NEVER stored under the alias.
+   */
+  registerBrokerAlias(aliasBrokerId: string, target: string | IBrokerAdapter): void {
+    const targetBrokerId = typeof target === 'string' ? target : target.brokerId;
+    const canonicalBrokerId = this.resolveCanonicalBrokerId(targetBrokerId);
+    const registration = this.registrations.get(canonicalBrokerId);
+    if (!registration) {
+      throw new NotFoundException(
+        `Cannot register broker alias ${aliasBrokerId}: canonical provider ` +
+          `${targetBrokerId} is not registered`,
+      );
+    }
+    if (typeof target !== 'string' && registration.adapter !== target) {
+      throw new ConflictException(
+        `Cannot register broker alias ${aliasBrokerId}: adapter identity does not match ` +
+          `canonical provider ${canonicalBrokerId}`,
+      );
+    }
+    if (!aliasBrokerId) {
+      throw new ConflictException('Broker alias requires a non-empty broker id');
+    }
+    if (aliasBrokerId === canonicalBrokerId) return;
+    if (this.registrations.has(aliasBrokerId)) {
+      throw new ConflictException(
+        `Cannot register broker alias ${aliasBrokerId}: a primary adapter already uses that id`,
+      );
+    }
+
+    const existing = this.aliases.get(aliasBrokerId);
+    if (existing && existing !== canonicalBrokerId) {
+      throw new ConflictException(
+        `Broker alias ${aliasBrokerId} is already bound to canonical provider ${existing}`,
+      );
+    }
+
+    this.aliases.set(aliasBrokerId, canonicalBrokerId);
+    this.logger.log(`Registered broker alias: ${aliasBrokerId} → ${canonicalBrokerId}`);
+  }
+
+  /** Metadata/root lookup only. Production account operations must use a session. */
   getAdapter(brokerId: string): IBrokerAdapter {
-    const adapter = this.adapters.get(brokerId);
-    if (!adapter) {
+    return this.getRegistration(brokerId).adapter;
+  }
+
+  /**
+   * Fresh adapter for operations that are not yet tied to a persisted connection,
+   * such as credential testing. Never cached.
+   */
+  createEphemeralAdapter(brokerId: string): IBrokerAdapter {
+    return this.instantiate(brokerId);
+  }
+
+  /**
+   * One mutable adapter context per persisted BrokerConnection.id. Concurrent calls
+   * for the same connection share its session; different connection ids never do.
+   * The requested broker id (including an alias) remains part of the binding so a
+   * persisted connection cannot silently switch brands/routes after session creation.
+   */
+  getAdapterForConnection(connectionId: string, brokerId: string): IBrokerAdapter {
+    if (!connectionId) {
+      throw new ConflictException('Broker adapter session requires a connection id');
+    }
+
+    const existing = this.connectionSessions.get(connectionId);
+    if (existing) {
+      if (existing.brokerId !== brokerId) {
+        throw new ConflictException(
+          `Broker connection ${connectionId} is already bound to provider ` +
+            `${existing.brokerId}; refusing cross-provider session reuse`,
+        );
+      }
+      return existing.adapter;
+    }
+
+    const adapter = this.instantiate(brokerId);
+    this.connectionSessions.set(connectionId, { brokerId, adapter });
+    return adapter;
+  }
+
+  /** Drop mutable adapter context after disconnect/delete. Safe to call repeatedly. */
+  releaseAdapterForConnection(connectionId: string): void {
+    this.connectionSessions.delete(connectionId);
+  }
+
+  /** Primary provider summaries only; aliases remain catalog identities, not adapters. */
+  getSupportedBrokers(): BrokerSummary[] {
+    return Array.from(this.registrations.values()).map(({ adapter }) => ({
+      brokerId: adapter.brokerId,
+      brokerName: adapter.brokerName,
+      supportsDemo: adapter.supportsDemo,
+    }));
+  }
+
+  /** Runtime-connectable ids include both primary providers and registered aliases. */
+  getSupportedBrokerIds(): string[] {
+    return [...this.registrations.keys(), ...this.aliases.keys()];
+  }
+
+  isSupported(brokerId: string): boolean {
+    return this.registrations.has(brokerId) || this.aliases.has(brokerId);
+  }
+
+  /** Visible for deterministic security tests/observability; never contains secrets. */
+  getActiveConnectionSessionCount(): number {
+    return this.connectionSessions.size;
+  }
+
+  private instantiate(brokerId: string): IBrokerAdapter {
+    const registration = this.getRegistration(brokerId);
+    if (!registration.factory) {
+      throw new ConflictException(
+        `Broker adapter ${brokerId} has no connection-isolation factory; ` +
+          'refusing account-scoped provider operation',
+      );
+    }
+
+    const adapter = registration.factory(brokerId);
+    if (adapter === registration.adapter) {
+      throw new ConflictException(
+        `Broker adapter ${brokerId} isolation factory returned its metadata/root singleton; ` +
+          'refusing shared mutable provider context',
+      );
+    }
+    if (adapter.brokerId !== registration.adapter.brokerId) {
+      throw new ConflictException(
+        `Broker adapter ${brokerId} isolation factory returned provider ${adapter.brokerId}; ` +
+          `expected ${registration.adapter.brokerId}`,
+      );
+    }
+    if (this.isolatedAdapterInstances.has(adapter)) {
+      throw new ConflictException(
+        `Broker adapter ${brokerId} isolation factory reused a previously-created adapter instance; ` +
+          'refusing shared mutable provider context',
+      );
+    }
+
+    this.isolatedAdapterInstances.add(adapter);
+    return adapter;
+  }
+
+  private getRegistration(brokerId: string): BrokerAdapterRegistration {
+    const canonicalBrokerId = this.resolveCanonicalBrokerId(brokerId);
+    const registration = this.registrations.get(canonicalBrokerId);
+    if (!registration) {
       throw new NotFoundException(
         `No broker adapter registered for brokerId: "${brokerId}". ` +
           `Supported brokers: [${this.getSupportedBrokerIds().join(', ')}]`,
       );
     }
-    return adapter;
+    return registration;
   }
 
-  /**
-   * Summaries of registered adapters — DEDUPLICATED by adapter brokerId so
-   * alias registrations (which map extra keys onto one instance) never
-   * duplicate entries.
-   */
-  getSupportedBrokers(): BrokerSummary[] {
-    const seen = new Set<string>();
-    const summaries: BrokerSummary[] = [];
-    for (const adapter of this.adapters.values()) {
-      if (seen.has(adapter.brokerId)) continue; // alias re-registration
-      seen.add(adapter.brokerId);
-      summaries.push({
-        brokerId: adapter.brokerId,
-        brokerName: adapter.brokerName,
-        supportsDemo: adapter.supportsDemo,
-      });
-    }
-    return summaries;
-  }
-
-  getSupportedBrokerIds(): string[] {
-    return Array.from(this.adapters.keys());
-  }
-
-  isSupported(brokerId: string): boolean {
-    return this.adapters.has(brokerId);
+  private resolveCanonicalBrokerId(brokerId: string): string {
+    return this.aliases.get(brokerId) ?? brokerId;
   }
 }

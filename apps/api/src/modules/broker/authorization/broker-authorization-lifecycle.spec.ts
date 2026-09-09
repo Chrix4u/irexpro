@@ -113,6 +113,11 @@ describe('BrokerService — Sprint 50 authorization lifecycle', () => {
           provide: BrokerAdapterRegistry,
           useValue: {
             getAdapter: jest.fn().mockReturnValue(adapter),
+            // #291 / correction round 3: the session API the production code
+            // resolves connection-scoped/ephemeral adapters through.
+            getAdapterForConnection: jest.fn().mockReturnValue(adapter),
+            createEphemeralAdapter: jest.fn().mockReturnValue(adapter),
+            releaseAdapterForConnection: jest.fn(),
             isSupported: jest.fn().mockReturnValue(true),
           },
         },

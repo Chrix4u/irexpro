@@ -135,6 +135,10 @@ describe('BrokerDemoValidationService', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    // Prototype-level spies (the registry factory hands each connection a
+    // FRESH adapter instance — instance spies can no longer reach them) MUST
+    // be restored between tests, or implementations leak across cases.
+    jest.restoreAllMocks();
 
     module = await Test.createTestingModule({
       providers: [
@@ -186,8 +190,11 @@ describe('BrokerDemoValidationService', () => {
     accountRepo = module.get(getRepositoryToken(BrokerAccount));
     auditService = module.get(AuditService);
 
-    // Same registration the BrokerModule performs in onModuleInit.
-    registry.register(paperAdapter);
+    // Same registration the BrokerModule performs in onModuleInit — including
+    // the connection-isolation factory (#291 / correction round 3): the real
+    // registry hands each BrokerConnection its own mutable adapter context and
+    // fails closed without a factory.
+    registry.register(paperAdapter, () => new PaperBrokerAdapter());
 
     connectionRecord = buildConnection();
     connectionRepo.findOne.mockImplementation(
@@ -328,15 +335,20 @@ describe('BrokerDemoValidationService', () => {
       // connectBroker will reach CONNECTED and auto-write demoValidated=true;
       // simulate the persisted row flipping to the blessed value exactly as
       // the repository would after the CONNECTED transition.
-      const originalConnect = paperAdapter.connect.bind(paperAdapter);
-      jest.spyOn(paperAdapter, 'connect').mockImplementation(async (credentials) => {
-        const result = await originalConnect(credentials);
-        connectionRecord = buildConnection({ demoValidated: true });
-        return result;
-      });
+      // Prototype level: connectBroker operates on the connection-scoped
+      // adapter the registry factory produces — the spy must cover every
+      // instance, not just the metadata root.
+      const originalConnect = PaperBrokerAdapter.prototype.connect;
+      jest
+        .spyOn(PaperBrokerAdapter.prototype, 'connect')
+        .mockImplementation(async function (this: PaperBrokerAdapter, credentials) {
+          const result = await originalConnect.call(this, credentials);
+          connectionRecord = buildConnection({ demoValidated: true });
+          return result;
+        });
       // ...and then the evidence contradicts the bless: the checklist fails.
       jest
-        .spyOn(paperAdapter, 'getAccountInfo')
+        .spyOn(PaperBrokerAdapter.prototype, 'getAccountInfo')
         .mockRejectedValueOnce(
           new BrokerAdapterError(
             BrokerErrorCode.BROKER_SERVER_ERROR,
@@ -376,7 +388,7 @@ describe('BrokerDemoValidationService', () => {
     it('keeps demoValidated false, returns the honest step result and audits FAILED', async () => {
       const marker = 'SCRIPTED_SECRET_MARKER_9e8d7c6b';
       jest
-        .spyOn(paperAdapter, 'getAccountInfo')
+        .spyOn(PaperBrokerAdapter.prototype, 'getAccountInfo')
         .mockRejectedValueOnce(
           new BrokerAdapterError(
             BrokerErrorCode.BROKER_SERVER_ERROR,
@@ -410,7 +422,9 @@ describe('BrokerDemoValidationService', () => {
     it('cascades SKIPPED steps when the connection itself fails (fail-closed)', async () => {
       // connectBroker's documented failure path: connect() RESOLVES with
       // success=false → status ERROR + BROKER_CONNECT_FAILED audit + BadRequest.
-      jest.spyOn(paperAdapter, 'connect').mockResolvedValueOnce({
+      jest
+        .spyOn(PaperBrokerAdapter.prototype, 'connect')
+        .mockResolvedValueOnce({
         success: false,
         accountId: '',
         accountType: BrokerMode.DEMO,
@@ -455,7 +469,7 @@ describe('BrokerDemoValidationService', () => {
     it('REVOKES a previously validated connection when re-validation fails (evidence-consistent write)', async () => {
       connectionRecord = buildConnection({ demoValidated: true });
       jest
-        .spyOn(paperAdapter, 'getCurrentPrice')
+        .spyOn(PaperBrokerAdapter.prototype, 'getCurrentPrice')
         .mockRejectedValueOnce(
           new BrokerAdapterError(BrokerErrorCode.MARKET_CLOSED, 'market closed for validation'),
         );
@@ -511,7 +525,7 @@ describe('BrokerDemoValidationService', () => {
       // The registry is NOT used for the stub (registering a brokerId without
       // a server-authoritative catalog entry would violate the registry
       // truthfulness rule) — the spec routes getAdapter to the stub instead.
-      jest.spyOn(registry, 'getAdapter').mockReturnValue(stub);
+      jest.spyOn(registry, 'getAdapterForConnection').mockReturnValue(stub);
       const bundle = encryptionService.encrypt({
         apiKey: 'STUB_KEY_MARKER_556677',
         accountId: 'stub-account-001',
@@ -553,10 +567,14 @@ describe('BrokerDemoValidationService', () => {
 
   // ─── Paper adapter state guard (the module shares one instance) ────────────
 
-  it('leaves the shared adapter connected after a passing validation (no teardown on the service path)', async () => {
+  it('leaves the connection-scoped adapter connected after a passing validation (no teardown on the service path)', async () => {
     const result = await service.validateDemoConnection(CONN_ID, USER_ID);
     expect(result.overall).toBe('PASS');
-    expect(paperAdapter.isConnected()).toBe(true);
+    // #291 / correction round 3: the live mutable context is the
+    // connection-scoped session adapter — it must stay connected (the
+    // validation service never tears it down).
+    const scoped = registry.getAdapterForConnection(CONN_ID, 'paper-broker');
+    expect(scoped.isConnected()).toBe(true);
   });
 
   it('rejects Forbidden-style usage gracefully when credentials are absent', async () => {

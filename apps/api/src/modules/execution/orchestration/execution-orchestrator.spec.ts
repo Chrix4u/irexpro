@@ -155,7 +155,7 @@ describe('ExecutionOrchestrator', () => {
       brokerService as unknown as BrokerService,
       controlService as unknown as ExecutionControlService,
       {
-        getAdapter: jest.fn().mockReturnValue(adapter as unknown as IBrokerAdapter),
+        getAdapterForConnection: jest.fn().mockReturnValue(adapter as unknown as IBrokerAdapter),
       } as unknown as BrokerAdapterRegistry,
       encryptionService as unknown as CredentialEncryptionService,
       auditService as unknown as AuditService,

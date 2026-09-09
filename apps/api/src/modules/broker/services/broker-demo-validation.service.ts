@@ -151,10 +151,14 @@ export class BrokerDemoValidationService {
       // (fail-closed for the decision, evidence still recorded).
     }
 
-    // Steps 2–7 — the adapter the registry resolved is the SAME instance
-    // connectBroker just connected (the checklist's injected connect step
-    // prevents a second adapter.connect()).
-    const adapter = this.adapterRegistry.getAdapter(connection.brokerId);
+    // Steps 2–7 — the connection-scoped adapter context the registry resolves
+    // IS the same instance connectBroker just connected (same
+    // BrokerConnection.id → same session; the checklist's injected connect
+    // step prevents a second adapter.connect()). #291 / correction round 3.
+    const adapter = this.adapterRegistry.getAdapterForConnection(
+      connection.id,
+      connection.brokerId,
+    );
     const evidence = await runVerificationChecklist(adapter, {
       brokerId: connection.brokerId,
       mode: 'DEMO',

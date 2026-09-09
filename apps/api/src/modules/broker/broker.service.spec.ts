@@ -33,15 +33,27 @@ const mockAccountRepo = () => ({
   update: jest.fn().mockResolvedValue({ affected: 1 }),
 });
 
-const mockRegistry = () => ({
-  isSupported: jest.fn().mockReturnValue(true),
-  getAdapter: jest.fn(),
-  getSupportedBrokers: jest
-    .fn()
-    .mockReturnValue([
-      { brokerId: 'metatrader5', brokerName: 'MetaTrader 5 (via MetaAPI)', supportsDemo: true },
-    ]),
-});
+const mockRegistry = () => {
+  const getAdapter = jest.fn();
+  return {
+    isSupported: jest.fn().mockReturnValue(true),
+    getAdapter,
+    // #291 / correction round 3: production code resolves connection-scoped
+    // and ephemeral adapters through the registry session API — the mock
+    // delegates to the same per-broker adapter stubs the legacy getAdapter
+    // expectations use.
+    getAdapterForConnection: jest.fn((_connectionId: string, brokerId: string) =>
+      getAdapter(brokerId),
+    ),
+    createEphemeralAdapter: jest.fn((brokerId: string) => getAdapter(brokerId)),
+    releaseAdapterForConnection: jest.fn(),
+    getSupportedBrokers: jest
+      .fn()
+      .mockReturnValue([
+        { brokerId: 'metatrader5', brokerName: 'MetaTrader 5 (via MetaAPI)', supportsDemo: true },
+      ]),
+  };
+};
 
 // Sprint 50 — provider registry mock (permissive defaults preserve legacy
 // test expectations; dedicated registry specs exercise the real service)

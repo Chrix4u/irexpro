@@ -1,4 +1,5 @@
 import { Module, OnModuleInit } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BullModule } from '@nestjs/bullmq';
 import { BrokerService } from './broker.service';
@@ -40,8 +41,11 @@ import { AuditModule } from '../audit/audit.module';
  *
  * Adding a new broker adapter:
  *   1. Implement IBrokerAdapter
- *   2. Add to providers list
- *   3. Call registry.register(adapter) in onModuleInit
+ *   2. Add the metadata/root adapter to the providers list
+ *   3. Register it in onModuleInit WITH a connection-isolation factory
+ *      (registry.register(adapter, factory)) — the root instance stays
+ *      metadata-only; persisted BrokerConnections receive fresh mutable
+ *      adapter contexts per connection id (#291 / correction round 3)
  *
  * See: docs/architecture/09-broker-integration-architecture.md
  */
@@ -121,21 +125,39 @@ export class BrokerModule implements OnModuleInit {
     private paperBrokerAdapter: PaperBrokerAdapter,
     private oandaAdapter: OandaAdapter,
     private cTraderAdapter: CTraderAdapter,
+    private metaApiClient: MetaApiClientService,
+    private configService: ConfigService,
+    private cTraderClient: CTraderClientService,
   ) {}
 
   onModuleInit() {
-    this.registry.register(this.metaTraderAdapter);
-    this.registry.register(this.paperBrokerAdapter);
+    // Root adapters are metadata-only (#291 / Sprint 56 correction round 3,
+    // architect findings 1 + 2 + 7). Every persisted BrokerConnection gets a
+    // fresh mutable adapter context from these factories. Lower-level
+    // provider infrastructure (the MetaAPI connection pool, the cTrader
+    // environment-connection pool) remains shared underneath by design.
+    this.registry.register(
+      this.metaTraderAdapter,
+      () => new MetaTraderAdapter(this.metaApiClient),
+    );
+    this.registry.register(this.paperBrokerAdapter, () => new PaperBrokerAdapter());
     // Sprint 51 PR-7 — OANDA v20 REST native adapter (BETA: implemented +
     // contract-tested; live verification pending — see
     // docs/brokers/oanda-v20-adapter.md).
-    this.registry.register(this.oandaAdapter);
-    // Sprint 56 / Task 48-B — universal cTrader Open API engine (BETA:
-    // implemented + contract-tested; connections fail closed until the
-    // operator supplies CTRADER_CLIENT_ID/CTRADER_CLIENT_SECRET — Spotware
-    // partner approval — and production-LIVE stays UNVERIFIED). The
-    // Pepperstone / IC Markets catalog entries share this one engine.
-    this.registry.register(this.cTraderAdapter);
+    this.registry.register(this.oandaAdapter, () => new OandaAdapter(this.configService));
+    // Sprint 56 / Task 48-B + correction round 3 — the universal cTrader Open
+    // API engine (BETA: implemented + contract-tested; connections fail
+    // closed until the operator supplies CTRADER_CLIENT_ID/CTRADER_CLIENT_SECRET
+    // — Spotware partner approval — and production-LIVE stays UNVERIFIED).
+    // The Pepperstone / IC Markets catalog entries are ALIASES: they share
+    // the canonical factory + client infrastructure, NEVER the mutable
+    // adapter object. The requested alias broker id is preserved on the
+    // isolated adapter so broker-specific identity verification (discovered
+    // brokerTitleShort) can fail closed on brand mismatch.
+    this.registry.register(
+      this.cTraderAdapter,
+      (requestedBrokerId: string) => new CTraderAdapter(this.cTraderClient, requestedBrokerId),
+    );
     this.registry.registerBrokerAlias('pepperstone-ctrader', this.cTraderAdapter);
     this.registry.registerBrokerAlias('icmarkets-ctrader', this.cTraderAdapter);
   }

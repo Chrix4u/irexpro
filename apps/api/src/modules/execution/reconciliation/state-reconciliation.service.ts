@@ -142,7 +142,12 @@ export class StateReconciliationService {
       });
 
       // ── Phase 2: connect the adapter (credentials zeroed after use) ────
-      const adapter = this.adapterRegistry.getAdapter(connection.brokerId);
+      // #291 / correction round 3: reconciliation uses the connection-scoped
+      // adapter context — isolated from any other connection's mutable state.
+      const adapter = this.adapterRegistry.getAdapterForConnection(
+        connection.id,
+        connection.brokerId,
+      );
       adapter.setMode(connection.accountType);
       const credentials = this.buildCredentials(connection);
       try {
