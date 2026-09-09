@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { BullModule } from '@nestjs/bullmq';
 import { BrokerService } from './broker.service';
 import { BrokerController } from './broker.controller';
+import { BrokerOAuthController } from './broker-oauth.controller';
 import { PortfolioController } from './portfolio.controller';
 import { BrokerRegistryController } from './broker-registry.controller';
 import { BrokerConnection } from './entities/broker-connection.entity';
@@ -18,6 +19,7 @@ import { MetaApiClientService } from './services/metaapi-client.service';
 import { PortfolioReadService } from './services/portfolio-read.service';
 import { BrokerDemoValidationService } from './services/broker-demo-validation.service';
 import { BrokerOAuthTokenLifecycleService } from './services/broker-oauth-token-lifecycle.service';
+import { BrokerOAuthService } from './services/broker-oauth.service';
 import { BrokerProviderRegistryService } from './registry/broker-provider-registry.service';
 import { BrokerHealthCheckJob, BROKER_HEALTH_QUEUE } from './jobs/broker-health-check.job';
 import { BrokerHealthCheckProducer } from './jobs/broker-health-check.producer';
@@ -47,7 +49,12 @@ import { AuditModule } from '../audit/audit.module';
     BullModule.registerQueue({ name: BROKER_HEALTH_QUEUE }),
     AuditModule,
   ],
-  controllers: [BrokerController, BrokerRegistryController, PortfolioController],
+  controllers: [
+    BrokerOAuthController,
+    BrokerController,
+    BrokerRegistryController,
+    PortfolioController,
+  ],
   providers: [
     BrokerService,
     PortfolioReadService,
@@ -59,6 +66,10 @@ import { AuditModule } from '../audit/audit.module';
     // for the cTrader family (refresh + ATOMIC pair persistence, fail-closed
     // INVALID on rejection). Consumed by BrokerService connect/health paths.
     BrokerOAuthTokenLifecycleService,
+    // Sprint 56 correction round 1 (audit point 6) — the user-facing OAuth
+    // connection flow (authorize → external consent → complete → link) with
+    // server-side single-use flow correlation.
+    BrokerOAuthService,
     CredentialEncryptionService,
     MetaApiClientService,
     // Sprint 56 / Task 48-B — the platform-level cTrader Open API connection

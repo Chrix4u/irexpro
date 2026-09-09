@@ -174,9 +174,8 @@ describe('BrokerService authorization transitions — real PostgreSQL concurrenc
     // Sprint 56 correction round 1: OAuth token lifecycle (cTrader family
     // only — these fixtures are metatrader5, so the gate is a no-op passthrough).
     const tokenLifecycle = {
-      ensureFreshTokens: jest.fn(
-        (_connection: unknown, credentials: DecryptedBrokerCredentials) =>
-          Promise.resolve(credentials),
+      ensureFreshTokens: jest.fn((_connection: unknown, credentials: DecryptedBrokerCredentials) =>
+        Promise.resolve(credentials),
       ),
     } as unknown as BrokerOAuthTokenLifecycleService;
     service = new BrokerService(

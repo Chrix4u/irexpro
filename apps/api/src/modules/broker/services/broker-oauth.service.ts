@@ -1,4 +1,10 @@
-import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { ConfigService } from '@nestjs/config';
 import { BrokerConnection } from '../entities/broker-connection.entity';
@@ -217,8 +223,7 @@ export class BrokerOAuthService {
       // is now spent (or was invalid) — the flow is DEAD: consume it so it
       // can never be retried with a replayed code (fail-closed).
       this.flows.delete(flowId);
-      const providerCode =
-        err instanceof BrokerAdapterError ? err.code : BrokerErrorCode.UNKNOWN;
+      const providerCode = err instanceof BrokerAdapterError ? err.code : BrokerErrorCode.UNKNOWN;
       await this.auditService.log({
         actorUserId: userId,
         action: AuditAction.BROKER_OAUTH_AUTHORIZATION_FAILED,
@@ -244,8 +249,7 @@ export class BrokerOAuthService {
       discovered = await this.ctraderClient.discoverAccounts('DEMO', tokens.accessToken);
     } catch (err) {
       this.flows.delete(flowId);
-      const providerCode =
-        err instanceof BrokerAdapterError ? err.code : BrokerErrorCode.UNKNOWN;
+      const providerCode = err instanceof BrokerAdapterError ? err.code : BrokerErrorCode.UNKNOWN;
       await this.auditService.log({
         actorUserId: userId,
         action: AuditAction.BROKER_OAUTH_AUTHORIZATION_FAILED,
@@ -278,9 +282,7 @@ export class BrokerOAuthService {
     flow.state = 'AUTHORIZED';
     flow.accessToken = tokens.accessToken;
     flow.refreshToken = tokens.refreshToken;
-    flow.accessTokenExpiresAt = new Date(
-      Date.now() + tokens.expiresIn * 1000,
-    ).toISOString();
+    flow.accessTokenExpiresAt = new Date(Date.now() + tokens.expiresIn * 1000).toISOString();
     flow.accounts = accounts;
     flow.expiresAt = Date.now() + FLOW_AUTHORIZED_TTL_MS;
 
@@ -341,7 +343,9 @@ export class BrokerOAuthService {
     dto.accountType = account.isLive ? BrokerMode.LIVE : BrokerMode.DEMO;
     dto.accountId = account.ctidTraderAccountId;
     dto.apiKey = flow.accessToken;
-    dto.displayName = displayName ?? `${account.brokerTitleShort ?? flow.brokerId} ${account.isLive ? 'LIVE' : 'DEMO'}`;
+    dto.displayName =
+      displayName ??
+      `${account.brokerTitleShort ?? flow.brokerId} ${account.isLive ? 'LIVE' : 'DEMO'}`;
     dto.additionalParams = {
       refreshToken: flow.refreshToken!,
       accessTokenExpiresAt: flow.accessTokenExpiresAt!,
@@ -384,7 +388,11 @@ export class BrokerOAuthService {
   // ─── Internals ─────────────────────────────────────────────────────────────
 
   /** Ownership-checked, state-checked, single-tenant flow lookup. */
-  private requireOwnedFlow(flowId: string, userId: string, state: 'PENDING' | 'AUTHORIZED'): OAuthFlowRecord {
+  private requireOwnedFlow(
+    flowId: string,
+    userId: string,
+    state: 'PENDING' | 'AUTHORIZED',
+  ): OAuthFlowRecord {
     const flow = this.flows.get(flowId);
     if (!flow || flow.userId !== userId) {
       // NotFound for BOTH unknown and foreign flows — no existence oracle.

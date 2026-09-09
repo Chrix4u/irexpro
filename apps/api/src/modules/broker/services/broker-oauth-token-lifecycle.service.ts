@@ -106,10 +106,7 @@ export class BrokerOAuthTokenLifecycleService {
     try {
       tokens = await this.ctraderClient.refreshAccessToken(refreshToken);
     } catch (err) {
-      if (
-        err instanceof BrokerAdapterError &&
-        err.code === BrokerErrorCode.AUTHENTICATION_FAILED
-      ) {
+      if (err instanceof BrokerAdapterError && err.code === BrokerErrorCode.AUTHENTICATION_FAILED) {
         // The refresh token is DEAD at the provider — the persisted pair can
         // never authenticate again. Fail closed: mark INVALID and require
         // re-authorization (never a silent fallback to the dead pair).

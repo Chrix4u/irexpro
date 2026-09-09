@@ -407,10 +407,7 @@ export class CTraderClientService implements OnModuleDestroy {
    * identifier (it appears in the consent URL every user sees); the client
    * SECRET never leaves this class.
    */
-  buildAuthorizationUrl(
-    redirectUri: string,
-    scope: 'trading' | 'accounts' = 'trading',
-  ): string {
+  buildAuthorizationUrl(redirectUri: string, scope: 'trading' | 'accounts' = 'trading'): string {
     return buildCtraderAuthorizationUrl(this.clientId, redirectUri, scope);
   }
 

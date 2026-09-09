@@ -1,7 +1,6 @@
 import { ConfigService } from '@nestjs/config';
 import { ConflictException } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
 import { Test, TestingModule } from '@nestjs/testing';
 import { BrokerOAuthTokenLifecycleService } from './broker-oauth-token-lifecycle.service';
 import { BrokerConnection } from '../entities/broker-connection.entity';

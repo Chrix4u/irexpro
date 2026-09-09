@@ -1,5 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { BrokerOAuthService } from './broker-oauth.service';
 import { BrokerService } from '../broker.service';
@@ -21,8 +26,18 @@ const ACCESS_TOKEN = 'SEKRIT-ACCESS-TOKEN';
 const REFRESH_TOKEN = 'SEKRIT-REFRESH-TOKEN';
 
 const discoveredAccounts = (): CtraderDiscoveredAccount[] => [
-  { ctidTraderAccountId: 1234567, isLive: false, traderLogin: 987654, brokerTitleShort: 'Spotware' },
-  { ctidTraderAccountId: 7654321, isLive: true, traderLogin: 123456, brokerTitleShort: 'Pepperstone' },
+  {
+    ctidTraderAccountId: 1234567,
+    isLive: false,
+    traderLogin: 987654,
+    brokerTitleShort: 'Spotware',
+  },
+  {
+    ctidTraderAccountId: 7654321,
+    isLive: true,
+    traderLogin: 123456,
+    brokerTitleShort: 'Pepperstone',
+  },
 ];
 
 describe('BrokerOAuthService (Sprint 56 correction — audit point 6)', () => {
@@ -122,9 +137,7 @@ describe('BrokerOAuthService (Sprint 56 correction — audit point 6)', () => {
       await expect(service.startAuthorization(USER, 'metatrader5')).rejects.toThrow(
         BadRequestException,
       );
-      await expect(service.startAuthorization(USER, 'oanda')).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(service.startAuthorization(USER, 'oanda')).rejects.toThrow(BadRequestException);
       // Family aliases ARE accepted.
       await expect(service.startAuthorization(USER, 'pepperstone-ctrader')).resolves.toBeDefined();
       await expect(service.startAuthorization(USER, 'icmarkets-ctrader')).resolves.toBeDefined();
@@ -132,9 +145,7 @@ describe('BrokerOAuthService (Sprint 56 correction — audit point 6)', () => {
 
     it('fails closed with the honest blocker when platform app credentials are unconfigured', async () => {
       ctraderClient.isAvailable.mockReturnValue(false);
-      const err = await service
-        .startAuthorization(USER, 'ctrader')
-        .catch((e: unknown) => e);
+      const err = await service.startAuthorization(USER, 'ctrader').catch((e: unknown) => e);
       expect(err).toBeInstanceOf(BadRequestException);
       expect((err as BadRequestException).message).toContain('CTRADER_CLIENT_ID');
     });
@@ -191,9 +202,9 @@ describe('BrokerOAuthService (Sprint 56 correction — audit point 6)', () => {
 
     it('treats an unknown flow and a FOREIGN flow identically (no existence oracle)', async () => {
       const start = await service.startAuthorization(USER, 'ctrader');
-      await expect(
-        service.completeAuthorization(FOREIGN_USER, start.flowId, 'x'),
-      ).rejects.toThrow(NotFoundException);
+      await expect(service.completeAuthorization(FOREIGN_USER, start.flowId, 'x')).rejects.toThrow(
+        NotFoundException,
+      );
       await expect(service.completeAuthorization(USER, 'missing-flow', 'x')).rejects.toThrow(
         NotFoundException,
       );
@@ -330,9 +341,7 @@ describe('BrokerOAuthService (Sprint 56 correction — audit point 6)', () => {
       brokerService.createConnection.mockResolvedValue(linkedConnection);
       const flowId = await authorizedFlow();
       await service.linkAccount(USER, flowId, '1234567');
-      await expect(service.linkAccount(USER, flowId, '1234567')).rejects.toThrow(
-        NotFoundException,
-      );
+      await expect(service.linkAccount(USER, flowId, '1234567')).rejects.toThrow(NotFoundException);
     });
 
     it('keeps the flow alive when linking FAILS (user can pick a DEMO account instead)', async () => {
@@ -359,9 +368,9 @@ describe('BrokerOAuthService (Sprint 56 correction — audit point 6)', () => {
 
     it('rejects a foreign user on every step (tenant isolation)', async () => {
       const start = await service.startAuthorization(USER, 'ctrader');
-      await expect(
-        service.linkAccount(FOREIGN_USER, start.flowId, '1234567'),
-      ).rejects.toThrow(NotFoundException);
+      await expect(service.linkAccount(FOREIGN_USER, start.flowId, '1234567')).rejects.toThrow(
+        NotFoundException,
+      );
     });
 
     it('rejects linking before authorization completed (state machine)', async () => {
@@ -391,9 +400,7 @@ describe('BrokerOAuthService (Sprint 56 correction — audit point 6)', () => {
         Array.from({ length: 1000 }, () => service.startAuthorization(USER, 'ctrader')),
       );
       expect(many).toHaveLength(1000);
-      await expect(service.startAuthorization(USER, 'ctrader')).rejects.toThrow(
-        ConflictException,
-      );
+      await expect(service.startAuthorization(USER, 'ctrader')).rejects.toThrow(ConflictException);
     });
 
     it('sweeps expired flows so the store stays bounded over time', async () => {

@@ -1,10 +1,5 @@
 import { Body, Controller, HttpStatus, Post, SerializeOptions, UseGuards } from '@nestjs/common';
-import {
-  ApiBearerAuth,
-  ApiOperation,
-  ApiResponse,
-  ApiTags,
-} from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { BrokerOAuthService } from './services/broker-oauth.service';
 import {
   CompleteBrokerOAuthDto,
@@ -52,7 +47,10 @@ export class BrokerOAuthController {
     description: 'Consent URL + server-side flow correlation id',
     type: Object,
   })
-  @ApiResponse({ status: 400, description: 'Broker not cTrader-family / platform app unconfigured' })
+  @ApiResponse({
+    status: 400,
+    description: 'Broker not cTrader-family / platform app unconfigured',
+  })
   async startAuthorization(
     @Body() dto: StartBrokerOAuthDto,
     @CurrentUserId() userId: string,
@@ -92,7 +90,7 @@ export class BrokerOAuthController {
     description:
       'Persists the chosen account through the canonical createConnection path: ' +
       'credentials (access token + refresh token + expiry tracking) are ' +
-      'AES-256-GCM encrypted; the environment derives from the account\'s ' +
+      "AES-256-GCM encrypted; the environment derives from the account's " +
       'server-reported isLive flag; LIVE linking for production-LIVE-unverified ' +
       'brokers fails closed exactly like the manual path. The OAuth flow is ' +
       'consumed (single-use).',
@@ -103,7 +101,10 @@ export class BrokerOAuthController {
     type: BrokerConnectionResponseDto,
   })
   @ApiResponse({ status: 400, description: 'Account not granted to this authorization' })
-  @ApiResponse({ status: 403, description: 'LIVE connection on an unverified broker (fail-closed)' })
+  @ApiResponse({
+    status: 403,
+    description: 'LIVE connection on an unverified broker (fail-closed)',
+  })
   @ApiResponse({ status: 404, description: 'Flow unknown or not owned by the caller' })
   async linkAccount(
     @Body() dto: LinkBrokerOAuthDto,
