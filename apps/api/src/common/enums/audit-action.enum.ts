@@ -71,6 +71,18 @@ export enum AuditAction {
   // stale true (fail-closed).
   BROKER_DEMO_VALIDATION_PASSED = 'BROKER_DEMO_VALIDATION_PASSED',
   BROKER_DEMO_VALIDATION_FAILED = 'BROKER_DEMO_VALIDATION_FAILED',
+  // Sprint 56 correction round 1 (audit point 1) — cTrader OAuth token
+  // lifecycle: refreshed token pairs are ATOMICALLY persisted (ROTATED);
+  // refresh rejections mark the credential INVALID (fail-closed). Metadata
+  // carries timestamps/ids ONLY — never token material.
+  BROKER_OAUTH_TOKENS_REFRESHED = 'BROKER_OAUTH_TOKENS_REFRESHED',
+  BROKER_OAUTH_TOKEN_REFRESH_FAILED = 'BROKER_OAUTH_TOKEN_REFRESH_FAILED',
+  // Sprint 56 correction round 1 (audit point 6) — the user-facing OAuth
+  // connection flow (authorize → external consent → complete → link).
+  BROKER_OAUTH_FLOW_STARTED = 'BROKER_OAUTH_FLOW_STARTED',
+  BROKER_OAUTH_AUTHORIZATION_COMPLETED = 'BROKER_OAUTH_AUTHORIZATION_COMPLETED',
+  BROKER_OAUTH_AUTHORIZATION_FAILED = 'BROKER_OAUTH_AUTHORIZATION_FAILED',
+  BROKER_OAUTH_ACCOUNT_LINKED = 'BROKER_OAUTH_ACCOUNT_LINKED',
 
   // Sprint 50 — Live Account foundation (authorization state machine,
   // credential lifecycle, provider registry, emergency control plane)

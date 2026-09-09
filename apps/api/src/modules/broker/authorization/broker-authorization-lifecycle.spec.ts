@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { BrokerService } from '../broker.service';
+import { BrokerOAuthTokenLifecycleService } from '../services/broker-oauth-token-lifecycle.service';
 import { BrokerConnection } from '../entities/broker-connection.entity';
 import { BrokerAccount } from '../entities/broker-account.entity';
 import { BrokerAdapterRegistry } from '../adapters/broker-adapter.registry';
@@ -119,6 +120,16 @@ describe('BrokerService — Sprint 50 authorization lifecycle', () => {
         { provide: CredentialEncryptionService, useValue: encryption },
         { provide: AuditService, useValue: audit },
         { provide: DomainEventBus, useValue: eventBus },
+        // Sprint 56 correction round 1: passthrough OAuth token lifecycle
+        // (fixtures are metatrader-family — the gate is a no-op).
+        {
+          provide: BrokerOAuthTokenLifecycleService,
+          useValue: {
+            ensureFreshTokens: jest.fn((_c: unknown, credentials: unknown) =>
+              Promise.resolve(credentials),
+            ),
+          },
+        },
       ],
     }).compile();
 

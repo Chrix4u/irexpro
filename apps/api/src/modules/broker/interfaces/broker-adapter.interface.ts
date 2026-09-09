@@ -166,6 +166,15 @@ export interface DecryptedBrokerCredentials {
   apiSecret?: string;
   accountId: string;
   serverUrl?: string;
+  /**
+   * Provider-specific credential parameters. Documented conventions (kept
+   * INSIDE the AES-256-GCM ciphertext — never plaintext at rest):
+   * - cTrader family (Sprint 56): `refreshToken` (the OAuth refresh token)
+   *   and `accessTokenExpiresAt` (ISO-8601 expiry of the access token in
+   *   `apiKey`). The token-lifecycle service refreshes the pair BEFORE
+   *   provider use when expired/near-expiry and atomically persists the new
+   *   pair (cTrader invalidates the previous pair on refresh).
+   */
   additionalParams?: Record<string, string>;
 }
 

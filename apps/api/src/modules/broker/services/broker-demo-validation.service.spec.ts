@@ -11,6 +11,8 @@ import { BrokerProviderRegistryService } from '../registry/broker-provider-regis
 import { PaperBrokerAdapter } from '../adapters/paper-broker.adapter';
 import { CredentialEncryptionService } from './credential-encryption.service';
 import { BrokerDemoValidationService } from './broker-demo-validation.service';
+import { BrokerOAuthTokenLifecycleService } from './broker-oauth-token-lifecycle.service';
+import { CTraderClientService } from '../adapters/ctrader/ctrader-client.service';
 import { AuditService } from '../../audit/audit.service';
 import { AuditSeverity } from '../../audit/entities/audit-log.entity';
 import { AuditAction } from '../../../common/enums/audit-action.enum';
@@ -141,6 +143,14 @@ describe('BrokerDemoValidationService', () => {
         BrokerAdapterRegistry,
         PaperBrokerAdapter,
         CredentialEncryptionService,
+        // Sprint 56 correction round 1 (audit point 1): the REAL token
+        // lifecycle service — the freshness gate is a no-op for paper-broker
+        // fixtures (cTrader family only), proven here end-to-end.
+        BrokerOAuthTokenLifecycleService,
+        {
+          provide: CTraderClientService,
+          useValue: { refreshAccessToken: jest.fn() },
+        },
         {
           provide: ConfigService,
           useValue: {

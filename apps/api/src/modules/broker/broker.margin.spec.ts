@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { BrokerService } from './broker.service';
+import { BrokerOAuthTokenLifecycleService } from './services/broker-oauth-token-lifecycle.service';
 import { BrokerConnection } from './entities/broker-connection.entity';
 import { BrokerAccount } from './entities/broker-account.entity';
 import { BrokerAdapterRegistry } from './adapters/broker-adapter.registry';
@@ -56,6 +57,15 @@ describe('BrokerService — account-scoped required margin', () => {
         },
         { provide: AuditService, useValue: { log: jest.fn() } },
         { provide: DomainEventBus, useValue: { publish: jest.fn() } },
+        // Sprint 56 correction round 1: passthrough OAuth token lifecycle.
+        {
+          provide: BrokerOAuthTokenLifecycleService,
+          useValue: {
+            ensureFreshTokens: jest.fn((_c: unknown, credentials: unknown) =>
+              Promise.resolve(credentials),
+            ),
+          },
+        },
       ],
     }).compile();
     const service = module.get(BrokerService);
@@ -119,6 +129,15 @@ describe('BrokerService — account-scoped required margin', () => {
         },
         { provide: AuditService, useValue: { log: jest.fn() } },
         { provide: DomainEventBus, useValue: { publish: jest.fn() } },
+        // Sprint 56 correction round 1: passthrough OAuth token lifecycle.
+        {
+          provide: BrokerOAuthTokenLifecycleService,
+          useValue: {
+            ensureFreshTokens: jest.fn((_c: unknown, credentials: unknown) =>
+              Promise.resolve(credentials),
+            ),
+          },
+        },
       ],
     }).compile();
     const service = module.get(BrokerService);

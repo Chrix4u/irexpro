@@ -92,6 +92,11 @@ export default () => ({
     // AUTHENTICATION_FAILED configuration message. NEVER log these values.
     ctraderClientId: process.env.CTRADER_CLIENT_ID,
     ctraderClientSecret: process.env.CTRADER_CLIENT_SECRET,
+    // Sprint 56 correction round 1 (audit point 6) — the platform's
+    // registered OAuth redirect URI(s), comma-separated (web callback page
+    // and, if registered by the operator, the mobile deep-link scheme).
+    // The user-facing OAuth flow fails closed when empty.
+    ctraderRedirectUris: process.env.CTRADER_REDIRECT_URIS,
   },
   internalApi: {
     key: process.env.NESTJS_INTERNAL_API_KEY,

@@ -5,13 +5,18 @@ import { BrokerConnection } from '../entities/broker-connection.entity';
 import { BrokerAdapterRegistry } from '../adapters/broker-adapter.registry';
 import { BrokerProviderRegistryService } from '../registry/broker-provider-registry.service';
 import { CredentialEncryptionService } from '../services/credential-encryption.service';
+import { BrokerOAuthTokenLifecycleService } from '../services/broker-oauth-token-lifecycle.service';
 import { AuditService } from '../../audit/audit.service';
 import { DomainEventBus } from '../../events/event-bus.service';
 import {
   BrokerAuthorizationStatus,
   BrokerAuthorizationStateMachine,
 } from './broker-authorization-status';
-import { BrokerConnectionStatus, BrokerMode } from '../interfaces/broker-adapter.interface';
+import {
+  BrokerConnectionStatus,
+  BrokerMode,
+  DecryptedBrokerCredentials,
+} from '../interfaces/broker-adapter.interface';
 
 /**
  * Sprint 50 correction (architect review A4) — atomic authorization
@@ -166,6 +171,14 @@ describe('BrokerService authorization transitions — real PostgreSQL concurrenc
     } as unknown as CredentialEncryptionService;
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as unknown as AuditService;
     const eventBus = { publish: jest.fn() } as unknown as DomainEventBus;
+    // Sprint 56 correction round 1: OAuth token lifecycle (cTrader family
+    // only — these fixtures are metatrader5, so the gate is a no-op passthrough).
+    const tokenLifecycle = {
+      ensureFreshTokens: jest.fn(
+        (_connection: unknown, credentials: DecryptedBrokerCredentials) =>
+          Promise.resolve(credentials),
+      ),
+    } as unknown as BrokerOAuthTokenLifecycleService;
     service = new BrokerService(
       connectionRepo,
       // accountRepo is unused by the transition paths under test
@@ -175,6 +188,7 @@ describe('BrokerService authorization transitions — real PostgreSQL concurrenc
       encryption,
       audit,
       eventBus,
+      tokenLifecycle,
     );
   });
 

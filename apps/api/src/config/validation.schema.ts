@@ -75,6 +75,10 @@ export const validationSchema = Joi.object({
   // at https://openapi.ctrader.com (Spotware approval flow). NEVER log these.
   CTRADER_CLIENT_ID: Joi.string().optional().allow(''),
   CTRADER_CLIENT_SECRET: Joi.string().optional().allow(''),
+  // Comma-separated redirect URI allowlist for the cTrader OAuth flow
+  // (Sprint 56 correction round). OPTIONAL — the flow fails closed (honest
+  // message) when unset. NEVER log these values.
+  CTRADER_REDIRECT_URIS: Joi.string().optional().allow(''),
 
   // Internal API key for Python AI Engine → NestJS communication.
   // Must match NESTJS_INTERNAL_API_KEY in services/ai-engine/.env.

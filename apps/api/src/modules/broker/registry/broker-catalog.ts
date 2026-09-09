@@ -41,6 +41,17 @@ import {
  * VERIFIED evidence today.
  */
 
+/**
+ * cTrader-family broker ids — every catalog entry backed by the shared
+ * universal 'ctrader' adapter (the Open API engine). Single definition
+ * point for OAuth token-lifecycle and OAuth-connection-flow gating.
+ */
+export const CTRADER_FAMILY_BROKER_IDS: readonly string[] = [
+  'ctrader',
+  'pepperstone-ctrader',
+  'icmarkets-ctrader',
+];
+
 export const BROKER_CATALOG: readonly BrokerDefinition[] = [
   {
     id: 'metatrader5',

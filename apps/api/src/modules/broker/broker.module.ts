@@ -17,6 +17,7 @@ import { CredentialEncryptionService } from './services/credential-encryption.se
 import { MetaApiClientService } from './services/metaapi-client.service';
 import { PortfolioReadService } from './services/portfolio-read.service';
 import { BrokerDemoValidationService } from './services/broker-demo-validation.service';
+import { BrokerOAuthTokenLifecycleService } from './services/broker-oauth-token-lifecycle.service';
 import { BrokerProviderRegistryService } from './registry/broker-provider-registry.service';
 import { BrokerHealthCheckJob, BROKER_HEALTH_QUEUE } from './jobs/broker-health-check.job';
 import { BrokerHealthCheckProducer } from './jobs/broker-health-check.producer';
@@ -54,6 +55,10 @@ import { AuditModule } from '../audit/audit.module';
     // BrokerConnection.demoValidated
     // (POST /broker/connections/:connectionId/validate-demo).
     BrokerDemoValidationService,
+    // Sprint 56 correction round 1 (audit point 1) — OAuth token freshness
+    // for the cTrader family (refresh + ATOMIC pair persistence, fail-closed
+    // INVALID on rejection). Consumed by BrokerService connect/health paths.
+    BrokerOAuthTokenLifecycleService,
     CredentialEncryptionService,
     MetaApiClientService,
     // Sprint 56 / Task 48-B — the platform-level cTrader Open API connection

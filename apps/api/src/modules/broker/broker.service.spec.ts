@@ -10,6 +10,7 @@ import { BrokerAdapterRegistry } from './adapters/broker-adapter.registry';
 import { BrokerProviderRegistryService } from './registry/broker-provider-registry.service';
 import { CredentialEncryptionService } from './services/credential-encryption.service';
 import { AuditService } from '../audit/audit.service';
+import { BrokerOAuthTokenLifecycleService } from './services/broker-oauth-token-lifecycle.service';
 import { BrokerConnectionStatus, BrokerMode } from './interfaces/broker-adapter.interface';
 import { BrokerAuthorizationStatus } from './authorization/broker-authorization-status';
 import { DomainEventBus } from '../events/event-bus.service';
@@ -78,6 +79,14 @@ const mockEventBus = () => ({
   subscribe: jest.fn().mockReturnValue(() => {}),
 });
 
+// Sprint 56 correction round 1 — OAuth token lifecycle mock (passthrough by
+// default; dedicated tests override ensureFreshTokens to return a refreshed pair).
+const mockTokenLifecycle = () => ({
+  ensureFreshTokens: jest.fn((_connection: unknown, credentials: unknown) =>
+    Promise.resolve(credentials),
+  ),
+});
+
 // ─── Connected-connection fixture with full credentials ───────────────────────
 
 const connectedConnection = (overrides: Partial<Record<string, unknown>> = {}) => ({
@@ -122,6 +131,7 @@ describe('BrokerService', () => {
         { provide: AuditService, useFactory: mockAudit },
         { provide: DataSource, useValue: {} },
         { provide: DomainEventBus, useFactory: mockEventBus },
+        { provide: BrokerOAuthTokenLifecycleService, useFactory: mockTokenLifecycle },
       ],
     }).compile();
 
@@ -332,6 +342,66 @@ describe('BrokerService', () => {
       // Credentials zeroed in finally block — verify connect was called, not the values
       expect(mockAdapter.connect).toHaveBeenCalledTimes(1);
       expect(auditService.log).toHaveBeenCalled();
+    });
+
+    it('connects with the REFRESHED credentials when the OAuth lifecycle rotates the pair (audit point 1)', async () => {
+      const mockAdapter = {
+        setMode: jest.fn(),
+        connect: jest.fn().mockResolvedValue({
+          success: true,
+          accountId: '123456',
+          accountType: BrokerMode.DEMO,
+          currency: 'USD',
+          serverTime: new Date(),
+        }),
+      };
+      registry.getAdapter.mockReturnValue(mockAdapter);
+
+      const refreshedCredentials = {
+        apiKey: 'refreshed-access-token',
+        accountId: '123456',
+        additionalParams: {
+          refreshToken: 'rotated-refresh-token',
+          accessTokenExpiresAt: new Date(Date.now() + 2_628_000_000).toISOString(),
+        },
+      };
+      const lifecycle = module.get<ReturnType<typeof mockTokenLifecycle>>(
+        BrokerOAuthTokenLifecycleService,
+      );
+      lifecycle.ensureFreshTokens.mockResolvedValue(refreshedCredentials);
+
+      const mockConn = {
+        id: 'conn-1',
+        userId: 'user-1',
+        brokerId: 'ctrader',
+        accountType: BrokerMode.DEMO,
+        encryptedCredentials: 'ciphertext',
+        credentialIv: 'iv',
+        credentialTag: 'tag',
+        encryptionKeyId: 'env-key-v1',
+        authorizationStatus: BrokerAuthorizationStatus.NOT_CONNECTED,
+        credentialStatus: 'ROTATED',
+        consecutiveFailureCount: 0,
+      };
+      connectionRepo.findOne
+        .mockResolvedValueOnce(mockConn)
+        .mockResolvedValueOnce({ ...mockConn, status: BrokerConnectionStatus.CONNECTED });
+      connectionRepo.update.mockResolvedValue({ affected: 1 });
+      accountRepo.findOne.mockResolvedValue(null);
+      accountRepo.create.mockReturnValue({});
+      accountRepo.save.mockResolvedValue({});
+
+      await service.connectBroker('conn-1', 'user-1');
+
+      // The lifecycle gate ran BEFORE the adapter call and its refreshed pair
+      // (not the stale decrypted pair) reached the provider — the exact
+      // "reconnect with the newly refreshed token" requirement.
+      expect(lifecycle.ensureFreshTokens).toHaveBeenCalledTimes(1);
+      expect(mockAdapter.connect).toHaveBeenCalledTimes(1);
+      const passedCredentials = mockAdapter.connect.mock.calls[0][0];
+      expect(passedCredentials).toBe(refreshedCredentials);
+      // Both plaintext copies are zeroed in the finally block.
+      expect(refreshedCredentials.apiKey).toBeNull();
     });
 
     // ─── Sprint 56 / Task 48-D — the connect-time demoValidated auto-write ────

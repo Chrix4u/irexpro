@@ -12,6 +12,7 @@ import { BrokerConnection } from './entities/broker-connection.entity';
 import { BrokerAccount } from './entities/broker-account.entity';
 import { BrokerAdapterRegistry } from './adapters/broker-adapter.registry';
 import { CredentialEncryptionService } from './services/credential-encryption.service';
+import { BrokerOAuthTokenLifecycleService } from './services/broker-oauth-token-lifecycle.service';
 import {
   BrokerAccountInfo,
   BrokerConnectionStatus,
@@ -62,6 +63,9 @@ export class BrokerService {
     private encryptionService: CredentialEncryptionService,
     private auditService: AuditService,
     private readonly eventBus: DomainEventBus,
+    // Sprint 56 correction round 1 (audit point 1): OAuth credential
+    // freshness for the cTrader family (refresh + atomic persist).
+    private readonly tokenLifecycle: BrokerOAuthTokenLifecycleService,
   ) {}
 
   // ─── Read operations ──────────────────────────────────────────────────────
@@ -324,8 +328,15 @@ export class BrokerService {
 
     adapter.setMode(connection.accountType);
 
+    // Sprint 56 correction round 1 (audit point 1): OAuth credential
+    // freshness gate — cTrader-family credentials carrying a refresh token
+    // are refreshed (and the new pair ATOMICALLY persisted) BEFORE the
+    // adapter sees the token. Reconnect/health paths thereby always run on
+    // the current token; a rejected refresh fails closed (INVALID).
+    let connectCredentials = credentials;
     try {
-      const result = await adapter.connect(credentials);
+      connectCredentials = await this.tokenLifecycle.ensureFreshTokens(connection, credentials);
+      const result = await adapter.connect(connectCredentials);
 
       if (!result.success) {
         // A4: terminal ERROR write guarded on the in-flight state. On a
@@ -434,6 +445,12 @@ export class BrokerService {
       Object.keys(credentials).forEach((k) => {
         (credentials as unknown as Record<string, unknown>)[k] = null;
       });
+      // The refreshed copy (audit point 1) is a distinct object — zeroed too.
+      if (connectCredentials !== credentials) {
+        Object.keys(connectCredentials).forEach((k) => {
+          (connectCredentials as unknown as Record<string, unknown>)[k] = null;
+        });
+      }
     }
 
     return this.findConnectionById(connectionId, userId);
@@ -808,8 +825,15 @@ export class BrokerService {
     adapter.setMode(connection.accountType);
 
     try {
+      // Sprint 56 correction round 1 (audit point 1): the same freshness
+      // gate as connectBroker — periodic health checks keep OAuth
+      // credentials current (refresh + atomic persist before provider use).
+      const healthCredentials = await this.tokenLifecycle.ensureFreshTokens(
+        connection,
+        credentials,
+      );
       // connect() reuses the MetaAPI connection pool — only reconnects if stale
-      await adapter.connect(credentials);
+      await adapter.connect(healthCredentials);
       const balance = await adapter.getAccountBalance();
 
       await this.connectionRepo.update(connectionId, {
