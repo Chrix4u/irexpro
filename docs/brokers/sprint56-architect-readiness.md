@@ -98,9 +98,51 @@ dependency: approved Spotware Open API application credentials
 (CTRADER_CLIENT_ID/SECRET + registered redirect URIs incl. the mobile HTTPS
 callback slots) — an operator/partner action, not a code gap.
 
-**Issue #288 remains open by design** (shared mutable adapter connection
-context — architect-owned; untouched in this round).
+**Issue #288 note:** at round 2 it remained open by design (shared mutable
+adapter connection context — architect-owned). Round 3 (below) closes its
+substance via the #291 connection-scoped factory contract.
 
 cTrader, Pepperstone-via-cTrader and IC-Markets-via-cTrader remain **BETA**
 with `productionLiveVerification = UNVERIFIED`; no fail-closed gate was
 weakened. Production-LIVE eligibility still requires items 1–5 above.
+
+## Correction round 3 (delivered on this branch — post-round-2 integration corrections)
+
+The architect's post-round-2 review identified eight integration corrections
+against the connection-scoped factory/session architecture developed in
+#291/#288; all eight are closed (commits `085d35f` + `31f7b23` after
+`ba10983`):
+
+1. **Connection-scoped mutable adapter contexts** (findings 1 + 2 + 7) — the
+   #291 `BrokerAdapterRegistry` factory/session contract is adopted as the
+   ONE mechanism (no competing singleton/factory): metadata-only roots,
+   per-`BrokerConnection.id` sessions, ephemeral credential-test adapters,
+   alias→canonical resolution sharing the factory/infrastructure (never the
+   adapter object), and all four fail-closed factory protections retained.
+   This closes the SUBSTANCE of issue #288.
+2. **SPOT event correlation** (finding 3) — waiters match
+   `ctidTraderAccountId` + symbolId + complete quote; adversarial
+   two-account same-environment proof.
+3. **Account-session leases** (finding 4) — refcounted ownership per
+   adapter context; disconnecting one connection never removes a session
+   another requires.
+4. **Credential-test lifecycle** (finding 5) — finally-safe disposal on
+   success and partial failures without invalidating persisted connections'
+   sessions.
+5. **Broker alias identity validation** (finding 6) — centralized
+   normalization/matching policy on the discovered `brokerTitleShort`;
+   fail-closed brand/alias mismatch at adapter connect AND OAuth link;
+   generic `ctrader` stays agnostic; no fabricated provider mappings.
+6. **BrokerService races** (finding 8) — provider teardown strictly after
+   the guarded disconnect transition (lost race = zero side effects);
+   suspension release/audit/event only when the guarded transition actually
+   won (unguarded status write removed).
+
+Issue #288's substance (shared mutable adapter connection context) is
+closed by item 1; the issue itself stays with the architect to re-review
+and reconcile with the #291 branch (the contract ported here is byte-level
+#291 semantics with the cTrader factory wired that #291 deferred).
+
+cTrader, Pepperstone-via-cTrader and IC-Markets-via-cTrader remain **BETA**
+with `productionLiveVerification = UNVERIFIED`; no production-LIVE
+fail-closed gate was weakened in any round.

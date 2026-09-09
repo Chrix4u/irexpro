@@ -573,3 +573,99 @@ a production provider callback). Expo SDK55 Android/iOS support is
 unchanged in mechanism (external system browser + `Linking` deep-link
 listener) with a 10-minute await watchdog and clean cancellation feedback;
 Account/Security Center behavior is preserved.
+
+### 14.7 Sprint 56 correction round 3 — post-round-2 integration corrections (connection-scoped adapter factory, alias identity, SPOT correlation, session leases, credential-test disposal, BrokerService races)
+
+The architect's post-round-2 review of PR #290 (with the connection-scoped
+factory/session architecture developed in #291/#288) identified eight
+integration corrections; all eight are closed (commits `085d35f`, `31f7b23`
+on `feat/broker-completion` after `ba10983`). This round closes the SUBSTANCE
+of issue #288 (shared mutable adapter connection context) by adopting the
+#291 contract rather than a competing mechanism. cTrader-family brokers
+remain **BETA / production-LIVE UNVERIFIED** throughout.
+
+**a) Connection-scoped mutable adapter contexts (findings 1 + 2 + 7, issue
+#288 substance).** `BrokerAdapterRegistry` now implements the #291
+factory/session contract: every canonical provider registers a metadata
+root PLUS an isolation factory; `getAdapterForConnection(connectionId,
+brokerId)` hands ONE mutable adapter context per persisted
+`BrokerConnection.id` (concurrent operations on the same connection share
+its session; different connections never share); `createEphemeralAdapter`
+serves pre-persistence credential tests (never cached); aliases
+(`pepperstone-ctrader`, `icmarkets-ctrader`) resolve to the canonical
+provider registration — they share the FACTORY and the lower-level provider
+infrastructure, never a mutable adapter object. Four fail-closed factory
+protections are retained from #291: no factory registered → account
+operations refused; factory returning the root singleton → refused; wrong
+provider output → refused; a factory reusing a previously-created instance
+across independent connections → refused. The cTrader factory receives the
+REQUESTED broker id (alias-aware) while the isolated adapter's `brokerId`
+stays canonical `ctrader` — the requested identity rides as
+`CTraderAdapter.requestedBrokerId` for broker-specific verification. All
+account-operation consumers (BrokerService connect/health/rotate/margin/
+ohlcv/trades, ExecutionOrchestrator dispatch, StateReconciliation, DEMO
+validation) resolve through the session API; the shared `CTraderClientService`
+environment-connection pool stays shared by design (it is stateless with
+respect to adapter context).
+
+**b) SPOT event correlation (finding 3).** A spot waiter in
+`fetchSpotQuote` now requires `payload.ctidTraderAccountId ===
+<requesting account>` AND `symbolId` AND a complete bid/ask quote. A 2131
+event for a DIFFERENT account on the same shared environment connection can
+never satisfy the waiter. Proven adversarially: two accounts, one DEMO
+connection, account B's event delivered first — A's waiter stays pending and
+resolves only on A's own event; wrong-symbol and partial-quote events never
+resolve; two concurrent waiters (one per account, same symbol) each resolve
+only on their own account's event; adapter-level two-context
+`getCurrentPrice` race included.
+
+**c) Account-session lease/refcount lifecycle (finding 4).** The client's
+`ensureAccountSession(env, accountId, token, owner)` acquires a NAMED LEASE
+per adapter context; `removeAccountSession(env, accountId, owner)` releases
+ONE owner's lease — the provider session (token + 2102 authorization) is
+removed only when NO other owner still requires it, and the environment
+connection closes only when its last account session goes away.
+`releaseOwnerSessions(owner)` releases every lease an adapter context holds
+across both environments. Disconnecting one BrokerConnection can therefore
+never remove a provider session still required by another BrokerConnection
+using the same cTrader account/environment; repeated `connect()` calls
+(orchestrator dispatch, health checks) are idempotent lease re-acquisitions.
+Proven deterministically: two adapters/one client share ONE session and ONE
+2102; A disconnects → B stays connected; the last release tears down session
+and transport.
+
+**d) Credential-test lifecycle (finding 5).** `testConnection()` runs its
+full disposal in a `finally` path — every provider session the (ephemeral)
+context established is released on BOTH the success and every partial-failure
+path (2102 succeeded, then discovery/trader fetch failed), and lease
+refcounting guarantees sessions owned by PERSISTED connections sharing the
+same account are never invalidated. `BrokerService.testCredentials` and the
+rotation validation both use ephemeral adapters; rotation releases the
+connection's adapter context only AFTER the new credentials persist.
+
+**e) Broker alias identity validation (finding 6).** A centralized policy
+(`ctrader-broker-identity.ts`) derives the expected identity token from the
+REQUESTED alias id itself (no fabricated provider-title mappings): the
+discovered `brokerTitleShort` (2149) is normalized (case/punctuation/
+whitespace-insensitive containment) and must match the alias — an
+IC-Markets-discovered account fails closed under `pepperstone-ctrader`
+(and vice versa) at BOTH the adapter connect path and the OAuth
+`linkAccount` path; a missing/empty discovered title under a
+broker-specific alias is a mismatch (fail-closed); the generic `ctrader` id
+remains broker-agnostic by design.
+
+**f) BrokerService races (finding 8, from #291).** `disconnectBroker` now
+performs the guarded persisted-state transition BEFORE any irreversible
+provider teardown: a lost race (ConflictException) leaves the provider
+session and adapter context untouched for the concurrent winner — a lost
+race can never strand a CONNECTED persisted state on a torn-down provider
+session; teardown after a WON transition is best-effort (a failure leaves a
+recoverable provider session under a DISCONNECTED state), and the adapter
+context is released after both. Health-check suspension now transitions
+through the guarded write only (the unconditional unguarded status write is
+REMOVED): when the guarded suspension loses a concurrency race there are NO
+observable side effects — the adapter context is not released and no
+SUSPENDED audit/event is emitted (telemetry still records the failure
+count); release/audit/event happen only when the guarded transition actually
+succeeded. Both behaviors are covered by deterministic race specs (shared
+call-order sequences and `affected: 0` mock orchestration).
