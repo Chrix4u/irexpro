@@ -268,7 +268,9 @@ LIVE OANDA connection can be created or enabled — fail closed, by code.
 | **Partner approval (the blocker)** | **REQUIRED before any real-account usage**: an Open API application must be registered at openapi.ctrader.com with a cTrader ID and approved by Spotware (manual email review). Until the operator supplies the approved app's `CTRADER_CLIENT_ID/SECRET`, the adapter is implemented and contract-tested but real-account connect fails closed (`AUTHENTICATION_FAILED`, unconfigured credentials never open a socket). The Playground (own-cTID token) exists for initial testing. Server-side `clientOrderId` dedupe is undocumented — local idempotency + advisory lock stays authoritative. |
 | Adapter status | **BETA** — implemented this sprint (JSON/WS, OAuth2, full trading surface, contract-tested; zero new npm dependencies — Node native WebSocket + fetch); idempotency key propagates to `clientOrderId` + `label` + `comment` |
 | Production-LIVE verification | **UNVERIFIED — externally blocked on partner approval + real credentials** (operator harness: `ctrader.demo-verification.spec.ts`, env-gated) |
-| Test evidence | cTrader suite (message-types, client protocol, adapter mapping, fake-transport, contract suite — 150 tests at Sprint 56 implementation, re-ported to main's interface) incl. host isolation, redaction, error-code mapping, execution-event semantics |
+| Test evidence | cTrader suite (message-types, client protocol, adapter mapping, fake-transport, contract suite — 150 tests at Sprint 56 implementation, re-ported to main's interface) incl. host isolation, redaction, error-code mapping, execution-event semantics; correction round 1 added the adversarial battery (in-flight ceiling, concurrent correlation, duplicate-heartbeat/zombie-timer, pool-isolation, credential-fragment redaction, log-payload secrecy) |
+| Token lifecycle (correction round 1) | Access-token expiry tracked inside the encrypted credential (`additionalParams.accessTokenExpiresAt` + `refreshToken`); `BrokerOAuthTokenLifecycleService` refreshes BEFORE provider use when expired/near-expiry (5-min margin) and persists the new pair ATOMICALLY (one UPDATE: ciphertext+iv+tag+keyId+ROTATED) BEFORE it is used — cTrader invalidates the previous pair on refresh. Rejected refresh → credential INVALID (fail-closed, re-authorization required); transient refresh failures never poison the credential. Wired into `connectBroker` + `healthCheck` (reconnect/health paths always run on the current token). |
+| User OAuth connection flow (correction round 1) | End-to-end flow implemented: `POST /broker/connections/oauth/authorize` (server-side single-use flow, user-bound, 10-min TTL) → external id.ctrader.com consent (external browser/system browser — cTrader password never captured) → redirect to the platform's registered redirect URI (env `CTRADER_REDIRECT_URIS` allowlist: web callback page + optional mobile deep link `irexpro://broker/oauth/callback`) → `complete` (server-side code exchange with the PLATFORM app credentials + account discovery 2149) → `link` (encrypted credential persistence through the canonical createConnection path; LIVE fails closed for UNVERIFIED brokers — OAuth never weakens the production-LIVE gate). Web UI: onboarding broker page OAuth branch + `/onboarding/broker/callback` account picker. Mobile (SDK55): BrokerScreen OAuth branch with deep-link completion. |
 | Remaining blockers | 1) Open API application approval + operator-supplied OAuth app credentials; 2) DEMO verification run with a real user token; 3) LIVE verification evidence before LIVE is selectable |
 
 ### Pepperstone via cTrader (`pepperstone-ctrader`) — **BETA** (universal engine alias)
@@ -293,6 +295,49 @@ clients (verify per-client — flagged). Status: **BETA**, production-LIVE
 **UNVERIFIED**, partner approval required per broker.
 
 ---
+
+## Sprint 56 correction round 1 (architect 10-point audit)
+
+Corrections landed on `feat/broker-completion` after the architect's review
+(local commits only — GitHub suspended at the time; see the worklog):
+
+1. **cTrader OAuth token lifecycle (audit point 1)** — expiry tracking,
+   pre-use refresh, ATOMIC access+refresh pair replacement (cTrader
+   invalidates the previous pair on refresh), reconnect on the refreshed
+   token, fail-closed INVALID on refresh rejection. Adversarial tests prove
+   access/refresh tokens and the client secret never appear in HTTP
+   responses, audit metadata, logs, exception text, or persisted plaintext
+   fields (ciphertext-only at rest).
+2. **Demo/live separation (audit point 2)** — unchanged architecture (5036,
+   demo/live hosts, per-env connections, isLive cross-check); hardened with
+   explicit cross-environment rejection/pool-isolation tests. The iRexPro
+   production-LIVE verification rule is untouched: cTrader, Pepperstone and
+   IC Markets remain BETA/production-LIVE **UNVERIFIED**.
+3. **Heartbeat (audit point 3)** — unchanged (10 s, single timer, cleanup,
+   post-auth start, capped reconnect); hardened with duplicate-timer,
+   zombie-timer, pre-auth and shutdown tests.
+4. **Serialized transport (audit point 4)** — bounded in-flight ceiling
+   (500/connection) with fail-fast retryable rejection; concurrency tests
+   prove clientMsgId correlation and wire ordering; disconnect rejects all
+   pending; reconnect never replays non-idempotent commands.
+5. **Rate limits (audit point 5)** — unchanged (50/5 rps token buckets,
+   fail-closed, no sleep queue); error messages carry no credential material.
+6. **End-to-end user OAuth flow (audit point 6)** — was MISSING (PR #287
+   shipped api+docs only); now implemented across API + web + mobile (see
+   the cTrader record above). No cTrader password is ever captured; the
+   mobile deep link must be operator-registered (server allowlist,
+   fail-closed honest message otherwise).
+7. **Alias truthfulness (audit point 7)** — catalog wording verified: BETA +
+   production-LIVE UNVERIFIED for the whole cTrader family; web/mobile
+   render from the server registry (no client-side "LIVE verified" badges;
+   LIVE is offered only for VERIFIED entries).
+8. **Demo-validation boundary (audit point 8)** — unchanged fail-closed
+   semantics (ownership, DEMO-only, server evidence, FAIL revokes,
+   productionLiveVerification untouched); adversarial redaction tests kept
+   green.
+9. **Paper isolation (audit point 9)** — unchanged (self-contained adapter,
+   LIVE mode rejected, no cross-provider dispatch, constructor-injected
+   feed/clock, dedupe replay); no strategy/model/allocation changes.
 
 ## Ghana / regional regulatory landscape (research summary)
 

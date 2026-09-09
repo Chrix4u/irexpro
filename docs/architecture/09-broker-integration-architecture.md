@@ -411,3 +411,75 @@ provider matrix) and PRODUCTION-LIVE-VERIFIED (operator-attested
 `evidenceRef` + `verifiedAt` in the catalog). **Unit/contract/sandbox tests
 never flip `productionLiveVerification`** — only an operator edit with
 recorded evidence does.
+
+### 14.5 Sprint 56 correction round 1 — OAuth token lifecycle & user OAuth connection flow
+
+The architect's 10-point audit of PR #287 found three code gaps; all three are
+closed (local commits on `feat/broker-completion`):
+
+**a) cTrader OAuth token lifecycle (`BrokerOAuthTokenLifecycleService`).**
+Spotware invalidates the previous `(accessToken, refreshToken)` pair the
+moment a refresh succeeds — a refreshed-but-unpersisted credential set is
+permanently dead. The lifecycle service therefore:
+
+- tracks access-token expiry INSIDE the encrypted credential
+  (`additionalParams.accessTokenExpiresAt`, next to `refreshToken` — never
+  plaintext at rest);
+- refreshes BEFORE provider use when the token is expired, near-expiry
+  (5-minute margin) or of unknown expiry;
+- persists the new pair ATOMICALLY (single `UPDATE`: ciphertext + iv + tag +
+  keyId + `credentialStatus: ROTATED`) BEFORE the new tokens are handed to
+  any consumer;
+- fails closed on refresh rejection (typed `ConflictException` + credential
+  `INVALID` + re-authorization required) and on persistence failure after a
+  successful refresh (the stored pair is dead — `INVALID` is the honest
+  state); transient failures (network/timeout/rate) propagate WITHOUT
+  poisoning the credential;
+- is wired into `BrokerService.connectBroker` and `healthCheck`, so
+  reconnect and health paths always run on the current token (the adapter
+  session map is updated with the refreshed token before use).
+
+**b) Bounded serialized transport (client engine).** The cTrader client
+enforces an explicit in-flight ceiling (`CTRADER_MAX_IN_FLIGHT_REQUESTS =
+500` per connection — the worst legal steady state of 50 req/s general × the
+10 s request timeout): requests beyond the ceiling fail fast with a
+retryable `RATE_LIMITED` error instead of accumulating unbounded pending
+state. Correlation (clientMsgId echo), wire ordering, disconnect rejection
+and no-replay-of-non-idempotent semantics are pinned by the adversarial
+test battery in `ctrader-client.service.spec.ts`.
+
+**c) End-to-end user OAuth connection flow (API + web + mobile).** PR #287
+shipped the adapter without any user-facing OAuth path; it now exists:
+
+```
+user selects cTrader-family broker (web onboarding / mobile SDK55 screen)
+  → POST /broker/connections/oauth/authorize      (server-side single-use
+    flow, user-bound, 10-min TTL, bounded store; returns the official
+    id.ctrader.com consent URL + flowId)
+  → external browser / system browser consent     (cTrader password NEVER
+    captured by iRexPro)
+  → redirect to the platform-registered redirect URI (env
+    CTRADER_REDIRECT_URIS allowlist: web callback page
+    /onboarding/broker/callback and, if operator-registered, the mobile
+    deep link irexpro://broker/oauth/callback)
+  → POST complete {flowId, code}                  (ownership-checked,
+    single-use; code exchanged server-side with the PLATFORM application
+    credentials; cTID accounts discovered via 2149 with isLive flags)
+  → user picks an account
+  → POST link {flowId, ctidTraderAccountId}       (canonical
+    createConnection path: AES-256-GCM-encrypted credentials incl.
+    refreshToken + expiry; accountType derived from the SERVER-reported
+    isLive flag; LIVE fails closed for production-LIVE-UNVERIFIED brokers —
+    OAuth never weakens the Phase H gate; flow consumed single-use)
+  → BrokerConnection created → connect → validate-demo checklist.
+```
+
+cTrader's OAuth supports no `state` parameter — correlation is maintained
+server-side via the single-use flowId (web keeps its copy in sessionStorage
+across the external round trip; mobile keeps it in memory while awaiting the
+deep-link return). Tokens exist in plaintext ONLY: (1) in transit to the
+token endpoint (TLS), (2) in memory between `complete` and `link` (bounded
+TTL), (3) inside the AES-256-GCM ciphertext — never in responses, audit
+metadata, logs or exception text (adversarially tested in
+`broker-oauth.service.spec.ts` and
+`broker-oauth-token-lifecycle.service.spec.ts`).
