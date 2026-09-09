@@ -57,3 +57,50 @@ Production readiness for cTrader-backed providers additionally requires:
 3. operator-run DEMO verification evidence;
 4. provider-specific production-LIVE verification evidence;
 5. exact-head repository CI/security gates on the final candidate.
+
+## Correction round 1 (delivered on this branch)
+
+Round 1 closed the 10-point audit of PR #287 (token lifecycle, bounded
+in-flight transport, end-to-end web/mobile OAuth flow, adversarial test
+batteries, docs). Issue #289's substance (server-owned OAuth onboarding for
+web and mobile) was implemented end-to-end in that round.
+
+## Correction round 2 (delivered on this branch — PR #290 review)
+
+The architect's independent code review of PR #290 found four remaining
+production-readiness gaps; all four are closed:
+
+1. **Real cTrader transport serialization** — production `send()` now uses a
+   bounded single-drain FIFO outbound queue per environment connection
+   (never overlapping writes; deterministic overflow; no silent drops; no
+   replay on reconnect; payloads never logged).
+2. **Replica-safe OAuth authorization state** — the process-local flow Map is
+   now the encrypted `broker.broker_oauth_flows` PostgreSQL store with
+   PENDING/AUTHORIZED/LINKING/CONSUMED CAS transitions, hard TTLs, and
+   cross-instance single-use semantics (authorize on A → complete on B →
+   link on A is proven).
+3. **Concurrent OAuth refresh protection** — per-connection DB-atomic
+   refresh lease + credential-generation CAS across replicas: exactly one
+   provider refresh per stale generation, losers adopt the winner's pair,
+   no false INVALID, stale responses can never overwrite a newer pair.
+4. **Production mobile OAuth callback boundary** — Spotware's authorization
+   code now lands on a REGISTERED HTTPS server callback that exchanges it
+   server-side and hands the app only a one-time, user-bound, 2-minute
+   opaque handoff token via a controlled deep link; the custom scheme never
+   carries the provider code, tokens, or secret.
+
+**Issue #289 acceptance evidence (updated):** the server-owned OAuth
+onboarding is complete for web AND mobile: authorize (web/mobile channels) →
+external consent → server-side code exchange → replica-safe encrypted flow
+store → mobile handoff token boundary → account picker → link (LIVE
+fail-closed for UNVERIFIED brokers everywhere). Remaining external
+dependency: approved Spotware Open API application credentials
+(CTRADER_CLIENT_ID/SECRET + registered redirect URIs incl. the mobile HTTPS
+callback slots) — an operator/partner action, not a code gap.
+
+**Issue #288 remains open by design** (shared mutable adapter connection
+context — architect-owned; untouched in this round).
+
+cTrader, Pepperstone-via-cTrader and IC-Markets-via-cTrader remain **BETA**
+with `productionLiveVerification = UNVERIFIED`; no fail-closed gate was
+weakened. Production-LIVE eligibility still requires items 1–5 above.

@@ -483,3 +483,93 @@ TTL), (3) inside the AES-256-GCM ciphertext — never in responses, audit
 metadata, logs or exception text (adversarially tested in
 `broker-oauth.service.spec.ts` and
 `broker-oauth-token-lifecycle.service.spec.ts`).
+
+### 14.6 Sprint 56 correction round 2 — architect findings on PR #290 (transport serialization, replica-safe OAuth state, concurrent refresh, mobile handoff boundary)
+
+The architect's independent code review of PR #290 identified four remaining
+production-readiness gaps; all four are closed (local commits on
+`feat/broker-completion` after `401b125`). cTrader-family brokers remain
+**BETA / production-LIVE UNVERIFIED** throughout — nothing in this round
+weakens any fail-closed gate.
+
+**a) Real transport serialization (finding 1).** The production
+`NodeWebSocketCtraderTransport.send()` no longer writes to the socket when
+OPEN: every outbound frame passes through ONE bounded FIFO outbox per
+environment connection, drained by a single drain loop (one frame at a
+time — never overlapping writes; a re-entrant `send()` during a drain only
+enqueues). Deterministic backpressure: queue capacity (default 1000) with a
+typed `CtraderTransportSendError('queue-overflow' | 'not-open')`; nothing is
+silently dropped, the client maps send failures to retryable typed errors
+and cleans pending entries immediately, heartbeat frames enqueue strictly
+FIFO (never reorder requests or app-auth-first ordering), socket close and
+intentional `close()` clear the queue (no replay on reconnect), and payloads
+are never logged. Proven by a deterministic 12-test transport suite (exact
+wire order under 300+50 concurrent submissions, single-drain re-entrancy,
+queue ceiling, disconnect-with-queued, heartbeat interleaving, DEMO/LIVE
+outbox independence, log secrecy) plus 3 client failure-mapping tests. An
+injectable `CtraderSocketLike` factory seam keeps the suite network-free.
+
+**b) Replica-safe OAuth authorization state (finding 2).** The flow store
+was a process-local `Map` — unusable with multiple API replicas and lost on
+restart. It is now the `broker.broker_oauth_flows` table (TypeORM +
+PostgreSQL — this platform's shared store; no Redis exists in the stack):
+server-generated opaque flow ids bound to user/broker/redirect URI;
+explicit `PENDING → AUTHORIZED → LINKING → CONSUMED` states with
+conditional-UPDATE (CAS) transitions — single-use `complete`, single-use
+`link` (the transient `LINKING` claim carries a 60-second stale-recovery
+window; a failed link restores `AUTHORIZED` so the DEMO-fallback UX
+survives); hard TTLs (10 min pending, 5 min authorized) enforced fail-closed
+plus lazy sweeps; the `{accessToken, refreshToken}` bundle is AES-256-GCM
+encrypted at rest; no token material in logs, audit metadata, exceptions or
+responses. Cross-instance proof (`broker-oauth.cross-instance.spec.ts`):
+authorize on instance A → complete on instance B → link on instance A; a
+third instance continues a flow after "restart"; concurrent duplicate
+completion/link allows exactly ONE consumer; cross-user lookups behave as
+not-found.
+
+**c) Concurrent OAuth refresh protection (finding 3).** Spotware rotates
+BOTH tokens on refresh and invalidates the previous pair — two concurrent
+refreshes of one credential generation permanently kill it.
+`BrokerOAuthTokenLifecycleService` now serializes refreshes per
+`BrokerConnection` ACROSS REPLICAS: a DB-atomic conditional-UPDATE refresh
+LEASE (`credential_refresh_lease_expires_at`, 30 s, self-expiring so a hung
+winner never stalls the connection) lets exactly ONE replica call the
+provider per stale `credential_generation`; losers bounded-wait and ADOPT
+the winner's persisted pair (no provider call, no write, no audit, and
+never a false INVALID merely because another request rotated successfully);
+persistence is a generation CAS (`credential_generation = observed + 1
+WHERE generation = observed`) so a stale refresh response can never
+overwrite a newer pair (it adopts it); genuinely rejected CURRENT
+credentials still fail closed to INVALID; transient errors never poison;
+exactly one rotation audit event per generation. Proven by a 6-test
+concurrency suite: 20 simultaneous `ensureFreshTokens()` calls → provider
+refresh count EXACTLY 1, all callers receive the same new generation, the
+stored credential stays ROTATED, no false INVALID, cross-instance refresh,
+stale-CAS never overwrites; plus a PG-integration spec for CI.
+
+**d) Production mobile OAuth callback boundary (finding 4).** The mobile
+app no longer receives Spotware's authorization code through the
+`irexpro://` custom scheme. Production flow: cTrader → the REGISTERED HTTPS
+iRexPro server callback (`GET /broker/connections/oauth/callback[/:slot]`,
+public, 302-to-deep-link with a minimal no-data HTML body) → the server
+immediately consumes/exchanges the provider code and maintains the flow
+correlation → the server issues a short-lived opaque ONE-TIME handoff token
+(32 random bytes; only its SHA-256 digest and a 120 s TTL are stored;
+user-bound; replay/expired/cross-user all fail closed) → a controlled
+deep-link handoff (`irexpro://broker/oauth/handoff?token=…` — custom-scheme
+interception yields nothing reusable) opens the app → the app POSTs the
+handoff token to `/broker/connections/oauth/handoff` (authenticated,
+single-use) → the account-selection flow continues exactly as before.
+Because cTrader's OAuth has no `state` parameter and redirect URIs must be
+exactly registered, mobile-flow correlation uses operator-registered
+callback SLOTS (`CTRADER_MOBILE_CALLBACK_URIS`, e.g.
+`…/callback/m1 … /mN`): `authorize` with `channel: 'mobile'` claims a free
+slot, and the callback resolves the flow by the arriving request path —
+exactly-one-PENDING-flow-per-slot is enforced, ambiguity fails closed hard
+(no cross-user completion is ever possible). Web OAuth continues unchanged
+through its registered HTTPS callback page; the client-supplied redirect
+URI for the web channel must now be HTTPS (custom schemes are rejected as
+a production provider callback). Expo SDK55 Android/iOS support is
+unchanged in mechanism (external system browser + `Linking` deep-link
+listener) with a 10-minute await watchdog and clean cancellation feedback;
+Account/Security Center behavior is preserved.
