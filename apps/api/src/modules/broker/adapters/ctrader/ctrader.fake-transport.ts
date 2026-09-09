@@ -23,9 +23,16 @@
  * - The account-discovery default derives `isLive` from the URL the transport
  *   actually connected to (demo host → demo account, live host → live
  *   account), so DEMO/LIVE routing works without per-mode scripting.
+ * - Task 48-a additive send-failure hook: `failNextSends`/`sendFailure` make
+ *   the next N send() calls throw the typed transport send error (determines
+ *   the client's send-failure surface); default behavior is unchanged.
  */
 import { CtraderMessageEnvelope, CTRADER_PAYLOAD_TYPE } from './ctrader-message-types';
-import { CtraderTransport } from './ctrader-transport';
+import {
+  CtraderSendRejectionReason,
+  CtraderTransport,
+  CtraderTransportSendError,
+} from './ctrader-transport';
 
 export type ScriptedHandler = (
   payload: Record<string, unknown>,
@@ -44,6 +51,15 @@ export class FakeCtraderTransport implements CtraderTransport {
   connectedUrl: string | undefined;
   /** Scripted connect outcome — 'fail' makes connect() reject (reconnect tests). */
   connectBehavior: 'ok' | 'fail' = 'ok';
+  /**
+   * Task 48-a additive failure hook: the next N send() calls throw a
+   * CtraderTransportSendError carrying `sendFailure` — the message is NOT
+   * recorded and the scripted server is NOT consulted (deterministic client
+   * send-failure surface). 0 (default) keeps the healthy behavior unchanged.
+   */
+  failNextSends = 0;
+  /** Rejection reason carried by the injected send failures. */
+  sendFailure: CtraderSendRejectionReason = 'queue-overflow';
   private openState = false;
   private messageHandler: ((raw: unknown) => void) | null = null;
   private closeHandler: ((code: number | undefined, reason: string) => void) | null = null;
@@ -69,6 +85,13 @@ export class FakeCtraderTransport implements CtraderTransport {
   }
 
   send(message: CtraderMessageEnvelope): void {
+    if (this.failNextSends > 0) {
+      this.failNextSends -= 1;
+      throw new CtraderTransportSendError(
+        this.sendFailure,
+        'scripted cTrader fake-transport send failure',
+      );
+    }
     this.sentMessages.push(message);
     this.recorder?.(message, this.connectedUrl);
     const responses = this.server.handle(message);

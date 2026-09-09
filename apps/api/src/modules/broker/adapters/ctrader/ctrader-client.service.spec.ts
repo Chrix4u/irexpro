@@ -728,4 +728,95 @@ describe('CTraderClientService', () => {
       expect(all).not.toContain('ctidTraderAccountId');
     });
   });
+
+  // ─── Task 48-a: transport send-failure handling (outbound serialization) ──
+
+  describe('transport send failures (Task 48-a — bounded outbound serialization)', () => {
+    it("rejects IMMEDIATELY with retryable RATE_LIMITED when the transport send throws 'queue-overflow'", async () => {
+      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+      const transport = client.createdTransports[0];
+      transport.failNextSends = 1;
+      transport.sendFailure = 'queue-overflow';
+
+      const startedAt = Date.now();
+      const err = await client
+        .request('DEMO', CTRADER_PAYLOAD_TYPE.TRADER_REQ, { ctidTraderAccountId: 1234567 })
+        .catch((e: unknown) => e);
+      // Immediate — a leaked pending entry would instead hang for the 10 s
+      // request timeout (and the suite would slow down / leave open handles).
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
+      expect(err).toBeInstanceOf(BrokerAdapterError);
+      expect(err).toMatchObject({
+        code: BrokerErrorCode.RATE_LIMITED,
+        isRetryable: true,
+        message: expect.stringContaining('outbound queue is at capacity'),
+      });
+      // Sanitized: no payload data rides the error.
+      expect((err as BrokerAdapterError).message).not.toContain('ctidTraderAccountId');
+      // Nothing was written for the rejected request (send failed up front).
+      expect(
+        transport.sentMessages.filter((m) => m.payloadType === CTRADER_PAYLOAD_TYPE.TRADER_REQ),
+      ).toHaveLength(0);
+    });
+
+    it("rejects with retryable CONNECTION_LOST when the transport send throws 'not-open'", async () => {
+      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+      const transport = client.createdTransports[0];
+      transport.failNextSends = 1;
+      transport.sendFailure = 'not-open';
+
+      await expect(
+        client.request('DEMO', CTRADER_PAYLOAD_TYPE.TRADER_REQ, { ctidTraderAccountId: 1234567 }),
+      ).rejects.toMatchObject({
+        code: BrokerErrorCode.CONNECTION_LOST,
+        isRetryable: true,
+        message: expect.stringContaining('connection is not open'),
+      });
+    });
+
+    it('survives a heartbeat send failure: sanitized warn, interval continues, requests recover', async () => {
+      jest.useFakeTimers();
+      await client.ensureAccountSession('DEMO', ACCOUNT_ID, ACCESS_TOKEN);
+      const transport = client.createdTransports[0];
+      const logged: string[] = [];
+      const logger = (client as unknown as { logger: Record<string, jest.Mock> }).logger;
+      const warnSpy = jest
+        .spyOn(logger, 'warn')
+        .mockImplementation((m: unknown) => void logged.push(String(m)));
+
+      try {
+        // The next transport send fails (the first heartbeat tick) — the
+        // interval callback must catch it: ONE sanitized warn, no unhandled
+        // rejection, no crash, and the interval keeps running.
+        transport.failNextSends = 1;
+        transport.sendFailure = 'queue-overflow';
+        await jest.advanceTimersByTimeAsync(10_000);
+        expect(
+          transport.sentMessages.filter(
+            (m) => m.payloadType === CTRADER_PAYLOAD_TYPE.HEARTBEAT_EVENT,
+          ),
+        ).toHaveLength(0);
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        expect(logged[0]).toContain('heartbeat enqueue failed');
+        expect(logged[0]).toContain('queue-overflow');
+        expect(logged[0]).toContain('DEMO');
+        expect(logged[0]).not.toContain('payload'); // sanitized — reason class only
+
+        // The beat is skipped, not the interval: the NEXT tick succeeds.
+        await jest.advanceTimersByTimeAsync(10_000);
+        expect(
+          transport.sentMessages.filter(
+            (m) => m.payloadType === CTRADER_PAYLOAD_TYPE.HEARTBEAT_EVENT,
+          ),
+        ).toHaveLength(1);
+      } finally {
+        warnSpy.mockRestore();
+      }
+
+      // Send has recovered — a subsequent request resolves normally.
+      await expect(
+        client.request('DEMO', CTRADER_PAYLOAD_TYPE.TRADER_REQ, { ctidTraderAccountId: 1234567 }),
+      ).resolves.toMatchObject({ payloadType: CTRADER_PAYLOAD_TYPE.TRADER_RES });
+    });
+  });
 });

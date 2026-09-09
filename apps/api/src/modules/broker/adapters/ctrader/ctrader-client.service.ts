@@ -42,7 +42,11 @@ import {
   mapCtraderError,
   parseCtraderId,
 } from './ctrader-message-types';
-import { CtraderTransport, NodeWebSocketCtraderTransport } from './ctrader-transport';
+import {
+  CtraderTransport,
+  CtraderTransportSendError,
+  NodeWebSocketCtraderTransport,
+} from './ctrader-transport';
 import {
   buildCtraderAuthorizationUrl,
   buildCtraderTokenRequestUrl,
@@ -536,11 +540,22 @@ export class CTraderClientService implements OnModuleDestroy {
   private startHeartbeat(conn: EnvironmentConnection): void {
     this.stopHeartbeat(conn);
     conn.heartbeatTimer = setInterval(() => {
-      // Heartbeat is an event, not a request: it bypasses the rate limiter.
-      conn.transport.send({
-        payloadType: CTRADER_PAYLOAD_TYPE.HEARTBEAT_EVENT,
-        payload: {},
-      });
+      // Heartbeat is an event, not a request: it bypasses the rate limiter,
+      // but it enqueues on the transport's bounded outbound queue EXACTLY
+      // like any other frame (FIFO — it never jumps the queue and can never
+      // reorder app-auth or in-flight requests). A deterministic send
+      // failure (queue-overflow / not-open) must never crash the interval:
+      // ONE sanitized warn (reason class only — no payload content), the
+      // beat is skipped, and the interval keeps running.
+      try {
+        conn.transport.send({
+          payloadType: CTRADER_PAYLOAD_TYPE.HEARTBEAT_EVENT,
+          payload: {},
+        });
+      } catch (error) {
+        const reason = error instanceof CtraderTransportSendError ? error.reason : 'send-failure';
+        this.logger.warn(`cTrader ${conn.env} heartbeat enqueue failed (${reason}) — skipped`);
+      }
     }, HEARTBEAT_INTERVAL_MS);
   }
 
@@ -632,7 +647,39 @@ export class CTraderClientService implements OnModuleDestroy {
         );
       }, REQUEST_TIMEOUT_MS);
       conn.pending.set(clientMsgId, { resolve, reject, timer, requestPayloadType: payloadType });
-      conn.transport.send({ clientMsgId, payloadType, payload });
+      try {
+        conn.transport.send({ clientMsgId, payloadType, payload });
+      } catch (error) {
+        // Deterministic outbound failure (Task 48-a): clean up the pending
+        // entry + timer FIRST (no leaks, no orphan timeout), then reject with
+        // a typed, sanitized, retryable error. Never any payload data in the
+        // message.
+        conn.pending.delete(clientMsgId);
+        clearTimeout(timer);
+        if (!(error instanceof CtraderTransportSendError)) {
+          // Unexpected throw — surface it unchanged (still rejects the promise).
+          throw error;
+        }
+        if (error.reason === 'queue-overflow') {
+          reject(
+            new BrokerAdapterError(
+              BrokerErrorCode.RATE_LIMITED,
+              `cTrader ${conn.env} outbound queue is at capacity — retry when in-flight writes settle.`,
+              undefined,
+              true,
+            ),
+          );
+        } else {
+          reject(
+            new BrokerAdapterError(
+              BrokerErrorCode.CONNECTION_LOST,
+              `cTrader ${conn.env} connection is not open.`,
+              undefined,
+              true,
+            ),
+          );
+        }
+      }
     });
   }
 
