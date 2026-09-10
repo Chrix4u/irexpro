@@ -31,7 +31,10 @@ import { CtraderMessageEnvelope, CTRADER_PAYLOAD_TYPE } from './ctrader-message-
 import {
   CtraderSendRejectionReason,
   CtraderTransport,
+  CtraderTransportCloseHandler,
   CtraderTransportSendError,
+  CtraderTransportWriteFailure,
+  CtraderTransportWriteFailureHandler,
 } from './ctrader-transport';
 
 export type ScriptedHandler = (
@@ -60,15 +63,30 @@ export class FakeCtraderTransport implements CtraderTransport {
   failNextSends = 0;
   /** Rejection reason carried by the injected send failures. */
   sendFailure: CtraderSendRejectionReason = 'queue-overflow';
+  /**
+   * Correction round 4 (finding 3): when set, the NEXT send() reports a
+   * synchronous mid-write failure via onWriteFailure instead of throwing —
+   * the scripted equivalent of socket.send() throwing mid-drain. The
+   * message is recorded as ATTEMPTED but never answered; unwritten queue
+   * contents are reported as never-written.
+   */
+  failNextWriteAttempt = false;
+  /** Generation counter (increments per connect — mirrors production fencing). */
+  private generation = 0;
   private openState = false;
   private messageHandler: ((raw: unknown) => void) | null = null;
-  private closeHandler: ((code: number | undefined, reason: string) => void) | null = null;
+  private closeHandler: CtraderTransportCloseHandler | null = null;
+  private writeFailureHandler: CtraderTransportWriteFailureHandler | null = null;
   private readonly server: ScriptedCtraderServer;
   private readonly recorder: CtraderSendRecorder | undefined;
 
   constructor(server: ScriptedCtraderServer, recorder?: CtraderSendRecorder) {
     this.server = server;
     this.recorder = recorder;
+  }
+
+  get transportGeneration(): number {
+    return this.generation;
   }
 
   connect(url: string): Promise<void> {
@@ -81,10 +99,23 @@ export class FakeCtraderTransport implements CtraderTransport {
       return Promise.reject(new Error('scripted connect failure'));
     }
     this.openState = true;
+    this.generation += 1;
     return Promise.resolve();
   }
 
   send(message: CtraderMessageEnvelope): void {
+    if (this.failNextWriteAttempt) {
+      this.failNextWriteAttempt = false;
+      this.openState = false; // the generation is unhealthy from here on
+      const failure: CtraderTransportWriteFailure = {
+        failedWriteClientMsgId: message.clientMsgId ?? null,
+        neverWrittenClientMsgIds: [],
+      };
+      if (this.writeFailureHandler) {
+        this.writeFailureHandler(failure);
+      }
+      return;
+    }
     if (this.failNextSends > 0) {
       this.failNextSends -= 1;
       throw new CtraderTransportSendError(
@@ -113,8 +144,12 @@ export class FakeCtraderTransport implements CtraderTransport {
     this.messageHandler = handler;
   }
 
-  onClose(handler: (code: number | undefined, reason: string) => void): void {
+  onClose(handler: CtraderTransportCloseHandler): void {
     this.closeHandler = handler;
+  }
+
+  onWriteFailure(handler: CtraderTransportWriteFailureHandler): void {
+    this.writeFailureHandler = handler;
   }
 
   close(): void {
@@ -129,7 +164,7 @@ export class FakeCtraderTransport implements CtraderTransport {
   simulateClose(code = 1000): void {
     this.openState = false;
     if (this.closeHandler) {
-      this.closeHandler(code, 'simulated close');
+      this.closeHandler(code, 'simulated close', []);
     }
   }
 

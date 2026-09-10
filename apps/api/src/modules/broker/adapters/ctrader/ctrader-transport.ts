@@ -1,38 +1,46 @@
 /**
  * cTrader Open API transport (Sprint 56 / Task 47-C2; Task 48-a outbound
- * serialization).
+ * serialization; Sprint 56 correction round 4, architect findings 3 + 4:
+ * outbound write certainty + transport generation fencing).
  *
  * JSON-over-WebSocket (wss://host:5036). Uses Node's NATIVE WebSocket global
  * (Node ≥ 22; sandbox verified on v24.19.0) — ZERO new npm dependencies.
  *
- * OUTBOUND SERIALIZATION (Task 48-a — architect finding 1: production send()
- * previously invoked WebSocket.send() directly whenever OPEN, so concurrent
- * submissions could interleave writes and CONNECTING was the only queued
- * state). Now:
- * - ONE ordered outbound queue per connection; send() enqueues and a
- *   SINGLE-drain loop writes ONE frame at a time (shift → send, strictly
- *   FIFO) — transport writes never overlap, even under synchronous bursts
- *   or re-entrant sends (a send during an active drain only enqueues; the
- *   active loop picks it up).
- * - Heartbeat frames enqueue exactly like any other message — they never
- *   jump the queue, so request ordering (incl. app-auth-first) is preserved.
- * - The queue is BOUNDED (queueCapacity, default 1000). Deterministic
- *   overflow fails synchronously with CtraderTransportSendError
- *   ('queue-overflow') — the rejected message is NOT enqueued, the queue
- *   stays intact, and NOTHING is ever silently dropped.
- * - Sending on a closed/closing/intentionally-closed transport throws
- *   CtraderTransportSendError('not-open') — never a silent drop.
- * - Frames queued while CONNECTING flush on 'open' in submission order.
- * - Unintentional disconnect and intentional close() CLEAR the queue:
- *   unwritten messages are NEVER replayed (reconnects use a NEW transport
- *   instance; connect() resets the intentional-close state).
+ * OUTBOUND SERIALIZATION (Task 48-a): ONE ordered bounded queue per
+ * connection; a SINGLE-drain loop writes ONE frame at a time (strict FIFO);
+ * heartbeates enqueue like any other frame; deterministic overflow fails
+ * synchronously with CtraderTransportSendError('queue-overflow').
  *
- * Inbound behavior is unchanged: JSON.parse on the way in; malformed frames
- * are dropped (never logged with content) — a malformed frame must never
- * crash the message pump and must never leak payload text into logs.
- * The transport never interprets payload semantics: request↔response
- * matching, auth, heartbeat and rate limiting all live in
- * ctrader-client.service.ts.
+ * WRITE-CERTAINTY MODEL (correction round 4, finding 3 — an accepted frame
+ * may never disappear silently while its request waits for a timeout):
+ * - NOT_WRITTEN: deterministic — queue-overflow (never enqueued),
+ *   not-open (socket closed/closing/intentional close BEFORE write), and
+ *   every frame still QUEUED when a write failure or close clears the
+ *   outbox. These are safe to retry as new operations.
+ * - WRITE_ATTEMPTED_OUTCOME_UNKNOWN: the single frame whose synchronous
+ *   socket.send() threw mid-drain. The frame is SHIFTED OUT of the queue and
+ *   NEVER replayed — unless the transport API gives deterministic proof the
+ *   frame was not accepted (the WHATWG WebSocket API does not), the request
+ *   must be treated as possibly-on-the-wire.
+ * - WRITTEN_AWAITING_RESPONSE: socket.send() returned normally; the response
+ *   matching (clientMsgId echo) lives in ctrader-client.service.ts.
+ *
+ * On a synchronous write failure the transport:
+ * - notifies the client IMMEDIATELY via onWriteFailure (never lets pending
+ *   requests starve until the 10 s request timeout);
+ * - marks THIS transport generation unhealthy (send() now fails
+ *   'not-open'; the client reconnects with a NEW transport generation);
+ * - clears the unwritten queue, reporting the never-written clientMsgIds so
+ *   the client can fail those requests DEFINITELY_NOT_SENT;
+ * - never replays the uncertain frame and never logs frame contents/tokens.
+ *
+ * SOCKET-IDENTITY FENCING (correction round 4, finding 4): every event
+ * listener installed by connect() captures the socket it was installed FOR;
+ * events from a socket that is no longer `this.socket` (replaced by a fresh
+ * connect(), disposed after a timeout, or a zombie after write-failure) are
+ * IGNORED — a stale socket can never clear state, satisfy pending requests,
+ * or fire the close path of a newer generation. The CLIENT additionally
+ * fences by monotonic transport generation (see attachTransport).
  *
  * SECURITY: message payloads are NEVER logged (they can carry tokens).
  */
@@ -41,7 +49,30 @@ import { CtraderMessageEnvelope } from './ctrader-message-types';
 
 /** Transport-level callback shapes (kept primitive — no DOM types in the interface). */
 export type CtraderTransportMessageHandler = (rawMessage: unknown) => void;
-export type CtraderTransportCloseHandler = (closeCode: number | undefined, reason: string) => void;
+export type CtraderTransportCloseHandler = (
+  closeCode: number | undefined,
+  reason: string,
+  /** clientMsgIds of frames still queued (NEVER written) when the socket closed. */
+  neverWrittenClientMsgIds: readonly string[],
+) => void;
+
+/**
+ * Outbound write-certainty classification for a failed transport generation
+ * (correction round 4, finding 3). Reported ONCE per generation when a
+ * synchronous socket write fails.
+ */
+export interface CtraderTransportWriteFailure {
+  /** The frame whose synchronous write attempt failed — outcome UNKNOWN. */
+  readonly failedWriteClientMsgId: string | null;
+  /**
+   * clientMsgIds of frames still queued and NEVER written (deterministic
+   * NOT_WRITTEN — their requests may be safely retried as new operations).
+   */
+  readonly neverWrittenClientMsgIds: readonly string[];
+}
+
+/** Write-failure notification handler (installed via onWriteFailure). */
+export type CtraderTransportWriteFailureHandler = (failure: CtraderTransportWriteFailure) => void;
 
 /**
  * Injectable seam over any WebSocket-like socket (production: Node's native
@@ -64,9 +95,10 @@ export type CtraderSendRejectionReason = 'queue-overflow' | 'not-open';
 /**
  * Thrown SYNCHRONOUSLY by send() on deterministic outbound failures:
  * 'queue-overflow' (bounded backpressure — the message was not enqueued) or
- * 'not-open' (no socket / CLOSING / CLOSED / intentional close). Callers
- * must handle it (ctrader-client.service.ts maps it to retryable
- * BrokerAdapterErrors).
+ * 'not-open' (no socket / CLOSING / CLOSED / intentional close / unhealthy
+ * transport generation). Both are DEFINITELY_NOT_SENT: the frame never
+ * reached the wire. Callers must handle it (ctrader-client.service.ts maps
+ * it to retryable BrokerAdapterErrors carrying dispatch certainty).
  */
 export class CtraderTransportSendError extends Error {
   readonly reason: CtraderSendRejectionReason;
@@ -110,6 +142,14 @@ export interface NodeWebSocketCtraderTransportOptions {
 export interface CtraderTransport {
   /** URL of the last successful connect() call (undefined when never connected). */
   readonly connectedUrl: string | undefined;
+  /**
+   * Monotonic transport-generation counter — increments on every
+   * connect() (a new socket identity). Event callbacks installed for one
+   * generation only ever observe their own generation's socket (internal
+   * fencing); the CLIENT additionally fences cross-transport by capturing the
+   * generation at attachTransport() time (correction round 4, finding 4).
+   */
+  readonly transportGeneration: number;
   /** Opens the WebSocket connection; rejects on failure/timeout. */
   connect(url: string): Promise<void>;
   /**
@@ -122,11 +162,21 @@ export interface CtraderTransport {
   send(message: CtraderMessageEnvelope): void;
   /** Registers the inbound-message callback (single handler per transport). */
   onMessage(handler: CtraderTransportMessageHandler): void;
-  /** Registers the connection-lost callback (single handler per transport). */
+  /**
+   * Registers the connection-lost callback (single handler per transport).
+   * The handler receives the never-written clientMsgIds that were cleared
+   * with the queue (deterministic NOT_WRITTEN classification).
+   */
   onClose(handler: CtraderTransportCloseHandler): void;
+  /**
+   * Registers the outbound-write-failure callback (single handler per
+   * transport): fired ONCE, immediately, when a synchronous socket write
+   * fails mid-drain. The generation is unhealthy from that point on.
+   */
+  onWriteFailure(handler: CtraderTransportWriteFailureHandler): void;
   /** Closes the connection (intentional — the CALLER tracks intent). */
   close(): void;
-  /** True while the socket is open. */
+  /** True while the socket is open AND the generation is healthy. */
   isOpen(): boolean;
 }
 
@@ -148,8 +198,16 @@ export class NodeWebSocketCtraderTransport implements CtraderTransport {
   private draining = false;
   /** Set by intentional close(); reset by connect(). */
   private intentionallyClosed = false;
+  /**
+   * Set when a synchronous outbound write failed (finding 3): the transport
+   * generation is unhealthy — send() fails 'not-open' until a fresh connect().
+   */
+  private writeFailureDetected = false;
+  /** Monotonic fencing counter — one increment per connect() (new socket). */
+  private generation = 0;
   private messageHandler: CtraderTransportMessageHandler | null = null;
   private closeHandler: CtraderTransportCloseHandler | null = null;
+  private writeFailureHandler: CtraderTransportWriteFailureHandler | null = null;
   private _connectedUrl: string | undefined;
 
   constructor(options: NodeWebSocketCtraderTransportOptions = {}) {
@@ -162,13 +220,26 @@ export class NodeWebSocketCtraderTransport implements CtraderTransport {
     return this._connectedUrl;
   }
 
+  get transportGeneration(): number {
+    return this.generation;
+  }
+
   connect(url: string): Promise<void> {
-    if (!this.intentionallyClosed && this.socket && this.socket.readyState === SOCKET_OPEN) {
+    if (
+      !this.intentionallyClosed &&
+      !this.writeFailureDetected &&
+      this.socket &&
+      this.socket.readyState === SOCKET_OPEN
+    ) {
       return Promise.resolve();
     }
-    // A fresh connect resets the intentional-close state (and any stale queue).
+    // A fresh connect resets the intentional-close and write-failure state
+    // (and any stale queue) — each connect() is a NEW socket generation.
     this.intentionallyClosed = false;
+    this.writeFailureDetected = false;
     this.disposeSocket();
+    this.generation += 1;
+    const generation = this.generation;
     return new Promise<void>((resolve, reject) => {
       let settled = false;
       const socket = this.socketFactory(url);
@@ -189,6 +260,11 @@ export class NodeWebSocketCtraderTransport implements CtraderTransport {
       }, this.connectTimeoutMs);
 
       socket.addEventListener('open', () => {
+        // SOCKET-IDENTITY FENCE (finding 4): a late 'open' from a socket that
+        // is no longer current (timeout disposal / replacement) is ignored.
+        if (this.socket !== socket || this.generation !== generation) {
+          return;
+        }
         clearTimeout(connectTimer);
         // Queued frames flush on open — FIFO, single-drain, in submission order.
         this.drain();
@@ -198,6 +274,9 @@ export class NodeWebSocketCtraderTransport implements CtraderTransport {
         }
       });
       socket.addEventListener('error', () => {
+        if (this.socket !== socket || this.generation !== generation) {
+          return; // stale socket event — never affects the current generation
+        }
         if (!settled) {
           settled = true;
           clearTimeout(connectTimer);
@@ -209,20 +288,32 @@ export class NodeWebSocketCtraderTransport implements CtraderTransport {
       });
       socket.addEventListener('close', (event: unknown) => {
         clearTimeout(connectTimer);
+        // SOCKET-IDENTITY FENCE (finding 4): events from a replaced/disposed
+        // socket never clear the queue or fire the close path of a newer
+        // generation.
+        if (this.socket !== socket || this.generation !== generation) {
+          return;
+        }
         if (!settled) {
           settled = true;
           reject(new Error('cTrader WebSocket closed before open'));
         }
         // Unwritten queued messages are NEVER replayed on a later socket —
-        // reconnects use a NEW transport instance; this queue is cleared.
-        this.outbox.length = 0;
+        // reconnects use a NEW transport instance; this queue is cleared and
+        // the never-written ids are REPORTED so the client can fail those
+        // requests DEFINITELY_NOT_SENT (finding 3 certainty contract).
+        const neverWritten = this.clearOutbox();
         const closeEvent = event as { code?: number; reason?: unknown };
         this.notifyClosed(
           typeof closeEvent.code === 'number' ? closeEvent.code : undefined,
           typeof closeEvent.reason === 'string' ? closeEvent.reason : '',
+          neverWritten,
         );
       });
       socket.addEventListener('message', (event: unknown) => {
+        if (this.socket !== socket || this.generation !== generation) {
+          return; // stale socket event — never satisfies a newer generation
+        }
         this.handleRawFrame((event as { data?: unknown }).data);
       });
     });
@@ -231,11 +322,13 @@ export class NodeWebSocketCtraderTransport implements CtraderTransport {
   send(message: CtraderMessageEnvelope): void {
     if (
       this.intentionallyClosed ||
+      this.writeFailureDetected ||
       this.socket === null ||
       this.socket.readyState === SOCKET_CLOSING ||
       this.socket.readyState === SOCKET_CLOSED
     ) {
-      // NEVER a silent drop: the caller learns the connection is gone.
+      // NEVER a silent drop: the caller learns the generation is gone. The
+      // frame was NEVER written — deterministic NOT_WRITTEN.
       throw new CtraderTransportSendError(
         'not-open',
         'cTrader transport is not open — the message was not sent.',
@@ -244,7 +337,7 @@ export class NodeWebSocketCtraderTransport implements CtraderTransport {
     if (this.outbox.length >= this.queueCapacity) {
       // Deterministic backpressure: reject BEFORE enqueueing — the rejected
       // message is never enqueued and the queue stays intact (FIFO of
-      // everything already accepted is preserved).
+      // everything already accepted is preserved). NOT_WRITTEN.
       throw new CtraderTransportSendError(
         'queue-overflow',
         `cTrader outbound queue is at capacity (${this.queueCapacity}) — the message was not enqueued.`,
@@ -262,10 +355,16 @@ export class NodeWebSocketCtraderTransport implements CtraderTransport {
     this.closeHandler = handler;
   }
 
+  onWriteFailure(handler: CtraderTransportWriteFailureHandler): void {
+    this.writeFailureHandler = handler;
+  }
+
   close(): void {
     if (!this.socket) return;
     this.intentionallyClosed = true;
     // Queued-but-unwritten frames are dropped — never replayed after close.
+    // (Intentional close: the CLIENT already failed these pending requests
+    // through closeEnvironmentConnection — no notification needed here.)
     this.outbox.length = 0;
     try {
       this.socket.close(1000, 'client-initiated close');
@@ -276,7 +375,10 @@ export class NodeWebSocketCtraderTransport implements CtraderTransport {
 
   isOpen(): boolean {
     return (
-      !this.intentionallyClosed && this.socket !== null && this.socket.readyState === SOCKET_OPEN
+      !this.intentionallyClosed &&
+      !this.writeFailureDetected &&
+      this.socket !== null &&
+      this.socket.readyState === SOCKET_OPEN
     );
   }
 
@@ -289,6 +391,12 @@ export class NodeWebSocketCtraderTransport implements CtraderTransport {
    * wire order is always the submission order. One frame at a time
    * (shift → send), strictly FIFO. CONNECTING sockets leave the queue
    * untouched (the 'open' listener drains).
+   *
+   * WRITE-CERTAINTY (finding 3): a frame is shifted out BEFORE the write
+   * attempt. If socket.send() throws synchronously, that frame's outcome is
+   * UNKNOWN (WRITE_ATTEMPTED_OUTCOME_UNKNOWN) — it is never re-queued, never
+   * replayed; the remaining queue is cleared (NOT_WRITTEN, reported); the
+   * generation is marked unhealthy; and the client is notified IMMEDIATELY.
    */
   private drain(): void {
     if (this.draining) {
@@ -298,6 +406,7 @@ export class NodeWebSocketCtraderTransport implements CtraderTransport {
     try {
       while (
         !this.intentionallyClosed &&
+        !this.writeFailureDetected &&
         this.socket !== null &&
         this.socket.readyState === SOCKET_OPEN &&
         this.outbox.length > 0
@@ -305,17 +414,68 @@ export class NodeWebSocketCtraderTransport implements CtraderTransport {
         const message = this.outbox.shift()!;
         try {
           this.socket.send(JSON.stringify(message));
+          // WRITTEN_AWAITING_RESPONSE — the clientMsgId echo matching lives
+          // in the client service.
         } catch {
-          // Unexpected socket write failure: pause the drain (the remaining
-          // messages stay queued; the close path clears them safely).
-          // Never log the frame content — payload secrecy.
-          this.logger.warn('cTrader transport outbound write failed — drain paused');
+          // SYNCHRONOUS WRITE FAILURE (finding 3): the shifted frame's
+          // outcome is UNKNOWN. Never log the frame content — payload
+          // secrecy. Never replay. Fail the generation immediately.
+          this.handleOutboundWriteFailure(message);
           return;
         }
       }
     } finally {
       this.draining = false;
     }
+  }
+
+  /**
+   * Terminal write-failure handling (finding 3): mark the generation
+   * unhealthy, clear + report the unwritten queue, close the broken socket
+   * best-effort, and notify the client ONCE — pending requests must NEVER
+   * starve until the request timeout.
+   */
+  private handleOutboundWriteFailure(failedMessage: CtraderMessageEnvelope): void {
+    this.writeFailureDetected = true;
+    const neverWritten = this.clearOutbox();
+    const failure: CtraderTransportWriteFailure = {
+      failedWriteClientMsgId: failedMessage.clientMsgId ?? null,
+      neverWrittenClientMsgIds: neverWritten,
+    };
+    const socket = this.socket;
+    this.socket = null; // the generation is dead — no further writes/events
+    try {
+      socket?.close();
+    } catch {
+      /* best-effort */
+    }
+    this.logger.warn(
+      'cTrader transport outbound write failed — transport generation marked ' +
+        'unhealthy (uncertain frame not replayed; unwritten queue cleared and reported)',
+    );
+    if (this.writeFailureHandler) {
+      try {
+        this.writeFailureHandler(failure);
+      } catch (err) {
+        // A handler bug must never take the transport down — logged without
+        // any frame/token content.
+        this.logger.warn(
+          `cTrader transport write-failure handler threw: ${(err as Error).constructor.name}`,
+        );
+      }
+    }
+  }
+
+  /** Removes every queued (never-written) frame, returning their clientMsgIds. */
+  private clearOutbox(): string[] {
+    const ids: string[] = [];
+    while (this.outbox.length > 0) {
+      const message = this.outbox.shift()!;
+      if (message.clientMsgId) {
+        ids.push(message.clientMsgId);
+      }
+    }
+    return ids;
   }
 
   private handleRawFrame(data: unknown): void {
@@ -335,9 +495,13 @@ export class NodeWebSocketCtraderTransport implements CtraderTransport {
     }
   }
 
-  private notifyClosed(code: number | undefined, reason: string): void {
+  private notifyClosed(
+    code: number | undefined,
+    reason: string,
+    neverWrittenClientMsgIds: readonly string[],
+  ): void {
     if (this.closeHandler) {
-      this.closeHandler(code, reason);
+      this.closeHandler(code, reason, neverWrittenClientMsgIds);
     }
   }
 

@@ -45,6 +45,7 @@ import {
 import {
   CtraderTransport,
   CtraderTransportSendError,
+  CtraderTransportWriteFailure,
   NodeWebSocketCtraderTransport,
 } from './ctrader-transport';
 import {
@@ -55,6 +56,7 @@ import {
   parseCtraderTokenResponse,
 } from './ctrader-oauth';
 import { BrokerAdapterError, BrokerErrorCode } from '../../interfaces/broker-adapter.errors';
+import { ProviderDispatchCertainty } from '../../interfaces/provider-dispatch-certainty';
 
 /** Request/response timeout (the platform's responsiveness budget). */
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -137,6 +139,18 @@ class EnvironmentConnection {
     HISTORICAL_RATE_LIMIT_PER_SECOND,
   );
   transport: CtraderTransport;
+  /**
+   * MONOTONIC TRANSPORT GENERATION (Sprint 56 correction round 4, architect
+   * finding 4): increments on EVERY attachTransport() — a new transport
+   * identity. Event callbacks installed for one generation capture that
+   * generation and operate ONLY while it is still current: an OLD socket's
+   * message / close / error / late-open / write-failure events can never
+   * clear the current authorization state, reject or satisfy the current
+   * transport's pending requests, satisfy current event waiters, stop the
+   * current heartbeat, schedule another reconnect, or clear the current
+   * outbound queue.
+   */
+  transportGeneration = 0;
   appAuthenticated = false;
   /** Accounts authorized on the CURRENT transport session. */
   readonly authorizedAccounts = new Set<number>();
@@ -588,8 +602,25 @@ export class CTraderClientService implements OnModuleDestroy {
 
   private attachTransport(conn: EnvironmentConnection, transport: CtraderTransport): void {
     conn.transport = transport;
-    transport.onMessage((raw) => this.handleInbound(conn, raw));
-    transport.onClose((code) => this.handleTransportClosed(conn, code));
+    conn.transportGeneration += 1;
+    // GENERATION FENCE (finding 4): every callback captures the generation it
+    // was installed FOR; events from a REPLACED transport (an old socket) are
+    // ignored — they can never act on the current generation's state.
+    const generation = conn.transportGeneration;
+    transport.onMessage((raw) => {
+      if (conn.transportGeneration !== generation) return;
+      this.handleInbound(conn, raw);
+    });
+    transport.onClose((code, reason, neverWrittenClientMsgIds) => {
+      if (conn.transportGeneration !== generation) return;
+      this.handleTransportClosed(conn, code, neverWrittenClientMsgIds);
+      // `reason` is reserved for diagnostics only — never logged with content.
+      void reason;
+    });
+    transport.onWriteFailure((failure) => {
+      if (conn.transportGeneration !== generation) return;
+      this.handleTransportWriteFailure(conn, failure);
+    });
   }
 
   /** App auth 2100 — the FIRST message on any fresh connection. */
@@ -727,12 +758,18 @@ export class CTraderClientService implements OnModuleDestroy {
     return new Promise<CtraderMessageEnvelope>((resolve, reject) => {
       const timer = setTimeout(() => {
         conn.pending.delete(clientMsgId);
+        // The frame was WRITTEN (transport.send() returned synchronously
+        // without a deterministic rejection) and the provider never answered
+        // — the request MAY HAVE REACHED the provider and may have EXECUTED:
+        // state-changing callers must reconcile, never blindly resend
+        // (correction round 4, findings 3 + 5).
         reject(
           new BrokerAdapterError(
             BrokerErrorCode.CONNECTION_TIMEOUT,
             `cTrader request (payloadType ${payloadType}) timed out after ${REQUEST_TIMEOUT_MS}ms.`,
             undefined,
             true,
+            ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER,
           ),
         );
       }, REQUEST_TIMEOUT_MS);
@@ -742,8 +779,11 @@ export class CTraderClientService implements OnModuleDestroy {
       } catch (error) {
         // Deterministic outbound failure (Task 48-a): clean up the pending
         // entry + timer FIRST (no leaks, no orphan timeout), then reject with
-        // a typed, sanitized, retryable error. Never any payload data in the
-        // message.
+        // a typed, sanitized, retryable error carrying WRITE CERTAINTY
+        // (correction round 4, finding 3): both 'queue-overflow' and
+        // 'not-open' mean the frame NEVER reached the wire —
+        // DEFINITELY_NOT_SENT, safe to retry as a new operation. Never any
+        // payload data in the message.
         conn.pending.delete(clientMsgId);
         clearTimeout(timer);
         if (!(error instanceof CtraderTransportSendError)) {
@@ -757,6 +797,7 @@ export class CTraderClientService implements OnModuleDestroy {
               `cTrader ${conn.env} outbound queue is at capacity — retry when in-flight writes settle.`,
               undefined,
               true,
+              ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
             ),
           );
         } else {
@@ -766,6 +807,7 @@ export class CTraderClientService implements OnModuleDestroy {
               `cTrader ${conn.env} connection is not open.`,
               undefined,
               true,
+              ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
             ),
           );
         }
@@ -820,15 +862,56 @@ export class CTraderClientService implements OnModuleDestroy {
     }
   }
 
-  private handleTransportClosed(conn: EnvironmentConnection, code: number | undefined): void {
+  private handleTransportClosed(
+    conn: EnvironmentConnection,
+    code: number | undefined,
+    neverWrittenClientMsgIds: readonly string[],
+  ): void {
     if (conn.closedIntentionally) {
       return;
     }
     conn.appAuthenticated = false;
     conn.authorizedAccounts.clear();
     this.stopHeartbeat(conn);
-    this.failAllPending(conn, `cTrader ${conn.env} connection lost (code ${code ?? 'n/a'}).`);
+    this.failPendingWithCertainty(
+      conn,
+      `cTrader ${conn.env} connection lost (code ${code ?? 'n/a'}).`,
+      new Set(neverWrittenClientMsgIds),
+    );
     this.logger.warn(`cTrader ${conn.env} connection lost (code ${code ?? 'n/a'}) — reconnecting`);
+    this.scheduleReconnect(conn);
+  }
+
+  /**
+   * Synchronous outbound WRITE FAILURE (correction round 4, findings 3-4):
+   * the transport generation is dead. Immediately (never at request-timeout):
+   * - auth state of the DEAD generation is cleared (a fresh generation
+   *   re-authenticates via the normal reconnect path);
+   * - pending requests are failed with CERTAINTY: frames never written →
+   *   DEFINITELY_NOT_SENT; the failed write itself and everything already
+   *   written → MAY_HAVE_REACHED_PROVIDER (reconcile, never resend);
+   * - a reconnect with a NEW transport generation is scheduled; the old
+   *   socket's later events are ignored by the generation fence.
+   */
+  private handleTransportWriteFailure(
+    conn: EnvironmentConnection,
+    failure: CtraderTransportWriteFailure,
+  ): void {
+    if (conn.closedIntentionally) {
+      return;
+    }
+    conn.appAuthenticated = false;
+    conn.authorizedAccounts.clear();
+    this.stopHeartbeat(conn);
+    this.failPendingWithCertainty(
+      conn,
+      `cTrader ${conn.env} transport write failed — the transport generation is unhealthy.`,
+      new Set(failure.neverWrittenClientMsgIds),
+    );
+    this.logger.warn(
+      `cTrader ${conn.env} outbound write failed (transport generation unhealthy) — ` +
+        'pending requests failed with write certainty; reconnecting with a new transport generation',
+    );
     this.scheduleReconnect(conn);
   }
 
@@ -887,11 +970,38 @@ export class CTraderClientService implements OnModuleDestroy {
   }
 
   private failAllPending(conn: EnvironmentConnection, message: string): void {
+    this.failPendingWithCertainty(conn, message, null);
+  }
+
+  /**
+   * Fails every pending request + event waiter, classifying WRITE CERTAINTY
+   * (correction round 4, finding 3): requests whose frame was NEVER written
+   * (still queued at failure time) reject DEFINITELY_NOT_SENT — safe to
+   * retry; every other pending request (frame written, or the failed write
+   * itself) rejects MAY_HAVE_REACHED_PROVIDER — state-changing callers must
+   * reconcile, never resend. Event waiters reject CONNECTION_LOST retryable
+   * (read-class: no state change).
+   */
+  private failPendingWithCertainty(
+    conn: EnvironmentConnection,
+    message: string,
+    neverWrittenClientMsgIds: Set<string> | null,
+  ): void {
     for (const [id, pending] of Array.from(conn.pending.entries())) {
       clearTimeout(pending.timer);
       conn.pending.delete(id);
+      const certainty =
+        neverWrittenClientMsgIds?.has(id) === true
+          ? ProviderDispatchCertainty.DEFINITELY_NOT_SENT
+          : ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER;
       pending.reject(
-        new BrokerAdapterError(BrokerErrorCode.CONNECTION_LOST, message, undefined, true),
+        new BrokerAdapterError(
+          BrokerErrorCode.CONNECTION_LOST,
+          message,
+          undefined,
+          true,
+          certainty,
+        ),
       );
     }
     for (const waiter of Array.from(conn.waiters)) {

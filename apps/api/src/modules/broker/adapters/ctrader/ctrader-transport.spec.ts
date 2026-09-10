@@ -270,7 +270,13 @@ describe('NodeWebSocketCtraderTransport (bounded outbound serialization)', () =>
     // The pending connect rejects safely (queued+pending never replayed).
     await expect(connectPromise).rejects.toThrow('closed before open');
     expect(closeHandler).toHaveBeenCalledTimes(1);
-    expect(closeHandler).toHaveBeenCalledWith(1006, 'peer gone');
+    // Correction round 4 (finding 3): the close notification also reports
+    // the never-written clientMsgIds cleared with the queue.
+    expect(closeHandler).toHaveBeenCalledWith(1006, 'peer gone', [
+      'queued-1',
+      'queued-2',
+      'queued-3',
+    ]);
     expect(socket.sentFrames).toHaveLength(0); // nothing was written (never opened)
 
     // The cleared queue is GONE: the transport refuses further sends.
