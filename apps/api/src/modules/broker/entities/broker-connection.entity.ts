@@ -45,6 +45,28 @@ export class BrokerConnection {
   @Column({ name: 'account_id', type: 'varchar', length: 100, nullable: true })
   accountId: string | null;
 
+  // ─── Server-derived provider identity (Sprint 56 correction round 4, ──────
+  //     architect finding 9) ──────────────────────────────────────────────────
+
+  /**
+   * SANITIZED normalized identity of the actual broker behind this
+   * connection (e.g. 'pepperstone', 'icmarkets', 'spotware'), as discovered
+   * by the SERVER through cTrader account discovery (2149
+   * brokerTitleShort) during OAuth linking.
+   *
+   * - SERVER-DERIVED ONLY: never client-submitted, never overwritten by API
+   *   input (the public ConnectBrokerDto carries no such field).
+   * - Not a secret; never credential material (lowercase alphanumeric
+   *   normalization of the discovered title).
+   * - NULL = unknown identity (no discovery evidence) — identity-scoped
+   *   production-LIVE verification treats it FAIL-CLOSED (finding 10).
+   * - Identity-scoped LIVE eligibility: one broker's verification NEVER
+   *   authorizes another (the generic cTrader entry cannot blanket-authorize
+   *   Pepperstone/IC Markets/unknown brokers).
+   */
+  @Column({ name: 'provider_broker_identity', type: 'varchar', length: 100, nullable: true })
+  providerBrokerIdentity: string | null;
+
   @Column({
     name: 'account_type',
     type: 'varchar',

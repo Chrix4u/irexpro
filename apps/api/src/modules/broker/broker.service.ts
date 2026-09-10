@@ -30,6 +30,13 @@ import {
   BrokerCredentialLifecycle,
 } from './authorization/broker-credential-status';
 import { BrokerProviderRegistryService } from './registry/broker-provider-registry.service';
+import { CTRADER_FAMILY_BROKER_IDS } from './registry/broker-catalog';
+import {
+  catalogEntryToEvidence,
+  connectionLiveVerificationStatus,
+  PROVIDER_TECHNOLOGY,
+  type ProviderLiveVerificationEvidence,
+} from './verification/provider-live-verification.policy';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../../common/enums/audit-action.enum';
 import { AuditSeverity } from '../audit/entities/audit-log.entity';
@@ -182,6 +189,7 @@ export class BrokerService {
     dto: ConnectBrokerDto,
     userId: string,
     ipAddress?: string,
+    serverDerived?: { providerBrokerIdentity?: string | null },
   ): Promise<BrokerConnection> {
     if (!this.adapterRegistry.isSupported(dto.brokerId)) {
       throw new BadRequestException(`Unsupported broker: ${dto.brokerId}`);
@@ -209,6 +217,36 @@ export class BrokerService {
       );
     }
 
+    // IDENTITY-SCOPED production-LIVE verification (Sprint 56 correction
+    // round 4, architect finding 10): for the cTrader FAMILY — where many
+    // brokers share ONE technology — catalog-level verification is NEVER
+    // blanket evidence. LIVE eligibility additionally requires VERIFIED
+    // evidence matching the connection's SERVER-DERIVED provider identity
+    // (finding 9) exactly: unknown identity fails closed; one broker's
+    // verification never authorizes another; technology-level evidence
+    // never applies. (Today every cTrader-family entry is UNVERIFIED, so
+    // this gate is redundantly fail-closed — the model exists so a future
+    // VERIFIED flip can never leak authorization across identities.)
+    if (dto.accountType === BrokerMode.LIVE && CTRADER_FAMILY_BROKER_IDS.includes(dto.brokerId)) {
+      const connectionIdentity = serverDerived?.providerBrokerIdentity ?? null;
+      const evidence = this.ctraderFamilyLiveEvidence();
+      if (
+        connectionLiveVerificationStatus({
+          brokerId: dto.brokerId,
+          providerTechnology: PROVIDER_TECHNOLOGY.CTRADER,
+          connectionProviderIdentity: connectionIdentity,
+          environment: 'LIVE',
+          evidence,
+        }) !== 'VERIFIED'
+      ) {
+        throw new ForbiddenException(
+          `Broker ${dto.brokerId} LIVE connections require identity-scoped ` +
+            'production-LIVE verification matching the server-derived broker identity ' +
+            `(${connectionIdentity ?? 'unknown'}) — fail-closed.`,
+        );
+      }
+    }
+
     const credentials: DecryptedBrokerCredentials = {
       apiKey: dto.apiKey,
       apiSecret: dto.apiSecret,
@@ -226,6 +264,10 @@ export class BrokerService {
       displayName: dto.displayName ?? `${dto.brokerId} ${dto.accountType}`,
       accountId: dto.accountId,
       accountType: dto.accountType as BrokerMode,
+      // SERVER-DERIVED provider identity (correction round 4, finding 9):
+      // sanitized normalized identity from provider discovery — set ONLY by
+      // the server-side linking path (never the public DTO), null = unknown.
+      providerBrokerIdentity: serverDerived?.providerBrokerIdentity ?? null,
       status: BrokerConnectionStatus.DISCONNECTED,
       authorizationStatus: BrokerAuthorizationStatus.NOT_CONNECTED,
       credentialStatus: BrokerCredentialStatus.CREATED,
@@ -566,6 +608,30 @@ export class BrokerService {
    *
    * Live trading without prior DEMO validation is an architectural violation.
    */
+  /**
+   * Identity-scoped LIVE verification evidence for the cTrader family
+   * (correction round 4, finding 10): derived from the operator catalog —
+   * each branded alias contributes evidence scoped to its identity family;
+   * the generic entry contributes TECHNOLOGY-LEVEL evidence that can never
+   * blanket-authorize a connection. All entries are UNVERIFIED today.
+   */
+  private ctraderFamilyLiveEvidence(): ProviderLiveVerificationEvidence[] {
+    const evidence: ProviderLiveVerificationEvidence[] = [];
+    for (const id of CTRADER_FAMILY_BROKER_IDS) {
+      const entry = this.providerRegistry.getEntry(id);
+      if (!entry) continue;
+      // The cTrader family shares the 'ctrader' technology: evidence from
+      // every family entry is evaluated for that technology.
+      for (const unit of catalogEntryToEvidence(entry, ['LIVE'])) {
+        evidence.push({
+          ...unit,
+          providerTechnology: PROVIDER_TECHNOLOGY.CTRADER,
+        });
+      }
+    }
+    return evidence;
+  }
+
   async enableLiveTrading(connectionId: string, userId: string, ipAddress?: string): Promise<void> {
     const connection = await this.findConnectionById(connectionId, userId);
 

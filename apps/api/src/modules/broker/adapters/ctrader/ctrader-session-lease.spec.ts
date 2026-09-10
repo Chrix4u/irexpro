@@ -372,7 +372,10 @@ describe('cTrader session lease lifecycle (findings 4 + 5 + 6)', () => {
     });
 
     it('a matching brand connects under the broker-specific alias', async () => {
-      scriptDiscoveryBrand('Pepperstone (UK)');
+      // Correction round 4 (finding 8): exact canonical matching — the
+      // reviewed acceptable title is 'Pepperstone' (unreviewed variants like
+      // 'Pepperstone (UK)' now fail closed until cataloged with evidence).
+      scriptDiscoveryBrand('Pepperstone');
       const aliasAdapter = new CTraderAdapter(client, 'pepperstone-ctrader');
 
       const result = await aliasAdapter.connect({

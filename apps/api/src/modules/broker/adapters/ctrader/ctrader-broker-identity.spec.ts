@@ -1,6 +1,7 @@
 /**
  * cTrader broker-identity policy — adversarial unit coverage (Sprint 56
- * correction round 3, architect finding 6; Task 2-a).
+ * correction round 3, architect finding 6; correction round 4, architect
+ * finding 8 — versioned CANONICAL provider-identity model).
  *
  * The policy module is PURE (no transport, no client) — every case below is
  * a direct contract assertion on the documented matching policy:
@@ -9,19 +10,26 @@
  *   alias id: generic 'ctrader' is agnostic (null); unknown ids fall back to
  *   the id itself (fail-closed, NEVER agnostic); the bare '-ctrader' edge
  *   falls back to the full id.
- * - brokerIdentityMatches is agnostic for 'ctrader' even with a missing
- *   title, but fail-closed (false) for a broker-specific alias with a
- *   missing/empty/blank title, and containment-matched on the NORMALIZED
- *   title otherwise.
+ * - brokerIdentityMatches (round 4, EXACT canonical matching): agnostic for
+ *   'ctrader'; CATALOGED aliases ('pepperstone-ctrader', 'icmarkets-ctrader')
+ *   match ONLY the reviewed acceptable normalized titles (exact membership —
+ *   a title merely CONTAINING the expected token is NOT a verified identity);
+ *   uncataloged aliases match the derived token by EXACT equality; the bare
+ *   '-ctrader' edge never matches anything.
  * - assertDiscoveredBrokerIdentity rejects mismatches with
  *   AUTHENTICATION_FAILED naming BOTH the discovered title and the requested
  *   id, and never throws for the generic 'ctrader' id.
+ * - normalizeProviderBrokerIdentity produces the sanitized server-derived
+ *   persisted identity (or null — never fabricated).
  */
 import {
   assertDiscoveredBrokerIdentity,
   brokerIdentityMatches,
   expectedBrokerIdentityToken,
   normalizeBrokerTitleShort,
+  normalizeProviderBrokerIdentity,
+  PROVIDER_IDENTITY_MODEL_VERSION,
+  providerIdentityFamilyForAlias,
 } from './ctrader-broker-identity';
 import { BrokerAdapterError, BrokerErrorCode } from '../../interfaces/broker-adapter.errors';
 
@@ -104,12 +112,21 @@ describe('ctrader-broker-identity policy (finding 6)', () => {
       expect(brokerIdentityMatches('ctrader', 'Pepperstone')).toBe(true);
     });
 
-    it("'pepperstone-ctrader' matches the Pepperstone brand (normalized containment)", () => {
+    it("'pepperstone-ctrader' matches ONLY the reviewed canonical Pepperstone title (EXACT)", () => {
+      // Round 4 (finding 8): exact membership in the versioned catalog.
       expect(brokerIdentityMatches('pepperstone-ctrader', 'Pepperstone')).toBe(true);
       expect(brokerIdentityMatches('pepperstone-ctrader', 'PEPPER STONE')).toBe(true);
-      expect(brokerIdentityMatches('pepperstone-ctrader', 'Pepperstone (UK)')).toBe(true);
       expect(brokerIdentityMatches('pepperstone-ctrader', '  pepperstone  ')).toBe(true);
-      expect(brokerIdentityMatches('pepperstone-ctrader', 'Pepperstone Group Ltd')).toBe(true);
+    });
+
+    it('unreviewed variants CONTAINING the token are NOT verified identities (round 4, exact model)', () => {
+      // The old substring rule matched these; the canonical catalog does NOT
+      // — variants are only acceptable after an evidence-backed model bump.
+      expect(brokerIdentityMatches('pepperstone-ctrader', 'Pepperstone (UK)')).toBe(false);
+      expect(brokerIdentityMatches('pepperstone-ctrader', 'Pepperstone Group Ltd')).toBe(false);
+      // A DIFFERENT title that merely contains the expected token.
+      expect(brokerIdentityMatches('pepperstone-ctrader', 'NotPepperstone')).toBe(false);
+      expect(brokerIdentityMatches('pepperstone-ctrader', 'xpepperstonex')).toBe(false);
     });
 
     it("'pepperstone-ctrader' does NOT match other brands", () => {
@@ -127,9 +144,10 @@ describe('ctrader-broker-identity policy (finding 6)', () => {
       expect(brokerIdentityMatches('pepperstone-ctrader', ' - . ')).toBe(false);
     });
 
-    it("'icmarkets-ctrader' matches the IC Markets brand only", () => {
+    it("'icmarkets-ctrader' matches ONLY the reviewed canonical IC Markets title (EXACT)", () => {
       expect(brokerIdentityMatches('icmarkets-ctrader', 'IC Markets')).toBe(true);
-      expect(brokerIdentityMatches('icmarkets-ctrader', 'IC Markets (AU)')).toBe(true);
+      // Unreviewed variant — NOT a verified identity under the exact model.
+      expect(brokerIdentityMatches('icmarkets-ctrader', 'IC Markets (AU)')).toBe(false);
       expect(brokerIdentityMatches('icmarkets-ctrader', 'Pepperstone')).toBe(false);
     });
 
@@ -143,10 +161,18 @@ describe('ctrader-broker-identity policy (finding 6)', () => {
     });
 
     it("the bare '-ctrader' edge never matches a real brand (empty token fallback)", () => {
-      // expected token is '-ctrader' itself; no normalized title can contain
-      // the dash (non-alphanumerics are stripped) → always false.
+      // Round 4: the degenerate bare-suffix id fails closed against EVERY
+      // title (including 'cTrader', whose normalized form equals the id's).
       expect(brokerIdentityMatches('-ctrader', 'Pepperstone')).toBe(false);
       expect(brokerIdentityMatches('-ctrader', 'cTrader')).toBe(false);
+    });
+
+    it('unknown requested ids match ONLY the exact normalized id form (containment removed)', () => {
+      expect(brokerIdentityMatches('somebrand', 'Some Brand')).toBe(true);
+      // Containment is gone: a title that merely CONTAINS the token fails.
+      expect(brokerIdentityMatches('somebrand', 'Some Brand Extra')).toBe(false);
+      expect(brokerIdentityMatches('somebrand', 'Pepperstone')).toBe(false);
+      expect(brokerIdentityMatches('somebrand', undefined)).toBe(false);
     });
   });
 
@@ -214,11 +240,11 @@ describe('ctrader-broker-identity policy (finding 6)', () => {
       }
     });
 
-    it('does NOT throw when the discovered brand matches the requested alias', () => {
+    it('does NOT throw when the discovered brand matches the requested alias (exact)', () => {
       expect(() =>
         assertDiscoveredBrokerIdentity('pepperstone-ctrader', {
           ...ACCOUNT,
-          brokerTitleShort: 'Pepperstone (UK)',
+          brokerTitleShort: 'Pepperstone',
         }),
       ).not.toThrow();
       expect(() =>
@@ -227,6 +253,13 @@ describe('ctrader-broker-identity policy (finding 6)', () => {
           brokerTitleShort: 'IC Markets',
         }),
       ).not.toThrow();
+      // Unreviewed variants now FAIL CLOSED (round 4, exact model).
+      expect(() =>
+        assertDiscoveredBrokerIdentity('pepperstone-ctrader', {
+          ...ACCOUNT,
+          brokerTitleShort: 'Pepperstone (UK)',
+        }),
+      ).toThrow(BrokerAdapterError);
     });
 
     it("does NOT throw for the generic 'ctrader' id regardless of the discovered title", () => {
@@ -242,6 +275,55 @@ describe('ctrader-broker-identity policy (finding 6)', () => {
       expect(() =>
         assertDiscoveredBrokerIdentity('ctrader', { ...ACCOUNT, brokerTitleShort: '' }),
       ).not.toThrow();
+    });
+  });
+
+  // ─── Versioned canonical catalog (round 4, finding 8) ─────────────────────
+
+  describe('canonical provider-identity catalog', () => {
+    it('is versioned (every catalog change bumps the model version)', () => {
+      expect(PROVIDER_IDENTITY_MODEL_VERSION).toBe(1);
+    });
+
+    it('resolves the cataloged identity families for the branded aliases', () => {
+      expect(providerIdentityFamilyForAlias('pepperstone-ctrader')).toEqual({
+        family: 'PEPPERSTONE',
+        acceptableNormalizedTitles: ['pepperstone'],
+      });
+      expect(providerIdentityFamilyForAlias('icmarkets-ctrader')).toEqual({
+        family: 'IC_MARKETS',
+        acceptableNormalizedTitles: ['icmarkets'],
+      });
+    });
+
+    it('returns null for the generic id and uncataloged ids', () => {
+      expect(providerIdentityFamilyForAlias('ctrader')).toBeNull();
+      expect(providerIdentityFamilyForAlias('somebrand-ctrader')).toBeNull();
+      expect(providerIdentityFamilyForAlias('oanda')).toBeNull();
+    });
+
+    it('catalog matching is EXACT — cross-brand token containment never matches', () => {
+      // A fabricated title containing BOTH tokens still fails both aliases.
+      expect(brokerIdentityMatches('pepperstone-ctrader', 'Pepperstone IC Markets')).toBe(false);
+      expect(brokerIdentityMatches('icmarkets-ctrader', 'IC Markets Pepperstone')).toBe(false);
+    });
+  });
+
+  // ─── Server-derived persisted identity (round 4, finding 9) ───────────────
+
+  describe('normalizeProviderBrokerIdentity', () => {
+    it('normalizes a discovered title into the sanitized persisted identity', () => {
+      expect(normalizeProviderBrokerIdentity('Pepperstone')).toBe('pepperstone');
+      expect(normalizeProviderBrokerIdentity('IC Markets')).toBe('icmarkets');
+      expect(normalizeProviderBrokerIdentity('  Spotware  ')).toBe('spotware');
+    });
+
+    it('returns null for missing/blank/punctuation-only titles — never fabricated', () => {
+      expect(normalizeProviderBrokerIdentity(undefined)).toBeNull();
+      expect(normalizeProviderBrokerIdentity(null)).toBeNull();
+      expect(normalizeProviderBrokerIdentity('')).toBeNull();
+      expect(normalizeProviderBrokerIdentity('   ')).toBeNull();
+      expect(normalizeProviderBrokerIdentity('()')).toBeNull();
     });
   });
 });
