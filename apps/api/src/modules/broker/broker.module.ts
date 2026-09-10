@@ -136,10 +136,7 @@ export class BrokerModule implements OnModuleInit {
     // fresh mutable adapter context from these factories. Lower-level
     // provider infrastructure (the MetaAPI connection pool, the cTrader
     // environment-connection pool) remains shared underneath by design.
-    this.registry.register(
-      this.metaTraderAdapter,
-      () => new MetaTraderAdapter(this.metaApiClient),
-    );
+    this.registry.register(this.metaTraderAdapter, () => new MetaTraderAdapter(this.metaApiClient));
     this.registry.register(this.paperBrokerAdapter, () => new PaperBrokerAdapter());
     // Sprint 51 PR-7 — OANDA v20 REST native adapter (BETA: implemented +
     // contract-tested; live verification pending — see

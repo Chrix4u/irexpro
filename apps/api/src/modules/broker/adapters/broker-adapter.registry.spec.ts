@@ -118,9 +118,7 @@ describe('BrokerAdapterRegistry', () => {
   });
 
   it('rejects an isolation factory that returns the wrong provider adapter', () => {
-    registry.register(makeAdapter('oanda', 'OANDA root'), () =>
-      makeAdapter('metatrader5', 'MT5'),
-    );
+    registry.register(makeAdapter('oanda', 'OANDA root'), () => makeAdapter('metatrader5', 'MT5'));
 
     expect(() => registry.createEphemeralAdapter('oanda')).toThrow(ConflictException);
     expect(registry.getActiveConnectionSessionCount()).toBe(0);
@@ -154,78 +152,75 @@ describe('BrokerAdapterRegistry', () => {
     expect(registry.getActiveConnectionSessionCount()).toBe(2);
   });
 
-  it(
-    'keeps two accounts and mixed DEMO/LIVE modes isolated under adversarial async interleaving',
-    async () => {
-      let release!: () => void;
-      const gate = new Promise<void>((resolve) => {
-        release = resolve;
+  it('keeps two accounts and mixed DEMO/LIVE modes isolated under adversarial async interleaving', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let sequence = 0;
+
+    const factory = (): IBrokerAdapter => {
+      const adapter = makeAdapter('metatrader5', `MT5 concurrent session ${++sequence}`);
+      let mode = BrokerMode.DEMO;
+      let accountId = '';
+
+      adapter.setMode = jest.fn((nextMode: BrokerMode) => {
+        mode = nextMode;
       });
-      let sequence = 0;
-
-      const factory = (): IBrokerAdapter => {
-        const adapter = makeAdapter('metatrader5', `MT5 concurrent session ${++sequence}`);
-        let mode = BrokerMode.DEMO;
-        let accountId = '';
-
-        adapter.setMode = jest.fn((nextMode: BrokerMode) => {
-          mode = nextMode;
-        });
-        adapter.connect = jest.fn(async (credentials) => {
-          accountId = credentials.accountId;
-          await gate;
-          return {
-            success: true,
-            accountId,
-            accountType: mode,
-            currency: 'USD',
-            serverTime: new Date(),
-          };
-        });
-        adapter.getAccountInfo = jest.fn(async () => ({
+      adapter.connect = jest.fn(async (credentials) => {
+        accountId = credentials.accountId;
+        await gate;
+        return {
+          success: true,
           accountId,
+          accountType: mode,
           currency: 'USD',
-          leverage: 100,
-          balance: '1000.00',
-          equity: '1000.00',
-          margin: '0.00',
-          freeMargin: '1000.00',
-          marginLevel: '0.00',
-        }));
-        return adapter;
-      };
-
-      registry.register(makeAdapter('metatrader5', 'MT5 root'), factory);
-      const userA = registry.getAdapterForConnection('user-a-connection', 'metatrader5');
-      const userB = registry.getAdapterForConnection('user-b-connection', 'metatrader5');
-
-      userA.setMode(BrokerMode.DEMO);
-      userB.setMode(BrokerMode.LIVE);
-      const pendingA = userA.connect({ accountId: 'account-a' });
-      const pendingB = userB.connect({ accountId: 'account-b' });
-
-      // Both connect calls are now suspended after mutating their own session.
-      // Releasing them together reproduces the race a singleton adapter cannot survive.
-      release();
-      const [connectedA, connectedB] = await Promise.all([pendingA, pendingB]);
-      const [accountA, accountB] = await Promise.all([
-        userA.getAccountInfo(),
-        userB.getAccountInfo(),
-      ]);
-
-      expect(connectedA).toMatchObject({
-        accountId: 'account-a',
-        accountType: BrokerMode.DEMO,
+          serverTime: new Date(),
+        };
       });
-      expect(connectedB).toMatchObject({
-        accountId: 'account-b',
-        accountType: BrokerMode.LIVE,
-      });
-      expect(accountA.accountId).toBe('account-a');
-      expect(accountB.accountId).toBe('account-b');
-      expect(userA).not.toBe(userB);
-    },
-  );
+      adapter.getAccountInfo = jest.fn(async () => ({
+        accountId,
+        currency: 'USD',
+        leverage: 100,
+        balance: '1000.00',
+        equity: '1000.00',
+        margin: '0.00',
+        freeMargin: '1000.00',
+        marginLevel: '0.00',
+      }));
+      return adapter;
+    };
+
+    registry.register(makeAdapter('metatrader5', 'MT5 root'), factory);
+    const userA = registry.getAdapterForConnection('user-a-connection', 'metatrader5');
+    const userB = registry.getAdapterForConnection('user-b-connection', 'metatrader5');
+
+    userA.setMode(BrokerMode.DEMO);
+    userB.setMode(BrokerMode.LIVE);
+    const pendingA = userA.connect({ accountId: 'account-a' });
+    const pendingB = userB.connect({ accountId: 'account-b' });
+
+    // Both connect calls are now suspended after mutating their own session.
+    // Releasing them together reproduces the race a singleton adapter cannot survive.
+    release();
+    const [connectedA, connectedB] = await Promise.all([pendingA, pendingB]);
+    const [accountA, accountB] = await Promise.all([
+      userA.getAccountInfo(),
+      userB.getAccountInfo(),
+    ]);
+
+    expect(connectedA).toMatchObject({
+      accountId: 'account-a',
+      accountType: BrokerMode.DEMO,
+    });
+    expect(connectedB).toMatchObject({
+      accountId: 'account-b',
+      accountType: BrokerMode.LIVE,
+    });
+    expect(accountA.accountId).toBe('account-a');
+    expect(accountB.accountId).toBe('account-b');
+    expect(userA).not.toBe(userB);
+  });
 
   it('creates uncached ephemeral adapters for pre-persistence credential tests', () => {
     const root = makeAdapter('oanda', 'OANDA root');
@@ -253,9 +248,8 @@ describe('BrokerAdapterRegistry', () => {
   });
 
   it('releaseAdapterForConnection is idempotent', () => {
-    registry.register(
-      makeAdapter('metatrader5', 'MT5'),
-      () => makeAdapter('metatrader5', 'MT5 session'),
+    registry.register(makeAdapter('metatrader5', 'MT5'), () =>
+      makeAdapter('metatrader5', 'MT5 session'),
     );
     registry.getAdapterForConnection('connection-a', 'metatrader5');
     registry.releaseAdapterForConnection('connection-a');
@@ -268,9 +262,7 @@ describe('BrokerAdapterRegistry', () => {
     registry.register(makeAdapter('metatrader5', 'MT5'), () =>
       makeAdapter('metatrader5', 'MT5 session'),
     );
-    registry.register(makeAdapter('oanda', 'OANDA'), () =>
-      makeAdapter('oanda', 'OANDA session'),
-    );
+    registry.register(makeAdapter('oanda', 'OANDA'), () => makeAdapter('oanda', 'OANDA session'));
 
     registry.getAdapterForConnection('connection-a', 'metatrader5');
 
@@ -279,41 +271,35 @@ describe('BrokerAdapterRegistry', () => {
     );
   });
 
-  it(
-    'resolves aliases through the canonical factory without storing shared adapter instances',
-    () => {
-      const root = makeAdapter('ctrader', 'cTrader root');
-      let sequence = 0;
-      registry.register(root, () => makeAdapter('ctrader', `cTrader session ${++sequence}`));
-      // Compatibility with Sprint 56: alias registration may pass the root adapter.
-      registry.registerBrokerAlias('pepperstone-ctrader', root);
-      registry.registerBrokerAlias('icmarkets-ctrader', root);
+  it('resolves aliases through the canonical factory without storing shared adapter instances', () => {
+    const root = makeAdapter('ctrader', 'cTrader root');
+    let sequence = 0;
+    registry.register(root, () => makeAdapter('ctrader', `cTrader session ${++sequence}`));
+    // Compatibility with Sprint 56: alias registration may pass the root adapter.
+    registry.registerBrokerAlias('pepperstone-ctrader', root);
+    registry.registerBrokerAlias('icmarkets-ctrader', root);
 
-      const pepperstone = registry.getAdapterForConnection(
-        'pepperstone-connection',
-        'pepperstone-ctrader',
-      );
-      const icMarkets = registry.getAdapterForConnection(
-        'icmarkets-connection',
-        'icmarkets-ctrader',
-      );
+    const pepperstone = registry.getAdapterForConnection(
+      'pepperstone-connection',
+      'pepperstone-ctrader',
+    );
+    const icMarkets = registry.getAdapterForConnection('icmarkets-connection', 'icmarkets-ctrader');
 
-      expect(pepperstone).not.toBe(icMarkets);
-      expect(pepperstone).not.toBe(root);
-      expect(icMarkets).not.toBe(root);
-      expect(registry.getAdapter('pepperstone-ctrader')).toBe(root);
-      expect(registry.getAdapter('icmarkets-ctrader')).toBe(root);
-      expect(registry.getAdapter('pepperstone-ctrader').brokerId).toBe('ctrader');
-      expect(registry.isSupported('pepperstone-ctrader')).toBe(true);
-      expect(registry.isSupported('icmarkets-ctrader')).toBe(true);
-      expect(registry.getSupportedBrokerIds()).toEqual(
-        expect.arrayContaining(['ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader']),
-      );
-      // Aliases stay catalog identities: one provider summary, never per-alias
-      // adapter duplicates.
-      expect(registry.getSupportedBrokers()).toHaveLength(1);
-    },
-  );
+    expect(pepperstone).not.toBe(icMarkets);
+    expect(pepperstone).not.toBe(root);
+    expect(icMarkets).not.toBe(root);
+    expect(registry.getAdapter('pepperstone-ctrader')).toBe(root);
+    expect(registry.getAdapter('icmarkets-ctrader')).toBe(root);
+    expect(registry.getAdapter('pepperstone-ctrader').brokerId).toBe('ctrader');
+    expect(registry.isSupported('pepperstone-ctrader')).toBe(true);
+    expect(registry.isSupported('icmarkets-ctrader')).toBe(true);
+    expect(registry.getSupportedBrokerIds()).toEqual(
+      expect.arrayContaining(['ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader']),
+    );
+    // Aliases stay catalog identities: one provider summary, never per-alias
+    // adapter duplicates.
+    expect(registry.getSupportedBrokers()).toHaveLength(1);
+  });
 
   it('passes the requested alias broker id into the canonical isolation factory', () => {
     const root = makeAdapter('ctrader', 'cTrader root');
@@ -336,9 +322,7 @@ describe('BrokerAdapterRegistry', () => {
     registry.register(root);
     registry.registerBrokerAlias('pepperstone-ctrader', 'ctrader');
 
-    expect(() => registry.createEphemeralAdapter('pepperstone-ctrader')).toThrow(
-      ConflictException,
-    );
+    expect(() => registry.createEphemeralAdapter('pepperstone-ctrader')).toThrow(ConflictException);
     expect(() => registry.getAdapterForConnection('connection-a', 'pepperstone-ctrader')).toThrow(
       ConflictException,
     );
@@ -364,9 +348,9 @@ describe('BrokerAdapterRegistry', () => {
   });
 
   it('refuses to register an alias before its canonical provider is registered', () => {
-    expect(() =>
-      registry.registerBrokerAlias('pepperstone-ctrader', 'ctrader'),
-    ).toThrow(NotFoundException);
+    expect(() => registry.registerBrokerAlias('pepperstone-ctrader', 'ctrader')).toThrow(
+      NotFoundException,
+    );
   });
 
   it('a later primary registration replaces the alias mapping (operator-controlled init only)', () => {
@@ -385,9 +369,9 @@ describe('BrokerAdapterRegistry', () => {
     // The alias MAPPING is gone: the id resolves to the primary registration,
     // and a supported-id listing contains it exactly once.
     expect(registry.isSupported('pepperstone-ctrader')).toBe(true);
-    expect(registry.getSupportedBrokerIds().filter((id) => id === 'pepperstone-ctrader')).toHaveLength(
-      1,
-    );
+    expect(
+      registry.getSupportedBrokerIds().filter((id) => id === 'pepperstone-ctrader'),
+    ).toHaveLength(1);
   });
 });
 
@@ -508,11 +492,11 @@ describe('BrokerModule — connection-scoped cTrader adapter factory wiring', ()
     expect(registry.getAdapter('metatrader5')).toBeInstanceOf(MetaTraderAdapter);
     expect(registry.getAdapter('paper-broker')).toBeInstanceOf(PaperBrokerAdapter);
     expect(registry.getAdapter('oanda')).toBeInstanceOf(OandaAdapter);
-    expect(registry.getSupportedBrokers().map((b) => b.brokerId).sort()).toEqual([
-      'ctrader',
-      'metatrader5',
-      'oanda',
-      'paper-broker',
-    ]);
+    expect(
+      registry
+        .getSupportedBrokers()
+        .map((b) => b.brokerId)
+        .sort(),
+    ).toEqual(['ctrader', 'metatrader5', 'oanda', 'paper-broker']);
   });
 });

@@ -74,7 +74,7 @@
  *   listOrders() must expose; completed orders are only reachable through
  *   getOrderById (ProtoOAOrderDetailsReq).
  */
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import {
   AdapterMetadata,
@@ -196,6 +196,15 @@ const TRENDBAR_PERIOD_MS: Readonly<Record<number, number>> = {
   14: 2_629_800_000,
 };
 
+/**
+ * cTrader catalog identity for the DI-managed metadata/root adapter. No
+ * provider is ever registered for this token: NestJS injects `undefined`
+ * and the constructor default ('ctrader' — the broker-agnostic identity)
+ * applies. Isolated instances from the registry factory pass the REQUESTED
+ * broker id (alias-aware) explicitly.
+ */
+const CTRADER_ROOT_BROKER_IDENTITY = Symbol('CTRADER_ROOT_BROKER_IDENTITY');
+
 @Injectable()
 export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
   private readonly logger = new Logger(CTraderAdapter.name);
@@ -251,7 +260,14 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
      * requested identity drives broker-specific identity verification against
      * the discovered brokerTitleShort (finding 6). Public readonly — a broker
      * identity string, never a secret; observable for wiring/contract tests.
+     *
+     * The DI-managed root adapter resolves this through an @Optional token
+     * nobody provides → undefined → the 'ctrader' default applies (the root
+     * is the broker-agnostic metadata instance). Factory-created isolated
+     * instances pass the REQUESTED id positionally.
      */
+    @Optional()
+    @Inject(CTRADER_ROOT_BROKER_IDENTITY)
     readonly requestedBrokerId: string = 'ctrader',
   ) {
     this.sessionOwnerKey = `ctrader-adapter-${randomUUID()}`;

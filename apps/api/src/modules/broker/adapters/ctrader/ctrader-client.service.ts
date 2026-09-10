@@ -321,11 +321,7 @@ export class CTraderClientService implements OnModuleDestroy {
     return conn.authorizedAccounts.has(accountId);
   }
 
-  private acquireSessionLease(
-    conn: EnvironmentConnection,
-    accountId: number,
-    owner: string,
-  ): void {
+  private acquireSessionLease(conn: EnvironmentConnection, accountId: number, owner: string): void {
     let owners = conn.sessionOwners.get(accountId);
     if (!owners) {
       owners = new Set<string>();
@@ -334,11 +330,7 @@ export class CTraderClientService implements OnModuleDestroy {
     owners.add(owner);
   }
 
-  private releaseSessionLease(
-    conn: EnvironmentConnection,
-    accountId: number,
-    owner: string,
-  ): void {
+  private releaseSessionLease(conn: EnvironmentConnection, accountId: number, owner: string): void {
     const owners = conn.sessionOwners.get(accountId);
     if (!owners) return;
     owners.delete(owner);

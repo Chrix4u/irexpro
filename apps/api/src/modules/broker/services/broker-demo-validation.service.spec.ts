@@ -339,13 +339,14 @@ describe('BrokerDemoValidationService', () => {
       // adapter the registry factory produces — the spy must cover every
       // instance, not just the metadata root.
       const originalConnect = PaperBrokerAdapter.prototype.connect;
-      jest
-        .spyOn(PaperBrokerAdapter.prototype, 'connect')
-        .mockImplementation(async function (this: PaperBrokerAdapter, credentials) {
-          const result = await originalConnect.call(this, credentials);
-          connectionRecord = buildConnection({ demoValidated: true });
-          return result;
-        });
+      jest.spyOn(PaperBrokerAdapter.prototype, 'connect').mockImplementation(async function (
+        this: PaperBrokerAdapter,
+        credentials,
+      ) {
+        const result = await originalConnect.call(this, credentials);
+        connectionRecord = buildConnection({ demoValidated: true });
+        return result;
+      });
       // ...and then the evidence contradicts the bless: the checklist fails.
       jest
         .spyOn(PaperBrokerAdapter.prototype, 'getAccountInfo')
@@ -422,9 +423,7 @@ describe('BrokerDemoValidationService', () => {
     it('cascades SKIPPED steps when the connection itself fails (fail-closed)', async () => {
       // connectBroker's documented failure path: connect() RESOLVES with
       // success=false → status ERROR + BROKER_CONNECT_FAILED audit + BadRequest.
-      jest
-        .spyOn(PaperBrokerAdapter.prototype, 'connect')
-        .mockResolvedValueOnce({
+      jest.spyOn(PaperBrokerAdapter.prototype, 'connect').mockResolvedValueOnce({
         success: false,
         accountId: '',
         accountType: BrokerMode.DEMO,
