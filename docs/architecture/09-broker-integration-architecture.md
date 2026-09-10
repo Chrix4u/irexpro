@@ -669,3 +669,157 @@ SUSPENDED audit/event is emitted (telemetry still records the failure
 count); release/audit/event happen only when the guarded transition actually
 succeeded. Both behaviors are covered by deterministic race specs (shared
 call-order sequences and `affected: 0` mock orchestration).
+
+### 14.8 Sprint 56 correction round 4 — execution certainty, OAuth concurrency finalization, transport-generation fencing & provider-identity hardening
+
+Architect Correction Round 4 on PR #290 (post-round-3 baseline `64aaa96`).
+Round 3's architecture is preserved intact — this round closes four
+production-critical classes of defect around it.
+
+**a) WRITE-CERTAINTY model (architect findings 5-6).** A new normalized
+contract, `ProviderDispatchCertainty`
+(`broker/interfaces/provider-dispatch-certainty.ts`), classifies every
+state-changing provider failure crossing the execution boundary:
+
+- `DEFINITELY_NOT_SENT` — the request provably never left iRexPro (local
+  validation/control rejection, pre-send rate-limit, queue-overflow before
+  enqueue, connection known closed before write);
+- `SENT_RESPONSE_RECEIVED` — the provider answered (definitive outcome);
+- `MAY_HAVE_REACHED_PROVIDER` — a lost response after write, a connection
+  loss after an attempted write, an ambiguous transport write, or an
+  UNCLASSIFIED error (conservative default).
+
+`BrokerAdapterError` carries `dispatchCertainty`. `ExecutionOrchestrator
+.withRetry()` — the ONLY retry wrapper for state-changing dispatches
+(PLACE, CLOSE_POSITION) — now auto-retries ONLY
+`DEFINITELY_NOT_SENT`-classified retryable failures. A lost-response PLACE
+(timeout after write) produces exactly ONE provider send: the attempt is
+never resent; the order transitions `RECONCILIATION_PENDING` with the
+certainty classification persisted in the reason and the
+`ORDER_RECONCILIATION_PENDING` audit metadata. NO provider deduplication is
+assumed — cTrader `clientOrderId`/label/comment (and MetaTrader/OANDA
+request ids) are NOT treated as broker-side exactly-once guarantees.
+Read-only operations keep their transport-level retry policy (duplicate
+reads create no financial side effects).
+
+Per-provider classification (finding 6 — audited for PLACE, CLOSE_POSITION,
+CANCEL_ORDER, MODIFY/AMEND, and CLOSE_ALL surfaces): cTrader carries
+frame-level certainty from the transport/client (queue-overflow /
+not-open → DEFINITELY_NOT_SENT; post-write timeout, ambiguous write,
+connection loss → MAY_HAVE_REACHED_PROVIDER; error-envelope rejections →
+SENT_RESPONSE_RECEIVED); MetaTrader maps gateway 401/429 →
+DEFINITELY_NOT_SENT, timeout/conn-lost/5xx → MAY_HAVE_REACHED_PROVIDER,
+terminal-answered rejections → SENT_RESPONSE_RECEIVED; OANDA maps
+HTTP-response errors → SENT_RESPONSE_RECEIVED and network/timeout errors
+→ MAY_HAVE_REACHED_PROVIDER; the paper broker is fully local/deterministic
+— every failure is DEFINITELY_NOT_SENT.
+
+**b) Reconciliation resolves uncertain writes (finding 7).** An uncertain
+write is NOT failure and NOT permission to resend — it is an UNRESOLVED
+PROVIDER OUTCOME. `RECONCILIATION_PENDING` orders converge through the
+Round-3 connection-scoped adapter (exact `BrokerConnection.id`, provider
+account, DEMO/LIVE environment, stable identifiers, bounded windows —
+never across accounts). Correction: the resolution path previously called
+the status-only `resolveReconciliation(orderId, FILLED|PARTIALLY_FILLED)`,
+which `OrderService` rejects BY DESIGN ("a status-only reconciliation must
+never invent a fill") — convergence onto a provider-discovered fill always
+threw after applying the delta. The fix: `applyFill` (the exact-decimal
+atomic path, which itself transitions `RECONCILIATION_PENDING` →
+PARTIALLY_FILLED/FILLED because the state is fillable) is the
+fill-bearing authority when a delta exists, and a NEW dedicated
+`OrderService.resolveReconciliationFillState` records the
+provider-observed status when the recorded fill facts already match —
+guarded so a status write can never invent economic facts. The owning
+Trade propagates to `RECONCILIATION_PENDING` (existing UNKNOWN-outcome
+path) and converges idempotently; no second provider order is ever
+submitted (provider truth is READ via `getOrderById`/`listOrders`).
+
+**c) OAuth refresh stale-owner fencing (finding 1).** Terminal INVALID
+writes are ownership/generation-guarded:
+`markRefreshRejected` now performs a single conditional UPDATE on
+(connection id, `credential_generation = observedGeneration`, refresh
+lease = OUR claim or free). A request whose lease expired — whose provider
+request was overtaken by a takeover winner that persisted generation N+1 —
+can NEVER poison the newer usable pair and never emits a false
+"refresh failed" audit against it (it converges onto the newer pair). A
+genuine current-owner rejection marks exactly that generation INVALID once,
+releases its own lease in the same atomic write, and emits exactly one
+sanitized audit event. The provider-refresh-success-but-persist-failure
+path applies the same guard: only the generation whose old provider token
+was invalidated may be marked INVALID.
+
+**d) OAuth LINKING exactly-once (finding 2).** The automatic stale-LINKING
+reclaim window (`LINKING_STALE_MS`) is REMOVED: once a flow transitions
+AUTHORIZED → LINKING, no second request may reclaim it — not after a
+timeout, not from another replica. The account connection (an external
+side effect) is created before the final flow consume CAS; a reclaim would
+allow two `createConnection` side effects with only one final flow
+transition winner — logging the anomaly afterwards is not an exactly-once
+guarantee. A crashed linker's flow is recovered by EXPIRY (the
+authorization TTL deletes the row; the user restarts OAuth). A
+different-account takeover attempt on a claimed flow is rejected without
+any side effect.
+
+**e) cTrader transport write certainty + generation fencing (findings
+3-4).** The transport's drain loop no longer swallows a synchronous
+`socket.send()` failure: the shifted frame is classified
+`WRITE_ATTEMPTED_OUTCOME_UNKNOWN` and NEVER replayed; the unwritten queue
+is cleared and its clientMsgIds REPORTED (deterministic NOT_WRITTEN); the
+transport generation is marked unhealthy (subsequent `send()` throws
+'not-open'); and the client is notified IMMEDIATELY via
+`onWriteFailure` — pending requests never starve until the 10 s request
+timeout. Queue-overflow and closed-socket-before-write remain
+deterministic synchronous `NOT_WRITTEN` rejections. On write failure the
+client clears the dead generation's auth state, fails pending requests
+with per-frame certainty (never-written → DEFINITELY_NOT_SENT; everything
+else → MAY_HAVE_REACHED_PROVIDER), and reconnects with a NEW transport
+generation.
+
+Every transport event callback is generation-fenced: `attachTransport`
+increments a monotonic `transportGeneration` and its message/close/
+write-failure callbacks operate only while their generation is current —
+an OLD socket can never clear current authorization state, reject or
+satisfy the new transport's pending requests, satisfy current event
+waiters, stop the current heartbeat, schedule another reconnect, or clear
+the new transport's outbound queue. The transport itself also
+socket-identity-fences its connect() listeners (a replaced/timeout-
+disposed socket's late open/error/close/message events are ignored).
+Frame contents and tokens never appear in logs or evidence.
+
+**f) Provider identity hardening + persistence + scoped LIVE verification
+(findings 8-10).** Round 3's substring identity matching is replaced by a
+VERSIONED canonical provider-identity model
+(`PROVIDER_IDENTITY_MODEL_VERSION = 1`): branded aliases resolve to
+reviewed identity families (PEPPERSTONE, IC_MARKETS) with EXPLICIT
+acceptable normalized titles (evidence-backed by in-repo 2149 discovery
+fixtures — no invented identities; unreviewed variants such as
+"Pepperstone (UK)" now FAIL CLOSED until cataloged); uncataloged aliases
+match their derived token by EXACT equality (containment removed); the
+generic `ctrader` id stays agnostic.
+
+The actual provider identity returned by cTrader discovery is PERSISTED as
+sanitized connection metadata: `broker.broker_connections
+.provider_broker_identity` (migration 1753900000000) — server-derived ONLY
+(2149 discovery at OAuth link; the public ConnectBrokerDto can never
+submit or overwrite it), null = unknown.
+
+Production-LIVE eligibility is IDENTITY-SCOPED (finding 10): a future
+`ctrader.productionLiveVerification = VERIFIED` can never blanket-authorize
+Pepperstone, IC Markets, or an unknown broker. Verification evidence is
+modeled per (canonical provider technology, actual provider identity,
+environment, evidence reference, verified timestamp); a connection gains
+LIVE eligibility only from VERIFIED evidence EXACTLY matching its
+server-derived identity. Unknown identity is fail-closed; technology-level
+evidence authorizes nothing by itself. THIS ROUND: `ctrader`,
+`pepperstone-ctrader`, and `icmarkets-ctrader` ALL remain
+`productionLiveVerification = UNVERIFIED` — the added identity-scoped gate
+is redundantly fail-closed today and exists so a future flip can never
+leak authorization across identities.
+
+All existing safety/execution gates are unchanged: Risk Engine APPROVED,
+execution control plane, authorization state machine, LIVE ACTIVE
+requirement, credential lifecycle/encryption, DEMO-before-LIVE,
+production-LIVE verification, OAuth token secrecy, mobile one-time
+handoff, tenant isolation, audit redaction, decimal-string money, paper
+isolation, and Round-3 adapter/session isolation. No AI/signal/risk/
+profit-sharing/funding behavior was touched.

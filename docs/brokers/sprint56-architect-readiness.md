@@ -146,3 +146,95 @@ and reconcile with the #291 branch (the contract ported here is byte-level
 cTrader, Pepperstone-via-cTrader and IC-Markets-via-cTrader remain **BETA**
 with `productionLiveVerification = UNVERIFIED`; no production-LIVE
 fail-closed gate was weakened in any round.
+
+## Correction round 4 (delivered on this branch — execution certainty, OAuth concurrency finalization, transport-generation fencing, provider-identity hardening)
+
+Baseline: round-3 head `64aaa96` (architecture preserved intact — no
+competing mechanism introduced). Findings closed:
+
+1. **Stale OAuth refresh invalidation (finding 1)** — terminal INVALID
+   writes are generation/lease-guarded (`markRefreshRejected` conditional
+   UPDATE on id + `credential_generation = observed` + own-lease-or-free).
+   A stale owner whose lease expired and whose generation was taken over
+   (N+1 persisted) can never poison the newer usable pair and never emits a
+   false refresh-failed audit against it; it converges onto the newer pair.
+   Genuine current-owner rejection: exactly one INVALID write for exactly
+   that generation, lease released atomically, one sanitized audit.
+   Adversarial proofs: expired-lease/takeover/late-rejection (A),
+   takeover + persistence failure (B), genuine owner (C), 20-concurrent
+   no-takeover (D), live-lease stale owner (E), unreclaimed-lease dead pair
+   (F) + PostgreSQL integration re-proofs.
+2. **LINKING exactly-once (finding 2)** — the stale-LINKING reclaim window
+   (`LINKING_STALE_MS`) is REMOVED. Once AUTHORIZED → LINKING, no second
+   request may reclaim the flow (any age, any replica). A paused linker
+   (mid-`createConnection`) can never be overtaken; a different-account
+   takeover is rejected with zero side effects; exactly one
+   BrokerConnection, one linked audit, one flow consumer, no
+   account-selection mutation. A crashed linker's flow recovers by EXPIRY
+   (user restarts OAuth) — never by speculative replay.
+3. **cTrader transport write failure semantics (finding 3)** — explicit
+   outbound-write certainty: `NOT_WRITTEN` (queue-overflow, not-open,
+   queued-at-failure), `WRITE_ATTEMPTED_OUTCOME_UNKNOWN` (the frame whose
+   synchronous send threw — never replayed), `WRITTEN_AWAITING_RESPONSE`.
+   A synchronous write failure notifies the client IMMEDIATELY
+   (`onWriteFailure`), marks the transport generation unhealthy, clears
+   (and REPORTS) the unwritten queue, and reconnects with a NEW transport
+   generation. Frame contents/tokens never appear in logs.
+4. **Transport generation fencing (finding 4)** — monotonic
+   `transportGeneration` per `attachTransport`; every callback captures its
+   generation and operates only while current; the transport also
+   socket-identity-fences its own listeners. An old socket's
+   message/close/error/late-open events can never affect the current
+   generation (state, pending requests, waiters, heartbeat, reconnect
+   schedule, outbound queue). Ten adversarial transport proofs.
+5. **Provider-dispatch certainty (findings 5-6)** —
+   `ProviderDispatchCertainty`
+   (DEFINITELY_NOT_SENT / SENT_RESPONSE_RECEIVED /
+   MAY_HAVE_REACHED_PROVIDER) on every state-changing failure crossing the
+   execution boundary (PLACE, CLOSE_POSITION, CANCEL_ORDER, MODIFY/AMEND,
+   CLOSE_ALL) for MetaTrader, OANDA, cTrader and paper. Automatic retry is
+   allowed ONLY for DEFINITELY_NOT_SENT; everything else — including
+   UNCLASSIFIED errors — becomes RECONCILIATION_PENDING immediately. No
+   provider deduplication is assumed (cTrader clientOrderId/label/comment
+   are NOT broker-side exactly-once evidence). Read-only operations keep
+   their retry policy.
+6. **Reconciliation resolves uncertain writes (finding 7)** — uncertain
+   writes converge through the Round-3 connection-scoped adapter by
+   provider READ (never resubmission). Fixed a real convergence defect the
+   adversarial test exposed: the resolution path called the status-only
+   `resolveReconciliation(FILLED|PARTIALLY_FILLED)` which OrderService
+   rejects by design — the fill-bearing authority is now `applyFill`
+   (atomic, transitions the pending state itself) plus a guarded
+   `resolveReconciliationFillState` for fill-equal convergence (never
+   inventing economic facts). Concurrent resolution remains CAS-guarded:
+   exactly one authoritative convergence.
+7. **Versioned canonical provider-identity model (finding 8)** — substring
+   matching replaced by an explicit reviewed catalog
+   (`PROVIDER_IDENTITY_MODEL_VERSION = 1`): 'pepperstone-ctrader' → family
+   PEPPERSTONE, acceptable normalized titles ['pepperstone'];
+   'icmarkets-ctrader' → IC_MARKETS, ['icmarkets']; uncataloged aliases →
+   exact-token equality; unreviewed variants ("Pepperstone (UK)",
+   "IC Markets (AU)") fail CLOSED until cataloged with discovery evidence.
+8. **Persisted server-derived provider identity (finding 9)** —
+   `broker.broker_connections.provider_broker_identity`
+   (migration 1753900000000): sanitized normalized identity from 2149
+   discovery, set by the SERVER at OAuth link through an internal channel
+   (the public DTO can never submit or overwrite it); NULL = unknown.
+   Kept internal (no response-DTO exposure — no product need).
+9. **Identity-scoped production-LIVE verification (finding 10)** —
+   evidence modeled per (technology, identity, environment, evidence ref,
+   verified timestamp). A connection gains LIVE eligibility ONLY from
+   VERIFIED evidence EXACTLY matching its server-derived identity; unknown
+   identity fails closed; technology-level (generic ctrader) evidence
+   authorizes nothing by itself — one broker's verification can never
+   authorize another. THIS ROUND: `ctrader`, `pepperstone-ctrader`,
+   `icmarkets-ctrader` all remain BETA /
+   `productionLiveVerification = UNVERIFIED` — the identity gate is
+   redundantly fail-closed today.
+10. **CI truth** — GitHub Actions produced ZERO runs on the round-3 head
+    `64aaa96`; the exact-head CI/security matrix has NOT executed for this
+    branch. See the repository CI status for the round-4 head.
+
+No production-LIVE gate, execution safety gate, or Round-3
+adapter/session isolation was weakened; no AI/signal/risk/leverage/
+position-size/SL-TP/profit-sharing/funding behavior was modified.
