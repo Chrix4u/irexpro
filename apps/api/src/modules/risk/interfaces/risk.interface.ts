@@ -27,6 +27,16 @@ export interface RiskApprovalResult {
   /** Sprint 32 Gate 2: passed to ExecutionService for the final atomic
    * advisory-lock daily-trade-slot reservation. */
   maxDailyTrades: number;
+  /** Round 5 (#301): opaque handle to the durable server-authoritative
+   * RiskGrant issued with this approval. ExecutionService must verify +
+   * atomically consume the grant at the final dispatch boundary — a
+   * caller-constructed approval object is never sufficient. */
+  grantId?: string;
+  /** Round 5 (#295/#298): the exact authority the grant is bound to. */
+  sessionId?: string;
+  sessionGeneration?: number;
+  executionMode?: string;
+  brokerConnectionId?: string;
 }
 
 export interface RiskRejectionResult {
@@ -73,6 +83,17 @@ export interface ProposedTrade {
   volatilityScore?: number;
   /** Market regime classification from AI. */
   regime?: 'TRENDING' | 'RANGING' | 'LOW_LIQUIDITY' | 'HIGH_VOLATILITY';
+  /** Round 5 authority binding (#295/#298): the EXACT execution target.
+   * Supplied by the pipeline from the ACTIVE TradingSession; RiskService
+   * uses session.brokerConnectionId — never findActiveConnectionForUser().
+   * Missing binding for NEW exposure fails closed (typed rejection). */
+  sessionId?: string;
+  sessionGeneration?: number;
+  executionMode?: string;
+  brokerConnectionId?: string;
+  /** Round 5 (#302): producer-assigned signal generation timestamp for
+   * freshness + future-skew enforcement. */
+  generatedAt?: Date;
 }
 
 // ─── Rejection codes ──────────────────────────────────────────────────────────
