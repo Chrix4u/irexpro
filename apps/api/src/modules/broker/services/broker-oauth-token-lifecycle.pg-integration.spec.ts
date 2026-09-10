@@ -1,4 +1,5 @@
 import { ConfigService } from '@nestjs/config';
+import { ConflictException } from '@nestjs/common';
 import { DataSource, Repository } from 'typeorm';
 import { BrokerOAuthTokenLifecycleService } from './broker-oauth-token-lifecycle.service';
 import { BrokerConnection } from '../entities/broker-connection.entity';
@@ -9,6 +10,7 @@ import { AuditService } from '../../audit/audit.service';
 import { AuditAction } from '../../../common/enums/audit-action.enum';
 import { BrokerCredentialStatus } from '../authorization/broker-credential-status';
 import { DecryptedBrokerCredentials } from '../interfaces/broker-adapter.interface';
+import { BrokerAdapterError, BrokerErrorCode } from '../interfaces/broker-adapter.errors';
 
 /**
  * Sprint 56 correction round 2 (architect finding 3) — concurrent OAuth
@@ -43,7 +45,7 @@ describe('BrokerOAuthTokenLifecycleService concurrent refresh — real PostgreSQ
   let audit: { log: jest.Mock };
 
   /** One simulated API replica sharing the repo + provider mock. */
-  const makeInstance = (): BrokerOAuthTokenLifecycleService =>
+  const makeInstance = (seams: { leaseMs?: number } = {}): BrokerOAuthTokenLifecycleService =>
     new (class extends BrokerOAuthTokenLifecycleService {
       constructor() {
         super(
@@ -52,7 +54,7 @@ describe('BrokerOAuthTokenLifecycleService concurrent refresh — real PostgreSQ
           ctraderClient as unknown as CTraderClientService,
           audit as unknown as AuditService,
         );
-        this.leaseMs = 5_000;
+        this.leaseMs = seams.leaseMs ?? 5_000;
         this.waitBudgetMs = 5_000;
         this.pollIntervalMs = 5;
       }
@@ -245,5 +247,74 @@ describe('BrokerOAuthTokenLifecycleService concurrent refresh — real PostgreSQ
     expect(row!.credentialGeneration).toBe(1);
     expect(row!.credentialRefreshLeaseExpiresAt).toBeNull();
     expect(refreshedAuditCount()).toBe(1);
+  });
+
+  // ─── Sprint 56 correction round 4 (architect finding 1) — stale refresh ──
+  // owners can never invalidate a newer generation, proven on real PostgreSQL.
+
+  it('STALE OWNER (expired lease, takeover persisted N+1, late AUTHENTICATION_FAILED) can never poison the newer generation', async () => {
+    const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+    ctraderClient.refreshAccessToken
+      .mockImplementationOnce(async (): Promise<CtraderOAuthTokens> => {
+        await delay(150);
+        throw new BrokerAdapterError(
+          BrokerErrorCode.AUTHENTICATION_FAILED,
+          'CH_ACCESS_TOKEN_INVALID: the refresh token is dead',
+        );
+      })
+      .mockImplementation(
+        async (): Promise<CtraderOAuthTokens> => ({
+          accessToken: 'PG-B-ACCESS',
+          refreshToken: 'PG-B-REFRESH',
+          expiresIn: 2_628_000,
+        }),
+      );
+    const instanceA = makeInstance({ leaseMs: 60 });
+    const instanceB = makeInstance();
+
+    const promiseA = instanceA.ensureFreshTokens(connectionFixture(), staleCredentials());
+    await delay(80); // A's 60ms lease EXPIRED; A's provider call still in flight
+    const resultB = await instanceB.ensureFreshTokens(connectionFixture(), staleCredentials());
+    const resultA = await promiseA;
+
+    // B's takeover pair persisted at generation 1 and stays usable.
+    expect(resultB.apiKey).toBe('PG-B-ACCESS');
+    const row = await connectionRepo.findOne({ where: { id: CONN } });
+    expect(row!.credentialStatus).toBe(BrokerCredentialStatus.ROTATED);
+    expect(row!.credentialGeneration).toBe(1);
+    expect(row!.credentialRefreshLeaseExpiresAt).toBeNull();
+    // A CONVERGES onto B's pair (no error, no poison).
+    expect(resultA.apiKey).toBe('PG-B-ACCESS');
+    // ZERO stale INVALID overwrite and ZERO false refresh-failed audits.
+    expect(row!.credentialStatus).not.toBe(BrokerCredentialStatus.INVALID);
+    const failedAudits = audit.log.mock.calls.filter(
+      (c) => c[0].action === AuditAction.BROKER_OAUTH_TOKEN_REFRESH_FAILED,
+    );
+    expect(failedAudits).toHaveLength(0);
+    expect(refreshedAuditCount()).toBe(1);
+  });
+
+  it('GENUINE owner auth rejection (no takeover) marks generation N INVALID exactly once on real PostgreSQL', async () => {
+    ctraderClient.refreshAccessToken.mockRejectedValue(
+      new BrokerAdapterError(
+        BrokerErrorCode.AUTHENTICATION_FAILED,
+        'CH_ACCESS_TOKEN_INVALID: the refresh token is dead',
+      ),
+    );
+    const service = makeInstance();
+
+    await expect(
+      service.ensureFreshTokens(connectionFixture(), staleCredentials()),
+    ).rejects.toThrow(ConflictException);
+
+    const row = await connectionRepo.findOne({ where: { id: CONN } });
+    expect(row!.credentialStatus).toBe(BrokerCredentialStatus.INVALID);
+    expect(row!.credentialGeneration).toBe(0);
+    expect(row!.credentialRefreshLeaseExpiresAt).toBeNull();
+    const failedAudits = audit.log.mock.calls.filter(
+      (c) => c[0].action === AuditAction.BROKER_OAUTH_TOKEN_REFRESH_FAILED,
+    );
+    expect(failedAudits).toHaveLength(1);
+    expect(failedAudits[0][0].metadata.credentialGeneration).toBe(0);
   });
 });

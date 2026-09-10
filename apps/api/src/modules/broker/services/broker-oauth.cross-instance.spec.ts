@@ -217,6 +217,94 @@ describe('BrokerOAuthService cross-instance flow store (architect finding 2)', (
     expect(stored!.state).toBe('CONSUMED');
   });
 
+  // ─── Sprint 56 correction round 4 (architect finding 2): LINKING is
+  // exactly-once — the stale-LINKING reclaim window is REMOVED. A paused
+  // linker can never be overtaken by a second claimant, no matter how long
+  // it pauses. ────────────────────────────────────────────────────────────
+
+  it("PAUSED linker is never overtaken: B cannot reclaim A's LINKING claim even far past the former stale threshold (exactly-once, finding 2)", async () => {
+    const a = makeInstance();
+    const b = makeInstance();
+    const start = await authorizeOn(a);
+    await a.completeAuthorization(USER, start.flowId, AUTHORIZATION_CODE);
+
+    // Pause instance A INSIDE createConnection (mid-side-effect).
+    const resume: { fn?: (value: unknown) => void } = {};
+    brokerService.createConnection.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resume.fn = resolve;
+        }),
+    );
+    const promiseA = a.linkAccount(USER, start.flowId, '1234567');
+    // Let A reach the paused createConnection (LINKING claim already made).
+    await new Promise((r) => setTimeout(r, 25));
+
+    // Advance FAR beyond the former 60 s stale threshold — time alone must
+    // NOT make the claim re-claimable.
+    await flowRepo.update(start.flowId, {
+      stateChangedAt: new Date(Date.now() - 300_000),
+    });
+
+    // Instance B attempts to link (same account AND a different account).
+    await expect(b.linkAccount(USER, start.flowId, '1234567')).rejects.toThrow(
+      'Account linking is already in progress',
+    );
+    await expect(b.linkAccount(USER, start.flowId, '7654321')).rejects.toThrow(
+      'Account linking is already in progress',
+    );
+    // B never reached a side effect.
+    expect(brokerService.createConnection).toHaveBeenCalledTimes(1); // only A's in-flight call
+
+    // Resume A — the ONLY linker completes.
+    resume.fn?.({
+      id: 'new-conn-1',
+      brokerId: 'ctrader',
+      accountType: BrokerMode.DEMO,
+    } as unknown as BrokerConnection);
+    const connection = await promiseA;
+    expect(connection.id).toBe('new-conn-1');
+
+    // EXACTLY ONE connection-creation side effect in total.
+    expect(brokerService.createConnection).toHaveBeenCalledTimes(1);
+    // The DTO carried A's ORIGINAL account selection — no account mutation.
+    const dto = brokerService.createConnection.mock.calls[0][0];
+    expect(dto.accountId).toBe('1234567');
+    // EXACTLY ONE flow consumer: CONSUMED with token columns zeroed once.
+    const stored = await flowRepo.findOne({ where: { id: start.flowId } });
+    expect(stored!.state).toBe('CONSUMED');
+    expect(stored!.tokenCiphertext).toBeNull();
+    expect(stored!.tokenIv).toBeNull();
+    expect(stored!.tokenTag).toBeNull();
+    // EXACTLY ONE successful linked audit.
+    const linkedAudits = audit.log.mock.calls.filter(
+      (c) => c[0].action === AuditAction.BROKER_OAUTH_ACCOUNT_LINKED,
+    );
+    expect(linkedAudits).toHaveLength(1);
+    // No duplicate credential submission (exactly one createConnection call
+    // means exactly one encrypted-credential write through the broker service).
+  });
+
+  it('a crashed LINKING flow is recovered by EXPIRY, never by reclaim (finding 2)', async () => {
+    const a = makeInstance();
+    const start = await authorizeOn(a);
+    await a.completeAuthorization(USER, start.flowId, AUTHORIZATION_CODE);
+
+    // A crashed linker left the flow in LINKING; the authorization TTL lapses.
+    await flowRepo.update(start.flowId, {
+      state: 'LINKING',
+      expiresAt: new Date(Date.now() - 1_000),
+    });
+
+    // Any later link attempt fails closed with the expiry message and the
+    // expired row is deleted (bounded store).
+    await expect(a.linkAccount(USER, start.flowId, '1234567')).rejects.toThrow(
+      'The broker OAuth authorization has expired',
+    );
+    expect(await flowRepo.findOne({ where: { id: start.flowId } })).toBeNull();
+    expect(brokerService.createConnection).not.toHaveBeenCalled();
+  });
+
   it('a THIRD instance (process restart) continues an otherwise-valid flow', async () => {
     // Instance A starts the flow, then is "restarted away" — the state lives
     // in the shared store, not in any process.

@@ -686,16 +686,38 @@ describe('BrokerOAuthService (Sprint 56 correction round 2 — findings 2 + 4)',
       await expect(service.linkAccount(USER, flowId, '1234567')).rejects.toThrow(ConflictException);
     });
 
-    it('re-claims a STALE linking claim (crash recovery after 60s)', async () => {
-      brokerService.createConnection.mockResolvedValue(linkedConnection);
+    it('NEVER re-claims a LINKING claim — not even far beyond the former 60s stale threshold (exactly-once, finding 2)', async () => {
       const flowId = await authorizedFlowId();
-      // A crashed/abandoned LINKING claim older than 60 s is re-claimable.
+      // A crashed/abandoned LINKING claim, arbitrarily old. Correction round
+      // 4: there is NO automatic stale reclaim — the flow must expire and
+      // the user restarts OAuth. Re-claiming would allow a SECOND
+      // createConnection side effect with only one final flow winner.
       await flowRepo.update(flowId, {
         state: 'LINKING',
-        stateChangedAt: new Date(Date.now() - 61_000),
+        stateChangedAt: new Date(Date.now() - 300_000),
       });
-      await expect(service.linkAccount(USER, flowId, '1234567')).resolves.toBe(linkedConnection);
-      expect((await row(flowId))!.state).toBe('CONSUMED');
+      await expect(service.linkAccount(USER, flowId, '1234567')).rejects.toThrow(
+        'Account linking is already in progress',
+      );
+      // No connection side effect was attempted by the rejected caller.
+      expect(brokerService.createConnection).not.toHaveBeenCalled();
+      // The flow row stays LINKING (not consumed, not restored).
+      expect((await row(flowId))!.state).toBe('LINKING');
+    });
+
+    it('rejects a DIFFERENT-ACCOUNT takeover attempt on a claimed LINKING flow (finding 2)', async () => {
+      // Instance A claimed account X ('1234567') and is mid-link. A second
+      // call selecting account Y ('7654321') must NEVER link Y through A's
+      // claimed flow.
+      const flowId = await authorizedFlowId();
+      await flowRepo.update(flowId, {
+        state: 'LINKING',
+        stateChangedAt: new Date(),
+      });
+      await expect(service.linkAccount(USER, flowId, '7654321')).rejects.toThrow(
+        'Account linking is already in progress',
+      );
+      expect(brokerService.createConnection).not.toHaveBeenCalled();
     });
 
     it('consumes the flow when the stored token bundle cannot be decrypted (tampering)', async () => {

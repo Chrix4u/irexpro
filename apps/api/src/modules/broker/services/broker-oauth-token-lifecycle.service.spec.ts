@@ -492,7 +492,7 @@ describe('BrokerOAuthTokenLifecycleService (Sprint 56 correction — audit point
       refreshToken: NEW_REFRESH_TOKEN,
       expiresIn: 2_628_000,
     });
-    // Claim = attempt 1, CAS persist = attempt 2, release = attempt 3.
+    // Claim = attempt 1, CAS persist = attempt 2 (THROWS), guarded INVALID = attempt 3.
     repo.failConditionalUpdateAttempt = 2;
     await expect(
       service.ensureFreshTokens(ctraderConnection(), credentialsWithTokens()),
@@ -502,10 +502,16 @@ describe('BrokerOAuthTokenLifecycleService (Sprint 56 correction — audit point
     const row = repo.findOne({ where: { id: CONN_ID } })!;
     expect(row.credentialStatus).toBe(BrokerCredentialStatus.INVALID);
     expect(row.credentialRefreshLeaseExpiresAt).toBeNull();
-    const repoUpdates = repo.ops.filter((op) => op.kind === 'repo-update');
-    expect(repoUpdates[repoUpdates.length - 1].set).toEqual(
-      expect.objectContaining({ credentialStatus: BrokerCredentialStatus.INVALID }),
+    // Correction round 4: the INVALID write is a GUARDED conditional UPDATE
+    // (generation + lease identity — architect finding 1), not a blind
+    // repo.update by connection id.
+    const invalidWrites = repo.ops.filter(
+      (op) => op.set.credentialStatus === BrokerCredentialStatus.INVALID,
     );
+    expect(invalidWrites).toHaveLength(1);
+    expect(invalidWrites[0].kind).toBe('qb-update');
+    expect(invalidWrites[0].where).toContain('credential_generation = :observedGeneration');
+    expect(invalidWrites[0].affected).toBe(1);
   });
 
   // ─── Generation CAS: a stale refresh response never overwrites a newer pair ─

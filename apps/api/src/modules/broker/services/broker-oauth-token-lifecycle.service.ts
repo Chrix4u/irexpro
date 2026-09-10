@@ -50,6 +50,17 @@ import { BrokerAdapterError, BrokerErrorCode } from '../interfaces/broker-adapte
  * - a loser NEVER marks the credential INVALID merely because another
  *   request already rotated it (INVALID is only written by the winner's
  *   fail-closed paths: auth-class rejection / persist failure);
+ * - TERMINAL INVALID WRITES ARE OWNERSHIP/GUARDED (Sprint 56 correction
+ *   round 4, architect finding 1 — stale refresh owners): the failure path
+ *   carries the SAME generation-CAS protection as the success path. A
+ *   refresh-rejection write is a conditional UPDATE on (connection id,
+ *   credential_generation = observedGeneration, refresh lease = OUR claim
+ *   or free). A request whose lease EXPIRED — whose provider request was
+ *   overtaken by a takeover winner that persisted generation N+1 — can
+ *   therefore NEVER poison the newer, usable pair, and never emits a false
+ *   "refresh failed" audit against it. A genuine current-owner rejection
+ *   marks exactly ITS generation INVALID once, releases its own lease in the
+ *   same atomic write, and emits exactly one sanitized audit event.
  * - a hung winner's lease EXPIRES (leaseMs) so a waiter can steal the claim
  *   and complete the refresh — no permanent stall;
  * - budget exhaustion surfaces as a RETRYABLE, sanitized RATE_LIMITED error.
@@ -87,6 +98,25 @@ export const REFRESH_LEASE_MS = 30_000;
 export const REFRESH_WAIT_BUDGET_MS = 10_000;
 /** Lease-loser poll interval while waiting for the winner's generation. */
 export const REFRESH_POLL_INTERVAL_MS = 25;
+
+/**
+ * Outcome of a guarded refresh-rejection (INVALID) write (Sprint 56
+ * correction round 4, architect finding 1).
+ * - MARKED_INVALID: this request was the CURRENT owner of the observed
+ *   generation — the write marked exactly that generation INVALID and
+ *   released this request's own lease atomically.
+ * - SUPERSEDED_USABLE: a takeover winner persisted a NEWER USABLE pair —
+ *   the newer row is authoritative (never overwritten, never falsely
+ *   audited).
+ * - SUPERSEDED_NOT_USABLE: a newer generation exists but is NOT usable, or
+ *   another owner holds a LIVE lease on the same generation — never a write.
+ * - MARK_FAILED: the guarded write itself failed (logged, no false audit).
+ */
+type RefreshRejectionOutcome =
+  | 'MARKED_INVALID'
+  | 'SUPERSEDED_USABLE'
+  | 'SUPERSEDED_NOT_USABLE'
+  | 'MARK_FAILED';
 
 @Injectable()
 export class BrokerOAuthTokenLifecycleService {
@@ -336,10 +366,25 @@ export class BrokerOAuthTokenLifecycleService {
     } catch (err) {
       if (err instanceof BrokerAdapterError && err.code === BrokerErrorCode.AUTHENTICATION_FAILED) {
         // The refresh token is DEAD at the provider — the persisted pair can
-        // never authenticate again. Fail closed: mark INVALID and require
-        // re-authorization (never a silent fallback to the dead pair).
-        await this.markRefreshRejected(connection, err);
+        // never authenticate again. Fail closed: mark INVALID (guarded by OUR
+        // observed generation + lease identity — a lease-expiry takeover that
+        // already persisted a NEWER pair is authoritative and must survive)
+        // and require re-authorization (never a silent fallback to the dead
+        // pair).
+        const outcome = await this.markRefreshRejected(connection, err, {
+          observedGeneration,
+          claimUntil,
+        });
         await this.releaseLease(connection.id, claimUntil);
+        if (outcome === 'SUPERSEDED_USABLE') {
+          // A takeover winner persisted a NEWER usable pair while our provider
+          // request was in flight — the rejection we saw belongs to the OLD
+          // generation (already rotated away). The newer row is the truth.
+          const adopted = await this.tryAdoptNewerUsable(connection.id, observedGeneration);
+          if (adopted) {
+            return adopted; // no INVALID write, no audit, no error
+          }
+        }
         throw this.refreshRejectedConflict(connection.id);
       }
       // Transient (network / timeout / rate limit): the stored pair may still
@@ -395,10 +440,26 @@ export class BrokerOAuthTokenLifecycleService {
     } catch (persistErr) {
       // The provider issued a new pair but persistence failed: the STORED
       // (now dead) pair can never authenticate again — the honest state is
-      // INVALID (fail-closed), surfaced as a typed conflict.
-      await this.markRefreshRejected(connection, persistErr);
+      // INVALID (fail-closed), surfaced as a typed conflict. CORRECTION
+      // ROUND 4 (finding 1): the INVALID write is generation/lease-guarded —
+      // when a takeover winner already persisted a NEWER usable generation,
+      // that newer pair stays authoritative and THIS request converges onto
+      // it instead of poisoning it.
+      const outcome = await this.markRefreshRejected(connection, persistErr, {
+        observedGeneration,
+        claimUntil,
+      });
       await this.releaseLease(connection.id, claimUntil);
       this.zeroCredentials(updated);
+      if (outcome === 'SUPERSEDED_USABLE') {
+        const adopted = await this.tryAdoptNewerUsable(connection.id, observedGeneration);
+        if (adopted) {
+          return adopted; // the takeover winner's pair is the truth
+        }
+      }
+      if (outcome === 'SUPERSEDED_NOT_USABLE') {
+        throw this.staleGenerationConflict(connection.id);
+      }
       throw new ConflictException(
         `cTrader OAuth token refresh succeeded for connection ${connection.id} but the ` +
           'refreshed credential could not be persisted — the stored credential set is ' +
@@ -453,40 +514,129 @@ export class BrokerOAuthTokenLifecycleService {
 
   // ─── Fail-closed rejection + shared conflict messages ─────────────────────
 
-  /** Fail-closed rejection record (INVALID) + sanitized audit entry. */
-  private async markRefreshRejected(connection: BrokerConnection, err: unknown): Promise<void> {
+  /**
+   * Fail-closed rejection record (INVALID) — OWNERSHIP/GUARDED (Sprint 56
+   * correction round 4, architect finding 1).
+   *
+   * The write is a single conditional UPDATE on:
+   *   - connection id matches; AND
+   *   - credential_generation = observedGeneration (generation CAS); AND
+   *   - the refresh lease is still OUR claim, or has been released entirely.
+   *
+   * Semantics:
+   * - MARKED_INVALID: THIS request was the current owner of the observed
+   *   generation and the row is exactly that generation — the write marks
+   *   exactly that generation INVALID, releases OUR OWN lease in the SAME
+   *   atomic UPDATE, and emits EXACTLY ONE sanitized audit event (timestamps
+   *   / ids / generation only — never token material).
+   * - affected rows = 0 → reload the authoritative row: a NEWER usable
+   *   generation is the truth — NEVER overwrite it, NEVER emit a false
+   *   "refresh failed" audit against it (SUPERSEDED_USABLE). A newer
+   *   non-usable generation yields SUPERSEDED_NOT_USABLE.
+   * - A row that moved to a DIFFERENT owner's live lease (takeover in
+   *   flight, same generation) is also never overwritten — the takeover
+   *   winner's own terminal path decides that generation's fate.
+   * - A DB write failure is MARK_FAILED (logged; the audit may still record
+   *   the observed-generation provider rejection truthfully).
+   */
+  private async markRefreshRejected(
+    connection: BrokerConnection,
+    err: unknown,
+    guard: { observedGeneration: number; claimUntil: Date },
+  ): Promise<RefreshRejectionOutcome> {
+    let affected: number | undefined;
     try {
-      await this.connectionRepo.update(connection.id, {
-        credentialStatus: BrokerCredentialStatus.INVALID,
-        lastErrorMessage: 'OAuth token refresh rejected — re-authorization required',
-      });
+      const result = await this.connectionRepo
+        .createQueryBuilder()
+        .update(BrokerConnection)
+        .set({
+          credentialStatus: BrokerCredentialStatus.INVALID,
+          lastErrorMessage: 'OAuth token refresh rejected — re-authorization required',
+          // Release OUR OWN lease in the SAME atomic write (a stale claim's
+          // lease is never cleared here — the WHERE clause excludes it).
+          credentialRefreshLeaseExpiresAt: null,
+        })
+        .where(
+          'id = :id AND credential_generation = :observedGeneration AND ' +
+            '(credential_refresh_lease_expires_at = :claimUntil OR ' +
+            'credential_refresh_lease_expires_at IS NULL)',
+          {
+            id: connection.id,
+            observedGeneration: guard.observedGeneration,
+            claimUntil: guard.claimUntil,
+          },
+        )
+        .execute();
+      affected = result.affected;
     } catch (markErr) {
       this.logger.error(
         `Failed to mark connection=${connection.id} INVALID after refresh rejection: ` +
           `${(markErr as Error).message}`,
       );
+      return 'MARK_FAILED';
     }
-    await this.auditService
-      .log({
-        actorUserId: connection.userId,
-        action: AuditAction.BROKER_OAUTH_TOKEN_REFRESH_FAILED,
-        resourceType: 'BrokerConnection',
-        resourceId: connection.id,
-        metadata: {
-          brokerId: connection.brokerId,
-          accountId: connection.accountId,
-          error:
-            err instanceof BrokerAdapterError
-              ? `${err.code}`
-              : err instanceof Error
-                ? err.name
-                : 'UNKNOWN',
-        },
-        severity: AuditSeverity.WARNING,
-      })
-      .catch(() => {
-        /* audit best-effort — the INVALID marking above is the gate */
-      });
+
+    if (affected === 1) {
+      // Exactly ONE sanitized audit event for EXACTLY this generation.
+      await this.auditService
+        .log({
+          actorUserId: connection.userId,
+          action: AuditAction.BROKER_OAUTH_TOKEN_REFRESH_FAILED,
+          resourceType: 'BrokerConnection',
+          resourceId: connection.id,
+          metadata: {
+            brokerId: connection.brokerId,
+            accountId: connection.accountId,
+            credentialGeneration: guard.observedGeneration,
+            error:
+              err instanceof BrokerAdapterError
+                ? `${err.code}`
+                : err instanceof Error
+                  ? err.name
+                  : 'UNKNOWN',
+          },
+          severity: AuditSeverity.WARNING,
+        })
+        .catch(() => {
+          /* audit best-effort — the guarded INVALID marking above is the gate */
+        });
+      return 'MARKED_INVALID';
+    }
+
+    // affected = 0: the row moved — reload the AUTHORITATIVE row and let a
+    // newer USABLE generation win. NEVER overwrite it; NEVER audit a false
+    // "refresh failed" against a generation this request did not own.
+    const authoritative = await this.reloadRow(connection.id);
+    if (
+      authoritative &&
+      authoritative.credentialGeneration > guard.observedGeneration &&
+      BrokerCredentialLifecycle.isUsable(authoritative.credentialStatus)
+    ) {
+      return 'SUPERSEDED_USABLE';
+    }
+    if (authoritative && authoritative.credentialGeneration > guard.observedGeneration) {
+      return 'SUPERSEDED_NOT_USABLE';
+    }
+    // Same generation but another owner holds a LIVE lease (takeover in
+    // flight): never write, never audit — the current lease owner's own
+    // terminal path decides this generation. Surface the typed conflict.
+    return 'SUPERSEDED_NOT_USABLE';
+  }
+
+  /**
+   * Post-guard adoption: reload the row and decrypt a NEWER USABLE
+   * generation, if any (the takeover winner's pair is the truth). Returns
+   * null when no newer usable pair exists.
+   */
+  private async tryAdoptNewerUsable(
+    connectionId: string,
+    observedGeneration: number,
+  ): Promise<DecryptedBrokerCredentials | null> {
+    const row = await this.reloadRow(connectionId);
+    if (!row || (row.credentialGeneration ?? 0) <= observedGeneration) {
+      return null;
+    }
+    return this.adoptUsableNewerCredential(row);
   }
 
   /** The typed conflict thrown on BOTH the winner's and loser's INVALID path. */

@@ -22,7 +22,10 @@ import { AuditSeverity } from '../../audit/entities/audit-log.entity';
 import { CTRADER_FAMILY_BROKER_IDS } from '../registry/broker-catalog';
 import { BrokerMode } from '../interfaces/broker-adapter.interface';
 import { BrokerAdapterError, BrokerErrorCode } from '../interfaces/broker-adapter.errors';
-import { brokerIdentityMatches } from '../adapters/ctrader/ctrader-broker-identity';
+import {
+  brokerIdentityMatches,
+  normalizeProviderBrokerIdentity,
+} from '../adapters/ctrader/ctrader-broker-identity';
 import { CredentialEncryptionService } from './credential-encryption.service';
 
 /** Lifetime of a PENDING flow (authorization not yet completed). */
@@ -35,8 +38,6 @@ const HANDOFF_TOKEN_TTL_MS = 120_000;
 const MAX_CONCURRENT_FLOWS = 1000;
 /** Lazy sweep horizon: rows whose expires_at is older than this are deleted. */
 const FLOW_SWEEP_GRACE_MS = 60 * 60_000;
-/** A LINKING claim older than this may be re-claimed (crash recovery). */
-const LINKING_STALE_MS = 60_000;
 /** Handoff token entropy (bytes; base64url ⇒ ≥ 43 chars). */
 const HANDOFF_TOKEN_BYTES = 32;
 
@@ -429,21 +430,35 @@ export class BrokerOAuthService {
     const flow = await this.requireOwnedFlow(flowId, userId);
     await this.sweepStaleFlows();
 
-    const now = Date.now();
-    const staleLinking =
-      flow.state === 'LINKING' && flow.stateChangedAt.getTime() <= now - LINKING_STALE_MS;
-    if (flow.state !== 'AUTHORIZED' && !staleLinking) {
-      if (flow.state === 'PENDING') {
-        throw new ConflictException('This broker OAuth flow has not completed authorization yet.');
-      }
-      // AUTHORIZED→LINKING in flight elsewhere, or already CONSUMED.
+    // CONSUMED first — the inert row is never touched by the expiry check
+    // below (the sweep removes it later): "already used" is a terminal truth.
+    if (flow.state === 'CONSUMED') {
+      throw new ConflictException('This broker OAuth flow has already been used — start again.');
+    }
+
+    // Expiry: a crashed linker's LINKING flow is recovered by EXPIRY (row
+    // deleted, user restarts OAuth) — never by reclaim.
+    await this.assertNotExpired(flow, 'The broker OAuth authorization has expired — start again.');
+
+    // LINKING EXACTLY-ONCE (Sprint 56 correction round 4, architect finding
+    // 2): once a flow has transitioned AUTHORIZED → LINKING, NO second
+    // request may reclaim it — not after a timeout, not from another replica.
+    // The account connection (an external/application side effect) is created
+    // BEFORE the final flow consume CAS, so a stale-claim reclaim would allow
+    // TWO createConnection side effects with only one final flow transition
+    // winner — logging the anomaly afterwards is not an exactly-once
+    // guarantee. If the linking process dies mid-flight, the flow simply
+    // EXPIRES (authorizedTtl) and the user restarts OAuth — the safe outcome;
+    // speculative replay of a side-effecting operation is never automatic.
+    if (flow.state === 'PENDING') {
+      throw new ConflictException('This broker OAuth flow has not completed authorization yet.');
+    }
+    if (flow.state === 'LINKING') {
       throw new ConflictException(
-        flow.state === 'CONSUMED'
-          ? 'This broker OAuth flow has already been used — start again.'
-          : 'Account linking is already in progress for this authorization.',
+        'Account linking is already in progress for this authorization — wait for it ' +
+          'to finish or let it expire and start again.',
       );
     }
-    await this.assertNotExpired(flow, 'The broker OAuth authorization has expired — start again.');
 
     const accounts = (flow.accounts ?? []) as BrokerOAuthAccount[];
     const account = accounts.find((a) => a.ctidTraderAccountId === ctidTraderAccountId);
@@ -469,24 +484,15 @@ export class BrokerOAuthService {
       );
     }
 
-    // Single-use LINKING claim (CAS): exactly one concurrent linker proceeds;
-    // a crashed claim becomes re-claimable after LINKING_STALE_MS.
+    // Single-use LINKING claim (CAS): exactly one concurrent linker proceeds.
+    // The claim is PERMANENT until the flow expires or is consumed — a
+    // crashed linker is recovered by EXPIRY (user restarts OAuth), never by
+    // re-claiming a side-effecting operation.
     const claim = await this.flowRepo
       .createQueryBuilder()
       .update(BrokerOAuthFlow)
-      .set({ state: 'LINKING', stateChangedAt: new Date(now) })
-      .where(
-        staleLinking
-          ? 'id = :id AND state = :state AND state_changed_at <= :staleBoundary'
-          : 'id = :id AND state = :state',
-        staleLinking
-          ? {
-              id: flow.id,
-              state: 'LINKING',
-              staleBoundary: new Date(now - LINKING_STALE_MS),
-            }
-          : { id: flow.id, state: 'AUTHORIZED' },
-      )
+      .set({ state: 'LINKING', stateChangedAt: new Date() })
+      .where('id = :id AND state = :state', { id: flow.id, state: 'AUTHORIZED' })
       .execute();
     if (claim.affected !== 1) {
       throw new ConflictException('Account linking is already in progress for this authorization.');
@@ -533,7 +539,14 @@ export class BrokerOAuthService {
     };
 
     try {
-      const connection = await this.brokerService.createConnection(dto, userId, ipAddress);
+      // CORRECTION ROUND 4 (finding 9): the SERVER-DERIVED provider identity
+      // (normalized brokerTitleShort from the 2149 discovery that produced
+      // this flow's accounts) is persisted as connection metadata through an
+      // INTERNAL channel — the public ConnectBrokerDto can never submit or
+      // overwrite it. Sanitized (lowercase alphanumeric); null = unknown.
+      const connection = await this.brokerService.createConnection(dto, userId, ipAddress, {
+        providerBrokerIdentity: normalizeProviderBrokerIdentity(account.brokerTitleShort),
+      });
       // Single-use: the flow is consumed on successful linking (token columns
       // zeroed; expires_at=now so the sweep removes the inert row).
       const consumed = await this.casConsumeFromLinking(flow.id);
