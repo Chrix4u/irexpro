@@ -499,7 +499,12 @@ describe('ExecutionOrchestrator', () => {
       adapter.placeOrder.mockRejectedValueOnce(new Error('MetaAPI network error'));
       const outcome = await orchestrator.dispatchOrder(intent, connection);
 
-      expect(outcome).toMatchObject({ outcome: 'UNKNOWN', reason: 'MetaAPI network error' });
+      // Correction round 4 (finding 7): the reconciliation reason carries the
+      // write-certainty classification (sanitized) for downstream evidence.
+      expect(outcome).toMatchObject({
+        outcome: 'UNKNOWN',
+        reason: 'Dispatch error (MAY_HAVE_REACHED_PROVIDER): MetaAPI network error',
+      });
       expect(orderService.markReconciliationPending).toHaveBeenCalledWith('order-1');
       expect(auditService.log).toHaveBeenCalledWith(
         expect.objectContaining({

@@ -96,6 +96,7 @@ describe('ReconciliationResolutionService', () => {
   let tradeRepo: { update: jest.Mock };
   let orderService: {
     resolveReconciliation: jest.Mock;
+    resolveReconciliationFillState: jest.Mock;
     applyFill: jest.Mock;
     findByTradeId: jest.Mock;
   };
@@ -106,6 +107,7 @@ describe('ReconciliationResolutionService', () => {
     tradeRepo = { update: jest.fn().mockResolvedValue({ affected: 1 }) };
     orderService = {
       resolveReconciliation: jest.fn().mockResolvedValue(baseOrder()),
+      resolveReconciliationFillState: jest.fn().mockResolvedValue(baseOrder()),
       applyFill: jest.fn().mockResolvedValue(baseOrder()),
       findByTradeId: jest.fn().mockResolvedValue(null),
     };
@@ -265,15 +267,44 @@ describe('ReconciliationResolutionService', () => {
         providerOrder({ status: 'FILLED', filledQuantity: '1.0000', avgFillPrice: '1.10000' }),
       );
       expect(changed).toBe(true);
+      // applyFill is the FILL-BEARING authority: the atomic delta application
+      // itself transitions RECONCILIATION_PENDING → FILLED with its economic
+      // facts. CORRECTION ROUND 4 (finding 7): the old status-only
+      // resolveReconciliation(FILLED) call threw by design in production and
+      // is REMOVED — exactly one fill-bearing convergence, no status-only
+      // write that could invent a fill.
       expect(orderService.applyFill).toHaveBeenCalledWith('order-1', {
         quantity: '1',
         price: '1.10000',
         providerOrderId: 'ticket-1',
       });
-      expect(orderService.resolveReconciliation).toHaveBeenCalledWith(
+      expect(orderService.resolveReconciliation).not.toHaveBeenCalledWith(
         'order-1',
         OrderStatus.FILLED,
         expect.anything(),
+      );
+      expect(orderService.resolveReconciliationFillState).not.toHaveBeenCalled();
+    });
+
+    it('resolves a fill-equal RECONCILIATION_PENDING order through the FILL-BEARING entry point (no invented fill)', async () => {
+      // CORRECTION ROUND 4 (finding 7): when the recorded fill already
+      // matches the provider (no delta), the provider-observed status is
+      // recorded via resolveReconciliationFillState — guarded, never a
+      // status-only invention of economic facts.
+      const order = baseOrder({
+        status: OrderStatus.RECONCILIATION_PENDING,
+        filledQuantity: '1.0000',
+      });
+      const changed = await service.resolveOrderFromProviderState(
+        order,
+        providerOrder({ status: 'FILLED', filledQuantity: '1.0000' }),
+      );
+      expect(changed).toBe(true);
+      expect(orderService.applyFill).not.toHaveBeenCalled();
+      expect(orderService.resolveReconciliationFillState).toHaveBeenCalledWith(
+        'order-1',
+        OrderStatus.FILLED,
+        expect.objectContaining({ providerOrderId: 'ticket-1' }),
       );
     });
 

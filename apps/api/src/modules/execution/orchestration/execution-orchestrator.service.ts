@@ -9,7 +9,8 @@ import {
   BrokerOrderRequest,
   BrokerOrderResult,
 } from '../../broker/interfaces/broker-adapter.interface';
-import { RETRYABLE_BROKER_ERRORS } from '../../broker/interfaces/broker-adapter.errors';
+import { BrokerAdapterError } from '../../broker/interfaces/broker-adapter.errors';
+import { ProviderDispatchCertainty } from '../../broker/interfaces/provider-dispatch-certainty';
 import { ExecutionControlService } from '../../execution-control/execution-control.service';
 import { AuditService } from '../../audit/audit.service';
 import { AuditAction } from '../../../common/enums/audit-action.enum';
@@ -385,7 +386,13 @@ export class ExecutionOrchestrator {
       }
     } catch (err) {
       // ── UNKNOWN outcome: provider outcome cannot be determined ─────────
+      // CORRECTION ROUND 4 (finding 7): an uncertain write is NOT failure and
+      // is NOT permission to resend — it is an UNRESOLVED PROVIDER OUTCOME.
+      // The certainty classification is persisted with the reason and
+      // emitted in the sanitized audit/event evidence.
       const message = (err as Error).message ?? 'Unknown dispatch error';
+      const certainty = this.certaintyOf(err);
+      const reason = this.uncertaintyReason(message, certainty);
       this.logger.error(
         `Provider dispatch error for order ${order.id} (clientOrderId=${intent.clientOrderId}): ${message}`,
         (err as Error).stack,
@@ -394,7 +401,7 @@ export class ExecutionOrchestrator {
         order = await this.orderService.markReconciliationPending(order.id);
         await this.emitOrderEvent(DomainEventType.ORDER_RECONCILIATION_PENDING, intent, order, {
           status: OrderStatus.RECONCILIATION_PENDING,
-          reason: message,
+          reason,
         });
         await this.auditService.log({
           actorUserId: intent.userId,
@@ -403,7 +410,8 @@ export class ExecutionOrchestrator {
           resourceId: order.id,
           metadata: {
             clientOrderId: intent.clientOrderId,
-            reason: `Dispatch error: ${message}`,
+            reason,
+            dispatchCertainty: certainty,
             orderStatus: OrderStatus.RECONCILIATION_PENDING,
           },
           severity: AuditSeverity.CRITICAL,
@@ -415,8 +423,24 @@ export class ExecutionOrchestrator {
           `Could not move order ${order.id} to RECONCILIATION_PENDING: ${(transitionErr as Error).message}`,
         );
       }
-      return { outcome: 'UNKNOWN', order, orderId: order.id, reason: message };
+      return { outcome: 'UNKNOWN', order, orderId: order.id, reason };
     }
+  }
+
+  /** Sanitized certainty classification of a dispatch error (never UNKNOWN-certainty). */
+  private certaintyOf(err: unknown): ProviderDispatchCertainty {
+    if (err instanceof BrokerAdapterError && err.dispatchCertainty) {
+      return err.dispatchCertainty;
+    }
+    // Unclassified — conservatively uncertain: the request MAY have reached
+    // the provider (never auto-resent; reconciliation resolves it).
+    return ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER;
+  }
+
+  /** Reconciliation reason carrying the certainty classification. */
+  private uncertaintyReason(message: string, certainty: ProviderDispatchCertainty): string {
+    const bounded = message.slice(0, PROVIDER_REASON_MAX_LENGTH);
+    return `Dispatch error (${certainty}): ${sanitizeProviderReason(bounded)}`;
   }
 
   // ─── Provider dispatch mechanics ────────────────────────────────────────
@@ -482,9 +506,28 @@ export class ExecutionOrchestrator {
   }
 
   /**
-   * Retry/timeout wrapper for provider calls (unchanged semantics from the
-   * Sprint 32 ExecutionService implementation): 3 attempts, 10s timeout,
-   * exponential-ish backoff, only RETRYABLE_BROKER_ERRORS retry.
+   * Retry/timeout wrapper for STATE-CHANGING provider dispatches (PLACE,
+   * CLOSE_POSITION — every dispatchToProvider action is state-changing).
+   *
+   * CORRECTION ROUND 4 (architect findings 5 + 6) — PROVIDER-DISPATCH
+   * CERTAINTY: automatic retry of a state-changing provider operation is
+   * allowed ONLY when the failure PROVABLY never left iRexPro
+   * (dispatchCertainty === DEFINITELY_NOT_SENT — local validation/control
+   * rejection, pre-send rate-limit, queue-overflow before enqueue,
+   * known-closed connection before write). Everything else — a provider
+   * response timeout AFTER write, a connection loss after an attempted
+   * write, an ambiguous WebSocket write, an UNCLASSIFIED error, or a plain
+   * race-timeout while the provider call is still in flight — surfaces
+   * IMMEDIATELY so the order transitions RECONCILIATION_PENDING: an
+   * uncertain write is an unresolved provider outcome, NEVER permission to
+   * resend. (A lost PLACE response may mean the broker EXECUTED the order;
+   * resending could double a live position. cTrader clientOrderId/label and
+   * MetaTrader/OANDA request ids are NOT assumed to be broker-side
+   * exactly-once guarantees — no provider documentation evidence exists.)
+   *
+   * Read-only operations never pass through this wrapper — they keep their
+   * own transport-level retry policy (duplicate reads create no financial
+   * side effects).
    *
    * `call` is a FACTORY — each attempt invokes it afresh (never re-await a
    * settled promise).
@@ -504,24 +547,32 @@ export class ExecutionOrchestrator {
       } catch (err) {
         lastError = err as Error;
 
-        const isRetryable =
-          err instanceof Error &&
-          'errorCode' in err &&
-          RETRYABLE_BROKER_ERRORS.has((err as { errorCode: string }).errorCode as never);
-
-        if (!isRetryable || attempt === MAX_RETRY_ATTEMPTS - 1) {
+        // CERTAINTY GATE: only failures the adapter PROVED never reached the
+        // provider may be retried. Unclassified errors are conservatively
+        // uncertain — surfaced, never resent.
+        if (!this.isDefinitelyNotSent(err) || attempt === MAX_RETRY_ATTEMPTS - 1) {
           throw err;
         }
 
         const delay = RETRY_DELAYS_MS[attempt] ?? 9_000;
         this.logger.warn(
-          `Broker order attempt ${attempt + 1} failed (${lastError.message}) — retrying in ${delay}ms`,
+          `Broker order attempt ${attempt + 1} failed (${lastError.message}) — the request ` +
+            'provably never reached the provider (DEFINITELY_NOT_SENT); retrying in ' +
+            `${delay}ms`,
         );
         await new Promise((r) => setTimeout(r, delay));
       }
     }
 
     throw lastError ?? new Error('All retry attempts exhausted');
+  }
+
+  /** True only for adapter failures PROVEN to have never left iRexPro. */
+  private isDefinitelyNotSent(err: unknown): boolean {
+    return (
+      err instanceof BrokerAdapterError &&
+      err.dispatchCertainty === ProviderDispatchCertainty.DEFINITELY_NOT_SENT
+    );
   }
 
   // ─── Event + audit helpers ──────────────────────────────────────────────

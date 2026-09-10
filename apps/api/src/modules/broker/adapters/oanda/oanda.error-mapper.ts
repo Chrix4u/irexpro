@@ -4,6 +4,7 @@ import {
   RETRYABLE_BROKER_ERRORS,
   redactSecret,
 } from '../../interfaces/broker-adapter.errors';
+import { ProviderDispatchCertainty } from '../../interfaces/provider-dispatch-certainty';
 import { OandaErrorBody } from './oanda.transport';
 
 /**
@@ -97,6 +98,9 @@ export function mapOandaError(err: unknown, secret: string | undefined): BrokerA
       redactSecret(`OANDA request failed: ${err.message}`, secret),
       redactSecret(brokerMessage, secret),
       RETRYABLE_BROKER_ERRORS.has(code),
+      // CORRECTION ROUND 4 (finding 6): an HTTP RESPONSE exists — the
+      // provider answered this request; the outcome is authoritative.
+      ProviderDispatchCertainty.SENT_RESPONSE_RECEIVED,
     );
   }
 
@@ -108,6 +112,10 @@ export function mapOandaError(err: unknown, secret: string | undefined): BrokerA
       redactSecret(`OANDA connection timeout: ${message}`, secret),
       redactSecret(message, secret),
       RETRYABLE_BROKER_ERRORS.has(BrokerErrorCode.CONNECTION_TIMEOUT),
+      // CORRECTION ROUND 4 (finding 6): the request was SUBMITTED to the
+      // network and the response never arrived — the provider may have
+      // received (and executed) it. Reconcile, never resend.
+      ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER,
     );
   }
   return new BrokerAdapterError(
@@ -115,6 +123,9 @@ export function mapOandaError(err: unknown, secret: string | undefined): BrokerA
     redactSecret(`OANDA provider unavailable: ${message}`, secret),
     redactSecret(message, secret),
     RETRYABLE_BROKER_ERRORS.has(BrokerErrorCode.PROVIDER_UNAVAILABLE),
+    // A raw network failure cannot prove the request never left iRexPro —
+    // conservative uncertainty (correction round 4, finding 6).
+    ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER,
   );
 }
 

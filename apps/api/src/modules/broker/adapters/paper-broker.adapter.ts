@@ -20,6 +20,7 @@ import {
   RequiredMarginParams,
 } from '../interfaces/broker-adapter.interface';
 import { BrokerAdapterError, BrokerErrorCode } from '../interfaces/broker-adapter.errors';
+import { ProviderDispatchCertainty } from '../interfaces/provider-dispatch-certainty';
 
 /**
  * PaperBrokerAdapter — safe simulated broker for paper trading only.
@@ -814,81 +815,89 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   // ─── Order management ─────────────────────────────────────────────────────
 
   async placeOrder(order: BrokerOrderRequest): Promise<BrokerOrderResult> {
-    this.assertConnected();
-    // Order-kind + parameter validation runs BEFORE any order creation
-    // (fail-closed, never silently downgrading a non-market order kind).
-    const orderKind = this.validateOrderKind(order);
-    const instrument = this.requireInstrument(order.instrument);
-    this.validateLotSize(order.lotSize);
-    const stopLoss = this.normalizeProtectionLevel(order.stopLoss, 'stopLoss');
-    const takeProfit = this.normalizeProtectionLevel(order.takeProfit, 'takeProfit');
-    // Price-parameter validation (fail-fast, MT/OANDA-adapter convention):
-    // LIMIT/STOP_LIMIT require a positive limitPrice; STOP/STOP_LIMIT require
-    // a positive stopPrice.
-    if (orderKind === 'LIMIT' || orderKind === 'STOP_LIMIT') {
-      this.requirePositiveOrderPrice(orderKind, 'limitPrice', order.limitPrice);
-    }
-    if (orderKind === 'STOP' || orderKind === 'STOP_LIMIT') {
-      this.requirePositiveOrderPrice(orderKind, 'stopPrice', order.stopPrice);
-    }
+    // PAPER-ONLY write certainty (correction round 4, finding 6): the paper
+    // broker is fully LOCAL and deterministic — every failure provably never
+    // left iRexPro (there is no provider), so every error it throws is
+    // classified DEFINITELY_NOT_SENT.
+    try {
+      this.assertConnected();
+      // Order-kind + parameter validation runs BEFORE any order creation
+      // (fail-closed, never silently downgrading a non-market order kind).
+      const orderKind = this.validateOrderKind(order);
+      const instrument = this.requireInstrument(order.instrument);
+      this.validateLotSize(order.lotSize);
+      const stopLoss = this.normalizeProtectionLevel(order.stopLoss, 'stopLoss');
+      const takeProfit = this.normalizeProtectionLevel(order.takeProfit, 'takeProfit');
+      // Price-parameter validation (fail-fast, MT/OANDA-adapter convention):
+      // LIMIT/STOP_LIMIT require a positive limitPrice; STOP/STOP_LIMIT require
+      // a positive stopPrice.
+      if (orderKind === 'LIMIT' || orderKind === 'STOP_LIMIT') {
+        this.requirePositiveOrderPrice(orderKind, 'limitPrice', order.limitPrice);
+      }
+      if (orderKind === 'STOP' || orderKind === 'STOP_LIMIT') {
+        this.requirePositiveOrderPrice(orderKind, 'stopPrice', order.stopPrice);
+      }
 
-    // Idempotency — TRUE dedupe: a repeat request carrying the same stable
-    // identifier (clientOrderId, else idempotencyKey) returns the ORIGINAL
-    // placement result verbatim (no new order, no new fill).
-    const dedupeKey = order.clientOrderId ?? order.idempotencyKey;
-    const original = this._resultsByDedupeKey.get(dedupeKey);
-    if (original) {
+      // Idempotency — TRUE dedupe: a repeat request carrying the same stable
+      // identifier (clientOrderId, else idempotencyKey) returns the ORIGINAL
+      // placement result verbatim (no new order, no new fill).
+      const dedupeKey = order.clientOrderId ?? order.idempotencyKey;
+      const original = this._resultsByDedupeKey.get(dedupeKey);
+      if (original) {
+        this.logger.log(
+          `PaperBrokerAdapter: idempotent replay for key=${dedupeKey} ` +
+            `returns original result [PAPER_ONLY]`,
+        );
+        return { ...original };
+      }
+
+      this._orderCounter += 1;
+      const orderId = `paper-order-${this._orderCounter.toString().padStart(6, '0')}`;
+      const comment = [order.comment?.trim(), `idem:${order.idempotencyKey}`]
+        .filter((part) => part && part.length > 0)
+        .join(' | ');
+
+      let result: BrokerOrderResult;
+      if (orderKind === 'MARKET') {
+        result = this.executeMarketOrder(orderId, order, instrument, stopLoss, takeProfit, comment);
+      } else {
+        const placedAt = this._clock.now();
+        const working: PaperWorkingOrder = {
+          orderId,
+          dedupeKey,
+          comment,
+          instrument,
+          direction: order.direction,
+          lotSize: order.lotSize.trim(),
+          orderKind,
+          timeInForce: order.timeInForce ?? 'GTC',
+          limitPrice: order.limitPrice?.trim(),
+          stopPrice: order.stopPrice?.trim(),
+          stopLoss,
+          takeProfit,
+          status: 'WORKING',
+          placedAt,
+        };
+        this._working.push(working);
+        this._orderStates.set(orderId, this.workingOrderState(working));
+        result = {
+          success: true,
+          externalOrderId: orderId,
+          status: 'PENDING',
+          brokerMessage: `PAPER_ONLY simulated working ${orderKind} order`,
+        };
+      }
+
+      this._resultsByDedupeKey.set(dedupeKey, result);
       this.logger.log(
-        `PaperBrokerAdapter: idempotent replay for key=${dedupeKey} ` +
-          `returns original result [PAPER_ONLY]`,
+        `PaperBrokerAdapter: simulated order placed id=${orderId} ` +
+          `instrument=${instrument} dir=${order.direction} lot=${order.lotSize} ` +
+          `kind=${orderKind} [PAPER_ONLY — no real order placed]`,
       );
-      return { ...original };
+      return result;
+    } catch (err) {
+      throw this.toLocalWriteError(err);
     }
-
-    this._orderCounter += 1;
-    const orderId = `paper-order-${this._orderCounter.toString().padStart(6, '0')}`;
-    const comment = [order.comment?.trim(), `idem:${order.idempotencyKey}`]
-      .filter((part) => part && part.length > 0)
-      .join(' | ');
-
-    let result: BrokerOrderResult;
-    if (orderKind === 'MARKET') {
-      result = this.executeMarketOrder(orderId, order, instrument, stopLoss, takeProfit, comment);
-    } else {
-      const placedAt = this._clock.now();
-      const working: PaperWorkingOrder = {
-        orderId,
-        dedupeKey,
-        comment,
-        instrument,
-        direction: order.direction,
-        lotSize: order.lotSize.trim(),
-        orderKind,
-        timeInForce: order.timeInForce ?? 'GTC',
-        limitPrice: order.limitPrice?.trim(),
-        stopPrice: order.stopPrice?.trim(),
-        stopLoss,
-        takeProfit,
-        status: 'WORKING',
-        placedAt,
-      };
-      this._working.push(working);
-      this._orderStates.set(orderId, this.workingOrderState(working));
-      result = {
-        success: true,
-        externalOrderId: orderId,
-        status: 'PENDING',
-        brokerMessage: `PAPER_ONLY simulated working ${orderKind} order`,
-      };
-    }
-
-    this._resultsByDedupeKey.set(dedupeKey, result);
-    this.logger.log(
-      `PaperBrokerAdapter: simulated order placed id=${orderId} ` +
-        `instrument=${instrument} dir=${order.direction} lot=${order.lotSize} ` +
-        `kind=${orderKind} [PAPER_ONLY — no real order placed]`,
-    );
-    return result;
   }
 
   /**
@@ -1023,97 +1032,109 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     externalOrderId: string,
     modifications: BrokerOrderModification,
   ): Promise<BrokerOrderResult> {
-    this.assertConnected();
-    const { newStopLoss, newTakeProfit, newTrailingStop } = modifications ?? {};
-    if (newStopLoss === undefined && newTakeProfit === undefined && newTrailingStop === undefined) {
-      throw new BrokerAdapterError(
-        BrokerErrorCode.INVALID_REQUEST,
-        'At least one modification (newStopLoss/newTakeProfit) is required.',
-      );
-    }
-    if (newTrailingStop !== undefined) {
-      // Honest: the paper engine does not simulate trailing stops (same
-      // fail-closed convention as the OANDA sibling).
-      throw new BrokerAdapterError(
-        BrokerErrorCode.INVALID_REQUEST,
-        'The paper broker does not simulate trailing stops (fail-closed — use stopLoss/takeProfit only).',
-      );
-    }
-    const stopLoss = this.normalizeProtectionLevel(newStopLoss, 'newStopLoss');
-    const takeProfit = this.normalizeProtectionLevel(newTakeProfit, 'newTakeProfit');
-
-    const position = this._positions.get(externalOrderId);
-    if (position) {
-      if (stopLoss !== undefined) position.stopLoss = stopLoss;
-      if (takeProfit !== undefined) position.takeProfit = takeProfit;
-    } else {
-      const working = this._working.find((o) => o.orderId === externalOrderId);
-      if (!working) {
+    try {
+      this.assertConnected();
+      const { newStopLoss, newTakeProfit, newTrailingStop } = modifications ?? {};
+      if (
+        newStopLoss === undefined &&
+        newTakeProfit === undefined &&
+        newTrailingStop === undefined
+      ) {
         throw new BrokerAdapterError(
-          BrokerErrorCode.POSITION_NOT_FOUND,
-          `"${externalOrderId}" is neither an open paper position nor a working paper order.`,
+          BrokerErrorCode.INVALID_REQUEST,
+          'At least one modification (newStopLoss/newTakeProfit) is required.',
         );
       }
-      // Protection attached to a working order is carried into the eventual fill.
-      if (stopLoss !== undefined) working.stopLoss = stopLoss;
-      if (takeProfit !== undefined) working.takeProfit = takeProfit;
+      if (newTrailingStop !== undefined) {
+        // Honest: the paper engine does not simulate trailing stops (same
+        // fail-closed convention as the OANDA sibling).
+        throw new BrokerAdapterError(
+          BrokerErrorCode.INVALID_REQUEST,
+          'The paper broker does not simulate trailing stops (fail-closed — use stopLoss/takeProfit only).',
+        );
+      }
+      const stopLoss = this.normalizeProtectionLevel(newStopLoss, 'newStopLoss');
+      const takeProfit = this.normalizeProtectionLevel(newTakeProfit, 'newTakeProfit');
+
+      const position = this._positions.get(externalOrderId);
+      if (position) {
+        if (stopLoss !== undefined) position.stopLoss = stopLoss;
+        if (takeProfit !== undefined) position.takeProfit = takeProfit;
+      } else {
+        const working = this._working.find((o) => o.orderId === externalOrderId);
+        if (!working) {
+          throw new BrokerAdapterError(
+            BrokerErrorCode.POSITION_NOT_FOUND,
+            `"${externalOrderId}" is neither an open paper position nor a working paper order.`,
+          );
+        }
+        // Protection attached to a working order is carried into the eventual fill.
+        if (stopLoss !== undefined) working.stopLoss = stopLoss;
+        if (takeProfit !== undefined) working.takeProfit = takeProfit;
+      }
+      return {
+        success: true,
+        externalOrderId,
+        status: 'FILLED',
+        brokerMessage: 'PAPER_ONLY simulated modification',
+      };
+    } catch (err) {
+      throw this.toLocalWriteError(err);
     }
-    return {
-      success: true,
-      externalOrderId,
-      status: 'FILLED',
-      brokerMessage: 'PAPER_ONLY simulated modification',
-    };
   }
 
   async closeOrder(externalOrderId: string, lotSize?: string): Promise<BrokerOrderResult> {
-    this.assertConnected();
-    const position = this._positions.get(externalOrderId);
-    if (!position) {
-      // Fail honestly (never a silent success): unknown ids are rejected;
-      // working-order ids carry a pointer to cancelOrder — their honest path.
-      const isWorking = this._working.some((o) => o.orderId === externalOrderId);
-      return {
-        success: false,
-        externalOrderId,
-        status: 'REJECTED',
-        brokerMessage: isWorking
-          ? 'PAPER_ONLY: working order — cancelOrder is the path for pending orders'
-          : 'PAPER_ONLY: unknown position — nothing to close',
-      };
-    }
-
-    let closeUnits: bigint;
-    let closedLot = position.lotSize;
-    if (lotSize === undefined) {
-      closeUnits = position.units; // full close
-    } else {
-      this.validateLotSize(lotSize);
-      if (compareDecimalStrings(lotSize.trim(), position.lotSize) > 0) {
-        throw new BrokerAdapterError(
-          BrokerErrorCode.INVALID_LOT_SIZE,
-          `Close lot size ${lotSize} exceeds the open size ${position.lotSize}.`,
-        );
+    try {
+      this.assertConnected();
+      const position = this._positions.get(externalOrderId);
+      if (!position) {
+        // Fail honestly (never a silent success): unknown ids are rejected;
+        // working-order ids carry a pointer to cancelOrder — their honest path.
+        const isWorking = this._working.some((o) => o.orderId === externalOrderId);
+        return {
+          success: false,
+          externalOrderId,
+          status: 'REJECTED',
+          brokerMessage: isWorking
+            ? 'PAPER_ONLY: working order — cancelOrder is the path for pending orders'
+            : 'PAPER_ONLY: unknown position — nothing to close',
+        };
       }
-      closeUnits = lotSizeToUnits(lotSize);
-      closedLot = lotSize.trim();
+
+      let closeUnits: bigint;
+      let closedLot = position.lotSize;
+      if (lotSize === undefined) {
+        closeUnits = position.units; // full close
+      } else {
+        this.validateLotSize(lotSize);
+        if (compareDecimalStrings(lotSize.trim(), position.lotSize) > 0) {
+          throw new BrokerAdapterError(
+            BrokerErrorCode.INVALID_LOT_SIZE,
+            `Close lot size ${lotSize} exceeds the open size ${position.lotSize}.`,
+          );
+        }
+        closeUnits = lotSizeToUnits(lotSize);
+        closedLot = lotSize.trim();
+      }
+
+      // Manual closes execute at the quote mid (zero-slippage paper model —
+      // an open-and-close without an intervening tick books exactly flat).
+      const quote = this._feed.quote();
+      const closePrice = quoteMid(quote);
+
+      this.closePositionUnits(position, closeUnits, closedLot, closePrice, 'MANUAL');
+      return {
+        success: true,
+        externalOrderId,
+        filledPrice: closePrice,
+        filledQuantity: closedLot,
+        filledAt: this._clock.now(),
+        status: 'FILLED',
+        brokerMessage: 'PAPER_ONLY simulated close',
+      };
+    } catch (err) {
+      throw this.toLocalWriteError(err);
     }
-
-    // Manual closes execute at the quote mid (zero-slippage paper model —
-    // an open-and-close without an intervening tick books exactly flat).
-    const quote = this._feed.quote();
-    const closePrice = quoteMid(quote);
-
-    this.closePositionUnits(position, closeUnits, closedLot, closePrice, 'MANUAL');
-    return {
-      success: true,
-      externalOrderId,
-      filledPrice: closePrice,
-      filledQuantity: closedLot,
-      filledAt: this._clock.now(),
-      status: 'FILLED',
-      brokerMessage: 'PAPER_ONLY simulated close',
-    };
   }
 
   /**
@@ -1123,42 +1144,46 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
    * documented honest choice, same mapping as the OANDA sibling).
    */
   async cancelOrder(externalOrderId: string): Promise<BrokerOrderResult> {
-    this.assertConnected();
-    const index = this._working.findIndex((o) => o.orderId === externalOrderId);
-    if (index === -1) {
-      throw new BrokerAdapterError(
-        BrokerErrorCode.POSITION_NOT_FOUND,
-        `"${externalOrderId}" is not a working paper order.`,
+    try {
+      this.assertConnected();
+      const index = this._working.findIndex((o) => o.orderId === externalOrderId);
+      if (index === -1) {
+        throw new BrokerAdapterError(
+          BrokerErrorCode.POSITION_NOT_FOUND,
+          `"${externalOrderId}" is not a working paper order.`,
+        );
+      }
+      const [cancelled] = this._working.splice(index, 1);
+      const now = this._clock.now();
+      this._orderStates.set(externalOrderId, {
+        providerOrderId: externalOrderId,
+        clientOrderId: cancelled.dedupeKey,
+        status: 'CANCELLED',
+        instrument: cancelled.instrument,
+        direction: cancelled.direction,
+        requestedQuantity: cancelled.lotSize,
+        filledQuantity: '0.0000',
+        avgFillPrice: null,
+        orderKind: cancelled.orderKind,
+        limitPrice: cancelled.limitPrice ?? null,
+        stopPrice: cancelled.stopPrice ?? null,
+        timeInForce: cancelled.timeInForce,
+        placedAt: cancelled.placedAt,
+        updatedAt: now,
+      });
+      this.logger.log(
+        `PaperBrokerAdapter: cancelled working order id=${externalOrderId} ` +
+          `kind=${cancelled.orderKind} [PAPER_ONLY]`,
       );
+      return {
+        success: true,
+        externalOrderId,
+        status: 'FILLED',
+        brokerMessage: 'PAPER_ONLY working order cancelled',
+      };
+    } catch (err) {
+      throw this.toLocalWriteError(err);
     }
-    const [cancelled] = this._working.splice(index, 1);
-    const now = this._clock.now();
-    this._orderStates.set(externalOrderId, {
-      providerOrderId: externalOrderId,
-      clientOrderId: cancelled.dedupeKey,
-      status: 'CANCELLED',
-      instrument: cancelled.instrument,
-      direction: cancelled.direction,
-      requestedQuantity: cancelled.lotSize,
-      filledQuantity: '0.0000',
-      avgFillPrice: null,
-      orderKind: cancelled.orderKind,
-      limitPrice: cancelled.limitPrice ?? null,
-      stopPrice: cancelled.stopPrice ?? null,
-      timeInForce: cancelled.timeInForce,
-      placedAt: cancelled.placedAt,
-      updatedAt: now,
-    });
-    this.logger.log(
-      `PaperBrokerAdapter: cancelled working order id=${externalOrderId} ` +
-        `kind=${cancelled.orderKind} [PAPER_ONLY]`,
-    );
-    return {
-      success: true,
-      externalOrderId,
-      status: 'FILLED',
-      brokerMessage: 'PAPER_ONLY working order cancelled',
-    };
   }
 
   /**
@@ -1167,28 +1192,59 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
    * exposure and stay working — cancelOrder is the path for those.
    */
   async closeAllOrders(): Promise<BrokerCloseAllResult> {
-    this.assertConnected();
-    const quote = this._feed.quote();
-    let closedCount = 0;
-    let failedCount = 0;
-    const errors: string[] = [];
+    try {
+      this.assertConnected();
+      const quote = this._feed.quote();
+      let closedCount = 0;
+      let failedCount = 0;
+      const errors: string[] = [];
 
-    for (const position of Array.from(this._positions.values())) {
-      try {
-        const closePrice = quoteMid(quote);
-        this.closePositionUnits(position, position.units, position.lotSize, closePrice, 'SYSTEM');
-        closedCount++;
-      } catch (err) {
-        failedCount++;
-        errors.push(String((err as Error).message));
+      for (const position of Array.from(this._positions.values())) {
+        try {
+          const closePrice = quoteMid(quote);
+          this.closePositionUnits(position, position.units, position.lotSize, closePrice, 'SYSTEM');
+          closedCount++;
+        } catch (err) {
+          failedCount++;
+          errors.push(String((err as Error).message));
+        }
       }
-    }
 
-    this.logger.log(
-      `PaperBrokerAdapter: closeAllOrders closed=${closedCount} failed=${failedCount} ` +
-        `(working orders left untouched: ${this._working.length}) [PAPER_ONLY]`,
+      this.logger.log(
+        `PaperBrokerAdapter: closeAllOrders closed=${closedCount} failed=${failedCount} ` +
+          `(working orders left untouched: ${this._working.length}) [PAPER_ONLY]`,
+      );
+      return { closedCount, failedCount, errors };
+    } catch (err) {
+      throw this.toLocalWriteError(err);
+    }
+  }
+
+  /**
+   * PAPER-ONLY write certainty (Sprint 56 correction round 4, finding 6):
+   * the paper broker is fully LOCAL and deterministic — every failure it
+   * throws provably never left iRexPro (no provider exists), so every error
+   * is classified DEFINITELY_NOT_SENT (retrying later is always safe).
+   */
+  private toLocalWriteError(err: unknown): BrokerAdapterError {
+    if (err instanceof BrokerAdapterError) {
+      if (err.dispatchCertainty) return err;
+      return new BrokerAdapterError(
+        err.code,
+        err.message,
+        err.brokerMessage,
+        err.isRetryable,
+        ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+      );
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    return new BrokerAdapterError(
+      BrokerErrorCode.UNKNOWN,
+      message,
+      message,
+      false,
+      ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
     );
-    return { closedCount, failedCount, errors };
   }
 
   // ─── Trade history ────────────────────────────────────────────────────────

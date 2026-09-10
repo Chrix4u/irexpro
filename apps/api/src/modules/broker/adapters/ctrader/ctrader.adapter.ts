@@ -98,6 +98,10 @@ import {
   RequiredMarginParams,
 } from '../../interfaces/broker-adapter.interface';
 import { BrokerAdapterError, BrokerErrorCode } from '../../interfaces/broker-adapter.errors';
+import {
+  ProviderDispatchCertainty,
+  withDefaultCertainty,
+} from '../../interfaces/provider-dispatch-certainty';
 import { redactString } from '../../../../common/utils/redact-sensitive.util';
 import { CTraderClientService } from './ctrader-client.service';
 import { assertDiscoveredBrokerIdentity } from './ctrader-broker-identity';
@@ -1838,14 +1842,28 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
   /**
    * Error normalization: BrokerAdapterError passes through; anything else is
    * redacted and typed UNKNOWN (never raw provider text, never credentials).
+   *
+   * WRITE-CERTAINTY (Sprint 56 correction round 4, architect findings 5-6):
+   * errors already classified by the transport/client layer (frame-level
+   * accounting) keep their precise classification; adapter-level errors get
+   * the code-based default (pre-send validation → DEFINITELY_NOT_SENT;
+   * provider-answered rejections → SENT_RESPONSE_RECEIVED). An UNCLASSIFIED
+   * raw error is conservatively MAY_HAVE_REACHED_PROVIDER — the orchestrator
+   * reconciles instead of resending.
    */
   private mapError(err: unknown): BrokerAdapterError {
     if (err instanceof BrokerAdapterError) {
-      return err;
+      return withDefaultCertainty(err);
     }
     const message = err instanceof Error ? err.message : String(err);
     const sanitized = redactString(message);
     this.logger.warn(`cTrader adapter call failed: ${sanitized}`);
-    return new BrokerAdapterError(BrokerErrorCode.UNKNOWN, sanitized, sanitized, false);
+    return new BrokerAdapterError(
+      BrokerErrorCode.UNKNOWN,
+      sanitized,
+      sanitized,
+      false,
+      ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER,
+    );
   }
 }
