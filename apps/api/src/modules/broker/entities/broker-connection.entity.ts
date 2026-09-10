@@ -67,6 +67,25 @@ export class BrokerConnection {
   @Column({ name: 'provider_broker_identity', type: 'varchar', length: 100, nullable: true })
   providerBrokerIdentity: string | null;
 
+  /**
+   * Logical broker-account identity key (Round 5, issue #332) —
+   * SERVER-COMPUTED canonical key:
+   *   `<providerTechnology>|<normalizedProviderIdentity|canonicalBrokerId>|<providerAccountId>`
+   * Enforced UNIQUE per user (partial unique index over non-deleted rows)
+   * so the same provider account cannot become duplicable by retrying an
+   * OAuth link or by selecting cTrader alias broker ids
+   * (ctrader / pepperstone-ctrader / icmarkets-ctrader).
+   *
+   * - SERVER-DERIVED ONLY (computed from provider discovery + connection
+   *   row; clients never submit it).
+   * - NULL = insufficient evidence (manual/legacy rows) — excluded from the
+   *   unique constraint until evidence exists.
+   * - Soft deletion frees the key for intentional relinking (documented
+   *   semantics: deleted_at IS NULL scope).
+   */
+  @Column({ name: 'logical_account_key', type: 'varchar', length: 255, nullable: true })
+  logicalAccountKey: string | null;
+
   @Column({
     name: 'account_type',
     type: 'varchar',

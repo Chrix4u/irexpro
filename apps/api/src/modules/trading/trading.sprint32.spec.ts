@@ -11,6 +11,7 @@ import { AiEngineClient } from '../ai-engine-client/ai-engine-client.service';
 import { OnboardingService } from '../users/onboarding.service';
 import { AllowedTradingMode } from '../risk/entities/risk-profile.entity';
 import { TradingSession, TradingSessionStatus } from '../execution/entities/trading-session.entity';
+import { ExecutionMode } from '../execution/interfaces/execution-authority';
 
 /**
  * Sprint 32 — Risk Profile Snapshot Immutability.
@@ -31,6 +32,8 @@ describe('TradingService — Sprint 32 Snapshot Immutability', () => {
       id: 'session-1',
       userId: 'user-1',
       brokerConnectionId: 'conn-1',
+      executionMode: ExecutionMode.PAPER_ONLY,
+      authorityGeneration: 1,
       status: TradingSessionStatus.ACTIVE,
       openingBalance: '10000.00',
       peakEquity: '10000.00',

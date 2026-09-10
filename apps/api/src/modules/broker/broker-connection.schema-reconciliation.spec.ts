@@ -41,6 +41,12 @@ describe('BrokerConnection schema reconciliation (hotfix)', () => {
     __dirname,
     '../../database/migrations/1753900000000-AddProviderBrokerIdentity.ts',
   );
+  // Sprint 56 correction round 5 (architect issue #332) — logical account
+  // identity key column lives in its own migration
+  const logicalAccountMigrationPath = path.resolve(
+    __dirname,
+    '../../database/migrations/1754050000000-AddBrokerLogicalAccountIdentity.ts',
+  );
 
   let entitySource: string;
   let baselineSource: string;
@@ -48,6 +54,7 @@ describe('BrokerConnection schema reconciliation (hotfix)', () => {
   let authorizationSource: string;
   let refreshProtectionSource: string;
   let providerIdentitySource: string;
+  let logicalAccountSource: string;
 
   beforeAll(() => {
     entitySource = fs.readFileSync(entityPath, 'utf-8');
@@ -60,6 +67,8 @@ describe('BrokerConnection schema reconciliation (hotfix)', () => {
     refreshProtectionSource = fs.readFileSync(refreshProtectionMigrationPath, 'utf-8');
     expect(fs.existsSync(providerIdentityMigrationPath)).toBe(true);
     providerIdentitySource = fs.readFileSync(providerIdentityMigrationPath, 'utf-8');
+    expect(fs.existsSync(logicalAccountMigrationPath)).toBe(true);
+    logicalAccountSource = fs.readFileSync(logicalAccountMigrationPath, 'utf-8');
   });
 
   /**
@@ -158,12 +167,14 @@ describe('BrokerConnection schema reconciliation (hotfix)', () => {
     const authorizationColumns = extractMigrationColumnNames(authorizationSource);
     const refreshProtectionColumns = extractMigrationColumnNames(refreshProtectionSource);
     const providerIdentityColumns = extractMigrationColumnNames(providerIdentitySource);
+    const logicalAccountColumns = extractMigrationColumnNames(logicalAccountSource);
     const allMigrationColumns = new Set([
       ...baselineColumns,
       ...reconcileColumns,
       ...authorizationColumns,
       ...refreshProtectionColumns,
       ...providerIdentityColumns,
+      ...logicalAccountColumns,
     ]);
 
     // Every entity column must appear in at least one migration
@@ -186,6 +197,27 @@ describe('BrokerConnection schema reconciliation (hotfix)', () => {
   it('consecutive_failure_count should exist in the reconciliation migration', () => {
     const reconcileColumns = extractMigrationColumnNames(reconcileSource);
     expect(reconcileColumns.has('consecutive_failure_count')).toBe(true);
+  });
+
+  // ── Sprint 56 correction round 5 (issue #332) ──────────────────────────────
+
+  it('logical_account_key should exist in the logical-account migration', () => {
+    const logicalAccountColumns = extractMigrationColumnNames(logicalAccountSource);
+    expect(logicalAccountColumns.has('logical_account_key')).toBe(true);
+  });
+
+  it('logical-account migration should enforce per-user uniqueness over non-deleted rows', () => {
+    expect(logicalAccountSource).toContain('uq_broker_connections_logical_account');
+    expect(logicalAccountSource).toContain('deleted_at IS NULL');
+    expect(logicalAccountSource).toMatch(/CREATE UNIQUE INDEX[^;]*\(user_id, logical_account_key\)/s);
+  });
+
+  it('logical-account migration should canonicalize cTrader aliases to one technology', () => {
+    expect(logicalAccountSource).toContain("WHEN broker_id IN ('ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader') THEN 'ctrader'");
+  });
+
+  it('logical-account migration preflight should fail on duplicates (no silent dedup)', () => {
+    expect(logicalAccountSource).toContain('preflight FAILED: duplicate durable BrokerConnection rows');
   });
 
   it('live_trading_enabled should exist in the reconciliation migration', () => {

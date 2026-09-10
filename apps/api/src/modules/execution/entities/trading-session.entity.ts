@@ -6,6 +6,7 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import { ExecutionMode } from '../interfaces/execution-authority';
 
 export enum TradingSessionStatus {
   ACTIVE = 'ACTIVE',
@@ -16,13 +17,21 @@ export enum TradingSessionStatus {
 }
 
 /**
- * TradingSession — Tracks a user's active AI-trading session.
+ * TradingSession — THE authoritative execution target (Round 5, issue #295).
  *
- * A session starts when the user enables AI trading, and ends
- * when they disable it, the kill switch fires, or a risk limit is hit.
+ * (userId, sessionId, sessionGeneration, brokerConnectionId) identifies one
+ * immutable execution target. RiskService and ExecutionService MUST use
+ * session.brokerConnectionId — never findActiveConnectionForUser(). At most
+ * one ACTIVE session per user is enforced by a partial unique index.
  *
- * Used by the Risk Engine to check session state and by the
- * reconciliation job to scope which trades to monitor.
+ * authorityGeneration (issue #298): monotonic counter advanced on explicit,
+ * audited changes (mode change, connection switch, suspension/resume).
+ * Outstanding RiskGrants and SEMI_AUTO confirmations bind the generation at
+ * issuance; a mismatch invalidates them (never revived when switching back).
+ *
+ * executionMode (issue #298): PAPER_ONLY | SEMI_AUTO | FULL_AUTO — durable,
+ * never inferred from connection.accountType. PAPER_ONLY is
+ * database-authoritatively incapable of producing LIVE NEW exposure.
  *
  * See: docs/architecture/11-risk-engine-architecture.md §5.1
  */
@@ -37,6 +46,20 @@ export class TradingSession {
 
   @Column({ name: 'broker_connection_id', type: 'uuid' })
   brokerConnectionId: string;
+
+  /** Durable execution mode — part of the session authority (issue #298). */
+  @Column({
+    name: 'execution_mode',
+    type: 'varchar',
+    length: 20,
+    default: ExecutionMode.PAPER_ONLY,
+  })
+  executionMode: ExecutionMode;
+
+  /** Monotonic session authority generation — invalidates outstanding
+   *  RiskGrants / SEMI_AUTO confirmations when advanced (issue #298). */
+  @Column({ name: 'authority_generation', type: 'integer', default: 1 })
+  authorityGeneration: number;
 
   @Column({
     name: 'status',
