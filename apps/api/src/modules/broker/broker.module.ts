@@ -11,6 +11,7 @@ import { BrokerRegistryController } from './broker-registry.controller';
 import { BrokerConnection } from './entities/broker-connection.entity';
 import { BrokerAccount } from './entities/broker-account.entity';
 import { BrokerOAuthFlow } from './entities/broker-oauth-flow.entity';
+import { BrokerLinkOutbox } from './entities/broker-link-outbox.entity';
 import { BrokerAdapterRegistry } from './adapters/broker-adapter.registry';
 import { MetaTraderAdapter } from './adapters/metatrader.adapter';
 import { PaperBrokerAdapter } from './adapters/paper-broker.adapter';
@@ -23,6 +24,7 @@ import { PortfolioReadService } from './services/portfolio-read.service';
 import { BrokerDemoValidationService } from './services/broker-demo-validation.service';
 import { BrokerOAuthTokenLifecycleService } from './services/broker-oauth-token-lifecycle.service';
 import { BrokerOAuthService } from './services/broker-oauth.service';
+import { BrokerLinkOutboxService } from './services/broker-link-outbox.service';
 import { BrokerProviderRegistryService } from './registry/broker-provider-registry.service';
 import { BrokerHealthCheckJob, BROKER_HEALTH_QUEUE } from './jobs/broker-health-check.job';
 import { BrokerHealthCheckProducer } from './jobs/broker-health-check.producer';
@@ -51,7 +53,7 @@ import { AuditModule } from '../audit/audit.module';
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([BrokerConnection, BrokerAccount, BrokerOAuthFlow]),
+    TypeOrmModule.forFeature([BrokerConnection, BrokerAccount, BrokerOAuthFlow, BrokerLinkOutbox]),
     BullModule.registerQueue({ name: BROKER_HEALTH_QUEUE }),
     AuditModule,
   ],
@@ -84,6 +86,13 @@ import { AuditModule } from '../audit/audit.module';
     // and restart-safe, with encrypted token columns and CAS state
     // transitions.
     BrokerOAuthService,
+    // Sprint 56 correction round 5 (architect issue #332): durable outbox
+    // for post-commit broker-link audit/event side effects — enqueued
+    // ATOMICALLY with the connection INSERT by BrokerService.createConnection
+    // and delivered with retry/backoff by the broker health-check job's
+    // sweep, so an audit/event failure can never make a committed connection
+    // look uncommitted (durable idempotent OAuth connection linking).
+    BrokerLinkOutboxService,
     CredentialEncryptionService,
     MetaApiClientService,
     // Sprint 56 / Task 48-B — the platform-level cTrader Open API connection

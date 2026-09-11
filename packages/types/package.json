@@ -57,6 +57,10 @@
     "./admin-live-account": {
       "types": "./src/admin-live-account.ts",
       "default": "./src/admin-live-account.ts"
+    },
+    "./provider-verification": {
+      "types": "./src/provider-verification.ts",
+      "default": "./src/provider-verification.ts"
     }
   },
   "scripts": {

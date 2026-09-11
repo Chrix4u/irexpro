@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { BrokerService } from './broker.service';
 import { BrokerOAuthTokenLifecycleService } from './services/broker-oauth-token-lifecycle.service';
+import { BrokerLinkOutboxService } from './services/broker-link-outbox.service';
 import { BrokerConnection } from './entities/broker-connection.entity';
 import { BrokerAccount } from './entities/broker-account.entity';
 import { BrokerAdapterRegistry } from './adapters/broker-adapter.registry';
@@ -25,6 +26,14 @@ describe('BrokerService — account-scoped required margin', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         BrokerService,
+        {
+          provide: BrokerLinkOutboxService,
+          useValue: {
+            enqueueWithinTransaction: jest.fn().mockResolvedValue(undefined),
+            enqueue: jest.fn().mockResolvedValue(undefined),
+            sweep: jest.fn().mockResolvedValue({ delivered: 0, failed: 0, deferred: 0 }),
+          },
+        },
         {
           provide: getRepositoryToken(BrokerConnection),
           useValue: {
@@ -97,6 +106,14 @@ describe('BrokerService — account-scoped required margin', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         BrokerService,
+        {
+          provide: BrokerLinkOutboxService,
+          useValue: {
+            enqueueWithinTransaction: jest.fn().mockResolvedValue(undefined),
+            enqueue: jest.fn().mockResolvedValue(undefined),
+            sweep: jest.fn().mockResolvedValue({ delivered: 0, failed: 0, deferred: 0 }),
+          },
+        },
         {
           provide: getRepositoryToken(BrokerConnection),
           useValue: {

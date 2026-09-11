@@ -27,6 +27,9 @@ import {
   normalizeProviderBrokerIdentity,
 } from '../adapters/ctrader/ctrader-broker-identity';
 import { CredentialEncryptionService } from './credential-encryption.service';
+import { BrokerLinkOutboxService } from './broker-link-outbox.service';
+import { computeLogicalAccountKey } from '../utils/logical-account-key';
+import { BrokerLogicalAccountConflictError } from '../interfaces/broker-connection.errors';
 
 /** Lifetime of a PENDING flow (authorization not yet completed). */
 const FLOW_PENDING_TTL_MS = 10 * 60_000;
@@ -159,6 +162,10 @@ export class BrokerOAuthService {
     private readonly encryptionService: CredentialEncryptionService,
     @InjectRepository(BrokerOAuthFlow)
     private readonly flowRepo: Repository<BrokerOAuthFlow>,
+    // Sprint 56 correction round 5 (architect issue #332): the durable
+    // outbox — post-commit audit work for link/adopt paths is committed
+    // atomically with the connection and delivered by its sweep.
+    private readonly linkOutbox: BrokerLinkOutboxService,
   ) {}
 
   // ─── Step 1: authorization start ───────────────────────────────────────────
@@ -525,9 +532,46 @@ export class BrokerOAuthService {
     // assertion) decides the environment. LIVE linking for unverified
     // brokers fails closed inside createConnection exactly like the manual
     // path — OAuth NEVER weakens the production-LIVE gate.
+    const providerBrokerIdentity = normalizeProviderBrokerIdentity(account.brokerTitleShort);
+    const accountType = account.isLive ? BrokerMode.LIVE : BrokerMode.DEMO;
+    const logicalAccountKey = computeLogicalAccountKey(
+      flow.brokerId,
+      providerBrokerIdentity,
+      account.ctidTraderAccountId,
+    );
+
+    // ── DURABLE-IDEMPOTENCY ADOPTION PRE-CHECK (issue #332) ─────────────────
+    //
+    // A prior attempt may have COMMITTED the durable connection but failed
+    // before converging this flow (post-commit ambiguous failure — e.g. a
+    // commit ACK lost over the network, or a crash between the connection
+    // transaction and the flow consume). BEFORE inserting, PROVE whether the
+    // durable side effect already exists: a non-deleted connection for the
+    // same (user, logicalAccountKey) means a retry must ADOPT it — converge
+    // this flow to CONSUMED and return the existing row (no second durable
+    // connection). The partial unique index remains the hard backstop for the
+    // concurrent check-then-insert race (handled below via
+    // BrokerLogicalAccountConflictError).
+    if (logicalAccountKey) {
+      const existing = await this.brokerService.findLiveConnectionByLogicalKey(
+        userId,
+        logicalAccountKey,
+      );
+      if (existing) {
+        return this.adoptExistingConnection(flow, existing, {
+          userId,
+          ipAddress,
+          account,
+          accountType,
+          providerBrokerIdentity,
+          logicalAccountKey,
+        });
+      }
+    }
+
     const dto = new ConnectBrokerDto();
     dto.brokerId = flow.brokerId;
-    dto.accountType = account.isLive ? BrokerMode.LIVE : BrokerMode.DEMO;
+    dto.accountType = accountType;
     dto.accountId = account.ctidTraderAccountId;
     dto.apiKey = tokenBundle.accessToken;
     dto.displayName =
@@ -539,17 +583,44 @@ export class BrokerOAuthService {
     };
 
     try {
-      // CORRECTION ROUND 4 (finding 9): the SERVER-DERIVED provider identity
-      // (normalized brokerTitleShort from the 2149 discovery that produced
-      // this flow's accounts) is persisted as connection metadata through an
+      // CORRECTION ROUND 4 (finding 9) + ROUND 5 (#332): the SERVER-DERIVED
+      // provider identity (normalized brokerTitleShort from the 2149
+      // discovery that produced this flow's accounts) and the
+      // SERVER-COMPUTED logical account key are persisted through an
       // INTERNAL channel — the public ConnectBrokerDto can never submit or
-      // overwrite it. Sanitized (lowercase alphanumeric); null = unknown.
+      // overwrite either. createConnection commits the connection row AND
+      // its post-commit audit/event work (including the ACCOUNT_LINKED audit
+      // below) in ONE transaction; the outbox sweep delivers the work with
+      // retries AFTER commit.
       const connection = await this.brokerService.createConnection(dto, userId, ipAddress, {
-        providerBrokerIdentity: normalizeProviderBrokerIdentity(account.brokerTitleShort),
+        providerBrokerIdentity,
+        logicalAccountKey,
+        flowId,
+        linkAudit: {
+          payload: {
+            action: AuditAction.BROKER_OAUTH_ACCOUNT_LINKED,
+            actorUserId: userId,
+            ipAddress: ipAddress ?? null,
+            metadata: {
+              brokerId: flow.brokerId,
+              accountId: account.ctidTraderAccountId,
+              accountType,
+              via: 'oauth',
+            },
+            severity: AuditSeverity.INFO,
+          },
+        },
       });
-      // Single-use: the flow is consumed on successful linking (token columns
-      // zeroed; expires_at=now so the sweep removes the inert row).
-      const consumed = await this.casConsumeFromLinking(flow.id);
+
+      // ── POST-COMMIT (issue #332): the connection AND its outbox work are
+      // DURABLE. Nothing below may push the flow back to AUTHORIZED (the old
+      // defect: a post-save failure reopened a side-effected flow). The
+      // audit/event failures cannot even reach this point any more (the
+      // outbox owns that work); the only remaining post-commit step is the
+      // flow-converge CAS, and even ITS failure converges instead of
+      // reopening: the flow is retried once, and failing that left LINKING
+      // to expire — the durable connection stays authoritative.
+      const consumed = await this.convergeFlowAfterLink(flow.id);
       if (consumed !== 1) {
         // Concurrent anomaly (e.g. stale-LINKING re-claim raced us) — the
         // connection EXISTS and is authoritative; the flow row is inert.
@@ -558,35 +629,136 @@ export class BrokerOAuthService {
             '(concurrent anomaly) — connection persisted, flow left inert',
         );
       }
-      await this.auditService.log({
-        actorUserId: userId,
-        action: AuditAction.BROKER_OAUTH_ACCOUNT_LINKED,
-        resourceType: 'BrokerConnection',
-        resourceId: connection.id,
-        ipAddress,
-        metadata: {
-          brokerId: flow.brokerId,
-          accountId: account.ctidTraderAccountId,
-          accountType: dto.accountType,
-          via: 'oauth',
-        },
-        severity: AuditSeverity.INFO,
-      });
       this.logger.log(
         `cTrader OAuth account linked: connection=${connection.id} ` +
           `broker=${flow.brokerId} account=${account.ctidTraderAccountId} user=${userId}`,
       );
       return connection;
     } catch (err) {
-      // LIVE-for-unverified rejections (and any other createConnection
-      // failure) propagate — the flow is restored to AUTHORIZED so the user
-      // can pick a DEMO account from the same authorization instead.
+      if (err instanceof BrokerLogicalAccountConflictError) {
+        // ── DURABLE-IDEMPOTENCY ADOPTION (unique-index path, issue #332):
+        // the INSERT hit the per-user logical-account unique index — a
+        // concurrent winner (or a raced check-then-insert window) already
+        // committed this logical account. ADOPT the existing connection:
+        // converge the flow to CONSUMED and return the existing row (the
+        // transaction rolled back, so zero rows from THIS attempt).
+        return this.adoptExistingConnection(flow, err.existingConnection, {
+          userId,
+          ipAddress,
+          account,
+          accountType,
+          providerBrokerIdentity,
+          logicalAccountKey: err.logicalAccountKey,
+        });
+      }
+      // ── PROOF-BASED RESTORE (issue #332): createConnection's audit/event
+      // work now commits IN the connection transaction and is delivered by
+      // the outbox sweep — NOTHING awaited after the INSERT can throw on
+      // that path. An exception from createConnection therefore PROVES the
+      // transaction rolled back: ZERO durable rows exist for this attempt,
+      // so restoring AUTHORIZED is retry-safe. (For the pathological
+      // committed-but-ACK-lost case the retry adopts via the pre-check
+      // above — the unique index makes the world converge either way.)
+      // LIVE-for-unverified rejections (gates run BEFORE the INSERT) and
+      // every other pre-persistence failure propagate exactly as before —
+      // the user can pick a DEMO account from the same authorization.
       await this.casRestoreLinkingToAuthorized(flow.id);
       this.logger.warn(
         `cTrader OAuth link failed for flow=${flowId}: ${err instanceof Error ? err.constructor.name : 'UNKNOWN'}`,
       );
       throw err;
     }
+  }
+
+  /**
+   * Converges a LINKING flow to CONSUMED after the durable connection has
+   * committed (success and adoption paths). Single CAS semantics preserved
+   * (tokens zeroed exactly once by exactly one winner); a transient failure
+   * of the CAS itself is retried once and otherwise leaves the flow LINKING
+   * to expire — the durable connection is authoritative either way.
+   */
+  private async convergeFlowAfterLink(flowId: string): Promise<number | undefined> {
+    try {
+      return await this.casConsumeFromLinking(flowId);
+    } catch (err) {
+      this.logger.error(
+        `cTrader OAuth flow=${flowId} converge CAS failed after the connection ` +
+          `committed: ${err instanceof Error ? err.constructor.name : 'UNKNOWN'} — retrying once`,
+      );
+      try {
+        return await this.casConsumeFromLinking(flowId);
+      } catch (retryErr) {
+        this.logger.error(
+          `cTrader OAuth flow=${flowId} left in LINKING after a post-commit converge ` +
+            `failure (${retryErr instanceof Error ? retryErr.constructor.name : 'UNKNOWN'}) — ` +
+            'the flow will expire; the durable connection is authoritative',
+        );
+        return undefined;
+      }
+    }
+  }
+
+  /**
+   * ADOPTS an existing durable connection for a logical broker account
+   * (issue #332): converges the flow to CONSUMED (the link DID succeed —
+   * just on a prior/concurrent attempt) and returns the EXISTING row — no
+   * second durable connection is ever created. A durable-truth
+   * ACCOUNT_LINKED audit entry is enqueued best-effort (a standalone outbox
+   * insert AFTER convergence — its failure logs and never breaks the
+   * adoption).
+   */
+  private async adoptExistingConnection(
+    flow: BrokerOAuthFlow,
+    existing: BrokerConnection,
+    context: {
+      userId: string;
+      ipAddress?: string;
+      account: BrokerOAuthAccount;
+      accountType: BrokerMode;
+      providerBrokerIdentity: string | null;
+      logicalAccountKey: string | null;
+    },
+  ): Promise<BrokerConnection> {
+    const consumed = await this.convergeFlowAfterLink(flow.id);
+    if (consumed !== 1) {
+      this.logger.warn(
+        `cTrader OAuth flow=${flow.id} was not in LINKING state at adopt-consume time ` +
+          '(concurrent anomaly) — existing connection adopted, flow left inert',
+      );
+    }
+    try {
+      await this.linkOutbox.enqueue({
+        connectionId: existing.id,
+        flowId: flow.id,
+        eventType: 'oauth-account-linked-audit',
+        payload: {
+          action: AuditAction.BROKER_OAUTH_ACCOUNT_LINKED,
+          actorUserId: context.userId,
+          ipAddress: context.ipAddress ?? null,
+          metadata: {
+            brokerId: flow.brokerId,
+            accountId: context.account.ctidTraderAccountId,
+            accountType: context.accountType,
+            via: 'oauth',
+            adopted: true,
+          },
+          severity: AuditSeverity.INFO,
+        },
+      });
+    } catch (err) {
+      // Best-effort audit trail — the durable state (existing connection +
+      // consumed flow) is already correct; never break the adoption.
+      this.logger.warn(
+        `cTrader OAuth adopt audit enqueue failed for connection=${existing.id}: ` +
+          `${err instanceof Error ? err.constructor.name : 'UNKNOWN'}`,
+      );
+    }
+    this.logger.log(
+      `cTrader OAuth link ADOPTED existing connection=${existing.id} ` +
+        `broker=${flow.brokerId} account=${context.account.ctidTraderAccountId} ` +
+        `user=${context.userId} logical=${context.logicalAccountKey}`,
+    );
+    return existing;
   }
 
   // ─── Internals ─────────────────────────────────────────────────────────────

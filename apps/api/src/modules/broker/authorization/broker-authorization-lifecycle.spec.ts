@@ -3,6 +3,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { BrokerService } from '../broker.service';
 import { BrokerOAuthTokenLifecycleService } from '../services/broker-oauth-token-lifecycle.service';
+import { BrokerLinkOutboxService } from '../services/broker-link-outbox.service';
 import { BrokerConnection } from '../entities/broker-connection.entity';
 import { BrokerAccount } from '../entities/broker-account.entity';
 import { BrokerAdapterRegistry } from '../adapters/broker-adapter.registry';
@@ -61,6 +62,7 @@ describe('BrokerService — Sprint 50 authorization lifecycle', () => {
     create: jest.Mock;
     save: jest.Mock;
     softDelete: jest.Mock;
+    manager: { transaction: jest.Mock };
   };
   let accountRepo: { findOne: jest.Mock; create: jest.Mock; save: jest.Mock; update: jest.Mock };
   let adapter: ReturnType<typeof mockAdapter>;
@@ -82,6 +84,14 @@ describe('BrokerService — Sprint 50 authorization lifecycle', () => {
       create: jest.fn().mockImplementation((o) => o),
       save: jest.fn().mockImplementation(async (o) => ({ ...o, id: 'saved-1' })),
       softDelete: jest.fn(),
+      // Round 5 (#332): createConnection commits through one transaction —
+      // delegate to the SAME repo mock so save expectations keep working.
+      manager: {
+        transaction: jest.fn(
+          async (cb: (m: unknown) => Promise<unknown>) =>
+            cb({ getRepository: () => connectionRepo }),
+        ),
+      },
     };
     accountRepo = {
       findOne: jest.fn().mockResolvedValue(null),
@@ -107,6 +117,14 @@ describe('BrokerService — Sprint 50 authorization lifecycle', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         BrokerService,
+        {
+          provide: BrokerLinkOutboxService,
+          useValue: {
+            enqueueWithinTransaction: jest.fn().mockResolvedValue(undefined),
+            enqueue: jest.fn().mockResolvedValue(undefined),
+            sweep: jest.fn().mockResolvedValue({ delivered: 0, failed: 0, deferred: 0 }),
+          },
+        },
         { provide: getRepositoryToken(BrokerConnection), useValue: connectionRepo },
         { provide: getRepositoryToken(BrokerAccount), useValue: accountRepo },
         {

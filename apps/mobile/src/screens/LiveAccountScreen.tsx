@@ -27,11 +27,15 @@ import type {
   LiveOrderStatusFilter,
   LivePositionRowView,
 } from "@irexpro/types";
+import type { TradingSessionView } from "@irexpro/types/execution";
+import { ApiClientError } from "@irexpro/api-client";
+import { api } from "../lib/api";
 import { liveAccount } from "../lib/live-account";
 import { useRealtime } from "../context/realtime-context";
 import {
   alertSeverityColor,
   environmentBanner,
+  sessionAuthorityPresentation,
   sortAlerts,
   summaryTiles,
 } from "./live-account-screen.logic";
@@ -45,6 +49,11 @@ export default function LiveAccountScreen() {
   );
   const [orders, setOrders] = useState<LiveAccountOrdersPage | null>(null);
   const [orderFilter, setOrderFilter] = useState<LiveOrderStatusFilter>("ALL");
+  // ── Trading session authority (Sprint 56 correction round 5) ──
+  // The session mode/status/generation ARE the authoritative trading state
+  // (the legacy live-trading flag is never shown as current state).
+  const [session, setSession] = useState<TradingSessionView | null>(null);
+  const [sessionUnavailable, setSessionUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -57,11 +66,41 @@ export default function LiveAccountScreen() {
 
   const load = useCallback(
     async (filter: LiveOrderStatusFilter = orderFilter) => {
+      // The session authority read fails CLOSED but independently: the
+      // dashboard still renders when the session endpoint is unreachable,
+      // and the session card says so honestly (no inferred mode).
+      const loadSession = (async () => {
+        try {
+          const payload = await api.getActiveTradingSession();
+          // Structural envelope check: only the `{ session }` envelope (with
+          // session null = none active) is trusted; any other shape is a
+          // contract mismatch and is reported as UNAVAILABLE — never as
+          // "no active session".
+          const envelopeOk =
+            typeof payload === "object" &&
+            payload !== null &&
+            "session" in payload &&
+            (payload.session === null || typeof payload.session === "object");
+          if (envelopeOk) {
+            setSession(payload.session ?? null);
+            setSessionUnavailable(false);
+          } else {
+            setSession(null);
+            setSessionUnavailable(true);
+          }
+        } catch (err) {
+          setSession(null);
+          // 404 = no active session (truthful null); anything else = the
+          // authoritative state is unavailable — never guessed.
+          setSessionUnavailable(!(err instanceof ApiClientError && err.statusCode === 404));
+        }
+      })();
       try {
         const [ov, pos, ord] = await Promise.all([
           liveAccount.getOverview(),
           liveAccount.getPositions(),
           liveAccount.getOrders(filter),
+          loadSession,
         ]);
         setOverview(ov);
         setPositions(pos);
@@ -120,6 +159,7 @@ export default function LiveAccountScreen() {
   const banner = overview ? environmentBanner(overview.environment) : null;
   const tiles = overview ? summaryTiles(overview) : null;
   const alerts = overview ? sortAlerts(overview.alerts) : [];
+  const sessionAuthority = sessionAuthorityPresentation(session);
 
   return (
     <ScrollView
@@ -176,6 +216,54 @@ export default function LiveAccountScreen() {
           </Text>
         </View>
       ) : null}
+
+      {/* Trading session authority — the AUTHORITATIVE execution state
+          (Sprint 56 correction round 5). The mode/status/generation come
+          from the server session; the legacy live-trading flag is never
+          rendered as the current trading state. */}
+      <View
+        style={styles.card}
+        accessibilityLabel="Trading session authority"
+      >
+        <Text style={styles.cardTitle}>Trading session authority</Text>
+        {sessionUnavailable ? (
+          <Text style={styles.muted}>
+            Session state unavailable from the server — the execution mode is
+            not inferred locally. Pull to refresh.
+          </Text>
+        ) : (
+          <View>
+            <View style={styles.rowBetween}>
+              <Text style={styles.sessionMode}>{sessionAuthority.modeLabel}</Text>
+              <Text
+                style={[
+                  styles.sessionStatus,
+                  {
+                    color: sessionAuthority.executionBlocked
+                      ? "#f59e0b"
+                      : "#10b981",
+                  },
+                ]}
+              >
+                {sessionAuthority.statusLabel}
+              </Text>
+            </View>
+            {session ? (
+              <Text style={styles.mutedSmall}>
+                Authority generation {session.authorityGeneration}
+                {session.executionMode === "SEMI_AUTO"
+                  ? " · confirmations are approved in the web workspace"
+                  : ""}
+              </Text>
+            ) : null}
+            {sessionAuthority.blockedReasons.map((reason) => (
+              <Text key={reason} style={styles.mutedSmall}>
+                • {reason}
+              </Text>
+            ))}
+          </View>
+        )}
+      </View>
 
       {error ? (
         <View
@@ -503,6 +591,8 @@ const styles = StyleSheet.create({
   orderStatus: { fontSize: 10, fontWeight: "700", color: "#475569" },
   muted: { color: "#64748b", fontSize: 13 },
   mutedSmall: { color: "#94a3b8", fontSize: 11 },
+  sessionMode: { color: "#e2e8f0", fontSize: 14, fontWeight: "700" },
+  sessionStatus: { fontSize: 12, fontWeight: "700" },
   filterOption: {
     borderWidth: 1,
     borderColor: "#cbd5e1",

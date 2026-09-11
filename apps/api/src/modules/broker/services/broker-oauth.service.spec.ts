@@ -21,6 +21,8 @@ import { BrokerConnection } from '../entities/broker-connection.entity';
 import { BrokerMode } from '../interfaces/broker-adapter.interface';
 import { BrokerOAuthFlow } from '../entities/broker-oauth-flow.entity';
 import { CredentialEncryptionService } from './credential-encryption.service';
+import { BrokerLinkOutboxService } from './broker-link-outbox.service';
+import { BrokerLogicalAccountConflictError } from '../interfaces/broker-connection.errors';
 
 /**
  * BrokerOAuthService unit+store spec (Sprint 56 correction round 2 — architect
@@ -69,7 +71,8 @@ describe('BrokerOAuthService (Sprint 56 correction round 2 — findings 2 + 4)',
   let flowRepo: Repository<BrokerOAuthFlow>;
   let encryption: CredentialEncryptionService;
   let dataSource: DataSource;
-  let brokerService: { createConnection: jest.Mock };
+  let brokerService: { createConnection: jest.Mock; findLiveConnectionByLogicalKey: jest.Mock };
+  let linkOutbox: { enqueue: jest.Mock; enqueueWithinTransaction: jest.Mock; sweep: jest.Mock };
   let ctraderClient: {
     isAvailable: jest.Mock;
     buildAuthorizationUrl: jest.Mock;
@@ -94,7 +97,15 @@ describe('BrokerOAuthService (Sprint 56 correction round 2 — findings 2 + 4)',
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         BrokerOAuthService,
-        { provide: BrokerService, useValue: { createConnection: jest.fn() } },
+        {
+          provide: BrokerService,
+          useValue: {
+            createConnection: jest.fn(),
+            // Sprint 56 correction round 5 (#332): the durable-idempotency
+            // adoption pre-check (no existing live connection by default).
+            findLiveConnectionByLogicalKey: jest.fn().mockResolvedValue(null),
+          },
+        },
         {
           provide: CTraderClientService,
           useValue: {
@@ -132,11 +143,24 @@ describe('BrokerOAuthService (Sprint 56 correction round 2 — findings 2 + 4)',
         },
         CredentialEncryptionService,
         { provide: getRepositoryToken(BrokerOAuthFlow), useValue: flowRepo },
+        // Sprint 56 correction round 5 (#332): the durable outbox (mocked at
+        // this service seam — its real sweep semantics are proven in
+        // broker-link-outbox.service.spec.ts and the end-to-end durable-link
+        // behavior in broker-oauth.durable-link.spec.ts).
+        {
+          provide: BrokerLinkOutboxService,
+          useValue: {
+            enqueue: jest.fn().mockResolvedValue(undefined),
+            enqueueWithinTransaction: jest.fn().mockResolvedValue(undefined),
+            sweep: jest.fn().mockResolvedValue({ delivered: 0, failed: 0, deferred: 0 }),
+          },
+        },
       ],
     }).compile();
     service = module.get(BrokerOAuthService);
     encryption = module.get(CredentialEncryptionService);
     brokerService = module.get(BrokerService);
+    linkOutbox = module.get(BrokerLinkOutboxService);
     ctraderClient = module.get(CTraderClientService);
     audit = module.get(AuditService);
     config = module.get(ConfigService);
@@ -162,6 +186,11 @@ describe('BrokerOAuthService (Sprint 56 correction round 2 — findings 2 + 4)',
     });
     ctraderClient.discoverAccounts.mockResolvedValue(discoveredAccounts());
     brokerService.createConnection.mockReset();
+    brokerService.findLiveConnectionByLogicalKey.mockReset();
+    brokerService.findLiveConnectionByLogicalKey.mockResolvedValue(null);
+    linkOutbox.enqueue.mockClear();
+    linkOutbox.enqueueWithinTransaction.mockClear();
+    linkOutbox.sweep.mockClear();
     // Restore the default config behavior (tests may override it).
     config.get.mockImplementation((key: string) => {
       if (key === 'broker.ctraderRedirectUris') {
@@ -589,17 +618,31 @@ describe('BrokerOAuthService (Sprint 56 correction round 2 — findings 2 + 4)',
         accessTokenExpiresAt: expect.any(String),
       });
       expect(dto.displayName).toBe('My Demo');
-      // Linked audit: no tokens.
-      const linked = audit.log.mock.calls.find(
-        (c) => c[0].action === AuditAction.BROKER_OAUTH_ACCOUNT_LINKED,
+      // Sprint 56 correction round 5 (#332): the link path passes the
+      // SERVER-COMPUTED logical account key + the OAuth link audit through the
+      // INTERNAL serverDerived channel — they commit atomically with the
+      // (mocked here) connection and are delivered by the outbox sweep.
+      const serverDerived = brokerService.createConnection.mock.calls[0][3];
+      expect(serverDerived.providerBrokerIdentity).toBe('spotware');
+      expect(serverDerived.logicalAccountKey).toBe('ctrader|spotware|1234567');
+      expect(serverDerived.flowId).toBe(flowId);
+      expect(serverDerived.linkAudit.payload.action).toBe(
+        AuditAction.BROKER_OAUTH_ACCOUNT_LINKED,
       );
-      expect(linked[0].metadata).toMatchObject({
+      // Linked audit metadata: no tokens.
+      expect(serverDerived.linkAudit.payload.metadata).toMatchObject({
         brokerId: 'ctrader',
         accountId: '1234567',
         accountType: BrokerMode.DEMO,
         via: 'oauth',
       });
-      expect(JSON.stringify(linked[0].metadata)).not.toContain(ACCESS_TOKEN);
+      expect(JSON.stringify(serverDerived.linkAudit.payload.metadata)).not.toContain(ACCESS_TOKEN);
+      // The linked audit is NO LONGER emitted synchronously on the critical
+      // path (the old defect vector) — it is durable outbox work.
+      const linked = audit.log.mock.calls.find(
+        (c) => c[0].action === AuditAction.BROKER_OAUTH_ACCOUNT_LINKED,
+      );
+      expect(linked).toBeUndefined();
     });
 
     it('derives LIVE from the account flag and PROPAGATES the fail-closed LIVE rejection', async () => {
@@ -646,6 +689,102 @@ describe('BrokerOAuthService (Sprint 56 correction round 2 — findings 2 + 4)',
       expect((await row(flowId))!.state).toBe('AUTHORIZED');
       brokerService.createConnection.mockResolvedValue(linkedConnection);
       await expect(service.linkAccount(USER, flowId, '1234567')).resolves.toBe(linkedConnection);
+    });
+
+    // ─── Sprint 56 correction round 5 (architect issue #332): the
+    // proof-based durable-linking contract (mocked-seam proofs — the
+    // end-to-end durable proofs live in broker-oauth.durable-link.spec.ts).
+
+    it('PROOF-BASED contract: a pre-persistence createConnection failure restores AUTHORIZED (zero durable side effects)', async () => {
+      // With the outbox, createConnection throws ⟺ its transaction rolled
+      // back — so ANY exception it throws proves zero durable rows and the
+      // AUTHORIZED restore is retry-safe.
+      brokerService.createConnection.mockRejectedValueOnce(
+        new Error('transaction rolled back (simulated INSERT failure)'),
+      );
+      const flowId = await authorizedFlowId();
+      await expect(service.linkAccount(USER, flowId, '1234567')).rejects.toThrow(
+        'transaction rolled back (simulated INSERT failure)',
+      );
+      expect((await row(flowId))!.state).toBe('AUTHORIZED');
+      expect((await row(flowId))!.tokenCiphertext).toBeTruthy();
+      // Retry on the SAME flow succeeds (retry-safe).
+      brokerService.createConnection.mockResolvedValue(linkedConnection);
+      await expect(service.linkAccount(USER, flowId, '1234567')).resolves.toBe(linkedConnection);
+      expect((await row(flowId))!.state).toBe('CONSUMED');
+    });
+
+    it('ADOPTS an existing connection when the pre-check finds the durable logical account (issue #332)', async () => {
+      // A prior attempt committed the connection but failed to converge the
+      // flow (post-commit ambiguous failure). The retry PROVES the durable
+      // side effect exists via (userId, logicalAccountKey) and ADOPTS it.
+      const existing = {
+        id: 'existing-conn-9',
+        brokerId: 'ctrader',
+        accountType: BrokerMode.DEMO,
+      } as unknown as BrokerConnection;
+      brokerService.findLiveConnectionByLogicalKey.mockResolvedValue(existing);
+      const flowId = await authorizedFlowId();
+
+      const result = await service.linkAccount(USER, flowId, '1234567');
+
+      // No second durable row is ever attempted.
+      expect(brokerService.createConnection).not.toHaveBeenCalled();
+      expect(result).toBe(existing);
+      // The flow CONVERGED to CONSUMED with zeroed tokens (exactly once).
+      const stored = await row(flowId);
+      expect(stored!.state).toBe('CONSUMED');
+      expect(stored!.tokenCiphertext).toBeNull();
+      // The adoption audit is durable outbox work (via: oauth, adopted: true).
+      expect(linkOutbox.enqueue).toHaveBeenCalledTimes(1);
+      const entry = linkOutbox.enqueue.mock.calls[0][0];
+      expect(entry.connectionId).toBe('existing-conn-9');
+      expect(entry.eventType).toBe('oauth-account-linked-audit');
+      expect(entry.payload.metadata).toMatchObject({ via: 'oauth', adopted: true });
+      expect(JSON.stringify(entry.payload.metadata)).not.toContain(ACCESS_TOKEN);
+    });
+
+    it('ADOPTS an existing connection when createConnection hits the logical-account unique index (issue #332)', async () => {
+      // The check-then-insert race: the pre-check missed, the INSERT hit the
+      // per-user partial unique index, createConnection throws the typed
+      // conflict carrying the existing row — the flow converges and the
+      // EXISTING connection is returned (no second row).
+      const existing = {
+        id: 'existing-conn-raced',
+        brokerId: 'ctrader',
+        accountType: BrokerMode.DEMO,
+      } as unknown as BrokerConnection;
+      brokerService.createConnection.mockRejectedValueOnce(
+        new BrokerLogicalAccountConflictError('ctrader|spotware|1234567', existing),
+      );
+      const flowId = await authorizedFlowId();
+
+      const result = await service.linkAccount(USER, flowId, '1234567');
+
+      expect(result).toBe(existing);
+      const stored = await row(flowId);
+      expect(stored!.state).toBe('CONSUMED');
+      expect(stored!.tokenCiphertext).toBeNull();
+      expect(linkOutbox.enqueue).toHaveBeenCalledTimes(1);
+    });
+
+    it('a logical-conflict ADOPTION still consumes the flow even when the adoption audit enqueue fails (best-effort)', async () => {
+      const existing = {
+        id: 'existing-conn-adopt',
+        brokerId: 'ctrader',
+      } as unknown as BrokerConnection;
+      brokerService.createConnection.mockRejectedValueOnce(
+        new BrokerLogicalAccountConflictError('ctrader|spotware|1234567', existing),
+      );
+      linkOutbox.enqueue.mockRejectedValueOnce(new Error('outbox insert down'));
+      const flowId = await authorizedFlowId();
+
+      const result = await service.linkAccount(USER, flowId, '1234567');
+
+      // The durable truth (existing connection + converged flow) survives the
+      // best-effort audit failure.
+      expect(result).toBe(existing);
+      expect((await row(flowId))!.state).toBe('CONSUMED');
     });
 
     it('rejects an account that was not part of the discovery', async () => {

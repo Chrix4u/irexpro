@@ -1,6 +1,7 @@
 import { TradingController } from './trading.controller';
 import { TradingService } from './trading.service';
 import { TradingSessionStatus } from '../execution/entities/trading-session.entity';
+import { ExecutionMode } from '../execution/interfaces/execution-authority';
 
 /**
  * Regression coverage for the browser-facing session contract.
@@ -8,6 +9,10 @@ import { TradingSessionStatus } from '../execution/entities/trading-session.enti
  * The TradingService owns the full persistence entity, but the controller must
  * never return internal identity, financial-session, or audit-snapshot fields
  * to frontend clients.
+ *
+ * Round 5 (#295/#298): executionMode + authorityGeneration ARE part of the
+ * browser-facing contract (session authority) and must be present on every
+ * session response — including the mode-change response.
  */
 describe('TradingController frontend-safe session response', () => {
   const USER_ID = '11111111-1111-4111-8111-111111111111';
@@ -19,6 +24,8 @@ describe('TradingController frontend-safe session response', () => {
     id: SESSION_ID,
     userId: USER_ID,
     brokerConnectionId: BROKER_CONNECTION_ID,
+    executionMode: ExecutionMode.PAPER_ONLY,
+    authorityGeneration: 1,
     status: TradingSessionStatus.ACTIVE,
     openingBalance: '10000.00',
     peakEquity: '10500.00',
@@ -36,6 +43,9 @@ describe('TradingController frontend-safe session response', () => {
     const tradingService = {
       startTradingSession: jest.fn().mockResolvedValue(internalSession),
       stopTradingSession: jest.fn().mockResolvedValue(undefined),
+      changeExecutionMode: jest
+        .fn()
+        .mockResolvedValue({ ...internalSession, executionMode: ExecutionMode.SEMI_AUTO, authorityGeneration: 2 }),
       getActiveSession: jest.fn().mockResolvedValue(internalSession),
       getSessionById: jest.fn().mockResolvedValue(internalSession),
     };
@@ -50,6 +60,8 @@ describe('TradingController frontend-safe session response', () => {
     expect(response).toEqual({
       id: SESSION_ID,
       brokerConnectionId: BROKER_CONNECTION_ID,
+      executionMode: ExecutionMode.PAPER_ONLY,
+      authorityGeneration: 1,
       status: TradingSessionStatus.ACTIVE,
       startedAt: now,
       endedAt: null,
@@ -88,5 +100,25 @@ describe('TradingController frontend-safe session response', () => {
     const { controller } = buildController();
     const response = await controller.getById(USER_ID, SESSION_ID);
     expectSafeSession(response);
+  });
+
+  it('sanitizes the session returned by the mode-change endpoint (authority fields present)', async () => {
+    const { controller } = buildController();
+    const response = await controller.changeExecutionMode(USER_ID, SESSION_ID, {
+      executionMode: ExecutionMode.SEMI_AUTO,
+    });
+    expect(response).toEqual({
+      id: SESSION_ID,
+      brokerConnectionId: BROKER_CONNECTION_ID,
+      executionMode: ExecutionMode.SEMI_AUTO,
+      authorityGeneration: 2,
+      status: TradingSessionStatus.ACTIVE,
+      startedAt: now,
+      endedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+    expect(response).not.toHaveProperty('userId');
+    expect(response).not.toHaveProperty('riskProfileSnapshot');
   });
 });

@@ -564,7 +564,27 @@ export interface BrokerConnectionView {
   authorizedAt: string | null;
   authorizationRevokedAt: string | null;
   demoValidated: boolean;
+  /**
+   * COMPATIBILITY MIRROR ONLY (Sprint 56 correction round 5, #292/#298):
+   * never present this as the authoritative current trading state. The
+   * authoritative execution state is the TradingSession executionMode +
+   * status + authorityGeneration, the connection authorization/executable
+   * gates, and the provider verification taxonomy.
+   */
   liveTradingEnabled: boolean;
+  /**
+   * Provider-side broker identity string for this connection (e.g. the
+   * cTrader brokerTitleShort). Server-reported; null when the provider has
+   * not reported one. Optional: absent on payloads emitted before this field
+   * existed. (Sprint 56 correction round 5.)
+   */
+  providerBrokerIdentity?: string | null;
+  /**
+   * Server-derived canonical logical-account key (aliases of one provider
+   * account normalize to the same key). null until the server has derived
+   * it. Optional for wire compatibility with older payloads.
+   */
+  logicalAccountKey?: string | null;
   lastHealthCheckAt: string | null;
   lastSyncAt: string | null;
   lastErrorMessage: string | null;

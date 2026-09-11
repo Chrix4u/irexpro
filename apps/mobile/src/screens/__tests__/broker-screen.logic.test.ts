@@ -253,3 +253,96 @@ describe("buildConnectionRequest (fail-closed validation)", () => {
     }
   });
 });
+
+// ── Sprint 56 correction round 5: verification-label taxonomy ────────────────
+
+import {
+  verificationLabelColor,
+  verificationLabelForConnection,
+  verificationLabelForEntry,
+} from "../broker-screen.logic";
+
+describe("verificationLabelForEntry (fixed six-label taxonomy)", () => {
+  it("an UNVERIFIED BETA LIVE-capable provider is Production LIVE Unverified — never simply Live", () => {
+    expect(
+      verificationLabelForEntry(
+        entry({
+          productionLiveVerification: {
+            status: "UNVERIFIED",
+            verifiedAt: null,
+            evidenceRef: null,
+          },
+        }),
+      ),
+    ).toBe("Production LIVE Unverified");
+  });
+
+  it("a VERIFIED entry is Production LIVE Verified", () => {
+    expect(
+      verificationLabelForEntry(
+        entry({
+          status: "SUPPORTED",
+          productionLiveVerification: {
+            status: "VERIFIED",
+            verifiedAt: "2026-09-01T00:00:00.000Z",
+            evidenceRef: "OPS-123",
+          },
+        }),
+      ),
+    ).toBe("Production LIVE Verified");
+  });
+
+  it("a DEMO-only provider is DEMO only", () => {
+    expect(
+      verificationLabelForEntry(
+        entry({ environments: ["DEMO"], capabilities: ["DEMO"] }),
+      ),
+    ).toBe("DEMO only");
+  });
+
+  it("an unimplemented provider is Ineligible", () => {
+    expect(
+      verificationLabelForEntry(
+        entry({ status: "NOT_STARTED", adapterAvailable: false }),
+      ),
+    ).toBe("Ineligible");
+  });
+});
+
+describe("verificationLabelForConnection (registry join, fail-closed)", () => {
+  const connection = {
+    accountType: "LIVE" as const,
+    authorizationStatus: "AUTHORIZED" as const,
+    providerBrokerIdentity: null,
+    logicalAccountKey: null,
+  };
+
+  it("degrades fail-closed when the registry join is missing", () => {
+    expect(verificationLabelForConnection(connection, null)).toBe(
+      "Production LIVE Unverified",
+    );
+  });
+
+  it("a DEMO-typed connection identity is DEMO only", () => {
+    expect(
+      verificationLabelForConnection(
+        { ...connection, accountType: "DEMO" },
+        null,
+      ),
+    ).toBe("DEMO only");
+  });
+
+  it("maps every label to a badge color (no undefined styling)", () => {
+    const labels = [
+      "LIVE-capable",
+      "Production LIVE Verified",
+      "Production LIVE Unverified",
+      "Ineligible",
+      "DEMO only",
+      "execution disabled",
+    ] as const;
+    for (const label of labels) {
+      expect(verificationLabelColor(label)).toMatch(/^#[0-9a-f]{6}$/);
+    }
+  });
+});

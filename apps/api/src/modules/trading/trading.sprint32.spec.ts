@@ -96,7 +96,10 @@ describe('TradingService — Sprint 32 Snapshot Immutability', () => {
         {
           provide: BrokerService,
           useValue: {
-            findActiveConnectionForUser: jest.fn().mockResolvedValue({
+            // Round 5 (#295): session start resolves the EXACT connection by
+            // id (ownership-scoped) — never findActiveConnectionForUser.
+            findActiveConnectionForUser: jest.fn(),
+            findConnectionById: jest.fn().mockResolvedValue({
               id: 'conn-1',
               status: 'CONNECTED',
               brokerId: 'paper-broker',
@@ -105,7 +108,6 @@ describe('TradingService — Sprint 32 Snapshot Immutability', () => {
               consecutiveFailureCount: 0,
               lastHealthCheckAt: new Date(),
             }),
-            findConnectionById: jest.fn(),
             getBrokerAccountState: jest.fn().mockResolvedValue({
               balance: '10000.00',
               equity: '10050.00',
@@ -143,7 +145,7 @@ describe('TradingService — Sprint 32 Snapshot Immutability', () => {
   });
 
   it('passes a risk profile snapshot to startSession', async () => {
-    await service.startTradingSession('user-1');
+    await service.startTradingSession('user-1', 'conn-1');
     expect(executionService.startSession).toHaveBeenCalledWith(
       'user-1',
       'conn-1',
@@ -153,12 +155,13 @@ describe('TradingService — Sprint 32 Snapshot Immutability', () => {
         maxOpenTrades: 3,
         snapshotVersion: 1,
       }),
+      ExecutionMode.PAPER_ONLY,
     );
   });
 
   it('snapshot reflects the risk profile AT session start time (not after edits)', async () => {
     // Start session with the original profile (maxDailyTrades=10)
-    await service.startTradingSession('user-1');
+    await service.startTradingSession('user-1', 'conn-1');
     const snapshotArg = executionService.startSession.mock.calls[0][3];
     expect(snapshotArg.maxDailyTrades).toBe(10);
 
@@ -177,7 +180,7 @@ describe('TradingService — Sprint 32 Snapshot Immutability', () => {
     );
 
     // Start a NEW session (the old one is still active so this returns the existing)
-    await service.startTradingSession('user-1');
+    await service.startTradingSession('user-1', 'conn-1');
 
     // The FIRST session's snapshot (captured at start time) still has the old values
     // The snapshot is immutable — it doesn't change just because the profile changed

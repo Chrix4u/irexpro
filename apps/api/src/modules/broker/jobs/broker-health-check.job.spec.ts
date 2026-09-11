@@ -49,6 +49,7 @@ import { Logger } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { BrokerHealthCheckJob } from './broker-health-check.job';
 import { BrokerService } from '../broker.service';
+import { BrokerLinkOutboxService } from '../services/broker-link-outbox.service';
 import { BrokerConnection } from '../entities/broker-connection.entity';
 import { BrokerConnectionStatus } from '../interfaces/broker-adapter.interface';
 
@@ -76,6 +77,12 @@ describe('BrokerHealthCheckJob', () => {
         {
           provide: getRepositoryToken(BrokerConnection),
           useFactory: mockConnectionRepo,
+        },
+        {
+          provide: BrokerLinkOutboxService,
+          useValue: {
+            sweep: jest.fn().mockResolvedValue({ delivered: 0, failed: 0, deferred: 0 }),
+          },
         },
       ],
     }).compile();

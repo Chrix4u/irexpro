@@ -3,6 +3,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { ConflictException, Logger } from '@nestjs/common';
 import { BrokerService } from '../broker.service';
 import { BrokerOAuthTokenLifecycleService } from '../services/broker-oauth-token-lifecycle.service';
+import { BrokerLinkOutboxService } from '../services/broker-link-outbox.service';
 import { BrokerConnection } from '../entities/broker-connection.entity';
 import { BrokerAccount } from '../entities/broker-account.entity';
 import { BrokerAdapterRegistry } from '../adapters/broker-adapter.registry';
@@ -165,6 +166,14 @@ describe('BrokerService — #291 race coverage (correction round 3)', () => {
             ensureFreshTokens: jest.fn((_c: unknown, credentials: unknown) =>
               Promise.resolve(credentials),
             ),
+          },
+        },
+        {
+          provide: BrokerLinkOutboxService,
+          useValue: {
+            enqueueWithinTransaction: jest.fn().mockResolvedValue(undefined),
+            enqueue: jest.fn().mockResolvedValue(undefined),
+            sweep: jest.fn().mockResolvedValue({ delivered: 0, failed: 0, deferred: 0 }),
           },
         },
       ],

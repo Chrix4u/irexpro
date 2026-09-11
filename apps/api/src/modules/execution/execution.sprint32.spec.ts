@@ -6,6 +6,10 @@ import { ExecutionService } from './execution.service';
 import { ExecutionOrchestrator } from './orchestration/execution-orchestrator.service';
 import { Trade, TradeStatus } from './entities/trade.entity';
 import { TradingSession } from './entities/trading-session.entity';
+import { RiskGrant } from './entities/risk-grant.entity';
+import { ExecutionConfirmation } from './entities/execution-confirmation.entity';
+import { ExecutionMode } from './interfaces/execution-authority';
+import { ExecutionSessionResolutionService } from './execution-session.resolution';
 import { BrokerService } from '../broker/broker.service';
 import { AuditService } from '../audit/audit.service';
 import { AuditSeverity } from '../audit/entities/audit-log.entity';
@@ -70,6 +74,24 @@ describe('ExecutionService — Sprint 32 Idempotency', () => {
       create: jest.fn().mockImplementation((obj) => obj),
       save: jest.fn().mockImplementation(async (obj) => obj),
       update: jest.fn().mockResolvedValue({ affected: 1 }),
+      createQueryBuilder: jest.fn().mockReturnValue({
+        update: jest.fn().mockReturnThis(),
+        set: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        execute: jest.fn().mockResolvedValue({ affected: 1 }),
+      }),
+    };
+    // Round 5: authority invalidation repos (store-backed matrix lives in
+    // execution-session.authority.spec.ts — chainable stubs here).
+    const authorityRepoStub = {
+      createQueryBuilder: jest.fn().mockReturnValue({
+        update: jest.fn().mockReturnThis(),
+        set: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        execute: jest.fn().mockResolvedValue({ affected: 0 }),
+      }),
+      update: jest.fn().mockResolvedValue({ affected: 0 }),
+      findOne: jest.fn().mockResolvedValue(null),
     };
     auditService = { log: jest.fn().mockResolvedValue(undefined) };
 
@@ -78,7 +100,20 @@ describe('ExecutionService — Sprint 32 Idempotency', () => {
         ExecutionService,
         { provide: getRepositoryToken(Trade), useValue: tradeRepo },
         { provide: getRepositoryToken(TradingSession), useValue: sessionRepo },
+        { provide: getRepositoryToken(RiskGrant), useValue: authorityRepoStub },
+        { provide: getRepositoryToken(ExecutionConfirmation), useValue: authorityRepoStub },
         { provide: BrokerService, useValue: {} },
+        {
+          provide: ExecutionSessionResolutionService,
+          useValue: {
+            resolveActiveSessionAuthority: jest.fn().mockResolvedValue({
+              sessionId: 'session-1',
+              sessionGeneration: 1,
+              executionMode: ExecutionMode.PAPER_ONLY,
+              brokerConnectionId: 'conn-1',
+            }),
+          },
+        },
         { provide: ExecutionOrchestrator, useValue: mockOrchestratorInstance },
         { provide: AuditService, useValue: auditService },
         {
@@ -128,9 +163,10 @@ describe('ExecutionService — Sprint 32 Idempotency', () => {
 
     service = module.get(ExecutionService);
 
-    // Mock brokerService.findActiveConnectionForUser
+    // Round 5 (#295): executeTrade resolves the EXACT session-bound connection
+    // by id (ownership-scoped) — never findActiveConnectionForUser.
     (service as unknown as { brokerService: Record<string, jest.Mock> }).brokerService = {
-      findActiveConnectionForUser: jest.fn().mockResolvedValue({
+      findConnectionById: jest.fn().mockResolvedValue({
         id: 'conn-1',
         brokerId: 'paper-broker',
         accountType: BrokerMode.DEMO,

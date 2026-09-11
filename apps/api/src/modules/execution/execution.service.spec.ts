@@ -1,11 +1,21 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ConflictException, ForbiddenException, Logger } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Logger, NotFoundException } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { ExecutionService } from './execution.service';
 import { ExecutionOrchestrator } from './orchestration/execution-orchestrator.service';
 import { Trade, TradeCloseReason, TradeStatus } from './entities/trade.entity';
 import { TradingSession, TradingSessionStatus } from './entities/trading-session.entity';
+import { RiskGrant } from './entities/risk-grant.entity';
+import { ExecutionConfirmation } from './entities/execution-confirmation.entity';
+import { ExecutionMode } from './interfaces/execution-authority';
+import {
+  ActiveSessionConflictException,
+  BrokerConnectionNotConnectedException,
+  BrokerConnectionNotExecutableException,
+  BrokerConnectionOwnershipException,
+  ExecutionSessionResolutionService,
+} from './execution-session.resolution';
 import { Order } from './orders/order.entity';
 import { BrokerService } from '../broker/broker.service';
 import { AuditService } from '../audit/audit.service';
@@ -50,6 +60,7 @@ const mockBrokerConnection = {
   brokerId: 'metatrader',
   accountType: BrokerMode.DEMO,
   status: BrokerConnectionStatus.CONNECTED,
+  authorizationStatus: 'ACTIVE',
   encryptedCredentials: 'enc',
   credentialIv: 'iv',
   credentialTag: 'tag',
@@ -88,9 +99,14 @@ describe('ExecutionService', () => {
   let sessionRepo: jest.Mocked<{
     findOne: jest.Mock;
     create: jest.Mock;
+    insert: jest.Mock;
     save: jest.Mock;
     update: jest.Mock;
+    createQueryBuilder: jest.Mock;
   }>;
+  /** Row "persisted" by the insert mock — read back by the post-insert findOne. */
+  let insertedSession: Record<string, unknown> | null;
+  let authorityRepoStubs: { createQueryBuilder: jest.Mock; update: jest.Mock; findOne: jest.Mock };
   let auditService: { log: jest.Mock };
   let dataSource: { query: jest.Mock; transaction: jest.Mock };
 
@@ -111,11 +127,43 @@ describe('ExecutionService', () => {
       update: jest.fn().mockResolvedValue({ affected: 1 }),
     };
 
+    insertedSession = null;
     sessionRepo = {
-      findOne: jest.fn().mockResolvedValue(null),
+      findOne: jest.fn().mockImplementation(async (opts?: { where?: Record<string, unknown> }) => {
+        // Post-insert re-read returns the row the insert mock persisted;
+        // active-session lookups (no id filter) default to null — per-test
+        // overrides replace this implementation wholesale.
+        if (opts?.where?.id) return insertedSession;
+        return null;
+      }),
       create: jest.fn().mockImplementation((obj) => obj),
+      insert: jest.fn().mockImplementation(async (entity) => {
+        insertedSession = entity;
+        return { generatedMaps: [entity] };
+      }),
       save: jest.fn().mockImplementation(async (obj) => obj),
       update: jest.fn().mockResolvedValue({ affected: 1 }),
+      // Round 5: endSession / changeExecutionMode CAS via createQueryBuilder.
+      createQueryBuilder: jest.fn().mockReturnValue({
+        update: jest.fn().mockReturnThis(),
+        set: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        execute: jest.fn().mockResolvedValue({ affected: 1 }),
+      }),
+    };
+    // Round 5: RiskGrant / ExecutionConfirmation repositories are exercised
+    // for authority invalidation only via createQueryBuilder — a chainable
+    // stub keeps these unit tests independent of the store (the real-store
+    // matrix lives in execution-session.authority.spec.ts).
+    authorityRepoStubs = {
+      createQueryBuilder: jest.fn().mockReturnValue({
+        update: jest.fn().mockReturnThis(),
+        set: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        execute: jest.fn().mockResolvedValue({ affected: 0 }),
+      }),
+      update: jest.fn().mockResolvedValue({ affected: 0 }),
+      findOne: jest.fn().mockResolvedValue(null),
     };
 
     auditService = { log: jest.fn().mockResolvedValue(undefined) };
@@ -165,11 +213,17 @@ describe('ExecutionService', () => {
         ExecutionService,
         { provide: getRepositoryToken(Trade), useValue: tradeRepo },
         { provide: getRepositoryToken(TradingSession), useValue: sessionRepo },
+        { provide: getRepositoryToken(RiskGrant), useValue: authorityRepoStubs },
+        { provide: getRepositoryToken(ExecutionConfirmation), useValue: authorityRepoStubs },
         {
           provide: BrokerService,
           useValue: {
-            findActiveConnectionForUser: jest.fn().mockResolvedValue(mockBrokerConnection),
+            // Round 5 (#295): discovery is a NEVER-CALLED sentinel — executeTrade
+            // resolves the session authority seam + exact connection by id.
+            findActiveConnectionForUser: jest.fn(),
+            findConnectionsByIds: jest.fn().mockResolvedValue([mockBrokerConnection]),
             findConnectionById: jest.fn().mockResolvedValue(mockBrokerConnection),
+            isConnectionExecutable: jest.fn().mockReturnValue(true),
           },
         },
         // Sprint 50 PR-3: the provider dispatch pipeline is mocked at the
@@ -181,6 +235,17 @@ describe('ExecutionService', () => {
         {
           provide: DomainEventBus,
           useValue: { publish: jest.fn(), subscribe: jest.fn().mockReturnValue(() => {}) },
+        },
+        {
+          provide: ExecutionSessionResolutionService,
+          useValue: {
+            resolveActiveSessionAuthority: jest.fn().mockResolvedValue({
+              sessionId: 'session-1',
+              sessionGeneration: 1,
+              executionMode: ExecutionMode.PAPER_ONLY,
+              brokerConnectionId: 'conn-1',
+            }),
+          },
         },
       ],
     }).compile();
@@ -583,27 +648,130 @@ describe('ExecutionService', () => {
     });
   });
 
-  // ─── Session management ───────────────────────────────────────────────────
+  // ─── Session management (Round 5 — session is the authoritative target) ───
 
   describe('startSession()', () => {
-    it('creates new session when none exists', async () => {
-      await service.startSession('user-1', 'conn-1', '10000.00');
-      expect(sessionRepo.save).toHaveBeenCalledWith(
+    it('creates new session with executionMode + authorityGeneration 1 when none exists', async () => {
+      const created = await service.startSession('user-1', 'conn-1', '10000.00');
+      expect(sessionRepo.insert).toHaveBeenCalledWith(
         expect.objectContaining({
           userId: 'user-1',
           status: TradingSessionStatus.ACTIVE,
           openingBalance: '10000.00',
+          executionMode: ExecutionMode.PAPER_ONLY,
+          authorityGeneration: 1,
         }),
       );
+      expect(created.executionMode).toBe(ExecutionMode.PAPER_ONLY);
+      expect(created.authorityGeneration).toBe(1);
     });
 
-    it('returns existing session without creating duplicate', async () => {
-      const existing = { id: 'sess-1', status: TradingSessionStatus.ACTIVE };
+    it('persists the requested executionMode (SEMI_AUTO)', async () => {
+      const created = await service.startSession('user-1', 'conn-1', '10000.00', null, ExecutionMode.SEMI_AUTO);
+      expect(sessionRepo.insert).toHaveBeenCalledWith(
+        expect.objectContaining({ executionMode: ExecutionMode.SEMI_AUTO, authorityGeneration: 1 }),
+      );
+      expect(created.executionMode).toBe(ExecutionMode.SEMI_AUTO);
+    });
+
+    it('returns existing session (idempotent) for same connection + same mode', async () => {
+      const existing = {
+        id: 'sess-1',
+        userId: 'user-1',
+        brokerConnectionId: 'conn-1',
+        executionMode: ExecutionMode.PAPER_ONLY,
+        authorityGeneration: 1,
+        status: TradingSessionStatus.ACTIVE,
+      };
       sessionRepo.findOne.mockResolvedValue(existing);
 
       const result = await service.startSession('user-1', 'conn-1', '10000.00');
       expect(result).toEqual(existing);
-      expect(sessionRepo.save).not.toHaveBeenCalled();
+      expect(sessionRepo.insert).not.toHaveBeenCalled();
+    });
+
+    it('throws typed ownership rejection when the connection belongs to another user', async () => {
+      const brokerServiceMock = (service as unknown as { brokerService: BrokerService }).brokerService;
+      (brokerServiceMock as unknown as { findConnectionsByIds: jest.Mock }).findConnectionsByIds =
+        jest.fn().mockResolvedValue([{ ...mockBrokerConnection, userId: 'someone-else' }]);
+      await expect(service.startSession('user-1', 'conn-1', '10000.00')).rejects.toThrow(
+        BrokerConnectionOwnershipException,
+      );
+      expect(sessionRepo.insert).not.toHaveBeenCalled();
+    });
+
+    it('throws typed rejection when the connection is not CONNECTED', async () => {
+      const brokerServiceMock = (service as unknown as { brokerService: BrokerService }).brokerService;
+      (brokerServiceMock as unknown as { findConnectionsByIds: jest.Mock }).findConnectionsByIds =
+        jest.fn().mockResolvedValue([
+          { ...mockBrokerConnection, status: BrokerConnectionStatus.DISCONNECTED },
+        ]);
+      await expect(service.startSession('user-1', 'conn-1', '10000.00')).rejects.toThrow(
+        BrokerConnectionNotConnectedException,
+      );
+      expect(sessionRepo.insert).not.toHaveBeenCalled();
+    });
+
+    it('throws typed rejection when the connection is not LIVE-authorization executable', async () => {
+      const brokerServiceMock = (service as unknown as { brokerService: BrokerService }).brokerService;
+      (brokerServiceMock as unknown as { findConnectionsByIds: jest.Mock }).findConnectionsByIds =
+        jest.fn().mockResolvedValue([mockBrokerConnection]);
+      (brokerServiceMock as unknown as { isConnectionExecutable: jest.Mock }).isConnectionExecutable =
+        jest.fn().mockReturnValue(false);
+      await expect(service.startSession('user-1', 'conn-1', '10000.00')).rejects.toThrow(
+        BrokerConnectionNotExecutableException,
+      );
+      expect(sessionRepo.insert).not.toHaveBeenCalled();
+    });
+
+    it('throws typed ACTIVE_SESSION_CONFLICT when an ACTIVE session exists on ANOTHER connection', async () => {
+      const existing = {
+        id: 'sess-1',
+        userId: 'user-1',
+        brokerConnectionId: 'conn-OTHER',
+        executionMode: ExecutionMode.PAPER_ONLY,
+        authorityGeneration: 1,
+        status: TradingSessionStatus.ACTIVE,
+      };
+      sessionRepo.findOne.mockResolvedValue(existing);
+
+      await expect(service.startSession('user-1', 'conn-1', '10000.00')).rejects.toThrow(
+        ActiveSessionConflictException,
+      );
+      expect(sessionRepo.insert).not.toHaveBeenCalled();
+    });
+
+    it('throws typed ACTIVE_SESSION_CONFLICT when an ACTIVE session exists with a DIFFERENT mode (mode changes are explicit + audited)', async () => {
+      const existing = {
+        id: 'sess-1',
+        userId: 'user-1',
+        brokerConnectionId: 'conn-1',
+        executionMode: ExecutionMode.SEMI_AUTO,
+        authorityGeneration: 4,
+        status: TradingSessionStatus.ACTIVE,
+      };
+      sessionRepo.findOne.mockResolvedValue(existing);
+
+      await expect(
+        service.startSession('user-1', 'conn-1', '10000.00', null, ExecutionMode.PAPER_ONLY),
+      ).rejects.toThrow(ActiveSessionConflictException);
+      expect(sessionRepo.insert).not.toHaveBeenCalled();
+    });
+  });
+
+  // ─── executeTrade session-authority seam (#295) ───────────────────────────
+
+  describe('executeTrade — session authority seam', () => {
+    it('resolves the EXACT connection from the ACTIVE session (never findActiveConnectionForUser)', async () => {
+      await service.executeTrade('user-1', approvedDecision);
+      const brokerServiceMock = (service as unknown as { brokerService: BrokerService }).brokerService;
+      expect(
+        (brokerServiceMock as unknown as { findActiveConnectionForUser: jest.Mock })
+          .findActiveConnectionForUser,
+      ).not.toHaveBeenCalled();
+      expect(
+        (brokerServiceMock as unknown as { findConnectionById: jest.Mock }).findConnectionById,
+      ).toHaveBeenCalledWith('conn-1', 'user-1');
     });
   });
 });

@@ -6,6 +6,7 @@ import { Job } from 'bullmq';
 import { BrokerService } from '../broker.service';
 import { BrokerConnection } from '../entities/broker-connection.entity';
 import { BrokerConnectionStatus } from '../interfaces/broker-adapter.interface';
+import { BrokerLinkOutboxService } from '../services/broker-link-outbox.service';
 
 export const BROKER_HEALTH_QUEUE = 'broker-health-check';
 export const BROKER_HEALTH_JOB = 'health-check-all';
@@ -28,6 +29,12 @@ function maskLikeId(value: string | null | undefined): string {
  *   2. BrokerService decrypts credentials, calls adapter.connect() (pool reuse), then getAccountBalance()
  *   3. On 3 consecutive failures: connection is auto-suspended + audit event logged
  *
+ * Sprint 56 correction round 5 (architect issue #332): every tick ALSO sweeps
+ * the broker_link_outbox — the durable retry/backoff delivery of post-commit
+ * broker-link audit/event work (committed atomically with connection
+ * creation). The sweep never throws into the job (its own failure is logged
+ * and retried on the next tick).
+ *
  * See: docs/architecture/09-broker-integration-architecture.md §7
  */
 @Processor(BROKER_HEALTH_QUEUE)
@@ -38,12 +45,25 @@ export class BrokerHealthCheckJob extends WorkerHost {
     private readonly brokerService: BrokerService,
     @InjectRepository(BrokerConnection)
     private readonly connectionRepo: Repository<BrokerConnection>,
+    private readonly linkOutbox: BrokerLinkOutboxService,
   ) {
     super();
   }
 
   async process(job: Job): Promise<{ checked: number; failed: number }> {
     this.logger.debug(`Running broker health check job: ${job.id}`);
+
+    // #332: outbox sweep first — the audit/event delivery schedule rides the
+    // existing 60s broker job cadence (the sweep itself is guarded and never
+    // throws).
+    const outboxResult = await this.linkOutbox.sweep();
+    if (outboxResult.delivered > 0 || outboxResult.failed > 0) {
+      this.logger.log(
+        `Broker link outbox sweep: ${outboxResult.delivered} delivered, ` +
+          `${outboxResult.failed} failed (will retry after backoff), ` +
+          `${outboxResult.deferred} deferred`,
+      );
+    }
 
     const connections = await this.connectionRepo.find({
       where: { status: BrokerConnectionStatus.CONNECTED },

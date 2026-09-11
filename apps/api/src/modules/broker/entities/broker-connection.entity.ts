@@ -22,6 +22,14 @@ import { BrokerCredentialStatus } from '../authorization/broker-credential-statu
  * - Decryption happens only inside CredentialEncryptionService, never in controllers
  *
  * See: docs/architecture/09-broker-integration-architecture.md §6
+ *
+ * COLUMN-TYPE PORTABILITY (Sprint 56 correction round 5, issue #332): the
+ * timestamp columns use the portable `Date` constructor (and `status` is a
+ * plain varchar) instead of `timestamptz`/`enum` — exactly the pattern the
+ * BrokerOAuthFlow entity documents. Migration DDL owns the PRODUCTION types
+ * (timestamptz / varchar(30)); the entity declaration only drives test-harness
+ * DDL, and dialect-specific types made BrokerConnection unusable with the
+ * sqlite in-memory harness that now proves durable-link idempotency.
  */
 @Entity({ name: 'broker_connections', schema: 'broker' })
 export class BrokerConnection {
@@ -103,7 +111,11 @@ export class BrokerConnection {
 
   @Column({
     name: 'status',
-    type: 'enum',
+    // Round 5 (#332): portable 'varchar' — the production column is
+    // varchar(30) (baseline migration) and the enum-declared type blocked the
+    // sqlite test harness (see the portability note at the class bottom).
+    type: 'varchar',
+    length: 30,
     enum: BrokerConnectionStatus,
     default: BrokerConnectionStatus.DISCONNECTED,
   })
@@ -153,13 +165,13 @@ export class BrokerConnection {
    * previous pair, so two concurrent refreshes of one credential generation
    * would permanently kill the credential.
    */
-  @Column({ name: 'credential_refresh_lease_expires_at', type: 'timestamptz', nullable: true })
+  @Column({ name: 'credential_refresh_lease_expires_at', type: Date, nullable: true })
   credentialRefreshLeaseExpiresAt: Date | null;
 
-  @Column({ name: 'authorized_at', type: 'timestamptz', nullable: true })
+  @Column({ name: 'authorized_at', type: Date, nullable: true })
   authorizedAt: Date | null;
 
-  @Column({ name: 'authorization_revoked_at', type: 'timestamptz', nullable: true })
+  @Column({ name: 'authorization_revoked_at', type: Date, nullable: true })
   authorizationRevokedAt: Date | null;
 
   // ─── Encrypted credential fields — NEVER exposed in responses ────────────
@@ -193,10 +205,10 @@ export class BrokerConnection {
 
   // ─── Health and sync state ────────────────────────────────────────────────
 
-  @Column({ name: 'last_health_check_at', type: 'timestamptz', nullable: true })
+  @Column({ name: 'last_health_check_at', type: Date, nullable: true })
   lastHealthCheckAt: Date | null;
 
-  @Column({ name: 'last_sync_at', type: 'timestamptz', nullable: true })
+  @Column({ name: 'last_sync_at', type: Date, nullable: true })
   lastSyncAt: Date | null;
 
   @Column({ name: 'consecutive_failure_count', type: 'integer', default: 0 })
@@ -213,12 +225,12 @@ export class BrokerConnection {
   @Column({ name: 'live_trading_enabled', type: 'boolean', default: false })
   liveTradingEnabled: boolean;
 
-  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
+  @CreateDateColumn({ name: 'created_at', type: Date })
   createdAt: Date;
 
-  @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
+  @UpdateDateColumn({ name: 'updated_at', type: Date })
   updatedAt: Date;
 
-  @DeleteDateColumn({ name: 'deleted_at', type: 'timestamptz', nullable: true })
+  @DeleteDateColumn({ name: 'deleted_at', type: Date, nullable: true })
   deletedAt: Date | null;
 }

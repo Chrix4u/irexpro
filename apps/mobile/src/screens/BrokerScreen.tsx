@@ -43,6 +43,9 @@ import {
   keyCapabilityChips,
   routeLabel,
   statusPresentation,
+  verificationLabelColor,
+  verificationLabelForConnection,
+  verificationLabelForEntry,
 } from "./broker-screen.logic";
 import {
   BROKER_OAUTH_AWAIT_TIMEOUT_MS,
@@ -174,7 +177,15 @@ export default function BrokerScreen() {
             </Text>
           </View>
         ) : (
-          connections.map((connection) => (
+          connections.map((connection) => {
+            // Fixed six-label verification taxonomy (Sprint 56 round 5):
+            // joined with the registry by brokerId; a missing join degrades
+            // fail-closed — never a simple "Live" claim.
+            const verificationLabel = verificationLabelForConnection(
+              connection,
+              registry.find((entry) => entry.id === connection.brokerId) ?? null,
+            );
+            return (
             <View
               key={connection.id}
               style={styles.card}
@@ -193,11 +204,24 @@ export default function BrokerScreen() {
                   {connection.accountType}
                 </Text>
               </View>
+              <Text
+                style={[
+                  styles.verificationLabel,
+                  { color: verificationLabelColor(verificationLabel) },
+                ]}
+              >
+                {verificationLabel}
+              </Text>
               <Text style={styles.muted}>
                 {connection.accountId
                   ? `Account ${connection.accountId}`
                   : "Account pending"}
               </Text>
+              {connection.logicalAccountKey ? (
+                <Text style={styles.mutedSmall}>
+                  Logical account {connection.logicalAccountKey}
+                </Text>
+              ) : null}
               <View style={styles.rowWrap}>
                 <Text style={styles.chip}>{connection.status}</Text>
                 <Text style={styles.chip}>
@@ -224,13 +248,17 @@ export default function BrokerScreen() {
                 <Text style={styles.secondaryButtonText}>Disconnect</Text>
               </Pressable>
             </View>
-          ))
+            );
+          })
         )}
 
         <Text style={styles.sectionTitle}>Broker catalog</Text>
         {registry.map((entry) => {
           const presentation = statusPresentation(entry.status);
           const connectable = isConnectableEntry(entry);
+          // Fixed taxonomy label — e.g. an UNVERIFIED BETA provider is
+          // 'Production LIVE Unverified', never simply "Live".
+          const verificationLabel = verificationLabelForEntry(entry);
           return (
             <View
               key={entry.id}
@@ -254,11 +282,14 @@ export default function BrokerScreen() {
               <Text style={styles.mutedSmall} numberOfLines={3}>
                 {presentation.description}
               </Text>
-              {entry.productionLiveVerification?.status !== "VERIFIED" ? (
-                <Text style={styles.liveUnavailableText}>
-                  LIVE unavailable — not production-verified
-                </Text>
-              ) : null}
+              <Text
+                style={[
+                  styles.verificationLabel,
+                  { color: verificationLabelColor(verificationLabel) },
+                ]}
+              >
+                {verificationLabel}
+              </Text>
               <View style={styles.rowWrap}>
                 {keyCapabilityChips(entry).map((chip) => (
                   <Text key={chip} style={styles.chip}>
@@ -859,9 +890,10 @@ const styles = StyleSheet.create({
   },
   envDemo: { backgroundColor: "#fef3c7", color: "#92400e" },
   envLive: { backgroundColor: "#ffe4e6", color: "#9f1239" },
-  liveUnavailableText: {
-    color: "#b45309",
+  verificationLabel: {
     fontSize: 12,
+    fontWeight: "700",
+    marginTop: 4,
   },
   envOption: {
     borderWidth: 1,

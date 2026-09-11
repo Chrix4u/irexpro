@@ -7,12 +7,17 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
 import { BrokerConnection } from './entities/broker-connection.entity';
 import { BrokerAccount } from './entities/broker-account.entity';
 import { BrokerAdapterRegistry } from './adapters/broker-adapter.registry';
 import { CredentialEncryptionService } from './services/credential-encryption.service';
 import { BrokerOAuthTokenLifecycleService } from './services/broker-oauth-token-lifecycle.service';
+import { BrokerLinkOutboxService } from './services/broker-link-outbox.service';
+import { BrokerLinkOutboxAuditPayload } from './entities/broker-link-outbox.entity';
+import { computeLogicalAccountKey } from './utils/logical-account-key';
+import { isUniqueViolation } from './utils/db-unique-violation';
+import { BrokerLogicalAccountConflictError } from './interfaces/broker-connection.errors';
 import {
   BrokerAccountInfo,
   BrokerConnectionStatus,
@@ -59,6 +64,36 @@ import { DomainEventType } from '../events/enums/domain-event-type.enum';
  *
  * See: docs/architecture/09-broker-integration-architecture.md
  */
+/**
+ * Server-derived createConnection inputs (Sprint 56 correction rounds 4+5).
+ * SERVER-ONLY channel — the public ConnectBrokerDto can never submit or
+ * overwrite any of these fields.
+ */
+export interface BrokerConnectionServerDerived {
+  /**
+   * Round 4 (finding 9): sanitized normalized identity of the actual broker
+   * behind the connection (cTrader 2149 discovery), null = unknown.
+   */
+  providerBrokerIdentity?: string | null;
+  /**
+   * Round 5 (issue #332): the SERVER-COMPUTED logical account key. When
+   * explicitly provided (the OAuth link path passes the exact key it also
+   * pre-checks for adoption), it is persisted verbatim at INSERT time; when
+   * omitted, it is DERIVED from (brokerId, providerBrokerIdentity,
+   * accountId) — manual connects are idempotency-protected by the same
+   * partial unique index.
+   */
+  logicalAccountKey?: string | null;
+  /** Round 5 (#332): originating OAuth flow (outbox traceability only). */
+  flowId?: string | null;
+  /**
+   * Round 5 (#332): the OAuth ACCOUNT_LINKED audit entry committed
+   * ATOMICALLY with the connection (durable-truth audit — delivered by the
+   * outbox sweep after commit, never lost, never on the critical path).
+   */
+  linkAudit?: { payload: BrokerLinkOutboxAuditPayload } | null;
+}
+
 @Injectable()
 export class BrokerService {
   private readonly logger = new Logger(BrokerService.name);
@@ -76,6 +111,9 @@ export class BrokerService {
     // Sprint 56 correction round 1 (audit point 1): OAuth credential
     // freshness for the cTrader family (refresh + atomic persist).
     private readonly tokenLifecycle: BrokerOAuthTokenLifecycleService,
+    // Sprint 56 correction round 5 (architect issue #332): durable outbox
+    // for post-commit audit/event side effects of connection creation.
+    private readonly linkOutbox: BrokerLinkOutboxService,
   ) {}
 
   // ─── Read operations ──────────────────────────────────────────────────────
@@ -184,12 +222,34 @@ export class BrokerService {
   /**
    * Save a broker connection with encrypted credentials.
    * Does NOT establish a live connection — use connectBroker() for that.
+   *
+   * DURABLE IDEMPOTENCY (Sprint 56 correction round 5, architect issue #332):
+   * - The BrokerConnection INSERT, its logical_account_key, and ALL
+   *   post-commit side-effect work (connection-created audit, status event,
+   *   and the optional OAuth link audit) commit in ONE transaction. The
+   *   audit/event delivery itself moved OUT of the critical path into the
+   *   broker_link_outbox (swept by BrokerLinkOutboxService) — an audit/event
+   *   failure can therefore NEVER make a committed connection look
+   *   uncommitted: createConnection throws ⟺ the transaction rolled back
+   *   (zero durable rows), and succeeds ⟺ the row AND its outbox work are
+   *   durable. This proof is what lets BrokerOAuthService.linkAccount restore
+   *   a flow to AUTHORIZED ONLY on a provably side-effect-free failure.
+   * - The per-user partial unique index on (user_id, logical_account_key)
+   *   protects the INSERT itself: a duplicate logical account throws
+   *   BrokerLogicalAccountConflictError carrying the EXISTING connection
+   *   (manual connects surface an honest 409; the OAuth link path adopts).
+   *
+   * PUBLIC BEHAVIOR for manual (non-OAuth) connects: unchanged apart from the
+   * two durable-idempotency guarantees above — credentials are still
+   * AES-256-GCM encrypted at insert; the BROKER_CONNECTION_CREATED audit is
+   * still emitted (asynchronously via the outbox sweep, with retries instead
+   * of the old fire-and-forget); the return value is still the saved row.
    */
   async createConnection(
     dto: ConnectBrokerDto,
     userId: string,
     ipAddress?: string,
-    serverDerived?: { providerBrokerIdentity?: string | null },
+    serverDerived?: BrokerConnectionServerDerived,
   ): Promise<BrokerConnection> {
     if (!this.adapterRegistry.isSupported(dto.brokerId)) {
       throw new BadRequestException(`Unsupported broker: ${dto.brokerId}`);
@@ -257,6 +317,19 @@ export class BrokerService {
 
     const encrypted = this.encryptionService.encrypt(credentials);
 
+    // Logical account key (issue #332): EXPLICIT server-provided key when the
+    // OAuth link path passes the exact key it pre-checked for adoption;
+    // otherwise DERIVED from the row's own facts (manual connects get the same
+    // per-user uniqueness protection — matching the migration backfill).
+    const logicalAccountKey =
+      serverDerived?.logicalAccountKey !== undefined && serverDerived.logicalAccountKey !== null
+        ? serverDerived.logicalAccountKey
+        : computeLogicalAccountKey(
+            dto.brokerId,
+            serverDerived?.providerBrokerIdentity,
+            dto.accountId,
+          );
+
     const connection = this.connectionRepo.create({
       userId,
       brokerId: dto.brokerId,
@@ -268,6 +341,9 @@ export class BrokerService {
       // sanitized normalized identity from provider discovery — set ONLY by
       // the server-side linking path (never the public DTO), null = unknown.
       providerBrokerIdentity: serverDerived?.providerBrokerIdentity ?? null,
+      // Durable idempotency key (issue #332) — persisted AT INSERT TIME so the
+      // partial unique index protects the INSERT itself.
+      logicalAccountKey,
       status: BrokerConnectionStatus.DISCONNECTED,
       authorizationStatus: BrokerAuthorizationStatus.NOT_CONNECTED,
       credentialStatus: BrokerCredentialStatus.CREATED,
@@ -277,25 +353,103 @@ export class BrokerService {
       encryptionKeyId: encrypted.keyId,
     });
 
-    const saved = await this.connectionRepo.save(connection);
-
-    await this.auditService.log({
-      actorUserId: userId,
-      action: AuditAction.BROKER_CONNECTION_CREATED,
-      resourceType: 'BrokerConnection',
-      resourceId: saved.id,
-      ipAddress,
-      metadata: {
-        brokerId: dto.brokerId,
-        accountId: dto.accountId,
-        accountType: dto.accountType,
-      },
-    });
+    // ONE transaction (issue #332): the connection INSERT and ALL of its
+    // post-commit side-effect WORK (connection-created audit + status event +
+    // the optional OAuth link audit) commit together — or roll back together
+    // (zero durable rows). Delivery happens asynchronously via the outbox
+    // sweep, so an audit/event failure can NEVER make a committed connection
+    // look uncommitted.
+    let saved: BrokerConnection;
+    try {
+      saved = await this.connectionRepo.manager.transaction(async (manager) => {
+        const row = await manager.getRepository(BrokerConnection).save(connection);
+        await this.linkOutbox.enqueueWithinTransaction(manager, [
+          {
+            connectionId: row.id,
+            flowId: serverDerived?.flowId ?? null,
+            eventType: 'connection-created-audit',
+            payload: {
+              action: AuditAction.BROKER_CONNECTION_CREATED,
+              actorUserId: userId,
+              ipAddress: ipAddress ?? null,
+              metadata: {
+                brokerId: dto.brokerId,
+                accountId: dto.accountId,
+                accountType: dto.accountType,
+              },
+              severity: AuditSeverity.INFO,
+            },
+          },
+          {
+            connectionId: row.id,
+            flowId: serverDerived?.flowId ?? null,
+            eventType: 'broker-status-event',
+            payload: {
+              domainEventType: DomainEventType.BROKER_STATUS_CHANGED,
+              userId,
+              payload: {
+                userId,
+                connectionId: row.id,
+                status: BrokerConnectionStatus.DISCONNECTED,
+                previousStatus: null,
+                reason: 'created',
+              },
+            },
+          },
+          ...(serverDerived?.linkAudit
+            ? [
+                {
+                  connectionId: row.id,
+                  flowId: serverDerived?.flowId ?? null,
+                  eventType: 'oauth-account-linked-audit' as const,
+                  payload: serverDerived.linkAudit.payload,
+                },
+              ]
+            : []),
+        ]);
+        return row;
+      });
+    } catch (err) {
+      // Durable-idempotency conflict: the INSERT hit the per-user partial
+      // unique index — a non-deleted connection for this logical account
+      // already exists. Load it and hand it to the caller for ADOPTION (the
+      // OAuth link path converges its flow and returns the existing row;
+      // manual connects surface the honest 409).
+      if (logicalAccountKey && isUniqueViolation(err)) {
+        const existing = await this.findLiveConnectionByLogicalKey(userId, logicalAccountKey);
+        if (existing) {
+          this.logger.warn(
+            `Broker connection INSERT hit the logical-account unique index: ` +
+              `broker=${dto.brokerId} user=${userId} key=${logicalAccountKey} ` +
+              `existing=${existing.id} — adopting the existing connection`,
+          );
+          throw new BrokerLogicalAccountConflictError(logicalAccountKey, existing);
+        }
+      }
+      throw err;
+    }
 
     this.logger.log(
       `Broker connection created: id=${saved.id} broker=${dto.brokerId} user=${userId}`,
     );
     return saved;
+  }
+
+  /**
+   * Durable-idempotency lookup (issue #332): the non-deleted (live)
+   * connection for a user's logical broker account, or null. The OAuth link
+   * path uses this to PROVE whether a prior attempt already committed the
+   * durable connection (adoption) before inserting a new row; the partial
+   * unique index remains the hard backstop for the check-then-insert race.
+   */
+  async findLiveConnectionByLogicalKey(
+    userId: string,
+    logicalAccountKey: string,
+  ): Promise<BrokerConnection | null> {
+    return this.connectionRepo.findOne({
+      where: { userId, logicalAccountKey, deletedAt: IsNull() },
+      order: { createdAt: 'DESC' },
+    });
   }
 
   // ─── Connect / Disconnect ─────────────────────────────────────────────────

@@ -10,7 +10,10 @@ import { AuditAction } from '../../../common/enums/audit-action.enum';
 import { BrokerConnection } from '../entities/broker-connection.entity';
 import { BrokerMode } from '../interfaces/broker-adapter.interface';
 import { BrokerOAuthFlow } from '../entities/broker-oauth-flow.entity';
+import { BrokerLinkOutbox } from '../entities/broker-link-outbox.entity';
 import { CredentialEncryptionService } from './credential-encryption.service';
+import { BrokerLinkOutboxService } from './broker-link-outbox.service';
+import { DomainEventBus } from '../../events/event-bus.service';
 
 /**
  * Sprint 56 correction round 2 (architect finding 2) — the OAuth flow store
@@ -62,7 +65,8 @@ describe('BrokerOAuthService cross-instance flow store (architect finding 2)', (
   let dataSource: DataSource;
   let flowRepo: Repository<BrokerOAuthFlow>;
   let encryption: CredentialEncryptionService;
-  let brokerService: { createConnection: jest.Mock };
+  let brokerService: { createConnection: jest.Mock; findLiveConnectionByLogicalKey: jest.Mock };
+  let linkOutbox: BrokerLinkOutboxService;
   let ctraderClient: {
     isAvailable: jest.Mock;
     buildAuthorizationUrl: jest.Mock;
@@ -85,6 +89,9 @@ describe('BrokerOAuthService cross-instance flow store (architect finding 2)', (
       }) as unknown as ConfigService,
       encryption,
       flowRepo,
+      // Sprint 56 correction round 5 (#332): the REAL durable outbox over the
+      // shared store — every replica shares it exactly like the flow store.
+      linkOutbox,
     );
 
   beforeAll(async () => {
@@ -92,7 +99,7 @@ describe('BrokerOAuthService cross-instance flow store (architect finding 2)', (
       type: 'sqlite',
       database: ':memory:',
       synchronize: true,
-      entities: [BrokerOAuthFlow],
+      entities: [BrokerOAuthFlow, BrokerLinkOutbox],
     });
     await dataSource.initialize();
     flowRepo = dataSource.getRepository(BrokerOAuthFlow);
@@ -101,7 +108,21 @@ describe('BrokerOAuthService cross-instance flow store (architect finding 2)', (
       new ConfigService({ BROKER_ENCRYPTION_KEY: ENCRYPTION_KEY }) as unknown as ConfigService,
     );
 
-    brokerService = { createConnection: jest.fn() };
+    brokerService = {
+      createConnection: jest.fn(),
+      // Sprint 56 correction round 5 (#332): the durable-idempotency
+      // adoption pre-check — no existing live connection by default (the
+      // mocked createConnection owns the row creation in this suite).
+      findLiveConnectionByLogicalKey: jest.fn().mockResolvedValue(null),
+    };
+    audit = { log: jest.fn().mockResolvedValue(undefined) };
+    // The REAL outbox service over the shared store (adoption audits land
+    // here; the sweep is exercised by the dedicated outbox spec).
+    linkOutbox = new BrokerLinkOutboxService(
+      dataSource.getRepository(BrokerLinkOutbox),
+      audit as unknown as AuditService,
+      new DomainEventBus(),
+    );
     ctraderClient = {
       isAvailable: jest.fn().mockReturnValue(true),
       buildAuthorizationUrl: jest
@@ -136,7 +157,9 @@ describe('BrokerOAuthService cross-instance flow store (architect finding 2)', (
       brokerId: 'ctrader',
       accountType: BrokerMode.DEMO,
     } as unknown as BrokerConnection);
+    brokerService.findLiveConnectionByLogicalKey.mockResolvedValue(null);
     await flowRepo.clear();
+    await dataSource.getRepository(BrokerLinkOutbox).clear();
   });
 
   const authorizeOn = (instance: BrokerOAuthService, channel: 'web' | 'mobile' = 'web') =>
@@ -276,11 +299,18 @@ describe('BrokerOAuthService cross-instance flow store (architect finding 2)', (
     expect(stored!.tokenCiphertext).toBeNull();
     expect(stored!.tokenIv).toBeNull();
     expect(stored!.tokenTag).toBeNull();
-    // EXACTLY ONE successful linked audit.
-    const linkedAudits = audit.log.mock.calls.filter(
-      (c) => c[0].action === AuditAction.BROKER_OAUTH_ACCOUNT_LINKED,
+    // Sprint 56 correction round 5 (#332): EXACTLY ONE linked-audit is handed
+    // to the durable outbox channel (the round ≤4 spec asserted one
+    // synchronous audit.log call — the audit now commits atomically with the
+    // connection inside the (here mocked) createConnection and is delivered
+    // by the outbox sweep).
+    const serverDerivedArgs = brokerService.createConnection.mock.calls
+      .map((call: unknown[]) => call[3] as { linkAudit?: { payload: { action: string } } })
+      .filter((arg) => arg?.linkAudit);
+    expect(serverDerivedArgs).toHaveLength(1);
+    expect(serverDerivedArgs[0]!.linkAudit!.payload.action).toBe(
+      AuditAction.BROKER_OAUTH_ACCOUNT_LINKED,
     );
-    expect(linkedAudits).toHaveLength(1);
     // No duplicate credential submission (exactly one createConnection call
     // means exactly one encrypted-credential write through the broker service).
   });

@@ -127,7 +127,23 @@ export interface LiveAccountConnectionView {
   credentialStatus: BrokerCredentialStatus;
   /** Fail-closed execution gate (Directive §14: only true may execute). */
   executable: boolean;
+  /**
+   * COMPATIBILITY MIRROR ONLY (Sprint 56 correction round 5, #292/#298):
+   * never rendered as the authoritative current trading state — the
+   * TradingSession executionMode/status/authorityGeneration and the provider
+   * verification taxonomy are authoritative.
+   */
   liveTradingEnabled: boolean;
+  /**
+   * Provider-side broker identity (server-reported; null when not reported).
+   * Optional for wire compatibility with older payloads.
+   */
+  providerBrokerIdentity?: string | null;
+  /**
+   * Server-derived canonical logical-account key (null until derived;
+   * aliases normalize to one key). Optional for wire compatibility.
+   */
+  logicalAccountKey?: string | null;
   health: LiveConnectionHealth;
   lastSyncAt: string | null;
   lastHealthCheckAt: string | null;

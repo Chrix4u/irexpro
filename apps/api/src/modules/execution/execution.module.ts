@@ -4,9 +4,12 @@ import { BullModule } from '@nestjs/bullmq';
 import { ExecutionController } from './execution.controller';
 import { ExecutionReadService } from './execution-read.service';
 import { ExecutionService } from './execution.service';
+import { ExecutionSessionResolutionService } from './execution-session.resolution';
 import { ExecutionOrchestrator } from './orchestration/execution-orchestrator.service';
 import { Trade } from './entities/trade.entity';
 import { TradingSession } from './entities/trading-session.entity';
+import { RiskGrant } from './entities/risk-grant.entity';
+import { ExecutionConfirmation } from './entities/execution-confirmation.entity';
 import { Order } from './orders/order.entity';
 import { OrderService } from './orders/order.service';
 import {
@@ -53,6 +56,8 @@ import { ExecutionControlModule } from '../execution-control/execution-control.m
     TypeOrmModule.forFeature([
       Trade,
       TradingSession,
+      RiskGrant,
+      ExecutionConfirmation,
       Order,
       BrokerAccount,
       ReconciliationRun,
@@ -67,6 +72,9 @@ import { ExecutionControlModule } from '../execution-control/execution-control.m
   controllers: [ExecutionController],
   providers: [
     ExecutionService,
+    // Round 5 (#295): the session-resolution seam every EXECUTION-side
+    // NEW-exposure decision uses (TradingSession = authoritative target).
+    ExecutionSessionResolutionService,
     ExecutionOrchestrator,
     ExecutionReadService,
     OrderService,
@@ -76,6 +84,12 @@ import { ExecutionControlModule } from '../execution-control/execution-control.m
     TradeReconciliationJob,
     TradeReconciliationProducer,
   ],
-  exports: [ExecutionService, ExecutionOrchestrator, ExecutionReadService, OrderService],
+  exports: [
+    ExecutionService,
+    ExecutionSessionResolutionService,
+    ExecutionOrchestrator,
+    ExecutionReadService,
+    OrderService,
+  ],
 })
 export class ExecutionModule {}

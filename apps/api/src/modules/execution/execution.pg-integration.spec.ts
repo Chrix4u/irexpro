@@ -3,6 +3,10 @@ import { DataSource, Repository } from 'typeorm';
 import { ExecutionService } from './execution.service';
 import { Trade } from './entities/trade.entity';
 import { TradingSession } from './entities/trading-session.entity';
+import { RiskGrant } from './entities/risk-grant.entity';
+import { ExecutionConfirmation } from './entities/execution-confirmation.entity';
+import { ExecutionMode } from './interfaces/execution-authority';
+import { ExecutionSessionResolutionService } from './execution-session.resolution';
 import { Order } from './orders/order.entity';
 import { OrderService } from './orders/order.service';
 import { ExecutionOrchestrator } from './orchestration/execution-orchestrator.service';
@@ -206,7 +210,9 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
       encryptionKeyId: 'test-key',
     };
     const brokerService = {
-      findActiveConnectionForUser: jest.fn().mockResolvedValue(connection),
+      // Round 5 (#295): discovery sentinel — executeTrade resolves the session
+      // authority seam + the EXACT session-bound connection by id.
+      findActiveConnectionForUser: jest.fn(),
       findConnectionById: jest.fn().mockResolvedValue(connection),
       isConnectionExecutable: jest.fn().mockReturnValue(true),
     } as unknown as BrokerService;
@@ -225,6 +231,20 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
     } as unknown as ExecutionControlService;
     const auditService = { log: jest.fn().mockResolvedValue(undefined) } as unknown as AuditService;
     const eventBus = { publish: jest.fn() } as unknown as DomainEventBus;
+
+    // Round 5: the session-authority seam is mocked at this boundary — the
+    // session-resolution + start-race matrix against REAL PostgreSQL lives in
+    // execution-session.pg-integration.spec.ts.
+    const sessionResolution = {
+      resolveActiveSessionAuthority: jest.fn().mockResolvedValue({
+        sessionId: 'session-1',
+        sessionGeneration: 1,
+        executionMode: ExecutionMode.PAPER_ONLY,
+        brokerConnectionId: connectionId,
+      }),
+    } as unknown as ExecutionSessionResolutionService;
+    const authorityRepoStub = {} as Repository<RiskGrant>;
+    const confirmationRepoStub = {} as Repository<ExecutionConfirmation>;
 
     const orderService = new OrderService(
       dataSource.getRepository(Order) as Repository<Order>,
@@ -247,6 +267,9 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
       auditService,
       dataSource,
       eventBus,
+      authorityRepoStub,
+      confirmationRepoStub,
+      sessionResolution,
     );
   });
 
@@ -337,7 +360,7 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
     };
     const brokerServiceHandle = (service as unknown as { brokerService: BrokerService })
       .brokerService;
-    const connection = (await brokerServiceHandle.findActiveConnectionForUser(userId))!;
+    const connection = (await brokerServiceHandle.findConnectionById(connectionId, userId))!;
     const outcome = await orchestrator.dispatchOrder(intent, connection);
 
     expect(outcome.outcome).toBe('DUPLICATE');

@@ -188,3 +188,68 @@ describe("summaryTiles (§38 derived tiles)", () => {
     expect(tiles.warningAlerts).toBe(1);
   });
 });
+
+// ── Sprint 56 correction round 5: trading session authority ──────────────────
+
+import type { TradingSessionView } from "@irexpro/types/execution";
+import {
+  executionModeLabel,
+  sessionAuthorityPresentation,
+  sessionStatusLabel,
+} from "../live-account-screen.logic";
+
+const session = (
+  overrides: Partial<TradingSessionView>,
+): TradingSessionView => ({
+  id: "sess_00000000-0000-0000-0000-000000000001",
+  brokerConnectionId: "bconn_00000000-0000-0000-0000-000000000001",
+  executionMode: "SEMI_AUTO",
+  authorityGeneration: 3,
+  status: "ACTIVE",
+  openingBalance: null,
+  peakEquity: null,
+  startedAt: "2026-09-10T00:00:00.000Z",
+  ...overrides,
+});
+
+describe("sessionAuthorityPresentation (authoritative session state)", () => {
+  it("an ACTIVE SEMI_AUTO session is not blocked and labels the mode honestly", () => {
+    const presentation = sessionAuthorityPresentation(session({}));
+
+    expect(presentation.modeLabel).toBe("Semi-auto (confirm each order)");
+    expect(presentation.statusLabel).toBe("Active");
+    expect(presentation.executionBlocked).toBe(false);
+    expect(presentation.blockedReasons).toEqual([]);
+  });
+
+  it("a SUSPENDED_RISK_LIMIT session blocks execution with the server state as the reason", () => {
+    const presentation = sessionAuthorityPresentation(
+      session({ status: "SUSPENDED_RISK_LIMIT" }),
+    );
+
+    expect(presentation.executionBlocked).toBe(true);
+    expect(presentation.statusLabel).toBe("Suspended — risk limit");
+    expect(presentation.blockedReasons).toEqual([
+      "The trading session is suspended by a risk limit.",
+    ]);
+  });
+
+  it("no session at all reports execution authority not started (never inferred)", () => {
+    const presentation = sessionAuthorityPresentation(null);
+
+    expect(presentation.modeLabel).toBe("Not started");
+    expect(presentation.statusLabel).toBe("No active session");
+    expect(presentation.executionBlocked).toBe(true);
+    expect(presentation.blockedReasons[0]).toContain(
+      "No active trading session",
+    );
+  });
+
+  it("labels every durable mode + lifecycle status humanly", () => {
+    expect(executionModeLabel("PAPER_ONLY")).toBe("Paper only");
+    expect(executionModeLabel("FULL_AUTO")).toBe("Full auto");
+    expect(sessionStatusLabel("ENDED")).toBe("Ended");
+    expect(sessionStatusLabel("PAUSED")).toBe("Paused");
+    expect(sessionStatusLabel("SUSPENDED_BROKER")).toBe("Suspended — broker");
+  });
+});

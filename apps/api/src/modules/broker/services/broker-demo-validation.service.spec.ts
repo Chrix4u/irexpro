@@ -12,6 +12,7 @@ import { PaperBrokerAdapter } from '../adapters/paper-broker.adapter';
 import { CredentialEncryptionService } from './credential-encryption.service';
 import { BrokerDemoValidationService } from './broker-demo-validation.service';
 import { BrokerOAuthTokenLifecycleService } from './broker-oauth-token-lifecycle.service';
+import { BrokerLinkOutboxService } from './broker-link-outbox.service';
 import { CTraderClientService } from '../adapters/ctrader/ctrader-client.service';
 import { AuditService } from '../../audit/audit.service';
 import { AuditSeverity } from '../../audit/entities/audit-log.entity';
@@ -124,6 +125,19 @@ describe('BrokerDemoValidationService', () => {
     save: jest.fn().mockResolvedValue({}),
     update: jest.fn().mockResolvedValue({ affected: 1 }),
     softDelete: jest.fn(),
+    // Round 5 (#332): createConnection commits through a transaction + outbox
+    manager: {
+      transaction: jest.fn().mockImplementation(async (fn: unknown) =>
+        (fn as (m: unknown) => Promise<unknown>)({
+          getRepository: jest.fn().mockReturnValue({
+            save: jest.fn().mockImplementation(async (obj: Record<string, unknown>) => ({
+              id: 'conn-outbox-1',
+              ...obj,
+            })),
+          }),
+        }),
+      ),
+    },
   });
 
   const mockAccountRepo = () => ({
@@ -151,6 +165,14 @@ describe('BrokerDemoValidationService', () => {
         // lifecycle service — the freshness gate is a no-op for paper-broker
         // fixtures (cTrader family only), proven here end-to-end.
         BrokerOAuthTokenLifecycleService,
+        {
+          provide: BrokerLinkOutboxService,
+          useValue: {
+            enqueueWithinTransaction: jest.fn().mockResolvedValue(undefined),
+            enqueue: jest.fn().mockResolvedValue(undefined),
+            sweep: jest.fn().mockResolvedValue({ delivered: 0, failed: 0, deferred: 0 }),
+          },
+        },
         {
           provide: CTraderClientService,
           useValue: { refreshAccessToken: jest.fn() },

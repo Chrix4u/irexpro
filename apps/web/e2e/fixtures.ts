@@ -257,12 +257,21 @@ export async function setupAuthInterception(page: Page): Promise<void> {
 
     // ── Trading ─────────────────────────────────────────────────────────
     if (apiPath === 'trading/sessions/start') {
+      // Sprint 56 correction round 5: the start contract binds the exact
+      // brokerConnectionId + durable executionMode and returns the
+      // authoritative { session } envelope.
       return route.fulfill(
         jsonFulfill(201, {
-          id: 'sess_00000000-0000-0000-0000-000000000001',
-          status: 'ACTIVE',
-          requestedMode: 'PAPER_ONLY',
-          startedAt: new Date().toISOString(),
+          session: {
+            id: 'sess_00000000-0000-0000-0000-000000000001',
+            brokerConnectionId: mockBrokerConnections[0].id,
+            executionMode: 'PAPER_ONLY',
+            authorityGeneration: 1,
+            status: 'ACTIVE',
+            openingBalance: null,
+            peakEquity: null,
+            startedAt: new Date().toISOString(),
+          },
         }),
       );
     }

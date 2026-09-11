@@ -45,3 +45,222 @@ export interface TradeExecutionView {
   createdAt: string;
   updatedAt: string;
 }
+
+// ─── Execution authority: trading session (Sprint 56 correction round 5) ─────
+//
+// Issues #295/#298: the TradingSession is THE authoritative execution target.
+// The executionMode is durable session state — it is NEVER inferred from
+// connection.accountType, and `liveTradingEnabled` on a connection is only a
+// compatibility mirror that must never be presented as the current trading
+// state. Mode changes are audited server-side and bump `authorityGeneration`,
+// invalidating outstanding RiskGrants and SEMI_AUTO confirmations.
+
+/**
+ * Durable execution modes for a trading session (issue #298).
+ *
+ * - PAPER_ONLY: new exposure routes exclusively to the paper/simulator path.
+ * - SEMI_AUTO: every new exposure requires an explicit server-verifiable,
+ *   one-time user confirmation bound to the exact order payload.
+ * - FULL_AUTO: automatic new exposure permitted only while ALL current
+ *   authority conditions hold at the final dispatch boundary.
+ */
+export type ExecutionMode = 'PAPER_ONLY' | 'SEMI_AUTO' | 'FULL_AUTO';
+
+/** Trading session lifecycle (mirrors the backend enum). */
+export type TradingSessionStatus =
+  | 'ACTIVE'
+  | 'PAUSED'
+  | 'SUSPENDED_RISK_LIMIT'
+  | 'SUSPENDED_BROKER'
+  | 'ENDED';
+
+/** All execution-mode selector values, in risk-ascending order. */
+export const EXECUTION_MODES: readonly ExecutionMode[] = [
+  'PAPER_ONLY',
+  'SEMI_AUTO',
+  'FULL_AUTO',
+];
+
+/**
+ * Frontend-safe view of the authoritative trading session.
+ *
+ * Monetary values (openingBalance / peakEquity) are decimal strings and may
+ * be null until the first account snapshot is bound. The frontend renders
+ * these verbatim and never derives authority from them.
+ */
+export interface TradingSessionView {
+  id: string;
+  /** The exact broker connection bound at session start (issue #295). */
+  brokerConnectionId: string;
+  /** Durable execution mode — authoritative, never inferred (issue #298). */
+  executionMode: ExecutionMode;
+  /**
+   * Monotonic authority generation. Advanced on every audited mode change /
+   * connection switch / suspension; outstanding confirmations bind the
+   * generation at issuance, so a mismatch invalidates them.
+   */
+  authorityGeneration: number;
+  status: TradingSessionStatus;
+  /** Opening account balance snapshot (decimal string; null before sync). */
+  openingBalance: string | null;
+  /** Peak equity observed during the session (decimal string; null before sync). */
+  peakEquity: string | null;
+  startedAt: string;
+}
+
+/** GET /trading/sessions/active → 200 `{ session }` (session null when none is active). */
+export interface ActiveTradingSessionResponse {
+  session: TradingSessionView | null;
+}
+
+/** POST /trading/sessions/start request body. */
+export interface StartTradingSessionRequest {
+  /** Exact connection to bind as the execution target (server-validated). */
+  brokerConnectionId: string;
+  executionMode: ExecutionMode;
+}
+
+/** POST /trading/sessions/start → 201 `{ session }`. */
+export interface StartTradingSessionResponse {
+  session: TradingSessionView;
+}
+
+/** POST /trading/sessions/:id/mode request body (audited; bumps generation). */
+export interface ChangeTradingSessionModeRequest {
+  executionMode: ExecutionMode;
+}
+
+/** POST /trading/sessions/:id/mode → 200 `{ session }`. */
+export interface ChangeTradingSessionModeResponse {
+  session: TradingSessionView;
+}
+
+// ─── SEMI_AUTO execution confirmations (issue #298) ─────────────────────────
+//
+// In SEMI_AUTO mode the SERVER queues a one-time confirmation bound to the
+// exact order payload digest. The frontend may ONLY list pending
+// confirmations and relay an explicit confirm — it NEVER fabricates approval
+// state; only the server-consumed `CONSUMED` result (or the typed 409-style
+// failure) is truth.
+
+/**
+ * A pending SEMI_AUTO confirmation. `orderPayloadDigest` is the server's
+ * canonical SHA-256 digest of the exact order payload — displayed so the
+ * user can see the confirmation is bound to THIS order, not a lookalike.
+ */
+export interface ExecutionConfirmationView {
+  id: string;
+  /** Originating AI signal identity (immutable server-side). */
+  signalId: string;
+  instrument: string;
+  direction: TradeExecutionDirection;
+  /** Quantity as a decimal string (never parsed to a float). */
+  quantity: string;
+  stopLoss: string | null;
+  takeProfit: string | null;
+  /** Expiry timestamp — after this the server rejects the confirmation. */
+  expiresAt: string;
+  /** Canonical SHA-256 digest of the exact bound order payload. */
+  orderPayloadDigest: string;
+}
+
+/** GET /execution/confirmations/pending → `{ confirmations }`. */
+export interface PendingExecutionConfirmationsResponse {
+  confirmations: ExecutionConfirmationView[];
+}
+
+/**
+ * POST /execution/confirmations/:id/confirm → 200 server-consumed authority
+ * result. `CONSUMED` is the ONLY success value — the frontend never marks a
+ * confirmation approved on its own.
+ */
+export type ExecutionConfirmationOutcome = 'CONSUMED';
+
+/** POST /execution/confirmations/:id/confirm success body. */
+export interface ConfirmExecutionConfirmationResponse {
+  status: ExecutionConfirmationOutcome;
+}
+
+/**
+ * Typed failure classification for a confirm attempt (server 409-style
+ * responses). Kind values mirror the server-side one-time-use semantics:
+ * expired, already consumed, revoked, or bound to a superseded session
+ * authority generation.
+ */
+export type ExecutionConfirmationFailureKind =
+  | 'expired'
+  | 'consumed'
+  | 'revoked'
+  | 'mismatched-generation'
+  | 'unknown';
+
+/**
+ * Structured server failure surface for a rejected confirm attempt.
+ * Presentation only — it maps a sanitized server error onto the typed
+ * failure kinds so the UI never shows a fabricated approval state.
+ */
+export interface ExecutionConfirmationFailure {
+  kind: ExecutionConfirmationFailureKind;
+  /** Human-readable copy derived from the SERVER message (never invented). */
+  message: string;
+}
+
+/**
+ * Classify a confirm failure from a sanitized server error surface.
+ *
+ * Accepts the shared ApiClientError shape (`statusCode`, `message`, and an
+ * optional machine `code`) and maps it onto the typed failure kinds by
+ * inspecting the server-provided message/code — keywords are matched
+ * case-insensitively. Unknown shapes fail closed to `'unknown'` with the
+ * server message (or a neutral fallback) so the failure is still shown as
+ * the server's, never as a local success.
+ */
+export function describeExecutionConfirmationFailure(failure: {
+  statusCode?: number;
+  message?: string;
+  code?: string;
+}): ExecutionConfirmationFailure {
+  const message = typeof failure.message === 'string' ? failure.message : '';
+  const haystack = `${failure.code ?? ''} ${message}`.toLowerCase();
+  if (
+    haystack.includes('expired') ||
+    failure.code === 'CONFIRMATION_EXPIRED'
+  ) {
+    return {
+      kind: 'expired',
+      message: message || 'The confirmation expired before it reached the server.',
+    };
+  }
+  if (
+    haystack.includes('consumed') ||
+    haystack.includes('already used') ||
+    failure.code === 'CONFIRMATION_ALREADY_CONSUMED'
+  ) {
+    return {
+      kind: 'consumed',
+      message: message || 'The confirmation was already used exactly once.',
+    };
+  }
+  if (haystack.includes('revoked') || failure.code === 'CONFIRMATION_REVOKED') {
+    return {
+      kind: 'revoked',
+      message: message || 'The confirmation was revoked server-side.',
+    };
+  }
+  if (
+    haystack.includes('generation') ||
+    haystack.includes('mismatch') ||
+    failure.code === 'AUTHORITY_GENERATION_MISMATCH'
+  ) {
+    return {
+      kind: 'mismatched-generation',
+      message:
+        message ||
+        'The session authority changed — this confirmation is no longer bound to the current generation.',
+    };
+  }
+  return {
+    kind: 'unknown',
+    message: message || 'The server rejected this confirmation.',
+  };
+}

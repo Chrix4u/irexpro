@@ -188,6 +188,9 @@ describe('BrokerService authorization transitions — real PostgreSQL concurrenc
       audit,
       eventBus,
       tokenLifecycle,
+      // Sprint 56 correction round 5 (#332): link outbox — unused by the
+      // authorization-transition paths under test.
+      {} as never,
     );
   });
 

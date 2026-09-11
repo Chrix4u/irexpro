@@ -11,6 +11,7 @@ import { mapApiError } from '@/lib/error-mapping';
 import { api } from '@/lib/api';
 import { IREXPRO_BROKER_OAUTH_FLOW_KEY } from '@/lib/broker-oauth-flow';
 import { formatEnumLabel } from '@irexpro/types';
+import { connectionVerificationLabel } from '@/lib/trader-session';
 import type {
   SupportedBroker,
   BrokerConnectionView,
@@ -304,6 +305,19 @@ export default function OnboardingBrokerPage() {
     return 'info';
   }
 
+  /**
+   * Verification label from the fixed six-label taxonomy, joined with the
+   * server registry by brokerId. A missing entry degrades fail-closed — an
+   * UNVERIFIED BETA provider is NEVER labeled simply "Live".
+   */
+  function connectionLabelVariant(
+    label: ReturnType<typeof connectionVerificationLabel>['label'],
+  ): 'success' | 'error' | 'warning' | 'info' {
+    if (label === 'Production LIVE Verified') return 'success';
+    if (label === 'Production LIVE Unverified' || label === 'execution disabled') return 'error';
+    return 'warning';
+  }
+
   // Server-authoritative connection model (Directive §AU): the registry
   // decides OAuth vs credentials. Fallback to the summary list when the
   // registry is unreachable (offline-tolerant, same as before).
@@ -385,6 +399,24 @@ export default function OnboardingBrokerPage() {
                     <strong style={{ fontSize: '0.95rem', color: 'var(--text)' }}>{conn.brokerName}</strong>
                     {conn.displayName && <span className="muted text-sm">— {conn.displayName}</span>}
                     <Badge variant={statusVariant(conn.status)}>{formatEnumLabel(conn.status)}</Badge>
+                    {(() => {
+                      // Fixed-taxonomy verification label (Sprint 56 round 5);
+                      // the live-trading flag is NOT the current trading state.
+                      const verification = connectionVerificationLabel(
+                        {
+                          accountType: conn.accountType,
+                          authorizationStatus: conn.authorizationStatus,
+                          providerBrokerIdentity: conn.providerBrokerIdentity ?? null,
+                          logicalAccountKey: conn.logicalAccountKey ?? null,
+                        },
+                        registryEntries.find((entry) => entry.id === conn.brokerId) ?? null,
+                      );
+                      return (
+                        <Badge variant={connectionLabelVariant(verification.label)}>
+                          {verification.label}
+                        </Badge>
+                      );
+                    })()}
                   </div>
                   <div
                     className="text-sm muted"
@@ -392,6 +424,11 @@ export default function OnboardingBrokerPage() {
                   >
                     Account: {conn.accountId ?? '(not set)'}
                   </div>
+                  {conn.logicalAccountKey && (
+                    <div className="text-sm muted" style={{ fontSize: '0.8rem' }}>
+                      Logical account key: {conn.logicalAccountKey}
+                    </div>
+                  )}
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>

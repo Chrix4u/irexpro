@@ -70,8 +70,11 @@ function AccountPortfolioCard({ account }: { account: PortfolioAccountView }) {
           <dd>{account.brokerName}</dd>
         </div>
         <div>
-          <dt className="text-sm muted">Live execution enablement</dt>
-          <dd>{account.liveTradingEnabled ? 'Enabled' : 'Not enabled'}</dd>
+          <dt className="text-sm muted">Live-trading flag (compatibility mirror)</dt>
+          <dd>
+            {account.liveTradingEnabled ? 'Enabled' : 'Not enabled'} — not the authoritative
+            trading state; the session execution mode and authorization gates are.
+          </dd>
         </div>
       </dl>
 

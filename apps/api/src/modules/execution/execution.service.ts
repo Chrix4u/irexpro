@@ -1,11 +1,24 @@
 import * as crypto from 'crypto';
-import { ConflictException, ForbiddenException, Injectable, Logger } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, QueryDeepPartialEntity, Repository } from 'typeorm';
 import { Trade, TradeCloseReason, TradeDirection, TradeStatus } from './entities/trade.entity';
 import { TradingSession, TradingSessionStatus } from './entities/trading-session.entity';
+import { RiskGrant } from './entities/risk-grant.entity';
+import { ExecutionConfirmation } from './entities/execution-confirmation.entity';
+import { ExecutionMode, ExecutionConfirmationStatus, RiskGrantStatus } from './interfaces/execution-authority';
+import {
+  ActiveSessionConflictException,
+  BrokerConnectionNotConnectedException,
+  BrokerConnectionNotExecutableException,
+  BrokerConnectionOwnershipException,
+  ExecutionSessionResolutionService,
+  SessionAuthorityGenerationConflictException,
+  SessionAuthorityNotActiveException,
+} from './execution-session.resolution';
 import { RiskDecision } from '../risk/interfaces/risk.interface';
 import { BrokerService } from '../broker/broker.service';
+import { BrokerConnectionStatus } from '../broker/interfaces/broker-adapter.interface';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../../common/enums/audit-action.enum';
 import { AuditSeverity } from '../audit/entities/audit-log.entity';
@@ -15,6 +28,10 @@ import { TradeStateMachine } from './orders/trade-state-machine';
 import { OrderKind, OrderTimeInForce } from './orders/order.enums';
 import { ExecutionOrchestrator } from './orchestration/execution-orchestrator.service';
 import { ExecutionIntent } from './orchestration/execution-intent.interface';
+
+/** Invalidation reason stamped on RiskGrants when the session authority
+ *  generation advances (mode change / end / suspension — issue #298). */
+export const SESSION_AUTHORITY_GENERATION_CHANGED = 'SESSION_AUTHORITY_GENERATION_CHANGED';
 
 /**
  * ExecutionService — Live trade execution engine (position aggregate owner).
@@ -57,6 +74,11 @@ export class ExecutionService {
     private auditService: AuditService,
     private dataSource: DataSource,
     private readonly eventBus: DomainEventBus,
+    @InjectRepository(RiskGrant)
+    private readonly riskGrantRepo: Repository<RiskGrant>,
+    @InjectRepository(ExecutionConfirmation)
+    private readonly confirmationRepo: Repository<ExecutionConfirmation>,
+    private readonly sessionResolution: ExecutionSessionResolutionService,
   ) {}
 
   // ─── Main entry point ────────────────────────────────────────────────────
@@ -88,11 +110,16 @@ export class ExecutionService {
     const order = riskDecision.validatedOrder;
     const signalId = riskDecision.signalId;
 
-    // ── Step 2: Get broker connection ──────────────────────────────────────
-    const connection = await this.brokerService.findActiveConnectionForUser(userId);
-    if (!connection) {
-      throw new ForbiddenException('No active broker connection available for trade execution');
-    }
+    // ── Step 2: Resolve the EXACT execution target from the ACTIVE session ─
+    // Round 5 (issue #295): NEW exposure NEVER rediscovers "the latest active
+    // BrokerConnection". The TradingSession binds the exact connection chosen
+    // at session start; the resolution seam is the single source of that
+    // authority (sessionId + sessionGeneration + executionMode).
+    const authority = await this.sessionResolution.resolveActiveSessionAuthority(userId);
+    const connection = await this.brokerService.findConnectionById(
+      authority.brokerConnectionId,
+      userId,
+    );
 
     // ── Step 3: Pre-dispatch gates (fail-closed; BEFORE the trade-slot
     // reservation so blocked attempts never persist a PENDING trade).
@@ -187,6 +214,9 @@ export class ExecutionService {
         takeProfit: order.takeProfit,
         idempotencyKey,
         signalId,
+        sessionId: authority.sessionId,
+        sessionGeneration: authority.sessionGeneration,
+        executionMode: authority.executionMode,
       },
     });
 
@@ -779,48 +809,333 @@ export class ExecutionService {
     return this.tradeRepo.findOne({ where: { signalId, userId } });
   }
 
-  // ─── Session management ───────────────────────────────────────────────────
+  // ─── Session management (Round 5 — session is the authoritative target) ───
 
+  /**
+   * Start (or idempotently return) the user's ACTIVE TradingSession bound to
+   * the EXACT requested broker connection (architect issue #295).
+   *
+   * Round 5 invariants enforced here (single writer for session rows):
+   *   1. The EXACT connection is resolved by id and must be OWNED by the user
+   *      (typed rejection otherwise). NEVER findActiveConnectionForUser.
+   *   2. The connection must be CONNECTED and LIVE-authorization-executable
+   *      (brokerService.isConnectionExecutable — fail-closed state machine).
+   *   3. Same ACTIVE session + same connection + same mode → return existing.
+   *   4. ACTIVE session on ANOTHER connection (or another mode) → typed domain
+   *      conflict — switching accounts requires an explicit audited end+start.
+   *   5. Creation is protected by the DB partial unique index
+   *      uq_trading_sessions_one_active_per_user: a unique-violation on INSERT
+   *      re-reads the winner (not find-then-insert alone).
+   *   6. executionMode (default PAPER_ONLY) + authorityGeneration: 1 persist.
+   */
   async startSession(
     userId: string,
     brokerConnectionId: string,
     openingBalance: string,
     riskProfileSnapshot?: Record<string, unknown> | null,
+    executionMode: ExecutionMode = ExecutionMode.PAPER_ONLY,
   ): Promise<TradingSession> {
-    const existing = await this.sessionRepo.findOne({
-      where: { userId, status: TradingSessionStatus.ACTIVE },
-    });
-    if (existing) return existing;
+    // ── 1+2: exact-connection ownership + eligibility ─────────────────────
+    const [connection] = await this.brokerService.findConnectionsByIds([brokerConnectionId]);
+    if (!connection) {
+      throw new NotFoundException('Broker connection not found');
+    }
+    if (connection.userId !== userId) {
+      throw new BrokerConnectionOwnershipException();
+    }
+    if (connection.status !== BrokerConnectionStatus.CONNECTED) {
+      throw new BrokerConnectionNotConnectedException(connection.status);
+    }
+    if (!this.brokerService.isConnectionExecutable(connection)) {
+      throw new BrokerConnectionNotExecutableException(connection.authorizationStatus);
+    }
 
-    return this.sessionRepo.save(
-      this.sessionRepo.create({
-        userId,
-        brokerConnectionId,
-        status: TradingSessionStatus.ACTIVE,
-        openingBalance,
-        peakEquity: openingBalance,
-        startedAt: new Date(),
-        // Sprint 32: snapshot the risk profile at session start so future
-        // edits don't rewrite history. The snapshot is a deterministic JSON
-        // object of risk-relevant fields (no credentials/secrets/PII).
-        riskProfileSnapshot: riskProfileSnapshot ?? null,
-      }),
-    );
+    // ── 3+4: idempotency / typed conflict against an existing ACTIVE session ─
+    const existing = await this.findActiveSessionOrdered(userId);
+    if (existing) {
+      this.assertStartMatchesExistingAuthority(existing, brokerConnectionId, executionMode);
+      return existing;
+    }
+
+    // ── 5+6: create, protected by the partial unique (one ACTIVE per user) ──
+    // A plain INSERT (no transaction) so the DB partial unique index is the
+    // arbiter under concurrency: a unique-violation re-reads the winner.
+    const sessionId = crypto.randomUUID();
+    const sessionEntity = this.sessionRepo.create({
+      id: sessionId,
+      userId,
+      brokerConnectionId,
+      executionMode,
+      authorityGeneration: 1,
+      status: TradingSessionStatus.ACTIVE,
+      openingBalance,
+      peakEquity: openingBalance,
+      startedAt: new Date(),
+      // Sprint 32: snapshot the risk profile at session start so future
+      // edits don't rewrite history. The snapshot is a deterministic JSON
+      // object of risk-relevant fields (no credentials/secrets/PII).
+      riskProfileSnapshot: riskProfileSnapshot ?? null,
+    });
+    try {
+      await this.sessionRepo.insert(sessionEntity as QueryDeepPartialEntity<TradingSession>);
+      const created = await this.sessionRepo.findOne({ where: { id: sessionId } });
+      if (!created) {
+        throw new Error(`Trading session ${sessionId} vanished right after insertion`);
+      }
+      return created;
+    } catch (err) {
+      if (this.isUniqueConstraintViolation(err)) {
+        // A concurrent start won the partial-unique race — re-read the winner
+        // (bounded retry: the winner's commit can trail the violation by a
+        // few milliseconds on some drivers) and apply the same
+        // idempotency/conflict decision against it.
+        const winner = await this.findActiveSessionOrderedWithRetry(userId);
+        if (winner) {
+          this.assertStartMatchesExistingAuthority(winner, brokerConnectionId, executionMode);
+          return winner;
+        }
+      }
+      throw err;
+    }
   }
 
+  /**
+   * Explicit + audited execution-mode change (architect issue #298).
+   *
+   * CAS bump: authority_generation = authority_generation + 1 guarded by
+   * (id, status='ACTIVE', authority_generation = observed). Zero affected
+   * rows → reload + typed conflict (never a blind retry). Outstanding ACTIVE
+   * RiskGrants bound to the observed generation are INVALIDATED (reason
+   * SESSION_AUTHORITY_GENERATION_CHANGED — never revived when switching back);
+   * PENDING SEMI_AUTO confirmations are REVOKED. New risk evaluation is
+   * required for any further NEW exposure.
+   */
+  async changeExecutionMode(
+    userId: string,
+    sessionId: string,
+    newMode: ExecutionMode,
+  ): Promise<TradingSession> {
+    const session = await this.sessionRepo.findOne({ where: { id: sessionId, userId } });
+    if (!session) {
+      throw new NotFoundException(`Trading session ${sessionId} not found`);
+    }
+    if (session.status !== TradingSessionStatus.ACTIVE) {
+      throw new SessionAuthorityNotActiveException(userId);
+    }
+
+    const observed = session.authorityGeneration;
+    const bump = await this.sessionRepo
+      .createQueryBuilder()
+      .update()
+      .set({
+        executionMode: newMode,
+        authorityGeneration: () => 'authority_generation + 1',
+        updatedAt: new Date(),
+      })
+      .where(
+        'id = :id AND user_id = :userId AND status = :status AND authority_generation = :observed',
+        {
+          id: sessionId,
+          userId,
+          status: TradingSessionStatus.ACTIVE,
+          observed,
+        },
+      )
+      .execute();
+    if (!bump.affected) {
+      const current = await this.sessionRepo.findOne({ where: { id: sessionId, userId } });
+      throw new SessionAuthorityGenerationConflictException({
+        sessionId,
+        observedGeneration: observed,
+        currentGeneration: current?.authorityGeneration ?? null,
+        currentExecutionMode: current?.executionMode ?? null,
+        currentStatus: current?.status ?? null,
+      });
+    }
+
+    // Invalidate outstanding authority bound to the observed generation
+    // (CAS: only rows still ACTIVE/PENDING with that generation).
+    const invalidated = await this.invalidateOutstandingAuthority(
+      sessionId,
+      observed,
+      SESSION_AUTHORITY_GENERATION_CHANGED,
+    );
+
+    await this.auditService.log({
+      actorUserId: userId,
+      action: AuditAction.TRADING_SESSION_MODE_CHANGED,
+      severity: AuditSeverity.WARNING,
+      resourceType: 'TradingSession',
+      resourceId: sessionId,
+      metadata: {
+        previousExecutionMode: session.executionMode,
+        newExecutionMode: newMode,
+        previousAuthorityGeneration: observed,
+        newAuthorityGeneration: observed + 1,
+        invalidationReason: SESSION_AUTHORITY_GENERATION_CHANGED,
+        invalidatedRiskGrants: invalidated.invalidatedGrants,
+        revokedExecutionConfirmations: invalidated.revokedConfirmations,
+      },
+    });
+
+    const reloaded = await this.sessionRepo.findOne({ where: { id: sessionId } });
+    if (!reloaded) {
+      throw new NotFoundException(`Trading session ${sessionId} not found after mode change`);
+    }
+    return reloaded;
+  }
+
+  /**
+   * End (or suspend) the user's ACTIVE session. The status transition is a
+   * CAS on (id, status='ACTIVE', authority_generation = observed) and bumps
+   * the generation; outstanding ACTIVE RiskGrants / PENDING confirmations for
+   * the session are invalidated/revoked in the same CAS style (issue #298).
+   */
   async endSession(userId: string, status = TradingSessionStatus.ENDED): Promise<void> {
-    await this.sessionRepo.update(
-      { userId, status: TradingSessionStatus.ACTIVE },
-      { status, endedAt: new Date() },
+    const session = await this.findActiveSessionOrdered(userId);
+    if (!session) {
+      // Idempotent no-op — no ACTIVE session to end (legacy behavior).
+      return;
+    }
+
+    const observed = session.authorityGeneration;
+    const ended = await this.sessionRepo
+      .createQueryBuilder()
+      .update()
+      .set({
+        status,
+        endedAt: new Date(),
+        authorityGeneration: () => 'authority_generation + 1',
+        updatedAt: new Date(),
+      })
+      .where(
+        'id = :id AND user_id = :userId AND status = :active AND authority_generation = :observed',
+        {
+          id: session.id,
+          userId,
+          active: TradingSessionStatus.ACTIVE,
+          observed,
+        },
+      )
+      .execute();
+    if (!ended.affected) {
+      // Lost the race to another end/suspend/mode-change — the winner owns
+      // the outstanding-authority invalidation. Idempotent return.
+      return;
+    }
+
+    await this.invalidateOutstandingAuthority(
+      session.id,
+      observed,
+      SESSION_AUTHORITY_GENERATION_CHANGED,
     );
   }
 
   async getActiveSession(userId: string): Promise<TradingSession | null> {
-    return this.sessionRepo.findOne({ where: { userId, status: TradingSessionStatus.ACTIVE } });
+    return this.findActiveSessionOrdered(userId);
   }
 
   async findSessionById(sessionId: string): Promise<TradingSession | null> {
     return this.sessionRepo.findOne({ where: { id: sessionId } });
+  }
+
+  // ─── Internal helpers (session authority) ───────────────────────────────
+
+  /**
+   * The user's ACTIVE session ordered by authorityGeneration/startedAt desc
+   * (single row) — deterministic even for legacy multi-ACTIVE data.
+   */
+  private async findActiveSessionOrdered(userId: string): Promise<TradingSession | null> {
+    return this.sessionRepo.findOne({
+      where: { userId, status: TradingSessionStatus.ACTIVE },
+      order: { authorityGeneration: 'DESC', startedAt: 'DESC' },
+    });
+  }
+
+  /**
+   * Bounded re-read of the ACTIVE session after a unique-violation on INSERT:
+   * the winning concurrent start can commit a few milliseconds after the
+   * loser's violation surfaces on some drivers.
+   */
+  private async findActiveSessionOrderedWithRetry(
+    userId: string,
+    attempts = 3,
+    delayMs = 10,
+  ): Promise<TradingSession | null> {
+    let session = await this.findActiveSessionOrdered(userId);
+    for (let attempt = 1; attempt < attempts && !session; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      session = await this.findActiveSessionOrdered(userId);
+    }
+    return session;
+  }
+
+  /**
+   * A start request must match the existing ACTIVE session's exact execution
+   * target (connection + mode); anything else is a typed domain conflict —
+   * never a silent substitution.
+   */
+  private assertStartMatchesExistingAuthority(
+    existing: TradingSession,
+    requestedConnectionId: string,
+    requestedMode: ExecutionMode,
+  ): void {
+    if (
+      existing.brokerConnectionId !== requestedConnectionId ||
+      existing.executionMode !== requestedMode
+    ) {
+      throw new ActiveSessionConflictException({
+        existingSessionId: existing.id,
+        existingBrokerConnectionId: existing.brokerConnectionId,
+        existingExecutionMode: existing.executionMode,
+        requestedBrokerConnectionId: requestedConnectionId,
+        requestedExecutionMode: requestedMode,
+      });
+    }
+  }
+
+  /**
+   * Invalidate outstanding authority bound to a session generation (CAS):
+   * ACTIVE RiskGrants → INVALIDATED with the given reason; PENDING
+   * ExecutionConfirmations → REVOKED. Grants are NEVER revived — a new risk
+   * evaluation is always required after an authority change.
+   */
+  private async invalidateOutstandingAuthority(
+    sessionId: string,
+    observedGeneration: number,
+    reason: string,
+  ): Promise<{ invalidatedGrants: number; revokedConfirmations: number }> {
+    const grants = await this.riskGrantRepo
+      .createQueryBuilder()
+      .update()
+      .set({
+        status: RiskGrantStatus.INVALIDATED,
+        invalidatedAt: new Date(),
+        invalidationReason: reason,
+      })
+      .where(
+        'session_id = :sessionId AND status = :active AND session_generation = :observed',
+        { sessionId, active: RiskGrantStatus.ACTIVE, observed: observedGeneration },
+      )
+      .execute();
+
+    const confirmations = await this.confirmationRepo
+      .createQueryBuilder()
+      .update()
+      .set({
+        status: ExecutionConfirmationStatus.REVOKED,
+        revokedAt: new Date(),
+      })
+      .where(
+        'session_id = :sessionId AND status = :pending AND session_generation = :observed',
+        { sessionId, pending: ExecutionConfirmationStatus.PENDING, observed: observedGeneration },
+      )
+      .execute();
+
+    return {
+      invalidatedGrants: grants.affected ?? 0,
+      revokedConfirmations: confirmations.affected ?? 0,
+    };
   }
 
   // ─── Internal helpers ─────────────────────────────────────────────────────
@@ -869,9 +1184,12 @@ export class ExecutionService {
     if (!(err instanceof Error)) return false;
     const code = (err as { code?: string }).code;
     if (code === '23505') return true;
-    // Fallback: check the message for the SQLSTATE or the constraint name.
+    // sqlite (test harness): SQLITE_CONSTRAINT unique violations.
+    if (code === 'SQLITE_CONSTRAINT') return true;
+    // Fallback: check the message for the SQLSTATE or the constraint text
+    // (PostgreSQL 'duplicate key value' / SQLite 'UNIQUE constraint failed').
     const msg = err.message ?? '';
-    return msg.includes('23505') || msg.includes('duplicate key value');
+    return msg.includes('23505') || msg.includes('duplicate key value') || msg.includes('UNIQUE constraint failed');
   }
 
   /** Convert a raw PostgreSQL snake_case row into the Trade entity shape. */

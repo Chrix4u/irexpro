@@ -133,6 +133,11 @@ export enum AuditAction {
   AI_TRADING_ENABLED = 'AI_TRADING_ENABLED',
   AI_TRADING_DISABLED = 'AI_TRADING_DISABLED',
 
+  // Sprint 56 correction round 5 — session authority (issue #298): explicit +
+  // audited execution-mode change; bumps authorityGeneration and invalidates
+  // outstanding RiskGrants / SEMI_AUTO confirmations.
+  TRADING_SESSION_MODE_CHANGED = 'TRADING_SESSION_MODE_CHANGED',
+
   // Market data (internal)
   MARKET_DATA_REQUESTED = 'MARKET_DATA_REQUESTED',
   MARKET_DATA_REQUEST_FAILED = 'MARKET_DATA_REQUEST_FAILED',

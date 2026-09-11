@@ -43,6 +43,15 @@ import type {
   MyProfileView,
   SecurityEventListResponse,
 } from '@irexpro/types';
+import type {
+  ActiveTradingSessionResponse,
+  ChangeTradingSessionModeRequest,
+  ChangeTradingSessionModeResponse,
+  ConfirmExecutionConfirmationResponse,
+  PendingExecutionConfirmationsResponse,
+  StartTradingSessionRequest,
+  StartTradingSessionResponse,
+} from '@irexpro/types/execution';
 
 /**
  * Options for the shared API client.
@@ -202,6 +211,42 @@ export interface ApiClient {
   connectBroker(connectionId: string): Promise<BrokerConnectionView>;
   /** POST /broker/connections/:id/disconnect → disconnect. */
   disconnectBroker(connectionId: string): Promise<void>;
+
+  // ── Sprint 56 correction round 5: execution authority (issues #295/#298) ──
+  /**
+   * GET /trading/sessions/active → 200 `{ session }` — the authoritative
+   * execution target (executionMode is durable session state, NEVER inferred
+   * from connection.accountType; `session` is null when none is active).
+   */
+  getActiveTradingSession(): Promise<ActiveTradingSessionResponse>;
+  /** POST /trading/sessions/start → 201 `{ session }` (body binds the exact
+   *  brokerConnectionId + executionMode; server-validated fail-closed). */
+  startTradingSession(body: StartTradingSessionRequest): Promise<StartTradingSessionResponse>;
+  /**
+   * POST /trading/sessions/:id/mode → 200 `{ session }` — audited mode change
+   * that bumps `authorityGeneration` (outstanding SEMI_AUTO confirmations
+   * bound to the old generation are invalidated server-side, never revived).
+   * The returned session is the authoritative new state.
+   */
+  changeTradingSessionMode(
+    sessionId: string,
+    body: ChangeTradingSessionModeRequest,
+  ): Promise<ChangeTradingSessionModeResponse>;
+  /**
+   * GET /execution/confirmations/pending → `{ confirmations }` — the
+   * SEMI_AUTO one-time confirmations queued by the SERVER. The client never
+   * fabricates approval state; it only lists what the server reports.
+   */
+  listPendingExecutionConfirmations(): Promise<PendingExecutionConfirmationsResponse>;
+  /**
+   * POST /execution/confirmations/:id/confirm → 200 `{ status: 'CONSUMED' }` —
+   * the SERVER-consumed authority result (one-time use). Expired, already
+   * consumed, revoked, or mismatched-generation confirmations fail with a
+   * 409-style typed error the caller must surface (never a local success).
+   */
+  confirmExecutionConfirmation(
+    confirmationId: string,
+  ): Promise<ConfirmExecutionConfirmationResponse>;
 
   // Payments
   listProviders(): Promise<PaymentProviderInfo[]>;
@@ -515,6 +560,38 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
       request<void>(`/broker/connections/${connectionId}/disconnect`, {
         method: 'POST',
       }),
+
+    // Sprint 56 correction round 5: execution authority (#295/#298)
+    getActiveTradingSession: () =>
+      request<ActiveTradingSessionResponse>('/trading/sessions/active'),
+
+    startTradingSession: (body) =>
+      request<StartTradingSessionResponse>('/trading/sessions/start', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+
+    changeTradingSessionMode: (sessionId, body) =>
+      request<ChangeTradingSessionModeResponse>(
+        `/trading/sessions/${encodeURIComponent(sessionId)}/mode`,
+        {
+          method: 'POST',
+          body: JSON.stringify(body),
+        },
+      ),
+
+    listPendingExecutionConfirmations: () =>
+      request<PendingExecutionConfirmationsResponse>(
+        '/execution/confirmations/pending',
+      ),
+
+    confirmExecutionConfirmation: (confirmationId) =>
+      request<ConfirmExecutionConfirmationResponse>(
+        `/execution/confirmations/${encodeURIComponent(confirmationId)}/confirm`,
+        {
+          method: 'POST',
+        },
+      ),
 
     listProviders: () =>
       request<PaymentProviderInfo[]>('/payments/providers'),
