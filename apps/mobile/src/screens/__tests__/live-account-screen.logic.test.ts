@@ -206,8 +206,6 @@ const session = (
   executionMode: "SEMI_AUTO",
   authorityGeneration: 3,
   status: "ACTIVE",
-  openingBalance: null,
-  peakEquity: null,
   startedAt: "2026-09-10T00:00:00.000Z",
   ...overrides,
 });

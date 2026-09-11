@@ -123,30 +123,21 @@ function isTradingSession(value: unknown): value is TradingSessionView {
     Number.isInteger(value.authorityGeneration) &&
     value.authorityGeneration >= 1 &&
     isTradingSessionStatus(value.status) &&
-    // Display-only financial snapshot fields: null, absent (older payloads
-    // omit them), or a decimal string — never any other type.
-    (value.openingBalance === undefined ||
-      value.openingBalance === null ||
-      typeof value.openingBalance === 'string') &&
-    (value.peakEquity === undefined ||
-      value.peakEquity === null ||
-      typeof value.peakEquity === 'string') &&
     typeof value.startedAt === 'string'
   );
 }
 
 /**
- * Guard the GET /trading/sessions/active `{ session }` envelope.
+ * Guard the GET /trading/sessions/active payload.
  *
- * `session` may be null (no active session). A payload that is not the
- * envelope — e.g. a legacy bare session object — fails CLOSED: the cockpit
- * would rather show a contract error than trust an unknown shape.
+ * The API returns the session DTO DIRECTLY (bare object) — null when no
+ * session is active. Any other shape fails CLOSED: the cockpit would
+ * rather show a contract error than trust an unknown shape.
  */
-function isActiveTradingSessionEnvelope(
+function isActiveTradingSessionPayload(
   value: unknown,
-): value is { session: TradingSessionView | null } {
-  if (!isRecord(value) || !('session' in value)) return false;
-  return value.session === null || isTradingSession(value.session);
+): value is TradingSessionView | null {
+  return value === null || isTradingSession(value);
 }
 
 function isTerminalBroker(value: unknown): value is TerminalBrokerView {
@@ -209,14 +200,14 @@ export async function loadTraderTerminalStatus(): Promise<TraderTerminalStatus> 
   if (!isRiskStatus(riskPayload)) {
     throw new Error('Risk status contract mismatch');
   }
-  if (!isActiveTradingSessionEnvelope(sessionPayload)) {
+  if (!isActiveTradingSessionPayload(sessionPayload)) {
     throw new Error('Trading session contract mismatch');
   }
   if (!Array.isArray(brokerPayload) || !brokerPayload.every(isTerminalBroker)) {
     throw new Error('Broker connection contract mismatch');
   }
 
-  const session = sessionPayload.session;
+  const session = sessionPayload;
   const brokers: TerminalBrokerView[] = brokerPayload;
   const sessionBroker = session
     ? brokers.find((broker) => broker.id === session.brokerConnectionId) ?? null

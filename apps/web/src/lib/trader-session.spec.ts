@@ -46,8 +46,6 @@ const SESSION = {
   executionMode: 'SEMI_AUTO',
   authorityGeneration: 3,
   status: 'ACTIVE',
-  openingBalance: '10000.00',
-  peakEquity: '10250.00',
   startedAt: '2026-09-10T00:00:00.000Z',
 } as const;
 
@@ -69,8 +67,11 @@ describe('changeSessionExecutionMode', () => {
   });
 
   it('calls the audited mode endpoint and returns the server session (bumped generation)', async () => {
+    // The API returns the session DTO directly (bare object, no envelope).
     changeModeMock.mockResolvedValue({
-      session: { ...SESSION, executionMode: 'FULL_AUTO', authorityGeneration: 4 },
+      ...SESSION,
+      executionMode: 'FULL_AUTO',
+      authorityGeneration: 4,
     });
 
     const session = await changeSessionExecutionMode(SESSION.id, 'FULL_AUTO');
@@ -82,9 +83,10 @@ describe('changeSessionExecutionMode', () => {
     expect(session.authorityGeneration).toBe(4);
   });
 
-  it('fails closed when the response is not the { session } envelope', async () => {
-    // A legacy bare session object must never be trusted as the new state.
-    changeModeMock.mockResolvedValue({ ...SESSION, executionMode: 'FULL_AUTO' });
+  it('fails closed when the response is not a session object', async () => {
+    // A malformed payload (missing required authority fields) must never be
+    // trusted as the new state.
+    changeModeMock.mockResolvedValue({ executionMode: 'FULL_AUTO' });
 
     await expect(changeSessionExecutionMode(SESSION.id, 'FULL_AUTO')).rejects.toThrow(
       'Trading session mode-change contract mismatch',

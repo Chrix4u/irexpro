@@ -68,19 +68,16 @@ function isTradingSession(value: unknown): value is TradingSessionView {
     isTradingSessionStatus(value.status) &&
     // Display-only financial snapshot fields: null, absent (older payloads
     // omit them), or a decimal string — never any other type.
-    (value.openingBalance === undefined ||
-      value.openingBalance === null ||
-      typeof value.openingBalance === 'string') &&
-    (value.peakEquity === undefined ||
-      value.peakEquity === null ||
-      typeof value.peakEquity === 'string') &&
     typeof value.startedAt === 'string'
   );
 }
 
-/** Guard the `{ session }` envelope returned by start + mode-change responses. */
-function isSessionEnvelope(value: unknown): value is { session: TradingSessionView } {
-  return isRecord(value) && isTradingSession(value.session);
+/**
+ * The API returns the session DTO directly (bare object, no envelope) —
+ * guard it as the session view itself.
+ */
+function isSessionPayload(value: unknown): value is TradingSessionView {
+  return isTradingSession(value);
 }
 
 /**
@@ -93,10 +90,10 @@ export async function changeSessionExecutionMode(
   executionMode: ExecutionMode,
 ): Promise<TradingSessionView> {
   const payload = await api.changeTradingSessionMode(sessionId, { executionMode });
-  if (!isSessionEnvelope(payload)) {
+  if (!isSessionPayload(payload)) {
     throw new Error('Trading session mode-change contract mismatch');
   }
-  return payload.session;
+  return payload;
 }
 
 /**
@@ -108,10 +105,10 @@ export async function startTradingSessionForConnection(
   executionMode: ExecutionMode,
 ): Promise<TradingSessionView> {
   const payload = await api.startTradingSession({ brokerConnectionId, executionMode });
-  if (!isSessionEnvelope(payload)) {
+  if (!isSessionPayload(payload)) {
     throw new Error('Trading session start contract mismatch');
   }
-  return payload.session;
+  return payload;
 }
 
 // ── SEMI_AUTO confirmation inbox ────────────────────────────────────────────

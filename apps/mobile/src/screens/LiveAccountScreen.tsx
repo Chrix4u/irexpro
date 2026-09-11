@@ -72,17 +72,18 @@ export default function LiveAccountScreen() {
       const loadSession = (async () => {
         try {
           const payload = await api.getActiveTradingSession();
-          // Structural envelope check: only the `{ session }` envelope (with
-          // session null = none active) is trusted; any other shape is a
+          // The API returns the session DTO DIRECTLY (bare object) — null
+          // means no active session. Any other unexpected shape is a
           // contract mismatch and is reported as UNAVAILABLE — never as
           // "no active session".
-          const envelopeOk =
-            typeof payload === "object" &&
-            payload !== null &&
-            "session" in payload &&
-            (payload.session === null || typeof payload.session === "object");
-          if (envelopeOk) {
-            setSession(payload.session ?? null);
+          const payloadOk =
+            payload === null ||
+            (typeof payload === "object" &&
+              typeof (payload as { id?: unknown }).id === "string" &&
+              typeof (payload as { executionMode?: unknown }).executionMode ===
+                "string");
+          if (payloadOk) {
+            setSession(payload);
             setSessionUnavailable(false);
           } else {
             setSession(null);

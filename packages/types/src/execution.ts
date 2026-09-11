@@ -84,9 +84,12 @@ export const EXECUTION_MODES: readonly ExecutionMode[] = [
 /**
  * Frontend-safe view of the authoritative trading session.
  *
- * Monetary values (openingBalance / peakEquity) are decimal strings and may
- * be null until the first account snapshot is bound. The frontend renders
- * these verbatim and never derives authority from them.
+ * NOTE (Round-5 integration): the API returns the session DTO DIRECTLY
+ * (bare object, no envelope) — TradingSessionResponseDto deliberately
+ * excludes internal financial session fields (openingBalance/peakEquity)
+ * from browser-facing responses; those live in account/performance
+ * endpoints. The frontend renders authority fields only and never derives
+ * authority from monetary display values.
  */
 export interface TradingSessionView {
   id: string;
@@ -101,17 +104,11 @@ export interface TradingSessionView {
    */
   authorityGeneration: number;
   status: TradingSessionStatus;
-  /** Opening account balance snapshot (decimal string; null before sync). */
-  openingBalance: string | null;
-  /** Peak equity observed during the session (decimal string; null before sync). */
-  peakEquity: string | null;
   startedAt: string;
 }
 
-/** GET /trading/sessions/active → 200 `{ session }` (session null when none is active). */
-export interface ActiveTradingSessionResponse {
-  session: TradingSessionView | null;
-}
+/** GET /trading/sessions/active → 200 bare session (null when none is active). */
+export type ActiveTradingSessionResponse = TradingSessionView | null;
 
 /** POST /trading/sessions/start request body. */
 export interface StartTradingSessionRequest {
@@ -120,20 +117,16 @@ export interface StartTradingSessionRequest {
   executionMode: ExecutionMode;
 }
 
-/** POST /trading/sessions/start → 201 `{ session }`. */
-export interface StartTradingSessionResponse {
-  session: TradingSessionView;
-}
+/** POST /trading/sessions/start → 201 bare session. */
+export type StartTradingSessionResponse = TradingSessionView;
 
 /** POST /trading/sessions/:id/mode request body (audited; bumps generation). */
 export interface ChangeTradingSessionModeRequest {
   executionMode: ExecutionMode;
 }
 
-/** POST /trading/sessions/:id/mode → 200 `{ session }`. */
-export interface ChangeTradingSessionModeResponse {
-  session: TradingSessionView;
-}
+/** POST /trading/sessions/:id/mode → 200 bare session. */
+export type ChangeTradingSessionModeResponse = TradingSessionView;
 
 // ─── SEMI_AUTO execution confirmations (issue #298) ─────────────────────────
 //

@@ -796,8 +796,6 @@ export default function TradingWorkspacePage() {
                       <dl className="cockpit-detail-list">
                         <div><dt>Started</dt><dd>{formatTimestamp(session.startedAt)}</dd></div>
                         <div><dt>Authority generation</dt><dd>{session.authorityGeneration}</dd></div>
-                        <div><dt>Opening balance</dt><dd>{session.openingBalance ?? 'Not yet synchronized'}</dd></div>
-                        <div><dt>Peak equity</dt><dd>{session.peakEquity ?? 'Not yet synchronized'}</dd></div>
                         <div><dt>Lifecycle source</dt><dd>Trading session service</dd></div>
                       </dl>
                       <p className="text-sm muted" style={{ marginTop: 0, marginBottom: 'var(--space-2)' }}>
