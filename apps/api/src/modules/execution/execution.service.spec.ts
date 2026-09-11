@@ -1,9 +1,11 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ConflictException, ForbiddenException, Logger, NotFoundException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Logger } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { ExecutionService } from './execution.service';
 import { ExecutionOrchestrator } from './orchestration/execution-orchestrator.service';
+import { FinalDispatchBoundary } from './orchestration/final-dispatch-boundary';
+import { TradeLifecycleCasService } from './orders/trade-lifecycle-cas.service';
 import { Trade, TradeCloseReason, TradeStatus } from './entities/trade.entity';
 import { TradingSession, TradingSessionStatus } from './entities/trading-session.entity';
 import { RiskGrant } from './entities/risk-grant.entity';
@@ -44,6 +46,13 @@ const approvedDecision: RiskDecision = {
   evaluatedAt: new Date(),
   // Sprint 32 Gate 2: required for the advisory-lock daily-trade-slot reservation
   maxDailyTrades: 10,
+  // Round 5 (task 50-c): the durable authority handle — the final dispatch
+  // boundary requires + atomically consumes the server-issued grant.
+  grantId: 'grant-1',
+  sessionId: 'session-1',
+  sessionGeneration: 1,
+  executionMode: 'PAPER_ONLY',
+  brokerConnectionId: 'conn-1',
 };
 
 const rejectedDecision: RiskDecision = {
@@ -95,6 +104,9 @@ describe('ExecutionService', () => {
     create: jest.Mock;
     save: jest.Mock;
     update: jest.Mock;
+    // Round 5 (task 50-c): uncertain-exposure accounting (#314) runs counts
+    // through the repository query builder.
+    createQueryBuilder: jest.Mock;
   }>;
   let sessionRepo: jest.Mocked<{
     findOne: jest.Mock;
@@ -109,6 +121,8 @@ describe('ExecutionService', () => {
   let authorityRepoStubs: { createQueryBuilder: jest.Mock; update: jest.Mock; findOne: jest.Mock };
   let auditService: { log: jest.Mock };
   let dataSource: { query: jest.Mock; transaction: jest.Mock };
+  let finalDispatchBoundary: { authorizeNewExposureDispatch: jest.Mock };
+  let tradeCas: { applyCasTransition: jest.Mock };
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -125,6 +139,66 @@ describe('ExecutionService', () => {
       create: jest.fn().mockImplementation((obj) => ({ id: 'trade-1', ...obj })),
       save: jest.fn().mockImplementation(async (obj) => ({ id: 'trade-1', ...obj })),
       update: jest.fn().mockResolvedValue({ affected: 1 }),
+      // Round 5 (task 50-c): countOpenTrades/countTodayTrades run through the
+      // repository query builder (uncertain-exposure accounting, #314).
+      createQueryBuilder: jest.fn().mockReturnValue({
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        orWhere: jest.fn().mockReturnThis(),
+        getCount: jest.fn().mockResolvedValue(0),
+      }),
+    };
+
+    // Round 5 (task 50-c): the final dispatch boundary is exercised at the
+    // SEAM in this unit suite (its full check matrix lives in
+    // final-dispatch-boundary.spec.ts): a valid grant authorization resolves
+    // the boundary-verified connection — executeTrade NEVER re-discovers it.
+    finalDispatchBoundary = {
+      authorizeNewExposureDispatch: jest.fn().mockImplementation(async () => ({
+        context: {
+          userId: 'user-1',
+          signalId: 'sig-001',
+          operationType: 'NEW_EXPOSURE',
+          sessionId: 'session-1',
+          sessionGeneration: 1,
+          executionMode: 'PAPER_ONLY',
+          brokerConnectionId: 'conn-1',
+          brokerAccountId: null,
+          providerTechnology: 'paper-broker',
+          providerBrokerIdentity: null,
+          providerVerificationFingerprint: null,
+          financialSnapshotGeneration: null,
+          riskProfileId: null,
+          riskProfileVersion: null,
+          riskGrantId: 'grant-1',
+          authorityGeneration: 1,
+          validatedOrderDigest: 'digest-1',
+        },
+        connection: mockBrokerConnection,
+        confirmationId: null,
+        operationClass: 'NEW_EXPOSURE',
+      })),
+    };
+    // The trade-lifecycle CAS is exercised at the seam with a WRITE-THROUGH
+    // stub (the real CAS matrix lives in trade-cas.spec.ts): every transition
+    // still lands on tradeRepo.update so the existing persistence assertions
+    // keep proving the outcome mappings.
+    tradeCas = {
+      applyCasTransition: jest
+        .fn()
+        .mockImplementation(
+          async (params: {
+            tradeId: string;
+            target: TradeStatus;
+            patch: Record<string, unknown>;
+          }) => {
+            await tradeRepo.update(params.tradeId, params.patch as never);
+            return {
+              outcome: 'APPLIED',
+              trade: { id: params.tradeId, status: params.target, ...params.patch },
+            };
+          },
+        ),
     };
 
     insertedSession = null;
@@ -230,6 +304,8 @@ describe('ExecutionService', () => {
         // orchestrator seam — adapter-level behavior is covered by the
         // dedicated execution-orchestrator.spec.ts suite.
         { provide: ExecutionOrchestrator, useValue: orchestrator },
+        { provide: FinalDispatchBoundary, useValue: finalDispatchBoundary },
+        { provide: TradeLifecycleCasService, useValue: tradeCas },
         { provide: AuditService, useValue: auditService },
         { provide: DataSource, useValue: dataSource },
         {
@@ -299,10 +375,13 @@ describe('ExecutionService', () => {
   describe('Pre-dispatch gates', () => {
     it('runs assertDispatchable before reserving the trade slot', async () => {
       await service.executeTrade('user-1', approvedDecision);
-      expect(orchestrator.assertDispatchable).toHaveBeenCalledWith({
-        userId: 'user-1',
-        connection: expect.objectContaining({ id: 'conn-1' }),
-      });
+      expect(orchestrator.assertDispatchable).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'user-1',
+          connection: expect.objectContaining({ id: 'conn-1' }),
+          operationClass: 'NEW_EXPOSURE',
+        }),
+      );
     });
 
     it('blocked dispatch (control plane / authorization) rejects before any reservation', async () => {
@@ -630,9 +709,14 @@ describe('ExecutionService', () => {
   // ─── Query helpers ─────────────────────────────────────────────────────────
 
   describe('countOpenTrades()', () => {
-    it('returns count from repository', async () => {
-      tradeRepo.count.mockResolvedValue(3);
+    it('returns count from the exposure query builder (RECONCILIATION_PENDING counted, #314)', async () => {
+      // Round 5 (task 50-c): counts run through createQueryBuilder so
+      // uncertain exposure (RECONCILIATION_PENDING) is conservatively
+      // included — the repository count() is no longer the source.
+      const qb = tradeRepo.createQueryBuilder();
+      qb.getCount.mockResolvedValueOnce(3);
       expect(await service.countOpenTrades('user-1')).toBe(3);
+      expect(tradeRepo.createQueryBuilder).toHaveBeenCalled();
     });
   });
 
@@ -667,7 +751,13 @@ describe('ExecutionService', () => {
     });
 
     it('persists the requested executionMode (SEMI_AUTO)', async () => {
-      const created = await service.startSession('user-1', 'conn-1', '10000.00', null, ExecutionMode.SEMI_AUTO);
+      const created = await service.startSession(
+        'user-1',
+        'conn-1',
+        '10000.00',
+        null,
+        ExecutionMode.SEMI_AUTO,
+      );
       expect(sessionRepo.insert).toHaveBeenCalledWith(
         expect.objectContaining({ executionMode: ExecutionMode.SEMI_AUTO, authorityGeneration: 1 }),
       );
@@ -691,7 +781,8 @@ describe('ExecutionService', () => {
     });
 
     it('throws typed ownership rejection when the connection belongs to another user', async () => {
-      const brokerServiceMock = (service as unknown as { brokerService: BrokerService }).brokerService;
+      const brokerServiceMock = (service as unknown as { brokerService: BrokerService })
+        .brokerService;
       (brokerServiceMock as unknown as { findConnectionsByIds: jest.Mock }).findConnectionsByIds =
         jest.fn().mockResolvedValue([{ ...mockBrokerConnection, userId: 'someone-else' }]);
       await expect(service.startSession('user-1', 'conn-1', '10000.00')).rejects.toThrow(
@@ -701,11 +792,14 @@ describe('ExecutionService', () => {
     });
 
     it('throws typed rejection when the connection is not CONNECTED', async () => {
-      const brokerServiceMock = (service as unknown as { brokerService: BrokerService }).brokerService;
+      const brokerServiceMock = (service as unknown as { brokerService: BrokerService })
+        .brokerService;
       (brokerServiceMock as unknown as { findConnectionsByIds: jest.Mock }).findConnectionsByIds =
-        jest.fn().mockResolvedValue([
-          { ...mockBrokerConnection, status: BrokerConnectionStatus.DISCONNECTED },
-        ]);
+        jest
+          .fn()
+          .mockResolvedValue([
+            { ...mockBrokerConnection, status: BrokerConnectionStatus.DISCONNECTED },
+          ]);
       await expect(service.startSession('user-1', 'conn-1', '10000.00')).rejects.toThrow(
         BrokerConnectionNotConnectedException,
       );
@@ -713,11 +807,13 @@ describe('ExecutionService', () => {
     });
 
     it('throws typed rejection when the connection is not LIVE-authorization executable', async () => {
-      const brokerServiceMock = (service as unknown as { brokerService: BrokerService }).brokerService;
+      const brokerServiceMock = (service as unknown as { brokerService: BrokerService })
+        .brokerService;
       (brokerServiceMock as unknown as { findConnectionsByIds: jest.Mock }).findConnectionsByIds =
         jest.fn().mockResolvedValue([mockBrokerConnection]);
-      (brokerServiceMock as unknown as { isConnectionExecutable: jest.Mock }).isConnectionExecutable =
-        jest.fn().mockReturnValue(false);
+      (
+        brokerServiceMock as unknown as { isConnectionExecutable: jest.Mock }
+      ).isConnectionExecutable = jest.fn().mockReturnValue(false);
       await expect(service.startSession('user-1', 'conn-1', '10000.00')).rejects.toThrow(
         BrokerConnectionNotExecutableException,
       );
@@ -762,16 +858,25 @@ describe('ExecutionService', () => {
   // ─── executeTrade session-authority seam (#295) ───────────────────────────
 
   describe('executeTrade — session authority seam', () => {
-    it('resolves the EXACT connection from the ACTIVE session (never findActiveConnectionForUser)', async () => {
+    it('authorizes through the FINAL DISPATCH BOUNDARY with the grant (never re-discovers the connection)', async () => {
       await service.executeTrade('user-1', approvedDecision);
-      const brokerServiceMock = (service as unknown as { brokerService: BrokerService }).brokerService;
+      const brokerServiceMock = (service as unknown as { brokerService: BrokerService })
+        .brokerService;
+      // NEVER the implicit "latest active connection" discovery
       expect(
         (brokerServiceMock as unknown as { findActiveConnectionForUser: jest.Mock })
           .findActiveConnectionForUser,
       ).not.toHaveBeenCalled();
-      expect(
-        (brokerServiceMock as unknown as { findConnectionById: jest.Mock }).findConnectionById,
-      ).toHaveBeenCalledWith('conn-1', 'user-1');
+      // The EXACT connection comes from the boundary's grant-bound
+      // authorization — conn-1 is the id the grant binds (see fixture).
+      expect(finalDispatchBoundary.authorizeNewExposureDispatch).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'user-1', grantId: 'grant-1' }),
+      );
+      expect(orchestrator.assertDispatchable).toHaveBeenCalledWith(
+        expect.objectContaining({
+          connection: expect.objectContaining({ id: 'conn-1' }),
+        }),
+      );
     });
   });
 });

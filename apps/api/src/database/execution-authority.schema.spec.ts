@@ -19,22 +19,24 @@ describe('Execution authority schema reconciliation (round 5)', () => {
     __dirname,
     './migrations/1754000000000-CreateExecutionAuthoritySchema.ts',
   );
+  // Round 5 task 50-c: the final-dispatch fencing columns
+  // (risk_grants.credential_generation, trades.dispatch_certainty) live in a
+  // follow-up migration — the entity↔migration coverage below searches the
+  // CONCATENATED sources of both authority migrations.
+  const fencingMigrationPath = path.resolve(
+    __dirname,
+    './migrations/1754200000000-AddFinalDispatchFencingColumns.ts',
+  );
 
   const entityPaths = {
     riskGrant: path.resolve(root, 'execution/entities/risk-grant.entity.ts'),
-    confirmation: path.resolve(
-      root,
-      'execution/entities/execution-confirmation.entity.ts',
-    ),
+    confirmation: path.resolve(root, 'execution/entities/execution-confirmation.entity.ts'),
     signalIdentity: path.resolve(root, 'execution/entities/ai-signal-identity.entity.ts'),
     authorityGeneration: path.resolve(
       root,
       'users/entities/trading-authority-generation.entity.ts',
     ),
-    accountSnapshot: path.resolve(
-      root,
-      'broker/entities/broker-account-snapshot.entity.ts',
-    ),
+    accountSnapshot: path.resolve(root, 'broker/entities/broker-account-snapshot.entity.ts'),
     tradingSession: path.resolve(root, 'execution/entities/trading-session.entity.ts'),
   };
 
@@ -44,6 +46,8 @@ describe('Execution authority schema reconciliation (round 5)', () => {
   beforeAll(() => {
     expect(fs.existsSync(migrationPath)).toBe(true);
     migrationSource = fs.readFileSync(migrationPath, 'utf-8');
+    expect(fs.existsSync(fencingMigrationPath)).toBe(true);
+    migrationSource += '\n' + fs.readFileSync(fencingMigrationPath, 'utf-8');
     for (const [key, p] of Object.entries(entityPaths)) {
       expect(fs.existsSync(p)).toBe(true);
       entitySources[key] = fs.readFileSync(p, 'utf-8');
@@ -53,7 +57,8 @@ describe('Execution authority schema reconciliation (round 5)', () => {
   function extractEntityColumnNames(source: string): string[] {
     const names: string[] = [];
     // multi-line-safe: match @Column-decorator blocks and pull the name: option
-    const columnBlockRegex = /@(?:Column|CreateDateColumn|UpdateDateColumn|DeleteDateColumn|PrimaryGeneratedColumn)\(\s*\{[^}]*?\}/gs;
+    const columnBlockRegex =
+      /@(?:Column|CreateDateColumn|UpdateDateColumn|DeleteDateColumn|PrimaryGeneratedColumn)\(\s*\{[^}]*?\}/gs;
     let blockMatch: RegExpExecArray | null;
     while ((blockMatch = columnBlockRegex.exec(source)) !== null) {
       const nameMatch = blockMatch[0].match(/name:\s*['"]([^'"]+)['"]/);
@@ -123,17 +128,23 @@ describe('Execution authority schema reconciliation (round 5)', () => {
 
   it('enforces at most ONE ACTIVE TradingSession per user (partial unique)', () => {
     expect(migrationSource).toContain('uq_trading_sessions_one_active_per_user');
-    expect(migrationSource).toMatch(/CREATE UNIQUE INDEX[^;]*\(user_id\)[^;]*WHERE status = 'ACTIVE'/s);
+    expect(migrationSource).toMatch(
+      /CREATE UNIQUE INDEX[^;]*\(user_id\)[^;]*WHERE status = 'ACTIVE'/s,
+    );
   });
 
   it('enforces at most ONE ACTIVE RiskGrant per signal (partial unique)', () => {
     expect(migrationSource).toContain('uq_risk_grants_one_active_per_signal');
-    expect(migrationSource).toMatch(/CREATE UNIQUE INDEX[^;]*\(signal_id\)[^;]*WHERE status = 'ACTIVE'/s);
+    expect(migrationSource).toMatch(
+      /CREATE UNIQUE INDEX[^;]*\(signal_id\)[^;]*WHERE status = 'ACTIVE'/s,
+    );
   });
 
   it('enforces at most ONE PENDING confirmation per signal (partial unique)', () => {
     expect(migrationSource).toContain('uq_execution_confirmations_one_pending_per_signal');
-    expect(migrationSource).toMatch(/CREATE UNIQUE INDEX[^;]*\(signal_id\)[^;]*WHERE status = 'PENDING'/s);
+    expect(migrationSource).toMatch(
+      /CREATE UNIQUE INDEX[^;]*\(signal_id\)[^;]*WHERE status = 'PENDING'/s,
+    );
   });
 
   it('enforces immutable signal identity uniqueness (user_id, signal_id)', () => {
@@ -142,7 +153,9 @@ describe('Execution authority schema reconciliation (round 5)', () => {
 
   it('enforces monotonic snapshot generations (unique connection+generation, CHECK >= 1)', () => {
     expect(migrationSource).toContain('uq_broker_account_snapshot_connection_generation');
-    expect(migrationSource).toMatch(/ck_broker_account_snapshots_generation[\s\S]*?CHECK \(generation >= 1\)/);
+    expect(migrationSource).toMatch(
+      /ck_broker_account_snapshots_generation[\s\S]*?CHECK \(generation >= 1\)/,
+    );
   });
 
   it('enforces execution mode domain via CHECK constraint', () => {
@@ -180,5 +193,22 @@ describe('Execution authority schema reconciliation (round 5)', () => {
     expect(downBody).toContain('DROP TABLE IF EXISTS identity.trading_authority_generations');
     expect(downBody).toContain('DROP COLUMN IF EXISTS execution_mode');
     expect(downBody).toContain('DROP COLUMN IF EXISTS authority_generation');
+  });
+
+  // ── Round 5 task 50-c — final-dispatch fencing columns ──────────────────────
+
+  it('adds nullable risk_grants.credential_generation for dispatch fencing (#361)', () => {
+    expect(migrationSource).toMatch(
+      /ALTER TABLE trading\.risk_grants\s+ADD COLUMN IF NOT EXISTS credential_generation integer/,
+    );
+  });
+
+  it('adds nullable trades.dispatch_certainty with a domain CHECK (#314)', () => {
+    expect(migrationSource).toMatch(
+      /ALTER TABLE trading\.trades\s+ADD COLUMN IF NOT EXISTS dispatch_certainty varchar\(30\)/,
+    );
+    expect(migrationSource).toContain('ck_trades_dispatch_certainty');
+    expect(migrationSource).toContain("'DEFINITELY_NOT_SENT'");
+    expect(migrationSource).toContain("'MAY_HAVE_REACHED_PROVIDER'");
   });
 });

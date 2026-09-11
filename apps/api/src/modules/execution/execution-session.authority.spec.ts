@@ -27,6 +27,8 @@ import {
 } from './execution-session.resolution';
 import { BrokerService } from '../broker/broker.service';
 import { ExecutionOrchestrator } from './orchestration/execution-orchestrator.service';
+import { FinalDispatchBoundary } from './orchestration/final-dispatch-boundary';
+import { TradeLifecycleCasService } from './orders/trade-lifecycle-cas.service';
 import { AuditService } from '../audit/audit.service';
 import { DomainEventBus } from '../events/event-bus.service';
 
@@ -67,7 +69,12 @@ class TradingSessionMirror {
   userId: string;
   @Column({ name: 'broker_connection_id', type: 'varchar' })
   brokerConnectionId: string;
-  @Column({ name: 'execution_mode', type: 'varchar', length: 20, default: ExecutionMode.PAPER_ONLY })
+  @Column({
+    name: 'execution_mode',
+    type: 'varchar',
+    length: 20,
+    default: ExecutionMode.PAPER_ONLY,
+  })
   executionMode: ExecutionMode;
   @Column({ name: 'authority_generation', type: 'integer', default: 1 })
   authorityGeneration: number;
@@ -160,7 +167,12 @@ class ExecutionConfirmationMirror {
   expiresAt: Date;
   @Column({ name: 'revoked_at', type: 'datetime', nullable: true })
   revokedAt: Date | null;
-  @Column({ name: 'status', type: 'varchar', length: 30, default: ExecutionConfirmationStatus.PENDING })
+  @Column({
+    name: 'status',
+    type: 'varchar',
+    length: 30,
+    default: ExecutionConfirmationStatus.PENDING,
+  })
   status: ExecutionConfirmationStatus;
   @CreateDateColumn({ name: 'created_at', type: 'datetime' })
   createdAt: Date;
@@ -243,6 +255,10 @@ describe('ExecutionService — session authority (Round 5, issues #295/#298)', (
       riskGrantRepo as unknown as Repository<RiskGrant>,
       confirmationRepo as unknown as Repository<ExecutionConfirmation>,
       resolution,
+      // Round 5 (task 50-c): the final dispatch boundary + trade-lifecycle CAS
+      // are not exercised by this session-authority matrix — stub seams.
+      {} as FinalDispatchBoundary,
+      {} as TradeLifecycleCasService,
     );
   });
 
@@ -261,8 +277,11 @@ describe('ExecutionService — session authority (Round 5, issues #295/#298)', (
     auditService.log.mockClear();
   });
 
-  const start = (userId = USER, connectionId = CONN_A, mode: ExecutionMode = ExecutionMode.PAPER_ONLY) =>
-    service.startSession(userId, connectionId, '10000.00', null, mode);
+  const start = (
+    userId = USER,
+    connectionId = CONN_A,
+    mode: ExecutionMode = ExecutionMode.PAPER_ONLY,
+  ) => service.startSession(userId, connectionId, '10000.00', null, mode);
 
   const seedGrant = async (
     session: { id: string },
@@ -278,7 +297,12 @@ describe('ExecutionService — session authority (Round 5, issues #295/#298)', (
       brokerConnectionId: CONN_A,
       authorityGeneration: 1,
       orderPayloadDigest: DIGEST('b'),
-      orderPayload: { instrument: 'EURUSD', direction: 'BUY', quantity: '0.1', orderType: 'MARKET' },
+      orderPayload: {
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        quantity: '0.1',
+        orderType: 'MARKET',
+      },
       issuedAt: new Date(),
       expiresAt: new Date(Date.now() + 60_000),
       status: RiskGrantStatus.ACTIVE,

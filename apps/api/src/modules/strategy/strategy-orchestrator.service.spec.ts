@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { Logger } from '@nestjs/common';
 import { StrategyOrchestratorService } from './strategy-orchestrator.service';
+import { AiSignalIdentityGateService } from '../execution/orchestration/signal-identity.gate';
 import { RiskService } from '../risk/risk.service';
 import { ExecutionService } from '../execution/execution.service';
 import { BrokerService } from '../broker/broker.service';
@@ -99,6 +100,20 @@ describe('StrategyOrchestratorService', () => {
         { provide: BrokerService, useValue: brokerService },
         { provide: AuditService, useValue: auditService },
         { provide: DomainEventBus, useValue: eventBus },
+        {
+          // Round 5 (task 50-c): the durable signal-identity gate is mocked at
+          // the seam (its own matrix lives in signal-identity.gate.spec.ts).
+          provide: AiSignalIdentityGateService,
+          useValue: {
+            registerOrReuse: jest
+              .fn()
+              .mockImplementation(async (_userId: string, signal: Record<string, unknown>) => ({
+                signalId: (signal.signalId as string) ?? 'sig-1',
+                payloadDigest: 'digest-fixture',
+                firstDelivery: true,
+              })),
+          },
+        },
       ],
     }).compile();
 

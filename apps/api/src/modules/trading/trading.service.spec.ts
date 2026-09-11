@@ -123,7 +123,9 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       findSessionById: jest.fn().mockResolvedValue(mockSession()),
       changeExecutionMode: jest
         .fn()
-        .mockResolvedValue(mockSession({ executionMode: ExecutionMode.SEMI_AUTO, authorityGeneration: 2 })),
+        .mockResolvedValue(
+          mockSession({ executionMode: ExecutionMode.SEMI_AUTO, authorityGeneration: 2 }),
+        ),
     };
 
     auditService = { log: jest.fn().mockResolvedValue(undefined) };
@@ -497,7 +499,11 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
         allowedTradingModes: AllowedTradingMode.SEMI_AUTO,
         riskAcknowledgementAccepted: true,
       } as never);
-      const updated = await service.changeExecutionMode('user-1', 'session-1', ExecutionMode.SEMI_AUTO);
+      const updated = await service.changeExecutionMode(
+        'user-1',
+        'session-1',
+        ExecutionMode.SEMI_AUTO,
+      );
       expect(executionService.changeExecutionMode).toHaveBeenCalledWith(
         'user-1',
         'session-1',

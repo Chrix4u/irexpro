@@ -42,7 +42,8 @@ export class SessionAuthorityNotActiveException extends HttpException {
       {
         statusCode: HttpStatus.FORBIDDEN,
         code: 'SESSION_NOT_ACTIVE',
-        message: 'No active trading session. Start an explicit session before requesting new exposure.',
+        message:
+          'No active trading session. Start an explicit session before requesting new exposure.',
         userId,
       },
       HttpStatus.FORBIDDEN,

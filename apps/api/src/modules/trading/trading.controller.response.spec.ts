@@ -43,9 +43,11 @@ describe('TradingController frontend-safe session response', () => {
     const tradingService = {
       startTradingSession: jest.fn().mockResolvedValue(internalSession),
       stopTradingSession: jest.fn().mockResolvedValue(undefined),
-      changeExecutionMode: jest
-        .fn()
-        .mockResolvedValue({ ...internalSession, executionMode: ExecutionMode.SEMI_AUTO, authorityGeneration: 2 }),
+      changeExecutionMode: jest.fn().mockResolvedValue({
+        ...internalSession,
+        executionMode: ExecutionMode.SEMI_AUTO,
+        authorityGeneration: 2,
+      }),
       getActiveSession: jest.fn().mockResolvedValue(internalSession),
       getSessionById: jest.fn().mockResolvedValue(internalSession),
     };

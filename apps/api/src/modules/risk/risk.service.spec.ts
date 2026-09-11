@@ -4,27 +4,46 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { RiskService } from './risk.service';
 import { RiskProfile } from './entities/risk-profile.entity';
 import { RiskViolation } from './entities/risk-violation.entity';
+import { TradingSession } from '../execution/entities/trading-session.entity';
+import { TradingAuthorityGeneration } from '../users/entities/trading-authority-generation.entity';
 import { BrokerService } from '../broker/broker.service';
 import { AuditService } from '../audit/audit.service';
 import { ExecutionService } from '../execution/execution.service';
 import { ExecutionControlService } from '../execution-control/execution-control.service';
+import {
+  ExecutionSessionResolutionService,
+  SessionAuthorityNotActiveException,
+} from '../execution/execution-session.resolution';
+import { ExecutionMode } from '../execution/interfaces/execution-authority';
+import { RiskGrantService } from './risk-grant.service';
+import { RiskOrderGeometryService } from './risk-order-geometry.service';
+import { ExactDecimal } from '../../common/utils/exact-decimal';
 import { ProposedTrade, RiskRejectionCode } from './interfaces/risk.interface';
 import { DomainEventBus } from '../events/event-bus.service';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-const validTrade = (): ProposedTrade => ({
-  signalId: 'sig-001',
-  instrument: 'EURUSD',
-  direction: 'BUY',
-  requestedLotSize: '0.05',
-  entryPrice: '1.08500',
-  stopLoss: '1.07500', // 100 pips below entry
-  takeProfit: '1.09500', // 100 pips above entry
-  idempotencyKey: 'idem-abc',
-  volatilityScore: 0.4,
-  regime: 'TRENDING',
-});
+/** validTrade (binding kept intact by default) with optional overrides. */
+function validTrade(overrides: Partial<ProposedTrade> = {}): ProposedTrade {
+  return {
+    signalId: 'sig-001',
+    instrument: 'EURUSD',
+    direction: 'BUY',
+    requestedLotSize: '0.05',
+    entryPrice: '1.08500',
+    stopLoss: '1.07500', // 100 pips below entry
+    takeProfit: '1.09500', // 100 pips above entry
+    idempotencyKey: 'idem-abc',
+    volatilityScore: 0.4,
+    regime: 'TRENDING',
+    sessionId: 'session-1',
+    sessionGeneration: 1,
+    executionMode: ExecutionMode.PAPER_ONLY,
+    brokerConnectionId: 'conn-1',
+    generatedAt: new Date(),
+    ...overrides,
+  };
+}
 
 const defaultProfile = (): Partial<RiskProfile> => ({
   id: 'profile-1',
@@ -40,6 +59,38 @@ const defaultProfile = (): Partial<RiskProfile> => ({
   allowedInstruments: null,
   maxVolatilityScore: '0.85',
   rejectLowLiquidity: true,
+  maxTradeRiskPercent: '2.00',
+  maxLeverageAllowed: 30,
+});
+
+const defaultSession = (overrides: Partial<TradingSession> = {}): TradingSession =>
+  ({
+    id: 'session-1',
+    userId: 'user-1',
+    brokerConnectionId: 'conn-1',
+    executionMode: ExecutionMode.PAPER_ONLY,
+    authorityGeneration: 1,
+    status: 'ACTIVE',
+    openingBalance: '10000.00',
+    peakEquity: '10000.00',
+    riskProfileSnapshot: null,
+    startedAt: new Date(),
+    endedAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
+  }) as TradingSession;
+
+const defaultConnection = (overrides: Record<string, unknown> = {}) => ({
+  id: 'conn-1',
+  userId: 'user-1',
+  brokerId: 'metatrader5',
+  accountType: 'DEMO',
+  status: 'CONNECTED',
+  authorizationStatus: 'ACTIVE',
+  providerBrokerIdentity: null,
+  credentialGeneration: 0,
+  ...overrides,
 });
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
@@ -57,9 +108,26 @@ const mockViolationRepo = () => ({
   find: jest.fn().mockResolvedValue([]),
 });
 
+/** TradingSession repo — findOne for the baseline load + CAS query builder. */
+const mockSessionRepo = () => ({
+  findOne: jest.fn().mockResolvedValue(defaultSession()),
+  create: jest.fn().mockImplementation((obj) => obj),
+  save: jest.fn().mockImplementation(async (obj) => obj),
+  createQueryBuilder: jest.fn().mockReturnValue({
+    update: jest.fn().mockReturnThis(),
+    set: jest.fn().mockReturnThis(),
+    where: jest.fn().mockReturnThis(),
+    execute: jest.fn().mockResolvedValue({ affected: 1 }),
+  }),
+});
+
+const mockAuthorityGenerationRepo = () => ({
+  findOne: jest.fn().mockResolvedValue(null),
+});
+
 const mockBrokerService = () => ({
   hasActiveConnection: jest.fn().mockResolvedValue(true),
-  findActiveConnectionForUser: jest.fn().mockResolvedValue({ id: 'conn-1' }),
+  findConnectionById: jest.fn().mockResolvedValue(defaultConnection()),
   // Sprint 50 — LIVE authorization gate (mocked permissive; the dedicated
   // execution-control spec exercises the real fail-closed behavior)
   isConnectionExecutable: jest.fn().mockReturnValue(true),
@@ -93,6 +161,32 @@ const mockExecutionControlService = () => ({
   listActiveControls: jest.fn().mockResolvedValue([]),
 });
 
+const mockSessionResolution = () => ({
+  resolveActiveSessionAuthority: jest.fn().mockResolvedValue({
+    sessionId: 'session-1',
+    sessionGeneration: 1,
+    executionMode: ExecutionMode.PAPER_ONLY,
+    brokerConnectionId: 'conn-1',
+  }),
+});
+
+const mockRiskGrantService = () => ({
+  issueGrant: jest.fn().mockResolvedValue({
+    grant: { id: 'grant-1', expiresAt: new Date(Date.now() + 60_000) },
+    reused: false,
+  }),
+  consumeGrantAtomic: jest.fn(),
+  invalidateGrantsForSession: jest.fn().mockResolvedValue(0),
+});
+
+const mockOrderGeometry = () => ({
+  resolveOrderGeometry: jest.fn().mockResolvedValue({
+    contractSize: ExactDecimal.parse('100000'),
+    freshQuote: null,
+    quoteRef: null,
+  }),
+});
+
 // ─── Test suite ───────────────────────────────────────────────────────────────
 
 describe('RiskService', () => {
@@ -100,22 +194,46 @@ describe('RiskService', () => {
   let service: RiskService;
   let profileRepo: ReturnType<typeof mockProfileRepo>;
   let violationRepo: ReturnType<typeof mockViolationRepo>;
+  let sessionRepo: ReturnType<typeof mockSessionRepo>;
   let brokerService: ReturnType<typeof mockBrokerService>;
   let executionControlService: ReturnType<typeof mockExecutionControlService>;
+  let executionService: ReturnType<typeof mockExecutionService>;
+  let sessionResolution: ReturnType<typeof mockSessionResolution>;
+  let riskGrantService: ReturnType<typeof mockRiskGrantService>;
+  let orderGeometry: ReturnType<typeof mockOrderGeometry>;
   let auditService: ReturnType<typeof mockAuditService>;
 
   beforeEach(async () => {
     jest.clearAllMocks();
 
+    profileRepo = mockProfileRepo();
+    violationRepo = mockViolationRepo();
+    sessionRepo = mockSessionRepo();
+    brokerService = mockBrokerService();
+    executionService = mockExecutionService();
+    executionControlService = mockExecutionControlService();
+    sessionResolution = mockSessionResolution();
+    riskGrantService = mockRiskGrantService();
+    orderGeometry = mockOrderGeometry();
+    auditService = mockAuditService();
+
     module = await Test.createTestingModule({
       providers: [
         RiskService,
-        { provide: getRepositoryToken(RiskProfile), useFactory: mockProfileRepo },
-        { provide: getRepositoryToken(RiskViolation), useFactory: mockViolationRepo },
-        { provide: BrokerService, useFactory: mockBrokerService },
-        { provide: AuditService, useFactory: mockAuditService },
-        { provide: ExecutionService, useFactory: mockExecutionService },
-        { provide: ExecutionControlService, useFactory: mockExecutionControlService },
+        { provide: getRepositoryToken(RiskProfile), useValue: profileRepo },
+        { provide: getRepositoryToken(RiskViolation), useValue: violationRepo },
+        { provide: getRepositoryToken(TradingSession), useValue: sessionRepo },
+        {
+          provide: getRepositoryToken(TradingAuthorityGeneration),
+          useValue: mockAuthorityGenerationRepo(),
+        },
+        { provide: BrokerService, useValue: brokerService },
+        { provide: AuditService, useValue: auditService },
+        { provide: ExecutionService, useValue: executionService },
+        { provide: ExecutionControlService, useValue: executionControlService },
+        { provide: ExecutionSessionResolutionService, useValue: sessionResolution },
+        { provide: RiskGrantService, useValue: riskGrantService },
+        { provide: RiskOrderGeometryService, useValue: orderGeometry },
         {
           provide: DomainEventBus,
           useValue: { publish: jest.fn(), subscribe: jest.fn().mockReturnValue(() => {}) },
@@ -124,11 +242,6 @@ describe('RiskService', () => {
     }).compile();
 
     service = module.get<RiskService>(RiskService);
-    profileRepo = module.get(getRepositoryToken(RiskProfile));
-    violationRepo = module.get(getRepositoryToken(RiskViolation));
-    brokerService = module.get(BrokerService);
-    executionControlService = module.get(ExecutionControlService);
-    auditService = module.get(AuditService);
   });
 
   afterEach(async () => {
@@ -157,6 +270,62 @@ describe('RiskService', () => {
       }
     });
 
+    it('carries the issued RiskGrant + session authority binding (#301/#295)', async () => {
+      const result = await service.validateProposedTrade('user-1', validTrade());
+
+      expect(result.decision).toBe('APPROVED');
+      if (result.decision === 'APPROVED') {
+        expect(result.grantId).toBe('grant-1');
+        expect(result.sessionId).toBe('session-1');
+        expect(result.sessionGeneration).toBe(1);
+        expect(result.executionMode).toBe(ExecutionMode.PAPER_ONLY);
+        expect(result.brokerConnectionId).toBe('conn-1');
+      }
+    });
+
+    it('issues the durable grant with the full authority binding (#301)', async () => {
+      await service.validateProposedTrade('user-1', validTrade());
+
+      expect(riskGrantService.issueGrant).toHaveBeenCalledTimes(1);
+      const input = riskGrantService.issueGrant.mock.calls[0][0];
+      expect(input).toMatchObject({
+        userId: 'user-1',
+        signalId: 'sig-001',
+        sessionId: 'session-1',
+        sessionGeneration: 1,
+        executionMode: ExecutionMode.PAPER_ONLY,
+        brokerConnectionId: 'conn-1',
+        authorityGeneration: 1, // no identity row → default generation 1
+        riskProfileId: 'profile-1',
+        providerBrokerIdentity: null,
+      });
+      expect(input.signalPayloadDigest).toMatch(/^[0-9a-f]{64}$/);
+      expect(input.orderPayloadDigest).toMatch(/^[0-9a-f]{64}$/);
+      expect(input.riskProfileHash).toMatch(/^[0-9a-f]{64}$/);
+      expect(input.orderPayload).toMatchObject({
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        quantity: '0.05',
+        orderType: 'MARKET',
+        requestedPrice: '1.085',
+        stopLoss: '1.075',
+        takeProfit: '1.095',
+        marketRegime: 'TRENDING',
+      });
+    });
+
+    it('rejects (never approves) when grant issuance fails — fail-closed', async () => {
+      riskGrantService.issueGrant.mockRejectedValue(new Error('grant insert failed'));
+
+      const result = await service.validateProposedTrade('user-1', validTrade());
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.RISK_ENGINE_ERROR);
+        expect(result.rejectionReason).toContain('durable risk grant');
+      }
+    });
+
     it('includes a riskScore in the APPROVED result', async () => {
       const result = await service.validateProposedTrade('user-1', validTrade());
       if (result.decision === 'APPROVED') {
@@ -172,11 +341,129 @@ describe('RiskService', () => {
         expect(result.appliedRules).toContain('BROKER_CONNECTION:OK');
         expect(result.appliedRules).toContain('MANDATORY_SL:OK');
         expect(result.appliedRules).toContain('MANDATORY_TP:OK');
+        expect(result.appliedRules).toContain('MAX_TRADE_RISK:OK');
+        expect(result.appliedRules).toContain('LEVERAGE:OK');
+      }
+    });
+
+    it('verifies per-trade controls with the exact geometry (risk % + leverage)', async () => {
+      // Defaults: |1.085−1.075| × 0.05 × 100000 = 50 risk at stop on 10050
+      // equity → 0.4975% (< 2%); notional 5425 / 10050 → 0.54 (< 30).
+      const geometry = orderGeometry.resolveOrderGeometry as jest.Mock;
+      await service.validateProposedTrade('user-1', validTrade());
+
+      expect(geometry).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'user-1',
+          brokerConnectionId: 'conn-1',
+          instrument: 'EURUSD',
+          needFreshQuote: false, // entry price present → requested-price entry
+        }),
+      );
+    });
+  });
+
+  // ─── Step 0: Authority binding (#295/#298/#301) ──────────────────────────
+
+  describe('Step 0 — Authority binding', () => {
+    it('REJECTS with AUTHORITY_BINDING_REQUIRED when the binding is missing', async () => {
+      const { sessionId: _s, ...withoutBinding } = validTrade();
+      void _s;
+      const result = await service.validateProposedTrade('user-1', withoutBinding);
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.AUTHORITY_BINDING_REQUIRED);
+        expect(result.rejectionReason).toContain('sessionId');
+      }
+    });
+
+    it('REJECTS with AUTHORITY_BINDING_REQUIRED when brokerConnectionId is missing', async () => {
+      const { brokerConnectionId: _c, ...withoutConnection } = validTrade();
+      void _c;
+      const result = await service.validateProposedTrade('user-1', withoutConnection);
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.AUTHORITY_BINDING_REQUIRED);
+      }
+    });
+
+    it('checks the binding BEFORE any other rule (kill switch does not shadow it)', async () => {
+      profileRepo.findOne.mockResolvedValue({ ...defaultProfile(), killSwitchActive: true });
+      const { sessionId: _s, sessionGeneration: _g, ...partial } = validTrade();
+      void _s;
+      void _g;
+      const result = await service.validateProposedTrade('user-1', partial);
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.AUTHORITY_BINDING_REQUIRED);
+      }
+    });
+
+    it('REJECTS with SESSION_NOT_ACTIVE when no ACTIVE session resolves (#295)', async () => {
+      sessionResolution.resolveActiveSessionAuthority.mockRejectedValue(
+        new SessionAuthorityNotActiveException('user-1'),
+      );
+
+      const result = await service.validateProposedTrade('user-1', validTrade());
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.SESSION_NOT_ACTIVE);
+      }
+    });
+
+    it('REJECTS with SESSION_AUTHORITY_MISMATCH when the signal binding is stale', async () => {
+      const trade = { ...validTrade(), sessionGeneration: 2 };
+
+      const result = await service.validateProposedTrade('user-1', trade);
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.SESSION_AUTHORITY_MISMATCH);
+        expect(result.rejectionReason).toContain('generation');
+      }
+    });
+
+    it('REJECTS with SESSION_AUTHORITY_MISMATCH when the signal binds another connection', async () => {
+      const trade = { ...validTrade(), brokerConnectionId: 'conn-other' };
+
+      const result = await service.validateProposedTrade('user-1', trade);
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.SESSION_AUTHORITY_MISMATCH);
+      }
+    });
+
+    it('REJECTS with BROKER_DISCONNECTED when the session-bound connection is not owned/available', async () => {
+      brokerService.findConnectionById.mockRejectedValue(new Error('not found'));
+
+      const result = await service.validateProposedTrade('user-1', validTrade());
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.BROKER_DISCONNECTED);
+      }
+    });
+
+    it('REJECTS with BROKER_DISCONNECTED when the session-bound connection is not CONNECTED', async () => {
+      brokerService.findConnectionById.mockResolvedValue(
+        defaultConnection({ status: 'DISCONNECTED' }),
+      );
+
+      const result = await service.validateProposedTrade('user-1', validTrade());
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.BROKER_DISCONNECTED);
       }
     });
   });
 
-  // ─── Step 1: Kill switch ──────────────────────────────────────────────────
+  // ─── Step 1a: Kill switch ──────────────────────────────────────────────────
 
   describe('Step 1a — Kill switch check', () => {
     it('REJECTS with KILL_SWITCH_ACTIVE when kill switch is on', async () => {
@@ -203,24 +490,15 @@ describe('RiskService', () => {
     });
   });
 
-  // ─── Step 1b: Broker connection ───────────────────────────────────────────
+  // ─── Step 1a-pre/1c-pre: Emergency control plane ─────────────────────────
 
   describe('Step 1a-pre/1c-pre — Emergency control plane: ALL FOUR SCOPES (architect correction A1)', () => {
-    beforeEach(() => {
-      // The authoritative connection context used by the 1c-pre gate.
-      (brokerService.findActiveConnectionForUser as jest.Mock).mockResolvedValue({
-        id: 'conn-1',
-        brokerId: 'metatrader5',
-        accountType: 'DEMO',
-      });
-    });
-
     const blocked = (scope: string, scopeKey: string | null, reason = 'incident') => ({
       allowed: false,
       blockedBy: { scope, scopeKey, reason },
     });
 
-    it('evaluates the control plane with the COMPLETE context after connection discovery', async () => {
+    it('evaluates the control plane with the COMPLETE context after loading the session-bound connection', async () => {
       await service.validateProposedTrade('user-1', validTrade());
 
       const contexts = (
@@ -234,6 +512,9 @@ describe('RiskService', () => {
         brokerId: 'metatrader5',
         brokerConnectionId: 'conn-1',
       });
+      // The early gate ran BEFORE any connection discovery; the full gate
+      // ran AFTER the exact session-bound connection was loaded.
+      expect(brokerService.findConnectionById).toHaveBeenCalledTimes(1);
     });
 
     it('GLOBAL blocks everyone (fail-fast, before connection discovery)', async () => {
@@ -283,23 +564,28 @@ describe('RiskService', () => {
       }
     });
 
-    it('USER scope blocks via the early gate (before broker discovery)', async () => {
+    it('USER scope blocks via the early gate (before the session-bound connection is loaded)', async () => {
       (executionControlService.checkExecutionPermission as jest.Mock).mockResolvedValue(
         blocked('USER', 'user-1', 'account under investigation'),
       );
 
       const result = await service.validateProposedTrade('user-1', validTrade());
       expect(result.decision).toBe('REJECTED');
-      // Blocked BEFORE broker discovery: findActiveConnectionForUser never called
-      expect(brokerService.findActiveConnectionForUser).not.toHaveBeenCalled();
+      // Blocked BEFORE the connection load: findConnectionById never called
+      expect(brokerService.findConnectionById).not.toHaveBeenCalled();
     });
 
     it('an unrelated provider/connection remains unaffected (allowed through both gates)', async () => {
-      (brokerService.findActiveConnectionForUser as jest.Mock).mockResolvedValue({
-        id: 'conn-other',
-        brokerId: 'oanda',
-        accountType: 'DEMO',
+      sessionRepo.findOne.mockResolvedValue(defaultSession({ brokerConnectionId: 'conn-other' }));
+      sessionResolution.resolveActiveSessionAuthority.mockResolvedValue({
+        sessionId: 'session-1',
+        sessionGeneration: 1,
+        executionMode: ExecutionMode.PAPER_ONLY,
+        brokerConnectionId: 'conn-other',
       });
+      brokerService.findConnectionById.mockResolvedValue(
+        defaultConnection({ id: 'conn-other', brokerId: 'oanda' }),
+      );
       (executionControlService.checkExecutionPermission as jest.Mock).mockImplementation(
         async (ctx: { userId: string; brokerId?: string; brokerConnectionId?: string }) =>
           ctx.brokerId === 'metatrader5' || ctx.brokerConnectionId === 'conn-1'
@@ -307,7 +593,10 @@ describe('RiskService', () => {
             : { allowed: true },
       );
 
-      const result = await service.validateProposedTrade('user-2', validTrade());
+      const result = await service.validateProposedTrade(
+        'user-2',
+        validTrade({ brokerConnectionId: 'conn-other' } as Partial<ProposedTrade>),
+      );
       expect(result.decision).toBe('APPROVED');
     });
 
@@ -337,16 +626,153 @@ describe('RiskService', () => {
     });
   });
 
-  describe('Step 1b — Broker connection check', () => {
-    it('REJECTS with BROKER_DISCONNECTED when no active broker', async () => {
-      (brokerService.hasActiveConnection as jest.Mock).mockResolvedValue(false);
+  // ─── Step 2/3: account state, daily loss + drawdown (#296/#313/#317) ────
+
+  describe('Step 2/3 — Account state + exact-decimal baselines (#296/#313/#317)', () => {
+    it('REJECTS with ACCOUNT_STATE_UNAVAILABLE when account state is missing (fail-closed, no skip)', async () => {
+      brokerService.getBrokerAccountState.mockResolvedValue(null);
 
       const result = await service.validateProposedTrade('user-1', validTrade());
 
       expect(result.decision).toBe('REJECTED');
       if (result.decision === 'REJECTED') {
-        expect(result.rejectionCode).toBe(RiskRejectionCode.BROKER_DISCONNECTED);
+        expect(result.rejectionCode).toBe(RiskRejectionCode.ACCOUNT_STATE_UNAVAILABLE);
+        expect(result.rejectionReason).toContain('unavailable');
       }
+    });
+
+    it('REJECTS (fail-closed, typed) when the account-state query throws (#296)', async () => {
+      brokerService.getBrokerAccountState.mockRejectedValue(new Error('db down'));
+
+      const result = await service.validateProposedTrade('user-1', validTrade());
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.RISK_ENGINE_QUERY_FAILED);
+        // Sanitized: the raw driver error never reaches the rejection reason
+        expect(result.rejectionReason).not.toContain('db down');
+      }
+    });
+
+    it('REJECTS with ACCOUNT_STATE_UNAVAILABLE when equity is malformed (#313 fail-closed)', async () => {
+      brokerService.getBrokerAccountState.mockResolvedValue({
+        balance: '10000.00',
+        equity: 'not-a-number',
+        freeMargin: '9800.00',
+        currency: 'USD',
+      });
+
+      const result = await service.validateProposedTrade('user-1', validTrade());
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.ACCOUNT_STATE_UNAVAILABLE);
+        expect(result.rejectionReason).toContain('malformed');
+      }
+    });
+
+    it('REJECTS with SESSION_BASELINE_UNAVAILABLE when the session has no opening balance (#317)', async () => {
+      sessionRepo.findOne.mockResolvedValue(defaultSession({ openingBalance: null }));
+
+      const result = await service.validateProposedTrade('user-1', validTrade());
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.SESSION_BASELINE_UNAVAILABLE);
+        expect(result.rejectionReason).toContain('opening balance');
+      }
+    });
+
+    it('daily loss EXACT boundary: |loss| == 5% of the session OPENING balance rejects (SUSPENDED)', async () => {
+      // 5% of 10000.00 = 500.00 exactly.
+      executionService.getTodayRealisedLoss.mockResolvedValue(-500);
+
+      const result = await service.validateProposedTrade('user-1', validTrade());
+
+      expect(result.decision).toBe('SUSPENDED');
+      if (result.decision !== 'APPROVED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.DAILY_LOSS_LIMIT_REACHED);
+        // denominator = session opening balance, NOT the current broker balance
+        expect(result.rejectionReason).toContain('opening balance');
+      }
+    });
+
+    it('daily loss just below the exact boundary approves', async () => {
+      executionService.getTodayRealisedLoss.mockResolvedValue(-499.99);
+
+      const result = await service.validateProposedTrade('user-1', validTrade());
+
+      expect(result.decision).toBe('APPROVED');
+    });
+
+    it('REJECTS with RISK_ENGINE_QUERY_FAILED when the daily-loss query throws (no SKIPPED)', async () => {
+      executionService.getTodayRealisedLoss.mockRejectedValue(new Error('timeout'));
+
+      const result = await service.validateProposedTrade('user-1', validTrade());
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.RISK_ENGINE_QUERY_FAILED);
+        expect(result.rejectionReason).not.toContain('timeout');
+      }
+    });
+
+    it('drawdown EXACT boundary: 10% drawdown against the monotonic peak rejects (SUSPENDED)', async () => {
+      // peak 10000 (persisted), fresh equity 9000 → 10.00% == maxDrawdownPercent.
+      brokerService.getBrokerAccountState.mockResolvedValue({
+        balance: '9000.00',
+        equity: '9000.00',
+        freeMargin: '9800.00',
+        currency: 'USD',
+      });
+      // CAS loses (a higher/equal peak is already persisted) → reload peak.
+      sessionRepo.createQueryBuilder.mockReturnValue({
+        update: jest.fn().mockReturnThis(),
+        set: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        execute: jest.fn().mockResolvedValue({ affected: 0 }),
+      });
+
+      const result = await service.validateProposedTrade('user-1', validTrade());
+
+      expect(result.decision).toBe('SUSPENDED');
+      if (result.decision !== 'APPROVED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.MAX_DRAWDOWN_REACHED);
+        expect(result.rejectionReason).toContain('10.00%');
+      }
+    });
+
+    it('maintains the session peak MONOTONICALLY via the guarded CAS write (#317)', async () => {
+      // Default: fresh equity 10050 > persisted peak 10000 → CAS writes 10050.
+      const result = await service.validateProposedTrade('user-1', validTrade());
+
+      expect(result.decision).toBe('APPROVED');
+      const builder = (sessionRepo.createQueryBuilder as jest.Mock).mock.results[0].value;
+      expect(builder.set).toHaveBeenCalledWith({ peakEquity: '10050' });
+      expect(builder.where).toHaveBeenCalledWith(
+        'id = :id AND (peak_equity IS NULL OR peak_equity <= :fresh)',
+        { id: 'session-1', fresh: '10050' },
+      );
+    });
+
+    it('drawdown just below the exact boundary approves', async () => {
+      // peak 10000 → fresh equity 9000.01 → 9.999% < 10%.
+      brokerService.getBrokerAccountState.mockResolvedValue({
+        balance: '9000.01',
+        equity: '9000.01',
+        freeMargin: '9800.00',
+        currency: 'USD',
+      });
+      sessionRepo.createQueryBuilder.mockReturnValue({
+        update: jest.fn().mockReturnThis(),
+        set: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        execute: jest.fn().mockResolvedValue({ affected: 0 }),
+      });
+
+      const result = await service.validateProposedTrade('user-1', validTrade());
+
+      expect(result.decision).toBe('APPROVED');
     });
   });
 
@@ -361,7 +787,7 @@ describe('RiskService', () => {
       expect(result.decision).toBe('APPROVED');
       if (result.decision === 'APPROVED') {
         // capped to profile.maxPositionSizeLot (mock value is '0.10')
-        expect(parseFloat(result.validatedOrder.lotSize)).toBe(0.1);
+        expect(result.validatedOrder.lotSize).toBe('0.10');
         expect(result.appliedRules.some((r) => r.startsWith('POSITION_SIZE:REDUCED'))).toBe(true);
       }
     });
@@ -371,6 +797,33 @@ describe('RiskService', () => {
 
       if (result.decision === 'APPROVED') {
         expect(result.validatedOrder.lotSize).toBe('0.05');
+      }
+    });
+  });
+
+  // ─── Step 4a: concurrent trades fail-closed (#296) ───────────────────────
+
+  describe('Step 4a — Max concurrent trades', () => {
+    it('REJECTS with MAX_CONCURRENT_TRADES at the limit', async () => {
+      executionService.countOpenTrades.mockResolvedValue(3);
+
+      const result = await service.validateProposedTrade('user-1', validTrade());
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.MAX_CONCURRENT_TRADES);
+      }
+    });
+
+    it('REJECTS with RISK_ENGINE_QUERY_FAILED when the count query throws (never SKIPPED, #296)', async () => {
+      executionService.countOpenTrades.mockRejectedValue(new Error('pool exhausted'));
+
+      const result = await service.validateProposedTrade('user-1', validTrade());
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.RISK_ENGINE_QUERY_FAILED);
+        expect(result.rejectionReason).not.toContain('pool exhausted');
       }
     });
   });
@@ -504,7 +957,7 @@ describe('RiskService', () => {
     });
   });
 
-  // ─── Step 6: Volatility ───────────────────────────────────────────────────
+  // ─── Step 6: Volatility and regime ────────────────────────────────────────
 
   describe('Step 6 — Volatility and regime checks', () => {
     it('REJECTS when volatility score exceeds threshold', async () => {
@@ -538,6 +991,181 @@ describe('RiskService', () => {
       const trade = { ...validTrade(), regime: 'LOW_LIQUIDITY' as const };
       const result = await service.validateProposedTrade('user-1', trade);
       expect(result.decision).toBe('APPROVED');
+    });
+
+    it('REJECTS with UNKNOWN_MARKET_REGIME when the regime is missing and the profile enforces regime rules (#330)', async () => {
+      const { regime: _r, ...withoutRegime } = validTrade();
+      void _r;
+      const result = await service.validateProposedTrade('user-1', withoutRegime);
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.UNKNOWN_MARKET_REGIME);
+      }
+    });
+
+    it('REJECTS with UNKNOWN_MARKET_REGIME for an unrecognized regime label (#330)', async () => {
+      const trade = { ...validTrade(), regime: 'CHOPPY_UNKNOWN' as ProposedTrade['regime'] };
+      const result = await service.validateProposedTrade('user-1', trade);
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.UNKNOWN_MARKET_REGIME);
+      }
+    });
+
+    it('permits an unknown regime only when the profile does NOT enforce regime rules', async () => {
+      profileRepo.findOne.mockResolvedValue({ ...defaultProfile(), rejectLowLiquidity: false });
+      const { regime: _r, ...withoutRegime } = validTrade();
+      void _r;
+      const result = await service.validateProposedTrade('user-1', withoutRegime);
+
+      expect(result.decision).toBe('APPROVED');
+    });
+  });
+
+  // ─── Step 6c: per-trade controls (#316) ──────────────────────────────────
+
+  describe('Step 6c — maxTradeRiskPercent + maxLeverageAllowed (#316)', () => {
+    it('maxTradeRiskPercent EXACT boundary: risk % == limit rejects', async () => {
+      // |1.085−1.075| × 0.05 × 100000 = 50 risk at stop; equity 2500 → 2.00%.
+      brokerService.getBrokerAccountState.mockResolvedValue({
+        balance: '2500.00',
+        equity: '2500.00',
+        freeMargin: '9800.00',
+        currency: 'USD',
+      });
+
+      const result = await service.validateProposedTrade('user-1', validTrade());
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.MAX_TRADE_RISK_EXCEEDED);
+        expect(result.rejectionReason).toContain('2.00%');
+      }
+    });
+
+    it('maxTradeRiskPercent just below the exact boundary approves', async () => {
+      brokerService.getBrokerAccountState.mockResolvedValue({
+        balance: '2501.00',
+        equity: '2501.00',
+        freeMargin: '9800.00',
+        currency: 'USD',
+      });
+
+      const result = await service.validateProposedTrade('user-1', validTrade());
+
+      expect(result.decision).toBe('APPROVED');
+    });
+
+    it('maxLeverageAllowed EXACT boundary: effective leverage == limit rejects', async () => {
+      // notional = 1.085 × 0.05 × 100000 = 5425; equity 2712.50 → 2.0 exactly.
+      profileRepo.findOne.mockResolvedValue({ ...defaultProfile(), maxLeverageAllowed: 2 });
+      brokerService.getBrokerAccountState.mockResolvedValue({
+        balance: '2712.50',
+        equity: '2712.50',
+        freeMargin: '9800.00',
+        currency: 'USD',
+      });
+
+      const result = await service.validateProposedTrade('user-1', validTrade());
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.LEVERAGE_EXCEEDED);
+        expect(result.rejectionReason).toContain('Effective order leverage');
+      }
+    });
+
+    it('maxLeverageAllowed just below the exact boundary approves', async () => {
+      profileRepo.findOne.mockResolvedValue({ ...defaultProfile(), maxLeverageAllowed: 2 });
+      brokerService.getBrokerAccountState.mockResolvedValue({
+        balance: '2712.51',
+        equity: '2712.51',
+        freeMargin: '9800.00',
+        currency: 'USD',
+      });
+
+      const result = await service.validateProposedTrade('user-1', validTrade());
+
+      expect(result.decision).toBe('APPROVED');
+    });
+
+    it('LIVE NEW exposure fails CLOSED with a typed code when contract size is unavailable', async () => {
+      brokerService.findConnectionById.mockResolvedValue(
+        defaultConnection({ accountType: 'LIVE' }),
+      );
+      sessionRepo.findOne.mockResolvedValue(
+        defaultSession({ executionMode: ExecutionMode.FULL_AUTO }),
+      );
+      sessionResolution.resolveActiveSessionAuthority.mockResolvedValue({
+        sessionId: 'session-1',
+        sessionGeneration: 1,
+        executionMode: ExecutionMode.FULL_AUTO,
+        brokerConnectionId: 'conn-1',
+      });
+      orderGeometry.resolveOrderGeometry.mockResolvedValue({
+        contractSize: null,
+        freshQuote: null,
+        quoteRef: null,
+      });
+
+      const result = await service.validateProposedTrade(
+        'user-1',
+        validTrade({ executionMode: ExecutionMode.FULL_AUTO } as Partial<ProposedTrade>),
+      );
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.CONTRACT_SIZE_UNAVAILABLE);
+      }
+    });
+
+    it('LIVE MARKET entry without a fresh quote fails CLOSED with a typed code', async () => {
+      brokerService.findConnectionById.mockResolvedValue(
+        defaultConnection({ accountType: 'LIVE' }),
+      );
+      sessionRepo.findOne.mockResolvedValue(
+        defaultSession({ executionMode: ExecutionMode.FULL_AUTO }),
+      );
+      sessionResolution.resolveActiveSessionAuthority.mockResolvedValue({
+        sessionId: 'session-1',
+        sessionGeneration: 1,
+        executionMode: ExecutionMode.FULL_AUTO,
+        brokerConnectionId: 'conn-1',
+      });
+      orderGeometry.resolveOrderGeometry.mockResolvedValue({
+        contractSize: ExactDecimal.parse('100000'),
+        freshQuote: null,
+        quoteRef: null,
+      });
+      const trade = validTrade({
+        entryPrice: '0',
+        executionMode: ExecutionMode.FULL_AUTO,
+      });
+
+      const result = await service.validateProposedTrade('user-1', trade);
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.RISK_QUOTE_UNAVAILABLE);
+      }
+    });
+
+    it('PAPER/DEMO records the unverified geometry honestly and still approves', async () => {
+      orderGeometry.resolveOrderGeometry.mockResolvedValue({
+        contractSize: null,
+        freshQuote: null,
+        quoteRef: null,
+      });
+
+      const result = await service.validateProposedTrade('user-1', validTrade());
+
+      expect(result.decision).toBe('APPROVED');
+      if (result.decision === 'APPROVED') {
+        expect(result.appliedRules).toContain('MAX_TRADE_RISK:GEOMETRY_UNVERIFIED');
+        expect(result.appliedRules).toContain('LEVERAGE:GEOMETRY_UNVERIFIED');
+      }
     });
   });
 
@@ -618,6 +1246,11 @@ describe('RiskService', () => {
   describe('hasDailyLossLimitBreached()', () => {
     it('returns false when no loss and broker connected', async () => {
       expect(await service.hasDailyLossLimitBreached('user-1')).toBe(false);
+    });
+
+    it('uses the session opening balance + exact decimals (equality = breached)', async () => {
+      executionService.getTodayRealisedLoss.mockResolvedValue(-500);
+      expect(await service.hasDailyLossLimitBreached('user-1')).toBe(true);
     });
   });
 });

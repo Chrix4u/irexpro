@@ -103,13 +103,21 @@ export class TradingController {
    * silent pick — the mode is part of the session authority).
    */
   private resolveExecutionMode(dto: StartSessionDto): ExecutionMode {
-    if (dto.executionMode && dto.requestedMode && String(dto.executionMode) !== String(dto.requestedMode)) {
+    if (
+      dto.executionMode &&
+      dto.requestedMode &&
+      String(dto.executionMode) !== String(dto.requestedMode)
+    ) {
       throw new BadRequestException(
         'requestedMode and executionMode disagree. Supply only executionMode ' +
           '(requestedMode is a deprecated alias with the same values).',
       );
     }
-    return dto.executionMode ?? (dto.requestedMode as ExecutionMode | undefined) ?? ExecutionMode.PAPER_ONLY;
+    return (
+      dto.executionMode ??
+      (dto.requestedMode as ExecutionMode | undefined) ??
+      ExecutionMode.PAPER_ONLY
+    );
   }
 
   /**

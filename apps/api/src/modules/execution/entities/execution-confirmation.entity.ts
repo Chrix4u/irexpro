@@ -82,7 +82,12 @@ export class ExecutionConfirmation {
   @Column({ name: 'revoked_at', type: 'timestamptz', nullable: true })
   revokedAt: Date | null;
 
-  @Column({ name: 'status', type: 'varchar', length: 30, default: ExecutionConfirmationStatus.PENDING })
+  @Column({
+    name: 'status',
+    type: 'varchar',
+    length: 30,
+    default: ExecutionConfirmationStatus.PENDING,
+  })
   status: ExecutionConfirmationStatus;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })

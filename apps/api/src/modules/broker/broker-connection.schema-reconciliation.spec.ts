@@ -209,15 +209,21 @@ describe('BrokerConnection schema reconciliation (hotfix)', () => {
   it('logical-account migration should enforce per-user uniqueness over non-deleted rows', () => {
     expect(logicalAccountSource).toContain('uq_broker_connections_logical_account');
     expect(logicalAccountSource).toContain('deleted_at IS NULL');
-    expect(logicalAccountSource).toMatch(/CREATE UNIQUE INDEX[^;]*\(user_id, logical_account_key\)/s);
+    expect(logicalAccountSource).toMatch(
+      /CREATE UNIQUE INDEX[^;]*\(user_id, logical_account_key\)/s,
+    );
   });
 
   it('logical-account migration should canonicalize cTrader aliases to one technology', () => {
-    expect(logicalAccountSource).toContain("WHEN broker_id IN ('ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader') THEN 'ctrader'");
+    expect(logicalAccountSource).toContain(
+      "WHEN broker_id IN ('ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader') THEN 'ctrader'",
+    );
   });
 
   it('logical-account migration preflight should fail on duplicates (no silent dedup)', () => {
-    expect(logicalAccountSource).toContain('preflight FAILED: duplicate durable BrokerConnection rows');
+    expect(logicalAccountSource).toContain(
+      'preflight FAILED: duplicate durable BrokerConnection rows',
+    );
   });
 
   it('live_trading_enabled should exist in the reconciliation migration', () => {

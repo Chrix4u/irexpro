@@ -1,8 +1,4 @@
-import {
-  ExactDecimal,
-  ExactDecimalError,
-  EXACT_DECIMAL_MAX_SCALE,
-} from './exact-decimal';
+import { ExactDecimal, ExactDecimalError, EXACT_DECIMAL_MAX_SCALE } from './exact-decimal';
 
 /**
  * ExactDecimal boundary tests — architect issue #313 (Round 5).
@@ -72,9 +68,9 @@ describe('ExactDecimal (issue #313 — exact financial arithmetic)', () => {
       expect(D('0.1').cmp(D('0.2'))).toBe(-1);
       expect(D('0.2').cmp(D('0.1'))).toBe(1);
       // beyond double precision entirely
-      expect(
-        D('0.100000000000000000000000000001').cmp(D('0.100000000000000000000000000002')),
-      ).toBe(-1);
+      expect(D('0.100000000000000000000000000001').cmp(D('0.100000000000000000000000000002'))).toBe(
+        -1,
+      );
     });
   });
 
@@ -218,9 +214,7 @@ describe('ExactDecimal (issue #313 — exact financial arithmetic)', () => {
     it('parses and preserves 30+ digit values exactly', () => {
       const big = D('123456789012345678901234567890.123456789');
       expect(big.toString()).toBe('123456789012345678901234567890.123456789');
-      expect(big.add(D('0.000000001')).toString()).toBe(
-        '123456789012345678901234567890.12345679',
-      );
+      expect(big.add(D('0.000000001')).toString()).toBe('123456789012345678901234567890.12345679');
     });
 
     it('1e20-scale integer plus 0.01 stays exact (impossible in doubles)', () => {
@@ -254,9 +248,7 @@ describe('ExactDecimal (issue #313 — exact financial arithmetic)', () => {
     });
 
     it('bigint input accepted at scale 0', () => {
-      expect(D(123456789012345678901234567890n).toString()).toBe(
-        '123456789012345678901234567890',
-      );
+      expect(D(123456789012345678901234567890n).toString()).toBe('123456789012345678901234567890');
       expect(D(42n).add(D('0.5')).toString()).toBe('42.5');
     });
   });
@@ -344,13 +336,7 @@ describe('ExactDecimal (issue #313 — exact financial arithmetic)', () => {
 
     it('operations reject non-ExactDecimal operands (no silent coercion)', () => {
       const d = D('1');
-      for (const bad of [
-        '0.5',
-        0.5,
-        null,
-        undefined,
-        {},
-      ] as never[]) {
+      for (const bad of ['0.5', 0.5, null, undefined, {}] as never[]) {
         expect(() => d.add(bad as never)).toThrow();
         expect(() => d.cmp(bad as never)).toThrow(ExactDecimalError);
         expect(() => d.div(bad as never)).toThrow(ExactDecimalError);

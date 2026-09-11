@@ -1,5 +1,6 @@
 import { Order } from '../orders/order.entity';
 import { OrderKind, OrderTimeInForce } from '../orders/order.enums';
+import { ProviderDispatchCertainty } from '../../broker/interfaces/provider-dispatch-certainty';
 
 /**
  * ExecutionIntent — Directive PHASE D "execution intent".
@@ -108,6 +109,14 @@ export type ProviderDispatchOutcome =
       order: Order;
       orderId: string;
       reason: string;
+      /**
+       * Round 5 (#314): the round-4 WRITE-CERTAINTY classification of the
+       * uncertain dispatch — persisted on the Trade when it transitions to
+       * RECONCILIATION_PENDING so uncertain-exposure accounting knows whether
+       * the capacity reservation must be RETAINED
+       * (MAY_HAVE_REACHED_PROVIDER) or released once (DEFINITELY_NOT_SENT).
+       */
+      certainty: ProviderDispatchCertainty;
     }
   | {
       outcome: 'DUPLICATE';

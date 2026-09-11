@@ -214,10 +214,11 @@ export class ExactDecimal {
   static readonly HUNDRED = new ExactDecimal(100n, 0);
 
   /** Build from a percentage string applied to a base amount: base * pct / 100 (EXACT). */
-  static percentOf(percent: string | number | bigint, base: string | number | bigint): ExactDecimal {
-    return ExactDecimal.parse(base)
-      .mul(ExactDecimal.parse(percent))
-      .divByPowerOfTen(2);
+  static percentOf(
+    percent: string | number | bigint,
+    base: string | number | bigint,
+  ): ExactDecimal {
+    return ExactDecimal.parse(base).mul(ExactDecimal.parse(percent)).divByPowerOfTen(2);
   }
 
   static min(a: ExactDecimal, b: ExactDecimal): ExactDecimal {
@@ -279,10 +280,7 @@ export class ExactDecimal {
   }
 
   mul(other: ExactDecimal): ExactDecimal {
-    return new ExactDecimal(
-      this.unscaled * other.unscaled,
-      this.scale + other.scale,
-    ).normalize();
+    return new ExactDecimal(this.unscaled * other.unscaled, this.scale + other.scale).normalize();
   }
 
   neg(): ExactDecimal {
@@ -302,10 +300,7 @@ export class ExactDecimal {
       if (this.scale >= exp) {
         return new ExactDecimal(this.unscaled, this.scale - exp).normalize();
       }
-      return new ExactDecimal(
-        this.unscaled * pow10(exp - this.scale),
-        0,
-      );
+      return new ExactDecimal(this.unscaled * pow10(exp - this.scale), 0);
     }
     return this.divByPowerOfTen(-exp);
   }
@@ -320,9 +315,7 @@ export class ExactDecimal {
     }
     const targetScale = this.scale + exp;
     if (targetScale > EXACT_DECIMAL_MAX_SCALE) {
-      throw new ExactDecimalError(
-        `scale out of supported range after dividing by 10^${exp}`,
-      );
+      throw new ExactDecimalError(`scale out of supported range after dividing by 10^${exp}`);
     }
     return new ExactDecimal(this.unscaled, targetScale).normalize();
   }
@@ -346,11 +339,8 @@ export class ExactDecimal {
       throw new ExactDecimalError('division by zero');
     }
     const mode: ExactDecimalRoundingMode = options.mode ?? 'HALF_UP';
-    const scale = options.scale ?? Math.max(
-      this.scale,
-      divisor.scale,
-      EXACT_DECIMAL_DEFAULT_DIV_SCALE,
-    );
+    const scale =
+      options.scale ?? Math.max(this.scale, divisor.scale, EXACT_DECIMAL_DEFAULT_DIV_SCALE);
     if (!Number.isInteger(scale) || scale < 0 || scale > EXACT_DECIMAL_MAX_SCALE) {
       throw new ExactDecimalError(`invalid division scale: ${scale}`);
     }
@@ -485,19 +475,15 @@ export class ExactDecimal {
  * Divide `num / den` at integer precision, applying the rounding mode to the
  * truncated quotient. `num` and `den` are BigInts; den !== 0n.
  */
-function quantizedDivide(
-  num: bigint,
-  den: bigint,
-  mode: ExactDecimalRoundingMode,
-): bigint {
+function quantizedDivide(num: bigint, den: bigint, mode: ExactDecimalRoundingMode): bigint {
   // BigInt division truncates toward zero; remainder takes the dividend's sign.
-  let q = num / den;
+  const q = num / den;
   const r = num % den;
   if (r === 0n) {
     return q;
   }
 
-  const negativeResult = (num < 0n) !== (den < 0n);
+  const negativeResult = num < 0n !== den < 0n;
   // Direction that moves the magnitude away from zero.
   const awayFromZero = negativeResult ? -1n : 1n;
 

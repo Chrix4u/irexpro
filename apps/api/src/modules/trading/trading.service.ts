@@ -71,7 +71,10 @@ export class TradingService {
   ) {}
 
   /** ExecutionMode → the risk-profile AllowedTradingMode it must satisfy. */
-  private static readonly ALLOWED_MODE_BY_EXECUTION_MODE: Record<ExecutionMode, AllowedTradingMode> = {
+  private static readonly ALLOWED_MODE_BY_EXECUTION_MODE: Record<
+    ExecutionMode,
+    AllowedTradingMode
+  > = {
     [ExecutionMode.PAPER_ONLY]: AllowedTradingMode.PAPER_ONLY,
     [ExecutionMode.SEMI_AUTO]: AllowedTradingMode.SEMI_AUTO,
     [ExecutionMode.FULL_AUTO]: AllowedTradingMode.FULL_AUTO,

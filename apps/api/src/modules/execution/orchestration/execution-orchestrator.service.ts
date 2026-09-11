@@ -23,6 +23,8 @@ import { OrderService } from '../orders/order.service';
 import { OrderStatus } from '../orders/order.enums';
 import { ExecutionIntent, ProviderDispatchOutcome } from './execution-intent.interface';
 import { mapProviderOrderResponse } from './provider-response.mapper';
+import { classifyIntentOperation, isExposureIncreasingOperation } from './provider-operation-class';
+import { ProviderOperationClass } from '../interfaces/execution-authority';
 
 const EXECUTION_TIMEOUT_MS = 10_000;
 const MAX_RETRY_ATTEMPTS = 3;
@@ -91,20 +93,33 @@ export class ExecutionOrchestrator {
    * Throws ForbiddenException when any gate blocks — BEFORE any order is
    * persisted or any provider is contacted.
    *
-   * Gate A — emergency control plane: matches the Risk Engine's step 1a-pre
-   * check, closing the TOCTOU window between risk approval and dispatch.
+   * Gate A — emergency control plane (OPERATION-AWARE, round 5 issue #303):
+   * matches the Risk Engine's step 1a-pre check, closing the TOCTOU window
+   * between risk approval and dispatch. The gate blocks EXPOSURE-INCREASING
+   * operations (NEW_EXPOSURE / INCREASE_EXPOSURE / RISK_INCREASING_MODIFY)
+   * while a kill-switch / emergency-stop control is active, while
+   * CLOSE_POSITION / CANCEL_PENDING / RECONCILE_READ / risk-reducing
+   * operations remain available (an active emergency must never prevent the
+   * platform from REDUCING exposure or reading provider truth).
    * Gate B — LIVE authorization: a LIVE connection must be ACTIVE in the
    * BrokerAuthorizationStateMachine (fail-closed via isConnectionExecutable).
    * DEMO/PAPER connections pass Gate B (mirrors RiskService step 1c).
    */
-  async assertDispatchable(ctx: { userId: string; connection: BrokerConnection }): Promise<void> {
+  async assertDispatchable(ctx: {
+    userId: string;
+    connection: BrokerConnection;
+    /** Operation class of the dispatch (default NEW_EXPOSURE — fail-closed). */
+    operationClass?: ProviderOperationClass;
+  }): Promise<void> {
+    const operationClass = ctx.operationClass ?? ProviderOperationClass.NEW_EXPOSURE;
+
     // ── Gate A: emergency control plane (fail-closed on store errors) ──────
     const permission = await this.executionControlService.checkExecutionPermission({
       userId: ctx.userId,
       brokerId: ctx.connection.brokerId,
       brokerConnectionId: ctx.connection.id,
     });
-    if (!permission.allowed) {
+    if (!permission.allowed && isExposureIncreasingOperation(operationClass)) {
       const blocked = permission.blockedBy;
       this.logger.warn(
         `Dispatch blocked by execution control plane for user ${ctx.userId} ` +
@@ -120,6 +135,7 @@ export class ExecutionOrchestrator {
           controlScope: blocked?.scope ?? 'UNKNOWN',
           controlScopeKey: blocked?.scopeKey ?? null,
           brokerConnectionId: ctx.connection.id,
+          operationClass,
         },
         severity: AuditSeverity.WARNING,
       });
@@ -127,7 +143,6 @@ export class ExecutionOrchestrator {
         `Execution blocked by platform control plane (${blocked?.scope ?? 'UNKNOWN'} scope).`,
       );
     }
-
     // ── Re-load the PERSISTED connection (architect correction, Phase D):
     // the caller's snapshot can be stale — a concurrent revoke/suspend
     // between the caller's load and this boundary must NOT be bypassed.
@@ -221,6 +236,11 @@ export class ExecutionOrchestrator {
     intent: ExecutionIntent,
     connection: BrokerConnection,
   ): Promise<ProviderDispatchOutcome> {
+    // Round 5 (#303): the operation class of THIS provider-bound dispatch —
+    // classified from the intent, audited on every submission, and used by
+    // the operation-aware control gate.
+    const operationClass = classifyIntentOperation(intent);
+
     // ── Idempotent reservation ────────────────────────────────────────────
     const submission = await this.orderService.submitOrder({
       userId: intent.userId,
@@ -274,6 +294,7 @@ export class ExecutionOrchestrator {
       metadata: {
         clientOrderId: intent.clientOrderId,
         providerAction: intent.providerAction,
+        operationClass,
         instrument: intent.instrument,
         direction: intent.direction,
         orderKind: intent.orderKind,
@@ -377,11 +398,21 @@ export class ExecutionOrchestrator {
             metadata: {
               clientOrderId: intent.clientOrderId,
               reason: action.reason,
+              dispatchCertainty: ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER,
+              operationClass,
               orderStatus: OrderStatus.RECONCILIATION_PENDING,
             },
             severity: AuditSeverity.CRITICAL,
           });
-          return { outcome: 'UNKNOWN', order, orderId: order.id, reason: action.reason };
+          return {
+            outcome: 'UNKNOWN',
+            order,
+            orderId: order.id,
+            reason: action.reason,
+            // A provider-ANSWERED but malformed/ambiguous response cannot
+            // prove non-execution — conservatively uncertain (#314).
+            certainty: ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER,
+          };
         }
       }
     } catch (err) {
@@ -412,6 +443,7 @@ export class ExecutionOrchestrator {
             clientOrderId: intent.clientOrderId,
             reason,
             dispatchCertainty: certainty,
+            operationClass,
             orderStatus: OrderStatus.RECONCILIATION_PENDING,
           },
           severity: AuditSeverity.CRITICAL,
@@ -423,7 +455,7 @@ export class ExecutionOrchestrator {
           `Could not move order ${order.id} to RECONCILIATION_PENDING: ${(transitionErr as Error).message}`,
         );
       }
-      return { outcome: 'UNKNOWN', order, orderId: order.id, reason };
+      return { outcome: 'UNKNOWN', order, orderId: order.id, reason, certainty };
     }
   }
 

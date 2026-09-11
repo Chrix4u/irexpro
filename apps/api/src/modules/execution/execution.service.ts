@@ -1,12 +1,23 @@
 import * as crypto from 'crypto';
-import { ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, QueryDeepPartialEntity, Repository } from 'typeorm';
+import { Brackets, DataSource, QueryDeepPartialEntity, Repository } from 'typeorm';
 import { Trade, TradeCloseReason, TradeDirection, TradeStatus } from './entities/trade.entity';
 import { TradingSession, TradingSessionStatus } from './entities/trading-session.entity';
 import { RiskGrant } from './entities/risk-grant.entity';
 import { ExecutionConfirmation } from './entities/execution-confirmation.entity';
-import { ExecutionMode, ExecutionConfirmationStatus, RiskGrantStatus } from './interfaces/execution-authority';
+import {
+  ExecutionMode,
+  ExecutionConfirmationStatus,
+  ProviderOperationClass,
+  RiskGrantStatus,
+} from './interfaces/execution-authority';
 import {
   ActiveSessionConflictException,
   BrokerConnectionNotConnectedException,
@@ -19,14 +30,19 @@ import {
 import { RiskDecision } from '../risk/interfaces/risk.interface';
 import { BrokerService } from '../broker/broker.service';
 import { BrokerConnectionStatus } from '../broker/interfaces/broker-adapter.interface';
+import { ProviderDispatchCertainty } from '../broker/interfaces/provider-dispatch-certainty';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../../common/enums/audit-action.enum';
 import { AuditSeverity } from '../audit/entities/audit-log.entity';
 import { DomainEventBus } from '../events/event-bus.service';
 import { DomainEventType } from '../events/enums/domain-event-type.enum';
-import { TradeStateMachine } from './orders/trade-state-machine';
+import { TradeLifecycleCasService } from './orders/trade-lifecycle-cas.service';
 import { OrderKind, OrderTimeInForce } from './orders/order.enums';
 import { ExecutionOrchestrator } from './orchestration/execution-orchestrator.service';
+import {
+  FinalDispatchAuthorization,
+  FinalDispatchBoundary,
+} from './orchestration/final-dispatch-boundary';
 import { ExecutionIntent } from './orchestration/execution-intent.interface';
 
 /** Invalidation reason stamped on RiskGrants when the session authority
@@ -46,15 +62,23 @@ export const SESSION_AUTHORITY_GENERATION_CHANGED = 'SESSION_AUTHORITY_GENERATIO
  * Pipeline (Sprint 50 PR-3 — provider dispatch now flows through the
  * normalized order domain):
  *   1. Enforce Risk Engine APPROVED gate
+ *   1b. FINAL DISPATCH BOUNDARY (Round 5, task 50-c): a server-issued
+ *       RiskGrant is REQUIRED (RiskApprovalResult.grantId) and consumed
+ *       atomically at the boundary — grant/session/connection/mode/
+ *       confirmation/control re-verified from CURRENT durable state, ZERO
+ *       provider calls on any drift (#361/#301/#294/#298/#299/#303)
  *   2. Idempotent trade-slot reservation (advisory lock + daily limit)
  *   3. ExecutionOrchestrator.assertDispatchable() — control-plane +
- *      LIVE-authorization gates (fail-closed, TOCTOU defense in depth)
+ *      LIVE-authorization gates (fail-closed, TOCTOU defense in depth,
+ *      operation-aware)
  *   4. Create PENDING Trade record (atomic reservation)
  *   5. ExecutionOrchestrator.dispatchOrder() — idempotent order reservation,
  *      provider dispatch with retry/timeout, response handling, and
  *      OrderStateMachine-guarded order transitions
- *   6. Map ProviderDispatchOutcome → Trade transitions (all guarded by
- *      TradeStateMachine)
+ *   6. Map ProviderDispatchOutcome → Trade transitions (EVERY provider-bound
+ *      Trade mutation is a compare-and-swap via TradeLifecycleCasService —
+ *      issue #315: 0-affected → reload authoritative, preserve newer
+ *      terminal truth, never regress a proved-CLOSED trade)
  *   7. Emit audit + domain events
  *
  * See: docs/architecture/12-execution-engine-architecture.md,
@@ -79,6 +103,8 @@ export class ExecutionService {
     @InjectRepository(ExecutionConfirmation)
     private readonly confirmationRepo: Repository<ExecutionConfirmation>,
     private readonly sessionResolution: ExecutionSessionResolutionService,
+    private readonly finalDispatchBoundary: FinalDispatchBoundary,
+    private readonly tradeCas: TradeLifecycleCasService,
   ) {}
 
   // ─── Main entry point ────────────────────────────────────────────────────
@@ -87,8 +113,15 @@ export class ExecutionService {
    * Execute a trade that has been APPROVED by the Risk Engine.
    *
    * @throws ForbiddenException if riskDecision is not APPROVED — ALWAYS.
+   * @throws ForbiddenException if the approval carries no server-issued
+   *         RiskGrant (grantId) — a caller-constructed approval object can
+   *         NEVER satisfy the final dispatch boundary (fail-closed).
    */
-  async executeTrade(userId: string, riskDecision: RiskDecision): Promise<Trade> {
+  async executeTrade(
+    userId: string,
+    riskDecision: RiskDecision,
+    preAuthorization?: FinalDispatchAuthorization,
+  ): Promise<Trade> {
     // ── Non-bypassable Risk Engine gate ────────────────────────────────────
     if (riskDecision.decision !== 'APPROVED') {
       const code =
@@ -110,22 +143,78 @@ export class ExecutionService {
     const order = riskDecision.validatedOrder;
     const signalId = riskDecision.signalId;
 
-    // ── Step 2: Resolve the EXACT execution target from the ACTIVE session ─
-    // Round 5 (issue #295): NEW exposure NEVER rediscovers "the latest active
-    // BrokerConnection". The TradingSession binds the exact connection chosen
-    // at session start; the resolution seam is the single source of that
-    // authority (sessionId + sessionGeneration + executionMode).
-    const authority = await this.sessionResolution.resolveActiveSessionAuthority(userId);
-    const connection = await this.brokerService.findConnectionById(
-      authority.brokerConnectionId,
-      userId,
-    );
+    // ── Step 1b: FINAL DISPATCH BOUNDARY (Round 5, task 50-c) ──────────────
+    // The exact execution authority is bound to the SERVER-ISSUED RiskGrant
+    // (sessionId + sessionGeneration + executionMode + the EXACT
+    // brokerConnectionId — never re-discovered). The boundary re-reads every
+    // authority fact from CURRENT durable state and consumes the grant
+    // atomically: exactly ONE winner proceeds to any provider call, and any
+    // late-arriving change (session ended, mode changed, connection
+    // suspended, credential rotation, kill switch, LIVE-verification
+    // downgrade, grant consumed by a replica) yields ZERO provider calls
+    // with a typed blocked reason.
+    let authorization: FinalDispatchAuthorization;
+    if (preAuthorization) {
+      // Server-produced pre-authorization (the SEMI_AUTO user-confirmation
+      // endpoint consumed the confirmation + grant through the SAME
+      // boundary). It must match THIS decision — a mismatched pairing is
+      // fail-closed, never a substitution.
+      if (
+        preAuthorization.context.riskGrantId !== riskDecision.grantId ||
+        preAuthorization.context.userId !== userId
+      ) {
+        throw new ForbiddenException(
+          'Pre-authorization does not match this risk decision — refusing dispatch (fail-closed).',
+        );
+      }
+      authorization = preAuthorization;
+    } else {
+      const grantId = riskDecision.grantId;
+      if (!grantId) {
+        this.logger.warn(
+          `executeTrade() blocked APPROVED decision without a RiskGrant for user ${userId} ` +
+            `(signal ${signalId}) — fail-closed`,
+        );
+        await this.auditService.log({
+          actorUserId: userId,
+          action: AuditAction.EXECUTION_AUTHORITY_BLOCKED,
+          resourceType: 'RiskGrant',
+          resourceId: 'not-issued',
+          severity: AuditSeverity.WARNING,
+          metadata: {
+            blockedReason: 'GRANT_REQUIRED',
+            signalId,
+            message:
+              'Risk approval carried no grantId — a server-issued RiskGrant is required for dispatch.',
+          },
+        });
+        throw new ForbiddenException(
+          'Risk approval carried no server-issued grant — execution requires a durable RiskGrant.',
+        );
+      }
+      authorization = await this.finalDispatchBoundary.authorizeNewExposureDispatch({
+        userId,
+        grantId,
+        operationClass: ProviderOperationClass.NEW_EXPOSURE,
+      });
+    }
+
+    // The connection is the EXACT one the boundary re-verified (the same id
+    // the grant binds — never discovered another way, never re-discovered
+    // here: the authority context is the single source downstream).
+    const connection = authorization.connection;
 
     // ── Step 3: Pre-dispatch gates (fail-closed; BEFORE the trade-slot
     // reservation so blocked attempts never persist a PENDING trade).
     // Defense in depth against TOCTOU between risk approval and dispatch:
-    // an emergency control activated in that window blocks here.
-    await this.orchestrator.assertDispatchable({ userId, connection });
+    // an emergency control activated in that window blocks here (the boundary
+    // already checked the CURRENT control state — this is the SAME-store
+    // defense-in-depth gate).
+    await this.orchestrator.assertDispatchable({
+      userId,
+      connection,
+      operationClass: ProviderOperationClass.NEW_EXPOSURE,
+    });
 
     // ── Step 4: ATOMIC reservation (advisory lock + idempotency + daily limit + PENDING INSERT)
     //
@@ -214,9 +303,11 @@ export class ExecutionService {
         takeProfit: order.takeProfit,
         idempotencyKey,
         signalId,
-        sessionId: authority.sessionId,
-        sessionGeneration: authority.sessionGeneration,
-        executionMode: authority.executionMode,
+        sessionId: authorization.context.sessionId,
+        sessionGeneration: authorization.context.sessionGeneration,
+        executionMode: authorization.context.executionMode,
+        brokerConnectionId: authorization.context.brokerConnectionId,
+        riskGrantId: authorization.context.riskGrantId,
       },
     });
 
@@ -264,22 +355,39 @@ export class ExecutionService {
         (err as Error).stack,
       );
 
-      // Sprint 50 PR-2: guard the transition (fail-closed — an illegal
-      // transition surfaces loudly instead of silently corrupting state).
-      TradeStateMachine.assertTransition(trade.status, TradeStatus.RECONCILIATION_PENDING);
-      await this.tradeRepo.update(trade.id, {
-        status: TradeStatus.RECONCILIATION_PENDING,
-        brokerRejectionReason: `Execution error: ${(err as Error).message}`,
+      // Issue #315: CAS transition — a concurrent winner (e.g. the
+      // reconciliation path) is never overwritten; newer terminal truth is
+      // preserved. The certainty of an orchestration-level failure is
+      // conservatively uncertain: the provider call MAY have been attempted
+      // (the capacity reservation is RETAINED — issue #314).
+      const outcome = await this.tradeCas.applyCasTransition({
+        tradeId: trade.id,
+        expectedFrom: TradeStatus.PENDING,
+        target: TradeStatus.RECONCILIATION_PENDING,
+        patch: {
+          status: TradeStatus.RECONCILIATION_PENDING,
+          brokerRejectionReason: `Execution error: ${(err as Error).message}`,
+          dispatchCertainty: ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER,
+        },
+        context: {
+          userId,
+          source: 'executeTrade:orchestration-error',
+          reason: (err as Error).message,
+        },
       });
-
-      trade.status = TradeStatus.RECONCILIATION_PENDING;
+      trade.status = outcome.trade?.status ?? TradeStatus.RECONCILIATION_PENDING;
 
       await this.auditService.log({
         actorUserId: userId,
         action: AuditAction.TRADE_SUBMITTED,
         resourceType: 'Trade',
         resourceId: trade.id,
-        metadata: { error: (err as Error).message, status: 'RECONCILIATION_PENDING' },
+        metadata: {
+          error: (err as Error).message,
+          status: 'RECONCILIATION_PENDING',
+          casOutcome: outcome.outcome,
+          dispatchCertainty: ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER,
+        },
         severity: AuditSeverity.CRITICAL,
       });
 
@@ -297,53 +405,74 @@ export class ExecutionService {
     }
 
     // ── Step 6: Map the dispatch outcome onto the position aggregate ───────
+    // Issue #315: EVERY provider-bound trade transition below is a
+    // compare-and-swap (expected status + affected-rows check). A 0-affected
+    // outcome reloads the AUTHORITATIVE row: newer terminal truth is
+    // PRESERVED (never regressed), an already-reached target is idempotent,
+    // and an illegal convergence records a discrepancy.
     switch (dispatch.outcome) {
       case 'FILLED': {
         // Provider executed the order — the position is OPEN.
-        // Sprint 50 PR-2: every status mutation is guarded by the explicit
-        // TradeStateMachine (no scattered unvalidated updates).
-        TradeStateMachine.assertTransition(trade.status, TradeStatus.OPEN);
-        await this.tradeRepo.update(trade.id, {
-          status: TradeStatus.OPEN,
-          externalOrderId: dispatch.providerOrderId,
-          fillPrice: dispatch.avgFillPrice,
-          openedAt: new Date(),
-        });
-
-        trade.status = TradeStatus.OPEN;
-        trade.externalOrderId = dispatch.providerOrderId;
-
-        await this.auditService.log({
-          actorUserId: userId,
-          action: AuditAction.TRADE_OPENED,
-          resourceType: 'Trade',
-          resourceId: trade.id,
-          metadata: {
+        const outcome = await this.tradeCas.applyCasTransition({
+          tradeId: trade.id,
+          expectedFrom: TradeStatus.PENDING,
+          target: TradeStatus.OPEN,
+          patch: {
+            status: TradeStatus.OPEN,
             externalOrderId: dispatch.providerOrderId,
             fillPrice: dispatch.avgFillPrice,
-            instrument: order.instrument,
-            direction: order.direction,
-            lotSize: order.lotSize,
-            signalId,
-            orderId: dispatch.orderId,
+            openedAt: new Date(),
+          },
+          context: {
+            userId,
+            source: 'executeTrade:FILLED',
+            reason: `order ${dispatch.orderId} FILLED`,
           },
         });
+        Object.assign(trade, outcome.trade ?? {});
 
-        this.logger.log(
-          `Trade OPENED: id=${trade.id} externalId=${dispatch.providerOrderId} ` +
-            `${order.direction} ${order.instrument} ${order.lotSize} lots ` +
-            `(order ${dispatch.orderId} FILLED)`,
-        );
+        if (outcome.outcome === 'APPLIED' || outcome.outcome === 'ALREADY_AT_TARGET') {
+          await this.auditService.log({
+            actorUserId: userId,
+            action: AuditAction.TRADE_OPENED,
+            resourceType: 'Trade',
+            resourceId: trade.id,
+            metadata: {
+              externalOrderId: dispatch.providerOrderId,
+              fillPrice: dispatch.avgFillPrice,
+              instrument: order.instrument,
+              direction: order.direction,
+              lotSize: order.lotSize,
+              signalId,
+              orderId: dispatch.orderId,
+              casOutcome: outcome.outcome,
+            },
+          });
 
-        this.eventBus.publish(DomainEventType.TRADE_OPENED, userId, {
-          tradeId: trade.id,
-          userId,
-          instrument: order.instrument,
-          direction: order.direction,
-          volume: order.lotSize,
-          entryPrice: dispatch.avgFillPrice,
-          status: 'OPEN',
-        });
+          this.logger.log(
+            `Trade OPENED: id=${trade.id} externalId=${dispatch.providerOrderId} ` +
+              `${order.direction} ${order.instrument} ${order.lotSize} lots ` +
+              `(order ${dispatch.orderId} FILLED)`,
+          );
+
+          this.eventBus.publish(DomainEventType.TRADE_OPENED, userId, {
+            tradeId: trade.id,
+            userId,
+            instrument: order.instrument,
+            direction: order.direction,
+            volume: order.lotSize,
+            entryPrice: dispatch.avgFillPrice,
+            status: 'OPEN',
+          });
+        } else {
+          // PRESERVED_NEWER_TRUTH / STATE_CONFLICT: the authoritative trade
+          // state already advanced past OPEN (e.g. reconciliation proved it
+          // CLOSED) — the late FILLED mapping must not regress it.
+          this.logger.warn(
+            `Trade ${trade.id} FILLED mapping deferred to authoritative state ` +
+              `(${outcome.outcome}, status ${outcome.trade?.status ?? 'UNKNOWN'}) — never regressed`,
+          );
+        }
         break;
       }
 
@@ -364,20 +493,33 @@ export class ExecutionService {
       }
 
       case 'REJECTED': {
-        TradeStateMachine.assertTransition(trade.status, TradeStatus.REJECTED);
-        await this.tradeRepo.update(trade.id, {
-          status: TradeStatus.REJECTED,
-          brokerRejectionReason: dispatch.reason,
+        const outcome = await this.tradeCas.applyCasTransition({
+          tradeId: trade.id,
+          expectedFrom: TradeStatus.PENDING,
+          target: TradeStatus.REJECTED,
+          patch: {
+            status: TradeStatus.REJECTED,
+            brokerRejectionReason: dispatch.reason,
+          },
+          context: {
+            userId,
+            source: 'executeTrade:REJECTED',
+            reason: dispatch.reason,
+          },
         });
-
-        trade.status = TradeStatus.REJECTED;
+        Object.assign(trade, outcome.trade ?? {});
 
         await this.auditService.log({
           actorUserId: userId,
           action: AuditAction.TRADE_REJECTED,
           resourceType: 'Trade',
           resourceId: trade.id,
-          metadata: { brokerMessage: dispatch.reason, signalId, orderId: dispatch.orderId },
+          metadata: {
+            brokerMessage: dispatch.reason,
+            signalId,
+            orderId: dispatch.orderId,
+            casOutcome: outcome.outcome,
+          },
           severity: AuditSeverity.WARNING,
         });
 
@@ -404,13 +546,31 @@ export class ExecutionService {
           dispatch.outcome === 'UNKNOWN'
             ? dispatch.reason
             : 'Order already existed for a newly reserved trade slot — inconsistent state';
-        TradeStateMachine.assertTransition(trade.status, TradeStatus.RECONCILIATION_PENDING);
-        await this.tradeRepo.update(trade.id, {
-          status: TradeStatus.RECONCILIATION_PENDING,
-          brokerRejectionReason: `Execution error: ${reason}`,
+        // Issue #314: the round-4 write-certainty of the uncertain dispatch
+        // is PERSISTED on the trade so uncertain-exposure accounting retains
+        // the capacity reservation (MAY_HAVE_REACHED_PROVIDER) or releases it
+        // once (DEFINITELY_NOT_SENT). A DUPLICATE outcome is conservatively
+        // uncertain (the pre-existing order's provider state is unknown).
+        const certainty =
+          dispatch.outcome === 'UNKNOWN'
+            ? dispatch.certainty
+            : ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER;
+        const outcome = await this.tradeCas.applyCasTransition({
+          tradeId: trade.id,
+          expectedFrom: TradeStatus.PENDING,
+          target: TradeStatus.RECONCILIATION_PENDING,
+          patch: {
+            status: TradeStatus.RECONCILIATION_PENDING,
+            brokerRejectionReason: `Execution error: ${reason}`,
+            dispatchCertainty: certainty,
+          },
+          context: {
+            userId,
+            source: `executeTrade:${dispatch.outcome}`,
+            reason,
+          },
         });
-
-        trade.status = TradeStatus.RECONCILIATION_PENDING;
+        Object.assign(trade, outcome.trade ?? {});
 
         await this.auditService.log({
           actorUserId: userId,
@@ -421,6 +581,8 @@ export class ExecutionService {
             error: reason,
             status: 'RECONCILIATION_PENDING',
             orderId: dispatch.orderId,
+            casOutcome: outcome.outcome,
+            dispatchCertainty: certainty,
           },
           severity: AuditSeverity.CRITICAL,
         });
@@ -479,7 +641,15 @@ export class ExecutionService {
     );
 
     // Pre-dispatch gates (control plane + LIVE authorization) — fail-closed.
-    await this.orchestrator.assertDispatchable({ userId, connection });
+    // Round 5 (#303): the close is a CLOSE_POSITION operation — the control
+    // plane does NOT block it while an emergency control is active (risk-
+    // reducing operations remain available); the authorization/credential
+    // gates still apply (the provider must be reachable with valid creds).
+    await this.orchestrator.assertDispatchable({
+      userId,
+      connection,
+      operationClass: ProviderOperationClass.CLOSE_POSITION,
+    });
 
     // Idempotent close-attempt id: concurrent closes of the same trade race
     // for the SAME attempt id (one wins, the loser returns idempotently);
@@ -509,16 +679,25 @@ export class ExecutionService {
     if (dispatch.outcome === 'FILLED') {
       // exit price = the close order's fill price; P&L populated by
       // reconciliation job.
-      TradeStateMachine.assertTransition(trade.status, TradeStatus.CLOSED);
-      await this.tradeRepo.update(trade.id, {
-        status: TradeStatus.CLOSED,
-        exitPrice: dispatch.avgFillPrice,
-        closedAt: new Date(),
-        closeReason: reason,
+      // Issue #315: CAS OPEN → CLOSED — a concurrent reconciliation close is
+      // never double-applied; a reload already showing CLOSED is idempotent.
+      const outcome = await this.tradeCas.applyCasTransition({
+        tradeId: trade.id,
+        expectedFrom: TradeStatus.OPEN,
+        target: TradeStatus.CLOSED,
+        patch: {
+          status: TradeStatus.CLOSED,
+          exitPrice: dispatch.avgFillPrice,
+          closedAt: new Date(),
+          closeReason: reason,
+        },
+        context: {
+          userId,
+          source: 'closeTrade:FILLED',
+          reason: `close order ${dispatch.orderId} FILLED`,
+        },
       });
-
-      trade.status = TradeStatus.CLOSED;
-      trade.closeReason = reason;
+      Object.assign(trade, outcome.trade ?? {});
 
       await this.auditService.log({
         actorUserId: userId,
@@ -530,6 +709,7 @@ export class ExecutionService {
           closeReason: reason,
           externalOrderId: trade.externalOrderId,
           closeOrderId: dispatch.orderId,
+          casOutcome: outcome.outcome,
         },
       });
 
@@ -564,13 +744,29 @@ export class ExecutionService {
     // Flag the trade for reconciliation instead of guessing (fail-closed).
     const reasonText =
       dispatch.outcome === 'UNKNOWN' ? dispatch.reason : 'Close order resting at provider';
-    TradeStateMachine.assertTransition(trade.status, TradeStatus.RECONCILIATION_PENDING);
-    await this.tradeRepo.update(trade.id, {
-      status: TradeStatus.RECONCILIATION_PENDING,
-      brokerRejectionReason: `Close outcome unresolved: ${reasonText}`,
+    // Issue #314: an AMBIGUOUS CLOSE keeps the underlying exposure — the
+    // trade's uncertain-exposure classification retains the capacity
+    // reservation until closure is PROVEN (terminal CLOSED / reconciliation).
+    const closeCertainty =
+      dispatch.outcome === 'UNKNOWN'
+        ? dispatch.certainty
+        : ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER;
+    const outcome = await this.tradeCas.applyCasTransition({
+      tradeId: trade.id,
+      expectedFrom: TradeStatus.OPEN,
+      target: TradeStatus.RECONCILIATION_PENDING,
+      patch: {
+        status: TradeStatus.RECONCILIATION_PENDING,
+        brokerRejectionReason: `Close outcome unresolved: ${reasonText}`,
+        dispatchCertainty: closeCertainty,
+      },
+      context: {
+        userId,
+        source: `closeTrade:${dispatch.outcome}`,
+        reason: reasonText,
+      },
     });
-
-    trade.status = TradeStatus.RECONCILIATION_PENDING;
+    Object.assign(trade, outcome.trade ?? {});
 
     await this.auditService.log({
       actorUserId: userId,
@@ -581,6 +777,8 @@ export class ExecutionService {
         error: `Close outcome unresolved: ${reasonText}`,
         status: 'RECONCILIATION_PENDING',
         closeOrderId: dispatch.orderId,
+        casOutcome: outcome.outcome,
+        dispatchCertainty: closeCertainty,
       },
       severity: AuditSeverity.CRITICAL,
     });
@@ -600,9 +798,42 @@ export class ExecutionService {
 
   // ─── Query helpers (used by Risk Engine) ─────────────────────────────────
 
-  /** Count of currently open trades for a user. Used for Risk Engine Step 4a. */
+  /**
+   * Count of currently OPEN-LIKE trades for a user. Used for Risk Engine
+   * Step 4a (max concurrent positions).
+   *
+   * UNCERTAIN-EXPOSURE ACCOUNTING (Round 5, issue #314): a trade left
+   * RECONCILIATION_PENDING by an ambiguous PLACE **RETAINS its NEW-exposure
+   * capacity reservation** when its dispatch MAY have reached the provider
+   * (dispatchCertainty = MAY_HAVE_REACHED_PROVIDER) — or when the certainty
+   * is unknown (NULL — legacy rows, conservatively uncertain). A
+   * DEFINITELY_NOT_SENT dispatch (provably never left iRexPro) or a
+   * reconciliation-proved non-execution (terminal REJECTED/CANCELLED)
+   **releases** the reservation once — never counted here. An AMBIGUOUS CLOSE
+   * keeps the same uncertain classification, so the underlying exposure is
+   * NOT released until closure is proven (terminal CLOSED).
+   */
   async countOpenTrades(userId: string): Promise<number> {
-    return this.tradeRepo.count({ where: { userId, status: TradeStatus.OPEN } });
+    return this.tradeRepo
+      .createQueryBuilder('trade')
+      .where('trade.userId = :userId', { userId })
+      .andWhere(
+        new Brackets((qb) =>
+          qb.where('trade.status = :open', { open: TradeStatus.OPEN }).orWhere(
+            new Brackets((qb2) =>
+              qb2
+                .where('trade.status = :rp', { rp: TradeStatus.RECONCILIATION_PENDING })
+                // NULL certainty (legacy rows) is conservatively uncertain:
+                // COALESCE to the uncertain classification — fail closed.
+                .andWhere('COALESCE(trade.dispatchCertainty, :uncertain) <> :released', {
+                  uncertain: ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER,
+                  released: ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+                }),
+            ),
+          ),
+        ),
+      )
+      .getCount();
   }
 
   /**
@@ -614,6 +845,12 @@ export class ExecutionService {
    * and REJECTED (broker refused). This avoids double-counting retries and
    * avoids counting risk-rejected attempts as executed trades.
    *
+   * Round 5 (issue #314): RECONCILIATION_PENDING trades whose dispatch MAY
+   * have reached the provider (or NULL — conservatively uncertain) count as
+   * today's executed capacity: the reservation is retained until the provider
+   * truth is proven. DEFINITELY_NOT_SENT ambiguous placements are excluded
+   * (released once).
+   *
    * The trading-day boundary is UTC midnight — consistent with the existing
    * getTodayRealisedLoss() day boundary.
    */
@@ -621,16 +858,44 @@ export class ExecutionService {
     const todayStart = new Date();
     todayStart.setUTCHours(0, 0, 0, 0);
 
-    const result = await this.dataSource.query<{ count: string }[]>(
-      `SELECT COUNT(*) AS count
-       FROM trading.trades
-       WHERE user_id = $1
-         AND opened_at >= $2
-         AND status IN ('OPEN', 'CLOSED')`,
-      [userId, todayStart.toISOString()],
-    );
-
-    return parseInt(result[0]?.count ?? '0', 10);
+    return this.tradeRepo
+      .createQueryBuilder('trade')
+      .where('trade.userId = :userId', { userId })
+      .andWhere(
+        new Brackets((qb) =>
+          qb
+            .where(
+              new Brackets((qb2) =>
+                qb2
+                  .where('trade.openedAt >= :today', { today: todayStart })
+                  .andWhere('trade.status IN (:...openOrClosed)', {
+                    openOrClosed: [TradeStatus.OPEN, TradeStatus.CLOSED],
+                  }),
+              ),
+            )
+            .orWhere(
+              new Brackets((qb2) =>
+                qb2
+                  .where('trade.status = :pending', { pending: TradeStatus.PENDING })
+                  .andWhere('trade.createdAt >= :today', { today: todayStart }),
+              ),
+            )
+            .orWhere(
+              new Brackets((qb2) =>
+                qb2
+                  .where('trade.status = :rp', { rp: TradeStatus.RECONCILIATION_PENDING })
+                  .andWhere('COALESCE(trade.dispatchCertainty, :uncertain) <> :released', {
+                    uncertain: ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER,
+                    released: ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+                  })
+                  .andWhere('(trade.createdAt >= :today OR trade.openedAt >= :today)', {
+                    today: todayStart,
+                  }),
+              ),
+            ),
+        ),
+      )
+      .getCount();
   }
 
   /**
@@ -691,6 +956,10 @@ export class ExecutionService {
 
       // 3. Daily-trade-limit count: OPEN+CLOSED (opened today) + PENDING
       //    (created today — reservations). REJECTED/CANCELLED don't count.
+      //    Round 5 (issue #314) uncertain-exposure accounting: a trade left
+      //    RECONCILIATION_PENDING by a dispatch that MAY have reached the
+      //    provider (or NULL — legacy, conservatively uncertain) RETAINS its
+      //    daily capacity reservation; DEFINITELY_NOT_SENT is released once.
       const todayStart = new Date();
       todayStart.setUTCHours(0, 0, 0, 0);
 
@@ -702,6 +971,12 @@ export class ExecutionService {
              (opened_at >= $2 AND status IN ('OPEN', 'CLOSED'))
              OR
              (created_at >= $2 AND status = 'PENDING')
+             OR
+             (
+               (created_at >= $2 OR opened_at >= $2)
+               AND status = 'RECONCILIATION_PENDING'
+               AND COALESCE(dispatch_certainty, 'MAY_HAVE_REACHED_PROVIDER') <> 'DEFINITELY_NOT_SENT'
+             )
            )`,
         [userId, todayStart.toISOString()],
       );
@@ -1113,10 +1388,11 @@ export class ExecutionService {
         invalidatedAt: new Date(),
         invalidationReason: reason,
       })
-      .where(
-        'session_id = :sessionId AND status = :active AND session_generation = :observed',
-        { sessionId, active: RiskGrantStatus.ACTIVE, observed: observedGeneration },
-      )
+      .where('session_id = :sessionId AND status = :active AND session_generation = :observed', {
+        sessionId,
+        active: RiskGrantStatus.ACTIVE,
+        observed: observedGeneration,
+      })
       .execute();
 
     const confirmations = await this.confirmationRepo
@@ -1126,10 +1402,11 @@ export class ExecutionService {
         status: ExecutionConfirmationStatus.REVOKED,
         revokedAt: new Date(),
       })
-      .where(
-        'session_id = :sessionId AND status = :pending AND session_generation = :observed',
-        { sessionId, pending: ExecutionConfirmationStatus.PENDING, observed: observedGeneration },
-      )
+      .where('session_id = :sessionId AND status = :pending AND session_generation = :observed', {
+        sessionId,
+        pending: ExecutionConfirmationStatus.PENDING,
+        observed: observedGeneration,
+      })
       .execute();
 
     return {
@@ -1189,7 +1466,11 @@ export class ExecutionService {
     // Fallback: check the message for the SQLSTATE or the constraint text
     // (PostgreSQL 'duplicate key value' / SQLite 'UNIQUE constraint failed').
     const msg = err.message ?? '';
-    return msg.includes('23505') || msg.includes('duplicate key value') || msg.includes('UNIQUE constraint failed');
+    return (
+      msg.includes('23505') ||
+      msg.includes('duplicate key value') ||
+      msg.includes('UNIQUE constraint failed')
+    );
   }
 
   /** Convert a raw PostgreSQL snake_case row into the Trade entity shape. */

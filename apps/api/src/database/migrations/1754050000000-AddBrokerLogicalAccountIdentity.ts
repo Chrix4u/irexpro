@@ -90,9 +90,7 @@ export class AddBrokerLogicalAccountIdentity1754050000000 implements MigrationIn
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(
-      `DROP INDEX IF EXISTS broker.uq_broker_connections_logical_account`,
-    );
+    await queryRunner.query(`DROP INDEX IF EXISTS broker.uq_broker_connections_logical_account`);
     await queryRunner.query(`
       ALTER TABLE broker.broker_connections
       DROP COLUMN IF EXISTS logical_account_key

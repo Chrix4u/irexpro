@@ -7,8 +7,9 @@ import { DomainEventBus } from '../events/event-bus.service';
 import { DomainEventType } from '../events/enums/domain-event-type.enum';
 import { AuditAction } from '../../common/enums/audit-action.enum';
 import { AuditSeverity } from '../audit/entities/audit-log.entity';
-import { TradingSessionStatus } from '../execution/entities/trading-session.entity';
+import { TradingSession, TradingSessionStatus } from '../execution/entities/trading-session.entity';
 import { ProposedTrade } from '../risk/interfaces/risk.interface';
+import { AiSignalIdentityGateService } from '../execution/orchestration/signal-identity.gate';
 import {
   AiSignalCandidate,
   StrategyOutcome,
@@ -29,6 +30,10 @@ const CONFIDENCE_THRESHOLD = 0.6;
  *     → confidence threshold
  *     → session active check
  *     → broker connection gate
+ *     → SIGNAL IDENTITY GATE (#302, Round 5 task 50-c — BEFORE risk
+ *       evaluation: persist-or-reuse AiSignalIdentity by (userId, signalId);
+ *       same payload digest → idempotent proceed; different digest → typed
+ *       conflict; stale/future generatedAt → typed rejection)
  *     → RiskService.validateProposedTrade()  ← MANDATORY
  *     → ExecutionService.executeTrade()       ← only on APPROVED
  * ═══════════════════════════════════════════════════════════════════════
@@ -51,6 +56,7 @@ export class StrategyOrchestratorService {
     private readonly brokerService: BrokerService,
     private readonly auditService: AuditService,
     private readonly eventBus: DomainEventBus,
+    private readonly signalIdentityGate: AiSignalIdentityGateService,
   ) {}
 
   /**
@@ -64,6 +70,11 @@ export class StrategyOrchestratorService {
     this.logger.log(
       `Processing signal ${signalId} for user=${userId} instrument=${candidate.instrument}`,
     );
+
+    // Resolved ACTIVE session authority — the ProposedTrade binding is
+    // populated FROM this session (Round 5 #295/#298: never the candidate's
+    // possibly-stale connection reference, never re-discovered downstream).
+    let session: TradingSession | null = null;
 
     // ── Gate 1: Validate signal structure ─────────────────────────────────────
     const structureError = this.validateStructure(candidate);
@@ -93,7 +104,7 @@ export class StrategyOrchestratorService {
 
     // ── Gate 3: Trading session active ────────────────────────────────────────
     try {
-      const session = await this.executionService.getActiveSession(userId);
+      session = await this.executionService.getActiveSession(userId);
       if (!session || session.status !== TradingSessionStatus.ACTIVE) {
         const reason = 'No active trading session';
         this.logger.warn(`Signal ${signalId} rejected: ${reason}`);
@@ -154,7 +165,57 @@ export class StrategyOrchestratorService {
       return { outcome: 'NO_BROKER_CONNECTION', signalId, reason };
     }
 
-    // ── Build ProposedTrade ────────────────────────────────────────────────────
+    // Type-narrowing guard: Gate 3 returned on every failure path, so the
+    // session is non-null here (unreachable in practice — kept explicit so
+    // the compiler enforces the binding completeness below).
+    if (!session) {
+      return { outcome: 'SESSION_INACTIVE', signalId, reason: 'No active trading session' };
+    }
+
+    // ── Gate 4.5: Signal identity (#302, Round 5 task 50-c) ──────────────
+    // Persist-or-reuse the durable identity BEFORE risk evaluation: retries
+    // and redeliveries never produce a second logical evaluation; a same-
+    // signalId/different-payload digest is a SECURITY EVENT (typed conflict,
+    // audited by the gate — never a new idempotency key); stale/future
+    // generatedAt is typed-rejected.
+    try {
+      await this.signalIdentityGate.registerOrReuse(userId, {
+        signalId,
+        generatedAt: candidate.generatedAt,
+        materialFields: {
+          instrument: candidate.instrument,
+          direction: candidate.direction,
+          requestedLotSize: String(candidate.suggestedVolume),
+          entryPrice: candidate.suggestedEntryPrice,
+          stopLoss: candidate.suggestedStopLoss,
+          takeProfit: candidate.suggestedTakeProfit,
+          strategyCode: candidate.strategyCode,
+          timeframe: candidate.timeframe,
+          modelVersion: candidate.modelVersion,
+        },
+      });
+    } catch (err) {
+      const reason = (err as Error).message ?? 'Signal identity rejected';
+      this.logger.warn(`Signal ${signalId} rejected at the identity gate: ${reason}`);
+      await this.recordIgnored(
+        candidate,
+        'SIGNAL_INVALID',
+        'SIGNAL_IDENTITY_REJECTED',
+        `Signal identity gate rejected the delivery: ${reason}`,
+      );
+      return { outcome: 'SIGNAL_INVALID', signalId, reason };
+    }
+
+    // ── Build ProposedTrade ────────────────────────────────────────────────────────
+    // (Round 5 #295/#298/#301/#302): the authority binding comes from the
+    // RESOLVED ACTIVE session (Gate 3) — sessionId, sessionGeneration,
+    // executionMode and the session's EXACT brokerConnectionId. The Risk
+    // Engine fails closed with AUTHORITY_BINDING_REQUIRED when these are
+    // missing, and rejects a stale binding (SESSION_AUTHORITY_MISMATCH)
+    // instead of silently rebinding. generatedAt flows from the signal
+    // producer (#302 freshness). marketRegime is normalized to the risk
+    // engine's regime vocabulary — an unrecognized label stays undefined so
+    // the risk layer fails closed when the profile enforces regime rules.
     const proposedTrade: ProposedTrade = {
       signalId: candidate.signalId,
       instrument: candidate.instrument,
@@ -166,6 +227,12 @@ export class StrategyOrchestratorService {
       takeProfit: String(candidate.suggestedTakeProfit),
       idempotencyKey: `${candidate.userId}:${candidate.signalId}`,
       volatilityScore: candidate.volatilityScore,
+      regime: normalizeMarketRegime(candidate.marketRegime),
+      sessionId: session.id,
+      sessionGeneration: session.authorityGeneration,
+      executionMode: session.executionMode,
+      brokerConnectionId: session.brokerConnectionId,
+      generatedAt: candidate.generatedAt,
     };
 
     // ── Gate 5: Risk Engine ────────────────────────────────────────────────────
@@ -238,6 +305,39 @@ export class StrategyOrchestratorService {
     });
 
     // ── Gate 6: Execution ──────────────────────────────────────────────────────
+    // SEMI_AUTO (Round 5 task 50-c, #298): the automated pipeline may NEVER
+    // dispatch NEW exposure for a SEMI_AUTO approval — the user's one-time
+    // confirmation (POST /execution/confirmations/:id/confirm) is the only
+    // dispatch path. The approval + its PENDING confirmation are durable;
+    // this outcome is honest: nothing failed, the trade awaits the user.
+    if (riskDecision.executionMode === 'SEMI_AUTO') {
+      this.logger.log(
+        `Signal ${signalId} approved under SEMI_AUTO — awaiting the user one-time ` +
+          'confirmation (no automated dispatch).',
+      );
+      await this.auditService.log({
+        actorUserId: userId,
+        action: AuditAction.AI_SIGNAL_RISK_APPROVED,
+        severity: AuditSeverity.INFO,
+        resourceType: 'AiSignal',
+        resourceId: signalId,
+        metadata: {
+          instrument: candidate.instrument,
+          direction: candidate.direction,
+          executionMode: riskDecision.executionMode,
+          grantId: riskDecision.grantId ?? null,
+          awaiting: 'USER_EXECUTION_CONFIRMATION',
+        },
+      });
+      return {
+        outcome: 'EXECUTION_PENDING_CONFIRMATION',
+        signalId,
+        reason:
+          'Approved under SEMI_AUTO — awaiting the user one-time confirmation ' +
+          '(the automated pipeline never dispatches SEMI_AUTO new exposure).',
+      };
+    }
+
     try {
       const trade = await this.executionService.executeTrade(userId, riskDecision);
       this.logger.log(`Signal ${signalId} executed: tradeId=${trade.id} status=${trade.status}`);
@@ -322,5 +422,29 @@ export class StrategyOrchestratorService {
       strategyCode: candidate.strategyCode,
       ignoredReason: reasonSummary,
     });
+  }
+}
+
+/**
+ * Normalize the AI engine's free-form market regime label to the risk
+ * engine's regime vocabulary (#330). Unrecognized labels return undefined —
+ * the Risk Engine then fails closed (UNKNOWN_MARKET_REGIME) when the profile
+ * enforces regime rules, rather than silently treating them as acceptable.
+ */
+function normalizeMarketRegime(marketRegime: string | undefined): ProposedTrade['regime'] {
+  if (!marketRegime || typeof marketRegime !== 'string') return undefined;
+  const normalized = marketRegime.trim().toUpperCase();
+  switch (normalized) {
+    case 'TRENDING':
+      return 'TRENDING';
+    case 'RANGING':
+      return 'RANGING';
+    case 'LOW_LIQUIDITY':
+      return 'LOW_LIQUIDITY';
+    case 'HIGH_VOLATILITY':
+    case 'VOLATILE':
+      return 'HIGH_VOLATILITY';
+    default:
+      return undefined;
   }
 }

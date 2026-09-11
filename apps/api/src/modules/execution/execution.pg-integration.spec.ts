@@ -11,38 +11,55 @@ import { Order } from './orders/order.entity';
 import { OrderService } from './orders/order.service';
 import { ExecutionOrchestrator } from './orchestration/execution-orchestrator.service';
 import { ExecutionIntent } from './orchestration/execution-intent.interface';
+import { FinalDispatchBoundary } from './orchestration/final-dispatch-boundary';
+import { TradeLifecycleCasService } from './orders/trade-lifecycle-cas.service';
 import { BrokerService } from '../broker/broker.service';
 import { BrokerAdapterRegistry } from '../broker/adapters/broker-adapter.registry';
+import { BrokerProviderRegistryService } from '../broker/registry/broker-provider-registry.service';
 import { CredentialEncryptionService } from '../broker/services/credential-encryption.service';
 import { ExecutionControlService } from '../execution-control/execution-control.service';
 import { AuditService } from '../audit/audit.service';
 import { DomainEventBus } from '../events/event-bus.service';
 import { BrokerMode, IBrokerAdapter } from '../broker/interfaces/broker-adapter.interface';
 import { RiskDecision } from '../risk/interfaces/risk.interface';
+import { RiskGrantService } from '../risk/risk-grant.service';
 import { OrderKind, OrderTimeInForce } from './orders/order.enums';
 
 /**
  * Sprint 50 PR-3 — real-PostgreSQL concurrency proof for the execution
- * orchestration pipeline (ExecutionService → ExecutionOrchestrator →
- * OrderService → adapter):
+ * orchestration pipeline (ExecutionService → FinalDispatchBoundary →
+ * ExecutionOrchestrator → OrderService → adapter):
  *
  * 1. The Sprint 32 trade-slot advisory-lock guarantees (unchanged).
  * 2. NEW: exactly-once DISPATCH — a duplicate clientOrderId NEVER re-calls
  *    the provider, even under concurrency (the order-layer idempotency).
  * 3. NEW: the full order lifecycle (CREATED → SUBMITTED → ACKNOWLEDGED →
  *    FILLED with exact decimal fill math) is recorded on real PostgreSQL.
+ * 4. Round 5 (task 50-c): the FINAL DISPATCH BOUNDARY runs for REAL against
+ *    real grant/session rows — a durable RiskGrant is REQUIRED per approval
+ *    and consumed atomically (the same signal racing through two
+ *    executeTrade calls yields ONE grant-consume winner and ONE provider
+ *    call; the loser gets the typed grant conflict, never a second
+ *    dispatch).
  */
 describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () => {
   let dataSource: DataSource;
   let service: ExecutionService;
   let orchestrator: ExecutionOrchestrator;
   let placeOrder: jest.Mock;
-  let tradeRepo: { update: jest.Mock };
+  let riskGrantRepo: Repository<RiskGrant>;
+  let sessionRepo: Repository<TradingSession>;
+  let confirmationRepo: Repository<ExecutionConfirmation>;
+  let tradeRepo: Repository<Trade>;
 
   const userId = '11111111-1111-1111-1111-111111111111';
   const connectionId = '22222222-2222-2222-2222-222222222222';
+  const sessionId = '33333333-3333-4333-8333-333333333333';
 
-  const decision = (signalId: string, maxDailyTrades = 1): RiskDecision => ({
+  const decision = (
+    signalId: string,
+    maxDailyTrades = 1,
+  ): RiskDecision & { decision: 'APPROVED' } => ({
     decision: 'APPROVED',
     signalId,
     validatedOrder: {
@@ -58,7 +75,61 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
     riskScore: 10,
     evaluatedAt: new Date(),
     maxDailyTrades,
+    // Round 5 (task 50-c): the durable authority — seeded per signal by
+    // seedGrant() in beforeEach; the boundary consumes it atomically.
+    grantId: '',
+    sessionId,
+    sessionGeneration: 1,
+    executionMode: ExecutionMode.FULL_AUTO,
+    brokerConnectionId: connectionId,
   });
+
+  /** Seed one ACTIVE grant (+ returns its id) bound to the test session. */
+  const seedGrant = async (signalId: string): Promise<string> => {
+    const grant = riskGrantRepo.create({
+      userId,
+      signalId,
+      signalPayloadDigest: `sig-${signalId}`.padEnd(64, '0').slice(0, 64),
+      sessionId,
+      sessionGeneration: 1,
+      executionMode: ExecutionMode.FULL_AUTO,
+      brokerConnectionId: connectionId,
+      credentialGeneration: 0,
+      providerBrokerIdentity: null,
+      providerVerificationFingerprint: null,
+      riskProfileId: null,
+      riskProfileVersion: null,
+      riskProfileHash: null,
+      accountSnapshotId: null,
+      accountSnapshotGeneration: null,
+      accountSnapshotObservedAt: null,
+      authorityGeneration: 1,
+      killSwitchGeneration: null,
+      executionControlRevision: null,
+      orderPayloadDigest: `order-${signalId}`.padEnd(64, '0').slice(0, 64),
+      orderPayload: {
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        quantity: '0.05',
+        orderType: 'MARKET',
+      },
+      quoteRef: null,
+      issuedAt: new Date(),
+      expiresAt: new Date(Date.now() + 60_000),
+      consumedAt: null,
+      invalidatedAt: null,
+      invalidationReason: null,
+      status: 'ACTIVE',
+    } as RiskGrant);
+    const saved = await riskGrantRepo.save(grant);
+    return saved.id;
+  };
+
+  /** decision() + a seeded ACTIVE grant (the durable authority handle). */
+  const grantedDecision = async (signalId: string, maxDailyTrades = 1): Promise<RiskDecision> => {
+    const grantId = await seedGrant(signalId);
+    return { ...decision(signalId, maxDailyTrades), grantId };
+  };
 
   beforeAll(async () => {
     dataSource = new DataSource({
@@ -68,7 +139,7 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
       username: process.env.DB_USER ?? 'irexpro',
       password: process.env.DB_PASSWORD ?? 'test_password',
       database: process.env.DB_NAME ?? 'irexpro_test',
-      entities: [Order],
+      entities: [Order, Trade, TradingSession, RiskGrant, ExecutionConfirmation],
       synchronize: false,
       logging: false,
     });
@@ -76,6 +147,85 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
     await dataSource.query('CREATE SCHEMA IF NOT EXISTS trading');
     await dataSource.query('DROP TABLE IF EXISTS trading.trades');
     await dataSource.query('DROP TABLE IF EXISTS trading.orders');
+    await dataSource.query('DROP TABLE IF EXISTS trading.execution_confirmations');
+    await dataSource.query('DROP TABLE IF EXISTS trading.risk_grants');
+    await dataSource.query('DROP TABLE IF EXISTS trading.trading_sessions');
+    // The ACTIVE session bound to every seeded grant (task 50-c: the
+    // boundary re-reads CURRENT session/authority state).
+    await dataSource.query(`CREATE TABLE trading.trading_sessions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL,
+      broker_connection_id UUID NOT NULL,
+      execution_mode VARCHAR(20) NOT NULL DEFAULT 'PAPER_ONLY',
+      authority_generation INTEGER NOT NULL DEFAULT 1,
+      status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+      opening_balance NUMERIC(15,2),
+      peak_equity NUMERIC(15,2),
+      risk_profile_snapshot JSONB,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      ended_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+    // risk_grants — mirrors migration 1754000000000 + the 1754200000000
+    // fencing column (credential_generation).
+    await dataSource.query(`CREATE TABLE trading.risk_grants (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL,
+      signal_id VARCHAR(100) NOT NULL,
+      signal_payload_digest VARCHAR(64) NOT NULL,
+      session_id UUID NOT NULL,
+      session_generation INTEGER NOT NULL,
+      execution_mode VARCHAR(20) NOT NULL,
+      broker_connection_id UUID NOT NULL,
+      credential_generation INTEGER,
+      provider_broker_identity VARCHAR(100),
+      provider_verification_fingerprint VARCHAR(128),
+      risk_profile_id UUID,
+      risk_profile_version INTEGER,
+      risk_profile_hash VARCHAR(64),
+      account_snapshot_id UUID,
+      account_snapshot_generation INTEGER,
+      account_snapshot_observed_at TIMESTAMPTZ,
+      authority_generation INTEGER NOT NULL,
+      kill_switch_generation INTEGER,
+      execution_control_revision INTEGER,
+      order_payload_digest VARCHAR(64) NOT NULL,
+      order_payload JSONB NOT NULL,
+      quote_ref JSONB,
+      issued_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      expires_at TIMESTAMPTZ NOT NULL,
+      consumed_at TIMESTAMPTZ,
+      invalidated_at TIMESTAMPTZ,
+      invalidation_reason VARCHAR(200),
+      status VARCHAR(30) NOT NULL DEFAULT 'ACTIVE',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+    await dataSource.query(
+      `CREATE UNIQUE INDEX uq_risk_grants_one_active_per_signal ON trading.risk_grants (signal_id) WHERE status = 'ACTIVE'`,
+    );
+    await dataSource.query(`CREATE TABLE trading.execution_confirmations (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL,
+      session_id UUID NOT NULL,
+      session_generation INTEGER NOT NULL,
+      signal_id VARCHAR(100) NOT NULL,
+      broker_connection_id UUID NOT NULL,
+      risk_grant_id UUID,
+      order_payload_digest VARCHAR(64) NOT NULL,
+      instrument VARCHAR(50) NOT NULL,
+      direction VARCHAR(10) NOT NULL,
+      quantity NUMERIC(18,8) NOT NULL,
+      stop_loss NUMERIC(18,8),
+      take_profit NUMERIC(18,8),
+      expires_at TIMESTAMPTZ NOT NULL,
+      consumed_at TIMESTAMPTZ,
+      revoked_at TIMESTAMPTZ,
+      status VARCHAR(30) NOT NULL DEFAULT 'PENDING',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+    await dataSource.query(
+      `CREATE UNIQUE INDEX uq_execution_confirmations_one_pending_per_signal ON trading.execution_confirmations (signal_id) WHERE status = 'PENDING'`,
+    );
     await dataSource.query(`CREATE TABLE trading.trades (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL,
       broker_connection_id UUID NOT NULL, signal_id UUID, idempotency_key VARCHAR(255) UNIQUE NOT NULL,
@@ -84,7 +234,7 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
       fill_price NUMERIC(18,8), stop_loss NUMERIC(18,8) NOT NULL, take_profit NUMERIC(18,8) NOT NULL,
       trailing_stop_pips NUMERIC(8,2), external_order_id VARCHAR(255), status VARCHAR(32) NOT NULL DEFAULT 'PENDING',
       exit_price NUMERIC(18,8), realised_pnl NUMERIC(18,8), close_reason VARCHAR(64), broker_rejection_reason TEXT,
-      opened_at TIMESTAMPTZ, closed_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      dispatch_certainty VARCHAR(30), opened_at TIMESTAMPTZ, closed_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
     // trading.orders — mirrors migration 1753600000000 (CreateNormalizedOrderDomain)
     await dataSource.query(`CREATE TABLE trading.orders (
@@ -141,25 +291,31 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
   beforeEach(async () => {
     await dataSource.query('TRUNCATE TABLE trading.trades');
     await dataSource.query('TRUNCATE TABLE trading.orders');
-    // The trade-repository mock PERSISTS updates to the real table (the
-    // orchestration pipeline's trade-side assertions read the DB row state,
-    // so a no-op mock would leave the trade PENDING forever).
-    const toSnake = (key: string) => key.replace(/[A-Z]/g, (m) => `_${m.toLowerCase()}`);
-    tradeRepo = {
-      update: jest.fn().mockImplementation(async (criteria, patch: Record<string, unknown>) => {
-        const id = typeof criteria === 'string' ? criteria : (criteria as { id: string }).id;
-        const params: unknown[] = [id];
-        const sets = Object.entries(patch).map(([key, value], i) => {
-          params.push(value instanceof Date ? value.toISOString() : (value ?? null));
-          return `"${toSnake(key)}" = $${i + 2}`;
-        });
-        await dataSource.query(
-          `UPDATE trading.trades SET ${sets.join(', ')} WHERE id = $1`,
-          params,
-        );
-        return { affected: 1 };
-      }),
-    };
+    await dataSource.query('TRUNCATE TABLE trading.execution_confirmations');
+    await dataSource.query('TRUNCATE TABLE trading.risk_grants');
+    await dataSource.query('TRUNCATE TABLE trading.trading_sessions');
+    // Real repositories: trade-lifecycle CAS + the boundary operate on the
+    // real PostgreSQL rows (task 50-c).
+    tradeRepo = dataSource.getRepository(Trade);
+    sessionRepo = dataSource.getRepository(TradingSession);
+    riskGrantRepo = dataSource.getRepository(RiskGrant);
+    confirmationRepo = dataSource.getRepository(ExecutionConfirmation);
+
+    // The ACTIVE session every grant binds to (authorityGeneration 1,
+    // FULL_AUTO so the pipeline origin may dispatch; the connection is the
+    // paper-broker path).
+    await sessionRepo.save(
+      sessionRepo.create({
+        id: sessionId,
+        userId,
+        brokerConnectionId: connectionId,
+        executionMode: ExecutionMode.FULL_AUTO,
+        authorityGeneration: 1,
+        status: 'ACTIVE',
+        startedAt: new Date(),
+      } as TradingSession),
+    );
+
     placeOrder = jest.fn().mockResolvedValue({
       success: true,
       externalOrderId: 'broker-position-1',
@@ -196,14 +352,18 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
     // Sprint 50 correction round: the connection fixture carries the
     // credential lifecycle state, and the (Phase D) orchestrator boundary
     // re-loads the persisted connection — the mock answers both entry points
-    // with the same usable-state connection.
+    // with the same usable-state connection. Task 50-c: the connection also
+    // carries credentialGeneration 0 — the grant-observed value the boundary
+    // fences on.
     const connection = {
       id: connectionId,
+      userId,
       brokerId: 'paper-broker',
       accountType: BrokerMode.DEMO,
       status: 'CONNECTED',
       authorizationStatus: 'ACTIVE',
       credentialStatus: 'VERIFIED',
+      credentialGeneration: 0,
       encryptedCredentials: 'ciphertext',
       credentialIv: 'iv',
       credentialTag: 'tag',
@@ -214,6 +374,7 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
       // authority seam + the EXACT session-bound connection by id.
       findActiveConnectionForUser: jest.fn(),
       findConnectionById: jest.fn().mockResolvedValue(connection),
+      findConnectionsByIds: jest.fn().mockResolvedValue([connection]),
       isConnectionExecutable: jest.fn().mockReturnValue(true),
     } as unknown as BrokerService;
     const adapterRegistry = {
@@ -229,6 +390,10 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
     const executionControlService = {
       checkExecutionPermission: jest.fn().mockResolvedValue({ allowed: true, blockedBy: null }),
     } as unknown as ExecutionControlService;
+    const providerRegistry = {
+      getEntry: jest.fn().mockReturnValue(null),
+      isProductionLiveEligible: jest.fn().mockReturnValue(false),
+    } as unknown as BrokerProviderRegistryService;
     const auditService = { log: jest.fn().mockResolvedValue(undefined) } as unknown as AuditService;
     const eventBus = { publish: jest.fn() } as unknown as DomainEventBus;
 
@@ -243,8 +408,6 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
         brokerConnectionId: connectionId,
       }),
     } as unknown as ExecutionSessionResolutionService;
-    const authorityRepoStub = {} as Repository<RiskGrant>;
-    const confirmationRepoStub = {} as Repository<ExecutionConfirmation>;
 
     const orderService = new OrderService(
       dataSource.getRepository(Order) as Repository<Order>,
@@ -259,24 +422,46 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
       auditService,
       eventBus,
     );
+    // Round 5 (task 50-c): the REAL final dispatch boundary + the REAL
+    // RiskGrantService (the 50-b contract) + the REAL trade-lifecycle CAS —
+    // grant consumption, confirmation fencing and CAS transitions run
+    // against real PostgreSQL rows.
+    const riskGrantService = new RiskGrantService(riskGrantRepo, confirmationRepo, auditService);
+    const boundary = new FinalDispatchBoundary(
+      riskGrantRepo,
+      sessionRepo,
+      confirmationRepo,
+      brokerService,
+      executionControlService,
+      providerRegistry,
+      auditService,
+      riskGrantService,
+    );
+    const tradeCas = new TradeLifecycleCasService(tradeRepo, auditService);
     service = new ExecutionService(
       tradeRepo as unknown as Repository<Trade>,
-      {} as Repository<TradingSession>,
+      sessionRepo,
       brokerService,
       orchestrator,
       auditService,
       dataSource,
       eventBus,
-      authorityRepoStub,
-      confirmationRepoStub,
+      riskGrantRepo,
+      confirmationRepo,
       sessionResolution,
+      boundary,
+      tradeCas,
     );
   });
 
   it('different signals racing for final slot yield one DB row and one broker submission', async () => {
+    const [decisionA, decisionB] = await Promise.all([
+      grantedDecision('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
+      grantedDecision('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'),
+    ]);
     const results = await Promise.allSettled([
-      service.executeTrade(userId, decision('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')),
-      service.executeTrade(userId, decision('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb')),
+      service.executeTrade(userId, decisionA),
+      service.executeTrade(userId, decisionB),
     ]);
     const fulfilled = results.filter((r) => r.status === 'fulfilled');
     const rejected = results.filter((r) => r.status === 'rejected');
@@ -290,13 +475,22 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
     expect(rows).toHaveLength(1);
   });
 
-  it('same signal concurrently persists once and submits to broker once', async () => {
+  it('same signal concurrently: ONE grant-consume winner, ONE broker submission, loser typed-blocked', async () => {
     const signalId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    // ONE durable grant for the signal — both racing executeTrade calls carry
+    // the same grantId; the final dispatch boundary's atomic consume grants
+    // exactly ONE winner (the loser gets the typed grant conflict and makes
+    // ZERO provider calls — task 50-c).
+    const granted = await grantedDecision(signalId, 10);
     const results = await Promise.allSettled([
-      service.executeTrade(userId, decision(signalId, 10)),
-      service.executeTrade(userId, decision(signalId, 10)),
+      service.executeTrade(userId, granted),
+      service.executeTrade(userId, granted),
     ]);
-    expect(results.every((r) => r.status === 'fulfilled')).toBe(true);
+    const fulfilled = results.filter((r) => r.status === 'fulfilled');
+    const rejected = results.filter((r) => r.status === 'rejected');
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(ForbiddenException);
     expect(placeOrder).toHaveBeenCalledTimes(1);
     const rows = await dataSource.query(
       'SELECT idempotency_key FROM trading.trades WHERE user_id = $1',
@@ -307,7 +501,7 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
 
   it('records the full normalized order lifecycle (CREATED→SUBMITTED→ACKNOWLEDGED→FILLED) on real PostgreSQL', async () => {
     const signalId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
-    const trade = await service.executeTrade(userId, decision(signalId, 10));
+    const trade = await service.executeTrade(userId, await grantedDecision(signalId, 10));
 
     // The trade (position aggregate) mirrors the outcome.
     expect(trade.status).toBe('OPEN');
@@ -341,7 +535,7 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
 
   it('duplicate clientOrderId never re-dispatches — exactly-once at the order layer (sequential)', async () => {
     const signalId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
-    await service.executeTrade(userId, decision(signalId, 10));
+    await service.executeTrade(userId, await grantedDecision(signalId, 10));
 
     // A second orchestrated dispatch with the SAME clientOrderId (e.g. a
     // retried pipeline after a crash) must NOT re-contact the provider.

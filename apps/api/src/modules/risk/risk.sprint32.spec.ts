@@ -4,17 +4,24 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { RiskService } from './risk.service';
 import { RiskProfile } from './entities/risk-profile.entity';
 import { RiskViolation } from './entities/risk-violation.entity';
+import { TradingSession } from '../execution/entities/trading-session.entity';
+import { TradingAuthorityGeneration } from '../users/entities/trading-authority-generation.entity';
 import { BrokerService } from '../broker/broker.service';
 import { AuditService } from '../audit/audit.service';
 import { ExecutionService } from '../execution/execution.service';
 import { ExecutionControlService } from '../execution-control/execution-control.service';
+import { ExecutionSessionResolutionService } from '../execution/execution-session.resolution';
+import { ExecutionMode } from '../execution/interfaces/execution-authority';
+import { RiskGrantService } from './risk-grant.service';
+import { RiskOrderGeometryService } from './risk-order-geometry.service';
+import { ExactDecimal } from '../../common/utils/exact-decimal';
 import { ProposedTrade, RiskRejectionCode } from './interfaces/risk.interface';
 import { DomainEventBus } from '../events/event-bus.service';
 import { AllowedTradingMode } from './entities/risk-profile.entity';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-const validTrade = (): ProposedTrade => ({
+const validTrade = (overrides: Partial<ProposedTrade> = {}): ProposedTrade => ({
   signalId: 'sig-s32-001',
   instrument: 'EURUSD',
   direction: 'BUY',
@@ -25,6 +32,12 @@ const validTrade = (): ProposedTrade => ({
   idempotencyKey: 'idem-s32',
   volatilityScore: 0.4,
   regime: 'TRENDING',
+  sessionId: 'session-1',
+  sessionGeneration: 1,
+  executionMode: ExecutionMode.PAPER_ONLY,
+  brokerConnectionId: 'conn-1',
+  generatedAt: new Date(),
+  ...overrides,
 });
 
 const defaultProfile = (): Partial<RiskProfile> => ({
@@ -47,6 +60,24 @@ const defaultProfile = (): Partial<RiskProfile> => ({
   riskAcknowledgementAccepted: true,
 });
 
+const defaultSession = (overrides: Partial<TradingSession> = {}): TradingSession =>
+  ({
+    id: 'session-1',
+    userId: 'user-1',
+    brokerConnectionId: 'conn-1',
+    executionMode: ExecutionMode.PAPER_ONLY,
+    authorityGeneration: 1,
+    status: 'ACTIVE',
+    openingBalance: '10000.00',
+    peakEquity: '10000.00',
+    riskProfileSnapshot: null,
+    startedAt: new Date(),
+    endedAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
+  }) as TradingSession;
+
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
 const mockProfileRepo = () => ({
@@ -62,9 +93,34 @@ const mockViolationRepo = () => ({
   find: jest.fn().mockResolvedValue([]),
 });
 
+const mockSessionRepo = () => ({
+  findOne: jest.fn().mockResolvedValue(defaultSession()),
+  create: jest.fn().mockImplementation((obj) => obj),
+  save: jest.fn().mockImplementation(async (obj) => obj),
+  createQueryBuilder: jest.fn().mockReturnValue({
+    update: jest.fn().mockReturnThis(),
+    set: jest.fn().mockReturnThis(),
+    where: jest.fn().mockReturnThis(),
+    execute: jest.fn().mockResolvedValue({ affected: 1 }),
+  }),
+});
+
+const mockAuthorityGenerationRepo = () => ({
+  findOne: jest.fn().mockResolvedValue(null),
+});
+
 const mockBrokerService = () => ({
   hasActiveConnection: jest.fn().mockResolvedValue(true),
-  findActiveConnectionForUser: jest.fn().mockResolvedValue({ id: 'conn-1' }),
+  findConnectionById: jest.fn().mockResolvedValue({
+    id: 'conn-1',
+    userId: 'user-1',
+    brokerId: 'metatrader5',
+    accountType: 'DEMO',
+    status: 'CONNECTED',
+    authorizationStatus: 'ACTIVE',
+    providerBrokerIdentity: null,
+    credentialGeneration: 0,
+  }),
   // Sprint 50 — LIVE authorization gate (mocked permissive)
   isConnectionExecutable: jest.fn().mockReturnValue(true),
   getBrokerAccountState: jest.fn().mockResolvedValue({
@@ -94,6 +150,32 @@ const mockExecutionService = () => ({
   reserveDailyTradeSlot: jest.fn().mockResolvedValue({ allowed: true, currentCount: 0 }),
 });
 
+const mockSessionResolution = () => ({
+  resolveActiveSessionAuthority: jest.fn().mockResolvedValue({
+    sessionId: 'session-1',
+    sessionGeneration: 1,
+    executionMode: ExecutionMode.PAPER_ONLY,
+    brokerConnectionId: 'conn-1',
+  }),
+});
+
+const mockRiskGrantService = () => ({
+  issueGrant: jest.fn().mockResolvedValue({
+    grant: { id: 'grant-s32-1', expiresAt: new Date(Date.now() + 60_000) },
+    reused: false,
+  }),
+  consumeGrantAtomic: jest.fn(),
+  invalidateGrantsForSession: jest.fn().mockResolvedValue(0),
+});
+
+const mockOrderGeometry = () => ({
+  resolveOrderGeometry: jest.fn().mockResolvedValue({
+    contractSize: ExactDecimal.parse('100000'),
+    freshQuote: null,
+    quoteRef: null,
+  }),
+});
+
 // ─── Test suite ───────────────────────────────────────────────────────────────
 
 describe('RiskService — Sprint 32 Production Hardening', () => {
@@ -110,10 +192,18 @@ describe('RiskService — Sprint 32 Production Hardening', () => {
         RiskService,
         { provide: getRepositoryToken(RiskProfile), useValue: mockProfileRepo() },
         { provide: getRepositoryToken(RiskViolation), useValue: mockViolationRepo() },
+        { provide: getRepositoryToken(TradingSession), useValue: mockSessionRepo() },
+        {
+          provide: getRepositoryToken(TradingAuthorityGeneration),
+          useValue: mockAuthorityGenerationRepo(),
+        },
         { provide: BrokerService, useValue: brokerService },
         { provide: AuditService, useValue: mockAuditService() },
         { provide: ExecutionService, useValue: executionService },
         { provide: ExecutionControlService, useValue: mockExecutionControlService() },
+        { provide: ExecutionSessionResolutionService, useValue: mockSessionResolution() },
+        { provide: RiskGrantService, useValue: mockRiskGrantService() },
+        { provide: RiskOrderGeometryService, useValue: mockOrderGeometry() },
         { provide: DomainEventBus, useValue: { publish: jest.fn() } },
         { provide: Logger, useValue: { log: jest.fn(), warn: jest.fn(), error: jest.fn() } },
       ],
@@ -176,10 +266,22 @@ describe('RiskService — Sprint 32 Production Hardening', () => {
       expect(decision.decision).toBe('APPROVED');
     });
 
+    it('margin EXACT boundary: requiredMargin == freeMargin PASSES (equality is enough)', async () => {
+      brokerService.getBrokerAccountState.mockResolvedValue({
+        balance: '10000.00',
+        equity: '10050.00',
+        freeMargin: '100.00',
+        currency: 'USD',
+      });
+      brokerService.getRequiredMargin.mockResolvedValue('100.00');
+      const decision = await service.validateProposedTrade('user-1', validTrade());
+      expect(decision.decision).toBe('APPROVED');
+    });
+
     it('rejects with INSUFFICIENT_MARGIN when freeMargin is negative', async () => {
       brokerService.getBrokerAccountState.mockResolvedValue({
         balance: '10000.00',
-        equity: '10000.00', // equity == balance → no drawdown trigger
+        equity: '10050.00',
         freeMargin: '-200.00',
         currency: 'USD',
       });
@@ -210,8 +312,8 @@ describe('RiskService — Sprint 32 Production Hardening', () => {
 
     it('rejects with INSUFFICIENT_MARGIN when freeMargin is zero and order requires margin', async () => {
       brokerService.getBrokerAccountState.mockResolvedValue({
-        balance: '0',
-        equity: '0',
+        balance: '10000.00',
+        equity: '10050.00',
         freeMargin: '0',
         currency: 'USD',
       });
@@ -227,12 +329,12 @@ describe('RiskService — Sprint 32 Production Hardening', () => {
 
     // ── Sprint 32 Gate 4: explicit named tests for ALL fail-closed cases ──
 
-    it('LIVE fail-closed: accountInfo missing/null', async () => {
+    it('LIVE fail-closed: accountInfo missing/null (typed ACCOUNT_STATE_UNAVAILABLE)', async () => {
       brokerService.getBrokerAccountState.mockResolvedValue(null);
       const decision = await service.validateProposedTrade('user-1', validTrade());
       expect(decision.decision).toBe('REJECTED');
       if (decision.decision === 'REJECTED') {
-        expect(decision.rejectionCode).toBe(RiskRejectionCode.INSUFFICIENT_MARGIN);
+        expect(decision.rejectionCode).toBe(RiskRejectionCode.ACCOUNT_STATE_UNAVAILABLE);
         expect(decision.rejectionReason).toContain('unavailable');
       }
     });
@@ -392,8 +494,8 @@ describe('RiskService — Sprint 32 Production Hardening', () => {
 
     it('PAPER: insufficient simulated margin rejects', async () => {
       brokerService.getBrokerAccountState.mockResolvedValue({
-        balance: '100.00',
-        equity: '100.00',
+        balance: '10000.00',
+        equity: '10050.00',
         freeMargin: '50.00',
         currency: 'USD',
       });

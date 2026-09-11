@@ -82,7 +82,9 @@ export type StrategyOutcome =
   | 'RISK_REJECTED'
   | 'RISK_SUSPENDED'
   | 'EXECUTION_FAILED'
-  | 'EXECUTION_SUCCEEDED';
+  | 'EXECUTION_SUCCEEDED'
+  /** Round 5 (#298): SEMI_AUTO approval awaiting the user one-time confirmation. */
+  | 'EXECUTION_PENDING_CONFIRMATION';
 
 export interface StrategyResult {
   outcome: StrategyOutcome;

@@ -14,6 +14,8 @@ import {
 } from './execution-session.resolution';
 import { BrokerService } from '../broker/broker.service';
 import { ExecutionOrchestrator } from './orchestration/execution-orchestrator.service';
+import { FinalDispatchBoundary } from './orchestration/final-dispatch-boundary';
+import { TradeLifecycleCasService } from './orders/trade-lifecycle-cas.service';
 import { AuditService } from '../audit/audit.service';
 import { DomainEventBus } from '../events/event-bus.service';
 import { Trade } from './entities/trade.entity';
@@ -145,17 +147,15 @@ describe('ExecutionService — session authority on real PostgreSQL (#295/#298)'
     auditService = { log: jest.fn().mockResolvedValue(undefined) };
     const eventBus = { publish: jest.fn() } as unknown as DomainEventBus;
     brokerService = {
-      findConnectionsByIds: jest
-        .fn()
-        .mockImplementation(async (ids: string[]) =>
-          ids.map((id) => ({
-            id,
-            userId: USER,
-            brokerId: 'paper-broker',
-            status: 'CONNECTED',
-            authorizationStatus: 'ACTIVE',
-          })),
-        ),
+      findConnectionsByIds: jest.fn().mockImplementation(async (ids: string[]) =>
+        ids.map((id) => ({
+          id,
+          userId: USER,
+          brokerId: 'paper-broker',
+          status: 'CONNECTED',
+          authorizationStatus: 'ACTIVE',
+        })),
+      ),
       isConnectionExecutable: jest.fn().mockReturnValue(true),
     };
 
@@ -170,6 +170,11 @@ describe('ExecutionService — session authority on real PostgreSQL (#295/#298)'
       riskGrantRepo,
       confirmationRepo,
       resolution,
+      // Round 5 (task 50-c): boundary + trade-lifecycle CAS are stub seams in
+      // this session-authority matrix (their real-store proofs live in the
+      // dedicated final-dispatch-boundary / trade-cas specs).
+      {} as FinalDispatchBoundary,
+      {} as TradeLifecycleCasService,
     );
   });
 
@@ -193,7 +198,9 @@ describe('ExecutionService — session authority on real PostgreSQL (#295/#298)'
 
     // The partial unique index arbitrates the race: every loser catches the
     // unique violation, re-reads the winner, and resolves the SAME session.
-    const fulfilled = results.filter((r) => r.status === 'fulfilled') as PromiseFulfilledResult<TradingSession>[];
+    const fulfilled = results.filter(
+      (r) => r.status === 'fulfilled',
+    ) as PromiseFulfilledResult<TradingSession>[];
     expect(fulfilled).toHaveLength(20);
     expect(new Set(fulfilled.map((r) => r.value.id)).size).toBe(1);
 
@@ -212,7 +219,13 @@ describe('ExecutionService — session authority on real PostgreSQL (#295/#298)'
   });
 
   it('mode change invalidates the outstanding RiskGrant and revokes the PENDING confirmation (generation CAS)', async () => {
-    const session = await service.startSession(USER, CONN_A, '10000.00', null, ExecutionMode.PAPER_ONLY);
+    const session = await service.startSession(
+      USER,
+      CONN_A,
+      '10000.00',
+      null,
+      ExecutionMode.PAPER_ONLY,
+    );
     const grant = riskGrantRepo.create({
       userId: USER,
       signalId: 'sig-pg-1',
@@ -223,7 +236,12 @@ describe('ExecutionService — session authority on real PostgreSQL (#295/#298)'
       brokerConnectionId: CONN_A,
       authorityGeneration: 1,
       orderPayloadDigest: DIGEST('b'),
-      orderPayload: { instrument: 'EURUSD', direction: 'BUY', quantity: '0.1', orderType: 'MARKET' },
+      orderPayload: {
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        quantity: '0.1',
+        orderType: 'MARKET',
+      },
       issuedAt: new Date(),
       expiresAt: new Date(Date.now() + 60_000),
       status: RiskGrantStatus.ACTIVE,
@@ -254,7 +272,9 @@ describe('ExecutionService — session authority on real PostgreSQL (#295/#298)'
     expect(grantAfter?.invalidationReason).toBe('SESSION_AUTHORITY_GENERATION_CHANGED');
     expect(grantAfter?.invalidatedAt).toBeInstanceOf(Date);
 
-    const confirmationAfter = await confirmationRepo.findOne({ where: { id: savedConfirmation.id } });
+    const confirmationAfter = await confirmationRepo.findOne({
+      where: { id: savedConfirmation.id },
+    });
     expect(confirmationAfter?.status).toBe(ExecutionConfirmationStatus.REVOKED);
     expect(confirmationAfter?.revokedAt).toBeInstanceOf(Date);
 

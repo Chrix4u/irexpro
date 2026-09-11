@@ -626,9 +626,7 @@ describe('BrokerOAuthService (Sprint 56 correction round 2 — findings 2 + 4)',
       expect(serverDerived.providerBrokerIdentity).toBe('spotware');
       expect(serverDerived.logicalAccountKey).toBe('ctrader|spotware|1234567');
       expect(serverDerived.flowId).toBe(flowId);
-      expect(serverDerived.linkAudit.payload.action).toBe(
-        AuditAction.BROKER_OAUTH_ACCOUNT_LINKED,
-      );
+      expect(serverDerived.linkAudit.payload.action).toBe(AuditAction.BROKER_OAUTH_ACCOUNT_LINKED);
       // Linked audit metadata: no tokens.
       expect(serverDerived.linkAudit.payload.metadata).toMatchObject({
         brokerId: 'ctrader',

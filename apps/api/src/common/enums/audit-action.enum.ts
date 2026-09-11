@@ -107,6 +107,10 @@ export enum AuditAction {
   RISK_DAILY_LOSS_LIMIT_BREACHED = 'RISK_DAILY_LOSS_LIMIT_BREACHED',
   RISK_DRAWDOWN_LIMIT_BREACHED = 'RISK_DRAWDOWN_LIMIT_BREACHED',
   RISK_SESSION_SUSPENDED = 'RISK_SESSION_SUSPENDED',
+  // Sprint 56 correction round 5 (#301): a durable RiskGrant was issued (or
+  // idempotently reused) for an approved signal. Metadata carries ids/digests
+  // ONLY — never order secrets (there are none) or account credentials.
+  RISK_GRANT_ISSUED = 'RISK_GRANT_ISSUED',
 
   // Trade execution lifecycle
   TRADE_PREPARED = 'TRADE_PREPARED',
@@ -137,6 +141,16 @@ export enum AuditAction {
   // audited execution-mode change; bumps authorityGeneration and invalidates
   // outstanding RiskGrants / SEMI_AUTO confirmations.
   TRADING_SESSION_MODE_CHANGED = 'TRADING_SESSION_MODE_CHANGED',
+
+  // Sprint 56 correction round 5 (task 50-c) — final dispatch boundary:
+  // every typed NEW-exposure block (zero provider call) is audited with the
+  // blocked reason + authority facts; every successful one-time SEMI_AUTO
+  // confirmation consumption is audited (server-authoritative approval).
+  EXECUTION_AUTHORITY_BLOCKED = 'EXECUTION_AUTHORITY_BLOCKED',
+  EXECUTION_CONFIRMATION_CONSUMED = 'EXECUTION_CONFIRMATION_CONSUMED',
+  // Signal identity security event (issue #302): same signalId re-delivered
+  // with a DIFFERENT material payload digest — never a new logical signal.
+  AI_SIGNAL_IDENTITY_CONFLICT = 'AI_SIGNAL_IDENTITY_CONFLICT',
 
   // Market data (internal)
   MARKET_DATA_REQUESTED = 'MARKET_DATA_REQUESTED',

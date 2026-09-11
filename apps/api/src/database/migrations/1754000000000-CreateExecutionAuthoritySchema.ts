@@ -35,7 +35,10 @@ export class CreateExecutionAuthoritySchema1754000000000 implements MigrationInt
     if (Array.isArray(duplicateActive) && duplicateActive.length > 0) {
       const sample = duplicateActive
         .slice(0, 10)
-        .map((r: { user_id: string; active_count: string }) => `user ${r.user_id} has ${r.active_count} ACTIVE sessions`)
+        .map(
+          (r: { user_id: string; active_count: string }) =>
+            `user ${r.user_id} has ${r.active_count} ACTIVE sessions`,
+        )
         .join('; ');
       throw new Error(
         `ExecutionAuthoritySchema migration preflight FAILED: duplicate ACTIVE TradingSessions detected (${duplicateActive.length} users). ` +
@@ -54,7 +57,10 @@ export class CreateExecutionAuthoritySchema1754000000000 implements MigrationInt
     if (Array.isArray(orphanUsers) && orphanUsers.length > 0) {
       const sample = orphanUsers
         .slice(0, 10)
-        .map((r: { session_id: string; user_id: string }) => `session ${r.session_id} references missing user ${r.user_id}`)
+        .map(
+          (r: { session_id: string; user_id: string }) =>
+            `session ${r.session_id} references missing user ${r.user_id}`,
+        )
         .join('; ');
       throw new Error(
         `ExecutionAuthoritySchema migration preflight FAILED: orphan TradingSessions (user missing). ` +
@@ -70,7 +76,10 @@ export class CreateExecutionAuthoritySchema1754000000000 implements MigrationInt
     if (Array.isArray(orphanConnections) && orphanConnections.length > 0) {
       const sample = orphanConnections
         .slice(0, 10)
-        .map((r: { session_id: string; broker_connection_id: string }) => `session ${r.session_id} references missing broker connection ${r.broker_connection_id}`)
+        .map(
+          (r: { session_id: string; broker_connection_id: string }) =>
+            `session ${r.session_id} references missing broker connection ${r.broker_connection_id}`,
+        )
         .join('; ');
       throw new Error(
         `ExecutionAuthoritySchema migration preflight FAILED: orphan TradingSessions (broker connection missing). ` +

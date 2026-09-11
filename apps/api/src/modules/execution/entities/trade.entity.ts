@@ -159,6 +159,25 @@ export class Trade {
   @Column({ name: 'broker_rejection_reason', type: 'text', nullable: true })
   brokerRejectionReason: string | null;
 
+  /**
+   * Round 5 (#314): provider WRITE-CERTAINTY of the state-changing dispatch
+   * that left this trade RECONCILIATION_PENDING (round-4
+   * ProviderDispatchCertainty classification).
+   *
+   * UNCERTAIN-EXPOSURE ACCOUNTING RULE (issue #314):
+   *  - RECONCILIATION_PENDING + MAY_HAVE_REACHED_PROVIDER (or NULL — legacy
+   *    rows, conservatively uncertain) RETAINS its NEW-exposure capacity
+   *    reservation: counted as OPEN-like exposure by countOpenTrades() /
+   *    countTodayTrades() until reconciliation proves otherwise;
+   *  - RECONCILIATION_PENDING + DEFINITELY_NOT_SENT (provably never left
+   *    iRexPro) releases the capacity ONCE — never counted as exposure;
+   *  - a RECONCILIATION_PENDING reached via an AMBIGUOUS CLOSE keeps the same
+   *    uncertain value, so the underlying exposure is NOT released until
+   *    closure is proven (terminal CLOSED).
+   */
+  @Column({ name: 'dispatch_certainty', type: 'varchar', length: 30, nullable: true })
+  dispatchCertainty: string | null;
+
   // ─── Timestamps ───────────────────────────────────────────────────────────
 
   /** Set when broker confirms fill. */

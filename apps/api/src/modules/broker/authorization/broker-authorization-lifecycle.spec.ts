@@ -87,9 +87,8 @@ describe('BrokerService — Sprint 50 authorization lifecycle', () => {
       // Round 5 (#332): createConnection commits through one transaction —
       // delegate to the SAME repo mock so save expectations keep working.
       manager: {
-        transaction: jest.fn(
-          async (cb: (m: unknown) => Promise<unknown>) =>
-            cb({ getRepository: () => connectionRepo }),
+        transaction: jest.fn(async (cb: (m: unknown) => Promise<unknown>) =>
+          cb({ getRepository: () => connectionRepo }),
         ),
       },
     };

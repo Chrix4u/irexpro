@@ -11,7 +11,10 @@ import { BrokerProviderRegistryService } from './registry/broker-provider-regist
 import { CredentialEncryptionService } from './services/credential-encryption.service';
 import { AuditService } from '../audit/audit.service';
 import { BrokerOAuthTokenLifecycleService } from './services/broker-oauth-token-lifecycle.service';
-import { BrokerLinkOutboxService, BrokerLinkOutboxEntry } from './services/broker-link-outbox.service';
+import {
+  BrokerLinkOutboxService,
+  BrokerLinkOutboxEntry,
+} from './services/broker-link-outbox.service';
 import { BrokerConnectionServerDerived } from './broker.service';
 import { BrokerLogicalAccountConflictError } from './interfaces/broker-connection.errors';
 import { AuditAction } from '../../common/enums/audit-action.enum';
@@ -255,8 +258,7 @@ describe('BrokerService', () => {
       // synchronous call (issue #332).
       expect(connectionRepo.save).toHaveBeenCalled();
       expect(linkOutbox.enqueueWithinTransaction).toHaveBeenCalledTimes(1);
-      const entries: BrokerLinkOutboxEntry[] =
-        linkOutbox.enqueueWithinTransaction.mock.calls[0][1];
+      const entries: BrokerLinkOutboxEntry[] = linkOutbox.enqueueWithinTransaction.mock.calls[0][1];
       expect(entries).toHaveLength(2); // connection-created audit + status event
       expect(auditService.log).not.toHaveBeenCalled();
       expect(result.id).toBe('conn-new');
@@ -281,7 +283,12 @@ describe('BrokerService', () => {
     });
 
     it('persists the EXPLICIT server-derived logical account key verbatim (OAuth link path, #332)', async () => {
-      const dto = { brokerId: 'ctrader', accountType: BrokerMode.DEMO, accountId: '1234567', apiKey: 'k' };
+      const dto = {
+        brokerId: 'ctrader',
+        accountType: BrokerMode.DEMO,
+        accountId: '1234567',
+        apiKey: 'k',
+      };
       registry.getAdapter.mockReturnValue({ brokerName: 'cTrader' });
       connectionRepo.create.mockImplementation((obj) => obj);
       connectionRepo.save.mockImplementation(async (obj) => ({ id: 'new-id', ...obj }));
@@ -307,25 +314,34 @@ describe('BrokerService', () => {
         expect.objectContaining({ logicalAccountKey: 'ctrader|spotware|1234567' }),
       );
       // The optional OAuth link audit rides the SAME atomic outbox batch.
-      const entries: BrokerLinkOutboxEntry[] =
-        linkOutbox.enqueueWithinTransaction.mock.calls[0][1];
+      const entries: BrokerLinkOutboxEntry[] = linkOutbox.enqueueWithinTransaction.mock.calls[0][1];
       expect(entries).toHaveLength(3);
       expect(entries.every((e) => e.flowId === 'flow-1')).toBe(true);
     });
 
     it('throws the typed logical-account conflict (carrying the existing row) on a unique-violation INSERT (#332)', async () => {
-      const dto = { brokerId: 'ctrader', accountType: BrokerMode.DEMO, accountId: '1234567', apiKey: 'k' };
+      const dto = {
+        brokerId: 'ctrader',
+        accountType: BrokerMode.DEMO,
+        accountId: '1234567',
+        apiKey: 'k',
+      };
       registry.getAdapter.mockReturnValue({ brokerName: 'cTrader' });
       connectionRepo.create.mockImplementation((obj) => obj);
       const uniqueViolation = Object.assign(
-        new Error('UNIQUE constraint failed: broker_connections.user_id, broker_connections.logical_account_key'),
+        new Error(
+          'UNIQUE constraint failed: broker_connections.user_id, broker_connections.logical_account_key',
+        ),
         { code: '23505' },
       );
       // BOTH calls in this test hit the unique violation (second call below
       // re-throws to capture the typed error object)
       connectionRepo.save.mockRejectedValueOnce(uniqueViolation);
       connectionRepo.save.mockRejectedValueOnce(uniqueViolation);
-      const existing = { id: 'existing-conn', logicalAccountKey: 'ctrader|spotware|1234567' } as never;
+      const existing = {
+        id: 'existing-conn',
+        logicalAccountKey: 'ctrader|spotware|1234567',
+      } as never;
       connectionRepo.findOne.mockResolvedValue(existing);
 
       await expect(
@@ -357,17 +373,29 @@ describe('BrokerService', () => {
     });
 
     it('a NON-unique INSERT failure propagates unchanged (no adoption lookup)', async () => {
-      const dto = { brokerId: 'ctrader', accountType: BrokerMode.DEMO, accountId: '1234567', apiKey: 'k' };
+      const dto = {
+        brokerId: 'ctrader',
+        accountType: BrokerMode.DEMO,
+        accountId: '1234567',
+        apiKey: 'k',
+      };
       registry.getAdapter.mockReturnValue({ brokerName: 'cTrader' });
       connectionRepo.create.mockImplementation((obj) => obj);
       connectionRepo.save.mockRejectedValueOnce(new Error('connection refused'));
 
-      await expect(service.createConnection(dto as any, 'user-1')).rejects.toThrow('connection refused');
+      await expect(service.createConnection(dto as any, 'user-1')).rejects.toThrow(
+        'connection refused',
+      );
       expect(connectionRepo.findOne).not.toHaveBeenCalled();
     });
 
     it('an OUTBOX enqueue failure fails the whole createConnection (one transaction: rollback semantics, #332)', async () => {
-      const dto = { brokerId: 'ctrader', accountType: BrokerMode.DEMO, accountId: '1234567', apiKey: 'k' };
+      const dto = {
+        brokerId: 'ctrader',
+        accountType: BrokerMode.DEMO,
+        accountId: '1234567',
+        apiKey: 'k',
+      };
       registry.getAdapter.mockReturnValue({ brokerName: 'cTrader' });
       connectionRepo.create.mockImplementation((obj) => obj);
       connectionRepo.save.mockImplementation(async (obj) => ({ id: 'new-id', ...obj }));
@@ -417,8 +445,7 @@ describe('BrokerService', () => {
       // The audit payload is committed to the outbox atomically with the row
       // (delivery happens later via the sweep).
       expect(linkOutbox.enqueueWithinTransaction).toHaveBeenCalled();
-      const entries: BrokerLinkOutboxEntry[] =
-        linkOutbox.enqueueWithinTransaction.mock.calls[0][1];
+      const entries: BrokerLinkOutboxEntry[] = linkOutbox.enqueueWithinTransaction.mock.calls[0][1];
       const auditEntry = entries.find((e) => e.eventType === 'connection-created-audit')!;
       expect(auditEntry.payload.action).toBe(AuditAction.BROKER_CONNECTION_CREATED);
       const metadataStr = JSON.stringify(auditEntry.payload.metadata);
@@ -440,8 +467,9 @@ describe('BrokerService', () => {
       connectionRepo.findOne.mockResolvedValueOnce(existing);
       connectionRepo.findOne.mockResolvedValueOnce(null);
 
-      await expect(service.findLiveConnectionByLogicalKey('user-1', 'ctrader|spotware|1234567'))
-        .resolves.toMatchObject({ id: 'existing-conn' });
+      await expect(
+        service.findLiveConnectionByLogicalKey('user-1', 'ctrader|spotware|1234567'),
+      ).resolves.toMatchObject({ id: 'existing-conn' });
       await expect(
         service.findLiveConnectionByLogicalKey('user-1', 'ctrader|spotware|1234567'),
       ).resolves.toBeNull();

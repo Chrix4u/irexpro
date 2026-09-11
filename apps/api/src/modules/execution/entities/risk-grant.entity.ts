@@ -65,12 +65,28 @@ export class RiskGrant {
   @Column({ name: 'broker_connection_id', type: 'uuid' })
   brokerConnectionId: string;
 
+  /**
+   * Round 5 (#361 final-dispatch fencing): BrokerConnection.credentialGeneration
+   * observed at issuance. NULL = the issuer (RiskService) did not observe it —
+   * the final dispatch boundary then reads the CURRENT generation for the
+   * returned authority context but cannot fence on it; whenever the value IS
+   * present, ANY drift (credential rotation between approval and dispatch)
+   * blocks NEW exposure fail-closed.
+   */
+  @Column({ name: 'credential_generation', type: 'integer', nullable: true })
+  credentialGeneration: number | null;
+
   /** Server-derived persisted provider identity at issuance (NULL = unknown). */
   @Column({ name: 'provider_broker_identity', type: 'varchar', length: 100, nullable: true })
   providerBrokerIdentity: string | null;
 
   /** Identity-scoped LIVE-verification evidence fingerprint/model version at issuance. */
-  @Column({ name: 'provider_verification_fingerprint', type: 'varchar', length: 128, nullable: true })
+  @Column({
+    name: 'provider_verification_fingerprint',
+    type: 'varchar',
+    length: 128,
+    nullable: true,
+  })
   providerVerificationFingerprint: string | null;
 
   @Column({ name: 'risk_profile_id', type: 'uuid', nullable: true })
