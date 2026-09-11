@@ -238,3 +238,90 @@ competing mechanism introduced). Findings closed:
 No production-LIVE gate, execution safety gate, or Round-3
 adapter/session isolation was weakened; no AI/signal/risk/leverage/
 position-size/SL-TP/profit-sharing/funding behavior was modified.
+
+## Correction round 5 (delivered on this branch — unified execution authority)
+
+Issues #292–#303, #312–#317, #330–#332, #361 on the exact round-5 prompt.
+Starting HEAD 06ea2a8d (round-4 final). Commits:
+2d40874 (ExactDecimal #313), bc58d69 (authority schema wave),
+674fbf3 (contract seam), cc5a0bb (session authority + OAuth durable
+linking + authority UX), 78bb351 (frontend contract alignment),
+8c1b157 (final dispatch boundary + risk correctness + trade CAS +
+exposure accounting), plus the docs commit.
+
+- **#295** TradingSession is the execution target: executionMode +
+  authorityGeneration persisted (migration 1754000000000 with one-ACTIVE
+  partial unique + FK preflight that FAILS on duplicates/orphans); start
+  binds the exact connection (typed conflict, audited switch); risk +
+  execution use session.brokerConnectionId only (findActiveConnectionForUser
+  removed from NEW-exposure paths); final boundary reloads the SAME id.
+- **#298** modes durable; PAPER_ONLY routes NEW exposure to paper only
+  (never inferred from accountType); SEMI_AUTO one-time confirmations
+  (partial unique one-PENDING-per-signal; consumed CAS at the boundary;
+  endpoints GET /execution/confirmations/pending + POST :id/confirm);
+  FULL_AUTO only with full current authority; mode change = audited
+  generation bump invalidating grants/confirmations.
+- **#301** RiskGrant: durable, immutable, short-TTL, single-use, bound to
+  exact order digest + all authority facts; issuance one-per-signal;
+  execution accepts only the opaque handle; consume is atomic at dispatch.
+- **#300/#299** authority generation + kill-switch/control revisions bound
+  into grants and re-checked at the boundary; suspension/KYC reversal bump
+  the generation (grant mismatch → blocked NEW exposure; risk-reducing ops
+  remain).
+- **#294** identity-scoped LIVE verification re-checked at the final
+  boundary (fail-closed on unknown identity / missing evidence /
+  downgrade); enableLiveTrading recheck path preserved from round 4.
+- **#297/#312** broker_account_snapshots versioned (unique
+  connection+generation) — schema + entity landed; writer wiring is the
+  follow-up integration point (grant carries snapshot generation fields).
+- **#296** fail-closed risk engine: no :SKIPPED; RISK_ENGINE_QUERY_FAILED
+  rejections; malformed values fail closed.
+- **#313** ExactDecimal everywhere in risk math; boundary tests: 80/80
+  (exact equality, next/previous quantum, negatives, large values verified
+  vs Python arbitrary precision, malformed fail-closed).
+- **#317** daily loss vs session openingBalance; drawdown vs monotonic CAS
+  peakEquity.
+- **#316** maxTradeRiskPercent (risk-at-stop, conservative divUp) +
+  maxLeverageAllowed (effective order leverage = notional/equity) enforced.
+- **#331** MARKET SL/TP geometry via risk-order-geometry service (fresh
+  connection-scoped quote reference; BUY ask / SELL bid; fail-closed on
+  malformed/stale); LIMIT/STOP semantics preserved.
+- **#330** regime propagation + LOW_LIQUIDITY rejection + unknown-regime
+  fail-closed.
+- **#302** durable signal identity (userId, signalId) + digest conflict
+  detection + freshness/skew; strategy supplies the binding.
+- **#314** RECONCILIATION_PENDING retains exposure reservation;
+  DEFINITELY_NOT_SENT releases once; ambiguous CLOSE retains until proven.
+- **#315** trade lifecycle CAS (OPEN→RECONCILIATION_PENDING, OPEN→CLOSED)
+  with reload-preserve (late UNKNOWN never regresses reconciled truth).
+- **#303** operation classes; kill switch blocks NEW/INCREASE only.
+- **#332** logical-account-key idempotent OAuth linking + durable outbox;
+  cTrader aliases canonicalize; adopt-on-retry; 20-way races covered.
+- **#361** the final dispatch boundary itself (see §14.8 of
+  09-broker-integration-architecture.md).
+- **#292/#293** Web/Mobile/Admin truthfulness: six-label taxonomy
+  (LIVE-capable / Production LIVE Verified / Production LIVE Unverified /
+  Ineligible / DEMO only / execution disabled); liveTradingEnabled demoted
+  to compatibility mirror; session mode selector + confirmation inbox with
+  server-consumed authority only.
+
+Validation at the final head: API full suite 214 suites (212 passed + 2
+pg-gated), 3183 tests (3176 passed + 7 pg-gated); tsc 0; nest build OK;
+lint 0 errors / 132 warnings; web production build OK + tsc exactly 1
+pre-existing e2e TS2339 + jest 69/69; mobile tsc 0 + jest 72/72 +
+account-security 124/124 + release-config valid + Android/iOS Metro
+exports OK; types 21/21 + api-client contracts 15/15; secret scan 1039
+blobs 0 secrets + self-test; tracked artifacts 1042 paths; checkout
+credential privacy 19 steps; release-audit install-safety OK. PostgreSQL
+is unavailable in this sandbox (no docker/sudo) — the 8 jest-pg
+integration specs (incl. 20-way session/confirmation/link races)
+typecheck locally and execute in CI only.
+
+HONEST LIMITS: (1) snapshot-version WRITER wiring (provider refresh into
+broker_account_snapshots at the pre-trade boundary) is schema-complete but
+not yet wired into the broker refresh path — the grant/verification fields
+exist and the boundary enforces presence once wired; (2) PG races await a
+PostgreSQL-capable CI runner execution; (3) cTrader/Pepperstone/IC Markets
+remain BETA / productionLiveVerification = UNVERIFIED — external provider
+evidence (Spotware approval, production credentials, registered redirect
+URIs/mobile callbacks, DEMO + LIVE verification) is still required.

@@ -823,3 +823,74 @@ production-LIVE verification, OAuth token secrecy, mobile one-time
 handoff, tenant isolation, audit redaction, decimal-string money, paper
 isolation, and Round-3 adapter/session isolation. No AI/signal/risk/
 profit-sharing/funding behavior was touched.
+
+## 14.8 Correction round 5 — unified execution authority, exact risk arithmetic, durable linking
+
+Round 5 (architect issues #292–#303, #312–#317, #330–#332, #361) makes the
+execution chain deterministically bound to ONE fresh, immutable,
+server-verifiable authority at the instant of dispatch.
+
+**The chain (all stages use the SAME facts — nothing is rediscovered):**
+
+`Signal (durable identity #302)` → `exact TradingSession (#295)` →
+`executionMode (#298)` → `exact brokerConnectionId` →
+`user/KYC/jurisdiction authority generation (#300)` →
+`server-derived provider identity + identity-scoped LIVE verification (#294)` →
+`fresh versioned account snapshot (#297/#312)` →
+`exact-decimal risk evaluation (#296/#313/#316/#317/#331)` →
+`immutable expiring RiskGrant (#301)` →
+`final dispatch boundary recheck + atomic consume (#361)` →
+`provider dispatch (operation-class aware #303)` →
+`reconciliation (CAS lifecycle #315; conservative uncertain-exposure accounting #314)`.
+
+Key mechanisms (all on `feat/broker-completion`, migrations
+1754000000000/1754050000000/1754100000000/1754200000000):
+
+- **TradingSession is the authoritative target** (#295/#298): execution mode
+  + authority generation persisted; one-ACTIVE-session-per-user partial
+  unique; start binds the EXACT connection (typed conflict on cross-account
+  switch, never silent substitution); mode changes are audited CAS bumps
+  that invalidate outstanding grants/confirmations (never revived).
+- **RiskGrant** (#301): APPROVED risk decisions mint a durable single-use
+  grant binding signal digest, session generation, mode, exact connection,
+  provider identity/verification fingerprint, risk-profile version, control
+  revisions and the exact order payload digest. ExecutionService accepts
+  ONLY the grant handle — caller-constructed approvals fail closed.
+- **Final dispatch boundary** (#361): immediately before any NEW-exposure
+  provider call the grant is re-verified against CURRENT durable state
+  (session, mode, exact connection id, CONNECTED status, executable
+  authorization, usable credentials, unchanged credential generation,
+  SEMI_AUTO one-time confirmation, PAPER_ONLY paper-path routing, LIVE
+  identity-scoped verification, kill-switch generation) and consumed
+  atomically — exactly one dispatch winner; zero provider calls on drift.
+- **Exact decimal arithmetic** (#313): `ExactDecimal` (fixed-scale BigInt,
+  strict fail-closed parsing, exact comparisons, quantized division with
+  conservative UP/DOWN boundary helpers) replaces binary floats in every
+  safety-critical calculation; boundary semantics are exact (loss >= limit
+  rejects at equality; margin > freeMargin rejects only strictly).
+- **Fail-closed risk engine** (#296/#317/#316/#330): no `:SKIPPED`
+  continuations; daily-loss uses the session opening balance; drawdown uses
+  a monotonically CAS-maintained peak equity; `maxTradeRiskPercent` and
+  `maxLeverageAllowed` (effective order leverage) are enforced; LOW_LIQUIDITY
+  regimes rejected per profile.
+- **Signal identity** (#302): (userId, signalId) durable uniqueness with
+  canonical payload digests — re-deliveries are idempotent, conflicting
+  material payloads are typed security events, generatedAt freshness and
+  future-skew are enforced.
+- **Durable idempotent OAuth linking** (#332): server-computed logical
+  account key (cTrader aliases canonicalize to one technology) enforced by
+  a per-user partial unique at INSERT; connection + post-commit audit/event
+  work commit atomically with a durable outbox + sweep; LINKING→AUTHORIZED
+  rollback only on PROVEN no-commit; ambiguous post-commit failures converge
+  CONSUMED and retries ADOPT the existing connection.
+- **Trade lifecycle CAS + uncertain exposure** (#315/#314): provider-bound
+  transitions are expected-state CAS (late provider responses never regress
+  reconciled terminal truth); RECONCILIATION_PENDING retains capacity
+  reservation until definitively resolved.
+- **Operation-aware controls** (#303): kill switch blocks NEW/INCREASE
+  exposure only — close/cancel/reconcile/risk-reducing remain available.
+
+cTrader / Pepperstone-cTrader / IC-Markets-cTrader remain
+BETA / `productionLiveVerification = UNVERIFIED` (see §34 release-truth):
+no amount of passing tests flips LIVE verification — that requires the
+external provider evidence listed there.
