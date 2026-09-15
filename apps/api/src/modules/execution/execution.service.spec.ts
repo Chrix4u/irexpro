@@ -18,6 +18,7 @@ import {
   BrokerConnectionOwnershipException,
   ExecutionSessionResolutionService,
 } from './execution-session.resolution';
+import { TradeIntentService } from './services/trade-intent.service';
 import { Order } from './orders/order.entity';
 import { BrokerService } from '../broker/broker.service';
 import { AuditService } from '../audit/audit.service';
@@ -124,6 +125,13 @@ describe('ExecutionService', () => {
   let dataSource: { query: jest.Mock; transaction: jest.Mock };
   let finalDispatchBoundary: { authorizeNewExposureDispatch: jest.Mock };
   let tradeCas: { applyCasTransition: jest.Mock };
+  /** Round 6 §2: the durable TradeIntent guard — seam-level mock (the
+   * intent matrix lives in trade-intent.service.spec.ts). */
+  let tradeIntentService: {
+    resolveIntentForExecutionBySignal: jest.Mock;
+    markExecuted: jest.Mock;
+    markRejected: jest.Mock;
+  };
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -200,6 +208,21 @@ describe('ExecutionService', () => {
             };
           },
         ),
+    };
+
+    // Round 6 §2: every APPROVED executeTrade path carries a usable intent
+    // (CREATED, unexpired) — per-test overrides replace this wholesale.
+    tradeIntentService = {
+      resolveIntentForExecutionBySignal: jest.fn().mockResolvedValue({
+        id: 'intent-1',
+        userId: 'user-1',
+        signalId: 'sig-001',
+        intentKey: 'user-1:sig-001',
+        status: 'CREATED',
+        expiresAt: new Date(Date.now() + 60_000),
+      }),
+      markExecuted: jest.fn().mockResolvedValue(undefined),
+      markRejected: jest.fn().mockResolvedValue(undefined),
     };
 
     insertedSession = null;
@@ -328,6 +351,7 @@ describe('ExecutionService', () => {
         { provide: ExecutionOrchestrator, useValue: orchestrator },
         { provide: FinalDispatchBoundary, useValue: finalDispatchBoundary },
         { provide: TradeLifecycleCasService, useValue: tradeCas },
+        { provide: TradeIntentService, useValue: tradeIntentService },
         { provide: AuditService, useValue: auditService },
         { provide: DataSource, useValue: dataSource },
         {

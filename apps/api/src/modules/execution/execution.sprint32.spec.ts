@@ -18,6 +18,7 @@ import { BrokerMode } from '../broker/interfaces/broker-adapter.interface';
 import { DomainEventBus } from '../events/event-bus.service';
 import { FinalDispatchBoundary } from './orchestration/final-dispatch-boundary';
 import { TradeLifecycleCasService } from './orders/trade-lifecycle-cas.service';
+import { TradeIntentService } from './services/trade-intent.service';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -197,6 +198,22 @@ describe('ExecutionService — Sprint 32 Idempotency', () => {
                 transitionedTo: params.target,
                 trade: { id: 'trade-1', status: params.target },
               })),
+          },
+        },
+        {
+          // Round 6 §2: the durable TradeIntent guard — seam-level mock (the
+          // intent matrix lives in trade-intent.service.spec.ts).
+          provide: TradeIntentService,
+          useValue: {
+            resolveIntentForExecutionBySignal: jest.fn().mockResolvedValue({
+              id: 'intent-1',
+              userId: 'user-1',
+              signalId: 'sig-001',
+              status: 'CREATED',
+              expiresAt: new Date(Date.now() + 60_000),
+            }),
+            markExecuted: jest.fn().mockResolvedValue(undefined),
+            markRejected: jest.fn().mockResolvedValue(undefined),
           },
         },
         { provide: ExecutionOrchestrator, useValue: mockOrchestratorInstance },

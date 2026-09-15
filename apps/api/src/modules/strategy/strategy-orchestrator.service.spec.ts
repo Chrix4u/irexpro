@@ -3,6 +3,9 @@ import { Logger } from '@nestjs/common';
 import { StrategyOrchestratorService } from './strategy-orchestrator.service';
 import { AiSignalIdentityGateService } from '../execution/orchestration/signal-identity.gate';
 import { SignalIdentityRegistration } from '../execution/orchestration/signal-identity.gate';
+import { TradeIntentService } from '../execution/services/trade-intent.service';
+import { TradingAuthorityService } from '../execution-authority/trading-authority.service';
+import { SharedControlRevisionService } from '../execution-authority/shared-control-revision.service';
 import { RiskService } from '../risk/risk.service';
 import { ExecutionService } from '../execution/execution.service';
 import { BrokerService } from '../broker/broker.service';
@@ -65,6 +68,18 @@ describe('StrategyOrchestratorService', () => {
   let auditService: jest.Mocked<Partial<AuditService>>;
   let eventBus: jest.Mocked<Partial<DomainEventBus>>;
   let identityGateMock: { registerOrReuse: jest.Mock; markProcessed: jest.Mock };
+  /** Round 6 §2: TradeIntent-layer + authority-read mocks (seam level). */
+  let tradeIntentMock: {
+    recordOrReuseIntent: jest.Mock;
+    markRejected: jest.Mock;
+    markExecuted: jest.Mock;
+  };
+  let authorityReadMock: { getCurrentGeneration: jest.Mock };
+  let sharedRevisionMock: {
+    getCurrentTradingPolicyRevision: jest.Mock;
+    getCurrentProviderVerificationRevision: jest.Mock;
+    getCurrentExecutionControlRevision: jest.Mock;
+  };
 
   /** Full SignalIdentityRegistration shape (Round 6 mock contract). */
   const registrationFor = (
@@ -100,6 +115,11 @@ describe('StrategyOrchestratorService', () => {
 
     brokerService = {
       hasActiveConnection: jest.fn().mockResolvedValue(true),
+      // Round 6 §2: best-effort logical-account-key read at intent intake.
+      findConnectionById: jest.fn().mockResolvedValue({
+        id: 'conn-1',
+        logicalAccountKey: 'paper-broker::demo::acct-1',
+      }),
     };
 
     auditService = {
@@ -120,6 +140,35 @@ describe('StrategyOrchestratorService', () => {
       markProcessed: jest.fn().mockResolvedValue(undefined),
     };
 
+    // Round 6 §2: the durable TradeIntent layer is mocked at the seam (its
+    // own matrix lives in trade-intent.service.spec.ts) — every NEW signal
+    // records (or reuses) a CREATED intent with the authority generations
+    // CURRENT at creation.
+    tradeIntentMock = {
+      recordOrReuseIntent: jest.fn().mockImplementation(async (facts: { signalId: string; userId: string }) => ({
+        created: true,
+        intent: {
+          id: `intent-${facts.signalId}`,
+          userId: facts.userId,
+          signalId: facts.signalId,
+          status: 'CREATED',
+          expiresAt: new Date(Date.now() + 60_000),
+        },
+      })),
+      markRejected: jest.fn().mockResolvedValue(undefined),
+      markExecuted: jest.fn().mockResolvedValue(undefined),
+    };
+
+    authorityReadMock = {
+      getCurrentGeneration: jest.fn().mockResolvedValue(1),
+    };
+
+    sharedRevisionMock = {
+      getCurrentTradingPolicyRevision: jest.fn().mockResolvedValue(1),
+      getCurrentProviderVerificationRevision: jest.fn().mockResolvedValue(1),
+      getCurrentExecutionControlRevision: jest.fn().mockResolvedValue(1),
+    };
+
     module = await Test.createTestingModule({
       providers: [
         StrategyOrchestratorService,
@@ -136,6 +185,11 @@ describe('StrategyOrchestratorService', () => {
           provide: AiSignalIdentityGateService,
           useValue: identityGateMock,
         },
+        // Round 6 §2: TradeIntent layer + authority/revision reads at intent
+        // creation (matrices live in their own suites).
+        { provide: TradeIntentService, useValue: tradeIntentMock },
+        { provide: TradingAuthorityService, useValue: authorityReadMock },
+        { provide: SharedControlRevisionService, useValue: sharedRevisionMock },
       ],
     }).compile();
 

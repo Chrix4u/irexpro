@@ -105,6 +105,16 @@ export class Trade {
   @Column({ name: 'risk_period_id', type: 'uuid', nullable: true })
   riskPeriodId: string | null;
 
+  /**
+   * Round 6 live-execution completion (§2): the durable TradeIntent this
+   * trade was executed from. IMMUTABLE provenance — links the executed trade
+   * back to the normalized AI decision for the §20 reconstruction chain
+   * (AI decision → intent → allocation → sizing → grant → dispatch →
+   * reconciliation). NULL = legacy rows executed before the intent layer.
+   */
+  @Column({ name: 'trade_intent_id', type: 'uuid', nullable: true })
+  tradeIntentId: string | null;
+
   // ─── Order parameters (Risk Engine-validated values) ─────────────────────
 
   @Column({ name: 'instrument', type: 'varchar', length: 50 })

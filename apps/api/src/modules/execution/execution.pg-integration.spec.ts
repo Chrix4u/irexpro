@@ -5,6 +5,8 @@ import { Trade } from './entities/trade.entity';
 import { TradingSession } from './entities/trading-session.entity';
 import { RiskGrant } from './entities/risk-grant.entity';
 import { ExecutionConfirmation } from './entities/execution-confirmation.entity';
+import { TradeIntent } from './entities/trade-intent.entity';
+import { TradeIntentService } from './services/trade-intent.service';
 import { ExecutionMode } from './interfaces/execution-authority';
 import { ExecutionSessionResolutionService } from './execution-session.resolution';
 import { Order } from './orders/order.entity';
@@ -51,6 +53,7 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
   let sessionRepo: Repository<TradingSession>;
   let confirmationRepo: Repository<ExecutionConfirmation>;
   let tradeRepo: Repository<Trade>;
+  let tradeIntentService: TradeIntentService;
 
   const userId = '11111111-1111-1111-1111-111111111111';
   const connectionId = '22222222-2222-2222-2222-222222222222';
@@ -128,6 +131,32 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
   /** decision() + a seeded ACTIVE grant (the durable authority handle). */
   const grantedDecision = async (signalId: string, maxDailyTrades = 1): Promise<RiskDecision> => {
     const grantId = await seedGrant(signalId);
+    // Round 6 §2: the durable TradeIntent is recorded at intake — the
+    // executeTrade intent guard fail-closes without it.
+    await tradeIntentService.recordOrReuseIntent({
+      userId,
+      signalId,
+      signalGeneratedAt: new Date(),
+      brokerConnectionId: connectionId,
+      logicalAccountKey: null,
+      tradingSessionId: sessionId,
+      strategyCode: 'test-strategy',
+      modelVersion: 'test-model',
+      timeframe: 'M15',
+      instrument: 'EURUSD',
+      direction: 'BUY',
+      requestedLotSize: '0.05',
+      requestedEntryPrice: null,
+      stopLoss: '1.07500',
+      takeProfit: '1.09500',
+      trailingStopPips: null,
+      rationale: null,
+      metadata: null,
+      authorityGeneration: 1,
+      tradingPolicyRevision: 1,
+      providerVerificationRevision: 1,
+      executionControlRevision: 1,
+    });
     return { ...decision(signalId, maxDailyTrades), grantId };
   };
 
@@ -139,7 +168,7 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
       username: process.env.DB_USER ?? 'irexpro',
       password: process.env.DB_PASSWORD ?? 'test_password',
       database: process.env.DB_NAME ?? 'irexpro_test',
-      entities: [Order, Trade, TradingSession, RiskGrant, ExecutionConfirmation],
+      entities: [Order, Trade, TradingSession, RiskGrant, ExecutionConfirmation, TradeIntent],
       synchronize: false,
       logging: false,
     });
@@ -150,6 +179,7 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
     await dataSource.query('DROP TABLE IF EXISTS trading.execution_confirmations');
     await dataSource.query('DROP TABLE IF EXISTS trading.risk_grants');
     await dataSource.query('DROP TABLE IF EXISTS trading.trading_sessions');
+    await dataSource.query('DROP TABLE IF EXISTS trading.trade_intents');
     // The ACTIVE session bound to every seeded grant (task 50-c: the
     // boundary re-reads CURRENT session/authority state).
     await dataSource.query(`CREATE TABLE trading.trading_sessions (
@@ -166,6 +196,42 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
       ended_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+    // trade_intents — mirrors migration 1754400000000 (Round 6 §2: the
+    // durable normalized AI-decision layer; UNIQUE (user_id, intent_key) is
+    // the exactly-once intent identity backstop).
+    await dataSource.query(`CREATE TABLE trading.trade_intents (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL,
+      intent_key VARCHAR(255) NOT NULL,
+      signal_id VARCHAR(100) NOT NULL,
+      signal_generated_at TIMESTAMPTZ NOT NULL,
+      broker_connection_id UUID NOT NULL,
+      logical_account_key VARCHAR(255),
+      trading_session_id UUID,
+      strategy_code VARCHAR(100),
+      model_version VARCHAR(100),
+      timeframe VARCHAR(20),
+      instrument VARCHAR(30) NOT NULL,
+      direction VARCHAR(4) NOT NULL,
+      entry_type VARCHAR(20) NOT NULL DEFAULT 'MARKET',
+      requested_lot_size NUMERIC(10,4) NOT NULL,
+      requested_entry_price NUMERIC(18,8),
+      stop_loss NUMERIC(18,8),
+      take_profit NUMERIC(18,8),
+      trailing_stop_pips NUMERIC(10,2),
+      expires_at TIMESTAMPTZ NOT NULL,
+      market_data_ref JSONB,
+      rationale TEXT,
+      metadata JSONB,
+      authority_generation INTEGER NOT NULL,
+      trading_policy_revision INTEGER,
+      provider_verification_revision INTEGER,
+      execution_control_revision INTEGER,
+      status VARCHAR(20) NOT NULL DEFAULT 'CREATED',
+      trade_id UUID,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT uq_trade_intents_user_intent_key UNIQUE (user_id, intent_key))`);
     // risk_grants — mirrors migration 1754000000000 + the 1754200000000
     // fencing column (credential_generation).
     await dataSource.query(`CREATE TABLE trading.risk_grants (
@@ -294,6 +360,7 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
     await dataSource.query('TRUNCATE TABLE trading.execution_confirmations');
     await dataSource.query('TRUNCATE TABLE trading.risk_grants');
     await dataSource.query('TRUNCATE TABLE trading.trading_sessions');
+    await dataSource.query('TRUNCATE TABLE trading.trade_intents');
     // Real repositories: trade-lifecycle CAS + the boundary operate on the
     // real PostgreSQL rows (task 50-c).
     tradeRepo = dataSource.getRepository(Trade);
@@ -454,6 +521,11 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
       } as never,
     );
     const tradeCas = new TradeLifecycleCasService(tradeRepo, auditService);
+    // Round 6 §2: the REAL TradeIntentService against real PostgreSQL rows —
+    // the intent guard + exactly-once identity run in this CI-gated matrix.
+    tradeIntentService = new TradeIntentService(
+      dataSource.getRepository(TradeIntent),
+    );
     service = new ExecutionService(
       tradeRepo as unknown as Repository<Trade>,
       sessionRepo,
@@ -467,6 +539,7 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
       sessionResolution,
       boundary,
       tradeCas,
+      tradeIntentService,
     );
   });
 

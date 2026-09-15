@@ -44,6 +44,10 @@ import {
   FinalDispatchBoundary,
 } from './orchestration/final-dispatch-boundary';
 import { ExecutionIntent } from './orchestration/execution-intent.interface';
+import {
+  TradeIntentNotUsableError,
+  TradeIntentService,
+} from './services/trade-intent.service';
 
 /** Invalidation reason stamped on RiskGrants when the session authority
  *  generation advances (mode change / end / suspension — issue #298). */
@@ -105,6 +109,7 @@ export class ExecutionService {
     private readonly sessionResolution: ExecutionSessionResolutionService,
     private readonly finalDispatchBoundary: FinalDispatchBoundary,
     private readonly tradeCas: TradeLifecycleCasService,
+    private readonly tradeIntents: TradeIntentService,
   ) {}
 
   // ─── Main entry point ────────────────────────────────────────────────────
@@ -200,6 +205,44 @@ export class ExecutionService {
       );
     }
 
+    // ── Step 1c (Round 6 §2): durable TradeIntent guard ───────────────────
+    // The AI decision's normalized intent must exist (recorded at signal
+    // intake, before risk evaluation) and still be USABLE: a stale, expired,
+    // superseded, already-executed or previously-rejected decision can NEVER
+    // create new exposure — fail-closed BEFORE any reservation or provider
+    // call. Both production callers (automated pipeline + SEMI_AUTO
+    // confirmation) route through the intent-recording orchestrator, so a
+    // missing intent means an off-pipeline path is attempting exposure.
+    let tradeIntent;
+    try {
+      tradeIntent = await this.tradeIntents.resolveIntentForExecutionBySignal(userId, signalId);
+    } catch (err) {
+      if (err instanceof TradeIntentNotUsableError) {
+        this.logger.warn(
+          `executeTrade() blocked by the trade-intent guard for user ${userId} ` +
+            `(signal ${signalId}): ${err.reason}`,
+        );
+        await this.auditService.log({
+          actorUserId: userId,
+          action: AuditAction.EXECUTION_AUTHORITY_BLOCKED,
+          resourceType: 'TradeIntent',
+          resourceId: err.intentId,
+          severity: AuditSeverity.WARNING,
+          metadata: {
+            blockedReason: 'TRADE_INTENT_NOT_USABLE',
+            intentStatus: err.status,
+            signalId,
+            message: err.reason,
+          },
+        });
+        throw new ForbiddenException(
+          `Trade blocked: the AI decision for signal ${signalId} is not usable ` +
+            `(${err.status}) — ${err.reason}`,
+        );
+      }
+      throw err;
+    }
+
     // ── Step 1b-continued (Round 6 #365): READ-ONLY boundary authorization.
     // The boundary re-verifies the ENTIRE authority chain against CURRENT
     // durable state and resolves the EXACT grant-bound connection — WITHOUT
@@ -240,6 +283,7 @@ export class ExecutionService {
       userId,
       riskDecision as RiskDecision & { decision: 'APPROVED' },
       connection.id,
+      tradeIntent.id,
     );
 
     // Handle the three possible outcomes:
@@ -262,6 +306,9 @@ export class ExecutionService {
         },
         severity: AuditSeverity.WARNING,
       });
+      // §2: bind the intent to the EXISTING trade (idempotent CAS — an
+      // already-EXECUTED intent stays bound to its original trade).
+      await this.tradeIntents.markExecuted(tradeIntent.id, reservation.trade.id);
       return reservation.trade;
     }
 
@@ -270,6 +317,12 @@ export class ExecutionService {
         `Daily trade limit reached for user ${userId}: ${reservation.currentCount}/${reservation.maxDailyTrades} ` +
           `(signal ${signalId} rejected by atomic advisory-lock guard)`,
       );
+      // §2: the daily-cap rejection is DEFINITIVE for this decision — the
+      // intent is terminally REJECTED so a replay of the same AI decision can
+      // never re-enter the pipeline (the signal-identity duplicate-recovery
+      // path would return the first outcome anyway; this makes the intent
+      // state itself honest).
+      await this.tradeIntents.markRejected(tradeIntent.id);
       await this.auditService.log({
         actorUserId: userId,
         action: AuditAction.TRADE_REJECTED,
@@ -294,6 +347,10 @@ export class ExecutionService {
     // The advisory lock has been released (transaction committed).
     // Now proceed to broker submission.
     const trade = reservation.trade;
+    // §2: the intent is CONSUMED by this reservation — binding it to the
+    // trade id makes any later replay of the same AI decision fail closed
+    // at the intent guard (already executed) before reaching the provider.
+    await this.tradeIntents.markExecuted(tradeIntent.id, trade.id);
     const idempotencyKey = this.generateIdempotencyKey(
       userId,
       order.instrument,
@@ -936,6 +993,7 @@ export class ExecutionService {
     userId: string,
     riskDecision: RiskDecision & { decision: 'APPROVED' },
     connectionId: string,
+    tradeIntentId?: string,
   ): Promise<
     | { status: 'RESERVED_NEW'; trade: Trade }
     | { status: 'DUPLICATE_EXISTING'; trade: Trade }
@@ -1027,8 +1085,9 @@ export class ExecutionService {
              instrument, direction, lot_size, requested_entry_price,
              stop_loss, take_profit, trailing_stop_pips, status,
              trading_session_id, logical_account_key, account_currency, risk_period_id,
+             trade_intent_id,
              created_at, updated_at)
-           VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'PENDING', $12, $13, $14, $15, NOW(), NOW())
+           VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'PENDING', $12, $13, $14, $15, $16, NOW(), NOW())
            RETURNING *`,
           [
             userId,
@@ -1046,6 +1105,7 @@ export class ExecutionService {
             riskDecision.logicalAccountKey ?? null,
             riskDecision.accountCurrency ?? null,
             riskDecision.riskPeriodId ?? null,
+            tradeIntentId ?? null,
           ],
         );
       } catch (err) {
@@ -1525,6 +1585,15 @@ export class ExecutionService {
       ['broker_connection_id', 'brokerConnectionId'],
       ['signal_id', 'signalId'],
       ['idempotency_key', 'idempotencyKey'],
+      // Round 6 (#362) provenance + §2 intent link: hydrate the full
+      // immutable-provenance block so the in-memory Trade carries the §20
+      // reconstruction chain (session, logical account, currency, risk
+      // period, originating TradeIntent).
+      ['trading_session_id', 'tradingSessionId'],
+      ['logical_account_key', 'logicalAccountKey'],
+      ['account_currency', 'accountCurrency'],
+      ['risk_period_id', 'riskPeriodId'],
+      ['trade_intent_id', 'tradeIntentId'],
       ['instrument', 'instrument'],
       ['direction', 'direction'],
       ['lot_size', 'lotSize'],
@@ -1534,6 +1603,10 @@ export class ExecutionService {
       ['take_profit', 'takeProfit'],
       ['trailing_stop_pips', 'trailingStopPips'],
       ['external_order_id', 'externalOrderId'],
+      ['external_position_id', 'externalPositionId'],
+      ['commission', 'commission'],
+      ['swap', 'swap'],
+      ['dispatch_certainty', 'dispatchCertainty'],
       ['status', 'status'],
       ['exit_price', 'exitPrice'],
       ['realised_pnl', 'realisedPnl'],

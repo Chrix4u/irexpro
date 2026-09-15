@@ -16,6 +16,7 @@ import { BrokerService } from '../broker/broker.service';
 import { ExecutionOrchestrator } from './orchestration/execution-orchestrator.service';
 import { FinalDispatchBoundary } from './orchestration/final-dispatch-boundary';
 import { TradeLifecycleCasService } from './orders/trade-lifecycle-cas.service';
+import type { TradeIntentService } from './services/trade-intent.service';
 import { AuditService } from '../audit/audit.service';
 import { DomainEventBus } from '../events/event-bus.service';
 import { Trade } from './entities/trade.entity';
@@ -175,6 +176,13 @@ describe('ExecutionService — session authority on real PostgreSQL (#295/#298)'
       // dedicated final-dispatch-boundary / trade-cas specs).
       {} as FinalDispatchBoundary,
       {} as TradeLifecycleCasService,
+      // Round 6 §2: the durable TradeIntent guard is a stub seam in this
+      // session-authority matrix (executeTrade is not exercised here).
+      {
+        resolveIntentForExecutionBySignal: jest.fn(),
+        markExecuted: jest.fn(),
+        markRejected: jest.fn(),
+      } as unknown as TradeIntentService,
     );
   });
 

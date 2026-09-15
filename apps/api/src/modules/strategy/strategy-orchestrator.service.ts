@@ -15,6 +15,12 @@ import {
   SignalIdentityRegistration,
 } from '../execution/orchestration/signal-identity.gate';
 import {
+  TradeIntentService,
+  TradeIntentFacts,
+} from '../execution/services/trade-intent.service';
+import { TradingAuthorityService } from '../execution-authority/trading-authority.service';
+import { SharedControlRevisionService } from '../execution-authority/shared-control-revision.service';
+import {
   AiSignalCandidate,
   StrategyDuplicateOfTrade,
   StrategyOutcome,
@@ -79,6 +85,12 @@ export class StrategyOrchestratorService {
     private readonly auditService: AuditService,
     private readonly eventBus: DomainEventBus,
     private readonly signalIdentityGate: AiSignalIdentityGateService,
+    // Round 6 live-execution completion (§2): the durable TradeIntent layer —
+    // every NEW AI decision is normalized + persisted at intake, BEFORE risk
+    // evaluation, with the authority generations CURRENT at creation.
+    private readonly tradeIntentService: TradeIntentService,
+    private readonly tradingAuthorityService: TradingAuthorityService,
+    private readonly sharedControlRevisionService: SharedControlRevisionService,
   ) {}
 
   /**
@@ -236,6 +248,40 @@ export class StrategyOrchestratorService {
       return this.recoverDuplicateOutcome(candidate, registration);
     }
 
+    // ── Gate 4.7: Durable TradeIntent recording (Round 6 §2) ────────────
+    // EVERY new AI decision is normalized into a durable TradeIntent BEFORE
+    // risk evaluation: full decision provenance (source decision id +
+    // ORIGINAL generatedAt, user, connection/logical account, strategy/
+    // model/version, instrument, direction, entry type, requested exposure,
+    // protective parameters, expiry, rationale, authority generations at
+    // creation). Idempotent per (userId, signalId) — the unique intent key
+    // means retries/worker restarts/queue redelivery can never mint a second
+    // equivalent intent. Fail-closed: without the durable intent the decision
+    // may NOT proceed to risk evaluation (executeTrade enforces the guard).
+    let tradeIntentId: string;
+    try {
+      tradeIntentId = (
+        await this.recordTradeIntent(candidate, session, registration)
+      ).id;
+    } catch (err) {
+      const reason = `Trade intent could not be recorded (fail-closed): ${(err as Error).message}`;
+      this.logger.error(`Signal ${signalId}: intent recording failed`, (err as Error).stack);
+      await this.auditService.log({
+        actorUserId: userId,
+        action: AuditAction.AI_SIGNAL_EXECUTION_FAILED,
+        severity: AuditSeverity.CRITICAL,
+        resourceType: 'AiSignal',
+        resourceId: signalId,
+        metadata: {
+          instrument: candidate.instrument,
+          direction: candidate.direction,
+          failureCode: 'TRADE_INTENT_RECORD_FAILED',
+          message: (err as Error).message,
+        },
+      });
+      return { outcome: 'EXECUTION_FAILED', signalId, reason };
+    }
+
     // ── Build ProposedTrade ────────────────────────────────────────────────────────
     // (Round 5 #295/#298/#301/#302): the authority binding comes from the
     // RESOLVED ACTIVE session (Gate 3) — sessionId, sessionGeneration,
@@ -301,6 +347,15 @@ export class StrategyOrchestratorService {
         riskDecision.decision === 'SUSPENDED' ? 'RISK_SUSPENDED' : 'RISK_REJECTED';
       this.logger.warn(
         `Signal ${signalId} RISK ${riskDecision.decision}: ${riskDecision.rejectionCode}`,
+      );
+      // §2: a risk rejection is DEFINITIVE for this decision — the intent is
+      // terminally REJECTED (a replay of the same AI decision can never
+      // re-enter exposure through the intent guard).
+      await this.tradeIntentService.markRejected(tradeIntentId).catch((err) =>
+        this.logger.warn(
+          `Signal ${signalId}: intent ${tradeIntentId} could not be marked REJECTED ` +
+            `(${(err as Error).message}) — the duplicate-recovery path still fails closed`,
+        ),
       );
       await this.auditService.log({
         actorUserId: userId,
@@ -405,6 +460,98 @@ export class StrategyOrchestratorService {
   }
 
   // ─── Internal helpers ──────────────────────────────────────────────────────
+
+  /**
+   * Round 6 live-execution completion (§2): record (or reuse) the durable
+   * TradeIntent for ONE new AI decision — the normalized, provenance-complete
+   * form of the decision, persisted BEFORE risk evaluation.
+   *
+   * Fail-closed by construction: the authority generations CURRENT at creation
+   * are read from the authoritative services (never defaulted); the ORIGINAL
+   * identity-gate-registered generatedAt is the decision instant (a replay can
+   * never refresh it); the connection's logical-account key is read
+   * best-effort (a transient read failure records NULL — the trade's own
+   * immutable provenance still carries the authoritative key at reservation).
+   *
+   * Returns the durable intent (created or reused — a UNIQUE(user_id,
+   * intent_key) race means a concurrent worker already recorded it; the
+   * winner's row is the truth, never a second intent).
+   */
+  private async recordTradeIntent(
+    candidate: AiSignalCandidate,
+    session: TradingSession,
+    registration: SignalIdentityRegistration,
+  ) {
+    const { userId, signalId } = candidate;
+
+    // Authority/policy generations CURRENT at creation — fail-closed reads
+    // (the services never default; an unreadable store throws, which the
+    // caller treats as a pipeline failure, not a silent 1/0).
+    const [
+      authorityGeneration,
+      tradingPolicyRevision,
+      providerVerificationRevision,
+      executionControlRevision,
+    ] = await Promise.all([
+      this.tradingAuthorityService.getCurrentGeneration(userId),
+      this.sharedControlRevisionService.getCurrentTradingPolicyRevision(),
+      this.sharedControlRevisionService.getCurrentProviderVerificationRevision(),
+      this.sharedControlRevisionService.getCurrentExecutionControlRevision(),
+    ]);
+
+    // Best-effort logical-account key at intake (§2 provenance; the
+    // authoritative key is re-proven at reservation from the grant binding).
+    let logicalAccountKey: string | null = null;
+    try {
+      const connection = await this.brokerService.findConnectionById(
+        session.brokerConnectionId,
+        userId,
+      );
+      logicalAccountKey = connection?.logicalAccountKey ?? null;
+    } catch {
+      logicalAccountKey = null;
+    }
+
+    const facts: TradeIntentFacts = {
+      userId,
+      signalId,
+      signalGeneratedAt: registration.generatedAt,
+      brokerConnectionId: session.brokerConnectionId,
+      logicalAccountKey,
+      tradingSessionId: session.id,
+      strategyCode: candidate.strategyCode ?? null,
+      modelVersion: candidate.modelVersion ?? null,
+      timeframe: candidate.timeframe ?? null,
+      instrument: candidate.instrument,
+      direction: candidate.direction,
+      requestedLotSize: String(candidate.suggestedVolume),
+      requestedEntryPrice:
+        candidate.suggestedEntryPrice != null ? String(candidate.suggestedEntryPrice) : null,
+      stopLoss: candidate.suggestedStopLoss != null ? String(candidate.suggestedStopLoss) : null,
+      takeProfit: candidate.suggestedTakeProfit != null ? String(candidate.suggestedTakeProfit) : null,
+      trailingStopPips: null,
+      rationale: null,
+      metadata: {
+        confidenceScore: candidate.confidenceScore,
+        marketRegime: candidate.marketRegime ?? null,
+        volatilityScore: candidate.volatilityScore ?? null,
+        ...(candidate.metadata ?? {}),
+      },
+      authorityGeneration,
+      tradingPolicyRevision,
+      providerVerificationRevision,
+      executionControlRevision,
+    };
+
+    const registrationOutcome = await this.tradeIntentService.recordOrReuseIntent(facts);
+    if (!registrationOutcome.created) {
+      this.logger.log(
+        `Signal ${signalId}: trade intent reused (recorded by a concurrent worker) — ` +
+          'exactly-once intent identity',
+      );
+    }
+    return registrationOutcome.intent;
+  }
 
   /**
    * Round 6 (#302, task 6-d): recover a DUPLICATE signal delivery from the

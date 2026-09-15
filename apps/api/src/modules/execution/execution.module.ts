@@ -12,6 +12,7 @@ import { FinalDispatchBoundary } from './orchestration/final-dispatch-boundary';
 import { AiSignalIdentityGateService } from './orchestration/signal-identity.gate';
 import { TradeLifecycleCasService } from './orders/trade-lifecycle-cas.service';
 import { Trade } from './entities/trade.entity';
+import { TradeIntent } from './entities/trade-intent.entity';
 import { TradingSession } from './entities/trading-session.entity';
 import { RiskGrant } from './entities/risk-grant.entity';
 import { ExecutionConfirmation } from './entities/execution-confirmation.entity';
@@ -36,6 +37,7 @@ import { AuditModule } from '../audit/audit.module';
 import { ExecutionControlModule } from '../execution-control/execution-control.module';
 import { ExecutionAuthorityModule } from '../execution-authority/execution-authority.module';
 import { DailyRiskPeriodModule } from './daily-risk-period.module';
+import { TradeIntentService } from './services/trade-intent.service';
 
 /**
  * ExecutionModule — Live trade execution, lifecycle management, and
@@ -64,6 +66,7 @@ import { DailyRiskPeriodModule } from './daily-risk-period.module';
   imports: [
     TypeOrmModule.forFeature([
       Trade,
+      TradeIntent,
       TradingSession,
       RiskGrant,
       ExecutionConfirmation,
@@ -95,6 +98,10 @@ import { DailyRiskPeriodModule } from './daily-risk-period.module';
   controllers: [ExecutionController, ExecutionConfirmationController],
   providers: [
     ExecutionService,
+    // Round 6 live-execution completion (§2): the durable normalized
+    // TradeIntent layer — idempotent per (user, intentKey), full decision
+    // provenance, authority generations at creation.
+    TradeIntentService,
     // Round 5 (#295): the session-resolution seam every EXECUTION-side
     // NEW-exposure decision uses (TradingSession = authoritative target).
     ExecutionSessionResolutionService,
@@ -125,6 +132,7 @@ import { DailyRiskPeriodModule } from './daily-risk-period.module';
   ],
   exports: [
     ExecutionService,
+    TradeIntentService,
     ExecutionSessionResolutionService,
     ExecutionOrchestrator,
     FinalDispatchBoundary,
