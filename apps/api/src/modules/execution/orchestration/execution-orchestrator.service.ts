@@ -23,6 +23,8 @@ import { OrderService } from '../orders/order.service';
 import { OrderStatus } from '../orders/order.enums';
 import { ExecutionIntent, ProviderDispatchOutcome } from './execution-intent.interface';
 import { MarketSafetyGateService } from './market-safety-gate.service';
+// Round 6 live-execution completion (§14): the per-account dispatch lease.
+import { AccountDispatchLeaseService } from './account-dispatch-lease.service';
 import { FinalDispatchBoundary } from './final-dispatch-boundary';
 import { mapProviderOrderResponse } from './provider-response.mapper';
 import { classifyIntentOperation, isExposureIncreasingOperation } from './provider-operation-class';
@@ -94,6 +96,11 @@ export class ExecutionOrchestrator {
     // gate — proven fresh quote + spread sanity + entry deviation, BEFORE
     // the commitment (zero provider calls on failure).
     private readonly marketSafetyGate: MarketSafetyGateService,
+    // Round 6 live-execution completion (§14): the per-account dispatch
+    // lease — the FULL dispatch critical section (reservation → gates →
+    // commitment → provider call → outcome) runs strictly serialized per
+    // broker account, in-process (entries, §10 exits, confirmations).
+    private readonly accountDispatchLease: AccountDispatchLeaseService,
   ) {}
 
   // ─── 1. Validation pipeline (fail-closed) ───────────────────────────────
@@ -241,6 +248,14 @@ export class ExecutionOrchestrator {
    * - exactly-once dispatch per clientOrderId (duplicates return DUPLICATE)
    * - every outcome is durably recorded on the order before returning
    * - UNKNOWN outcomes leave the order RECONCILIATION_PENDING (fail-closed)
+   *
+   * Round 6 §14: the FULL critical section runs under the per-account
+   * dispatch lease — dispatches against one broker account are strictly
+   * serialized in-process (an entry, a §10 exit, a SEMI_AUTO confirmation
+   * dispatch, or a reconciliation repair can never interleave on the same
+   * account). Different accounts proceed concurrently. The lease is the
+   * in-process complement of the durable exactly-once surfaces
+   * (advisory locks, clientOrderId idempotency, CAS transitions).
    */
   async dispatchOrder(
     intent: ExecutionIntent,
@@ -249,6 +264,22 @@ export class ExecutionOrchestrator {
       /** The RiskGrant authorizing this dispatch (consumed AT the commitment). */
       grantId: string;
       /** The SEMI_AUTO one-time confirmation driving this dispatch, if any. */
+      confirmationId?: string | null;
+      origin?: 'PIPELINE' | 'USER_CONFIRMATION';
+    },
+  ): Promise<ProviderDispatchOutcome> {
+    return this.accountDispatchLease.withAccountDispatchLease(
+      intent.brokerConnectionId,
+      () => this.dispatchOrderUnderLease(intent, connection, commitment),
+    );
+  }
+
+  /** The dispatch critical section (§14: ALWAYS under the account lease). */
+  private async dispatchOrderUnderLease(
+    intent: ExecutionIntent,
+    connection: BrokerConnection,
+    commitment?: {
+      grantId: string;
       confirmationId?: string | null;
       origin?: 'PIPELINE' | 'USER_CONFIRMATION';
     },

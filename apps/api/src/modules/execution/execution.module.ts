@@ -43,6 +43,8 @@ import { TradeIntentService } from './services/trade-intent.service';
 // Round 6 live-execution completion (§3/§4): the portfolio allocation
 // engine + the deterministic fail-closed position-sizing engine.
 import { MarketSafetyGateService } from './orchestration/market-safety-gate.service';
+// Round 6 live-execution completion (§14): the per-account dispatch lease.
+import { AccountDispatchLeaseService } from './orchestration/account-dispatch-lease.service';
 import { AllocationService } from './services/allocation.service';
 import { PositionSizingService } from './services/position-sizing.service';
 // Round 6 live-execution completion (§8): the protective-order
@@ -122,6 +124,9 @@ import { ProtectiveOrderReconciliationService } from './reconciliation/protectiv
     // proven fresh quote + spread sanity + entry deviation, before the
     // provider-dispatch commitment, NEW-EXPOSURE PLACE only.
     MarketSafetyGateService,
+    // Round 6 §14: the per-account dispatch lease — the full dispatch
+    // critical section is strictly serialized per broker account.
+    AccountDispatchLeaseService,
     // Round 5 (#295): the session-resolution seam every EXECUTION-side
     // NEW-exposure decision uses (TradingSession = authoritative target).
     ExecutionSessionResolutionService,

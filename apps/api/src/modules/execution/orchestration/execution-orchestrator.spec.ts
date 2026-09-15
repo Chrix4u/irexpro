@@ -1,6 +1,7 @@
 import { ForbiddenException, Logger } from '@nestjs/common';
 import { ExecutionOrchestrator } from './execution-orchestrator.service';
 import type { MarketSafetyGateService } from './market-safety-gate.service';
+import { AccountDispatchLeaseService } from './account-dispatch-lease.service';
 import { ExecutionIntent } from './execution-intent.interface';
 import { Order } from '../orders/order.entity';
 import { OrderKind, OrderStatus, OrderTimeInForce } from '../orders/order.enums';
@@ -171,6 +172,9 @@ describe('ExecutionOrchestrator', () => {
       {
         assertMarketSafeForDispatch: jest.fn().mockResolvedValue(undefined),
       } as unknown as MarketSafetyGateService,
+      // Round 6 §14: the per-account dispatch lease (real implementation —
+      // its own matrix lives in account-dispatch-lease.spec.ts).
+      new AccountDispatchLeaseService(),
     );
   });
 

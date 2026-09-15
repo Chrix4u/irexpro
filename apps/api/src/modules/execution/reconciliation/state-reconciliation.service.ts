@@ -27,6 +27,7 @@ import {
 import { ReconciliationDiscrepancyType, ReconciliationRunStatus } from './reconciliation.enums';
 import { ReconciliationPersistenceService } from './reconciliation-persistence.service';
 import { ReconciliationResolutionService } from './reconciliation-resolution.service';
+import { ProviderDispatchCertainty } from '../../broker/interfaces/provider-dispatch-certainty';
 
 /** Public outcome of one reconciliation run (job aggregation + specs). */
 export interface ReconciliationRunOutcome {
@@ -40,16 +41,31 @@ export interface ReconciliationRunOutcome {
   errors: number;
 }
 
-/** Non-terminal order statuses reconciliation compares. */
+/** Non-terminal order statuses reconciliation compares.
+ *
+ * Round 6 live-execution completion (§12/§19): DISPATCH_COMMITTED is
+ * included — a hard crash between the provider-dispatch commitment and the
+ * outcome write leaves the order committed-but-unresolved, and the sweep's
+ * 7c crash-window convergence owns it from the next cycle (crash window
+ * previously INVISIBLE to reconciliation). */
 const RECONCILABLE_ORDER_STATUSES = [
   OrderStatus.SUBMITTED,
+  OrderStatus.DISPATCH_COMMITTED,
   OrderStatus.ACKNOWLEDGED,
   OrderStatus.PARTIALLY_FILLED,
   OrderStatus.RECONCILIATION_PENDING,
 ] as const;
 
-/** Trade statuses holding (or possibly holding) provider positions. */
-const RECONCILABLE_TRADE_STATUSES = [TradeStatus.OPEN, TradeStatus.RECONCILIATION_PENDING] as const;
+/** Trade statuses holding (or possibly holding) provider positions.
+ *
+ * Round 6 (§12/§19): PENDING is included — the trade reserved for a dispatch
+ * that crashed after commitment but before the outcome write must enter the
+ * sweep (previously an invisible crash-window state). */
+const RECONCILABLE_TRADE_STATUSES = [
+  TradeStatus.PENDING,
+  TradeStatus.OPEN,
+  TradeStatus.RECONCILIATION_PENDING,
+] as const;
 
 /** Keep reconciliation error handling aligned with the execution boundary. */
 const SECRET_LIKE_RUN = /[A-Za-z0-9]{16,}/g;
@@ -304,6 +320,95 @@ export class StateReconciliationService {
           errors++;
           this.logger.warn(
             `Order resolution failed for ${order.id} (retried next run): ` +
+              sanitizeReconciliationReason(err),
+          );
+        }
+      }
+
+      // 7c. Round 6 live-execution completion (§12/§19) — CRASH-WINDOW
+      // CONVERGENCE: orders stuck in DISPATCH_COMMITTED without a provider
+      // order id (a hard crash between the provider-dispatch commitment and
+      // the outcome write — previously INVISIBLE to this sweep).
+      for (const order of internalOrders) {
+        if (order.status !== OrderStatus.DISPATCH_COMMITTED || order.providerOrderId) continue;
+        try {
+          // (a) §26 stable identifier: the provider echoes the clientOrderId
+          //     on its own order record — a match PROVES the dispatch
+          //     reached the provider; the provider state is the truth.
+          const matched = providerOrders.find(
+            (p) => p.clientOrderId && p.clientOrderId === order.clientOrderId,
+          );
+          if (matched) {
+            const changed = await this.resolution.resolveOrderFromProviderState(order, matched);
+            if (changed) {
+              resolutionRefs.push({
+                type: ReconciliationDiscrepancyType.UNRESOLVED_EXECUTION_RESULT,
+                internalRefId: order.id,
+                providerRef: matched.providerOrderId,
+                resolution:
+                  `Crash-window order recovered by clientOrderId — provider state ` +
+                  `${matched.status} applied`,
+              });
+            }
+            continue;
+          }
+
+          // (b) Not visible at the provider: the dispatch outcome is
+          //     UNCERTAIN (absence from listOrders does NOT prove the call
+          //     never left — fail-closed, never auto-close). Converge the
+          //     order AND its reserved trade to RECONCILIATION_PENDING
+          //     (state-machine-legal for both), stamp
+          //     MAY_HAVE_REACHED_PROVIDER so uncertain-exposure accounting
+          //     retains the capacity reservation, and let the comparator's
+          //     MISSING_PROVIDER_ORDER discrepancy surface it. Every later
+          //     cycle re-attempts (a) — sync lag heals; a truly-absent
+          //     order stays visible for admin resolution.
+          await this.orderService
+            .resolveReconciliation(order.id, OrderStatus.RECONCILIATION_PENDING, {
+              rejectReason:
+                'Crash-window convergence: dispatch committed but provider outcome ' +
+                'unprovable (absent from provider order list) — uncertain, surfaced',
+            })
+            .catch((err) => {
+              // A concurrent writer (restarted pipeline re-driving the same
+              // order, another resolver) won the transition — never fatal.
+              this.logger.warn(
+                `Crash-window order ${order.id} could not converge to ` +
+                  `RECONCILIATION_PENDING (${sanitizeReconciliationReason(err)}) — guard held`,
+              );
+            });
+
+          if (order.tradeId) {
+            const pendingTrade = internalTrades.find(
+              (t) => t.id === order.tradeId && t.status === TradeStatus.PENDING,
+            );
+            if (pendingTrade) {
+              const guarded = await this.tradeRepo.update(
+                { id: pendingTrade.id, status: TradeStatus.PENDING },
+                {
+                  status: TradeStatus.RECONCILIATION_PENDING,
+                  brokerRejectionReason:
+                    'Crash-window convergence: dispatch committed, provider outcome ' +
+                    'unprovable — uncertain exposure retained (MAY_HAVE_REACHED_PROVIDER)',
+                  dispatchCertainty: ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER,
+                } as never,
+              );
+              if (guarded.affected) {
+                resolutionRefs.push({
+                  type: ReconciliationDiscrepancyType.UNRESOLVED_EXECUTION_RESULT,
+                  internalRefId: pendingTrade.id,
+                  providerRef: null,
+                  resolution:
+                    'Crash-window trade converged to RECONCILIATION_PENDING ' +
+                    '(MAY_HAVE_REACHED_PROVIDER) — uncertain exposure retained',
+                });
+              }
+            }
+          }
+        } catch (err) {
+          errors++;
+          this.logger.warn(
+            `Crash-window resolution failed for ${order.id} (retried next run): ` +
               sanitizeReconciliationReason(err),
           );
         }
