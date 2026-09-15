@@ -1,5 +1,7 @@
 import { forwardRef, Module } from '@nestjs/common';
 import { StrategyOrchestratorService } from './strategy-orchestrator.service';
+// Round 6 live-execution completion (§10): the serialized AI exit pipeline.
+import { AiExitOrchestratorService } from './ai-exit-orchestrator.service';
 import { StrategyLabController } from './strategy-lab.controller';
 import { StrategyLabService } from './strategy-lab.service';
 import { RiskModule } from '../risk/risk.module';
@@ -14,6 +16,7 @@ import { ExecutionAuthorityModule } from '../execution-authority/execution-autho
  *
  * Live execution remains on the mandatory pipeline:
  *   Signal → active-session gate → broker gate → Risk Engine → Execution Engine
+ *   Exit signal → session gate → identity gate → §10 serialization → closeTrade
  *
  * Strategy Lab is deliberately separate from that mutation path. It reads a
  * versioned deterministic fixture, verifies its checksum, and returns advisory
@@ -35,7 +38,7 @@ import { ExecutionAuthorityModule } from '../execution-authority/execution-autho
     ExecutionAuthorityModule,
   ],
   controllers: [StrategyLabController],
-  providers: [StrategyOrchestratorService, StrategyLabService],
-  exports: [StrategyOrchestratorService, StrategyLabService],
+  providers: [StrategyOrchestratorService, AiExitOrchestratorService, StrategyLabService],
+  exports: [StrategyOrchestratorService, AiExitOrchestratorService, StrategyLabService],
 })
 export class StrategyModule {}

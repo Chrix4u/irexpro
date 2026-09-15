@@ -151,6 +151,10 @@ export enum AuditAction {
   // Signal identity security event (issue #302): same signalId re-delivered
   // with a DIFFERENT material payload digest — never a new logical signal.
   AI_SIGNAL_IDENTITY_CONFLICT = 'AI_SIGNAL_IDENTITY_CONFLICT',
+  // Round 6 live-execution completion (§8): protective-order reconciliation
+  // — per-trade SL/TP verify/repair outcomes + per-connection summaries
+  // (PROTECTED/REPAIRED/REPAIR_FAILED/INTERNAL_UNPROVABLE/SKIPPED).
+  PROTECTIVE_ORDER_RECONCILED = 'PROTECTIVE_ORDER_RECONCILED',
 
   // Market data (internal)
   MARKET_DATA_REQUESTED = 'MARKET_DATA_REQUESTED',
@@ -163,6 +167,13 @@ export enum AuditAction {
   AI_SIGNAL_RISK_REJECTED = 'AI_SIGNAL_RISK_REJECTED',
   AI_SIGNAL_EXECUTED = 'AI_SIGNAL_EXECUTED',
   AI_SIGNAL_EXECUTION_FAILED = 'AI_SIGNAL_EXECUTION_FAILED',
+  // Round 6 live-execution completion (§10): the serialized AI exit pipeline
+  // — every exit decision is received/ignored/executed/failed with stable
+  // machine codes (metadata carries ids + instrument ONLY, never secrets).
+  AI_EXIT_SIGNAL_RECEIVED = 'AI_EXIT_SIGNAL_RECEIVED',
+  AI_EXIT_SIGNAL_IGNORED = 'AI_EXIT_SIGNAL_IGNORED',
+  AI_EXIT_SIGNAL_EXECUTED = 'AI_EXIT_SIGNAL_EXECUTED',
+  AI_EXIT_SIGNAL_FAILED = 'AI_EXIT_SIGNAL_FAILED',
 
   // Payment lifecycle
   PAYMENT_CHECKOUT_INITIATED = 'PAYMENT_CHECKOUT_INITIATED',

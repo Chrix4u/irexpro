@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { v4 as uuidv4 } from 'uuid';
 import { StrategyOrchestratorService } from '../strategy/strategy-orchestrator.service';
+// Round 6 live-execution completion (§10): the serialized AI exit pipeline.
+import { AiExitOrchestratorService } from '../strategy/ai-exit-orchestrator.service';
 import { AuditService } from '../audit/audit.service';
 import { DomainEventBus } from '../events/event-bus.service';
 import { DomainEventType } from '../events/enums/domain-event-type.enum';
@@ -8,6 +10,10 @@ import { AuditAction } from '../../common/enums/audit-action.enum';
 import { AuditSeverity } from '../audit/entities/audit-log.entity';
 import { AiSignalCandidate } from './interfaces/ai-signal-candidate.interface';
 import { StrategyResult } from '../strategy/interfaces/strategy.interface';
+import {
+  AiExitResult,
+  AiExitSignal,
+} from '../strategy/interfaces/ai-exit-signal.interface';
 
 /**
  * AiSignalService — Safe signal intake service for the AI Signal Engine.
@@ -26,6 +32,9 @@ export class AiSignalService {
 
   constructor(
     private readonly strategyOrchestrator: StrategyOrchestratorService,
+    // Round 6 §10: exits route through their OWN serialized orchestrator —
+    // risk-reducing decisions never enter the NEW-exposure pipeline.
+    private readonly exitOrchestrator: AiExitOrchestratorService,
     private readonly auditService: AuditService,
     private readonly eventBus: DomainEventBus,
   ) {}
@@ -116,6 +125,25 @@ export class AiSignalService {
    */
   async forwardToStrategyOrchestrator(candidate: AiSignalCandidate): Promise<StrategyResult> {
     return this.strategyOrchestrator.processSignal(candidate);
+  }
+
+  /**
+   * Round 6 live-execution completion (§10): the AI EXIT intake — a
+   * risk-reducing decision (close one trade / flatten an instrument).
+   *
+   * CRITICAL INVARIANT (same as entries): exits are NEVER sent directly to
+   * ExecutionService or a BrokerAdapter — they route through the §10
+   * serialized exit orchestrator (session gate → identity gate → per-user
+   * serialization → closeTrade with AI_CLOSE_SIGNAL). Entry-signal
+   * structural validation does NOT apply (no SL/TP/volume on an exit).
+   */
+  async receiveExitSignal(signal: AiExitSignal): Promise<AiExitResult> {
+    this.logger.log(
+      `Exit signal received: id=${signal.signalId} user=${signal.userId} ` +
+        `instrument=${signal.instrument}` +
+        (signal.tradeId ? ` trade=${signal.tradeId}` : ' (flatten instrument)'),
+    );
+    return this.exitOrchestrator.processExitSignal(signal);
   }
 
   /**

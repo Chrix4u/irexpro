@@ -45,6 +45,9 @@ import { TradeIntentService } from './services/trade-intent.service';
 import { MarketSafetyGateService } from './orchestration/market-safety-gate.service';
 import { AllocationService } from './services/allocation.service';
 import { PositionSizingService } from './services/position-sizing.service';
+// Round 6 live-execution completion (§8): the protective-order
+// reconciliation loop (per-trade SL/TP verify/repair).
+import { ProtectiveOrderReconciliationService } from './reconciliation/protective-order-reconciliation.service';
 
 /**
  * ExecutionModule — Live trade execution, lifecycle management, and
@@ -144,6 +147,9 @@ import { PositionSizingService } from './services/position-sizing.service';
     StateReconciliationService,
     ReconciliationPersistenceService,
     ReconciliationResolutionService,
+    // Round 6 §8: the protective-order reconciliation loop runs after every
+    // per-connection state sweep (same sequential adapter model).
+    ProtectiveOrderReconciliationService,
     TradeReconciliationJob,
     TradeReconciliationProducer,
   ],
