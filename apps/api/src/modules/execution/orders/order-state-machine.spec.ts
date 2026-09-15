@@ -169,9 +169,9 @@ describe('OrderStateMachine', () => {
       // In-flight: neither terminal nor uncertain.
       expect(OrderStateMachine.isTerminal(OrderStatus.DISPATCH_COMMITTED)).toBe(false);
       // No backwards edge to CREATED/SUBMITTED — the provider call is bound.
-      expect(OrderStateMachine.canTransition(OrderStatus.DISPATCH_COMMITTED, OrderStatus.CREATED)).toBe(
-        false,
-      );
+      expect(
+        OrderStateMachine.canTransition(OrderStatus.DISPATCH_COMMITTED, OrderStatus.CREATED),
+      ).toBe(false);
       expect(
         OrderStateMachine.canTransition(OrderStatus.DISPATCH_COMMITTED, OrderStatus.SUBMITTED),
       ).toBe(false);
@@ -184,9 +184,9 @@ describe('OrderStateMachine', () => {
         ),
       ).toBe(false);
       // Terminal states can never reach the commitment point.
-      expect(OrderStateMachine.canTransition(OrderStatus.FILLED, OrderStatus.DISPATCH_COMMITTED)).toBe(
-        false,
-      );
+      expect(
+        OrderStateMachine.canTransition(OrderStatus.FILLED, OrderStatus.DISPATCH_COMMITTED),
+      ).toBe(false);
       expect(
         OrderStateMachine.canTransition(OrderStatus.REJECTED, OrderStatus.DISPATCH_COMMITTED),
       ).toBe(false);

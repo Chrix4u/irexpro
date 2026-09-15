@@ -39,10 +39,7 @@ import { DomainEventType } from '../events/enums/domain-event-type.enum';
 import { TradeLifecycleCasService } from './orders/trade-lifecycle-cas.service';
 import { OrderKind, OrderTimeInForce } from './orders/order.enums';
 import { ExecutionOrchestrator } from './orchestration/execution-orchestrator.service';
-import {
-  FinalDispatchAuthorization,
-  FinalDispatchBoundary,
-} from './orchestration/final-dispatch-boundary';
+import { FinalDispatchBoundary } from './orchestration/final-dispatch-boundary';
 import { ExecutionIntent } from './orchestration/execution-intent.interface';
 
 /** Invalidation reason stamped on RiskGrants when the session authority
@@ -1568,4 +1565,3 @@ export class ExecutionService {
     return digest.readUInt32BE(0) & 0x7fffffff;
   }
 }
-

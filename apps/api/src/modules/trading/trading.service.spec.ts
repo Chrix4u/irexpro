@@ -779,4 +779,3 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
     });
   });
 });
-

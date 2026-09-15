@@ -366,8 +366,7 @@ export class FinalDispatchBoundary {
     }
 
     // ── CURRENT unified authority re-verification (#300/#363/#299/#15) ─────
-    const currentGeneration =
-      await this.tradingAuthorityService.getCurrentGeneration(input.userId);
+    const currentGeneration = await this.tradingAuthorityService.getCurrentGeneration(input.userId);
     if (currentGeneration !== grant.authorityGeneration) {
       throw await this.blocked(
         boundaryInput,
@@ -389,8 +388,7 @@ export class FinalDispatchBoundary {
     let controlRevision: number;
     try {
       policyRevision = await this.sharedControlRevisions.getCurrentTradingPolicyRevision();
-      providerRevision =
-        await this.sharedControlRevisions.getCurrentProviderVerificationRevision();
+      providerRevision = await this.sharedControlRevisions.getCurrentProviderVerificationRevision();
       controlRevision = await this.sharedControlRevisions.getCurrentExecutionControlRevision();
     } catch {
       // §16: shared control-plane store unreadable ⇒ NEW exposure fails closed.

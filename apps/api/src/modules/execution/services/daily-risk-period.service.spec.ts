@@ -181,7 +181,7 @@ const seedTrade = async (
       row.accountCurrency === undefined ? 'USD' : row.accountCurrency,
       row.status ?? 'CLOSED',
       row.realisedPnl ?? null,
-      row.closedAt === undefined ? NOW.toISOString() : row.closedAt?.toISOString() ?? null,
+      row.closedAt === undefined ? NOW.toISOString() : (row.closedAt?.toISOString() ?? null),
       ts,
     ],
   );
@@ -318,15 +318,22 @@ describe('DailyRiskPeriodService (Round 6, 6-c — #362/#313)', () => {
 
     it('fails typed on a malformed baseline and persists NOTHING', async () => {
       await expect(
-        service.resolveDailyRiskPeriod(resolveInput({ snapshot: { id: 's', balance: 'abc', equity: '1.00' } })),
-      ).rejects.toBeInstanceOf(DailyRiskPeriodBaselineError);
-      await expect(
         service.resolveDailyRiskPeriod(
-          resolveInput({ accountCurrency: 'usd', snapshot: { id: 's', balance: '1.00', equity: '1.00' } }),
+          resolveInput({ snapshot: { id: 's', balance: 'abc', equity: '1.00' } }),
         ),
       ).rejects.toBeInstanceOf(DailyRiskPeriodBaselineError);
       await expect(
-        service.resolveDailyRiskPeriod(resolveInput({ snapshot: { id: '', balance: '1.00', equity: '1.00' } })),
+        service.resolveDailyRiskPeriod(
+          resolveInput({
+            accountCurrency: 'usd',
+            snapshot: { id: 's', balance: '1.00', equity: '1.00' },
+          }),
+        ),
+      ).rejects.toBeInstanceOf(DailyRiskPeriodBaselineError);
+      await expect(
+        service.resolveDailyRiskPeriod(
+          resolveInput({ snapshot: { id: '', balance: '1.00', equity: '1.00' } }),
+        ),
       ).rejects.toBeInstanceOf(DailyRiskPeriodBaselineError);
       expect(await countPeriods()).toBe(0);
     });
@@ -336,7 +343,10 @@ describe('DailyRiskPeriodService (Round 6, 6-c — #362/#313)', () => {
 
       await expect(
         service.resolveDailyRiskPeriod(
-          resolveInput({ accountCurrency: 'EUR', snapshot: { id: 'snap-eur', balance: '1.00', equity: '1.00' } }),
+          resolveInput({
+            accountCurrency: 'EUR',
+            snapshot: { id: 'snap-eur', balance: '1.00', equity: '1.00' },
+          }),
         ),
       ).rejects.toBeInstanceOf(DailyRiskPeriodCurrencyMismatchError);
 
@@ -374,7 +384,11 @@ describe('DailyRiskPeriodService (Round 6, 6-c — #362/#313)', () => {
 
     it('excludes losses of a DIFFERENT logical account key', async () => {
       await seedTrade(dataSource, { id: 't1', realisedPnl: '-100.50' });
-      await seedTrade(dataSource, { id: 't2', realisedPnl: '-999.75', logicalAccountKey: OTHER_KEY });
+      await seedTrade(dataSource, {
+        id: 't2',
+        realisedPnl: '-999.75',
+        logicalAccountKey: OTHER_KEY,
+      });
 
       const result = await todayLoss();
       expect(result.total).toBe('-100.50');
@@ -393,7 +407,12 @@ describe('DailyRiskPeriodService (Round 6, 6-c — #362/#313)', () => {
     it('excludes OPEN trades and positive realised P&L (CLOSED losers only)', async () => {
       await seedTrade(dataSource, { id: 't1', realisedPnl: '-25.25' });
       await seedTrade(dataSource, { id: 't2', realisedPnl: '75.25' }); // winner
-      await seedTrade(dataSource, { id: 't3', realisedPnl: '-100.50', status: 'OPEN', closedAt: null });
+      await seedTrade(dataSource, {
+        id: 't3',
+        realisedPnl: '-100.50',
+        status: 'OPEN',
+        closedAt: null,
+      });
 
       const result = await todayLoss();
       expect(result.total).toBe('-25.25');

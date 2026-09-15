@@ -457,10 +457,9 @@ export class RiskService {
     let liveLossComplete = false;
     if (connection.accountType === BrokerMode.LIVE) {
       try {
-        const snapshot =
-          await this.brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure(
-            connection.id,
-          );
+        const snapshot = await this.brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure(
+          connection.id,
+        );
         const logicalAccountKey = connection.logicalAccountKey ?? null;
         if (!logicalAccountKey) {
           throw new Error(
@@ -1106,8 +1105,7 @@ export class RiskService {
       // carry the snapshot-bound values; PAPER carries the projected view's
       // currency when the source provides one (never fabricated).
       logicalAccountKey: liveSnapshotBinding?.logicalAccountKey,
-      accountCurrency:
-        liveSnapshotBinding?.currency ?? accountState.currency ?? undefined,
+      accountCurrency: liveSnapshotBinding?.currency ?? accountState.currency ?? undefined,
       riskPeriodId: liveRiskPeriodId ?? undefined,
     };
 

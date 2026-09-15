@@ -254,12 +254,10 @@ describe('ExecutionService', () => {
         execute: jest.fn().mockResolvedValue({ affected: 0 }),
       }),
       update: jest.fn().mockResolvedValue({ affected: 0 }),
-      findOne: jest.fn().mockImplementation(
-        async (opts?: { where?: Record<string, unknown> }) => {
-          if (opts?.where?.id === 'grant-1') return activeGrantFixture;
-          return null;
-        },
-      ),
+      findOne: jest.fn().mockImplementation(async (opts?: { where?: Record<string, unknown> }) => {
+        if (opts?.where?.id === 'grant-1') return activeGrantFixture;
+        return null;
+      }),
     };
 
     auditService = { log: jest.fn().mockResolvedValue(undefined) };
@@ -910,4 +908,3 @@ describe('ExecutionService', () => {
     });
   });
 });
-

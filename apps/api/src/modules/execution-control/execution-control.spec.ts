@@ -46,7 +46,7 @@ describe('ExecutionControlService', () => {
     create: jest.Mock;
     delete: jest.Mock;
     update: jest.Mock;
-  manager: { transaction: jest.Mock };
+    manager: { transaction: jest.Mock };
   };
   let auditService: { log: jest.Mock };
   let eventBus: { publish: jest.Mock };

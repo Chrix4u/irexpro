@@ -43,8 +43,18 @@ describe('UsersService Sprint 45 DOB/KYC invariants', () => {
         { provide: getRepositoryToken(UserProfile), useValue: profileRepo },
         { provide: getRepositoryToken(Role), useValue: roleRepo },
         // Round 6 (#300): the unified execution-authority seams (mocked).
-        { provide: TradingAuthorityService, useValue: { bumpGeneration: jest.fn().mockResolvedValue(2) } },
-        { provide: GrantInvalidationService, useValue: { invalidateUserNewExposureAuthority: jest.fn().mockResolvedValue({ invalidatedGrants: 0, revokedConfirmations: 0 }) } },
+        {
+          provide: TradingAuthorityService,
+          useValue: { bumpGeneration: jest.fn().mockResolvedValue(2) },
+        },
+        {
+          provide: GrantInvalidationService,
+          useValue: {
+            invalidateUserNewExposureAuthority: jest
+              .fn()
+              .mockResolvedValue({ invalidatedGrants: 0, revokedConfirmations: 0 }),
+          },
+        },
       ],
     }).compile();
     service = module.get(UsersService);

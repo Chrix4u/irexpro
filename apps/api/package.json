@@ -1,7 +1,7 @@
 {
   "name": "@irexpro/api",
   "version": "0.1.0",
-  "description": "iRexPro \u2014 Global AI Forex Trading Platform \u2014 Backend API",
+  "description": "iRexPro — Global AI Forex Trading Platform — Backend API",
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
@@ -49,7 +49,7 @@
     "ioredis": "^5.4.2",
     "joi": "^17.13.3",
     "metaapi.cloud-sdk": "^29.3.3",
-    "nodemailer": "^9.0.3",
+    "nodemailer": "^10.0.10",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "pg": "^8.13.3",
