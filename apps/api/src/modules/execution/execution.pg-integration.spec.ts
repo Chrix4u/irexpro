@@ -421,6 +421,9 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
       encryptionService,
       auditService,
       eventBus,
+      // Round 6 (#365): the provider-dispatch commitment seam — the
+      // commitment-path pg matrices are tracked for this CI-gated suite.
+      {} as never,
     );
     // Round 5 (task 50-c): the REAL final dispatch boundary + the REAL
     // RiskGrantService (the 50-b contract) + the REAL trade-lifecycle CAS —
@@ -436,6 +439,19 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
       providerRegistry,
       auditService,
       riskGrantService,
+      // Round 6 (#365): the provider-dispatch commitment seam — the
+      // commitment-path pg matrices (authority-generation mismatch, shared
+      // revision mismatch, exactly-one-commitment) are tracked for this
+      // CI-gated suite (NOT EXECUTED locally — no PostgreSQL in sandbox).
+      dataSource.getRepository(Order),
+      {} as never,
+      dataSource,
+      { getCurrentGeneration: jest.fn() } as never,
+      {
+        getCurrentTradingPolicyRevision: jest.fn(),
+        getCurrentProviderVerificationRevision: jest.fn(),
+        getCurrentExecutionControlRevision: jest.fn(),
+      } as never,
     );
     const tradeCas = new TradeLifecycleCasService(tradeRepo, auditService);
     service = new ExecutionService(

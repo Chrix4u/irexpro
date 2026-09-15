@@ -48,6 +48,17 @@ export enum OrderTimeInForce {
  *   CREATED               Order persisted (idempotency key reserved); not yet
  *                         sent to the provider.
  *   SUBMITTED             Sent to the provider; acknowledgement pending.
+ *   DISPATCH_COMMITTED    Round 6 (issue #365): the provider-dispatch
+ *                         COMMITMENT has been atomically recorded — the grant
+ *                         (+ SEMI_AUTO confirmation) is consumed and the
+ *                         order/dispatch intent is durably bound to the
+ *                         state-changing provider call that follows
+ *                         IMMEDIATELY (no awaited audit/event/DB work between
+ *                         commitment and the adapter send). After this point
+ *                         the request is considered IN-FLIGHT: authority
+ *                         changes no longer yield zero provider calls but are
+ *                         resolved through dispatch certainty and
+ *                         reconciliation.
  *   ACKNOWLEDGED          Provider accepted the order; awaiting/partial fill.
  *   PARTIALLY_FILLED      Some (not all) of the requested quantity filled.
  *   FILLED                Terminal — requested quantity fully filled.
@@ -69,6 +80,7 @@ export enum OrderTimeInForce {
 export enum OrderStatus {
   CREATED = 'CREATED',
   SUBMITTED = 'SUBMITTED',
+  DISPATCH_COMMITTED = 'DISPATCH_COMMITTED',
   ACKNOWLEDGED = 'ACKNOWLEDGED',
   PARTIALLY_FILLED = 'PARTIALLY_FILLED',
   FILLED = 'FILLED',

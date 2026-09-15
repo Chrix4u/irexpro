@@ -198,6 +198,25 @@ export class RiskProfile {
   })
   allowedTradingModes: AllowedTradingMode;
 
+  // ─── Round-6 risk-profile revision (issues #299/#301, brief §15) ─────────
+
+  /**
+   * Monotonic risk-profile REVISION — incremented atomically on EVERY
+   * material risk-policy edit (any limit, allowed instruments, execution-mode
+   * permission, risk acknowledgement, kill-switch change on OR off).
+   *
+   * Round-6 authority chain: RiskGrants bind (riskProfileId, revision,
+   * riskProfileHash); the final dispatch boundary re-reads the CURRENT
+   * revision and blocks NEW exposure on any mismatch. Turning the kill
+   * switch OFF is another revision — a pre-kill-switch grant is never
+   * resurrected by a boolean flipping back.
+   *
+   * Existing rows start at revision 1 (migration default) — no fabricated
+   * history.
+   */
+  @Column({ name: 'revision', type: 'integer', default: 1 })
+  revision: number;
+
   // ─── Timestamps ───────────────────────────────────────────────────────────
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })

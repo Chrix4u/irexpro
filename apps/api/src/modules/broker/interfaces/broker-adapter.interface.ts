@@ -184,7 +184,9 @@ export interface BrokerConnectionResult {
   success: boolean;
   accountId: string;
   accountType: BrokerMode;
-  currency: string;
+  /** #7 (round 6): null when the provider reports NO currency — never a
+   *  synthetic fallback that would mis-label account money. */
+  currency: string | null;
   serverTime: Date;
   error?: string;
 }
@@ -202,7 +204,9 @@ export interface BrokerConnectionTestResult {
 
 export interface BrokerAccountInfo {
   accountId: string;
-  currency: string;
+  /** #7 (round 6): null when the provider reports NO currency — never a
+   *  synthetic fallback that would mis-label account money. */
+  currency: string | null;
   leverage: number;
   balance: string;
   equity: string;

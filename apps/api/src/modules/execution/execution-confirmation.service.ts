@@ -128,7 +128,14 @@ export class ExecutionConfirmationService {
     }
 
     const decision = await this.decisionFromGrant(userId, grant);
-    const trade: Trade = await this.executionService.executeTrade(userId, decision, authorization);
+    // Round 6 (#365/#18): the confirmation is consumed AT the provider-dispatch
+    // commitment (commitProviderDispatch, tenant + grant scoped CAS) — this
+    // call carries the confirmationId through to the orchestrator.
+    const trade: Trade = await this.executionService.executeTrade(
+      userId,
+      decision,
+      confirmationId,
+    );
 
     return {
       confirmationId,

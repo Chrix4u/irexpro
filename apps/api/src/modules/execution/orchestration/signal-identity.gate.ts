@@ -32,6 +32,13 @@ export interface SignalIdentityRegistration {
   payloadDigest: string;
   /** True when this delivery re-delivered an already-registered signal. */
   duplicate: boolean;
+  /**
+   * The PERSISTED authoritative original generatedAt (round 6, #302): on a
+   * duplicate re-delivery this is the FIRST registration's timestamp — the
+   * producer instant is immutable identity evidence and can never be
+   * refreshed forward by a replay.
+   */
+  generatedAt: Date;
 }
 
 /** signalId is MANDATORY for production signals (typed rejection). */
@@ -77,9 +84,12 @@ export class SignalFutureException extends BadRequestException {
 }
 
 /**
- * SAME signalId + DIFFERENT material payload digest — a SECURITY EVENT
+ * SAME signalId + DIFFERENT canonical payload digest — a SECURITY EVENT
  * (architect issue #302): never a new logical signal, never a fresh
  * idempotency key. The conflicting delivery is typed-rejected and audited.
+ * Round 6: generatedAt is part of the digest, so a replay with a MOVED
+ * timestamp is exactly this conflict — a replay can never refresh an old
+ * signal's time forward.
  */
 export class SignalIdentityConflictException extends ConflictException {
   readonly existingIdentityId: string;
@@ -89,12 +99,19 @@ export class SignalIdentityConflictException extends ConflictException {
     existingIdentityId: string;
     existingDigest: string;
     deliveredDigest: string;
+    /** Persisted original generatedAt (ISO UTC) — null only for legacy rows. */
+    existingGeneratedAt: string | null;
+    /** The delivered (conflicting) generatedAt (ISO UTC). */
+    deliveredGeneratedAt: string;
+    /** True when the delivered timestamp differs from the persisted original. */
+    generatedAtShifted: boolean;
   }) {
     super({
       code: 'SIGNAL_IDENTITY_CONFLICT',
       message:
-        `Signal ${details.signalId} was already registered with a DIFFERENT material payload ` +
-        'digest — same identifier may never carry two payloads (security event).',
+        `Signal ${details.signalId} was already registered with a DIFFERENT canonical ` +
+        'payload digest (material fields or generatedAt) — same identifier may ' +
+        'never carry two payloads (security event).',
       ...details,
     });
     this.signalId = details.signalId;
@@ -108,13 +125,15 @@ export class SignalIdentityConflictException extends ConflictException {
  *
  * Called at the strategy→execution handoff BEFORE risk evaluation:
  *  - persist-or-reuse AiSignalIdentity by (userId, signalId);
- *  - same signalId + SAME payload digest → idempotent PROCEED (retries and
+ *  - same signalId + SAME canonical digest (material fields AND the exact
+ *    generatedAt instant — round 6, #302) → idempotent PROCEED (retries and
  *    redeliveries never produce a second logical evaluation);
- *  - same signalId + DIFFERENT digest → typed conflict (security event; a
- *    new idempotency key is NEVER minted for it);
- *  - generatedAt freshness enforced (max age 120s, future skew 30s) —
- *    stale/future signals are typed-rejected;
- *  - signalId is MANDATORY for production signals.
+ *  - same signalId + DIFFERENT digest (changed material OR moved timestamp)
+ *    → typed conflict (security event; a new idempotency key is NEVER minted
+ *    for it);
+ *  - generatedAt freshness enforced on the DELIVERED timestamp (max age
+ *    120s, future skew 30s) — stale/future signals are typed-rejected;
+ *  - signalId is mandatory for production signals.
  */
 @Injectable()
 export class AiSignalIdentityGateService {
@@ -156,8 +175,14 @@ export class AiSignalIdentityGateService {
     }
 
     // ── Canonical payload digest of the material trading inputs ───────────
+    // Round 6 (#302): the producer timestamp is IMMUTABLE identity evidence
+    // and is part of the digest. Same material + the exact same canonical
+    // instant → idempotent duplicate; a DIFFERENT instant is a different
+    // payload (SIGNAL_IDENTITY_CONFLICT) — a replay can never refresh an old
+    // signal's time forward.
     const payloadDigest = await digestCanonicalPayload({
       signalId,
+      generatedAt: generatedAt.toISOString(),
       materialFields: signal.materialFields,
     });
 
@@ -179,6 +204,7 @@ export class AiSignalIdentityGateService {
         signalId,
         payloadDigest,
         duplicate: false,
+        generatedAt: this.persistedDate(identity.generatedAt),
       };
     } catch (err) {
       if (!this.isUniqueViolation(err)) {
@@ -190,7 +216,17 @@ export class AiSignalIdentityGateService {
         throw err; // vanished between violation and re-read — fail closed
       }
       if (existing.payloadDigest !== payloadDigest) {
-        // SECURITY EVENT: same identifier, different material payload.
+        // SECURITY EVENT: same identifier, different canonical payload
+        // (changed material fields and/or a moved generatedAt).
+        const existingGeneratedAtIso =
+          existing.generatedAt instanceof Date
+            ? existing.generatedAt.toISOString()
+            : existing.generatedAt
+              ? new Date(existing.generatedAt).toISOString()
+              : null;
+        const generatedAtShifted =
+          existingGeneratedAtIso !== null &&
+          new Date(existingGeneratedAtIso).getTime() !== generatedAt.getTime();
         await this.auditService.log({
           actorUserId: userId,
           action: AuditAction.AI_SIGNAL_IDENTITY_CONFLICT,
@@ -201,8 +237,9 @@ export class AiSignalIdentityGateService {
             signalId,
             existingDigest: existing.payloadDigest,
             deliveredDigest: payloadDigest,
-            existingGeneratedAt: existing.generatedAt?.toISOString?.() ?? null,
+            existingGeneratedAt: existingGeneratedAtIso,
             deliveredGeneratedAt: generatedAt.toISOString(),
+            generatedAtShifted,
           },
         });
         throw new SignalIdentityConflictException({
@@ -210,14 +247,19 @@ export class AiSignalIdentityGateService {
           existingIdentityId: existing.id,
           existingDigest: existing.payloadDigest,
           deliveredDigest: payloadDigest,
+          existingGeneratedAt: existingGeneratedAtIso,
+          deliveredGeneratedAt: generatedAt.toISOString(),
+          generatedAtShifted,
         });
       }
-      // Same digest — idempotent re-delivery: proceed with the SAME identity.
+      // Same digest — idempotent re-delivery: proceed with the SAME identity
+      // (and the PERSISTED original generatedAt — never the replay's clock).
       return {
         identityId: existing.id,
         signalId,
         payloadDigest,
         duplicate: true,
+        generatedAt: this.persistedDate(existing.generatedAt),
       };
     }
   }
@@ -254,5 +296,10 @@ export class AiSignalIdentityGateService {
     if (value === null || value === undefined) return null;
     const date = value instanceof Date ? value : new Date(value);
     return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  /** Coerce a persisted timestamp back to a Date (defensive vs. drivers). */
+  private persistedDate(value: Date | string): Date {
+    return value instanceof Date ? value : new Date(value);
   }
 }

@@ -1,6 +1,6 @@
 import { HttpException, HttpStatus, Injectable, Inject, Logger, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import * as crypto from 'crypto';
 import { BrokerConnection } from '../../broker/entities/broker-connection.entity';
 import { BrokerService } from '../../broker/broker.service';
@@ -32,6 +32,12 @@ import {
 } from '../interfaces/execution-authority';
 import { RiskGrantService } from '../../risk/risk-grant.service';
 import { isExposureIncreasingOperation } from './provider-operation-class';
+import { InjectDataSource } from '@nestjs/typeorm';
+import { Order } from '../orders/order.entity';
+import { OrderStatus } from '../orders/order.enums';
+import { RiskProfile } from '../../risk/entities/risk-profile.entity';
+import { TradingAuthorityService } from '../../execution-authority/trading-authority.service';
+import { SharedControlRevisionService } from '../../execution-authority/shared-control-revision.service';
 
 /** The paper/simulator execution path (broker-catalog.ts 'paper-broker'). */
 const PAPER_BROKER_ID = 'paper-broker';
@@ -72,7 +78,15 @@ export type FinalDispatchBlockedReason =
   | 'PROVIDER_IDENTITY_CHANGED'
   | 'PROVIDER_VERIFICATION_DOWNGRADED'
   | 'EXECUTION_CONTROL_BLOCKED'
-  | 'GRANT_CONSUME_RACE_LOST';
+  | 'GRANT_CONSUME_RACE_LOST'
+  // Round 6 (#300/#363/#299): the unified execution-authority re-checks at
+  // the PROVIDER-DISPATCH COMMITMENT (issue #365).
+  | 'TRADING_AUTHORITY_GENERATION_MISMATCH'
+  | 'SHARED_TRADING_POLICY_REVISION_MISMATCH'
+  | 'SHARED_PROVIDER_VERIFICATION_REVISION_MISMATCH'
+  | 'EXECUTION_CONTROL_REVISION_MISMATCH'
+  | 'KILL_SWITCH_PROFILE_REVISION_MISMATCH'
+  | 'ORDER_COMMITMENT_TRANSITION_LOST';
 
 /** 409-style reasons (conflict family — the caller may reload + re-request). */
 const CONFLICT_REASONS: readonly FinalDispatchBlockedReason[] = [
@@ -220,6 +234,17 @@ export class FinalDispatchBoundary {
     // ExecutionModule import cycle.
     @Inject(forwardRef(() => RiskGrantService))
     private readonly riskGrants: RiskGrantService,
+    // ── Round 6 (#365): the provider-dispatch commitment seam ──────────────
+    @InjectRepository(Order)
+    private readonly orderRepo: Repository<Order>,
+    @InjectRepository(RiskProfile)
+    private readonly riskProfileRepo: Repository<RiskProfile>,
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
+    // PLAIN leaf injections from ExecutionAuthorityModule (execution.module
+    // imports it plainly — NO new forwardRef anywhere).
+    private readonly tradingAuthorityService: TradingAuthorityService,
+    private readonly sharedControlRevisions: SharedControlRevisionService,
   ) {}
 
   /**
@@ -229,14 +254,26 @@ export class FinalDispatchBoundary {
   authorizeNewExposureDispatch(input: {
     userId: string;
     grantId: string;
+    confirmationId?: string | null;
+    origin?: FinalDispatchOrigin;
     operationClass?: ProviderOperationClass;
   }): Promise<FinalDispatchAuthorization> {
-    return this.authorize({
-      userId: input.userId,
-      grantId: input.grantId,
-      origin: 'PIPELINE',
-      operationClass: input.operationClass ?? ProviderOperationClass.NEW_EXPOSURE,
-    });
+    // Round 6 (#365): READ-ONLY — the full authority chain is verified against
+    // CURRENT durable state and the EXACT grant-bound connection resolved,
+    // but NOTHING is consumed here. The RiskGrant (+ the SEMI_AUTO
+    // confirmation) is consumed at the PROVIDER-DISPATCH COMMITMENT
+    // (commitProviderDispatch) inside orchestrator.dispatchOrder, immediately
+    // before the provider state-changing call.
+    return this.authorize(
+      {
+        userId: input.userId,
+        grantId: input.grantId,
+        confirmationId: input.confirmationId ?? undefined,
+        origin: input.origin ?? 'PIPELINE',
+        operationClass: input.operationClass ?? ProviderOperationClass.NEW_EXPOSURE,
+      },
+      { consume: false },
+    );
   }
 
   /**
@@ -250,17 +287,347 @@ export class FinalDispatchBoundary {
     confirmationId: string;
     operationClass?: ProviderOperationClass;
   }): Promise<FinalDispatchAuthorization> {
-    return this.authorize({
+    // Round 6 (#365/#18): READ-ONLY — verification only; the confirmation +
+    // the fresh grant are consumed AT the provider-dispatch commitment.
+    return this.authorize(
+      {
+        userId: input.userId,
+        confirmationId: input.confirmationId,
+        origin: 'USER_CONFIRMATION',
+        operationClass: input.operationClass ?? ProviderOperationClass.NEW_EXPOSURE,
+      },
+      { consume: false },
+    );
+  }
+
+  /**
+   * ROUND 6 (#365): the PROVIDER-DISPATCH COMMITMENT — ONE short DB
+   * transaction, invoked by ExecutionOrchestrator.dispatchOrder IMMEDIATELY
+   * before the provider state-changing adapter call, with NOTHING awaited in
+   * between (no audits, no events, no unrelated writes — those derive from
+   * durable state AFTER the dispatch outcome; this method therefore performs
+   * no audit writes of its own).
+   *
+   * Inside the single transaction (no network I/O):
+   *   1. re-verify the grant is still ACTIVE/unexpired + tenant-owned;
+   *   2. re-verify the CURRENT unified authority chain: user
+   *      TradingAuthorityGeneration (#300), shared cross-replica
+   *      trading-policy / provider-verification / execution-control
+   *      revisions (#363), risk-profile revision — the kill-switch
+   *      generation (#299/#15), session ACTIVE/generation/mode, connection
+   *      CONNECTED + credential generation (#361);
+   *   3. ATOMICALLY consume the RiskGrant (tenant-scoped CAS
+   *      ACTIVE+unexpired → CONSUMED — exactly one winner per grant);
+   *   4. ATOMICALLY consume the SEMI_AUTO confirmation driving this dispatch
+   *      (tenant + grant scoped CAS PENDING+unexpired → CONSUMED);
+   *   5. transition the local order SUBMITTED → DISPATCH_COMMITTED (CAS).
+   *
+   * Cutoff semantics: any authority change BEFORE this commitment ⇒ ZERO
+   * provider calls (typed FinalDispatchBlockedException). Any change AFTER ⇒
+   * the request is already in-flight — resolved through
+   * ProviderDispatchCertainty + reconciliation, never replayed.
+   */
+  async commitProviderDispatch(input: {
+    userId: string;
+    grantId: string;
+    confirmationId?: string | null;
+    orderId: string;
+    origin: FinalDispatchOrigin;
+  }): Promise<FinalDispatchAuthorization> {
+    const operationClass = ProviderOperationClass.NEW_EXPOSURE;
+    const boundaryInput: FinalDispatchInput = {
       userId: input.userId,
-      confirmationId: input.confirmationId,
-      origin: 'USER_CONFIRMATION',
-      operationClass: input.operationClass ?? ProviderOperationClass.NEW_EXPOSURE,
+      grantId: input.grantId,
+      confirmationId: input.confirmationId ?? undefined,
+      origin: input.origin,
+      operationClass,
+    };
+
+    const grant = await this.riskGrantRepo.findOne({
+      where: { id: input.grantId, userId: input.userId },
     });
+    if (!grant) {
+      throw await this.blocked(boundaryInput, operationClass, 'GRANT_NOT_FOUND', {
+        grantId: input.grantId,
+        message: 'Commitment: the grant does not exist for this user (tenant-scoped).',
+      });
+    }
+    if (grant.status !== RiskGrantStatus.ACTIVE || grant.expiresAt.getTime() <= Date.now()) {
+      throw await this.blocked(
+        boundaryInput,
+        operationClass,
+        grant.status === RiskGrantStatus.CONSUMED
+          ? 'GRANT_CONSUMED'
+          : grant.status === RiskGrantStatus.INVALIDATED
+            ? 'GRANT_INVALIDATED'
+            : 'GRANT_EXPIRED',
+        { grantId: grant.id, grantStatus: grant.status },
+      );
+    }
+
+    // ── CURRENT unified authority re-verification (#300/#363/#299/#15) ─────
+    const currentGeneration =
+      await this.tradingAuthorityService.getCurrentGeneration(input.userId);
+    if (currentGeneration !== grant.authorityGeneration) {
+      throw await this.blocked(
+        boundaryInput,
+        operationClass,
+        'TRADING_AUTHORITY_GENERATION_MISMATCH',
+        {
+          grantId: grant.id,
+          grantAuthorityGeneration: grant.authorityGeneration,
+          currentGeneration,
+          message:
+            'The user trading-authority generation advanced after this grant was issued ' +
+            '(KYC/jurisdiction/governance/risk/kill-switch change) — NEW exposure is blocked.',
+        },
+      );
+    }
+
+    let policyRevision: number;
+    let providerRevision: number;
+    let controlRevision: number;
+    try {
+      policyRevision = await this.sharedControlRevisions.getCurrentTradingPolicyRevision();
+      providerRevision =
+        await this.sharedControlRevisions.getCurrentProviderVerificationRevision();
+      controlRevision = await this.sharedControlRevisions.getCurrentExecutionControlRevision();
+    } catch {
+      // §16: shared control-plane store unreadable ⇒ NEW exposure fails closed.
+      throw await this.blocked(
+        boundaryInput,
+        operationClass,
+        'EXECUTION_CONTROL_REVISION_MISMATCH',
+        {
+          grantId: grant.id,
+          message:
+            'The shared cross-replica control-plane revision store is unreadable — ' +
+            'NEW exposure fails closed (a stale replica must never execute).',
+        },
+      );
+    }
+    if (grant.tradingPolicyRevision !== null && policyRevision !== grant.tradingPolicyRevision) {
+      throw await this.blocked(
+        boundaryInput,
+        operationClass,
+        'SHARED_TRADING_POLICY_REVISION_MISMATCH',
+        { grantId: grant.id, bound: grant.tradingPolicyRevision, current: policyRevision },
+      );
+    }
+    if (
+      grant.providerVerificationRevision !== null &&
+      providerRevision !== grant.providerVerificationRevision
+    ) {
+      throw await this.blocked(
+        boundaryInput,
+        operationClass,
+        'SHARED_PROVIDER_VERIFICATION_REVISION_MISMATCH',
+        { grantId: grant.id, bound: grant.providerVerificationRevision, current: providerRevision },
+      );
+    }
+    if (
+      grant.executionControlRevision !== null &&
+      controlRevision !== grant.executionControlRevision
+    ) {
+      throw await this.blocked(
+        boundaryInput,
+        operationClass,
+        'EXECUTION_CONTROL_REVISION_MISMATCH',
+        { grantId: grant.id, bound: grant.executionControlRevision, current: controlRevision },
+      );
+    }
+    if (grant.killSwitchGeneration !== null) {
+      const profile = await this.riskProfileRepo.findOne({ where: { userId: input.userId } });
+      const currentRevision = profile?.revision ?? null;
+      if (currentRevision !== null && currentRevision !== grant.killSwitchGeneration) {
+        throw await this.blocked(
+          boundaryInput,
+          operationClass,
+          'KILL_SWITCH_PROFILE_REVISION_MISMATCH',
+          {
+            grantId: grant.id,
+            bound: grant.killSwitchGeneration,
+            current: currentRevision,
+            message:
+              'The risk profile (kill switch / material policy) changed after this grant ' +
+              'was issued — NEW exposure is blocked (no boolean resurrection).',
+          },
+        );
+      }
+    }
+
+    // ── Session + connection CURRENT state (quick re-reads) ────────────────
+    const session = await this.sessionRepo.findOne({ where: { id: grant.sessionId } });
+    if (
+      !session ||
+      session.status !== TradingSessionStatus.ACTIVE ||
+      session.authorityGeneration !== grant.sessionGeneration ||
+      session.executionMode !== grant.executionMode
+    ) {
+      throw await this.blocked(
+        boundaryInput,
+        operationClass,
+        !session
+          ? 'SESSION_NOT_FOUND'
+          : session.status !== TradingSessionStatus.ACTIVE
+            ? 'SESSION_NOT_ACTIVE'
+            : session.authorityGeneration !== grant.sessionGeneration
+              ? 'SESSION_GENERATION_MISMATCH'
+              : 'EXECUTION_MODE_MISMATCH',
+        { grantId: grant.id, sessionId: grant.sessionId },
+      );
+    }
+    let connection: BrokerConnection;
+    try {
+      connection = await this.brokerService.findConnectionById(
+        grant.brokerConnectionId,
+        input.userId,
+      );
+    } catch {
+      throw await this.blocked(boundaryInput, operationClass, 'CONNECTION_NOT_FOUND', {
+        grantId: grant.id,
+        brokerConnectionId: grant.brokerConnectionId,
+      });
+    }
+    if (connection.status !== BrokerConnectionStatus.CONNECTED) {
+      throw await this.blocked(boundaryInput, operationClass, 'CONNECTION_NOT_CONNECTED', {
+        brokerConnectionId: connection.id,
+        status: connection.status,
+      });
+    }
+    if (
+      grant.credentialGeneration !== null &&
+      connection.credentialGeneration !== grant.credentialGeneration
+    ) {
+      throw await this.blocked(
+        boundaryInput,
+        operationClass,
+        'CONNECTION_CREDENTIAL_GENERATION_CHANGED',
+        {
+          brokerConnectionId: connection.id,
+          bound: grant.credentialGeneration,
+          current: connection.credentialGeneration,
+        },
+      );
+    }
+
+    // ── THE COMMITMENT (one short transaction; no network I/O inside) ──────
+    const now = new Date();
+    const context: ExecutionAuthorityContext = Object.freeze({
+      userId: grant.userId,
+      signalId: grant.signalId,
+      operationType: operationClass,
+      sessionId: session.id,
+      sessionGeneration: session.authorityGeneration,
+      executionMode: session.executionMode,
+      brokerConnectionId: connection.id,
+      brokerAccountId: connection.accountId ?? null,
+      providerTechnology: connection.brokerId,
+      providerBrokerIdentity: connection.providerBrokerIdentity ?? null,
+      providerVerificationFingerprint: grant.providerVerificationFingerprint,
+      financialSnapshotGeneration: grant.accountSnapshotGeneration ?? null,
+      riskProfileId: grant.riskProfileId ?? null,
+      riskProfileVersion: grant.riskProfileVersion ?? null,
+      riskGrantId: grant.id,
+      authorityGeneration: grant.authorityGeneration,
+      validatedOrderDigest: grant.orderPayloadDigest,
+    });
+
+    try {
+      await this.dataSource.transaction(async (em) => {
+        const grantConsume = await em
+          .getRepository(RiskGrant)
+          .createQueryBuilder()
+          .update()
+          .set({ status: RiskGrantStatus.CONSUMED, consumedAt: now })
+          .where('id = :id AND user_id = :userId AND status = :active AND expires_at > :now', {
+            id: grant.id,
+            userId: input.userId,
+            active: RiskGrantStatus.ACTIVE,
+            now,
+          })
+          .execute();
+        if ((grantConsume.affected ?? 0) !== 1) {
+          throw new Error('COMMITMENT_GRANT_CAS_LOST');
+        }
+
+        if (input.confirmationId) {
+          const confirmationConsume = await em
+            .getRepository(ExecutionConfirmation)
+            .createQueryBuilder()
+            .update()
+            .set({ status: ExecutionConfirmationStatus.CONSUMED, consumedAt: now })
+            .where(
+              'id = :id AND user_id = :userId AND risk_grant_id = :grantId ' +
+                'AND status = :pending AND expires_at > :now',
+              {
+                id: input.confirmationId,
+                userId: input.userId,
+                grantId: grant.id,
+                pending: ExecutionConfirmationStatus.PENDING,
+                now,
+              },
+            )
+            .execute();
+          if ((confirmationConsume.affected ?? 0) !== 1) {
+            throw new Error('COMMITMENT_CONFIRMATION_CAS_LOST');
+          }
+        }
+
+        const orderTransition = await em
+          .getRepository(Order)
+          .createQueryBuilder()
+          .update()
+          .set({ status: OrderStatus.DISPATCH_COMMITTED })
+          .where('id = :orderId AND status = :submitted', {
+            orderId: input.orderId,
+            submitted: OrderStatus.SUBMITTED,
+          })
+          .execute();
+        if ((orderTransition.affected ?? 0) !== 1) {
+          throw new Error('COMMITMENT_ORDER_TRANSITION_LOST');
+        }
+      });
+    } catch (err) {
+      const message = (err as Error).message ?? '';
+      throw await this.blocked(
+        boundaryInput,
+        operationClass,
+        message === 'COMMITMENT_ORDER_TRANSITION_LOST'
+          ? 'ORDER_COMMITMENT_TRANSITION_LOST'
+          : 'GRANT_CONSUME_RACE_LOST',
+        {
+          grantId: grant.id,
+          confirmationId: input.confirmationId ?? null,
+          orderId: input.orderId,
+          message:
+            'The commitment CAS lost (a concurrent winner consumed this authority, or the ' +
+            'order was no longer SUBMITTED) — exactly one dispatch commitment survives.',
+        },
+      );
+    }
+
+    this.logger.log(
+      `PROVIDER-DISPATCH COMMITTED: grant ${grant.id}` +
+        `${input.confirmationId ? ` + confirmation ${input.confirmationId}` : ''} ` +
+        `→ order ${input.orderId} DISPATCH_COMMITTED (user ${input.userId}, ` +
+        `session ${session.id}@${session.authorityGeneration})`,
+    );
+
+    return {
+      context,
+      connection,
+      confirmationId: input.confirmationId ?? null,
+      operationClass,
+    };
   }
 
   // ─── The boundary ─────────────────────────────────────────────────────────
 
-  private async authorize(input: FinalDispatchInput): Promise<FinalDispatchAuthorization> {
+  private async authorize(
+    input: FinalDispatchInput,
+    options?: { consume?: boolean },
+  ): Promise<FinalDispatchAuthorization> {
     const operationClass = input.operationClass ?? ProviderOperationClass.NEW_EXPOSURE;
     const exposureIncreasing = isExposureIncreasingOperation(operationClass);
 
@@ -595,7 +962,12 @@ export class FinalDispatchBoundary {
     }
 
     // ── 4b. Consume the SEMI_AUTO confirmation ATOMICALLY (single winner) ───
-    if (exposureIncreasing && session.executionMode === ExecutionMode.SEMI_AUTO && confirmation) {
+    if (
+      options?.consume !== false &&
+      exposureIncreasing &&
+      session.executionMode === ExecutionMode.SEMI_AUTO &&
+      confirmation
+    ) {
       const consumed = await this.confirmationRepo
         .createQueryBuilder()
         .update()
@@ -643,11 +1015,18 @@ export class FinalDispatchBoundary {
     }
 
     // ── 8. Consume the RiskGrant ATOMICALLY (single winner proceeds) ───────
+    // Round 6 (#365): SKIPPED in read-only mode — the consuming CAS runs at
+    // the PROVIDER-DISPATCH COMMITMENT (commitProviderDispatch).
     // The 50-b contract: RiskGrantService.consumeGrantAtomic is the CAS
     // ACTIVE+unexpired → CONSUMED with an affected-rows check — exactly one
     // winner (a second attempt, an invalidated grant, an expired grant, a
     // replica racing us: all fail with a TYPED reason, never a guess).
-    const consume = await this.riskGrants.consumeGrantAtomic(grant.id);
+    let consume: { consumed: boolean; grant: RiskGrant | null; reason?: string };
+    if (options?.consume === false) {
+      consume = { consumed: true, grant };
+    } else {
+      consume = await this.riskGrants.consumeGrantAtomic(grant.id);
+    }
     if (!consume.consumed) {
       throw await this.blocked(
         input,

@@ -596,7 +596,11 @@ export class BrokerService {
       }
 
       // Upsert BrokerAccount with latest synced state
-      await this.upsertBrokerAccount(connectionId, result.currency);
+      // Round 6 (#7): an UNKNOWN account currency (null from the widened
+      // adapter contract) must never be fabricated — it maps to undefined
+      // (absent) at this seam and every risk-authoritative consumer fails
+      // closed on missing currency identity.
+      await this.upsertBrokerAccount(connectionId, result.currency ?? undefined);
 
       // Successful handshake verifies the credential set (Directive §14)
       // and advances the authorization state machine (Directive §15):

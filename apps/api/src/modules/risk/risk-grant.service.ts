@@ -8,6 +8,7 @@ import {
   ExecutionConfirmationStatus,
   ExecutionMode,
   RiskGrantStatus,
+  digestCanonicalPayload,
 } from '../execution/interfaces/execution-authority';
 import { isUniqueViolation } from '../broker/utils/db-unique-violation';
 import type { RiskGrantConsumeResult } from '../execution/orchestration/risk-grant-consumer';
@@ -49,10 +50,28 @@ export interface RiskGrantIssuanceInput {
   riskProfileId: string | null;
   riskProfileVersion: number | null;
   riskProfileHash: string | null;
+  /**
+   * Round 6 (#297/#312): the DURABLE accepted account snapshot the decision
+   * was derived from. NON-NULL for LIVE NEW-exposure (RiskService Step 2-live
+   * resolves a fresh exact-connection snapshot before issuance). Null only on
+   * paths that genuinely derive from non-financial state (PAPER/DEMO
+   * projections) — never fabricated.
+   */
+  accountSnapshotId: string | null;
+  accountSnapshotGeneration: number | null;
+  accountSnapshotObservedAt: Date | null;
   /** User trading-authority generation observed at issuance (issue #300). */
   authorityGeneration: number;
+  /** Round 6 (#299/#15): monotonic risk-profile revision (kill-switch gen). */
   killSwitchGeneration: number | null;
   executionControlRevision: number | null;
+  /**
+   * Round 6 (#363): shared cross-replica control-plane revisions observed at
+   * issuance — the final dispatch boundary re-reads and compares them, so a
+   * stale replica can never execute a grant minted against newer policy.
+   */
+  tradingPolicyRevision: number | null;
+  providerVerificationRevision: number | null;
   /**
    * BrokerConnection.credentialGeneration observed at issuance (#361 fencing):
    * any credential rotation between approval and dispatch blocks NEW exposure
@@ -83,6 +102,47 @@ export class RiskGrantIssuanceConflictError extends Error {
 }
 
 /**
+ * Round 6 (#301): the CANONICAL authority binding digest.
+ *
+ * Canonical object → canonical JSON → SHA-256 over ALL safety-relevant
+ * authority inputs of an issuance. Two grants are "the same issuance" ONLY if
+ * every authority fact matches — a hand-written five-field equality check
+ * would drift as facts are added. The individual fields stay persisted for
+ * audit/queryability; THIS digest is the sameness authority.
+ */
+export async function computeAuthorityBindingDigest(
+  input: RiskGrantIssuanceInput,
+): Promise<string> {
+  return digestCanonicalPayload({
+    // Canonical schema version — bump when the authority fact set changes so
+    // old and new bindings never compare equal by accident.
+    v: 1,
+    userId: input.userId,
+    signalId: input.signalId,
+    signalPayloadDigest: input.signalPayloadDigest,
+    orderPayloadDigest: input.orderPayloadDigest,
+    sessionId: input.sessionId,
+    sessionGeneration: input.sessionGeneration,
+    executionMode: input.executionMode,
+    brokerConnectionId: input.brokerConnectionId,
+    providerBrokerIdentity: input.providerBrokerIdentity,
+    providerVerificationFingerprint: input.providerVerificationFingerprint,
+    riskProfileId: input.riskProfileId,
+    riskProfileVersion: input.riskProfileVersion,
+    riskProfileHash: input.riskProfileHash,
+    accountSnapshotId: input.accountSnapshotId,
+    accountSnapshotGeneration: input.accountSnapshotGeneration,
+    authorityGeneration: input.authorityGeneration,
+    killSwitchGeneration: input.killSwitchGeneration,
+    executionControlRevision: input.executionControlRevision,
+    tradingPolicyRevision: input.tradingPolicyRevision,
+    providerVerificationRevision: input.providerVerificationRevision,
+    credentialGeneration: input.credentialGeneration,
+    quoteRef: input.quoteRef ?? null,
+  });
+}
+
+/**
  * RiskGrantService — durable RiskGrant issuance + lifecycle (issue #301).
  *
  * OWNERSHIP: RiskService is the ONLY issuer of grants; other services
@@ -92,15 +152,21 @@ export class RiskGrantIssuanceConflictError extends Error {
  * guarded by an affected-rows compare-and-set so concurrent callers have
  * exactly one winner.
  *
- * ONE-ACTIVE-GRANT-PER-SIGNAL (partial unique uq_risk_grants_one_active_per_signal):
- *  - an ACTIVE grant with the SAME digests + binding → reused idempotently
- *    (same grantId returned; no second row);
- *  - an ACTIVE grant with DIFFERENT digests/binding → the stale row is
- *    CAS-invalidated (reason SUPERSEDED_BY_REVALIDATION) and a fresh grant
- *    is issued. CHOSEN POLICY (documented per the task): invalidate + reissue
- *    rather than reject-as-conflict, because a re-validated signal (e.g. a
- *    lot-size cap change) is the newest authoritative risk decision and the
- *    old approval must never survive it;
+ * Round 6 (#364 — TENANT ISOLATION): every lookup, supersession, consumption
+ * and invalidation of grants/confirmations is scoped by (user_id, signal_id).
+ * The partial unique indexes are tenant-scoped
+ * (uq_risk_grants_one_active_per_signal on (user_id, signal_id) WHERE ACTIVE;
+ * uq_execution_confirmations_one_pending_per_signal on (user_id, signal_id)
+ * WHERE PENDING) — two users may hold the SAME signalId independently and
+ * neither can discover, supersede, consume or block the other's authority.
+ *
+ * ONE-ACTIVE-GRANT-PER-(USER,SIGNAL):
+ *  - an ACTIVE grant with the SAME authority binding digest → reused
+ *    idempotently (same grantId returned; no second row);
+ *  - an ACTIVE grant with a DIFFERENT binding → the stale row is
+ *    CAS-invalidated (SUPERSEDED_BY_REVALIDATION), its PENDING confirmation
+ *    is REVOKED (never left occupying the tenant slot), and a fresh grant is
+ *    issued (SEMI_AUTO: exactly one NEW confirmation bound to the NEW grant);
  *  - a concurrent INSERT losing the unique race reloads the winner and
  *    applies the same reuse/supersede logic (bounded retries).
  *
@@ -128,17 +194,27 @@ export class RiskGrantService {
    */
   async issueGrant(input: RiskGrantIssuanceInput): Promise<RiskGrantIssuanceResult> {
     const expiresAt = new Date(input.issuedAt.getTime() + RISK_GRANT_TTL_MS);
+    const authorityBindingDigest = await computeAuthorityBindingDigest(input);
 
     // Bounded convergence loop: each iteration either reuses, supersedes, or
     // inserts; a lost unique-race reloads the winner and tries once more.
     for (let attempt = 0; attempt < 3; attempt++) {
-      const existing = await this.findActiveGrantForSignal(input.signalId);
+      const existing = await this.findActiveGrantForSignal(input.userId, input.signalId);
       if (existing) {
-        if (this.isSameIssuance(existing, input)) {
+        if (
+          existing.authorityBindingDigest !== null &&
+          existing.authorityBindingDigest === authorityBindingDigest
+        ) {
           return { grant: existing, reused: true };
         }
-        // Different digests/binding: the re-validation is authoritative.
+        // Round 6 (#301/#364): different authority binding — the
+        // re-validation is authoritative. Supersede TENANT-SCOPED: invalidate
+        // the old grant AND revoke any PENDING confirmation still bound to it
+        // (a stale PENDING confirmation must never occupy the tenant slot),
+        // then issue exactly one fresh grant (+ one fresh SEMI_AUTO
+        // confirmation on the NEW grant).
         await this.casInvalidateGrant(existing.id, 'SUPERSEDED_BY_REVALIDATION');
+        await this.revokeConfirmationsForGrant(existing.id);
         continue;
       }
 
@@ -157,14 +233,19 @@ export class RiskGrantService {
             riskProfileId: input.riskProfileId,
             riskProfileVersion: input.riskProfileVersion,
             riskProfileHash: input.riskProfileHash,
-            // Round 5: account snapshot infra is wired by another agent; the
-            // columns exist and stay null until that lands.
-            accountSnapshotId: null,
-            accountSnapshotGeneration: null,
-            accountSnapshotObservedAt: null,
+            // Round 6 (#297/#312): snapshot authority binding — the durable
+            // accepted snapshot the decision derived from (LIVE: non-null).
+            accountSnapshotId: input.accountSnapshotId,
+            accountSnapshotGeneration: input.accountSnapshotGeneration,
+            accountSnapshotObservedAt: input.accountSnapshotObservedAt,
             authorityGeneration: input.authorityGeneration,
             killSwitchGeneration: input.killSwitchGeneration,
             executionControlRevision: input.executionControlRevision,
+            // Round 6 (#363): shared cross-replica control-plane revisions.
+            tradingPolicyRevision: input.tradingPolicyRevision,
+            providerVerificationRevision: input.providerVerificationRevision,
+            // Round 6 (#301): canonical authority binding digest.
+            authorityBindingDigest,
             credentialGeneration: input.credentialGeneration,
             orderPayloadDigest: input.orderPayloadDigest,
             orderPayload: input.orderPayload,
@@ -186,10 +267,10 @@ export class RiskGrantService {
         return { grant, reused: false };
       } catch (err) {
         if (isUniqueViolation(err)) {
-          // A concurrent issuance won the one-ACTIVE-per-signal slot.
+          // A concurrent issuance won the one-ACTIVE-per-(user,signal) slot.
           // Reload the winner and converge on the next loop iteration.
           this.logger.warn(
-            `Concurrent RiskGrant issuance for signal ${input.signalId} — reloading the winner`,
+            `Concurrent RiskGrant issuance for user ${input.userId} signal ${input.signalId} — reloading the winner`,
           );
           continue;
         }
@@ -208,13 +289,14 @@ export class RiskGrantService {
    *
    * CAS: the row transitions ACTIVE → CONSUMED only while it is still ACTIVE
    * AND unexpired. Exactly one concurrent caller wins (affected-rows check);
-   * every loser gets a TYPED reason — never a guessed status. The return
-   * shape satisfies the execution module's RiskGrantConsumerPort contract
-   * (RISK_GRANT_CONSUMER seam, task 50-c) so the final dispatch boundary can
-   * alias this service directly.
+   * every loser gets a TYPED reason — never a guessed status.
+   *
+   * Round 6 (#364): pass `userId` to tenant-fence the CAS (id + user_id) so a
+   * cross-tenant caller can neither consume another user's grant nor use the
+   * failure classification as an existence oracle beyond not-found.
    */
-  async consumeGrantAtomic(grantId: string): Promise<RiskGrantConsumeResult> {
-    const result = await this.grantRepo
+  async consumeGrantAtomic(grantId: string, userId?: string): Promise<RiskGrantConsumeResult> {
+    const qb = this.grantRepo
       .createQueryBuilder()
       .update()
       .set({ status: RiskGrantStatus.CONSUMED, consumedAt: new Date() })
@@ -222,18 +304,27 @@ export class RiskGrantService {
         id: grantId,
         active: RiskGrantStatus.ACTIVE,
         now: new Date(),
-      })
-      .execute();
+      });
+    if (userId) {
+      qb.andWhere('user_id = :userId', { userId });
+    }
+    const result = await qb.execute();
     const affected = result.affected ?? 0;
 
     if (affected > 0) {
       this.logger.log(`RiskGrant ${grantId} CONSUMED (single-winner CAS)`);
-      const grant = await this.grantRepo.findOne({ where: { id: grantId } });
+      const grant = await this.grantRepo.findOne({
+        where: userId ? { id: grantId, userId } : { id: grantId },
+      });
       return { consumed: true, grant: grant ?? null };
     }
 
     // Lost the CAS — reload and classify the failure (typed, never guessed).
-    const grant = await this.grantRepo.findOne({ where: { id: grantId } });
+    // Tenant-scoped reload: a cross-tenant id is indistinguishable from
+    // NOT_FOUND (no existence oracle).
+    const grant = await this.grantRepo.findOne({
+      where: userId ? { id: grantId, userId } : { id: grantId },
+    });
     if (!grant) return { consumed: false, reason: 'NOT_FOUND', grant: null };
     if (grant.status === RiskGrantStatus.CONSUMED) {
       return { consumed: false, reason: 'ALREADY_CONSUMED', grant };
@@ -292,25 +383,34 @@ export class RiskGrantService {
     return result.affected ?? 0;
   }
 
-  // ─── Internal helpers ─────────────────────────────────────────────────────
-
-  private async findActiveGrantForSignal(signalId: string): Promise<RiskGrant | null> {
-    return this.grantRepo.findOne({ where: { signalId, status: RiskGrantStatus.ACTIVE } });
+  /**
+   * Round 6 (#11 supersession / #364): revoke the PENDING confirmation bound
+   * to ONE grant (tenant-safe: the grant id is already tenant-scoped by the
+   * caller). CAS on status = PENDING only.
+   */
+  async revokeConfirmationsForGrant(grantId: string): Promise<number> {
+    const result = await this.confirmationRepo
+      .createQueryBuilder()
+      .update()
+      .set({ status: ExecutionConfirmationStatus.REVOKED, revokedAt: new Date() })
+      .where('risk_grant_id = :grantId AND status = :pending', {
+        grantId,
+        pending: ExecutionConfirmationStatus.PENDING,
+      })
+      .execute();
+    return result.affected ?? 0;
   }
 
-  /**
-   * Sameness = identical signal payload digest, order payload digest and
-   * authority binding. A generation/mode/connection change is a DIFFERENT
-   * authority state even when the order bytes match.
-   */
-  private isSameIssuance(existing: RiskGrant, input: RiskGrantIssuanceInput): boolean {
-    return (
-      existing.signalPayloadDigest === input.signalPayloadDigest &&
-      existing.orderPayloadDigest === input.orderPayloadDigest &&
-      existing.sessionGeneration === input.sessionGeneration &&
-      existing.executionMode === input.executionMode &&
-      existing.brokerConnectionId === input.brokerConnectionId
-    );
+  // ─── Internal helpers ─────────────────────────────────────────────────────
+
+  /** Round 6 (#364): ACTIVE grant lookup is TENANT-SCOPED (user + signal). */
+  private async findActiveGrantForSignal(
+    userId: string,
+    signalId: string,
+  ): Promise<RiskGrant | null> {
+    return this.grantRepo.findOne({
+      where: { userId, signalId, status: RiskGrantStatus.ACTIVE },
+    });
   }
 
   /** CAS single-writer invalidation of one grant (only while still ACTIVE). */
@@ -329,7 +429,7 @@ export class RiskGrantService {
 
   /**
    * SEMI_AUTO confirmation row, bound to the grant + EXACT order. The
-   * one-PENDING-per-signal partial unique index arbitrates concurrent
+   * one-PENDING-per-(user,signal) partial unique index arbitrates concurrent
    * creation; a unique violation means an equivalent PENDING row already
    * exists — swallowed deliberately (idempotent creation).
    */
@@ -362,7 +462,7 @@ export class RiskGrantService {
     } catch (err) {
       if (isUniqueViolation(err)) {
         this.logger.warn(
-          `PENDING confirmation already exists for signal ${grant.signalId} — keeping the original`,
+          `PENDING confirmation already exists for user ${grant.userId} signal ${grant.signalId} — keeping the original`,
         );
         return;
       }
@@ -384,6 +484,13 @@ export class RiskGrantService {
           executionMode: grant.executionMode,
           brokerConnectionId: grant.brokerConnectionId,
           authorityGeneration: grant.authorityGeneration,
+          killSwitchGeneration: grant.killSwitchGeneration,
+          executionControlRevision: grant.executionControlRevision,
+          tradingPolicyRevision: grant.tradingPolicyRevision,
+          providerVerificationRevision: grant.providerVerificationRevision,
+          accountSnapshotId: grant.accountSnapshotId,
+          accountSnapshotGeneration: grant.accountSnapshotGeneration,
+          authorityBindingDigest: grant.authorityBindingDigest,
           orderPayloadDigest: grant.orderPayloadDigest,
           signalPayloadDigest: grant.signalPayloadDigest,
           expiresAt: grant.expiresAt,

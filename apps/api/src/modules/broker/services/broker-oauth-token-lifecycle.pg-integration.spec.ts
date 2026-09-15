@@ -117,7 +117,10 @@ describe('BrokerOAuthTokenLifecycleService concurrent refresh — real PostgreSQ
     await dataSource.query('CREATE SCHEMA IF NOT EXISTS broker');
 
     // DDL mirrors broker.broker_connections including the Sprint-56 round-2
-    // refresh-protection columns (migration 1753850000000).
+    // refresh-protection columns (migration 1753850000000), the round-4/round-5
+    // provider-identity + logical-account columns, and the round-6 refresh-lease
+    // OWNER column (migration 1754300000000) — the full current entity shape,
+    // so the seeded INSERT (which lists every mapped column) succeeds.
     await dataSource.query(`DROP TABLE IF EXISTS "broker"."broker_connections"`);
     await dataSource.query(`
       CREATE TABLE "broker"."broker_connections" (
@@ -127,6 +130,8 @@ describe('BrokerOAuthTokenLifecycleService concurrent refresh — real PostgreSQ
         "broker_name" varchar(100) NOT NULL,
         "display_name" varchar(100) NULL,
         "account_id" varchar(100) NULL,
+        "provider_broker_identity" varchar(100) NULL,
+        "logical_account_key" varchar(255) NULL,
         "account_type" varchar(10) NOT NULL DEFAULT 'DEMO',
         "account_currency" varchar(3) NULL,
         "account_leverage" integer NULL,
@@ -135,6 +140,7 @@ describe('BrokerOAuthTokenLifecycleService concurrent refresh — real PostgreSQ
         "credential_status" varchar(20) NOT NULL DEFAULT 'CREATED',
         "credential_generation" integer NOT NULL DEFAULT 0,
         "credential_refresh_lease_expires_at" timestamptz NULL,
+        "credential_refresh_lease_owner" varchar(64) NULL,
         "authorized_at" timestamptz NULL,
         "authorization_revoked_at" timestamptz NULL,
         "encrypted_credentials" text NULL,

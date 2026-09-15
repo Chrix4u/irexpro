@@ -8,16 +8,34 @@ import { DomainEventType } from '../events/enums/domain-event-type.enum';
 import { AuditAction } from '../../common/enums/audit-action.enum';
 import { AuditSeverity } from '../audit/entities/audit-log.entity';
 import { TradingSession, TradingSessionStatus } from '../execution/entities/trading-session.entity';
+import { Trade, TradeStatus } from '../execution/entities/trade.entity';
 import { ProposedTrade } from '../risk/interfaces/risk.interface';
-import { AiSignalIdentityGateService } from '../execution/orchestration/signal-identity.gate';
+import {
+  AiSignalIdentityGateService,
+  SignalIdentityRegistration,
+} from '../execution/orchestration/signal-identity.gate';
 import {
   AiSignalCandidate,
+  StrategyDuplicateOfTrade,
   StrategyOutcome,
   StrategyResult,
 } from './interfaces/strategy.interface';
 
 /** Minimum confidence score required for a signal to proceed. */
 const CONFIDENCE_THRESHOLD = 0.6;
+
+/**
+ * Round 6 (#302) — deterministic duplicate recovery: trade statuses whose
+ * original execution is treated as SUCCEEDED when a duplicate re-delivery is
+ * recovered from the existing durable trade (anything that reached or passed
+ * the provider). REJECTED/CANCELLED recover as EXECUTION_FAILED.
+ */
+const DUPLICATE_ALIVE_TRADE_STATUSES: readonly TradeStatus[] = [
+  TradeStatus.PENDING,
+  TradeStatus.OPEN,
+  TradeStatus.CLOSED,
+  TradeStatus.RECONCILIATION_PENDING,
+];
 
 /**
  * StrategyOrchestratorService — Routes AI signal candidates through the
@@ -32,8 +50,12 @@ const CONFIDENCE_THRESHOLD = 0.6;
  *     → broker connection gate
  *     → SIGNAL IDENTITY GATE (#302, Round 5 task 50-c — BEFORE risk
  *       evaluation: persist-or-reuse AiSignalIdentity by (userId, signalId);
- *       same payload digest → idempotent proceed; different digest → typed
+ *       same canonical digest (material fields + the exact generatedAt
+ *       instant, Round 6) → idempotent proceed; different digest → typed
  *       conflict; stale/future generatedAt → typed rejection)
+ *     → DUPLICATE RECOVERY (#302, Round 6 task 6-d: duplicate=true →
+ *       recoverDuplicateOutcome() — the FIRST delivery's durable outcome is
+ *       the truth; NEVER a fresh risk evaluation or provider dispatch)
  *     → RiskService.validateProposedTrade()  ← MANDATORY
  *     → ExecutionService.executeTrade()       ← only on APPROVED
  * ═══════════════════════════════════════════════════════════════════════
@@ -175,11 +197,12 @@ export class StrategyOrchestratorService {
     // ── Gate 4.5: Signal identity (#302, Round 5 task 50-c) ──────────────
     // Persist-or-reuse the durable identity BEFORE risk evaluation: retries
     // and redeliveries never produce a second logical evaluation; a same-
-    // signalId/different-payload digest is a SECURITY EVENT (typed conflict,
-    // audited by the gate — never a new idempotency key); stale/future
-    // generatedAt is typed-rejected.
+    // signalId/different canonical digest (material fields OR generatedAt) is
+    // a SECURITY EVENT (typed conflict, audited by the gate — never a new
+    // idempotency key); stale/future generatedAt is typed-rejected.
+    let registration: SignalIdentityRegistration;
     try {
-      await this.signalIdentityGate.registerOrReuse(userId, {
+      registration = await this.signalIdentityGate.registerOrReuse(userId, {
         signalId,
         generatedAt: candidate.generatedAt,
         materialFields: {
@@ -204,6 +227,13 @@ export class StrategyOrchestratorService {
         `Signal identity gate rejected the delivery: ${reason}`,
       );
       return { outcome: 'SIGNAL_INVALID', signalId, reason };
+    }
+
+    // ── Gate 4.6: Deterministic duplicate recovery (#302, Round 6 6-d) ──
+    // A duplicate delivery NEVER re-enters risk evaluation or dispatch: the
+    // FIRST delivery's durable outcome is the truth for this signalId.
+    if (registration.duplicate) {
+      return this.recoverDuplicateOutcome(candidate, registration);
     }
 
     // ── Build ProposedTrade ────────────────────────────────────────────────────────
@@ -376,6 +406,116 @@ export class StrategyOrchestratorService {
 
   // ─── Internal helpers ──────────────────────────────────────────────────────
 
+  /**
+   * Round 6 (#302, task 6-d): recover a DUPLICATE signal delivery from the
+   * FIRST delivery's durable outcome — via the EXISTING
+   * executionService.findTradeBySignalId dependency (no fresh risk
+   * evaluation, no new trade, no provider dispatch, ever):
+   *
+   *  - existing trade (ANY status) → typed duplicate outcome carrying the
+   *    existing tradeId + status in StrategyResult.duplicateOfTrade
+   *    (EXECUTION_SUCCEEDED for PENDING/OPEN/CLOSED/RECONCILIATION_PENDING,
+   *    EXECUTION_FAILED for REJECTED/CANCELLED);
+   *  - NO trade → the original evaluation produced no execution: a transport
+   *    retry of a rejected signal stays rejected (RISK_REJECTED +
+   *    duplicateOfTrade{tradeId:null, tradeStatus:'REJECTED_PREVIOUSLY'});
+   *  - lookup failure → fail-closed SIGNAL_INVALID (the duplicate's durable
+   *    outcome could not be verified — never a fresh evaluation).
+   *
+   * The suppressed delivery is audited via the existing
+   * AuditAction.AI_SIGNAL_IGNORED (reasonCodes DUPLICATE_SIGNAL_RECOVERED /
+   * DUPLICATE_PREVIOUSLY_REJECTED / DUPLICATE_STATE_UNVERIFIED) and emits the
+   * AI_SIGNAL_IGNORED domain event, with metadata carrying the existing
+   * trade id/status + the original generatedAt.
+   */
+  private async recoverDuplicateOutcome(
+    candidate: AiSignalCandidate,
+    registration: SignalIdentityRegistration,
+  ): Promise<StrategyResult> {
+    const { signalId, userId } = candidate;
+    const originalGeneratedAt = registration.generatedAt.toISOString();
+
+    let existing: Trade | null;
+    try {
+      existing = await this.executionService.findTradeBySignalId(signalId, userId);
+    } catch (err) {
+      const reason =
+        'Duplicate delivery whose prior trade state could not be verified (fail-closed)';
+      this.logger.error(
+        `Signal ${signalId}: duplicate recovery lookup failed`,
+        (err as Error).message,
+      );
+      await this.recordIgnored(
+        candidate,
+        'SIGNAL_INVALID',
+        'DUPLICATE_STATE_UNVERIFIED',
+        'Duplicate delivery — the prior evaluation outcome could not be verified; fail-closed',
+        { existingTradeId: null, originalGeneratedAt },
+      );
+      return { outcome: 'SIGNAL_INVALID', signalId, reason };
+    }
+
+    if (existing) {
+      const recoveredAs: StrategyOutcome = DUPLICATE_ALIVE_TRADE_STATUSES.includes(existing.status)
+        ? 'EXECUTION_SUCCEEDED'
+        : 'EXECUTION_FAILED';
+      const duplicateOfTrade: StrategyDuplicateOfTrade = {
+        tradeId: existing.id,
+        tradeStatus: existing.status,
+        recoveredAs,
+      };
+      this.logger.log(
+        `Signal ${signalId} duplicate redelivery recovered from the existing ` +
+          `trade ${existing.id} (status ${existing.status}) — no fresh evaluation/dispatch`,
+      );
+      await this.recordIgnored(
+        candidate,
+        recoveredAs,
+        'DUPLICATE_SIGNAL_RECOVERED',
+        `Duplicate redelivery recovered from the existing trade ${existing.id} (${existing.status})`,
+        {
+          existingTradeId: existing.id,
+          existingTradeStatus: existing.status,
+          originalGeneratedAt,
+        },
+      );
+      return {
+        outcome: recoveredAs,
+        signalId,
+        tradeId: existing.id,
+        duplicateOfTrade,
+      };
+    }
+
+    // No trade exists for this signalId: the FIRST evaluation completed
+    // without creating one (risk-rejected, or a producer retry of a signal
+    // that never passed the pipeline). A transport retry of a rejected
+    // signal stays rejected — deterministically.
+    this.logger.log(
+      `Signal ${signalId} duplicate redelivery recovered as REJECTED_PREVIOUSLY ` +
+        '(no trade was created by the original evaluation)',
+    );
+    await this.recordIgnored(
+      candidate,
+      'RISK_REJECTED',
+      'DUPLICATE_PREVIOUSLY_REJECTED',
+      'Duplicate redelivery of a signal whose original evaluation produced no trade — stays rejected',
+      { existingTradeId: null, existingTradeStatus: 'REJECTED_PREVIOUSLY', originalGeneratedAt },
+    );
+    return {
+      outcome: 'RISK_REJECTED',
+      signalId,
+      reason:
+        'Duplicate delivery of a previously rejected signal — the original ' +
+        'evaluation produced no trade, and a retry may never mint a fresh one.',
+      duplicateOfTrade: {
+        tradeId: null,
+        tradeStatus: 'REJECTED_PREVIOUSLY',
+        recoveredAs: 'RISK_REJECTED',
+      },
+    };
+  }
+
   private validateStructure(candidate: AiSignalCandidate): string | null {
     if (!candidate.signalId) return 'Missing signalId';
     if (!candidate.userId) return 'Missing userId';
@@ -396,6 +536,7 @@ export class StrategyOrchestratorService {
     outcome: StrategyOutcome,
     reasonCode: string,
     reasonSummary: string,
+    extraMetadata: Record<string, unknown> = {},
   ): Promise<void> {
     await this.auditService.log({
       actorUserId: candidate.userId,
@@ -411,6 +552,7 @@ export class StrategyOrchestratorService {
         outcome,
         reasonCode,
         reasonSummary,
+        ...extraMetadata,
       },
     });
 
@@ -421,6 +563,7 @@ export class StrategyOrchestratorService {
       confidenceScore: candidate.confidenceScore,
       strategyCode: candidate.strategyCode,
       ignoredReason: reasonSummary,
+      ...extraMetadata,
     });
   }
 }

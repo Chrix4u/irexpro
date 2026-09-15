@@ -47,6 +47,13 @@ describe('BrokerConnection schema reconciliation (hotfix)', () => {
     __dirname,
     '../../database/migrations/1754050000000-AddBrokerLogicalAccountIdentity.ts',
   );
+  // Sprint 56 correction round 6 (task 6-d / R6-A) — the OAuth refresh-lease
+  // OWNER column (credential_refresh_lease_owner varchar(64) NULL) and the
+  // other round-6 authority columns live in the round-6 migration
+  const round6MigrationPath = path.resolve(
+    __dirname,
+    '../../database/migrations/1754300000000-CompleteExecutionAuthorityRound6.ts',
+  );
 
   let entitySource: string;
   let baselineSource: string;
@@ -55,6 +62,7 @@ describe('BrokerConnection schema reconciliation (hotfix)', () => {
   let refreshProtectionSource: string;
   let providerIdentitySource: string;
   let logicalAccountSource: string;
+  let round6Source: string;
 
   beforeAll(() => {
     entitySource = fs.readFileSync(entityPath, 'utf-8');
@@ -69,6 +77,8 @@ describe('BrokerConnection schema reconciliation (hotfix)', () => {
     providerIdentitySource = fs.readFileSync(providerIdentityMigrationPath, 'utf-8');
     expect(fs.existsSync(logicalAccountMigrationPath)).toBe(true);
     logicalAccountSource = fs.readFileSync(logicalAccountMigrationPath, 'utf-8');
+    expect(fs.existsSync(round6MigrationPath)).toBe(true);
+    round6Source = fs.readFileSync(round6MigrationPath, 'utf-8');
   });
 
   /**
@@ -168,6 +178,7 @@ describe('BrokerConnection schema reconciliation (hotfix)', () => {
     const refreshProtectionColumns = extractMigrationColumnNames(refreshProtectionSource);
     const providerIdentityColumns = extractMigrationColumnNames(providerIdentitySource);
     const logicalAccountColumns = extractMigrationColumnNames(logicalAccountSource);
+    const round6Columns = extractMigrationColumnNames(round6Source);
     const allMigrationColumns = new Set([
       ...baselineColumns,
       ...reconcileColumns,
@@ -175,6 +186,7 @@ describe('BrokerConnection schema reconciliation (hotfix)', () => {
       ...refreshProtectionColumns,
       ...providerIdentityColumns,
       ...logicalAccountColumns,
+      ...round6Columns,
     ]);
 
     // Every entity column must appear in at least one migration
@@ -224,6 +236,19 @@ describe('BrokerConnection schema reconciliation (hotfix)', () => {
     expect(logicalAccountSource).toContain(
       'preflight FAILED: duplicate durable BrokerConnection rows',
     );
+  });
+
+  // ── Sprint 56 correction round 6 (task 6-d / R6-A) ──────────────────────
+
+  it('credential_refresh_lease_owner should exist in the round-6 migration (nullable, non-destructive)', () => {
+    const round6Columns = extractMigrationColumnNames(round6Source);
+    expect(round6Columns.has('credential_refresh_lease_owner')).toBe(true);
+    // Non-destructive ADD COLUMN IF NOT EXISTS + reversible down().
+    expect(round6Source).toContain('ADD COLUMN IF NOT EXISTS "credential_refresh_lease_owner"');
+    expect(round6Source).toContain('DROP COLUMN IF EXISTS "credential_refresh_lease_owner"');
+    // NULLable varchar(64) — a lease-owner token (random UUID) or nothing;
+    // `lease IS NULL` is never ownership.
+    expect(round6Source).toMatch(/credential_refresh_lease_owner" varchar\(64\) NULL/s);
   });
 
   it('live_trading_enabled should exist in the reconciliation migration', () => {

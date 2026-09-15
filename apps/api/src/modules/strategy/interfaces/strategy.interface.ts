@@ -86,9 +86,29 @@ export type StrategyOutcome =
   /** Round 5 (#298): SEMI_AUTO approval awaiting the user one-time confirmation. */
   | 'EXECUTION_PENDING_CONFIRMATION';
 
+/**
+ * Round 6 (#302): durable duplicate-recovery descriptor — what the FIRST
+ * delivery's persisted outcome was, when a duplicate re-delivery was
+ * recovered from it instead of re-entering risk evaluation/dispatch.
+ */
+export interface StrategyDuplicateOfTrade {
+  /** Existing trade id — null when the original evaluation produced NO trade. */
+  tradeId: string | null;
+  /** Existing trade status; 'REJECTED_PREVIOUSLY' when no trade exists. */
+  tradeStatus: string;
+  /** Strategy outcome the duplicate delivery was recovered as. */
+  recoveredAs: StrategyOutcome;
+}
+
 export interface StrategyResult {
   outcome: StrategyOutcome;
   signalId: string;
   tradeId?: string;
   reason?: string;
+  /**
+   * Round 6 (#302): set when a duplicate signal delivery was recovered from
+   * the first delivery's durable outcome (deterministic duplicates — never a
+   * fresh risk evaluation or provider dispatch for the same signalId).
+   */
+  duplicateOfTrade?: StrategyDuplicateOfTrade;
 }

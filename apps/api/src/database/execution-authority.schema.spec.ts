@@ -27,6 +27,15 @@ describe('Execution authority schema reconciliation (round 5)', () => {
     __dirname,
     './migrations/1754200000000-AddFinalDispatchFencingColumns.ts',
   );
+  // Round 6 (R6-A): the complete-authority wave — shared control-plane
+  // tables, daily_risk_periods, tenant-scoped uniques, FKs, and the round-6
+  // entity columns (risk_grants authority binding, trading_sessions opening
+  // snapshot binding, …) live in the round-6 migration; the coverage below
+  // searches the CONCATENATED sources of all three authority migrations.
+  const round6MigrationPath = path.resolve(
+    __dirname,
+    './migrations/1754300000000-CompleteExecutionAuthorityRound6.ts',
+  );
 
   const entityPaths = {
     riskGrant: path.resolve(root, 'execution/entities/risk-grant.entity.ts'),
@@ -48,6 +57,8 @@ describe('Execution authority schema reconciliation (round 5)', () => {
     migrationSource = fs.readFileSync(migrationPath, 'utf-8');
     expect(fs.existsSync(fencingMigrationPath)).toBe(true);
     migrationSource += '\n' + fs.readFileSync(fencingMigrationPath, 'utf-8');
+    expect(fs.existsSync(round6MigrationPath)).toBe(true);
+    migrationSource += '\n' + fs.readFileSync(round6MigrationPath, 'utf-8');
     for (const [key, p] of Object.entries(entityPaths)) {
       expect(fs.existsSync(p)).toBe(true);
       entitySources[key] = fs.readFileSync(p, 'utf-8');
@@ -210,5 +221,123 @@ describe('Execution authority schema reconciliation (round 5)', () => {
     expect(migrationSource).toContain('ck_trades_dispatch_certainty');
     expect(migrationSource).toContain("'DEFINITELY_NOT_SENT'");
     expect(migrationSource).toContain("'MAY_HAVE_REACHED_PROVIDER'");
+  });
+
+  // ── Round 6 (R6-A) — complete execution authority ════════════════════════
+
+  it('round-6 migration exists and is named CompleteExecutionAuthorityRound61754300000000', () => {
+    expect(migrationSource).toContain('CompleteExecutionAuthorityRound61754300000000');
+  });
+
+  it('creates the shared control-plane singletons and revision logs (#363)', () => {
+    expect(migrationSource).toContain('CREATE TABLE IF NOT EXISTS platform.trading_policy_state');
+    expect(migrationSource).toContain('CREATE TABLE IF NOT EXISTS platform.trading_policy_revision_logs');
+    expect(migrationSource).toContain(
+      'CREATE TABLE IF NOT EXISTS platform.provider_live_verification_state',
+    );
+    expect(migrationSource).toContain(
+      'CREATE TABLE IF NOT EXISTS platform.provider_live_verification_revision_logs',
+    );
+    expect(migrationSource).toContain(
+      'CREATE TABLE IF NOT EXISTS platform.execution_control_revision_state',
+    );
+    expect(migrationSource).toContain('ck_trading_policy_state_singleton');
+    expect(migrationSource).toContain('uq_trading_policy_revision_logs_revision');
+    expect(migrationSource).toContain('uq_provider_live_verification_revision_logs_revision');
+    expect(migrationSource).toContain('ck_execution_control_revision_state_singleton');
+  });
+
+  it('creates trading.daily_risk_periods with the (user, logical account, day) budget scope (#362)', () => {
+    expect(migrationSource).toContain('CREATE TABLE IF NOT EXISTS trading.daily_risk_periods');
+    expect(migrationSource).toContain('uq_daily_risk_periods_scope');
+    expect(migrationSource).toMatch(
+      /UNIQUE \(user_id, logical_account_key, risk_period_date\)/,
+    );
+    expect(migrationSource).toContain('idx_daily_risk_periods_user_day');
+  });
+
+  it('replaces the global signal uniques with tenant-scoped ones (#364)', () => {
+    expect(migrationSource).toContain('uq_risk_grants_one_active_per_user_signal');
+    expect(migrationSource).toContain('uq_execution_confirmations_one_pending_per_user_signal');
+    expect(migrationSource).toMatch(
+      /CREATE UNIQUE INDEX IF NOT EXISTS uq_risk_grants_one_active_per_user_signal[\s\S]*?ON trading\.risk_grants \(user_id, signal_id\)[\s\S]*?WHERE status = 'ACTIVE'/,
+    );
+    expect(migrationSource).toMatch(
+      /CREATE UNIQUE INDEX IF NOT EXISTS uq_execution_confirmations_one_pending_per_user_signal[\s\S]*?ON trading\.execution_confirmations \(user_id, signal_id\)[\s\S]*?WHERE status = 'PENDING'/,
+    );
+    // The global round-5 indexes are dropped (create-new-first, so there is
+    // never a window without single-winner protection).
+    expect(migrationSource).toContain(
+      'DROP INDEX IF EXISTS trading.uq_risk_grants_one_active_per_signal',
+    );
+    expect(migrationSource).toContain(
+      'DROP INDEX IF EXISTS trading.uq_execution_confirmations_one_pending_per_signal',
+    );
+  });
+
+  it('adds referential integrity to the authority tables with retention semantics (#13 audit)', () => {
+    expect(migrationSource).toContain('fk_risk_grants_user');
+    expect(migrationSource).toContain('fk_risk_grants_session');
+    expect(migrationSource).toContain('fk_risk_grants_broker_connection');
+    expect(migrationSource).toContain('fk_risk_grants_account_snapshot');
+    expect(migrationSource).toContain('fk_execution_confirmations_risk_grant');
+    expect(migrationSource).toContain('fk_ai_signal_identities_user');
+    expect(migrationSource).toContain('fk_trading_authority_generations_user');
+    expect(migrationSource).toContain('fk_broker_account_snapshots_connection');
+    // Never CASCADE on financial/audit authority history — retention (NO
+    // ACTION) semantics only; the migration contains no ON DELETE CASCADE.
+    expect(migrationSource).not.toMatch(/ON DELETE CASCADE/i);
+  });
+
+  it('adds the round-6 risk_grants authority binding columns (#301/#363)', () => {
+    expect(migrationSource).toMatch(
+      /ALTER TABLE trading\.risk_grants\s+ADD COLUMN IF NOT EXISTS authority_binding_digest varchar\(64\)/,
+    );
+    expect(migrationSource).toMatch(
+      /ADD COLUMN IF NOT EXISTS trading_policy_revision integer/,
+    );
+    expect(migrationSource).toMatch(
+      /ADD COLUMN IF NOT EXISTS provider_verification_revision integer/,
+    );
+  });
+
+  it('adds the trading_sessions opening-snapshot binding and trades provenance (#297/#312/#362)', () => {
+    expect(migrationSource).toMatch(
+      /ALTER TABLE trading\.trading_sessions\s+ADD COLUMN IF NOT EXISTS account_currency varchar\(3\)/,
+    );
+    expect(migrationSource).toMatch(
+      /ADD COLUMN IF NOT EXISTS opening_snapshot_id uuid/,
+    );
+    expect(migrationSource).toMatch(
+      /ADD COLUMN IF NOT EXISTS opening_snapshot_generation integer/,
+    );
+    expect(migrationSource).toMatch(
+      /ALTER TABLE trading\.trades\s+ADD COLUMN IF NOT EXISTS trading_session_id uuid/,
+    );
+    expect(migrationSource).toMatch(
+      /ADD COLUMN IF NOT EXISTS logical_account_key varchar\(255\)/,
+    );
+    expect(migrationSource).toMatch(
+      /ADD COLUMN IF NOT EXISTS account_currency varchar\(3\)/,
+    );
+    expect(migrationSource).toMatch(
+      /ADD COLUMN IF NOT EXISTS risk_period_id uuid/,
+    );
+  });
+
+  it('adds risk_profiles.revision and broker_accounts.last_snapshot_generation (#299/#312)', () => {
+    expect(migrationSource).toMatch(
+      /ALTER TABLE trading\.risk_profiles\s+ADD COLUMN IF NOT EXISTS revision integer NOT NULL DEFAULT 1/,
+    );
+    expect(migrationSource).toMatch(
+      /ALTER TABLE broker\.broker_accounts\s+ADD COLUMN IF NOT EXISTS last_snapshot_generation integer/,
+    );
+  });
+
+  it('supports the orders DISPATCH_COMMITTED status (#365)', () => {
+    expect(migrationSource).toContain('DROP CONSTRAINT IF EXISTS chk_orders_status');
+    expect(migrationSource).toMatch(
+      /ADD CONSTRAINT chk_orders_status CHECK \("status" IN \([\s\S]*?'DISPATCH_COMMITTED'/,
+    );
   });
 });

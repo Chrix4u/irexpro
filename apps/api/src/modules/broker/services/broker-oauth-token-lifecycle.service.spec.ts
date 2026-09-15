@@ -38,6 +38,7 @@ const COLUMN_OF: Record<string, string> = {
   credentialStatus: 'credential_status',
   credentialGeneration: 'credential_generation',
   credentialRefreshLeaseExpiresAt: 'credential_refresh_lease_expires_at',
+  credentialRefreshLeaseOwner: 'credential_refresh_lease_owner',
   encryptedCredentials: 'encrypted_credentials',
   credentialIv: 'credential_iv',
   credentialTag: 'credential_tag',
@@ -374,21 +375,34 @@ describe('BrokerOAuthTokenLifecycleService (Sprint 56 correction — audit point
     expect(expiryMs).toBeLessThan(Date.now() + 2_660_000_000);
     // ATOMIC persistence: exactly ONE guarded UPDATE carrying ciphertext +
     // IV + tag + keyId + ROTATED status + generation bump + lease release —
-    // the new pair is durable BEFORE any consumer sees it.
+    // the new pair is durable BEFORE any consumer sees it. Round 6: the
+    // claim set BOTH lease columns (expiry + a FRESH owner token) and the
+    // persist CAS is OWNER-GATED (exact token, no IS NULL alternative) and
+    // clears BOTH columns.
     const persists = repo.ops.filter((op) => 'encryptedCredentials' in op.set);
     expect(persists).toHaveLength(1);
     expect(persists[0].affected).toBe(1);
     expect(persists[0].set.credentialStatus).toBe(BrokerCredentialStatus.ROTATED);
     expect(persists[0].set.credentialGeneration).toBe(1);
     expect(persists[0].set.credentialRefreshLeaseExpiresAt).toBeNull();
-    // The refresh lease was claimed FIRST (serialization across replicas).
+    expect(persists[0].set.credentialRefreshLeaseOwner).toBeNull();
+    expect(persists[0].where).toContain('credential_generation = :observedGeneration');
+    expect(persists[0].where).toContain('credential_refresh_lease_owner = :ownerToken');
+    expect(persists[0].where).not.toContain('IS NULL');
+    // The refresh lease was claimed FIRST (serialization across replicas) —
+    // the claim mints BOTH the expiry AND the unique owner token.
     expect(repo.ops[0].set.credentialRefreshLeaseExpiresAt).toBeInstanceOf(Date);
+    expect(repo.ops[0].set.credentialRefreshLeaseOwner).toEqual(expect.any(String));
+    expect(repo.ops[0].set.credentialRefreshLeaseOwner).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
     // The STORED row now decrypts to exactly the NEW pair (cTrader
     // invalidated the previous pair — the old one must NOT be stored).
     const row = repo.findOne({ where: { id: CONN_ID } })!;
     expect(row.credentialStatus).toBe(BrokerCredentialStatus.ROTATED);
     expect(row.credentialGeneration).toBe(1);
     expect(row.credentialRefreshLeaseExpiresAt).toBeNull();
+    expect(row.credentialRefreshLeaseOwner).toBeNull();
     const decrypted = encryption.decrypt({
       ciphertext: row.encryptedCredentials as string,
       iv: row.credentialIv as string,
@@ -455,10 +469,12 @@ describe('BrokerOAuthTokenLifecycleService (Sprint 56 correction — audit point
     await expect(
       service.ensureFreshTokens(ctraderConnection(), credentialsWithTokens()),
     ).rejects.toThrow(ConflictException);
-    // INVALID persisted + the auth-failure audit recorded + lease released.
+    // INVALID persisted + the auth-failure audit recorded + lease released
+    // (BOTH columns — the owner token dies with the terminal write).
     const row = repo.findOne({ where: { id: CONN_ID } })!;
     expect(row.credentialStatus).toBe(BrokerCredentialStatus.INVALID);
     expect(row.credentialRefreshLeaseExpiresAt).toBeNull();
+    expect(row.credentialRefreshLeaseOwner).toBeNull();
     expect(row.lastErrorMessage).toContain('re-authorization required');
     const actions = audit.log.mock.calls.map((c) => c[0].action);
     expect(actions).toContain(AuditAction.BROKER_OAUTH_TOKEN_REFRESH_FAILED);
@@ -477,13 +493,24 @@ describe('BrokerOAuthTokenLifecycleService (Sprint 56 correction — audit point
       service.ensureFreshTokens(ctraderConnection(), credentialsWithTokens()),
     ).rejects.toMatchObject({ code: BrokerErrorCode.CONNECTION_TIMEOUT });
     // No INVALID write — the old pair may still be alive; no state change;
-    // the lease is RELEASED so the next attempt need not wait for expiry.
+    // the lease is RELEASED (BOTH columns, owner-token-gated) so the next
+    // attempt need not wait for expiry.
     const row = repo.findOne({ where: { id: CONN_ID } })!;
     expect(row.credentialStatus).toBe(BrokerCredentialStatus.VERIFIED);
     expect(row.credentialGeneration).toBe(0);
     expect(row.credentialRefreshLeaseExpiresAt).toBeNull();
+    expect(row.credentialRefreshLeaseOwner).toBeNull();
     const statuses = repo.ops.map((op) => op.set.credentialStatus);
     expect(statuses).not.toContain(BrokerCredentialStatus.INVALID);
+    // The release is fenced by OUR owner token and clears BOTH columns.
+    const releases = repo.ops.filter(
+      (op) =>
+        op.set.credentialRefreshLeaseExpiresAt === null && op.set.credentialStatus === undefined,
+    );
+    expect(releases).toHaveLength(1);
+    expect(releases[0].where).toContain('credential_refresh_lease_owner = :ownerToken');
+    expect(releases[0].set.credentialRefreshLeaseOwner).toBeNull();
+    expect(releases[0].affected).toBe(1);
   });
 
   it('marks INVALID when the refreshed pair cannot be PERSISTED (atomicity guarantee)', async () => {
@@ -502,16 +529,19 @@ describe('BrokerOAuthTokenLifecycleService (Sprint 56 correction — audit point
     const row = repo.findOne({ where: { id: CONN_ID } })!;
     expect(row.credentialStatus).toBe(BrokerCredentialStatus.INVALID);
     expect(row.credentialRefreshLeaseExpiresAt).toBeNull();
-    // Correction round 4: the INVALID write is a GUARDED conditional UPDATE
-    // (generation + lease identity — architect finding 1), not a blind
-    // repo.update by connection id.
+    // Correction round 4 + round 6: the INVALID write is a GUARDED conditional
+    // UPDATE (generation + EXACT lease-owner token — architect finding 1),
+    // not a blind repo.update by connection id.
     const invalidWrites = repo.ops.filter(
       (op) => op.set.credentialStatus === BrokerCredentialStatus.INVALID,
     );
     expect(invalidWrites).toHaveLength(1);
     expect(invalidWrites[0].kind).toBe('qb-update');
     expect(invalidWrites[0].where).toContain('credential_generation = :observedGeneration');
+    expect(invalidWrites[0].where).toContain('credential_refresh_lease_owner = :ownerToken');
+    expect(invalidWrites[0].where).not.toContain('IS NULL');
     expect(invalidWrites[0].affected).toBe(1);
+    expect(invalidWrites[0].set.credentialRefreshLeaseOwner).toBeNull();
   });
 
   // ─── Generation CAS: a stale refresh response never overwrites a newer pair ─
@@ -555,10 +585,13 @@ describe('BrokerOAuthTokenLifecycleService (Sprint 56 correction — audit point
     expect(row.credentialTag).toBe(newerBundle.tag);
     expect(row.credentialGeneration).toBe(5);
     expect(row.credentialRefreshLeaseExpiresAt).toBeNull();
-    // The CAS persist FAILED (affected 0) — never a blind overwrite.
+    expect(row.credentialRefreshLeaseOwner).toBeNull();
+    // The CAS persist FAILED (affected 0) — never a blind overwrite; the
+    // WHERE carries the generation AND the exact owner token.
     const persists = repo.ops.filter((op) => 'encryptedCredentials' in op.set);
     expect(persists).toHaveLength(1);
     expect(persists[0].affected).toBe(0);
+    expect(persists[0].where).toContain('credential_refresh_lease_owner = :ownerToken');
     // NO rotation audit for the losing attempt.
     const actions = audit.log.mock.calls.map((c) => c[0].action);
     expect(actions).not.toContain(AuditAction.BROKER_OAUTH_TOKENS_REFRESHED);
@@ -592,9 +625,11 @@ describe('BrokerOAuthTokenLifecycleService (Sprint 56 correction — audit point
   // ─── Loser path (lease held by another holder) ──────────────────────────────
 
   it('never calls the provider and throws RETRYABLE RATE_LIMITED when the wait budget is exhausted', async () => {
-    // Another holder (another replica) holds a live lease.
+    // Another holder (another replica) holds a live lease — expiry AND its
+    // own owner token.
     repo.setColumns(CONN_ID, {
       credential_refresh_lease_expires_at: new Date(Date.now() + 60_000),
+      credential_refresh_lease_owner: 'external-holder-owner-token',
     });
     service = new TestableLifecycleService(repo, encryption, ctraderClient, audit, {
       waitBudgetMs: 20,
@@ -610,19 +645,21 @@ describe('BrokerOAuthTokenLifecycleService (Sprint 56 correction — audit point
     expect((err as BrokerAdapterError).isRetryable).toBe(true);
     expect((err as BrokerAdapterError).message).toContain(CONN_ID);
     expect(ctraderClient.refreshAccessToken).not.toHaveBeenCalled();
-    // No state change at all (the lease stays with its holder).
+    // No state change at all (the lease stays with its holder — BOTH columns).
     const row = repo.findOne({ where: { id: CONN_ID } })!;
     expect(row.credentialStatus).toBe(BrokerCredentialStatus.VERIFIED);
     expect(row.credentialGeneration).toBe(0);
+    expect(row.credentialRefreshLeaseOwner).toBe('external-holder-owner-token');
     expect(repo.ops.filter((op) => op.affected > 0)).toHaveLength(0);
   });
 
   it('a LOSER observing an INVALID credential gets the typed conflict — never writes, never refreshes', async () => {
     // The winner's fail-closed path already marked the credential INVALID
-    // and still holds the lease.
+    // and still holds the lease (expiry + owner token).
     repo.setColumns(CONN_ID, {
       credential_status: BrokerCredentialStatus.INVALID,
       credential_refresh_lease_expires_at: new Date(Date.now() + 60_000),
+      credential_refresh_lease_owner: 'invalid-winner-owner-token',
     });
     service = new TestableLifecycleService(repo, encryption, ctraderClient, audit, {
       waitBudgetMs: 20,

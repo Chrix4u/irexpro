@@ -164,6 +164,9 @@ describe('ExecutionOrchestrator provider-write certainty (Sprint 56 correction r
       encryptionService as unknown as CredentialEncryptionService,
       auditService as unknown as AuditService,
       eventBus as unknown as DomainEventBus,
+      // Round 6 (#365): the provider-dispatch commitment seam — these suites
+      // drive dispatchOrder WITHOUT a commitment payload.
+      {} as never,
     );
   });
 

@@ -37,6 +37,15 @@ export interface RiskApprovalResult {
   sessionGeneration?: number;
   executionMode?: string;
   brokerConnectionId?: string;
+  /** Round 6 (#362): immutable per-trade provenance carried from the risk
+   * decision into the durable Trade row — the daily-risk-period key inputs.
+   * Absent (undefined) on paths without provable account provenance (e.g.
+   * PAPER_ONLY projections without a bound snapshot) — ExecutionService
+   * persists null then, and the daily-loss aggregation marks such history
+   * incomplete rather than guessing. */
+  logicalAccountKey?: string;
+  accountCurrency?: string;
+  riskPeriodId?: string;
 }
 
 export interface RiskRejectionResult {

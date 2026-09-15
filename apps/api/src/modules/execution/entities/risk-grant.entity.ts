@@ -119,6 +119,45 @@ export class RiskGrant {
   @Column({ name: 'execution_control_revision', type: 'integer', nullable: true })
   executionControlRevision: number | null;
 
+  // ─── Round-6 complete authority binding (issues #301 + #363) ──────────────
+
+  /**
+   * SHA-256 of the CANONICAL JSON over ALL authority facts bound at issuance
+   * (signal payload digest, session id/generation/mode, exact connection,
+   * credential generation, provider identity, shared policy/verification
+   * revisions, risk-profile id/version/hash, account snapshot
+   * id/generation/observed-at, user authority generation, kill-switch and
+   * execution-control revisions, order payload digest, quote authority).
+   *
+   * Two grants are "same issuance" ONLY when this digest matches — the
+   * canonical equality that replaces the drift-prone hand-written
+   * field-by-field comparison (issue #301). The individual bound fields are
+   * kept below/above for audit and queryability. NULL = legacy rows issued
+   * before round 6.
+   */
+  @Column({ name: 'authority_binding_digest', type: 'varchar', length: 64, nullable: true })
+  authorityBindingDigest: string | null;
+
+  /**
+   * SHARED cross-replica trading-policy revision observed at issuance
+   * (issue #363). The final dispatch boundary re-reads the CURRENT shared
+   * revision (platform.trading_policy_state) — a mismatch means this replica
+   * (or the grant) is stale and NEW exposure fails closed. NULL = legacy
+   * rows issued before round 6.
+   */
+  @Column({ name: 'trading_policy_revision', type: 'integer', nullable: true })
+  tradingPolicyRevision: number | null;
+
+  /**
+   * SHARED cross-replica provider LIVE-verification catalog revision
+   * observed at issuance (issue #363) — complements
+   * providerVerificationFingerprint with the durable revision. A shared
+   * verification downgrade must block the NEXT NEW exposure on every
+   * replica. NULL = legacy rows issued before round 6.
+   */
+  @Column({ name: 'provider_verification_revision', type: 'integer', nullable: true })
+  providerVerificationRevision: number | null;
+
   /** SHA-256 canonical digest of the EXACT validated order payload. */
   @Column({ name: 'order_payload_digest', type: 'varchar', length: 64 })
   orderPayloadDigest: string;

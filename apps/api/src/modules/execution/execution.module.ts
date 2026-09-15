@@ -34,6 +34,8 @@ import { RiskModule } from '../risk/risk.module';
 import { BrokerModule } from '../broker/broker.module';
 import { AuditModule } from '../audit/audit.module';
 import { ExecutionControlModule } from '../execution-control/execution-control.module';
+import { ExecutionAuthorityModule } from '../execution-authority/execution-authority.module';
+import { DailyRiskPeriodModule } from './daily-risk-period.module';
 
 /**
  * ExecutionModule — Live trade execution, lifecycle management, and
@@ -81,6 +83,14 @@ import { ExecutionControlModule } from '../execution-control/execution-control.m
     BrokerModule,
     AuditModule,
     ExecutionControlModule,
+    // Round 6: PLAIN leaf imports — the unified execution-authority services
+    // (the final-dispatch boundary's commitment re-verification reads the
+    // TradingAuthorityGeneration + shared control-plane revisions and
+    // consumes grants/confirmations through the tenant-scoped CAS seams) and
+    // the daily-risk-period authority. Acyclic on purpose: no forwardRef is
+    // stacked onto the existing RiskModule cycle.
+    ExecutionAuthorityModule,
+    DailyRiskPeriodModule,
   ],
   controllers: [ExecutionController, ExecutionConfirmationController],
   providers: [

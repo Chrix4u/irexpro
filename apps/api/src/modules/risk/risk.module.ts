@@ -16,6 +16,8 @@ import { BrokerModule } from '../broker/broker.module';
 import { AuditModule } from '../audit/audit.module';
 import { ExecutionModule } from '../execution/execution.module';
 import { ExecutionControlModule } from '../execution-control/execution-control.module';
+import { ExecutionAuthorityModule } from '../execution-authority/execution-authority.module';
+import { DailyRiskPeriodModule } from '../execution/daily-risk-period.module';
 
 /**
  * RiskModule — Non-bypassable pre-trade validation gateway.
@@ -53,6 +55,13 @@ import { ExecutionControlModule } from '../execution-control/execution-control.m
     BrokerModule,
     AuditModule,
     ExecutionControlModule,
+    // Round 6: PLAIN leaf imports — the unified execution-authority services
+    // (TradingAuthorityService / SharedControlRevisionService /
+    // GrantInvalidationService) and the daily-risk-period authority. Both are
+    // acyclic, so the existing forwardRef(ExecutionModule) cycle below stays
+    // EXACTLY as committed (no provider-level forwardRef is stacked on it).
+    ExecutionAuthorityModule,
+    DailyRiskPeriodModule,
     forwardRef(() => ExecutionModule),
   ],
   controllers: [RiskController, RiskIntelligenceController],

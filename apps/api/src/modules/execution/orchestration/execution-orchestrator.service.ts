@@ -22,6 +22,7 @@ import { Order } from '../orders/order.entity';
 import { OrderService } from '../orders/order.service';
 import { OrderStatus } from '../orders/order.enums';
 import { ExecutionIntent, ProviderDispatchOutcome } from './execution-intent.interface';
+import { FinalDispatchBoundary } from './final-dispatch-boundary';
 import { mapProviderOrderResponse } from './provider-response.mapper';
 import { classifyIntentOperation, isExposureIncreasingOperation } from './provider-operation-class';
 import { ProviderOperationClass } from '../interfaces/execution-authority';
@@ -84,6 +85,10 @@ export class ExecutionOrchestrator {
     private readonly encryptionService: CredentialEncryptionService,
     private readonly auditService: AuditService,
     private readonly eventBus: DomainEventBus,
+    // Round 6 (#365): the provider-dispatch commitment boundary — invoked
+    // INSIDE dispatchOrder immediately before the provider state-changing
+    // call, with NOTHING awaited in between.
+    private readonly finalDispatchBoundary: FinalDispatchBoundary,
   ) {}
 
   // ─── 1. Validation pipeline (fail-closed) ───────────────────────────────
@@ -235,6 +240,13 @@ export class ExecutionOrchestrator {
   async dispatchOrder(
     intent: ExecutionIntent,
     connection: BrokerConnection,
+    commitment?: {
+      /** The RiskGrant authorizing this dispatch (consumed AT the commitment). */
+      grantId: string;
+      /** The SEMI_AUTO one-time confirmation driving this dispatch, if any. */
+      confirmationId?: string | null;
+      origin?: 'PIPELINE' | 'USER_CONFIRMATION';
+    },
   ): Promise<ProviderDispatchOutcome> {
     // Round 5 (#303): the operation class of THIS provider-bound dispatch —
     // classified from the intent, audited on every submission, and used by
@@ -304,6 +316,27 @@ export class ExecutionOrchestrator {
         signalId: intent.signalId ?? null,
       },
     });
+
+    // ── ROUND 6 (#365): the PROVIDER-DISPATCH COMMITMENT ─────────────────
+    // ONE short DB transaction re-verifying the CURRENT unified authority
+    // chain (user TradingAuthorityGeneration, shared cross-replica revisions,
+    // risk-profile revision, session, connection, credential generation) and
+    // ATOMICALLY consuming the RiskGrant (+ the SEMI_AUTO confirmation)
+    // while transitioning this order to DISPATCH_COMMITTED. NOTHING is
+    // awaited between this commitment and the provider state-changing call
+    // below — that gap is the honest boundary between zero-provider-calls
+    // (any authority change before it blocks with ZERO provider calls) and
+    // in-flight (resolved through ProviderDispatchCertainty + reconciliation,
+    // never replayed).
+    if (commitment?.grantId) {
+      await this.finalDispatchBoundary.commitProviderDispatch({
+        userId: intent.userId,
+        grantId: commitment.grantId,
+        confirmationId: commitment.confirmationId ?? null,
+        orderId: order.id,
+        origin: commitment.origin ?? 'PIPELINE',
+      });
+    }
 
     // ── Provider dispatch (retry/timeout-wrapped) ─────────────────────────
     try {

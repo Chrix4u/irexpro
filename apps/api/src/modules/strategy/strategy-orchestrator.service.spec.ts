@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { Logger } from '@nestjs/common';
 import { StrategyOrchestratorService } from './strategy-orchestrator.service';
 import { AiSignalIdentityGateService } from '../execution/orchestration/signal-identity.gate';
+import { SignalIdentityRegistration } from '../execution/orchestration/signal-identity.gate';
 import { RiskService } from '../risk/risk.service';
 import { ExecutionService } from '../execution/execution.service';
 import { BrokerService } from '../broker/broker.service';
@@ -10,6 +11,7 @@ import { DomainEventBus } from '../events/event-bus.service';
 import { TradingSession, TradingSessionStatus } from '../execution/entities/trading-session.entity';
 import { AiSignalCandidate } from './interfaces/strategy.interface';
 import { Trade, TradeStatus } from '../execution/entities/trade.entity';
+import { AuditAction } from '../../common/enums/audit-action.enum';
 
 const validCandidate = (overrides: Partial<AiSignalCandidate> = {}): AiSignalCandidate => ({
   signalId: 'sig-001',
@@ -62,6 +64,22 @@ describe('StrategyOrchestratorService', () => {
   let brokerService: jest.Mocked<Partial<BrokerService>>;
   let auditService: jest.Mocked<Partial<AuditService>>;
   let eventBus: jest.Mocked<Partial<DomainEventBus>>;
+  let identityGateMock: { registerOrReuse: jest.Mock; markProcessed: jest.Mock };
+
+  /** Full SignalIdentityRegistration shape (Round 6 mock contract). */
+  const registrationFor = (
+    signal: Record<string, unknown>,
+    duplicate = false,
+  ): SignalIdentityRegistration => ({
+    identityId: `identity-${String(signal.signalId ?? 'sig-1')}`,
+    signalId: String(signal.signalId ?? 'sig-1'),
+    payloadDigest: 'digest-fixture',
+    duplicate,
+    generatedAt:
+      signal.generatedAt instanceof Date
+        ? signal.generatedAt
+        : new Date(String(signal.generatedAt)),
+  });
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -77,6 +95,7 @@ describe('StrategyOrchestratorService', () => {
       executeTrade: jest
         .fn()
         .mockResolvedValue({ id: 'trade-1', status: TradeStatus.OPEN } as Trade),
+      findTradeBySignalId: jest.fn().mockResolvedValue(null),
     };
 
     brokerService = {
@@ -92,6 +111,15 @@ describe('StrategyOrchestratorService', () => {
       subscribe: jest.fn().mockReturnValue(() => {}),
     };
 
+    identityGateMock = {
+      registerOrReuse: jest
+        .fn()
+        .mockImplementation(async (_userId: string, signal: Record<string, unknown>) =>
+          registrationFor(signal),
+        ),
+      markProcessed: jest.fn().mockResolvedValue(undefined),
+    };
+
     module = await Test.createTestingModule({
       providers: [
         StrategyOrchestratorService,
@@ -103,16 +131,10 @@ describe('StrategyOrchestratorService', () => {
         {
           // Round 5 (task 50-c): the durable signal-identity gate is mocked at
           // the seam (its own matrix lives in signal-identity.gate.spec.ts).
+          // Round 6: the mock carries the FULL registration shape incl. the
+          // duplicate flag + persisted original generatedAt.
           provide: AiSignalIdentityGateService,
-          useValue: {
-            registerOrReuse: jest
-              .fn()
-              .mockImplementation(async (_userId: string, signal: Record<string, unknown>) => ({
-                signalId: (signal.signalId as string) ?? 'sig-1',
-                payloadDigest: 'digest-fixture',
-                firstDelivery: true,
-              })),
-          },
+          useValue: identityGateMock,
         },
       ],
     }).compile();
@@ -256,6 +278,135 @@ describe('StrategyOrchestratorService', () => {
     it('returns tradeId on success', async () => {
       const result = await service.processSignal(validCandidate());
       expect(result.tradeId).toBe('trade-1');
+    });
+  });
+
+  describe('Gate 4.6: deterministic duplicate recovery (#302, Round 6)', () => {
+    /** Flip the identity-gate seam: this delivery is a DUPLICATE re-delivery. */
+    const deliverAsDuplicate = (): void => {
+      identityGateMock.registerOrReuse.mockImplementation(
+        async (_userId: string, signal: Record<string, unknown>) => registrationFor(signal, true),
+      );
+    };
+
+    const existingTrade = (status: TradeStatus): Trade =>
+      ({ id: 'trade-existing', status, signalId: 'sig-001' }) as Trade;
+
+    it.each([
+      ['PENDING', TradeStatus.PENDING],
+      ['OPEN', TradeStatus.OPEN],
+      ['CLOSED', TradeStatus.CLOSED],
+      ['RECONCILIATION_PENDING', TradeStatus.RECONCILIATION_PENDING],
+    ])(
+      'duplicate with an existing %s trade → EXECUTION_SUCCEEDED + duplicateOfTrade (no fresh evaluation, no dispatch)',
+      async (_label: string, status: TradeStatus) => {
+        deliverAsDuplicate();
+        (executionService.findTradeBySignalId as jest.Mock).mockResolvedValue(
+          existingTrade(status),
+        );
+
+        const result = await service.processSignal(validCandidate());
+
+        expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
+        expect(result.tradeId).toBe('trade-existing');
+        expect(result.duplicateOfTrade).toEqual({
+          tradeId: 'trade-existing',
+          tradeStatus: status,
+          recoveredAs: 'EXECUTION_SUCCEEDED',
+        });
+        // The FIRST delivery's durable outcome is the truth — the duplicate
+        // NEVER re-enters risk evaluation or provider dispatch.
+        expect(riskService.validateProposedTrade).not.toHaveBeenCalled();
+        expect(executionService.executeTrade).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([
+      ['REJECTED', TradeStatus.REJECTED],
+      ['CANCELLED', TradeStatus.CANCELLED],
+    ])(
+      'duplicate with an existing %s trade → EXECUTION_FAILED + duplicateOfTrade (no fresh evaluation, no dispatch)',
+      async (_label: string, status: TradeStatus) => {
+        deliverAsDuplicate();
+        (executionService.findTradeBySignalId as jest.Mock).mockResolvedValue(
+          existingTrade(status),
+        );
+
+        const result = await service.processSignal(validCandidate());
+
+        expect(result.outcome).toBe('EXECUTION_FAILED');
+        expect(result.tradeId).toBe('trade-existing');
+        expect(result.duplicateOfTrade).toEqual({
+          tradeId: 'trade-existing',
+          tradeStatus: status,
+          recoveredAs: 'EXECUTION_FAILED',
+        });
+        expect(riskService.validateProposedTrade).not.toHaveBeenCalled();
+        expect(executionService.executeTrade).not.toHaveBeenCalled();
+      },
+    );
+
+    it('duplicate with NO existing trade → RISK_REJECTED + duplicateOfTrade{tradeId:null, tradeStatus:REJECTED_PREVIOUSLY} — a retry of a rejected signal stays rejected', async () => {
+      deliverAsDuplicate();
+      (executionService.findTradeBySignalId as jest.Mock).mockResolvedValue(null);
+
+      const result = await service.processSignal(validCandidate());
+
+      expect(result.outcome).toBe('RISK_REJECTED');
+      expect(result.duplicateOfTrade).toEqual({
+        tradeId: null,
+        tradeStatus: 'REJECTED_PREVIOUSLY',
+        recoveredAs: 'RISK_REJECTED',
+      });
+      expect(result.reason).toContain('previously rejected');
+      expect(riskService.validateProposedTrade).not.toHaveBeenCalled();
+      expect(executionService.executeTrade).not.toHaveBeenCalled();
+    });
+
+    it('duplicate recovery lookup FAILURE → fail-closed SIGNAL_INVALID (never a fresh evaluation)', async () => {
+      deliverAsDuplicate();
+      (executionService.findTradeBySignalId as jest.Mock).mockRejectedValue(
+        new Error('trade store unavailable'),
+      );
+
+      const result = await service.processSignal(validCandidate());
+
+      expect(result.outcome).toBe('SIGNAL_INVALID');
+      expect(riskService.validateProposedTrade).not.toHaveBeenCalled();
+      expect(executionService.executeTrade).not.toHaveBeenCalled();
+    });
+
+    it('audits the suppressed duplicate via AI_SIGNAL_IGNORED (DUPLICATE_SIGNAL_RECOVERED) with existing trade id/status + original generatedAt, and emits the domain event', async () => {
+      deliverAsDuplicate();
+      (executionService.findTradeBySignalId as jest.Mock).mockResolvedValue(
+        existingTrade(TradeStatus.OPEN),
+      );
+
+      await service.processSignal(validCandidate());
+
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: AuditAction.AI_SIGNAL_IGNORED,
+          resourceType: 'AiSignal',
+          resourceId: 'sig-001',
+          metadata: expect.objectContaining({
+            outcome: 'EXECUTION_SUCCEEDED',
+            reasonCode: 'DUPLICATE_SIGNAL_RECOVERED',
+            existingTradeId: 'trade-existing',
+            existingTradeStatus: TradeStatus.OPEN,
+            originalGeneratedAt: expect.any(String),
+          }),
+        }),
+      );
+      expect(eventBus.publish).toHaveBeenCalledWith(
+        'ai.signal.ignored',
+        'user-1',
+        expect.objectContaining({
+          signalId: 'sig-001',
+          existingTradeId: 'trade-existing',
+          existingTradeStatus: TradeStatus.OPEN,
+        }),
+      );
     });
   });
 

@@ -168,6 +168,22 @@ export class BrokerConnection {
   @Column({ name: 'credential_refresh_lease_expires_at', type: Date, nullable: true })
   credentialRefreshLeaseExpiresAt: Date | null;
 
+  /**
+   * Round 6 (task 6-d, brief §20): UNIQUE lease-OWNER token (random UUID,
+   * ≤ 64 chars) for the OAuth refresh lease. The claim atomically sets BOTH
+   * `credential_refresh_lease_expires_at` AND this fresh owner token; a
+   * takeover mints a NEW token. EVERY winner-only operation — successful
+   * token-pair persistence, terminal INVALID transition, lease release —
+   * additionally requires the EXACT owner token (plus connection id and
+   * observed credential generation).
+   *
+   * `credential_refresh_lease_expires_at IS NULL` is NEVER treated as proof
+   * that a stale owner regained ownership: a released lease clears BOTH
+   * columns, so a stale replica's writes match ZERO rows.
+   */
+  @Column({ name: 'credential_refresh_lease_owner', type: 'varchar', length: 64, nullable: true })
+  credentialRefreshLeaseOwner: string | null;
+
   @Column({ name: 'authorized_at', type: Date, nullable: true })
   authorizedAt: Date | null;
 

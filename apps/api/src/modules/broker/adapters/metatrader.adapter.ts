@@ -82,7 +82,9 @@ export class MetaTraderAdapter implements IBrokerAdapter {
         success: true,
         accountId: String(info.login ?? credentials.accountId),
         accountType: this.resolveAccountType(info.type),
-        currency: info.currency ?? 'USD',
+        // #7 (round 6): unknown currency stays unknown — NEVER a synthetic
+        // 'USD' fallback that would mis-label account money.
+        currency: info.currency ?? null,
         serverTime: new Date(),
       };
     } catch (err) {

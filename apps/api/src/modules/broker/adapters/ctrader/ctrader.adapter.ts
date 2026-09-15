@@ -366,7 +366,10 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
         success: true,
         accountId: connected.accountId,
         accountType: connected.accountType,
-        currency: connected.currency,
+        // Round 6 (#7): unknown currency stays unknown — null (unreported by
+        // the provider) maps to undefined at this non-authoritative test
+        // seam; it NEVER becomes a fabricated 'USD'.
+        currency: connected.currency ?? undefined,
       };
     } catch (err) {
       const mapped = this.mapError(err);

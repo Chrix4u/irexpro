@@ -160,6 +160,10 @@ describe('ExecutionOrchestrator', () => {
       encryptionService as unknown as CredentialEncryptionService,
       auditService as unknown as AuditService,
       eventBus as unknown as DomainEventBus,
+      // Round 6 (#365): the provider-dispatch commitment seam — these suites
+      // drive dispatchOrder WITHOUT a commitment payload, so the boundary is
+      // never invoked.
+      {} as never,
     );
   });
 

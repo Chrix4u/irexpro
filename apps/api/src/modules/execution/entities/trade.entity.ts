@@ -71,6 +71,40 @@ export class Trade {
   @Index({ unique: true })
   idempotencyKey: string;
 
+  // ─── Round-6 immutable provenance (issue #362) ────────────────────────────
+
+  /**
+   * TradingSession the trade was executed under. IMMUTABLE provenance for
+   * the daily-loss budget scope (NULL = legacy rows without provenance —
+   * never guessed for LIVE risk decisions; such rows make the daily-loss
+   * measurement incomplete and consumers must fail closed on them).
+   */
+  @Column({ name: 'trading_session_id', type: 'uuid', nullable: true })
+  tradingSessionId: string | null;
+
+  /**
+   * Logical broker-account identity key at execution time. IMMUTABLE
+   * provenance — the historic account identity is NEVER re-derived from the
+   * (mutable) broker connection: the account may have changed since.
+   */
+  @Column({ name: 'logical_account_key', type: 'varchar', length: 255, nullable: true })
+  logicalAccountKey: string | null;
+
+  /**
+   * Account currency (ISO-4217 alpha-3) the trade's economics are
+   * denominated in. Immutable at execution time; heterogeneous currencies
+   * are never raw-summed into one budget (#362).
+   */
+  @Column({ name: 'account_currency', type: 'varchar', length: 3, nullable: true })
+  accountCurrency: string | null;
+
+  /**
+   * DailyRiskPeriod the trade's daily-loss budget belongs to (NULL = legacy
+   * rows without provenance).
+   */
+  @Column({ name: 'risk_period_id', type: 'uuid', nullable: true })
+  riskPeriodId: string | null;
+
   // ─── Order parameters (Risk Engine-validated values) ─────────────────────
 
   @Column({ name: 'instrument', type: 'varchar', length: 50 })

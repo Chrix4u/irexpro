@@ -4,6 +4,16 @@ import { OrderStatus, ORDER_STATUSES } from './order.enums';
  * Centralized, exhaustive order transition table.
  * Keys: from-state. Values: set of allowed to-states.
  * Any transition not present here is INVALID and must be rejected server-side.
+ *
+ * Round 6 (issue #365): DISPATCH_COMMITTED is the explicit provider-dispatch
+ * commitment point. It is reachable from CREATED (the round-6 commitment
+ * replaces the legacy pre-send "mark SUBMITTED" hop) AND from SUBMITTED
+ * (pipelines that already marked SUBMITTED before the commitment section —
+ * phased rollout / legacy sequencing). Its outgoing edges are exactly
+ * SUBMITTED's: once committed the request is IN-FLIGHT and every outcome
+ * (ack / partial / full fill / rejection / cancel / expiry / uncertainty)
+ * is resolved through provider responses, dispatch certainty and
+ * reconciliation.
  */
 const ALLOWED_TRANSITIONS: Readonly<Record<OrderStatus, readonly OrderStatus[]>> = {
   [OrderStatus.CREATED]: [
@@ -13,6 +23,10 @@ const ALLOWED_TRANSITIONS: Readonly<Record<OrderStatus, readonly OrderStatus[]>>
     OrderStatus.REJECTED,
     // Manual cancel before submission.
     OrderStatus.CANCELLED,
+    // Round 6 (#365): the provider-dispatch commitment recorded directly
+    // from the reserved state — consume grant/confirmation, commit, then
+    // invoke the provider IMMEDIATELY.
+    OrderStatus.DISPATCH_COMMITTED,
   ],
   [OrderStatus.SUBMITTED]: [
     OrderStatus.ACKNOWLEDGED,
@@ -24,6 +38,20 @@ const ALLOWED_TRANSITIONS: Readonly<Record<OrderStatus, readonly OrderStatus[]>>
     // IOC/FOK orders that receive no fill expire immediately.
     OrderStatus.EXPIRED,
     // Provider timeout / network partition — outcome unknown.
+    OrderStatus.RECONCILIATION_PENDING,
+    // Round 6 (#365): commitment recorded after a legacy pre-send SUBMITTED
+    // mark (phased rollout sequencing).
+    OrderStatus.DISPATCH_COMMITTED,
+  ],
+  [OrderStatus.DISPATCH_COMMITTED]: [
+    // In-flight post-commitment outcomes (same set as SUBMITTED):
+    OrderStatus.ACKNOWLEDGED,
+    OrderStatus.PARTIALLY_FILLED,
+    OrderStatus.FILLED,
+    OrderStatus.REJECTED,
+    OrderStatus.CANCELLED,
+    OrderStatus.EXPIRED,
+    // Ambiguous outcome — resolved via dispatch certainty + reconciliation.
     OrderStatus.RECONCILIATION_PENDING,
   ],
   [OrderStatus.ACKNOWLEDGED]: [
@@ -71,6 +99,9 @@ const TERMINAL_STATUSES: readonly OrderStatus[] = [
 const WORKING_STATUSES: readonly OrderStatus[] = [
   OrderStatus.CREATED,
   OrderStatus.SUBMITTED,
+  // Round 6 (#365): the dispatch is committed and in flight — fills and
+  // provider-side actions legitimately arrive in this state.
+  OrderStatus.DISPATCH_COMMITTED,
   OrderStatus.ACKNOWLEDGED,
   OrderStatus.PARTIALLY_FILLED,
 ];
@@ -111,7 +142,7 @@ export class OrderStateMachine {
     return status != null && TERMINAL_STATUSES.includes(status);
   }
 
-  /** True only for the four explicitly-working states. */
+  /** True only for the five explicitly-working states (incl. DISPATCH_COMMITTED). */
   static isWorking(status: OrderStatus | null | undefined): boolean {
     return status != null && WORKING_STATUSES.includes(status);
   }
@@ -119,11 +150,14 @@ export class OrderStateMachine {
   /**
    * States from which a fill may be applied. Fills bypass a generic
    * transition helper (they use exact-decimal atomic SQL), so the SQL WHERE
-   * clause must match exactly this set.
+   * clause must match exactly this set. Round 6 (#365): DISPATCH_COMMITTED
+   * accepts fills — a fill arriving after the commitment is the normal
+   * post-commitment outcome.
    */
   static isFillable(status: OrderStatus | null | undefined): boolean {
     return (
       status === OrderStatus.SUBMITTED ||
+      status === OrderStatus.DISPATCH_COMMITTED ||
       status === OrderStatus.ACKNOWLEDGED ||
       status === OrderStatus.PARTIALLY_FILLED ||
       status === OrderStatus.RECONCILIATION_PENDING

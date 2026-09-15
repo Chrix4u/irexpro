@@ -37,6 +37,11 @@ describe('TradingService — Sprint 32 Snapshot Immutability', () => {
       status: TradingSessionStatus.ACTIVE,
       openingBalance: '10000.00',
       peakEquity: '10000.00',
+      // Round 6 (#362): opening-snapshot binding + account currency provenance
+      // (PAPER session fixture — no snapshot authority, currency explicit).
+      accountCurrency: 'USD',
+      openingSnapshotId: null,
+      openingSnapshotGeneration: null,
       riskProfileSnapshot: null,
       startedAt: new Date(),
       endedAt: null,

@@ -1,6 +1,6 @@
 import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { EntityManager, Repository } from 'typeorm';
 import { ExactDecimal } from '../../common/utils/exact-decimal';
 import { RiskProfile } from './entities/risk-profile.entity';
 import { RiskViolation } from './entities/risk-violation.entity';
@@ -39,6 +39,13 @@ import { RiskGrantService } from './risk-grant.service';
 import { RiskOrderGeometryService } from './risk-order-geometry.service';
 import { DomainEventBus } from '../events/event-bus.service';
 import { DomainEventType } from '../events/enums/domain-event-type.enum';
+import { ModuleRef } from '@nestjs/core';
+import { TradingAuthorityService } from '../execution-authority/trading-authority.service';
+import type { AuthorityBumpReason } from '../execution-authority/trading-authority.service';
+import { SharedControlRevisionService } from '../execution-authority/shared-control-revision.service';
+import { GrantInvalidationService } from '../execution-authority/grant-invalidation.service';
+import { DailyRiskPeriodService } from '../execution/services/daily-risk-period.service';
+import { BrokerAccountSnapshotService } from '../broker/services/broker-account-snapshot.service';
 
 /** Default pip size for standard 5-digit pairs (EURUSD, GBPUSD, etc.) */
 const DEFAULT_PIP_SIZE = '0.0001';
@@ -116,6 +123,20 @@ export class RiskService {
     private readonly sessionResolution: ExecutionSessionResolutionService,
     private readonly riskGrantService: RiskGrantService,
     private readonly orderGeometry: RiskOrderGeometryService,
+    // ── Round 6: unified execution-authority seams ──────────────────────────
+    // All PLAIN (leaf) dependencies — ExecutionAuthorityModule and
+    // DailyRiskPeriodModule are acyclic, so NO provider-level forwardRef is
+    // added here (the Round-5 RiskModule↔ExecutionModule forwardRef cycle
+    // stays exactly as committed; stacking provider-level forwardRef onto it
+    // is what crashed full-graph DI compilation in the lost tree).
+    private readonly tradingAuthorityService: TradingAuthorityService,
+    private readonly sharedControlRevisionService: SharedControlRevisionService,
+    private readonly dailyRiskPeriod: DailyRiskPeriodService,
+    private readonly grantInvalidation: GrantInvalidationService,
+    private readonly brokerAccountSnapshotService: BrokerAccountSnapshotService,
+    /** Reserved lazy-resolution seam for cycle-prone execution-side
+     * collaborators (resolved at CALL time, never in the constructor). */
+    private readonly moduleRef: ModuleRef,
   ) {}
 
   // ─── Main validation entry point ──────────────────────────────────────────
@@ -363,7 +384,12 @@ export class RiskService {
     // ── Step 2: Load broker account state (fail-closed, typed) ─────────────
     // Round 5 (#296/#313): a failed/absent/unparseable account read REJECTS —
     // it is never silently skipped toward APPROVED.
-    let accountState: { balance: string; equity: string; freeMargin: string } | null = null;
+    let accountState: {
+      balance: string;
+      equity: string;
+      freeMargin: string;
+      currency?: string | null;
+    } | null = null;
     try {
       accountState = await this.brokerService.getBrokerAccountState(connection.id);
     } catch (err) {
@@ -413,6 +439,85 @@ export class RiskService {
       );
     }
 
+    // ── Step 2-live (Round 6 #297/#312/#362): LIVE NEW-exposure derives its
+    // financial truth from the DURABLE accepted account snapshot (exact
+    // connection, fresh observation, non-null currency) and resolves the
+    // per-account DAILY-RISK PERIOD (exact baseline + UTC day budget that a
+    // session restart can never reset). PAPER/DEMO keeps the projected
+    // current view — nothing is ever synthesized for LIVE.
+    let liveSnapshotBinding: {
+      id: string;
+      generation: number;
+      observedAt: Date;
+      currency: string;
+      logicalAccountKey: string;
+    } | null = null;
+    let liveRiskPeriodId: string | null = null;
+    let liveLossTotal: string | null = null;
+    let liveLossComplete = false;
+    if (connection.accountType === BrokerMode.LIVE) {
+      try {
+        const snapshot =
+          await this.brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure(
+            connection.id,
+          );
+        const logicalAccountKey = connection.logicalAccountKey ?? null;
+        if (!logicalAccountKey) {
+          throw new Error(
+            'LIVE connection carries no logical account key — cannot scope the daily-risk period',
+          );
+        }
+        // Fail-closed: the snapshot's financial identity fields must be
+        // present (resolveFreshSnapshotForNewExposure already validated
+        // parseability — a null field still refuses to bind authority).
+        const snapshotCurrency = snapshot.currency;
+        const snapshotBalance = snapshot.balance;
+        const snapshotEquity = snapshot.equity;
+        if (!snapshotCurrency || !snapshotBalance || !snapshotEquity) {
+          throw new Error(
+            'LIVE snapshot is missing currency/balance/equity — cannot bind authority (fail-closed)',
+          );
+        }
+        liveSnapshotBinding = {
+          id: snapshot.id,
+          generation: snapshot.generation,
+          observedAt: snapshot.providerObservedAt ?? snapshot.acceptedAt,
+          currency: snapshotCurrency,
+          logicalAccountKey,
+        };
+        const period = await this.dailyRiskPeriod.resolveDailyRiskPeriod({
+          userId,
+          brokerConnectionId: connection.id,
+          logicalAccountKey,
+          accountCurrency: snapshotCurrency,
+          snapshot: { id: snapshot.id, balance: snapshotBalance, equity: snapshotEquity },
+          riskProfile: { id: profile.id, revision: profile.revision ?? 0 },
+        });
+        liveRiskPeriodId = period.id;
+        const exact = await this.dailyRiskPeriod.getTodayRealisedLossExact({
+          userId,
+          logicalAccountKey,
+          accountCurrency: snapshotCurrency,
+        });
+        liveLossTotal = exact.total;
+        liveLossComplete = exact.complete;
+      } catch (err) {
+        this.logger.error(
+          `LIVE snapshot/daily-risk-period authority failed for connection ${connection.id}: ${(err as Error).message}`,
+        );
+        appliedRules.push('ACCOUNT_STATE:LIVE_SNAPSHOT_UNAVAILABLE');
+        return this.rejectAndRecord(
+          userId,
+          trade,
+          RiskRejectionCode.ACCOUNT_STATE_UNAVAILABLE,
+          `LIVE account snapshot authority unavailable for connection ${connection.id} — ` +
+            `${(err as Error).message} (fail-closed)`,
+          contextSnapshot as RiskContextSnapshot,
+          evaluatedAt,
+        );
+      }
+    }
+
     // ── Step 3: Account-level checks ───────────────────────────────────────
 
     // 3a. Daily loss limit — Round 5 (#317): the denominator is the SESSION
@@ -440,12 +545,31 @@ export class RiskService {
 
     let todayLoss: ExactDecimal | null = null;
     try {
-      // ExecutionService returns a JS number (parseFloat of the SQL SUM) —
-      // converted to the exact decimal of its shortest round-trip string.
-      // Malformed (NaN/Infinity) fails closed below.
-      todayLoss = this.parseNumberAsDecimal(
-        await this.executionService.getTodayRealisedLoss(userId),
-      );
+      if (liveLossTotal !== null) {
+        // LIVE (#313/#362): the EXACT string total from the per-account
+        // daily-risk-period query — no IEEE-754 boundary anywhere. Incomplete
+        // history (legacy rows without provenance) fails CLOSED, never guessed.
+        if (!liveLossComplete) {
+          appliedRules.push('DAILY_LOSS_LIMIT:INCOMPLETE_PROVENANCE');
+          return this.rejectAndRecord(
+            userId,
+            trade,
+            RiskRejectionCode.RISK_ENGINE_QUERY_FAILED,
+            "Today's realised loss cannot be proven complete for this account " +
+              '(legacy rows without account/currency provenance) — rejecting (fail-closed)',
+            contextSnapshot as RiskContextSnapshot,
+            evaluatedAt,
+          );
+        }
+        todayLoss = ExactDecimal.tryParse(liveLossTotal);
+      } else {
+        // PAPER/DEMO: ExecutionService boundary (number → the exact decimal
+        // of its shortest round-trip string). Malformed (NaN/Infinity) fails
+        // closed below.
+        todayLoss = this.parseNumberAsDecimal(
+          await this.executionService.getTodayRealisedLoss(userId),
+        );
+      }
     } catch (err) {
       this.logger.error(
         `Daily realised-loss query failed for user ${userId}: ${(err as Error).message}`,
@@ -943,6 +1067,7 @@ export class RiskService {
         evaluatedAt,
         validatedOrder,
         geometryQuoteRef,
+        liveSnapshotBinding,
       );
     } catch (err) {
       this.logger.error(
@@ -976,6 +1101,14 @@ export class RiskService {
       sessionGeneration: session.authorityGeneration,
       executionMode: session.executionMode,
       brokerConnectionId: session.brokerConnectionId,
+      // Round 6 (#362): immutable per-trade provenance → the durable Trade
+      // row (logical account, currency, daily-risk period). LIVE decisions
+      // carry the snapshot-bound values; PAPER carries the projected view's
+      // currency when the source provides one (never fabricated).
+      logicalAccountKey: liveSnapshotBinding?.logicalAccountKey,
+      accountCurrency:
+        liveSnapshotBinding?.currency ?? accountState.currency ?? undefined,
+      riskPeriodId: liveRiskPeriodId ?? undefined,
     };
 
     this.logger.log(
@@ -1254,6 +1387,13 @@ export class RiskService {
     issuedAt: Date,
     validatedOrder: ValidatedOrder,
     quoteRef: Record<string, unknown> | null,
+    liveSnapshot: {
+      id: string;
+      generation: number;
+      observedAt: Date;
+      currency: string;
+      logicalAccountKey: string;
+    } | null,
   ): Promise<string> {
     // Digest of the ProposedTrade MATERIAL fields (issue #301): the exact
     // signal content this approval was derived from.
@@ -1322,7 +1462,29 @@ export class RiskService {
     // bump service yet — reading the row binds the real value the day one
     // lands, and the session generation binding above covers session-level
     // authority in the meantime.)
+    // Round 6 (#300): delegated to the server-authoritative
+    // TradingAuthorityService — fail-closed (an unavailable authority store
+    // can NEVER be equivalent to generation 1).
     const authorityGeneration = await this.readUserAuthorityGeneration(userId);
+
+    // Round 6 (#363): shared cross-replica control-plane revisions observed
+    // at issuance. A failed shared store fails NEW exposure CLOSED (§16) —
+    // a stale replica must never execute against newer policy.
+    let tradingPolicyRevision: number | null = null;
+    let providerVerificationRevision: number | null = null;
+    let executionControlRevision: number | null = null;
+    try {
+      tradingPolicyRevision =
+        await this.sharedControlRevisionService.getCurrentTradingPolicyRevision();
+      providerVerificationRevision =
+        await this.sharedControlRevisionService.getCurrentProviderVerificationRevision();
+      executionControlRevision =
+        await this.sharedControlRevisionService.getCurrentExecutionControlRevision();
+    } catch (err) {
+      throw new Error(
+        `Shared control-plane revision read failed — NEW exposure fails closed: ${(err as Error).message}`,
+      );
+    }
 
     const { grant } = await this.riskGrantService.issueGrant({
       userId,
@@ -1333,19 +1495,31 @@ export class RiskService {
       executionMode: session.executionMode,
       brokerConnectionId: session.brokerConnectionId,
       // Read-only from the EXACT session-bound connection (never discovered).
-      // No verification fingerprint is persisted on the connection today —
-      // bound null rather than fabricated.
+      // Round 6 (#21) PARTIAL: no per-provider verification evidence
+      // fingerprint is persisted on the connection today — bound null rather
+      // than fabricated; the shared provider-verification REVISION is bound
+      // below and the LIVE verification gates fail closed independently.
       providerBrokerIdentity: connection.providerBrokerIdentity ?? null,
       providerVerificationFingerprint: null,
       riskProfileId: profile.id,
-      riskProfileVersion: null,
+      // Round 6 (#15): the durable monotonic risk-profile revision.
+      riskProfileVersion: profile.revision ?? null,
       riskProfileHash,
+      // Round 6 (#297/#312): snapshot authority binding — LIVE NEW-exposure
+      // carries the durable accepted snapshot (non-null); PAPER/DEMO paths
+      // without snapshot provenance bind null explicitly (never fabricated).
+      accountSnapshotId: liveSnapshot?.id ?? null,
+      accountSnapshotGeneration: liveSnapshot?.generation ?? null,
+      accountSnapshotObservedAt: liveSnapshot?.observedAt ?? null,
       authorityGeneration,
-      // No kill-switch/control revision counters exist in the current
-      // ExecutionControlService API — the gates themselves fail closed; the
-      // fields stay null rather than fabricated.
-      killSwitchGeneration: null,
-      executionControlRevision: null,
+      // Round 6 (#299/#15): the risk-profile revision doubles as the
+      // kill-switch generation (bumped atomically on kill-switch changes and
+      // material edits — a boolean flip can never resurrect old grants).
+      killSwitchGeneration: profile.revision ?? null,
+      executionControlRevision,
+      // Round 6 (#363): shared cross-replica control-plane revisions.
+      tradingPolicyRevision,
+      providerVerificationRevision,
       // #361 fencing: the credential generation observed at issuance — any
       // rotation between approval and dispatch blocks NEW exposure at the
       // final boundary.
@@ -1360,8 +1534,11 @@ export class RiskService {
   }
 
   private async readUserAuthorityGeneration(userId: string): Promise<number> {
-    const row = await this.authorityGenerationRepo.findOne({ where: { userId } });
-    return row?.generation ?? 1;
+    // Round 6 (#300): delegated to the server-authoritative
+    // TradingAuthorityService (fail-closed guarded seeding, atomic monotonic
+    // CAS bumps, audited reason codes, optional transactional EntityManager).
+    // An unavailable authority store is NEVER equivalent to generation 1.
+    return this.tradingAuthorityService.getCurrentGeneration(userId);
   }
 
   // ─── Step 3b: monotonic peak equity (#317) ─────────────────────────────────
@@ -1546,7 +1723,30 @@ export class RiskService {
       }
     }
 
-    await this.profileRepo.save(profile);
+    // Round 6 (#15/#2): material risk-policy edits advance the durable
+    // risk-profile revision + TradingAuthorityGeneration and invalidate the
+    // user's NEW-exposure authority ATOMICALLY WITH the edit. Display-only
+    // edits (outside the material set below) do not bump.
+    const materialFields: (keyof UpdateRiskProfileDto)[] = [
+      'maxDailyLossPercent',
+      'maxDrawdownPercent',
+      'maxOpenTrades',
+      'maxDailyTrades',
+      'maxPositionSizeLot',
+      'allowedInstruments',
+      'maxTradeRiskPercent',
+      'maxLeverageAllowed',
+      'allowedTradingModes',
+      'riskAcknowledgementAccepted',
+    ];
+    const materialChange = materialFields.some((field) => dto[field] !== undefined);
+
+    await this.profileRepo.manager.transaction(async (em) => {
+      await em.getRepository(RiskProfile).save(profile);
+      if (materialChange) {
+        await this.bumpProfileRevisionAndAuthority(em, userId, 'RISK_PROFILE_MATERIAL_EDIT');
+      }
+    });
 
     await this.auditService.log({
       actorUserId: userId,
@@ -1576,11 +1776,27 @@ export class RiskService {
     reason?: string,
     ipAddress?: string,
   ): Promise<RiskProfile> {
-    const profile = await this.getOrCreateProfile(userId);
-    profile.killSwitchActive = active;
-    profile.killSwitchReason = reason ?? null;
-    await this.profileRepo.save(profile);
+    // Round 6 (#299/#4): the kill-switch fact, the monotonic risk-profile
+    // revision (the kill-switch generation), the TradingAuthorityGeneration
+    // bump, and the NEW-exposure authority invalidation (ACTIVE grants +
+    // PENDING confirmations) ALL commit in ONE transaction. Turning the
+    // switch OFF advances authority AGAIN — a boolean flip can never
+    // resurrect pre-switch grants (G1 → kill ON → G2 → kill OFF → G3:
+    // G1 stays dead).
+    const profile = await this.profileRepo.manager.transaction(async (em) => {
+      const profiles = em.getRepository(RiskProfile);
+      let row = await profiles.findOne({ where: { userId } });
+      if (!row) row = profiles.create({ userId });
+      row.killSwitchActive = active;
+      row.killSwitchReason = reason ?? null;
+      await profiles.save(row);
 
+      await this.bumpProfileRevisionAndAuthority(em, userId, 'KILL_SWITCH_TOGGLED');
+
+      return row;
+    });
+
+    // Audits follow the durable write (failure never rolls back authority).
     await this.auditService.log({
       actorUserId: userId,
       action: active
@@ -1598,6 +1814,28 @@ export class RiskService {
     );
 
     return profile;
+  }
+
+  /**
+   * Round 6 (#15/#2 atomicity): monotonic risk-profile revision CAS +
+   * TradingAuthorityGeneration bump + user-scoped NEW-exposure invalidation,
+   * all inside the CALLER's transaction. The forbidden pattern is
+   * save-fact → commit → best-effort bump later (an execution race).
+   */
+  private async bumpProfileRevisionAndAuthority(
+    em: EntityManager,
+    userId: string,
+    reason: AuthorityBumpReason,
+  ): Promise<void> {
+    const profiles = em.getRepository(RiskProfile);
+    await profiles
+      .createQueryBuilder()
+      .update()
+      .set({ revision: () => 'COALESCE(revision, 0) + 1', updatedAt: new Date() })
+      .where('user_id = :userId', { userId })
+      .execute();
+    await this.tradingAuthorityService.bumpGeneration(userId, reason, em);
+    await this.grantInvalidation.invalidateUserNewExposureAuthority(userId, reason, em);
   }
 
   async getViolations(userId: string, limit = 50): Promise<RiskViolation[]> {

@@ -80,6 +80,30 @@ export class TradingSession {
   })
   openingBalance: string | null;
 
+  // ─── Round-6 opening financial binding (issues #297/#312) ─────────────────
+
+  /**
+   * Coherent account currency from the SAME accepted versioned snapshot the
+   * session opened from. NULL = legacy sessions opened before snapshot
+   * authority (and sessions created without a financial binding) — NEVER a
+   * synthesized 'USD': unknown stays unknown and fails closed where
+   * currency identity is required.
+   */
+  @Column({ name: 'account_currency', type: 'varchar', length: 3, nullable: true })
+  accountCurrency: string | null;
+
+  /**
+   * The accepted broker-account snapshot the session opened from — immutable
+   * provenance for the opening balance/equity and the daily-risk-period
+   * baseline. NULL = legacy sessions.
+   */
+  @Column({ name: 'opening_snapshot_id', type: 'uuid', nullable: true })
+  openingSnapshotId: string | null;
+
+  /** Generation of the opening snapshot (monotonic logical version). */
+  @Column({ name: 'opening_snapshot_generation', type: 'integer', nullable: true })
+  openingSnapshotGeneration: number | null;
+
   /** Peak equity seen during this session — used for drawdown calculation. Decimal string. */
   @Column({
     name: 'peak_equity',

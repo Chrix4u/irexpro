@@ -40,14 +40,24 @@ describe('OrderStateMachine', () => {
       [OrderStatus.RECONCILIATION_PENDING, OrderStatus.REJECTED],
       [OrderStatus.RECONCILIATION_PENDING, OrderStatus.CANCELLED],
       [OrderStatus.RECONCILIATION_PENDING, OrderStatus.EXPIRED],
+      // Round 6 (#365) — provider-dispatch commitment point
+      [OrderStatus.CREATED, OrderStatus.DISPATCH_COMMITTED],
+      [OrderStatus.SUBMITTED, OrderStatus.DISPATCH_COMMITTED],
+      [OrderStatus.DISPATCH_COMMITTED, OrderStatus.ACKNOWLEDGED],
+      [OrderStatus.DISPATCH_COMMITTED, OrderStatus.PARTIALLY_FILLED],
+      [OrderStatus.DISPATCH_COMMITTED, OrderStatus.FILLED],
+      [OrderStatus.DISPATCH_COMMITTED, OrderStatus.REJECTED],
+      [OrderStatus.DISPATCH_COMMITTED, OrderStatus.CANCELLED],
+      [OrderStatus.DISPATCH_COMMITTED, OrderStatus.EXPIRED],
+      [OrderStatus.DISPATCH_COMMITTED, OrderStatus.RECONCILIATION_PENDING],
     ];
 
     it.each(allowed)('%s → %s is allowed', (from, to) => {
       expect(OrderStateMachine.canTransition(from, to)).toBe(true);
     });
 
-    it('has the full set of declared allowed edges (27 total)', () => {
-      expect(allowed.length).toBe(27);
+    it('has the full set of declared allowed edges (36 total)', () => {
+      expect(allowed.length).toBe(36);
     });
   });
 
@@ -142,6 +152,7 @@ describe('OrderStateMachine', () => {
     it.each([
       OrderStatus.CREATED,
       OrderStatus.SUBMITTED,
+      OrderStatus.DISPATCH_COMMITTED,
       OrderStatus.ACKNOWLEDGED,
       OrderStatus.PARTIALLY_FILLED,
     ] as OrderStatus[])('%s is working and NOT terminal', (status) => {
@@ -153,11 +164,39 @@ describe('OrderStateMachine', () => {
       expect(OrderStateMachine.isWorking(OrderStatus.RECONCILIATION_PENDING)).toBe(false);
       expect(OrderStateMachine.isTerminal(OrderStatus.RECONCILIATION_PENDING)).toBe(false);
     });
+
+    it('DISPATCH_COMMITTED (round 6 #365): the commitment is not terminal, not backwards, and dispatch-unique', () => {
+      // In-flight: neither terminal nor uncertain.
+      expect(OrderStateMachine.isTerminal(OrderStatus.DISPATCH_COMMITTED)).toBe(false);
+      // No backwards edge to CREATED/SUBMITTED — the provider call is bound.
+      expect(OrderStateMachine.canTransition(OrderStatus.DISPATCH_COMMITTED, OrderStatus.CREATED)).toBe(
+        false,
+      );
+      expect(
+        OrderStateMachine.canTransition(OrderStatus.DISPATCH_COMMITTED, OrderStatus.SUBMITTED),
+      ).toBe(false);
+      // No second commitment from an already-committed order (exactly-one
+      // dispatch commitment — a replay must not re-commit).
+      expect(
+        OrderStateMachine.canTransition(
+          OrderStatus.DISPATCH_COMMITTED,
+          OrderStatus.DISPATCH_COMMITTED,
+        ),
+      ).toBe(false);
+      // Terminal states can never reach the commitment point.
+      expect(OrderStateMachine.canTransition(OrderStatus.FILLED, OrderStatus.DISPATCH_COMMITTED)).toBe(
+        false,
+      );
+      expect(
+        OrderStateMachine.canTransition(OrderStatus.REJECTED, OrderStatus.DISPATCH_COMMITTED),
+      ).toBe(false);
+    });
   });
 
   describe('isFillable', () => {
     it.each([
       OrderStatus.SUBMITTED,
+      OrderStatus.DISPATCH_COMMITTED,
       OrderStatus.ACKNOWLEDGED,
       OrderStatus.PARTIALLY_FILLED,
       OrderStatus.RECONCILIATION_PENDING,

@@ -59,6 +59,20 @@ export class BrokerAccount {
   @Column({ name: 'synced_at', type: 'timestamptz', nullable: true })
   syncedAt: Date | null;
 
+  /**
+   * Round 6 (issue #312): generation of the latest accepted versioned
+   * snapshot (broker.broker_account_snapshots) projected into this legacy
+   * current-view. MONOTONIC guard — an older reconciliation run can never
+   * project over a newer accepted generation (the projection skip/update
+   * guard re-checks it at write time). NULL = never projected (legacy rows).
+   *
+   * This table is a COMPAT current-view only; the snapshot table is the
+   * financial authority. synced_at tracks the snapshot's acceptedAt, never
+   * the projection write time.
+   */
+  @Column({ name: 'last_snapshot_generation', type: 'integer', nullable: true })
+  lastSnapshotGeneration: number | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 

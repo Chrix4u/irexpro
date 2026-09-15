@@ -112,15 +112,26 @@ export class ExecutionService {
   /**
    * Execute a trade that has been APPROVED by the Risk Engine.
    *
+   * ROUND 6 (#365): the grant is NO LONGER consumed at pipeline entry — the
+   * provider-dispatch COMMITMENT now runs inside
+   * ExecutionOrchestrator.dispatchOrder immediately before the provider
+   * state-changing call. Everything below is pre-commitment work (risk
+   * evaluation already happened; trade reservation, order reservation,
+   * audits/events follow) during which any authority change still yields
+   * ZERO provider calls.
+   *
+   * @param confirmationId — the SEMI_AUTO one-time confirmation driving this
+   *        dispatch (USER_CONFIRMATION origin; consumed AT the commitment).
+   *
    * @throws ForbiddenException if riskDecision is not APPROVED — ALWAYS.
    * @throws ForbiddenException if the approval carries no server-issued
    *         RiskGrant (grantId) — a caller-constructed approval object can
-   *         NEVER satisfy the final dispatch boundary (fail-closed).
+   *         NEVER satisfy the dispatch commitment (fail-closed).
    */
   async executeTrade(
     userId: string,
     riskDecision: RiskDecision,
-    preAuthorization?: FinalDispatchAuthorization,
+    confirmationId?: string,
   ): Promise<Trade> {
     // ── Non-bypassable Risk Engine gate ────────────────────────────────────
     if (riskDecision.decision !== 'APPROVED') {
@@ -143,65 +154,65 @@ export class ExecutionService {
     const order = riskDecision.validatedOrder;
     const signalId = riskDecision.signalId;
 
-    // ── Step 1b: FINAL DISPATCH BOUNDARY (Round 5, task 50-c) ──────────────
-    // The exact execution authority is bound to the SERVER-ISSUED RiskGrant
-    // (sessionId + sessionGeneration + executionMode + the EXACT
-    // brokerConnectionId — never re-discovered). The boundary re-reads every
-    // authority fact from CURRENT durable state and consumes the grant
-    // atomically: exactly ONE winner proceeds to any provider call, and any
-    // late-arriving change (session ended, mode changed, connection
-    // suspended, credential rotation, kill switch, LIVE-verification
-    // downgrade, grant consumed by a replica) yields ZERO provider calls
-    // with a typed blocked reason.
-    let authorization: FinalDispatchAuthorization;
-    if (preAuthorization) {
-      // Server-produced pre-authorization (the SEMI_AUTO user-confirmation
-      // endpoint consumed the confirmation + grant through the SAME
-      // boundary). It must match THIS decision — a mismatched pairing is
-      // fail-closed, never a substitution.
-      if (
-        preAuthorization.context.riskGrantId !== riskDecision.grantId ||
-        preAuthorization.context.userId !== userId
-      ) {
-        throw new ForbiddenException(
-          'Pre-authorization does not match this risk decision — refusing dispatch (fail-closed).',
-        );
-      }
-      authorization = preAuthorization;
-    } else {
-      const grantId = riskDecision.grantId;
-      if (!grantId) {
-        this.logger.warn(
-          `executeTrade() blocked APPROVED decision without a RiskGrant for user ${userId} ` +
-            `(signal ${signalId}) — fail-closed`,
-        );
-        await this.auditService.log({
-          actorUserId: userId,
-          action: AuditAction.EXECUTION_AUTHORITY_BLOCKED,
-          resourceType: 'RiskGrant',
-          resourceId: 'not-issued',
-          severity: AuditSeverity.WARNING,
-          metadata: {
-            blockedReason: 'GRANT_REQUIRED',
-            signalId,
-            message:
-              'Risk approval carried no grantId — a server-issued RiskGrant is required for dispatch.',
-          },
-        });
-        throw new ForbiddenException(
-          'Risk approval carried no server-issued grant — execution requires a durable RiskGrant.',
-        );
-      }
-      authorization = await this.finalDispatchBoundary.authorizeNewExposureDispatch({
-        userId,
-        grantId,
-        operationClass: ProviderOperationClass.NEW_EXPOSURE,
+    // ── Step 1b (PRE-COMMITMENT, read-only): the exact execution authority ─
+    // The grant must exist, be ACTIVE/unexpired, owned by this user — but it
+    // is NOT consumed here. Consumption (plus every CURRENT authority
+    // re-check: generation, kill-switch, shared revisions, snapshot
+    // supersession, connection/credential state) happens at THE COMMITMENT
+    // inside dispatchOrder, immediately before the provider call (issue
+    // #365: the honest boundary between zero-provider-calls and in-flight).
+    const grantId = riskDecision.grantId;
+    if (!grantId) {
+      this.logger.warn(
+        `executeTrade() blocked APPROVED decision without a RiskGrant for user ${userId} ` +
+          `(signal ${signalId}) — fail-closed`,
+      );
+      await this.auditService.log({
+        actorUserId: userId,
+        action: AuditAction.EXECUTION_AUTHORITY_BLOCKED,
+        resourceType: 'RiskGrant',
+        resourceId: 'not-issued',
+        severity: AuditSeverity.WARNING,
+        metadata: {
+          blockedReason: 'GRANT_REQUIRED',
+          signalId,
+          message:
+            'Risk approval carried no grantId — a server-issued RiskGrant is required for dispatch.',
+        },
       });
+      throw new ForbiddenException(
+        'Risk approval carried no server-issued grant — execution requires a durable RiskGrant.',
+      );
+    }
+    const preCommitmentGrant = await this.riskGrantRepo.findOne({
+      where: { id: grantId, userId },
+    });
+    if (
+      !preCommitmentGrant ||
+      preCommitmentGrant.status !== RiskGrantStatus.ACTIVE ||
+      preCommitmentGrant.expiresAt.getTime() <= Date.now()
+    ) {
+      // Read-only pre-flight: the commitment re-verifies authoritatively;
+      // failing early here simply avoids useless reservations.
+      throw new ForbiddenException(
+        `The risk grant for signal ${signalId} is not currently usable ` +
+          `(${preCommitmentGrant?.status ?? 'NOT_FOUND'}) — a fresh risk evaluation is required.`,
+      );
     }
 
-    // The connection is the EXACT one the boundary re-verified (the same id
-    // the grant binds — never discovered another way, never re-discovered
-    // here: the authority context is the single source downstream).
+    // ── Step 1b-continued (Round 6 #365): READ-ONLY boundary authorization.
+    // The boundary re-verifies the ENTIRE authority chain against CURRENT
+    // durable state and resolves the EXACT grant-bound connection — WITHOUT
+    // consuming anything. The RiskGrant (+ the SEMI_AUTO confirmation, when
+    // one drives this dispatch) is consumed at the PROVIDER-DISPATCH
+    // COMMITMENT inside orchestrator.dispatchOrder, immediately before the
+    // provider state-changing call (the honest zero-calls/in-flight boundary).
+    const authorization = await this.finalDispatchBoundary.authorizeNewExposureDispatch({
+      userId,
+      grantId,
+      confirmationId,
+      origin: confirmationId ? 'USER_CONFIRMATION' : 'PIPELINE',
+    });
     const connection = authorization.connection;
 
     // ── Step 3: Pre-dispatch gates (fail-closed; BEFORE the trade-slot
@@ -303,11 +314,14 @@ export class ExecutionService {
         takeProfit: order.takeProfit,
         idempotencyKey,
         signalId,
-        sessionId: authorization.context.sessionId,
-        sessionGeneration: authorization.context.sessionGeneration,
-        executionMode: authorization.context.executionMode,
-        brokerConnectionId: authorization.context.brokerConnectionId,
-        riskGrantId: authorization.context.riskGrantId,
+        sessionId: preCommitmentGrant.sessionId,
+        sessionGeneration: preCommitmentGrant.sessionGeneration,
+        executionMode: preCommitmentGrant.executionMode,
+        brokerConnectionId: preCommitmentGrant.brokerConnectionId,
+        riskGrantId: preCommitmentGrant.id,
+        logicalAccountKey: riskDecision.logicalAccountKey ?? null,
+        accountCurrency: riskDecision.accountCurrency ?? null,
+        riskPeriodId: riskDecision.riskPeriodId ?? null,
       },
     });
 
@@ -345,7 +359,11 @@ export class ExecutionService {
 
     let dispatch;
     try {
-      dispatch = await this.orchestrator.dispatchOrder(intent, connection);
+      dispatch = await this.orchestrator.dispatchOrder(intent, connection, {
+        grantId: preCommitmentGrant.id,
+        confirmationId,
+        origin: confirmationId ? 'USER_CONFIRMATION' : 'PIPELINE',
+      });
     } catch (err) {
       // Orchestrator-level infrastructure failure (order store unavailable
       // before reservation, etc.) — the provider outcome is UNKNOWN.
@@ -997,14 +1015,20 @@ export class ExecutionService {
       //    for same-signalId duplicates — if two concurrent transactions
       //    somehow both reach this point (impossible due to advisory lock),
       //    the DB rejects the second INSERT with SQLSTATE 23505.
+      //    Round 6 (#362): the immutable daily-risk provenance columns
+      //    (trading_session_id, logical_account_key, account_currency,
+      //    risk_period_id) are persisted at creation — NEVER re-derived later
+      //    from the connection (the account may have changed).
       let insertResult: Record<string, unknown>[];
       try {
         insertResult = await manager.query(
           `INSERT INTO trading.trades
             (id, user_id, broker_connection_id, signal_id, idempotency_key,
              instrument, direction, lot_size, requested_entry_price,
-             stop_loss, take_profit, trailing_stop_pips, status, created_at, updated_at)
-           VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'PENDING', NOW(), NOW())
+             stop_loss, take_profit, trailing_stop_pips, status,
+             trading_session_id, logical_account_key, account_currency, risk_period_id,
+             created_at, updated_at)
+           VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'PENDING', $12, $13, $14, $15, NOW(), NOW())
            RETURNING *`,
           [
             userId,
@@ -1018,6 +1042,10 @@ export class ExecutionService {
             order.stopLoss,
             order.takeProfit,
             order.trailingStopPips ?? null,
+            riskDecision.sessionId ?? null,
+            riskDecision.logicalAccountKey ?? null,
+            riskDecision.accountCurrency ?? null,
+            riskDecision.riskPeriodId ?? null,
           ],
         );
       } catch (err) {
@@ -1109,6 +1137,15 @@ export class ExecutionService {
     openingBalance: string,
     riskProfileSnapshot?: Record<string, unknown> | null,
     executionMode: ExecutionMode = ExecutionMode.PAPER_ONLY,
+    openingFinancialBinding?: {
+      /** Round 6 (#297/#312): the coherent account currency from the opening snapshot. */
+      accountCurrency: string;
+      /** The accepted snapshot the session opened from (provenance). */
+      openingSnapshotId: string;
+      openingSnapshotGeneration: number;
+      /** Peak equity from the SAME coherent snapshot. */
+      initialPeakEquity: string;
+    },
   ): Promise<TradingSession> {
     // ── 1+2: exact-connection ownership + eligibility ─────────────────────
     const [connection] = await this.brokerService.findConnectionsByIds([brokerConnectionId]);
@@ -1144,7 +1181,12 @@ export class ExecutionService {
       authorityGeneration: 1,
       status: TradingSessionStatus.ACTIVE,
       openingBalance,
-      peakEquity: openingBalance,
+      peakEquity: openingFinancialBinding?.initialPeakEquity ?? openingBalance,
+      // Round 6 (#297/#312): coherent financial binding — the session's
+      // opening state traces to the accepted versioned snapshot.
+      accountCurrency: openingFinancialBinding?.accountCurrency ?? null,
+      openingSnapshotId: openingFinancialBinding?.openingSnapshotId ?? null,
+      openingSnapshotGeneration: openingFinancialBinding?.openingSnapshotGeneration ?? null,
       startedAt: new Date(),
       // Sprint 32: snapshot the risk profile at session start so future
       // edits don't rewrite history. The snapshot is a deterministic JSON
@@ -1526,3 +1568,4 @@ export class ExecutionService {
     return digest.readUInt32BE(0) & 0x7fffffff;
   }
 }
+

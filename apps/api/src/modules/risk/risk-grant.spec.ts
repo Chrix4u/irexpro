@@ -153,6 +153,14 @@ class RiskGrantMirror {
   killSwitchGeneration: number | null;
   @Column({ name: 'execution_control_revision', type: 'integer', nullable: true })
   executionControlRevision: number | null;
+  // Round 6 (#301/#363): canonical authority binding digest + shared
+  // control-plane revisions (mirror of the production risk_grants columns).
+  @Column({ name: 'authority_binding_digest', type: 'varchar', length: 64, nullable: true })
+  authorityBindingDigest: string | null;
+  @Column({ name: 'trading_policy_revision', type: 'integer', nullable: true })
+  tradingPolicyRevision: number | null;
+  @Column({ name: 'provider_verification_revision', type: 'integer', nullable: true })
+  providerVerificationRevision: number | null;
   @Column({ name: 'credential_generation', type: 'integer', nullable: true })
   credentialGeneration: number | null;
   @Column({ name: 'order_payload_digest', type: 'varchar', length: 64 })
@@ -390,6 +398,18 @@ describe('RiskGrant issuance + exact-decimal boundaries (Round 5, 50-b)', () => 
       sessionResolution,
       riskGrantService,
       geometryMock as unknown as RiskOrderGeometryService,
+      // Round 6: unified execution-authority service seams (mocks — this
+      // suite exercises the RiskGrantService contract, not issuance).
+      { getCurrentGeneration: jest.fn().mockResolvedValue(1) } as never,
+      {
+        getCurrentTradingPolicyRevision: jest.fn(),
+        getCurrentProviderVerificationRevision: jest.fn(),
+        getCurrentExecutionControlRevision: jest.fn(),
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { get: jest.fn() } as never,
     );
   });
 
@@ -899,3 +919,4 @@ describe('RiskGrant issuance + exact-decimal boundaries (Round 5, 50-b)', () => 
     });
   });
 });
+

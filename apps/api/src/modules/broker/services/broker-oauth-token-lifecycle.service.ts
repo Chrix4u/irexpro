@@ -1,6 +1,8 @@
 import { ConflictException, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
+import { randomUUID } from 'crypto';
 import { BrokerConnection } from '../entities/broker-connection.entity';
 import { CredentialEncryptionService } from './credential-encryption.service';
 import { CTraderClientService } from '../adapters/ctrader/ctrader-client.service';
@@ -37,10 +39,12 @@ import { BrokerAdapterError, BrokerErrorCode } from '../interfaces/broker-adapte
  *   dead pair.
  *
  * CONCURRENT REFRESH PROTECTION (cross-replica, DB-atomic):
- * - `credential_refresh_lease_expires_at` is a refresh LEASE: the claim is a
- *   single conditional UPDATE (WHERE lease IS NULL OR lease <= now) with an
- *   affected-rows check, so exactly ONE API replica can hold it — this is
- *   NOT an in-memory mutex and works across replicas;
+ * - `credential_refresh_lease_expires_at` + `credential_refresh_lease_owner`
+ *   form a refresh LEASE: the claim is a single conditional UPDATE (WHERE
+ *   lease IS NULL OR lease <= now) with an affected-rows check that sets BOTH
+ *   the expiry AND a FRESH UNIQUE owner token (crypto.randomUUID), so exactly
+ *   ONE API replica can hold it — this is NOT an in-memory mutex and works
+ *   across replicas;
  * - only the lease WINNER calls the provider for one stale
  *   `credential_generation`; losers wait (bounded) and ADOPT the winner's
  *   persisted pair — they never call the provider, never write, never audit;
@@ -50,19 +54,21 @@ import { BrokerAdapterError, BrokerErrorCode } from '../interfaces/broker-adapte
  * - a loser NEVER marks the credential INVALID merely because another
  *   request already rotated it (INVALID is only written by the winner's
  *   fail-closed paths: auth-class rejection / persist failure);
- * - TERMINAL INVALID WRITES ARE OWNERSHIP/GUARDED (Sprint 56 correction
- *   round 4, architect finding 1 — stale refresh owners): the failure path
- *   carries the SAME generation-CAS protection as the success path. A
- *   refresh-rejection write is a conditional UPDATE on (connection id,
- *   credential_generation = observedGeneration, refresh lease = OUR claim
- *   or free). A request whose lease EXPIRED — whose provider request was
- *   overtaken by a takeover winner that persisted generation N+1 — can
- *   therefore NEVER poison the newer, usable pair, and never emits a false
- *   "refresh failed" audit against it. A genuine current-owner rejection
- *   marks exactly ITS generation INVALID once, releases its own lease in the
- *   same atomic write, and emits exactly one sanitized audit event.
+ * - LEASE-OWNER FENCING (Sprint 56 correction round 6, task 6-d — stale
+ *   refresh owners): EVERY winner-only operation (successful pair
+ *   persistence, terminal INVALID transition, lease release) is guarded by
+ *   the EXACT owner token claimed with the lease — there is NO
+ *   `credential_refresh_lease_expires_at IS NULL` ownership alternative
+ *   anywhere. A request whose lease EXPIRED — whose provider request was
+ *   overtaken by a takeover winner, or whose successor claimed, failed
+ *   transiently and RELEASED — can therefore NEVER mutate the row: an
+ *   expired lease alone is never proof that the old owner regained
+ *   ownership. A genuine CURRENT-owner rejection marks exactly ITS
+ *   generation INVALID once, releases its own lease in the same atomic
+ *   write, and emits exactly one sanitized audit event; a stale owner's
+ *   late rejection matches ZERO rows and stays USABLE (no false audit);
  * - a hung winner's lease EXPIRES (leaseMs) so a waiter can steal the claim
- *   and complete the refresh — no permanent stall;
+ *   (minting a NEW owner token) and complete the refresh — no permanent stall;
  * - budget exhaustion surfaces as a RETRYABLE, sanitized RATE_LIMITED error.
  *
  * CONTRACT (used by BrokerService.connectBroker and healthCheck):
@@ -101,7 +107,7 @@ export const REFRESH_POLL_INTERVAL_MS = 25;
 
 /**
  * Outcome of a guarded refresh-rejection (INVALID) write (Sprint 56
- * correction round 4, architect finding 1).
+ * correction round 4, architect finding 1; ownership hardened round 6).
  * - MARKED_INVALID: this request was the CURRENT owner of the observed
  *   generation — the write marked exactly that generation INVALID and
  *   released this request's own lease atomically.
@@ -117,6 +123,30 @@ type RefreshRejectionOutcome =
   | 'SUPERSEDED_USABLE'
   | 'SUPERSEDED_NOT_USABLE'
   | 'MARK_FAILED';
+
+/**
+ * One held refresh lease (round 6, task 6-d): the expiry instant AND the
+ * UNIQUE owner token that fences every winner-only write. Claimed atomically
+ * (both columns in ONE conditional UPDATE); a takeover mints a NEW token.
+ */
+export interface RefreshLeaseClaim {
+  claimUntil: Date;
+  ownerToken: string;
+}
+
+/**
+ * Update-patch typing for the lease columns (round 6, task 6-d): the claim
+ * atomically sets BOTH `credential_refresh_lease_expires_at` AND
+ * `credential_refresh_lease_owner`. The owner property ships on the
+ * BrokerConnection entity with the round-6 migration (1754300000000 —
+ * credential_refresh_lease_owner varchar(64) NULL); the widened intersection
+ * below keeps this module compiling against trees where that entity restore
+ * is still in flight WITHOUT changing the emitted UPDATE — once the entity
+ * carries the column, this is exactly the plain typed patch.
+ */
+type BrokerConnectionUpdatePatch = QueryDeepPartialEntity<BrokerConnection> & {
+  credentialRefreshLeaseOwner?: string | null;
+};
 
 @Injectable()
 export class BrokerOAuthTokenLifecycleService {
@@ -137,6 +167,15 @@ export class BrokerOAuthTokenLifecycleService {
   /** Sleep seam for the loser wait loop (tests keep real timers, tiny values). */
   protected sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Fresh lease-owner token (round 6): a random UUID (≤ 64 chars) minted at
+   * every claim/takeover — the fencing identity for ALL winner-only writes.
+   * Protected seam for tests.
+   */
+  protected newLeaseOwnerToken(): string {
+    return randomUUID();
   }
 
   constructor(
@@ -191,15 +230,9 @@ export class BrokerOAuthTokenLifecycleService {
     observedGeneration: number,
   ): Promise<DecryptedBrokerCredentials> {
     // Fast path (the common case): nobody else is refreshing — claim once.
-    let claimUntil = await this.tryClaimLease(connection.id);
-    if (claimUntil) {
-      return this.refreshAsWinner(
-        connection,
-        credentials,
-        refreshToken,
-        observedGeneration,
-        claimUntil,
-      );
+    let claim = await this.tryClaimLease(connection.id);
+    if (claim) {
+      return this.refreshAsWinner(connection, credentials, refreshToken, observedGeneration, claim);
     }
 
     // LOSER path: another replica/request holds a live lease for this
@@ -229,14 +262,14 @@ export class BrokerOAuthTokenLifecycleService {
       }
       // The lease is free (released or EXPIRED) → try to become the winner
       // ourselves; if another claimer won again, keep waiting.
-      claimUntil = await this.tryClaimLease(connection.id);
-      if (claimUntil) {
+      claim = await this.tryClaimLease(connection.id);
+      if (claim) {
         return this.refreshAsWinner(
           connection,
           credentials,
           refreshToken,
           observedGeneration,
-          claimUntil,
+          claim,
         );
       }
       if (this.now() >= deadline) {
@@ -253,47 +286,59 @@ export class BrokerOAuthTokenLifecycleService {
   }
 
   /**
-   * DB-atomic lease claim (works across replicas): one conditional UPDATE
-   * with an affected-rows check. Returns the claim timestamp (our lease
-   * identity for release-only-own-claim) or null when someone else holds it.
+   * DB-atomic lease claim (works across replicas): ONE conditional UPDATE
+   * with an affected-rows check that sets BOTH the lease expiry AND a FRESH
+   * UNIQUE owner token (round 6). Returns the claim (expiry + our fencing
+   * token for every winner-only write) or null when someone else holds it.
    */
-  private async tryClaimLease(connectionId: string): Promise<Date | null> {
+  private async tryClaimLease(connectionId: string): Promise<RefreshLeaseClaim | null> {
     const nowMs = this.now();
     const claimUntil = new Date(nowMs + this.leaseMs);
+    const ownerToken = this.newLeaseOwnerToken();
+    const claimPatch: BrokerConnectionUpdatePatch = {
+      credentialRefreshLeaseExpiresAt: claimUntil,
+      credentialRefreshLeaseOwner: ownerToken,
+    };
     const result = await this.connectionRepo
       .createQueryBuilder()
       .update(BrokerConnection)
-      .set({ credentialRefreshLeaseExpiresAt: claimUntil })
+      .set(claimPatch)
       .where(
         'id = :id AND (credential_refresh_lease_expires_at IS NULL ' +
           'OR credential_refresh_lease_expires_at <= :now)',
         { id: connectionId, now: new Date(nowMs) },
       )
       .execute();
-    return result.affected === 1 ? claimUntil : null;
+    return result.affected === 1 ? { claimUntil, ownerToken } : null;
   }
 
   /**
-   * Releases OUR OWN claim only (WHERE lease = claimUntil) — harmless when
-   * the CAS persist already cleared it or another holder replaced it.
+   * Releases OUR OWN claim only — guarded by the EXACT owner token (round 6):
+   * the WHERE clause requires our fencing token, and BOTH lease columns are
+   * cleared. Harmless when the CAS persist already released it or another
+   * holder (a takeover) replaced the token.
    * Best-effort: the lease expires on its own (short leaseMs), so a failed
    * release must never mask the caller's terminal outcome.
    */
-  private async releaseLease(connectionId: string, claimUntil: Date): Promise<void> {
+  private async releaseLease(connectionId: string, ownerToken: string): Promise<void> {
     try {
+      const releasePatch: BrokerConnectionUpdatePatch = {
+        credentialRefreshLeaseExpiresAt: null,
+        credentialRefreshLeaseOwner: null,
+      };
       await this.connectionRepo
         .createQueryBuilder()
         .update(BrokerConnection)
-        .set({ credentialRefreshLeaseExpiresAt: null })
-        .where('id = :id AND credential_refresh_lease_expires_at = :claimUntil', {
+        .set(releasePatch)
+        .where('id = :id AND credential_refresh_lease_owner = :ownerToken', {
           id: connectionId,
-          claimUntil,
+          ownerToken,
         })
         .execute();
     } catch (err) {
       this.logger.warn(
         `Failed to release the refresh lease for connection=${connectionId} ` +
-          `(self-expires at ${claimUntil.toISOString()}): ${(err as Error).message}`,
+          `(owner ${ownerToken.slice(0, 8)}, self-expires anyway): ${(err as Error).message}`,
       );
     }
   }
@@ -333,7 +378,7 @@ export class BrokerOAuthTokenLifecycleService {
     credentials: DecryptedBrokerCredentials,
     refreshToken: string,
     observedGeneration: number,
-    claimUntil: Date,
+    claim: RefreshLeaseClaim,
   ): Promise<DecryptedBrokerCredentials> {
     // CLAIM-THEN-VERIFY: the lease can be acquired in the very instant a
     // newer generation (or a fail-closed INVALID) lands — a waiter's reload
@@ -346,7 +391,7 @@ export class BrokerOAuthTokenLifecycleService {
     const postClaimRow = await this.reloadRow(connection.id);
     if (postClaimRow && postClaimRow.credentialGeneration > observedGeneration) {
       const adopted = this.adoptUsableNewerCredential(postClaimRow);
-      await this.releaseLease(connection.id, claimUntil);
+      await this.releaseLease(connection.id, claim.ownerToken);
       if (adopted) {
         return adopted; // no provider call, no write, no audit
       }
@@ -356,7 +401,7 @@ export class BrokerOAuthTokenLifecycleService {
       // The credential is already dead (a fail-closed winner marked it while
       // we were claiming): surface the same typed conflict WITHOUT a second
       // provider round-trip and WITHOUT our own INVALID write.
-      await this.releaseLease(connection.id, claimUntil);
+      await this.releaseLease(connection.id, claim.ownerToken);
       throw this.refreshRejectedConflict(connection.id);
     }
 
@@ -367,15 +412,16 @@ export class BrokerOAuthTokenLifecycleService {
       if (err instanceof BrokerAdapterError && err.code === BrokerErrorCode.AUTHENTICATION_FAILED) {
         // The refresh token is DEAD at the provider — the persisted pair can
         // never authenticate again. Fail closed: mark INVALID (guarded by OUR
-        // observed generation + lease identity — a lease-expiry takeover that
-        // already persisted a NEWER pair is authoritative and must survive)
+        // observed generation + EXACT lease-owner token — a lease-expiry
+        // takeover that already persisted a NEWER pair, or a successor that
+        // claimed and released after us, is authoritative and must survive)
         // and require re-authorization (never a silent fallback to the dead
         // pair).
         const outcome = await this.markRefreshRejected(connection, err, {
           observedGeneration,
-          claimUntil,
+          claim,
         });
-        await this.releaseLease(connection.id, claimUntil);
+        await this.releaseLease(connection.id, claim.ownerToken);
         if (outcome === 'SUPERSEDED_USABLE') {
           // A takeover winner persisted a NEWER usable pair while our provider
           // request was in flight — the rejection we saw belongs to the OLD
@@ -394,7 +440,7 @@ export class BrokerOAuthTokenLifecycleService {
         `cTrader token refresh failed transiently for connection=${connection.id}: ` +
           `${err instanceof BrokerAdapterError ? err.code : 'UNKNOWN'}`,
       );
-      await this.releaseLease(connection.id, claimUntil);
+      await this.releaseLease(connection.id, claim.ownerToken);
       throw err;
     }
 
@@ -402,7 +448,9 @@ export class BrokerOAuthTokenLifecycleService {
     // invalidated the previous pair the moment the refresh succeeded — the
     // new pair must reach the encrypted store BEFORE any consumer sees it,
     // in ONE guarded UPDATE (ciphertext + iv + tag + keyId + ROTATED status
-    // + generation CAS bump + lease release).
+    // + generation CAS bump + lease release). Round 6: the WHERE clause
+    // carries the EXACT lease-owner token — a request whose lease was taken
+    // over (or expired and reclaimed) matches ZERO rows and adopts instead.
     const expiresAt = new Date(this.now() + tokens.expiresIn * 1000);
     const updated: DecryptedBrokerCredentials = {
       ...credentials,
@@ -418,38 +466,47 @@ export class BrokerOAuthTokenLifecycleService {
 
     let affected: number | undefined;
     try {
+      const persistPatch: BrokerConnectionUpdatePatch = {
+        encryptedCredentials: encrypted.ciphertext,
+        credentialIv: encrypted.iv,
+        credentialTag: encrypted.tag,
+        encryptionKeyId: encrypted.keyId,
+        credentialStatus: BrokerCredentialStatus.ROTATED,
+        credentialGeneration: observedGeneration + 1,
+        // Release-on-success folded into the SAME atomic UPDATE (BOTH
+        // lease columns — the owner token is dead the moment we land).
+        credentialRefreshLeaseExpiresAt: null,
+        credentialRefreshLeaseOwner: null,
+      };
       const persistResult = await this.connectionRepo
         .createQueryBuilder()
         .update(BrokerConnection)
-        .set({
-          encryptedCredentials: encrypted.ciphertext,
-          credentialIv: encrypted.iv,
-          credentialTag: encrypted.tag,
-          encryptionKeyId: encrypted.keyId,
-          credentialStatus: BrokerCredentialStatus.ROTATED,
-          credentialGeneration: observedGeneration + 1,
-          // Release-on-success folded into the SAME atomic UPDATE.
-          credentialRefreshLeaseExpiresAt: null,
-        })
-        .where('id = :id AND credential_generation = :observedGeneration', {
-          id: connection.id,
-          observedGeneration,
-        })
+        .set(persistPatch)
+        .where(
+          'id = :id AND credential_generation = :observedGeneration AND ' +
+            'credential_refresh_lease_owner = :ownerToken',
+          {
+            id: connection.id,
+            observedGeneration,
+            ownerToken: claim.ownerToken,
+          },
+        )
         .execute();
       affected = persistResult.affected;
     } catch (persistErr) {
       // The provider issued a new pair but persistence failed: the STORED
       // (now dead) pair can never authenticate again — the honest state is
       // INVALID (fail-closed), surfaced as a typed conflict. CORRECTION
-      // ROUND 4 (finding 1): the INVALID write is generation/lease-guarded —
-      // when a takeover winner already persisted a NEWER usable generation,
-      // that newer pair stays authoritative and THIS request converges onto
-      // it instead of poisoning it.
+      // ROUND 4 (finding 1) + ROUND 6 (lease-owner fencing): the INVALID
+      // write is generation/owner-guarded — when a takeover winner already
+      // persisted a NEWER usable generation, that newer pair stays
+      // authoritative and THIS request converges onto it instead of
+      // poisoning it.
       const outcome = await this.markRefreshRejected(connection, persistErr, {
         observedGeneration,
-        claimUntil,
+        claim,
       });
-      await this.releaseLease(connection.id, claimUntil);
+      await this.releaseLease(connection.id, claim.ownerToken);
       this.zeroCredentials(updated);
       if (outcome === 'SUPERSEDED_USABLE') {
         const adopted = await this.tryAdoptNewerUsable(connection.id, observedGeneration);
@@ -469,12 +526,13 @@ export class BrokerOAuthTokenLifecycleService {
 
     if (affected !== 1) {
       // CAS FAIL: a NEWER generation already landed (manual/stolen rotation
-      // or a lease-expiry takeover). A STALE refresh response must NEVER
-      // overwrite the newer pair — adopt it instead.
+      // or a lease-expiry takeover — our owner token no longer fences the
+      // row). A STALE refresh response must NEVER overwrite the newer pair —
+      // adopt it instead.
       const reloaded = await this.reloadRow(connection.id);
-      // Only-own-claim release (harmless if the CAS winner already cleared
+      // Own-token-only release (harmless if the CAS winner already cleared
       // the lease or replaced our claim).
-      await this.releaseLease(connection.id, claimUntil);
+      await this.releaseLease(connection.id, claim.ownerToken);
       this.zeroCredentials(updated);
       if (reloaded && reloaded.credentialGeneration > observedGeneration) {
         const adopted = this.adoptUsableNewerCredential(reloaded);
@@ -515,25 +573,31 @@ export class BrokerOAuthTokenLifecycleService {
   // ─── Fail-closed rejection + shared conflict messages ─────────────────────
 
   /**
-   * Fail-closed rejection record (INVALID) — OWNERSHIP/GUARDED (Sprint 56
-   * correction round 4, architect finding 1).
+   * Fail-closed rejection record (INVALID) — LEASE-OWNER FENCED (Sprint 56
+   * correction round 4, architect finding 1; ownership hardened round 6).
    *
    * The write is a single conditional UPDATE on:
    *   - connection id matches; AND
    *   - credential_generation = observedGeneration (generation CAS); AND
-   *   - the refresh lease is still OUR claim, or has been released entirely.
+   *   - credential_refresh_lease_owner = OUR EXACT owner token.
+   *
+   * There is NO `credential_refresh_lease_expires_at IS NULL` ownership
+   * alternative (round 6): an expired-but-unreclaimed lease keeps its owner
+   * token, so the ORIGINAL owner's honest fail-closed write still lands (F),
+   * while a stale owner whose lease was TAKEN OVER — or whose successor
+   * claimed and RELEASED — matches ZERO rows and can never mutate the row.
    *
    * Semantics:
    * - MARKED_INVALID: THIS request was the current owner of the observed
    *   generation and the row is exactly that generation — the write marks
-   *   exactly that generation INVALID, releases OUR OWN lease in the SAME
-   *   atomic UPDATE, and emits EXACTLY ONE sanitized audit event (timestamps
-   *   / ids / generation only — never token material).
+   *   exactly that generation INVALID, releases OUR OWN lease (BOTH columns)
+   *   in the SAME atomic UPDATE, and emits EXACTLY ONE sanitized audit event
+   *   (timestamps / ids / generation only — never token material).
    * - affected rows = 0 → reload the authoritative row: a NEWER usable
    *   generation is the truth — NEVER overwrite it, NEVER emit a false
    *   "refresh failed" audit against it (SUPERSEDED_USABLE). A newer
    *   non-usable generation yields SUPERSEDED_NOT_USABLE.
-   * - A row that moved to a DIFFERENT owner's live lease (takeover in
+   * - A row still held by a DIFFERENT owner's live lease (takeover in
    *   flight, same generation) is also never overwritten — the takeover
    *   winner's own terminal path decides that generation's fate.
    * - A DB write failure is MARK_FAILED (logged; the audit may still record
@@ -542,28 +606,30 @@ export class BrokerOAuthTokenLifecycleService {
   private async markRefreshRejected(
     connection: BrokerConnection,
     err: unknown,
-    guard: { observedGeneration: number; claimUntil: Date },
+    guard: { observedGeneration: number; claim: RefreshLeaseClaim },
   ): Promise<RefreshRejectionOutcome> {
     let affected: number | undefined;
     try {
+      const invalidPatch: BrokerConnectionUpdatePatch = {
+        credentialStatus: BrokerCredentialStatus.INVALID,
+        lastErrorMessage: 'OAuth token refresh rejected — re-authorization required',
+        // Release OUR OWN lease in the SAME atomic write — BOTH columns
+        // (a stale owner's token is never matched here, so a stale claim's
+        // lease is never cleared by this write).
+        credentialRefreshLeaseExpiresAt: null,
+        credentialRefreshLeaseOwner: null,
+      };
       const result = await this.connectionRepo
         .createQueryBuilder()
         .update(BrokerConnection)
-        .set({
-          credentialStatus: BrokerCredentialStatus.INVALID,
-          lastErrorMessage: 'OAuth token refresh rejected — re-authorization required',
-          // Release OUR OWN lease in the SAME atomic write (a stale claim's
-          // lease is never cleared here — the WHERE clause excludes it).
-          credentialRefreshLeaseExpiresAt: null,
-        })
+        .set(invalidPatch)
         .where(
           'id = :id AND credential_generation = :observedGeneration AND ' +
-            '(credential_refresh_lease_expires_at = :claimUntil OR ' +
-            'credential_refresh_lease_expires_at IS NULL)',
+            'credential_refresh_lease_owner = :ownerToken',
           {
             id: connection.id,
             observedGeneration: guard.observedGeneration,
-            claimUntil: guard.claimUntil,
+            ownerToken: guard.claim.ownerToken,
           },
         )
         .execute();

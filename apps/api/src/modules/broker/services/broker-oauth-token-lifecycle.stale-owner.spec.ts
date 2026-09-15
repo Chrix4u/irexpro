@@ -12,29 +12,41 @@ import { DecryptedBrokerCredentials } from '../interfaces/broker-adapter.interfa
 import { BrokerAdapterError, BrokerErrorCode } from '../interfaces/broker-adapter.errors';
 
 /**
- * Sprint 56 correction round 4 — architect finding 1: STALE REFRESH OWNERS
- * can never invalidate a newer credential generation.
+ * Sprint 56 correction round 6 (task 6-d) — LEASE-OWNER FENCING: stale refresh
+ * owners can never mutate a row they no longer own.
  *
- * The successful token-persistence path always carried generation-CAS
- * protection; the failure path (markRefreshRejected) previously wrote
- * INVALID by connection id ALONE. This suite proves the corrected contract
- * on the shared in-memory row store (the pg-integration suite re-proves the
- * same guarantees against real PostgreSQL):
+ * Round 4 fenced the terminal INVALID write by generation + lease-instant;
+ * round 6 closes the residual hole: `lease IS NULL` was still accepted as an
+ * ownership alternative. The claim now sets BOTH
+ * credential_refresh_lease_expires_at AND a FRESH UNIQUE
+ * credential_refresh_lease_owner token; EVERY winner-only operation (success
+ * persist, INVALID transition, release) requires the EXACT owner token — no
+ * IS NULL alternative anywhere.
  *
- * A. A's lease expires → B persists N+1 → A returns AUTHENTICATION_FAILED
- *    → N+1 stays usable; ZERO stale INVALID overwrite; NO false failure
- *    audit against N+1.
+ * This suite proves the corrected contract on the shared in-memory row store
+ * (the pg-integration suite re-proves the same guarantees against real
+ * PostgreSQL):
+ *
+ * G. THE EXACT ARCHITECT SCENARIO: A claims N (owner a1) → A stalls → lease
+ *    expires → B takes N (owner b1) → B fails TRANSIENTLY → B releases
+ *    without rotating (both columns NULL) → A's LATE auth rejection
+ *    → A's INVALID CAS matches ZERO rows → generation N stays USABLE →
+ *    NO false refresh-failed audit from A.
+ * A. A's lease expires → B persists N+1 (owner-gated) → A's late
+ *    AUTHENTICATION_FAILED → N+1 stays usable; A CONVERGES onto B's pair;
+ *    ZERO stale INVALID writes; no false audit.
  * B. A's lease expires → B persists N+1 → A's own persistence THROWS
  *    → B's N+1 stays authoritative; stale A cannot invalidate it (A adopts).
- * C. GENUINE owner gets an auth rejection BEFORE any takeover
- *    → generation N becomes INVALID EXACTLY ONCE with exactly one audit.
- * D. Twenty concurrent callers, no lease-expiry takeover
- *    → the round-2 one-refresh behavior is fully preserved.
- * E. A stale owner whose lease was TAKEN OVER (live lease, same generation)
- *    → never writes, never audits; the current lease owner decides.
- * F. A stale owner with NO takeover but a dead pair (expired, unreclaimed
- *    lease) → the honest fail-closed INVALID still lands (provider evidence
- *    is authoritative for that generation).
+ * C. GENUINE current-owner rejection (owner token still A's) → generation N
+ *    becomes INVALID EXACTLY ONCE with exactly one audit; the write WHERE
+ *    carries the owner token (no IS NULL alternative).
+ * D. Twenty concurrent callers, no lease-expiry takeover → the round-2
+ *    one-refresh-per-generation behavior is fully preserved.
+ * E. A stale owner whose lease was TAKEN OVER (live lease, same generation,
+ *    owner b1) → never writes, never audits; B's owner token stays INTACT;
+ *    the current lease owner decides.
+ * F. A stale owner with NO takeover (expired, unreclaimed lease — owner
+ *    token still A's) → the honest fail-closed INVALID still lands.
  */
 
 const TEST_ENCRYPTION_KEY = 'test-encryption-key-32-chars-ok!!';
@@ -58,6 +70,7 @@ const COLUMN_OF: Record<string, string> = {
   credentialStatus: 'credential_status',
   credentialGeneration: 'credential_generation',
   credentialRefreshLeaseExpiresAt: 'credential_refresh_lease_expires_at',
+  credentialRefreshLeaseOwner: 'credential_refresh_lease_owner',
   encryptedCredentials: 'encrypted_credentials',
   credentialIv: 'credential_iv',
   credentialTag: 'credential_tag',
@@ -251,7 +264,7 @@ const makeInstance = (
     }
   })();
 
-describe('BrokerOAuthTokenLifecycleService stale-owner fencing (Sprint 56 correction round 4 — architect finding 1)', () => {
+describe('BrokerOAuthTokenLifecycleService stale-owner fencing (Sprint 56 correction round 6 — lease-owner token)', () => {
   let repo: InMemoryBrokerConnectionRepo;
   let encryption: CredentialEncryptionService;
   let ctraderClient: { refreshAccessToken: jest.Mock };
@@ -308,10 +321,24 @@ describe('BrokerOAuthTokenLifecycleService stale-owner fencing (Sprint 56 correc
       keyId: storedRow().encryptionKeyId as string,
     });
 
+  /**
+   * Lease-claim ops that LANDED (affected 1): each minted its own owner
+   * token; failed claim attempts (loser-loop polls) never wrote anything.
+   */
+  const claimOps = (): FakeOp[] =>
+    repo.ops.filter(
+      (op) => op.set.credentialRefreshLeaseExpiresAt instanceof Date && op.affected === 1,
+    );
+
+  /** INVALID-write ops that LANDED (affected 1). */
   const invalidOps = (): FakeOp[] =>
     repo.ops.filter(
       (op) => op.set.credentialStatus === BrokerCredentialStatus.INVALID && op.affected === 1,
     );
+
+  /** INVALID-write ATTEMPTS regardless of outcome (incl. fenced stale owners). */
+  const invalidAttempts = (): FakeOp[] =>
+    repo.ops.filter((op) => op.set.credentialStatus === BrokerCredentialStatus.INVALID);
 
   const refreshFailedAudits = (): unknown[] =>
     audit.log.mock.calls
@@ -327,9 +354,82 @@ describe('BrokerOAuthTokenLifecycleService stale-owner fencing (Sprint 56 correc
       'CH_ACCESS_TOKEN_INVALID: the refresh token is dead',
     );
 
+  const transientFailure = () =>
+    new BrokerAdapterError(
+      BrokerErrorCode.CONNECTION_TIMEOUT,
+      'cTrader token endpoint is unreachable.',
+      undefined,
+      true,
+    );
+
+  // ─── G. THE EXACT architect scenario: takeover + transient + release ───────
+
+  it('G: A stalls, B takes N and fails transiently and RELEASES → A\u2019s late auth rejection matches ZERO rows; generation N stays USABLE; no false refresh-failed audit', async () => {
+    ctraderClient.refreshAccessToken
+      .mockImplementationOnce(async () => {
+        await delay(120);
+        throw authRejection(); // A's LATE auth rejection
+      })
+      .mockImplementationOnce(async () => {
+        throw transientFailure(); // B's transient failure (no rotation)
+      });
+    const instanceA = makeInstance(repo, encryption, ctraderClient, audit, {
+      leaseMs: 40,
+      waitBudgetMs: 5_000,
+      pollIntervalMs: 5,
+    });
+    const instanceB = makeInstance(repo, encryption, ctraderClient, audit, {
+      leaseMs: 5_000,
+      waitBudgetMs: 5_000,
+      pollIntervalMs: 5,
+    });
+
+    const promiseA = instanceA.ensureFreshTokens(connectionFixture(), staleCredentials());
+    await delay(60); // A's lease (40ms) has EXPIRED; A's provider call is still in flight
+
+    // B takes over generation N (a NEW owner token), fails TRANSIENTLY and
+    // releases WITHOUT rotating the pair.
+    await expect(
+      instanceB.ensureFreshTokens(connectionFixture(), staleCredentials()),
+    ).rejects.toMatchObject({ code: BrokerErrorCode.CONNECTION_TIMEOUT });
+
+    // DB now: generation N; USABLE credential; lease NULL (BOTH columns).
+    expect(storedRow().credentialGeneration).toBe(0);
+    expect(storedRow().credentialStatus).toBe(BrokerCredentialStatus.VERIFIED);
+    expect(storedRow().credentialRefreshLeaseExpiresAt).toBeNull();
+    expect(storedRow().credentialRefreshLeaseOwner).toBeNull();
+
+    // A's late auth rejection finally lands.
+    await expect(promiseA).rejects.toThrow(ConflictException);
+
+    // A and B minted DISTINCT owner tokens (takeover wrote a NEW token).
+    expect(claimOps()).toHaveLength(2);
+    const [claimA, claimB] = claimOps();
+    expect(claimA.set.credentialRefreshLeaseOwner).not.toBe(claimB.set.credentialRefreshLeaseOwner);
+    expect(claimA.set.credentialRefreshLeaseOwner).toEqual(expect.any(String));
+
+    // A's terminal INVALID CAS was ATTEMPTED, matched ZERO rows, and is
+    // owner-token fenced — there is no `lease IS NULL` ownership alternative.
+    const attempts = invalidAttempts();
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0].affected).toBe(0);
+    expect(attempts[0].where).toContain('credential_refresh_lease_owner = :ownerToken');
+    expect(attempts[0].where).not.toContain('IS NULL');
+    expect(invalidOps()).toHaveLength(0);
+
+    // Generation N remains USABLE — A did not poison it.
+    expect(storedRow().credentialStatus).toBe(BrokerCredentialStatus.VERIFIED);
+    expect(storedRow().credentialGeneration).toBe(0);
+    expect(storedRow().credentialRefreshLeaseExpiresAt).toBeNull();
+    expect(storedRow().credentialRefreshLeaseOwner).toBeNull();
+
+    // NO false refresh-failed audit from A (and none from B's transient).
+    expect(refreshFailedAudits()).toHaveLength(0);
+  });
+
   // ─── A. Expired lease + takeover + late AUTHENTICATION_FAILED ──────────────
 
-  it('A: expired-lease stale winner CANNOT invalidate the takeover generation N+1 (no write, no audit)', async () => {
+  it('A: expired-lease stale winner CANNOT invalidate the takeover generation N+1 (owner-fenced; converges onto B\u2019s pair)', async () => {
     // A claims the lease (leaseMs = 40) and its provider request stays in
     // flight LONGER than the lease; B steals the expired lease, refreshes,
     // and CAS-persists generation 1 BEFORE A's rejection lands.
@@ -360,14 +460,22 @@ describe('BrokerOAuthTokenLifecycleService stale-owner fencing (Sprint 56 correc
     const resultB = await instanceB.ensureFreshTokens(connectionFixture(), staleCredentials());
     const resultA = await promiseA;
 
-    // B's takeover pair is usable and persisted at generation 1.
+    // B's takeover pair is usable and persisted at generation 1 — the persist
+    // CAS is OWNER-GATED (B's fresh token from the takeover claim).
     expect(resultB.apiKey).toBe(B_ACCESS_TOKEN);
     expect(storedRow().credentialStatus).toBe(BrokerCredentialStatus.ROTATED);
     expect(storedRow().credentialGeneration).toBe(1);
+    const bPersist = repo.ops.filter((op) => 'encryptedCredentials' in op.set && op.affected === 1);
+    expect(bPersist).toHaveLength(1);
+    expect(bPersist[0].where).toContain('credential_refresh_lease_owner = :ownerToken');
+    expect(bPersist[0].where).not.toContain('IS NULL');
+
     // A CONVERGES onto B's authoritative pair (no error, no poison).
     expect(resultA.apiKey).toBe(B_ACCESS_TOKEN);
     expect(resultA.additionalParams?.refreshToken).toBe(B_REFRESH_TOKEN);
-    // ZERO stale INVALID overwrite — no op ever wrote INVALID.
+    // ZERO stale INVALID overwrite — A's fenced attempt matched ZERO rows.
+    expect(invalidAttempts()).toHaveLength(1);
+    expect(invalidAttempts()[0].affected).toBe(0);
     expect(invalidOps()).toHaveLength(0);
     expect(storedRow().credentialStatus).not.toBe(BrokerCredentialStatus.INVALID);
     // NO false authoritative "refresh failed" audit against generation N+1.
@@ -432,7 +540,7 @@ describe('BrokerOAuthTokenLifecycleService stale-owner fencing (Sprint 56 correc
 
   // ─── C. Genuine owner rejection BEFORE takeover → INVALID exactly once ────
 
-  it('C: genuine current-owner auth rejection marks generation N INVALID EXACTLY ONCE with one audit', async () => {
+  it('C: genuine current-owner auth rejection marks generation N INVALID EXACTLY ONCE (owner-token WHERE, both lease columns cleared)', async () => {
     ctraderClient.refreshAccessToken.mockRejectedValue(authRejection());
     const instance = makeInstance(repo, encryption, ctraderClient, audit, {
       leaseMs: 30_000,
@@ -447,8 +555,11 @@ describe('BrokerOAuthTokenLifecycleService stale-owner fencing (Sprint 56 correc
     expect(storedRow().credentialStatus).toBe(BrokerCredentialStatus.INVALID);
     expect(storedRow().credentialGeneration).toBe(0);
     expect(storedRow().credentialRefreshLeaseExpiresAt).toBeNull();
+    expect(storedRow().credentialRefreshLeaseOwner).toBeNull();
     expect(invalidOps()).toHaveLength(1);
     expect(invalidOps()[0].where).toContain('credential_generation = :observedGeneration');
+    expect(invalidOps()[0].where).toContain('credential_refresh_lease_owner = :ownerToken');
+    expect(invalidOps()[0].where).not.toContain('IS NULL');
     expect(refreshFailedAudits()).toHaveLength(1);
     expect(
       (refreshFailedAudits()[0] as { metadata: { credentialGeneration: number } }).metadata
@@ -458,7 +569,7 @@ describe('BrokerOAuthTokenLifecycleService stale-owner fencing (Sprint 56 correc
 
   // ─── D. Twenty concurrent callers, no takeover → one-refresh preserved ────
 
-  it('D: 20 concurrent callers with no lease-expiry takeover → exactly one refresh, no false INVALID', async () => {
+  it('D: 20 concurrent callers with no lease-expiry takeover → exactly one refresh per generation, no false INVALID', async () => {
     ctraderClient.refreshAccessToken.mockResolvedValue({
       accessToken: NEW_ACCESS_TOKEN,
       refreshToken: NEW_REFRESH_TOKEN,
@@ -483,15 +594,18 @@ describe('BrokerOAuthTokenLifecycleService stale-owner fencing (Sprint 56 correc
     }
     expect(storedRow().credentialStatus).toBe(BrokerCredentialStatus.ROTATED);
     expect(storedRow().credentialGeneration).toBe(1);
+    expect(storedRow().credentialRefreshLeaseExpiresAt).toBeNull();
+    expect(storedRow().credentialRefreshLeaseOwner).toBeNull();
     expect(invalidOps()).toHaveLength(0);
     expect(refreshFailedAudits()).toHaveLength(0);
   });
 
   // ─── E. Stale owner while a LIVE takeover lease holds the same generation ──
 
-  it('E: stale owner rejected while B holds a LIVE lease on the same generation → no write, no audit', async () => {
-    // A claims (leaseMs = 40); lease expires; B claims and holds a LONG lease
-    // while its provider call is in flight; A's rejection lands mid-B.
+  it('E: stale owner rejected while B holds a LIVE lease on the same generation → no write, no audit; B\u2019s owner token stays INTACT', async () => {
+    // A claims (leaseMs = 40); lease expires; B claims (a NEW owner token)
+    // and holds a LONG lease while its provider call is in flight; A's
+    // rejection lands mid-B.
     const holder: {
       resolveB?: (tokens: { accessToken: string; refreshToken: string; expiresIn: number }) => void;
     } = {};
@@ -527,13 +641,20 @@ describe('BrokerOAuthTokenLifecycleService stale-owner fencing (Sprint 56 correc
     // the LIVE lease owner (B) decides this generation's fate.
     await rejectionA;
     expect(invalidOps()).toHaveLength(0);
+    expect(invalidAttempts()).toHaveLength(1);
+    expect(invalidAttempts()[0].affected).toBe(0);
     expect(refreshFailedAudits()).toHaveLength(0);
     expect(storedRow().credentialStatus).toBe(BrokerCredentialStatus.VERIFIED);
     expect(storedRow().credentialGeneration).toBe(0);
-    // The current lease owner's claim is INTACT (A never released B's lease).
+    // The current lease owner's claim is INTACT (BOTH columns — A never
+    // released B's lease and never overwrote B's owner token).
     expect(storedRow().credentialRefreshLeaseExpiresAt).not.toBeNull();
+    const [claimA, claimB] = claimOps();
+    expect(claimA.set.credentialRefreshLeaseOwner).not.toBe(claimB.set.credentialRefreshLeaseOwner);
+    expect(storedRow().credentialRefreshLeaseOwner).toBe(claimB.set.credentialRefreshLeaseOwner);
 
-    // B completes its refresh → the generation legitimately rotates.
+    // B completes its refresh → the generation legitimately rotates
+    // (B's persist is owner-gated by B's OWN token and lands).
     holder.resolveB?.({
       accessToken: B_ACCESS_TOKEN,
       refreshToken: B_REFRESH_TOKEN,
@@ -543,14 +664,16 @@ describe('BrokerOAuthTokenLifecycleService stale-owner fencing (Sprint 56 correc
     expect(resultB.apiKey).toBe(B_ACCESS_TOKEN);
     expect(storedRow().credentialGeneration).toBe(1);
     expect(storedRow().credentialStatus).toBe(BrokerCredentialStatus.ROTATED);
+    expect(storedRow().credentialRefreshLeaseOwner).toBeNull();
   });
 
   // ─── F. Stale owner, NO takeover, dead pair → honest fail-closed INVALID ──
 
-  it('F: stale owner with an unreclaimed expired lease and a dead pair → the honest INVALID still lands', async () => {
+  it('F: stale owner with an unreclaimed expired lease (owner token still A\u2019s) → the honest INVALID still lands', async () => {
     // A's lease expired but nobody took over; the provider then rejects the
-    // pair. The stale lease value is still A's own claim — the guarded write
-    // matches and the dead generation is marked INVALID (fail-closed).
+    // pair. The expired-but-unreclaimed lease still carries A's owner token —
+    // the owner-fenced write matches and the dead generation is marked
+    // INVALID (fail-closed).
     ctraderClient.refreshAccessToken.mockImplementationOnce(async () => {
       await delay(80);
       throw authRejection();
@@ -568,7 +691,9 @@ describe('BrokerOAuthTokenLifecycleService stale-owner fencing (Sprint 56 correc
 
     expect(storedRow().credentialStatus).toBe(BrokerCredentialStatus.INVALID);
     expect(invalidOps()).toHaveLength(1);
+    expect(invalidOps()[0].where).toContain('credential_refresh_lease_owner = :ownerToken');
     expect(refreshFailedAudits()).toHaveLength(1);
     expect(storedRow().credentialRefreshLeaseExpiresAt).toBeNull();
+    expect(storedRow().credentialRefreshLeaseOwner).toBeNull();
   });
 });

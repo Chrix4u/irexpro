@@ -10,6 +10,7 @@ import { PortfolioController } from './portfolio.controller';
 import { BrokerRegistryController } from './broker-registry.controller';
 import { BrokerConnection } from './entities/broker-connection.entity';
 import { BrokerAccount } from './entities/broker-account.entity';
+import { BrokerAccountSnapshot } from './entities/broker-account-snapshot.entity';
 import { BrokerOAuthFlow } from './entities/broker-oauth-flow.entity';
 import { BrokerLinkOutbox } from './entities/broker-link-outbox.entity';
 import { BrokerAdapterRegistry } from './adapters/broker-adapter.registry';
@@ -29,6 +30,8 @@ import { BrokerProviderRegistryService } from './registry/broker-provider-regist
 import { BrokerHealthCheckJob, BROKER_HEALTH_QUEUE } from './jobs/broker-health-check.job';
 import { BrokerHealthCheckProducer } from './jobs/broker-health-check.producer';
 import { AuditModule } from '../audit/audit.module';
+import { ExecutionAuthorityModule } from '../execution-authority/execution-authority.module';
+import { BrokerAccountSnapshotService } from './services/broker-account-snapshot.service';
 
 /**
  * BrokerModule — Pluggable broker integration layer with health monitoring.
@@ -53,9 +56,20 @@ import { AuditModule } from '../audit/audit.module';
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([BrokerConnection, BrokerAccount, BrokerOAuthFlow, BrokerLinkOutbox]),
+    TypeOrmModule.forFeature([
+      BrokerConnection,
+      BrokerAccount,
+      BrokerAccountSnapshot,
+      BrokerOAuthFlow,
+      BrokerLinkOutbox,
+    ]),
     BullModule.registerQueue({ name: BROKER_HEALTH_QUEUE }),
     AuditModule,
+    // Round 6: PLAIN leaf import — broker authority transitions (revocation,
+    // suspension, disconnect, credential INVALID/rotation, provider identity
+    // change) bump the TradingAuthorityGeneration and invalidate the user's
+    // NEW-exposure authority through the tenant-scoped seams.
+    ExecutionAuthorityModule,
   ],
   controllers: [
     BrokerOAuthController,
@@ -69,6 +83,10 @@ import { AuditModule } from '../audit/audit.module';
   ],
   providers: [
     BrokerService,
+    // Round 6 (#297/#312): the durable monotonic account-snapshot authority
+    // (accept generation-fenced writes, freshness gate for NEW exposure,
+    // legacy current-view projection guarded by generation).
+    BrokerAccountSnapshotService,
     PortfolioReadService,
     // Sprint 56 / Task 48-D — evidence-based write path for
     // BrokerConnection.demoValidated
@@ -110,6 +128,9 @@ import { AuditModule } from '../audit/audit.module';
   ],
   exports: [
     BrokerService,
+    // Round 6: exported so RiskModule (and the trading session start path)
+    // can resolve fresh exact-connection snapshots for NEW-exposure authority.
+    BrokerAccountSnapshotService,
     PortfolioReadService,
     BrokerAdapterRegistry,
     BrokerProviderRegistryService,
