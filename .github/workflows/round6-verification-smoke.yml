@@ -1,0 +1,66 @@
+name: Round 6 Verification Smoke
+
+on:
+  push:
+    branches:
+      - ci/github-round6-verification
+    paths:
+      - 'apps/web/e2e/**'
+      - 'apps/api/src/modules/broker/**'
+      - 'apps/api/src/modules/execution/**'
+      - '.github/workflows/round6-verification-smoke.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: round6-verification-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static-contract-smoke:
+    name: Static contract smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Diff hygiene
+        run: git diff --check HEAD^ HEAD
+
+      - name: Reject legacy trading-session envelope fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          files=(
+            apps/web/e2e/fixtures.ts
+            apps/web/e2e/trader-terminal.spec.ts
+            apps/web/e2e/dynamic-trader-cockpit.spec.ts
+            apps/web/e2e/cockpit-evidence.spec.ts
+          )
+          if grep -nE 'round-5 contract: \{ session \} envelope|Sprint 56 correction round 5:.*\{ session \} envelope' "${files[@]}"; then
+            echo 'Legacy { session } fixture contract detected; TradingController returns TradingSessionResponseDto directly.' >&2
+            exit 1
+          fi
+
+      - name: Verify PostgreSQL execution fixture carries external_position_id
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'external_position_id' apps/api/src/modules/execution/execution.pg-integration.spec.ts || {
+            echo 'execution.pg-integration.spec.ts is missing external_position_id in its hand-written trades schema.' >&2
+            exit 1
+          }
+
+      - name: Verify broker PG fixture carries provider_broker_identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'provider_broker_identity' apps/api/src/modules/broker/authorization/broker-authorization.pg-integration.spec.ts || {
+            echo 'broker-authorization.pg-integration.spec.ts is missing provider_broker_identity in its hand-written broker_connections schema.' >&2
+            exit 1
+          }
