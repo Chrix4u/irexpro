@@ -53,6 +53,16 @@ describe('BrokerOAuthTokenLifecycleService concurrent refresh — real PostgreSQ
           encryption,
           ctraderClient as unknown as CTraderClientService,
           audit as unknown as AuditService,
+          // Round 6 live-execution completion (§1b): authority seams (mocked —
+          // CI-gated suite; the bump/invalidation matrices live elsewhere).
+          {
+            bumpGeneration: jest.fn().mockResolvedValue(2),
+          } as unknown as import('../../execution-authority/trading-authority.service').TradingAuthorityService,
+          {
+            invalidateUserNewExposureAuthority: jest
+              .fn()
+              .mockResolvedValue({ invalidatedGrants: 0, revokedConfirmations: 0 }),
+          } as unknown as import('../../execution-authority/grant-invalidation.service').GrantInvalidationService,
         );
         this.leaseMs = seams.leaseMs ?? 5_000;
         this.waitBudgetMs = 5_000;

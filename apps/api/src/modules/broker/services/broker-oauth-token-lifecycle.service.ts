@@ -8,6 +8,8 @@ import { CredentialEncryptionService } from './credential-encryption.service';
 import { CTraderClientService } from '../adapters/ctrader/ctrader-client.service';
 import { CtraderOAuthTokens } from '../adapters/ctrader/ctrader-oauth';
 import { AuditService } from '../../audit/audit.service';
+import { TradingAuthorityService } from '../../execution-authority/trading-authority.service';
+import { GrantInvalidationService } from '../../execution-authority/grant-invalidation.service';
 import { AuditAction } from '../../../common/enums/audit-action.enum';
 import { AuditSeverity } from '../../audit/entities/audit-log.entity';
 import { CTRADER_FAMILY_BROKER_IDS } from '../registry/broker-catalog';
@@ -184,6 +186,12 @@ export class BrokerOAuthTokenLifecycleService {
     private readonly encryptionService: CredentialEncryptionService,
     private readonly ctraderClient: CTraderClientService,
     private readonly auditService: AuditService,
+    // Round 6 live-execution completion (§1b): credential-set transitions
+    // (INVALID on refresh rejection, ROTATED on refresh success) invalidate
+    // the user's NEW-exposure authority bound to the old credential
+    // generation — leaf seams only, no module import cycle.
+    private readonly tradingAuthorityService: TradingAuthorityService,
+    private readonly grantInvalidation: GrantInvalidationService,
   ) {}
 
   /**
@@ -544,6 +552,17 @@ export class BrokerOAuthTokenLifecycleService {
       throw this.staleGenerationConflict(connection.id);
     }
 
+    // Round 6 live-execution completion (§1b): the credential GENERATION
+    // advanced (automatic OAuth rotation) — prior NEW-exposure authority
+    // bound to the old generation is invalidated (the final dispatch
+    // boundary also fences on credentialGeneration).
+    await this.invalidateAuthorityAfterCredentialTransition(
+      connection.userId,
+      'BROKER_CREDENTIAL_ROTATED',
+      `OAuth token refresh advanced credential generation for connection ` +
+        `${connection.id} (${observedGeneration} -> ${observedGeneration + 1})`,
+    );
+
     // Exactly ONE successful rotation audit event for this generation.
     await this.auditService.log({
       actorUserId: connection.userId,
@@ -603,6 +622,28 @@ export class BrokerOAuthTokenLifecycleService {
    * - A DB write failure is MARK_FAILED (logged; the audit may still record
    *   the observed-generation provider rejection truthfully).
    */
+  /**
+   * Round 6 live-execution completion (§1b): fail-safe authority
+   * invalidation after a durable credential-set transition. The transition
+   * already landed; a failure here is logged loudly, never silent, and never
+   * rolls back the durable fact.
+   */
+  private async invalidateAuthorityAfterCredentialTransition(
+    userId: string,
+    reason: 'BROKER_CREDENTIAL_INVALIDATED' | 'BROKER_CREDENTIAL_ROTATED',
+    context: string,
+  ): Promise<void> {
+    try {
+      await this.tradingAuthorityService.bumpGeneration(userId, reason);
+      await this.grantInvalidation.invalidateUserNewExposureAuthority(userId, reason);
+    } catch (err) {
+      this.logger.error(
+        `Authority invalidation (${reason}) failed for user ${userId} ` +
+          `— ${context}: ${(err as Error).message}`,
+      );
+    }
+  }
+
   private async markRefreshRejected(
     connection: BrokerConnection,
     err: unknown,
@@ -666,6 +707,15 @@ export class BrokerOAuthTokenLifecycleService {
         .catch(() => {
           /* audit best-effort — the guarded INVALID marking above is the gate */
         });
+      // Round 6 live-execution completion (§1b): the credential set is now
+      // INVALID (generation-fenced write landed) — the user's NEW-exposure
+      // authority built on this credential set is gone.
+      await this.invalidateAuthorityAfterCredentialTransition(
+        connection.userId,
+        'BROKER_CREDENTIAL_INVALIDATED',
+        `OAuth token refresh rejected — connection ${connection.id} marked INVALID ` +
+          `at credential generation ${guard.observedGeneration}`,
+      );
       return 'MARKED_INVALID';
     }
 

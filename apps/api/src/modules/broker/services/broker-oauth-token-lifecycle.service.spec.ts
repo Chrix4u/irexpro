@@ -232,6 +232,16 @@ class TestableLifecycleService extends BrokerOAuthTokenLifecycleService {
       encryption,
       client as unknown as CTraderClientService,
       audit as unknown as AuditService,
+      // Round 6 live-execution completion (§1b): authority seams (mocked —
+      // the bump/invalidation matrices live in the execution-authority suites).
+      {
+        bumpGeneration: jest.fn().mockResolvedValue(2),
+      } as unknown as import('../../execution-authority/trading-authority.service').TradingAuthorityService,
+      {
+        invalidateUserNewExposureAuthority: jest
+          .fn()
+          .mockResolvedValue({ invalidatedGrants: 0, revokedConfirmations: 0 }),
+      } as unknown as import('../../execution-authority/grant-invalidation.service').GrantInvalidationService,
     );
     if (seams.leaseMs !== undefined) this.leaseMs = seams.leaseMs;
     if (seams.waitBudgetMs !== undefined) this.waitBudgetMs = seams.waitBudgetMs;

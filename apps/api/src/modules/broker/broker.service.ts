@@ -602,6 +602,17 @@ export class BrokerService {
             },
             'connectBroker ERROR transition',
           );
+          // Round 6 live-execution completion (§1b): an auth-class failure
+          // INVALIDATED the credential set — the user's NEW-exposure authority
+          // built on the old credential generation is gone. Durable fact first,
+          // then invalidation (logged-never-silent, best effort).
+          if (BrokerCredentialLifecycle.isAuthFailure(result.error)) {
+            await this.invalidateBrokerAuthority(
+              userId,
+              'BROKER_CREDENTIAL_INVALIDATED',
+              `connect auth-class failure for connection ${connectionId}`,
+            );
+          }
         } catch (transitionErr) {
           this.logger.warn(
             `connectBroker ERROR transition lost a concurrent state race for ` +
@@ -639,6 +650,15 @@ export class BrokerService {
           ? BrokerAuthorizationStatus.AUTHORIZED
           : BrokerAuthorizationStatus.CONNECTED;
 
+      // Round 6 live-execution completion (§1b): PROVIDER ACCOUNT IDENTITY
+      // DRIFT — the handshake reached a DIFFERENT provider account than the
+      // one this connection was established with. Prior authority was bound
+      // to the old logical account key; it is invalid for the new identity.
+      const identityDrift =
+        connection.accountId !== null &&
+        connection.accountId !== undefined &&
+        connection.accountId !== result.accountId;
+
       // A4: success transition guarded on the in-flight state — a concurrent
       // revoke/suspend between handshake and this write surfaces as a
       // Conflict; the winner's state is never overwritten by a stale success.
@@ -653,6 +673,19 @@ export class BrokerService {
           consecutiveFailureCount: 0,
           lastErrorMessage: null,
           credentialStatus: BrokerCredentialStatus.VERIFIED,
+          // §1b: a drifted account identity re-keys the logical account in
+          // the SAME atomic transition — the daily-risk-period scoping and
+          // snapshot authority follow the ACTUAL account, never a stale key.
+          ...(identityDrift
+            ? {
+                logicalAccountKey:
+                  computeLogicalAccountKey(
+                    connection.brokerId,
+                    connection.providerBrokerIdentity,
+                    result.accountId,
+                  ) ?? connection.logicalAccountKey,
+              }
+            : {}),
           ...(BrokerAuthorizationStateMachine.canTransition(
             inFlightAuthorization,
             postConnectAuthorization,
@@ -664,6 +697,18 @@ export class BrokerService {
         },
         'connectBroker CONNECTED transition',
       );
+
+      if (identityDrift) {
+        // Durable fact landed — NOW invalidate authority bound to the OLD
+        // provider identity (logged-never-silent, best effort after the
+        // durable transition — the same ordering discipline as disconnect).
+        await this.invalidateBrokerAuthority(
+          userId,
+          'BROKER_PROVIDER_IDENTITY_CHANGED',
+          `provider account identity changed on connection ${connectionId} ` +
+            `(${connection.accountId} -> ${result.accountId})`,
+        );
+      }
 
       await this.auditService.log({
         actorUserId: userId,
@@ -981,6 +1026,16 @@ export class BrokerService {
       'revokeAuthorization REVOKED transition',
     );
 
+    // Round 6 live-execution completion (§1b): a revoked automation
+    // authorization carries no NEW-exposure authority — the generation bump
+    // + user-scoped grant/confirmation invalidation land with the durable
+    // transition (same discipline as disconnect).
+    await this.invalidateBrokerAuthority(
+      userId,
+      'BROKER_AUTHORIZATION_REVOKED',
+      `authorization revoked for connection ${connectionId}`,
+    );
+
     this.eventBus.publish(DomainEventType.BROKER_AUTHORIZATION_CHANGED, userId, {
       userId,
       connectionId,
@@ -1080,6 +1135,16 @@ export class BrokerService {
       accountId: dto.accountId,
       credentialStatus: BrokerCredentialStatus.ROTATED,
     });
+
+    // Round 6 live-execution completion (§1b): the credential GENERATION
+    // changed (manual rotation) — prior NEW-exposure authority bound to the
+    // old credential set is invalid; in-flight grants/confirmations are
+    // invalidated (the final dispatch boundary also fences on the generation).
+    await this.invalidateBrokerAuthority(
+      userId,
+      'BROKER_CREDENTIAL_ROTATED',
+      `credentials manually rotated for connection ${connectionId}`,
+    );
 
     await this.auditService.log({
       actorUserId: userId,
@@ -1251,6 +1316,13 @@ export class BrokerService {
           this.adapterRegistry.releaseAdapterForConnection(connectionId);
           this.logger.error(
             `Broker connection ${connectionId} suspended after ${failureCount} consecutive failures`,
+          );
+          // Round 6 live-execution completion (§1b): a suspended connection
+          // carries no NEW-exposure authority.
+          await this.invalidateBrokerAuthority(
+            connection.userId,
+            'BROKER_CONNECTION_SUSPENDED',
+            `connection ${connectionId} suspended after ${failureCount} consecutive health failures`,
           );
           await this.auditService.log({
             action: AuditAction.BROKER_SUSPENDED_HEALTH_FAILURE,
@@ -1768,6 +1840,40 @@ export class BrokerService {
           brokerConnectionId: connectionId,
           ...patch,
         } as never),
+      );
+    }
+  }
+
+  // ─── Broker authority invalidation (§1b) ──────────────────────────────
+
+  /**
+   * Round 6 live-execution completion (§1b): invalidate the user's
+   * NEW-exposure authority after a broker authority transition — bumps the
+   * TradingAuthorityGeneration (every in-flight grant/confirmation fences on
+   * it at the final dispatch boundary) AND revokes the currently-active
+   * grants/PENDING confirmations through the tenant-scoped leaf seams.
+   *
+   * Ordering discipline (same as the disconnect hook): the DURABLE transition
+   * lands first; this invalidation runs after it — a failure is logged and
+   * audited, never silent, and never rolls back the durable fact.
+   */
+  private async invalidateBrokerAuthority(
+    userId: string,
+    reason:
+      | 'BROKER_AUTHORIZATION_REVOKED'
+      | 'BROKER_CONNECTION_SUSPENDED'
+      | 'BROKER_CREDENTIAL_INVALIDATED'
+      | 'BROKER_CREDENTIAL_ROTATED'
+      | 'BROKER_PROVIDER_IDENTITY_CHANGED',
+    context: string,
+  ): Promise<void> {
+    try {
+      await this.tradingAuthorityService.bumpGeneration(userId, reason);
+      await this.grantInvalidation.invalidateUserNewExposureAuthority(userId, reason);
+    } catch (err) {
+      this.logger.error(
+        `Authority invalidation (${reason}) failed for user ${userId} ` +
+          `— ${context}: ${(err as Error).message}`,
       );
     }
   }

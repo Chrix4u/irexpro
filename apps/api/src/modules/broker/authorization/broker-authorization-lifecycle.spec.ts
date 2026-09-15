@@ -34,6 +34,18 @@ const mockAdapter = (over: Record<string, unknown> = {}) => ({
   connect: jest.fn(),
   disconnect: jest.fn(),
   testConnection: jest.fn(),
+  // Round 6 live-execution completion (§1a): connectBroker takes the initial
+  // authoritative account snapshot via getAccountInfo().
+  getAccountInfo: jest.fn().mockResolvedValue({
+    accountId: '123456',
+    currency: 'USD',
+    leverage: 30,
+    balance: '1000',
+    equity: '1000',
+    margin: '0',
+    freeMargin: '1000',
+    marginLevel: '0',
+  }),
   ...over,
 });
 
@@ -58,6 +70,9 @@ const baseConnection = (over: Partial<Record<string, unknown>> = {}) => ({
 
 describe('BrokerService — Sprint 50 authorization lifecycle', () => {
   let service: BrokerService;
+  // Round 6 live-execution completion (§1b): authority-invalidation seams.
+  let authorityBump: jest.Mock;
+  let authorityInvalidate: jest.Mock;
   let connectionRepo: {
     findOne: jest.Mock;
     find: jest.Mock;
@@ -182,6 +197,10 @@ describe('BrokerService — Sprint 50 authorization lifecycle', () => {
     }).compile();
 
     service = module.get(BrokerService);
+    authorityBump = module.get(TradingAuthorityService).bumpGeneration as unknown as jest.Mock;
+    authorityInvalidate = module.get(
+      GrantInvalidationService,
+    ).invalidateUserNewExposureAuthority as unknown as jest.Mock;
   });
 
   describe('connectBroker() — state machine + credential advancement', () => {
@@ -399,6 +418,12 @@ describe('BrokerService — Sprint 50 authorization lifecycle', () => {
       );
       // Realtime event emitted so clients update immediately
       expect(eventBus.publish).toHaveBeenCalled();
+      // Round 6 live-execution completion (§1b): the durable REVOKED
+      // transition invalidates NEW-exposure authority (generation bump +
+      // active grant/PENDING confirmation revocation) — logged-never-silent,
+      // ordered AFTER the durable fact.
+      expect(authorityBump).toHaveBeenCalledWith('user-1', 'BROKER_AUTHORIZATION_REVOKED');
+      expect(authorityInvalidate).toHaveBeenCalledWith('user-1', 'BROKER_AUTHORIZATION_REVOKED');
     });
 
     it('rejects revocation from NOT_CONNECTED (invalid transition)', async () => {
@@ -581,6 +606,10 @@ describe('BrokerService — Sprint 50 authorization lifecycle', () => {
       // The update payload must never contain plaintext credential fields
       const payload = JSON.stringify(connectionRepo.update.mock.calls[0][1]);
       expect(payload).not.toMatch(/"apiKey"|"apiSecret"/);
+      // Round 6 live-execution completion (§1b): a successful manual rotation
+      // (credential GENERATION change) invalidates NEW-exposure authority.
+      expect(authorityBump).toHaveBeenCalledWith('user-1', 'BROKER_CREDENTIAL_ROTATED');
+      expect(authorityInvalidate).toHaveBeenCalledWith('user-1', 'BROKER_CREDENTIAL_ROTATED');
     });
 
     it('refuses rotation to a different broker or account type', async () => {
@@ -782,6 +811,145 @@ describe('BrokerService — Sprint 50 authorization lifecycle', () => {
       expect(
         service.isConnectionExecutable(baseConnection({ authorizationStatus: undefined }) as never),
       ).toBe(false);
+    });
+  });
+
+  // ─── Round 6 live-execution completion (§1b): remaining invalidation hooks ──
+
+  describe('connectBroker identity drift + auth-class INVALID (§1b)', () => {
+    it('bumps BROKER_PROVIDER_IDENTITY_CHANGED and re-keys logicalAccountKey when the handshake reaches a DIFFERENT provider account', async () => {
+      connectionRepo.findOne
+        .mockResolvedValueOnce(
+          baseConnection({
+            status: BrokerConnectionStatus.DISCONNECTED,
+            authorizationStatus: BrokerAuthorizationStatus.NOT_CONNECTED,
+            credentialStatus: BrokerCredentialStatus.VERIFIED,
+            accountId: 'OLD-ACCOUNT-1',
+            providerBrokerIdentity: 'Pepperstone',
+            logicalAccountKey: 'ctrader|Pepperstone|OLD-ACCOUNT-1',
+          }),
+        )
+        .mockResolvedValue(
+          baseConnection({
+            status: BrokerConnectionStatus.CONNECTED,
+            authorizationStatus: BrokerAuthorizationStatus.CONNECTED,
+            accountId: 'NEW-ACCOUNT-9',
+          }),
+        );
+      connectionRepo.update.mockResolvedValue({ affected: 1 });
+      adapter.connect.mockResolvedValue({
+        success: true,
+        accountId: 'NEW-ACCOUNT-9',
+        accountType: BrokerMode.LIVE,
+        currency: 'USD',
+        serverTime: new Date(),
+      });
+      adapter.getAccountInfo.mockResolvedValue({
+        accountId: 'NEW-ACCOUNT-9',
+        currency: 'USD',
+        leverage: 30,
+        balance: '1000',
+        equity: '1000',
+        margin: '0',
+        freeMargin: '1000',
+        marginLevel: '0',
+      });
+
+      await service.connectBroker('conn-1', 'user-1');
+
+      // The CONNECTED transition carries the re-computed logical account key
+      // (the first update call is the CONNECTING transition — assert on the
+      // CONNECTED one).
+      const connectedCall = connectionRepo.update.mock.calls.find(
+        (call: unknown[]) =>
+          (call[1] as Record<string, unknown>).status === BrokerConnectionStatus.CONNECTED,
+      );
+      expect(connectedCall).toBeDefined();
+      expect(connectedCall![1]).toEqual(
+        expect.objectContaining({
+          accountId: 'NEW-ACCOUNT-9',
+          logicalAccountKey: 'metatrader5|Pepperstone|NEW-ACCOUNT-9',
+        }),
+      );
+      // ...and the OLD identity's authority is invalidated after the fact.
+      expect(authorityBump).toHaveBeenCalledWith('user-1', 'BROKER_PROVIDER_IDENTITY_CHANGED');
+      expect(authorityInvalidate).toHaveBeenCalledWith(
+        'user-1',
+        'BROKER_PROVIDER_IDENTITY_CHANGED',
+      );
+    });
+
+    it('does NOT bump on the FIRST account observation (no prior identity)', async () => {
+      connectionRepo.findOne
+        .mockResolvedValueOnce(
+          baseConnection({
+            status: BrokerConnectionStatus.DISCONNECTED,
+            authorizationStatus: BrokerAuthorizationStatus.NOT_CONNECTED,
+            credentialStatus: BrokerCredentialStatus.VERIFIED,
+            accountId: null,
+          }),
+        )
+        .mockResolvedValue(
+          baseConnection({
+            status: BrokerConnectionStatus.CONNECTED,
+            authorizationStatus: BrokerAuthorizationStatus.CONNECTED,
+          }),
+        );
+      connectionRepo.update.mockResolvedValue({ affected: 1 });
+      adapter.connect.mockResolvedValue({
+        success: true,
+        accountId: '123456',
+        accountType: BrokerMode.LIVE,
+        currency: 'USD',
+        serverTime: new Date(),
+      });
+      adapter.getAccountInfo.mockResolvedValue({
+        accountId: '123456',
+        currency: 'USD',
+        leverage: 30,
+        balance: '1000',
+        equity: '1000',
+        margin: '0',
+        freeMargin: '1000',
+        marginLevel: '0',
+      });
+
+      await service.connectBroker('conn-1', 'user-1');
+
+      expect(authorityBump).not.toHaveBeenCalled();
+      expect(authorityInvalidate).not.toHaveBeenCalled();
+    });
+
+    it('auth-class connect failure marks INVALID and bumps BROKER_CREDENTIAL_INVALIDATED', async () => {
+      connectionRepo.findOne.mockResolvedValue(
+        baseConnection({
+          status: BrokerConnectionStatus.DISCONNECTED,
+          authorizationStatus: BrokerAuthorizationStatus.NOT_CONNECTED,
+          credentialStatus: BrokerCredentialStatus.VERIFIED,
+        }),
+      );
+      connectionRepo.update.mockResolvedValue({ affected: 1 });
+      adapter.connect.mockResolvedValue({
+        success: false,
+        accountId: '',
+        accountType: BrokerMode.LIVE,
+        currency: null,
+        serverTime: new Date(),
+        error: 'AUTH_FAILED: invalid api key',
+      });
+
+      await expect(service.connectBroker('conn-1', 'user-1')).rejects.toThrow(BadRequestException);
+
+      const errorCall = connectionRepo.update.mock.calls.find(
+        (call: unknown[]) =>
+          (call[1] as Record<string, unknown>).status === BrokerConnectionStatus.ERROR,
+      );
+      expect(errorCall).toBeDefined();
+      expect(errorCall![1]).toEqual(
+        expect.objectContaining({ credentialStatus: BrokerCredentialStatus.INVALID }),
+      );
+      expect(authorityBump).toHaveBeenCalledWith('user-1', 'BROKER_CREDENTIAL_INVALIDATED');
+      expect(authorityInvalidate).toHaveBeenCalledWith('user-1', 'BROKER_CREDENTIAL_INVALIDATED');
     });
   });
 });
