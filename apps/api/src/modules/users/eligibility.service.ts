@@ -19,6 +19,8 @@ import {
 import { KycReviewDecision, UserKycReview } from './entities/user-kyc-review.entity';
 import { KycStatus } from './entities/user-profile.entity';
 import { User, UserStatus } from './entities/user.entity';
+import { TradingAuthorityService } from '../execution-authority/trading-authority.service';
+import { GrantInvalidationService } from '../execution-authority/grant-invalidation.service';
 
 export type EligibilityJurisdictionStatus =
   | 'MISSING_PROFILE'
@@ -147,6 +149,10 @@ export class EligibilityService {
     private readonly kycReviewRepo: Repository<UserKycReview>,
     private readonly configService: ConfigService,
     private readonly auditService: AuditService,
+    // Round 6 (#300/#363): the unified execution-authority seams (leaf module
+    // — no cycle: ExecutionAuthorityModule imports only forFeature + Audit).
+    private readonly tradingAuthorityService: TradingAuthorityService,
+    private readonly grantInvalidation: GrantInvalidationService,
   ) {}
 
   async getStatus(userId: string): Promise<EligibilityStatusView> {
@@ -325,18 +331,34 @@ export class EligibilityService {
       );
     }
 
-    const review = await this.reviewRepo.save(
-      this.reviewRepo.create({
+    const review = await this.reviewRepo.manager.transaction(async (em) => {
+      const saved = await em.getRepository(UserEligibilityReview).save(
+        this.reviewRepo.create({
+          userId,
+          countryCode,
+          policyVersion: policy.version,
+          policyFingerprint: policy.fingerprint,
+          decision: dto.decision,
+          reasonCode: dto.reasonCode.trim().toUpperCase(),
+          reviewerUserId,
+          reviewerNote: dto.reviewerNote?.trim() || null,
+        }),
+      );
+      // Round 6 (#2/#300): a jurisdiction decision replaces previously usable
+      // eligibility evidence — the authority bump + NEW-exposure invalidation
+      // commit ATOMICALLY with the review fact (never best-effort later).
+      await this.tradingAuthorityService.bumpGeneration(
         userId,
-        countryCode,
-        policyVersion: policy.version,
-        policyFingerprint: policy.fingerprint,
-        decision: dto.decision,
-        reasonCode: dto.reasonCode.trim().toUpperCase(),
-        reviewerUserId,
-        reviewerNote: dto.reviewerNote?.trim() || null,
-      }),
-    );
+        'JURISDICTION_DECISION_CHANGED',
+        em,
+      );
+      await this.grantInvalidation.invalidateUserNewExposureAuthority(
+        userId,
+        'JURISDICTION_DECISION_CHANGED',
+        em,
+      );
+      return saved;
+    });
 
     await this.auditService.log({
       actorUserId: reviewerUserId,
@@ -394,7 +416,17 @@ export class EligibilityService {
       user.profile.kycStatus = KycStatus.REJECTED;
       user.profile.kycApprovedAt = null;
     }
-    await this.userRepo.save(user);
+    await this.userRepo.manager.transaction(async (em) => {
+      await em.getRepository(User).save(user);
+      // Round 6 (#2/#300): APPROVED/REJECTED replaces previously usable KYC
+      // evidence — atomic authority bump + NEW-exposure invalidation.
+      await this.tradingAuthorityService.bumpGeneration(userId, 'KYC_REVIEW_DECIDED', em);
+      await this.grantInvalidation.invalidateUserNewExposureAuthority(
+        userId,
+        'KYC_REVIEW_DECIDED',
+        em,
+      );
+    });
 
     await this.auditService.log({
       actorUserId: reviewerUserId,
@@ -624,6 +656,16 @@ export class EligibilityService {
       contentSha256: createHash('sha256').update(item.body, 'utf8').digest('hex'),
       required: true as const,
     }));
+  }
+
+  /**
+   * Round 6 (#363): the ACTIVE embedded trading-policy fingerprint — consumed
+   * by the deployment bootstrap (SharedControlPlaneBootstrap) to seed/advance
+   * the shared cross-replica trading-policy revision. Public + read-only.
+   */
+  getActivePolicyFingerprint(): { version: string; fingerprint: string } {
+    const policy = this.currentPolicy();
+    return { version: policy.version, fingerprint: policy.fingerprint };
   }
 
   private currentPolicy(): ActiveEligibilityPolicy {

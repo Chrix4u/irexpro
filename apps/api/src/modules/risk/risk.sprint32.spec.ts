@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { Logger } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { RiskService } from './risk.service';
 import { RiskProfile } from './entities/risk-profile.entity';
@@ -18,6 +19,11 @@ import { ExactDecimal } from '../../common/utils/exact-decimal';
 import { ProposedTrade, RiskRejectionCode } from './interfaces/risk.interface';
 import { DomainEventBus } from '../events/event-bus.service';
 import { AllowedTradingMode } from './entities/risk-profile.entity';
+import { TradingAuthorityService } from '../execution-authority/trading-authority.service';
+import { SharedControlRevisionService } from '../execution-authority/shared-control-revision.service';
+import { GrantInvalidationService } from '../execution-authority/grant-invalidation.service';
+import { DailyRiskPeriodService } from '../execution/services/daily-risk-period.service';
+import { BrokerAccountSnapshotService } from '../broker/services/broker-account-snapshot.service';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -206,6 +212,33 @@ describe('RiskService — Sprint 32 Production Hardening', () => {
         { provide: RiskOrderGeometryService, useValue: mockOrderGeometry() },
         { provide: DomainEventBus, useValue: { publish: jest.fn() } },
         { provide: Logger, useValue: { log: jest.fn(), warn: jest.fn(), error: jest.fn() } },
+        // ── Round 6: the unified execution-authority seams (leaf mocks) ──────
+        {
+          provide: TradingAuthorityService,
+          useValue: {
+            getCurrentGeneration: jest.fn().mockResolvedValue(1),
+            bumpGeneration: jest.fn().mockResolvedValue(2),
+          },
+        },
+        {
+          provide: SharedControlRevisionService,
+          useValue: {
+            getCurrentTradingPolicyRevision: jest.fn().mockResolvedValue(1),
+            getCurrentProviderVerificationRevision: jest.fn().mockResolvedValue(1),
+            getCurrentExecutionControlRevision: jest.fn().mockResolvedValue(1),
+          },
+        },
+        { provide: DailyRiskPeriodService, useValue: {} },
+        {
+          provide: GrantInvalidationService,
+          useValue: {
+            invalidateUserNewExposureAuthority: jest
+              .fn()
+              .mockResolvedValue({ invalidatedGrants: 0, revokedConfirmations: 0 }),
+          },
+        },
+        { provide: BrokerAccountSnapshotService, useValue: {} },
+        { provide: ModuleRef, useValue: { get: jest.fn() } },
       ],
     }).compile();
 

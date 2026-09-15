@@ -22,7 +22,10 @@ import { OnboardingService } from '../users/onboarding.service';
 import { TradingNotReadyException } from '../../common/exceptions/trading-not-ready.exception';
 import { AllowedTradingMode } from '../risk/entities/risk-profile.entity';
 import { BrokerConnection } from '../broker/entities/broker-connection.entity';
-import { BrokerConnectionStatus } from '../broker/interfaces/broker-adapter.interface';
+import { BrokerConnectionStatus, BrokerMode } from '../broker/interfaces/broker-adapter.interface';
+import { BrokerAccountSnapshotService } from '../broker/services/broker-account-snapshot.service';
+import { BrokerAccountSnapshot } from '../broker/entities/broker-account-snapshot.entity';
+import { ExactDecimal } from '../../common/utils/exact-decimal';
 
 /**
  * TradingService — Trading session lifecycle management.
@@ -68,6 +71,9 @@ export class TradingService {
     private readonly auditService: AuditService,
     private readonly eventBus: DomainEventBus,
     private readonly aiEngineClient: AiEngineClient,
+    // Round 6 (§6/#297/#312): the durable account-snapshot authority the
+    // session's opening financial state binds to (fail-closed — never `?? '0'`).
+    private readonly brokerAccountSnapshotService: BrokerAccountSnapshotService,
   ) {}
 
   /** ExecutionMode → the risk-profile AllowedTradingMode it must satisfy. */
@@ -138,9 +144,16 @@ export class TradingService {
       );
     }
 
-    // ── Start session via ExecutionService ───────────────────────────────────
-    const brokerState = await this.brokerService.getBrokerAccountState(connection.id);
-    const openingBalance = brokerState?.balance ?? '0';
+    // ── Gate 5 (Round 6, §6/#297/#312): fail-closed coherent opening state ──
+    // No production TradingSession may start with invented zero financial
+    // state. The opening balance/equity/currency come from ONE coherent
+    // observation of the EXACT requested connection — the durable accepted
+    // versioned snapshot when one exists (LIVE: freshness-enforced), else a
+    // STRICT broker-account read with non-null parseable balance/equity and a
+    // known currency. Missing / stale / malformed / unknown currency / read
+    // failure ⇒ NO session (typed, audited, fail-closed). Health-check
+    // timestamps are NEVER treated as financial freshness.
+    const opening = await this.acquireOpeningFinancialState(userId, connection);
 
     // Sprint 32: snapshot the risk profile at session start so future edits
     // don't rewrite history. The snapshot is a deterministic JSON object of
@@ -150,9 +163,10 @@ export class TradingService {
     const session = await this.executionService.startSession(
       userId,
       connection.id,
-      openingBalance,
+      opening.balance,
       riskProfileSnapshot,
       executionMode,
+      opening.binding,
     );
 
     await this.auditService.log({
@@ -163,7 +177,11 @@ export class TradingService {
       resourceId: session.id,
       metadata: {
         brokerConnectionId: connection.id,
-        openingBalance,
+        openingBalance: opening.balance,
+        openingSource: opening.source,
+        openingSnapshotId: opening.binding?.openingSnapshotId ?? null,
+        openingSnapshotGeneration: opening.binding?.openingSnapshotGeneration ?? null,
+        accountCurrency: opening.binding?.accountCurrency ?? null,
         sessionId: session.id,
         executionMode: session.executionMode,
         authorityGeneration: session.authorityGeneration,
@@ -304,7 +322,159 @@ export class TradingService {
     return session;
   }
 
-  // ─── Internal helpers ──────────────────────────────────────────────────────
+  // ─── Internal helpers ──────────────────────────────────────────────────
+
+  /**
+   * Round 6 (§6): the coherent, non-invented opening financial state.
+   *
+   * LIVE — the DURABLE accepted snapshot with the NEW-exposure freshness gate
+   * (missing / stale / malformed / unknown currency ⇒ no session, typed
+   * fail-closed with an audit trail). The ENTIRE binding (balance, equity,
+   * currency, snapshot id + generation) comes from that ONE observation —
+   * never blended with a second read.
+   *
+   * PAPER/DEMO — the latest accepted snapshot when one exists (same coherent
+   * binding); otherwise a STRICT broker-account read: absent state,
+   * null/unparseable balance or equity, or an unknown currency starts NO
+   * session (the `?? '0'` / synthesized-USD era is over).
+   */
+  private async acquireOpeningFinancialState(
+    userId: string,
+    connection: BrokerConnection,
+  ): Promise<{
+    balance: string;
+    source: 'ACCEPTED_SNAPSHOT' | 'BROKER_ACCOUNT_READ';
+    binding?: {
+      accountCurrency: string;
+      openingSnapshotId: string;
+      openingSnapshotGeneration: number;
+      initialPeakEquity: string;
+    };
+  }> {
+    if (connection.accountType === BrokerMode.LIVE) {
+      let snapshot: BrokerAccountSnapshot;
+      try {
+        snapshot = await this.brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure(
+          connection.id,
+        );
+      } catch (err) {
+        await this.auditService.log({
+          actorUserId: userId,
+          action: AuditAction.AI_TRADING_DISABLED,
+          severity: AuditSeverity.WARNING,
+          resourceType: 'TradingSession',
+          resourceId: 'not-started',
+          metadata: {
+            brokerConnectionId: connection.id,
+            blockedReason: 'OPENING_SNAPSHOT_UNAVAILABLE',
+            detail: (err as Error).message,
+          },
+        });
+        throw new ForbiddenException(
+          `LIVE trading requires a fresh accepted account snapshot for connection ` +
+            `${connection.id} — ${(err as Error).message} (fail-closed, no session started).`,
+        );
+      }
+      const fields = this.requireSnapshotFinancialFields(snapshot, connection.id);
+      return {
+        balance: fields.balance,
+        source: 'ACCEPTED_SNAPSHOT',
+        binding: {
+          accountCurrency: fields.currency,
+          openingSnapshotId: snapshot.id,
+          openingSnapshotGeneration: snapshot.generation,
+          initialPeakEquity: fields.equity,
+        },
+      };
+    }
+
+    // PAPER / DEMO: prefer the accepted versioned snapshot.
+    try {
+      const snapshot = await this.brokerAccountSnapshotService.readLatestAcceptedSnapshot(
+        connection.id,
+      );
+      if (snapshot) {
+        const fields = this.requireSnapshotFinancialFields(snapshot, connection.id);
+        return {
+          balance: fields.balance,
+          source: 'ACCEPTED_SNAPSHOT',
+          binding: {
+            accountCurrency: fields.currency,
+            openingSnapshotId: snapshot.id,
+            openingSnapshotGeneration: snapshot.generation,
+            initialPeakEquity: fields.equity,
+          },
+        };
+      }
+    } catch (err) {
+      throw new ForbiddenException(
+        `Broker account snapshot authority could not be read for connection ` +
+          `${connection.id} — ${(err as Error).message} (fail-closed, no session started).`,
+      );
+    }
+
+    // No accepted snapshot yet: STRICT projection read (never invented).
+    let state: { balance: string | null; equity: string | null; currency?: string | null } | null;
+    try {
+      state = await this.brokerService.getBrokerAccountState(connection.id);
+    } catch (err) {
+      throw new ForbiddenException(
+        `Broker account state read failed for connection ${connection.id} — ` +
+          `${(err as Error).message} (fail-closed, no session started).`,
+      );
+    }
+    const projectionBalance = state?.balance ?? null;
+    const projectionEquity = state?.equity ?? null;
+    const projectionCurrency = state?.currency ?? null;
+    const malformed =
+      !projectionBalance ||
+      !projectionEquity ||
+      !projectionCurrency ||
+      !ExactDecimal.tryParse(projectionBalance) ||
+      !ExactDecimal.tryParse(projectionEquity);
+    if (malformed) {
+      throw new ForbiddenException(
+        `Broker account financial state is unavailable for connection ${connection.id} ` +
+          '(missing/unparseable balance or equity, or unknown currency) — no trading ' +
+          'session may start on invented state (fail-closed).',
+      );
+    }
+    return {
+      balance: projectionBalance,
+      source: 'BROKER_ACCOUNT_READ',
+      // No snapshot provenance on this path — the session's opening-snapshot
+      // binding stays null (never fabricated), and the projection read's
+      // currency/equity are persisted through the audit + session columns.
+      binding: undefined,
+    };
+  }
+
+  /**
+   * §6: one coherent observation — returns the NARROWED non-null parseable
+   * money fields + known currency (throws typed ForbiddenException otherwise).
+   */
+  private requireSnapshotFinancialFields(
+    snapshot: BrokerAccountSnapshot,
+    connectionId: string,
+  ): { balance: string; equity: string; currency: string } {
+    if (
+      !snapshot.balance ||
+      !snapshot.equity ||
+      !snapshot.currency ||
+      !ExactDecimal.tryParse(snapshot.balance) ||
+      !ExactDecimal.tryParse(snapshot.equity)
+    ) {
+      throw new ForbiddenException(
+        `Accepted account snapshot for connection ${connectionId} carries malformed ` +
+          'financial fields — no trading session may start from it (fail-closed).',
+      );
+    }
+    return {
+      balance: snapshot.balance,
+      equity: snapshot.equity,
+      currency: snapshot.currency,
+    };
+  }
 
   /**
    * Resolve the EXACT requested broker connection (Round 5, issue #295).

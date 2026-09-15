@@ -325,3 +325,25 @@ PostgreSQL-capable CI runner execution; (3) cTrader/Pepperstone/IC Markets
 remain BETA / productionLiveVerification = UNVERIFIED — external provider
 evidence (Spotware approval, production credentials, registered redirect
 URIs/mobile callbacks, DEMO + LIVE verification) is still required.
+
+---
+
+## Correction Round 6 — readiness record (WIP: wip/round6-unified-authority)
+
+Validation truth at this checkpoint:
+- `tsc --noEmit` (apps/api): **0 errors**.
+- Full non-PG Jest (apps/api): **217/217 suites, 3317/3317 tests passed** (2 pg-integration suites / 7 tests skipped — CI-gated, NOT EXECUTED locally: no PostgreSQL in the sandbox).
+- SQLite-mirror harness note: this environment ships sqlite3 6.0.1 (IEEE-double SUMs; different concurrent-INSERT rollback behavior than 5.x) — DailyRiskPeriod creation uses single-statement autocommit INSERTs (the 6-b-proven pattern) and the harness-only number branch formats canonical 2-decimal money strings; production PostgreSQL NUMERIC paths are exact strings and unaffected.
+
+Key mechanisms delivered this round (see worklog R6-C entries for file-level detail):
+- Migration 1754300000000-CompleteExecutionAuthorityRound6 (tenant-scoped uniques, FKs, revisions, trades provenance, DISPATCH_COMMITTED).
+- TradingAuthorityService + SharedControlRevisionService + GrantInvalidationService + BrokerAccountSnapshotService + DailyRiskPeriodService (+47/46 mirror tests).
+- RiskGrantService: canonical authorityBindingDigest over ALL authority facts; tenant-scoped (user_id, signal_id) lookups/supersession/consumption (#364); supersession revokes the stale PENDING confirmation.
+- RiskService: LIVE snapshot/daily-risk-period exactness (no parseFloat boundary), full authority binding at issuance (revisions, snapshot, generation), atomic kill-switch/material-edit authority bumps + NEW-exposure invalidation.
+- FinalDispatchBoundary: read-only pre-commitment authorization + commitProviderDispatch (the #365 provider-dispatch commitment).
+- SEMI_AUTO §18: confirm() re-runs CURRENT risk; material changes ⇒ ReconfirmationRequiredException; fresh grant consumed at the commitment.
+- Fail-closed session start (§6): LIVE requires a fresh accepted snapshot; PAPER binds the accepted snapshot or a strict non-null projection read — never `?? '0'`, never synthesized USD.
+- Governance bumps: eligibility reviewUser/reviewKyc, users updateMyProfile (country/DOB/KYC-reset), account governance transitions, execution-control activate/deactivate — all atomic with their facts.
+- SharedControlPlaneBootstrap: boot-time trading-policy + provider-verification catalog revision sync (fail-closed boot).
+
+Known remaining work (honest): full getBrokerAccountState snapshot-backing routing inside broker.service (LIVE risk reads already go through the snapshot service directly); broader broker authority-transition hooks beyond disconnect/revoke; onboarding §26 blockedReasons reason-code surface; PG integration matrices (CI); web/mobile contract sweeps.

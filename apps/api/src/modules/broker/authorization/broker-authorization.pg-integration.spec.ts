@@ -190,6 +190,10 @@ describe('BrokerService authorization transitions — real PostgreSQL concurrenc
       tokenLifecycle,
       // Sprint 56 correction round 5 (#332): link outbox — unused by the
       // authorization-transition paths under test.
+      // Round 6 (#300): the unified authority seams — unused by the
+      // authorization-transition paths under test (CI-gated suite).
+      {} as never,
+      {} as never,
       {} as never,
     );
   });

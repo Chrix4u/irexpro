@@ -8,7 +8,7 @@ import { Trade, TradeStatus } from './entities/trade.entity';
 import { TradingSession } from './entities/trading-session.entity';
 import { RiskGrant } from './entities/risk-grant.entity';
 import { ExecutionConfirmation } from './entities/execution-confirmation.entity';
-import { ExecutionMode } from './interfaces/execution-authority';
+import { ExecutionMode, RiskGrantStatus } from './interfaces/execution-authority';
 import { ExecutionSessionResolutionService } from './execution-session.resolution';
 import { BrokerService } from '../broker/broker.service';
 import { AuditService } from '../audit/audit.service';
@@ -99,6 +99,21 @@ describe('ExecutionService — Sprint 32 Idempotency', () => {
     };
     // Round 5: authority invalidation repos (store-backed matrix lives in
     // execution-session.authority.spec.ts — chainable stubs here).
+    // Round 6 (#365): executeTrade's PRE-COMMITMENT grant preflight reads
+    // findOne({ id, userId }) — the canonical ACTIVE 'grant-1' fixture serves
+    // that read; per-test overrides still replace this wholesale.
+    const activeGrantFixture = {
+      id: 'grant-1',
+      userId: 'user-1',
+      signalId: 'sig-001',
+      sessionId: 'session-1',
+      sessionGeneration: 1,
+      executionMode: ExecutionMode.PAPER_ONLY,
+      brokerConnectionId: 'conn-1',
+      status: RiskGrantStatus.ACTIVE,
+      issuedAt: new Date(),
+      expiresAt: new Date(Date.now() + 60_000),
+    };
     const authorityRepoStub = {
       createQueryBuilder: jest.fn().mockReturnValue({
         update: jest.fn().mockReturnThis(),
@@ -107,7 +122,12 @@ describe('ExecutionService — Sprint 32 Idempotency', () => {
         execute: jest.fn().mockResolvedValue({ affected: 0 }),
       }),
       update: jest.fn().mockResolvedValue({ affected: 0 }),
-      findOne: jest.fn().mockResolvedValue(null),
+      findOne: jest.fn().mockImplementation(
+        async (opts?: { where?: Record<string, unknown> }) => {
+          if (opts?.where?.id === 'grant-1') return activeGrantFixture;
+          return null;
+        },
+      ),
     };
     auditService = { log: jest.fn().mockResolvedValue(undefined) };
 

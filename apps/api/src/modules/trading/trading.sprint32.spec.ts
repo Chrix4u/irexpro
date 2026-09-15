@@ -12,6 +12,7 @@ import { OnboardingService } from '../users/onboarding.service';
 import { AllowedTradingMode } from '../risk/entities/risk-profile.entity';
 import { TradingSession, TradingSessionStatus } from '../execution/entities/trading-session.entity';
 import { ExecutionMode } from '../execution/interfaces/execution-authority';
+import { BrokerAccountSnapshotService } from '../broker/services/broker-account-snapshot.service';
 
 /**
  * Sprint 32 — Risk Profile Snapshot Immutability.
@@ -142,6 +143,15 @@ describe('TradingService — Sprint 32 Snapshot Immutability', () => {
             canStartTrading: jest.fn().mockResolvedValue({ allowed: true, missingSteps: [] }),
           },
         },
+        // Round 6 (§6): no accepted snapshot on this path — the strict
+        // projection read serves the opening state.
+        {
+          provide: BrokerAccountSnapshotService,
+          useValue: {
+            readLatestAcceptedSnapshot: jest.fn().mockResolvedValue(null),
+            resolveFreshSnapshotForNewExposure: jest.fn(),
+          },
+        },
         { provide: Logger, useValue: { log: jest.fn(), warn: jest.fn(), error: jest.fn() } },
       ],
     }).compile();
@@ -161,6 +171,8 @@ describe('TradingService — Sprint 32 Snapshot Immutability', () => {
         snapshotVersion: 1,
       }),
       ExecutionMode.PAPER_ONLY,
+      // Round 6 (§6): no accepted snapshot on this path — no fabricated binding.
+      undefined,
     );
   });
 

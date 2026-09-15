@@ -5,6 +5,8 @@ import { Role } from './entities/role.entity';
 import { KycStatus, UserProfile } from './entities/user-profile.entity';
 import { User, UserStatus } from './entities/user.entity';
 import { UsersService } from './users.service';
+import { TradingAuthorityService } from '../execution-authority/trading-authority.service';
+import { GrantInvalidationService } from '../execution-authority/grant-invalidation.service';
 
 describe('UsersService Sprint 45 DOB/KYC invariants', () => {
   let service: UsersService;
@@ -14,6 +16,13 @@ describe('UsersService Sprint 45 DOB/KYC invariants', () => {
     findOne: jest.fn(),
     findAndCount: jest.fn(),
     save: jest.fn(async (value) => value),
+    // Round 6 (#2): authority-affecting profile edits commit the fact + bump
+    // inside userRepo.manager.transaction — the mock EM delegates back.
+    manager: {
+      transaction: jest.fn(async (cb: (em: unknown) => Promise<unknown>) =>
+        cb({ getRepository: () => userRepo }),
+      ),
+    },
   };
   const profileRepo = {
     findOne: jest.fn(),
@@ -33,6 +42,9 @@ describe('UsersService Sprint 45 DOB/KYC invariants', () => {
         { provide: getRepositoryToken(User), useValue: userRepo },
         { provide: getRepositoryToken(UserProfile), useValue: profileRepo },
         { provide: getRepositoryToken(Role), useValue: roleRepo },
+        // Round 6 (#300): the unified execution-authority seams (mocked).
+        { provide: TradingAuthorityService, useValue: { bumpGeneration: jest.fn().mockResolvedValue(2) } },
+        { provide: GrantInvalidationService, useValue: { invalidateUserNewExposureAuthority: jest.fn().mockResolvedValue({ invalidatedGrants: 0, revokedConfirmations: 0 }) } },
       ],
     }).compile();
     service = module.get(UsersService);

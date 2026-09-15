@@ -14,6 +14,7 @@ import { TradingSession, TradingSessionStatus } from '../execution/entities/trad
 import { ExecutionMode } from '../execution/interfaces/execution-authority';
 import { BrokerConnectionRequiredException } from '../execution/execution-session.resolution';
 import { AllowedTradingMode } from '../risk/entities/risk-profile.entity';
+import { BrokerAccountSnapshotService } from '../broker/services/broker-account-snapshot.service';
 import { BrokerConnectionStatus } from '../broker/interfaces/broker-adapter.interface';
 
 /**
@@ -64,6 +65,21 @@ function buildHealthyConnection(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/** Round 6 (§6): a coherent accepted account-snapshot fixture. */
+function buildAcceptedSnapshot(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'snap-1',
+    generation: 7,
+    connectionId: 'conn-1',
+    currency: 'EUR',
+    balance: '12000.00',
+    equity: '12100.00',
+    providerObservedAt: new Date(),
+    acceptedAt: new Date(),
+    ...overrides,
+  };
+}
+
 describe('TradingService (Sprint 29 amendment — centralized readiness gate)', () => {
   let module: TestingModule;
   let service: TradingService;
@@ -75,6 +91,7 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
   let eventBus: Record<string, jest.Mock>;
   let aiEngineClient: Record<string, jest.Mock>;
   let onboardingService: Record<string, jest.Mock>;
+  let brokerAccountSnapshotService: Record<string, jest.Mock>;
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -92,6 +109,14 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
         freeMargin: '9000.00',
         currency: 'USD',
       }),
+    };
+
+    // Round 6 (§6/#297/#312): the durable account-snapshot authority seam.
+    // Default: no accepted snapshot (the strict projection read path); the
+    // §6 tests below override these implementations per scenario.
+    brokerAccountSnapshotService = {
+      readLatestAcceptedSnapshot: jest.fn().mockResolvedValue(null),
+      resolveFreshSnapshotForNewExposure: jest.fn(),
     };
 
     // Deliberately retained as an unused external capability so the regression
@@ -153,6 +178,7 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
         { provide: DomainEventBus, useValue: eventBus },
         { provide: AiEngineClient, useValue: aiEngineClient },
         { provide: OnboardingService, useValue: onboardingService },
+        { provide: BrokerAccountSnapshotService, useValue: brokerAccountSnapshotService },
       ],
     }).compile();
 
@@ -304,6 +330,8 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
         '10000.00',
         expect.objectContaining({ snapshotVersion: 1 }),
         ExecutionMode.SEMI_AUTO,
+        // Round 6 (§6): no accepted snapshot on this path — no fabricated binding.
+        undefined,
       );
     });
   });
@@ -345,6 +373,124 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       );
       const session = await service.startTradingSession('user-1', 'conn-1');
       expect(session.id).toBe('session-1');
+    });
+  });
+
+  // ─── Round 6 (§6/#297/#312): fail-closed coherent opening state ────────────
+
+  describe('startTradingSession — Round 6 fail-closed opening financial state (§6)', () => {
+    it('PAPER connection with an accepted snapshot binds it (currency/id/generation/peak)', async () => {
+      brokerAccountSnapshotService.readLatestAcceptedSnapshot.mockResolvedValue(
+        buildAcceptedSnapshot(),
+      );
+
+      await service.startTradingSession('user-1', 'conn-1');
+
+      expect(executionService.startSession).toHaveBeenCalledWith(
+        'user-1',
+        'conn-1',
+        '12000.00',
+        expect.objectContaining({ snapshotVersion: 1 }),
+        ExecutionMode.PAPER_ONLY,
+        expect.objectContaining({
+          accountCurrency: 'EUR',
+          openingSnapshotId: 'snap-1',
+          openingSnapshotGeneration: 7,
+          initialPeakEquity: '12100.00',
+        }),
+      );
+      // The projection read is NEVER blended into a snapshot-backed opening.
+      expect(brokerService.getBrokerAccountState).not.toHaveBeenCalled();
+    });
+
+    it('PAPER connection without a snapshot uses the STRICT projection read (5-arg contract, no invented zero)', async () => {
+      brokerAccountSnapshotService.readLatestAcceptedSnapshot.mockResolvedValue(null);
+
+      await service.startTradingSession('user-1', 'conn-1');
+
+      expect(brokerService.getBrokerAccountState).toHaveBeenCalledWith('conn-1');
+      expect(executionService.startSession).toHaveBeenCalledWith(
+        'user-1',
+        'conn-1',
+        '10000.00',
+        expect.objectContaining({ snapshotVersion: 1 }),
+        ExecutionMode.PAPER_ONLY,
+        undefined,
+      );
+    });
+
+    it('PAPER connection with NO snapshot and a MISSING balance starts NO session (fail-closed)', async () => {
+      brokerAccountSnapshotService.readLatestAcceptedSnapshot.mockResolvedValue(null);
+      brokerService.getBrokerAccountState.mockResolvedValue({
+        balance: null,
+        equity: '10000.00',
+        freeMargin: '9000.00',
+        currency: 'USD',
+      });
+
+      await expect(service.startTradingSession('user-1', 'conn-1')).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(executionService.startSession).not.toHaveBeenCalled();
+    });
+
+    it('PAPER connection with NO snapshot and an UNKNOWN currency starts NO session (fail-closed)', async () => {
+      brokerAccountSnapshotService.readLatestAcceptedSnapshot.mockResolvedValue(null);
+      brokerService.getBrokerAccountState.mockResolvedValue({
+        balance: '10000.00',
+        equity: '10000.00',
+        freeMargin: '9000.00',
+        currency: null,
+      });
+
+      await expect(service.startTradingSession('user-1', 'conn-1')).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(executionService.startSession).not.toHaveBeenCalled();
+    });
+
+    it('LIVE connection with NO fresh snapshot starts NO session (fail-closed, audited)', async () => {
+      brokerService.findConnectionById.mockResolvedValue(
+        buildHealthyConnection({ accountType: 'LIVE' }),
+      );
+      brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure.mockRejectedValue(
+        new Error('SNAPSHOT_STALE'),
+      );
+
+      await expect(service.startTradingSession('user-1', 'conn-1')).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(executionService.startSession).not.toHaveBeenCalled();
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({ blockedReason: 'OPENING_SNAPSHOT_UNAVAILABLE' }),
+        }),
+      );
+    });
+
+    it('LIVE connection with a fresh accepted snapshot binds it as the opening authority', async () => {
+      brokerService.findConnectionById.mockResolvedValue(
+        buildHealthyConnection({ accountType: 'LIVE' }),
+      );
+      brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure.mockResolvedValue(
+        buildAcceptedSnapshot({ currency: 'USD', balance: '50000.00', equity: '50100.00' }),
+      );
+
+      await service.startTradingSession('user-1', 'conn-1');
+
+      expect(executionService.startSession).toHaveBeenCalledWith(
+        'user-1',
+        'conn-1',
+        '50000.00',
+        expect.objectContaining({ snapshotVersion: 1 }),
+        ExecutionMode.PAPER_ONLY,
+        expect.objectContaining({
+          accountCurrency: 'USD',
+          openingSnapshotId: 'snap-1',
+          openingSnapshotGeneration: 7,
+          initialPeakEquity: '50100.00',
+        }),
+      );
     });
   });
 
@@ -465,6 +611,8 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
           snapshotVersion: 1,
         }),
         ExecutionMode.PAPER_ONLY,
+        // Round 6 (§6): no accepted snapshot on this path — no fabricated binding.
+        undefined,
       );
       expect(subscriptionsService.canUserStartAiAutoTrading).not.toHaveBeenCalled();
       expect(brokerService.findActiveConnectionForUser).not.toHaveBeenCalled();

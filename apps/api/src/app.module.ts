@@ -14,6 +14,7 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
+import { SharedControlPlaneModule } from './modules/execution-authority/shared-control-plane.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { GlobalConfigModule } from './modules/global-config/global-config.module';
 import { PaymentsModule } from './modules/payments/payments.module';
@@ -78,6 +79,9 @@ import { AdminLiveAccountModule } from './modules/admin-live-account/admin-live-
     AuthModule,
     UsersModule,
     AuditModule,
+    // Round 6 (#363): deployment-time shared control-plane sync (trading
+    // policy + provider verification catalog revisions — fail-closed boot).
+    SharedControlPlaneModule,
     GlobalConfigModule,
     // Subscription-retirement (SUBSCRIPTION-RETIREMENT-IMPL):
     // SubscriptionsModule is no longer imported. The system now operates on a

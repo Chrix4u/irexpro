@@ -119,8 +119,19 @@ export class DailyRiskPeriodService {
     }
 
     try {
-      return await this.periodRepo.save(
-        this.periodRepo.create({
+      // Single-statement autocommit INSERT — the 6-b-proven harness-safe
+      // pattern. TypeORM's repository.save() wraps the INSERT in an implicit
+      // transaction on the sqlite mirror, and a concurrent loser's unique
+      // violation can roll the WINNER's uncommitted row back through the
+      // shared connection (proven on sqlite3 6.x in this environment; the
+      // same finding that drove the 6-b guarded seeds). A bare INSERT commits
+      // independently — the loser then converges through the re-read below.
+      // (Special columns — uuid PK, createdAt/updatedAt — are populated by
+      // the builder.)
+      await this.periodRepo
+        .createQueryBuilder()
+        .insert()
+        .values({
           userId: input.userId,
           brokerConnectionId: input.brokerConnectionId,
           logicalAccountKey: input.logicalAccountKey,
@@ -131,7 +142,21 @@ export class DailyRiskPeriodService {
           openingSnapshotId: input.snapshot.id,
           riskProfileId: input.riskProfile?.id ?? null,
           riskProfileRevision: input.riskProfile?.revision ?? null,
-        }),
+        })
+        .execute();
+      const created = await this.periodRepo.findOne({
+        where: {
+          userId: input.userId,
+          logicalAccountKey: input.logicalAccountKey,
+          riskPeriodDate,
+        },
+      });
+      if (created) {
+        this.assertCurrencyMatches(created, input.accountCurrency);
+        return created;
+      }
+      throw new Error(
+        'DailyRiskPeriod insert reported success but the row is unreadable — refusing to guess',
       );
     } catch (err) {
       if (!isUniqueViolation(err)) throw err;
@@ -223,9 +248,11 @@ export class DailyRiskPeriodService {
 
   /**
    * Harness-only conversion of the sqlite mirror's IEEE-double SUM back to a
-   * string. Production PostgreSQL returns NUMERIC as an exact string and
-   * never reaches this branch; the conversion uses the shortest round-trip
-   * decimal form of the double (no parseFloat, no arithmetic).
+   * canonical decimal string. Production PostgreSQL returns NUMERIC as an
+   * exact string and never reaches this branch. sqlite3 6.x returns SUM as a
+   * JS double: integer sums keep their plain form ('0'), fractional sums
+   * (at most 2 decimals in the harness fixtures) take the fixed 2-decimal
+   * money form — no parseFloat, no arithmetic, formatting only.
    */
   private harnessNumberToExactString(value: number): string {
     if (!Number.isFinite(value)) {
@@ -233,7 +260,7 @@ export class DailyRiskPeriodService {
         `Non-finite SUM result from the trades table — refusing to approximate: ${value}`,
       );
     }
-    return String(value);
+    return Number.isInteger(value) ? String(value) : value.toFixed(2);
   }
 
   /** Fail-closed validation of everything the baseline is built from. */

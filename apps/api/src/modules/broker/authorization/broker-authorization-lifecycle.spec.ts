@@ -2,6 +2,8 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { BrokerService } from '../broker.service';
+import { TradingAuthorityService } from '../../execution-authority/trading-authority.service';
+import { GrantInvalidationService } from '../../execution-authority/grant-invalidation.service';
 import { BrokerOAuthTokenLifecycleService } from '../services/broker-oauth-token-lifecycle.service';
 import { BrokerLinkOutboxService } from '../services/broker-link-outbox.service';
 import { BrokerConnection } from '../entities/broker-connection.entity';
@@ -116,6 +118,23 @@ describe('BrokerService — Sprint 50 authorization lifecycle', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         BrokerService,
+        // Round 6 (#300): the unified execution-authority seams (mocked —
+        // the bump/invalidation matrices live in the execution-authority suites).
+        {
+          provide: TradingAuthorityService,
+          useValue: {
+            getCurrentGeneration: jest.fn().mockResolvedValue(1),
+            bumpGeneration: jest.fn().mockResolvedValue(2),
+          },
+        },
+        {
+          provide: GrantInvalidationService,
+          useValue: {
+            invalidateUserNewExposureAuthority: jest
+              .fn()
+              .mockResolvedValue({ invalidatedGrants: 0, revokedConfirmations: 0 }),
+          },
+        },
         {
           provide: BrokerLinkOutboxService,
           useValue: {

@@ -88,6 +88,10 @@ describe('AccountGovernanceService', () => {
       appealRepo as unknown as Repository<AccountAppeal>,
       auditService as unknown as AuditService,
       dataSource as unknown as DataSource,
+      // Round 6 (#300): the unified authority seams (mocked — the bump
+      // matrices live in the execution-authority suites).
+      { bumpGeneration: jest.fn().mockResolvedValue(2) } as never,
+      { invalidateUserNewExposureAuthority: jest.fn().mockResolvedValue({}) } as never,
     );
   });
 

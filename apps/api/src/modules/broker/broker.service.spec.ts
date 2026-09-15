@@ -4,6 +4,8 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { BrokerService } from './broker.service';
+import { TradingAuthorityService } from '../execution-authority/trading-authority.service';
+import { GrantInvalidationService } from '../execution-authority/grant-invalidation.service';
 import { BrokerConnection } from './entities/broker-connection.entity';
 import { BrokerAccount } from './entities/broker-account.entity';
 import { BrokerAdapterRegistry } from './adapters/broker-adapter.registry';
@@ -161,6 +163,23 @@ describe('BrokerService', () => {
     module = await Test.createTestingModule({
       providers: [
         BrokerService,
+        // Round 6 (#300): the unified execution-authority seams (mocked —
+        // the bump/invalidation matrices live in the execution-authority suites).
+        {
+          provide: TradingAuthorityService,
+          useValue: {
+            getCurrentGeneration: jest.fn().mockResolvedValue(1),
+            bumpGeneration: jest.fn().mockResolvedValue(2),
+          },
+        },
+        {
+          provide: GrantInvalidationService,
+          useValue: {
+            invalidateUserNewExposureAuthority: jest
+              .fn()
+              .mockResolvedValue({ invalidatedGrants: 0, revokedConfirmations: 0 }),
+          },
+        },
         { provide: getRepositoryToken(BrokerConnection), useFactory: mockConnectionRepo },
         { provide: getRepositoryToken(BrokerAccount), useFactory: mockAccountRepo },
         { provide: BrokerAdapterRegistry, useFactory: mockRegistry },

@@ -6,6 +6,8 @@ import { DataSource } from 'typeorm';
 import { BrokerConnection } from '../entities/broker-connection.entity';
 import { BrokerAccount } from '../entities/broker-account.entity';
 import { BrokerService } from '../broker.service';
+import { TradingAuthorityService } from '../../execution-authority/trading-authority.service';
+import { GrantInvalidationService } from '../../execution-authority/grant-invalidation.service';
 import { BrokerAdapterRegistry } from '../adapters/broker-adapter.registry';
 import { BrokerProviderRegistryService } from '../registry/broker-provider-registry.service';
 import { PaperBrokerAdapter } from '../adapters/paper-broker.adapter';
@@ -157,6 +159,23 @@ describe('BrokerDemoValidationService', () => {
     module = await Test.createTestingModule({
       providers: [
         BrokerService,
+        // Round 6 (#300): the unified execution-authority seams (mocked —
+        // the bump/invalidation matrices live in the execution-authority suites).
+        {
+          provide: TradingAuthorityService,
+          useValue: {
+            getCurrentGeneration: jest.fn().mockResolvedValue(1),
+            bumpGeneration: jest.fn().mockResolvedValue(2),
+          },
+        },
+        {
+          provide: GrantInvalidationService,
+          useValue: {
+            invalidateUserNewExposureAuthority: jest
+              .fn()
+              .mockResolvedValue({ invalidatedGrants: 0, revokedConfirmations: 0 }),
+          },
+        },
         BrokerDemoValidationService,
         BrokerAdapterRegistry,
         PaperBrokerAdapter,

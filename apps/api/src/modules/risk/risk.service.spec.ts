@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { Logger } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { RiskService } from './risk.service';
 import { RiskProfile } from './entities/risk-profile.entity';
@@ -20,6 +21,11 @@ import { RiskOrderGeometryService } from './risk-order-geometry.service';
 import { ExactDecimal } from '../../common/utils/exact-decimal';
 import { ProposedTrade, RiskRejectionCode } from './interfaces/risk.interface';
 import { DomainEventBus } from '../events/event-bus.service';
+import { TradingAuthorityService } from '../execution-authority/trading-authority.service';
+import { SharedControlRevisionService } from '../execution-authority/shared-control-revision.service';
+import { GrantInvalidationService } from '../execution-authority/grant-invalidation.service';
+import { DailyRiskPeriodService } from '../execution/services/daily-risk-period.service';
+import { BrokerAccountSnapshotService } from '../broker/services/broker-account-snapshot.service';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -90,17 +96,39 @@ const defaultConnection = (overrides: Record<string, unknown> = {}) => ({
   authorizationStatus: 'ACTIVE',
   providerBrokerIdentity: null,
   credentialGeneration: 0,
+  // Round 6 (#362): the durable logical account identity LIVE snapshot
+  // authority scopes the daily-risk period by.
+  logicalAccountKey: 'metatrader5|MetaQuotes-Demo|12345',
   ...overrides,
 });
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
-const mockProfileRepo = () => ({
-  findOne: jest.fn().mockResolvedValue(defaultProfile()),
-  create: jest.fn().mockImplementation((obj) => ({ ...defaultProfile(), ...obj })),
-  save: jest.fn().mockImplementation(async (obj) => obj),
-  find: jest.fn().mockResolvedValue([]),
-});
+const mockProfileRepo = () => {
+  const repo = {
+    findOne: jest.fn().mockResolvedValue(defaultProfile()),
+    create: jest.fn().mockImplementation((obj) => ({ ...defaultProfile(), ...obj })),
+    save: jest.fn().mockImplementation(async (obj) => obj),
+    find: jest.fn().mockResolvedValue([]),
+    // Round 6 (#15): bumpProfileRevisionAndAuthority runs the monotonic
+    // revision CAS through the repository query builder.
+    createQueryBuilder: jest.fn().mockReturnValue({
+      update: jest.fn().mockReturnThis(),
+      set: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      execute: jest.fn().mockResolvedValue({ affected: 1 }),
+    }),
+  };
+  // Round 6 (#299): toggleKillSwitch / material profile edits commit inside
+  // profileRepo.manager.transaction — the mock EM's repositories delegate to
+  // THIS repo so the existing save/findOne assertions keep firing.
+  (repo as unknown as { manager: unknown }).manager = {
+    transaction: jest.fn().mockImplementation(async (cb: (em: unknown) => Promise<unknown>) =>
+      cb({ getRepository: () => repo }),
+    ),
+  };
+  return repo;
+};
 
 const mockViolationRepo = () => ({
   create: jest.fn().mockImplementation((obj) => obj),
@@ -202,6 +230,14 @@ describe('RiskService', () => {
   let riskGrantService: ReturnType<typeof mockRiskGrantService>;
   let orderGeometry: ReturnType<typeof mockOrderGeometry>;
   let auditService: ReturnType<typeof mockAuditService>;
+  // Round 6: LIVE snapshot/daily-risk-period authority seams (resolvable by
+  // default so LIVE-path tests flow to their OWN typed downstream failures;
+  // per-test overrides replace the implementations).
+  let brokerAccountSnapshotService: { resolveFreshSnapshotForNewExposure: jest.Mock };
+  let dailyRiskPeriod: {
+    resolveDailyRiskPeriod: jest.Mock;
+    getTodayRealisedLossExact: jest.Mock;
+  };
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -216,6 +252,21 @@ describe('RiskService', () => {
     riskGrantService = mockRiskGrantService();
     orderGeometry = mockOrderGeometry();
     auditService = mockAuditService();
+    brokerAccountSnapshotService = {
+      resolveFreshSnapshotForNewExposure: jest.fn().mockResolvedValue({
+        id: 'snap-1',
+        generation: 1,
+        currency: 'USD',
+        balance: '10000.00',
+        equity: '10050.00',
+        providerObservedAt: new Date(),
+        acceptedAt: new Date(),
+      }),
+    };
+    dailyRiskPeriod = {
+      resolveDailyRiskPeriod: jest.fn().mockResolvedValue({ id: 'period-1' }),
+      getTodayRealisedLossExact: jest.fn().mockResolvedValue({ total: '0', complete: true }),
+    };
 
     module = await Test.createTestingModule({
       providers: [
@@ -234,6 +285,35 @@ describe('RiskService', () => {
         { provide: ExecutionSessionResolutionService, useValue: sessionResolution },
         { provide: RiskGrantService, useValue: riskGrantService },
         { provide: RiskOrderGeometryService, useValue: orderGeometry },
+        // ── Round 6: the unified execution-authority seams (leaf mocks) ──────
+        {
+          provide: TradingAuthorityService,
+          useValue: {
+            getCurrentGeneration: jest.fn().mockResolvedValue(1),
+            bumpGeneration: jest.fn().mockResolvedValue(2),
+          },
+        },
+        {
+          provide: SharedControlRevisionService,
+          useValue: {
+            getCurrentTradingPolicyRevision: jest.fn().mockResolvedValue(1),
+            getCurrentProviderVerificationRevision: jest.fn().mockResolvedValue(1),
+            getCurrentExecutionControlRevision: jest.fn().mockResolvedValue(1),
+          },
+        },
+        // PAPER-only suite default; the LIVE tests above rely on these
+        // resolvable seams to reach their OWN typed downstream failures.
+        { provide: DailyRiskPeriodService, useValue: dailyRiskPeriod },
+        {
+          provide: GrantInvalidationService,
+          useValue: {
+            invalidateUserNewExposureAuthority: jest
+              .fn()
+              .mockResolvedValue({ invalidatedGrants: 0, revokedConfirmations: 0 }),
+          },
+        },
+        { provide: BrokerAccountSnapshotService, useValue: brokerAccountSnapshotService },
+        { provide: ModuleRef, useValue: { get: jest.fn() } },
         {
           provide: DomainEventBus,
           useValue: { publish: jest.fn(), subscribe: jest.fn().mockReturnValue(() => {}) },

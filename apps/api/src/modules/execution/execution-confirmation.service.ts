@@ -1,4 +1,5 @@
 import { ConflictException, Injectable, Logger } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { ExecutionConfirmation } from './entities/execution-confirmation.entity';
@@ -9,6 +10,7 @@ import { FinalDispatchBoundary } from './orchestration/final-dispatch-boundary';
 import { ExecutionService } from './execution.service';
 import { Trade } from './entities/trade.entity';
 import { RiskDecision } from '../risk/interfaces/risk.interface';
+import { RiskService } from '../risk/risk.service';
 
 /** Frontend-safe view of ONE pending SEMI_AUTO confirmation (full order detail). */
 export interface PendingExecutionConfirmationView {
@@ -45,6 +47,43 @@ export interface ExecutionConfirmationResult {
 }
 
 /**
+ * Round 6 (§18): the fresh CURRENT risk evaluation changed material order
+ * facts beyond the explicitly permitted MARKET current-quote semantics (lot
+ * size capped, different SL/TP, instrument or direction). The changed order
+ * is NEVER silently dispatched — the user must confirm the NEW proposal.
+ */
+export class ReconfirmationRequiredException extends Error {
+  constructor(details: {
+    confirmationId: string;
+    confirmed: {
+      instrument: string;
+      direction: string;
+      quantity: string;
+      stopLoss: string | null;
+      takeProfit: string | null;
+    };
+    fresh: {
+      instrument: string;
+      direction: string;
+      quantity: string;
+      stopLoss: string;
+      takeProfit: string;
+    };
+  }) {
+    super(
+      `Reconfirmation required for confirmation ${details.confirmationId}: the fresh risk ` +
+        `evaluation changed material order facts (confirmed ${details.confirmed.quantity} ` +
+        `${details.confirmed.direction} ${details.confirmed.instrument} → fresh ` +
+        `${details.fresh.quantity} ${details.fresh.direction} ${details.fresh.instrument}) — ` +
+        'the changed order is never silently dispatched.',
+    );
+    this.name = 'ReconfirmationRequiredException';
+    this.details = details;
+  }
+  readonly details: unknown;
+}
+
+/**
  * ExecutionConfirmationService — the server-authoritative SEMI_AUTO
  * confirmation surface (Sprint 56 correction round 5, task 50-c, issue #298).
  *
@@ -74,6 +113,10 @@ export class ExecutionConfirmationService {
     private readonly riskProfileRepo: Repository<RiskProfile>,
     private readonly boundary: FinalDispatchBoundary,
     private readonly executionService: ExecutionService,
+    // Round 6 (§18): resolved at CALL time — constructor-injecting RiskService
+    // here would stack a provider-level dependency onto the existing
+    // RiskModule↔ExecutionModule forwardRef cycle (the crash pattern).
+    private readonly moduleRef: ModuleRef,
   ) {}
 
   /** The user's PENDING confirmations with full order detail. */
@@ -106,31 +149,97 @@ export class ExecutionConfirmationService {
    * with typed 409-style errors.
    */
   async confirm(userId: string, confirmationId: string): Promise<ExecutionConfirmationResult> {
-    const authorization = await this.boundary.authorizeFromUserConfirmation({
-      userId,
-      confirmationId,
+    // ── ROUND 6 (§18/#298): the SEMI_AUTO re-risk model ────────────────────
+    // A confirmation is the user's intent to approve the EXACT proposed order
+    // — NEVER a five-minute-old financial authorization. Confirming triggers
+    // a FULL CURRENT risk re-evaluation (authority, fresh snapshot, quote,
+    // geometry, limits, policy); the FRESH short-lived grant drives the
+    // dispatch and is consumed — together with this confirmation — at the
+    // provider-dispatch commitment.
+    const confirmation = await this.confirmationRepo.findOne({
+      where: { id: confirmationId, userId, status: ExecutionConfirmationStatus.PENDING },
     });
-
-    // The consumed grant is the server-side authority for the exact order.
-    if (!authorization.context.riskGrantId) {
+    if (!confirmation) {
       throw new ConflictException(
-        'The confirmed authorization carries no risk grant — refusing dispatch (fail-closed).',
+        'No PENDING confirmation found for this id and user — it may already be consumed, ' +
+          'revoked, or belong to another account.',
       );
     }
-    const grant = await this.riskGrantRepo.findOne({
-      where: { id: authorization.context.riskGrantId },
-    });
-    if (!grant) {
+    if (confirmation.expiresAt.getTime() <= Date.now()) {
       throw new ConflictException(
-        'The confirmed order risk grant is no longer available — the confirmation was consumed ' +
-          '(server authority) but no dispatch happened. A new risk evaluation is required.',
+        'This confirmation window has expired — a new risk evaluation is required.',
       );
     }
 
-    const decision = await this.decisionFromGrant(userId, grant);
-    // Round 6 (#365/#18): the confirmation is consumed AT the provider-dispatch
-    // commitment (commitProviderDispatch, tenant + grant scoped CAS) — this
-    // call carries the confirmationId through to the orchestrator.
+    // CURRENT risk re-evaluation. ModuleRef at CALL time: constructor-injecting
+    // RiskService would stack a provider dependency onto the existing
+    // RiskModule↔ExecutionModule forwardRef cycle.
+    const riskService = this.moduleRef.get(RiskService, { strict: false });
+    const decision: RiskDecision = await riskService.validateProposedTrade(userId, {
+      signalId: confirmation.signalId,
+      instrument: confirmation.instrument,
+      direction: confirmation.direction as 'BUY' | 'SELL',
+      requestedLotSize: String(confirmation.quantity),
+      // MARKET sentinel ('0'): the original authorization was a MARKET
+      // instruction — current-quote risk semantics apply (§18).
+      entryPrice: '0',
+      stopLoss: confirmation.stopLoss ?? undefined,
+      takeProfit: confirmation.takeProfit ?? undefined,
+      idempotencyKey: `${userId}:${confirmation.signalId}`,
+      sessionId: confirmation.sessionId,
+      sessionGeneration: confirmation.sessionGeneration,
+      executionMode: ExecutionMode.SEMI_AUTO,
+      brokerConnectionId: confirmation.brokerConnectionId,
+    });
+
+    if (decision.decision !== 'APPROVED') {
+      // Fresh risk rejection ⇒ ZERO provider calls (fail-closed).
+      this.logger.warn(
+        `SEMI_AUTO confirmation ${confirmationId} rejected by CURRENT risk: ` +
+          `[${decision.rejectionCode}] ${decision.rejectionReason}`,
+      );
+      throw new ConflictException(
+        `Current risk evaluation rejected this order (${decision.rejectionCode}) — ` +
+          'the confirmation was not executed.',
+      );
+    }
+
+    // Material-change check: the fresh validated order must match the EXACT
+    // proposal the user confirmed. A changed lot size (risk cap), different
+    // SL/TP, instrument or direction requires RECONFIRMATION — never a
+    // silent dispatch of the changed order.
+    const confirmedQuantity = String(confirmation.quantity);
+    const materialChange =
+      decision.validatedOrder.instrument !== confirmation.instrument ||
+      decision.validatedOrder.direction !== confirmation.direction ||
+      decision.validatedOrder.lotSize !== confirmedQuantity ||
+      (confirmation.stopLoss != null && decision.validatedOrder.stopLoss !== confirmation.stopLoss) ||
+      (confirmation.takeProfit != null &&
+        decision.validatedOrder.takeProfit !== confirmation.takeProfit);
+    if (materialChange) {
+      this.logger.warn(
+        `SEMI_AUTO confirmation ${confirmationId} requires reconfirmation — the fresh ` +
+          'evaluation changed material order facts',
+      );
+      throw new ReconfirmationRequiredException({
+        confirmationId,
+        confirmed: {
+          instrument: confirmation.instrument,
+          direction: confirmation.direction,
+          quantity: confirmedQuantity,
+          stopLoss: confirmation.stopLoss,
+          takeProfit: confirmation.takeProfit,
+        },
+        fresh: {
+          instrument: decision.validatedOrder.instrument,
+          direction: decision.validatedOrder.direction,
+          quantity: decision.validatedOrder.lotSize,
+          stopLoss: decision.validatedOrder.stopLoss,
+          takeProfit: decision.validatedOrder.takeProfit,
+        },
+      });
+    }
+
     const trade: Trade = await this.executionService.executeTrade(
       userId,
       decision,
@@ -146,58 +255,6 @@ export class ExecutionConfirmationService {
   }
 
   // ─── Internal helpers ─────────────────────────────────────────────────────
-
-  /** Rebuild the execution decision from the CONSUMED grant (server authority). */
-  private async decisionFromGrant(userId: string, grant: RiskGrant): Promise<RiskDecision> {
-    const payload = grant.orderPayload ?? ({} as Record<string, unknown>);
-    const instrument = String(payload.instrument ?? '');
-    const direction = String(payload.direction ?? '');
-    const lotSize = String(payload.quantity ?? '');
-    const stopLoss = payload.stopLoss == null ? null : String(payload.stopLoss);
-    const takeProfit = payload.takeProfit == null ? null : String(payload.takeProfit);
-    if (!instrument || !direction || !lotSize || stopLoss === null || takeProfit === null) {
-      // The grant's authoritative payload is incomplete — fail closed (the
-      // exact validated order cannot be reconstructed).
-      throw new ConflictException(
-        'The confirmed order payload is incomplete — refusing to reconstruct the order ' +
-          '(fail-closed). A new risk evaluation is required.',
-      );
-    }
-
-    // Daily-limit authority: the CURRENT risk profile's maxDailyTrades (the
-    // grant pins the risk profile id/version — a missing profile fails closed).
-    const profile = grant.riskProfileId
-      ? await this.riskProfileRepo.findOne({ where: { id: grant.riskProfileId } })
-      : await this.riskProfileRepo.findOne({ where: { userId } });
-    if (!profile) {
-      throw new ConflictException(
-        'No risk profile available for the daily-trade limit — refusing dispatch (fail-closed).',
-      );
-    }
-
-    return {
-      decision: 'APPROVED',
-      signalId: grant.signalId,
-      validatedOrder: {
-        instrument,
-        direction: direction as 'BUY' | 'SELL',
-        lotSize,
-        entryPrice: payload.requestedPrice == null ? '0' : String(payload.requestedPrice),
-        stopLoss,
-        takeProfit,
-        idempotencyKey: `${userId}:${grant.signalId}`,
-      },
-      appliedRules: ['SEMI_AUTO_USER_CONFIRMATION:CONSUMED'],
-      riskScore: 0,
-      evaluatedAt: grant.issuedAt,
-      maxDailyTrades: profile.maxDailyTrades,
-      grantId: grant.id,
-      sessionId: grant.sessionId,
-      sessionGeneration: grant.sessionGeneration,
-      executionMode: grant.executionMode as string,
-      brokerConnectionId: grant.brokerConnectionId,
-    };
-  }
 
   private toView(
     confirmation: ExecutionConfirmation,

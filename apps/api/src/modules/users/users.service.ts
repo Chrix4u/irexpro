@@ -5,6 +5,8 @@ import { User } from './entities/user.entity';
 import { KycStatus, UserProfile } from './entities/user-profile.entity';
 import { Role, RoleName } from './entities/role.entity';
 import { UpdateMyProfileDto } from './dto/update-my-profile.dto';
+import { TradingAuthorityService } from '../execution-authority/trading-authority.service';
+import { GrantInvalidationService } from '../execution-authority/grant-invalidation.service';
 
 @Injectable()
 export class UsersService {
@@ -15,6 +17,10 @@ export class UsersService {
     private profileRepo: Repository<UserProfile>,
     @InjectRepository(Role)
     private roleRepo: Repository<Role>,
+    // Round 6 (#300): authority-affecting profile edits bump the trading
+    // authority generation + invalidate NEW exposure atomically.
+    private readonly tradingAuthorityService: TradingAuthorityService,
+    private readonly grantInvalidation: GrantInvalidationService,
   ) {}
 
   async findById(id: string): Promise<User> {
@@ -62,7 +68,22 @@ export class UsersService {
     const user = await this.userRepo.findOne({ where: { id: userId }, relations: ['profile'] });
     if (!user) throw new NotFoundException('User not found');
 
-    if (dto.countryCode !== undefined) user.countryCode = dto.countryCode.toUpperCase();
+    // Round 6 (#2/#300): authority-affecting changes tracked for the atomic
+    // generation bump — countryCode (jurisdiction), dateOfBirth (+ the
+    // DOB-triggered KYC reset). Display-only edits never bump.
+    let authorityBumpReason:
+      | 'USER_PROFILE_COUNTRY_CHANGED'
+      | 'USER_PROFILE_DATE_OF_BIRTH_CHANGED'
+      | 'USER_PROFILE_DOB_KYC_RESET'
+      | null = null;
+
+    if (dto.countryCode !== undefined) {
+      const nextCountry = dto.countryCode.toUpperCase();
+      if (nextCountry !== user.countryCode) {
+        authorityBumpReason = 'USER_PROFILE_COUNTRY_CHANGED';
+      }
+      user.countryCode = nextCountry;
+    }
     if (dto.timezone !== undefined) user.timezone = dto.timezone;
     if (dto.preferredCurrency !== undefined)
       user.preferredCurrency = dto.preferredCurrency.toUpperCase();
@@ -79,17 +100,31 @@ export class UsersService {
         }
 
         if (user.profile.dateOfBirth !== dto.dateOfBirth) {
+          const resetsKyc = user.profile.kycStatus !== KycStatus.NONE;
           user.profile.dateOfBirth = dto.dateOfBirth;
           user.profile.kycStatus = KycStatus.NONE;
           user.profile.kycSubmittedAt = null;
           user.profile.kycApprovedAt = null;
+          authorityBumpReason = resetsKyc ? 'USER_PROFILE_DOB_KYC_RESET' : 'USER_PROFILE_DATE_OF_BIRTH_CHANGED';
         }
       }
 
       await this.profileRepo.save(user.profile);
     }
 
-    await this.userRepo.save(user);
+    await this.userRepo.manager.transaction(async (em) => {
+      await em.getRepository(User).save(user);
+      if (authorityBumpReason) {
+        // Round 6 (#2 atomicity): the authority fact + generation bump +
+        // NEW-exposure invalidation commit together (never best-effort later).
+        await this.tradingAuthorityService.bumpGeneration(userId, authorityBumpReason, em);
+        await this.grantInvalidation.invalidateUserNewExposureAuthority(
+          userId,
+          authorityBumpReason,
+          em,
+        );
+      }
+    });
     return this.findById(userId);
   }
 

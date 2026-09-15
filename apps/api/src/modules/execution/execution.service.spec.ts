@@ -26,6 +26,7 @@ import { RiskDecision, RiskRejectionCode } from '../risk/interfaces/risk.interfa
 import { BrokerConnectionStatus, BrokerMode } from '../broker/interfaces/broker-adapter.interface';
 import { DomainEventBus } from '../events/event-bus.service';
 import { ProviderDispatchOutcome } from './orchestration/execution-intent.interface';
+import { RiskGrantStatus } from './interfaces/execution-authority';
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -229,6 +230,22 @@ describe('ExecutionService', () => {
     // for authority invalidation only via createQueryBuilder — a chainable
     // stub keeps these unit tests independent of the store (the real-store
     // matrix lives in execution-session.authority.spec.ts).
+    // Round 6 (#365): executeTrade's PRE-COMMITMENT grant preflight reads
+    // findOne({ id, userId }) — the canonical ACTIVE 'grant-1' fixture serves
+    // that read; per-test overrides still replace this wholesale (the
+    // unusable-grant / not-found matrices below drive their own fixtures).
+    const activeGrantFixture = {
+      id: 'grant-1',
+      userId: 'user-1',
+      signalId: 'sig-001',
+      sessionId: 'session-1',
+      sessionGeneration: 1,
+      executionMode: ExecutionMode.PAPER_ONLY,
+      brokerConnectionId: 'conn-1',
+      status: RiskGrantStatus.ACTIVE,
+      issuedAt: new Date(),
+      expiresAt: new Date(Date.now() + 60_000),
+    };
     authorityRepoStubs = {
       createQueryBuilder: jest.fn().mockReturnValue({
         update: jest.fn().mockReturnThis(),
@@ -237,7 +254,12 @@ describe('ExecutionService', () => {
         execute: jest.fn().mockResolvedValue({ affected: 0 }),
       }),
       update: jest.fn().mockResolvedValue({ affected: 0 }),
-      findOne: jest.fn().mockResolvedValue(null),
+      findOne: jest.fn().mockImplementation(
+        async (opts?: { where?: Record<string, unknown> }) => {
+          if (opts?.where?.id === 'grant-1') return activeGrantFixture;
+          return null;
+        },
+      ),
     };
 
     auditService = { log: jest.fn().mockResolvedValue(undefined) };
@@ -464,6 +486,14 @@ describe('ExecutionService', () => {
           providerAction: 'PLACE',
         }),
         expect.objectContaining({ id: 'conn-1' }),
+        // Round 6 (#365): the provider-dispatch COMMITMENT payload — the
+        // grant is consumed AT the commitment inside dispatchOrder. No
+        // SEMI_AUTO confirmation drives this pipeline dispatch ⇒ undefined.
+        expect.objectContaining({
+          grantId: 'grant-1',
+          confirmationId: undefined,
+          origin: 'PIPELINE',
+        }),
       );
     });
 

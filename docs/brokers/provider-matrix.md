@@ -549,3 +549,29 @@ updated to match the evidence (never the reverse).
   evidence for the exclusion table above).
 - Ghana: sec.gov.gh (licensees, unlicensed-entities lists), bog.gov.gh
   (notices).
+
+---
+
+## Round 6 — Unified Execution Authority (WIP branch wip/round6-unified-authority)
+
+Provider verification truth (UNCHANGED — truthfulness policy preserved):
+- cTrader (`ctrader`): BETA / production-LIVE **UNVERIFIED** — no verified evidence exists.
+- Pepperstone-via-cTrader (`pepperstone-ctrader`): BETA / **UNVERIFIED** (alias, identity-scoped).
+- IC Markets-via-cTrader (`icmarkets-ctrader`): BETA / **UNVERIFIED** (alias, identity-scoped).
+- MetaTrader 5 (MetaAPI): DEMO-capable; LIVE unverified.
+- OANDA v20: BETA (contract-tested).
+- Paper broker: internal simulator only.
+
+Round-6 authority chain implemented (all fail-closed for NEW exposure):
+signal generatedAt identity digest → user ACTIVE + eligibility/KYC/disclosures →
+shared trading-policy revision (cross-replica) → user TradingAuthorityGeneration →
+exact ACTIVE TradingSession + generation → durable executionMode → exact
+BrokerConnection → credential generation fencing → server-derived provider identity →
+shared provider-verification revision → fresh monotonic exact-connection account
+snapshot (LIVE) → account currency + DailyRiskPeriod provenance → risk-profile
+revision (kill-switch generation) → exact-decimal risk decision → immutable
+RiskGrant (canonical authorityBindingDigest, tenant-scoped) → SEMI_AUTO fresh
+re-risk after user confirmation → shared execution-control revision →
+ProviderDispatchCommitment (single short transaction: grant + confirmation
+consumption + order DISPATCH_COMMITTED) → exactly one state-changing provider
+attempt → dispatch-certainty reconciliation.

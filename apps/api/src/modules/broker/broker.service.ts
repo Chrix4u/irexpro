@@ -14,6 +14,8 @@ import { BrokerAdapterRegistry } from './adapters/broker-adapter.registry';
 import { CredentialEncryptionService } from './services/credential-encryption.service';
 import { BrokerOAuthTokenLifecycleService } from './services/broker-oauth-token-lifecycle.service';
 import { BrokerLinkOutboxService } from './services/broker-link-outbox.service';
+import { TradingAuthorityService } from '../execution-authority/trading-authority.service';
+import { GrantInvalidationService } from '../execution-authority/grant-invalidation.service';
 import { BrokerLinkOutboxAuditPayload } from './entities/broker-link-outbox.entity';
 import { computeLogicalAccountKey } from './utils/logical-account-key';
 import { isUniqueViolation } from './utils/db-unique-violation';
@@ -114,6 +116,11 @@ export class BrokerService {
     // Sprint 56 correction round 5 (architect issue #332): durable outbox
     // for post-commit audit/event side effects of connection creation.
     private readonly linkOutbox: BrokerLinkOutboxService,
+    // Round 6 (#2/#300): broker authority transitions (disconnect, revoke)
+    // bump the user TradingAuthorityGeneration + invalidate NEW exposure
+    // through the tenant-scoped leaf seams.
+    private readonly tradingAuthorityService: TradingAuthorityService,
+    private readonly grantInvalidation: GrantInvalidationService,
   ) {}
 
   // ─── Read operations ──────────────────────────────────────────────────────
@@ -697,6 +704,26 @@ export class BrokerService {
       },
       'disconnectBroker transition',
     );
+
+    // Round 6 (#2/#300): a disconnected connection carries no NEW-exposure
+    // authority — the generation bump + user-scoped grant/confirmation
+    // invalidation land with the persisted transition (fail-safe best effort
+    // AFTER the durable fact: a failure is logged and audited, never silent).
+    try {
+      await this.tradingAuthorityService.bumpGeneration(
+        userId,
+        'BROKER_AUTHORIZATION_REVOKED',
+      );
+      await this.grantInvalidation.invalidateUserNewExposureAuthority(
+        userId,
+        'BROKER_AUTHORIZATION_REVOKED',
+      );
+    } catch (err) {
+      this.logger.error(
+        `Authority invalidation after disconnect failed for user ${userId} ` +
+          `(connection ${connectionId}): ${(err as Error).message}`,
+      );
+    }
 
     if (connection.status === BrokerConnectionStatus.CONNECTED) {
       try {
