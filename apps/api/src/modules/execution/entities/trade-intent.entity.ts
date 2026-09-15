@@ -110,7 +110,13 @@ export class TradeIntent {
   @Column({ name: 'requested_lot_size', type: 'numeric', precision: 10, scale: 4 })
   requestedLotSize: string;
 
-  @Column({ name: 'requested_entry_price', type: 'numeric', precision: 18, scale: 8, nullable: true })
+  @Column({
+    name: 'requested_entry_price',
+    type: 'numeric',
+    precision: 18,
+    scale: 8,
+    nullable: true,
+  })
   requestedEntryPrice: string | null;
 
   @Column({ name: 'stop_loss', type: 'numeric', precision: 18, scale: 8, nullable: true })

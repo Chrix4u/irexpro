@@ -148,9 +148,7 @@ export class AiExitOrchestratorService {
     }
 
     // ── §10 SERIALIZATION: everything from here on is per-user ordered ──
-    return this.serializeForUser(userId, () =>
-      this.processRegisteredExit(signal, registration),
-    );
+    return this.serializeForUser(userId, () => this.processRegisteredExit(signal, registration));
   }
 
   // ─── Serialized core ─────────────────────────────────────────────────────
@@ -396,7 +394,10 @@ export class AiExitOrchestratorService {
     // is pure ordering; a rejection inside `work` propagates to THIS
     // caller only — the stored tail stays clean for the next exit.
     const next = previous.then(work);
-    this.userExitChains.set(userId, next.catch(() => undefined));
+    this.userExitChains.set(
+      userId,
+      next.catch(() => undefined),
+    );
     return next;
   }
 }

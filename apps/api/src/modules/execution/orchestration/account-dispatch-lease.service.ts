@@ -39,10 +39,7 @@ export class AccountDispatchLeaseService {
    * critical's value or rejects with its error — the lease is ALWAYS
    * released (finally), and the chain tail never rejects.
    */
-  async withAccountDispatchLease<T>(
-    accountKey: string,
-    critical: () => Promise<T>,
-  ): Promise<T> {
+  async withAccountDispatchLease<T>(accountKey: string, critical: () => Promise<T>): Promise<T> {
     const predecessor = this.accountChains.get(accountKey);
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {

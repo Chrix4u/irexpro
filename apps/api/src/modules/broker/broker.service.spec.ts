@@ -1241,7 +1241,10 @@ describe('BrokerService', () => {
     });
 
     it('fails closed for a non-CONNECTED connection — the adapter is never contacted', async () => {
-      connectionRepo.findOne.mockResolvedValue({ ...connectedConn, status: BrokerConnectionStatus.SUSPENDED });
+      connectionRepo.findOne.mockResolvedValue({
+        ...connectedConn,
+        status: BrokerConnectionStatus.SUSPENDED,
+      });
 
       await expect(
         service.getInstrumentSpecForConnection('user-1', 'conn-1', 'EURUSD'),
@@ -1328,5 +1331,4 @@ describe('BrokerService', () => {
       ).resolves.toBeNull();
     });
   });
-
 });

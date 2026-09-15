@@ -3,10 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { ExactDecimal } from '../../../common/utils/exact-decimal';
-import {
-  CapitalAllocation,
-  CapitalAllocationStatus,
-} from '../entities/capital-allocation.entity';
+import { CapitalAllocation, CapitalAllocationStatus } from '../entities/capital-allocation.entity';
 import { CapitalBudget } from '../entities/capital-budget.entity';
 import { BrokerService } from '../../broker/broker.service';
 import { isUniqueViolation } from '../../broker/utils/db-unique-violation';
@@ -355,10 +352,7 @@ export class AllocationService {
    * rejection, definite dispatch failure). Guarded CAS — a RELEASED
    * allocation never transitions back.
    */
-  async releaseAllocationForIntent(
-    tradeIntentId: string,
-    reason: string,
-  ): Promise<void> {
+  async releaseAllocationForIntent(tradeIntentId: string, reason: string): Promise<void> {
     await this.allocationRepo
       .createQueryBuilder()
       .update()
@@ -386,7 +380,12 @@ export class AllocationService {
     manager: { query: (sql: string, params?: unknown[]) => Promise<Record<string, unknown>[]> },
     userId: string,
     logicalAccountKey: string,
-  ): Promise<{ totalCapital: string; accountCurrency: string; maxInstrumentConcentration: string | null; maxStrategyConcentration: string | null }> {
+  ): Promise<{
+    totalCapital: string;
+    accountCurrency: string;
+    maxInstrumentConcentration: string | null;
+    maxStrategyConcentration: string | null;
+  }> {
     const rows = await manager.query(
       `SELECT * FROM trading.capital_budgets
          WHERE user_id = $1 AND logical_account_key = $2 LIMIT 1`,
@@ -408,11 +407,7 @@ export class AllocationService {
 
     // Seed from the AUTHORITATIVE account state — the connection bound to
     // this account scope. The §1a routing is snapshot-backed and DB-only.
-    const seeded = await this.seedBudgetFromAuthoritativeState(
-      manager,
-      userId,
-      logicalAccountKey,
-    );
+    const seeded = await this.seedBudgetFromAuthoritativeState(manager, userId, logicalAccountKey);
     if (seeded) return seeded;
 
     throw new AllocationError(
@@ -426,7 +421,12 @@ export class AllocationService {
     manager: { query: (sql: string, params?: unknown[]) => Promise<Record<string, unknown>[]> },
     userId: string,
     logicalAccountKey: string,
-  ): Promise<{ totalCapital: string; accountCurrency: string; maxInstrumentConcentration: string | null; maxStrategyConcentration: string | null } | null> {
+  ): Promise<{
+    totalCapital: string;
+    accountCurrency: string;
+    maxInstrumentConcentration: string | null;
+    maxStrategyConcentration: string | null;
+  } | null> {
     // Resolve the connection that owns this logical account scope.
     const connRows = await manager.query(
       `SELECT id FROM broker.broker_connections
@@ -476,9 +476,7 @@ export class AllocationService {
       totalCapital: String(row.total_capital),
       accountCurrency: String(row.account_currency),
       maxInstrumentConcentration:
-        row.max_instrument_concentration === null
-          ? null
-          : String(row.max_instrument_concentration),
+        row.max_instrument_concentration === null ? null : String(row.max_instrument_concentration),
       maxStrategyConcentration:
         row.max_strategy_concentration === null ? null : String(row.max_strategy_concentration),
     };
@@ -558,9 +556,7 @@ export class AllocationService {
           capital: ExactDecimal.parse(instrumentBucket.capital)
             .add(ExactDecimal.parse(capital))
             .toString(),
-          lots: ExactDecimal.parse(instrumentBucket.lots)
-            .add(ExactDecimal.parse(lots))
-            .toString(),
+          lots: ExactDecimal.parse(instrumentBucket.lots).add(ExactDecimal.parse(lots)).toString(),
         });
         if (row.strategy_code !== null && row.strategy_code !== undefined) {
           addTo(buckets.byStrategy, String(row.strategy_code), capital);

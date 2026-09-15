@@ -103,8 +103,9 @@ export class RiskOrderGeometryService {
     // Contract size: PROVEN through the public instrument seam, or null
     // (unverified) — never invented. A seam failure is a typed outcome.
     let contractSize: ExactDecimal | null = null;
-    let instrumentSpec: import('../broker/interfaces/broker-adapter.interface').BrokerInstrument | null =
-      null;
+    let instrumentSpec:
+      | import('../broker/interfaces/broker-adapter.interface').BrokerInstrument
+      | null = null;
     try {
       instrumentSpec = await this.brokerService.getInstrumentSpecForConnection(
         params.userId,

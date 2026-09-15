@@ -3,6 +3,10 @@ import {
   OrderCapabilityDeclaration,
   OrderCapabilityError,
 } from './order-capability';
+import { MetaTraderAdapter } from '../adapters/metatrader.adapter';
+import { OandaAdapter } from '../adapters/oanda/oanda.adapter';
+import { CTraderAdapter } from '../adapters/ctrader/ctrader.adapter';
+import { PaperBrokerAdapter } from '../adapters/paper-broker.adapter';
 
 /**
  * Round 6 live-execution completion (§7) — the ORDER CAPABILITY CONTRACT.
@@ -18,7 +22,9 @@ import {
  *     matrices (OANDA lacks STOP_LIMIT; cTrader defers MARKET SL/TP)
  */
 
-const fullDeclaration = (overrides: Partial<OrderCapabilityDeclaration> = {}): OrderCapabilityDeclaration => ({
+const fullDeclaration = (
+  overrides: Partial<OrderCapabilityDeclaration> = {},
+): OrderCapabilityDeclaration => ({
   brokerId: 'test-broker',
   supportedOrderKinds: ['MARKET', 'LIMIT', 'STOP', 'STOP_LIMIT'],
   requirements: {
@@ -88,10 +94,7 @@ describe('assertOrderWithinCapabilities (Round 6 §7)', () => {
 
   it('STOP_PRICE_REQUIRED for a STOP without a positive stopPrice', () => {
     try {
-      assertOrderWithinCapabilities(
-        { orderKind: 'STOP', stopPrice: undefined },
-        fullDeclaration(),
-      );
+      assertOrderWithinCapabilities({ orderKind: 'STOP', stopPrice: undefined }, fullDeclaration());
       throw new Error('expected a typed violation');
     } catch (err) {
       expect((err as OrderCapabilityError).code).toBe('STOP_PRICE_REQUIRED');
@@ -127,15 +130,12 @@ describe('assertOrderWithinCapabilities (Round 6 §7)', () => {
 });
 
 describe('the four PRODUCTION adapter declarations (Round 6 §7/§11 truth matrix)', () => {
-  const { MetaTraderAdapter } = require('../adapters/metatrader.adapter');
-  const { OandaAdapter } = require('../adapters/oanda/oanda.adapter');
-  const { CTraderAdapter } = require('../adapters/ctrader/ctrader.adapter');
-  const { PaperBrokerAdapter } = require('../adapters/paper-broker.adapter');
-
-  const declarationOf = (AdapterClass: new (...args: never[]) => { getOrderCapabilities(): OrderCapabilityDeclaration }): OrderCapabilityDeclaration => {
+  const declarationOf = (
+    AdapterClass: new (...args: never[]) => { getOrderCapabilities(): OrderCapabilityDeclaration },
+  ): OrderCapabilityDeclaration => {
     // Constructors take collaborators; the declaration is static truth —
     // construct with undefined deps (never touched by getOrderCapabilities).
-    const instance = new AdapterClass(...(([] as unknown[]) as never[]));
+    const instance = new AdapterClass(...([] as unknown[] as never[]));
     return instance.getOrderCapabilities();
   };
 
@@ -176,7 +176,12 @@ describe('the four PRODUCTION adapter declarations (Round 6 §7/§11 truth matri
   });
 
   it('every declaration is COMPLETE (all four kinds have a requirement entry)', () => {
-    for (const AdapterClass of [MetaTraderAdapter, OandaAdapter, CTraderAdapter, PaperBrokerAdapter]) {
+    for (const AdapterClass of [
+      MetaTraderAdapter,
+      OandaAdapter,
+      CTraderAdapter,
+      PaperBrokerAdapter,
+    ]) {
       const d = declarationOf(AdapterClass as never);
       for (const kind of ['MARKET', 'LIMIT', 'STOP', 'STOP_LIMIT'] as const) {
         expect(d.requirements[kind]).toBeDefined();
@@ -184,9 +189,7 @@ describe('the four PRODUCTION adapter declarations (Round 6 §7/§11 truth matri
       // A declared kind must pass its own requirement shape.
       for (const kind of d.supportedOrderKinds) {
         if (kind === 'MARKET') {
-          expect(() =>
-            assertOrderWithinCapabilities({ orderKind: kind }, d),
-          ).not.toThrow();
+          expect(() => assertOrderWithinCapabilities({ orderKind: kind }, d)).not.toThrow();
         }
       }
     }

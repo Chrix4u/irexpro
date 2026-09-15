@@ -10,10 +10,7 @@ import { AuditAction } from '../../common/enums/audit-action.enum';
 import { AuditSeverity } from '../audit/entities/audit-log.entity';
 import { AiSignalCandidate } from './interfaces/ai-signal-candidate.interface';
 import { StrategyResult } from '../strategy/interfaces/strategy.interface';
-import {
-  AiExitResult,
-  AiExitSignal,
-} from '../strategy/interfaces/ai-exit-signal.interface';
+import { AiExitResult, AiExitSignal } from '../strategy/interfaces/ai-exit-signal.interface';
 
 /**
  * AiSignalService — Safe signal intake service for the AI Signal Engine.

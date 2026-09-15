@@ -131,7 +131,9 @@ const USER_B = '22222222-2222-4222-8222-222222222222';
 const CONN = '33333333-3333-4333-8333-333333333333';
 const SESSION = '44444444-4444-4444-8444-444444444444';
 
-const facts = (overrides: Partial<Parameters<TradeIntentService['recordOrReuseIntent']>[0]> = {}) => ({
+const facts = (
+  overrides: Partial<Parameters<TradeIntentService['recordOrReuseIntent']>[0]> = {},
+) => ({
   userId: USER,
   signalId: 'sig-001',
   signalGeneratedAt: new Date(),
@@ -233,7 +235,7 @@ describe('TradeIntentService — durable normalized AI decisions (Round 6 §2)',
       expect(second.intent.id).toBe(rows[0].id);
     });
 
-    it('a CONCURRENT racing duplicate resolves to the winner\'s row — never a second intent (§13 step 1)', async () => {
+    it("a CONCURRENT racing duplicate resolves to the winner's row — never a second intent (§13 step 1)", async () => {
       const results = await Promise.all([
         service.recordOrReuseIntent(facts()),
         service.recordOrReuseIntent(facts()),
@@ -261,9 +263,7 @@ describe('TradeIntentService — durable normalized AI decisions (Round 6 §2)',
     });
 
     it('normalizes the signal layer\'s "0" MARKET sentinel to a NULL requested price (never a zero limit)', async () => {
-      const { intent } = await service.recordOrReuseIntent(
-        facts({ requestedEntryPrice: '0' }),
-      );
+      const { intent } = await service.recordOrReuseIntent(facts({ requestedEntryPrice: '0' }));
       expect(intent.entryType).toBe('MARKET');
       expect(intent.requestedEntryPrice).toBeNull();
     });
@@ -298,9 +298,9 @@ describe('TradeIntentService — durable normalized AI decisions (Round 6 §2)',
         facts({ signalGeneratedAt: staleGeneratedAt }),
       );
       // The resolution lazily applies the EXPIRED transition.
-      await expect(
-        service.resolveIntentForExecutionBySignal(USER, 'sig-001'),
-      ).rejects.toThrow(/expired/i);
+      await expect(service.resolveIntentForExecutionBySignal(USER, 'sig-001')).rejects.toThrow(
+        /expired/i,
+      );
 
       const row = await repo.findOne({ where: { id: intent.id } });
       expect(row?.status).toBe(TradeIntentStatus.EXPIRED);
@@ -309,33 +309,33 @@ describe('TradeIntentService — durable normalized AI decisions (Round 6 §2)',
     it('fails closed on an explicitly-EXPIRED row without touching the expiry clock', async () => {
       const { intent } = await service.recordOrReuseIntent(facts());
       await repo.update(intent.id, { status: TradeIntentStatus.EXPIRED });
-      await expect(
-        service.resolveIntentForExecutionBySignal(USER, 'sig-001'),
-      ).rejects.toThrow(/expired/i);
+      await expect(service.resolveIntentForExecutionBySignal(USER, 'sig-001')).rejects.toThrow(
+        /expired/i,
+      );
     });
 
     it('fails closed on a SUPERSEDED (replaced) decision', async () => {
       const { intent } = await service.recordOrReuseIntent(facts());
       await repo.update(intent.id, { status: TradeIntentStatus.SUPERSEDED });
-      await expect(
-        service.resolveIntentForExecutionBySignal(USER, 'sig-001'),
-      ).rejects.toThrow(/superseded/i);
+      await expect(service.resolveIntentForExecutionBySignal(USER, 'sig-001')).rejects.toThrow(
+        /superseded/i,
+      );
     });
 
     it('fails closed on an EXECUTED decision — a replay can never open a second exposure', async () => {
       const { intent } = await service.recordOrReuseIntent(facts());
       await service.markExecuted(intent.id, 'trade-1');
-      await expect(
-        service.resolveIntentForExecutionBySignal(USER, 'sig-001'),
-      ).rejects.toThrow(/already executed/i);
+      await expect(service.resolveIntentForExecutionBySignal(USER, 'sig-001')).rejects.toThrow(
+        /already executed/i,
+      );
     });
 
     it('fails closed on a REJECTED decision — a risk-rejected decision stays rejected', async () => {
       const { intent } = await service.recordOrReuseIntent(facts());
       await service.markRejected(intent.id);
-      await expect(
-        service.resolveIntentForExecutionBySignal(USER, 'sig-001'),
-      ).rejects.toThrow(/previously rejected/i);
+      await expect(service.resolveIntentForExecutionBySignal(USER, 'sig-001')).rejects.toThrow(
+        /previously rejected/i,
+      );
     });
 
     it('scopes the lookup to the owning user (tenant isolation)', async () => {

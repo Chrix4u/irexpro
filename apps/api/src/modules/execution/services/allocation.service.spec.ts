@@ -1,13 +1,6 @@
 import { DataSource } from 'typeorm';
-import {
-  AllocationError,
-  AllocationService,
-} from './allocation.service';
-import {
-  CapitalAllocation,
-  CapitalAllocationStatus,
-} from '../entities/capital-allocation.entity';
-import { CapitalBudget } from '../entities/capital-budget.entity';
+import { AllocationError, AllocationService } from './allocation.service';
+import { CapitalAllocationStatus } from '../entities/capital-allocation.entity';
 import { BrokerService } from '../../broker/broker.service';
 import type { PositionSizingInputs, SizedPosition } from './position-sizing.service';
 
@@ -76,9 +69,7 @@ const sizingInputsFixture = (): PositionSizingInputs => ({
   computedAt: new Date(0).toISOString(),
 });
 
-const sized = (
-  overrides: Partial<SizedPosition> = {},
-): SizedPosition => ({
+const sized = (overrides: Partial<SizedPosition> = {}): SizedPosition => ({
   lots: '0.20',
   allocatedCapital: '21700',
   accountCurrency: 'USD',
@@ -97,14 +88,6 @@ const joinRow = (alloc: Partial<Record<string, unknown>> = {}) => ({
   intent_status: 'CREATED',
   trade_status: null,
   ...alloc,
-});
-
-const budgetRow = (overrides: Partial<Record<string, unknown>> = {}) => ({
-  total_capital: '50000',
-  account_currency: 'USD',
-  max_instrument_concentration: null,
-  max_strategy_concentration: null,
-  ...overrides,
 });
 
 describe('AllocationService — server-side authoritative capital layer (Round 6 §3)', () => {
@@ -126,9 +109,7 @@ describe('AllocationService — server-side authoritative capital layer (Round 6
       if (sql.includes('pg_advisory_xact_lock')) return [];
       // Idempotency re-check by intent id.
       if (sql.includes('SELECT * FROM trading.capital_allocations WHERE trade_intent_id')) {
-        const found = store.allocations.filter(
-          (a) => a.trade_intent_id === params?.[0],
-        );
+        const found = store.allocations.filter((a) => a.trade_intent_id === params?.[0]);
         return found;
       }
       // Budget lookups.
@@ -195,25 +176,23 @@ describe('AllocationService — server-side authoritative capital layer (Round 6
   });
 
   const dataSource = {
-    transaction: jest.fn().mockImplementation(async (cb: (manager: unknown) => Promise<unknown>) => {
-      txRan = true;
-      return cb(fakeManager());
-    }),
+    transaction: jest
+      .fn()
+      .mockImplementation(async (cb: (manager: unknown) => Promise<unknown>) => {
+        txRan = true;
+        return cb(fakeManager());
+      }),
   } as unknown as DataSource;
 
   const allocationRepo = () => ({
     findOne: jest.fn().mockImplementation(async ({ where }: { where: Record<string, unknown> }) => {
-      const found = store.allocations.find(
-        (a) => a.trade_intent_id === where.tradeIntentId,
-      );
+      const found = store.allocations.find((a) => a.trade_intent_id === where.tradeIntentId);
       return found ? { ...found } : null;
     }),
     createQueryBuilder: () => {
       const applyCas = (params: Record<string, unknown>) => {
         // CAS release: only ACTIVE rows transition.
-        const row = store.allocations.find(
-          (a) => a.trade_intent_id === params.tradeIntentId,
-        );
+        const row = store.allocations.find((a) => a.trade_intent_id === params.tradeIntentId);
         if (row && row.status === 'ACTIVE' && params.status === 'ACTIVE') {
           row.status = 'RELEASED';
         }
@@ -221,10 +200,12 @@ describe('AllocationService — server-side authoritative capital layer (Round 6
       const chain: Record<string, jest.Mock> = {};
       chain.update = jest.fn().mockReturnValue(chain);
       chain.set = jest.fn().mockReturnValue(chain);
-      chain.where = jest.fn().mockImplementation((_sql: string, params: Record<string, unknown>) => {
-        applyCas(params);
-        return chain;
-      });
+      chain.where = jest
+        .fn()
+        .mockImplementation((_sql: string, params: Record<string, unknown>) => {
+          applyCas(params);
+          return chain;
+        });
       chain.execute = jest.fn().mockResolvedValue({ affected: 1 });
       return chain;
     },
@@ -547,9 +528,7 @@ describe('AllocationService — server-side authoritative capital layer (Round 6
   // ─── Typed error shape ──────────────────────────────────────────────────
 
   it('AllocationError carries the stable machine code', async () => {
-    store.aggregateRows = [
-      joinRow({ allocated_capital: '50000', trade_status: 'OPEN' }),
-    ];
+    store.aggregateRows = [joinRow({ allocated_capital: '50000', trade_status: 'OPEN' })];
     try {
       await service.resolveOrAllocate({
         intent: intent('intent-1'),

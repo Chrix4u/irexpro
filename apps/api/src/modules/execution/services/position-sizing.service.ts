@@ -81,8 +81,6 @@ export interface SizedPosition {
 
 /** Decimal scale for lot math (lot steps are 0.01/0.001 — 8 digits is exact). */
 const LOT_SCALE = 8;
-/** Decimal scale for capital (notional) math. */
-const CAPITAL_SCALE = 8;
 
 /**
  * PositionSizingService (Round 6 live-execution completion §4) — the
@@ -269,7 +267,14 @@ export class PositionSizingService {
     const minLot = ExactDecimal.tryParse(spec.minLot);
     const maxLot = ExactDecimal.tryParse(spec.maxLot);
     const lotStep = ExactDecimal.tryParse(spec.lotStep);
-    if (!minLot || !maxLot || !lotStep || !minLot.isPositive() || !maxLot.isPositive() || !lotStep.isPositive()) {
+    if (
+      !minLot ||
+      !maxLot ||
+      !lotStep ||
+      !minLot.isPositive() ||
+      !maxLot.isPositive() ||
+      !lotStep.isPositive()
+    ) {
       throw new PositionSizingError(
         'INSTRUMENT_SPEC_UNPROVABLE',
         `instrument ${instrument} volume constraints are not provable decimals ` +

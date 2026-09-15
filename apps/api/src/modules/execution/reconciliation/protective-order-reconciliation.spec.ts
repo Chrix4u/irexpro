@@ -71,7 +71,10 @@ const openTrade = (id: string, overrides: Partial<Trade> = {}): Trade =>
     ...overrides,
   }) as unknown as Trade;
 
-const position = (externalOrderId: string, overrides: Partial<BrokerPosition> = {}): BrokerPosition =>
+const position = (
+  externalOrderId: string,
+  overrides: Partial<BrokerPosition> = {},
+): BrokerPosition =>
   ({
     externalOrderId,
     instrument: 'EURUSD',
@@ -262,7 +265,10 @@ describe('ProtectiveOrderReconciliationService — the §8 protective-order loop
       connection({ credentialStatus: BrokerCredentialStatus.REVOKED }),
     );
 
-    expect(outcome).toMatchObject({ status: 'SKIPPED', reason: expect.stringContaining('REVOKED') });
+    expect(outcome).toMatchObject({
+      status: 'SKIPPED',
+      reason: expect.stringContaining('REVOKED'),
+    });
     expect(adapterRegistry.getAdapterForConnection).not.toHaveBeenCalled();
     expect(auditService.log).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -277,7 +283,10 @@ describe('ProtectiveOrderReconciliationService — the §8 protective-order loop
 
     const outcome = await service.reconcileProtectiveOrders(connection());
 
-    expect(outcome).toMatchObject({ status: 'FAILED', reason: expect.stringContaining('socket down') });
+    expect(outcome).toMatchObject({
+      status: 'FAILED',
+      reason: expect.stringContaining('socket down'),
+    });
     expect(adapter.modifyOrder).not.toHaveBeenCalled();
   });
 

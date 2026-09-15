@@ -1,12 +1,4 @@
-import {
-  IsNumber,
-  IsOptional,
-  IsString,
-  IsUUID,
-  Max,
-  Min,
-  IsDateString,
-} from 'class-validator';
+import { IsNumber, IsOptional, IsString, IsUUID, Max, Min, IsDateString } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 /**
@@ -52,7 +44,10 @@ export class InternalExitSignalDto {
   @IsUUID()
   tradeId?: string;
 
-  @ApiProperty({ description: 'Model confidence score 0–1 (same threshold as entries)', example: 0.8 })
+  @ApiProperty({
+    description: 'Model confidence score 0–1 (same threshold as entries)',
+    example: 0.8,
+  })
   @IsNumber()
   @Min(0)
   @Max(1)

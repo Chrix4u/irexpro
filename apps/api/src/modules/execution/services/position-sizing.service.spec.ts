@@ -1,7 +1,4 @@
-import {
-  PositionSizingError,
-  PositionSizingService,
-} from './position-sizing.service';
+import { PositionSizingError, PositionSizingService } from './position-sizing.service';
 import { RiskProfile } from '../../risk/entities/risk-profile.entity';
 import { BrokerService } from '../../broker/broker.service';
 import { RiskOrderGeometryService } from '../../risk/risk-order-geometry.service';
@@ -53,7 +50,14 @@ const profileRow = (overrides: Partial<RiskProfile> = {}): RiskProfile =>
     ...overrides,
   }) as RiskProfile;
 
-const accountState = (overrides: Partial<{ balance: string; equity: string; freeMargin: string; currency: string }> = {}) => ({
+const accountState = (
+  overrides: Partial<{
+    balance: string;
+    equity: string;
+    freeMargin: string;
+    currency: string;
+  }> = {},
+) => ({
   balance: '10000.00',
   equity: '10000.00',
   freeMargin: '9500.00',
@@ -141,9 +145,7 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
 
     it('normalizes DOWN to the instrument volume step (0.2567 → 0.25 at step 0.01)', async () => {
       // risk 200 / (0.00775 × 100000) = 0.25806451... → step-down → 0.25
-      const sized = await service.sizePosition(
-        baseParams({ stopLoss: '1.07725' }),
-      );
+      const sized = await service.sizePosition(baseParams({ stopLoss: '1.07725' }));
       expect(sized.lots).toBe('0.25');
     });
 
@@ -156,9 +158,7 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
     });
 
     it('clamps to the profile maxPositionSizeLot', async () => {
-      profileRepo.findOne.mockResolvedValue(
-        profileRow({ maxPositionSizeLot: '0.1000' }),
-      );
+      profileRepo.findOne.mockResolvedValue(profileRow({ maxPositionSizeLot: '0.1000' }));
       const sized = await service.sizePosition(baseParams());
       expect(sized.lots).toBe('0.1');
       expect(sized.inputs.profileMaxPositionSizeLot).toBe('0.1');
@@ -190,27 +190,21 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
     });
 
     it('EQUITY_UNPROVABLE when equity is not a provable positive decimal', async () => {
-      brokerService.getBrokerAccountState.mockResolvedValue(
-        accountState({ equity: '0' }),
-      );
+      brokerService.getBrokerAccountState.mockResolvedValue(accountState({ equity: '0' }));
       await expect(service.sizePosition(baseParams())).rejects.toMatchObject({
         code: 'EQUITY_UNPROVABLE',
       });
     });
 
     it('FREE_MARGIN_UNPROVABLE when free margin is unparseable', async () => {
-      brokerService.getBrokerAccountState.mockResolvedValue(
-        accountState({ freeMargin: 'n/a' }),
-      );
+      brokerService.getBrokerAccountState.mockResolvedValue(accountState({ freeMargin: 'n/a' }));
       await expect(service.sizePosition(baseParams())).rejects.toMatchObject({
         code: 'FREE_MARGIN_UNPROVABLE',
       });
     });
 
     it('ACCOUNT_CURRENCY_UNPROVABLE for a non-ISO currency', async () => {
-      brokerService.getBrokerAccountState.mockResolvedValue(
-        accountState({ currency: 'us' }),
-      );
+      brokerService.getBrokerAccountState.mockResolvedValue(accountState({ currency: 'us' }));
       await expect(service.sizePosition(baseParams())).rejects.toMatchObject({
         code: 'ACCOUNT_CURRENCY_UNPROVABLE',
       });
@@ -224,9 +218,7 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
     });
 
     it('RISK_BUDGET_UNPARSEABLE when the risk percent is not provable', async () => {
-      profileRepo.findOne.mockResolvedValue(
-        profileRow({ maxTradeRiskPercent: '0' }),
-      );
+      profileRepo.findOne.mockResolvedValue(profileRow({ maxTradeRiskPercent: '0' }));
       await expect(service.sizePosition(baseParams())).rejects.toMatchObject({
         code: 'RISK_BUDGET_UNPARSEABLE',
       });
@@ -242,33 +234,29 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
     });
 
     it('INSTRUMENT_SPEC_UNPROVABLE when the spec is missing', async () => {
-      orderGeometry.resolveOrderGeometry.mockResolvedValue(
-        geometry({ instrumentSpec: null }),
-      );
+      orderGeometry.resolveOrderGeometry.mockResolvedValue(geometry({ instrumentSpec: null }));
       await expect(service.sizePosition(baseParams())).rejects.toMatchObject({
         code: 'INSTRUMENT_SPEC_UNPROVABLE',
       });
     });
 
     it('ENTRY_PRICE_UNPROVABLE for a MARKET entry without a fresh quote', async () => {
-      orderGeometry.resolveOrderGeometry.mockResolvedValue(
-        geometry({ freshQuote: null }),
-      );
+      orderGeometry.resolveOrderGeometry.mockResolvedValue(geometry({ freshQuote: null }));
       await expect(service.sizePosition(baseParams())).rejects.toMatchObject({
         code: 'ENTRY_PRICE_UNPROVABLE',
       });
     });
 
     it('STOP_LOSS_REQUIRED when the decision carries no stop', async () => {
-      await expect(
-        service.sizePosition(baseParams({ stopLoss: null })),
-      ).rejects.toMatchObject({ code: 'STOP_LOSS_REQUIRED' });
+      await expect(service.sizePosition(baseParams({ stopLoss: null }))).rejects.toMatchObject({
+        code: 'STOP_LOSS_REQUIRED',
+      });
     });
 
     it('STOP_LOSS_DISTANCE_INVALID when the stop equals the entry', async () => {
-      await expect(
-        service.sizePosition(baseParams({ stopLoss: '1.08500' })),
-      ).rejects.toMatchObject({ code: 'STOP_LOSS_DISTANCE_INVALID' });
+      await expect(service.sizePosition(baseParams({ stopLoss: '1.08500' }))).rejects.toMatchObject(
+        { code: 'STOP_LOSS_DISTANCE_INVALID' },
+      );
     });
 
     it('CURRENCY_MISMATCH when the instrument quotes in a different currency (no invented FX)', async () => {
@@ -278,9 +266,9 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
     });
 
     it('CURRENCY_MISMATCH for non-standard symbols whose quote currency cannot be proven', async () => {
-      await expect(
-        service.sizePosition(baseParams({ instrument: 'XAU' })),
-      ).rejects.toMatchObject({ code: 'CURRENCY_MISMATCH' });
+      await expect(service.sizePosition(baseParams({ instrument: 'XAU' }))).rejects.toMatchObject({
+        code: 'CURRENCY_MISMATCH',
+      });
     });
 
     it('POSITION_SIZE_BELOW_MINIMUM — rounding UP to minLot would exceed the risk budget', async () => {

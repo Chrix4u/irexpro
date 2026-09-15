@@ -273,9 +273,8 @@ export class ExecutionOrchestrator {
       origin?: 'PIPELINE' | 'USER_CONFIRMATION';
     },
   ): Promise<ProviderDispatchOutcome> {
-    return this.accountDispatchLease.withAccountDispatchLease(
-      intent.brokerConnectionId,
-      () => this.dispatchOrderUnderLease(intent, connection, commitment),
+    return this.accountDispatchLease.withAccountDispatchLease(intent.brokerConnectionId, () =>
+      this.dispatchOrderUnderLease(intent, connection, commitment),
     );
   }
 

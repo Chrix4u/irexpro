@@ -179,12 +179,14 @@ export class MarketSafetyGateService {
     );
     // The order is terminally REJECTED (SUBMITTED → REJECTED is a legal
     // machine transition) — zero provider calls, nothing consumed.
-    await this.orderService.rejectOrder(orderId, reason).catch((err) =>
-      this.logger.error(
-        `Order ${orderId} could not be marked REJECTED after the market-safety ` +
-          `failure (${(err as Error).message}) — reconciliation will converge it`,
-      ),
-    );
+    await this.orderService
+      .rejectOrder(orderId, reason)
+      .catch((err) =>
+        this.logger.error(
+          `Order ${orderId} could not be marked REJECTED after the market-safety ` +
+            `failure (${(err as Error).message}) — reconciliation will converge it`,
+        ),
+      );
     await this.auditService.log({
       actorUserId: intent.userId,
       action: AuditAction.ORDER_REJECTED,

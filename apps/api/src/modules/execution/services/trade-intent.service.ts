@@ -4,10 +4,7 @@ import { Repository } from 'typeorm';
 import { TradeIntent, TradeIntentStatus } from '../entities/trade-intent.entity';
 import { isUniqueViolation } from '../../broker/utils/db-unique-violation';
 import { ExactDecimal } from '../../../common/utils/exact-decimal';
-import {
-  EXECUTION_CONFIRMATION_WINDOW_MS,
-  RISK_GRANT_TTL_MS,
-} from '../../risk/risk-grant.service';
+import { EXECUTION_CONFIRMATION_WINDOW_MS, RISK_GRANT_TTL_MS } from '../../risk/risk-grant.service';
 
 /**
  * INTENT_MAX_AGE_MS — §2: a stale AI decision must not create new exposure.
@@ -34,9 +31,7 @@ export class TradeIntentNotUsableError extends Error {
     readonly status: TradeIntentStatus,
     readonly reason: string,
   ) {
-    super(
-      `Trade intent ${intentId} is not usable for new exposure (status: ${status}): ${reason}`,
-    );
+    super(`Trade intent ${intentId} is not usable for new exposure (status: ${status}): ${reason}`);
     this.name = 'TradeIntentNotUsableError';
   }
 }
@@ -197,10 +192,7 @@ export class TradeIntentService {
    * Resolve the intent for execution by (userId, signalId) — the lookup the
    * execution path uses (executeTrade knows the signal, not the intent id).
    */
-  async resolveIntentForExecutionBySignal(
-    userId: string,
-    signalId: string,
-  ): Promise<TradeIntent> {
+  async resolveIntentForExecutionBySignal(userId: string, signalId: string): Promise<TradeIntent> {
     const intent = await this.findBySignal(userId, signalId);
     if (!intent) {
       throw new TradeIntentNotUsableError(

@@ -4,10 +4,7 @@ import { Repository } from 'typeorm';
 import { ExactDecimal } from '../../../common/utils/exact-decimal';
 import { Trade, TradeStatus } from '../entities/trade.entity';
 import { BrokerConnection } from '../../broker/entities/broker-connection.entity';
-import {
-  IBrokerAdapter,
-  BrokerPosition,
-} from '../../broker/interfaces/broker-adapter.interface';
+import { IBrokerAdapter, BrokerPosition } from '../../broker/interfaces/broker-adapter.interface';
 import { BrokerAdapterRegistry } from '../../broker/adapters/broker-adapter.registry';
 import { CredentialEncryptionService } from '../../broker/services/credential-encryption.service';
 import { BrokerCredentialLifecycle } from '../../broker/authorization/broker-credential-status';
@@ -127,8 +124,7 @@ export class ProtectiveOrderReconciliationService {
 
     if (!BrokerCredentialLifecycle.isUsable(connection.credentialStatus)) {
       // Typed skip — fail-closed: never reconcile with unusable credentials.
-      const reason =
-        `credential lifecycle state is ${connection.credentialStatus ?? 'MISSING'}`;
+      const reason = `credential lifecycle state is ${connection.credentialStatus ?? 'MISSING'}`;
       await this.auditSkip(connection, reason, candidates.length);
       return {
         checked: 0,
@@ -168,9 +164,7 @@ export class ProtectiveOrderReconciliationService {
       this.zeroCredentials(credentials);
     }
 
-    const providerByExternalId = new Map(
-      positions.map((p) => [p.externalOrderId, p] as const),
-    );
+    const providerByExternalId = new Map(positions.map((p) => [p.externalOrderId, p] as const));
 
     let protectedCount = 0;
     let repairedCount = 0;
@@ -257,12 +251,8 @@ export class ProtectiveOrderReconciliationService {
     const providerSl = ExactDecimal.tryParse(position.stopLoss ?? '');
     const providerTp = ExactDecimal.tryParse(position.takeProfit ?? '');
 
-    const slOk =
-      providerSl?.isPositive() === true &&
-      this.withinTolerance(providerSl, internalSl);
-    const tpOk =
-      providerTp?.isPositive() === true &&
-      this.withinTolerance(providerTp, internalTp);
+    const slOk = providerSl?.isPositive() === true && this.withinTolerance(providerSl, internalSl);
+    const tpOk = providerTp?.isPositive() === true && this.withinTolerance(providerTp, internalTp);
 
     if (slOk && tpOk) {
       return { tradeId: trade.id, externalOrderId, outcome: 'PROTECTED' };
@@ -328,11 +318,7 @@ export class ProtectiveOrderReconciliationService {
     apiSecret?: string;
     serverUrl?: string;
   } {
-    if (
-      connection.encryptedCredentials &&
-      connection.credentialIv &&
-      connection.credentialTag
-    ) {
+    if (connection.encryptedCredentials && connection.credentialIv && connection.credentialTag) {
       return this.encryptionService.decrypt({
         ciphertext: connection.encryptedCredentials,
         iv: connection.credentialIv,

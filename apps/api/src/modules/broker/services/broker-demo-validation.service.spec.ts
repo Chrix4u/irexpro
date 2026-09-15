@@ -669,7 +669,6 @@ class StubLimitedAdapter implements IBrokerAdapter {
   private readonly positions: BrokerPosition[] = [];
   private readonly closed: BrokerClosedTrade[] = [];
 
-
   // Round 6 §7: the declared order capability contract.
   getOrderCapabilities(): OrderCapabilityDeclaration {
     return {

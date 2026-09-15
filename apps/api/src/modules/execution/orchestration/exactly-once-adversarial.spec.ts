@@ -284,10 +284,7 @@ describe('ExecutionOrchestrator exactly-once adversarial (Round 6 §13+§14 comp
 
     const [a, b] = await Promise.all([
       orchestrator.dispatchOrder(entryIntent(), connection),
-      orchestrator.dispatchOrder(
-        entryIntent({ brokerConnectionId: 'conn-2' }),
-        otherConnection,
-      ),
+      orchestrator.dispatchOrder(entryIntent({ brokerConnectionId: 'conn-2' }), otherConnection),
     ]);
 
     // Two accounts → two independent dispatches (no global lock).

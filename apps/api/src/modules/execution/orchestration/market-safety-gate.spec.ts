@@ -94,7 +94,10 @@ describe('MarketSafetyGateService — the final pre-commitment gate (Round 6 §5
     );
     expect(auditService.log).toHaveBeenCalledWith(
       expect.objectContaining({
-        metadata: expect.objectContaining({ blockedReason: 'MARKET_DATA_UNAVAILABLE', gate: 'MARKET_SAFETY' }),
+        metadata: expect.objectContaining({
+          blockedReason: 'MARKET_DATA_UNAVAILABLE',
+          gate: 'MARKET_SAFETY',
+        }),
       }),
     );
   });
@@ -154,11 +157,7 @@ describe('MarketSafetyGateService — the final pre-commitment gate (Round 6 §5
       quote({ bid: '1.09980', ask: '1.10020', spread: '0.00040' }),
     );
     await expect(
-      service.assertMarketSafeForDispatch(
-        intent({ referencePrice: null }),
-        {} as never,
-        'order-1',
-      ),
+      service.assertMarketSafeForDispatch(intent({ referencePrice: null }), {} as never, 'order-1'),
     ).resolves.toBeUndefined();
   });
 

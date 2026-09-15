@@ -87,7 +87,6 @@ class ToyContractAdapter implements IBrokerAdapter {
 
   constructor(private readonly transport: ScriptedBackend) {}
 
-
   // Round 6 §7: the declared order capability contract.
   getOrderCapabilities(): OrderCapabilityDeclaration {
     return {

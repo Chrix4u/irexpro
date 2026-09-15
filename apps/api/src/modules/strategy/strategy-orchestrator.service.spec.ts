@@ -153,16 +153,18 @@ describe('StrategyOrchestratorService', () => {
     // records (or reuses) a CREATED intent with the authority generations
     // CURRENT at creation.
     tradeIntentMock = {
-      recordOrReuseIntent: jest.fn().mockImplementation(async (facts: { signalId: string; userId: string }) => ({
-        created: true,
-        intent: {
-          id: `intent-${facts.signalId}`,
-          userId: facts.userId,
-          signalId: facts.signalId,
-          status: 'CREATED',
-          expiresAt: new Date(Date.now() + 60_000),
-        },
-      })),
+      recordOrReuseIntent: jest
+        .fn()
+        .mockImplementation(async (facts: { signalId: string; userId: string }) => ({
+          created: true,
+          intent: {
+            id: `intent-${facts.signalId}`,
+            userId: facts.userId,
+            signalId: facts.signalId,
+            status: 'CREATED',
+            expiresAt: new Date(Date.now() + 60_000),
+          },
+        })),
       markRejected: jest.fn().mockResolvedValue(undefined),
       markExecuted: jest.fn().mockResolvedValue(undefined),
     };

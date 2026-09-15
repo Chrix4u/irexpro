@@ -48,11 +48,23 @@ export class CapitalBudget {
   totalCapital: string;
 
   /** Optional per-instrument concentration cap (percent, NULL = unenforced). */
-  @Column({ name: 'max_instrument_concentration', type: 'numeric', precision: 5, scale: 2, nullable: true })
+  @Column({
+    name: 'max_instrument_concentration',
+    type: 'numeric',
+    precision: 5,
+    scale: 2,
+    nullable: true,
+  })
   maxInstrumentConcentration: string | null;
 
   /** Optional per-strategy concentration cap (percent, NULL = unenforced). */
-  @Column({ name: 'max_strategy_concentration', type: 'numeric', precision: 5, scale: 2, nullable: true })
+  @Column({
+    name: 'max_strategy_concentration',
+    type: 'numeric',
+    precision: 5,
+    scale: 2,
+    nullable: true,
+  })
   maxStrategyConcentration: string | null;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })

@@ -188,9 +188,7 @@ export class AiController {
     description: 'Internal service API key',
     required: true,
   })
-  async receiveInternalExitSignal(
-    @Body() dto: InternalExitSignalDto,
-  ): Promise<AiExitResult> {
+  async receiveInternalExitSignal(@Body() dto: InternalExitSignalDto): Promise<AiExitResult> {
     this.logger.log(
       `[INTERNAL] Exit signal received from AI engine: ` +
         `instrument=${dto.instrument}` +

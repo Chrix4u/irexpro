@@ -367,11 +367,7 @@ describe('OnboardingService readiness gate', () => {
 
     expect(status.canStartTrading).toBe(false);
     expect(status.blockedReasons).toEqual(
-      expect.arrayContaining([
-        'JURISDICTION_INELIGIBLE',
-        'AGE_NOT_ADULT',
-        'KYC_REJECTED',
-      ]),
+      expect.arrayContaining(['JURISDICTION_INELIGIBLE', 'AGE_NOT_ADULT', 'KYC_REJECTED']),
     );
   });
 
@@ -435,7 +431,10 @@ describe('OnboardingService readiness gate', () => {
     );
 
     // Risk profile without acknowledgement + connected broker with INVALID creds
-    mockRiskProfileRepo.findOne.mockResolvedValue({ ...completeRisk(), riskAcknowledgementAccepted: false });
+    mockRiskProfileRepo.findOne.mockResolvedValue({
+      ...completeRisk(),
+      riskAcknowledgementAccepted: false,
+    });
     mockBrokerQb.getOne.mockResolvedValue({ ...connectedBroker(), credentialStatus: 'INVALID' });
     status = await service.getOnboardingStatus('user-complete');
     expect(status.blockedReasons).toEqual(

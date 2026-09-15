@@ -14,13 +14,15 @@ import { RiskGrantService } from '../../risk/risk-grant.service';
 import { TradingAuthorityService } from '../../execution-authority/trading-authority.service';
 import { SharedControlRevisionService } from '../../execution-authority/shared-control-revision.service';
 import {
-  ExecutionConfirmationStatus,
   ExecutionMode,
   ProviderOperationClass,
   RiskGrantStatus,
 } from '../interfaces/execution-authority';
 import { BrokerConnection } from '../../broker/entities/broker-connection.entity';
-import { BrokerConnectionStatus, BrokerMode } from '../../broker/interfaces/broker-adapter.interface';
+import {
+  BrokerConnectionStatus,
+  BrokerMode,
+} from '../../broker/interfaces/broker-adapter.interface';
 import { PaperBrokerAdapter } from '../../broker/adapters/paper-broker.adapter';
 import { AuditAction } from '../../../common/enums/audit-action.enum';
 
@@ -130,10 +132,7 @@ describe('FinalDispatchBoundary — the §15 Paper→LIVE boundary matrix', () =
       {} as SharedControlRevisionService,
     );
 
-  const authorize = (input?: {
-    grantId?: string;
-    operationClass?: ProviderOperationClass;
-  }) =>
+  const authorize = (input?: { grantId?: string; operationClass?: ProviderOperationClass }) =>
     boundary.authorizeNewExposureDispatch({
       userId: USER,
       grantId: input?.grantId ?? 'grant-1',
@@ -194,21 +193,15 @@ describe('FinalDispatchBoundary — the §15 Paper→LIVE boundary matrix', () =
   });
 
   it('PAPER_ONLY refuses a real-broker connection EVEN when the account type claims DEMO — and never consumes the grant', async () => {
-    brokerService.findConnectionsByIds.mockResolvedValue([
-      connection({ brokerId: 'metatrader5' }),
-    ]);
+    brokerService.findConnectionsByIds.mockResolvedValue([connection({ brokerId: 'metatrader5' })]);
     await expect(authorize()).rejects.toBeInstanceOf(FinalDispatchBlockedException);
     // Read-only authorize consumed nothing — the typed block happened at
     // verification time, zero provider calls, zero consumption.
   });
 
   it('FULL_AUTO + LIVE account + NOT production-LIVE-eligible provider → LIVE_VERIFICATION_UNVERIFIED', async () => {
-    riskGrantRepo.findOne.mockResolvedValue(
-      grant({ executionMode: ExecutionMode.FULL_AUTO }),
-    );
-    sessionRepo.findOne.mockResolvedValue(
-      session({ executionMode: ExecutionMode.FULL_AUTO }),
-    );
+    riskGrantRepo.findOne.mockResolvedValue(grant({ executionMode: ExecutionMode.FULL_AUTO }));
+    sessionRepo.findOne.mockResolvedValue(session({ executionMode: ExecutionMode.FULL_AUTO }));
     brokerService.findConnectionsByIds.mockResolvedValue([
       connection({ brokerId: 'metatrader5', accountType: BrokerMode.LIVE }),
     ]);
@@ -229,9 +222,7 @@ describe('FinalDispatchBoundary — the §15 Paper→LIVE boundary matrix', () =
     riskGrantRepo.findOne.mockResolvedValue(
       grant({ executionMode: ExecutionMode.FULL_AUTO, providerVerificationFingerprint: null }),
     );
-    sessionRepo.findOne.mockResolvedValue(
-      session({ executionMode: ExecutionMode.FULL_AUTO }),
-    );
+    sessionRepo.findOne.mockResolvedValue(session({ executionMode: ExecutionMode.FULL_AUTO }));
     brokerService.findConnectionsByIds.mockResolvedValue([
       connection({ brokerId: 'metatrader5', accountType: BrokerMode.LIVE }),
     ]);
@@ -260,9 +251,7 @@ describe('FinalDispatchBoundary — the §15 Paper→LIVE boundary matrix', () =
   });
 
   it('every block carries the stable machine code in the typed exception', async () => {
-    brokerService.findConnectionsByIds.mockResolvedValue([
-      connection({ brokerId: 'metatrader5' }),
-    ]);
+    brokerService.findConnectionsByIds.mockResolvedValue([connection({ brokerId: 'metatrader5' })]);
     try {
       await authorize();
       throw new Error('expected the typed block');
@@ -277,18 +266,14 @@ describe('FinalDispatchBoundary — the §15 Paper→LIVE boundary matrix', () =
 
 describe('PaperBrokerAdapter — the paper path can NEVER be switched to LIVE (§15 layer 2)', () => {
   it('setMode(LIVE) warns and IGNORES — the adapter stays on its DEMO paper mode', () => {
-    const loggerWarn = jest
-      .spyOn(Logger.prototype, 'warn')
-      .mockImplementation(() => {});
+    const loggerWarn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
     const adapter = new PaperBrokerAdapter();
 
     adapter.setMode(BrokerMode.LIVE);
 
     // The mode is unchanged: the paper execution path stays PAPER — a LIVE
     // request can never route real money through the paper adapter.
-    expect(loggerWarn).toHaveBeenCalledWith(
-      expect.stringContaining('cannot be set to LIVE mode'),
-    );
+    expect(loggerWarn).toHaveBeenCalledWith(expect.stringContaining('cannot be set to LIVE mode'));
     loggerWarn.mockRestore();
   });
 

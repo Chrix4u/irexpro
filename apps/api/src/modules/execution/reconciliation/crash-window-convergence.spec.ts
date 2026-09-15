@@ -64,7 +64,7 @@ const connection = (): BrokerConnection =>
   }) as unknown as BrokerConnection;
 
 /** The crash-window trade: reserved (PENDING), never outcome-written. */
-const pendingTrade = (overrides: Partial<Trade> = {}): Trade =>
+const pendingTrade = (_overrides: Partial<Trade> = {}): Trade =>
   ({
     id: 'trade-1',
     userId: 'user-1',

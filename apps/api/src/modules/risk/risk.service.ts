@@ -4,10 +4,7 @@ import { EntityManager, Repository } from 'typeorm';
 import { ExactDecimal } from '../../common/utils/exact-decimal';
 import { RiskProfile } from './entities/risk-profile.entity';
 import { RiskViolation } from './entities/risk-violation.entity';
-import {
-  TradingSession,
-  TradingSessionStatus,
-} from '../execution/entities/trading-session.entity';
+import { TradingSession, TradingSessionStatus } from '../execution/entities/trading-session.entity';
 // Round 6 live-execution completion (§16): the autonomous session lifecycle.
 import { TradingSessionStateMachine } from '../execution/entities/trading-session-state-machine';
 import { TradingAuthorityGeneration } from '../users/entities/trading-authority-generation.entity';
@@ -462,10 +459,9 @@ export class RiskService {
     let liveLossComplete = false;
     if (connection.accountType === BrokerMode.LIVE) {
       try {
-        const snapshot =
-          await this.brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure(
-            connection.id,
-          );
+        const snapshot = await this.brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure(
+          connection.id,
+        );
         const logicalAccountKey = connection.logicalAccountKey ?? null;
         if (!logicalAccountKey) {
           throw new Error(
@@ -1111,8 +1107,7 @@ export class RiskService {
       // carry the snapshot-bound values; PAPER carries the projected view's
       // currency when the source provides one (never fabricated).
       logicalAccountKey: liveSnapshotBinding?.logicalAccountKey,
-      accountCurrency:
-        liveSnapshotBinding?.currency ?? accountState.currency ?? undefined,
+      accountCurrency: liveSnapshotBinding?.currency ?? accountState.currency ?? undefined,
       riskPeriodId: liveRiskPeriodId ?? undefined,
     };
 
@@ -2136,10 +2131,7 @@ export class RiskService {
    * grant invalidation. Idempotent: a session already degraded (or ended) is
    * a no-op; the §16 state machine forbids everything else.
    */
-  private async suspendSessionForRiskLimit(
-    userId: string,
-    code: RiskRejectionCode,
-  ): Promise<void> {
+  private async suspendSessionForRiskLimit(userId: string, code: RiskRejectionCode): Promise<void> {
     const session = await this.sessionRepo.findOne({
       where: { userId, status: TradingSessionStatus.ACTIVE },
       order: { startedAt: 'DESC' },

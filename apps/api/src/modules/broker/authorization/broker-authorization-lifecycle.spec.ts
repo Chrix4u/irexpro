@@ -198,9 +198,8 @@ describe('BrokerService — Sprint 50 authorization lifecycle', () => {
 
     service = module.get(BrokerService);
     authorityBump = module.get(TradingAuthorityService).bumpGeneration as unknown as jest.Mock;
-    authorityInvalidate = module.get(
-      GrantInvalidationService,
-    ).invalidateUserNewExposureAuthority as unknown as jest.Mock;
+    authorityInvalidate = module.get(GrantInvalidationService)
+      .invalidateUserNewExposureAuthority as unknown as jest.Mock;
   });
 
   describe('connectBroker() — state machine + credential advancement', () => {

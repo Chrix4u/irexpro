@@ -5,10 +5,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { RiskService } from './risk.service';
 import { RiskProfile } from './entities/risk-profile.entity';
 import { RiskViolation } from './entities/risk-violation.entity';
-import {
-  TradingSession,
-  TradingSessionStatus,
-} from '../execution/entities/trading-session.entity';
+import { TradingSession, TradingSessionStatus } from '../execution/entities/trading-session.entity';
 import { TradingAuthorityGeneration } from '../users/entities/trading-authority-generation.entity';
 import { BrokerService } from '../broker/broker.service';
 import { AuditService } from '../audit/audit.service';
@@ -126,9 +123,11 @@ const mockProfileRepo = () => {
   // profileRepo.manager.transaction — the mock EM's repositories delegate to
   // THIS repo so the existing save/findOne assertions keep firing.
   (repo as unknown as { manager: unknown }).manager = {
-    transaction: jest.fn().mockImplementation(async (cb: (em: unknown) => Promise<unknown>) =>
-      cb({ getRepository: () => repo }),
-    ),
+    transaction: jest
+      .fn()
+      .mockImplementation(async (cb: (em: unknown) => Promise<unknown>) =>
+        cb({ getRepository: () => repo }),
+      ),
   };
   return repo;
 };

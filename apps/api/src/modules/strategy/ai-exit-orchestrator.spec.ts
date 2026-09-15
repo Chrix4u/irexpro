@@ -7,10 +7,7 @@ import { ExecutionService } from '../execution/execution.service';
 import { ExecutionReadService } from '../execution/execution-read.service';
 import { AiSignalIdentityGateService } from '../execution/orchestration/signal-identity.gate';
 import { AuditAction } from '../../common/enums/audit-action.enum';
-import {
-  AiExitSignal,
-  AiExitResult,
-} from './interfaces/ai-exit-signal.interface';
+import { AiExitSignal, AiExitResult } from './interfaces/ai-exit-signal.interface';
 import { Trade, TradeCloseReason, TradeStatus } from '../execution/entities/trade.entity';
 import { TradingSession, TradingSessionStatus } from '../execution/entities/trading-session.entity';
 
@@ -141,9 +138,7 @@ describe('AiExitOrchestratorService — the §10 serialized AI exit pipeline', (
   });
 
   it('SESSION_INACTIVE when the session reference is stale (mismatch)', async () => {
-    const result = await service.processExitSignal(
-      exitSignal({ tradingSessionId: 'session-OLD' }),
-    );
+    const result = await service.processExitSignal(exitSignal({ tradingSessionId: 'session-OLD' }));
     expect(result.outcome).toBe('SESSION_INACTIVE');
     expect(result.reason).toContain('does not match');
   });
@@ -294,7 +289,9 @@ describe('AiExitOrchestratorService — the §10 serialized AI exit pipeline', (
 
   it('audits AI_EXIT_SIGNAL_EXECUTED on success with per-trade results', async () => {
     executionReadService.listOpenPositions.mockResolvedValue([openTrade('trade-1')]);
-    executionService.closeTrade.mockResolvedValue(openTrade('trade-1', { status: TradeStatus.CLOSED }));
+    executionService.closeTrade.mockResolvedValue(
+      openTrade('trade-1', { status: TradeStatus.CLOSED }),
+    );
 
     await service.processExitSignal(exitSignal());
 
@@ -382,8 +379,12 @@ describe('AiExitOrchestratorService — the §10 serialized AI exit pipeline', (
     });
 
     await Promise.all([
-      service.processExitSignal(exitSignal({ userId: 'user-A', tradingSessionId: 'session-user-A' })),
-      service.processExitSignal(exitSignal({ userId: 'user-B', tradingSessionId: 'session-user-B' })),
+      service.processExitSignal(
+        exitSignal({ userId: 'user-A', tradingSessionId: 'session-user-A' }),
+      ),
+      service.processExitSignal(
+        exitSignal({ userId: 'user-B', tradingSessionId: 'session-user-B' }),
+      ),
     ]);
 
     // user-B started before user-A ended → concurrent across users.

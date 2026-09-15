@@ -28,7 +28,9 @@ describe('TradingSessionStateMachine (§16)', () => {
       TradingSessionStatus.SUSPENDED_RISK_LIMIT,
       TradingSessionStatus.SUSPENDED_BROKER,
     ]) {
-      expect(TradingSessionStateMachine.canTransition(from, TradingSessionStatus.ACTIVE)).toBe(true);
+      expect(TradingSessionStateMachine.canTransition(from, TradingSessionStatus.ACTIVE)).toBe(
+        true,
+      );
       expect(TradingSessionStateMachine.canTransition(from, TradingSessionStatus.ENDED)).toBe(true);
     }
   });
@@ -53,7 +55,10 @@ describe('TradingSessionStateMachine (§16)', () => {
       ),
     ).toBe(false);
     expect(
-      TradingSessionStateMachine.canTransition(TradingSessionStatus.PAUSED, TradingSessionStatus.SUSPENDED_BROKER),
+      TradingSessionStateMachine.canTransition(
+        TradingSessionStatus.PAUSED,
+        TradingSessionStatus.SUSPENDED_BROKER,
+      ),
     ).toBe(false);
   });
 

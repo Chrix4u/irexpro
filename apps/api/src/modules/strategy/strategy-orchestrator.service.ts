@@ -14,10 +14,7 @@ import {
   AiSignalIdentityGateService,
   SignalIdentityRegistration,
 } from '../execution/orchestration/signal-identity.gate';
-import {
-  TradeIntentService,
-  TradeIntentFacts,
-} from '../execution/services/trade-intent.service';
+import { TradeIntentService, TradeIntentFacts } from '../execution/services/trade-intent.service';
 import { AllocationService } from '../execution/services/allocation.service';
 import { PositionSizingService } from '../execution/services/position-sizing.service';
 import { TradingAuthorityService } from '../execution-authority/trading-authority.service';
@@ -268,9 +265,7 @@ export class StrategyOrchestratorService {
     // may NOT proceed to risk evaluation (executeTrade enforces the guard).
     let tradeIntentId: string;
     try {
-      tradeIntentId = (
-        await this.recordTradeIntent(candidate, session, registration)
-      ).id;
+      tradeIntentId = (await this.recordTradeIntent(candidate, session, registration)).id;
     } catch (err) {
       const reason = `Trade intent could not be recorded (fail-closed): ${(err as Error).message}`;
       this.logger.error(`Signal ${signalId}: intent recording failed`, (err as Error).stack);
@@ -414,12 +409,14 @@ export class StrategyOrchestratorService {
       // §2: a risk rejection is DEFINITIVE for this decision — the intent is
       // terminally REJECTED (a replay of the same AI decision can never
       // re-enter exposure through the intent guard).
-      await this.tradeIntentService.markRejected(tradeIntentId).catch((err) =>
-        this.logger.warn(
-          `Signal ${signalId}: intent ${tradeIntentId} could not be marked REJECTED ` +
-            `(${(err as Error).message}) — the duplicate-recovery path still fails closed`,
-        ),
-      );
+      await this.tradeIntentService
+        .markRejected(tradeIntentId)
+        .catch((err) =>
+          this.logger.warn(
+            `Signal ${signalId}: intent ${tradeIntentId} could not be marked REJECTED ` +
+              `(${(err as Error).message}) — the duplicate-recovery path still fails closed`,
+          ),
+        );
       // §3: the capital reservation is released with the decision (definitive
       // non-exposure — the ledger records why).
       await this.allocationService
@@ -601,7 +598,8 @@ export class StrategyOrchestratorService {
       requestedEntryPrice:
         candidate.suggestedEntryPrice != null ? String(candidate.suggestedEntryPrice) : null,
       stopLoss: candidate.suggestedStopLoss != null ? String(candidate.suggestedStopLoss) : null,
-      takeProfit: candidate.suggestedTakeProfit != null ? String(candidate.suggestedTakeProfit) : null,
+      takeProfit:
+        candidate.suggestedTakeProfit != null ? String(candidate.suggestedTakeProfit) : null,
       trailingStopPips: null,
       rationale: null,
       metadata: {

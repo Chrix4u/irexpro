@@ -546,9 +546,7 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
     const tradeCas = new TradeLifecycleCasService(tradeRepo, auditService);
     // Round 6 §2: the REAL TradeIntentService against real PostgreSQL rows —
     // the intent guard + exactly-once identity run in this CI-gated matrix.
-    tradeIntentService = new TradeIntentService(
-      dataSource.getRepository(TradeIntent),
-    );
+    tradeIntentService = new TradeIntentService(dataSource.getRepository(TradeIntent));
     service = new ExecutionService(
       tradeRepo as unknown as Repository<Trade>,
       sessionRepo,

@@ -59,7 +59,10 @@ export class OrderCapabilityError extends Error {
 }
 
 const isPositiveDecimalString = (value: unknown): boolean =>
-  typeof value === 'string' && value.trim() !== '' && Number(value) > 0 && Number.isFinite(Number(value));
+  typeof value === 'string' &&
+  value.trim() !== '' &&
+  Number(value) > 0 &&
+  Number.isFinite(Number(value));
 
 /**
  * Assert ONE order request is within the adapter's declared capability.

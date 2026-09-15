@@ -39,15 +39,9 @@ import { DomainEventType } from '../events/enums/domain-event-type.enum';
 import { TradeLifecycleCasService } from './orders/trade-lifecycle-cas.service';
 import { OrderKind, OrderTimeInForce } from './orders/order.enums';
 import { ExecutionOrchestrator } from './orchestration/execution-orchestrator.service';
-import {
-  FinalDispatchAuthorization,
-  FinalDispatchBoundary,
-} from './orchestration/final-dispatch-boundary';
+import { FinalDispatchBoundary } from './orchestration/final-dispatch-boundary';
 import { ExecutionIntent } from './orchestration/execution-intent.interface';
-import {
-  TradeIntentNotUsableError,
-  TradeIntentService,
-} from './services/trade-intent.service';
+import { TradeIntentNotUsableError, TradeIntentService } from './services/trade-intent.service';
 import { MarketSafetyError } from './orchestration/market-safety-gate.service';
 
 /** Invalidation reason stamped on RiskGrants when the session authority
@@ -432,12 +426,14 @@ export class ExecutionService {
       // also reconstructible via clientOrderId).
       if (dispatch.orderId) {
         trade.orderId = dispatch.orderId;
-        await this.tradeRepo.update(trade.id, { orderId: dispatch.orderId }).catch((linkErr) =>
-          this.logger.warn(
-            `Trade ${trade.id} order-linkage write failed (${(linkErr as Error).message}) — ` +
-              'the audit chain remains reconstructible via clientOrderId',
-          ),
-        );
+        await this.tradeRepo
+          .update(trade.id, { orderId: dispatch.orderId })
+          .catch((linkErr) =>
+            this.logger.warn(
+              `Trade ${trade.id} order-linkage write failed (${(linkErr as Error).message}) — ` +
+                'the audit chain remains reconstructible via clientOrderId',
+            ),
+          );
       }
     } catch (err) {
       if (err instanceof MarketSafetyError) {
@@ -467,12 +463,14 @@ export class ExecutionService {
           },
         });
         trade.status = outcome.trade?.status ?? TradeStatus.REJECTED;
-        await this.tradeIntents.markRejected(tradeIntent.id).catch((intentErr) =>
-          this.logger.warn(
-            `Intent ${tradeIntent.id} could not be marked REJECTED after the ` +
-              `market-safety failure (${(intentErr as Error).message})`,
-          ),
-        );
+        await this.tradeIntents
+          .markRejected(tradeIntent.id)
+          .catch((intentErr) =>
+            this.logger.warn(
+              `Intent ${tradeIntent.id} could not be marked REJECTED after the ` +
+                `market-safety failure (${(intentErr as Error).message})`,
+            ),
+          );
         await this.auditService.log({
           actorUserId: userId,
           action: AuditAction.TRADE_REJECTED,
@@ -1792,4 +1790,3 @@ export class ExecutionService {
     return digest.readUInt32BE(0) & 0x7fffffff;
   }
 }
-

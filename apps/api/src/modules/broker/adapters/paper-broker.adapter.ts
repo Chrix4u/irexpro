@@ -815,7 +815,6 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
 
   // ─── Order management ─────────────────────────────────────────────────────
 
-
   // ─── Order capability contract (Round 6 §7) ──────────────────────────────
 
   /**

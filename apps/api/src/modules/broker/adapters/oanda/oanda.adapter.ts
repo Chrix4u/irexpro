@@ -584,7 +584,6 @@ export class OandaAdapter implements IBrokerAdapter, AdapterMetadata {
 
   // ─── Order management ─────────────────────────────────────────────────────
 
-
   // ─── Order capability contract (Round 6 §7) ──────────────────────────────
 
   /**

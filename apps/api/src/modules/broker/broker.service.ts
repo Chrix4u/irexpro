@@ -803,10 +803,7 @@ export class BrokerService {
     // invalidation land with the persisted transition (fail-safe best effort
     // AFTER the durable fact: a failure is logged and audited, never silent).
     try {
-      await this.tradingAuthorityService.bumpGeneration(
-        userId,
-        'BROKER_AUTHORIZATION_REVOKED',
-      );
+      await this.tradingAuthorityService.bumpGeneration(userId, 'BROKER_AUTHORIZATION_REVOKED');
       await this.grantInvalidation.invalidateUserNewExposureAuthority(
         userId,
         'BROKER_AUTHORIZATION_REVOKED',
