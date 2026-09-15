@@ -32,6 +32,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  *    computed intermediates).
  */
 export class PortfolioAllocationRound6LiveCompletion1754500000000 implements MigrationInterface {
+  name = 'PortfolioAllocationRound6LiveCompletion1754500000000';
   public async up(queryRunner: QueryRunner): Promise<void> {
     // ── A. capital_budgets ──────────────────────────────────────────────────
     await queryRunner.query(`

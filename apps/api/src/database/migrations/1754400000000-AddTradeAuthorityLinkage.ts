@@ -22,6 +22,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * is reconstructed by id, never enforced by CASCADE).
  */
 export class AddTradeAuthorityLinkage1754400000000 implements MigrationInterface {
+  name = 'AddTradeAuthorityLinkage1754400000000';
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(
       `ALTER TABLE trading.trades ADD COLUMN IF NOT EXISTS risk_grant_id uuid NULL`,

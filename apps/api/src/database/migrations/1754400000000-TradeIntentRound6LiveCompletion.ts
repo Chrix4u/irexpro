@@ -15,6 +15,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  *    trade back to its originating intent (§20 reconstruction chain).
  */
 export class TradeIntentRound6LiveCompletion1754400000000 implements MigrationInterface {
+  name = 'TradeIntentRound6LiveCompletion1754400000000';
   public async up(queryRunner: QueryRunner): Promise<void> {
     // ── A. trade_intents ────────────────────────────────────────────────────
     await queryRunner.query(`

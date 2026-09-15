@@ -111,12 +111,17 @@ describe('BrokerService authorization transitions — real PostgreSQL concurrenc
         "broker_name" varchar(100) NOT NULL,
         "display_name" varchar(100) NULL,
         "account_id" varchar(100) NULL,
+        "provider_broker_identity" varchar(100) NULL,
+        "logical_account_key" varchar(255) NULL,
         "account_type" varchar(10) NOT NULL DEFAULT 'DEMO',
         "account_currency" varchar(3) NULL,
         "account_leverage" integer NULL,
         "status" varchar(32) NOT NULL DEFAULT 'DISCONNECTED',
         "authorization_status" varchar(30) NOT NULL DEFAULT 'NOT_CONNECTED',
         "credential_status" varchar(20) NOT NULL DEFAULT 'CREATED',
+        "credential_generation" integer NOT NULL DEFAULT 0,
+        "credential_refresh_lease_expires_at" timestamptz NULL,
+        "credential_refresh_lease_owner" varchar(64) NULL,
         "authorized_at" timestamptz NULL,
         "authorization_revoked_at" timestamptz NULL,
         "encrypted_credentials" text NULL,
@@ -158,6 +163,8 @@ describe('BrokerService authorization transitions — real PostgreSQL concurrenc
     };
     const adapterRegistry = {
       getAdapter: jest.fn().mockReturnValue(adapter),
+      getAdapterForConnection: jest.fn().mockReturnValue(adapter),
+      releaseAdapterForConnection: jest.fn(),
       isSupported: jest.fn().mockReturnValue(true),
     } as unknown as BrokerAdapterRegistry;
     const providerRegistry = {
@@ -178,6 +185,15 @@ describe('BrokerService authorization transitions — real PostgreSQL concurrenc
         Promise.resolve(credentials),
       ),
     } as unknown as BrokerOAuthTokenLifecycleService;
+    const tradingAuthority = {
+      bumpGeneration: jest.fn().mockResolvedValue(2),
+    };
+    const grantInvalidation = {
+      invalidateUserNewExposureAuthority: jest.fn().mockResolvedValue({
+        invalidatedGrants: 0,
+        revokedConfirmations: 0,
+      }),
+    };
     service = new BrokerService(
       connectionRepo,
       // accountRepo is unused by the transition paths under test
@@ -190,13 +206,11 @@ describe('BrokerService authorization transitions — real PostgreSQL concurrenc
       tokenLifecycle,
       // Sprint 56 correction round 5 (#332): link outbox — unused by the
       // authorization-transition paths under test.
-      // Round 6 (#300): the unified authority seams — unused by the
-      // authorization-transition paths under test (CI-gated suite).
       {} as never,
-      {} as never,
+      tradingAuthority as never,
+      grantInvalidation as never,
       // Round 6 live-execution completion (§1a): snapshot authority seam —
       // unused by the authorization-transition paths under test.
-      {} as never,
       {} as never,
     );
   });

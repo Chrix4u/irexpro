@@ -192,6 +192,9 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
       authority_generation INTEGER NOT NULL DEFAULT 1,
       status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
       opening_balance NUMERIC(15,2),
+      account_currency VARCHAR(3),
+      opening_snapshot_id UUID,
+      opening_snapshot_generation INTEGER,
       peak_equity NUMERIC(15,2),
       risk_profile_snapshot JSONB,
       started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -257,6 +260,9 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
       authority_generation INTEGER NOT NULL,
       kill_switch_generation INTEGER,
       execution_control_revision INTEGER,
+      authority_binding_digest VARCHAR(64),
+      trading_policy_revision INTEGER,
+      provider_verification_revision INTEGER,
       order_payload_digest VARCHAR(64) NOT NULL,
       order_payload JSONB NOT NULL,
       quote_ref JSONB,
@@ -300,9 +306,12 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
       instrument VARCHAR(50) NOT NULL, direction VARCHAR(10) NOT NULL,
       lot_size NUMERIC(10,4) NOT NULL, requested_entry_price NUMERIC(18,8) NOT NULL,
       fill_price NUMERIC(18,8), stop_loss NUMERIC(18,8) NOT NULL, take_profit NUMERIC(18,8) NOT NULL,
-      trailing_stop_pips NUMERIC(8,2), external_order_id VARCHAR(255), status VARCHAR(32) NOT NULL DEFAULT 'PENDING',
+      trailing_stop_pips NUMERIC(8,2), external_order_id VARCHAR(255), external_position_id VARCHAR(255),
+      commission NUMERIC(18,8), swap NUMERIC(18,8), status VARCHAR(32) NOT NULL DEFAULT 'PENDING',
       exit_price NUMERIC(18,8), realised_pnl NUMERIC(18,8), close_reason VARCHAR(64), broker_rejection_reason TEXT,
-      dispatch_certainty VARCHAR(30), opened_at TIMESTAMPTZ, closed_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      dispatch_certainty VARCHAR(30), trading_session_id UUID, logical_account_key VARCHAR(255), account_currency VARCHAR(3),
+      risk_period_id UUID, trade_intent_id UUID, risk_grant_id UUID, order_id UUID,
+      opened_at TIMESTAMPTZ, closed_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
     // trading.orders — mirrors migration 1753600000000 (CreateNormalizedOrderDomain)
     await dataSource.query(`CREATE TABLE trading.orders (
@@ -333,7 +342,7 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
       CONSTRAINT chk_orders_tif CHECK (time_in_force IN ('GTC','DAY','IOC','FOK')),
       CONSTRAINT chk_orders_direction CHECK (direction IN ('BUY','SELL')),
       CONSTRAINT chk_orders_status CHECK (status IN (
-        'CREATED','SUBMITTED','ACKNOWLEDGED','PARTIALLY_FILLED','FILLED',
+        'CREATED','SUBMITTED','DISPATCH_COMMITTED','ACKNOWLEDGED','PARTIALLY_FILLED','FILLED',
         'REJECTED','CANCELLED','EXPIRED','RECONCILIATION_PENDING')),
       CONSTRAINT chk_orders_quantity_positive CHECK (requested_quantity > 0),
       CONSTRAINT chk_orders_filled_range CHECK (filled_quantity >= 0 AND filled_quantity <= requested_quantity),
@@ -460,6 +469,7 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
     } as unknown as BrokerService;
     const adapterRegistry = {
       getAdapter: jest.fn().mockReturnValue(adapter),
+      getAdapterForConnection: jest.fn().mockReturnValue(adapter),
     } as unknown as BrokerAdapterRegistry;
     const encryptionService = {
       decrypt: jest.fn().mockReturnValue({
@@ -536,13 +546,18 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
       dataSource.getRepository(Order),
       {} as never,
       dataSource,
-      { getCurrentGeneration: jest.fn() } as never,
+      { getCurrentGeneration: jest.fn().mockResolvedValue(1) } as never,
       {
         getCurrentTradingPolicyRevision: jest.fn(),
         getCurrentProviderVerificationRevision: jest.fn(),
         getCurrentExecutionControlRevision: jest.fn(),
       } as never,
     );
+    // PG harness: route orchestrator dispatch commitment through the same real
+    // FinalDispatchBoundary instance used by ExecutionService.
+    (
+      orchestrator as unknown as { finalDispatchBoundary: FinalDispatchBoundary }
+    ).finalDispatchBoundary = boundary;
     const tradeCas = new TradeLifecycleCasService(tradeRepo, auditService);
     // Round 6 §2: the REAL TradeIntentService against real PostgreSQL rows —
     // the intent guard + exactly-once identity run in this CI-gated matrix.
@@ -585,12 +600,13 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
     expect(rows).toHaveLength(1);
   });
 
-  it('same signal concurrently: ONE grant-consume winner, ONE broker submission, loser typed-blocked', async () => {
+  it('same signal concurrently: ONE durable trade, ONE broker submission, duplicate returns existing trade', async () => {
     const signalId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
     // ONE durable grant for the signal — both racing executeTrade calls carry
-    // the same grantId; the final dispatch boundary's atomic consume grants
-    // exactly ONE winner (the loser gets the typed grant conflict and makes
-    // ZERO provider calls — task 50-c).
+    // the same grantId. The atomic trade-slot reservation serializes the same
+    // idempotency key: one caller reserves the PENDING trade and proceeds to
+    // provider commitment; the duplicate caller returns that existing trade.
+    // Exactly one provider dispatch is therefore possible.
     const granted = await grantedDecision(signalId, 10);
     const results = await Promise.allSettled([
       service.executeTrade(userId, granted),
@@ -598,15 +614,19 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
     ]);
     const fulfilled = results.filter((r) => r.status === 'fulfilled');
     const rejected = results.filter((r) => r.status === 'rejected');
-    expect(fulfilled).toHaveLength(1);
-    expect(rejected).toHaveLength(1);
-    expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(ForbiddenException);
+    expect(fulfilled).toHaveLength(2);
+    expect(rejected).toHaveLength(0);
+    const returnedTradeIds = fulfilled.map(
+      (r) => (r as PromiseFulfilledResult<{ id: string }>).value.id,
+    );
+    expect(returnedTradeIds[0]).toBe(returnedTradeIds[1]);
     expect(placeOrder).toHaveBeenCalledTimes(1);
     const rows = await dataSource.query(
-      'SELECT idempotency_key FROM trading.trades WHERE user_id = $1',
+      'SELECT id, idempotency_key FROM trading.trades WHERE user_id = $1',
       [userId],
     );
     expect(rows).toHaveLength(1);
+    expect(rows[0].id).toBe(returnedTradeIds[0]);
   });
 
   it('records the full normalized order lifecycle (CREATED→SUBMITTED→ACKNOWLEDGED→FILLED) on real PostgreSQL', async () => {
