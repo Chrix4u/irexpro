@@ -6,6 +6,8 @@ import { SignalIdentityRegistration } from '../execution/orchestration/signal-id
 import { TradeIntentService } from '../execution/services/trade-intent.service';
 import { TradingAuthorityService } from '../execution-authority/trading-authority.service';
 import { SharedControlRevisionService } from '../execution-authority/shared-control-revision.service';
+import { PositionSizingService } from '../execution/services/position-sizing.service';
+import { AllocationService } from '../execution/services/allocation.service';
 import { RiskService } from '../risk/risk.service';
 import { ExecutionService } from '../execution/execution.service';
 import { BrokerService } from '../broker/broker.service';
@@ -79,6 +81,12 @@ describe('StrategyOrchestratorService', () => {
     getCurrentTradingPolicyRevision: jest.Mock;
     getCurrentProviderVerificationRevision: jest.Mock;
     getCurrentExecutionControlRevision: jest.Mock;
+  };
+  /** Round 6 §3/§4: sizing + allocation seam mocks. */
+  let sizingMock: { sizePosition: jest.Mock };
+  let allocationMock: {
+    resolveOrAllocate: jest.Mock;
+    releaseAllocationForIntent: jest.Mock;
   };
 
   /** Full SignalIdentityRegistration shape (Round 6 mock contract). */
@@ -169,6 +177,22 @@ describe('StrategyOrchestratorService', () => {
       getCurrentExecutionControlRevision: jest.fn().mockResolvedValue(1),
     };
 
+    // Round 6 §3/§4: sizing derives a proven volume and allocation reserves
+    // it (matrices live in their own suites).
+    sizingMock = {
+      sizePosition: jest.fn().mockResolvedValue({
+        lots: '0.05',
+        allocatedCapital: '5425.00',
+        accountCurrency: 'USD',
+        entryPrice: '1.08500',
+        inputs: { accountCurrency: 'USD', equity: '10000.00' },
+      }),
+    };
+    allocationMock = {
+      resolveOrAllocate: jest.fn().mockResolvedValue({ id: 'alloc-1', status: 'ACTIVE' }),
+      releaseAllocationForIntent: jest.fn().mockResolvedValue(undefined),
+    };
+
     module = await Test.createTestingModule({
       providers: [
         StrategyOrchestratorService,
@@ -190,6 +214,9 @@ describe('StrategyOrchestratorService', () => {
         { provide: TradeIntentService, useValue: tradeIntentMock },
         { provide: TradingAuthorityService, useValue: authorityReadMock },
         { provide: SharedControlRevisionService, useValue: sharedRevisionMock },
+        // Round 6 §3/§4: sizing + allocation at the seam.
+        { provide: PositionSizingService, useValue: sizingMock },
+        { provide: AllocationService, useValue: allocationMock },
       ],
     }).compile();
 

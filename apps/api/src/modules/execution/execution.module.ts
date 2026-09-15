@@ -13,6 +13,8 @@ import { AiSignalIdentityGateService } from './orchestration/signal-identity.gat
 import { TradeLifecycleCasService } from './orders/trade-lifecycle-cas.service';
 import { Trade } from './entities/trade.entity';
 import { TradeIntent } from './entities/trade-intent.entity';
+import { CapitalAllocation } from './entities/capital-allocation.entity';
+import { CapitalBudget } from './entities/capital-budget.entity';
 import { TradingSession } from './entities/trading-session.entity';
 import { RiskGrant } from './entities/risk-grant.entity';
 import { ExecutionConfirmation } from './entities/execution-confirmation.entity';
@@ -38,6 +40,10 @@ import { ExecutionControlModule } from '../execution-control/execution-control.m
 import { ExecutionAuthorityModule } from '../execution-authority/execution-authority.module';
 import { DailyRiskPeriodModule } from './daily-risk-period.module';
 import { TradeIntentService } from './services/trade-intent.service';
+// Round 6 live-execution completion (§3/§4): the portfolio allocation
+// engine + the deterministic fail-closed position-sizing engine.
+import { AllocationService } from './services/allocation.service';
+import { PositionSizingService } from './services/position-sizing.service';
 
 /**
  * ExecutionModule — Live trade execution, lifecycle management, and
@@ -67,6 +73,8 @@ import { TradeIntentService } from './services/trade-intent.service';
     TypeOrmModule.forFeature([
       Trade,
       TradeIntent,
+      CapitalAllocation,
+      CapitalBudget,
       TradingSession,
       RiskGrant,
       ExecutionConfirmation,
@@ -102,6 +110,10 @@ import { TradeIntentService } from './services/trade-intent.service';
     // TradeIntent layer — idempotent per (user, intentKey), full decision
     // provenance, authority generations at creation.
     TradeIntentService,
+    // Round 6 §3/§4: allocation (server-side authoritative portfolio layer)
+    // + position sizing (deterministic, fail-closed, ExactDecimal-only).
+    AllocationService,
+    PositionSizingService,
     // Round 5 (#295): the session-resolution seam every EXECUTION-side
     // NEW-exposure decision uses (TradingSession = authoritative target).
     ExecutionSessionResolutionService,
@@ -133,6 +145,8 @@ import { TradeIntentService } from './services/trade-intent.service';
   exports: [
     ExecutionService,
     TradeIntentService,
+    AllocationService,
+    PositionSizingService,
     ExecutionSessionResolutionService,
     ExecutionOrchestrator,
     FinalDispatchBoundary,

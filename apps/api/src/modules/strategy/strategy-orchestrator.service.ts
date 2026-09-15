@@ -18,6 +18,8 @@ import {
   TradeIntentService,
   TradeIntentFacts,
 } from '../execution/services/trade-intent.service';
+import { AllocationService } from '../execution/services/allocation.service';
+import { PositionSizingService } from '../execution/services/position-sizing.service';
 import { TradingAuthorityService } from '../execution-authority/trading-authority.service';
 import { SharedControlRevisionService } from '../execution-authority/shared-control-revision.service';
 import {
@@ -91,6 +93,12 @@ export class StrategyOrchestratorService {
     private readonly tradeIntentService: TradeIntentService,
     private readonly tradingAuthorityService: TradingAuthorityService,
     private readonly sharedControlRevisionService: SharedControlRevisionService,
+    // Round 6 live-execution completion (§3/§4): the server-side
+    // authoritative allocation engine + the deterministic fail-closed
+    // position-sizing engine — every NEW decision is sized from PROVEN
+    // inputs and its capital reserved BEFORE risk evaluation.
+    private readonly positionSizingService: PositionSizingService,
+    private readonly allocationService: AllocationService,
   ) {}
 
   /**
@@ -282,6 +290,59 @@ export class StrategyOrchestratorService {
       return { outcome: 'EXECUTION_FAILED', signalId, reason };
     }
 
+    // ── Gate 4.8: Position sizing + capital allocation (Round 6 §3/§4) ──
+    // The decision's volume is DERIVED from proven inputs (authoritative
+    // equity, risk budget, stop-loss distance, PROVEN contract size and
+    // instrument constraints — ExactDecimal only; missing input = typed
+    // fail-closed, NEVER a guessed lot size), then the capital is reserved
+    // against the account's explicit allocation budget inside the serialized
+    // critical section (double allocation / strategy conflicts / multi-worker
+    // races are impossible). The AI's suggested volume is provenance only —
+    // the SIZED volume is what flows to the Risk Engine.
+    let sized;
+    try {
+      sized = await this.positionSizingService.sizePosition({
+        userId,
+        brokerConnectionId: session.brokerConnectionId,
+        instrument: candidate.instrument,
+        direction: candidate.direction,
+        entryType: candidate.suggestedEntryPrice != null ? 'LIMIT' : 'MARKET',
+        requestedEntryPrice:
+          candidate.suggestedEntryPrice != null ? String(candidate.suggestedEntryPrice) : null,
+        stopLoss: candidate.suggestedStopLoss != null ? String(candidate.suggestedStopLoss) : null,
+      });
+      await this.allocationService.resolveOrAllocate({
+        intent: {
+          id: tradeIntentId,
+          userId,
+          brokerConnectionId: session.brokerConnectionId,
+          instrument: candidate.instrument,
+          direction: candidate.direction,
+          strategyCode: candidate.strategyCode ?? null,
+        },
+        logicalAccountKey: null, // resolved inside the allocation engine scope
+        sized,
+      });
+    } catch (err) {
+      const code = (err as { code?: string }).code ?? 'SIZING_ALLOCATION_FAILED';
+      const reason = `Position sizing/allocation failed closed [${code}]: ${(err as Error).message}`;
+      this.logger.warn(`Signal ${signalId}: ${reason}`);
+      await this.auditService.log({
+        actorUserId: userId,
+        action: AuditAction.AI_SIGNAL_EXECUTION_FAILED,
+        severity: AuditSeverity.WARNING,
+        resourceType: 'AiSignal',
+        resourceId: signalId,
+        metadata: {
+          instrument: candidate.instrument,
+          direction: candidate.direction,
+          failureCode: code,
+          message: (err as Error).message,
+        },
+      });
+      return { outcome: 'EXECUTION_FAILED', signalId, reason };
+    }
+
     // ── Build ProposedTrade ────────────────────────────────────────────────────────
     // (Round 5 #295/#298/#301/#302): the authority binding comes from the
     // RESOLVED ACTIVE session (Gate 3) — sessionId, sessionGeneration,
@@ -296,7 +357,9 @@ export class StrategyOrchestratorService {
       signalId: candidate.signalId,
       instrument: candidate.instrument,
       direction: candidate.direction,
-      requestedLotSize: String(candidate.suggestedVolume),
+      // Round 6 §4: the SIZED volume (risk-budget-derived, instrument-
+      // normalized) — never the raw AI suggestion.
+      requestedLotSize: sized.lots,
       entryPrice:
         candidate.suggestedEntryPrice != null ? String(candidate.suggestedEntryPrice) : '0',
       stopLoss: String(candidate.suggestedStopLoss),
@@ -357,6 +420,16 @@ export class StrategyOrchestratorService {
             `(${(err as Error).message}) — the duplicate-recovery path still fails closed`,
         ),
       );
+      // §3: the capital reservation is released with the decision (definitive
+      // non-exposure — the ledger records why).
+      await this.allocationService
+        .releaseAllocationForIntent(tradeIntentId, `RISK_${riskDecision.decision}`)
+        .catch((err) =>
+          this.logger.warn(
+            `Signal ${signalId}: allocation for intent ${tradeIntentId} could not be ` +
+              `released (${(err as Error).message}) — the aggregate self-heals from intent status`,
+          ),
+        );
       await this.auditService.log({
         actorUserId: userId,
         action: AuditAction.AI_SIGNAL_RISK_REJECTED,
