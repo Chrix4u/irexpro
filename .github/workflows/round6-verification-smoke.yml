@@ -1,21 +1,10 @@
 name: Round 6 Verification Smoke
 
 on:
-  push:
-    branches:
-      - ci/github-round6-verification
-    paths:
-      - 'apps/web/e2e/**'
-      - 'apps/api/src/modules/broker/**'
-      - 'apps/api/src/modules/execution/**'
-      - '.github/workflows/round6-verification-smoke.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
-
-concurrency:
-  group: round6-verification-smoke-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   static-contract-smoke:
