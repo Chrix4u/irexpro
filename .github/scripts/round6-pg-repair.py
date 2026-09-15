@@ -52,6 +52,58 @@ edit(exec_pg,
 edit(exec_pg,
      '    );\n    const tradeCas = new TradeLifecycleCasService(tradeRepo, auditService);',
      '    );\n    // PG harness: route orchestrator dispatch commitment through the same real\n    // FinalDispatchBoundary instance used by ExecutionService.\n    (orchestrator as unknown as { finalDispatchBoundary: FinalDispatchBoundary })\n      .finalDispatchBoundary = boundary;\n    const tradeCas = new TradeLifecycleCasService(tradeRepo, auditService);')
+edit(exec_pg,
+     """  it('same signal concurrently: ONE grant-consume winner, ONE broker submission, loser typed-blocked', async () => {
+    const signalId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    // ONE durable grant for the signal — both racing executeTrade calls carry
+    // the same grantId; the final dispatch boundary's atomic consume grants
+    // exactly ONE winner (the loser gets the typed grant conflict and makes
+    // ZERO provider calls — task 50-c).
+    const granted = await grantedDecision(signalId, 10);
+    const results = await Promise.allSettled([
+      service.executeTrade(userId, granted),
+      service.executeTrade(userId, granted),
+    ]);
+    const fulfilled = results.filter((r) => r.status === 'fulfilled');
+    const rejected = results.filter((r) => r.status === 'rejected');
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(ForbiddenException);
+    expect(placeOrder).toHaveBeenCalledTimes(1);
+    const rows = await dataSource.query(
+      'SELECT idempotency_key FROM trading.trades WHERE user_id = $1',
+      [userId],
+    );
+    expect(rows).toHaveLength(1);
+  });""",
+     """  it('same signal concurrently: ONE durable trade, ONE broker submission, duplicate returns existing trade', async () => {
+    const signalId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    // ONE durable grant for the signal — both racing executeTrade calls carry
+    // the same grantId. The atomic trade-slot reservation serializes the same
+    // idempotency key: one caller reserves the PENDING trade and proceeds to
+    // provider commitment; the duplicate caller returns that existing trade.
+    // Exactly one provider dispatch is therefore possible.
+    const granted = await grantedDecision(signalId, 10);
+    const results = await Promise.allSettled([
+      service.executeTrade(userId, granted),
+      service.executeTrade(userId, granted),
+    ]);
+    const fulfilled = results.filter((r) => r.status === 'fulfilled');
+    const rejected = results.filter((r) => r.status === 'rejected');
+    expect(fulfilled).toHaveLength(2);
+    expect(rejected).toHaveLength(0);
+    const returnedTradeIds = fulfilled.map(
+      (r) => (r as PromiseFulfilledResult<{ id: string }>).value.id,
+    );
+    expect(returnedTradeIds[0]).toBe(returnedTradeIds[1]);
+    expect(placeOrder).toHaveBeenCalledTimes(1);
+    const rows = await dataSource.query(
+      'SELECT id, idempotency_key FROM trading.trades WHERE user_id = $1',
+      [userId],
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].id).toBe(returnedTradeIds[0]);
+  });""")
 
 session_pg = 'apps/api/src/modules/execution/execution-session.pg-integration.spec.ts'
 edit(session_pg,
@@ -87,12 +139,41 @@ p = Path(auth_pg)
 s = p.read_text()
 if 'const tradingAuthority = {' not in s:
     anchor = '    service = new BrokerService(\n'
-    block = """    const tradingAuthority = {\n      bumpGeneration: jest.fn().mockResolvedValue(2),\n    };\n    const grantInvalidation = {\n      invalidateUserNewExposureAuthority: jest.fn().mockResolvedValue({\n        invalidatedGrants: 0,\n        revokedConfirmations: 0,\n      }),\n    };\n"""
+    block = """    const tradingAuthority = {
+      bumpGeneration: jest.fn().mockResolvedValue(2),
+    };
+    const grantInvalidation = {
+      invalidateUserNewExposureAuthority: jest.fn().mockResolvedValue({
+        invalidatedGrants: 0,
+        revokedConfirmations: 0,
+      }),
+    };
+"""
     if anchor not in s:
         raise SystemExit('BrokerService constructor anchor missing')
     s = s.replace(anchor, block + anchor, 1)
-old = """      tokenLifecycle,\n      // Sprint 56 correction round 5 (#332): link outbox — unused by the\n      // authorization-transition paths under test.\n      // Round 6 (#300): the unified authority seams — unused by the\n      // authorization-transition paths under test (CI-gated suite).\n      {} as never,\n      {} as never,\n      // Round 6 live-execution completion (§1a): snapshot authority seam —\n      // unused by the authorization-transition paths under test.\n      {} as never,\n      {} as never,\n"""
-new = """      tokenLifecycle,\n      // Sprint 56 correction round 5 (#332): link outbox — unused by the\n      // authorization-transition paths under test.\n      {} as never,\n      tradingAuthority as never,\n      grantInvalidation as never,\n      // Round 6 live-execution completion (§1a): snapshot authority seam —\n      // unused by the authorization-transition paths under test.\n      {} as never,\n"""
+old = """      tokenLifecycle,
+      // Sprint 56 correction round 5 (#332): link outbox — unused by the
+      // authorization-transition paths under test.
+      // Round 6 (#300): the unified authority seams — unused by the
+      // authorization-transition paths under test (CI-gated suite).
+      {} as never,
+      {} as never,
+      // Round 6 live-execution completion (§1a): snapshot authority seam —
+      // unused by the authorization-transition paths under test.
+      {} as never,
+      {} as never,
+"""
+new = """      tokenLifecycle,
+      // Sprint 56 correction round 5 (#332): link outbox — unused by the
+      // authorization-transition paths under test.
+      {} as never,
+      tradingAuthority as never,
+      grantInvalidation as never,
+      // Round 6 live-execution completion (§1a): snapshot authority seam —
+      // unused by the authorization-transition paths under test.
+      {} as never,
+"""
 if new not in s:
     if old not in s:
         raise SystemExit('BrokerService seam argument anchor missing')
