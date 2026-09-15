@@ -424,6 +424,21 @@ export class ExecutionService {
         confirmationId,
         origin: confirmationId ? 'USER_CONFIRMATION' : 'PIPELINE',
       });
+
+      // ── Round 6 §20: complete the audit chain — link the executed trade
+      // to the ORDER row that carried its provider lifecycle. Best-effort
+      // provenance enrichment (the dispatch already happened; a link-write
+      // failure is logged + audited, NEVER a state change — the chain is
+      // also reconstructible via clientOrderId).
+      if (dispatch.orderId) {
+        trade.orderId = dispatch.orderId;
+        await this.tradeRepo.update(trade.id, { orderId: dispatch.orderId }).catch((linkErr) =>
+          this.logger.warn(
+            `Trade ${trade.id} order-linkage write failed (${(linkErr as Error).message}) — ` +
+              'the audit chain remains reconstructible via clientOrderId',
+          ),
+        );
+      }
     } catch (err) {
       if (err instanceof MarketSafetyError) {
         // §5/§18 carve-out: the market-safety gate runs BEFORE the
@@ -1218,9 +1233,9 @@ export class ExecutionService {
              instrument, direction, lot_size, requested_entry_price,
              stop_loss, take_profit, trailing_stop_pips, status,
              trading_session_id, logical_account_key, account_currency, risk_period_id,
-             trade_intent_id,
+             trade_intent_id, risk_grant_id,
              created_at, updated_at)
-           VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'PENDING', $12, $13, $14, $15, $16, NOW(), NOW())
+           VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'PENDING', $12, $13, $14, $15, $16, $17, NOW(), NOW())
            RETURNING *`,
           [
             userId,
@@ -1239,6 +1254,9 @@ export class ExecutionService {
             riskDecision.accountCurrency ?? null,
             riskDecision.riskPeriodId ?? null,
             tradeIntentId ?? null,
+            // Round 6 §20: immutable authority provenance — the grant whose
+            // atomic consumption at the commitment authorized this exposure.
+            riskDecision.grantId ?? null,
           ],
         );
       } catch (err) {

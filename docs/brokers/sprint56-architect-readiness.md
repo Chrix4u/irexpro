@@ -347,3 +347,51 @@ Key mechanisms delivered this round (see worklog R6-C entries for file-level det
 - SharedControlPlaneBootstrap: boot-time trading-policy + provider-verification catalog revision sync (fail-closed boot).
 
 Known remaining work (honest): full getBrokerAccountState snapshot-backing routing inside broker.service (LIVE risk reads already go through the snapshot service directly); broader broker authority-transition hooks beyond disconnect/revoke; onboarding §26 blockedReasons reason-code surface; PG integration matrices (CI); web/mobile contract sweeps.
+
+---
+
+## Round 6 Live-Execution Completion — readiness record (branch feat/round6-live-execution-completion)
+
+This record supersedes the "Known remaining work (honest)" list above.
+
+CLOSED this round (all on feat/round6-live-execution-completion, base bf81c64):
+- getBrokerAccountState snapshot-backing routing + snapshot writers at
+  connect/health/reconciliation + the instrument/contract-size seam (§1a) —
+  the CONTRACT_SIZE_UNAVAILABLE LIVE blocker is closed.
+- Complete broker authority-invalidation hooks: revoke, health-suspend,
+  connect auth-class INVALID, identity drift (logical re-key), manual
+  rotate, OAuth refresh-rejected (§1b) + onboarding blockedReasons (§1d).
+- §5/§18 final market-safety gate (pre-commitment, NEW-EXPOSURE PLACE only,
+  typed fail-closed, unprovable never invented).
+- §7 order-capability contract (declared per-adapter matrices, pre-commitment
+  enforcement, OANDA STOP_LIMIT fail-closed at both layers).
+- §8 protective-order reconciliation loop (per-trade SL/TP verify/repair,
+  60s cycle, 0.05% rounding tolerance, CRITICAL escalation on refused
+  repair).
+- §10 serialized AI exit pipeline (POST /ai/internal/exit-signals; #302
+  identity discipline; duplicate recovery from durable trade state).
+- §12/§19 crash-window convergence (DISPATCH_COMMITTED orders + PENDING
+  trades enter the sweep; clientOrderId echo proves arrival; absence is
+  uncertain — never auto-closed).
+- §13/§14 per-account dispatch lease + exactly-once adversarial matrix
+  (concurrent duplicates → exactly ONE provider call).
+- §16 autonomous session lifecycle (full state machine; daily-loss/drawdown
+  breach → SUSPENDED_RISK_LIMIT with CAS + generation bump + grant
+  invalidation).
+- §17 four-level stop (kill-switch ACTIVATION emergency-flattens every OPEN
+  position through the fail-closed close path).
+- §20 audit chain (trades carry trade_intent_id + risk_grant_id + order_id;
+  migration 1754400000000 additive/nullable).
+- §22 contract sweep: packages/types OrderStatus += DISPATCH_COMMITTED
+  (frontend-safe mirror repaired); provider-matrix Round-6 completion
+  section appended.
+
+STILL honest remaining (external or CI-bound):
+- PG integration matrices remain CI-gated (no PostgreSQL in the dev sandbox
+  — the 8 pg-integration suites typecheck but are NOT executed locally).
+- cTrader / Pepperstone / IC Markets remain BETA / production-LIVE
+  UNVERIFIED — external provider evidence is still required; no LIVE
+  verification was fabricated.
+- Mobile contract sweep of the new exit endpoint surface (the mobile app
+  does not yet expose AI-exit monitoring UI — the API surface is
+  service-to-service).

@@ -115,6 +115,24 @@ export class Trade {
   @Column({ name: 'trade_intent_id', type: 'uuid', nullable: true })
   tradeIntentId: string | null;
 
+  /**
+   * Round 6 live-execution completion (§20): the RiskGrant whose atomic
+   * consumption at the provider-dispatch commitment authorized THIS trade's
+   * exposure. IMMUTABLE authority provenance (previously signalId-only).
+   * NULL = legacy rows / dispatches without a grant.
+   */
+  @Column({ name: 'risk_grant_id', type: 'uuid', nullable: true })
+  riskGrantId: string | null;
+
+  /**
+   * Round 6 live-execution completion (§20): the internal Order row that
+   * carried the provider lifecycle of this trade (reservation → SUBMITTED →
+   * DISPATCH_COMMITTED → outcome). IMMUTABLE lifecycle provenance
+   * (previously a clientOrderId join). NULL = legacy rows.
+   */
+  @Column({ name: 'order_id', type: 'uuid', nullable: true })
+  orderId: string | null;
+
   // ─── Order parameters (Risk Engine-validated values) ─────────────────────
 
   @Column({ name: 'instrument', type: 'varchar', length: 50 })

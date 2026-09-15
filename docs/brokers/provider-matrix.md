@@ -575,3 +575,58 @@ re-risk after user confirmation → shared execution-control revision →
 ProviderDispatchCommitment (single short transaction: grant + confirmation
 consumption + order DISPATCH_COMMITTED) → exactly one state-changing provider
 attempt → dispatch-certainty reconciliation.
+
+## Round 6 Live-Execution Completion (branch feat/round6-live-execution-completion)
+
+Provider verification truth (UNCHANGED — truthfulness policy preserved):
+cTrader / Pepperstone-via-cTrader / IC Markets-via-cTrader remain BETA /
+production-LIVE **UNVERIFIED**; MetaTrader 5 remains DEMO-capable / LIVE
+unverified; OANDA v2 BETA (contract-tested); paper broker internal. No LIVE
+provider verification was fabricated or weakened in this round.
+
+What the completion layer adds ON TOP of the unified authority chain:
+
+- **§1a snapshot routing + instrument seam** — `getBrokerAccountState` reads
+  the snapshot authority (no 'USD' fabrication); connect/health/reconciliation
+  WRITE accepted snapshots; `getInstrumentSpecForConnection` proves
+  contractSize/instrument constraints (the CONTRACT_SIZE_UNAVAILABLE blocker
+  is closed).
+- **§1b authority-invalidation hooks** — revoke / health-suspend /
+  credential INVALID / identity drift (logical re-key) / manual rotate /
+  OAuth refresh-rejected all bump the authority generation + invalidate
+  NEW-exposure authority.
+- **§5/§18 final market-safety gate** — proven fresh quote (30s), spread
+  sanity (2%), entry deviation vs the risk-validated reference (1%);
+  NEW-EXPOSURE PLACE only; typed fail-closed codes; zero provider calls on
+  failure. Unprovable market state is NEVER invented.
+- **§7 order-capability contract** — every adapter DECLARES its order-kind
+  matrix (OANDA: no STOP_LIMIT — fail-closed at both layers; cTrader:
+  MARKET SL/TP deferred to the filled position); the orchestrator enforces
+  the declaration PRE-COMMITMENT.
+- **§8 protective-order reconciliation** — every OPEN trade's provider
+  SL/TP verified against the risk-gate-approved internal authority each
+  60s cycle (ExactDecimal, 0.05% rounding tolerance); missing/deviated →
+  ONE modifyOrder repair per cycle; refused repair = CRITICAL audit.
+- **§10 serialized AI exit pipeline** — POST /ai/internal/exit-signals →
+  structure → confidence → session → signal identity (#302 discipline) →
+  §14 serialization → closeTrade(AI_CLOSE_SIGNAL); duplicate redelivery
+  recovers the first delivery's durable outcome (never a re-close).
+- **§12/§19 crash-window convergence** — DISPATCH_COMMITTED orders +
+  PENDING trades now ENTER the reconciliation sweep; provider echo by
+  clientOrderId proves arrival (provider state applied); absence is
+  UNCERTAIN → RECONCILIATION_PENDING + MAY_HAVE_REACHED_PROVIDER (never
+  auto-closed).
+- **§13/§14 per-account dispatch lease + adversarial exactly-once** — the
+  full dispatch critical section is strictly serialized per broker account
+  (in-process); concurrent duplicate dispatches produce exactly ONE
+  provider call (typed DUPLICATE loser).
+- **§16 autonomous session lifecycle** — full state machine; a daily-loss/
+  drawdown breach degrades the ACTIVE session to SUSPENDED_RISK_LIMIT
+  (CAS + generation bump + grant invalidation).
+- **§17 four-level stop** — kill-switch ACTIVATION now emergency-flattens
+  every OPEN position (control-exempt, market-safety-exempt closes; one
+  refused close never aborts the flatten).
+- **§20 audit chain** — trades carry risk_grant_id + order_id + trade_intent_id
+  provenance (migration 1754400000000; AI decision → intent → grant →
+  order → provider dispatch → outcome → reconciliation is reconstructible
+  by direct ids).
