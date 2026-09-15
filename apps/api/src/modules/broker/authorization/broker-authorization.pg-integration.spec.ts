@@ -99,9 +99,10 @@ describe('BrokerService authorization transitions — real PostgreSQL concurrenc
     await dataSource.initialize();
     await dataSource.query('CREATE SCHEMA IF NOT EXISTS broker');
 
-    // DDL mirrors the broker.broker_connections columns used by the service
-    // plus the Sprint-50 authorization-state CHECK constraints
-    // (migration 1753400000000-AddBrokerAuthorizationStateMachine).
+    // Keep this hand-written table schema-complete with BrokerConnection.
+    // Repository.save() may list mapped nullable/defaulted columns even when a
+    // given test does not set them, so omitting a current entity column makes
+    // the PostgreSQL harness fail before it reaches the concurrency behavior.
     await dataSource.query(`DROP TABLE IF EXISTS "broker"."broker_connections"`);
     await dataSource.query(`
       CREATE TABLE "broker"."broker_connections" (
@@ -111,12 +112,17 @@ describe('BrokerService authorization transitions — real PostgreSQL concurrenc
         "broker_name" varchar(100) NOT NULL,
         "display_name" varchar(100) NULL,
         "account_id" varchar(100) NULL,
+        "provider_broker_identity" varchar(100) NULL,
+        "logical_account_key" varchar(255) NULL,
         "account_type" varchar(10) NOT NULL DEFAULT 'DEMO',
         "account_currency" varchar(3) NULL,
         "account_leverage" integer NULL,
         "status" varchar(32) NOT NULL DEFAULT 'DISCONNECTED',
         "authorization_status" varchar(30) NOT NULL DEFAULT 'NOT_CONNECTED',
         "credential_status" varchar(20) NOT NULL DEFAULT 'CREATED',
+        "credential_generation" integer NOT NULL DEFAULT 0,
+        "credential_refresh_lease_expires_at" timestamptz NULL,
+        "credential_refresh_lease_owner" varchar(64) NULL,
         "authorized_at" timestamptz NULL,
         "authorization_revoked_at" timestamptz NULL,
         "encrypted_credentials" text NULL,
@@ -158,6 +164,8 @@ describe('BrokerService authorization transitions — real PostgreSQL concurrenc
     };
     const adapterRegistry = {
       getAdapter: jest.fn().mockReturnValue(adapter),
+      getAdapterForConnection: jest.fn().mockReturnValue(adapter),
+      releaseAdapterForConnection: jest.fn(),
       isSupported: jest.fn().mockReturnValue(true),
     } as unknown as BrokerAdapterRegistry;
     const providerRegistry = {
@@ -199,8 +207,6 @@ describe('BrokerService authorization transitions — real PostgreSQL concurrenc
   });
 
   it('revoke vs enable-live-trading race: exactly ONE winner, no mixed state', async () => {
-    // AUTHORIZED is a legal source for BOTH transitions:
-    //   AUTHORIZED → REVOKED (revoke) and AUTHORIZED → ACTIVE (enable-live).
     await seed({ authorizationStatus: BrokerAuthorizationStatus.AUTHORIZED });
     await seedDemo();
 
@@ -218,11 +224,9 @@ describe('BrokerService authorization transitions — real PostgreSQL concurrenc
     const row = await freshRow();
     expect(row).not.toBeNull();
     if (row!.authorizationStatus === BrokerAuthorizationStatus.REVOKED) {
-      // Revoke won: fail-closed dual-write must be consistent
       expect(row!.liveTradingEnabled).toBe(false);
       expect(row!.authorizationRevokedAt).not.toBeNull();
     } else {
-      // Enable-live won: ACTIVE with the authorization dual-write
       expect(row!.authorizationStatus).toBe(BrokerAuthorizationStatus.ACTIVE);
       expect(row!.liveTradingEnabled).toBe(true);
     }
@@ -238,8 +242,6 @@ describe('BrokerService authorization transitions — real PostgreSQL concurrenc
     ]);
 
     const rejected = results.filter((r) => r.status === 'rejected');
-    // Both transitions are legal from CONNECTED — the conditional write
-    // guarantees exactly one wins; the loser surfaces ConflictException.
     expect(rejected).toHaveLength(1);
     expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(ConflictException);
 
@@ -255,19 +257,14 @@ describe('BrokerService authorization transitions — real PostgreSQL concurrenc
   });
 
   it('healthCheck suspend vs revoke race: stale suspension never overwrites REVOKED', async () => {
-    // AUTHORIZED is a legal source for BOTH SUSPENDED (healthCheck) and REVOKED.
-    // The connection carries stored ciphertext so healthCheck passes the
-    // presence + lifecycle gates and reaches the (failing) provider call.
     await seed({
       authorizationStatus: BrokerAuthorizationStatus.AUTHORIZED,
-      consecutiveFailureCount: 2, // next failure = 3 → suspend threshold
+      consecutiveFailureCount: 2,
       encryptedCredentials: 'cipher',
       credentialIv: 'iv',
       credentialTag: 'tag',
       encryptionKeyId: 'key-1',
     });
-    // The provider is down: healthCheck fails and attempts the SUSPENDED
-    // transition; concurrently a revoke lands.
     adapter.connect.mockRejectedValue(new Error('provider down'));
 
     const [healthResult] = await Promise.all([
@@ -275,15 +272,13 @@ describe('BrokerService authorization transitions — real PostgreSQL concurrenc
       service.revokeAuthorization(LIVE_CONN, USER),
     ]);
 
-    expect(healthResult).toBe(false); // the health check itself failed
+    expect(healthResult).toBe(false);
 
     const row = await freshRow();
-    // Whichever transition won, the state is EXACTLY one of the two — never
-    // a mixed/overwritten state, and telemetry was still recorded.
     expect([BrokerAuthorizationStatus.SUSPENDED, BrokerAuthorizationStatus.REVOKED]).toContain(
       row!.authorizationStatus,
     );
-    expect(row!.consecutiveFailureCount).toBe(3); // telemetry write (unguarded) survived
+    expect(row!.consecutiveFailureCount).toBe(3);
     if (row!.authorizationStatus === BrokerAuthorizationStatus.REVOKED) {
       expect(row!.liveTradingEnabled).toBe(false);
     }
@@ -312,8 +307,6 @@ describe('BrokerService authorization transitions — real PostgreSQL concurrenc
     await service.revokeAuthorization(LIVE_CONN, USER);
     expect((await freshRow())!.authorizationStatus).toBe(BrokerAuthorizationStatus.REVOKED);
 
-    // A stale enable-live-trading writer that validated against AUTHORIZED
-    // issues exactly this conditional UPDATE — it must match ZERO rows.
     const result = await connectionRepo.update(
       { id: LIVE_CONN, authorizationStatus: BrokerAuthorizationStatus.AUTHORIZED } as never,
       {
@@ -333,17 +326,14 @@ describe('BrokerService authorization transitions — real PostgreSQL concurrenc
     await seed({ authorizationStatus: BrokerAuthorizationStatus.CONNECTED });
     await seedDemo();
 
-    // CONNECTED → ACTIVE (enable-live) …
     await service.enableLiveTrading(LIVE_CONN, USER);
     expect((await freshRow())!.authorizationStatus).toBe(BrokerAuthorizationStatus.ACTIVE);
 
-    // … then ACTIVE → REVOKED (revoke) — both sequential transitions succeed.
     await service.revokeAuthorization(LIVE_CONN, USER);
     const row = await freshRow();
     expect(row!.authorizationStatus).toBe(BrokerAuthorizationStatus.REVOKED);
     expect(row!.liveTradingEnabled).toBe(false);
 
-    // The transitions used are legal per the state machine
     expect(
       BrokerAuthorizationStateMachine.canTransition(
         BrokerAuthorizationStatus.CONNECTED,

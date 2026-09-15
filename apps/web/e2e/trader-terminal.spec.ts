@@ -94,19 +94,17 @@ async function gotoTradeWithLiveStatusMocks(page: Parameters<typeof setupErrorCo
     }
 
     if (apiPath === 'trading/sessions/active') {
-      // Sprint 56 round-5 contract: { session } envelope with the durable
-      // executionMode + authorityGeneration.
+      // TradingController returns TradingSessionResponseDto directly (or null),
+      // never a legacy { session } envelope.
       return fulfill(200, {
-        session: {
-          id: ACTIVE_SESSION_ID,
-          brokerConnectionId: mockBrokerConnections[0].id,
-          executionMode: 'PAPER_ONLY',
-          authorityGeneration: 1,
-          status: 'ACTIVE',
-          openingBalance: '10000.00',
-          peakEquity: '10000.00',
-          startedAt: '2026-08-28T18:00:00.000Z',
-        },
+        id: ACTIVE_SESSION_ID,
+        brokerConnectionId: mockBrokerConnections[0].id,
+        executionMode: 'PAPER_ONLY',
+        authorityGeneration: 1,
+        status: 'ACTIVE',
+        openingBalance: '10000.00',
+        peakEquity: '10000.00',
+        startedAt: '2026-08-28T18:00:00.000Z',
       });
     }
 

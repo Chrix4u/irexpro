@@ -377,19 +377,15 @@ async function gotoCockpit(
       });
     }
     if (apiPath === 'trading/sessions/active') {
-      // Sprint 56 round-5 contract: { session } envelope with the durable
-      // executionMode + authorityGeneration.
       return fulfill(200, {
-        session: {
-          id: '44444444-4444-4444-8444-444444444444',
-          brokerConnectionId: mockBrokerConnections[0].id,
-          executionMode: 'PAPER_ONLY',
-          authorityGeneration: 1,
-          status: 'ACTIVE',
-          openingBalance: '10000.00',
-          peakEquity: '10000.00',
-          startedAt: '2026-08-31T00:30:00.000Z',
-        },
+        id: '44444444-4444-4444-8444-444444444444',
+        brokerConnectionId: mockBrokerConnections[0].id,
+        executionMode: 'PAPER_ONLY',
+        authorityGeneration: 1,
+        status: 'ACTIVE',
+        openingBalance: '10000.00',
+        peakEquity: '10000.00',
+        startedAt: '2026-08-31T00:30:00.000Z',
       });
     }
     if (apiPath === 'broker/connections') return fulfill(200, mockBrokerConnections);
@@ -550,4 +546,4 @@ test.describe('Dynamic Trader Cockpit', () => {
     await assertNoHorizontalOverflow(page);
     assertNoExternalRequests(page);
   });
-});
+}

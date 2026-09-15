@@ -315,19 +315,15 @@ async function setupCockpitEvidence(page: Page) {
       });
     }
     if (apiPath === 'trading/sessions/active') {
-      // Sprint 56 round-5 contract: { session } envelope with the durable
-      // executionMode + authorityGeneration.
       return fulfill(200, {
-        session: {
-          id: '44444444-4444-4444-8444-444444444441',
-          brokerConnectionId: brokerConnection.id,
-          executionMode: 'PAPER_ONLY',
-          authorityGeneration: 1,
-          status: 'ACTIVE',
-          openingBalance: '10000.00',
-          peakEquity: '10000.00',
-          startedAt: '2026-08-31T01:30:00.000Z',
-        },
+        id: '44444444-4444-4444-8444-444444444441',
+        brokerConnectionId: brokerConnection.id,
+        executionMode: 'PAPER_ONLY',
+        authorityGeneration: 1,
+        status: 'ACTIVE',
+        openingBalance: '10000.00',
+        peakEquity: '10000.00',
+        startedAt: '2026-08-31T01:30:00.000Z',
       });
     }
     if (apiPath === 'broker/connections') return fulfill(200, [brokerConnection]);

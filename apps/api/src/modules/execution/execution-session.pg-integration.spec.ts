@@ -22,20 +22,7 @@ import { Trade } from './entities/trade.entity';
 
 /**
  * Sprint 56 correction round 5 — real-PostgreSQL session-authority proofs
- * (architect issues #295/#298):
- *
- *   1. 20 concurrent startSession calls race the partial unique index
- *      uq_trading_sessions_one_active_per_user (migration 1754000000000):
- *      exactly ONE ACTIVE row survives, every caller resolves the SAME
- *      session (unique-violation catch → re-read the winner).
- *   2. The audited execution-mode change CAS-bumps authority_generation and
- *      INVALIDATES the outstanding ACTIVE RiskGrant (reason
- *      SESSION_AUTHORITY_GENERATION_CHANGED) + REVOKES the PENDING
- *      confirmation on real PostgreSQL.
- *
- * Gated exactly like execution.pg-integration.spec.ts: honored via the jest
- * testPathIgnorePatterns 'pg-integration' entry — typechecks locally, runs on
- * PostgreSQL in CI (DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME).
+ * (architect issues #295/#298).
  */
 describe('ExecutionService — session authority on real PostgreSQL (#295/#298)', () => {
   let dataSource: DataSource;
@@ -69,12 +56,10 @@ describe('ExecutionService — session authority on real PostgreSQL (#295/#298)'
     await dataSource.initialize();
     await dataSource.query('CREATE SCHEMA IF NOT EXISTS trading');
 
-    // trading.trading_sessions — baseline columns + the execution-authority
-    // columns from migration 1754000000000 (execution_mode,
-    // authority_generation) + the partial unique one-ACTIVE-per-user.
     await dataSource.query('DROP TABLE IF EXISTS trading.execution_confirmations');
     await dataSource.query('DROP TABLE IF EXISTS trading.risk_grants');
     await dataSource.query('DROP TABLE IF EXISTS trading.trading_sessions');
+
     await dataSource.query(`CREATE TABLE trading.trading_sessions (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id uuid NOT NULL,
@@ -83,6 +68,9 @@ describe('ExecutionService — session authority on real PostgreSQL (#295/#298)'
       authority_generation integer NOT NULL DEFAULT 1,
       status varchar(30) NOT NULL DEFAULT 'ACTIVE',
       opening_balance numeric(15,2),
+      account_currency varchar(3),
+      opening_snapshot_id uuid,
+      opening_snapshot_generation integer,
       peak_equity numeric(15,2),
       risk_profile_snapshot jsonb,
       started_at timestamptz NOT NULL DEFAULT NOW(),
@@ -99,8 +87,9 @@ describe('ExecutionService — session authority on real PostgreSQL (#295/#298)'
       ON trading.trading_sessions (user_id)
       WHERE status = 'ACTIVE'`);
 
-    // trading.risk_grants / trading.execution_confirmations — mirrors
-    // migration 1754000000000 (subset exercised by this spec's authority rows).
+    // Schema-complete with the current RiskGrant entity. Repository.save()
+    // can include mapped nullable/defaulted columns even when this matrix does
+    // not populate them, so the PG harness must track the complete entity.
     await dataSource.query(`CREATE TABLE trading.risk_grants (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id uuid NOT NULL,
@@ -110,17 +99,35 @@ describe('ExecutionService — session authority on real PostgreSQL (#295/#298)'
       session_generation integer NOT NULL,
       execution_mode varchar(20) NOT NULL,
       broker_connection_id uuid NOT NULL,
+      credential_generation integer,
+      provider_broker_identity varchar(100),
+      provider_verification_fingerprint varchar(128),
+      risk_profile_id uuid,
+      risk_profile_version integer,
+      risk_profile_hash varchar(64),
+      account_snapshot_id uuid,
+      account_snapshot_generation integer,
+      account_snapshot_observed_at timestamptz,
       authority_generation integer NOT NULL,
+      kill_switch_generation integer,
+      execution_control_revision integer,
+      authority_binding_digest varchar(64),
+      trading_policy_revision integer,
+      provider_verification_revision integer,
       order_payload_digest varchar(64) NOT NULL,
       order_payload jsonb NOT NULL,
+      quote_ref jsonb,
       issued_at timestamptz NOT NULL DEFAULT NOW(),
       expires_at timestamptz NOT NULL,
+      consumed_at timestamptz,
       invalidated_at timestamptz,
       invalidation_reason varchar(200),
       status varchar(30) NOT NULL DEFAULT 'ACTIVE',
       created_at timestamptz NOT NULL DEFAULT NOW(),
       updated_at timestamptz NOT NULL DEFAULT NOW()
     )`);
+
+    // Schema-complete with the current ExecutionConfirmation entity.
     await dataSource.query(`CREATE TABLE trading.execution_confirmations (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id uuid NOT NULL,
@@ -128,11 +135,15 @@ describe('ExecutionService — session authority on real PostgreSQL (#295/#298)'
       session_generation integer NOT NULL,
       signal_id varchar(100) NOT NULL,
       broker_connection_id uuid NOT NULL,
+      risk_grant_id uuid,
       order_payload_digest varchar(64) NOT NULL,
       instrument varchar(50) NOT NULL,
       direction varchar(10) NOT NULL,
       quantity numeric(18,8) NOT NULL,
+      stop_loss numeric(18,8),
+      take_profit numeric(18,8),
       expires_at timestamptz NOT NULL,
+      consumed_at timestamptz,
       revoked_at timestamptz,
       status varchar(30) NOT NULL DEFAULT 'PENDING',
       created_at timestamptz NOT NULL DEFAULT NOW(),
@@ -160,7 +171,7 @@ describe('ExecutionService — session authority on real PostgreSQL (#295/#298)'
     };
 
     service = new ExecutionService(
-      {} as Repository<Trade>, // trade repo — not exercised by this matrix
+      {} as Repository<Trade>,
       sessionRepo,
       brokerService as unknown as BrokerService,
       {} as ExecutionOrchestrator,
@@ -170,9 +181,6 @@ describe('ExecutionService — session authority on real PostgreSQL (#295/#298)'
       riskGrantRepo,
       confirmationRepo,
       resolution,
-      // Round 5 (task 50-c): boundary + trade-lifecycle CAS are stub seams in
-      // this session-authority matrix (their real-store proofs live in the
-      // dedicated final-dispatch-boundary / trade-cas specs).
       {} as FinalDispatchBoundary,
       {} as TradeLifecycleCasService,
     );
@@ -196,8 +204,6 @@ describe('ExecutionService — session authority on real PostgreSQL (#295/#298)'
       ),
     );
 
-    // The partial unique index arbitrates the race: every loser catches the
-    // unique violation, re-reads the winner, and resolves the SAME session.
     const fulfilled = results.filter(
       (r) => r.status === 'fulfilled',
     ) as PromiseFulfilledResult<TradingSession>[];
