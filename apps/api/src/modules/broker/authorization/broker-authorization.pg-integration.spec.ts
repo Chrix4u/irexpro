@@ -194,6 +194,9 @@ describe('BrokerService authorization transitions — real PostgreSQL concurrenc
       // authorization-transition paths under test (CI-gated suite).
       {} as never,
       {} as never,
+      // Round 6 live-execution completion (§1a): snapshot authority seam —
+      // unused by the authorization-transition paths under test.
+      {} as never,
       {} as never,
     );
   });

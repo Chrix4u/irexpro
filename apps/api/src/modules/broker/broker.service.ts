@@ -23,10 +23,15 @@ import { BrokerLogicalAccountConflictError } from './interfaces/broker-connectio
 import {
   BrokerAccountInfo,
   BrokerConnectionStatus,
+  BrokerInstrument,
   BrokerMode,
   DecryptedBrokerCredentials,
   OHLCV,
 } from './interfaces/broker-adapter.interface';
+import {
+  BrokerAccountSnapshotService,
+  type ProviderAccountObservation,
+} from './services/broker-account-snapshot.service';
 import { BrokerAdapterError } from './interfaces/broker-adapter.errors';
 import {
   BrokerAuthorizationStatus,
@@ -100,6 +105,16 @@ export interface BrokerConnectionServerDerived {
 export class BrokerService {
   private readonly logger = new Logger(BrokerService.name);
 
+  /** In-process instrument-spec cache TTL (§1a/§4): short enough that an
+   * account switch on a connection re-resolves quickly, long enough that a
+   * risk validation burst does not hammer the provider. */
+  private static readonly INSTRUMENT_SPEC_CACHE_TTL_MS = 60_000;
+
+  private readonly instrumentSpecCache = new Map<
+    string,
+    { spec: BrokerInstrument; expiresAt: number }
+  >();
+
   constructor(
     @InjectRepository(BrokerConnection)
     private connectionRepo: Repository<BrokerConnection>,
@@ -121,6 +136,11 @@ export class BrokerService {
     // through the tenant-scoped leaf seams.
     private readonly tradingAuthorityService: TradingAuthorityService,
     private readonly grantInvalidation: GrantInvalidationService,
+    // Round 6 live-execution completion (§1a): the accepted snapshot model is
+    // the financial authority for broker connections — every provider account
+    // observation is accepted as a monotonic snapshot and the legacy
+    // broker.broker_accounts row becomes a projection of it.
+    private readonly snapshotService: BrokerAccountSnapshotService,
   ) {}
 
   // ─── Read operations ──────────────────────────────────────────────────────
@@ -659,6 +679,33 @@ export class BrokerService {
         },
       });
 
+      // Round 6 live-execution completion (§1a): accept the FIRST full
+      // provider account observation as the initial authoritative snapshot
+      // (monotonic generation 1) so a freshly connected LIVE account carries
+      // provable financial state immediately. A snapshot failure NEVER fails
+      // the (already successful) connect — it is logged and the next health
+      // check / reconciliation run records the observation.
+      try {
+        const accountInfo = await adapter.getAccountInfo();
+        await this.recordAccountSnapshot(connection, {
+          balance: accountInfo.balance,
+          equity: accountInfo.equity,
+          margin: accountInfo.margin,
+          freeMargin: accountInfo.freeMargin,
+          marginLevel: accountInfo.marginLevel,
+          leverage: accountInfo.leverage,
+          currency: accountInfo.currency,
+          providerObservedAt: result.serverTime ?? null,
+          source: 'connect',
+        });
+      } catch (snapshotErr) {
+        this.logger.warn(
+          `Initial account snapshot after connect failed for connection ` +
+            `${connectionId}: ${(snapshotErr as Error).message} — the next health ` +
+            'check or reconciliation run records the observation',
+        );
+      }
+
       this.logger.log(
         `Broker connected: id=${connectionId} account=${result.accountId} user=${userId}`,
       );
@@ -1140,6 +1187,18 @@ export class BrokerService {
         equity: balance.equity,
       });
 
+      // Round 6 live-execution completion (§1a): the health check observes
+      // REAL provider financial state — accept it as the next authoritative
+      // snapshot (monotonic generation). providerObservedAt = the provider's
+      // own balance timestamp, so freshness is NEVER derived from write time.
+      await this.recordAccountSnapshot(connection, {
+        balance: balance.balance,
+        equity: balance.equity,
+        currency: balance.currency,
+        providerObservedAt: balance.timestamp ?? null,
+        source: 'health-check',
+      });
+
       return true;
     } catch (err) {
       const failureCount = (connection.consecutiveFailureCount ?? 0) + 1;
@@ -1416,22 +1475,136 @@ export class BrokerService {
   }
 
   /**
-   * Get the last-synced BrokerAccount state for a connection.
+   * Get the authoritative financial state for a connection.
    * Used by RiskService for margin and equity checks.
+   *
+   * Round 6 live-execution completion (§1a): routed through the AUTHORITATIVE
+   * accepted BrokerAccountSnapshot model — the latest accepted snapshot (by
+   * monotonic generation, never by write time) is the truth; the legacy
+   * broker.broker_accounts row is only a projection/compat fallback for
+   * connections that have never produced a provider observation.
+   *
+   * FAIL-CLOSED SHAPE RULE: a partial financial state (missing balance,
+   * equity, freeMargin or currency) returns null — the caller treats the
+   * account state as UNAVAILABLE. Zero, USD, stale or cached values are
+   * NEVER substituted when LIVE authority cannot be proven.
    */
   async getBrokerAccountState(
     connectionId: string,
   ): Promise<{ balance: string; equity: string; freeMargin: string; currency: string } | null> {
+    const snapshot = await this.snapshotService.readLatestAcceptedSnapshot(connectionId);
+    if (snapshot) {
+      const { balance, equity, freeMargin, currency } = snapshot;
+      if (
+        balance === null ||
+        balance === undefined ||
+        equity === null ||
+        equity === undefined ||
+        freeMargin === null ||
+        freeMargin === undefined ||
+        !currency
+      ) {
+        // Partial snapshot state cannot authorize exposure — no fabrication.
+        return null;
+      }
+      return { balance, equity, freeMargin, currency };
+    }
+
+    // No accepted snapshot exists (connection never observed by connect /
+    // health-check / reconciliation) — legacy compat view. Unknown currency
+    // stays unknown: null, never a synthetic 'USD'.
     const account = await this.accountRepo.findOne({
       where: { brokerConnectionId: connectionId },
     });
-    if (!account) return null;
+    if (!account || !account.currency) return null;
     return {
       balance: account.balance,
       equity: account.equity,
       freeMargin: account.freeMargin,
-      currency: account.currency ?? 'USD',
+      currency: account.currency,
     };
+  }
+
+  /**
+   * Round 6 live-execution completion (§1a/§4/§18): resolve the normalized
+   * instrument specification (contract size, min/max volume, lot step,
+   * digits) for a connection through the adapter's getInstrumentList().
+   *
+   * This is the missing BrokerService seam behind the risk engine's
+   * CONTRACT_SIZE_UNAVAILABLE fail-closed rejection — the risk/sizing layers
+   * must never reach into adapter internals or duplicate credential
+   * handling. Results are cached in-process for a SHORT TTL (instrument
+   * specifications change rarely; connection-scoped key so an account switch
+   * on the same connection naturally re-resolves after the TTL).
+   *
+   * Returns null when the instrument is not tradable through the connection
+   * (unknown symbol mapping) or the adapter cannot prove the specification —
+   * the caller fails closed, NEVER invents a contract size.
+   */
+  async getInstrumentSpecForConnection(
+    userId: string,
+    brokerConnectionId: string,
+    instrument: string,
+  ): Promise<BrokerInstrument | null> {
+    const cacheKey = `${brokerConnectionId}:${instrument}`;
+    const cached = this.instrumentSpecCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.spec;
+    }
+
+    const connection = await this.findConnectionById(brokerConnectionId, userId);
+
+    if (connection.status !== BrokerConnectionStatus.CONNECTED) {
+      throw new ForbiddenException('Broker connection is not active');
+    }
+
+    if (!connection.encryptedCredentials || !connection.credentialIv || !connection.credentialTag) {
+      throw new ForbiddenException('Broker connection credentials unavailable');
+    }
+
+    // A3: lifecycle gate before decrypt — unusable credentials never reach the
+    // provider adapter.
+    this.assertCredentialsUsable(connection, 'getInstrumentSpecForConnection');
+
+    const adapter = this.adapterRegistry.getAdapterForConnection(
+      connection.id,
+      connection.brokerId,
+    );
+    const credentials = this.encryptionService.decrypt({
+      ciphertext: connection.encryptedCredentials,
+      iv: connection.credentialIv,
+      tag: connection.credentialTag,
+      keyId: connection.encryptionKeyId ?? 'env-key-v1',
+    });
+
+    adapter.setMode(connection.accountType);
+
+    try {
+      await adapter.connect(credentials);
+      const instruments = await adapter.getInstrumentList();
+      // Adapters report CANONICAL symbols (OANDA maps EUR_USD -> EURUSD);
+      // exact match first, case-insensitive fallback for safety.
+      const spec =
+        instruments.find((i) => i.symbol === instrument) ??
+        instruments.find((i) => i.symbol.toLowerCase() === instrument.toLowerCase());
+      if (spec) {
+        this.instrumentSpecCache.set(cacheKey, {
+          spec,
+          expiresAt: Date.now() + BrokerService.INSTRUMENT_SPEC_CACHE_TTL_MS,
+        });
+      }
+      return spec ?? null;
+    } catch (err) {
+      this.logger.warn(
+        `Instrument spec resolution failed connection=${brokerConnectionId} ` +
+          `instrument=${instrument}: ${(err as Error).message}`,
+      );
+      return null;
+    } finally {
+      Object.keys(credentials).forEach((k) => {
+        (credentials as unknown as Record<string, unknown>)[k] = null;
+      });
+    }
   }
 
   /**
@@ -1538,6 +1711,39 @@ export class BrokerService {
     account: BrokerAccountInfo,
     openPositionsCount: number,
   ): Promise<void> {
+    // Round 6 live-execution completion (§1a): the reconciliation run's
+    // provider account observation is accepted into the AUTHORITATIVE
+    // snapshot model FIRST (monotonic generation); the legacy write below is
+    // the compat projection. providerAccountIdentity is the observed
+    // provider account id — identity drift is detectable across snapshots.
+    try {
+      const outcome = await this.snapshotService.acceptSnapshot({
+        connectionId,
+        balance: account.balance,
+        equity: account.equity,
+        margin: account.margin,
+        freeMargin: account.freeMargin,
+        marginLevel: account.marginLevel,
+        leverage: account.leverage,
+        openPositionsCount,
+        currency: account.currency,
+        providerObservedAt: null,
+        providerAccountIdentity: account.accountId ?? null,
+        source: 'state-reconciliation',
+      });
+      if (outcome.accepted) {
+        await this.snapshotService.projectToLegacyAccount(outcome.snapshot);
+      }
+    } catch (err) {
+      // Fail-safe: the reconciliation run's primary purpose (state
+      // convergence) is not blocked by a snapshot-authority write failure —
+      // logged loudly, never silent.
+      this.logger.error(
+        `Account snapshot acceptance failed for connection ${connectionId} ` +
+          `during reconciliation: ${(err as Error).message}`,
+      );
+    }
+
     const existing = await this.accountRepo.findOne({
       where: { brokerConnectionId: connectionId },
     });
@@ -1562,6 +1768,60 @@ export class BrokerService {
           brokerConnectionId: connectionId,
           ...patch,
         } as never),
+      );
+    }
+  }
+
+  // ─── Snapshot authority recording (§1a) ────────────────────────────────
+
+  /**
+   * Accept ONE provider account observation into the authoritative snapshot
+   * model and project it into the legacy current-view.
+   *
+   * Fail-safe semantics: a snapshot-authority failure NEVER fails the
+   * caller's primary flow (connect / health check succeeded provider-side);
+   * it is logged loudly and the next observation records fresh truth. The
+   * observation is fully materialized by the caller BEFORE this call — no
+   * provider I/O happens inside the snapshot write path.
+   */
+  private async recordAccountSnapshot(
+    connection: BrokerConnection,
+    observation: {
+      balance: string | null;
+      equity: string | null;
+      margin?: string | null;
+      freeMargin?: string | null;
+      marginLevel?: string | null;
+      leverage?: number | null;
+      openPositionsCount?: number | null;
+      currency: string | null;
+      providerObservedAt?: Date | null;
+      source: string;
+    },
+  ): Promise<void> {
+    const providerObservation: ProviderAccountObservation = {
+      connectionId: connection.id,
+      balance: observation.balance,
+      equity: observation.equity,
+      margin: observation.margin ?? null,
+      freeMargin: observation.freeMargin ?? null,
+      marginLevel: observation.marginLevel ?? null,
+      leverage: observation.leverage ?? null,
+      openPositionsCount: observation.openPositionsCount ?? null,
+      currency: observation.currency,
+      providerObservedAt: observation.providerObservedAt ?? null,
+      providerAccountIdentity: connection.accountId ?? null,
+      source: observation.source,
+    };
+
+    const outcome = await this.snapshotService.acceptSnapshot(providerObservation);
+    if (outcome.accepted) {
+      await this.snapshotService.projectToLegacyAccount(outcome.snapshot);
+    } else {
+      this.logger.warn(
+        `Snapshot ${outcome.reason} for connection ${connection.id} ` +
+          `(source=${observation.source}, currentGeneration=${outcome.currentGeneration}) — ` +
+          'observation not accepted; the winning writer is the authority',
       );
     }
   }

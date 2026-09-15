@@ -22,6 +22,7 @@ import {
 } from './broker-authorization-status';
 import { BrokerCredentialStatus } from './broker-credential-status';
 import { BrokerConnectionStatus, BrokerMode } from '../interfaces/broker-adapter.interface';
+import { BrokerAccountSnapshotService } from '../services/broker-account-snapshot.service';
 
 /**
  * Sprint 56 correction round 3 / Task 2-b — deterministic race-coverage for the
@@ -176,6 +177,12 @@ describe('BrokerService — #291 race coverage (correction round 3)', () => {
         { provide: BrokerProviderRegistryService, useValue: providerRegistry },
         { provide: CredentialEncryptionService, useValue: encryption },
         { provide: AuditService, useValue: audit },
+        // Round 6 live-execution completion (§1a): snapshot authority seam
+        // (unused by the authorization-transition paths under test).
+        {
+          provide: BrokerAccountSnapshotService,
+          useValue: { readLatestAcceptedSnapshot: jest.fn().mockResolvedValue(null) },
+        },
         { provide: DomainEventBus, useValue: eventBus },
         // Passthrough OAuth token lifecycle (fixtures are metatrader-family —
         // the freshness gate hands the decrypted credentials straight through).

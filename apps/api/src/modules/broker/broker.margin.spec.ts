@@ -3,6 +3,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { BrokerService } from './broker.service';
 import { TradingAuthorityService } from '../execution-authority/trading-authority.service';
 import { GrantInvalidationService } from '../execution-authority/grant-invalidation.service';
+import { BrokerAccountSnapshotService } from './services/broker-account-snapshot.service';
 import { BrokerOAuthTokenLifecycleService } from './services/broker-oauth-token-lifecycle.service';
 import { BrokerLinkOutboxService } from './services/broker-link-outbox.service';
 import { BrokerConnection } from './entities/broker-connection.entity';
@@ -84,6 +85,12 @@ describe('BrokerService — account-scoped required margin', () => {
           useValue: { decrypt: jest.fn().mockReturnValue(credentials) },
         },
         { provide: AuditService, useValue: { log: jest.fn() } },
+        // Round 6 live-execution completion (§1a): snapshot authority seam
+        // (unused by the required-margin paths under test).
+        {
+          provide: BrokerAccountSnapshotService,
+          useValue: { readLatestAcceptedSnapshot: jest.fn().mockResolvedValue(null) },
+        },
         { provide: DomainEventBus, useValue: { publish: jest.fn() } },
         // Sprint 56 correction round 1: passthrough OAuth token lifecycle.
         {
@@ -181,6 +188,12 @@ describe('BrokerService — account-scoped required margin', () => {
           useValue: { decrypt: jest.fn().mockReturnValue(credentials) },
         },
         { provide: AuditService, useValue: { log: jest.fn() } },
+        // Round 6 live-execution completion (§1a): snapshot authority seam
+        // (unused by the required-margin paths under test).
+        {
+          provide: BrokerAccountSnapshotService,
+          useValue: { readLatestAcceptedSnapshot: jest.fn().mockResolvedValue(null) },
+        },
         { provide: DomainEventBus, useValue: { publish: jest.fn() } },
         // Sprint 56 correction round 1: passthrough OAuth token lifecycle.
         {

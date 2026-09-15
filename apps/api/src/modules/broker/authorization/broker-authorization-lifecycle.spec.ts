@@ -16,6 +16,7 @@ import { DomainEventBus } from '../../events/event-bus.service';
 import { BrokerAuthorizationStatus } from '../authorization/broker-authorization-status';
 import { BrokerCredentialStatus } from '../authorization/broker-credential-status';
 import { BrokerConnectionStatus, BrokerMode } from '../interfaces/broker-adapter.interface';
+import { BrokerAccountSnapshotService } from '../services/broker-account-snapshot.service';
 
 /**
  * Sprint 50 — BrokerService authorization lifecycle integration tests.
@@ -160,6 +161,12 @@ describe('BrokerService — Sprint 50 authorization lifecycle', () => {
         { provide: BrokerProviderRegistryService, useValue: providerRegistry },
         { provide: CredentialEncryptionService, useValue: encryption },
         { provide: AuditService, useValue: audit },
+        // Round 6 live-execution completion (§1a): snapshot authority seam
+        // (unused by the authorization-transition paths under test).
+        {
+          provide: BrokerAccountSnapshotService,
+          useValue: { readLatestAcceptedSnapshot: jest.fn().mockResolvedValue(null) },
+        },
         { provide: DomainEventBus, useValue: eventBus },
         // Sprint 56 correction round 1: passthrough OAuth token lifecycle
         // (fixtures are metatrader-family — the gate is a no-op).

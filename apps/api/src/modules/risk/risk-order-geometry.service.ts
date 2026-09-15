@@ -20,18 +20,19 @@ import { OHLCV } from '../broker/interfaces/broker-adapter.interface';
  *     caller decides the fail-closed policy (LIVE NEW exposure rejects with
  *     a typed code).
  *
- *  2. CONTRACT SIZE — there is NO public BrokerService seam that exposes
- *     per-instrument contract size today (adapters expose
- *     getInstrumentList()/BrokerInstrument.contractSize, but BrokerService
- *     does not surface it, and the risk engine must not reach into adapter
- *     internals or duplicate credential handling). Until that seam lands,
- *     resolveOrderGeometry() returns contractSize = null — the caller
- *     treats the geometry as UNVERIFIED: LIVE NEW exposure fails closed
- *     (typed CONTRACT_SIZE_UNAVAILABLE); PAPER/DEMO records the unverified
- *     state honestly in appliedRules instead of inventing a 100000
- *     fallback. Hardcoding a standard-FX contract size here would be
- *     exactly the "invented pip-value formula" the architect forbade
- *     (metals/CFD instruments report contractSize '1').
+ *  2. CONTRACT SIZE — resolved through the public connection-scoped
+ *     instrument seam BrokerService.getInstrumentSpecForConnection()
+ *     (Round 6 live-execution completion: adapters' getInstrumentList()
+ *     surfaced with in-process caching, canonical symbols). When the seam
+ *     cannot PROVE the specification (unknown symbol, adapter failure,
+ *     malformed contract size), resolveOrderGeometry() returns
+ *     contractSize = null — the caller treats the geometry as UNVERIFIED:
+ *     LIVE NEW exposure fails closed (typed CONTRACT_SIZE_UNAVAILABLE);
+ *     PAPER/DEMO records the unverified state honestly in appliedRules
+ *     instead of inventing a 100000 fallback. Hardcoding a standard-FX
+ *     contract size here would be exactly the "invented pip-value formula"
+ *     the architect forbade (metals/CFD instruments report contractSize
+ *     '1').
  * ═══════════════════════════════════════════════════════════════════════
  */
 @Injectable()
@@ -47,8 +48,9 @@ export class RiskOrderGeometryService {
    *        carries no usable requested price) — the only case in which a
    *        provider quote fetch is required for the risk boundary.
    * @returns freshQuote is null when unavailable/unparseable — NEVER a
-   *          fabricated price. contractSize is null until a broker-side
-   *          contract-size seam exists (see class doc).
+   *          fabricated price. contractSize is null when the instrument seam
+   *          cannot PROVE the specification (unknown symbol / adapter
+   *          failure / malformed value) — never an invented fallback.
    */
   async resolveOrderGeometry(params: {
     userId: string;
@@ -59,6 +61,7 @@ export class RiskOrderGeometryService {
     contractSize: ExactDecimal | null;
     freshQuote: ExactDecimal | null;
     quoteRef: Record<string, unknown> | null;
+    instrumentSpec: import('../broker/interfaces/broker-adapter.interface').BrokerInstrument | null;
   }> {
     let freshQuote: ExactDecimal | null = null;
     let quoteRef: Record<string, unknown> | null = null;
@@ -97,7 +100,36 @@ export class RiskOrderGeometryService {
       }
     }
 
-    return { contractSize: null, freshQuote, quoteRef };
+    // Contract size: PROVEN through the public instrument seam, or null
+    // (unverified) — never invented. A seam failure is a typed outcome.
+    let contractSize: ExactDecimal | null = null;
+    let instrumentSpec: import('../broker/interfaces/broker-adapter.interface').BrokerInstrument | null =
+      null;
+    try {
+      instrumentSpec = await this.brokerService.getInstrumentSpecForConnection(
+        params.userId,
+        params.brokerConnectionId,
+        params.instrument,
+      );
+      const raw = instrumentSpec?.contractSize;
+      const parsed = raw ? ExactDecimal.tryParse(raw) : null;
+      contractSize = parsed && parsed.isPositive() ? parsed : null;
+      if (instrumentSpec && !contractSize) {
+        this.logger.warn(
+          `Instrument ${params.instrument} reported a non-positive/malformed contract ` +
+            `size ("${raw ?? 'null'}") on connection ${params.brokerConnectionId} — ` +
+            'geometry stays UNVERIFIED',
+        );
+        instrumentSpec = null;
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Instrument spec unavailable connection=${params.brokerConnectionId} ` +
+          `instrument=${params.instrument}: ${(err as Error).message}`,
+      );
+    }
+
+    return { contractSize, freshQuote, quoteRef, instrumentSpec };
   }
 
   /** Strict-exact parse of a candle close; null on malformed/absent values. */

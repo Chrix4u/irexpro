@@ -14,6 +14,7 @@ import { PaperBrokerAdapter } from '../adapters/paper-broker.adapter';
 import { CredentialEncryptionService } from './credential-encryption.service';
 import { BrokerDemoValidationService } from './broker-demo-validation.service';
 import { BrokerOAuthTokenLifecycleService } from './broker-oauth-token-lifecycle.service';
+import { BrokerAccountSnapshotService } from './broker-account-snapshot.service';
 import { BrokerLinkOutboxService } from './broker-link-outbox.service';
 import { CTraderClientService } from '../adapters/ctrader/ctrader-client.service';
 import { AuditService } from '../../audit/audit.service';
@@ -215,6 +216,12 @@ describe('BrokerDemoValidationService', () => {
         { provide: getRepositoryToken(BrokerConnection), useFactory: mockConnectionRepo },
         { provide: getRepositoryToken(BrokerAccount), useFactory: mockAccountRepo },
         { provide: AuditService, useValue: { log: jest.fn().mockResolvedValue(undefined) } },
+        // Round 6 live-execution completion (§1a): snapshot authority seam
+        // (unused by the demo-validation paths under test).
+        {
+          provide: BrokerAccountSnapshotService,
+          useValue: { readLatestAcceptedSnapshot: jest.fn().mockResolvedValue(null) },
+        },
         { provide: DataSource, useValue: {} },
         {
           provide: DomainEventBus,
@@ -389,9 +396,15 @@ describe('BrokerDemoValidationService', () => {
         return result;
       });
       // ...and then the evidence contradicts the bless: the checklist fails.
+      // Round 6 live-execution completion (§1a): connectBroker now takes the
+      // initial account snapshot via getAccountInfo() too (fail-safe — the
+      // connect survives its failure). The scripted provider failure is
+      // therefore persistent: BOTH the connect-time observation and the
+      // checklist's account-info step see it — the checklist still fails and
+      // the bless is still revoked exactly as before.
       jest
         .spyOn(PaperBrokerAdapter.prototype, 'getAccountInfo')
-        .mockRejectedValueOnce(
+        .mockRejectedValue(
           new BrokerAdapterError(
             BrokerErrorCode.BROKER_SERVER_ERROR,
             `provider exploded: apiKey=${marker}`,
@@ -429,9 +442,12 @@ describe('BrokerDemoValidationService', () => {
   describe('validateDemoConnection — scripted adapter failure', () => {
     it('keeps demoValidated false, returns the honest step result and audits FAILED', async () => {
       const marker = 'SCRIPTED_SECRET_MARKER_9e8d7c6b';
+      // Round 6 live-execution completion (§1a): persistent failure — the
+      // connect-time snapshot observation sees it too (fail-safe, connect
+      // survives) AND the checklist's account-info step fails as scripted.
       jest
         .spyOn(PaperBrokerAdapter.prototype, 'getAccountInfo')
-        .mockRejectedValueOnce(
+        .mockRejectedValue(
           new BrokerAdapterError(
             BrokerErrorCode.BROKER_SERVER_ERROR,
             `provider exploded: apiKey=${marker}`,
