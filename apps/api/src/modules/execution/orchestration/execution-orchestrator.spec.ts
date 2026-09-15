@@ -1,5 +1,6 @@
 import { ForbiddenException, Logger } from '@nestjs/common';
 import { ExecutionOrchestrator } from './execution-orchestrator.service';
+import type { MarketSafetyGateService } from './market-safety-gate.service';
 import { ExecutionIntent } from './execution-intent.interface';
 import { Order } from '../orders/order.entity';
 import { OrderKind, OrderStatus, OrderTimeInForce } from '../orders/order.enums';
@@ -164,6 +165,12 @@ describe('ExecutionOrchestrator', () => {
       // drive dispatchOrder WITHOUT a commitment payload, so the boundary is
       // never invoked.
       {} as never,
+      // Round 6 §5/§18: the market-safety gate is exercised at the SEAM
+      // (its own matrix lives in market-safety-gate.spec.ts) — passes by
+      // default; per-test overrides make it fail closed.
+      {
+        assertMarketSafeForDispatch: jest.fn().mockResolvedValue(undefined),
+      } as unknown as MarketSafetyGateService,
     );
   });
 

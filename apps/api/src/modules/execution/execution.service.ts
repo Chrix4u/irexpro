@@ -48,6 +48,7 @@ import {
   TradeIntentNotUsableError,
   TradeIntentService,
 } from './services/trade-intent.service';
+import { MarketSafetyError } from './orchestration/market-safety-gate.service';
 
 /** Invalidation reason stamped on RiskGrants when the session authority
  *  generation advances (mode change / end / suspension — issue #298). */
@@ -410,6 +411,8 @@ export class ExecutionService {
       stopPrice: null,
       stopLoss: order.stopLoss,
       takeProfit: order.takeProfit,
+      // §5/§18: the risk-validated reference for the final deviation check.
+      referencePrice: order.entryPrice,
       comment: order.idempotencyKey,
       providerAction: 'PLACE',
     };
@@ -422,6 +425,56 @@ export class ExecutionService {
         origin: confirmationId ? 'USER_CONFIRMATION' : 'PIPELINE',
       });
     } catch (err) {
+      if (err instanceof MarketSafetyError) {
+        // §5/§18 carve-out: the market-safety gate runs BEFORE the
+        // commitment and BEFORE any provider call — the dispatch is
+        // PROVABLY not sent. The order is terminally REJECTED by the gate
+        // itself; the trade follows (PENDING → REJECTED, DEFINITELY_NOT_SENT
+        // releases the daily-capacity reservation) and the decision's intent
+        // is terminally rejected (a replay of the same AI decision can never
+        // re-enter exposure — §2).
+        this.logger.warn(
+          `Market-safety rejection for trade ${trade.id} [${err.code}]: ${err.message}`,
+        );
+        const outcome = await this.tradeCas.applyCasTransition({
+          tradeId: trade.id,
+          expectedFrom: TradeStatus.PENDING,
+          target: TradeStatus.REJECTED,
+          patch: {
+            status: TradeStatus.REJECTED,
+            brokerRejectionReason: `MARKET_SAFETY_${err.code}: ${err.message}`,
+            dispatchCertainty: ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+          },
+          context: {
+            userId,
+            source: 'executeTrade:market-safety-rejection',
+            reason: err.message,
+          },
+        });
+        trade.status = outcome.trade?.status ?? TradeStatus.REJECTED;
+        await this.tradeIntents.markRejected(tradeIntent.id).catch((intentErr) =>
+          this.logger.warn(
+            `Intent ${tradeIntent.id} could not be marked REJECTED after the ` +
+              `market-safety failure (${(intentErr as Error).message})`,
+          ),
+        );
+        await this.auditService.log({
+          actorUserId: userId,
+          action: AuditAction.TRADE_REJECTED,
+          resourceType: 'Trade',
+          resourceId: trade.id,
+          severity: AuditSeverity.WARNING,
+          metadata: {
+            blockedReason: err.code,
+            signalId,
+            instrument: order.instrument,
+            dispatchCertainty: ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+            casOutcome: outcome.outcome,
+          },
+        });
+        return trade;
+      }
+
       // Orchestrator-level infrastructure failure (order store unavailable
       // before reservation, etc.) — the provider outcome is UNKNOWN.
       // Fail closed: flag for reconciliation, never silently drop.

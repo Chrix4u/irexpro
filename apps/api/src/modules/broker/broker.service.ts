@@ -25,6 +25,7 @@ import {
   BrokerConnectionStatus,
   BrokerInstrument,
   BrokerMode,
+  BrokerPrice,
   DecryptedBrokerCredentials,
   OHLCV,
 } from './interfaces/broker-adapter.interface';
@@ -1676,6 +1677,71 @@ export class BrokerService {
       Object.keys(credentials).forEach((k) => {
         (credentials as unknown as Record<string, unknown>)[k] = null;
       });
+    }
+  }
+
+  /**
+   * Round 6 live-execution completion (§5/§18): the FRESH-QUOTE seam for the
+   * final market-safety gate — one provider quote for the canonical
+   * instrument through the caller's connection (tenant + CONNECTED +
+   * credential-lifecycle gated, exactly like the instrument seam).
+   *
+   * Deliberately NOT cached: freshness is the entire point. Returns null when
+   * the adapter cannot prove a current quote (unknown symbol mapping, market
+   * data unavailable) — the caller fails closed, NEVER invents a price or a
+   * market state (§18).
+   */
+  async getCurrentPriceForConnection(
+    userId: string,
+    brokerConnectionId: string,
+    instrument: string,
+  ): Promise<BrokerPrice | null> {
+    const connection = await this.findConnectionById(brokerConnectionId, userId);
+
+    if (connection.status !== BrokerConnectionStatus.CONNECTED) {
+      throw new ForbiddenException('Broker connection is not active');
+    }
+
+    if (!connection.encryptedCredentials || !connection.credentialIv || !connection.credentialTag) {
+      throw new ForbiddenException('Broker connection credentials unavailable');
+    }
+
+    this.assertCredentialsUsable(connection, 'getCurrentPriceForConnection');
+
+    const adapter = this.adapterRegistry.getAdapterForConnection(
+      connection.id,
+      connection.brokerId,
+    );
+    const credentials = this.encryptionService.decrypt({
+      ciphertext: connection.encryptedCredentials,
+      iv: connection.credentialIv,
+      tag: connection.credentialTag,
+      keyId: connection.encryptionKeyId ?? 'env-key-v1',
+    });
+
+    adapter.setMode(connection.accountType);
+
+    try {
+      await adapter.connect(credentials);
+      const price = await adapter.getCurrentPrice(instrument);
+      if (
+        !price ||
+        !price.bid ||
+        !price.ask ||
+        !price.timestamp ||
+        !Number.isFinite(new Date(price.timestamp).getTime())
+      ) {
+        return null; // §18 — unprovable is unprovable; never invented.
+      }
+      return price;
+    } catch {
+      // Quote failures are the gate's typed MARKET_DATA_UNAVAILABLE — a null
+      // return keeps the seam honest without swallowing the reason.
+      this.logger.warn(
+        `Fresh quote unavailable for ${instrument} on connection ${brokerConnectionId} — ` +
+          'the market-safety gate will fail closed',
+      );
+      return null;
     }
   }
 

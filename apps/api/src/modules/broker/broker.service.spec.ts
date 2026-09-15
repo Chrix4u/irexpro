@@ -1249,4 +1249,84 @@ describe('BrokerService', () => {
       expect(registry.getAdapterForConnection).not.toHaveBeenCalled();
     });
   });
+
+  describe('getCurrentPriceForConnection() — the fresh-quote seam (§5/§18 market safety)', () => {
+    const connectedConn = {
+      id: 'conn-1',
+      userId: 'user-1',
+      brokerId: 'metatrader5',
+      status: BrokerConnectionStatus.CONNECTED,
+      accountType: BrokerMode.LIVE,
+      credentialStatus: 'VERIFIED',
+      encryptedCredentials: 'ciphertext',
+      credentialIv: 'iv',
+      credentialTag: 'tag',
+      encryptionKeyId: 'env-key-v1',
+    };
+
+    const priceFixture = {
+      instrument: 'EURUSD',
+      bid: '1.08490',
+      ask: '1.08510',
+      spread: '0.00020',
+      timestamp: new Date('2025-09-15T10:00:00Z'),
+    };
+
+    it('resolves ONE fresh provider quote through the connection (never cached)', async () => {
+      connectionRepo.findOne.mockResolvedValue(connectedConn);
+      const adapter = {
+        setMode: jest.fn(),
+        connect: jest.fn().mockResolvedValue(undefined),
+        getCurrentPrice: jest.fn().mockResolvedValue(priceFixture),
+      };
+      registry.getAdapterForConnection.mockReturnValue(adapter);
+      encryption.decrypt.mockReturnValue({ accountId: 'acc-1' });
+
+      await expect(
+        service.getCurrentPriceForConnection('user-1', 'conn-1', 'EURUSD'),
+      ).resolves.toEqual(priceFixture);
+      expect(adapter.getCurrentPrice).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects a non-active connection (tenant + lifecycle gated)', async () => {
+      connectionRepo.findOne.mockResolvedValue({
+        ...connectedConn,
+        status: BrokerConnectionStatus.DISCONNECTED,
+      });
+      await expect(
+        service.getCurrentPriceForConnection('user-1', 'conn-1', 'EURUSD'),
+      ).rejects.toThrow();
+    });
+
+    it('returns null when the adapter cannot prove a quote — never an invented price (§18)', async () => {
+      connectionRepo.findOne.mockResolvedValue(connectedConn);
+      const adapter = {
+        setMode: jest.fn(),
+        connect: jest.fn().mockResolvedValue(undefined),
+        getCurrentPrice: jest.fn().mockRejectedValue(new Error('market data down')),
+      };
+      registry.getAdapterForConnection.mockReturnValue(adapter);
+      encryption.decrypt.mockReturnValue({ accountId: 'acc-1' });
+
+      await expect(
+        service.getCurrentPriceForConnection('user-1', 'conn-1', 'EURUSD'),
+      ).resolves.toBeNull();
+    });
+
+    it('returns null for a quote with an unparseable timestamp (unprovable is unprovable)', async () => {
+      connectionRepo.findOne.mockResolvedValue(connectedConn);
+      const adapter = {
+        setMode: jest.fn(),
+        connect: jest.fn().mockResolvedValue(undefined),
+        getCurrentPrice: jest.fn().mockResolvedValue({ ...priceFixture, timestamp: 'garbage' }),
+      };
+      registry.getAdapterForConnection.mockReturnValue(adapter);
+      encryption.decrypt.mockReturnValue({ accountId: 'acc-1' });
+
+      await expect(
+        service.getCurrentPriceForConnection('user-1', 'conn-1', 'EURUSD'),
+      ).resolves.toBeNull();
+    });
+  });
+
 });

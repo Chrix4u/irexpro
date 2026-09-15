@@ -43,6 +43,16 @@ export interface ExecutionIntent {
   /** Required for STOP / STOP_LIMIT (decimal string). */
   stopPrice?: string | null;
 
+  /**
+   * Round 6 live-execution completion (§5/§18): the risk-validated reference
+   * price (the geometry quote the risk evaluation used). The final
+   * market-safety gate verifies the CURRENT price has not deviated
+   * materially from this reference before the provider commitment. Null for
+   * intents without a provable reference (the deviation check is skipped —
+   * freshness + spread still apply).
+   */
+  referencePrice?: string | null;
+
   stopLoss: string;
   takeProfit: string;
 

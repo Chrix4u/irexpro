@@ -1,5 +1,6 @@
 import { Logger } from '@nestjs/common';
 import { ExecutionOrchestrator } from './execution-orchestrator.service';
+import type { MarketSafetyGateService } from './market-safety-gate.service';
 import { ExecutionIntent } from './execution-intent.interface';
 import { Order } from '../orders/order.entity';
 import { OrderKind, OrderStatus, OrderTimeInForce } from '../orders/order.enums';
@@ -167,6 +168,12 @@ describe('ExecutionOrchestrator provider-write certainty (Sprint 56 correction r
       // Round 6 (#365): the provider-dispatch commitment seam — these suites
       // drive dispatchOrder WITHOUT a commitment payload.
       {} as never,
+      // Round 6 §5/§18: the market-safety gate is exercised at the SEAM
+      // (its own matrix lives in market-safety-gate.spec.ts) — passes by
+      // default; per-test overrides make it fail closed.
+      {
+        assertMarketSafeForDispatch: jest.fn().mockResolvedValue(undefined),
+      } as unknown as MarketSafetyGateService,
     );
   });
 

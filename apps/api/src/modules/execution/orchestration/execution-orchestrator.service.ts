@@ -22,6 +22,7 @@ import { Order } from '../orders/order.entity';
 import { OrderService } from '../orders/order.service';
 import { OrderStatus } from '../orders/order.enums';
 import { ExecutionIntent, ProviderDispatchOutcome } from './execution-intent.interface';
+import { MarketSafetyGateService } from './market-safety-gate.service';
 import { FinalDispatchBoundary } from './final-dispatch-boundary';
 import { mapProviderOrderResponse } from './provider-response.mapper';
 import { classifyIntentOperation, isExposureIncreasingOperation } from './provider-operation-class';
@@ -89,6 +90,10 @@ export class ExecutionOrchestrator {
     // INSIDE dispatchOrder immediately before the provider state-changing
     // call, with NOTHING awaited in between.
     private readonly finalDispatchBoundary: FinalDispatchBoundary,
+    // Round 6 live-execution completion (§5/§18): the final market-safety
+    // gate — proven fresh quote + spread sanity + entry deviation, BEFORE
+    // the commitment (zero provider calls on failure).
+    private readonly marketSafetyGate: MarketSafetyGateService,
   ) {}
 
   // ─── 1. Validation pipeline (fail-closed) ───────────────────────────────
@@ -316,6 +321,22 @@ export class ExecutionOrchestrator {
         signalId: intent.signalId ?? null,
       },
     });
+
+    // ── ROUND 6 live-execution completion (§5/§18): the FINAL MARKET-SAFETY
+    // GATE — runs between the SUBMITTED mark and the PROVIDER-DISPATCH
+    // COMMITMENT. Scope: NEW-EXPOSURE PLACE intents only (risk-REDUCING
+    // dispatches stay possible during market anomalies — §10/§17). A typed
+    // failure terminally REJECTS the order with ZERO provider calls and
+    // NOTHING consumed (no grant, no confirmation). The gate proves CURRENT
+    // market facts (fresh quote, sane spread, bounded deviation from the
+    // risk-validated reference) — when market state cannot be proven it
+    // NEVER invents one (§18).
+    if (
+      operationClass === ProviderOperationClass.NEW_EXPOSURE &&
+      intent.providerAction === 'PLACE'
+    ) {
+      await this.marketSafetyGate.assertMarketSafeForDispatch(intent, connection, order.id);
+    }
 
     // ── ROUND 6 (#365): the PROVIDER-DISPATCH COMMITMENT ─────────────────
     // ONE short DB transaction re-verifying the CURRENT unified authority

@@ -12,6 +12,7 @@ import { ExecutionSessionResolutionService } from './execution-session.resolutio
 import { Order } from './orders/order.entity';
 import { OrderService } from './orders/order.service';
 import { ExecutionOrchestrator } from './orchestration/execution-orchestrator.service';
+import type { MarketSafetyGateService } from './orchestration/market-safety-gate.service';
 import { ExecutionIntent } from './orchestration/execution-intent.interface';
 import { FinalDispatchBoundary } from './orchestration/final-dispatch-boundary';
 import { TradeLifecycleCasService } from './orders/trade-lifecycle-cas.service';
@@ -491,6 +492,12 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
       // Round 6 (#365): the provider-dispatch commitment seam — the
       // commitment-path pg matrices are tracked for this CI-gated suite.
       {} as never,
+      // Round 6 §5/§18: the market-safety gate is exercised at the SEAM
+      // (its own matrix lives in market-safety-gate.spec.ts) — passes by
+      // default; per-test overrides make it fail closed.
+      {
+        assertMarketSafeForDispatch: jest.fn().mockResolvedValue(undefined),
+      } as unknown as MarketSafetyGateService,
     );
     // Round 5 (task 50-c): the REAL final dispatch boundary + the REAL
     // RiskGrantService (the 50-b contract) + the REAL trade-lifecycle CAS —

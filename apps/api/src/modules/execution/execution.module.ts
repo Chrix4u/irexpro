@@ -42,6 +42,7 @@ import { DailyRiskPeriodModule } from './daily-risk-period.module';
 import { TradeIntentService } from './services/trade-intent.service';
 // Round 6 live-execution completion (§3/§4): the portfolio allocation
 // engine + the deterministic fail-closed position-sizing engine.
+import { MarketSafetyGateService } from './orchestration/market-safety-gate.service';
 import { AllocationService } from './services/allocation.service';
 import { PositionSizingService } from './services/position-sizing.service';
 
@@ -114,6 +115,10 @@ import { PositionSizingService } from './services/position-sizing.service';
     // + position sizing (deterministic, fail-closed, ExactDecimal-only).
     AllocationService,
     PositionSizingService,
+    // Round 6 §5/§18: the final market-safety gate (pre-commitment) —
+    // proven fresh quote + spread sanity + entry deviation, before the
+    // provider-dispatch commitment, NEW-EXPOSURE PLACE only.
+    MarketSafetyGateService,
     // Round 5 (#295): the session-resolution seam every EXECUTION-side
     // NEW-exposure decision uses (TradingSession = authoritative target).
     ExecutionSessionResolutionService,

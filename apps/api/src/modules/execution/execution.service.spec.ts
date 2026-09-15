@@ -19,6 +19,8 @@ import {
   ExecutionSessionResolutionService,
 } from './execution-session.resolution';
 import { TradeIntentService } from './services/trade-intent.service';
+import { MarketSafetyError } from './orchestration/market-safety-gate.service';
+import { ProviderDispatchCertainty } from '../broker/interfaces/provider-dispatch-certainty';
 import { Order } from './orders/order.entity';
 import { BrokerService } from '../broker/broker.service';
 import { AuditService } from '../audit/audit.service';
@@ -440,6 +442,36 @@ describe('ExecutionService', () => {
       expect(orchestrator.dispatchOrder).not.toHaveBeenCalled();
       // No PENDING trade was reserved (dataSource.transaction never ran).
       expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    // ─── Round 6 §5/§18: market-safety rejection carve-out ─────────────
+
+    it('a market-safety gate failure rejects the trade DEFINITELY_NOT_SENT + marks the intent REJECTED (§2)', async () => {
+      orchestrator.dispatchOrder.mockRejectedValueOnce(
+        new MarketSafetyError('STALE_PRICE', 'quote age 45000ms exceeds the window'),
+      );
+      const trade = await service.executeTrade('user-1', approvedDecision);
+
+      expect(trade.status).toBe(TradeStatus.REJECTED);
+      // The CAS write-through stub landed the patch on tradeRepo.update.
+      expect(tradeRepo.update).toHaveBeenCalledWith(
+        'trade-1',
+        expect.objectContaining({
+          status: TradeStatus.REJECTED,
+          dispatchCertainty: ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+        }),
+      );
+      // §2: the decision's intent is terminally rejected — a replay can
+      // never re-enter exposure.
+      expect(tradeIntentService.markRejected).toHaveBeenCalledWith('intent-1');
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            blockedReason: 'STALE_PRICE',
+            dispatchCertainty: ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+          }),
+        }),
+      );
     });
   });
 
