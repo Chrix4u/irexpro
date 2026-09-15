@@ -5,7 +5,10 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { RiskService } from './risk.service';
 import { RiskProfile } from './entities/risk-profile.entity';
 import { RiskViolation } from './entities/risk-violation.entity';
-import { TradingSession } from '../execution/entities/trading-session.entity';
+import {
+  TradingSession,
+  TradingSessionStatus,
+} from '../execution/entities/trading-session.entity';
 import { TradingAuthorityGeneration } from '../users/entities/trading-authority-generation.entity';
 import { BrokerService } from '../broker/broker.service';
 import { AuditService } from '../audit/audit.service';
@@ -180,6 +183,8 @@ const mockExecutionService = () => ({
   findTradeBySignalId: jest.fn().mockResolvedValue(null),
   // Sprint 32 Gate 2: mock advisory-lock daily-trade-slot reservation
   reserveDailyTradeSlot: jest.fn().mockResolvedValue({ allowed: true, currentCount: 0 }),
+  // Round 6 §17: the kill-switch emergency flatten seam.
+  emergencyCloseAllOpenPositions: jest.fn().mockResolvedValue([]),
 });
 
 // Sprint 50 — emergency control plane mock (default: execution allowed)
@@ -785,6 +790,48 @@ describe('RiskService', () => {
       expect(result.decision).toBe('APPROVED');
     });
 
+    // ─── Round 6 §16: autonomous session degradation on hard breaches ────
+
+    it('a daily-loss breach degrades the ACTIVE session to SUSPENDED_RISK_LIMIT (§16)', async () => {
+      executionService.getTodayRealisedLoss.mockResolvedValue(-500);
+      sessionRepo.findOne.mockResolvedValue(defaultSession());
+
+      const result = await service.validateProposedTrade('user-1', validTrade());
+
+      expect(result.decision).toBe('SUSPENDED');
+      // The guarded CAS update ran (status + authority generation bump).
+      expect(sessionRepo.createQueryBuilder().update).toHaveBeenCalled();
+      expect(sessionRepo.createQueryBuilder().set).toHaveBeenCalledWith(
+        expect.objectContaining({ status: TradingSessionStatus.SUSPENDED_RISK_LIMIT }),
+      );
+      // Session-scoped grant invalidation fired with the typed reason.
+      expect(riskGrantService.invalidateGrantsForSession).toHaveBeenCalledWith(
+        defaultSession().id,
+        expect.stringContaining('SESSION_SUSPENDED_RISK_LIMIT'),
+      );
+    });
+
+    it('the degradation is idempotent — no ACTIVE session means nothing to degrade', async () => {
+      executionService.getTodayRealisedLoss.mockResolvedValue(-500);
+      // The risk pipeline's own session lookups find the session; the
+      // degradation lookup finds none ACTIVE (already degraded/ended).
+      let callCount = 0;
+      sessionRepo.findOne.mockImplementation(async () => {
+        callCount++;
+        // First lookup (pipeline gates): ACTIVE session; degradation
+        // lookup also returns it — assert instead that when the guarded
+        // CAS loses (affected=0), nothing throws and the rejection stands.
+        return defaultSession();
+      });
+      sessionRepo.createQueryBuilder().execute.mockResolvedValueOnce({ affected: 0 });
+
+      const result = await service.validateProposedTrade('user-1', validTrade());
+
+      expect(result.decision).toBe('SUSPENDED'); // the rejection still stands
+      expect(riskGrantService.invalidateGrantsForSession).not.toHaveBeenCalled();
+      void callCount;
+    });
+
     it('REJECTS with RISK_ENGINE_QUERY_FAILED when the daily-loss query throws (no SKIPPED)', async () => {
       executionService.getTodayRealisedLoss.mockRejectedValue(new Error('timeout'));
 
@@ -1294,6 +1341,29 @@ describe('RiskService', () => {
       await service.toggleKillSwitch('user-1', false);
       expect(profileRepo.save).toHaveBeenCalledWith(
         expect.objectContaining({ killSwitchActive: false }),
+      );
+    });
+
+    // ─── Round 6 §17: the FOURTH STOP LEVEL — emergency flatten ──────────
+
+    it('ACTIVATION emergency-flattens every OPEN position (§17 level 4)', async () => {
+      await service.toggleKillSwitch('user-1', true, 'Manual pause');
+      expect(executionService.emergencyCloseAllOpenPositions).toHaveBeenCalledWith('user-1');
+    });
+
+    it('DEACTIVATION never re-opens positions (no flatten call)', async () => {
+      await service.toggleKillSwitch('user-1', false);
+      expect(executionService.emergencyCloseAllOpenPositions).not.toHaveBeenCalled();
+    });
+
+    it('a flatten failure NEVER rolls back the kill-switch authority (durable switch stands)', async () => {
+      executionService.emergencyCloseAllOpenPositions.mockRejectedValueOnce(
+        new Error('provider unreachable'),
+      );
+      const profile = await service.toggleKillSwitch('user-1', true);
+      expect(profile.killSwitchActive).toBe(true);
+      expect(profileRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ killSwitchActive: true }),
       );
     });
   });

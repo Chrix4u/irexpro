@@ -82,6 +82,20 @@ const mockBrokerConnection = {
 
 const mockOrder = { id: 'order-1', clientOrderId: 'sig-sig-001', status: 'FILLED' } as Order;
 
+/** Round 6 §17: the canonical OPEN-trade fixture for the kill-switch flatten. */
+const baseTradeFixture = {
+  id: 'trade-1',
+  userId: 'user-1',
+  status: TradeStatus.OPEN,
+  externalOrderId: 'ext-1',
+  brokerConnectionId: 'conn-1',
+  instrument: 'EURUSD',
+  direction: 'BUY',
+  lotSize: '0.05',
+  signalId: null,
+  openedAt: new Date(),
+};
+
 /** A canonical FILLED dispatch outcome (provider executed the order). */
 const filledOutcome: ProviderDispatchOutcome = {
   outcome: 'FILLED',
@@ -651,6 +665,101 @@ describe('ExecutionService', () => {
       expect(tradeRepo.update).toHaveBeenCalledWith(
         'trade-1',
         expect.objectContaining({ status: TradeStatus.RECONCILIATION_PENDING }),
+      );
+    });
+  });
+
+  // ─── Round 6 §17: the kill-switch emergency flatten ─────────────────────
+
+  describe('emergencyCloseAllOpenPositions() — §17 fourth stop level', () => {
+    it('returns [] when the user has no OPEN positions (nothing to flatten)', async () => {
+      tradeRepo.find.mockResolvedValue([]);
+      const results = await service.emergencyCloseAllOpenPositions('user-1');
+      expect(results).toEqual([]);
+      expect(orchestrator.dispatchOrder).not.toHaveBeenCalled();
+    });
+
+    it('closes EVERY OPEN position through the fail-closed close path', async () => {
+      tradeRepo.find.mockResolvedValue([
+        { ...baseTradeFixture, id: 'trade-1', externalOrderId: 'ext-1' },
+        { ...baseTradeFixture, id: 'trade-2', externalOrderId: 'ext-2' },
+      ]);
+      tradeRepo.findOne.mockImplementation(async ({ where }) => {
+        const id = (where as { id: string }).id;
+        return { ...baseTradeFixture, id, externalOrderId: `ext-${id.split('-')[1]}` };
+      });
+      orchestrator.assertDispatchable.mockResolvedValue(undefined);
+      orchestrator.dispatchOrder.mockResolvedValue({
+        outcome: 'FILLED',
+        order: mockOrder,
+        orderId: mockOrder.id,
+        providerOrderId: 'pos-close',
+        filledQuantity: '0.05',
+        avgFillPrice: '1.09000',
+        reason: 'closed',
+      });
+      // CAS write-through lands the CLOSED patch on the repo.
+      tradeCas.applyCasTransition.mockImplementation(async ({ target }) => ({
+        outcome: 'CAS_OK',
+        trade: { ...baseTradeFixture, status: target },
+      }));
+
+      const results = await service.emergencyCloseAllOpenPositions('user-1');
+
+      expect(results).toHaveLength(2);
+      expect(results.every((r: { closed: boolean }) => r.closed)).toBe(true);
+      expect(orchestrator.dispatchOrder).toHaveBeenCalledTimes(2);
+    });
+
+    it('isolates failures — one refused close never aborts the flatten', async () => {
+      tradeRepo.find.mockResolvedValue([
+        { ...baseTradeFixture, id: 'trade-1', externalOrderId: 'ext-1' },
+        { ...baseTradeFixture, id: 'trade-2', externalOrderId: 'ext-2' },
+      ]);
+      tradeRepo.findOne.mockResolvedValue({ ...baseTradeFixture, id: 'trade-1' });
+      orchestrator.assertDispatchable.mockResolvedValue(undefined);
+      orchestrator.dispatchOrder
+        .mockRejectedValueOnce(new ForbiddenException('provider refused'))
+        .mockResolvedValueOnce({
+          outcome: 'FILLED',
+          order: mockOrder,
+          orderId: mockOrder.id,
+          providerOrderId: 'pos-close',
+          filledQuantity: '0.05',
+          avgFillPrice: '1.09000',
+          reason: 'closed',
+        });
+      tradeCas.applyCasTransition.mockImplementation(async ({ target }) => ({
+        outcome: 'CAS_OK',
+        trade: { ...baseTradeFixture, status: target },
+      }));
+
+      const results = await service.emergencyCloseAllOpenPositions('user-1');
+
+      expect(orchestrator.dispatchOrder).toHaveBeenCalledTimes(2); // the flatten continued
+      const failed = results.find((r: { tradeId: string }) => r.tradeId === 'trade-1');
+      expect(failed?.closed).toBe(false);
+      const ok = results.find((r: { tradeId: string }) => r.tradeId === 'trade-2');
+      expect(ok?.closed).toBe(true);
+    });
+
+    it('audits the honest summary (CRITICAL when any close failed)', async () => {
+      tradeRepo.find.mockResolvedValue([{ ...baseTradeFixture, id: 'trade-1' }]);
+      tradeRepo.findOne.mockResolvedValue({ ...baseTradeFixture, id: 'trade-1' });
+      orchestrator.assertDispatchable.mockResolvedValue(undefined);
+      orchestrator.dispatchOrder.mockRejectedValue(new Error('connection down'));
+
+      await service.emergencyCloseAllOpenPositions('user-1');
+
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            emergencyFlatten: true,
+            targetCount: 1,
+            closedCount: 0,
+            failedCount: 1,
+          }),
+        }),
       );
     });
   });

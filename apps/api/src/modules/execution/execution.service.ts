@@ -734,6 +734,86 @@ export class ExecutionService {
   // ─── Trade close ──────────────────────────────────────────────────────────
 
   /**
+   * Round 6 live-execution completion (§17) — the FOURTH STOP LEVEL: the
+   * kill-switch EMERGENCY FLATTEN. Every OPEN trade of the user is closed
+   * through the SAME fail-closed close path as §10 exits (idempotent close
+   * attempts, CAS transitions, §14 account-lease serialization,
+   * control-plane-exempt + market-safety-exempt CLOSE_POSITION operations —
+   * de-risking must remain possible precisely when everything else is
+   * blocked).
+   *
+   * Isolation: one refused close NEVER aborts the flatten (the remaining
+   * positions still de-risk); an unknown close outcome leaves the trade
+   * RECONCILIATION_PENDING for the convergence machinery. The summary audit
+   * records the honest per-trade results.
+   */
+  async emergencyCloseAllOpenPositions(
+    userId: string,
+    reason: TradeCloseReason = TradeCloseReason.KILL_SWITCH_FORCE_CLOSE,
+  ): Promise<{ tradeId: string; closed: boolean; status: TradeStatus; detail?: string }[]> {
+    const openTrades = await this.tradeRepo.find({
+      where: { userId, status: TradeStatus.OPEN },
+      order: { openedAt: 'ASC' },
+    });
+
+    if (openTrades.length === 0) {
+      this.logger.log(`Kill-switch flatten for user ${userId}: no OPEN positions`);
+      return [];
+    }
+
+    this.logger.warn(
+      `Kill-switch flatten for user ${userId}: closing ${openTrades.length} OPEN position(s) ` +
+        `(${reason})`,
+    );
+
+    const results: { tradeId: string; closed: boolean; status: TradeStatus; detail?: string }[] =
+      [];
+    for (const trade of openTrades) {
+      try {
+        const closed = await this.closeTrade(trade.id, userId, reason);
+        results.push({
+          tradeId: trade.id,
+          closed: closed.status === TradeStatus.CLOSED,
+          status: closed.status,
+          detail:
+            closed.status === TradeStatus.CLOSED
+              ? undefined
+              : `close dispatched — trade now ${closed.status}`,
+        });
+      } catch (err) {
+        // closeTrade is fail-closed per trade: a refused/unknown close
+        // leaves the trade OPEN or RECONCILIATION_PENDING — never a silent
+        // drop. The flatten continues with the remaining positions.
+        const detail = (err as Error).message;
+        results.push({ tradeId: trade.id, closed: false, status: trade.status, detail });
+        this.logger.error(
+          `Kill-switch flatten: close of trade ${trade.id} failed — ${detail} ` +
+            '(reconciliation will converge it)',
+        );
+      }
+    }
+
+    const closedCount = results.filter((r) => r.closed).length;
+    await this.auditService.log({
+      actorUserId: userId,
+      action: AuditAction.RISK_KILL_SWITCH_ACTIVATED,
+      resourceType: 'Trade',
+      resourceId: userId,
+      severity: closedCount === results.length ? AuditSeverity.WARNING : AuditSeverity.CRITICAL,
+      metadata: {
+        emergencyFlatten: true,
+        closeReason: reason,
+        targetCount: results.length,
+        closedCount,
+        failedCount: results.length - closedCount,
+        trades: results.map((r) => ({ tradeId: r.tradeId, closed: r.closed })),
+      },
+    });
+
+    return results;
+  }
+
+  /**
    * Close an open trade. Called by AI signal, kill switch, or user action.
    * The Risk Engine must validate the CLOSE action before calling this.
    *

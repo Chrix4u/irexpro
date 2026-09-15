@@ -4,7 +4,12 @@ import { EntityManager, Repository } from 'typeorm';
 import { ExactDecimal } from '../../common/utils/exact-decimal';
 import { RiskProfile } from './entities/risk-profile.entity';
 import { RiskViolation } from './entities/risk-violation.entity';
-import { TradingSession } from '../execution/entities/trading-session.entity';
+import {
+  TradingSession,
+  TradingSessionStatus,
+} from '../execution/entities/trading-session.entity';
+// Round 6 live-execution completion (§16): the autonomous session lifecycle.
+import { TradingSessionStateMachine } from '../execution/entities/trading-session-state-machine';
 import { TradingAuthorityGeneration } from '../users/entities/trading-authority-generation.entity';
 import {
   ProposedTrade,
@@ -1813,6 +1818,24 @@ export class RiskService {
       `Kill switch ${active ? 'ACTIVATED' : 'DEACTIVATED'} for user ${userId}. Reason: ${reason ?? 'none'}`,
     );
 
+    // ── Round 6 §17 — the FOURTH STOP LEVEL: on ACTIVATION the kill switch
+    // EMERGENCY-FLATTENS every OPEN position of the user (control-exempt,
+    // market-safety-exempt CLOSE_POSITION operations through the §14
+    // serialized close path). The durable authority already stands — a
+    // flatten failure NEVER rolls it back; per-trade outcomes are audited
+    // honestly and reconciliation converges unknowns. Deactivation NEVER
+    // re-opens positions (only new decisions can, after re-validation).
+    if (active) {
+      await this.executionService
+        .emergencyCloseAllOpenPositions(userId)
+        .catch((err) =>
+          this.logger.error(
+            `Kill-switch emergency flatten failed for user ${userId} (authority stands; ` +
+              `reconciliation will converge): ${(err as Error).message}`,
+          ),
+        );
+    }
+
     return profile;
   }
 
@@ -2081,9 +2104,109 @@ export class RiskService {
         this.logger.error(`Failed to record risk violation: ${(err as Error).message}`),
       );
 
+    // ── Round 6 §16: AUTONOMOUS session degradation on hard risk breaches.
+    // A daily-loss / drawdown breach is not just a per-signal rejection —
+    // the ACTIVE session itself degrades to SUSPENDED_RISK_LIMIT (guarded
+    // CAS + authorityGeneration bump), every grant for the session is
+    // invalidated, and the boundary's session re-verification fails closed
+    // for anything still in flight. Failures here NEVER break the rejection
+    // (the durable violation + rejection already stand; the next signal
+    // re-attempts the degradation idempotently).
+    if (
+      code === RiskRejectionCode.DAILY_LOSS_LIMIT_REACHED ||
+      code === RiskRejectionCode.MAX_DRAWDOWN_REACHED
+    ) {
+      await this.suspendSessionForRiskLimit(userId, code).catch((err) =>
+        this.logger.error(
+          `Session risk-limit suspension failed for user ${userId} ` +
+            `(rejection stands; retried on the next signal): ${(err as Error).message}`,
+        ),
+      );
+    }
+
     this.logger.warn(`Signal ${trade.signalId} REJECTED for user ${userId}: [${code}] ${reason}`);
 
     return decision;
+  }
+
+  /**
+   * Round 6 §16 — autonomously degrade the user's ACTIVE trading session to
+   * SUSPENDED_RISK_LIMIT on a hard risk breach (daily-loss / drawdown):
+   * guarded CAS on (id, ACTIVE) + authorityGeneration+1, then session-scoped
+   * grant invalidation. Idempotent: a session already degraded (or ended) is
+   * a no-op; the §16 state machine forbids everything else.
+   */
+  private async suspendSessionForRiskLimit(
+    userId: string,
+    code: RiskRejectionCode,
+  ): Promise<void> {
+    const session = await this.sessionRepo.findOne({
+      where: { userId, status: TradingSessionStatus.ACTIVE },
+      order: { startedAt: 'DESC' },
+    });
+    if (!session) return; // nothing ACTIVE to degrade (idempotent)
+
+    TradingSessionStateMachine.assertTransition(
+      session.status,
+      TradingSessionStatus.SUSPENDED_RISK_LIMIT,
+    );
+
+    const bump = await this.sessionRepo
+      .createQueryBuilder()
+      .update()
+      .set({
+        status: TradingSessionStatus.SUSPENDED_RISK_LIMIT,
+        authorityGeneration: () => 'authority_generation + 1',
+        updatedAt: new Date(),
+      })
+      .where('id = :id AND user_id = :userId AND status = :active', {
+        id: session.id,
+        userId,
+        active: TradingSessionStatus.ACTIVE,
+      })
+      .execute();
+
+    if (!bump.affected) {
+      // A concurrent writer (mode change / end / another breach reaction)
+      // won — its own transition owns the session. Never double-apply.
+      this.logger.warn(
+        `Session ${session.id} risk-limit suspension lost the CAS race — the concurrent ` +
+          'transition owns the session (guard held)',
+      );
+      return;
+    }
+
+    // Session-scoped invalidation: every ACTIVE grant + PENDING confirmation
+    // for this session dies with the generation bump (fail-closed at the
+    // boundary for anything in flight).
+    await this.riskGrantService.invalidateGrantsForSession(
+      session.id,
+      `SESSION_SUSPENDED_RISK_LIMIT:${code}`,
+    );
+
+    await this.auditService.log({
+      actorUserId: userId,
+      action: AuditAction.RISK_SESSION_SUSPENDED,
+      resourceType: 'TradingSession',
+      resourceId: session.id,
+      severity: AuditSeverity.CRITICAL,
+      metadata: {
+        sessionId: session.id,
+        previousGeneration: session.authorityGeneration,
+        newGeneration: session.authorityGeneration + 1,
+        reason: code,
+        status: TradingSessionStatus.SUSPENDED_RISK_LIMIT,
+        source: 'risk-engine:autonomous-degradation',
+      },
+    });
+
+    this.eventBus.publish(DomainEventType.TRADING_SESSION_STOPPED, userId, {
+      userId,
+      sessionId: session.id,
+      status: TradingSessionStatus.SUSPENDED_RISK_LIMIT,
+      reason: code,
+      source: 'risk-engine:autonomous-degradation',
+    });
   }
 }
 
