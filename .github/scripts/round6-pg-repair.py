@@ -44,6 +44,9 @@ edit(exec_pg,
      "    const adapterRegistry = {\n      getAdapter: jest.fn().mockReturnValue(adapter),\n    } as unknown as BrokerAdapterRegistry;",
      "    const adapterRegistry = {\n      getAdapter: jest.fn().mockReturnValue(adapter),\n      getAdapterForConnection: jest.fn().mockReturnValue(adapter),\n    } as unknown as BrokerAdapterRegistry;")
 edit(exec_pg,
+     '      { getCurrentGeneration: jest.fn() } as never,',
+     '      { getCurrentGeneration: jest.fn().mockResolvedValue(1) } as never,')
+edit(exec_pg,
      '    );\n    const tradeCas = new TradeLifecycleCasService(tradeRepo, auditService);',
      '    );\n    // PG harness: route orchestrator dispatch commitment through the same real\n    // FinalDispatchBoundary instance used by ExecutionService.\n    (orchestrator as unknown as { finalDispatchBoundary: FinalDispatchBoundary })\n      .finalDispatchBoundary = boundary;\n    const tradeCas = new TradeLifecycleCasService(tradeRepo, auditService);')
 
