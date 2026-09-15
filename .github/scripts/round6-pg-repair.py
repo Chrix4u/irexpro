@@ -41,6 +41,9 @@ edit(exec_pg,
      '      dispatch_certainty VARCHAR(30), opened_at TIMESTAMPTZ, closed_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),',
      '      dispatch_certainty VARCHAR(30), trading_session_id UUID, logical_account_key VARCHAR(255), account_currency VARCHAR(3),\n      risk_period_id UUID, trade_intent_id UUID, risk_grant_id UUID, order_id UUID,\n      opened_at TIMESTAMPTZ, closed_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),')
 edit(exec_pg,
+     "        'CREATED','SUBMITTED','ACKNOWLEDGED','PARTIALLY_FILLED','FILLED',",
+     "        'CREATED','SUBMITTED','DISPATCH_COMMITTED','ACKNOWLEDGED','PARTIALLY_FILLED','FILLED',")
+edit(exec_pg,
      "    const adapterRegistry = {\n      getAdapter: jest.fn().mockReturnValue(adapter),\n    } as unknown as BrokerAdapterRegistry;",
      "    const adapterRegistry = {\n      getAdapter: jest.fn().mockReturnValue(adapter),\n      getAdapterForConnection: jest.fn().mockReturnValue(adapter),\n    } as unknown as BrokerAdapterRegistry;")
 edit(exec_pg,
