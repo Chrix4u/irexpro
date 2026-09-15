@@ -35,11 +35,17 @@ edit(exec_pg,
      '      execution_control_revision INTEGER,\n      order_payload_digest VARCHAR(64) NOT NULL,',
      '      execution_control_revision INTEGER,\n      authority_binding_digest VARCHAR(64),\n      trading_policy_revision INTEGER,\n      provider_verification_revision INTEGER,\n      order_payload_digest VARCHAR(64) NOT NULL,')
 edit(exec_pg,
+     '      trailing_stop_pips NUMERIC(8,2), external_order_id VARCHAR(255), status VARCHAR(32) NOT NULL DEFAULT \'PENDING\',',
+     '      trailing_stop_pips NUMERIC(8,2), external_order_id VARCHAR(255), external_position_id VARCHAR(255),\n      commission NUMERIC(18,8), swap NUMERIC(18,8), status VARCHAR(32) NOT NULL DEFAULT \'PENDING\',')
+edit(exec_pg,
      '      dispatch_certainty VARCHAR(30), opened_at TIMESTAMPTZ, closed_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),',
      '      dispatch_certainty VARCHAR(30), trading_session_id UUID, logical_account_key VARCHAR(255), account_currency VARCHAR(3),\n      risk_period_id UUID, trade_intent_id UUID, risk_grant_id UUID, order_id UUID,\n      opened_at TIMESTAMPTZ, closed_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),')
 edit(exec_pg,
      "    const adapterRegistry = {\n      getAdapter: jest.fn().mockReturnValue(adapter),\n    } as unknown as BrokerAdapterRegistry;",
      "    const adapterRegistry = {\n      getAdapter: jest.fn().mockReturnValue(adapter),\n      getAdapterForConnection: jest.fn().mockReturnValue(adapter),\n    } as unknown as BrokerAdapterRegistry;")
+edit(exec_pg,
+     '    );\n    const tradeCas = new TradeLifecycleCasService(tradeRepo, auditService);',
+     '    );\n    // PG harness: route orchestrator dispatch commitment through the same real\n    // FinalDispatchBoundary instance used by ExecutionService.\n    (orchestrator as unknown as { finalDispatchBoundary: FinalDispatchBoundary })\n      .finalDispatchBoundary = boundary;\n    const tradeCas = new TradeLifecycleCasService(tradeRepo, auditService);')
 
 session_pg = 'apps/api/src/modules/execution/execution-session.pg-integration.spec.ts'
 edit(session_pg,
