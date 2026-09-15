@@ -396,6 +396,18 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
       brokerId: 'paper-broker',
       brokerName: 'Concurrency Test Broker',
       supportsDemo: true,
+      // Round 6 §7: the declared order capability contract.
+      getOrderCapabilities: jest.fn().mockReturnValue({
+        brokerId: 'paper-broker',
+        supportedOrderKinds: ['MARKET', 'LIMIT', 'STOP', 'STOP_LIMIT'],
+        requirements: {
+          MARKET: { limitPriceRequired: false, stopPriceRequired: false },
+          LIMIT: { limitPriceRequired: true, stopPriceRequired: false },
+          STOP: { limitPriceRequired: false, stopPriceRequired: true },
+          STOP_LIMIT: { limitPriceRequired: true, stopPriceRequired: true },
+        },
+        marketSlTpAttachedAtPlacement: true,
+      }),
       setMode: jest.fn(),
       connect: jest.fn().mockResolvedValue({ success: true }),
       disconnect: jest.fn(),

@@ -130,6 +130,19 @@ describe('ExecutionOrchestrator provider-write certainty (Sprint 56 correction r
       checkExecutionPermission: jest.fn().mockResolvedValue({ allowed: true, blockedBy: null }),
     };
     adapter = {
+      // Round 6 §7: full-capability declaration (per-test overrides can
+      // narrow it to exercise the fail-closed contract).
+      getOrderCapabilities: jest.fn().mockReturnValue({
+        brokerId: 'paper-broker',
+        supportedOrderKinds: ['MARKET', 'LIMIT', 'STOP', 'STOP_LIMIT'],
+        requirements: {
+          MARKET: { limitPriceRequired: false, stopPriceRequired: false },
+          LIMIT: { limitPriceRequired: true, stopPriceRequired: false },
+          STOP: { limitPriceRequired: false, stopPriceRequired: true },
+          STOP_LIMIT: { limitPriceRequired: true, stopPriceRequired: true },
+        },
+        marketSlTpAttachedAtPlacement: true,
+      }),
       setMode: jest.fn(),
       connect: jest.fn().mockResolvedValue({ success: true }),
       placeOrder: jest.fn().mockResolvedValue({

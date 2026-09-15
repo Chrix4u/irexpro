@@ -44,6 +44,7 @@ import {
   BrokerOrderModification,
   BrokerOrderRequest,
 } from '../interfaces/broker-adapter.interface';
+import type { OrderCapabilityDeclaration } from '../interfaces/order-capability';
 import { BrokerAdapterError, BrokerErrorCode } from '../interfaces/broker-adapter.errors';
 import { DEMO_VALIDATION_STEPS } from '../verification/provider-verification-harness';
 
@@ -667,6 +668,22 @@ class StubLimitedAdapter implements IBrokerAdapter {
   private counter = 0;
   private readonly positions: BrokerPosition[] = [];
   private readonly closed: BrokerClosedTrade[] = [];
+
+
+  // Round 6 §7: the declared order capability contract.
+  getOrderCapabilities(): OrderCapabilityDeclaration {
+    return {
+      brokerId: this.brokerId,
+      supportedOrderKinds: ['MARKET', 'LIMIT', 'STOP', 'STOP_LIMIT'],
+      requirements: {
+        MARKET: { limitPriceRequired: false, stopPriceRequired: false },
+        LIMIT: { limitPriceRequired: true, stopPriceRequired: false },
+        STOP: { limitPriceRequired: false, stopPriceRequired: true },
+        STOP_LIMIT: { limitPriceRequired: true, stopPriceRequired: true },
+      },
+      marketSlTpAttachedAtPlacement: true,
+    };
+  }
 
   setMode(_mode: BrokerMode): void {
     // DEMO by definition.

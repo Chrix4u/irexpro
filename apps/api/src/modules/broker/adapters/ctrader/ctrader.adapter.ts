@@ -97,6 +97,7 @@ import {
   OHLCV,
   RequiredMarginParams,
 } from '../../interfaces/broker-adapter.interface';
+import type { OrderCapabilityDeclaration } from '../../interfaces/order-capability';
 import { BrokerAdapterError, BrokerErrorCode } from '../../interfaces/broker-adapter.errors';
 import {
   ProviderDispatchCertainty,
@@ -620,6 +621,31 @@ export class CTraderAdapter implements IBrokerAdapter, AdapterMetadata {
   }
 
   // ─── Order management ─────────────────────────────────────────────────────
+
+
+  // ─── Order capability contract (Round 6 §7) ──────────────────────────────
+
+  /**
+   * cTrader capability matrix (the DECLARED truth): all four normalized
+   * kinds; LIMIT/STOP_LIMIT need limitPrice, STOP/STOP_LIMIT need stopPrice.
+   * MARKET orders do NOT carry SL/TP on the wire — protection is attached
+   * to the FILLED position (proto 2110 amend) — so
+   * marketSlTpAttachedAtPlacement is FALSE and §8's protective loop covers
+   * the deferred-attach shape.
+   */
+  getOrderCapabilities(): OrderCapabilityDeclaration {
+    return {
+      brokerId: this.brokerId,
+      supportedOrderKinds: ['MARKET', 'LIMIT', 'STOP', 'STOP_LIMIT'],
+      requirements: {
+        MARKET: { limitPriceRequired: false, stopPriceRequired: false },
+        LIMIT: { limitPriceRequired: true, stopPriceRequired: false },
+        STOP: { limitPriceRequired: false, stopPriceRequired: true },
+        STOP_LIMIT: { limitPriceRequired: true, stopPriceRequired: true },
+      },
+      marketSlTpAttachedAtPlacement: false,
+    };
+  }
 
   async placeOrder(order: BrokerOrderRequest): Promise<BrokerOrderResult> {
     const session = this.resolveSession(order.connectionReference);

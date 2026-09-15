@@ -36,6 +36,18 @@ const makeAdapter = (brokerId: string, brokerName: string): IBrokerAdapter => ({
   getOrderById: jest.fn(),
   // Sprint 32 Gate 2: required margin capability
   getRequiredMargin: jest.fn().mockResolvedValue(null),
+  // Round 6 §7: the declared order capability contract
+  getOrderCapabilities: jest.fn().mockReturnValue({
+    brokerId,
+    supportedOrderKinds: ['MARKET', 'LIMIT', 'STOP', 'STOP_LIMIT'],
+    requirements: {
+      MARKET: { limitPriceRequired: false, stopPriceRequired: false },
+      LIMIT: { limitPriceRequired: true, stopPriceRequired: false },
+      STOP: { limitPriceRequired: false, stopPriceRequired: true },
+      STOP_LIMIT: { limitPriceRequired: true, stopPriceRequired: true },
+    },
+    marketSlTpAttachedAtPlacement: true,
+  }),
 });
 
 describe('BrokerAdapterRegistry', () => {

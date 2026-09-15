@@ -19,6 +19,7 @@ import {
   OHLCV,
   RequiredMarginParams,
 } from '../interfaces/broker-adapter.interface';
+import type { OrderCapabilityDeclaration } from '../interfaces/order-capability';
 import { BrokerAdapterError, BrokerErrorCode } from '../interfaces/broker-adapter.errors';
 import { ProviderDispatchCertainty } from '../interfaces/provider-dispatch-certainty';
 
@@ -813,6 +814,29 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   }
 
   // ─── Order management ─────────────────────────────────────────────────────
+
+
+  // ─── Order capability contract (Round 6 §7) ──────────────────────────────
+
+  /**
+   * Paper broker capability matrix (the DECLARED truth): all four normalized
+   * kinds (validated by validateOrderKind); LIMIT/STOP_LIMIT need
+   * limitPrice, STOP/STOP_LIMIT need stopPrice; MARKET orders attach SL/TP
+   * at placement.
+   */
+  getOrderCapabilities(): OrderCapabilityDeclaration {
+    return {
+      brokerId: this.brokerId,
+      supportedOrderKinds: ['MARKET', 'LIMIT', 'STOP', 'STOP_LIMIT'],
+      requirements: {
+        MARKET: { limitPriceRequired: false, stopPriceRequired: false },
+        LIMIT: { limitPriceRequired: true, stopPriceRequired: false },
+        STOP: { limitPriceRequired: false, stopPriceRequired: true },
+        STOP_LIMIT: { limitPriceRequired: true, stopPriceRequired: true },
+      },
+      marketSlTpAttachedAtPlacement: true,
+    };
+  }
 
   async placeOrder(order: BrokerOrderRequest): Promise<BrokerOrderResult> {
     // PAPER-ONLY write certainty (correction round 4, finding 6): the paper

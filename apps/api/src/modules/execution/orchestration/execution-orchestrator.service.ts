@@ -25,6 +25,11 @@ import { ExecutionIntent, ProviderDispatchOutcome } from './execution-intent.int
 import { MarketSafetyGateService } from './market-safety-gate.service';
 // Round 6 live-execution completion (§14): the per-account dispatch lease.
 import { AccountDispatchLeaseService } from './account-dispatch-lease.service';
+// Round 6 live-execution completion (§7): the order capability contract.
+import {
+  assertOrderWithinCapabilities,
+  OrderCapabilityError,
+} from '../../broker/interfaces/order-capability';
 import { FinalDispatchBoundary } from './final-dispatch-boundary';
 import { mapProviderOrderResponse } from './provider-response.mapper';
 import { classifyIntentOperation, isExposureIncreasingOperation } from './provider-operation-class';
@@ -352,6 +357,64 @@ export class ExecutionOrchestrator {
         signalId: intent.signalId ?? null,
       },
     });
+
+    // ── ROUND 6 live-execution completion (§7): the ORDER CAPABILITY
+    // CONTRACT — enforced BEFORE the market-safety gate and BEFORE the
+    // commitment: an intent the connection's adapter can NEVER fulfill
+    // (unsupported order kind / missing required price) is a typed terminal
+    // REJECTION with ZERO provider calls and NOTHING consumed. The check is
+    // against the adapter's DECLARED capability matrix (in-memory registry
+    // lookup — no provider I/O).
+    if (intent.providerAction === 'PLACE') {
+      try {
+        const capabilityAdapter = this.adapterRegistry.getAdapterForConnection(
+          connection.id,
+          connection.brokerId,
+        );
+        assertOrderWithinCapabilities(
+          {
+            orderKind: intent.orderKind,
+            limitPrice: intent.requestedPrice ?? undefined,
+            stopPrice: intent.stopPrice ?? undefined,
+          },
+          capabilityAdapter.getOrderCapabilities(),
+        );
+      } catch (err) {
+        if (err instanceof OrderCapabilityError) {
+          this.logger.warn(
+            `Order capability contract rejected order ${order.id} ` +
+              `(${intent.instrument} ${intent.orderKind}): ${err.message}`,
+          );
+          await this.orderService
+            .rejectOrder(order.id, `ORDER_CAPABILITY_${err.code}: ${err.message}`)
+            .catch((rejectErr) =>
+              this.logger.error(
+                `Order ${order.id} could not be marked REJECTED after the capability ` +
+                  `violation (${(rejectErr as Error).message}) — reconciliation will converge it`,
+              ),
+            );
+          await this.auditService.log({
+            actorUserId: intent.userId,
+            action: AuditAction.ORDER_REJECTED,
+            resourceType: 'Order',
+            resourceId: order.id,
+            severity: AuditSeverity.WARNING,
+            metadata: {
+              blockedReason: err.code,
+              gate: 'ORDER_CAPABILITY',
+              brokerId: err.brokerId,
+              clientOrderId: intent.clientOrderId,
+              instrument: intent.instrument,
+              orderKind: intent.orderKind,
+              tradeId: intent.tradeId ?? null,
+              signalId: intent.signalId ?? null,
+              message: err.message,
+            },
+          });
+        }
+        throw err;
+      }
+    }
 
     // ── ROUND 6 live-execution completion (§5/§18): the FINAL MARKET-SAFETY
     // GATE — runs between the SUBMITTED mark and the PROVIDER-DISPATCH

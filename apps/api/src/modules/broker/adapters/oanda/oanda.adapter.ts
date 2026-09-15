@@ -21,6 +21,7 @@ import {
   OHLCV,
   RequiredMarginParams,
 } from '../../interfaces/broker-adapter.interface';
+import type { OrderCapabilityDeclaration } from '../../interfaces/order-capability';
 import { BrokerAdapterError, BrokerErrorCode } from '../../interfaces/broker-adapter.errors';
 import {
   isOandaOrderRejection,
@@ -582,6 +583,29 @@ export class OandaAdapter implements IBrokerAdapter, AdapterMetadata {
   }
 
   // ─── Order management ─────────────────────────────────────────────────────
+
+
+  // ─── Order capability contract (Round 6 §7) ──────────────────────────────
+
+  /**
+   * OANDA v20 capability matrix (the DECLARED truth): MARKET/LIMIT/STOP —
+   * STOP_LIMIT is NOT mapped (v20 has no stop-limit order type) and fails
+   * closed here AND at placeOrder (never silently downgraded); MARKET
+   * orders attach SL/TP at placement.
+   */
+  getOrderCapabilities(): OrderCapabilityDeclaration {
+    return {
+      brokerId: this.brokerId,
+      supportedOrderKinds: ['MARKET', 'LIMIT', 'STOP'],
+      requirements: {
+        MARKET: { limitPriceRequired: false, stopPriceRequired: false },
+        LIMIT: { limitPriceRequired: true, stopPriceRequired: false },
+        STOP: { limitPriceRequired: false, stopPriceRequired: true },
+        STOP_LIMIT: { limitPriceRequired: true, stopPriceRequired: true },
+      },
+      marketSlTpAttachedAtPlacement: true,
+    };
+  }
 
   async placeOrder(order: BrokerOrderRequest): Promise<BrokerOrderResult> {
     const { accountId, token } = this.requireConnection();

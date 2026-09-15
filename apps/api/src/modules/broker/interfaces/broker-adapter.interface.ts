@@ -13,6 +13,8 @@
  *
  * See: docs/architecture/09-broker-integration-architecture.md
  */
+import type { OrderCapabilityDeclaration } from './order-capability';
+
 export interface IBrokerAdapter {
   readonly brokerId: string;
   readonly brokerName: string;
@@ -61,6 +63,19 @@ export interface IBrokerAdapter {
    * for LIVE execution. If this returns null, the Risk Engine fails closed.
    */
   getRequiredMargin(params: RequiredMarginParams): Promise<string | null>;
+
+  // ─── Order capability contract (Round 6 §7) ───────────────────────────────
+
+  /**
+   * The adapter's DECLARED order capability matrix: supported normalized
+   * order kinds, per-kind required fields, and whether MARKET orders attach
+   * SL/TP at placement. Enforced pre-commitment by the orchestrator
+   * (assertOrderWithinCapabilities — typed, zero provider calls) and
+   * verified by the shared adapter contract suite. The declaration is the
+   * TRUTH the adapter must honor: a declared kind is accepted, an undeclared
+   * kind is rejected loudly — never silently downgraded.
+   */
+  getOrderCapabilities(): OrderCapabilityDeclaration;
 
   // ─── Market data ──────────────────────────────────────────────────────────
 
