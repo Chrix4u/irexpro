@@ -105,7 +105,9 @@ export class UsersService {
           user.profile.kycStatus = KycStatus.NONE;
           user.profile.kycSubmittedAt = null;
           user.profile.kycApprovedAt = null;
-          authorityBumpReason = resetsKyc ? 'USER_PROFILE_DOB_KYC_RESET' : 'USER_PROFILE_DATE_OF_BIRTH_CHANGED';
+          authorityBumpReason = resetsKyc
+            ? 'USER_PROFILE_DOB_KYC_RESET'
+            : 'USER_PROFILE_DATE_OF_BIRTH_CHANGED';
         }
       }
 

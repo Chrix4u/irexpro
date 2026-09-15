@@ -1,0 +1,16 @@
+{
+  "policy": {
+    "blockedSeverities": [
+      "critical",
+      "high"
+    ],
+    "deployableRoots": [
+      "apps__api",
+      "apps__web",
+      "apps__admin"
+    ],
+    "note": "Mobile-only and development-only dependency paths do not gate the VPS release."
+  },
+  "blockingAdvisoryCount": 0,
+  "advisories": []
+}

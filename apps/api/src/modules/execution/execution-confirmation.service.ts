@@ -213,7 +213,8 @@ export class ExecutionConfirmationService {
       decision.validatedOrder.instrument !== confirmation.instrument ||
       decision.validatedOrder.direction !== confirmation.direction ||
       decision.validatedOrder.lotSize !== confirmedQuantity ||
-      (confirmation.stopLoss != null && decision.validatedOrder.stopLoss !== confirmation.stopLoss) ||
+      (confirmation.stopLoss != null &&
+        decision.validatedOrder.stopLoss !== confirmation.stopLoss) ||
       (confirmation.takeProfit != null &&
         decision.validatedOrder.takeProfit !== confirmation.takeProfit);
     if (materialChange) {
@@ -240,11 +241,7 @@ export class ExecutionConfirmationService {
       });
     }
 
-    const trade: Trade = await this.executionService.executeTrade(
-      userId,
-      decision,
-      confirmationId,
-    );
+    const trade: Trade = await this.executionService.executeTrade(userId, decision, confirmationId);
 
     return {
       confirmationId,

@@ -426,13 +426,7 @@ export class BrokerAccountSnapshotService {
 
   /** Typed pre-insert validation of every decimal string (fail-closed). */
   private assertWellFormedDecimals(observation: ProviderAccountObservation): void {
-    const decimalFields = [
-      'balance',
-      'equity',
-      'margin',
-      'freeMargin',
-      'marginLevel',
-    ] as const;
+    const decimalFields = ['balance', 'equity', 'margin', 'freeMargin', 'marginLevel'] as const;
     for (const field of decimalFields) {
       const raw = observation[field];
       if (raw === null || raw === undefined) continue;
@@ -492,11 +486,10 @@ export class BrokerAccountSnapshotService {
 
   /** Map a raw snake_case row onto the entity shape (dates as Date). */
   private hydrateSnapshotRow(row: Record<string, unknown>): BrokerAccountSnapshot {
-    const date = (v: unknown): Date | null => (v === null || v === undefined ? null : new Date(v as string));
-    const num = (v: unknown): number | null =>
-      v === null || v === undefined ? null : Number(v);
-    const str = (v: unknown): string | null =>
-      v === null || v === undefined ? null : String(v);
+    const date = (v: unknown): Date | null =>
+      v === null || v === undefined ? null : new Date(v as string);
+    const num = (v: unknown): number | null => (v === null || v === undefined ? null : Number(v));
+    const str = (v: unknown): string | null => (v === null || v === undefined ? null : String(v));
     return {
       id: String(row.id),
       connectionId: String(row.connection_id),

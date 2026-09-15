@@ -175,8 +175,21 @@ describe('EligibilityService', () => {
         { provide: AuditService, useValue: auditService },
         // Round 6 (#300): the unified execution-authority seams (mocked —
         // the bump matrices live in the execution-authority suites).
-        { provide: TradingAuthorityService, useValue: { bumpGeneration: jest.fn().mockResolvedValue(2), getCurrentGeneration: jest.fn().mockResolvedValue(1) } },
-        { provide: GrantInvalidationService, useValue: { invalidateUserNewExposureAuthority: jest.fn().mockResolvedValue({ invalidatedGrants: 0, revokedConfirmations: 0 }) } },
+        {
+          provide: TradingAuthorityService,
+          useValue: {
+            bumpGeneration: jest.fn().mockResolvedValue(2),
+            getCurrentGeneration: jest.fn().mockResolvedValue(1),
+          },
+        },
+        {
+          provide: GrantInvalidationService,
+          useValue: {
+            invalidateUserNewExposureAuthority: jest
+              .fn()
+              .mockResolvedValue({ invalidatedGrants: 0, revokedConfirmations: 0 }),
+          },
+        },
       ],
     }).compile();
 

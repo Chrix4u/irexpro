@@ -6,6 +6,7 @@ import type {
   RiskProfile,
   BrokerConnectionView,
   SupportedBroker,
+  BrokerRegistryCatalog,
 } from '@irexpro/types';
 
 /**
@@ -103,6 +104,60 @@ export const mockSupportedBrokers: SupportedBroker[] = [
   },
 ];
 
+/**
+ * Server-authoritative broker-registry fixture used by onboarding tests.
+ * Keep this separate from the legacy supported-brokers summary because the
+ * page now consumes GET /broker/registry to decide authentication model,
+ * environment availability, adapter availability, and verification labels.
+ */
+export const mockBrokerRegistry: BrokerRegistryCatalog = {
+  catalogVersion: 'e2e-deterministic-v1',
+  brokers: [
+    {
+      id: 'paper-broker',
+      name: 'Paper Broker',
+      description: 'Deterministic in-platform PAPER execution fixture.',
+      status: 'SUPPORTED',
+      connectionRoutes: ['PAPER'],
+      capabilities: [
+        'ACCOUNT_READ',
+        'BALANCE_READ',
+        'SESSION_AUTH',
+        'DEMO',
+        'ORDER_PLACEMENT',
+      ],
+      authenticationType: 'SESSION_AUTH',
+      environments: ['DEMO'],
+      regions: [],
+      adapterAvailable: true,
+    },
+    {
+      id: 'metatrader5',
+      name: 'MetaTrader 5',
+      description: 'MetaTrader 5 deterministic E2E catalog fixture.',
+      status: 'SUPPORTED',
+      productionLiveVerification: {
+        status: 'VERIFIED',
+        verifiedAt: null,
+        evidenceRef: 'e2e-fixture',
+      },
+      connectionRoutes: ['METATRADER'],
+      capabilities: [
+        'ACCOUNT_READ',
+        'BALANCE_READ',
+        'API_TOKEN',
+        'DEMO',
+        'LIVE',
+        'ORDER_PLACEMENT',
+      ],
+      authenticationType: 'API_TOKEN',
+      environments: ['DEMO', 'LIVE'],
+      regions: [],
+      adapterAvailable: true,
+    },
+  ],
+};
+
 export const mockBrokerConnections: BrokerConnectionView[] = [
   {
     id: 'bconn_00000000-0000-0000-0000-000000000001',
@@ -132,7 +187,7 @@ export const mockBrokerConnections: BrokerConnectionView[] = [
   },
 ];
 
-// ── Route interception ───────────────────────────────────────────────────────
+// ── Route interception ────────────────────────────────────────────────────────
 
 function jsonFulfill(status: number, body: unknown) {
   return {
@@ -222,6 +277,9 @@ export async function setupAuthInterception(page: Page): Promise<void> {
 
     // ── Broker ──────────────────────────────────────────────────────────
     // Static segments must be checked before the dynamic :id segment.
+    if (apiPath === 'broker/registry') {
+      return route.fulfill(jsonFulfill(200, mockBrokerRegistry));
+    }
     if (apiPath === 'broker/connections/supported') {
       return route.fulfill(jsonFulfill(200, mockSupportedBrokers));
     }
@@ -257,21 +315,17 @@ export async function setupAuthInterception(page: Page): Promise<void> {
 
     // ── Trading ─────────────────────────────────────────────────────────
     if (apiPath === 'trading/sessions/start') {
-      // Sprint 56 correction round 5: the start contract binds the exact
-      // brokerConnectionId + durable executionMode and returns the
-      // authoritative { session } envelope.
+      // TradingController returns TradingSessionResponseDto directly.
       return route.fulfill(
         jsonFulfill(201, {
-          session: {
-            id: 'sess_00000000-0000-0000-0000-000000000001',
-            brokerConnectionId: mockBrokerConnections[0].id,
-            executionMode: 'PAPER_ONLY',
-            authorityGeneration: 1,
-            status: 'ACTIVE',
-            openingBalance: null,
-            peakEquity: null,
-            startedAt: new Date().toISOString(),
-          },
+          id: 'sess_00000000-0000-0000-0000-000000000001',
+          brokerConnectionId: mockBrokerConnections[0].id,
+          executionMode: 'PAPER_ONLY',
+          authorityGeneration: 1,
+          status: 'ACTIVE',
+          openingBalance: null,
+          peakEquity: null,
+          startedAt: new Date().toISOString(),
         }),
       );
     }

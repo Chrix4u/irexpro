@@ -231,7 +231,9 @@ describe('Execution authority schema reconciliation (round 5)', () => {
 
   it('creates the shared control-plane singletons and revision logs (#363)', () => {
     expect(migrationSource).toContain('CREATE TABLE IF NOT EXISTS platform.trading_policy_state');
-    expect(migrationSource).toContain('CREATE TABLE IF NOT EXISTS platform.trading_policy_revision_logs');
+    expect(migrationSource).toContain(
+      'CREATE TABLE IF NOT EXISTS platform.trading_policy_revision_logs',
+    );
     expect(migrationSource).toContain(
       'CREATE TABLE IF NOT EXISTS platform.provider_live_verification_state',
     );
@@ -250,9 +252,7 @@ describe('Execution authority schema reconciliation (round 5)', () => {
   it('creates trading.daily_risk_periods with the (user, logical account, day) budget scope (#362)', () => {
     expect(migrationSource).toContain('CREATE TABLE IF NOT EXISTS trading.daily_risk_periods');
     expect(migrationSource).toContain('uq_daily_risk_periods_scope');
-    expect(migrationSource).toMatch(
-      /UNIQUE \(user_id, logical_account_key, risk_period_date\)/,
-    );
+    expect(migrationSource).toMatch(/UNIQUE \(user_id, logical_account_key, risk_period_date\)/);
     expect(migrationSource).toContain('idx_daily_risk_periods_user_day');
   });
 
@@ -293,9 +293,7 @@ describe('Execution authority schema reconciliation (round 5)', () => {
     expect(migrationSource).toMatch(
       /ALTER TABLE trading\.risk_grants\s+ADD COLUMN IF NOT EXISTS authority_binding_digest varchar\(64\)/,
     );
-    expect(migrationSource).toMatch(
-      /ADD COLUMN IF NOT EXISTS trading_policy_revision integer/,
-    );
+    expect(migrationSource).toMatch(/ADD COLUMN IF NOT EXISTS trading_policy_revision integer/);
     expect(migrationSource).toMatch(
       /ADD COLUMN IF NOT EXISTS provider_verification_revision integer/,
     );
@@ -305,24 +303,14 @@ describe('Execution authority schema reconciliation (round 5)', () => {
     expect(migrationSource).toMatch(
       /ALTER TABLE trading\.trading_sessions\s+ADD COLUMN IF NOT EXISTS account_currency varchar\(3\)/,
     );
-    expect(migrationSource).toMatch(
-      /ADD COLUMN IF NOT EXISTS opening_snapshot_id uuid/,
-    );
-    expect(migrationSource).toMatch(
-      /ADD COLUMN IF NOT EXISTS opening_snapshot_generation integer/,
-    );
+    expect(migrationSource).toMatch(/ADD COLUMN IF NOT EXISTS opening_snapshot_id uuid/);
+    expect(migrationSource).toMatch(/ADD COLUMN IF NOT EXISTS opening_snapshot_generation integer/);
     expect(migrationSource).toMatch(
       /ALTER TABLE trading\.trades\s+ADD COLUMN IF NOT EXISTS trading_session_id uuid/,
     );
-    expect(migrationSource).toMatch(
-      /ADD COLUMN IF NOT EXISTS logical_account_key varchar\(255\)/,
-    );
-    expect(migrationSource).toMatch(
-      /ADD COLUMN IF NOT EXISTS account_currency varchar\(3\)/,
-    );
-    expect(migrationSource).toMatch(
-      /ADD COLUMN IF NOT EXISTS risk_period_id uuid/,
-    );
+    expect(migrationSource).toMatch(/ADD COLUMN IF NOT EXISTS logical_account_key varchar\(255\)/);
+    expect(migrationSource).toMatch(/ADD COLUMN IF NOT EXISTS account_currency varchar\(3\)/);
+    expect(migrationSource).toMatch(/ADD COLUMN IF NOT EXISTS risk_period_id uuid/);
   });
 
   it('adds risk_profiles.revision and broker_accounts.last_snapshot_generation (#299/#312)', () => {

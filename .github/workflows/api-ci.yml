@@ -31,6 +31,7 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
 
     steps:
       - name: Checkout exact candidate
@@ -63,6 +64,9 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-24.04
+    # Prevent a leaked Jest handle from consuming a runner for GitHub's long
+    # default timeout. A healthy full API suite should finish well inside this.
+    timeout-minutes: 35
 
     steps:
       - name: Checkout exact candidate
@@ -104,6 +108,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     needs: [lint, test]
 
     steps:

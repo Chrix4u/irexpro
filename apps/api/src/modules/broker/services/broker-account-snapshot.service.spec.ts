@@ -182,7 +182,6 @@ class RacingWriterSnapshotService extends TestableSnapshotService {
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
 const CONN = '33333333-3333-4333-8333-333333333333';
-const OTHER_CONN = '44444444-4444-4444-8444-444444444444';
 
 const observation = (
   overrides: Partial<ProviderAccountObservation> = {},
@@ -225,7 +224,7 @@ const insertSnapshotRow = async (
       `00000000-0000-4000-8000-${String(row.generation).padStart(12, '0')}`,
       row.connectionId ?? CONN,
       row.generation,
-      row.providerObservedAt === undefined ? null : row.providerObservedAt?.toISOString() ?? null,
+      row.providerObservedAt === undefined ? null : (row.providerObservedAt?.toISOString() ?? null),
       ts,
       row.balance ?? null,
       row.equity ?? null,
@@ -345,11 +344,15 @@ describe('BrokerAccountSnapshotService (Round 6, 6-c — #297/#312)', () => {
       'rejects a malformed decimal %s TYPED before any insert (nothing written)',
       async (field) => {
         await expect(
-          service.acceptSnapshot(observation({ [field]: 'abc' } as Partial<ProviderAccountObservation>)),
+          service.acceptSnapshot(
+            observation({ [field]: 'abc' } as Partial<ProviderAccountObservation>),
+          ),
         ).rejects.toBeInstanceOf(MalformedSnapshotFieldError);
 
         await expect(
-          service.acceptSnapshot(observation({ [field]: 'abc' } as Partial<ProviderAccountObservation>)),
+          service.acceptSnapshot(
+            observation({ [field]: 'abc' } as Partial<ProviderAccountObservation>),
+          ),
         ).rejects.toMatchObject({ field, value: 'abc', name: 'MalformedSnapshotFieldError' });
 
         expect(await countSnapshots()).toBe(0);
@@ -552,7 +555,7 @@ describe('BrokerAccountSnapshotService (Round 6, 6-c — #297/#312)', () => {
       expect(err!.failure).toEqual({ code: 'SNAPSHOT_MALFORMED', field: 'equity' });
     });
 
-    it("fails typed with SNAPSHOT_CURRENCY_UNKNOWN when currency is null — USD is NEVER synthesized", async () => {
+    it('fails typed with SNAPSHOT_CURRENCY_UNKNOWN when currency is null — USD is NEVER synthesized', async () => {
       await service.acceptSnapshot(observation({ currency: null }));
       const err = await resolveFailure(CONN);
       expect(err!.failure).toEqual({ code: 'SNAPSHOT_CURRENCY_UNKNOWN' });
@@ -726,7 +729,12 @@ describe('BrokerAccountSnapshotService (Round 6, 6-c — #297/#312)', () => {
     it('projects a NEWER generation and moves last_snapshot_generation forward only', async () => {
       await seedLegacyRow({ lastSnapshotGeneration: 3, balance: '1.00' });
       // Manually accept generations 4 and 5 (simulating accumulated history):
-      await insertSnapshotRow(dataSource, { generation: 4, balance: '4.00', equity: '4.00', currency: 'USD' });
+      await insertSnapshotRow(dataSource, {
+        generation: 4,
+        balance: '4.00',
+        equity: '4.00',
+        currency: 'USD',
+      });
       const outcome = await service.acceptSnapshot(observation({ balance: '555.00' }));
       expect(outcome.accepted).toBe(true);
       if (!outcome.accepted) return;

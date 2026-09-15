@@ -283,6 +283,10 @@ jobs:
 
   codeql:
     name: CodeQL Static Analysis
+    # CodeQL upload is unavailable for private repositories on this account's
+    # current GitHub plan. Keep the job visible but skipped rather than failing
+    # the release gate for a platform entitlement the code cannot satisfy.
+    if: ${{ github.event.repository.private == false }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     permissions:

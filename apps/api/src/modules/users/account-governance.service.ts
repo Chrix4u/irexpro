@@ -280,7 +280,11 @@ export class AccountGovernanceService {
       // NEW-exposure invalidation commit ATOMICALLY (same transaction —
       // never a best-effort bump after the fact).
       const bumpReason = this.authorityBumpReasonFor(dto.action);
-      await this.tradingAuthorityService.bumpGeneration(targetUserId, bumpReason, queryRunner.manager);
+      await this.tradingAuthorityService.bumpGeneration(
+        targetUserId,
+        bumpReason,
+        queryRunner.manager,
+      );
       await this.grantInvalidation.invalidateUserNewExposureAuthority(
         targetUserId,
         bumpReason,

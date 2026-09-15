@@ -269,9 +269,7 @@ export class CompleteExecutionAuthorityRound61754300000000 implements MigrationI
       ON trading.execution_confirmations (user_id, signal_id)
       WHERE status = 'PENDING'
     `);
-    await queryRunner.query(
-      `DROP INDEX IF EXISTS trading.uq_risk_grants_one_active_per_signal`,
-    );
+    await queryRunner.query(`DROP INDEX IF EXISTS trading.uq_risk_grants_one_active_per_signal`);
     await queryRunner.query(
       `DROP INDEX IF EXISTS trading.uq_execution_confirmations_one_pending_per_signal`,
     );
@@ -495,7 +493,9 @@ export class CompleteExecutionAuthorityRound61754300000000 implements MigrationI
     // orders: DISPATCH_COMMITTED support (#365). The status CHECK is
     // replaced (same constraint name) with the round-6 superset — all
     // existing values remain valid, so no row is mutated or rejected.
-    await queryRunner.query(`ALTER TABLE trading.orders DROP CONSTRAINT IF EXISTS chk_orders_status`);
+    await queryRunner.query(
+      `ALTER TABLE trading.orders DROP CONSTRAINT IF EXISTS chk_orders_status`,
+    );
     await queryRunner.query(`
       ALTER TABLE trading.orders
       ADD CONSTRAINT chk_orders_status CHECK ("status" IN (
@@ -636,7 +636,9 @@ export class CompleteExecutionAuthorityRound61754300000000 implements MigrationI
     );
 
     // ── Reverse the orders status CHECK (remove DISPATCH_COMMITTED) ───────
-    await queryRunner.query(`ALTER TABLE trading.orders DROP CONSTRAINT IF EXISTS chk_orders_status`);
+    await queryRunner.query(
+      `ALTER TABLE trading.orders DROP CONSTRAINT IF EXISTS chk_orders_status`,
+    );
     await queryRunner.query(`
       ALTER TABLE trading.orders
       ADD CONSTRAINT chk_orders_status CHECK ("status" IN (
