@@ -104,8 +104,9 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          pnpm --filter @irexpro/web exec prettier --write e2e/trader-terminal.spec.ts
-          pnpm --filter @irexpro/admin exec prettier --write e2e/live-ops.spec.ts
+          pnpm --filter @irexpro/api exec prettier --write \
+            ../../apps/web/e2e/trader-terminal.spec.ts \
+            ../../apps/admin/e2e/live-ops.spec.ts
 
       - name: Upgrade vulnerable Nodemailer and regenerate lockfile
         shell: bash
