@@ -132,7 +132,7 @@ export const mockBrokerConnections: BrokerConnectionView[] = [
   },
 ];
 
-// ── Route interception ───────────────────────────────────────────────────────
+// ── Route interception ────────────────────────────────────────────────────────
 
 function jsonFulfill(status: number, body: unknown) {
   return {
@@ -257,21 +257,17 @@ export async function setupAuthInterception(page: Page): Promise<void> {
 
     // ── Trading ─────────────────────────────────────────────────────────
     if (apiPath === 'trading/sessions/start') {
-      // Sprint 56 correction round 5: the start contract binds the exact
-      // brokerConnectionId + durable executionMode and returns the
-      // authoritative { session } envelope.
+      // TradingController returns TradingSessionResponseDto directly.
       return route.fulfill(
         jsonFulfill(201, {
-          session: {
-            id: 'sess_00000000-0000-0000-0000-000000000001',
-            brokerConnectionId: mockBrokerConnections[0].id,
-            executionMode: 'PAPER_ONLY',
-            authorityGeneration: 1,
-            status: 'ACTIVE',
-            openingBalance: null,
-            peakEquity: null,
-            startedAt: new Date().toISOString(),
-          },
+          id: 'sess_00000000-0000-0000-0000-000000000001',
+          brokerConnectionId: mockBrokerConnections[0].id,
+          executionMode: 'PAPER_ONLY',
+          authorityGeneration: 1,
+          status: 'ACTIVE',
+          openingBalance: null,
+          peakEquity: null,
+          startedAt: new Date().toISOString(),
         }),
       );
     }
