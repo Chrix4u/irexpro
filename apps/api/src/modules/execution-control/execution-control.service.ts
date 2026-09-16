@@ -5,6 +5,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import {
@@ -19,6 +20,10 @@ import { AuditSeverity } from '../audit/entities/audit-log.entity';
 import { DomainEventBus } from '../events/event-bus.service';
 import { DomainEventType } from '../events/enums/domain-event-type.enum';
 import { SharedControlRevisionService } from '../execution-authority/shared-control-revision.service';
+// Round 7 (P1 metrics — audit R7-audit-C A6): dependency-free in-process
+// counters (lazy ModuleRef seam — see the metrics getter below).
+import { MetricsService } from '../metrics/metrics.service';
+import { METRIC_NAMES } from '../metrics/metric-names';
 
 /** Result of an execution-permission check (fail-closed). */
 export interface ExecutionPermission {
@@ -89,7 +94,29 @@ export class ExecutionControlService {
     // the global execution-control revision — a boolean flip can never
     // resurrect pre-control authority.
     private readonly sharedControlRevisions: SharedControlRevisionService,
+    /** Round 7 (P1 metrics): lazy MetricsService seam (never a constructor
+     * injection — see the metrics getter for the DI decision). */
+    private readonly moduleRef: ModuleRef,
   ) {}
+
+  /**
+   * Round 7 (P1 metrics — audit R7-audit-C A6): lazy metrics seam. Resolved
+   * at CALL time via ModuleRef.get(..., { strict: false }) — the app-wide
+   * lookup finds the MetricsModule singleton (registered once in AppModule).
+   * Direct constructor injection was rejected: it would demand a
+   * MetricsService provider in EVERY spec constructing this service (incl.
+   * out-of-scope suites) plus module-file imports outside the approved file
+   * scope. In isolated test contexts the lookup fails → null → the
+   * `this.metrics?.increment(...)` call sites no-op. Never affects control
+   * flow (MetricsService methods never throw).
+   */
+  private get metrics(): MetricsService | null {
+    try {
+      return this.moduleRef.get(MetricsService, { strict: false });
+    } catch {
+      return null;
+    }
+  }
 
   // ─── Fail-closed permission checks ────────────────────────────────────────
 
@@ -268,6 +295,13 @@ export class ExecutionControlService {
     });
 
     this.publishControlEvent(adminUserId, control, 'activated');
+
+    // Round 7 (P1 metrics): a successful emergency-control ACTIVATION (the
+    // durable row + revision bump already committed — observability follows
+    // the fact; ConflictException/deactivation paths never reach here).
+    this.metrics?.increment(METRIC_NAMES.EMERGENCY_CONTROL_ACTIVATIONS, {
+      scope: control.scope,
+    });
 
     return this.toView(control);
   }

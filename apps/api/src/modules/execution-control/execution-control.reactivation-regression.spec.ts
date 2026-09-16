@@ -1,4 +1,5 @@
 import { ConflictException } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { Repository } from 'typeorm';
 import { AuditService } from '../audit/audit.service';
 import { DomainEventBus } from '../events/event-bus.service';
@@ -51,6 +52,9 @@ function makeHarness() {
     events as unknown as DomainEventBus,
     // Round 6 (#14): the shared control-plane revision seam (mocked).
     { bumpExecutionControlRevision: jest.fn().mockResolvedValue(1) } as never,
+    // Round 7 (P1 metrics): the lazy MetricsService ModuleRef seam — the
+    // stub's get() returns undefined, so every metrics call site no-ops.
+    { get: jest.fn() } as unknown as ModuleRef,
   );
 
   return { service, repo, audit, events };

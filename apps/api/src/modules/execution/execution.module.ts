@@ -30,7 +30,7 @@ import { TradeReconciliationProducer } from './jobs/trade-reconciliation.produce
 // Round 7 (P1): the expiry-hygiene sweeper + the durable emergency flatten.
 import { ExecutionExpiryJob, EXECUTION_EXPIRY_QUEUE } from './jobs/execution-expiry.job';
 import { ExecutionExpiryProducer } from './jobs/execution-expiry.producer';
-import { EMERGENCY_FLATTEN_QUEUE } from './jobs/emergency-flatten.job';
+import { EMERGENCY_FLATTEN_QUEUE } from './jobs/emergency-flatten.constants';
 import { EmergencyFlattenJob } from './jobs/emergency-flatten.job';
 import { EmergencyFlattenProducer } from './jobs/emergency-flatten.producer';
 import { StateReconciliationService } from './reconciliation/state-reconciliation.service';

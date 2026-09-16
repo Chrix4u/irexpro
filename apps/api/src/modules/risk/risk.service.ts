@@ -49,6 +49,10 @@ import { GrantInvalidationService } from '../execution-authority/grant-invalidat
 import { DailyRiskPeriodService } from '../execution/services/daily-risk-period.service';
 import { BrokerAccountSnapshotService } from '../broker/services/broker-account-snapshot.service';
 import { SnapshotNotFreshError } from '../broker/services/broker-account-snapshot.service';
+// Round 7 (P1 metrics — audit R7-audit-C A6): dependency-free in-process
+// counters (lazy ModuleRef seam — see the metrics getter below).
+import { MetricsService } from '../metrics/metrics.service';
+import { METRIC_NAMES } from '../metrics/metric-names';
 
 /** Default pip size for standard 5-digit pairs (EURUSD, GBPUSD, etc.) */
 const DEFAULT_PIP_SIZE = '0.0001';
@@ -141,6 +145,25 @@ export class RiskService {
      * collaborators (resolved at CALL time, never in the constructor). */
     private readonly moduleRef: ModuleRef,
   ) {}
+
+  /**
+   * Round 7 (P1 metrics — audit R7-audit-C A6): lazy metrics seam. Resolved
+   * at CALL time via ModuleRef.get(..., { strict: false }) — the app-wide
+   * lookup finds the MetricsModule singleton (registered once in AppModule).
+   * Direct constructor injection was rejected: it would demand a
+   * MetricsService provider in EVERY spec constructing this service (incl.
+   * out-of-scope suites) plus module-file imports outside the approved file
+   * scope. In isolated test contexts the lookup fails → null → the
+   * `this.metrics?.increment(...)` call sites no-op. Never affects control
+   * flow (MetricsService methods never throw).
+   */
+  private get metrics(): MetricsService | null {
+    try {
+      return this.moduleRef.get(MetricsService, { strict: false });
+    } catch {
+      return null;
+    }
+  }
 
   // ─── Main validation entry point ──────────────────────────────────────────
 
@@ -1158,6 +1181,10 @@ export class RiskService {
         `grant=${grantId}, session=${session.id}@${session.authorityGeneration}, mode=${session.executionMode})`,
     );
 
+    // Round 7 (P1 metrics): the APPROVED decision point (the durable grant
+    // already stands — observability follows the fact, never gates it).
+    this.metrics?.increment(METRIC_NAMES.RISK_APPROVALS);
+
     this.eventBus.publish(DomainEventType.RISK_SIGNAL_APPROVED, userId, {
       userId,
       instrument: trade.instrument,
@@ -1871,6 +1898,9 @@ export class RiskService {
     // path runs — a process death between the authority write above and the
     // flatten can no longer lose the emergency de-risking.
     if (active) {
+      // Round 7 (P1 metrics): activation-only flatten counter (deactivation
+      // never re-opens positions — nothing to count there).
+      this.metrics?.increment(METRIC_NAMES.KILL_SWITCH_FLATTENS);
       await this.executionService
         .requestDurableEmergencyFlatten(userId, 'KILL_SWITCH_ACTIVATE')
         .catch((err) =>
@@ -2105,6 +2135,9 @@ export class RiskService {
     reason: string,
     evaluatedAt: Date,
   ): RiskRejectionResult {
+    // Round 7 (P1 metrics): the fail-closed wrapper's rejection path (e.g.
+    // RISK_ENGINE_ERROR) never passes through rejectAndRecord — count it too.
+    this.metrics?.increment(METRIC_NAMES.RISK_REJECTIONS, { code });
     return {
       decision: 'REJECTED',
       signalId,
@@ -2133,6 +2166,10 @@ export class RiskService {
       rejectionReason: reason,
       evaluatedAt,
     };
+
+    // Round 7 (P1 metrics): the REJECTION funnel — every typed rejection code
+    // in the pipeline flows through here (one site, complete coverage).
+    this.metrics?.increment(METRIC_NAMES.RISK_REJECTIONS, { code });
 
     // Record violation asynchronously — don't block the rejection response
     this.violationRepo

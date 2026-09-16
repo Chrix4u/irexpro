@@ -1,4 +1,5 @@
 import { Logger } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { ExecutionOrchestrator } from './execution-orchestrator.service';
 import type { MarketSafetyGateService } from './market-safety-gate.service';
 import { AccountDispatchLeaseService } from './account-dispatch-lease.service';
@@ -191,6 +192,9 @@ describe('ExecutionOrchestrator provider-write certainty (Sprint 56 correction r
       // Round 6 §14: the per-account dispatch lease (real implementation —
       // its own matrix lives in account-dispatch-lease.spec.ts).
       new AccountDispatchLeaseService(),
+      // Round 7 (P1 metrics): the lazy MetricsService ModuleRef seam — the
+      // stub's get() returns undefined, so every metrics call site no-ops.
+      { get: jest.fn() } as unknown as ModuleRef,
     );
   });
 

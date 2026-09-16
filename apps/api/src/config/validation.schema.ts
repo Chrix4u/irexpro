@@ -69,6 +69,16 @@ export const validationSchema = Joi.object({
   // In production: store in AWS Secrets Manager / HashiCorp Vault
   METAAPI_TOKEN: Joi.string().optional().allow(''),
 
+  // Round 7 (R7-impl-harness) — operator-only PRODUCTION-LIVE certification
+  // master gate (IREXPRO_ALLOW_LIVE_CERTIFICATION). OPTIONAL and FAIL-CLOSED:
+  // the configuration maps ONLY the EXACT string 'true' to enabled; absent,
+  // blank, 'false', or anything else means DISABLED (never a default-true).
+  // Any value other than 'true'/'false'/'' fails validation loudly at boot so
+  // an operator typo can never silently disable (or enable) LIVE certification.
+  // This gate arms the operator-run LIVE certification harness ONLY — it never
+  // affects trading authorization (that remains the catalog VERIFIED process).
+  IREXPRO_ALLOW_LIVE_CERTIFICATION: Joi.string().valid('true', 'false').optional().allow(''),
+
   // cTrader Open API platform application credentials (Sprint 56 / Task 48-B).
   // OPTIONAL — the adapter registers truthfully without them, but connections
   // fail closed with a clear configuration message. Register the platform app

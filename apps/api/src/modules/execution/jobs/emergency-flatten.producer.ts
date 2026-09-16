@@ -1,7 +1,7 @@
 import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable, Logger } from '@nestjs/common';
 import { Queue } from 'bullmq';
-import { EMERGENCY_FLATTEN_JOB, EMERGENCY_FLATTEN_QUEUE } from './emergency-flatten.job';
+import { EMERGENCY_FLATTEN_JOB, EMERGENCY_FLATTEN_QUEUE } from './emergency-flatten.constants';
 
 /**
  * EmergencyFlattenProducer (Round 7 P1 — durable kill-switch flatten) —

@@ -1,4 +1,5 @@
 import { Logger } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import type { Job } from 'bullmq';
 import { ExecutionExpiryJob } from './execution-expiry.job';
 import { EmergencyFlattenJob } from './emergency-flatten.job';
@@ -39,6 +40,9 @@ describe('ExecutionExpiryJob (Round 7 P1 expiry hygiene)', () => {
       tradeIntents as unknown as TradeIntentService,
       allocationService as unknown as AllocationService,
       riskGrantService as unknown as RiskGrantService,
+      // Round 7 (P1 metrics): the lazy MetricsService ModuleRef seam — the
+      // stub's get() returns undefined, so every metrics call site no-ops.
+      { get: jest.fn() } as unknown as ModuleRef,
     );
   });
 

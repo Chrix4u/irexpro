@@ -1,4 +1,5 @@
 import { Logger } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { ExecutionOrchestrator } from './execution-orchestrator.service';
 import type { MarketSafetyGateService } from './market-safety-gate.service';
 import { AccountDispatchLeaseService } from './account-dispatch-lease.service';
@@ -122,6 +123,9 @@ describe('ExecutionOrchestrator exactly-once adversarial (Round 6 §13+§14 comp
         assertMarketSafeForDispatch: jest.fn().mockResolvedValue(undefined),
       } as unknown as MarketSafetyGateService,
       lease,
+      // Round 7 (P1 metrics): the lazy MetricsService ModuleRef seam — the
+      // stub's get() returns undefined, so every metrics call site no-ops.
+      { get: jest.fn() } as unknown as ModuleRef,
     );
 
   beforeEach(() => {

@@ -1,4 +1,5 @@
 import { ConflictException } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { DataSource, FindOptionsWhere, IsNull, Repository } from 'typeorm';
 import { ExecutionControlService } from './execution-control.service';
 import {
@@ -111,11 +112,19 @@ describe('ExecutionControlService — real PostgreSQL lifecycle (architect A2)',
     await dataSource.query('TRUNCATE TABLE "platform"."execution_controls"');
     const auditService = { log: jest.fn().mockResolvedValue(undefined) } as unknown as AuditService;
     const eventBus = { publish: jest.fn() } as unknown as DomainEventBus;
-    service = new ExecutionControlService(controlRepo, auditService, eventBus, {
-      // Round 6 (#14): the shared control-plane revision seam (mocked — the
-      // revision CAS matrices live in the execution-authority suites).
-      bumpExecutionControlRevision: jest.fn().mockResolvedValue(1),
-    } as never);
+    service = new ExecutionControlService(
+      controlRepo,
+      auditService,
+      eventBus,
+      {
+        // Round 6 (#14): the shared control-plane revision seam (mocked — the
+        // revision CAS matrices live in the execution-authority suites).
+        bumpExecutionControlRevision: jest.fn().mockResolvedValue(1),
+      } as never,
+      // Round 7 (P1 metrics): the lazy MetricsService ModuleRef seam — the
+      // stub's get() returns undefined, so every metrics call site no-ops.
+      { get: jest.fn() } as unknown as ModuleRef,
+    );
   });
 
   const activeRows = async (
