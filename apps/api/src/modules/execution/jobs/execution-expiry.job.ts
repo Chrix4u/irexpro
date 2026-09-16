@@ -1,9 +1,14 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Injectable, Logger } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import type { Job } from 'bullmq';
 import { TradeIntentService } from '../services/trade-intent.service';
 import { AllocationService } from '../services/allocation.service';
 import { RiskGrantService } from '../../risk/risk-grant.service';
+// Round 7 (P1 metrics — audit R7-audit-C A6): dependency-free in-process
+// counters (lazy ModuleRef seam — see the metrics getter below).
+import { MetricsService } from '../../metrics/metrics.service';
+import { METRIC_NAMES } from '../../metrics/metric-names';
 
 export const EXECUTION_EXPIRY_QUEUE = 'execution-expiry';
 export const EXECUTION_EXPIRY_JOB = 'sweep-execution-expiry';
@@ -39,8 +44,30 @@ export class ExecutionExpiryJob extends WorkerHost {
     private readonly tradeIntents: TradeIntentService,
     private readonly allocationService: AllocationService,
     private readonly riskGrantService: RiskGrantService,
+    /** Round 7 (P1 metrics): lazy MetricsService seam (never a constructor
+     * injection — see the metrics getter for the DI decision). */
+    private readonly moduleRef: ModuleRef,
   ) {
     super();
+  }
+
+  /**
+   * Round 7 (P1 metrics — audit R7-audit-C A6): lazy metrics seam. Resolved
+   * at CALL time via ModuleRef.get(..., { strict: false }) — the app-wide
+   * lookup finds the MetricsModule singleton (registered once in AppModule).
+   * Direct constructor injection was rejected: it would demand a
+   * MetricsService provider in EVERY spec constructing this job (incl.
+   * out-of-scope suites) plus module-file imports outside the approved file
+   * scope. In isolated test contexts the lookup fails → null → the
+   * `this.metrics?.increment(...)` call sites no-op. Never affects control
+   * flow (MetricsService methods never throw).
+   */
+  private get metrics(): MetricsService | null {
+    try {
+      return this.moduleRef.get(MetricsService, { strict: false });
+    } catch {
+      return null;
+    }
   }
 
   async process(job: Job): Promise<{
@@ -77,6 +104,12 @@ export class ExecutionExpiryJob extends WorkerHost {
           'confirmation(s) expired',
       );
     }
+
+    // Round 7 (P1 metrics): sweep-count increments (value = count; a zero
+    // sweep still materializes the series at 0 for scrape stability).
+    this.metrics?.increment(METRIC_NAMES.INTENTS_EXPIRED, undefined, expiredIntentIds.length);
+    this.metrics?.increment(METRIC_NAMES.ALLOCATIONS_RELEASED, undefined, releasedAllocations);
+    this.metrics?.increment(METRIC_NAMES.CONFIRMATIONS_EXPIRED, undefined, expiredConfirmations);
 
     return {
       expiredIntents: expiredIntentIds.length,

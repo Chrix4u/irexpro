@@ -109,6 +109,13 @@ export default () => ({
     // deep link the server callback redirects to after exchanging the
     // provider code (the app receives ONLY the one-time handoff token).
     ctraderMobileDeepLink: process.env.CTRADER_MOBILE_DEEP_LINK ?? 'irexpro://broker/oauth/handoff',
+    // Round 7 (R7-impl-harness) — operator-only PRODUCTION-LIVE certification
+    // master gate. FAIL-CLOSED: ONLY the EXACT string 'true' enables it;
+    // absent, blank, 'false', or any other value = disabled. NEVER a
+    // default-true. Consumed through isLiveCertificationEnabled() by the LIVE
+    // certification harness (modules/broker/verification) — it never affects
+    // trading authorization (that stays the catalog VERIFIED process).
+    allowLiveCertification: process.env.IREXPRO_ALLOW_LIVE_CERTIFICATION === 'true',
   },
   internalApi: {
     key: process.env.NESTJS_INTERNAL_API_KEY,
@@ -141,3 +148,36 @@ export default () => ({
     cancelUrl: process.env.STRIPE_CANCEL_URL || undefined,
   },
 });
+
+// ─── Round 7 — operator-only LIVE certification gate helper ──────────────────
+
+/**
+ * Minimal structural view of the root configuration the LIVE certification
+ * gate reads (structural so the harness, specs, and the app config object all
+ * satisfy it without a Nest runtime).
+ */
+export interface LiveCertificationConfigView {
+  broker?: {
+    allowLiveCertification?: boolean;
+  };
+}
+
+/**
+ * Round 7 (R7-impl-harness) — resolves the operator-only PRODUCTION-LIVE
+ * certification gate from a configuration object.
+ *
+ * FAIL-CLOSED: returns true ONLY when the configuration explicitly carries
+ * `broker.allowLiveCertification === true` — i.e. the environment variable
+ * IREXPRO_ALLOW_LIVE_CERTIFICATION was the EXACT string 'true'. Absent,
+ * blank, 'false', or any other value (and a missing/undefined config object)
+ * resolves to DISABLED. NEVER a default-true.
+ *
+ * Usable by the LIVE certification harness
+ * (apps/api/src/modules/broker/verification) and its spec entry points:
+ *   isLiveCertificationEnabled(configuration())
+ */
+export function isLiveCertificationEnabled(
+  config: LiveCertificationConfigView | null | undefined,
+): boolean {
+  return config?.broker?.allowLiveCertification === true;
+}

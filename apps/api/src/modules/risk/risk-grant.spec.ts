@@ -1,4 +1,5 @@
 import { DataSource, Repository } from 'typeorm';
+import { ModuleRef } from '@nestjs/core';
 import {
   Column,
   CreateDateColumn,
@@ -338,6 +339,9 @@ describe('RiskGrant issuance + exact-decimal boundaries (Round 5, 50-b)', () => 
       grantRepo as unknown as Repository<RiskGrant>,
       confirmationRepo as unknown as Repository<ExecutionConfirmation>,
       auditService,
+      // Round 7 (P1 metrics): the lazy MetricsService ModuleRef seam — the
+      // stub's get() returns undefined, so every metrics call site no-ops.
+      { get: jest.fn() } as unknown as ModuleRef,
     );
 
     brokerService = {

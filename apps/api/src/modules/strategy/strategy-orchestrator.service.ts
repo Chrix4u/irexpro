@@ -1,4 +1,5 @@
 import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { RiskService } from '../risk/risk.service';
 import { ExecutionService } from '../execution/execution.service';
 import { BrokerService } from '../broker/broker.service';
@@ -20,6 +21,11 @@ import { AllocationService } from '../execution/services/allocation.service';
 import { PositionSizingService } from '../execution/services/position-sizing.service';
 import { TradingAuthorityService } from '../execution-authority/trading-authority.service';
 import { SharedControlRevisionService } from '../execution-authority/shared-control-revision.service';
+// Round 7 (P1 metrics — audit R7-audit-C A6): dependency-free in-process
+// counters. Resolved lazily via ModuleRef (see the getter below) — metrics
+// can never affect pipeline control flow.
+import { MetricsService } from '../metrics/metrics.service';
+import { METRIC_NAMES } from '../metrics/metric-names';
 import {
   AiSignalCandidate,
   StrategyDuplicateOfTrade,
@@ -97,7 +103,29 @@ export class StrategyOrchestratorService {
     // inputs and its capital reserved BEFORE risk evaluation.
     private readonly positionSizingService: PositionSizingService,
     private readonly allocationService: AllocationService,
+    /** Round 7 (P1 metrics): lazy MetricsService seam (never a constructor
+     * injection — see the metrics getter for the DI decision). */
+    private readonly moduleRef: ModuleRef,
   ) {}
+
+  /**
+   * Round 7 (P1 metrics — audit R7-audit-C A6): lazy metrics seam. Resolved
+   * at CALL time via ModuleRef.get(..., { strict: false }) — the app-wide
+   * lookup finds the MetricsModule singleton (registered once in AppModule).
+   * Direct constructor injection was rejected: it would demand a
+   * MetricsService provider in EVERY spec constructing this service
+   * (incl. out-of-scope suites) plus module-file imports outside the approved
+   * file scope. In isolated test contexts the lookup fails → null → the
+   * `this.metrics?.increment(...)` call sites no-op (MetricsService methods
+   * never throw). Never affects control flow.
+   */
+  private get metrics(): MetricsService | null {
+    try {
+      return this.moduleRef.get(MetricsService, { strict: false });
+    } catch {
+      return null;
+    }
+  }
 
   /**
    * Process an AI signal candidate through the full validation pipeline.
@@ -283,6 +311,9 @@ export class StrategyOrchestratorService {
           message: (err as Error).message,
         },
       });
+      this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, {
+        outcome: 'EXECUTION_FAILED',
+      });
       return { outcome: 'EXECUTION_FAILED', signalId, reason };
     }
 
@@ -350,6 +381,17 @@ export class StrategyOrchestratorService {
           message: (err as Error).message,
         },
       });
+      this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, {
+        outcome: 'EXECUTION_FAILED',
+      });
+      // Typed failure classification: AllocationError codes are all
+      // ALLOCATION_-prefixed; every other typed code is a sizing failure.
+      this.metrics?.increment(
+        code.startsWith('ALLOCATION_')
+          ? METRIC_NAMES.ALLOCATION_FAILURES
+          : METRIC_NAMES.SIZING_FAILURES,
+        { code },
+      );
       return { outcome: 'EXECUTION_FAILED', signalId, reason };
     }
 
@@ -412,6 +454,9 @@ export class StrategyOrchestratorService {
         rejectionCode: 'RISK_ENGINE_ERROR',
         rejectionReason: reason,
       });
+      this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, {
+        outcome: 'RISK_REJECTED',
+      });
       return { outcome: 'RISK_REJECTED', signalId, reason };
     }
 
@@ -454,6 +499,10 @@ export class StrategyOrchestratorService {
           rejectionCode: riskDecision.rejectionCode,
           rejectionReason: riskDecision.rejectionReason,
         },
+      });
+      this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, { outcome });
+      this.metrics?.increment(METRIC_NAMES.INTENTS_REJECTED, {
+        code: riskDecision.rejectionCode,
       });
       return {
         outcome,
@@ -499,6 +548,9 @@ export class StrategyOrchestratorService {
           awaiting: 'USER_EXECUTION_CONFIRMATION',
         },
       });
+      this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, {
+        outcome: 'EXECUTION_PENDING_CONFIRMATION',
+      });
       return {
         outcome: 'EXECUTION_PENDING_CONFIRMATION',
         signalId,
@@ -524,6 +576,9 @@ export class StrategyOrchestratorService {
           strategyCode: candidate.strategyCode,
         },
       });
+      this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, {
+        outcome: 'EXECUTION_SUCCEEDED',
+      });
       return { outcome: 'EXECUTION_SUCCEEDED', signalId, tradeId: trade.id };
     } catch (err) {
       const reason = `Execution failed: ${(err as Error).message}`;
@@ -539,6 +594,9 @@ export class StrategyOrchestratorService {
           direction: candidate.direction,
           failureCode: 'EXECUTION_ERROR',
         },
+      });
+      this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, {
+        outcome: 'EXECUTION_FAILED',
       });
       return { outcome: 'EXECUTION_FAILED', signalId, reason };
     }
@@ -630,6 +688,11 @@ export class StrategyOrchestratorService {
     };
 
     const registrationOutcome = await this.tradeIntentService.recordOrReuseIntent(facts);
+    if (registrationOutcome.created) {
+      // Round 7 (P1 metrics): only a FRESH intent row is an intent created
+      // (a UNIQUE-race reuse is exactly-once identity, not a second intent).
+      this.metrics?.increment(METRIC_NAMES.INTENTS_CREATED);
+    }
     if (!registrationOutcome.created) {
       this.logger.log(
         `Signal ${signalId}: trade intent reused (recorded by a concurrent worker) — ` +
@@ -771,6 +834,11 @@ export class StrategyOrchestratorService {
     reasonSummary: string,
     extraMetadata: Record<string, unknown> = {},
   ): Promise<void> {
+    // Round 7 (P1 metrics): every ignored/duplicate-recovered signal outcome
+    // funnels through here — the received-signal counter stays honest for the
+    // whole gate-1..4.6 family (the remaining outcomes increment at their
+    // own return sites).
+    this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, { outcome });
     await this.auditService.log({
       actorUserId: candidate.userId,
       action: AuditAction.AI_SIGNAL_IGNORED,

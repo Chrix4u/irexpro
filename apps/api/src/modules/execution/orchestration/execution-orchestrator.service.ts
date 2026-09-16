@@ -1,4 +1,5 @@
 import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { BrokerConnection } from '../../broker/entities/broker-connection.entity';
 import { BrokerService } from '../../broker/broker.service';
 import { BrokerAdapterRegistry } from '../../broker/adapters/broker-adapter.registry';
@@ -31,6 +32,10 @@ import {
   OrderCapabilityError,
 } from '../../broker/interfaces/order-capability';
 import { FinalDispatchBoundary, FinalDispatchBlockedException } from './final-dispatch-boundary';
+// Round 7 (P1 metrics — audit R7-audit-C A6): dependency-free in-process
+// counters (lazy ModuleRef seam — see the metrics getter below).
+import { MetricsService } from '../../metrics/metrics.service';
+import { METRIC_NAMES } from '../../metrics/metric-names';
 import { mapProviderOrderResponse } from './provider-response.mapper';
 import { classifyIntentOperation, isExposureIncreasingOperation } from './provider-operation-class';
 import { ProviderOperationClass } from '../interfaces/execution-authority';
@@ -106,7 +111,29 @@ export class ExecutionOrchestrator {
     // commitment → provider call → outcome) runs strictly serialized per
     // broker account, in-process (entries, §10 exits, confirmations).
     private readonly accountDispatchLease: AccountDispatchLeaseService,
+    /** Round 7 (P1 metrics): lazy MetricsService seam (never a constructor
+     * injection — see the metrics getter for the DI decision). */
+    private readonly moduleRef: ModuleRef,
   ) {}
+
+  /**
+   * Round 7 (P1 metrics — audit R7-audit-C A6): lazy metrics seam. Resolved
+   * at CALL time via ModuleRef.get(..., { strict: false }) — the app-wide
+   * lookup finds the MetricsModule singleton (registered once in AppModule).
+   * Direct constructor injection was rejected: it would demand a
+   * MetricsService provider in EVERY spec constructing this orchestrator
+   * (incl. out-of-scope suites) plus module-file imports outside the approved
+   * file scope. In isolated test contexts the lookup fails → null → the
+   * `this.metrics?.increment(...)` call sites no-op. Never affects control
+   * flow (MetricsService methods never throw).
+   */
+  private get metrics(): MetricsService | null {
+    try {
+      return this.moduleRef.get(MetricsService, { strict: false });
+    } catch {
+      return null;
+    }
+  }
 
   // ─── 1. Validation pipeline (fail-closed) ───────────────────────────────
 
@@ -160,6 +187,9 @@ export class ExecutionOrchestrator {
           operationClass,
         },
         severity: AuditSeverity.WARNING,
+      });
+      this.metrics?.increment(METRIC_NAMES.DISPATCH_BLOCKS, {
+        gate: 'EXECUTION_CONTROL',
       });
       throw new ForbiddenException(
         `Execution blocked by platform control plane (${blocked?.scope ?? 'UNKNOWN'} scope).`,
@@ -216,6 +246,9 @@ export class ExecutionOrchestrator {
         },
         severity: AuditSeverity.WARNING,
       });
+      this.metrics?.increment(METRIC_NAMES.DISPATCH_BLOCKS, {
+        gate: 'LIVE_AUTHORIZATION',
+      });
       throw new ForbiddenException(
         'Live account is not authorized for execution (authorization state is not ACTIVE).',
       );
@@ -241,6 +274,9 @@ export class ExecutionOrchestrator {
           brokerConnectionId: ctx.connection.id,
         },
         severity: AuditSeverity.WARNING,
+      });
+      this.metrics?.increment(METRIC_NAMES.DISPATCH_BLOCKS, {
+        gate: 'CREDENTIAL_LIFECYCLE',
       });
       throw new ForbiddenException(
         'Broker credentials are not usable for execution (credential lifecycle is not active).',
@@ -305,6 +341,10 @@ export class ExecutionOrchestrator {
     // the operation-aware control gate.
     const operationClass = classifyIntentOperation(intent);
 
+    // Round 7 (P1 metrics): every dispatch entering the critical section
+    // (the outcome-specific counters below sub-classify how it resolved).
+    this.metrics?.increment(METRIC_NAMES.DISPATCH_ATTEMPTS, { operationClass });
+
     // ── Idempotent reservation ────────────────────────────────────────────
     const submission = await this.orderService.submitOrder({
       userId: intent.userId,
@@ -340,6 +380,7 @@ export class ExecutionOrchestrator {
         },
         severity: AuditSeverity.WARNING,
       });
+      this.metrics?.increment(METRIC_NAMES.DUPLICATE_SUPPRESSIONS);
       return { outcome: 'DUPLICATE', order: submission.order, orderId: submission.order.id };
     }
 
@@ -422,6 +463,9 @@ export class ExecutionOrchestrator {
               message: err.message,
             },
           });
+          this.metrics?.increment(METRIC_NAMES.DISPATCH_BLOCKS, {
+            gate: 'ORDER_CAPABILITY',
+          });
         }
         throw err;
       }
@@ -502,6 +546,9 @@ export class ExecutionOrchestrator {
             },
             severity: AuditSeverity.WARNING,
           });
+          this.metrics?.increment(METRIC_NAMES.DISPATCH_BLOCKS, {
+            gate: 'FINAL_DISPATCH_BOUNDARY',
+          });
         }
         throw err;
       }
@@ -541,6 +588,9 @@ export class ExecutionOrchestrator {
               orderStatus: filled.status,
             },
           });
+          this.metrics?.increment(METRIC_NAMES.PROVIDER_ACKNOWLEDGEMENTS, {
+            outcome: 'FILLED',
+          });
           return {
             outcome: 'FILLED',
             order: filled,
@@ -554,6 +604,9 @@ export class ExecutionOrchestrator {
         case 'ACKNOWLEDGE': {
           order = await this.orderService.markAcknowledged(order.id, action.providerOrderId);
           await this.emitAcknowledged(intent, order, action.providerOrderId);
+          this.metrics?.increment(METRIC_NAMES.PROVIDER_ACKNOWLEDGEMENTS, {
+            outcome: 'WORKING',
+          });
           return {
             outcome: 'WORKING',
             order,
@@ -583,6 +636,7 @@ export class ExecutionOrchestrator {
             },
             severity: AuditSeverity.WARNING,
           });
+          this.metrics?.increment(METRIC_NAMES.PROVIDER_REJECTS);
           return { outcome: 'REJECTED', order, orderId: order.id, reason: sanitizedReason };
         }
 
@@ -605,6 +659,9 @@ export class ExecutionOrchestrator {
               orderStatus: OrderStatus.RECONCILIATION_PENDING,
             },
             severity: AuditSeverity.CRITICAL,
+          });
+          this.metrics?.increment(METRIC_NAMES.AMBIGUOUS_PROVIDER_OUTCOMES, {
+            source: 'PROVIDER_RESPONSE',
           });
           return {
             outcome: 'UNKNOWN',
@@ -649,6 +706,9 @@ export class ExecutionOrchestrator {
             orderStatus: OrderStatus.RECONCILIATION_PENDING,
           },
           severity: AuditSeverity.CRITICAL,
+        });
+        this.metrics?.increment(METRIC_NAMES.AMBIGUOUS_PROVIDER_OUTCOMES, {
+          source: 'DISPATCH_ERROR',
         });
       } catch (transitionErr) {
         // The order row may already have moved (e.g. a terminal state won in a

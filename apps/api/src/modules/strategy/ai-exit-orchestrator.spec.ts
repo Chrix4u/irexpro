@@ -1,3 +1,4 @@
+import { ModuleRef } from '@nestjs/core';
 import {
   AiExitOrchestratorService,
   EXIT_CONFIDENCE_THRESHOLD,
@@ -88,6 +89,9 @@ describe('AiExitOrchestratorService — the §10 serialized AI exit pipeline', (
       executionService as unknown as ExecutionService,
       executionReadService as unknown as ExecutionReadService,
       signalIdentityGate as unknown as AiSignalIdentityGateService,
+      // Round 7 (P1 metrics): the lazy MetricsService ModuleRef seam — the
+      // stub's get() returns undefined, so every metrics call site no-ops.
+      { get: jest.fn() } as unknown as ModuleRef,
     );
   });
 

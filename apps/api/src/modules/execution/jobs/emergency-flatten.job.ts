@@ -3,8 +3,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import type { Job } from 'bullmq';
 import { ExecutionService } from '../execution.service';
 
-export const EMERGENCY_FLATTEN_QUEUE = 'emergency-flatten';
-export const EMERGENCY_FLATTEN_JOB = 'emergency-flatten-user';
+import { EMERGENCY_FLATTEN_JOB, EMERGENCY_FLATTEN_QUEUE } from './emergency-flatten.constants';
+
+export { EMERGENCY_FLATTEN_JOB, EMERGENCY_FLATTEN_QUEUE };
 
 /**
  * EmergencyFlattenJob (Round 7 P1 — durable kill-switch flatten) — the

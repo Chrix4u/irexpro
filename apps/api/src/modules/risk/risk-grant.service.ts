@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { RiskGrant } from '../execution/entities/risk-grant.entity';
@@ -14,6 +15,10 @@ import { isUniqueViolation } from '../broker/utils/db-unique-violation';
 import type { RiskGrantConsumeResult } from '../execution/orchestration/risk-grant-consumer';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../../common/enums/audit-action.enum';
+// Round 7 (P1 metrics — audit R7-audit-C A6): dependency-free in-process
+// counters (lazy ModuleRef seam — see the metrics getter below).
+import { MetricsService } from '../metrics/metrics.service';
+import { METRIC_NAMES } from '../metrics/metric-names';
 
 /**
  * RISK_GRANT_TTL_MS — the short validity window of an issued RiskGrant
@@ -218,7 +223,29 @@ export class RiskGrantService {
     @InjectRepository(ExecutionConfirmation)
     private readonly confirmationRepo: Repository<ExecutionConfirmation>,
     private readonly auditService: AuditService,
+    /** Round 7 (P1 metrics): lazy MetricsService seam (never a constructor
+     * injection — see the metrics getter for the DI decision). */
+    private readonly moduleRef: ModuleRef,
   ) {}
+
+  /**
+   * Round 7 (P1 metrics — audit R7-audit-C A6): lazy metrics seam. Resolved
+   * at CALL time via ModuleRef.get(..., { strict: false }) — the app-wide
+   * lookup finds the MetricsModule singleton (registered once in AppModule).
+   * Direct constructor injection was rejected: it would demand a
+   * MetricsService provider in EVERY spec constructing this service (incl.
+   * out-of-scope suites) plus module-file imports outside the approved file
+   * scope. In isolated test contexts the lookup fails → null → the
+   * `this.metrics?.increment(...)` call sites no-op. Never affects control
+   * flow (MetricsService methods never throw).
+   */
+  private get metrics(): MetricsService | null {
+    try {
+      return this.moduleRef.get(MetricsService, { strict: false });
+    } catch {
+      return null;
+    }
+  }
 
   /**
    * Issue (or idempotently reuse) the durable ACTIVE grant for a signal.
@@ -336,6 +363,9 @@ export class RiskGrantService {
         }
 
         await this.auditIssuance(grant, false);
+        // Round 7 (P1 metrics): a FRESH durable grant was issued (the reused
+        // path above returns without this — reuse is not issuance).
+        this.metrics?.increment(METRIC_NAMES.GRANTS_ISSUED);
         return { grant, reused: false };
       } catch (err) {
         if (isUniqueViolation(err)) {
@@ -385,6 +415,8 @@ export class RiskGrantService {
 
     if (affected > 0) {
       this.logger.log(`RiskGrant ${grantId} CONSUMED (single-winner CAS)`);
+      // Round 7 (P1 metrics): the single-winner commitment consumption.
+      this.metrics?.increment(METRIC_NAMES.GRANTS_CONSUMED);
       const grant = await this.grantRepo.findOne({
         where: userId ? { id: grantId, userId } : { id: grantId },
       });
