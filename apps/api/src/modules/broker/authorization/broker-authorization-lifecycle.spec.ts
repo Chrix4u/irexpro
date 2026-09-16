@@ -502,6 +502,20 @@ describe('BrokerService — Sprint 50 authorization lifecycle', () => {
       expect(eventBus.publish).not.toHaveBeenCalled();
     });
 
+    it('disconnectBroker invalidates NEW-exposure authority with the explicit disconnect reason', async () => {
+      connectionRepo.findOne.mockResolvedValue(
+        baseConnection({
+          status: BrokerConnectionStatus.CONNECTED,
+          authorizationStatus: BrokerAuthorizationStatus.ACTIVE,
+        }),
+      );
+
+      await service.disconnectBroker('conn-1', 'user-1');
+
+      expect(authorityBump).toHaveBeenCalledWith('user-1', 'BROKER_CONNECTION_DISCONNECTED');
+      expect(authorityInvalidate).toHaveBeenCalledWith('user-1', 'BROKER_CONNECTION_DISCONNECTED');
+    });
+
     it('disconnectBroker guards the write on the loaded authorization state', async () => {
       connectionRepo.findOne.mockResolvedValue(
         baseConnection({
@@ -513,6 +527,8 @@ describe('BrokerService — Sprint 50 authorization lifecycle', () => {
 
       await expect(service.disconnectBroker('conn-1', 'user-1')).rejects.toThrow(ConflictException);
       expect(connectionRepo.update).toHaveBeenCalledTimes(1);
+      expect(authorityBump).not.toHaveBeenCalled();
+      expect(authorityInvalidate).not.toHaveBeenCalled();
     });
 
     it('healthCheck suspend loses to a concurrent revoke — conflict logged, state untouched, returns false', async () => {
