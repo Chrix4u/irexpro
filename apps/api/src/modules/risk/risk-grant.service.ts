@@ -85,6 +85,19 @@ export interface RiskGrantIssuanceInput {
   /** Quote reference observed for MARKET geometry, when one was used. */
   quoteRef: Record<string, unknown> | null;
   issuedAt: Date;
+  /**
+   * Round 7 (SEMI_AUTO confirm-path P0 fix): when the fresh issuance is
+   * driven by the user CONFIRMING an existing PENDING confirmation
+   * (ExecutionConfirmationService.confirm → §18 fresh re-evaluation), the
+   * EXISTING PENDING confirmation is RE-BOUND to the fresh grant instead of
+   * being revoked + re-created. Without this, every confirm() superseded the
+   * in-flight confirmation (fresh quoteRef ⇒ different authority digest ⇒
+   * SUPERSEDED_BY_REVALIDATION + revoke) and the commitment CAS could then
+   * NEVER match (CONFIRMATION_REVOKED / DIGEST_MISMATCH) — SEMI_AUTO
+   * dispatch was structurally impossible. Only the confirm() path sets this;
+   * every other supersession keeps the revoke semantics.
+   */
+  rebindConfirmationId?: string;
 }
 
 export interface RiskGrantIssuanceResult {
@@ -98,6 +111,26 @@ export class RiskGrantIssuanceConflictError extends Error {
   constructor(signalId: string, detail: string) {
     super(`RiskGrant issuance conflict for signal ${signalId}: ${detail}`);
     this.name = 'RiskGrantIssuanceConflictError';
+  }
+}
+
+/**
+ * Round 7 (SEMI_AUTO confirm-path P0 fix): the PENDING confirmation to
+ * re-bind to the fresh grant was not re-bindable (consumed / revoked /
+ * expired / not PENDING for this user+signal concurrently). Fail-closed —
+ * the confirm() call aborts with ZERO provider calls.
+ */
+export class PendingConfirmationRebindError extends Error {
+  constructor(
+    readonly confirmationId: string,
+    readonly signalId: string,
+    detail: string,
+  ) {
+    super(
+      `PENDING confirmation ${confirmationId} (signal ${signalId}) could not be ` +
+        `re-bound to the fresh grant: ${detail}`,
+    );
+    this.name = 'PendingConfirmationRebindError';
   }
 }
 
@@ -205,6 +238,18 @@ export class RiskGrantService {
           existing.authorityBindingDigest !== null &&
           existing.authorityBindingDigest === authorityBindingDigest
         ) {
+          // Round 7 (SEMI_AUTO confirm-path): an identical binding reused —
+          // defensively re-point the PENDING confirmation at the reused grant
+          // (idempotent when already bound; a consumed/revoked confirmation
+          // is a typed fail-closed abort).
+          if (input.rebindConfirmationId) {
+            await this.rebindPendingConfirmation(
+              input.rebindConfirmationId,
+              existing,
+              input.userId,
+              input.signalId,
+            );
+          }
           return { grant: existing, reused: true };
         }
         // Round 6 (#301/#364): different authority binding — the
@@ -213,8 +258,22 @@ export class RiskGrantService {
         // (a stale PENDING confirmation must never occupy the tenant slot),
         // then issue exactly one fresh grant (+ one fresh SEMI_AUTO
         // confirmation on the NEW grant).
-        await this.casInvalidateGrant(existing.id, 'SUPERSEDED_BY_REVALIDATION');
-        await this.revokeConfirmationsForGrant(existing.id);
+        //
+        // Round 7 (SEMI_AUTO confirm-path P0 fix): when this issuance is
+        // driven by the user CONFIRMING a PENDING confirmation, the
+        // in-flight confirmation is NOT revoked — it is RE-BOUND to the
+        // fresh grant below (the user's one-time confirmation survives the
+        // fresh §18 evaluation that must necessarily issue a fresh grant;
+        // revoking it made the commitment CAS permanently unwinnable).
+        await this.casInvalidateGrant(
+          existing.id,
+          input.rebindConfirmationId
+            ? 'SUPERSEDED_BY_CONFIRMATION_RE_EVALUATION'
+            : 'SUPERSEDED_BY_REVALIDATION',
+        );
+        if (!input.rebindConfirmationId) {
+          await this.revokeConfirmationsForGrant(existing.id);
+        }
         continue;
       }
 
@@ -259,7 +318,20 @@ export class RiskGrantService {
           }),
         );
 
-        if (input.executionMode === ExecutionMode.SEMI_AUTO) {
+        if (input.rebindConfirmationId) {
+          // Round 7 (SEMI_AUTO confirm-path P0 fix): carry the user's
+          // EXISTING one-time confirmation over to the fresh grant (CAS on
+          // status = PENDING for this user+signal). No second confirmation
+          // row is created — the user's single confirmation remains
+          // single-use, expiring and replay-proof, now bound to the grant
+          // that will actually be consumed at the commitment.
+          await this.rebindPendingConfirmation(
+            input.rebindConfirmationId,
+            grant,
+            input.userId,
+            input.signalId,
+          );
+        } else if (input.executionMode === ExecutionMode.SEMI_AUTO) {
           await this.createPendingConfirmation(grant, input);
         }
 
@@ -425,6 +497,45 @@ export class RiskGrantService {
       })
       .where('id = :id AND status = :active', { id: grantId, active: RiskGrantStatus.ACTIVE })
       .execute();
+  }
+
+  /**
+   * Round 7 (SEMI_AUTO confirm-path P0 fix): re-bind an existing PENDING
+   * confirmation to a grant — CAS on (id, user_id, signal_id, status=PENDING).
+   * The confirmation keeps its ORIGINAL expiry (anchored at the user's
+   * original proposal view — the window never extends). Any concurrent
+   * terminal transition (consumed/revoked/expired) is a TYPED fail-closed
+   * abort: the confirm() call fails with zero provider calls.
+   */
+  private async rebindPendingConfirmation(
+    confirmationId: string,
+    grant: RiskGrant,
+    userId: string,
+    signalId: string,
+  ): Promise<void> {
+    const result = await this.confirmationRepo
+      .createQueryBuilder()
+      .update()
+      .set({ riskGrantId: grant.id })
+      .where('id = :id AND user_id = :userId AND signal_id = :signalId AND status = :pending', {
+        id: confirmationId,
+        userId,
+        signalId,
+        pending: ExecutionConfirmationStatus.PENDING,
+      })
+      .execute();
+    if ((result.affected ?? 0) !== 1) {
+      throw new PendingConfirmationRebindError(
+        confirmationId,
+        signalId,
+        'the confirmation is no longer PENDING for this user+signal ' +
+          '(consumed/revoked/expired concurrently) — fail-closed, zero provider calls',
+      );
+    }
+    this.logger.log(
+      `PENDING confirmation ${confirmationId} re-bound to fresh grant ${grant.id} ` +
+        `(signal ${signalId}) — the user's one-time confirmation survives the §18 fresh evaluation`,
+    );
   }
 
   /**
