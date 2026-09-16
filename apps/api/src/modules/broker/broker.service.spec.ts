@@ -1108,9 +1108,7 @@ describe('BrokerService', () => {
     it('observes the provider balance and records it as an authoritative snapshot', async () => {
       const adapter = {
         setMode: jest.fn(),
-        connect: jest
-          .fn()
-          .mockResolvedValue({ success: true, accountType: BrokerMode.DEMO }),
+        connect: jest.fn().mockResolvedValue({ success: true, accountType: BrokerMode.DEMO }),
         getAccountBalance: jest.fn().mockResolvedValue({
           balance: '10100.00',
           equity: '10125.00',
@@ -1190,9 +1188,9 @@ describe('BrokerService', () => {
       const authority = module.get(TradingAuthorityService);
       const grantInvalidation = module.get(GrantInvalidationService);
 
-      await expect(
-        service.observeAccountSnapshotNow('user-1', 'conn-1'),
-      ).rejects.toThrow(BrokerEnvironmentMismatchError);
+      await expect(service.observeAccountSnapshotNow('user-1', 'conn-1')).rejects.toThrow(
+        BrokerEnvironmentMismatchError,
+      );
 
       // NOTHING from the mislabeled session may become trusted snapshot
       // truth — the entire point of P0-1.
@@ -1243,9 +1241,9 @@ describe('BrokerService', () => {
       );
       connectionRepo.update.mockResolvedValue({ affected: 1 });
 
-      await expect(
-        service.observeAccountSnapshotNow('user-1', 'conn-1'),
-      ).rejects.toThrow(BrokerEnvironmentMismatchError);
+      await expect(service.observeAccountSnapshotNow('user-1', 'conn-1')).rejects.toThrow(
+        BrokerEnvironmentMismatchError,
+      );
       expect(snapshotService.acceptSnapshot).not.toHaveBeenCalled();
     });
 

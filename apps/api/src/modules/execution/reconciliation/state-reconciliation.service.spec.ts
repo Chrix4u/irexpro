@@ -142,9 +142,18 @@ describe('StateReconciliationService — Phase E: credential lifecycle + securit
         },
         { provide: OrderService, useValue: {} },
         // Round 7.1 (P0-5): pre-commitment recovery deps.
-        { provide: getRepositoryToken(TradeIntent), useValue: { findOne: jest.fn().mockResolvedValue(null) } },
-        { provide: getRepositoryToken(RiskGrant), useValue: { findOne: jest.fn().mockResolvedValue(null) } },
-        { provide: AllocationService, useValue: { releaseAllocationForIntent: jest.fn().mockResolvedValue(undefined) } },
+        {
+          provide: getRepositoryToken(TradeIntent),
+          useValue: { findOne: jest.fn().mockResolvedValue(null) },
+        },
+        {
+          provide: getRepositoryToken(RiskGrant),
+          useValue: { findOne: jest.fn().mockResolvedValue(null) },
+        },
+        {
+          provide: AllocationService,
+          useValue: { releaseAllocationForIntent: jest.fn().mockResolvedValue(undefined) },
+        },
         { provide: AuditService, useValue: auditService },
         { provide: DomainEventBus, useValue: { publish: jest.fn() } },
       ],
@@ -299,9 +308,18 @@ describe('StateReconciliationService', () => {
         { provide: ReconciliationResolutionService, useValue: resolution },
         { provide: OrderService, useValue: {} },
         // Round 7.1 (P0-5): pre-commitment recovery deps.
-        { provide: getRepositoryToken(TradeIntent), useValue: { findOne: jest.fn().mockResolvedValue(null) } },
-        { provide: getRepositoryToken(RiskGrant), useValue: { findOne: jest.fn().mockResolvedValue(null) } },
-        { provide: AllocationService, useValue: { releaseAllocationForIntent: jest.fn().mockResolvedValue(undefined) } },
+        {
+          provide: getRepositoryToken(TradeIntent),
+          useValue: { findOne: jest.fn().mockResolvedValue(null) },
+        },
+        {
+          provide: getRepositoryToken(RiskGrant),
+          useValue: { findOne: jest.fn().mockResolvedValue(null) },
+        },
+        {
+          provide: AllocationService,
+          useValue: { releaseAllocationForIntent: jest.fn().mockResolvedValue(undefined) },
+        },
         { provide: AuditService, useValue: auditService },
         { provide: DomainEventBus, useValue: eventBus },
       ],
@@ -563,7 +581,10 @@ describe('StateReconciliationService', () => {
       expect(adapter.getOpenPositions).not.toHaveBeenCalled();
       expect(adapter.getAccountInfo).not.toHaveBeenCalled();
       expect(brokerService.applyProviderAccountSnapshot).not.toHaveBeenCalled();
-      expect(persistence.failRun).toHaveBeenCalledWith('run-1', expect.stringContaining('Environment mismatch'));
+      expect(persistence.failRun).toHaveBeenCalledWith(
+        'run-1',
+        expect.stringContaining('Environment mismatch'),
+      );
       expect(auditService.log).toHaveBeenCalledWith(
         expect.objectContaining({
           action: AuditAction.RECONCILIATION_RUN_FAILED,

@@ -164,9 +164,9 @@ describe('ExecutionOrchestrator', () => {
       setMode: jest.fn((mode: BrokerMode) => {
         adapterMode = mode;
       }),
-      connect: jest.fn().mockImplementation(() =>
-        Promise.resolve({ success: true, accountType: adapterMode }),
-      ),
+      connect: jest
+        .fn()
+        .mockImplementation(() => Promise.resolve({ success: true, accountType: adapterMode })),
       placeOrder: jest.fn().mockResolvedValue({
         success: true,
         externalOrderId: 'pos-1',

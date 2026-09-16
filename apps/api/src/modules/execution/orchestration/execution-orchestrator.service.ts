@@ -783,10 +783,7 @@ export class ExecutionOrchestrator {
     // fails closed into reconciliation (never resent; the health check or
     // next observation performs the suspension + authority invalidation on
     // its own cadence, and every subsequent dispatch re-fences).
-    if (
-      connectResult.success &&
-      connectResult.accountType !== connection.accountType
-    ) {
+    if (connectResult.success && connectResult.accountType !== connection.accountType) {
       throw new BrokerAdapterError(
         BrokerErrorCode.ENVIRONMENT_MISMATCH,
         `Environment mismatch at dispatch: the provider reports a ` +

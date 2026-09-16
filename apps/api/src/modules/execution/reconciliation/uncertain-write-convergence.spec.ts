@@ -264,9 +264,18 @@ describe('Uncertain-write reconciliation convergence (Sprint 56 correction round
           { provide: ReconciliationPersistenceService, useValue: persistence },
           { provide: OrderService, useValue: orderService },
           // Round 7.1 (P0-5): pre-commitment recovery deps.
-          { provide: getRepositoryToken(TradeIntent), useValue: { findOne: jest.fn().mockResolvedValue(null) } },
-          { provide: getRepositoryToken(RiskGrant), useValue: { findOne: jest.fn().mockResolvedValue(null) } },
-          { provide: AllocationService, useValue: { releaseAllocationForIntent: jest.fn().mockResolvedValue(undefined) } },
+          {
+            provide: getRepositoryToken(TradeIntent),
+            useValue: { findOne: jest.fn().mockResolvedValue(null) },
+          },
+          {
+            provide: getRepositoryToken(RiskGrant),
+            useValue: { findOne: jest.fn().mockResolvedValue(null) },
+          },
+          {
+            provide: AllocationService,
+            useValue: { releaseAllocationForIntent: jest.fn().mockResolvedValue(undefined) },
+          },
           { provide: AuditService, useValue: auditService },
           { provide: DomainEventBus, useValue: eventBus },
         ],
@@ -374,9 +383,18 @@ describe('Uncertain-write reconciliation convergence (Sprint 56 correction round
           { provide: TRADE_REPO, useValue: tradeRepo },
           { provide: OrderService, useValue: orderService },
           // Round 7.1 (P0-5): pre-commitment recovery deps.
-          { provide: getRepositoryToken(TradeIntent), useValue: { findOne: jest.fn().mockResolvedValue(null) } },
-          { provide: getRepositoryToken(RiskGrant), useValue: { findOne: jest.fn().mockResolvedValue(null) } },
-          { provide: AllocationService, useValue: { releaseAllocationForIntent: jest.fn().mockResolvedValue(undefined) } },
+          {
+            provide: getRepositoryToken(TradeIntent),
+            useValue: { findOne: jest.fn().mockResolvedValue(null) },
+          },
+          {
+            provide: getRepositoryToken(RiskGrant),
+            useValue: { findOne: jest.fn().mockResolvedValue(null) },
+          },
+          {
+            provide: AllocationService,
+            useValue: { releaseAllocationForIntent: jest.fn().mockResolvedValue(undefined) },
+          },
           { provide: AuditService, useValue: auditService },
           { provide: DomainEventBus, useValue: eventBus },
         ],

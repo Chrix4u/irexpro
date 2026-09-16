@@ -92,10 +92,7 @@ export interface BrokerProductionLiveVerification {
  * completed certifications; a pending or persistence-failed run flips
  * nothing).
  */
-export type ProviderCertificationState =
-  | 'NOT_CERTIFIED'
-  | 'LEGACY_VERIFIED'
-  | 'CERTIFIED';
+export type ProviderCertificationState = 'NOT_CERTIFIED' | 'LEGACY_VERIFIED' | 'CERTIFIED';
 
 /** Derive the truthful display state from catalog verification evidence. */
 export function deriveProviderCertificationState(

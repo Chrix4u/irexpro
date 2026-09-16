@@ -142,7 +142,8 @@ export class AdminProductionLiveVerificationDto {
     nullable: true,
     type: String,
     format: 'date-time',
-    description: 'Operator-attested verification timestamp (null when unverified or legacy-attested without a dated artifact).',
+    description:
+      'Operator-attested verification timestamp (null when unverified or legacy-attested without a dated artifact).',
   })
   verifiedAt: string | null;
 

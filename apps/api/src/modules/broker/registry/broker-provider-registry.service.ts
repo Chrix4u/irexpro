@@ -112,14 +112,10 @@ export class BrokerProviderRegistryService {
           // materialized (null provenance on UNVERIFIED entries).
           certifiedVia: entry.productionLiveVerification?.certifiedVia ?? null,
           certificationRunRef: entry.productionLiveVerification?.certificationRunRef ?? null,
-          certificationState: deriveProviderCertificationState(
-            entry.productionLiveVerification,
-          ),
+          certificationState: deriveProviderCertificationState(entry.productionLiveVerification),
         },
         // Round 7.1 (P0-3): top-level derived state (shared contract shape).
-        certificationState: deriveProviderCertificationState(
-          entry.productionLiveVerification,
-        ),
+        certificationState: deriveProviderCertificationState(entry.productionLiveVerification),
         connectionRoutes: [...entry.connectionRoutes],
         capabilities: [...entry.capabilities],
         authenticationType: entry.authenticationType,

@@ -1678,7 +1678,9 @@ function finalizeLiveCertificationEvidence(
     );
     writeFileSync(path, JSON.stringify(evidence, null, 2), { encoding: 'utf8' });
     if (!verifyLiveCertificationArtifact(path, evidence)) {
-      throw new Error('read-back verification failed (artifact missing, unparsable, or hash mismatch)');
+      throw new Error(
+        'read-back verification failed (artifact missing, unparsable, or hash mismatch)',
+      );
     }
     evidence.evidenceState = 'PERSISTED';
     evidence.certificationResult = record.overall;

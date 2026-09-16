@@ -87,7 +87,7 @@ const connection = (): BrokerConnection =>
 
 const STALE = new Date('2025-01-01T00:00:00Z'); // far past the 5-min grace
 
-const pendingTrade = (overrides: Partial<Record<string, unknown>> = {}) =>
+const pendingTrade = (_overrides: Partial<Record<string, unknown>> = {}) =>
   ({
     id: 'trade-1',
     userId: 'user-1',
@@ -165,8 +165,9 @@ describe('Round 7.1 (P0-5): crash/restart recovery — pre-commitment convergenc
           provide: TRADE_REPO,
           useValue: {
             find: jest.fn(async () => trades),
-            findOne: jest.fn(async ({ where }: { where: { id: string } }) =>
-              trades.find((t) => t.id === where.id) ?? null,
+            findOne: jest.fn(
+              async ({ where }: { where: { id: string } }) =>
+                trades.find((t) => t.id === where.id) ?? null,
             ),
             update: jest.fn(async (where: unknown, set: unknown) => {
               tradeUpdates.push({ where, set });
@@ -437,7 +438,14 @@ describe('Round 7.1 (P0-5): crash/restart recovery — pre-commitment convergenc
   it('grace window: a LIVE in-flight dispatch (order minutes old) is NEVER touched by the recovery', async () => {
     const fresh = new Date(Date.now() - 10_000); // 10s ago — in flight
     trades = [pendingTrade()];
-    orders = [entryOrder({ status: OrderStatus.SUBMITTED, updatedAt: fresh, createdAt: fresh, submittedAt: fresh })];
+    orders = [
+      entryOrder({
+        status: OrderStatus.SUBMITTED,
+        updatedAt: fresh,
+        createdAt: fresh,
+        submittedAt: fresh,
+      }),
+    ];
     grant = activeGrant();
 
     await service.runForConnection(connection());
@@ -583,7 +591,9 @@ describe('Round 7.1 (P0-5): crash/restart recovery — pre-commitment convergenc
     await secondService.runForConnection(connection());
 
     expect(orderService.resolveReconciliation.mock.calls.length).toBe(firstPassCalls);
-    expect(tradeUpdates.filter((u) => (u.set as { status?: string }).status === TradeStatus.REJECTED)).toHaveLength(1);
+    expect(
+      tradeUpdates.filter((u) => (u.set as { status?: string }).status === TradeStatus.REJECTED),
+    ).toHaveLength(1);
   });
 });
 

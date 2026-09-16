@@ -742,7 +742,7 @@ describe('LIVE certification harness — Round 7.1 P0-2: durable-evidence finali
     expect(isCertifiablePass(evidence)).toBe(false);
   });
 
-  it('a PASSING checklist with a NONEXISTENT evidence dir can never certify either (typo\'d IREXPRO_LIVE_CERT_EVIDENCE_DIR)', async () => {
+  it("a PASSING checklist with a NONEXISTENT evidence dir can never certify either (typo'd IREXPRO_LIVE_CERT_EVIDENCE_DIR)", async () => {
     const adapter = new FakeLiveCertificationAdapter();
     const evidence = await runLiveProviderCertification(
       liveGateOptions(adapter, { evidenceDir: join(artifactsDir, 'does-not-exist') }),
@@ -784,17 +784,9 @@ describe('LIVE certification harness — Round 7.1 P0-2: durable-evidence finali
     expect(first.artifactPath!).not.toBe(second.artifactPath!);
     // Even when finishedAt lands in the same second, the runId differentiates.
     expect(
-      liveCertificationArtifactFileName(
-        'fake-live',
-        first.runId,
-        new Date(first.finishedAt),
-      ),
+      liveCertificationArtifactFileName('fake-live', first.runId, new Date(first.finishedAt)),
     ).not.toBe(
-      liveCertificationArtifactFileName(
-        'fake-live',
-        second.runId,
-        new Date(second.finishedAt),
-      ),
+      liveCertificationArtifactFileName('fake-live', second.runId, new Date(second.finishedAt)),
     );
     expect(existsSync(first.artifactPath!)).toBe(true);
     expect(existsSync(second.artifactPath!)).toBe(true);
@@ -838,7 +830,9 @@ describe('LIVE certification harness — Round 7.1 P0-2: durable-evidence finali
     expect(isCertifiablePass(evidence)).toBe(true);
 
     expect(isCertifiablePass({ ...evidence, evidenceState: 'PERSISTENCE_FAILED' })).toBe(false);
-    expect(isCertifiablePass({ ...evidence, certificationResult: 'EVIDENCE_PERSISTENCE_FAILED' })).toBe(false);
+    expect(
+      isCertifiablePass({ ...evidence, certificationResult: 'EVIDENCE_PERSISTENCE_FAILED' }),
+    ).toBe(false);
     expect(isCertifiablePass({ ...evidence, certificationResult: 'FAIL' })).toBe(false);
     expect(isCertifiablePass({ ...evidence, overall: 'FAIL' })).toBe(false);
     expect(isCertifiablePass({ ...evidence, artifactPath: undefined })).toBe(false);

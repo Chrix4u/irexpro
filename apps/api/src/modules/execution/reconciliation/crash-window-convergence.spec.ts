@@ -225,9 +225,18 @@ describe('StateReconciliationService — §12/§19 crash-window convergence (Rou
         { provide: ReconciliationResolutionService, useValue: resolution },
         { provide: OrderService, useValue: orderService },
         // Round 7.1 (P0-5): pre-commitment recovery deps.
-        { provide: getRepositoryToken(TradeIntent), useValue: { findOne: jest.fn().mockResolvedValue(null) } },
-        { provide: getRepositoryToken(RiskGrant), useValue: { findOne: jest.fn().mockResolvedValue(null) } },
-        { provide: AllocationService, useValue: { releaseAllocationForIntent: jest.fn().mockResolvedValue(undefined) } },
+        {
+          provide: getRepositoryToken(TradeIntent),
+          useValue: { findOne: jest.fn().mockResolvedValue(null) },
+        },
+        {
+          provide: getRepositoryToken(RiskGrant),
+          useValue: { findOne: jest.fn().mockResolvedValue(null) },
+        },
+        {
+          provide: AllocationService,
+          useValue: { releaseAllocationForIntent: jest.fn().mockResolvedValue(undefined) },
+        },
         { provide: AuditService, useValue: { log: jest.fn().mockResolvedValue(undefined) } },
         { provide: DomainEventBus, useValue: { publish: jest.fn() } },
       ],

@@ -1321,7 +1321,6 @@ export class BrokerService {
         connectResult.success &&
         this.evaluateEnvironmentMismatch(connection, connectResult).mismatch
       ) {
-        const observed = connectResult.accountType;
         let mismatchSuspended = false;
         try {
           await this.applyGuardedAuthorizationUpdate(
@@ -2200,11 +2199,7 @@ export class BrokerService {
         reason: `Suspended: provider-reported environment contradicts the declared one (${source})`,
       });
     }
-    throw new BrokerEnvironmentMismatchError(
-      connection.accountType,
-      observed ?? 'UNKNOWN',
-      source,
-    );
+    throw new BrokerEnvironmentMismatchError(connection.accountType, observed ?? 'UNKNOWN', source);
   }
 
   // ─── Snapshot authority recording (§1a) ────────────────────────────────

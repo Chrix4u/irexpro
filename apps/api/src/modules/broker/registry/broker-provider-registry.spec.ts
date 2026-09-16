@@ -250,7 +250,13 @@ describe('BrokerProviderRegistryService', () => {
 
       it('UNVERIFIED entries carry NOT_CERTIFIED with null provenance (never a guessed certification)', async () => {
         const service = await buildService(['metatrader5', 'paper-broker', 'oanda']);
-        for (const id of ['oanda', 'paper-broker', 'ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader']) {
+        for (const id of [
+          'oanda',
+          'paper-broker',
+          'ctrader',
+          'pepperstone-ctrader',
+          'icmarkets-ctrader',
+        ]) {
           const entry = service.getEntry(id)!;
           expect(entry.productionLiveVerification.status).toBe('UNVERIFIED');
           expect(entry.productionLiveVerification.certifiedVia).toBeNull();
@@ -276,7 +282,11 @@ describe('BrokerProviderRegistryService', () => {
         // NOT_CERTIFIED — no evidence / UNVERIFIED.
         expect(deriveProviderCertificationState(undefined)).toBe('NOT_CERTIFIED');
         expect(
-          deriveProviderCertificationState({ status: 'UNVERIFIED', verifiedAt: null, evidenceRef: null }),
+          deriveProviderCertificationState({
+            status: 'UNVERIFIED',
+            verifiedAt: null,
+            evidenceRef: null,
+          }),
         ).toBe('NOT_CERTIFIED');
         // LEGACY_VERIFIED — VERIFIED without (or with) a date, provenance
         // legacy or absent-but-verified (back-compat: an older payload that

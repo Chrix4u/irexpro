@@ -491,8 +491,7 @@ export class StateReconciliationService {
         }
         // Grace window: a live in-flight dispatch crosses these states in
         // seconds — never touch a dispatch that might still be running.
-        const orderAgeMs =
-          Date.now() - new Date(order.updatedAt).getTime();
+        const orderAgeMs = Date.now() - new Date(order.updatedAt).getTime();
         if (orderAgeMs < PRE_COMMITMENT_GRACE_MS) continue;
 
         try {
@@ -538,8 +537,7 @@ export class StateReconciliationService {
           // DEFINITELY_NOT_SENT (the commitment never ran; the provider call
           // only starts after it). CREATED orders of ANY kind are provable
           // the same way (provider I/O starts only after SUBMITTED).
-          const provablyNotSent =
-            order.status === OrderStatus.CREATED || grant !== null;
+          const provablyNotSent = order.status === OrderStatus.CREATED || grant !== null;
           if (!provablyNotSent) {
             // SUBMITTED close order (no grant): no provability anchor — the
             // close may have reached the provider. Uncertain, surfaced; the

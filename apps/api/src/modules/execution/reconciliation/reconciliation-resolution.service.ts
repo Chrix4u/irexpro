@@ -131,15 +131,12 @@ export class ReconciliationResolutionService {
     // the observed from-state (a concurrently-moved trade is never touched).
     TradeStateMachine.assertTransition(trade.status, TradeStatus.OPEN);
 
-    const result = await this.tradeRepo.update(
-      { id: trade.id, status: trade.status },
-      { status: TradeStatus.OPEN } as never,
-    );
+    const result = await this.tradeRepo.update({ id: trade.id, status: trade.status }, {
+      status: TradeStatus.OPEN,
+    } as never);
 
     if (!result.affected) {
-      this.logger.log(
-        `Trade ${trade.id} no longer ${trade.status} — recovery skipped`,
-      );
+      this.logger.log(`Trade ${trade.id} no longer ${trade.status} — recovery skipped`);
       return false;
     }
 
