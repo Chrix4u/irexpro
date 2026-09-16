@@ -87,6 +87,14 @@ Do not paste environment values, credentials, tokens, cookies, URLs containing s
 
 A rollback requires the staging checkout still to match the declared failed candidate SHA and the rollback target to be an ancestor of that candidate and contained in `origin/main`.
 
+Before `origin/main` is fetched or trusted, the rollback script independently validates `remote.origin.url` against the approved repository provenance allowlist used by the deployment script:
+
+- `https://github.com/Chrix4u/irexpro.git`
+- `git@github.com:Chrix4u/irexpro.git`
+- `ssh://git@github.com/Chrix4u/irexpro.git`
+
+A stale-owner, lookalike, or otherwise unapproved origin fails closed during rollback preflight. No fetch, rollback-target selection, deployment-script invocation, or runtime mutation is allowed to proceed from an untrusted origin.
+
 Run:
 
 ```bash
@@ -107,7 +115,7 @@ If rollback verification fails, keep the incident open and follow the incident-r
 
 The workflow contains no SSH step, VPS hostname, deployment credential, environment secret, or staging mutation command. It cannot deploy to the staging server.
 
-The regression suite covers malformed/bad SHA input, dirty-worktree rejection, unexpected or stale-owner origin rejection, Node release-major mismatch before install/build/runtime mutation, package-manager contract integrity, build failure before runtime mutation, API readiness failure before Web/Admin restart, successful exact-SHA deployment, and exact-SHA rollback verification.
+The regression suite covers malformed/bad SHA input, dirty-worktree rejection, unexpected or stale-owner origin rejection for deployment, rollback-origin provenance rejection before rollback fetch/target trust, Node release-major mismatch before install/build/runtime mutation, package-manager contract integrity, build failure before runtime mutation, API readiness failure before Web/Admin restart, successful exact-SHA deployment, and exact-SHA rollback verification.
 
 ## Evidence to retain
 
