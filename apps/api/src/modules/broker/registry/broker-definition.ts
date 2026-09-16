@@ -76,15 +76,15 @@ export interface BrokerProductionLiveVerification {
 
 /**
  * Round 7.1 (P0-3): the TRUTHFUL, derived certification state for
- * UI/API display — distinguishes historical/legacy verification from
- * current production certification.
+ * UI/API display and production-LIVE authorization.
  *
- * - NOT_CERTIFIED: no production-LIVE evidence at all (UNVERIFIED).
+ * - NOT_CERTIFIED: no production-LIVE evidence, or a purported current
+ *   certification whose required durable evidence is incomplete/malformed.
  * - LEGACY_VERIFIED: VERIFIED via legacy operator attestation — real
- *   historical evidence, but NOT a Round-7-protocol certification run
- *   (verifiedAt may legitimately be null; no dated artifact exists).
- * - CERTIFIED: VERIFIED via the documented certification protocol
- *   (HARNESS_CERTIFIED with a durable evidence artifact + runRef).
+ *   historical evidence, but NOT a Round-7-protocol certification run.
+ * - CERTIFIED: VERIFIED via the documented certification protocol AND
+ *   carrying a valid timestamp, durable evidence reference, and
+ *   `<runId>@sha256:<64-hex>` certification run reference.
  *
  * CERTIFICATION_PENDING and EVIDENCE_PERSISTENCE_FAILED are deliberately
  * NOT catalog states — they are RUN-level outcomes carried by
@@ -94,14 +94,33 @@ export interface BrokerProductionLiveVerification {
  */
 export type ProviderCertificationState = 'NOT_CERTIFIED' | 'LEGACY_VERIFIED' | 'CERTIFIED';
 
-/** Derive the truthful display state from catalog verification evidence. */
+/** Derive the truthful, fail-closed state from catalog verification evidence. */
 export function deriveProviderCertificationState(
   verification: BrokerProductionLiveVerification | undefined,
 ): ProviderCertificationState {
   if (!verification || verification.status !== 'VERIFIED') {
     return 'NOT_CERTIFIED';
   }
-  return verification.certifiedVia === 'HARNESS_CERTIFIED' ? 'CERTIFIED' : 'LEGACY_VERIFIED';
+  if (verification.certifiedVia !== 'HARNESS_CERTIFIED') {
+    return 'LEGACY_VERIFIED';
+  }
+
+  const verifiedAt = verification.verifiedAt?.trim() ?? '';
+  const evidenceRef = verification.evidenceRef?.trim() ?? '';
+  const certificationRunRef = verification.certificationRunRef?.trim() ?? '';
+  const runRefPattern =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}@sha256:[0-9a-f]{64}$/i;
+
+  if (
+    !verifiedAt ||
+    Number.isNaN(Date.parse(verifiedAt)) ||
+    !evidenceRef ||
+    !runRefPattern.test(certificationRunRef)
+  ) {
+    return 'NOT_CERTIFIED';
+  }
+
+  return 'CERTIFIED';
 }
 
 export interface BrokerDefinition {
@@ -117,8 +136,8 @@ export interface BrokerDefinition {
   status: BrokerAvailabilityStatus;
   /**
    * Production-LIVE verification evidence — absent/UNVERIFIED means LIVE
-   * execution is fail-closed (BrokerProviderRegistryService.
-   * isProductionLiveEligible returns false; BETA is DEMO-only).
+   * execution is fail-closed. Historical LEGACY_ATTESTATION is informational
+   * only; only a complete current CERTIFIED state can authorize production LIVE.
    */
   productionLiveVerification?: BrokerProductionLiveVerification;
   /** Connectivity routes this broker can be reached through. */
