@@ -64,8 +64,9 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-24.04
-    # Prevent a leaked Jest handle from consuming a runner for GitHub's long
-    # default timeout. A healthy full API suite should finish well inside this.
+    # Keep a bounded runner timeout as a final safety net. Jest is also forced
+    # to terminate after reporting the suite result because the current API
+    # tests leave non-critical handles alive after all assertions complete.
     timeout-minutes: 35
 
     steps:
@@ -94,7 +95,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Run tests
-        run: pnpm api:test
+        run: pnpm --filter @irexpro/api exec jest --forceExit
         env:
           NODE_ENV: test
           JWT_SECRET: test_jwt_secret_minimum_32_characters_long
