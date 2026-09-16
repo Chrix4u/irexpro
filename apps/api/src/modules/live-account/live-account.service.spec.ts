@@ -8,7 +8,13 @@ import { BrokerCredentialStatus } from '../broker/authorization/broker-credentia
 import { Trade, TradeDirection, TradeStatus } from '../execution/entities/trade.entity';
 import { TradingSession, TradingSessionStatus } from '../execution/entities/trading-session.entity';
 import { Order } from '../execution/orders/order.entity';
-import { OrderKind, OrderStatus, OrderTimeInForce } from '../execution/orders/order.enums';
+import {
+  ORDER_STATUSES,
+  OrderKind,
+  OrderStatus,
+  OrderTimeInForce,
+} from '../execution/orders/order.enums';
+import { OrderStateMachine } from '../execution/orders/order-state-machine';
 import { ReconciliationRun } from '../execution/reconciliation/entities/reconciliation-run.entity';
 import { ReconciliationDiscrepancy } from '../execution/reconciliation/entities/reconciliation-discrepancy.entity';
 import {
@@ -1009,6 +1015,22 @@ describe('LiveAccountService', () => {
       expectMoreThanOrEqualDate(rejectedCall?.[0].where.createdAt, cutoff);
       expectMoreThanOrEqualDate(filledCall?.[0].where.createdAt, cutoff);
     });
+
+    it('workingOrders counts the full non-terminal set incl. DISPATCH_COMMITTED (R7-audit-C A7)', async () => {
+      await service.getOverview(USER_ID, NOW);
+
+      // The workingOrders count is the single In([...]) order count query.
+      const workingCountCall = orderRepo.count.mock.calls.find(
+        (args) => (args[0].where.status as FindOperatorLike<unknown[]> | undefined)?.type === 'in',
+      );
+      expect(workingCountCall).toBeDefined();
+      expectInOperator(workingCountCall?.[0].where.status, ORDER_WORKING_STATUSES);
+      // Explicit regression guard: an in-flight dispatch commitment is a
+      // WORKING order — it has not reached a terminal state.
+      expect((workingCountCall?.[0].where.status as FindOperatorLike<unknown[]>).value).toContain(
+        OrderStatus.DISPATCH_COMMITTED,
+      );
+    });
   });
 
   // ─── Output redaction ─────────────────────────────────────────────────────
@@ -1059,6 +1081,33 @@ describe('LiveAccountService', () => {
   });
 
   // ─── Orders page ──────────────────────────────────────────────────────────
+
+  describe('order status filter sets (R7-audit-C A7 — DISPATCH_COMMITTED)', () => {
+    it('WORKING includes the in-flight DISPATCH_COMMITTED commitment state', () => {
+      expect(ORDER_WORKING_STATUSES).toContain(OrderStatus.DISPATCH_COMMITTED);
+    });
+
+    it('WORKING is exactly the non-terminal set per the order state machine', () => {
+      for (const status of ORDER_WORKING_STATUSES) {
+        expect(OrderStateMachine.isTerminal(status)).toBe(false);
+      }
+      for (const status of ORDER_HISTORY_STATUSES) {
+        expect(OrderStateMachine.isTerminal(status)).toBe(true);
+      }
+    });
+
+    it('WORKING and HISTORY partition the full OrderStatus enum (no overlap, no gaps)', () => {
+      const working = new Set(ORDER_WORKING_STATUSES);
+      const history = new Set(ORDER_HISTORY_STATUSES);
+      for (const status of ORDER_WORKING_STATUSES) {
+        expect(history.has(status)).toBe(false);
+      }
+      for (const status of ORDER_STATUSES) {
+        expect(working.has(status) || history.has(status)).toBe(true);
+      }
+      expect(working.size + history.size).toBe(ORDER_STATUSES.length);
+    });
+  });
 
   describe('getOrders', () => {
     it('WORKING maps to the working status set with pagination', async () => {
@@ -1144,6 +1193,32 @@ describe('LiveAccountService', () => {
       expect(row.finalizedAt).toBeNull();
       expect(JSON.stringify(row)).not.toContain('idempotencyKey');
       expect(JSON.stringify(row)).not.toContain('signalId');
+    });
+
+    it('maps a DISPATCH_COMMITTED order (in-flight dispatch) with status passthrough', async () => {
+      connectionRepo.find.mockResolvedValue([connection()]);
+      orderRepo.find.mockResolvedValue([
+        order({
+          id: 'order-dispatch',
+          status: OrderStatus.DISPATCH_COMMITTED,
+          providerOrderId: null,
+          filledQuantity: '0.0000',
+          avgFillPrice: null,
+          finalizedAt: null,
+        }),
+      ]);
+
+      const row = (await service.getOrders(USER_ID, 'ALL', 50, 0)).orders[0];
+
+      // The ALL filter (api-client default) legitimately returns in-flight
+      // rows in this state; the shared LiveOrderRowView union includes
+      // DISPATCH_COMMITTED, so the passthrough must be verbatim.
+      expect(row.id).toBe('order-dispatch');
+      expect(row.status).toBe('DISPATCH_COMMITTED');
+      expect(row.providerOrderId).toBeNull();
+      expect(row.filledQuantity).toBe('0.0000');
+      expect(row.avgFillPrice).toBeNull();
+      expect(row.finalizedAt).toBeNull();
     });
   });
 

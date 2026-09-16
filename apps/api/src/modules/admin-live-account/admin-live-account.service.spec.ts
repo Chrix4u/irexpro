@@ -198,6 +198,8 @@ describe('AdminLiveAccountService', () => {
     environments: ['DEMO', 'LIVE'],
     regions: ['global'],
     adapterAvailable: true,
+    // Always materialized by the real registry service (default UNVERIFIED).
+    productionLiveVerification: { status: 'UNVERIFIED', verifiedAt: null, evidenceRef: null },
     ...overrides,
   });
 
@@ -596,6 +598,11 @@ describe('AdminLiveAccountService', () => {
           capabilities: ['ACCOUNT_READ', 'ORDER_READ'],
           supportsDemo: true,
           supportsLive: true,
+          productionLiveVerification: {
+            status: 'UNVERIFIED',
+            verifiedAt: null,
+            evidenceRef: null,
+          },
         },
         {
           brokerId: 'oanda',
@@ -603,6 +610,11 @@ describe('AdminLiveAccountService', () => {
           capabilities: ['OAUTH'],
           supportsDemo: true,
           supportsLive: false,
+          productionLiveVerification: {
+            status: 'UNVERIFIED',
+            verifiedAt: null,
+            evidenceRef: null,
+          },
         },
         {
           brokerId: 'paper-broker',
@@ -610,6 +622,11 @@ describe('AdminLiveAccountService', () => {
           capabilities: [],
           supportsDemo: false,
           supportsLive: true,
+          productionLiveVerification: {
+            status: 'UNVERIFIED',
+            verifiedAt: null,
+            evidenceRef: null,
+          },
         },
       ]);
     });
@@ -621,6 +638,32 @@ describe('AdminLiveAccountService', () => {
       const overview = await service.getOverview(NOW);
 
       expect(overview.providers[0].capabilities).not.toBe(capabilities);
+    });
+
+    it('carries productionLiveVerification through from the registry (R7-audit-D #12)', async () => {
+      const verification = {
+        status: 'VERIFIED',
+        verifiedAt: '2026-01-02T00:00:00.000Z',
+        evidenceRef: 'docs/brokers/provider-matrix.md#metatrader5',
+      };
+      providerRegistry.getCatalog.mockReturnValue([
+        registryEntry({ productionLiveVerification: verification }),
+        registryEntry({ id: 'oanda', name: 'OANDA' }),
+      ]);
+
+      const overview = await service.getOverview(NOW);
+
+      // VERIFIED evidence passes through verbatim — Admin Live Ops can render
+      // verification state from the overview without a second registry call.
+      expect(overview.providers[0].productionLiveVerification).toEqual(verification);
+      // The copy is never a shared reference with the registry entry.
+      expect(overview.providers[0].productionLiveVerification).not.toBe(verification);
+      // Unverified providers carry the fail-closed materialized default.
+      expect(overview.providers[1].productionLiveVerification).toEqual({
+        status: 'UNVERIFIED',
+        verifiedAt: null,
+        evidenceRef: null,
+      });
     });
   });
 

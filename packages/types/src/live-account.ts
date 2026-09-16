@@ -238,6 +238,12 @@ export interface LiveOrderRowView {
   status:
     | 'CREATED'
     | 'SUBMITTED'
+    /** Round 6 (#365): the dispatch commitment is recorded and the provider
+     *  call is IN-FLIGHT (mirrors OrderStatus in orders.ts / the API's
+     *  order.enums.ts). Observable between SUBMITTED and the outcome — the
+     *  ALL filter (the api-client default) can legitimately return rows in
+     *  this state, so the union MUST include it (R7-audit-C A7). */
+    | 'DISPATCH_COMMITTED'
     | 'ACKNOWLEDGED'
     | 'PARTIALLY_FILLED'
     | 'FILLED'

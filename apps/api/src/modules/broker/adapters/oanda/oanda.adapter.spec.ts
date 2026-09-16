@@ -27,6 +27,7 @@ import {
   redactSecret,
 } from '../../interfaces/broker-adapter.errors';
 import { BrokerMode, BrokerOrderRequest } from '../../interfaces/broker-adapter.interface';
+import { ProviderDispatchCertainty } from '../../interfaces/provider-dispatch-certainty';
 
 const SECRET = 'unit-test-oanda-token-9f8e7d6c';
 const ACCOUNT_ID = '101-004-1234567-001';
@@ -190,6 +191,17 @@ const scriptHealthy = (): void => {
   }));
   backend.route('PUT', '/close', () => ({
     orderFillTransaction: { id: '2105', price: '1.10005', units: '1000', time: ISO_TIME },
+  }));
+  // Registered LAST so the more specific '/cancel' path wins over the
+  // '/orders' substring route above (later registration wins on overlap).
+  backend.route('PUT', '/cancel', () => ({
+    orderCancelTransaction: {
+      id: '2301',
+      type: 'ORDER_CANCEL',
+      orderID: '2101',
+      time: ISO_TIME,
+      reason: 'CLIENT_REQUEST',
+    },
   }));
 };
 
@@ -566,7 +578,7 @@ describe('OandaAdapter (v20 REST — BETA)', () => {
       expect(buyBody.order.units).toBe('25000');
     });
 
-    it('passes the idempotencyKey through as clientExtensions.id', async () => {
+    it('falls back to the idempotencyKey as clientExtensions.id ONLY when no clientOrderId is supplied (Directive §AN #6)', async () => {
       const adapter = await freshAdapterAndScript();
       await adapter.placeOrder(placedOrder({ idempotencyKey: 'idem-key-xyz' }));
       const body = postOrderRequests()[0]?.body as {
@@ -642,6 +654,99 @@ describe('OandaAdapter (v20 REST — BETA)', () => {
         status: 'REJECTED',
       });
       expect(result.brokerMessage).toContain('MARGIN_NOT_SUFFICIENT');
+    });
+  });
+
+  describe('provider client identifier — Phase-7c echo alignment (§26)', () => {
+    const SIGNAL_CLIENT_ORDER_ID = 'sig-3f2b8c1a-7d4e-4f5a-9b6c-1d2e3f4a5b6c';
+
+    it('carries the caller-supplied clientOrderId as clientExtensions.id (the sha256-hash scheme is gone)', async () => {
+      const adapter = await freshAdapterAndScript();
+      // BOTH identifiers supplied: the clientOrderId MUST win — the internal
+      // idempotencyKey is a sha256 digest that can never match the
+      // reconciliation echo lookup.
+      await adapter.placeOrder(
+        placedOrder({
+          idempotencyKey: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+          clientOrderId: SIGNAL_CLIENT_ORDER_ID,
+        }),
+      );
+      const body = postOrderRequests()[0]?.body as {
+        order: { clientExtensions: { id: string } };
+      };
+      expect(body.order.clientExtensions.id).toBe(SIGNAL_CLIENT_ORDER_ID);
+      expect(body.order.clientExtensions.id).not.toContain('e3b0c442');
+    });
+
+    it("close-<tradeId> clientOrderIds travel too (the platform's other id scheme)", async () => {
+      const adapter = await freshAdapterAndScript();
+      await adapter.placeOrder(
+        placedOrder({ clientOrderId: 'close-0a1b2c3d-4e5f-6789-abcd-ef0123456789-2' }),
+      );
+      const body = postOrderRequests()[0]?.body as {
+        order: { clientExtensions: { id: string } };
+      };
+      expect(body.order.clientExtensions.id).toBe('close-0a1b2c3d-4e5f-6789-abcd-ef0123456789-2');
+    });
+
+    it('fails closed on a clientOrderId that cannot travel as clientExtensions.id (INVALID_REQUEST, no transport call)', async () => {
+      const adapter = await freshAdapterAndScript();
+      backend.resetRequests();
+      // 65 characters — over OANDA's 64-char clientExtensions.id limit.
+      const tooLong = `sig-${'a'.repeat(61)}`;
+      expect(tooLong).toHaveLength(65);
+      await expect(
+        adapter.placeOrder(placedOrder({ clientOrderId: tooLong })),
+      ).rejects.toMatchObject({ code: BrokerErrorCode.INVALID_REQUEST });
+      // Disallowed punctuation (space) — rejected locally, never transformed.
+      await expect(
+        adapter.placeOrder(placedOrder({ clientOrderId: 'sig abc/with spaces' })),
+      ).rejects.toMatchObject({ code: BrokerErrorCode.INVALID_REQUEST });
+      const err = (await adapter
+        .placeOrder(placedOrder({ clientOrderId: 'sig bad id' }))
+        .catch((e) => e)) as BrokerAdapterError;
+      expect(err.dispatchCertainty).toBe(ProviderDispatchCertainty.DEFINITELY_NOT_SENT);
+      expect(backend.requests).toHaveLength(0);
+    });
+
+    it('Phase-7c-style lookup by sig-<signalId> MATCHES through listOrders (crash-window recovery unblocked)', async () => {
+      // The provider echoes the placed order back with the clientOrderId we
+      // sent as clientExtensions.id (v20 behavior) — exactly what
+      // state-reconciliation §7c(a) matches against the internal order.
+      backend.route('GET', 'state=PENDING', () => ({
+        orders: [
+          v3Order({ clientExtensions: { id: SIGNAL_CLIENT_ORDER_ID } }),
+          v3Order({ id: '2102', clientExtensions: undefined }),
+        ],
+      }));
+      backend.route('GET', 'state=TRIGGERED', () => ({ orders: [] }));
+      const adapter = await freshAdapterAndScript();
+
+      // The placed order carried the clientOrderId to the provider...
+      await adapter.placeOrder(placedOrder({ clientOrderId: SIGNAL_CLIENT_ORDER_ID }));
+      const posted = postOrderRequests()[0]?.body as {
+        order: { clientExtensions: { id: string } };
+      };
+      expect(posted.order.clientExtensions.id).toBe(SIGNAL_CLIENT_ORDER_ID);
+
+      // ...and the provider echo round-trips so the crash-window match hits.
+      const providerOrders = await adapter.listOrders();
+      const matched = providerOrders.find(
+        (p) => p.clientOrderId && p.clientOrderId === SIGNAL_CLIENT_ORDER_ID,
+      );
+      expect(matched).toBeDefined();
+      expect(matched?.providerOrderId).toBe('2101');
+    });
+
+    it('getOrderById surfaces the same clientOrderId for the Phase-7c echo', async () => {
+      backend.route('GET', /\/orders\/[^/]+$/, () => ({
+        order: v3Order({ clientExtensions: { id: SIGNAL_CLIENT_ORDER_ID } }),
+      }));
+      const adapter = await freshAdapterAndScript();
+      const order = await adapter.getOrderById('2101');
+      expect(order?.clientOrderId).toBe(SIGNAL_CLIENT_ORDER_ID);
+      // A Phase-7c-style match against the internal clientOrderId succeeds.
+      expect(order?.clientOrderId === SIGNAL_CLIENT_ORDER_ID).toBe(true);
     });
   });
 
@@ -898,6 +1003,102 @@ describe('OandaAdapter (v20 REST — BETA)', () => {
       expect(result.failedCount).toBe(1);
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0]).toContain('302');
+    });
+  });
+
+  describe('cancelOrder (PUT /orders/{id}/cancel — additive concrete surface)', () => {
+    it('cancels a pending order and maps the orderCancelTransaction honestly', async () => {
+      const adapter = await freshAdapterAndScript();
+      const result = await adapter.cancelOrder('2101');
+      expect(result).toMatchObject({
+        success: true,
+        externalOrderId: '2101',
+        status: 'FILLED',
+        brokerMessage: 'OANDA order cancelled',
+      });
+      const request = backend.requests.find(
+        (r) => r.method === 'PUT' && r.path.endsWith('/orders/2101/cancel'),
+      );
+      expect(request).toBeDefined();
+      // Environment + credential discipline identical to every other call.
+      expect(request?.baseUrl).toBe(OANDA_DEFAULT_DEMO_BASE_URL);
+      expect(request?.headers.Authorization).toBe(`Bearer ${SECRET}`);
+      expect(result.rawResponse).toMatchObject({
+        orderCancelTransaction: { id: '2301', orderID: '2101' },
+      });
+    });
+
+    it('LIVE mode cancels through the LIVE base URL only (environment never crossed)', async () => {
+      const adapter = await connectAdapter(BrokerMode.LIVE);
+      await adapter.cancelOrder('2101');
+      const request = backend.requests.find(
+        (r) => r.method === 'PUT' && r.path.endsWith('/orders/2101/cancel'),
+      );
+      expect(request?.baseUrl).toBe(OANDA_DEFAULT_LIVE_BASE_URL);
+    });
+
+    it('a 400 orderCancelRejectTransaction (e.g. already filled) is an honest REJECTED result', async () => {
+      backend.route('PUT', '/cancel', () => {
+        throw new OandaApiError(400, '', 'Cancel rejected', 'req-cr-1', {
+          orderCancelRejectTransaction: { reason: 'ORDER_ALREADY_FILLED' },
+        });
+      });
+      const adapter = await freshAdapterAndScript();
+      const result = await adapter.cancelOrder('2101');
+      expect(result.success).toBe(false);
+      expect(result.status).toBe('REJECTED');
+      expect(result.brokerMessage).toContain('ORDER_ALREADY_FILLED');
+    });
+
+    it('a legitimate 404 order-not-found maps to POSITION_NOT_FOUND (SENT_RESPONSE_RECEIVED)', async () => {
+      backend.route('PUT', '/cancel', () => {
+        throw new OandaApiError(404, 'order_not_found', 'Order not found', 'req-nf');
+      });
+      const adapter = await freshAdapterAndScript();
+      const err = (await adapter.cancelOrder('2101').catch((e) => e)) as BrokerAdapterError;
+      expect(err).toBeInstanceOf(BrokerAdapterError);
+      expect(err.code).toBe(BrokerErrorCode.POSITION_NOT_FOUND);
+      expect(err.dispatchCertainty).toBe(ProviderDispatchCertainty.SENT_RESPONSE_RECEIVED);
+    });
+
+    it('a 200 without orderCancelTransaction.id fails closed (INVALID_REQUEST, never success)', async () => {
+      backend.route('PUT', '/cancel', () => ({ lastTransactionID: '2301' }));
+      const adapter = await freshAdapterAndScript();
+      await expect(adapter.cancelOrder('2101')).rejects.toMatchObject({
+        code: BrokerErrorCode.INVALID_REQUEST,
+      });
+    });
+
+    it('a timeout maps to CONNECTION_TIMEOUT with MAY_HAVE_REACHED_PROVIDER (reconcile, never resend)', async () => {
+      const adapter = await freshAdapterAndScript();
+      backend.failWith(new Error('Request timed out'));
+      const err = (await adapter.cancelOrder('2101').catch((e) => e)) as BrokerAdapterError;
+      expect(err).toBeInstanceOf(BrokerAdapterError);
+      expect(err.code).toBe(BrokerErrorCode.CONNECTION_TIMEOUT);
+      expect(err.isRetryable).toBe(true);
+      expect(err.dispatchCertainty).toBe(ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER);
+    });
+
+    it('a 5xx maps to PROVIDER_UNAVAILABLE (retryable) with SENT_RESPONSE_RECEIVED (an HTTP answer exists)', async () => {
+      backend.route('PUT', '/cancel', () => {
+        throw new OandaApiError(503, '', 'Service unavailable');
+      });
+      const adapter = await freshAdapterAndScript();
+      const err = (await adapter.cancelOrder('2101').catch((e) => e)) as BrokerAdapterError;
+      expect(err.code).toBe(BrokerErrorCode.PROVIDER_UNAVAILABLE);
+      expect(err.isRetryable).toBe(true);
+      // Existing transport discipline (correction round 4): ANY HTTP
+      // response — including a 5xx — means the provider answered this
+      // request (SENT_RESPONSE_RECEIVED). MAY_HAVE_REACHED_PROVIDER is
+      // reserved for raw transport failures with NO response (timeout).
+      expect(err.dispatchCertainty).toBe(ProviderDispatchCertainty.SENT_RESPONSE_RECEIVED);
+    });
+
+    it('fails closed with NOT_CONNECTED before connect()', async () => {
+      const adapter = buildAdapter();
+      await expect(adapter.cancelOrder('2101')).rejects.toMatchObject({
+        code: BrokerErrorCode.NOT_CONNECTED,
+      });
     });
   });
 
