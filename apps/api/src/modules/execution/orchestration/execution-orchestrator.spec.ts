@@ -505,6 +505,30 @@ describe('ExecutionOrchestrator', () => {
 
   // ─── Round 7.1 (P0-1): pre-dispatch environment fence ─────────────────────
 
+  // ─── Round 7.1 (P0-4): fail-closed action router ──────────────────────────
+
+  describe('dispatchOrder() — Round 7.1 P0-4: fail-closed provider-action router', () => {
+    it('an UNKNOWN providerAction NEVER falls through to placeOrder — typed DEFINITELY_NOT_SENT refusal, zero provider calls', async () => {
+      // A hypothetical future caller minting e.g. a CANCEL_PENDING intent
+      // must not silently OPEN exposure under an exit label (the previous
+      // fall-through reached placeOrder for any non-CLOSE_POSITION action).
+      const unknownActionIntent: ExecutionIntent = {
+        ...intent,
+        providerAction: 'CANCEL_PENDING' as ExecutionIntent['providerAction'],
+      };
+
+      const outcome = await orchestrator.dispatchOrder(unknownActionIntent, connection);
+
+      expect(adapter.placeOrder).not.toHaveBeenCalled();
+      expect(adapter.closeOrder).not.toHaveBeenCalled();
+      expect(outcome.outcome).toBe('UNKNOWN');
+      if (outcome.outcome === 'UNKNOWN') {
+        expect(outcome.certainty).toBe('DEFINITELY_NOT_SENT');
+        expect(outcome.reason).toContain('Unsupported providerAction');
+      }
+    });
+  });
+
   describe('dispatchOrder() — Round 7.1 P0-1: pre-dispatch environment fence', () => {
     it('a provider environment CONTRADICTION at the dispatch connection makes ZERO provider calls and fails closed with DEFINITELY_NOT_SENT certainty (declared DEMO, provider reports LIVE)', async () => {
       // The provider session comes back LIVE while the connection is

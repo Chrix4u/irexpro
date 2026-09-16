@@ -47,6 +47,11 @@ describe('StateReconciliationService — provider error redaction', () => {
       orderService as never,
       auditService as never,
       eventBus as never,
+      // Round 7.1 (P0-5): pre-commitment recovery deps (unused on this
+      // path — the provider read fails before step 7d).
+      {} as never,
+      {} as never,
+      { releaseAllocationForIntent: jest.fn() } as never,
     );
 
     const connection = {

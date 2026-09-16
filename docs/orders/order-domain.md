@@ -112,3 +112,50 @@ orders.
 - **PR-5**: user-facing order APIs (place/cancel/list) using
   `clientOrderId`.
 - **PR-6**: admin/observability projections.
+
+## Round 7.1 — provider-dispatch state mapping (durable states ↔ the dispatch lifecycle)
+
+The Round 7.1 recovery audit confirmed every phase of the durable
+provider-dispatch lifecycle already has a persisted, state-machine-enforced
+representation. There is deliberately NO parallel "dispatch state" enum —
+the combination of `OrderStatus` + `TradeStatus` + the commitment boundary
+IS the state machine. Mapping (for audits, operators and future reviewers):
+
+| Lifecycle phase (Round 7.1 nomenclature) | Durable representation | Converged by |
+| --- | --- | --- |
+| PREPARED | order `CREATED` + trade `PENDING` + grant `ACTIVE` + intent `EXECUTED` | dispatch pipeline; crash-recovered by reconciliation step 7d |
+| DISPATCHING (pre-commitment) | order `SUBMITTED` | dispatch pipeline; crash-recovered by step 7d |
+| Commitment point | grant `CONSUMED` + confirmation `CONSUMED` + order `DISPATCH_COMMITTED` — ONE atomic transaction | final dispatch boundary |
+| SUBMITTED (committed, in flight) | order `DISPATCH_COMMITTED` | dispatch outcome write; crash-window convergence (step 7c) |
+| UNKNOWN | order + trade `RECONCILIATION_PENDING` + `dispatchCertainty` | step 7c/7d + provider reconciliation (echo by `clientOrderId`/`providerOrderId`) |
+| ACKNOWLEDGED | order `ACKNOWLEDGED` | dispatch outcome write / step 7b |
+| PARTIALLY_FILLED | order `PARTIALLY_FILLED` (exact-decimal fill math) | `applyFill` / step 7b fill-delta convergence |
+| FILLED | order `FILLED` + trade `OPEN` | dispatch outcome write / step 7b/7c |
+| REJECTED | order + trade `REJECTED` (+ `DEFINITELY_NOT_SENT` where provable) | dispatch outcome write / step 7d provable recovery |
+| CANCELLED | order `CANCELLED` | `cancelOrder` (terminal) |
+| RECONCILIATION_REQUIRED | `RECONCILIATION_PENDING` (orders + trades) + OPEN discrepancy rows | reconciliation resolution; manual/admin when unprovable |
+
+### Round 7.1 additions to the recovery machinery
+
+- **Step 7d — pre-commitment convergence**: crash-abandoned `CREATED`/
+  `SUBMITTED` orders (previously invisible to the sweep, capital allocation
+  leaked forever) converge terminally when the linked grant is provably
+  unconsumed (grant consume and order `DISPATCH_COMMITTED` are one atomic
+  transaction — an unconsumed grant PROVES zero provider calls):
+  order + trade → `REJECTED` (`DEFINITELY_NOT_SENT`), allocation released,
+  audited. Grant-bearing `SUBMITTED` orders with a CONSUMED grant (an atomic
+  impossibility → corruption) and grant-less close orders (no commitment
+  anchor) converge to `RECONCILIATION_PENDING` (uncertain, surfaced) —
+  never auto-rejected.
+- **Step 7a extension**: a WORKING-outcome `PENDING` trade with a live
+  provider position recovers to `OPEN` (previously no convergence branch).
+- **Boot-time immediate sweep**: the reconciliation producer enqueues one
+  immediate, idempotent run at boot — restart recovery starts in seconds,
+  not after a full 60s interval.
+- **Fail-closed action router**: `dispatchToProvider` refuses any
+  `providerAction` other than `PLACE`/`CLOSE_POSITION` with a typed
+  `DEFINITELY_NOT_SENT` error — a future exit-labelled intent can never
+  fall through to `placeOrder` and open exposure.
+- **Delayed acknowledgment inertness**: a provider response arriving after
+  the dispatch race timeout is never applied locally (the outcome already
+  settled UNKNOWN); convergence belongs exclusively to reconciliation.

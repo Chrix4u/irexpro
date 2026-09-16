@@ -8,6 +8,9 @@ import { CredentialEncryptionService } from '../../broker/services/credential-en
 import { AuditService } from '../../audit/audit.service';
 import { DomainEventBus } from '../../events/event-bus.service';
 import { Trade, TradeStatus } from '../entities/trade.entity';
+import { TradeIntent } from '../entities/trade-intent.entity';
+import { RiskGrant } from '../entities/risk-grant.entity';
+import { AllocationService } from '../services/allocation.service';
 import { Order } from '../orders/order.entity';
 import { OrderStatus } from '../orders/order.enums';
 import { OrderService } from '../orders/order.service';
@@ -221,6 +224,10 @@ describe('StateReconciliationService — §12/§19 crash-window convergence (Rou
         { provide: ReconciliationPersistenceService, useValue: persistence },
         { provide: ReconciliationResolutionService, useValue: resolution },
         { provide: OrderService, useValue: orderService },
+        // Round 7.1 (P0-5): pre-commitment recovery deps.
+        { provide: getRepositoryToken(TradeIntent), useValue: { findOne: jest.fn().mockResolvedValue(null) } },
+        { provide: getRepositoryToken(RiskGrant), useValue: { findOne: jest.fn().mockResolvedValue(null) } },
+        { provide: AllocationService, useValue: { releaseAllocationForIntent: jest.fn().mockResolvedValue(undefined) } },
         { provide: AuditService, useValue: { log: jest.fn().mockResolvedValue(undefined) } },
         { provide: DomainEventBus, useValue: { publish: jest.fn() } },
       ],

@@ -281,6 +281,54 @@ describe('ExecutionOrchestrator provider-write certainty (Sprint 56 correction r
     expect(adapter.connect).toHaveBeenCalledTimes(1);
   });
 
+  // ─── A2 (Round 7.1 P0-4): DELAYED provider acknowledgment ────────────────
+
+  it('A2. a provider response arriving AFTER the dispatch race timeout settles UNKNOWN — the late response is inert, never re-applied, convergence belongs to reconciliation', async () => {
+    // The provider WILL answer — 15s later, well past the 10s dispatch race.
+    // The delayed response is a "duplicate callback" hazard in miniature: it
+    // must never mutate an outcome that already settled.
+    adapter.placeOrder.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(
+            () =>
+              resolve({
+                success: true,
+                externalOrderId: 'pos-late',
+                filledPrice: '1.08500',
+                filledQuantity: '0.05',
+                status: 'FILLED',
+              }),
+            15_000,
+          );
+        }),
+    );
+
+    const outcomePromise = orchestrator.dispatchOrder(intent, connection);
+    // Fire the 10s race timeout (the provider call is still in flight).
+    await jest.advanceTimersByTimeAsync(10_000);
+    const outcome = await outcomePromise;
+
+    // EXACTLY ONE send; the outcome settled UNKNOWN (timeout, unclassified
+    // → conservatively uncertain) — order RECONCILIATION_PENDING.
+    expect(adapter.placeOrder).toHaveBeenCalledTimes(1);
+    expect(outcome.outcome).toBe('UNKNOWN');
+    if (outcome.outcome === 'UNKNOWN') {
+      expect(outcome.certainty).toBe('MAY_HAVE_REACHED_PROVIDER');
+    }
+    expect(orderService.markReconciliationPending).toHaveBeenCalledTimes(1);
+
+    // Now the delayed acknowledgment ACTUALLY arrives (t=15s). It must be
+    // completely inert: no second send, no state mutation, no duplicate
+    // outcome — the provider truth converges ONLY through reconciliation.
+    await jest.advanceTimersByTimeAsync(10_000);
+    expect(adapter.placeOrder).toHaveBeenCalledTimes(1);
+    expect(orderService.markReconciliationPending).toHaveBeenCalledTimes(1);
+    expect(orderService.applyFill).not.toHaveBeenCalled();
+    expect(orderService.markAcknowledged).not.toHaveBeenCalled();
+    expect(reconciliationAudits()).toHaveLength(1);
+  });
+
   // ─── B. Deterministic pre-send rejection → safe retry ───────────────────
 
   it('B. deterministic pre-send queue rejection (DEFINITELY_NOT_SENT + retryable) → SAFE retry occurs and then succeeds', async () => {

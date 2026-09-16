@@ -17,6 +17,12 @@ import { Trade, TradeStatus } from '../entities/trade.entity';
 import { Order } from '../orders/order.entity';
 import { OrderStatus } from '../orders/order.enums';
 import { OrderService } from '../orders/order.service';
+// Round 7.1 (P0-5): pre-commitment crash recovery needs the intent (capital
+// allocation release) and the grant (provability of DEFINITELY_NOT_SENT).
+import { TradeIntent } from '../entities/trade-intent.entity';
+import { RiskGrant } from '../entities/risk-grant.entity';
+import { RiskGrantStatus } from '../interfaces/execution-authority';
+import { AllocationService } from '../services/allocation.service';
 import {
   compareStates,
   InternalAccountSnapshot,
@@ -49,12 +55,25 @@ export interface ReconciliationRunOutcome {
  * 7c crash-window convergence owns it from the next cycle (crash window
  * previously INVISIBLE to reconciliation). */
 const RECONCILABLE_ORDER_STATUSES = [
+  // Round 7.1 (P0-5): CREATED orders enter the sweep so the pre-commitment
+  // recovery (step 7d) can converge crash-abandoned reservations. The
+  // comparator itself skips CREATED (no provider expectation) — only 7d
+  // acts on them.
+  OrderStatus.CREATED,
   OrderStatus.SUBMITTED,
   OrderStatus.DISPATCH_COMMITTED,
   OrderStatus.ACKNOWLEDGED,
   OrderStatus.PARTIALLY_FILLED,
   OrderStatus.RECONCILIATION_PENDING,
 ] as const;
+
+/**
+ * Round 7.1 (P0-5): a normal dispatch crosses CREATED/SUBMITTED in seconds.
+ * Pre-commitment recovery only converges orders that have been stuck past
+ * this grace window (mirrors the comparator's unresolved-execution grace) —
+ * never a dispatch that is merely in flight.
+ */
+const PRE_COMMITMENT_GRACE_MS = 5 * 60_000;
 
 /** Trade statuses holding (or possibly holding) provider positions.
  *
@@ -139,6 +158,14 @@ export class StateReconciliationService {
     private readonly orderService: OrderService,
     private readonly auditService: AuditService,
     private readonly eventBus: DomainEventBus,
+    // Round 7.1 (P0-5): pre-commitment crash recovery dependencies — the
+    // intent (capital-allocation release), the grant (DEFINITELY_NOT_SENT
+    // provability) and the allocation service itself.
+    @InjectRepository(TradeIntent)
+    private readonly intentRepo: Repository<TradeIntent>,
+    @InjectRepository(RiskGrant)
+    private readonly riskGrantRepo: Repository<RiskGrant>,
+    private readonly allocationService: AllocationService,
   ) {}
 
   async runForConnection(connection: BrokerConnection): Promise<ReconciliationRunOutcome> {
@@ -286,7 +313,15 @@ export class StateReconciliationService {
                 resolution: 'Provider reports the position closed — trade converged to CLOSED',
               });
             }
-          } else if (position !== null && trade.status === TradeStatus.RECONCILIATION_PENDING) {
+          } else if (
+            position !== null &&
+            (trade.status === TradeStatus.RECONCILIATION_PENDING ||
+              // Round 7.1 (P0-5): a WORKING dispatch outcome leaves the trade
+              // PENDING with the position live at the provider — the provider
+              // truth recovers it to OPEN (PENDING→OPEN is state-machine
+              // legal; previously this case had NO convergence branch).
+              trade.status === TradeStatus.PENDING)
+          ) {
             const recovered = await this.resolution.recoverTradeToOpen(trade);
             if (recovered) {
               resolutionRefs.push({
@@ -423,6 +458,182 @@ export class StateReconciliationService {
           errors++;
           this.logger.warn(
             `Crash-window resolution failed for ${order.id} (retried next run): ` +
+              sanitizeReconciliationReason(err),
+          );
+        }
+      }
+
+      // 7d. Round 7.1 (P0-5) — PRE-COMMITMENT CONVERGENCE: a process crash
+      // between the trade/order reservation and the provider-dispatch
+      // commitment previously left CREATED/SUBMITTED orders + their PENDING
+      // trades INVISIBLE forever (not in the sweep's candidate sets) with
+      // their capital allocation leaked. The commitment transaction is the
+      // provability anchor: the grant is consumed IN THE SAME TRANSACTION as
+      // the order's SUBMITTED→DISPATCH_COMMITTED CAS, and the provider call
+      // happens only AFTER that transaction. Therefore:
+      //   - an order still CREATED/SUBMITTED past the grace window whose
+      //     linked grant is NOT CONSUMED was PROVABLY never dispatched
+      //     (DEFINITELY_NOT_SENT) → terminal REJECTED (order + PENDING
+      //     trade) + capital allocation released. No exposure ever existed.
+      //   - a SUBMITTED order WITHOUT a grant (close-position orders carry
+      //     none — closes skip the commitment boundary) has NO provability
+      //     anchor → conservatively RECONCILIATION_PENDING (uncertain), the
+      //     position loop (7a) converges the underlying trade either way.
+      //   - a SUBMITTED order with a CONSUMED grant is a corrupt
+      //     impossibility (atomic transaction) → surfaced CRITICALLY,
+      //     converged to RECONCILIATION_PENDING, never auto-rejected.
+      for (const order of internalOrders) {
+        if (
+          (order.status !== OrderStatus.CREATED && order.status !== OrderStatus.SUBMITTED) ||
+          order.providerOrderId
+        ) {
+          continue;
+        }
+        // Grace window: a live in-flight dispatch crosses these states in
+        // seconds — never touch a dispatch that might still be running.
+        const orderAgeMs =
+          Date.now() - new Date(order.updatedAt).getTime();
+        if (orderAgeMs < PRE_COMMITMENT_GRACE_MS) continue;
+
+        try {
+          const linkedTrade = order.tradeId
+            ? await this.tradeRepo.findOne({ where: { id: order.tradeId } })
+            : null;
+          const grant = linkedTrade?.riskGrantId
+            ? await this.riskGrantRepo.findOne({ where: { id: linkedTrade.riskGrantId } })
+            : null;
+
+          // Corrupt impossibility: grant consumed while the order never
+          // reached DISPATCH_COMMITTED — surface loudly, converge
+          // uncertainly, NEVER auto-reject.
+          if (grant?.status === RiskGrantStatus.CONSUMED) {
+            await this.orderService.resolveReconciliation(
+              order.id,
+              OrderStatus.RECONCILIATION_PENDING,
+              {
+                rejectReason:
+                  'Pre-commitment recovery: grant consumed but order never committed — ' +
+                  'corrupt state surfaced for manual resolution (fail-closed)',
+              },
+            );
+            await this.auditService.log({
+              actorUserId: connection.userId,
+              action: AuditAction.RECONCILIATION_DISCREPANCY_DETECTED,
+              resourceType: 'Order',
+              resourceId: order.id,
+              metadata: {
+                runId: run.id,
+                type: ReconciliationDiscrepancyType.UNRESOLVED_EXECUTION_RESULT,
+                severity: 'CRITICAL',
+                clientOrderId: order.clientOrderId,
+                finding: 'CONSUMED_GRANT_WITHOUT_COMMITMENT',
+              },
+              severity: AuditSeverity.CRITICAL,
+            });
+            errors++;
+            continue;
+          }
+
+          // Grant-bearing entry order with an unconsumed grant → provable
+          // DEFINITELY_NOT_SENT (the commitment never ran; the provider call
+          // only starts after it). CREATED orders of ANY kind are provable
+          // the same way (provider I/O starts only after SUBMITTED).
+          const provablyNotSent =
+            order.status === OrderStatus.CREATED || grant !== null;
+          if (!provablyNotSent) {
+            // SUBMITTED close order (no grant): no provability anchor — the
+            // close may have reached the provider. Uncertain, surfaced; the
+            // position loop owns the trade truth.
+            await this.orderService.resolveReconciliation(
+              order.id,
+              OrderStatus.RECONCILIATION_PENDING,
+              {
+                rejectReason:
+                  'Pre-commitment recovery: close dispatch outcome unprovable ' +
+                  '(no commitment anchor) — uncertain, surfaced for convergence',
+              },
+            );
+            await this.auditService.log({
+              actorUserId: connection.userId,
+              action: AuditAction.RECONCILIATION_DISCREPANCY_DETECTED,
+              resourceType: 'Order',
+              resourceId: order.id,
+              metadata: {
+                runId: run.id,
+                type: ReconciliationDiscrepancyType.UNRESOLVED_EXECUTION_RESULT,
+                severity: 'WARNING',
+                clientOrderId: order.clientOrderId,
+                finding: 'UNPROVABLE_PRE_COMMITMENT_CLOSE',
+              },
+              severity: AuditSeverity.WARNING,
+            });
+            continue;
+          }
+
+          // Provable non-exposure: terminal REJECTED (DEFINITELY_NOT_SENT),
+          // the reserved PENDING trade released, the capital allocation
+          // returned to the budget. Auditable at every step.
+          await this.orderService.resolveReconciliation(order.id, OrderStatus.REJECTED, {
+            rejectReason:
+              'Pre-commitment recovery: process crashed before the dispatch ' +
+              'commitment — provably DEFINITELY_NOT_SENT (grant unconsumed), ' +
+              'terminal rejection, no exposure ever existed',
+          });
+          if (linkedTrade && linkedTrade.status === TradeStatus.PENDING) {
+            const guarded = await this.tradeRepo.update(
+              { id: linkedTrade.id, status: TradeStatus.PENDING },
+              {
+                status: TradeStatus.REJECTED,
+                brokerRejectionReason:
+                  'Pre-commitment recovery: dispatch never started ' +
+                  '(DEFINITELY_NOT_SENT) — trade released',
+                dispatchCertainty: ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+              } as never,
+            );
+            if (guarded.affected) {
+              resolutionRefs.push({
+                type: ReconciliationDiscrepancyType.UNRESOLVED_EXECUTION_RESULT,
+                internalRefId: linkedTrade.id,
+                providerRef: null,
+                resolution:
+                  'Pre-commitment recovery: PENDING trade converged to REJECTED ' +
+                  '(DEFINITELY_NOT_SENT — grant unconsumed)',
+              });
+            }
+          }
+          // Capital: the intent's ACTIVE allocation is terminally released
+          // (definite non-exposure; the §3 aggregate self-heals).
+          if (linkedTrade) {
+            const intent = await this.intentRepo.findOne({
+              where: { tradeId: linkedTrade.id },
+            });
+            if (intent) {
+              await this.allocationService.releaseAllocationForIntent(
+                intent.id,
+                'PRE_COMMITMENT_RECOVERY',
+              );
+            }
+          }
+          await this.auditService.log({
+            actorUserId: connection.userId,
+            action: AuditAction.RECONCILIATION_DISCREPANCY_DETECTED,
+            resourceType: 'Order',
+            resourceId: order.id,
+            metadata: {
+              runId: run.id,
+              type: ReconciliationDiscrepancyType.UNRESOLVED_EXECUTION_RESULT,
+              severity: 'WARNING',
+              clientOrderId: order.clientOrderId,
+              finding: 'PRE_COMMITMENT_CRASH_RECOVERED',
+              dispatchCertainty: ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+              tradeConverged: linkedTrade !== null && linkedTrade.status === TradeStatus.PENDING,
+            },
+            severity: AuditSeverity.WARNING,
+          });
+        } catch (err) {
+          errors++;
+          this.logger.warn(
+            `Pre-commitment recovery failed for ${order.id} (retried next run): ` +
               sanitizeReconciliationReason(err),
           );
         }

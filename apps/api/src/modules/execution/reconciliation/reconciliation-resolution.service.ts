@@ -125,15 +125,21 @@ export class ReconciliationResolutionService {
    * recover to OPEN. Guarded; returns true when this call transitioned.
    */
   async recoverTradeToOpen(trade: Trade): Promise<boolean> {
-    TradeStateMachine.assertTransition(TradeStatus.RECONCILIATION_PENDING, TradeStatus.OPEN);
+    // Round 7.1 (P0-5): recovery is legal from BOTH uncertain holding states
+    // (RECONCILIATION_PENDING and the WORKING-outcome PENDING) — the state
+    // machine is the single authority on legality, and the guarded CAS pins
+    // the observed from-state (a concurrently-moved trade is never touched).
+    TradeStateMachine.assertTransition(trade.status, TradeStatus.OPEN);
 
     const result = await this.tradeRepo.update(
-      { id: trade.id, status: TradeStatus.RECONCILIATION_PENDING },
+      { id: trade.id, status: trade.status },
       { status: TradeStatus.OPEN } as never,
     );
 
     if (!result.affected) {
-      this.logger.log(`Trade ${trade.id} no longer RECONCILIATION_PENDING — recovery skipped`);
+      this.logger.log(
+        `Trade ${trade.id} no longer ${trade.status} — recovery skipped`,
+      );
       return false;
     }
 
@@ -144,6 +150,7 @@ export class ReconciliationResolutionService {
       resourceId: trade.id,
       metadata: {
         recoveredTo: TradeStatus.OPEN,
+        recoveredFrom: trade.status,
         externalOrderId: trade.externalOrderId,
         source: 'state-reconciliation',
       },

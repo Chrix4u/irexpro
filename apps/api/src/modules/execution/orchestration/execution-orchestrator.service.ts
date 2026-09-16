@@ -805,6 +805,22 @@ export class ExecutionOrchestrator {
         }
         return adapter.closeOrder(intent.providerReferenceId, intent.requestedQuantity);
       }
+      // Round 7.1 (P0-4 — fail-closed action router): the only entry action
+      // that reaches the provider as an OPEN is PLACE. Any other/unknown
+      // providerAction previously fell through to placeOrder below — a
+      // future caller minting e.g. a CANCEL_PENDING intent here would have
+      // OPENED exposure under an exit label. Fail closed BEFORE any provider
+      // call (provably DEFINITELY_NOT_SENT) instead.
+      if (intent.providerAction !== 'PLACE') {
+        throw new BrokerAdapterError(
+          BrokerErrorCode.INVALID_REQUEST,
+          `Unsupported providerAction '${intent.providerAction}' at the dispatch ` +
+            'boundary — refusing to dispatch (fail-closed action router)',
+          undefined,
+          false,
+          ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+        );
+      }
       const request: BrokerOrderRequest = {
         idempotencyKey: this.orderIdempotencyKey(intent),
         instrument: intent.instrument,
