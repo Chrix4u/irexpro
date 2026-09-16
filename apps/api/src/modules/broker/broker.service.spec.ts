@@ -763,6 +763,109 @@ describe('BrokerService', () => {
       // is a DEMO-only concept (enableLiveTrading checks the DEMO flag).
       expect('demoValidated' in connectedPatch).toBe(false);
     });
+
+    // ─── Round 7 (P0): declared-vs-observed environment enforcement ─────────
+
+    it('P0: a provider-reported environment that CONTRADICTS the declared type fails CLOSED (ERROR, no authorization advance, CRITICAL audit)', async () => {
+      // A LIVE MetaApi account declared as DEMO — the exact real-money
+      // mislabeling that previously sailed to AUTHORIZED + demoValidated.
+      const mockAdapter = {
+        setMode: jest.fn(),
+        connect: jest.fn().mockResolvedValue({
+          success: true,
+          accountId: '123456',
+          accountType: BrokerMode.LIVE, // provider TRUTH
+          currency: 'USD',
+          serverTime: new Date(),
+        }),
+      };
+      registry.getAdapter.mockReturnValue(mockAdapter);
+
+      const mockConn = {
+        id: 'conn-1',
+        userId: 'user-1',
+        brokerId: 'metatrader5',
+        accountType: BrokerMode.DEMO, // declared LIE
+        encryptedCredentials: 'ciphertext',
+        credentialIv: 'iv',
+        credentialTag: 'tag',
+        encryptionKeyId: 'env-key-v1',
+        authorizationStatus: BrokerAuthorizationStatus.NOT_CONNECTED,
+        credentialStatus: 'CREATED',
+        consecutiveFailureCount: 0,
+      };
+      connectionRepo.findOne.mockResolvedValue(mockConn);
+      connectionRepo.update.mockResolvedValue({ affected: 1 });
+
+      await expect(service.connectBroker('conn-1', 'user-1')).rejects.toThrow(
+        'Environment mismatch',
+      );
+
+      // Fail-closed: an ERROR transition is written; NO CONNECTED/AUTHORIZED
+      // transition, NO demoValidated proxy, NO credential VERIFIED write.
+      const patches = connectionRepo.update.mock.calls.map((call) => call[1]);
+      const errorPatch = patches.find((patch) => patch.status === BrokerConnectionStatus.ERROR);
+      expect(errorPatch).toBeDefined();
+      expect(errorPatch.lastErrorMessage).toContain('Environment mismatch');
+      expect(
+        patches.find((patch) => patch.status === BrokerConnectionStatus.CONNECTED),
+      ).toBeUndefined();
+      expect(patches.some((patch) => patch.demoValidated === true)).toBe(false);
+      expect(patches.some((patch) => patch.credentialStatus === 'VERIFIED')).toBe(false);
+
+      // CRITICAL audit with the typed machine code.
+      const auditCall = (auditService.log as jest.Mock).mock.calls.find(
+        (call) => call[0]?.action === 'BROKER_CONNECT_FAILED',
+      );
+      expect(auditCall).toBeDefined();
+      expect(auditCall[0].metadata).toMatchObject({
+        failureCode: 'ACCOUNT_TYPE_MISMATCH',
+        declaredAccountType: BrokerMode.DEMO,
+        providerObservedAccountType: BrokerMode.LIVE,
+      });
+    });
+
+    it('P0: a matching provider-reported environment connects normally (no false positives)', async () => {
+      const mockAdapter = {
+        setMode: jest.fn(),
+        connect: jest.fn().mockResolvedValue({
+          success: true,
+          accountId: '123456',
+          accountType: BrokerMode.DEMO, // matches the declaration
+          currency: 'USD',
+          serverTime: new Date(),
+        }),
+      };
+      registry.getAdapter.mockReturnValue(mockAdapter);
+
+      const mockConn = {
+        id: 'conn-1',
+        userId: 'user-1',
+        brokerId: 'metatrader5',
+        accountType: BrokerMode.DEMO,
+        demoValidated: false,
+        encryptedCredentials: 'ciphertext',
+        credentialIv: 'iv',
+        credentialTag: 'tag',
+        encryptionKeyId: 'env-key-v1',
+        authorizationStatus: BrokerAuthorizationStatus.NOT_CONNECTED,
+        credentialStatus: 'CREATED',
+        consecutiveFailureCount: 0,
+      };
+      connectionRepo.findOne
+        .mockResolvedValueOnce(mockConn)
+        .mockResolvedValueOnce({ ...mockConn, status: BrokerConnectionStatus.CONNECTED });
+      connectionRepo.update.mockResolvedValue({ affected: 1 });
+      accountRepo.findOne.mockResolvedValue(null);
+      accountRepo.create.mockReturnValue({});
+      accountRepo.save.mockResolvedValue({});
+
+      await expect(service.connectBroker('conn-1', 'user-1')).resolves.toBeDefined();
+      const patches = connectionRepo.update.mock.calls.map((call) => call[1]);
+      expect(
+        patches.find((patch) => patch.status === BrokerConnectionStatus.ERROR),
+      ).toBeUndefined();
+    });
   });
 
   // ─── enableLiveTrading ────────────────────────────────────────────────────
@@ -838,7 +941,9 @@ describe('BrokerService', () => {
     /** Standard healthy adapter — connect + getAccountBalance both succeed. */
     const healthyAdapter = () => ({
       setMode: jest.fn(),
-      connect: jest.fn().mockResolvedValue({ success: true }),
+      // Round 7: BrokerConnectionResult contract — the observed environment
+      // must be reported (matches the declared DEMO connection fixture).
+      connect: jest.fn().mockResolvedValue({ success: true, accountType: BrokerMode.DEMO }),
       getAccountBalance: jest.fn().mockResolvedValue({
         balance: '10000.00',
         equity: '10000.00',
@@ -850,7 +955,7 @@ describe('BrokerService', () => {
     /** Failing adapter — connect succeeds but getAccountBalance throws. */
     const failingAdapter = (error = 'connection timeout') => ({
       setMode: jest.fn(),
-      connect: jest.fn().mockResolvedValue({ success: true }),
+      connect: jest.fn().mockResolvedValue({ success: true, accountType: BrokerMode.DEMO }),
       getAccountBalance: jest.fn().mockRejectedValue(new Error(error)),
     });
 
@@ -932,6 +1037,45 @@ describe('BrokerService', () => {
       expect(auditService.log).toHaveBeenCalledWith(
         expect.objectContaining({ severity: 'CRITICAL' }),
       );
+    });
+
+    // ─── Round 7 (P0): environment mismatch at the health check ─────────────
+
+    it('P0: a provider environment mismatch observed at health check suspends IMMEDIATELY (first occurrence, CRITICAL) and invalidates broker authority', async () => {
+      jest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+      // The connection is declared DEMO but the provider now reports LIVE
+      // (broker-side migration/relabel) — a security event, not a blip.
+      const adapter = {
+        setMode: jest.fn(),
+        connect: jest.fn().mockResolvedValue({ success: true, accountType: BrokerMode.LIVE }),
+        getAccountBalance: jest.fn(),
+      };
+      registry.getAdapter.mockReturnValue(adapter);
+      connectionRepo.findOne.mockResolvedValue(connectedConnection({ consecutiveFailureCount: 0 }));
+      connectionRepo.update.mockResolvedValue({ affected: 1 });
+
+      const result = await service.healthCheck('conn-1');
+
+      expect(result).toBe(false);
+      // Immediate guarded SUSPENDED transition (NOT the 3-failure path —
+      // this ran with consecutiveFailureCount 0).
+      expect(connectionRepo.update).toHaveBeenCalledWith(
+        { id: 'conn-1', authorizationStatus: BrokerAuthorizationStatus.ACTIVE },
+        expect.objectContaining({
+          status: BrokerConnectionStatus.SUSPENDED,
+          lastErrorMessage: expect.stringContaining('Environment mismatch'),
+        }),
+      );
+      // CRITICAL audit with the typed machine code.
+      const auditCall = (auditService.log as jest.Mock).mock.calls.find(
+        (call) => call[0]?.metadata?.failureCode === 'ACCOUNT_TYPE_MISMATCH',
+      );
+      expect(auditCall).toBeDefined();
+      expect(auditCall[0].severity).toBe('CRITICAL');
+      expect(auditCall[0].metadata).toMatchObject({
+        declaredAccountType: BrokerMode.DEMO,
+        providerObservedAccountType: BrokerMode.LIVE,
+      });
     });
 
     it('health check exception does not propagate — returns false safely', async () => {

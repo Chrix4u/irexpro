@@ -577,7 +577,25 @@ export class BrokerService {
       connectCredentials = await this.tokenLifecycle.ensureFreshTokens(connection, credentials);
       const result = await adapter.connect(connectCredentials);
 
-      if (!result.success) {
+      // Round 7 (P0 — declared-vs-observed environment enforcement): the
+      // provider-observed account environment (BrokerConnectionResult.
+      // accountType — e.g. MetaApi's info.type) must MATCH the connection's
+      // DECLARED accountType. A mislabeled environment is a SECURITY event:
+      // a LIVE provider account declared as DEMO would otherwise sail past
+      // the demo-authorization path (AUTHORIZED + demoValidated) and the
+      // LIVE verification gates — real money executing under DEMO semantics
+      // on the only VERIFIED real-money route. Fail-closed: ERROR transition,
+      // zero authorization advance, audited with a typed code. Adapters that
+      // only echo the requested mode never trip this gate; it bites exactly
+      // when the provider CONTRADICTS the declaration.
+      const environmentMismatch = result.success && result.accountType !== connection.accountType;
+      const failureError = environmentMismatch
+        ? `Environment mismatch: the provider reports a ${result.accountType} account, ` +
+          `but this connection was declared ${connection.accountType} — refusing to ` +
+          'authorize a mislabeled environment (fail-closed).'
+        : (result.error ?? 'Connection rejected by broker');
+
+      if (!result.success || environmentMismatch) {
         // A4: terminal ERROR write guarded on the in-flight state. On a
         // concurrent state change the original broker failure remains the
         // primary outcome (logged), and the winner's authoritative state is
@@ -588,7 +606,7 @@ export class BrokerService {
             inFlightAuthorization,
             {
               status: BrokerConnectionStatus.ERROR,
-              lastErrorMessage: result.error ?? 'Connection rejected by broker',
+              lastErrorMessage: failureError,
               consecutiveFailureCount: () => 'consecutive_failure_count + 1',
               ...(BrokerAuthorizationStateMachine.canTransition(
                 inFlightAuthorization,
@@ -627,11 +645,24 @@ export class BrokerService {
           resourceType: 'BrokerConnection',
           resourceId: connectionId,
           ipAddress,
-          metadata: { brokerId: connection.brokerId, error: result.error },
-          severity: AuditSeverity.WARNING,
+          metadata: {
+            brokerId: connection.brokerId,
+            error: failureError,
+            // Round 7 (P0): typed machine code — the provider CONTRADICTED the
+            // declared environment (e.g. a LIVE MetaApi account labeled DEMO).
+            ...(environmentMismatch
+              ? {
+                  failureCode: 'ACCOUNT_TYPE_MISMATCH',
+                  declaredAccountType: connection.accountType,
+                  providerObservedAccountType: result.accountType,
+                }
+              : {}),
+          },
+          // A mislabeled REAL-MONEY environment is a security event.
+          severity: environmentMismatch ? AuditSeverity.CRITICAL : AuditSeverity.WARNING,
         });
 
-        throw new BadRequestException(`Broker connection failed: ${result.error}`);
+        throw new BadRequestException(`Broker connection failed: ${failureError}`);
       }
 
       // Upsert BrokerAccount with latest synced state
@@ -1236,7 +1267,72 @@ export class BrokerService {
         credentials,
       );
       // connect() reuses the MetaAPI connection pool — only reconnects if stale
-      await adapter.connect(healthCredentials);
+      const connectResult = await adapter.connect(healthCredentials);
+
+      // Round 7 (P0 — declared-vs-observed environment enforcement, the same
+      // rule as connectBroker): a post-connect provider-side environment
+      // change (broker migration, account relabel) must NEVER silently keep a
+      // mislabeled connection CONNECTED/executable. Immediate CRITICAL
+      // suspension on the FIRST observation — never the 3-failure threshold
+      // (a mislabeled REAL-MONEY environment is a security event, not a
+      // transient health blip).
+      if (connectResult.success && connectResult.accountType !== connection.accountType) {
+        let mismatchSuspended = false;
+        try {
+          await this.applyGuardedAuthorizationUpdate(
+            connectionId,
+            connection.authorizationStatus,
+            {
+              status: BrokerConnectionStatus.SUSPENDED,
+              lastErrorMessage:
+                `Environment mismatch: the provider reports a ${connectResult.accountType} ` +
+                `account, but this connection was declared ${connection.accountType} ` +
+                '(fail-closed).',
+              ...(this.canTransitionTo(connection, BrokerAuthorizationStatus.SUSPENDED)
+                ? { authorizationStatus: BrokerAuthorizationStatus.SUSPENDED }
+                : {}),
+            },
+            'healthCheck ENVIRONMENT_MISMATCH suspension',
+          );
+          mismatchSuspended = true;
+        } catch (transitionErr) {
+          this.logger.warn(
+            `healthCheck environment-mismatch suspension lost a concurrent state race for ` +
+              `${connectionId}: ${(transitionErr as Error).message}`,
+          );
+        }
+        if (mismatchSuspended) {
+          this.adapterRegistry.releaseAdapterForConnection(connectionId);
+          await this.invalidateBrokerAuthority(
+            connection.userId,
+            'BROKER_CONNECTION_SUSPENDED',
+            `environment mismatch on connection ${connectionId} (declared ` +
+              `${connection.accountType}, provider reports ${connectResult.accountType})`,
+          );
+          await this.auditService.log({
+            action: AuditAction.BROKER_SUSPENDED_HEALTH_FAILURE,
+            resourceType: 'BrokerConnection',
+            resourceId: connectionId,
+            metadata: {
+              brokerId: connection.brokerId,
+              userId: connection.userId,
+              failureCode: 'ACCOUNT_TYPE_MISMATCH',
+              declaredAccountType: connection.accountType,
+              providerObservedAccountType: connectResult.accountType,
+            },
+            severity: AuditSeverity.CRITICAL,
+          });
+          this.eventBus.publish(DomainEventType.BROKER_STATUS_CHANGED, connection.userId, {
+            userId: connection.userId,
+            connectionId,
+            status: BrokerConnectionStatus.SUSPENDED,
+            previousStatus: BrokerConnectionStatus.CONNECTED,
+            reason: 'Suspended: provider-reported environment contradicts the declared one',
+          });
+        }
+        return false;
+      }
+
       const balance = await adapter.getAccountBalance();
 
       await this.connectionRepo.update(connectionId, {
