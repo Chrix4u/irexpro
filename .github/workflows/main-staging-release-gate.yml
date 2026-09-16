@@ -1,0 +1,56 @@
+name: Main Staging Release Gate
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: main-staging-release-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+  CANDIDATE_SHA: ${{ github.sha }}
+  BEFORE_SHA: ${{ github.event_name == 'push' && github.event.before || '' }}
+  MAIN_RELEASE_POLL_SECONDS: '15'
+  MAIN_RELEASE_TIMEOUT_SECONDS: '2700'
+
+jobs:
+  gate:
+    name: Main Staging Release Gate
+    if: ${{ github.repository == 'Chrix4u/irexpro' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+
+    steps:
+      - name: Checkout exact main candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+
+      - name: Verify exact candidate checkout
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+      - name: Setup Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Test main staging release policy
+        run: node scripts/deployment/main-staging-release-gate.mjs --self-test
+
+      - name: Wait for applicable exact-main push workflows
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/deployment/main-staging-release-gate.mjs

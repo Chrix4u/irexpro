@@ -2,6 +2,10 @@
 set -Eeuo pipefail
 umask 077
 
+readonly EXPECTED_HTTPS_ORIGIN="https://github.com/Chrix4u/irexpro.git"
+readonly EXPECTED_SSH_ORIGIN="git@github.com:Chrix4u/irexpro.git"
+readonly EXPECTED_SSH_URL_ORIGIN="ssh://git@github.com/Chrix4u/irexpro.git"
+
 FAILED_SHA="unknown"
 ROLLBACK_SHA="unknown"
 STAGE="rollback-preflight"
@@ -40,6 +44,16 @@ cd "$STAGING_ROOT"
 [[ "$(git rev-parse --show-toplevel)" == "$STAGING_ROOT" ]] || die "STAGING_ROOT is not the repository root."
 [[ -z "$(git status --porcelain)" ]] || die "Working tree is not clean."
 [[ "$(git rev-parse HEAD)" == "$FAILED_SHA" ]] || die "Current checkout does not match the declared failed candidate."
+
+# Rollback must establish repository provenance BEFORE it trusts origin/main for
+# either fetch or rollback-target selection. A stale owner, lookalike repository,
+# or any unapproved remote fails closed before network activity or runtime
+# mutation. Keep this allowlist identical to deploy-staging.sh.
+remote_url="$(git config --get remote.origin.url || true)"
+case "$remote_url" in
+  "$EXPECTED_HTTPS_ORIGIN"|"$EXPECTED_SSH_ORIGIN"|"$EXPECTED_SSH_URL_ORIGIN") ;;
+  *) die "Unexpected origin repository." ;;
+esac
 
 STAGE="rollback-target-verification"
 git fetch --quiet origin main

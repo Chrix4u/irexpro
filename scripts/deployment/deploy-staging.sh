@@ -174,9 +174,11 @@ pm2 restart "$API_PM2_NAME" --update-env
 STAGE="api-liveness"
 wait_for_api
 STAGE="api-readiness"
+# The public readiness controller intentionally exposes only {status}. The
+# underlying HealthService derives `ready` only when both PostgreSQL and Redis
+# probes succeed, so validating status=ready preserves dependency fail-closed
+# behavior without requiring internal dependency fields to be publicly exposed.
 require_health_field "$LOCAL_API_READY_URL" status ready
-require_health_field "$LOCAL_API_READY_URL" database connected
-require_health_field "$LOCAL_API_READY_URL" redis connected
 STAGE="api-aggregate-health"
 require_health_field "$LOCAL_API_HEALTH_URL" status ok
 

@@ -1,0 +1,125 @@
+name: Staging Deploy
+
+on:
+  workflow_run:
+    workflows: ['Main Staging Release Gate']
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: irexpro-staging-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy exact verified main SHA to staging
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      vars.STAGING_CD_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment:
+      name: staging
+      url: https://irexpro.lightworldtech.com/login
+
+    env:
+      CANDIDATE_SHA: ${{ github.event.workflow_run.head_sha }}
+      STAGING_SSH_HOST: vps.lightworldtech.com
+      STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
+      STAGING_SSH_USER: ${{ vars.STAGING_SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+
+    steps:
+      - name: Checkout exact authorized main candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+
+      - name: Verify candidate is still exact current main
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --quiet --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git rev-parse origin/main)" = "$CANDIDATE_SHA"
+
+      - name: Validate staging SSH configuration
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$STAGING_SSH_HOST"
+          test -n "$STAGING_SSH_PORT"
+          test -n "$STAGING_SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          [[ "$STAGING_SSH_PORT" =~ ^[0-9]+$ ]]
+
+      - name: Configure pinned SSH identity and host keys
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Deploy exact SHA on staging VPS
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh \
+            -i "$HOME/.ssh/irexpro_staging" \
+            -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            "bash -s -- $CANDIDATE_SHA" <<'REMOTE'
+          set -Eeuo pipefail
+          umask 077
+
+          candidate_sha="$1"
+          [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            printf 'CD HOLD: invalid candidate SHA.\n' >&2
+            exit 2
+          }
+
+          export STAGING_ROOT='/home/lightworld/webapps/irexpro-staging'
+          export API_PM2_NAME='irexpro-api-staging'
+          export WEB_PM2_NAME='irexpro-web-staging'
+          export ADMIN_PM2_NAME='irexpro-admin-staging'
+
+          export LOCAL_API_LIVE_URL='http://127.0.0.1:3010/api/v1/health/live'
+          export LOCAL_API_READY_URL='http://127.0.0.1:3010/api/v1/health/ready'
+          export LOCAL_API_HEALTH_URL='http://127.0.0.1:3010/api/v1/health'
+          export LOCAL_WEB_URL='http://127.0.0.1:3005/login'
+          export LOCAL_ADMIN_URL='http://127.0.0.1:3006/'
+
+          export PUBLIC_API_LIVE_URL='https://irexpro.lightworldtech.com/api/v1/health/live'
+          export PUBLIC_API_READY_URL='https://irexpro.lightworldtech.com/api/v1/health/ready'
+          export PUBLIC_WEB_URL='https://irexpro.lightworldtech.com/login'
+          export PUBLIC_ADMIN_URL='https://irexproadmin.lightworldtech.com/'
+
+          cd "$STAGING_ROOT"
+          test "$(git rev-parse --show-toplevel)" = "$STAGING_ROOT"
+          git fetch --quiet origin main
+          test "$(git rev-parse origin/main)" = "$candidate_sha" || {
+            printf 'CD HOLD: candidate is no longer exact current origin/main.\n' >&2
+            exit 3
+          }
+
+          bash scripts/deployment/deploy-staging.sh "$candidate_sha"
+          REMOTE
+
+      - name: Remove ephemeral SSH material
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"

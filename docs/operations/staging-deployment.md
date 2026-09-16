@@ -4,24 +4,93 @@
 
 This runbook defines the repository-controlled staging release process for iRexPro. It is designed to make the deployed revision explicit, auditable, reproducible, and fail-closed.
 
-The scripts in `scripts/deployment/` do not connect to a server by themselves. An authorized operator runs them from the existing staging checkout after separately establishing the approved administrative session.
+The preferred path is automatic CD from GitHub after an exact merged `main` SHA passes the post-merge staging release gate. The underlying `scripts/deployment/deploy-staging.sh` remains usable manually by an authorized operator for controlled recovery or diagnosis.
+
+## Verified staging topology
+
+- VPS host: `vps.lightworldtech.com`
+- Staging checkout: `/home/lightworld/webapps/irexpro-staging`
+- API PM2 process: `irexpro-api-staging`
+- Web PM2 process: `irexpro-web-staging`
+- Admin PM2 process: `irexpro-admin-staging`
+- API upstream: `127.0.0.1:3010`
+- Web upstream: `127.0.0.1:3005`
+- Admin upstream: `127.0.0.1:3006`
+- Public web: `https://irexpro.lightworldtech.com/login`
+- Public admin: `https://irexproadmin.lightworldtech.com/`
+- Public API base: `https://irexpro.lightworldtech.com/api/v1`
+
+Health endpoints used by deployment verification:
+
+- local live: `http://127.0.0.1:3010/api/v1/health/live`
+- local ready: `http://127.0.0.1:3010/api/v1/health/ready`
+- local aggregate: `http://127.0.0.1:3010/api/v1/health`
+- public live: `https://irexpro.lightworldtech.com/api/v1/health/live`
+- public ready: `https://irexpro.lightworldtech.com/api/v1/health/ready`
+
+The public readiness controller deliberately exposes only `{status}`. Internally, `HealthService.readiness()` returns `ready` only when both PostgreSQL and Redis probes succeed. Deployment therefore validates `status=ready` instead of requiring internal dependency fields to be publicly exposed.
+
+## Automatic CD flow
+
+The automatic staging release chain is:
+
+1. Pull request exact-head CI/security gates pass.
+2. The PR is merged into `main`.
+3. `.github/workflows/main-staging-release-gate.yml` runs on the exact merged SHA.
+4. `scripts/deployment/main-staging-release-gate.mjs` compares the previous `main` SHA with the new SHA, derives the applicable required push workflows, waits for those exact-SHA runs, and fails if the candidate is no longer current `main`.
+5. A successful `Main Staging Release Gate` triggers `.github/workflows/staging-deploy.yml`.
+6. The deploy workflow checks out the authorized SHA, proves it is still exact `origin/main`, opens a pinned-host SSH session to the staging VPS, and invokes `deploy-staging.sh` with that immutable SHA.
+7. The server builds API, Web, and Admin before runtime mutation, restarts API first, verifies liveness/readiness/aggregate health, then restarts Web/Admin and performs local/public smoke checks.
+
+Deployment concurrency is serialized. An older release is not allowed to race a newer `main` SHA.
+
+## GitHub configuration required once
+
+Create or use the GitHub Environment named `staging` for the deployment secrets. Do not store application `.env` contents in GitHub unless separately required; the application runtime configuration remains on the VPS.
+
+Repository variables:
+
+- `STAGING_CD_ENABLED` — set to `true` only after the SSH setup below is complete.
+- `STAGING_SSH_USER` — dedicated or approved VPS user that owns/can operate the staging checkout and the three staging PM2 processes.
+- `STAGING_SSH_PORT` — optional; defaults to `22` when absent.
+
+`staging` Environment secrets:
+
+- `STAGING_SSH_PRIVATE_KEY` — private half of the dedicated GitHub CD SSH key.
+- `STAGING_SSH_KNOWN_HOSTS` — trusted `known_hosts` line(s) for `vps.lightworldtech.com`; do not replace this with opportunistic `ssh-keyscan` inside the workflow.
+
+The private key, passwords, database credentials, broker credentials, tokens, cookies, and `.env` contents must never be committed or pasted into PRs/logs.
+
+## VPS SSH account requirements
+
+The SSH account used by GitHub Actions must be narrowly scoped. It needs to:
+
+- authenticate using the dedicated public key;
+- access `/home/lightworld/webapps/irexpro-staging`;
+- fetch the public `Chrix4u/irexpro` origin;
+- run Node.js 22 and Corepack/pnpm 10.34.5;
+- run the existing PM2 processes `irexpro-api-staging`, `irexpro-web-staging`, and `irexpro-admin-staging`;
+- read the existing staging runtime environment files required by those processes.
+
+It should not receive unrelated root, database-administrator, or production-host privileges.
+
+After the GitHub variables/secrets are configured, set `STAGING_CD_ENABLED=true`. If the current `main` SHA should be deployed immediately without another code merge, manually dispatch **Main Staging Release Gate** on the `main` branch. Its normal exact-main checks still apply, and a successful run will trigger the same staging deploy workflow.
 
 ## Release prerequisites
 
-Before deployment, verify all of the following:
+Before any deployment, verify all of the following:
 
-1. The candidate is a full 40-character lowercase Git commit SHA from `origin/main`.
-2. The candidate PR was reviewed and all required exact-head CI/security checks passed.
-3. The staging checkout has the approved `Chrix4u/irexpro` origin and a clean working tree.
-4. The staging host is running the verified release baseline, currently Node.js 22.x; broad application compatibility (`node >=20`) does not replace this release preflight.
-5. Required staging environment configuration already exists outside Git. Do not paste secrets into shell history, tickets, PRs, or evidence notes.
-6. PM2 process names and local/public health URLs are supplied through the operator environment.
-7. A previously verified rollback SHA is recorded before runtime mutation.
-8. Database backup/restore and secret-rotation prerequisites from the operational security runbook are satisfied when the release requires them.
+1. The candidate is a full 40-character lowercase Git commit SHA from current `origin/main`.
+2. Required exact-SHA CI/security checks passed.
+3. The staging checkout has one of the approved `Chrix4u/irexpro` origins and a clean working tree.
+4. The staging host is running the verified release baseline, currently Node.js 22.x.
+5. Required staging application configuration already exists outside Git.
+6. A previously verified rollback SHA is known before runtime mutation.
+7. Database backup/restore and secret-rotation prerequisites from the operational security runbook are satisfied when the release requires them.
 
-## Required configuration
+## Deployment script configuration
 
-The deployment script requires these environment variable names to be populated by the authorized staging environment:
+`deploy-staging.sh` requires:
 
 - `STAGING_ROOT`
 - `API_PM2_NAME`
@@ -37,88 +106,77 @@ The deployment script requires these environment variable names to be populated 
 - `PUBLIC_WEB_URL`
 - `PUBLIC_ADMIN_URL`
 
-`AI_HEALTH_URL` is optional. The deployment scripts never restart the AI service. When `AI_HEALTH_URL` is supplied, the observed health payload must explicitly identify paper mode or the deployment fails.
+The GitHub staging deployment workflow supplies these non-secret values explicitly for the verified staging topology above.
 
-`ADMIN_EXPECTED_STATUSES` is optional and defaults to the auth-safe set `200,302,303,307,308,401,403`. Narrow it in the staging environment if the deployed Admin contract is stricter.
+`AI_HEALTH_URL` is optional. The deployment scripts never restart the AI service. When supplied, its observed payload must explicitly identify paper mode or the deployment fails. Automatic CD currently leaves it unset until that internal health contract is separately pinned.
 
-Never commit the values of these variables to the repository.
+`ADMIN_EXPECTED_STATUSES` defaults to `200,302,303,307,308,401,403`.
 
-## Deploy an exact SHA
+## Manual exact-SHA deployment
 
-From the clean staging repository root, an authorized operator runs:
+From the clean staging repository root, an authorized operator may run:
 
 ```bash
 bash scripts/deployment/deploy-staging.sh <40-character-candidate-sha>
 ```
 
-The script performs the following sequence:
+The script:
 
 1. validates required configuration, repository root, clean worktree, and approved origin;
 2. records the current SHA as rollback evidence;
-3. fetches `origin/main` and proves the immutable candidate SHA is contained in it;
-4. switches to the exact detached candidate SHA and verifies it;
-5. verifies the host Node.js major matches the explicit release baseline (currently 22) and the candidate `packageManager` matches the approved pnpm version;
-6. installs dependencies through the repository-declared pnpm version using a frozen lockfile;
-7. builds API, Web, and Admin before any runtime mutation;
+3. fetches `origin/main` and proves the candidate is contained in it;
+4. switches to the exact detached SHA;
+5. verifies Node.js 22 and the approved pnpm version;
+6. installs from the frozen lockfile;
+7. builds API, Web, and Admin before runtime mutation;
 8. restarts API first;
-9. requires local API liveness, readiness, database/Redis readiness, and aggregate health;
+9. requires API liveness, dependency-backed readiness, and aggregate health;
 10. restarts Web and Admin only after API readiness passes;
 11. requires local and public smoke checks;
-12. optionally observes AI health and fails unless it explicitly reports paper mode;
-13. re-verifies the final Git SHA and emits a timestamped, secret-safe summary.
-
-The script does not restart or modify the AI service.
+12. optionally observes AI paper mode when `AI_HEALTH_URL` is supplied;
+13. re-verifies the final Git SHA and emits timestamped secret-safe evidence.
 
 ## Failure behavior
 
-The deployment stops immediately on install, build, restart, health, or final-SHA failure. Its error evidence includes only safe control-plane metadata:
+The deployment stops immediately on install, build, restart, health, or final-SHA failure. Failure evidence contains only safe control-plane metadata: UTC timestamp, candidate SHA, previous SHA, failed stage, and exit code.
 
-- UTC timestamp;
-- candidate SHA;
-- previously checked-out SHA;
-- failed stage;
-- exit code.
-
-The script deliberately does **not** perform a silent automatic rollback. A failed deployment must remain visible and the rollback action must explicitly identify both the failed and rollback SHAs.
-
-Do not paste environment values, credentials, tokens, cookies, URLs containing secrets, or process environment dumps into release evidence.
+The workflow does not silently auto-rollback. Failed releases remain visible and rollback must explicitly identify the failed and rollback SHAs.
 
 ## Explicit rollback
 
-A rollback requires the staging checkout still to match the declared failed candidate SHA and the rollback target to be an ancestor of that candidate and contained in `origin/main`.
-
-Run:
+A rollback requires the checkout still to match the declared failed candidate SHA and the rollback target to be an ancestor of that candidate and contained in the approved `origin/main` history.
 
 ```bash
 bash scripts/deployment/rollback-staging.sh <failed-candidate-sha> <previously-verified-rollback-sha>
 ```
 
-The rollback script extracts the deployment procedure from the failed candidate, redeploys the exact rollback SHA using the same build/restart/health gates, verifies the final checkout, and emits both SHAs in its secret-safe evidence.
+Before any rollback fetch or target trust, the rollback script verifies that `remote.origin.url` is exactly one of:
 
-If rollback verification fails, keep the incident open and follow the incident-response runbook. Do not relabel the failed release as successful.
+- `https://github.com/Chrix4u/irexpro.git`
+- `git@github.com:Chrix4u/irexpro.git`
+- `ssh://git@github.com/Chrix4u/irexpro.git`
+
+Stale-owner, lookalike, or otherwise unapproved origins fail closed during rollback preflight.
 
 ## CI safety boundary
 
-`.github/workflows/deployment-script-safety.yml` performs only repository-local validation:
+`.github/workflows/deployment-script-safety.yml` performs repository-local validation only. It runs Bash syntax validation, ShellCheck, deployment/rollback adversarial tests, the public-health-contract test, and the exact-main release-gate self-test.
 
-- Bash syntax validation;
-- ShellCheck;
-- adversarial regression tests using disposable local Git repositories and command shims.
+The safety workflow itself has no SSH credentials and cannot mutate the VPS.
 
-The workflow contains no SSH step, VPS hostname, deployment credential, environment secret, or staging mutation command. It cannot deploy to the staging server.
-
-The regression suite covers malformed/bad SHA input, dirty-worktree rejection, unexpected or stale-owner origin rejection, Node release-major mismatch before install/build/runtime mutation, package-manager contract integrity, build failure before runtime mutation, API readiness failure before Web/Admin restart, successful exact-SHA deployment, and exact-SHA rollback verification.
+The actual `.github/workflows/staging-deploy.yml` obtains SSH credentials only through the protected GitHub `staging` Environment and only after the exact-main staging release gate succeeds and `STAGING_CD_ENABLED=true`.
 
 ## Evidence to retain
 
-For each authorized staging release, retain the following in the approved operational evidence location:
+For each staging release retain:
 
-- candidate SHA;
+- authorized candidate SHA;
 - previous/rollback SHA;
-- exact-head CI/security result reference;
+- exact-main release-gate result;
+- applicable CI/security result references;
 - deployment UTC timestamp;
 - success/failure marker and failed stage when applicable;
-- rollback result if a rollback was executed;
-- operator identity according to internal access-control policy.
+- rollback result when executed;
+- operator/service identity according to internal access-control policy.
 
-Do not retain secrets or full environment dumps in release evidence.
+Never retain private keys, passwords, tokens, application secrets, broker credentials, or full environment dumps in release evidence.
