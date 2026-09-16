@@ -133,6 +133,14 @@ if [[ "$url" == 'http://local.test/web' && "$web_failures" =~ ^[0-9]+$ ]]; then
     exit 7
   fi
 fi
+admin_failures="${FAKE_ADMIN_CONNECT_FAILURES:-0}"
+if [[ "$url" == 'http://local.test/admin' && "$admin_failures" =~ ^[0-9]+$ ]]; then
+  admin_attempts="$(grep -F -c 'http://local.test/admin' "$COMMAND_LOG" || true)"
+  if (( admin_attempts <= admin_failures )); then
+    printf 'simulated connection refused\n' >&2
+    exit 7
+  fi
+fi
 if [[ "$*" == *"--write-out"* ]]; then
   if [[ "$url" == *admin* ]]; then
     printf '307'
@@ -275,6 +283,67 @@ retry_output="$(run_deploy "$FIXTURE_CANDIDATE_SHA" FAKE_WEB_CONNECT_FAILURES=1 
 [[ "$retry_output" == *'STAGING DEPLOYMENT VERIFIED'* ]] || fail 'Transient web startup failure was not recovered by bounded smoke retries.'
 web_attempt_count="$(grep -F -c 'http://local.test/web' "$COMMAND_LOG" || true)"
 [[ "$web_attempt_count" -eq 2 ]] || fail 'Transient web startup regression test did not exercise exactly one retry.'
+
+# Local-smoke readiness regression matrix (staging startup race):
+# a transient connection refusal right after PM2 restart must be recovered by
+# the bounded retries; exhaustion must fail the deployment at local-smoke with
+# NO later public smoke or final verification treated as successful.
+
+# Scenario: a transient ADMIN connection refusal must be recovered by the
+# bounded readiness retries, independently of the Web endpoint.
+make_fixture 'admin-startup-retry'
+git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
+admin_retry_output="$(run_deploy "$FIXTURE_CANDIDATE_SHA" FAKE_ADMIN_CONNECT_FAILURES=1 MAX_HEALTH_ATTEMPTS=2)"
+[[ "$admin_retry_output" == *'STAGING DEPLOYMENT VERIFIED'* ]] || fail 'Transient admin startup failure was not recovered by bounded smoke retries.'
+admin_retry_admin_attempts="$(grep -F -c 'http://local.test/admin' "$COMMAND_LOG" || true)"
+[[ "$admin_retry_admin_attempts" -eq 2 ]] || fail 'Transient admin startup regression test did not exercise exactly one retry.'
+admin_retry_web_attempts="$(grep -F -c 'http://local.test/web' "$COMMAND_LOG" || true)"
+[[ "$admin_retry_web_attempts" -eq 1 ]] || fail 'Admin connection-refusal simulation must be independent of the Web endpoint.'
+
+# Scenario: repeated Web connection refusals through the maximum attempt count
+# must fail the deployment at local-smoke — and nothing after the exhausted
+# local retry (public smoke, AI observation, final verification) may run or be
+# reported as successful.
+make_fixture 'web-smoke-exhausted'
+git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
+if web_exhausted_output="$(run_deploy "$FIXTURE_CANDIDATE_SHA" FAKE_WEB_CONNECT_FAILURES=99 MAX_HEALTH_ATTEMPTS=2 2>&1)"; then
+  fail 'Exhausted local web readiness retries must fail the deployment.'
+fi
+[[ "$web_exhausted_output" == *'failed_stage=local-smoke'* ]] || fail 'Exhausted web readiness retries must fail at the local-smoke stage.'
+[[ "$web_exhausted_output" == *'STAGING DEPLOYMENT FAILED'* ]] || fail 'Exhausted web readiness retries must emit failure evidence.'
+[[ "$web_exhausted_output" != *'STAGING DEPLOYMENT VERIFIED'* ]] || fail 'Exhausted web readiness retries must never be reported as verified.'
+web_exhausted_web_attempts="$(grep -F -c 'http://local.test/web' "$COMMAND_LOG" || true)"
+[[ "$web_exhausted_web_attempts" -eq 2 ]] || fail 'Exhausted web readiness retries must stop exactly at MAX_HEALTH_ATTEMPTS.'
+web_exhausted_admin_attempts="$(grep -F -c 'http://local.test/admin' "$COMMAND_LOG" || true)"
+[[ "$web_exhausted_admin_attempts" -eq 0 ]] || fail 'Web readiness exhaustion must fail before the admin smoke check.'
+if grep -q 'https://public.test' "$COMMAND_LOG"; then
+  fail 'Public smoke must not run after exhausted local web readiness retries.'
+fi
+if grep -q 'ai/health' "$COMMAND_LOG"; then
+  fail 'AI paper-mode observation must not run after exhausted local web readiness retries.'
+fi
+
+# Scenario: repeated Admin connection refusals through the maximum attempt
+# count must fail the deployment at local-smoke, with the web smoke already
+# succeeded and nothing later treated as successful.
+make_fixture 'admin-smoke-exhausted'
+git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
+if admin_exhausted_output="$(run_deploy "$FIXTURE_CANDIDATE_SHA" FAKE_ADMIN_CONNECT_FAILURES=99 MAX_HEALTH_ATTEMPTS=2 2>&1)"; then
+  fail 'Exhausted local admin readiness retries must fail the deployment.'
+fi
+[[ "$admin_exhausted_output" == *'failed_stage=local-smoke'* ]] || fail 'Exhausted admin readiness retries must fail at the local-smoke stage.'
+[[ "$admin_exhausted_output" == *'STAGING DEPLOYMENT FAILED'* ]] || fail 'Exhausted admin readiness retries must emit failure evidence.'
+[[ "$admin_exhausted_output" != *'STAGING DEPLOYMENT VERIFIED'* ]] || fail 'Exhausted admin readiness retries must never be reported as verified.'
+admin_exhausted_admin_attempts="$(grep -F -c 'http://local.test/admin' "$COMMAND_LOG" || true)"
+[[ "$admin_exhausted_admin_attempts" -eq 2 ]] || fail 'Exhausted admin readiness retries must stop exactly at MAX_HEALTH_ATTEMPTS.'
+admin_exhausted_web_attempts="$(grep -F -c 'http://local.test/web' "$COMMAND_LOG" || true)"
+[[ "$admin_exhausted_web_attempts" -eq 1 ]] || fail 'Web smoke must have succeeded exactly once before the exhausted admin retries.'
+if grep -q 'https://public.test' "$COMMAND_LOG"; then
+  fail 'Public smoke must not run after exhausted local admin readiness retries.'
+fi
+if grep -q 'ai/health' "$COMMAND_LOG"; then
+  fail 'AI paper-mode observation must not run after exhausted local admin readiness retries.'
+fi
 
 make_fixture 'successful-deploy'
 git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
