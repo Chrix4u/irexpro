@@ -1,0 +1,204 @@
+name: Staging Node Baseline One-Shot
+
+on:
+  push:
+    branches: [fix/staging-node-release-baseline]
+    paths:
+      - '.github/workflows/staging-node-baseline-one-shot.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: fix/staging-node-release-baseline
+          fetch-depth: 0
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Patch Node release baseline preflight
+        shell: python
+        run: |
+          from pathlib import Path
+
+          deploy_path = Path('scripts/deployment/deploy-staging.sh')
+          deploy = deploy_path.read_text()
+          pin_anchor = 'readonly PNPM_VERSION="10.34.5"\n'
+          pin_replacement = pin_anchor + 'readonly RELEASE_NODE_MAJOR="22"\n'
+          if deploy.count(pin_anchor) != 1:
+              raise SystemExit(f'expected one pnpm pin anchor, found {deploy.count(pin_anchor)}')
+          deploy = deploy.replace(pin_anchor, pin_replacement, 1)
+
+          stage_anchor = (
+              'STAGE="package-manager-verification"\n'
+              'package_manager="$(node -p "require(\'./package.json\').packageManager || \'\'")"\n'
+              '[[ "$package_manager" == "pnpm@${PNPM_VERSION}" ]] || die "Candidate packageManager does not match the approved pnpm version."\n'
+          )
+          stage_replacement = (
+              'STAGE="release-toolchain-verification"\n'
+              'node_major="$(node -p "process.versions.node.split(\'.\')[0]")"\n'
+              '[[ "$node_major" == "$RELEASE_NODE_MAJOR" ]] || die "Node.js major version does not match the verified release baseline (expected ${RELEASE_NODE_MAJOR})."\n'
+              '\n'
+              'STAGE="package-manager-verification"\n'
+              'package_manager="$(node -p "require(\'./package.json\').packageManager || \'\'")"\n'
+              '[[ "$package_manager" == "pnpm@${PNPM_VERSION}" ]] || die "Candidate packageManager does not match the approved pnpm version."\n'
+          )
+          if deploy.count(stage_anchor) != 1:
+              raise SystemExit(f'expected one package-manager verification block, found {deploy.count(stage_anchor)}')
+          deploy = deploy.replace(stage_anchor, stage_replacement, 1)
+          deploy_path.write_text(deploy)
+
+          test_path = Path('scripts/deployment/test-deployment-scripts.sh')
+          test = test_path.read_text()
+          root_anchor = (
+              'ROOT_PACKAGE_MANAGER="$(node -e "const p=require(process.argv[1]); process.stdout.write(p.packageManager || \'\')" "$REPO_ROOT/package.json")"\n'
+              'readonly ROOT_PACKAGE_MANAGER\n'
+              'DEPLOY_PNPM_VERSION="$(sed -n \'s/^readonly PNPM_VERSION="\\([^"\\]*\\)"/\\1/p\' "$SCRIPT_DIR/deploy-staging.sh")"\n'
+              'readonly DEPLOY_PNPM_VERSION\n'
+          )
+          root_replacement = root_anchor + (
+              'REAL_NODE="$(command -v node)"\n'
+              'readonly REAL_NODE\n'
+              'DEPLOY_NODE_MAJOR="$(sed -n \'s/^readonly RELEASE_NODE_MAJOR="\\([^"\\]*\\)"/\\1/p\' "$SCRIPT_DIR/deploy-staging.sh")"\n'
+              'readonly DEPLOY_NODE_MAJOR\n'
+          )
+          if test.count(root_anchor) != 1:
+              raise SystemExit(f'expected one package-manager contract anchor, found {test.count(root_anchor)}')
+          test = test.replace(root_anchor, root_replacement, 1)
+
+          contract_anchor = (
+              '[[ -n "$DEPLOY_PNPM_VERSION" ]] || fail \'deploy-staging.sh must declare PNPM_VERSION.\'\n'
+              '[[ "$ROOT_PACKAGE_MANAGER" == "pnpm@${DEPLOY_PNPM_VERSION}" ]] || fail "Deployment pnpm pin (${DEPLOY_PNPM_VERSION}) does not match root packageManager (${ROOT_PACKAGE_MANAGER})."\n'
+          )
+          contract_replacement = contract_anchor + (
+              '[[ -n "$REAL_NODE" ]] || fail \'Node.js must be available to run deployment safety tests.\'\n'
+              '[[ -n "$DEPLOY_NODE_MAJOR" ]] || fail \'deploy-staging.sh must declare RELEASE_NODE_MAJOR.\'\n'
+              '[[ "$("$REAL_NODE" -p "process.versions.node.split(\'.\')[0]")" == "$DEPLOY_NODE_MAJOR" ]] || fail "Deployment Node major (${DEPLOY_NODE_MAJOR}) does not match the CI validation runtime."\n'
+          )
+          if test.count(contract_anchor) != 1:
+              raise SystemExit(f'expected one contract assertion anchor, found {test.count(contract_anchor)}')
+          test = test.replace(contract_anchor, contract_replacement, 1)
+
+          shim_anchor = "  cat > \"$FAKE_BIN/corepack\" <<'SHIM'\n"
+          node_shim = (
+              "  cat > \"$FAKE_BIN/node\" <<'SHIM'\n"
+              "#!/usr/bin/env bash\n"
+              "set -Eeuo pipefail\n"
+              "if [[ -n \"${FAKE_NODE_MAJOR:-}\" && \"${1:-}\" == '-p' && \"${2:-}\" == \"process.versions.node.split('.')[0]\" ]]; then\n"
+              "  printf '%s\\n' \"$FAKE_NODE_MAJOR\"\n"
+              "  exit 0\n"
+              "fi\n"
+              "exec \"$REAL_NODE\" \"$@\"\n"
+              "SHIM\n\n"
+              + shim_anchor
+          )
+          if test.count(shim_anchor) != 1:
+              raise SystemExit(f'expected one corepack shim anchor, found {test.count(shim_anchor)}')
+          test = test.replace(shim_anchor, node_shim, 1)
+
+          chmod_anchor = '  chmod 700 "$FAKE_BIN/corepack" "$FAKE_BIN/pm2" "$FAKE_BIN/curl"\n'
+          chmod_replacement = '  chmod 700 "$FAKE_BIN/node" "$FAKE_BIN/corepack" "$FAKE_BIN/pm2" "$FAKE_BIN/curl"\n'
+          if test.count(chmod_anchor) != 1:
+              raise SystemExit(f'expected one chmod anchor, found {test.count(chmod_anchor)}')
+          test = test.replace(chmod_anchor, chmod_replacement, 1)
+
+          env_anchor = (
+              '    PATH="$FAKE_BIN:$PATH" \\\n'
+              '    COMMAND_LOG="$COMMAND_LOG" \\\n'
+          )
+          env_replacement = (
+              '    PATH="$FAKE_BIN:$PATH" \\\n'
+              '    REAL_NODE="$REAL_NODE" \\\n'
+              '    COMMAND_LOG="$COMMAND_LOG" \\\n'
+          )
+          if test.count(env_anchor) != 2:
+              raise SystemExit(f'expected run env anchor twice, found {test.count(env_anchor)}')
+          test = test.replace(env_anchor, env_replacement)
+
+          mismatch_anchor = (
+              "make_fixture 'build-failure'\n"
+              'git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"\n'
+          )
+          mismatch_test = (
+              "make_fixture 'node-major-mismatch'\n"
+              'git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"\n'
+              'expect_failure \'Node.js major version does not match the verified release baseline\' run_deploy "$FIXTURE_CANDIDATE_SHA" FAKE_NODE_MAJOR=20\n'
+              '[[ ! -s "$COMMAND_LOG" ]] || fail \'Node-major rejection must happen before install/build/restart commands.\'\n'
+              '\n'
+              + mismatch_anchor
+          )
+          if test.count(mismatch_anchor) != 1:
+              raise SystemExit(f'expected one build-failure anchor, found {test.count(mismatch_anchor)}')
+          test = test.replace(mismatch_anchor, mismatch_test, 1)
+          test_path.write_text(test)
+
+          docs_path = Path('docs/operations/staging-deployment.md')
+          docs = docs_path.read_text()
+          prerequisite = '3. The staging checkout has the approved `Chrix4u/irexpro` origin and a clean working tree.\n'
+          prerequisite_replacement = prerequisite + '4. The staging host is running the verified release baseline, currently Node.js 22.x; broad application compatibility (`node >=20`) does not replace this release preflight.\n'
+          if docs.count(prerequisite) != 1:
+              raise SystemExit(f'expected one prerequisite anchor, found {docs.count(prerequisite)}')
+          docs = docs.replace(prerequisite, prerequisite_replacement, 1)
+          for old, new in [('4. Required staging environment configuration', '5. Required staging environment configuration'), ('5. PM2 process names', '6. PM2 process names'), ('6. A previously verified rollback SHA', '7. A previously verified rollback SHA'), ('7. Database backup/restore', '8. Database backup/restore')]:
+              if docs.count(old) != 1:
+                  raise SystemExit(f'expected one numbered prerequisite fragment {old!r}, found {docs.count(old)}')
+              docs = docs.replace(old, new, 1)
+
+          sequence_anchor = '5. installs dependencies through the repository-declared pnpm version using a frozen lockfile;\n'
+          sequence_replacement = (
+              '5. verifies the host Node.js major matches the explicit release baseline (currently 22) and the candidate `packageManager` matches the approved pnpm version;\n'
+              '6. installs dependencies through the repository-declared pnpm version using a frozen lockfile;\n'
+          )
+          if docs.count(sequence_anchor) != 1:
+              raise SystemExit(f'expected one deploy sequence anchor, found {docs.count(sequence_anchor)}')
+          docs = docs.replace(sequence_anchor, sequence_replacement, 1)
+          for old, new in [('6. builds API', '7. builds API'), ('7. restarts API first', '8. restarts API first'), ('8. requires local API', '9. requires local API'), ('9. restarts Web and Admin', '10. restarts Web and Admin'), ('10. requires local and public', '11. requires local and public'), ('11. optionally observes AI', '12. optionally observes AI'), ('12. re-verifies the final', '13. re-verifies the final')]:
+              if docs.count(old) != 1:
+                  raise SystemExit(f'expected one sequence fragment {old!r}, found {docs.count(old)}')
+              docs = docs.replace(old, new, 1)
+
+          regression_anchor = 'The regression suite covers malformed/bad SHA input, dirty-worktree rejection, unexpected or stale-owner origin rejection, build failure before runtime mutation, API readiness failure before Web/Admin restart, successful exact-SHA deployment, and exact-SHA rollback verification.\n'
+          regression_replacement = 'The regression suite covers malformed/bad SHA input, dirty-worktree rejection, unexpected or stale-owner origin rejection, Node release-major mismatch before install/build/runtime mutation, package-manager contract integrity, build failure before runtime mutation, API readiness failure before Web/Admin restart, successful exact-SHA deployment, and exact-SHA rollback verification.\n'
+          if docs.count(regression_anchor) != 1:
+              raise SystemExit(f'expected one regression coverage sentence, found {docs.count(regression_anchor)}')
+          docs = docs.replace(regression_anchor, regression_replacement, 1)
+          docs_path.write_text(docs)
+
+      - name: Check shell syntax
+        run: bash -n scripts/deployment/*.sh
+
+      - name: Run deployment safety regression suite
+        run: bash scripts/deployment/test-deployment-scripts.sh
+
+      - name: Verify Node mismatch test is fail-closed before mutation
+        run: |
+          grep -Fq 'RELEASE_NODE_MAJOR="22"' scripts/deployment/deploy-staging.sh
+          grep -Fq "FAKE_NODE_MAJOR=20" scripts/deployment/test-deployment-scripts.sh
+          grep -Fq 'Node release-major mismatch before install/build/runtime mutation' docs/operations/staging-deployment.md
+
+      - name: Verify diff
+        run: git diff --check
+
+      - name: Commit verified correction and remove helper
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm .github/workflows/staging-node-baseline-one-shot.yml
+          git add scripts/deployment/deploy-staging.sh \
+                  scripts/deployment/test-deployment-scripts.sh \
+                  docs/operations/staging-deployment.md \
+                  .github/workflows/staging-node-baseline-one-shot.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: enforce Node 22 staging release baseline'
+          git push origin HEAD:fix/staging-node-release-baseline
