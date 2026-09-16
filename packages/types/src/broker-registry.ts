@@ -67,8 +67,9 @@ export type BrokerAuthenticationType = 'API_TOKEN' | 'OAUTH' | 'SESSION_AUTH';
  *
  * BETA ≠ production-LIVE: a BETA status only means the adapter is
  * implemented + contract-tested. VERIFIED here is the separate
- * operator-attested evidence that gates LIVE execution (fail-closed
- * otherwise). `evidenceRef` is a doc/ticket reference — never secrets.
+ * operator-attested evidence record; the runtime additionally requires a
+ * complete current HARNESS_CERTIFIED record before production LIVE is
+ * authorized. `evidenceRef` is a doc/ticket reference — never secrets.
  */
 export interface BrokerProductionLiveVerification {
   status: 'UNVERIFIED' | 'VERIFIED';
@@ -88,21 +89,45 @@ export interface BrokerProductionLiveVerification {
 }
 
 /**
- * Round 7.1 (P0-3): the truthful, derived certification state for UI
- * display — distinguishes legacy verification from current protocol
- * certification. CERTIFICATION_PENDING / EVIDENCE_PERSISTENCE_FAILED are
- * run-level outcomes (harness evidence), NOT catalog states.
+ * Round 7.1 (P0-3): the truthful, derived certification state for UI and
+ * runtime interpretation. CERTIFICATION_PENDING /
+ * EVIDENCE_PERSISTENCE_FAILED are run-level outcomes (harness evidence), NOT
+ * catalog states.
  */
 export type ProviderCertificationState = 'NOT_CERTIFIED' | 'LEGACY_VERIFIED' | 'CERTIFIED';
 
-/** Derive the display state (mirror of the API-side derivation). */
+/**
+ * Derive the display/runtime state (mirror of the API-side derivation).
+ * A HARNESS_CERTIFIED label by itself is insufficient: CERTIFIED requires a
+ * parseable verification timestamp, non-empty evidence reference, and a
+ * valid UUIDv4 + SHA-256 run reference.
+ */
 export function deriveProviderCertificationState(
   verification: BrokerProductionLiveVerification | undefined | null,
 ): ProviderCertificationState {
   if (!verification || verification.status !== 'VERIFIED') {
     return 'NOT_CERTIFIED';
   }
-  return verification.certifiedVia === 'HARNESS_CERTIFIED' ? 'CERTIFIED' : 'LEGACY_VERIFIED';
+  if (verification.certifiedVia !== 'HARNESS_CERTIFIED') {
+    return 'LEGACY_VERIFIED';
+  }
+
+  const verifiedAt = verification.verifiedAt?.trim() ?? '';
+  const evidenceRef = verification.evidenceRef?.trim() ?? '';
+  const certificationRunRef = verification.certificationRunRef?.trim() ?? '';
+  const runRefPattern =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}@sha256:[0-9a-f]{64}$/i;
+
+  if (
+    !verifiedAt ||
+    Number.isNaN(Date.parse(verifiedAt)) ||
+    !evidenceRef ||
+    !runRefPattern.test(certificationRunRef)
+  ) {
+    return 'NOT_CERTIFIED';
+  }
+
+  return 'CERTIFIED';
 }
 
 export interface BrokerRegistryEntry {
