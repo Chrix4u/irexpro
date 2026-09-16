@@ -50,6 +50,8 @@ const WORKFLOW_RULES = [
       'docs/operations/staging-deployment.md',
       'package.json',
       '.github/workflows/deployment-script-safety.yml',
+      '.github/workflows/main-staging-release-gate.yml',
+      '.github/workflows/staging-deploy.yml',
     ],
   },
   {
@@ -146,6 +148,16 @@ export function runSelfTests() {
     requiredWorkflowNames(['scripts/deployment/deploy-staging.sh']),
     ['Release Security', 'Deployment Script Safety'],
     'deployment change',
+  );
+  assertEqual(
+    requiredWorkflowNames(['.github/workflows/main-staging-release-gate.yml']),
+    ['Release Security', 'Deployment Script Safety'],
+    'main staging release workflow change',
+  );
+  assertEqual(
+    requiredWorkflowNames(['.github/workflows/staging-deploy.yml']),
+    ['Release Security', 'Deployment Script Safety'],
+    'staging deploy workflow change',
   );
   assertEqual(
     requiredWorkflowNames(['infrastructure/nginx/irexpro.conf']),
