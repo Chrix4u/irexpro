@@ -60,6 +60,7 @@ jobs:
           bash scripts/deployment/test-deployment-scripts.sh
           bash scripts/deployment/test-rollback-origin-provenance.sh
           bash scripts/deployment/test-health-contract.sh
+          bash scripts/deployment/test-staging-cd-bootstrap.sh
 
       - name: Test exact-main staging release gate policy
         run: node scripts/deployment/main-staging-release-gate.mjs --self-test
