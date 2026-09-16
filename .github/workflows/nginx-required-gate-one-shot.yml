@@ -33,43 +33,47 @@ jobs:
 
           gate_path = Path('scripts/security/required-ci-gate.mjs')
           gate = gate_path.read_text()
-          deployment_rule = """  {
-    name: 'Deployment Script Safety',
-    patterns: [
-      'scripts/deployment/**',
-      'docs/operations/staging-deployment.md',
-      '.github/workflows/deployment-script-safety.yml',
-    ],
-  },
-"""
-          nginx_rule = deployment_rule + """  {
-    name: 'Nginx Security Policy',
-    patterns: [
-      'infrastructure/nginx/**',
-      'scripts/security/check-nginx-security-headers.mjs',
-      'docs/runbooks/realtime-ingress-security.md',
-      'docs/runbooks/reverse-proxy-client-ip-trust.md',
-      'docs/runbooks/production-deployment-vps-webuzo.md',
-      '.github/workflows/nginx-security-policy.yml',
-    ],
-  },
-"""
+          deployment_rule = (
+              "  {\n"
+              "    name: 'Deployment Script Safety',\n"
+              "    patterns: [\n"
+              "      'scripts/deployment/**',\n"
+              "      'docs/operations/staging-deployment.md',\n"
+              "      '.github/workflows/deployment-script-safety.yml',\n"
+              "    ],\n"
+              "  },\n"
+          )
+          nginx_rule = deployment_rule + (
+              "  {\n"
+              "    name: 'Nginx Security Policy',\n"
+              "    patterns: [\n"
+              "      'infrastructure/nginx/**',\n"
+              "      'scripts/security/check-nginx-security-headers.mjs',\n"
+              "      'docs/runbooks/realtime-ingress-security.md',\n"
+              "      'docs/runbooks/reverse-proxy-client-ip-trust.md',\n"
+              "      'docs/runbooks/production-deployment-vps-webuzo.md',\n"
+              "      '.github/workflows/nginx-security-policy.yml',\n"
+              "    ],\n"
+              "  },\n"
+          )
           if gate.count(deployment_rule) != 1:
               raise SystemExit(f'expected one deployment gate rule, found {gate.count(deployment_rule)}')
           gate = gate.replace(deployment_rule, nginx_rule, 1)
 
-          deployment_test = """  assertEqual(
-    requiredWorkflowNames(['scripts/deployment/deploy-staging.sh']),
-    ['Release Security', 'Deployment Script Safety'],
-    'deployment change',
-  );
-"""
-          nginx_test = deployment_test + """  assertEqual(
-    requiredWorkflowNames(['infrastructure/nginx/irexpro.conf']),
-    ['Release Security', 'Nginx Security Policy'],
-    'nginx security change',
-  );
-"""
+          deployment_test = (
+              "  assertEqual(\n"
+              "    requiredWorkflowNames(['scripts/deployment/deploy-staging.sh']),\n"
+              "    ['Release Security', 'Deployment Script Safety'],\n"
+              "    'deployment change',\n"
+              "  );\n"
+          )
+          nginx_test = deployment_test + (
+              "  assertEqual(\n"
+              "    requiredWorkflowNames(['infrastructure/nginx/irexpro.conf']),\n"
+              "    ['Release Security', 'Nginx Security Policy'],\n"
+              "    'nginx security change',\n"
+              "  );\n"
+          )
           if gate.count(deployment_test) != 1:
               raise SystemExit(f'expected one deployment self-test, found {gate.count(deployment_test)}')
           gate = gate.replace(deployment_test, nginx_test, 1)
@@ -77,32 +81,36 @@ jobs:
 
           drift_path = Path('scripts/security/check-required-ci-trigger-drift.mjs')
           drift = drift_path.read_text()
-          deployment_mapping = """  [
-    'Deployment Script Safety',
-    '.github/workflows/deployment-script-safety.yml',
-  ],
-"""
-          nginx_mapping = deployment_mapping + """  ['Nginx Security Policy', '.github/workflows/nginx-security-policy.yml'],
-"""
+          deployment_mapping = (
+              "  [\n"
+              "    'Deployment Script Safety',\n"
+              "    '.github/workflows/deployment-script-safety.yml',\n"
+              "  ],\n"
+          )
+          nginx_mapping = deployment_mapping + (
+              "  ['Nginx Security Policy', '.github/workflows/nginx-security-policy.yml'],\n"
+          )
           if drift.count(deployment_mapping) != 1:
               raise SystemExit(f'expected one deployment workflow mapping, found {drift.count(deployment_mapping)}')
           drift = drift.replace(deployment_mapping, nginx_mapping, 1)
 
-          mobile_assertions = """  assert(WORKFLOW_FILES.has('Mobile CI'), 'required workflow registry must include Mobile CI');
-  assert(
-    WORKFLOW_FILES.get('Mobile CI') === '.github/workflows/mobile-ci.yml',
-    'Mobile CI workflow mapping must remain canonical',
-  );
-"""
-          expanded_assertions = mobile_assertions + """  assert(
-    WORKFLOW_FILES.has('Nginx Security Policy'),
-    'required workflow registry must include Nginx Security Policy',
-  );
-  assert(
-    WORKFLOW_FILES.get('Nginx Security Policy') === '.github/workflows/nginx-security-policy.yml',
-    'Nginx Security Policy workflow mapping must remain canonical',
-  );
-"""
+          mobile_assertions = (
+              "  assert(WORKFLOW_FILES.has('Mobile CI'), 'required workflow registry must include Mobile CI');\n"
+              "  assert(\n"
+              "    WORKFLOW_FILES.get('Mobile CI') === '.github/workflows/mobile-ci.yml',\n"
+              "    'Mobile CI workflow mapping must remain canonical',\n"
+              "  );\n"
+          )
+          expanded_assertions = mobile_assertions + (
+              "  assert(\n"
+              "    WORKFLOW_FILES.has('Nginx Security Policy'),\n"
+              "    'required workflow registry must include Nginx Security Policy',\n"
+              "  );\n"
+              "  assert(\n"
+              "    WORKFLOW_FILES.get('Nginx Security Policy') === '.github/workflows/nginx-security-policy.yml',\n"
+              "    'Nginx Security Policy workflow mapping must remain canonical',\n"
+              "  );\n"
+          )
           if drift.count(mobile_assertions) != 1:
               raise SystemExit(f'expected one workflow registry assertion block, found {drift.count(mobile_assertions)}')
           drift = drift.replace(mobile_assertions, expanded_assertions, 1)
