@@ -125,9 +125,10 @@ SHIM
 set -Eeuo pipefail
 printf 'curl %s\n' "$*" >> "$COMMAND_LOG"
 url="${*: -1}"
-if [[ "$url" == 'http://local.test/web' && "${FAKE_WEB_CONNECT_FAILURES:-0}" =~ ^[0-9]+$ ]]; then
+web_failures="${FAKE_WEB_CONNECT_FAILURES:-0}"
+if [[ "$url" == 'http://local.test/web' && "$web_failures" =~ ^[0-9]+$ ]]; then
   web_attempts="$(grep -F -c 'http://local.test/web' "$COMMAND_LOG" || true)"
-  if (( web_attempts <= FAKE_WEB_CONNECT_FAILURES )); then
+  if (( web_attempts <= web_failures )); then
     printf 'simulated connection refused\n' >&2
     exit 7
   fi
