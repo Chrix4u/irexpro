@@ -630,3 +630,44 @@ What the completion layer adds ON TOP of the unified authority chain:
   provenance (migration 1754400000000; AI decision → intent → grant →
   order → provider dispatch → outcome → reconciliation is reconstructible
   by direct ids).
+
+---
+
+## Round 7 — production-LIVE certification program (2026-09)
+
+Round 7 added the missing producer side of the level-3 evidence program and
+closed the P0/P1 code gaps the production-live audit found. Verification
+TRUTH IS UNCHANGED for every route (one MetaApi attestation retained;
+everything else honestly UNVERIFIED) — what changed is that the evidence now
+has a producing tool and an exact protocol:
+
+- **`docs/brokers/production-live-certification.md`** — the authoritative
+  LIVE certification protocol: the `IREXPRO_ALLOW_LIVE_CERTIFICATION` gate,
+  the 16-stage checklist (ending in `VERIFY_ZERO_UNEXPECTED_OPEN_EXPOSURE`),
+  provider-minimum-capped canary sizing (never AI-derived), sanitized
+  evidence artifacts + operator identity, the only legitimate path to flip a
+  catalog entry to VERIFIED (and the fail-closed downgrade path), and the
+  broker-by-broker honest state table.
+- **`provider-live-certification-harness.ts`** — the operator-only engine
+  implementing that protocol (DEMO harness + its contract untouched); env-
+  gated operator entry points for MetaApi/OANDA/cTrader
+  (`*.live-certification.spec.ts`, describe.skip without gate+credentials);
+  always-on machinery suite proves the gate/cap/sizing/classification/
+  zero-unexpected-exposure disciplines with fake adapters. CI remains
+  credential-free and gate-closed.
+- **MetaApi hardening (VERIFIED route):** declared-vs-observed account-
+  environment enforcement at connect AND health check (a LIVE account
+  declared DEMO is a fail-closed CRITICAL event — previously it sailed to
+  AUTHORIZED + demoValidated and executed real money under DEMO semantics);
+  per-symbol `getSymbolSpecification` geometry (the hardcoded
+  contractSize=100000/digits=5-for-every-symbol fabrication is gone —
+  unprovable symbols are omitted); pending-order cancellation added.
+- **OANDA code gaps closed toward (not into) verification:** pending-order
+  cancellation (`PUT /orders/{id}/cancel`) and the Phase-7c crash-window
+  echo alignment (`clientExtensions.id = clientOrderId` — the provider-echo
+  recovery can now match; previously every OANDA crash-window order was
+  permanently RECONCILIATION_PENDING). LIVE stays UNVERIFIED — an operator
+  certification run under the protocol above is the remaining path.
+- **cTrader family:** engine, OAuth lifecycle, and host separation were
+  already production-grade; the remaining LIVE blocker is EXTERNAL (Spotware
+  partner approval + per-broker real-account approval) and unchanged.
