@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 TMP_ROOT="$(mktemp -d)"
 readonly TMP_ROOT
-readonly EXPECTED_HTTPS_ORIGIN="https://github.com/christianagbotah/irexpro.git"
+readonly EXPECTED_HTTPS_ORIGIN="https://github.com/Chrix4u/irexpro.git"
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
 FIXTURE_REPO=""
@@ -33,7 +33,7 @@ expect_failure() {
 make_fixture() {
   local name="$1"
   local root="$TMP_ROOT/$name"
-  local remote="$root/remotes/christianagbotah/irexpro.git"
+  local remote="$root/remotes/Chrix4u/irexpro.git"
   local repo="$root/repo"
 
   mkdir -p "$(dirname "$remote")" "$repo/scripts/deployment"
@@ -196,9 +196,15 @@ expect_failure 'Working tree is not clean' run_deploy "$FIXTURE_CANDIDATE_SHA"
 
 make_fixture 'unexpected-origin'
 git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
-git -C "$FIXTURE_REPO" remote set-url origin 'https://github.com/christianagbotah/irexpro-lookalike.git'
+git -C "$FIXTURE_REPO" remote set-url origin 'https://github.com/Chrix4u/irexpro-lookalike.git'
 expect_failure 'Unexpected origin repository' run_deploy "$FIXTURE_CANDIDATE_SHA"
 [[ ! -s "$COMMAND_LOG" ]] || fail 'Unexpected-origin rejection must happen before install/build/restart commands.'
+
+make_fixture 'stale-owner-origin'
+git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
+git -C "$FIXTURE_REPO" remote set-url origin 'https://github.com/christianagbotah/irexpro.git'
+expect_failure 'Unexpected origin repository' run_deploy "$FIXTURE_CANDIDATE_SHA"
+[[ ! -s "$COMMAND_LOG" ]] || fail 'Stale-owner origin rejection must happen before install/build/restart commands.'
 
 make_fixture 'build-failure'
 git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
