@@ -8,6 +8,8 @@ on:
       - 'docs/operations/staging-deployment.md'
       - 'package.json'
       - '.github/workflows/deployment-script-safety.yml'
+      - '.github/workflows/main-staging-release-gate.yml'
+      - '.github/workflows/staging-deploy.yml'
   push:
     branches: [main]
     paths:
@@ -15,6 +17,8 @@ on:
       - 'docs/operations/staging-deployment.md'
       - 'package.json'
       - '.github/workflows/deployment-script-safety.yml'
+      - '.github/workflows/main-staging-release-gate.yml'
+      - '.github/workflows/staging-deploy.yml'
 
 permissions:
   contents: read
@@ -51,5 +55,11 @@ jobs:
       - name: Run ShellCheck
         run: shellcheck scripts/deployment/*.sh
 
-      - name: Run safety regression tests
-        run: bash scripts/deployment/test-deployment-scripts.sh
+      - name: Run deployment safety regression tests
+        run: |
+          bash scripts/deployment/test-deployment-scripts.sh
+          bash scripts/deployment/test-rollback-origin-provenance.sh
+          bash scripts/deployment/test-health-contract.sh
+
+      - name: Test exact-main staging release gate policy
+        run: node scripts/deployment/main-staging-release-gate.mjs --self-test
