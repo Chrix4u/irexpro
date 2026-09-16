@@ -52,6 +52,17 @@ const WORKFLOW_RULES = [
     ],
   },
   {
+    name: 'Nginx Security Policy',
+    patterns: [
+      'infrastructure/nginx/**',
+      'scripts/security/check-nginx-security-headers.mjs',
+      'docs/runbooks/realtime-ingress-security.md',
+      'docs/runbooks/reverse-proxy-client-ip-trust.md',
+      'docs/runbooks/production-deployment-vps-webuzo.md',
+      '.github/workflows/nginx-security-policy.yml',
+    ],
+  },
+  {
     name: 'UI E2E',
     patterns: [
       'apps/web/**',
@@ -134,6 +145,11 @@ export function runSelfTests() {
     requiredWorkflowNames(['scripts/deployment/deploy-staging.sh']),
     ['Release Security', 'Deployment Script Safety'],
     'deployment change',
+  );
+  assertEqual(
+    requiredWorkflowNames(['infrastructure/nginx/irexpro.conf']),
+    ['Release Security', 'Nginx Security Policy'],
+    'nginx security change',
   );
   assertEqual(
     requiredWorkflowNames(['apps/web/src/app/page.tsx']),

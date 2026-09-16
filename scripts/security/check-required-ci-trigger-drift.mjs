@@ -18,6 +18,7 @@ export const WORKFLOW_FILES = new Map([
     'Deployment Script Safety',
     '.github/workflows/deployment-script-safety.yml',
   ],
+  ['Nginx Security Policy', '.github/workflows/nginx-security-policy.yml'],
   ['UI E2E', '.github/workflows/web-e2e.yml'],
   ['Mobile CI', '.github/workflows/mobile-ci.yml'],
 ]);
@@ -203,6 +204,14 @@ export function runSelfTests() {
   assert(
     WORKFLOW_FILES.get('Mobile CI') === '.github/workflows/mobile-ci.yml',
     'Mobile CI workflow mapping must remain canonical',
+  );
+  assert(
+    WORKFLOW_FILES.has('Nginx Security Policy'),
+    'required workflow registry must include Nginx Security Policy',
+  );
+  assert(
+    WORKFLOW_FILES.get('Nginx Security Policy') === '.github/workflows/nginx-security-policy.yml',
+    'Nginx Security Policy workflow mapping must remain canonical',
   );
 
   console.log('Required CI trigger drift guard self-tests passed.');
