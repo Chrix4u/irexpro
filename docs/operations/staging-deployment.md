@@ -12,7 +12,7 @@ Before deployment, verify all of the following:
 
 1. The candidate is a full 40-character lowercase Git commit SHA from `origin/main`.
 2. The candidate PR was reviewed and all required exact-head CI/security checks passed.
-3. The staging checkout has the approved `christianagbotah/irexpro` origin and a clean working tree.
+3. The staging checkout has the approved `Chrix4u/irexpro` origin and a clean working tree.
 4. Required staging environment configuration already exists outside Git. Do not paste secrets into shell history, tickets, PRs, or evidence notes.
 5. PM2 process names and local/public health URLs are supplied through the operator environment.
 6. A previously verified rollback SHA is recorded before runtime mutation.
@@ -105,7 +105,7 @@ If rollback verification fails, keep the incident open and follow the incident-r
 
 The workflow contains no SSH step, VPS hostname, deployment credential, environment secret, or staging mutation command. It cannot deploy to the staging server.
 
-The regression suite covers malformed/bad SHA input, dirty-worktree rejection, unexpected origin rejection, build failure before runtime mutation, API readiness failure before Web/Admin restart, successful exact-SHA deployment, and exact-SHA rollback verification.
+The regression suite covers malformed/bad SHA input, dirty-worktree rejection, unexpected or stale-owner origin rejection, build failure before runtime mutation, API readiness failure before Web/Admin restart, successful exact-SHA deployment, and exact-SHA rollback verification.
 
 ## Evidence to retain
 
