@@ -6,6 +6,7 @@ readonly EXPECTED_HTTPS_ORIGIN="https://github.com/Chrix4u/irexpro.git"
 readonly EXPECTED_SSH_ORIGIN="git@github.com:Chrix4u/irexpro.git"
 readonly EXPECTED_SSH_URL_ORIGIN="ssh://git@github.com/Chrix4u/irexpro.git"
 readonly PNPM_VERSION="10.34.5"
+readonly RELEASE_NODE_MAJOR="22"
 readonly MAX_HEALTH_ATTEMPTS="${MAX_HEALTH_ATTEMPTS:-30}"
 readonly HEALTH_RETRY_SECONDS="${HEALTH_RETRY_SECONDS:-2}"
 readonly ADMIN_EXPECTED_STATUSES="${ADMIN_EXPECTED_STATUSES:-200,302,303,307,308,401,403}"
@@ -149,6 +150,10 @@ git merge-base --is-ancestor "$CANDIDATE_SHA" origin/main || die "Candidate is n
 git switch --quiet --detach "$CANDIDATE_SHA"
 [[ "$(git rev-parse HEAD)" == "$CANDIDATE_SHA" ]] || die "Exact candidate checkout failed."
 [[ -z "$(git status --porcelain)" ]] || die "Exact candidate checkout is not clean."
+
+STAGE="release-toolchain-verification"
+node_major="$(node -p "process.versions.node.split('.')[0]")"
+[[ "$node_major" == "$RELEASE_NODE_MAJOR" ]] || die "Node.js major version does not match the verified release baseline (expected ${RELEASE_NODE_MAJOR})."
 
 STAGE="package-manager-verification"
 package_manager="$(node -p "require('./package.json').packageManager || ''")"

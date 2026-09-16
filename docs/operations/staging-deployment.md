@@ -13,10 +13,11 @@ Before deployment, verify all of the following:
 1. The candidate is a full 40-character lowercase Git commit SHA from `origin/main`.
 2. The candidate PR was reviewed and all required exact-head CI/security checks passed.
 3. The staging checkout has the approved `Chrix4u/irexpro` origin and a clean working tree.
-4. Required staging environment configuration already exists outside Git. Do not paste secrets into shell history, tickets, PRs, or evidence notes.
-5. PM2 process names and local/public health URLs are supplied through the operator environment.
-6. A previously verified rollback SHA is recorded before runtime mutation.
-7. Database backup/restore and secret-rotation prerequisites from the operational security runbook are satisfied when the release requires them.
+4. The staging host is running the verified release baseline, currently Node.js 22.x; broad application compatibility (`node >=20`) does not replace this release preflight.
+5. Required staging environment configuration already exists outside Git. Do not paste secrets into shell history, tickets, PRs, or evidence notes.
+6. PM2 process names and local/public health URLs are supplied through the operator environment.
+7. A previously verified rollback SHA is recorded before runtime mutation.
+8. Database backup/restore and secret-rotation prerequisites from the operational security runbook are satisfied when the release requires them.
 
 ## Required configuration
 
@@ -56,14 +57,15 @@ The script performs the following sequence:
 2. records the current SHA as rollback evidence;
 3. fetches `origin/main` and proves the immutable candidate SHA is contained in it;
 4. switches to the exact detached candidate SHA and verifies it;
-5. installs dependencies through the repository-declared pnpm version using a frozen lockfile;
-6. builds API, Web, and Admin before any runtime mutation;
-7. restarts API first;
-8. requires local API liveness, readiness, database/Redis readiness, and aggregate health;
-9. restarts Web and Admin only after API readiness passes;
-10. requires local and public smoke checks;
-11. optionally observes AI health and fails unless it explicitly reports paper mode;
-12. re-verifies the final Git SHA and emits a timestamped, secret-safe summary.
+5. verifies the host Node.js major matches the explicit release baseline (currently 22) and the candidate `packageManager` matches the approved pnpm version;
+6. installs dependencies through the repository-declared pnpm version using a frozen lockfile;
+7. builds API, Web, and Admin before any runtime mutation;
+8. restarts API first;
+9. requires local API liveness, readiness, database/Redis readiness, and aggregate health;
+10. restarts Web and Admin only after API readiness passes;
+11. requires local and public smoke checks;
+12. optionally observes AI health and fails unless it explicitly reports paper mode;
+13. re-verifies the final Git SHA and emits a timestamped, secret-safe summary.
 
 The script does not restart or modify the AI service.
 
@@ -105,7 +107,7 @@ If rollback verification fails, keep the incident open and follow the incident-r
 
 The workflow contains no SSH step, VPS hostname, deployment credential, environment secret, or staging mutation command. It cannot deploy to the staging server.
 
-The regression suite covers malformed/bad SHA input, dirty-worktree rejection, unexpected or stale-owner origin rejection, build failure before runtime mutation, API readiness failure before Web/Admin restart, successful exact-SHA deployment, and exact-SHA rollback verification.
+The regression suite covers malformed/bad SHA input, dirty-worktree rejection, unexpected or stale-owner origin rejection, Node release-major mismatch before install/build/runtime mutation, package-manager contract integrity, build failure before runtime mutation, API readiness failure before Web/Admin restart, successful exact-SHA deployment, and exact-SHA rollback verification.
 
 ## Evidence to retain
 
