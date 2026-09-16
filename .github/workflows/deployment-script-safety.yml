@@ -6,12 +6,14 @@ on:
     paths:
       - 'scripts/deployment/**'
       - 'docs/operations/staging-deployment.md'
+      - 'package.json'
       - '.github/workflows/deployment-script-safety.yml'
   push:
     branches: [main]
     paths:
       - 'scripts/deployment/**'
       - 'docs/operations/staging-deployment.md'
+      - 'package.json'
       - '.github/workflows/deployment-script-safety.yml'
 
 permissions:
