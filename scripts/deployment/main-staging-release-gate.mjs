@@ -57,6 +57,30 @@ async function assertCurrentMain(repository, candidateSha, token, apiUrl) {
   }
 }
 
+async function assertMergedPullRequestProvenance(repository, candidateSha, token, apiUrl) {
+  const pullRequests = await githubJson(
+    `/repos/${repository}/commits/${candidateSha}/pulls?per_page=100`,
+    token,
+    apiUrl,
+  );
+  const mergedIntoMain = pullRequests.filter(
+    (pullRequest) =>
+      pullRequest.state === 'closed' &&
+      Boolean(pullRequest.merged_at) &&
+      pullRequest.base?.ref === 'main',
+  );
+
+  if (mergedIntoMain.length === 0) {
+    throw new Error(
+      `Staging release candidate ${candidateSha} is not associated with a merged pull request targeting main; direct/unprovenanced main pushes are not deployable`,
+    );
+  }
+
+  console.log(
+    `Merged PR provenance: ${mergedIntoMain.map((pullRequest) => `#${pullRequest.number}`).join(', ')}`,
+  );
+}
+
 async function resolveBeforeSha(repository, candidateSha, token, apiUrl) {
   const supplied = process.env.BEFORE_SHA?.trim() ?? '';
   if (supplied && !ZERO_SHA.test(supplied)) {
@@ -150,6 +174,7 @@ export async function runMainStagingReleaseGate() {
 
   assertFullSha(candidateSha, 'CANDIDATE_SHA');
   await assertCurrentMain(repository, candidateSha, token, apiUrl);
+  await assertMergedPullRequestProvenance(repository, candidateSha, token, apiUrl);
 
   const beforeSha = await resolveBeforeSha(repository, candidateSha, token, apiUrl);
   const changedPaths = await listChangedFiles(repository, beforeSha, candidateSha, token, apiUrl);
