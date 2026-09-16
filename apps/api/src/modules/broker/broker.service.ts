@@ -653,7 +653,7 @@ export class BrokerService {
             error: failureError,
             // Round 7 (P0): typed machine code — the provider CONTRADICTED the
             // declared environment (e.g. a LIVE MetaApi account labeled DEMO).
-            ...(environmentMismatch
+            ...(environmentMismatch.mismatch
               ? {
                   failureCode: 'ACCOUNT_TYPE_MISMATCH',
                   declaredAccountType: connection.accountType,
@@ -662,7 +662,7 @@ export class BrokerService {
               : {}),
           },
           // A mislabeled REAL-MONEY environment is a security event.
-          severity: environmentMismatch ? AuditSeverity.CRITICAL : AuditSeverity.WARNING,
+          severity: environmentMismatch.mismatch ? AuditSeverity.CRITICAL : AuditSeverity.WARNING,
         });
 
         throw new BadRequestException(`Broker connection failed: ${failureError}`);
