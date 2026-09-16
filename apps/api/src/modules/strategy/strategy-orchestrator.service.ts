@@ -19,6 +19,13 @@ import { TradeIntentService, TradeIntentFacts } from '../execution/services/trad
 import type { TradeIntent } from '../execution/entities/trade-intent.entity';
 import { AllocationService } from '../execution/services/allocation.service';
 import { PositionSizingService } from '../execution/services/position-sizing.service';
+// Round 7.1 (P1 — sizing input freshness): the durable account-snapshot
+// authority whose 30s LIVE freshness window is now enforced BEFORE sizing.
+import {
+  BrokerAccountSnapshotService,
+  SnapshotNotFreshError,
+} from '../broker/services/broker-account-snapshot.service';
+import { BrokerMode } from '../broker/interfaces/broker-adapter.interface';
 import { TradingAuthorityService } from '../execution-authority/trading-authority.service';
 import { SharedControlRevisionService } from '../execution-authority/shared-control-revision.service';
 // Round 7 (P1 metrics — audit R7-audit-C A6): dependency-free in-process
@@ -88,6 +95,11 @@ export class StrategyOrchestratorService {
     @Inject(forwardRef(() => ExecutionService))
     private readonly executionService: ExecutionService,
     private readonly brokerService: BrokerService,
+    // Round 7.1 (P1 — sizing input freshness): the LIVE fresh-snapshot
+    // authority resolved BEFORE sizePosition (BrokerModule is already
+    // imported by StrategyModule and exports this provider — no module
+    // wiring change).
+    private readonly brokerAccountSnapshotService: BrokerAccountSnapshotService,
     private readonly auditService: AuditService,
     private readonly eventBus: DomainEventBus,
     private readonly signalIdentityGate: AiSignalIdentityGateService,
@@ -328,6 +340,16 @@ export class StrategyOrchestratorService {
     // the SIZED volume is what flows to the Risk Engine.
     let sized;
     try {
+      // Round 7.1 (P1 — sizing input freshness): resolve the LIVE fresh-
+      // snapshot authority BEFORE sizing. PositionSizingService reads equity
+      // from the durable account snapshot with NO age check at sizing time,
+      // and the 30s LIVE freshness window was previously enforced only LATER
+      // at risk Step 2-live — which refreshes the snapshot AFTER sizing — so
+      // lots could be computed from equity up to 60s+ old while risk
+      // validated with fresh numbers. DEMO/PAPER connections are unchanged
+      // (no sizing-time freshness gate). Any failure is the typed rejection
+      // below (never a stale-equity sizing).
+      await this.ensureLiveSizingSnapshotFresh(userId, session);
       sized = await this.positionSizingService.sizePosition({
         userId,
         brokerConnectionId: session.brokerConnectionId,
@@ -365,7 +387,12 @@ export class StrategyOrchestratorService {
         sized,
       });
     } catch (err) {
-      const code = (err as { code?: string }).code ?? 'SIZING_ALLOCATION_FAILED';
+      // Round 7.1 (P1 — sizing input freshness): a LIVE freshness rejection
+      // surfaces its TYPED SNAPSHOT_* code — never the generic default.
+      const code =
+        (err as { code?: string }).code ??
+        (err instanceof SnapshotNotFreshError ? err.failure.code : undefined) ??
+        'SIZING_ALLOCATION_FAILED';
       const reason = `Position sizing/allocation failed closed [${code}]: ${(err as Error).message}`;
       this.logger.warn(`Signal ${signalId}: ${reason}`);
       await this.auditService.log({
@@ -603,6 +630,59 @@ export class StrategyOrchestratorService {
   }
 
   // ─── Internal helpers ──────────────────────────────────────────────────────
+
+  /**
+   * Round 7.1 (P1 — sizing input freshness): resolve the LIVE fresh-snapshot
+   * authority BEFORE position sizing (Gate 4.8).
+   *
+   * The sizing engine derives lots from the durable account snapshot's
+   * equity; that read carries no age check, so the 30s LIVE freshness window
+   * must be enforced HERE — before the volume is computed — instead of only
+   * at risk Step 2-live, which resolves/refreshes the snapshot AFTER sizing
+   * (lots computed from equity up to 60s+ old while risk validated with
+   * fresh numbers).
+   *
+   * Resolution pattern — IDENTICAL to risk Step 2-live (risk.service.ts):
+   *   1. resolveFreshSnapshotForNewExposure(connection.id);
+   *   2. on SnapshotNotFreshError SNAPSHOT_STALE / SNAPSHOT_MISSING → ONE
+   *      bounded synchronous provider observation
+   *      (observeAccountSnapshotNow — the §1a write path) → re-resolve;
+   *   3. any failure propagates (typed, fail-closed — a failed refresh never
+   *      authorizes a stale snapshot, and a stale snapshot never sizes).
+   *
+   * DEMO/PAPER connections return immediately — no sizing-time freshness
+   * gate (their behavior is unchanged).
+   */
+  private async ensureLiveSizingSnapshotFresh(
+    userId: string,
+    session: TradingSession,
+  ): Promise<void> {
+    // The EXACT session-bound connection (ownership enforced by
+    // findConnectionById; a missing row is the caller's typed fail-closed
+    // rejection — the account type can never be guessed).
+    const connection = await this.brokerService.findConnectionById(
+      session.brokerConnectionId,
+      userId,
+    );
+    if (connection.accountType !== BrokerMode.LIVE) {
+      return; // DEMO/PAPER: no sizing-time freshness gate.
+    }
+    try {
+      await this.brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure(connection.id);
+    } catch (snapErr) {
+      if (
+        snapErr instanceof SnapshotNotFreshError &&
+        (snapErr.failure.code === 'SNAPSHOT_STALE' || snapErr.failure.code === 'SNAPSHOT_MISSING')
+      ) {
+        // ONE bounded synchronous provider observation, then re-resolve —
+        // LIVE sizing availability is structural, not cadence-luck.
+        await this.brokerService.observeAccountSnapshotNow(userId, connection.id);
+        await this.brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure(connection.id);
+      } else {
+        throw snapErr;
+      }
+    }
+  }
 
   /**
    * Round 6 live-execution completion (§2): record (or reuse) the durable

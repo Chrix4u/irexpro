@@ -11,6 +11,12 @@ import { AllocationService } from '../execution/services/allocation.service';
 import { RiskService } from '../risk/risk.service';
 import { ExecutionService } from '../execution/execution.service';
 import { BrokerService } from '../broker/broker.service';
+// Round 7.1 (P1 — sizing input freshness): the LIVE fresh-snapshot seam.
+import {
+  BrokerAccountSnapshotService,
+  SnapshotNotFreshError,
+} from '../broker/services/broker-account-snapshot.service';
+import { BrokerMode } from '../broker/interfaces/broker-adapter.interface';
 import { AuditService } from '../audit/audit.service';
 import { DomainEventBus } from '../events/event-bus.service';
 import { TradingSession, TradingSessionStatus } from '../execution/entities/trading-session.entity';
@@ -88,6 +94,8 @@ describe('StrategyOrchestratorService', () => {
     resolveOrAllocate: jest.Mock;
     releaseAllocationForIntent: jest.Mock;
   };
+  /** Round 7.1 (P1): the LIVE fresh-snapshot authority seam (Gate 4.8). */
+  let snapshotMock: { resolveFreshSnapshotForNewExposure: jest.Mock };
 
   /** Full SignalIdentityRegistration shape (Round 6 mock contract). */
   const registrationFor = (
@@ -124,10 +132,24 @@ describe('StrategyOrchestratorService', () => {
     brokerService = {
       hasActiveConnection: jest.fn().mockResolvedValue(true),
       // Round 6 §2: best-effort logical-account-key read at intent intake.
+      // (The default connection carries NO accountType — every existing
+      // test is a DEMO-class signal, so the Round 7.1 sizing-freshness gate
+      // is never entered without an explicit per-test LIVE override.)
       findConnectionById: jest.fn().mockResolvedValue({
         id: 'conn-1',
         logicalAccountKey: 'paper-broker::demo::acct-1',
       }),
+      // Round 7.1 (P1 — sizing input freshness): the ONE bounded synchronous
+      // provider observation used when a LIVE snapshot is STALE/MISSING.
+      observeAccountSnapshotNow: jest.fn().mockResolvedValue(undefined),
+    };
+
+    // Round 7.1 (P1): the LIVE fresh-snapshot authority resolves by default
+    // (fresh) — the DEMO default path never consults it at all.
+    snapshotMock = {
+      resolveFreshSnapshotForNewExposure: jest
+        .fn()
+        .mockResolvedValue({ id: 'snap-1', generation: 1, currency: 'USD' }),
     };
 
     auditService = {
@@ -222,6 +244,10 @@ describe('StrategyOrchestratorService', () => {
         // Round 6 §3/§4: sizing + allocation at the seam.
         { provide: PositionSizingService, useValue: sizingMock },
         { provide: AllocationService, useValue: allocationMock },
+        // Round 7.1 (P1 — sizing input freshness): the LIVE fresh-snapshot
+        // authority at the seam (its own matrix lives in
+        // broker-account-snapshot.service.spec.ts).
+        { provide: BrokerAccountSnapshotService, useValue: snapshotMock },
       ],
     }).compile();
 
@@ -377,6 +403,131 @@ describe('StrategyOrchestratorService', () => {
     it('returns tradeId on success', async () => {
       const result = await service.processSignal(validCandidate());
       expect(result.tradeId).toBe('trade-1');
+    });
+  });
+
+  describe('Round 7.1 (P1): sizing authority + LIVE input freshness (Gate 4.8)', () => {
+    /** The session-bound LIVE connection (accountType is the gate's switch). */
+    const liveConnection = () => ({
+      id: 'conn-1',
+      userId: 'user-1',
+      brokerId: 'metatrader',
+      accountType: BrokerMode.LIVE,
+      logicalAccountKey: 'metatrader::live::acct-1',
+    });
+
+    it('the SIZED volume flows to the Risk Engine — never the AI suggestedVolume (mock-seam regression: the Round 7 P0 allocation bug hid behind this exact seam)', async () => {
+      // The AI suggests 9.99 lots; the (mocked) sizing authority derives
+      // 0.20 from the risk budget. The Risk Engine must see 0.20.
+      sizingMock.sizePosition.mockResolvedValue({
+        lots: '0.20',
+        allocatedCapital: '21700.00',
+        accountCurrency: 'USD',
+        entryPrice: '1.08500',
+        inputs: { accountCurrency: 'USD', equity: '10000.00' },
+      });
+
+      const result = await service.processSignal(validCandidate({ suggestedVolume: 9.99 }));
+
+      expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
+      const proposed = (riskService.validateProposedTrade as jest.Mock).mock.calls[0][1];
+      expect(proposed.requestedLotSize).toBe('0.20');
+      expect(proposed.requestedLotSize).not.toBe('9.99');
+      // Provenance only: the durable intent records the RAW AI request (the
+      // sizing derivation is recorded with the allocation, not the intent).
+      expect(tradeIntentMock.recordOrReuseIntent).toHaveBeenCalledWith(
+        expect.objectContaining({ requestedLotSize: '9.99' }),
+      );
+    });
+
+    it('DEMO connections never consult the snapshot authority (no sizing-time freshness gate — behavior unchanged)', async () => {
+      const result = await service.processSignal(validCandidate());
+      expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
+      expect(snapshotMock.resolveFreshSnapshotForNewExposure).not.toHaveBeenCalled();
+      expect(brokerService.observeAccountSnapshotNow).not.toHaveBeenCalled();
+      expect(sizingMock.sizePosition).toHaveBeenCalledTimes(1);
+    });
+
+    it('LIVE + fresh snapshot → no refresh call, sizing proceeds', async () => {
+      (brokerService.findConnectionById as jest.Mock).mockResolvedValue(liveConnection());
+
+      const result = await service.processSignal(validCandidate());
+
+      expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
+      expect(snapshotMock.resolveFreshSnapshotForNewExposure).toHaveBeenCalledWith('conn-1');
+      expect(brokerService.observeAccountSnapshotNow).not.toHaveBeenCalled();
+      expect(sizingMock.sizePosition).toHaveBeenCalledTimes(1);
+    });
+
+    it('LIVE + stale snapshot → ONE bounded synchronous refresh, re-resolve, sizing proceeds on the refreshed state', async () => {
+      (brokerService.findConnectionById as jest.Mock).mockResolvedValue(liveConnection());
+      snapshotMock.resolveFreshSnapshotForNewExposure
+        .mockRejectedValueOnce(
+          new SnapshotNotFreshError(
+            { code: 'SNAPSHOT_STALE', ageMs: 45_000, maxAgeMs: 30_000 },
+            'conn-1',
+          ),
+        )
+        .mockResolvedValueOnce({ id: 'snap-2', generation: 2, currency: 'USD' });
+
+      const result = await service.processSignal(validCandidate());
+
+      expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
+      // Exactly ONE provider observation, then the re-resolve succeeded.
+      expect(brokerService.observeAccountSnapshotNow).toHaveBeenCalledTimes(1);
+      expect(brokerService.observeAccountSnapshotNow).toHaveBeenCalledWith('user-1', 'conn-1');
+      expect(snapshotMock.resolveFreshSnapshotForNewExposure).toHaveBeenCalledTimes(2);
+      expect(sizingMock.sizePosition).toHaveBeenCalledTimes(1);
+    });
+
+    it('LIVE + refresh leaves the snapshot stale → typed SNAPSHOT_STALE rejection, sizePosition NEVER called (never a stale-equity sizing)', async () => {
+      (brokerService.findConnectionById as jest.Mock).mockResolvedValue(liveConnection());
+      const stillStale = new SnapshotNotFreshError(
+        { code: 'SNAPSHOT_STALE', ageMs: 61_000, maxAgeMs: 30_000 },
+        'conn-1',
+      );
+      snapshotMock.resolveFreshSnapshotForNewExposure
+        .mockRejectedValueOnce(
+          new SnapshotNotFreshError(
+            { code: 'SNAPSHOT_STALE', ageMs: 45_000, maxAgeMs: 30_000 },
+            'conn-1',
+          ),
+        )
+        .mockRejectedValueOnce(stillStale);
+
+      const result = await service.processSignal(validCandidate());
+
+      expect(result.outcome).toBe('EXECUTION_FAILED');
+      expect(result.reason).toContain('SNAPSHOT_STALE');
+      expect(brokerService.observeAccountSnapshotNow).toHaveBeenCalledTimes(1);
+      // NEVER a stale-equity sizing: the sizing engine was never invoked.
+      expect(sizingMock.sizePosition).not.toHaveBeenCalled();
+      expect(allocationMock.resolveOrAllocate).not.toHaveBeenCalled();
+      expect(riskService.validateProposedTrade).not.toHaveBeenCalled();
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: AuditAction.AI_SIGNAL_EXECUTION_FAILED,
+          metadata: expect.objectContaining({ failureCode: 'SNAPSHOT_STALE' }),
+        }),
+      );
+    });
+
+    it('LIVE + the refresh observation itself fails → typed fail-closed rejection, sizePosition NEVER called', async () => {
+      (brokerService.findConnectionById as jest.Mock).mockResolvedValue(liveConnection());
+      snapshotMock.resolveFreshSnapshotForNewExposure.mockRejectedValueOnce(
+        new SnapshotNotFreshError({ code: 'SNAPSHOT_MISSING' }, 'conn-1'),
+      );
+      (brokerService.observeAccountSnapshotNow as jest.Mock).mockRejectedValueOnce(
+        new Error('provider unreachable'),
+      );
+
+      const result = await service.processSignal(validCandidate());
+
+      expect(result.outcome).toBe('EXECUTION_FAILED');
+      expect(result.reason).toContain('provider unreachable');
+      expect(brokerService.observeAccountSnapshotNow).toHaveBeenCalledTimes(1);
+      expect(sizingMock.sizePosition).not.toHaveBeenCalled();
+      expect(riskService.validateProposedTrade).not.toHaveBeenCalled();
     });
   });
 

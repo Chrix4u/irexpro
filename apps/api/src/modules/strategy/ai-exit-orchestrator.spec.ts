@@ -6,7 +6,15 @@ import {
 import { AuditService } from '../audit/audit.service';
 import { ExecutionService } from '../execution/execution.service';
 import { ExecutionReadService } from '../execution/execution-read.service';
-import { AiSignalIdentityGateService } from '../execution/orchestration/signal-identity.gate';
+import {
+  AiSignalIdentityGateService,
+  SIGNAL_FUTURE_SKEW_MS,
+  SIGNAL_MAX_AGE_MS,
+  SignalFutureException,
+  SignalStaleException,
+} from '../execution/orchestration/signal-identity.gate';
+import { isExposureIncreasingOperation } from '../execution/orchestration/provider-operation-class';
+import { ProviderOperationClass } from '../execution/interfaces/execution-authority';
 import { AuditAction } from '../../common/enums/audit-action.enum';
 import { AiExitSignal, AiExitResult } from './interfaces/ai-exit-signal.interface';
 import { Trade, TradeCloseReason, TradeStatus } from '../execution/entities/trade.entity';
@@ -29,6 +37,15 @@ import { TradingSession, TradingSessionStatus } from '../execution/entities/trad
  *   - one close failure among several → EXIT_PARTIAL (others still close)
  *   - every close fails → EXIT_FAILED (audited WARNING)
  *   - §10 SERIALIZATION: per-user exits run strictly one-at-a-time
+ *
+ * Round 7.1 (P1) additions:
+ *   - composed: an active GLOBAL execution control never gates the exit
+ *     pipeline — closes dispatch while the same state blocks new exposure
+ *     (Gate-A exemption proven in execution-orchestrator.spec.ts)
+ *   - cross-tenant: user A's exit signal naming user B's tradeId →
+ *     EXIT_TARGET_NOT_FOUND (tenant-scoped target resolution, no close)
+ *   - composed staleness: >120s-old generatedAt → SIGNAL_IDENTITY_REJECTED
+ *     with NO target resolution and NO close; >30s future skew → same
  */
 
 const USER = 'user-1';
@@ -156,6 +173,50 @@ describe('AiExitOrchestratorService — the §10 serialized AI exit pipeline', (
     expect(executionService.closeTrade).not.toHaveBeenCalled();
   });
 
+  it('Round 7.1 (P1): a >120s-old generatedAt is typed-rejected with NOTHING persisted or closed (no target resolution, no closeTrade)', async () => {
+    // Composed with the REAL gate semantics: the generatedAt instant is past
+    // the gate's SIGNAL_MAX_AGE_MS boundary and the (mocked) gate throws the
+    // gate's own SignalStaleException — the orchestrator maps it to the
+    // typed SIGNAL_IDENTITY_REJECTED outcome BEFORE any serialized work.
+    const staleGeneratedAt = new Date(Date.now() - (SIGNAL_MAX_AGE_MS + 5_000));
+    signalIdentityGate.registerOrReuse.mockImplementation(async () => {
+      const age = Date.now() - staleGeneratedAt.getTime();
+      throw new SignalStaleException(staleGeneratedAt, age);
+    });
+
+    const result = await service.processExitSignal(exitSignal({ generatedAt: staleGeneratedAt }));
+
+    expect(result.outcome).toBe('SIGNAL_IDENTITY_REJECTED');
+    expect(result.reason).toContain('stale');
+    // Nothing persisted/closed: a stale decision NEVER reaches target
+    // resolution or closeTrade.
+    expect(executionReadService.listOpenPositions).not.toHaveBeenCalled();
+    expect(executionService.closeTrade).not.toHaveBeenCalled();
+    expect(auditService.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: AuditAction.AI_EXIT_SIGNAL_IGNORED,
+        metadata: expect.objectContaining({ failureCode: 'SIGNAL_IDENTITY_REJECTED' }),
+      }),
+    );
+  });
+
+  it('Round 7.1 (P1): a >30s future-skewed generatedAt is typed-rejected with NOTHING persisted or closed (no target resolution, no closeTrade)', async () => {
+    // Future-dated exit decisions are exactly as untrustworthy as stale ones
+    // (the gate's SIGNAL_FUTURE_SKEW_MS producer clock-skew tolerance).
+    const futureGeneratedAt = new Date(Date.now() + (SIGNAL_FUTURE_SKEW_MS + 5_000));
+    signalIdentityGate.registerOrReuse.mockImplementation(async () => {
+      const skew = futureGeneratedAt.getTime() - Date.now();
+      throw new SignalFutureException(futureGeneratedAt, skew);
+    });
+
+    const result = await service.processExitSignal(exitSignal({ generatedAt: futureGeneratedAt }));
+
+    expect(result.outcome).toBe('SIGNAL_IDENTITY_REJECTED');
+    expect(result.reason).toContain('future');
+    expect(executionReadService.listOpenPositions).not.toHaveBeenCalled();
+    expect(executionService.closeTrade).not.toHaveBeenCalled();
+  });
+
   it('registers the EXIT material fields in the identity digest', async () => {
     await service.processExitSignal(exitSignal({ tradeId: 'trade-9' }));
     expect(signalIdentityGate.registerOrReuse).toHaveBeenCalledWith(
@@ -207,6 +268,31 @@ describe('AiExitOrchestratorService — the §10 serialized AI exit pipeline', (
     const result = await service.processExitSignal(exitSignal());
     expect(result.outcome).toBe('NO_OPEN_POSITION');
     expect(executionService.closeTrade).not.toHaveBeenCalled();
+  });
+
+  it('Round 7.1 (P1): cross-tenant exit — user A naming user B’s tradeId resolves to EXIT_TARGET_NOT_FOUND (tenant-scoped resolution, never a close)', async () => {
+    // User A’s open positions ONLY: B’s trade id exists in the store but is
+    // invisible to A’s tenant-scoped listOpenPositions read.
+    executionReadService.listOpenPositions.mockResolvedValue([
+      openTrade('trade-A1'),
+      openTrade('trade-A2'),
+    ]);
+
+    const result = await service.processExitSignal(exitSignal({ tradeId: 'trade-B1' }));
+
+    expect(result.outcome).toBe('EXIT_TARGET_NOT_FOUND');
+    expect(result.reason).toContain('trade-B1');
+    // The tenant-scoped read ran for the SIGNALING user only.
+    expect(executionReadService.listOpenPositions).toHaveBeenCalledWith(USER);
+    // No cross-tenant close was ever attempted (closeTrade additionally
+    // re-proves ownership via findOne({ id, userId })).
+    expect(executionService.closeTrade).not.toHaveBeenCalled();
+    expect(auditService.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: AuditAction.AI_EXIT_SIGNAL_IGNORED,
+        metadata: expect.objectContaining({ failureCode: 'EXIT_TARGET_NOT_FOUND' }),
+      }),
+    );
   });
 
   // ── Gate 7: serialized closes ────────────────────────────────────────────
@@ -323,6 +409,56 @@ describe('AiExitOrchestratorService — the §10 serialized AI exit pipeline', (
     expect(result.outcome).toBe('EXIT_PARTIAL');
     expect(result.trades[0].closed).toBe(false);
     expect(result.trades[0].reason).toContain('RECONCILIATION_PENDING');
+  });
+
+  it('Round 7.1 (P1): an active GLOBAL execution control never gates the exit pipeline — closes dispatch while the same control state blocks new exposure', async () => {
+    // Composed representation of an active GLOBAL kill switch: exactly what
+    // ExecutionControlService.checkExecutionPermission reports while a
+    // GLOBAL control row is ACTIVE. The Gate-A exemption itself is proven at
+    // the orchestrator boundary (execution-orchestrator.spec.ts, Round 7.1
+    // (P1) Gate-A matrix); THIS test proves the EXIT pipeline’s own layer
+    // dispatches its closes under that control state — the closeTrade seam
+    // enforces Gate-A’s operation-aware contract via the production
+    // classifier: CLOSE_POSITION is exempt, NEW_EXPOSURE would be blocked.
+    const activeGlobalControl = {
+      allowed: false,
+      blockedBy: { scope: 'GLOBAL', scopeKey: null, reason: 'INCIDENT' },
+    };
+    // The control state blocks exposure-INCREASING operations …
+    expect(
+      !activeGlobalControl.allowed &&
+        isExposureIncreasingOperation(ProviderOperationClass.NEW_EXPOSURE),
+    ).toBe(true);
+    // … but NOT the risk-reducing CLOSE class the exit pipeline dispatches.
+    expect(
+      !activeGlobalControl.allowed &&
+        isExposureIncreasingOperation(ProviderOperationClass.CLOSE_POSITION),
+    ).toBe(false);
+
+    executionReadService.listOpenPositions.mockResolvedValue([
+      openTrade('trade-1'),
+      openTrade('trade-2'),
+      openTrade('trade-GBP', { instrument: 'GBPUSD' }), // untouched instrument
+    ]);
+    executionService.closeTrade.mockImplementation(async (tradeId: string) =>
+      openTrade(tradeId, { status: TradeStatus.CLOSED }),
+    );
+
+    const result = await service.processExitSignal(exitSignal());
+
+    // The exit path DISPATCHED its closes while the kill switch was active.
+    expect(result.outcome).toBe('EXIT_SUCCEEDED');
+    expect(executionService.closeTrade).toHaveBeenCalledTimes(2);
+    expect(executionService.closeTrade).toHaveBeenCalledWith(
+      'trade-1',
+      USER,
+      TradeCloseReason.AI_CLOSE_SIGNAL,
+    );
+    expect(executionService.closeTrade).toHaveBeenCalledWith(
+      'trade-2',
+      USER,
+      TradeCloseReason.AI_CLOSE_SIGNAL,
+    );
   });
 
   // ── §10 SERIALIZATION ────────────────────────────────────────────────────

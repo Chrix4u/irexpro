@@ -347,6 +347,84 @@ describe('ExecutionOrchestrator', () => {
       ).rejects.toThrow(ForbiddenException);
     });
 
+    // ─── Round 7.1 (P1): Gate A is OPERATION-AWARE — the close exemption ────
+    // Gate A (the emergency control plane) blocks only EXPOSURE-INCREASING
+    // operations for EVERY control-plane scope — CLOSE_POSITION / CANCEL_PENDING
+    // are exempt so an active emergency can never prevent de-risking. Round 7's
+    // §10 matrix covered Gate B (LIVE non-executable); THIS matrix pins the
+    // Gate-A exemption per scope (incl. the fail-closed store-unavailable
+    // case) together with the invariant that NEW_EXPOSURE stays blocked.
+
+    it.each([
+      ['GLOBAL', { scope: 'GLOBAL', scopeKey: null, reason: 'INCIDENT' }],
+      ['PROVIDER', { scope: 'PROVIDER', scopeKey: 'paper-broker', reason: 'INCIDENT' }],
+      ['USER', { scope: 'USER', scopeKey: userId, reason: 'INCIDENT' }],
+      ['BROKER_CONNECTION', { scope: 'BROKER_CONNECTION', scopeKey: 'conn-1', reason: 'INCIDENT' }],
+    ])(
+      'Round 7.1 (P1): an active %s execution control still permits CLOSE_POSITION (de-risking survives every control scope) while NEW_EXPOSURE stays blocked',
+      async (_scope: string, blockedBy: Record<string, unknown>) => {
+        controlService.checkExecutionPermission.mockResolvedValue({
+          allowed: false,
+          blockedBy,
+        });
+
+        // CLOSE_POSITION is exempt from Gate A at this scope → resolves.
+        await expect(
+          orchestrator.assertDispatchable({
+            userId,
+            connection,
+            operationClass: ProviderOperationClass.CLOSE_POSITION,
+          }),
+        ).resolves.toBeUndefined();
+
+        // The same active control still blocks exposure-INCREASING dispatch.
+        await expect(
+          orchestrator.assertDispatchable({
+            userId,
+            connection,
+            operationClass: ProviderOperationClass.NEW_EXPOSURE,
+          }),
+        ).rejects.toThrow(ForbiddenException);
+        expect(auditService.log).toHaveBeenCalledWith(
+          expect.objectContaining({
+            action: AuditAction.ORDER_REJECTED,
+            metadata: expect.objectContaining({
+              reason: 'EXECUTION_CONTROL_BLOCKED',
+              operationClass: ProviderOperationClass.NEW_EXPOSURE,
+            }),
+            severity: AuditSeverity.WARNING,
+          }),
+        );
+      },
+    );
+
+    it('Round 7.1 (P1): the fail-closed EXECUTION_CONTROL_STORE_UNAVAILABLE case still exempts CLOSE_POSITION while blocking NEW_EXPOSURE (a control-plane outage must never trap open positions)', async () => {
+      controlService.checkExecutionPermission.mockResolvedValue({
+        allowed: false,
+        blockedBy: {
+          scope: 'GLOBAL',
+          scopeKey: null,
+          reason: 'EXECUTION_CONTROL_STORE_UNAVAILABLE',
+        },
+      });
+
+      await expect(
+        orchestrator.assertDispatchable({
+          userId,
+          connection,
+          operationClass: ProviderOperationClass.CLOSE_POSITION,
+        }),
+      ).resolves.toBeUndefined();
+
+      await expect(
+        orchestrator.assertDispatchable({
+          userId,
+          connection,
+          operationClass: ProviderOperationClass.NEW_EXPOSURE,
+        }),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
     it('Phase D: stale snapshot defense — persisted state REVOKED blocks despite an ACTIVE snapshot', async () => {
       // Caller's snapshot says ACTIVE, but the re-loaded persisted state is REVOKED
       brokerService.findConnectionById.mockResolvedValue({

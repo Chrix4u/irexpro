@@ -940,6 +940,25 @@ describe('ExecutionService', () => {
       ).rejects.toThrow(ForbiddenException);
     });
 
+    it('Round 7.1 (P1): the ownership predicate is tenant-scoped — findOne filters by { id, userId } and a foreign-owner row resolves to nothing → ForbiddenException, never a dispatch', async () => {
+      // Cross-tenant close attempt: user-1 names a trade id that EXISTS but
+      // belongs to another tenant. The scoped query ({ id, userId }) finds no
+      // row for THIS user — the repo answers null, ownership is never proven,
+      // and the close is refused BEFORE any connection load or dispatch.
+      tradeRepo.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.closeTrade('trade-FOREIGN', 'user-1', TradeCloseReason.MANUAL_CLOSE),
+      ).rejects.toThrow(ForbiddenException);
+
+      expect(tradeRepo.findOne).toHaveBeenCalledWith({
+        where: { id: 'trade-FOREIGN', userId: 'user-1' },
+      });
+      expect(orchestrator.assertDispatchable).not.toHaveBeenCalled();
+      expect(orchestrator.dispatchOrder).not.toHaveBeenCalled();
+      expect(tradeRepo.update).not.toHaveBeenCalled();
+    });
+
     it('throws ForbiddenException when trade is not OPEN', async () => {
       tradeRepo.findOne.mockResolvedValue({
         id: 'trade-1',
