@@ -79,14 +79,16 @@ of them is a critical incident.
 
 | Component | Version | Purpose |
 |---|---|---|
-| Node.js | 20.x LTS (≥ 20.0.0) | NestJS API runtime |
-| pnpm | 9.x (≥ 9.0.0) | Package manager (workspace) |
+| Node.js | 22.x LTS (verified CI/release baseline; app engines allow ≥ 20) | NestJS API runtime |
+| pnpm | 10.34.5 (repository-pinned; app engines allow ≥ 9) | Package manager (workspace) |
 | Python | 3.11 (≥ 3.11.0) | AI engine runtime |
 | PostgreSQL | 15+ (staging verified on **18**) | Primary database |
 | Redis | 7 (≥ 7.0.0) | BullMQ queues + AI OHLCV cache |
 | Nginx | ≥ 1.18 | Reverse proxy + TLS termination |
 | PM2 | ≥ 5.3 | Process manager (recommended) OR systemd |
 | Certbot | latest | Let's Encrypt TLS certificates |
+
+> **Verified release-toolchain note:** `package.json` keeps broad compatibility engines (`node >=20`, `pnpm >=9`), but repository CI and deterministic deployment procedures currently standardize releases on **Node.js 22.x** and the exact `packageManager` value **pnpm 10.34.5**. Production builds should match that verified baseline unless a separate candidate explicitly re-verifies another toolchain.
 
 > **Webuzo note:** Webuzo already provides PostgreSQL, Redis, Nginx, and
 > Certbot as installable apps. You may use the Webuzo-managed versions OR
@@ -471,14 +473,19 @@ signals to NestJS; NestJS verifies it with a constant-time HMAC comparison via
 
 ```bash
 cd /opt/irexpro
-git checkout main
-git pull --ff-only origin main
-git rev-parse HEAD    # record this commit for rollback
-git branch --show-current
+git fetch --quiet origin main
+CANDIDATE_SHA='<approved-40-character-lowercase-sha>'
+[[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid candidate SHA' >&2; exit 1; }
+git cat-file -e "${CANDIDATE_SHA}^{commit}"
+git merge-base --is-ancestor "$CANDIDATE_SHA" origin/main
+git switch --detach "$CANDIDATE_SHA"
+test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
 ```
 
-`git branch --show-current` must print `main`. If it prints anything else, stop
-and re-run the checkout step before proceeding.
+A detached checkout is intentional for a production release. Record the exact
+candidate SHA before any build or runtime mutation; do not deploy a moving branch
+name or an unverified tag.
+
 
 ### 5.1 NestJS API
 
@@ -1156,19 +1163,28 @@ any of these in logs, treat it as a critical incident.
 
 ## 11. Rollback process
 
-### 11.1 Application rollback (code revert)
+### 11.1 Application rollback (exact verified SHA)
+
+Roll back only to a previously verified full commit SHA. The rollback target must
+be an ancestor of the failed release and must still be contained in `origin/main`.
+Do not discover rollback targets by sprint tag at incident time.
 
 ```bash
 cd /opt/irexpro
-git fetch --tags
-# Find the last known-good tag
-git tag -l 'sprint-*-complete'
-
-# Checkout the previous stable tag (e.g., sprint-18-complete)
-git checkout sprint-18-complete
-pnpm install --frozen-lockfile
-pnpm --filter @irexpro/api build
+FAILED_SHA="$(git rev-parse HEAD)"
+ROLLBACK_SHA='<previously-verified-40-character-lowercase-sha>'
+[[ "$ROLLBACK_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid rollback SHA' >&2; exit 1; }
+test "$FAILED_SHA" != "$ROLLBACK_SHA"
+git fetch --quiet origin main
+git cat-file -e "${ROLLBACK_SHA}^{commit}"
+git merge-base --is-ancestor "$ROLLBACK_SHA" "$FAILED_SHA"
+git merge-base --is-ancestor "$ROLLBACK_SHA" origin/main
+git switch --detach "$ROLLBACK_SHA"
+test "$(git rev-parse HEAD)" = "$ROLLBACK_SHA"
+corepack pnpm@10.34.5 install --frozen-lockfile
+corepack pnpm@10.34.5 --filter @irexpro/api build
 pm2 restart irexpro-api     # or: sudo systemctl restart irexpro-api
+test "$(git rev-parse HEAD)" = "$ROLLBACK_SHA"
 ```
 
 ### 11.2 Database rollback (migration revert)
@@ -1227,8 +1243,8 @@ Print this and tick every box before going live.
 
 - [ ] VPS meets minimum specs (§1.1)
 - [ ] Ubuntu 22.04/24.04 LTS, all security patches applied (`sudo apt update && sudo apt upgrade`)
-- [ ] Node.js 20.x LTS installed (`node -v`)
-- [ ] pnpm 9.x installed (`pnpm -v`)
+- [ ] Node.js 22.x LTS installed for release parity (`node -v`; package engines remain compatible with Node ≥ 20)
+- [ ] repository-pinned pnpm 10.34.5 available via Corepack (`corepack pnpm@10.34.5 --version`)
 - [ ] Python 3.11 installed (`python3.11 --version`)
 - [ ] PostgreSQL 15 installed, running, bound to localhost
 - [ ] Redis 7 installed, running, password set, bound to localhost
@@ -1264,7 +1280,7 @@ Print this and tick every box before going live.
 
 ### 12.4 Build + migrate
 
-- [ ] Confirmed `git branch --show-current` reports `main`, not a sprint or feature branch.
+- [ ] Confirmed `git rev-parse HEAD` equals the recorded approved candidate SHA and that SHA is contained in `origin/main`.
 - [ ] `pnpm install --frozen-lockfile` succeeds
 - [ ] `pnpm --filter @irexpro/api build` succeeds, `apps/api/dist/main.js` exists
 - [ ] AI engine venv created, `pip install -e .` succeeds
@@ -1375,9 +1391,9 @@ ticked on the production host too.
 
 ### 16.1 Source + dependencies
 
-- [ ] `git clone` from `main` works (`git checkout main && git pull --ff-only origin main`)
+- [ ] the approved full candidate SHA is present in `origin/main` and is checked out detached exactly
 - [ ] `pnpm install` works (frozen lockfile, no peer-dep errors)
-- [ ] Node.js 20.x LTS + pnpm 9.x installed (`node -v`, `pnpm -v`)
+- [ ] Node.js 22.x LTS + repository-pinned pnpm 10.34.5 verified (`node -v`, `corepack pnpm@10.34.5 --version`)
 - [ ] Python 3.11 installed (`python3.11 --version`)
 
 ### 16.2 Database
