@@ -48,6 +48,7 @@ const WORKFLOW_RULES = [
     patterns: [
       'scripts/deployment/**',
       'docs/operations/staging-deployment.md',
+      'package.json',
       '.github/workflows/deployment-script-safety.yml',
     ],
   },
@@ -178,6 +179,7 @@ export function runSelfTests() {
       'API CI',
       'Risk Execution Concurrency',
       'Database Migration Compatibility',
+      'Deployment Script Safety',
       'UI E2E',
       'Mobile CI',
     ],

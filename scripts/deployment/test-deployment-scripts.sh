@@ -4,6 +4,12 @@ umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+readonly REPO_ROOT
+ROOT_PACKAGE_MANAGER="$(node -e "const p=require(process.argv[1]); process.stdout.write(p.packageManager || '')" "$REPO_ROOT/package.json")"
+readonly ROOT_PACKAGE_MANAGER
+DEPLOY_PNPM_VERSION="$(sed -n 's/^readonly PNPM_VERSION="\([^"\]*\)"/\1/p' "$SCRIPT_DIR/deploy-staging.sh")"
+readonly DEPLOY_PNPM_VERSION
 TMP_ROOT="$(mktemp -d)"
 readonly TMP_ROOT
 readonly EXPECTED_HTTPS_ORIGIN="https://github.com/Chrix4u/irexpro.git"
@@ -19,6 +25,10 @@ fail() {
   printf 'TEST FAILURE: %s\n' "$1" >&2
   exit 1
 }
+
+[[ -n "$ROOT_PACKAGE_MANAGER" ]] || fail 'Root package.json must declare packageManager.'
+[[ -n "$DEPLOY_PNPM_VERSION" ]] || fail 'deploy-staging.sh must declare PNPM_VERSION.'
+[[ "$ROOT_PACKAGE_MANAGER" == "pnpm@${DEPLOY_PNPM_VERSION}" ]] || fail "Deployment pnpm pin (${DEPLOY_PNPM_VERSION}) does not match root packageManager (${ROOT_PACKAGE_MANAGER})."
 
 expect_failure() {
   local expected="$1"
@@ -44,7 +54,7 @@ make_fixture() {
 
   cp "$SCRIPT_DIR/deploy-staging.sh" "$repo/scripts/deployment/deploy-staging.sh"
   cp "$SCRIPT_DIR/rollback-staging.sh" "$repo/scripts/deployment/rollback-staging.sh"
-  printf '{"packageManager":"pnpm@10.34.5"}\n' > "$repo/package.json"
+  printf '{"packageManager":"%s"}\n' "$ROOT_PACKAGE_MANAGER" > "$repo/package.json"
   printf 'prior\n' > "$repo/release-marker.txt"
   git -C "$repo" add .
   git -C "$repo" commit --quiet -m 'fixture: prior verified release'
