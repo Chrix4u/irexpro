@@ -361,6 +361,377 @@ async function testRevokeOtherSessionsNetworkErrorContract() {
   );
 }
 
+async function testStartBrokerOAuthChannelContract() {
+  const scenarios = [
+    {
+      label: 'mobile channel claims a server callback slot',
+      args: ['ctrader', { channel: 'mobile' }],
+      expectedBody: { brokerId: 'ctrader', channel: 'mobile' },
+    },
+    {
+      label: 'no options stays source-compatible for web callers',
+      args: ['ctrader', undefined],
+      expectedBody: { brokerId: 'ctrader' },
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    const calls = [];
+    const responseBody = {
+      authorizationUrl: 'https://id.ctrader.com/oauth/authorize?fixture=1',
+      flowId: 'fixture-flow-id',
+      expiresAt: '2025-01-01T00:00:00.000Z',
+    };
+    const fakeFetch = async (url, init) => {
+      calls.push({ url, init });
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => responseBody,
+      };
+    };
+
+    const { createApiClient } = loadApiClient(fakeFetch);
+    const client = createApiClient({
+      baseUrl: 'https://api.example.test/api/v1',
+      getAccessToken: () => 'fixture-access-token',
+    });
+
+    const result = await client.startBrokerOAuth(...scenario.args);
+
+    assert.deepEqual(result, responseBody);
+    assert.equal(
+      calls.length,
+      1,
+      `oauth authorize (${scenario.label}) must issue exactly one request`,
+    );
+    const [{ url, init }] = calls;
+    assert.equal(url, 'https://api.example.test/api/v1/broker/connections/oauth/authorize');
+    assert.equal(init.method, 'POST');
+    // Finding 4: the body carries ONLY the broker id + optional channel — a
+    // redirect URI (custom app scheme) must NEVER be client-supplied.
+    assert.deepEqual(JSON.parse(init.body), scenario.expectedBody);
+    assert.equal(init.headers.Authorization, 'Bearer fixture-access-token');
+    assert.equal(init.headers['Content-Type'], 'application/json');
+  }
+}
+
+async function testExchangeBrokerOAuthHandoffContract() {
+  const calls = [];
+  const responseBody = {
+    flowId: 'fixture-flow-id',
+    accounts: [
+      {
+        ctidTraderAccountId: '1234567',
+        isLive: false,
+        traderLogin: 1234567,
+        brokerTitleShort: 'cTrader',
+      },
+    ],
+  };
+  const fakeFetch = async (url, init) => {
+    calls.push({ url, init });
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => responseBody,
+    };
+  };
+
+  const { createApiClient } = loadApiClient(fakeFetch);
+  const client = createApiClient({
+    baseUrl: 'https://api.example.test/api/v1',
+    getAccessToken: () => 'fixture-access-token',
+  });
+
+  const result = await client.exchangeBrokerOAuthHandoff({
+    handoffToken: 'fixture-one-time-handoff-token',
+  });
+
+  assert.deepEqual(result, responseBody);
+  assert.equal(calls.length, 1, 'oauth handoff must issue exactly one request');
+  const [{ url, init }] = calls;
+  assert.equal(url, 'https://api.example.test/api/v1/broker/connections/oauth/handoff');
+  assert.equal(init.method, 'POST');
+  // Finding 4: the ONLY mobile-side secret-ish value is the opaque one-time
+  // handoff token — no provider code, access token, or refresh token.
+  assert.deepEqual(JSON.parse(init.body), {
+    handoffToken: 'fixture-one-time-handoff-token',
+  });
+  assert.equal(init.headers.Authorization, 'Bearer fixture-access-token');
+  assert.equal(init.headers['Content-Type'], 'application/json');
+}
+
+async function testActiveTradingSessionContract() {
+  const calls = [];
+  const responseBody = {
+    session: {
+      id: 'sess_00000000-0000-0000-0000-000000000001',
+      brokerConnectionId: 'bconn_00000000-0000-0000-0000-000000000001',
+      executionMode: 'SEMI_AUTO',
+      authorityGeneration: 3,
+      status: 'ACTIVE',
+      openingBalance: '10000.00',
+      peakEquity: '10250.00',
+      startedAt: '2026-09-10T00:00:00.000Z',
+    },
+  };
+  const fakeFetch = async (url, init) => {
+    calls.push({ url, init });
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => responseBody,
+    };
+  };
+
+  const { createApiClient } = loadApiClient(fakeFetch);
+  const client = createApiClient({
+    baseUrl: 'https://api.example.test/api/v1',
+    getAccessToken: () => 'fixture-access-token',
+  });
+
+  const result = await client.getActiveTradingSession();
+
+  // The authoritative session state arrives in the { session } envelope —
+  // the client must not unwrap, re-shape, or default it.
+  assert.deepEqual(result, responseBody);
+  assert.equal(calls.length, 1, 'active session must issue exactly one request');
+  const [{ url, init }] = calls;
+  assert.equal(url, 'https://api.example.test/api/v1/trading/sessions/active');
+  assert.equal(init.method ?? 'GET', 'GET');
+  assert.equal(init.headers.Authorization, 'Bearer fixture-access-token');
+  assert.equal(init.headers['Content-Type'], 'application/json');
+}
+
+async function testStartTradingSessionContract() {
+  const calls = [];
+  const responseBody = {
+    session: {
+      id: 'sess_00000000-0000-0000-0000-000000000002',
+      brokerConnectionId: 'bconn_00000000-0000-0000-0000-000000000001',
+      executionMode: 'PAPER_ONLY',
+      authorityGeneration: 1,
+      status: 'ACTIVE',
+      openingBalance: null,
+      peakEquity: null,
+      startedAt: '2026-09-10T00:00:00.000Z',
+    },
+  };
+  const fakeFetch = async (url, init) => {
+    calls.push({ url, init });
+    return {
+      ok: true,
+      status: 201,
+      statusText: 'Created',
+      json: async () => responseBody,
+    };
+  };
+
+  const { createApiClient } = loadApiClient(fakeFetch);
+  const client = createApiClient({
+    baseUrl: 'https://api.example.test/api/v1',
+    getAccessToken: () => 'fixture-access-token',
+  });
+
+  const result = await client.startTradingSession({
+    brokerConnectionId: 'bconn_00000000-0000-0000-0000-000000000001',
+    executionMode: 'PAPER_ONLY',
+  });
+
+  assert.deepEqual(result, responseBody);
+  assert.equal(calls.length, 1, 'session start must issue exactly one request');
+  const [{ url, init }] = calls;
+  assert.equal(url, 'https://api.example.test/api/v1/trading/sessions/start');
+  assert.equal(init.method, 'POST');
+  // The body binds the EXACT connection + durable execution mode — the
+  // legacy `requestedMode` shape is gone.
+  assert.deepEqual(JSON.parse(init.body), {
+    brokerConnectionId: 'bconn_00000000-0000-0000-0000-000000000001',
+    executionMode: 'PAPER_ONLY',
+  });
+  assert.equal(init.headers.Authorization, 'Bearer fixture-access-token');
+  assert.equal(init.headers['Content-Type'], 'application/json');
+}
+
+async function testChangeTradingSessionModeContract() {
+  const calls = [];
+  const responseBody = {
+    session: {
+      id: 'sess_00000000-0000-0000-0000-000000000001',
+      brokerConnectionId: 'bconn_00000000-0000-0000-0000-000000000001',
+      executionMode: 'FULL_AUTO',
+      authorityGeneration: 4,
+      status: 'ACTIVE',
+      openingBalance: '10000.00',
+      peakEquity: '10250.00',
+      startedAt: '2026-09-10T00:00:00.000Z',
+    },
+  };
+  const fakeFetch = async (url, init) => {
+    calls.push({ url, init });
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => responseBody,
+    };
+  };
+
+  const { createApiClient } = loadApiClient(fakeFetch);
+  const client = createApiClient({
+    baseUrl: 'https://api.example.test/api/v1',
+    getAccessToken: () => 'fixture-access-token',
+  });
+
+  const result = await client.changeTradingSessionMode(
+    'sess/needs encoding-1',
+    { executionMode: 'FULL_AUTO' },
+  );
+
+  assert.deepEqual(result, responseBody);
+  assert.equal(calls.length, 1, 'mode change must issue exactly one request');
+  const [{ url, init }] = calls;
+  // The session id is path-encoded; the body carries ONLY the new mode —
+  // the audited generation bump is server-side.
+  assert.equal(
+    url,
+    'https://api.example.test/api/v1/trading/sessions/sess%2Fneeds%20encoding-1/mode',
+  );
+  assert.equal(init.method, 'POST');
+  assert.deepEqual(JSON.parse(init.body), { executionMode: 'FULL_AUTO' });
+  assert.equal(init.headers.Authorization, 'Bearer fixture-access-token');
+  assert.equal(init.headers['Content-Type'], 'application/json');
+}
+
+async function testExecutionConfirmationsContract() {
+  // ── pending list ──
+  {
+    const calls = [];
+    const responseBody = {
+      confirmations: [
+        {
+          id: 'conf_00000000-0000-0000-0000-000000000001',
+          signalId: 'sig_00000000-0000-0000-0000-000000000001',
+          instrument: 'EURUSD',
+          direction: 'BUY',
+          quantity: '0.10',
+          stopLoss: '1.09500000',
+          takeProfit: '1.11000000',
+          expiresAt: '2026-09-10T00:05:00.000Z',
+          orderPayloadDigest:
+            'sha256:fixture-digest-0000000000000000000000000000000000000000000000000000',
+        },
+      ],
+    };
+    const fakeFetch = async (url, init) => {
+      calls.push({ url, init });
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => responseBody,
+      };
+    };
+
+    const { createApiClient } = loadApiClient(fakeFetch);
+    const client = createApiClient({
+      baseUrl: 'https://api.example.test/api/v1',
+      getAccessToken: () => 'fixture-access-token',
+    });
+
+    const result = await client.listPendingExecutionConfirmations();
+
+    assert.deepEqual(result, responseBody);
+    assert.equal(calls.length, 1, 'pending confirmations must issue exactly one request');
+    const [{ url, init }] = calls;
+    assert.equal(url, 'https://api.example.test/api/v1/execution/confirmations/pending');
+    assert.equal(init.method ?? 'GET', 'GET');
+    assert.equal(init.headers.Authorization, 'Bearer fixture-access-token');
+  }
+
+  // ── confirm: server-consumed authority result ──
+  {
+    const calls = [];
+    const responseBody = { status: 'CONSUMED' };
+    const fakeFetch = async (url, init) => {
+      calls.push({ url, init });
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => responseBody,
+      };
+    };
+
+    const { createApiClient } = loadApiClient(fakeFetch);
+    const client = createApiClient({
+      baseUrl: 'https://api.example.test/api/v1',
+      getAccessToken: () => 'fixture-access-token',
+    });
+
+    const result = await client.confirmExecutionConfirmation(
+      'conf/needs encoding-1',
+    );
+
+    // CONSUMED is the ONLY success value — the client never fabricates
+    // approval state locally.
+    assert.deepEqual(result, responseBody);
+    assert.equal(result.status, 'CONSUMED');
+    assert.equal(calls.length, 1, 'confirm must issue exactly one request');
+    const [{ url, init }] = calls;
+    assert.equal(
+      url,
+      'https://api.example.test/api/v1/execution/confirmations/conf%2Fneeds%20encoding-1/confirm',
+    );
+    assert.equal(init.method, 'POST');
+    // No-body POST convention (mirrors logout/revoke-others).
+    assert.equal(init.body, undefined);
+    assert.equal(init.headers.Authorization, 'Bearer fixture-access-token');
+    assert.equal(init.headers['Content-Type'], 'application/json');
+  }
+}
+
+async function testConfirmExecutionConfirmation409Contract() {
+  // A 409-style typed failure (expired/consumed/revoked/mismatched-generation)
+  // must surface as an ApiClientError carrying the server body — the caller
+  // renders the server's typed failure, never a local success.
+  const fakeFetch = async () => ({
+    ok: false,
+    status: 409,
+    statusText: 'Conflict',
+    json: async () => ({
+      statusCode: 409,
+      message: 'Confirmation expired',
+      error: 'Conflict',
+    }),
+  });
+
+  const { createApiClient, ApiClientError } = loadApiClient(fakeFetch);
+  const client = createApiClient({
+    baseUrl: 'https://api.example.test/api/v1',
+    getAccessToken: () => 'fixture-access-token',
+  });
+
+  await assert.rejects(
+    client.confirmExecutionConfirmation('conf_00000000-0000-0000-0000-000000000001'),
+    (error) => {
+      assert.ok(error instanceof ApiClientError, 'error must be an ApiClientError');
+      assert.equal(error.statusCode, 409);
+      assert.equal(error.message, 'Confirmation expired');
+      assert.deepEqual(error.raw, {
+        statusCode: 409,
+        message: 'Confirmation expired',
+        error: 'Conflict',
+      });
+      return true;
+    },
+  );
+}
+
 async function main() {
   await testMfaSetupPasswordContract();
   console.log('api-client MFA setup contract test passed.');
@@ -378,6 +749,20 @@ async function main() {
   console.log('api-client change-password failure contract test passed.');
   await testRevokeOtherSessionsNetworkErrorContract();
   console.log('api-client revoke-others network-failure contract test passed.');
+  await testStartBrokerOAuthChannelContract();
+  console.log('api-client oauth authorize channel contract test passed.');
+  await testExchangeBrokerOAuthHandoffContract();
+  console.log('api-client oauth handoff contract test passed.');
+  await testActiveTradingSessionContract();
+  console.log('api-client active-trading-session contract test passed.');
+  await testStartTradingSessionContract();
+  console.log('api-client trading-session start contract test passed.');
+  await testChangeTradingSessionModeContract();
+  console.log('api-client trading-session mode-change contract test passed.');
+  await testExecutionConfirmationsContract();
+  console.log('api-client execution confirmations contract test passed.');
+  await testConfirmExecutionConfirmation409Contract();
+  console.log('api-client confirmation 409-failure contract test passed.');
 }
 
 main().catch((error) => {

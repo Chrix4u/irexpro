@@ -1,5 +1,7 @@
 import { ForbiddenException, Logger } from '@nestjs/common';
 import { ExecutionOrchestrator } from './execution-orchestrator.service';
+import type { MarketSafetyGateService } from './market-safety-gate.service';
+import { AccountDispatchLeaseService } from './account-dispatch-lease.service';
 import { ExecutionIntent } from './execution-intent.interface';
 import { Order } from '../orders/order.entity';
 import { OrderKind, OrderStatus, OrderTimeInForce } from '../orders/order.enums';
@@ -124,6 +126,19 @@ describe('ExecutionOrchestrator', () => {
       checkExecutionPermission: jest.fn().mockResolvedValue({ allowed: true, blockedBy: null }),
     };
     adapter = {
+      // Round 6 §7: full-capability declaration (per-test overrides can
+      // narrow it to exercise the fail-closed contract).
+      getOrderCapabilities: jest.fn().mockReturnValue({
+        brokerId: 'paper-broker',
+        supportedOrderKinds: ['MARKET', 'LIMIT', 'STOP', 'STOP_LIMIT'],
+        requirements: {
+          MARKET: { limitPriceRequired: false, stopPriceRequired: false },
+          LIMIT: { limitPriceRequired: true, stopPriceRequired: false },
+          STOP: { limitPriceRequired: false, stopPriceRequired: true },
+          STOP_LIMIT: { limitPriceRequired: true, stopPriceRequired: true },
+        },
+        marketSlTpAttachedAtPlacement: true,
+      }),
       setMode: jest.fn(),
       connect: jest.fn().mockResolvedValue({ success: true }),
       placeOrder: jest.fn().mockResolvedValue({
@@ -155,11 +170,24 @@ describe('ExecutionOrchestrator', () => {
       brokerService as unknown as BrokerService,
       controlService as unknown as ExecutionControlService,
       {
-        getAdapter: jest.fn().mockReturnValue(adapter as unknown as IBrokerAdapter),
+        getAdapterForConnection: jest.fn().mockReturnValue(adapter as unknown as IBrokerAdapter),
       } as unknown as BrokerAdapterRegistry,
       encryptionService as unknown as CredentialEncryptionService,
       auditService as unknown as AuditService,
       eventBus as unknown as DomainEventBus,
+      // Round 6 (#365): the provider-dispatch commitment seam — these suites
+      // drive dispatchOrder WITHOUT a commitment payload, so the boundary is
+      // never invoked.
+      {} as never,
+      // Round 6 §5/§18: the market-safety gate is exercised at the SEAM
+      // (its own matrix lives in market-safety-gate.spec.ts) — passes by
+      // default; per-test overrides make it fail closed.
+      {
+        assertMarketSafeForDispatch: jest.fn().mockResolvedValue(undefined),
+      } as unknown as MarketSafetyGateService,
+      // Round 6 §14: the per-account dispatch lease (real implementation —
+      // its own matrix lives in account-dispatch-lease.spec.ts).
+      new AccountDispatchLeaseService(),
     );
   });
 
@@ -499,7 +527,12 @@ describe('ExecutionOrchestrator', () => {
       adapter.placeOrder.mockRejectedValueOnce(new Error('MetaAPI network error'));
       const outcome = await orchestrator.dispatchOrder(intent, connection);
 
-      expect(outcome).toMatchObject({ outcome: 'UNKNOWN', reason: 'MetaAPI network error' });
+      // Correction round 4 (finding 7): the reconciliation reason carries the
+      // write-certainty classification (sanitized) for downstream evidence.
+      expect(outcome).toMatchObject({
+        outcome: 'UNKNOWN',
+        reason: 'Dispatch error (MAY_HAVE_REACHED_PROVIDER): MetaAPI network error',
+      });
       expect(orderService.markReconciliationPending).toHaveBeenCalledWith('order-1');
       expect(auditService.log).toHaveBeenCalledWith(
         expect.objectContaining({

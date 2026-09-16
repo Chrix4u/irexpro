@@ -41,7 +41,10 @@
       "postcss@8.4.31": "8.5.18",
       "socket.io-parser@3.3.5": "3.3.6",
       "socket.io-parser@4.2.6": "4.2.7"
-    }
+    },
+    "onlyBuiltDependencies": [
+      "sqlite3"
+    ]
   },
   "engines": {
     "node": ">=20.0.0",

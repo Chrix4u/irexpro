@@ -4,6 +4,12 @@ import { Job } from 'bullmq';
 import { BrokerConnection } from '../../broker/entities/broker-connection.entity';
 import { StateReconciliationService } from '../reconciliation/state-reconciliation.service';
 import { ReconciliationRunOutcome } from '../reconciliation/state-reconciliation.service';
+// Round 6 live-execution completion (§8): the protective-order loop runs
+// after every per-connection state sweep.
+import {
+  ProtectiveOrderReconciliationService,
+  ProtectiveReconciliationOutcome,
+} from '../reconciliation/protective-order-reconciliation.service';
 
 export const TRADE_RECONCILIATION_QUEUE = 'trade-reconciliation';
 export const TRADE_RECONCILIATION_JOB = 'reconcile-open-trades';
@@ -19,7 +25,10 @@ export const RECONCILIATION_INTERVAL_MS = 60_000; // 60 seconds
  * discrepancy records. The job now:
  *   1. Discovers candidate connections (internal state worth reconciling).
  *   2. Runs ONE full state reconciliation per connection — SEQUENTIALLY.
- *   3. Aggregates outcomes; per-connection failures never break the loop.
+ *   3. Round 6 §8: runs the protective-order reconciliation loop (per-trade
+ *      SL/TP verify/repair) after each state sweep — same sequential adapter
+ *      model, same per-connection failure isolation.
+ *   4. Aggregates outcomes; per-connection failures never break the loop.
  *
  * WHY SEQUENTIAL: broker adapters are stateful singletons (MetaTrader sets
  * currentAccountId per connect) — the previous Promise.allSettled over
@@ -38,7 +47,11 @@ export const RECONCILIATION_INTERVAL_MS = 60_000; // 60 seconds
 export class TradeReconciliationJob extends WorkerHost {
   private readonly logger = new Logger(TradeReconciliationJob.name);
 
-  constructor(private readonly stateReconciliation: StateReconciliationService) {
+  constructor(
+    private readonly stateReconciliation: StateReconciliationService,
+    // Round 6 §8: the protective-order loop (per-trade SL/TP verify/repair).
+    private readonly protectiveOrderReconciliation: ProtectiveOrderReconciliationService,
+  ) {
     super();
   }
 
@@ -49,6 +62,9 @@ export class TradeReconciliationJob extends WorkerHost {
     discrepanciesAutoResolved: number;
     discrepanciesOpen: number;
     failedConnections: number;
+    protectiveOrdersChecked: number;
+    protectiveOrdersRepaired: number;
+    protectiveRepairsFailed: number;
   }> {
     this.logger.debug(`Running reconciliation worker cycle ${job.id}`);
 
@@ -63,6 +79,9 @@ export class TradeReconciliationJob extends WorkerHost {
         discrepanciesAutoResolved: 0,
         discrepanciesOpen: 0,
         failedConnections: 0,
+        protectiveOrdersChecked: 0,
+        protectiveOrdersRepaired: 0,
+        protectiveRepairsFailed: 0,
       };
     }
 
@@ -73,6 +92,10 @@ export class TradeReconciliationJob extends WorkerHost {
     let discrepanciesAutoResolved = 0;
     let discrepanciesOpen = 0;
     let failedConnections = 0;
+    // Round 6 §8: protective-order aggregates.
+    let protectiveOrdersChecked = 0;
+    let protectiveOrdersRepaired = 0;
+    let protectiveRepairsFailed = 0;
 
     // Sequential per connection (stateful adapter model — see class docs).
     for (const connection of connections) {
@@ -91,13 +114,31 @@ export class TradeReconciliationJob extends WorkerHost {
           `Reconciliation run threw for connection ${connection.id}: ${(err as Error).message}`,
         );
       }
+
+      // Round 6 §8: the protective-order loop AFTER the state sweep (same
+      // connection, sequential adapter model). A protective-loop failure
+      // never breaks the cycle — every failure is typed + audited inside.
+      try {
+        const protective: ProtectiveReconciliationOutcome =
+          await this.protectiveOrderReconciliation.reconcileProtectiveOrders(connection);
+        protectiveOrdersChecked += protective.checked;
+        protectiveOrdersRepaired += protective.repairedCount;
+        protectiveRepairsFailed += protective.repairFailedCount;
+      } catch (err) {
+        this.logger.error(
+          `Protective-order reconciliation threw for connection ${connection.id}: ` +
+            `${(err as Error).message}`,
+        );
+      }
     }
 
     this.logger.log(
       `Reconciliation cycle complete: ${connections.length} connections, ` +
         `${discrepanciesDetected} detected (${discrepanciesNew} new), ` +
         `${discrepanciesAutoResolved} auto-resolved, ${discrepanciesOpen} open, ` +
-        `${failedConnections} failed`,
+        `${failedConnections} failed; protective orders: ${protectiveOrdersChecked} ` +
+        `checked, ${protectiveOrdersRepaired} repaired, ${protectiveRepairsFailed} ` +
+        `repair failures`,
     );
 
     return {
@@ -107,6 +148,9 @@ export class TradeReconciliationJob extends WorkerHost {
       discrepanciesAutoResolved,
       discrepanciesOpen,
       failedConnections,
+      protectiveOrdersChecked,
+      protectiveOrdersRepaired,
+      protectiveRepairsFailed,
     };
   }
 }

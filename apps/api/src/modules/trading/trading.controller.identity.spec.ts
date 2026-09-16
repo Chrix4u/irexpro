@@ -1,6 +1,7 @@
 import { TradingController } from './trading.controller';
 import { TradingService } from './trading.service';
 import { StartSessionDto } from './dto/start-session.dto';
+import { ExecutionMode } from '../execution/interfaces/execution-authority';
 import { AllowedTradingMode } from '../risk/entities/risk-profile.entity';
 
 /**
@@ -21,9 +22,18 @@ describe('TradingController (Hotfix — UUID identity regression)', () => {
       startTradingSession: jest.fn().mockResolvedValue({
         id: SESSION_ID,
         userId: USER_ID,
+        executionMode: ExecutionMode.PAPER_ONLY,
+        authorityGeneration: 1,
         status: 'ACTIVE',
       }),
       stopTradingSession: jest.fn().mockResolvedValue(undefined),
+      changeExecutionMode: jest.fn().mockResolvedValue({
+        id: SESSION_ID,
+        userId: USER_ID,
+        executionMode: ExecutionMode.SEMI_AUTO,
+        authorityGeneration: 2,
+        status: 'ACTIVE',
+      }),
       getActiveSession: jest.fn().mockResolvedValue({
         id: SESSION_ID,
         userId: USER_ID,
@@ -39,14 +49,36 @@ describe('TradingController (Hotfix — UUID identity regression)', () => {
 
   describe('passes only UUID string to TradingService', () => {
     it('startSession passes userId as UUID string', async () => {
+      const dto: StartSessionDto = { executionMode: ExecutionMode.PAPER_ONLY };
+      await controller.startSession(USER_ID, dto);
+      expect(tradingService.startTradingSession).toHaveBeenCalledWith(
+        USER_ID,
+        undefined,
+        ExecutionMode.PAPER_ONLY,
+      );
+      expect(typeof tradingService.startTradingSession.mock.calls[0][0]).toBe('string');
+    });
+
+    it('startSession resolves the legacy requestedMode alias to the same ExecutionMode value', async () => {
       const dto: StartSessionDto = { requestedMode: AllowedTradingMode.PAPER_ONLY };
       await controller.startSession(USER_ID, dto);
       expect(tradingService.startTradingSession).toHaveBeenCalledWith(
         USER_ID,
         undefined,
-        AllowedTradingMode.PAPER_ONLY,
+        ExecutionMode.PAPER_ONLY,
       );
-      expect(typeof tradingService.startTradingSession.mock.calls[0][0]).toBe('string');
+    });
+
+    it('changeExecutionMode passes userId + sessionId as UUID strings', async () => {
+      await controller.changeExecutionMode(USER_ID, SESSION_ID, {
+        executionMode: ExecutionMode.SEMI_AUTO,
+      });
+      expect(tradingService.changeExecutionMode).toHaveBeenCalledWith(
+        USER_ID,
+        SESSION_ID,
+        ExecutionMode.SEMI_AUTO,
+      );
+      expect(typeof tradingService.changeExecutionMode.mock.calls[0][0]).toBe('string');
     });
 
     it('stopSession passes userId as UUID string', async () => {

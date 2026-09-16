@@ -13,6 +13,8 @@
  *
  * See: docs/architecture/09-broker-integration-architecture.md
  */
+import type { OrderCapabilityDeclaration } from './order-capability';
+
 export interface IBrokerAdapter {
   readonly brokerId: string;
   readonly brokerName: string;
@@ -61,6 +63,19 @@ export interface IBrokerAdapter {
    * for LIVE execution. If this returns null, the Risk Engine fails closed.
    */
   getRequiredMargin(params: RequiredMarginParams): Promise<string | null>;
+
+  // ─── Order capability contract (Round 6 §7) ───────────────────────────────
+
+  /**
+   * The adapter's DECLARED order capability matrix: supported normalized
+   * order kinds, per-kind required fields, and whether MARKET orders attach
+   * SL/TP at placement. Enforced pre-commitment by the orchestrator
+   * (assertOrderWithinCapabilities — typed, zero provider calls) and
+   * verified by the shared adapter contract suite. The declaration is the
+   * TRUTH the adapter must honor: a declared kind is accepted, an undeclared
+   * kind is rejected loudly — never silently downgraded.
+   */
+  getOrderCapabilities(): OrderCapabilityDeclaration;
 
   // ─── Market data ──────────────────────────────────────────────────────────
 
@@ -166,6 +181,15 @@ export interface DecryptedBrokerCredentials {
   apiSecret?: string;
   accountId: string;
   serverUrl?: string;
+  /**
+   * Provider-specific credential parameters. Documented conventions (kept
+   * INSIDE the AES-256-GCM ciphertext — never plaintext at rest):
+   * - cTrader family (Sprint 56): `refreshToken` (the OAuth refresh token)
+   *   and `accessTokenExpiresAt` (ISO-8601 expiry of the access token in
+   *   `apiKey`). The token-lifecycle service refreshes the pair BEFORE
+   *   provider use when expired/near-expiry and atomically persists the new
+   *   pair (cTrader invalidates the previous pair on refresh).
+   */
   additionalParams?: Record<string, string>;
 }
 
@@ -175,7 +199,9 @@ export interface BrokerConnectionResult {
   success: boolean;
   accountId: string;
   accountType: BrokerMode;
-  currency: string;
+  /** #7 (round 6): null when the provider reports NO currency — never a
+   *  synthetic fallback that would mis-label account money. */
+  currency: string | null;
   serverTime: Date;
   error?: string;
 }
@@ -193,7 +219,9 @@ export interface BrokerConnectionTestResult {
 
 export interface BrokerAccountInfo {
   accountId: string;
-  currency: string;
+  /** #7 (round 6): null when the provider reports NO currency — never a
+   *  synthetic fallback that would mis-label account money. */
+  currency: string | null;
   leverage: number;
   balance: string;
   equity: string;

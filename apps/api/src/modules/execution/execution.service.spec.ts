@@ -4,8 +4,23 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { ExecutionService } from './execution.service';
 import { ExecutionOrchestrator } from './orchestration/execution-orchestrator.service';
+import { FinalDispatchBoundary } from './orchestration/final-dispatch-boundary';
+import { TradeLifecycleCasService } from './orders/trade-lifecycle-cas.service';
 import { Trade, TradeCloseReason, TradeStatus } from './entities/trade.entity';
 import { TradingSession, TradingSessionStatus } from './entities/trading-session.entity';
+import { RiskGrant } from './entities/risk-grant.entity';
+import { ExecutionConfirmation } from './entities/execution-confirmation.entity';
+import { ExecutionMode } from './interfaces/execution-authority';
+import {
+  ActiveSessionConflictException,
+  BrokerConnectionNotConnectedException,
+  BrokerConnectionNotExecutableException,
+  BrokerConnectionOwnershipException,
+  ExecutionSessionResolutionService,
+} from './execution-session.resolution';
+import { TradeIntentService } from './services/trade-intent.service';
+import { MarketSafetyError } from './orchestration/market-safety-gate.service';
+import { ProviderDispatchCertainty } from '../broker/interfaces/provider-dispatch-certainty';
 import { Order } from './orders/order.entity';
 import { BrokerService } from '../broker/broker.service';
 import { AuditService } from '../audit/audit.service';
@@ -14,6 +29,7 @@ import { RiskDecision, RiskRejectionCode } from '../risk/interfaces/risk.interfa
 import { BrokerConnectionStatus, BrokerMode } from '../broker/interfaces/broker-adapter.interface';
 import { DomainEventBus } from '../events/event-bus.service';
 import { ProviderDispatchOutcome } from './orchestration/execution-intent.interface';
+import { RiskGrantStatus } from './interfaces/execution-authority';
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -34,6 +50,13 @@ const approvedDecision: RiskDecision = {
   evaluatedAt: new Date(),
   // Sprint 32 Gate 2: required for the advisory-lock daily-trade-slot reservation
   maxDailyTrades: 10,
+  // Round 5 (task 50-c): the durable authority handle — the final dispatch
+  // boundary requires + atomically consumes the server-issued grant.
+  grantId: 'grant-1',
+  sessionId: 'session-1',
+  sessionGeneration: 1,
+  executionMode: 'PAPER_ONLY',
+  brokerConnectionId: 'conn-1',
 };
 
 const rejectedDecision: RiskDecision = {
@@ -50,6 +73,7 @@ const mockBrokerConnection = {
   brokerId: 'metatrader',
   accountType: BrokerMode.DEMO,
   status: BrokerConnectionStatus.CONNECTED,
+  authorizationStatus: 'ACTIVE',
   encryptedCredentials: 'enc',
   credentialIv: 'iv',
   credentialTag: 'tag',
@@ -57,6 +81,20 @@ const mockBrokerConnection = {
 };
 
 const mockOrder = { id: 'order-1', clientOrderId: 'sig-sig-001', status: 'FILLED' } as Order;
+
+/** Round 6 §17: the canonical OPEN-trade fixture for the kill-switch flatten. */
+const baseTradeFixture = {
+  id: 'trade-1',
+  userId: 'user-1',
+  status: TradeStatus.OPEN,
+  externalOrderId: 'ext-1',
+  brokerConnectionId: 'conn-1',
+  instrument: 'EURUSD',
+  direction: 'BUY',
+  lotSize: '0.05',
+  signalId: null,
+  openedAt: new Date(),
+};
 
 /** A canonical FILLED dispatch outcome (provider executed the order). */
 const filledOutcome: ProviderDispatchOutcome = {
@@ -84,15 +122,32 @@ describe('ExecutionService', () => {
     create: jest.Mock;
     save: jest.Mock;
     update: jest.Mock;
+    // Round 5 (task 50-c): uncertain-exposure accounting (#314) runs counts
+    // through the repository query builder.
+    createQueryBuilder: jest.Mock;
   }>;
   let sessionRepo: jest.Mocked<{
     findOne: jest.Mock;
     create: jest.Mock;
+    insert: jest.Mock;
     save: jest.Mock;
     update: jest.Mock;
+    createQueryBuilder: jest.Mock;
   }>;
+  /** Row "persisted" by the insert mock — read back by the post-insert findOne. */
+  let insertedSession: Record<string, unknown> | null;
+  let authorityRepoStubs: { createQueryBuilder: jest.Mock; update: jest.Mock; findOne: jest.Mock };
   let auditService: { log: jest.Mock };
   let dataSource: { query: jest.Mock; transaction: jest.Mock };
+  let finalDispatchBoundary: { authorizeNewExposureDispatch: jest.Mock };
+  let tradeCas: { applyCasTransition: jest.Mock };
+  /** Round 6 §2: the durable TradeIntent guard — seam-level mock (the
+   * intent matrix lives in trade-intent.service.spec.ts). */
+  let tradeIntentService: {
+    resolveIntentForExecutionBySignal: jest.Mock;
+    markExecuted: jest.Mock;
+    markRejected: jest.Mock;
+  };
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -109,13 +164,139 @@ describe('ExecutionService', () => {
       create: jest.fn().mockImplementation((obj) => ({ id: 'trade-1', ...obj })),
       save: jest.fn().mockImplementation(async (obj) => ({ id: 'trade-1', ...obj })),
       update: jest.fn().mockResolvedValue({ affected: 1 }),
+      // Round 5 (task 50-c): countOpenTrades/countTodayTrades run through the
+      // repository query builder (uncertain-exposure accounting, #314).
+      createQueryBuilder: jest.fn().mockReturnValue({
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        orWhere: jest.fn().mockReturnThis(),
+        getCount: jest.fn().mockResolvedValue(0),
+      }),
     };
 
+    // Round 5 (task 50-c): the final dispatch boundary is exercised at the
+    // SEAM in this unit suite (its full check matrix lives in
+    // final-dispatch-boundary.spec.ts): a valid grant authorization resolves
+    // the boundary-verified connection — executeTrade NEVER re-discovers it.
+    finalDispatchBoundary = {
+      authorizeNewExposureDispatch: jest.fn().mockImplementation(async () => ({
+        context: {
+          userId: 'user-1',
+          signalId: 'sig-001',
+          operationType: 'NEW_EXPOSURE',
+          sessionId: 'session-1',
+          sessionGeneration: 1,
+          executionMode: 'PAPER_ONLY',
+          brokerConnectionId: 'conn-1',
+          brokerAccountId: null,
+          providerTechnology: 'paper-broker',
+          providerBrokerIdentity: null,
+          providerVerificationFingerprint: null,
+          financialSnapshotGeneration: null,
+          riskProfileId: null,
+          riskProfileVersion: null,
+          riskGrantId: 'grant-1',
+          authorityGeneration: 1,
+          validatedOrderDigest: 'digest-1',
+        },
+        connection: mockBrokerConnection,
+        confirmationId: null,
+        operationClass: 'NEW_EXPOSURE',
+      })),
+    };
+    // The trade-lifecycle CAS is exercised at the seam with a WRITE-THROUGH
+    // stub (the real CAS matrix lives in trade-cas.spec.ts): every transition
+    // still lands on tradeRepo.update so the existing persistence assertions
+    // keep proving the outcome mappings.
+    tradeCas = {
+      applyCasTransition: jest
+        .fn()
+        .mockImplementation(
+          async (params: {
+            tradeId: string;
+            target: TradeStatus;
+            patch: Record<string, unknown>;
+          }) => {
+            await tradeRepo.update(params.tradeId, params.patch as never);
+            return {
+              outcome: 'APPLIED',
+              trade: { id: params.tradeId, status: params.target, ...params.patch },
+            };
+          },
+        ),
+    };
+
+    // Round 6 §2: every APPROVED executeTrade path carries a usable intent
+    // (CREATED, unexpired) — per-test overrides replace this wholesale.
+    tradeIntentService = {
+      resolveIntentForExecutionBySignal: jest.fn().mockResolvedValue({
+        id: 'intent-1',
+        userId: 'user-1',
+        signalId: 'sig-001',
+        intentKey: 'user-1:sig-001',
+        status: 'CREATED',
+        expiresAt: new Date(Date.now() + 60_000),
+      }),
+      markExecuted: jest.fn().mockResolvedValue(undefined),
+      markRejected: jest.fn().mockResolvedValue(undefined),
+    };
+
+    insertedSession = null;
     sessionRepo = {
-      findOne: jest.fn().mockResolvedValue(null),
+      findOne: jest.fn().mockImplementation(async (opts?: { where?: Record<string, unknown> }) => {
+        // Post-insert re-read returns the row the insert mock persisted;
+        // active-session lookups (no id filter) default to null — per-test
+        // overrides replace this implementation wholesale.
+        if (opts?.where?.id) return insertedSession;
+        return null;
+      }),
       create: jest.fn().mockImplementation((obj) => obj),
+      insert: jest.fn().mockImplementation(async (entity) => {
+        insertedSession = entity;
+        return { generatedMaps: [entity] };
+      }),
       save: jest.fn().mockImplementation(async (obj) => obj),
       update: jest.fn().mockResolvedValue({ affected: 1 }),
+      // Round 5: endSession / changeExecutionMode CAS via createQueryBuilder.
+      createQueryBuilder: jest.fn().mockReturnValue({
+        update: jest.fn().mockReturnThis(),
+        set: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        execute: jest.fn().mockResolvedValue({ affected: 1 }),
+      }),
+    };
+    // Round 5: RiskGrant / ExecutionConfirmation repositories are exercised
+    // for authority invalidation only via createQueryBuilder — a chainable
+    // stub keeps these unit tests independent of the store (the real-store
+    // matrix lives in execution-session.authority.spec.ts).
+    // Round 6 (#365): executeTrade's PRE-COMMITMENT grant preflight reads
+    // findOne({ id, userId }) — the canonical ACTIVE 'grant-1' fixture serves
+    // that read; per-test overrides still replace this wholesale (the
+    // unusable-grant / not-found matrices below drive their own fixtures).
+    const activeGrantFixture = {
+      id: 'grant-1',
+      userId: 'user-1',
+      signalId: 'sig-001',
+      sessionId: 'session-1',
+      sessionGeneration: 1,
+      executionMode: ExecutionMode.PAPER_ONLY,
+      brokerConnectionId: 'conn-1',
+      status: RiskGrantStatus.ACTIVE,
+      issuedAt: new Date(),
+      expiresAt: new Date(Date.now() + 60_000),
+    };
+    authorityRepoStubs = {
+      createQueryBuilder: jest.fn().mockReturnValue({
+        update: jest.fn().mockReturnThis(),
+        set: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        execute: jest.fn().mockResolvedValue({ affected: 0 }),
+      }),
+      update: jest.fn().mockResolvedValue({ affected: 0 }),
+      findOne: jest.fn().mockImplementation(async (opts?: { where?: Record<string, unknown> }) => {
+        if (opts?.where?.id === 'grant-1') return activeGrantFixture;
+        return null;
+      }),
     };
 
     auditService = { log: jest.fn().mockResolvedValue(undefined) };
@@ -165,22 +346,42 @@ describe('ExecutionService', () => {
         ExecutionService,
         { provide: getRepositoryToken(Trade), useValue: tradeRepo },
         { provide: getRepositoryToken(TradingSession), useValue: sessionRepo },
+        { provide: getRepositoryToken(RiskGrant), useValue: authorityRepoStubs },
+        { provide: getRepositoryToken(ExecutionConfirmation), useValue: authorityRepoStubs },
         {
           provide: BrokerService,
           useValue: {
-            findActiveConnectionForUser: jest.fn().mockResolvedValue(mockBrokerConnection),
+            // Round 5 (#295): discovery is a NEVER-CALLED sentinel — executeTrade
+            // resolves the session authority seam + exact connection by id.
+            findActiveConnectionForUser: jest.fn(),
+            findConnectionsByIds: jest.fn().mockResolvedValue([mockBrokerConnection]),
             findConnectionById: jest.fn().mockResolvedValue(mockBrokerConnection),
+            isConnectionExecutable: jest.fn().mockReturnValue(true),
           },
         },
         // Sprint 50 PR-3: the provider dispatch pipeline is mocked at the
         // orchestrator seam — adapter-level behavior is covered by the
         // dedicated execution-orchestrator.spec.ts suite.
         { provide: ExecutionOrchestrator, useValue: orchestrator },
+        { provide: FinalDispatchBoundary, useValue: finalDispatchBoundary },
+        { provide: TradeLifecycleCasService, useValue: tradeCas },
+        { provide: TradeIntentService, useValue: tradeIntentService },
         { provide: AuditService, useValue: auditService },
         { provide: DataSource, useValue: dataSource },
         {
           provide: DomainEventBus,
           useValue: { publish: jest.fn(), subscribe: jest.fn().mockReturnValue(() => {}) },
+        },
+        {
+          provide: ExecutionSessionResolutionService,
+          useValue: {
+            resolveActiveSessionAuthority: jest.fn().mockResolvedValue({
+              sessionId: 'session-1',
+              sessionGeneration: 1,
+              executionMode: ExecutionMode.PAPER_ONLY,
+              brokerConnectionId: 'conn-1',
+            }),
+          },
         },
       ],
     }).compile();
@@ -234,10 +435,13 @@ describe('ExecutionService', () => {
   describe('Pre-dispatch gates', () => {
     it('runs assertDispatchable before reserving the trade slot', async () => {
       await service.executeTrade('user-1', approvedDecision);
-      expect(orchestrator.assertDispatchable).toHaveBeenCalledWith({
-        userId: 'user-1',
-        connection: expect.objectContaining({ id: 'conn-1' }),
-      });
+      expect(orchestrator.assertDispatchable).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'user-1',
+          connection: expect.objectContaining({ id: 'conn-1' }),
+          operationClass: 'NEW_EXPOSURE',
+        }),
+      );
     });
 
     it('blocked dispatch (control plane / authorization) rejects before any reservation', async () => {
@@ -250,6 +454,36 @@ describe('ExecutionService', () => {
       expect(orchestrator.dispatchOrder).not.toHaveBeenCalled();
       // No PENDING trade was reserved (dataSource.transaction never ran).
       expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    // ─── Round 6 §5/§18: market-safety rejection carve-out ─────────────
+
+    it('a market-safety gate failure rejects the trade DEFINITELY_NOT_SENT + marks the intent REJECTED (§2)', async () => {
+      orchestrator.dispatchOrder.mockRejectedValueOnce(
+        new MarketSafetyError('STALE_PRICE', 'quote age 45000ms exceeds the window'),
+      );
+      const trade = await service.executeTrade('user-1', approvedDecision);
+
+      expect(trade.status).toBe(TradeStatus.REJECTED);
+      // The CAS write-through stub landed the patch on tradeRepo.update.
+      expect(tradeRepo.update).toHaveBeenCalledWith(
+        'trade-1',
+        expect.objectContaining({
+          status: TradeStatus.REJECTED,
+          dispatchCertainty: ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+        }),
+      );
+      // §2: the decision's intent is terminally rejected — a replay can
+      // never re-enter exposure.
+      expect(tradeIntentService.markRejected).toHaveBeenCalledWith('intent-1');
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            blockedReason: 'STALE_PRICE',
+            dispatchCertainty: ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+          }),
+        }),
+      );
     });
   });
 
@@ -320,6 +554,14 @@ describe('ExecutionService', () => {
           providerAction: 'PLACE',
         }),
         expect.objectContaining({ id: 'conn-1' }),
+        // Round 6 (#365): the provider-dispatch COMMITMENT payload — the
+        // grant is consumed AT the commitment inside dispatchOrder. No
+        // SEMI_AUTO confirmation drives this pipeline dispatch ⇒ undefined.
+        expect.objectContaining({
+          grantId: 'grant-1',
+          confirmationId: undefined,
+          origin: 'PIPELINE',
+        }),
       );
     });
 
@@ -421,6 +663,101 @@ describe('ExecutionService', () => {
       expect(tradeRepo.update).toHaveBeenCalledWith(
         'trade-1',
         expect.objectContaining({ status: TradeStatus.RECONCILIATION_PENDING }),
+      );
+    });
+  });
+
+  // ─── Round 6 §17: the kill-switch emergency flatten ─────────────────────
+
+  describe('emergencyCloseAllOpenPositions() — §17 fourth stop level', () => {
+    it('returns [] when the user has no OPEN positions (nothing to flatten)', async () => {
+      tradeRepo.find.mockResolvedValue([]);
+      const results = await service.emergencyCloseAllOpenPositions('user-1');
+      expect(results).toEqual([]);
+      expect(orchestrator.dispatchOrder).not.toHaveBeenCalled();
+    });
+
+    it('closes EVERY OPEN position through the fail-closed close path', async () => {
+      tradeRepo.find.mockResolvedValue([
+        { ...baseTradeFixture, id: 'trade-1', externalOrderId: 'ext-1' },
+        { ...baseTradeFixture, id: 'trade-2', externalOrderId: 'ext-2' },
+      ]);
+      tradeRepo.findOne.mockImplementation(async ({ where }) => {
+        const id = (where as { id: string }).id;
+        return { ...baseTradeFixture, id, externalOrderId: `ext-${id.split('-')[1]}` };
+      });
+      orchestrator.assertDispatchable.mockResolvedValue(undefined);
+      orchestrator.dispatchOrder.mockResolvedValue({
+        outcome: 'FILLED',
+        order: mockOrder,
+        orderId: mockOrder.id,
+        providerOrderId: 'pos-close',
+        filledQuantity: '0.05',
+        avgFillPrice: '1.09000',
+        reason: 'closed',
+      });
+      // CAS write-through lands the CLOSED patch on the repo.
+      tradeCas.applyCasTransition.mockImplementation(async ({ target }) => ({
+        outcome: 'CAS_OK',
+        trade: { ...baseTradeFixture, status: target },
+      }));
+
+      const results = await service.emergencyCloseAllOpenPositions('user-1');
+
+      expect(results).toHaveLength(2);
+      expect(results.every((r: { closed: boolean }) => r.closed)).toBe(true);
+      expect(orchestrator.dispatchOrder).toHaveBeenCalledTimes(2);
+    });
+
+    it('isolates failures — one refused close never aborts the flatten', async () => {
+      tradeRepo.find.mockResolvedValue([
+        { ...baseTradeFixture, id: 'trade-1', externalOrderId: 'ext-1' },
+        { ...baseTradeFixture, id: 'trade-2', externalOrderId: 'ext-2' },
+      ]);
+      tradeRepo.findOne.mockResolvedValue({ ...baseTradeFixture, id: 'trade-1' });
+      orchestrator.assertDispatchable.mockResolvedValue(undefined);
+      orchestrator.dispatchOrder
+        .mockRejectedValueOnce(new ForbiddenException('provider refused'))
+        .mockResolvedValueOnce({
+          outcome: 'FILLED',
+          order: mockOrder,
+          orderId: mockOrder.id,
+          providerOrderId: 'pos-close',
+          filledQuantity: '0.05',
+          avgFillPrice: '1.09000',
+          reason: 'closed',
+        });
+      tradeCas.applyCasTransition.mockImplementation(async ({ target }) => ({
+        outcome: 'CAS_OK',
+        trade: { ...baseTradeFixture, status: target },
+      }));
+
+      const results = await service.emergencyCloseAllOpenPositions('user-1');
+
+      expect(orchestrator.dispatchOrder).toHaveBeenCalledTimes(2); // the flatten continued
+      const failed = results.find((r: { tradeId: string }) => r.tradeId === 'trade-1');
+      expect(failed?.closed).toBe(false);
+      const ok = results.find((r: { tradeId: string }) => r.tradeId === 'trade-2');
+      expect(ok?.closed).toBe(true);
+    });
+
+    it('audits the honest summary (CRITICAL when any close failed)', async () => {
+      tradeRepo.find.mockResolvedValue([{ ...baseTradeFixture, id: 'trade-1' }]);
+      tradeRepo.findOne.mockResolvedValue({ ...baseTradeFixture, id: 'trade-1' });
+      orchestrator.assertDispatchable.mockResolvedValue(undefined);
+      orchestrator.dispatchOrder.mockRejectedValue(new Error('connection down'));
+
+      await service.emergencyCloseAllOpenPositions('user-1');
+
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            emergencyFlatten: true,
+            targetCount: 1,
+            closedCount: 0,
+            failedCount: 1,
+          }),
+        }),
       );
     });
   });
@@ -565,9 +902,14 @@ describe('ExecutionService', () => {
   // ─── Query helpers ─────────────────────────────────────────────────────────
 
   describe('countOpenTrades()', () => {
-    it('returns count from repository', async () => {
-      tradeRepo.count.mockResolvedValue(3);
+    it('returns count from the exposure query builder (RECONCILIATION_PENDING counted, #314)', async () => {
+      // Round 5 (task 50-c): counts run through createQueryBuilder so
+      // uncertain exposure (RECONCILIATION_PENDING) is conservatively
+      // included — the repository count() is no longer the source.
+      const qb = tradeRepo.createQueryBuilder();
+      qb.getCount.mockResolvedValueOnce(3);
       expect(await service.countOpenTrades('user-1')).toBe(3);
+      expect(tradeRepo.createQueryBuilder).toHaveBeenCalled();
     });
   });
 
@@ -583,27 +925,151 @@ describe('ExecutionService', () => {
     });
   });
 
-  // ─── Session management ───────────────────────────────────────────────────
+  // ─── Session management (Round 5 — session is the authoritative target) ───
 
   describe('startSession()', () => {
-    it('creates new session when none exists', async () => {
-      await service.startSession('user-1', 'conn-1', '10000.00');
-      expect(sessionRepo.save).toHaveBeenCalledWith(
+    it('creates new session with executionMode + authorityGeneration 1 when none exists', async () => {
+      const created = await service.startSession('user-1', 'conn-1', '10000.00');
+      expect(sessionRepo.insert).toHaveBeenCalledWith(
         expect.objectContaining({
           userId: 'user-1',
           status: TradingSessionStatus.ACTIVE,
           openingBalance: '10000.00',
+          executionMode: ExecutionMode.PAPER_ONLY,
+          authorityGeneration: 1,
         }),
       );
+      expect(created.executionMode).toBe(ExecutionMode.PAPER_ONLY);
+      expect(created.authorityGeneration).toBe(1);
     });
 
-    it('returns existing session without creating duplicate', async () => {
-      const existing = { id: 'sess-1', status: TradingSessionStatus.ACTIVE };
+    it('persists the requested executionMode (SEMI_AUTO)', async () => {
+      const created = await service.startSession(
+        'user-1',
+        'conn-1',
+        '10000.00',
+        null,
+        ExecutionMode.SEMI_AUTO,
+      );
+      expect(sessionRepo.insert).toHaveBeenCalledWith(
+        expect.objectContaining({ executionMode: ExecutionMode.SEMI_AUTO, authorityGeneration: 1 }),
+      );
+      expect(created.executionMode).toBe(ExecutionMode.SEMI_AUTO);
+    });
+
+    it('returns existing session (idempotent) for same connection + same mode', async () => {
+      const existing = {
+        id: 'sess-1',
+        userId: 'user-1',
+        brokerConnectionId: 'conn-1',
+        executionMode: ExecutionMode.PAPER_ONLY,
+        authorityGeneration: 1,
+        status: TradingSessionStatus.ACTIVE,
+      };
       sessionRepo.findOne.mockResolvedValue(existing);
 
       const result = await service.startSession('user-1', 'conn-1', '10000.00');
       expect(result).toEqual(existing);
-      expect(sessionRepo.save).not.toHaveBeenCalled();
+      expect(sessionRepo.insert).not.toHaveBeenCalled();
+    });
+
+    it('throws typed ownership rejection when the connection belongs to another user', async () => {
+      const brokerServiceMock = (service as unknown as { brokerService: BrokerService })
+        .brokerService;
+      (brokerServiceMock as unknown as { findConnectionsByIds: jest.Mock }).findConnectionsByIds =
+        jest.fn().mockResolvedValue([{ ...mockBrokerConnection, userId: 'someone-else' }]);
+      await expect(service.startSession('user-1', 'conn-1', '10000.00')).rejects.toThrow(
+        BrokerConnectionOwnershipException,
+      );
+      expect(sessionRepo.insert).not.toHaveBeenCalled();
+    });
+
+    it('throws typed rejection when the connection is not CONNECTED', async () => {
+      const brokerServiceMock = (service as unknown as { brokerService: BrokerService })
+        .brokerService;
+      (brokerServiceMock as unknown as { findConnectionsByIds: jest.Mock }).findConnectionsByIds =
+        jest
+          .fn()
+          .mockResolvedValue([
+            { ...mockBrokerConnection, status: BrokerConnectionStatus.DISCONNECTED },
+          ]);
+      await expect(service.startSession('user-1', 'conn-1', '10000.00')).rejects.toThrow(
+        BrokerConnectionNotConnectedException,
+      );
+      expect(sessionRepo.insert).not.toHaveBeenCalled();
+    });
+
+    it('throws typed rejection when the connection is not LIVE-authorization executable', async () => {
+      const brokerServiceMock = (service as unknown as { brokerService: BrokerService })
+        .brokerService;
+      (brokerServiceMock as unknown as { findConnectionsByIds: jest.Mock }).findConnectionsByIds =
+        jest.fn().mockResolvedValue([mockBrokerConnection]);
+      (
+        brokerServiceMock as unknown as { isConnectionExecutable: jest.Mock }
+      ).isConnectionExecutable = jest.fn().mockReturnValue(false);
+      await expect(service.startSession('user-1', 'conn-1', '10000.00')).rejects.toThrow(
+        BrokerConnectionNotExecutableException,
+      );
+      expect(sessionRepo.insert).not.toHaveBeenCalled();
+    });
+
+    it('throws typed ACTIVE_SESSION_CONFLICT when an ACTIVE session exists on ANOTHER connection', async () => {
+      const existing = {
+        id: 'sess-1',
+        userId: 'user-1',
+        brokerConnectionId: 'conn-OTHER',
+        executionMode: ExecutionMode.PAPER_ONLY,
+        authorityGeneration: 1,
+        status: TradingSessionStatus.ACTIVE,
+      };
+      sessionRepo.findOne.mockResolvedValue(existing);
+
+      await expect(service.startSession('user-1', 'conn-1', '10000.00')).rejects.toThrow(
+        ActiveSessionConflictException,
+      );
+      expect(sessionRepo.insert).not.toHaveBeenCalled();
+    });
+
+    it('throws typed ACTIVE_SESSION_CONFLICT when an ACTIVE session exists with a DIFFERENT mode (mode changes are explicit + audited)', async () => {
+      const existing = {
+        id: 'sess-1',
+        userId: 'user-1',
+        brokerConnectionId: 'conn-1',
+        executionMode: ExecutionMode.SEMI_AUTO,
+        authorityGeneration: 4,
+        status: TradingSessionStatus.ACTIVE,
+      };
+      sessionRepo.findOne.mockResolvedValue(existing);
+
+      await expect(
+        service.startSession('user-1', 'conn-1', '10000.00', null, ExecutionMode.PAPER_ONLY),
+      ).rejects.toThrow(ActiveSessionConflictException);
+      expect(sessionRepo.insert).not.toHaveBeenCalled();
+    });
+  });
+
+  // ─── executeTrade session-authority seam (#295) ───────────────────────────
+
+  describe('executeTrade — session authority seam', () => {
+    it('authorizes through the FINAL DISPATCH BOUNDARY with the grant (never re-discovers the connection)', async () => {
+      await service.executeTrade('user-1', approvedDecision);
+      const brokerServiceMock = (service as unknown as { brokerService: BrokerService })
+        .brokerService;
+      // NEVER the implicit "latest active connection" discovery
+      expect(
+        (brokerServiceMock as unknown as { findActiveConnectionForUser: jest.Mock })
+          .findActiveConnectionForUser,
+      ).not.toHaveBeenCalled();
+      // The EXACT connection comes from the boundary's grant-bound
+      // authorization — conn-1 is the id the grant binds (see fixture).
+      expect(finalDispatchBoundary.authorizeNewExposureDispatch).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'user-1', grantId: 'grant-1' }),
+      );
+      expect(orchestrator.assertDispatchable).toHaveBeenCalledWith(
+        expect.objectContaining({
+          connection: expect.objectContaining({ id: 'conn-1' }),
+        }),
+      );
     });
   });
 });

@@ -33,6 +33,15 @@ function makeHarness() {
     delete: jest.fn().mockResolvedValue({ affected: 1 }),
     update: jest.fn().mockResolvedValue({ affected: 1 }),
   };
+  // Round 6 (#14): activate/deactivate wrap the fact + shared-revision bump in
+  // repo.manager.transaction — the mock EM delegates back to this repo.
+  (repo as unknown as { manager: unknown }).manager = {
+    transaction: jest
+      .fn()
+      .mockImplementation(async (cb: (em: unknown) => Promise<unknown>) =>
+        cb({ getRepository: () => repo }),
+      ),
+  };
   const audit = { log: jest.fn().mockResolvedValue(undefined) };
   const events = { publish: jest.fn() };
 
@@ -40,6 +49,8 @@ function makeHarness() {
     repo as unknown as Repository<ExecutionControl>,
     audit as unknown as AuditService,
     events as unknown as DomainEventBus,
+    // Round 6 (#14): the shared control-plane revision seam (mocked).
+    { bumpExecutionControlRevision: jest.fn().mockResolvedValue(1) } as never,
   );
 
   return { service, repo, audit, events };

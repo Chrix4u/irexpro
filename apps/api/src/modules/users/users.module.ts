@@ -22,6 +22,7 @@ import { AccountGovernanceController } from './account-governance.controller';
 import { AccountGovernanceService } from './account-governance.service';
 import { EligibilityController } from './eligibility.controller';
 import { EligibilityService } from './eligibility.service';
+import { ExecutionAuthorityModule } from '../execution-authority/execution-authority.module';
 
 @Module({
   // OnboardingService needs RiskProfile + BrokerConnection repos.
@@ -42,6 +43,10 @@ import { EligibilityService } from './eligibility.service';
       BrokerConnection,
     ]),
     AuditModule,
+    // Round 6 (#300): the unified execution-authority leaf — profile/KYC/
+    // jurisdiction/governance mutations bump the TradingAuthorityGeneration
+    // and invalidate NEW exposure through the tenant-scoped seams.
+    ExecutionAuthorityModule,
     ThrottlerModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],

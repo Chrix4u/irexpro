@@ -12,6 +12,7 @@ import type {
   LiveAccountEnvironment,
   LiveAccountOverviewView,
 } from "@irexpro/types";
+import type { TradingSessionView } from "@irexpro/types/execution";
 
 export interface EnvironmentBannerStyle {
   label: string;
@@ -124,5 +125,87 @@ export function summaryTiles(
     reconciliationPending: overview.executionHealth.reconciliationPending,
     criticalAlerts: sorted.filter((a) => a.severity === "CRITICAL").length,
     warningAlerts: sorted.filter((a) => a.severity === "WARNING").length,
+  };
+}
+
+// ── Trading session authority (Sprint 56 correction round 5) ────────────────
+
+export interface SessionAuthorityPresentation {
+  /** Human label for the durable execution mode. */
+  modeLabel: string;
+  /** Human label for the session lifecycle status. */
+  statusLabel: string;
+  /** True only when the server-reported session state blocks execution. */
+  executionBlocked: boolean;
+  /** Server-state-fed reasons (rendered verbatim; never speculated). */
+  blockedReasons: string[];
+}
+
+/** Human label for a durable execution mode (mirrors the web workspace copy). */
+export function executionModeLabel(mode: TradingSessionView["executionMode"]): string {
+  switch (mode) {
+    case "PAPER_ONLY":
+      return "Paper only";
+    case "SEMI_AUTO":
+      return "Semi-auto (confirm each order)";
+    case "FULL_AUTO":
+      return "Full auto";
+    default:
+      return mode;
+  }
+}
+
+/** Human label for a session lifecycle status. */
+export function sessionStatusLabel(status: TradingSessionView["status"]): string {
+  switch (status) {
+    case "ACTIVE":
+      return "Active";
+    case "PAUSED":
+      return "Paused";
+    case "SUSPENDED_RISK_LIMIT":
+      return "Suspended — risk limit";
+    case "SUSPENDED_BROKER":
+      return "Suspended — broker";
+    case "ENDED":
+      return "Ended";
+    default:
+      return status;
+  }
+}
+
+/**
+ * Session authority presentation (fail-closed): the mode/status/generation
+ * are the AUTHORITATIVE trading state — `liveTradingEnabled` is only a
+ * compatibility mirror and is never presented here. Blocked reasons come
+ * solely from the server-reported session state.
+ */
+export function sessionAuthorityPresentation(
+  session: TradingSessionView | null,
+): SessionAuthorityPresentation {
+  if (!session) {
+    return {
+      modeLabel: "Not started",
+      statusLabel: "No active session",
+      executionBlocked: true,
+      blockedReasons: [
+        "No active trading session — execution authority is not started. Start or manage sessions from the web workspace.",
+      ],
+    };
+  }
+  const blockedReasons: string[] = [];
+  if (session.status === "ENDED") {
+    blockedReasons.push("The trading session has ended.");
+  } else if (session.status === "PAUSED") {
+    blockedReasons.push("The trading session is paused.");
+  } else if (session.status === "SUSPENDED_RISK_LIMIT") {
+    blockedReasons.push("The trading session is suspended by a risk limit.");
+  } else if (session.status === "SUSPENDED_BROKER") {
+    blockedReasons.push("The trading session is suspended by the broker.");
+  }
+  return {
+    modeLabel: executionModeLabel(session.executionMode),
+    statusLabel: sessionStatusLabel(session.status),
+    executionBlocked: session.status !== "ACTIVE",
+    blockedReasons,
   };
 }

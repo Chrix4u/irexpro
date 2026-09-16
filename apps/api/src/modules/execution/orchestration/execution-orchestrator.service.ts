@@ -9,7 +9,8 @@ import {
   BrokerOrderRequest,
   BrokerOrderResult,
 } from '../../broker/interfaces/broker-adapter.interface';
-import { RETRYABLE_BROKER_ERRORS } from '../../broker/interfaces/broker-adapter.errors';
+import { BrokerAdapterError } from '../../broker/interfaces/broker-adapter.errors';
+import { ProviderDispatchCertainty } from '../../broker/interfaces/provider-dispatch-certainty';
 import { ExecutionControlService } from '../../execution-control/execution-control.service';
 import { AuditService } from '../../audit/audit.service';
 import { AuditAction } from '../../../common/enums/audit-action.enum';
@@ -21,7 +22,18 @@ import { Order } from '../orders/order.entity';
 import { OrderService } from '../orders/order.service';
 import { OrderStatus } from '../orders/order.enums';
 import { ExecutionIntent, ProviderDispatchOutcome } from './execution-intent.interface';
+import { MarketSafetyGateService } from './market-safety-gate.service';
+// Round 6 live-execution completion (§14): the per-account dispatch lease.
+import { AccountDispatchLeaseService } from './account-dispatch-lease.service';
+// Round 6 live-execution completion (§7): the order capability contract.
+import {
+  assertOrderWithinCapabilities,
+  OrderCapabilityError,
+} from '../../broker/interfaces/order-capability';
+import { FinalDispatchBoundary } from './final-dispatch-boundary';
 import { mapProviderOrderResponse } from './provider-response.mapper';
+import { classifyIntentOperation, isExposureIncreasingOperation } from './provider-operation-class';
+import { ProviderOperationClass } from '../interfaces/execution-authority';
 
 const EXECUTION_TIMEOUT_MS = 10_000;
 const MAX_RETRY_ATTEMPTS = 3;
@@ -81,6 +93,19 @@ export class ExecutionOrchestrator {
     private readonly encryptionService: CredentialEncryptionService,
     private readonly auditService: AuditService,
     private readonly eventBus: DomainEventBus,
+    // Round 6 (#365): the provider-dispatch commitment boundary — invoked
+    // INSIDE dispatchOrder immediately before the provider state-changing
+    // call, with NOTHING awaited in between.
+    private readonly finalDispatchBoundary: FinalDispatchBoundary,
+    // Round 6 live-execution completion (§5/§18): the final market-safety
+    // gate — proven fresh quote + spread sanity + entry deviation, BEFORE
+    // the commitment (zero provider calls on failure).
+    private readonly marketSafetyGate: MarketSafetyGateService,
+    // Round 6 live-execution completion (§14): the per-account dispatch
+    // lease — the FULL dispatch critical section (reservation → gates →
+    // commitment → provider call → outcome) runs strictly serialized per
+    // broker account, in-process (entries, §10 exits, confirmations).
+    private readonly accountDispatchLease: AccountDispatchLeaseService,
   ) {}
 
   // ─── 1. Validation pipeline (fail-closed) ───────────────────────────────
@@ -90,20 +115,33 @@ export class ExecutionOrchestrator {
    * Throws ForbiddenException when any gate blocks — BEFORE any order is
    * persisted or any provider is contacted.
    *
-   * Gate A — emergency control plane: matches the Risk Engine's step 1a-pre
-   * check, closing the TOCTOU window between risk approval and dispatch.
+   * Gate A — emergency control plane (OPERATION-AWARE, round 5 issue #303):
+   * matches the Risk Engine's step 1a-pre check, closing the TOCTOU window
+   * between risk approval and dispatch. The gate blocks EXPOSURE-INCREASING
+   * operations (NEW_EXPOSURE / INCREASE_EXPOSURE / RISK_INCREASING_MODIFY)
+   * while a kill-switch / emergency-stop control is active, while
+   * CLOSE_POSITION / CANCEL_PENDING / RECONCILE_READ / risk-reducing
+   * operations remain available (an active emergency must never prevent the
+   * platform from REDUCING exposure or reading provider truth).
    * Gate B — LIVE authorization: a LIVE connection must be ACTIVE in the
    * BrokerAuthorizationStateMachine (fail-closed via isConnectionExecutable).
    * DEMO/PAPER connections pass Gate B (mirrors RiskService step 1c).
    */
-  async assertDispatchable(ctx: { userId: string; connection: BrokerConnection }): Promise<void> {
+  async assertDispatchable(ctx: {
+    userId: string;
+    connection: BrokerConnection;
+    /** Operation class of the dispatch (default NEW_EXPOSURE — fail-closed). */
+    operationClass?: ProviderOperationClass;
+  }): Promise<void> {
+    const operationClass = ctx.operationClass ?? ProviderOperationClass.NEW_EXPOSURE;
+
     // ── Gate A: emergency control plane (fail-closed on store errors) ──────
     const permission = await this.executionControlService.checkExecutionPermission({
       userId: ctx.userId,
       brokerId: ctx.connection.brokerId,
       brokerConnectionId: ctx.connection.id,
     });
-    if (!permission.allowed) {
+    if (!permission.allowed && isExposureIncreasingOperation(operationClass)) {
       const blocked = permission.blockedBy;
       this.logger.warn(
         `Dispatch blocked by execution control plane for user ${ctx.userId} ` +
@@ -119,6 +157,7 @@ export class ExecutionOrchestrator {
           controlScope: blocked?.scope ?? 'UNKNOWN',
           controlScopeKey: blocked?.scopeKey ?? null,
           brokerConnectionId: ctx.connection.id,
+          operationClass,
         },
         severity: AuditSeverity.WARNING,
       });
@@ -126,7 +165,6 @@ export class ExecutionOrchestrator {
         `Execution blocked by platform control plane (${blocked?.scope ?? 'UNKNOWN'} scope).`,
       );
     }
-
     // ── Re-load the PERSISTED connection (architect correction, Phase D):
     // the caller's snapshot can be stale — a concurrent revoke/suspend
     // between the caller's load and this boundary must NOT be bypassed.
@@ -215,11 +253,46 @@ export class ExecutionOrchestrator {
    * - exactly-once dispatch per clientOrderId (duplicates return DUPLICATE)
    * - every outcome is durably recorded on the order before returning
    * - UNKNOWN outcomes leave the order RECONCILIATION_PENDING (fail-closed)
+   *
+   * Round 6 §14: the FULL critical section runs under the per-account
+   * dispatch lease — dispatches against one broker account are strictly
+   * serialized in-process (an entry, a §10 exit, a SEMI_AUTO confirmation
+   * dispatch, or a reconciliation repair can never interleave on the same
+   * account). Different accounts proceed concurrently. The lease is the
+   * in-process complement of the durable exactly-once surfaces
+   * (advisory locks, clientOrderId idempotency, CAS transitions).
    */
   async dispatchOrder(
     intent: ExecutionIntent,
     connection: BrokerConnection,
+    commitment?: {
+      /** The RiskGrant authorizing this dispatch (consumed AT the commitment). */
+      grantId: string;
+      /** The SEMI_AUTO one-time confirmation driving this dispatch, if any. */
+      confirmationId?: string | null;
+      origin?: 'PIPELINE' | 'USER_CONFIRMATION';
+    },
   ): Promise<ProviderDispatchOutcome> {
+    return this.accountDispatchLease.withAccountDispatchLease(intent.brokerConnectionId, () =>
+      this.dispatchOrderUnderLease(intent, connection, commitment),
+    );
+  }
+
+  /** The dispatch critical section (§14: ALWAYS under the account lease). */
+  private async dispatchOrderUnderLease(
+    intent: ExecutionIntent,
+    connection: BrokerConnection,
+    commitment?: {
+      grantId: string;
+      confirmationId?: string | null;
+      origin?: 'PIPELINE' | 'USER_CONFIRMATION';
+    },
+  ): Promise<ProviderDispatchOutcome> {
+    // Round 5 (#303): the operation class of THIS provider-bound dispatch —
+    // classified from the intent, audited on every submission, and used by
+    // the operation-aware control gate.
+    const operationClass = classifyIntentOperation(intent);
+
     // ── Idempotent reservation ────────────────────────────────────────────
     const submission = await this.orderService.submitOrder({
       userId: intent.userId,
@@ -273,6 +346,7 @@ export class ExecutionOrchestrator {
       metadata: {
         clientOrderId: intent.clientOrderId,
         providerAction: intent.providerAction,
+        operationClass,
         instrument: intent.instrument,
         direction: intent.direction,
         orderKind: intent.orderKind,
@@ -282,6 +356,101 @@ export class ExecutionOrchestrator {
         signalId: intent.signalId ?? null,
       },
     });
+
+    // ── ROUND 6 live-execution completion (§7): the ORDER CAPABILITY
+    // CONTRACT — enforced BEFORE the market-safety gate and BEFORE the
+    // commitment: an intent the connection's adapter can NEVER fulfill
+    // (unsupported order kind / missing required price) is a typed terminal
+    // REJECTION with ZERO provider calls and NOTHING consumed. The check is
+    // against the adapter's DECLARED capability matrix (in-memory registry
+    // lookup — no provider I/O).
+    if (intent.providerAction === 'PLACE') {
+      try {
+        const capabilityAdapter = this.adapterRegistry.getAdapterForConnection(
+          connection.id,
+          connection.brokerId,
+        );
+        assertOrderWithinCapabilities(
+          {
+            orderKind: intent.orderKind,
+            limitPrice: intent.requestedPrice ?? undefined,
+            stopPrice: intent.stopPrice ?? undefined,
+          },
+          capabilityAdapter.getOrderCapabilities(),
+        );
+      } catch (err) {
+        if (err instanceof OrderCapabilityError) {
+          this.logger.warn(
+            `Order capability contract rejected order ${order.id} ` +
+              `(${intent.instrument} ${intent.orderKind}): ${err.message}`,
+          );
+          await this.orderService
+            .rejectOrder(order.id, `ORDER_CAPABILITY_${err.code}: ${err.message}`)
+            .catch((rejectErr) =>
+              this.logger.error(
+                `Order ${order.id} could not be marked REJECTED after the capability ` +
+                  `violation (${(rejectErr as Error).message}) — reconciliation will converge it`,
+              ),
+            );
+          await this.auditService.log({
+            actorUserId: intent.userId,
+            action: AuditAction.ORDER_REJECTED,
+            resourceType: 'Order',
+            resourceId: order.id,
+            severity: AuditSeverity.WARNING,
+            metadata: {
+              blockedReason: err.code,
+              gate: 'ORDER_CAPABILITY',
+              brokerId: err.brokerId,
+              clientOrderId: intent.clientOrderId,
+              instrument: intent.instrument,
+              orderKind: intent.orderKind,
+              tradeId: intent.tradeId ?? null,
+              signalId: intent.signalId ?? null,
+              message: err.message,
+            },
+          });
+        }
+        throw err;
+      }
+    }
+
+    // ── ROUND 6 live-execution completion (§5/§18): the FINAL MARKET-SAFETY
+    // GATE — runs between the SUBMITTED mark and the PROVIDER-DISPATCH
+    // COMMITMENT. Scope: NEW-EXPOSURE PLACE intents only (risk-REDUCING
+    // dispatches stay possible during market anomalies — §10/§17). A typed
+    // failure terminally REJECTS the order with ZERO provider calls and
+    // NOTHING consumed (no grant, no confirmation). The gate proves CURRENT
+    // market facts (fresh quote, sane spread, bounded deviation from the
+    // risk-validated reference) — when market state cannot be proven it
+    // NEVER invents one (§18).
+    if (
+      operationClass === ProviderOperationClass.NEW_EXPOSURE &&
+      intent.providerAction === 'PLACE'
+    ) {
+      await this.marketSafetyGate.assertMarketSafeForDispatch(intent, connection, order.id);
+    }
+
+    // ── ROUND 6 (#365): the PROVIDER-DISPATCH COMMITMENT ─────────────────
+    // ONE short DB transaction re-verifying the CURRENT unified authority
+    // chain (user TradingAuthorityGeneration, shared cross-replica revisions,
+    // risk-profile revision, session, connection, credential generation) and
+    // ATOMICALLY consuming the RiskGrant (+ the SEMI_AUTO confirmation)
+    // while transitioning this order to DISPATCH_COMMITTED. NOTHING is
+    // awaited between this commitment and the provider state-changing call
+    // below — that gap is the honest boundary between zero-provider-calls
+    // (any authority change before it blocks with ZERO provider calls) and
+    // in-flight (resolved through ProviderDispatchCertainty + reconciliation,
+    // never replayed).
+    if (commitment?.grantId) {
+      await this.finalDispatchBoundary.commitProviderDispatch({
+        userId: intent.userId,
+        grantId: commitment.grantId,
+        confirmationId: commitment.confirmationId ?? null,
+        orderId: order.id,
+        origin: commitment.origin ?? 'PIPELINE',
+      });
+    }
 
     // ── Provider dispatch (retry/timeout-wrapped) ─────────────────────────
     try {
@@ -376,16 +545,32 @@ export class ExecutionOrchestrator {
             metadata: {
               clientOrderId: intent.clientOrderId,
               reason: action.reason,
+              dispatchCertainty: ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER,
+              operationClass,
               orderStatus: OrderStatus.RECONCILIATION_PENDING,
             },
             severity: AuditSeverity.CRITICAL,
           });
-          return { outcome: 'UNKNOWN', order, orderId: order.id, reason: action.reason };
+          return {
+            outcome: 'UNKNOWN',
+            order,
+            orderId: order.id,
+            reason: action.reason,
+            // A provider-ANSWERED but malformed/ambiguous response cannot
+            // prove non-execution — conservatively uncertain (#314).
+            certainty: ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER,
+          };
         }
       }
     } catch (err) {
       // ── UNKNOWN outcome: provider outcome cannot be determined ─────────
+      // CORRECTION ROUND 4 (finding 7): an uncertain write is NOT failure and
+      // is NOT permission to resend — it is an UNRESOLVED PROVIDER OUTCOME.
+      // The certainty classification is persisted with the reason and
+      // emitted in the sanitized audit/event evidence.
       const message = (err as Error).message ?? 'Unknown dispatch error';
+      const certainty = this.certaintyOf(err);
+      const reason = this.uncertaintyReason(message, certainty);
       this.logger.error(
         `Provider dispatch error for order ${order.id} (clientOrderId=${intent.clientOrderId}): ${message}`,
         (err as Error).stack,
@@ -394,7 +579,7 @@ export class ExecutionOrchestrator {
         order = await this.orderService.markReconciliationPending(order.id);
         await this.emitOrderEvent(DomainEventType.ORDER_RECONCILIATION_PENDING, intent, order, {
           status: OrderStatus.RECONCILIATION_PENDING,
-          reason: message,
+          reason,
         });
         await this.auditService.log({
           actorUserId: intent.userId,
@@ -403,7 +588,9 @@ export class ExecutionOrchestrator {
           resourceId: order.id,
           metadata: {
             clientOrderId: intent.clientOrderId,
-            reason: `Dispatch error: ${message}`,
+            reason,
+            dispatchCertainty: certainty,
+            operationClass,
             orderStatus: OrderStatus.RECONCILIATION_PENDING,
           },
           severity: AuditSeverity.CRITICAL,
@@ -415,8 +602,24 @@ export class ExecutionOrchestrator {
           `Could not move order ${order.id} to RECONCILIATION_PENDING: ${(transitionErr as Error).message}`,
         );
       }
-      return { outcome: 'UNKNOWN', order, orderId: order.id, reason: message };
+      return { outcome: 'UNKNOWN', order, orderId: order.id, reason, certainty };
     }
+  }
+
+  /** Sanitized certainty classification of a dispatch error (never UNKNOWN-certainty). */
+  private certaintyOf(err: unknown): ProviderDispatchCertainty {
+    if (err instanceof BrokerAdapterError && err.dispatchCertainty) {
+      return err.dispatchCertainty;
+    }
+    // Unclassified — conservatively uncertain: the request MAY have reached
+    // the provider (never auto-resent; reconciliation resolves it).
+    return ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER;
+  }
+
+  /** Reconciliation reason carrying the certainty classification. */
+  private uncertaintyReason(message: string, certainty: ProviderDispatchCertainty): string {
+    const bounded = message.slice(0, PROVIDER_REASON_MAX_LENGTH);
+    return `Dispatch error (${certainty}): ${sanitizeProviderReason(bounded)}`;
   }
 
   // ─── Provider dispatch mechanics ────────────────────────────────────────
@@ -437,7 +640,13 @@ export class ExecutionOrchestrator {
       keyId: connection.encryptionKeyId!,
     });
 
-    const adapter = this.adapterRegistry.getAdapter(connection.brokerId);
+    // #291 / correction round 3: dispatch uses the connection-scoped adapter
+    // context — the same mutable context connectBroker/healthCheck operate on,
+    // never a process-global singleton's setMode/current-account state.
+    const adapter = this.adapterRegistry.getAdapterForConnection(
+      connection.id,
+      connection.brokerId,
+    );
     adapter.setMode(connection.accountType);
     await adapter.connect(credentials);
     const connectionReference = credentials.accountId;
@@ -476,9 +685,28 @@ export class ExecutionOrchestrator {
   }
 
   /**
-   * Retry/timeout wrapper for provider calls (unchanged semantics from the
-   * Sprint 32 ExecutionService implementation): 3 attempts, 10s timeout,
-   * exponential-ish backoff, only RETRYABLE_BROKER_ERRORS retry.
+   * Retry/timeout wrapper for STATE-CHANGING provider dispatches (PLACE,
+   * CLOSE_POSITION — every dispatchToProvider action is state-changing).
+   *
+   * CORRECTION ROUND 4 (architect findings 5 + 6) — PROVIDER-DISPATCH
+   * CERTAINTY: automatic retry of a state-changing provider operation is
+   * allowed ONLY when the failure PROVABLY never left iRexPro
+   * (dispatchCertainty === DEFINITELY_NOT_SENT — local validation/control
+   * rejection, pre-send rate-limit, queue-overflow before enqueue,
+   * known-closed connection before write). Everything else — a provider
+   * response timeout AFTER write, a connection loss after an attempted
+   * write, an ambiguous WebSocket write, an UNCLASSIFIED error, or a plain
+   * race-timeout while the provider call is still in flight — surfaces
+   * IMMEDIATELY so the order transitions RECONCILIATION_PENDING: an
+   * uncertain write is an unresolved provider outcome, NEVER permission to
+   * resend. (A lost PLACE response may mean the broker EXECUTED the order;
+   * resending could double a live position. cTrader clientOrderId/label and
+   * MetaTrader/OANDA request ids are NOT assumed to be broker-side
+   * exactly-once guarantees — no provider documentation evidence exists.)
+   *
+   * Read-only operations never pass through this wrapper — they keep their
+   * own transport-level retry policy (duplicate reads create no financial
+   * side effects).
    *
    * `call` is a FACTORY — each attempt invokes it afresh (never re-await a
    * settled promise).
@@ -498,24 +726,32 @@ export class ExecutionOrchestrator {
       } catch (err) {
         lastError = err as Error;
 
-        const isRetryable =
-          err instanceof Error &&
-          'errorCode' in err &&
-          RETRYABLE_BROKER_ERRORS.has((err as { errorCode: string }).errorCode as never);
-
-        if (!isRetryable || attempt === MAX_RETRY_ATTEMPTS - 1) {
+        // CERTAINTY GATE: only failures the adapter PROVED never reached the
+        // provider may be retried. Unclassified errors are conservatively
+        // uncertain — surfaced, never resent.
+        if (!this.isDefinitelyNotSent(err) || attempt === MAX_RETRY_ATTEMPTS - 1) {
           throw err;
         }
 
         const delay = RETRY_DELAYS_MS[attempt] ?? 9_000;
         this.logger.warn(
-          `Broker order attempt ${attempt + 1} failed (${lastError.message}) — retrying in ${delay}ms`,
+          `Broker order attempt ${attempt + 1} failed (${lastError.message}) — the request ` +
+            'provably never reached the provider (DEFINITELY_NOT_SENT); retrying in ' +
+            `${delay}ms`,
         );
         await new Promise((r) => setTimeout(r, delay));
       }
     }
 
     throw lastError ?? new Error('All retry attempts exhausted');
+  }
+
+  /** True only for adapter failures PROVEN to have never left iRexPro. */
+  private isDefinitelyNotSent(err: unknown): boolean {
+    return (
+      err instanceof BrokerAdapterError &&
+      err.dispatchCertainty === ProviderDispatchCertainty.DEFINITELY_NOT_SENT
+    );
   }
 
   // ─── Event + audit helpers ──────────────────────────────────────────────

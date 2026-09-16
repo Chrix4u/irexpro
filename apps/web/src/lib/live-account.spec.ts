@@ -134,6 +134,40 @@ describe('loadLiveAccountOverview runtime guards', () => {
     expect(overview.reconciliationLoaded).toBe(false);
   });
 
+  it('accepts the Sprint 56 round-5 identity fields when present (validated, optional)', async () => {
+    requestMock.mockResolvedValue({
+      ...UNKNOWN_ENVIRONMENT_OVERVIEW,
+      connections: [
+        {
+          ...UNKNOWN_ENVIRONMENT_OVERVIEW.connections[0],
+          providerBrokerIdentity: 'cTrader',
+          logicalAccountKey: 'ctrader:1234567',
+        },
+      ],
+    });
+
+    const overview = await loadLiveAccountOverview();
+
+    expect(overview.connections[0].providerBrokerIdentity).toBe('cTrader');
+    expect(overview.connections[0].logicalAccountKey).toBe('ctrader:1234567');
+  });
+
+  it('rejects a non-string logicalAccountKey (fail-closed on unknown shapes)', async () => {
+    requestMock.mockResolvedValue({
+      ...UNKNOWN_ENVIRONMENT_OVERVIEW,
+      connections: [
+        {
+          ...UNKNOWN_ENVIRONMENT_OVERVIEW.connections[0],
+          logicalAccountKey: 42,
+        },
+      ],
+    });
+
+    await expect(loadLiveAccountOverview()).rejects.toThrow(
+      'Live account overview contract mismatch',
+    );
+  });
+
   it('rejects a non-boolean reconciliationLoaded value', async () => {
     requestMock.mockResolvedValue({
       ...UNKNOWN_ENVIRONMENT_OVERVIEW,

@@ -86,6 +86,29 @@ export default () => ({
   broker: {
     encryptionKey: process.env.BROKER_ENCRYPTION_KEY,
     metaApiToken: process.env.METAAPI_TOKEN,
+    // Sprint 56 / Task 48-B — platform cTrader Open API app credentials.
+    // OPTIONAL: without them the cTrader adapter still registers (the catalog
+    // stays truthful) but connections fail closed with a clear
+    // AUTHENTICATION_FAILED configuration message. NEVER log these values.
+    ctraderClientId: process.env.CTRADER_CLIENT_ID,
+    ctraderClientSecret: process.env.CTRADER_CLIENT_SECRET,
+    // Sprint 56 correction round 1 (audit point 6) — the platform's
+    // registered OAuth redirect URI(s), comma-separated (web callback page
+    // and, if registered by the operator, the mobile deep-link scheme).
+    // The user-facing OAuth flow fails closed when empty.
+    ctraderRedirectUris: process.env.CTRADER_REDIRECT_URIS,
+    // Sprint 56 correction round 2 (architect finding 4) — the HTTPS SERVER
+    // callback slot URI(s) registered on the platform cTrader Open API
+    // application for MOBILE flows, comma-separated. Each slot URI is
+    // distinct (e.g. …/oauth/callback/m1 … /mN); authorize(channel=mobile)
+    // atomically claims a free slot (a single configured slot serializes
+    // mobile authorizations platform-wide — register more for parallelism).
+    // Mobile authorizations fail closed when empty.
+    ctraderMobileCallbackUris: process.env.CTRADER_MOBILE_CALLBACK_URIS,
+    // Sprint 56 correction round 2 (architect finding 4) — the controlled
+    // deep link the server callback redirects to after exchanging the
+    // provider code (the app receives ONLY the one-time handoff token).
+    ctraderMobileDeepLink: process.env.CTRADER_MOBILE_DEEP_LINK ?? 'irexpro://broker/oauth/handoff',
   },
   internalApi: {
     key: process.env.NESTJS_INTERNAL_API_KEY,

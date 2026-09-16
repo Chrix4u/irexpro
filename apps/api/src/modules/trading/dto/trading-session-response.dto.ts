@@ -4,6 +4,7 @@ import {
   TradingSession,
   TradingSessionStatus,
 } from '../../execution/entities/trading-session.entity';
+import { ExecutionMode } from '../../execution/interfaces/execution-authority';
 
 /**
  * Frontend-safe trading-session response.
@@ -11,6 +12,10 @@ import {
  * Intentionally excludes userId, openingBalance, peakEquity, and the internal
  * riskProfileSnapshot. Financial values will be exposed only through dedicated
  * authoritative portfolio/performance contracts in later terminal slices.
+ *
+ * Round 5 (issues #295/#298): executionMode + authorityGeneration are part of
+ * the session authority contract and ARE exposed — clients must display the
+ * authoritative execution mode and reload on generation conflicts.
  */
 @Exclude()
 export class TradingSessionResponseDto {
@@ -21,6 +26,17 @@ export class TradingSessionResponseDto {
   @Expose()
   @ApiProperty()
   brokerConnectionId: string;
+
+  @Expose()
+  @ApiProperty({ enum: ExecutionMode })
+  executionMode: ExecutionMode;
+
+  @Expose()
+  @ApiProperty({
+    description: 'Monotonic session authority generation — advanced on audited changes.',
+    example: 1,
+  })
+  authorityGeneration: number;
 
   @Expose()
   @ApiProperty({ enum: TradingSessionStatus })
@@ -51,6 +67,8 @@ export function toTradingSessionResponse(session: TradingSession): TradingSessio
   const response = new TradingSessionResponseDto();
   response.id = session.id;
   response.brokerConnectionId = session.brokerConnectionId;
+  response.executionMode = session.executionMode ?? ExecutionMode.PAPER_ONLY;
+  response.authorityGeneration = session.authorityGeneration ?? 1;
   response.status = session.status;
   response.startedAt = session.startedAt;
   response.endedAt = session.endedAt;

@@ -48,6 +48,10 @@ import {
   ReconciliationRunOutcome,
   StateReconciliationService,
 } from '../reconciliation/state-reconciliation.service';
+import {
+  ProtectiveOrderReconciliationService,
+  ProtectiveReconciliationOutcome,
+} from '../reconciliation/protective-order-reconciliation.service';
 import { ReconciliationRunStatus } from '../reconciliation/reconciliation.enums';
 import { BrokerConnection } from '../../broker/entities/broker-connection.entity';
 
@@ -71,23 +75,43 @@ const makeOutcome = (
 
 const fakeJob = { id: 'job-1', data: {} } as never;
 
+const makeProtectiveOutcome = (
+  overrides: Partial<ProtectiveReconciliationOutcome> = {},
+): ProtectiveReconciliationOutcome => ({
+  checked: 0,
+  protectedCount: 0,
+  repairedCount: 0,
+  repairFailedCount: 0,
+  skippedCount: 0,
+  status: 'OK',
+  ...overrides,
+});
+
 describe('TradeReconciliationJob', () => {
   let job: TradeReconciliationJob;
   let stateReconciliation: {
     findReconcilableConnections: jest.Mock;
     runForConnection: jest.Mock;
   };
+  let protectiveOrderReconciliation: { reconcileProtectiveOrders: jest.Mock };
 
   beforeEach(async () => {
     stateReconciliation = {
       findReconcilableConnections: jest.fn().mockResolvedValue([]),
       runForConnection: jest.fn(),
     };
+    protectiveOrderReconciliation = {
+      reconcileProtectiveOrders: jest.fn().mockResolvedValue(makeProtectiveOutcome()),
+    };
 
     const module = await Test.createTestingModule({
       providers: [
         TradeReconciliationJob,
         { provide: StateReconciliationService, useValue: stateReconciliation },
+        {
+          provide: ProtectiveOrderReconciliationService,
+          useValue: protectiveOrderReconciliation,
+        },
       ],
     }).compile();
     module.useLogger(false);
@@ -104,6 +128,9 @@ describe('TradeReconciliationJob', () => {
       discrepanciesAutoResolved: 0,
       discrepanciesOpen: 0,
       failedConnections: 0,
+      protectiveOrdersChecked: 0,
+      protectiveOrdersRepaired: 0,
+      protectiveRepairsFailed: 0,
     });
     expect(stateReconciliation.runForConnection).not.toHaveBeenCalled();
   });
@@ -180,5 +207,59 @@ describe('TradeReconciliationJob', () => {
 
     await job.process(fakeJob);
     expect(order).toEqual(['start:conn-1', 'end:conn-1', 'start:conn-2', 'end:conn-2']);
+  });
+
+  // ─── Round 6 §8: the protective-order loop ─────────────────────────────
+
+  it('runs the protective-order loop AFTER each connection state sweep', async () => {
+    const order: string[] = [];
+    stateReconciliation.findReconcilableConnections.mockResolvedValue([makeConnection('conn-1')]);
+    stateReconciliation.runForConnection.mockImplementation(async () => {
+      order.push('state-sweep');
+      return makeOutcome('conn-1');
+    });
+    protectiveOrderReconciliation.reconcileProtectiveOrders.mockImplementation(async () => {
+      order.push('protective-loop');
+      return makeProtectiveOutcome();
+    });
+
+    await job.process(fakeJob);
+    expect(order).toEqual(['state-sweep', 'protective-loop']);
+    expect(protectiveOrderReconciliation.reconcileProtectiveOrders).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'conn-1' }),
+    );
+  });
+
+  it('aggregates protective-order counts across connections', async () => {
+    stateReconciliation.findReconcilableConnections.mockResolvedValue([
+      makeConnection('conn-1'),
+      makeConnection('conn-2'),
+    ]);
+    protectiveOrderReconciliation.reconcileProtectiveOrders
+      .mockResolvedValueOnce(
+        makeProtectiveOutcome({ checked: 3, repairedCount: 1, repairFailedCount: 1 }),
+      )
+      .mockResolvedValueOnce(makeProtectiveOutcome({ checked: 2, repairedCount: 2 }));
+
+    const result = await job.process(fakeJob);
+    expect(result).toMatchObject({
+      protectiveOrdersChecked: 5,
+      protectiveOrdersRepaired: 3,
+      protectiveRepairsFailed: 1,
+    });
+  });
+
+  it('survives a protective-loop throw (the cycle never breaks)', async () => {
+    stateReconciliation.findReconcilableConnections.mockResolvedValue([
+      makeConnection('conn-1'),
+      makeConnection('conn-2'),
+    ]);
+    protectiveOrderReconciliation.reconcileProtectiveOrders
+      .mockRejectedValueOnce(new Error('protective explosion'))
+      .mockResolvedValueOnce(makeProtectiveOutcome({ checked: 1 }));
+
+    const result = await job.process(fakeJob);
+    expect(result.protectiveOrdersChecked).toBe(1);
+    expect(protectiveOrderReconciliation.reconcileProtectiveOrders).toHaveBeenCalledTimes(2);
   });
 });

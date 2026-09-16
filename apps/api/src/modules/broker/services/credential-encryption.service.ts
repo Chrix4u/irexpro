@@ -15,6 +15,16 @@ export interface EncryptedCredentialBundle {
   keyId: string;
 }
 
+/** JSON payload encrypted by encryptJson — any shape, NEVER token material in logs. */
+export type EncryptedJsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  | { [key: string]: EncryptedJsonValue }
+  | EncryptedJsonValue[];
+
 /**
  * CredentialEncryptionService — AES-256-GCM symmetric encryption for broker credentials.
  *
@@ -57,10 +67,30 @@ export class CredentialEncryptionService {
    * Returns ciphertext, IV, auth tag, and key identifier — all safe to persist.
    */
   encrypt(credentials: DecryptedBrokerCredentials): EncryptedCredentialBundle {
+    return this.encryptJson(credentials as unknown as EncryptedJsonValue);
+  }
+
+  /**
+   * Decrypt broker credentials.
+   * The result is in-memory only — NEVER log or serialize the return value.
+   */
+  decrypt(bundle: EncryptedCredentialBundle): DecryptedBrokerCredentials {
+    return this.decryptJson(bundle) as unknown as DecryptedBrokerCredentials;
+  }
+
+  // ─── Generic JSON encryption (Sprint 56 correction round 2, finding 2) ─────
+
+  /**
+   * Encrypt an arbitrary JSON-serialisable value (AES-256-GCM) — used by
+   * BrokerOAuthService to persist OAuth token bundles in the shared flow
+   * store WITHOUT plaintext tokens at rest. The decrypted result must NEVER
+   * be logged or returned in a response.
+   */
+  encryptJson(value: EncryptedJsonValue): EncryptedCredentialBundle {
     const iv = randomBytes(IV_LENGTH);
     const cipher = createCipheriv(ALGORITHM, this.encryptionKey, iv);
 
-    const plaintext = JSON.stringify(credentials);
+    const plaintext = JSON.stringify(value);
     const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
     const tag = cipher.getAuthTag();
 
@@ -73,10 +103,11 @@ export class CredentialEncryptionService {
   }
 
   /**
-   * Decrypt broker credentials.
-   * The result is in-memory only — NEVER log or serialize the return value.
+   * Decrypt a bundle produced by encryptJson. Fails closed (BrokerAdapterError
+   * DECRYPTION_FAILED) on any tampering — GCM auth-tag mismatch, wrong key,
+   * or malformed input. The result is in-memory only.
    */
-  decrypt(bundle: EncryptedCredentialBundle): DecryptedBrokerCredentials {
+  decryptJson(bundle: EncryptedCredentialBundle): EncryptedJsonValue {
     try {
       const iv = Buffer.from(bundle.iv, 'hex');
       const tag = Buffer.from(bundle.tag, 'hex');
@@ -86,7 +117,7 @@ export class CredentialEncryptionService {
       decipher.setAuthTag(tag);
 
       const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
-      return JSON.parse(decrypted.toString('utf8')) as DecryptedBrokerCredentials;
+      return JSON.parse(decrypted.toString('utf8')) as EncryptedJsonValue;
     } catch (err) {
       // Log the error type only — never log the key, IV, or any credential data
       this.logger.error('Credential decryption failed', (err as Error).message);

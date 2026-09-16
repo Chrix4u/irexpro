@@ -1,23 +1,37 @@
 import { Module, OnModuleInit } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BullModule } from '@nestjs/bullmq';
 import { BrokerService } from './broker.service';
 import { BrokerController } from './broker.controller';
+import { BrokerOAuthController } from './broker-oauth.controller';
+import { BrokerOAuthCallbackController } from './broker-oauth-callback.controller';
 import { PortfolioController } from './portfolio.controller';
 import { BrokerRegistryController } from './broker-registry.controller';
 import { BrokerConnection } from './entities/broker-connection.entity';
 import { BrokerAccount } from './entities/broker-account.entity';
+import { BrokerAccountSnapshot } from './entities/broker-account-snapshot.entity';
+import { BrokerOAuthFlow } from './entities/broker-oauth-flow.entity';
+import { BrokerLinkOutbox } from './entities/broker-link-outbox.entity';
 import { BrokerAdapterRegistry } from './adapters/broker-adapter.registry';
 import { MetaTraderAdapter } from './adapters/metatrader.adapter';
 import { PaperBrokerAdapter } from './adapters/paper-broker.adapter';
 import { OandaAdapter } from './adapters/oanda/oanda.adapter';
+import { CTraderAdapter } from './adapters/ctrader/ctrader.adapter';
+import { CTraderClientService } from './adapters/ctrader/ctrader-client.service';
 import { CredentialEncryptionService } from './services/credential-encryption.service';
 import { MetaApiClientService } from './services/metaapi-client.service';
 import { PortfolioReadService } from './services/portfolio-read.service';
+import { BrokerDemoValidationService } from './services/broker-demo-validation.service';
+import { BrokerOAuthTokenLifecycleService } from './services/broker-oauth-token-lifecycle.service';
+import { BrokerOAuthService } from './services/broker-oauth.service';
+import { BrokerLinkOutboxService } from './services/broker-link-outbox.service';
 import { BrokerProviderRegistryService } from './registry/broker-provider-registry.service';
 import { BrokerHealthCheckJob, BROKER_HEALTH_QUEUE } from './jobs/broker-health-check.job';
 import { BrokerHealthCheckProducer } from './jobs/broker-health-check.producer';
 import { AuditModule } from '../audit/audit.module';
+import { ExecutionAuthorityModule } from '../execution-authority/execution-authority.module';
+import { BrokerAccountSnapshotService } from './services/broker-account-snapshot.service';
 
 /**
  * BrokerModule — Pluggable broker integration layer with health monitoring.
@@ -32,33 +46,91 @@ import { AuditModule } from '../audit/audit.module';
  *
  * Adding a new broker adapter:
  *   1. Implement IBrokerAdapter
- *   2. Add to providers list
- *   3. Call registry.register(adapter) in onModuleInit
+ *   2. Add the metadata/root adapter to the providers list
+ *   3. Register it in onModuleInit WITH a connection-isolation factory
+ *      (registry.register(adapter, factory)) — the root instance stays
+ *      metadata-only; persisted BrokerConnections receive fresh mutable
+ *      adapter contexts per connection id (#291 / correction round 3)
  *
  * See: docs/architecture/09-broker-integration-architecture.md
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([BrokerConnection, BrokerAccount]),
+    TypeOrmModule.forFeature([
+      BrokerConnection,
+      BrokerAccount,
+      BrokerAccountSnapshot,
+      BrokerOAuthFlow,
+      BrokerLinkOutbox,
+    ]),
     BullModule.registerQueue({ name: BROKER_HEALTH_QUEUE }),
     AuditModule,
+    // Round 6: PLAIN leaf import — broker authority transitions (revocation,
+    // suspension, disconnect, credential INVALID/rotation, provider identity
+    // change) bump the TradingAuthorityGeneration and invalidate the user's
+    // NEW-exposure authority through the tenant-scoped seams.
+    ExecutionAuthorityModule,
   ],
-  controllers: [BrokerController, BrokerRegistryController, PortfolioController],
+  controllers: [
+    BrokerOAuthController,
+    // Sprint 56 correction round 2 (architect finding 4) — the UNAUTHENTICATED
+    // server-side provider callback for mobile flows (public route; carries
+    // no user data, grants nothing without the single-use provider code).
+    BrokerOAuthCallbackController,
+    BrokerController,
+    BrokerRegistryController,
+    PortfolioController,
+  ],
   providers: [
     BrokerService,
+    // Round 6 (#297/#312): the durable monotonic account-snapshot authority
+    // (accept generation-fenced writes, freshness gate for NEW exposure,
+    // legacy current-view projection guarded by generation).
+    BrokerAccountSnapshotService,
     PortfolioReadService,
+    // Sprint 56 / Task 48-D — evidence-based write path for
+    // BrokerConnection.demoValidated
+    // (POST /broker/connections/:connectionId/validate-demo).
+    BrokerDemoValidationService,
+    // Sprint 56 correction round 1 (audit point 1) — OAuth token freshness
+    // for the cTrader family (refresh + ATOMIC pair persistence, fail-closed
+    // INVALID on rejection). Consumed by BrokerService connect/health paths.
+    BrokerOAuthTokenLifecycleService,
+    // Sprint 56 correction round 1 (audit point 6) — the user-facing OAuth
+    // connection flow (authorize → external consent → complete → link) with
+    // server-side single-use flow correlation. Sprint 56 correction round 2
+    // (architect finding 2): the flow store moved from a process-local Map to
+    // the shared broker.broker_oauth_flows table (PostgreSQL) — replica-safe
+    // and restart-safe, with encrypted token columns and CAS state
+    // transitions.
+    BrokerOAuthService,
+    // Sprint 56 correction round 5 (architect issue #332): durable outbox
+    // for post-commit broker-link audit/event side effects — enqueued
+    // ATOMICALLY with the connection INSERT by BrokerService.createConnection
+    // and delivered with retry/backoff by the broker health-check job's
+    // sweep, so an audit/event failure can never make a committed connection
+    // look uncommitted (durable idempotent OAuth connection linking).
+    BrokerLinkOutboxService,
     CredentialEncryptionService,
     MetaApiClientService,
+    // Sprint 56 / Task 48-B — the platform-level cTrader Open API connection
+    // manager (JSON-WebSocket, OAuth2, heartbeat, rate limits, reconnect).
+    // Owns ALL cTrader provider connections; the adapter stays a mapping layer.
+    CTraderClientService,
     BrokerAdapterRegistry,
     BrokerProviderRegistryService,
     MetaTraderAdapter,
     PaperBrokerAdapter,
     OandaAdapter,
+    CTraderAdapter,
     BrokerHealthCheckJob,
     BrokerHealthCheckProducer,
   ],
   exports: [
     BrokerService,
+    // Round 6: exported so RiskModule (and the trading session start path)
+    // can resolve fresh exact-connection snapshots for NEW-exposure authority.
+    BrokerAccountSnapshotService,
     PortfolioReadService,
     BrokerAdapterRegistry,
     BrokerProviderRegistryService,
@@ -82,15 +154,38 @@ export class BrokerModule implements OnModuleInit {
     private metaTraderAdapter: MetaTraderAdapter,
     private paperBrokerAdapter: PaperBrokerAdapter,
     private oandaAdapter: OandaAdapter,
+    private cTraderAdapter: CTraderAdapter,
+    private metaApiClient: MetaApiClientService,
+    private configService: ConfigService,
+    private cTraderClient: CTraderClientService,
   ) {}
 
   onModuleInit() {
-    this.registry.register(this.metaTraderAdapter);
-    this.registry.register(this.paperBrokerAdapter);
+    // Root adapters are metadata-only (#291 / Sprint 56 correction round 3,
+    // architect findings 1 + 2 + 7). Every persisted BrokerConnection gets a
+    // fresh mutable adapter context from these factories. Lower-level
+    // provider infrastructure (the MetaAPI connection pool, the cTrader
+    // environment-connection pool) remains shared underneath by design.
+    this.registry.register(this.metaTraderAdapter, () => new MetaTraderAdapter(this.metaApiClient));
+    this.registry.register(this.paperBrokerAdapter, () => new PaperBrokerAdapter());
     // Sprint 51 PR-7 — OANDA v20 REST native adapter (BETA: implemented +
     // contract-tested; live verification pending — see
     // docs/brokers/oanda-v20-adapter.md).
-    this.registry.register(this.oandaAdapter);
-    // Future: this.registry.register(this.cTraderAdapter); // partner approval required
+    this.registry.register(this.oandaAdapter, () => new OandaAdapter(this.configService));
+    // Sprint 56 / Task 48-B + correction round 3 — the universal cTrader Open
+    // API engine (BETA: implemented + contract-tested; connections fail
+    // closed until the operator supplies CTRADER_CLIENT_ID/CTRADER_CLIENT_SECRET
+    // — Spotware partner approval — and production-LIVE stays UNVERIFIED).
+    // The Pepperstone / IC Markets catalog entries are ALIASES: they share
+    // the canonical factory + client infrastructure, NEVER the mutable
+    // adapter object. The requested alias broker id is preserved on the
+    // isolated adapter so broker-specific identity verification (discovered
+    // brokerTitleShort) can fail closed on brand mismatch.
+    this.registry.register(
+      this.cTraderAdapter,
+      (requestedBrokerId: string) => new CTraderAdapter(this.cTraderClient, requestedBrokerId),
+    );
+    this.registry.registerBrokerAlias('pepperstone-ctrader', this.cTraderAdapter);
+    this.registry.registerBrokerAlias('icmarkets-ctrader', this.cTraderAdapter);
   }
 }

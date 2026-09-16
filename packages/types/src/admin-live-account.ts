@@ -117,7 +117,22 @@ export interface AdminConnectionRowView {
   credentialStatus: BrokerCredentialStatus;
   /** Fail-closed execution gate (server-computed). */
   executable: boolean;
+  /**
+   * COMPATIBILITY MIRROR ONLY (Sprint 56 correction round 5, #292/#298):
+   * never rendered as the authoritative current trading state — see the
+   * provider verification taxonomy (identity eligibility + executability).
+   */
   liveTradingEnabled: boolean;
+  /**
+   * Provider-side broker identity (server-reported; null when not reported).
+   * Optional for wire compatibility with older payloads.
+   */
+  providerBrokerIdentity?: string | null;
+  /**
+   * Server-derived canonical logical-account key (null until derived).
+   * Optional for wire compatibility with older payloads.
+   */
+  logicalAccountKey?: string | null;
   lastSyncAt: string | null;
   lastHealthCheckAt: string | null;
   /** Sanitized, truncated (never raw provider internals). */

@@ -19,8 +19,14 @@ import {
   OHLCV,
   RequiredMarginParams,
 } from '../interfaces/broker-adapter.interface';
+import type { OrderCapabilityDeclaration } from '../interfaces/order-capability';
 import { BrokerAdapterError, BrokerErrorCode } from '../interfaces/broker-adapter.errors';
+import {
+  ProviderDispatchCertainty,
+  withDefaultCertainty,
+} from '../interfaces/provider-dispatch-certainty';
 import { MetaApiClientService } from '../services/metaapi-client.service';
+import { redactString } from '../../../common/utils/redact-sensitive.util';
 
 /** MetaAPI stringCode for a successfully executed trade */
 const MT_SUCCESS_CODE = 'TRADE_RETCODE_DONE';
@@ -77,7 +83,9 @@ export class MetaTraderAdapter implements IBrokerAdapter {
         success: true,
         accountId: String(info.login ?? credentials.accountId),
         accountType: this.resolveAccountType(info.type),
-        currency: info.currency ?? 'USD',
+        // #7 (round 6): unknown currency stays unknown — NEVER a synthetic
+        // 'USD' fallback that would mis-label account money.
+        currency: info.currency ?? null,
         serverTime: new Date(),
       };
     } catch (err) {
@@ -346,6 +354,28 @@ export class MetaTraderAdapter implements IBrokerAdapter {
   }
 
   // ─── Order management ─────────────────────────────────────────────────────
+
+  // ─── Order capability contract (Round 6 §7) ──────────────────────────────
+
+  /**
+   * MetaTrader 5 capability matrix (the DECLARED truth — enforced
+   * pre-commitment by the orchestrator + verified by the contract suite):
+   * all four normalized kinds; LIMIT/STOP_LIMIT need limitPrice,
+   * STOP/STOP_LIMIT need stopPrice; MARKET orders attach SL/TP at placement.
+   */
+  getOrderCapabilities(): OrderCapabilityDeclaration {
+    return {
+      brokerId: this.brokerId,
+      supportedOrderKinds: ['MARKET', 'LIMIT', 'STOP', 'STOP_LIMIT'],
+      requirements: {
+        MARKET: { limitPriceRequired: false, stopPriceRequired: false },
+        LIMIT: { limitPriceRequired: true, stopPriceRequired: false },
+        STOP: { limitPriceRequired: false, stopPriceRequired: true },
+        STOP_LIMIT: { limitPriceRequired: true, stopPriceRequired: true },
+      },
+      marketSlTpAttachedAtPlacement: true,
+    };
+  }
 
   async placeOrder(order: BrokerOrderRequest): Promise<BrokerOrderResult> {
     const conn = order.connectionReference
@@ -800,45 +830,139 @@ export class MetaTraderAdapter implements IBrokerAdapter {
   /**
    * Map MetaAPI / network errors to typed BrokerAdapterError.
    * Never includes raw credentials in the error message.
+   *
+   * Sprint 56 credential redaction (merged from the orphan sprint): raw
+   * provider text may echo credentials (tokens/keys in error bodies). It is
+   * sanitized BEFORE entering any BrokerAdapterError field; the classifier
+   * below still reads the raw text. Complements the interface's
+   * redactSecret() (known-secret replacement) with pattern-based scrubbing
+   * of credential-shaped fragments the adapter does not know verbatim.
+   */
+  /**
+   * WRITE-CERTAINTY (Sprint 56 correction round 4, architect finding 6):
+   * every classification below is tagged with the certainty that the
+   * state-changing request left iRexPro. MetaApi commands relay through the
+   * MetaApi CLOUD to the broker terminal, so:
+   * - gateway-level rejections (401/429 — rejected BEFORE the terminal) are
+   *   DEFINITELY_NOT_SENT — nothing reached the broker; safe to retry;
+   * - timeouts / connection loss / 5xx AFTER submission are
+   *   MAY_HAVE_REACHED_PROVIDER — the terminal may have executed the
+   *   command; reconcile, never resend;
+   * - terminal-ANSWERED rejections (position not found, market closed,
+   *   margin, duplicate, symbol) are SENT_RESPONSE_RECEIVED — the broker
+   *   definitively reported the outcome.
+   * Local validation errors thrown BEFORE any SDK call carry their own
+   * DEFINITELY_NOT_SENT classification.
    */
   mapError(err: unknown): BrokerAdapterError {
-    if (err instanceof BrokerAdapterError) return err;
+    if (err instanceof BrokerAdapterError) {
+      // Pre-send local validation keeps its explicit classification; raw
+      // provider/SDK failures get the truth table below.
+      return withDefaultCertainty(err);
+    }
 
-    const message = (err as any)?.message ?? 'Unknown MetaAPI error';
+    const raw = (err as any)?.message ?? 'Unknown MetaAPI error';
+    const message = redactString(raw);
     const status = (err as any)?.status ?? (err as any)?.statusCode;
-    const lower = message.toLowerCase();
+    const lower = raw.toLowerCase();
 
     if (status === 401 || lower.includes('authentication') || lower.includes('unauthorized')) {
-      return new BrokerAdapterError(BrokerErrorCode.AUTHENTICATION_FAILED, message, message, false);
+      return new BrokerAdapterError(
+        BrokerErrorCode.AUTHENTICATION_FAILED,
+        message,
+        message,
+        false,
+        ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+      );
     }
     if (status === 404 || lower.includes('not found') || lower.includes('position not found')) {
-      return new BrokerAdapterError(BrokerErrorCode.POSITION_NOT_FOUND, message, message, false);
+      return new BrokerAdapterError(
+        BrokerErrorCode.POSITION_NOT_FOUND,
+        message,
+        message,
+        false,
+        ProviderDispatchCertainty.SENT_RESPONSE_RECEIVED,
+      );
     }
     if (status === 429 || lower.includes('rate limit') || lower.includes('too many requests')) {
-      return new BrokerAdapterError(BrokerErrorCode.RATE_LIMITED, message, message, true);
+      return new BrokerAdapterError(
+        BrokerErrorCode.RATE_LIMITED,
+        message,
+        message,
+        true,
+        ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+      );
     }
     if (lower.includes('timeout') || lower.includes('timed out')) {
-      return new BrokerAdapterError(BrokerErrorCode.CONNECTION_TIMEOUT, message, message, true);
+      return new BrokerAdapterError(
+        BrokerErrorCode.CONNECTION_TIMEOUT,
+        message,
+        message,
+        true,
+        ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER,
+      );
     }
     if (lower.includes('connection') && (lower.includes('lost') || lower.includes('closed'))) {
-      return new BrokerAdapterError(BrokerErrorCode.CONNECTION_LOST, message, message, true);
+      return new BrokerAdapterError(
+        BrokerErrorCode.CONNECTION_LOST,
+        message,
+        message,
+        true,
+        ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER,
+      );
     }
     if (lower.includes('market closed') || lower.includes('trade disabled')) {
-      return new BrokerAdapterError(BrokerErrorCode.MARKET_CLOSED, message, message, false);
+      return new BrokerAdapterError(
+        BrokerErrorCode.MARKET_CLOSED,
+        message,
+        message,
+        false,
+        ProviderDispatchCertainty.SENT_RESPONSE_RECEIVED,
+      );
     }
     if (lower.includes('insufficient margin') || lower.includes('not enough money')) {
-      return new BrokerAdapterError(BrokerErrorCode.INSUFFICIENT_MARGIN, message, message, false);
+      return new BrokerAdapterError(
+        BrokerErrorCode.INSUFFICIENT_MARGIN,
+        message,
+        message,
+        false,
+        ProviderDispatchCertainty.SENT_RESPONSE_RECEIVED,
+      );
     }
     if (lower.includes('invalid symbol') || lower.includes('unknown symbol')) {
-      return new BrokerAdapterError(BrokerErrorCode.INVALID_INSTRUMENT, message, message, false);
+      return new BrokerAdapterError(
+        BrokerErrorCode.INVALID_INSTRUMENT,
+        message,
+        message,
+        false,
+        ProviderDispatchCertainty.SENT_RESPONSE_RECEIVED,
+      );
     }
     if (lower.includes('duplicate') || lower.includes('client id')) {
-      return new BrokerAdapterError(BrokerErrorCode.DUPLICATE_ORDER, message, message, false);
+      return new BrokerAdapterError(
+        BrokerErrorCode.DUPLICATE_ORDER,
+        message,
+        message,
+        false,
+        ProviderDispatchCertainty.SENT_RESPONSE_RECEIVED,
+      );
     }
     if (status >= 500 || lower.includes('internal server error')) {
-      return new BrokerAdapterError(BrokerErrorCode.BROKER_SERVER_ERROR, message, message, true);
+      return new BrokerAdapterError(
+        BrokerErrorCode.BROKER_SERVER_ERROR,
+        message,
+        message,
+        true,
+        ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER,
+      );
     }
 
-    return new BrokerAdapterError(BrokerErrorCode.UNKNOWN, message, message, false);
+    return new BrokerAdapterError(
+      BrokerErrorCode.UNKNOWN,
+      message,
+      message,
+      false,
+      ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER,
+    );
   }
 }

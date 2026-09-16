@@ -1,6 +1,11 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { BrokerService } from './broker.service';
+import { TradingAuthorityService } from '../execution-authority/trading-authority.service';
+import { GrantInvalidationService } from '../execution-authority/grant-invalidation.service';
+import { BrokerAccountSnapshotService } from './services/broker-account-snapshot.service';
+import { BrokerOAuthTokenLifecycleService } from './services/broker-oauth-token-lifecycle.service';
+import { BrokerLinkOutboxService } from './services/broker-link-outbox.service';
 import { BrokerConnection } from './entities/broker-connection.entity';
 import { BrokerAccount } from './entities/broker-account.entity';
 import { BrokerAdapterRegistry } from './adapters/broker-adapter.registry';
@@ -24,6 +29,31 @@ describe('BrokerService — account-scoped required margin', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         BrokerService,
+        // Round 6 (#300): the unified execution-authority seams (mocked —
+        // the bump/invalidation matrices live in the execution-authority suites).
+        {
+          provide: TradingAuthorityService,
+          useValue: {
+            getCurrentGeneration: jest.fn().mockResolvedValue(1),
+            bumpGeneration: jest.fn().mockResolvedValue(2),
+          },
+        },
+        {
+          provide: GrantInvalidationService,
+          useValue: {
+            invalidateUserNewExposureAuthority: jest
+              .fn()
+              .mockResolvedValue({ invalidatedGrants: 0, revokedConfirmations: 0 }),
+          },
+        },
+        {
+          provide: BrokerLinkOutboxService,
+          useValue: {
+            enqueueWithinTransaction: jest.fn().mockResolvedValue(undefined),
+            enqueue: jest.fn().mockResolvedValue(undefined),
+            sweep: jest.fn().mockResolvedValue({ delivered: 0, failed: 0, deferred: 0 }),
+          },
+        },
         {
           provide: getRepositoryToken(BrokerConnection),
           useValue: {
@@ -44,7 +74,7 @@ describe('BrokerService — account-scoped required margin', () => {
         { provide: getRepositoryToken(BrokerAccount), useValue: {} },
         {
           provide: BrokerAdapterRegistry,
-          useValue: { getAdapter: jest.fn().mockReturnValue(adapter) },
+          useValue: { getAdapterForConnection: jest.fn().mockReturnValue(adapter) },
         },
         {
           provide: BrokerProviderRegistryService,
@@ -55,7 +85,22 @@ describe('BrokerService — account-scoped required margin', () => {
           useValue: { decrypt: jest.fn().mockReturnValue(credentials) },
         },
         { provide: AuditService, useValue: { log: jest.fn() } },
+        // Round 6 live-execution completion (§1a): snapshot authority seam
+        // (unused by the required-margin paths under test).
+        {
+          provide: BrokerAccountSnapshotService,
+          useValue: { readLatestAcceptedSnapshot: jest.fn().mockResolvedValue(null) },
+        },
         { provide: DomainEventBus, useValue: { publish: jest.fn() } },
+        // Sprint 56 correction round 1: passthrough OAuth token lifecycle.
+        {
+          provide: BrokerOAuthTokenLifecycleService,
+          useValue: {
+            ensureFreshTokens: jest.fn((_c: unknown, credentials: unknown) =>
+              Promise.resolve(credentials),
+            ),
+          },
+        },
       ],
     }).compile();
     const service = module.get(BrokerService);
@@ -87,6 +132,31 @@ describe('BrokerService — account-scoped required margin', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         BrokerService,
+        // Round 6 (#300): the unified execution-authority seams (mocked —
+        // the bump/invalidation matrices live in the execution-authority suites).
+        {
+          provide: TradingAuthorityService,
+          useValue: {
+            getCurrentGeneration: jest.fn().mockResolvedValue(1),
+            bumpGeneration: jest.fn().mockResolvedValue(2),
+          },
+        },
+        {
+          provide: GrantInvalidationService,
+          useValue: {
+            invalidateUserNewExposureAuthority: jest
+              .fn()
+              .mockResolvedValue({ invalidatedGrants: 0, revokedConfirmations: 0 }),
+          },
+        },
+        {
+          provide: BrokerLinkOutboxService,
+          useValue: {
+            enqueueWithinTransaction: jest.fn().mockResolvedValue(undefined),
+            enqueue: jest.fn().mockResolvedValue(undefined),
+            sweep: jest.fn().mockResolvedValue({ delivered: 0, failed: 0, deferred: 0 }),
+          },
+        },
         {
           provide: getRepositoryToken(BrokerConnection),
           useValue: {
@@ -107,7 +177,7 @@ describe('BrokerService — account-scoped required margin', () => {
         { provide: getRepositoryToken(BrokerAccount), useValue: {} },
         {
           provide: BrokerAdapterRegistry,
-          useValue: { getAdapter: jest.fn().mockReturnValue(adapter) },
+          useValue: { getAdapterForConnection: jest.fn().mockReturnValue(adapter) },
         },
         {
           provide: BrokerProviderRegistryService,
@@ -118,7 +188,22 @@ describe('BrokerService — account-scoped required margin', () => {
           useValue: { decrypt: jest.fn().mockReturnValue(credentials) },
         },
         { provide: AuditService, useValue: { log: jest.fn() } },
+        // Round 6 live-execution completion (§1a): snapshot authority seam
+        // (unused by the required-margin paths under test).
+        {
+          provide: BrokerAccountSnapshotService,
+          useValue: { readLatestAcceptedSnapshot: jest.fn().mockResolvedValue(null) },
+        },
         { provide: DomainEventBus, useValue: { publish: jest.fn() } },
+        // Sprint 56 correction round 1: passthrough OAuth token lifecycle.
+        {
+          provide: BrokerOAuthTokenLifecycleService,
+          useValue: {
+            ensureFreshTokens: jest.fn((_c: unknown, credentials: unknown) =>
+              Promise.resolve(credentials),
+            ),
+          },
+        },
       ],
     }).compile();
     const service = module.get(BrokerService);

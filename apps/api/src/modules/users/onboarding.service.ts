@@ -6,6 +6,7 @@ import { UserProfile } from '../users/entities/user-profile.entity';
 import { RiskProfile } from '../risk/entities/risk-profile.entity';
 import { BrokerConnection } from '../broker/entities/broker-connection.entity';
 import { BrokerConnectionStatus } from '../broker/interfaces/broker-adapter.interface';
+import { BrokerCredentialLifecycle } from '../broker/authorization/broker-credential-status';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../../common/enums/audit-action.enum';
 import { EligibilityService } from './eligibility.service';
@@ -49,6 +50,12 @@ export class OnboardingService {
         brokerConnectionStatus: 'NONE' as const,
         canStartTrading: false,
         missingSteps: ['PROFILE', 'ELIGIBILITY', 'RISK_PROFILE', 'BROKER_CONNECTION'],
+        blockedReasons: [
+          'PROFILE_INCOMPLETE',
+          'KYC_REQUIRED',
+          'RISK_PROFILE_MISSING',
+          'BROKER_DISCONNECTED',
+        ] as OnboardingBlockedReason[],
         nextStep: 'PROFILE',
       };
     }
@@ -77,6 +84,62 @@ export class OnboardingService {
     if (!eligibilityCompleted) missingSteps.push('ELIGIBILITY');
     if (!riskProfileCompleted) missingSteps.push('RISK_PROFILE');
     if (!brokerConnected) missingSteps.push('BROKER_CONNECTION');
+
+    // ── Round 6 live-execution completion (§26 / §1d): STABLE
+    // machine-readable blockedReasons — every production blocker is named,
+    // so `canStartTrading=false` is never presented without its reason(s).
+    // The codes are a closed union (OnboardingBlockedReason); web/mobile/admin
+    // are display-only consumers of this server-authoritative list.
+    const blockedReasons: OnboardingBlockedReason[] = [];
+    switch (user.status) {
+      case UserStatus.PENDING_VERIFICATION:
+        blockedReasons.push('ACCOUNT_PENDING_VERIFICATION');
+        break;
+      case UserStatus.SUSPENDED:
+        blockedReasons.push('ACCOUNT_SUSPENDED');
+        break;
+      case UserStatus.PERMANENTLY_LOCKED:
+        blockedReasons.push('ACCOUNT_LOCKED');
+        break;
+      case UserStatus.CLOSED:
+        blockedReasons.push('ACCOUNT_CLOSED');
+        break;
+      default:
+        break;
+    }
+    if (!profileCompleted) blockedReasons.push('PROFILE_INCOMPLETE');
+    if (!eligibilityCompleted) {
+      if (eligibility.jurisdictionStatus !== 'ELIGIBLE') {
+        blockedReasons.push('JURISDICTION_INELIGIBLE');
+      }
+      if (eligibility.ageStatus !== 'ADULT') {
+        blockedReasons.push('AGE_NOT_ADULT');
+      }
+      if (eligibility.kycStatus === 'REJECTED') {
+        blockedReasons.push('KYC_REJECTED');
+      } else if (eligibility.kycStatus !== 'APPROVED') {
+        blockedReasons.push('KYC_REQUIRED');
+      }
+      if (eligibility.missingConsentKeys.length > 0) {
+        blockedReasons.push('DISCLOSURE_OUTSTANDING');
+      }
+    }
+    if (!riskProfile) {
+      blockedReasons.push('RISK_PROFILE_MISSING');
+    } else if (!riskProfileCompleted) {
+      blockedReasons.push('RISK_ACK_REQUIRED');
+    }
+    if (!brokerConnected) {
+      blockedReasons.push('BROKER_DISCONNECTED');
+    } else if (
+      activeConnection?.credentialStatus &&
+      !BrokerCredentialLifecycle.isUsable(activeConnection.credentialStatus)
+    ) {
+      blockedReasons.push('CREDENTIALS_INVALID');
+    }
+    if (killSwitchActive) {
+      blockedReasons.push('KILL_SWITCH_ACTIVE');
+    }
 
     const canStartTrading =
       userActive &&
@@ -114,6 +177,7 @@ export class OnboardingService {
       brokerConnectionStatus,
       canStartTrading,
       missingSteps,
+      blockedReasons,
       nextStep,
     };
   }
@@ -155,7 +219,12 @@ export class OnboardingService {
     userId: string,
   ): Promise<Pick<
     BrokerConnection,
-    'id' | 'status' | 'lastHealthCheckAt' | 'consecutiveFailureCount' | 'liveTradingEnabled'
+    | 'id'
+    | 'status'
+    | 'lastHealthCheckAt'
+    | 'consecutiveFailureCount'
+    | 'liveTradingEnabled'
+    | 'credentialStatus'
   > | null> {
     try {
       const connection = await this.brokerConnectionRepo
@@ -166,6 +235,7 @@ export class OnboardingService {
           'conn.lastHealthCheckAt',
           'conn.consecutiveFailureCount',
           'conn.liveTradingEnabled',
+          'conn.credentialStatus',
         ])
         .where('conn.userId = :userId', { userId })
         .andWhere('conn.status = :status', { status: BrokerConnectionStatus.CONNECTED })
@@ -173,7 +243,12 @@ export class OnboardingService {
 
       return connection as Pick<
         BrokerConnection,
-        'id' | 'status' | 'lastHealthCheckAt' | 'consecutiveFailureCount' | 'liveTradingEnabled'
+        | 'id'
+        | 'status'
+        | 'lastHealthCheckAt'
+        | 'consecutiveFailureCount'
+        | 'liveTradingEnabled'
+        | 'credentialStatus'
       > | null;
     } catch (err) {
       this.logger.error(
@@ -187,6 +262,32 @@ export class OnboardingService {
 export type OnboardingStep = 'PROFILE' | 'ELIGIBILITY' | 'RISK_PROFILE' | 'BROKER_CONNECTION';
 export type OnboardingNextStep = OnboardingStep | 'READY';
 
+/**
+ * Round 6 live-execution completion (§26 / §1d): the STABLE, closed set of
+ * server-derived account-readiness blocked reason codes. `canStartTrading =
+ * false` is NEVER presented without at least one of these codes. The
+ * execution-time blockers (SESSION_*, SNAPSHOT_*, PROVIDER_UNVERIFIED,
+ * EXECUTION_CONTROL_BLOCKED, RECONFIRMATION_REQUIRED, ...) live where they
+ * are decided — the risk pipeline's RiskRejectionCode and the final dispatch
+ * boundary's FinalDispatchBlockedReason unions (also machine-readable).
+ */
+export type OnboardingBlockedReason =
+  | 'ACCOUNT_PENDING_VERIFICATION'
+  | 'ACCOUNT_SUSPENDED'
+  | 'ACCOUNT_LOCKED'
+  | 'ACCOUNT_CLOSED'
+  | 'PROFILE_INCOMPLETE'
+  | 'JURISDICTION_INELIGIBLE'
+  | 'AGE_NOT_ADULT'
+  | 'KYC_REQUIRED'
+  | 'KYC_REJECTED'
+  | 'DISCLOSURE_OUTSTANDING'
+  | 'RISK_PROFILE_MISSING'
+  | 'RISK_ACK_REQUIRED'
+  | 'KILL_SWITCH_ACTIVE'
+  | 'BROKER_DISCONNECTED'
+  | 'CREDENTIALS_INVALID';
+
 export interface OnboardingStatus {
   profileCompleted: boolean;
   eligibilityCompleted: boolean;
@@ -195,5 +296,7 @@ export interface OnboardingStatus {
   brokerConnectionStatus: BrokerConnectionStatus | 'NONE';
   canStartTrading: boolean;
   missingSteps: OnboardingStep[];
+  /** §26: stable machine-readable reasons for EVERY production blocker. */
+  blockedReasons: OnboardingBlockedReason[];
   nextStep: OnboardingNextStep;
 }

@@ -10,9 +10,12 @@ import type {
   BrokerAuthenticationType,
   BrokerAvailabilityStatus,
   BrokerConnectionRoute,
+  BrokerConnectionView,
   BrokerRegistryEntry,
   CreateBrokerConnectionRequest,
 } from "@irexpro/types";
+import type { ProviderVerificationLabel } from "@irexpro/types/provider-verification";
+import { assessProviderVerification } from "@irexpro/types/provider-verification";
 
 export interface BrokerStatusPresentation {
   label: string;
@@ -107,6 +110,71 @@ export function keyCapabilityChips(entry: BrokerRegistryEntry): string[] {
   if (caps.includes("MARKET_DATA")) chips.push("Market data");
   if (caps.includes("ORDER_PLACEMENT")) chips.push("Orders");
   return chips;
+}
+
+// ── Provider verification label taxonomy (Sprint 56 correction round 5) ─────
+//
+// EXACTLY the six architect labels: 'LIVE-capable' | 'Production LIVE
+// Verified' | 'Production LIVE Unverified' | 'Ineligible' | 'DEMO only' |
+// 'execution disabled'. An UNVERIFIED BETA provider is NEVER labeled simply
+// "Live" — the shared assessment maps server facts onto the fixed vocabulary
+// and degrades fail-closed when a fact is missing.
+
+/** Mobile badge color for a taxonomy label (risk-ascending). */
+export function verificationLabelColor(label: ProviderVerificationLabel): string {
+  switch (label) {
+    case "Production LIVE Verified":
+      return "#10b981";
+    case "Production LIVE Unverified":
+    case "execution disabled":
+      return "#f43f5e";
+    case "DEMO only":
+    case "Ineligible":
+      return "#f59e0b";
+    default:
+      return "#6b7280";
+  }
+}
+
+/** Verification label for a catalog (registry) entry. */
+export function verificationLabelForEntry(
+  entry: BrokerRegistryEntry,
+): ProviderVerificationLabel {
+  return assessProviderVerification({
+    environments: entry.environments,
+    implementationStatus: entry.status,
+    adapterAvailable: entry.adapterAvailable,
+    productionLiveVerification: entry.productionLiveVerification ?? null,
+  }).label;
+}
+
+/**
+ * Verification label for one user connection, joined with the registry entry
+ * (by brokerId). A missing join degrades fail-closed — never toward a
+ * "Live"-sounding claim.
+ */
+export function verificationLabelForConnection(
+  connection: Pick<
+    BrokerConnectionView,
+    | "accountType"
+    | "authorizationStatus"
+    | "providerBrokerIdentity"
+    | "logicalAccountKey"
+  >,
+  registryEntry: BrokerRegistryEntry | null,
+): ProviderVerificationLabel {
+  return assessProviderVerification({
+    environments: registryEntry?.environments ?? null,
+    implementationStatus: registryEntry?.status ?? null,
+    adapterAvailable: registryEntry?.adapterAvailable ?? null,
+    productionLiveVerification: registryEntry?.productionLiveVerification ?? null,
+    accountType: connection.accountType,
+    logicalAccountKey: connection.logicalAccountKey ?? null,
+    authorizationStatus: connection.authorizationStatus,
+    // The broker-connection view carries no executable gate — unknown, never
+    // guessed (the live-account surface renders the server gate).
+    executable: null,
+  }).label;
 }
 
 /** Human label for a connection route (Directive §AF). */

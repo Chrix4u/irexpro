@@ -34,6 +34,9 @@ describe('OnboardingService readiness gate', () => {
     decisionSource: 'POLICY' as const,
     reasonCode: 'POLICY_ALLOWED',
     reviewedAt: null,
+    ageStatus: 'ADULT' as const,
+    kycStatus: 'APPROVED' as const,
+    identityReasonCode: 'KYC_APPROVED',
     disclosures: [],
     consents: [],
     missingConsentKeys: [],
@@ -305,6 +308,10 @@ describe('OnboardingService readiness gate', () => {
       'conn.lastHealthCheckAt',
       'conn.consecutiveFailureCount',
       'conn.liveTradingEnabled',
+      // Round 6 live-execution completion (§1d): the credential STATUS enum
+      // (never the credential material) feeds the CREDENTIALS_INVALID
+      // blockedReason code.
+      'conn.credentialStatus',
     ]);
     expect(JSON.stringify(status)).not.toMatch(
       /encryptedCredentials|credentialIv|credentialTag|providerAccountId|apiSecret/,
@@ -340,5 +347,129 @@ describe('OnboardingService readiness gate', () => {
     const result = await service.canStartTrading('user-complete');
 
     expect(result).toEqual({ allowed: false, missingSteps: ['ELIGIBILITY'] });
+  });
+
+  // ─── Round 6 live-execution completion (§26/§1d): stable blockedReasons ───
+
+  it('§1d: returns machine-readable blockedReasons for EVERY blocker (kyc + jurisdiction + age + disclosure)', async () => {
+    mockUserRepo.findOne.mockResolvedValue(completeUser());
+    mockRiskProfileRepo.findOne.mockResolvedValue(completeRisk());
+    mockBrokerQb.getOne.mockResolvedValue(connectedBroker());
+    mockEligibilityService.getStatus.mockResolvedValue({
+      ...eligibleStatus,
+      jurisdictionStatus: 'INELIGIBLE' as never,
+      ageStatus: 'UNKNOWN' as never,
+      kycStatus: 'REJECTED' as never,
+      canProceed: false,
+    });
+
+    const status = await service.getOnboardingStatus('user-complete');
+
+    expect(status.canStartTrading).toBe(false);
+    expect(status.blockedReasons).toEqual(
+      expect.arrayContaining(['JURISDICTION_INELIGIBLE', 'AGE_NOT_ADULT', 'KYC_REJECTED']),
+    );
+  });
+
+  it('§1d: KYC_REQUIRED when KYC is not submitted/pending', async () => {
+    mockUserRepo.findOne.mockResolvedValue(completeUser());
+    mockRiskProfileRepo.findOne.mockResolvedValue(completeRisk());
+    mockBrokerQb.getOne.mockResolvedValue(connectedBroker());
+    mockEligibilityService.getStatus.mockResolvedValue({
+      ...eligibleStatus,
+      kycStatus: 'PENDING' as never,
+      canProceed: false,
+    });
+
+    const status = await service.getOnboardingStatus('user-complete');
+    expect(status.blockedReasons).toContain('KYC_REQUIRED');
+    expect(status.blockedReasons).not.toContain('KYC_REJECTED');
+  });
+
+  it('§1d: DISCLOSURE_OUTSTANDING maps from missing consent keys', async () => {
+    mockUserRepo.findOne.mockResolvedValue(completeUser());
+    mockRiskProfileRepo.findOne.mockResolvedValue(completeRisk());
+    mockBrokerQb.getOne.mockResolvedValue(connectedBroker());
+    mockEligibilityService.getStatus.mockResolvedValue({
+      ...eligibleStatus,
+      missingConsentKeys: ['NO_PROFIT_GUARANTEE'],
+      canProceed: false,
+    });
+
+    const status = await service.getOnboardingStatus('user-complete');
+    expect(status.blockedReasons).toContain('DISCLOSURE_OUTSTANDING');
+  });
+
+  it('§1d: user-status blockers map to stable account codes', async () => {
+    for (const [status, code] of [
+      ['SUSPENDED', 'ACCOUNT_SUSPENDED'],
+      ['PERMANENTLY_LOCKED', 'ACCOUNT_LOCKED'],
+      ['CLOSED', 'ACCOUNT_CLOSED'],
+      ['PENDING_VERIFICATION', 'ACCOUNT_PENDING_VERIFICATION'],
+    ] as const) {
+      mockUserRepo.findOne.mockResolvedValue({ ...completeUser(), status });
+      mockRiskProfileRepo.findOne.mockResolvedValue(completeRisk());
+      mockBrokerQb.getOne.mockResolvedValue(connectedBroker());
+      mockEligibilityService.getStatus.mockResolvedValue(eligibleStatus);
+
+      const result = await service.getOnboardingStatus('user-complete');
+      expect(result.blockedReasons).toContain(code);
+      expect(result.canStartTrading).toBe(false);
+    }
+  });
+
+  it('§1d: risk/broker blockers — RISK_ACK_REQUIRED, RISK_PROFILE_MISSING, BROKER_DISCONNECTED, CREDENTIALS_INVALID, KILL_SWITCH_ACTIVE', async () => {
+    // No risk profile at all
+    mockUserRepo.findOne.mockResolvedValue(completeUser());
+    mockRiskProfileRepo.findOne.mockResolvedValue(null);
+    mockBrokerQb.getOne.mockResolvedValue(null);
+    mockEligibilityService.getStatus.mockResolvedValue(eligibleStatus);
+
+    let status = await service.getOnboardingStatus('user-complete');
+    expect(status.blockedReasons).toEqual(
+      expect.arrayContaining(['RISK_PROFILE_MISSING', 'BROKER_DISCONNECTED']),
+    );
+
+    // Risk profile without acknowledgement + connected broker with INVALID creds
+    mockRiskProfileRepo.findOne.mockResolvedValue({
+      ...completeRisk(),
+      riskAcknowledgementAccepted: false,
+    });
+    mockBrokerQb.getOne.mockResolvedValue({ ...connectedBroker(), credentialStatus: 'INVALID' });
+    status = await service.getOnboardingStatus('user-complete');
+    expect(status.blockedReasons).toEqual(
+      expect.arrayContaining(['RISK_ACK_REQUIRED', 'CREDENTIALS_INVALID']),
+    );
+
+    // Kill switch
+    mockRiskProfileRepo.findOne.mockResolvedValue({ ...completeRisk(), killSwitchActive: true });
+    mockBrokerQb.getOne.mockResolvedValue(connectedBroker());
+    status = await service.getOnboardingStatus('user-complete');
+    expect(status.blockedReasons).toContain('KILL_SWITCH_ACTIVE');
+    expect(status.canStartTrading).toBe(false);
+  });
+
+  it('§1d: a READY account has an EMPTY blockedReasons list (never READY with blockers)', async () => {
+    mockUserRepo.findOne.mockResolvedValue(completeUser());
+    mockRiskProfileRepo.findOne.mockResolvedValue(completeRisk());
+    mockBrokerQb.getOne.mockResolvedValue(connectedBroker());
+    mockEligibilityService.getStatus.mockResolvedValue(eligibleStatus);
+
+    const status = await service.getOnboardingStatus('user-complete');
+    expect(status.canStartTrading).toBe(true);
+    expect(status.blockedReasons).toEqual([]);
+  });
+
+  it('§1d: the fail-closed no-user status carries honest blockedReasons', async () => {
+    mockUserRepo.findOne.mockResolvedValue(null);
+
+    const status = await service.getOnboardingStatus('ghost');
+    expect(status.canStartTrading).toBe(false);
+    expect(status.blockedReasons).toEqual([
+      'PROFILE_INCOMPLETE',
+      'KYC_REQUIRED',
+      'RISK_PROFILE_MISSING',
+      'BROKER_DISCONNECTED',
+    ]);
   });
 });

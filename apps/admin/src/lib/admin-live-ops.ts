@@ -2,6 +2,7 @@ import type {
   BrokerAuthorizationStatus,
   BrokerConnectionStatus,
   BrokerCredentialStatus,
+  BrokerRegistryEntry,
 } from '@irexpro/types';
 import type {
   AdminAuditPage,
@@ -210,6 +211,48 @@ function isProviderRegistryEntry(value: unknown): value is AdminProviderRegistry
   );
 }
 
+function isBrokerAvailabilityStatus(value: unknown): value is BrokerRegistryEntry['status'] {
+  return (
+    value === 'SUPPORTED' ||
+    value === 'BETA' ||
+    value === 'NOT_STARTED' ||
+    value === 'PARTNER_APPROVAL_REQUIRED' ||
+    value === 'UNAVAILABLE'
+  );
+}
+
+/** Guard for the shared registry entries consumed by the provider matrix. */
+function isBrokerRegistryEntry(value: unknown): value is BrokerRegistryEntry {
+  if (!isRecord(value)) return false;
+  return (
+    isString(value.id) &&
+    isString(value.name) &&
+    isString(value.description) &&
+    isBrokerAvailabilityStatus(value.status) &&
+    Array.isArray(value.connectionRoutes) &&
+    value.connectionRoutes.every(isString) &&
+    Array.isArray(value.capabilities) &&
+    value.capabilities.every(isString) &&
+    (value.authenticationType === 'API_TOKEN' ||
+      value.authenticationType === 'OAUTH' ||
+      value.authenticationType === 'SESSION_AUTH') &&
+    Array.isArray(value.environments) &&
+    value.environments.every((env) => env === 'DEMO' || env === 'LIVE') &&
+    Array.isArray(value.regions) &&
+    value.regions.every(isString) &&
+    typeof value.adapterAvailable === 'boolean' &&
+    (value.productionLiveVerification === undefined ||
+      value.productionLiveVerification === null ||
+      (isRecord(value.productionLiveVerification) &&
+        (value.productionLiveVerification.status === 'UNVERIFIED' ||
+          value.productionLiveVerification.status === 'VERIFIED') &&
+        (value.productionLiveVerification.verifiedAt === null ||
+          typeof value.productionLiveVerification.verifiedAt === 'string') &&
+        (value.productionLiveVerification.evidenceRef === null ||
+          typeof value.productionLiveVerification.evidenceRef === 'string')))
+  );
+}
+
 function isConnectionStateCounts(
   value: unknown,
 ): value is AdminLiveOpsOverviewView['connections'] {
@@ -276,6 +319,14 @@ function isConnectionRowView(value: unknown): value is AdminConnectionRowView {
     isBrokerCredentialStatus(value.credentialStatus) &&
     typeof value.executable === 'boolean' &&
     typeof value.liveTradingEnabled === 'boolean' &&
+    // Sprint 56 round-5 identity fields: optional on the wire (older
+    // payloads), but validated whenever present.
+    (value.providerBrokerIdentity === undefined ||
+      value.providerBrokerIdentity === null ||
+      typeof value.providerBrokerIdentity === 'string') &&
+    (value.logicalAccountKey === undefined ||
+      value.logicalAccountKey === null ||
+      typeof value.logicalAccountKey === 'string') &&
     isNullableString(value.lastSyncAt) &&
     isNullableString(value.lastHealthCheckAt) &&
     isNullableString(value.lastErrorMessage) &&
@@ -353,6 +404,21 @@ function isAuditPage(value: unknown): value is AdminAuditPage {
 }
 
 // ── Loaders ─────────────────────────────────────────────────────────────────
+
+/**
+ * GET /broker/registry — server-authoritative provider catalog, used to join
+ * the Live Ops provider matrix with implementation/adapter/verification
+ * facts (Sprint 56 correction round 5, issues #292/#293/#298). Callers catch
+ * and degrade fail-closed (labels fall back to the taxonomy's unverified /
+ * Ineligible values — never toward a "Live"-sounding claim).
+ */
+export async function loadAdminProviderRegistry(): Promise<BrokerRegistryEntry[]> {
+  const payload = await api.listBrokerRegistry();
+  if (!Array.isArray(payload?.brokers) || !payload.brokers.every(isBrokerRegistryEntry)) {
+    throw new Error('Provider registry contract mismatch');
+  }
+  return payload.brokers;
+}
 
 /**
  * GET /admin/live-account/overview — §39 operational overview

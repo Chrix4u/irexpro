@@ -86,8 +86,12 @@ class SignalScheduler:
             return False
 
         settings = get_settings()
-        if request.mode != "paper":
-            logger.warning("Only paper mode is supported for scheduled generation")
+        # Round 5 (session authority): the request carries the TradingSession's
+        # durable executionMode ("paper" = legacy API value). Scheduled signal
+        # generation itself stays paper-only — the risk + execution gates in
+        # the API own the enforcement boundary for SEMI_AUTO / FULL_AUTO.
+        if request.mode not in ("paper", "PAPER_ONLY", "SEMI_AUTO", "FULL_AUTO"):
+            logger.warning("Unsupported scheduler mode", mode=request.mode)
             return False
 
         if request.source == "mock" and settings.is_production and not settings.ai_allow_mock_market_data:

@@ -5,11 +5,18 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/context/auth-context';
 import { Alert, Badge, Button, Card, EmptyState } from '@/components/ui';
 import { formatEnumLabel } from '@irexpro/types';
+import type { BrokerRegistryEntry } from '@irexpro/types';
+import { assessProviderVerification } from '@irexpro/types/provider-verification';
+import type { ProviderVerificationLabel } from '@irexpro/types/provider-verification';
 import {
   ADMIN_DISCREPANCY_PAGE_SIZE,
+  ADMIN_TABLE_PAGE_SIZE,
   formatAdminTimestamp,
+  loadAdminConnections,
   loadAdminDiscrepancies,
   loadAdminLiveOpsOverview,
+  loadAdminProviderRegistry,
+  type AdminConnectionRowView,
   type AdminDiscrepancyFilter,
   type AdminDiscrepancyRowView,
   type AdminExecutionControlView,
@@ -42,6 +49,17 @@ const DISCREPANCY_FILTERS: AdminDiscrepancyFilter[] = [
   'CRITICAL',
   'WARNING',
 ];
+
+/**
+ * Badge semantics for the fixed six-label verification taxonomy
+ * (Sprint 56 correction round 5 — risk-ascending accents).
+ */
+function verificationBadgeVariant(label: ProviderVerificationLabel): 'success' | 'warning' | 'error' | 'info' {
+  if (label === 'Production LIVE Verified') return 'success';
+  if (label === 'Production LIVE Unverified' || label === 'execution disabled') return 'error';
+  if (label === 'DEMO only' || label === 'Ineligible') return 'warning';
+  return 'info';
+}
 
 function severityBadgeVariant(severity: 'INFO' | 'WARNING' | 'CRITICAL') {
   if (severity === 'CRITICAL') return 'error' as const;
@@ -131,6 +149,137 @@ function ProviderCapabilities({ capabilities }: { capabilities: string[] }) {
   );
 }
 
+/**
+ * Provider capability-matrix row (Sprint 56 correction round 5, issues
+ * #292/#293): the six distinguished facts stay SEPARATE columns —
+ * (a) protocol/environment capability, (b) implementation availability,
+ * (c) adapter availability, (d) verification status — each rendered from
+ * the fixed taxonomy so an UNVERIFIED BETA provider is never "Live".
+ * Identity eligibility (e) and current executability (f) are per-connection
+ * facts and live in the connection authority table below.
+ */
+function ProviderMatrixRow({
+  provider,
+  registryEntry,
+}: {
+  provider: NonNullable<AdminLiveOpsOverviewView['providers'][number]>;
+  registryEntry: BrokerRegistryEntry | null;
+}) {
+  const assessment = assessProviderVerification({
+    // The overview's own environment facts stay usable when the registry join
+    // failed; implementation/adapter/verification then degrade fail-closed.
+    environments:
+      registryEntry?.environments ??
+      (provider.supportsLive
+        ? (['DEMO', 'LIVE'] as const)
+        : provider.supportsDemo
+          ? (['DEMO'] as const)
+          : null),
+    implementationStatus: registryEntry?.status ?? null,
+    adapterAvailable: registryEntry?.adapterAvailable ?? null,
+    productionLiveVerification: registryEntry?.productionLiveVerification ?? null,
+  });
+
+  return (
+    <tr>
+      <td className="admin-table__cell-strong">{provider.brokerName}</td>
+      <td>
+        <Badge variant={verificationBadgeVariant(assessment.environmentCapability)}>
+          {assessment.environmentCapability}
+        </Badge>
+      </td>
+      <td>
+        <Badge variant={verificationBadgeVariant(assessment.implementationAvailability)}>
+          {assessment.implementationAvailability}
+        </Badge>
+        <div className="admin-table__cell-muted text-sm">
+          {registryEntry ? formatEnumLabel(registryEntry.status) : 'Registry unavailable'}
+        </div>
+      </td>
+      <td>
+        <Badge variant={verificationBadgeVariant(assessment.adapterAvailability)}>
+          {assessment.adapterAvailability}
+        </Badge>
+      </td>
+      <td>
+        <Badge variant={verificationBadgeVariant(assessment.verificationStatus)}>
+          {assessment.verificationStatus}
+        </Badge>
+        {registryEntry?.productionLiveVerification?.status === 'VERIFIED' && (
+          <div className="admin-table__cell-muted text-sm">
+            {registryEntry.productionLiveVerification.evidenceRef ?? 'Operator attested'} ·{' '}
+            {formatAdminTimestamp(registryEntry.productionLiveVerification.verifiedAt)}
+          </div>
+        )}
+      </td>
+      <td>
+        <ProviderCapabilities capabilities={provider.capabilities} />
+      </td>
+    </tr>
+  );
+}
+
+/**
+ * Connection authority row: (e) identity-specific production-LIVE eligibility
+ * and (f) current BrokerConnection executability — separate columns from the
+ * fixed taxonomy, plus the server-reported identity facts.
+ */
+function ConnectionAuthorityRow({
+  row,
+  registryEntry,
+}: {
+  row: AdminConnectionRowView;
+  registryEntry: BrokerRegistryEntry | null;
+}) {
+  const assessment = assessProviderVerification({
+    environments: registryEntry?.environments ?? null,
+    implementationStatus: registryEntry?.status ?? null,
+    adapterAvailable: registryEntry?.adapterAvailable ?? null,
+    productionLiveVerification: registryEntry?.productionLiveVerification ?? null,
+    accountType: row.accountType,
+    logicalAccountKey: row.logicalAccountKey ?? null,
+    authorizationStatus: row.authorizationStatus,
+    executable: row.executable,
+  });
+
+  return (
+    <tr>
+      <td>
+        <div className="admin-table__cell-strong">{row.brokerName}</div>
+        <div className="admin-table__cell-muted break-long">
+          {row.displayName ?? formatEnumLabel(row.brokerId)} · {row.maskedAccountId ?? '—'} ·{' '}
+          {row.accountType}
+        </div>
+      </td>
+      <td>
+        <div className="admin-table__cell-mono text-sm">{row.providerBrokerIdentity ?? '—'}</div>
+        <div className="admin-table__cell-mono admin-table__cell-muted text-sm break-long">
+          {row.logicalAccountKey ?? 'Not derived'}
+        </div>
+      </td>
+      <td>
+        <Badge variant={verificationBadgeVariant(assessment.identityProductionLiveEligibility)}>
+          {assessment.identityProductionLiveEligibility}
+        </Badge>
+      </td>
+      <td>
+        <Badge variant={verificationBadgeVariant(assessment.connectionExecutability)}>
+          {assessment.connectionExecutability}
+        </Badge>
+        <div className="admin-table__cell-muted text-sm">
+          Authorization {formatEnumLabel(row.authorizationStatus)}
+        </div>
+      </td>
+      <td>
+        <Badge variant={verificationBadgeVariant(assessment.label)}>{assessment.label}</Badge>
+        <div className="admin-table__cell-muted text-sm">
+          Live-trading flag (compatibility mirror): {row.liveTradingEnabled ? 'enabled' : 'not enabled'}
+        </div>
+      </td>
+    </tr>
+  );
+}
+
 function DiscrepancyRow({ row }: { row: AdminDiscrepancyRowView }) {
   return (
     <tr>
@@ -157,6 +306,13 @@ export default function AdminLiveOpsPage() {
   const [loadingOverview, setLoadingOverview] = useState(true);
   const [overviewError, setOverviewError] = useState<string | null>(null);
 
+  /** Shared provider registry joined into the capability matrix (null = unavailable → fail-closed labels). */
+  const [providerRegistry, setProviderRegistry] = useState<BrokerRegistryEntry[] | null>(null);
+
+  const [authorityRows, setAuthorityRows] = useState<AdminConnectionRowView[]>([]);
+  const [loadingConnections, setLoadingConnections] = useState(true);
+  const [authorityRowsError, setAuthorityRowsError] = useState<string | null>(null);
+
   const [discFilter, setDiscFilter] = useState<AdminDiscrepancyFilter>('ALL');
   const [discRows, setDiscRows] = useState<AdminDiscrepancyRowView[]>([]);
   const [discTotal, setDiscTotal] = useState(0);
@@ -166,19 +322,50 @@ export default function AdminLiveOpsPage() {
 
   /** Monotonic request id so stale discrepancy responses never overwrite newer pages. */
   const discRequestSeq = useRef(0);
+  /** Separate monotonic id for the connection authority rows. */
+  const connectionsRequestSeq = useRef(0);
 
   const refreshOverview = useCallback(async () => {
     setLoadingOverview(true);
     setOverviewError(null);
     try {
-      setOverview(await loadAdminLiveOpsOverview());
+      const [overviewPayload, registry] = await Promise.all([
+        loadAdminLiveOpsOverview(),
+        // Registry join powers the implementation/adapter/verification
+        // columns; failure degrades fail-closed (never toward "Live").
+        loadAdminProviderRegistry().catch(() => null),
+      ]);
+      setOverview(overviewPayload);
+      setProviderRegistry(registry);
     } catch (err) {
       setOverview(null);
+      setProviderRegistry(null);
       setOverviewError(
         err instanceof Error ? err.message : 'Failed to load live operations overview.',
       );
     } finally {
       setLoadingOverview(false);
+    }
+  }, []);
+
+  const refreshAuthorityRows = useCallback(async () => {
+    const seq = ++connectionsRequestSeq.current;
+    setLoadingConnections(true);
+    setAuthorityRowsError(null);
+    try {
+      const page = await loadAdminConnections('ALL', ADMIN_TABLE_PAGE_SIZE, 0);
+      if (seq !== connectionsRequestSeq.current) return;
+      setAuthorityRows(page.connections);
+    } catch (err) {
+      if (seq !== connectionsRequestSeq.current) return;
+      setAuthorityRows([]);
+      setAuthorityRowsError(
+        err instanceof Error ? err.message : 'Failed to load connection authority rows.',
+      );
+    } finally {
+      if (seq === connectionsRequestSeq.current) {
+        setLoadingConnections(false);
+      }
     }
   }, []);
 
@@ -210,13 +397,15 @@ export default function AdminLiveOpsPage() {
   useEffect(() => {
     if (!hasAdminRole) return;
     void refreshOverview();
+    void refreshAuthorityRows();
     void loadDiscrepancyPage('ALL', 0);
-  }, [hasAdminRole, refreshOverview, loadDiscrepancyPage]);
+  }, [hasAdminRole, refreshOverview, refreshAuthorityRows, loadDiscrepancyPage]);
 
   const handleRefresh = useCallback(() => {
     void refreshOverview();
+    void refreshAuthorityRows();
     void loadDiscrepancyPage(discFilter, 0);
-  }, [refreshOverview, loadDiscrepancyPage, discFilter]);
+  }, [refreshOverview, refreshAuthorityRows, loadDiscrepancyPage, discFilter]);
 
   const handleDiscFilterChange = useCallback(
     (filter: AdminDiscrepancyFilter) => {
@@ -411,10 +600,16 @@ export default function AdminLiveOpsPage() {
         </Card>
       )}
 
-      {/* §39 — provider registry */}
-      <Card title={`Provider registry (${providers.length})`}>
+      {/* §39 — provider capability matrix (Sprint 56 round 5: (a)–(d) separated) */}
+      <Card title={`Provider capability matrix (${providers.length})`}>
+        <p className="muted text-sm" style={{ marginTop: 0 }}>
+          Capability is NOT approval: environment capability, implementation, adapter availability,
+          and production-LIVE verification are separate facts rendered from the fixed label taxonomy.
+          An unverified provider is never listed as live.
+          {providerRegistry === null && ' Shared registry unavailable — implementation/adapter/verification degraded fail-closed.'}
+        </p>
         {loadingOverview ? (
-          <p className="muted">Loading provider registry…</p>
+          <p className="muted">Loading provider matrix…</p>
         ) : providers.length === 0 ? (
           <EmptyState
             icon="🔌"
@@ -423,36 +618,79 @@ export default function AdminLiveOpsPage() {
           />
         ) : (
           <div className="admin-table-scroll">
-            <table className="admin-table" aria-label="Provider registry">
+            <table className="admin-table" aria-label="Provider capability matrix">
               <thead>
                 <tr>
                   <th scope="col">Broker</th>
-                  <th scope="col">Environments</th>
+                  <th scope="col">Environment capability</th>
+                  <th scope="col">Implementation</th>
+                  <th scope="col">Adapter</th>
+                  <th scope="col">Production-LIVE verification</th>
                   <th scope="col">Capabilities</th>
                 </tr>
               </thead>
               <tbody>
                 {providers.map((provider) => (
-                  <tr key={provider.brokerId}>
-                    <td className="admin-table__cell-strong">{provider.brokerName}</td>
-                    <td>
-                      <span className="admin-table__badges">
-                        {provider.supportsDemo ? <Badge variant="info">Demo</Badge> : null}
-                        {provider.supportsLive ? <Badge variant="warning">Live</Badge> : null}
-                        {!provider.supportsDemo && !provider.supportsLive ? (
-                          <span className="admin-table__cell-muted">None</span>
-                        ) : null}
-                      </span>
-                    </td>
-                    <td>
-                      <ProviderCapabilities capabilities={provider.capabilities} />
-                    </td>
-                  </tr>
+                  <ProviderMatrixRow
+                    key={provider.brokerId}
+                    provider={provider}
+                    registryEntry={
+                      providerRegistry?.find((entry) => entry.id === provider.brokerId) ?? null
+                    }
+                  />
                 ))}
               </tbody>
             </table>
           </div>
         )}
+      </Card>
+
+      {/* Sprint 56 round 5 — connection execution authority: (e) + (f) per connection */}
+      <Card title="Connection execution authority">
+        <p className="muted text-sm" style={{ marginTop: 0 }}>
+          Per BrokerConnection: identity-specific production-LIVE eligibility and current
+          executability are separate from provider capability. The live-trading flag is shown only as
+          a compatibility mirror — it is not the authoritative trading state.
+        </p>
+        {authorityRowsError && <Alert variant="error">{authorityRowsError}</Alert>}
+        {loadingConnections ? (
+          <p className="muted">Loading connection authority…</p>
+        ) : authorityRows.length === 0 && !authorityRowsError ? (
+          <EmptyState
+            icon="🔌"
+            title="No broker connections"
+            description="No user connections exist yet."
+          />
+        ) : (
+          <div className="admin-table-scroll">
+            <table className="admin-table" aria-label="Connection execution authority">
+              <thead>
+                <tr>
+                  <th scope="col">Connection</th>
+                  <th scope="col">Provider identity · logical account</th>
+                  <th scope="col">Identity production-LIVE eligibility</th>
+                  <th scope="col">Current executability</th>
+                  <th scope="col">Verification label</th>
+                </tr>
+              </thead>
+              <tbody>
+                {authorityRows.map((row) => (
+                  <ConnectionAuthorityRow
+                    key={row.id}
+                    row={row}
+                    registryEntry={
+                      providerRegistry?.find((entry) => entry.id === row.brokerId) ?? null
+                    }
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <p className="muted text-sm">
+          Showing the first {authorityRows.length} connections — the full inventory with per-state
+          filters lives in Brokers.
+        </p>
       </Card>
 
       {/* §39 — automation session counts */}

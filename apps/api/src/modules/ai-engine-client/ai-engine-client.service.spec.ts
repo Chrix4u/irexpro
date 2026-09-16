@@ -1,5 +1,6 @@
 import { ConfigService } from '@nestjs/config';
 import { AiEngineClient } from './ai-engine-client.service';
+import { ExecutionMode } from '../execution/interfaces/execution-authority';
 
 describe('AiEngineClient', () => {
   let client: AiEngineClient;
@@ -40,7 +41,7 @@ describe('AiEngineClient', () => {
       instruments: ['EURUSD'],
       timeframe: 'H1',
       source: 'broker',
-      mode: 'paper',
+      mode: ExecutionMode.PAPER_ONLY,
     });
 
     expect(global.fetch).toHaveBeenCalledWith(
@@ -76,7 +77,7 @@ describe('AiEngineClient', () => {
       instruments: ['EURUSD'],
       timeframe: 'H1',
       source: 'broker',
-      mode: 'paper',
+      mode: ExecutionMode.PAPER_ONLY,
     });
 
     expect(global.fetch).not.toHaveBeenCalled();

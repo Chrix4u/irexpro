@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -11,11 +12,13 @@ import {
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { TradingService } from './trading.service';
 import { StartSessionDto } from './dto/start-session.dto';
+import { ChangeExecutionModeDto } from './dto/change-execution-mode.dto';
 import {
   TradingSessionResponseDto,
   toTradingSessionResponse,
 } from './dto/trading-session-response.dto';
 import { CurrentUserId } from '../../common/decorators/current-user.decorator';
+import { ExecutionMode } from '../execution/interfaces/execution-authority';
 
 /**
  * TradingController — Trading session lifecycle API.
@@ -24,6 +27,7 @@ import { CurrentUserId } from '../../common/decorators/current-user.decorator';
  *
  * POST /api/v1/trading/sessions/start       — start a new trading session
  * POST /api/v1/trading/sessions/:id/stop    — stop a specific session
+ * POST /api/v1/trading/sessions/:id/mode    — audited execution-mode change
  * GET  /api/v1/trading/sessions/active      — get current active session
  * GET  /api/v1/trading/sessions/:id         — get session by ID
  *
@@ -71,10 +75,12 @@ export class TradingController {
     summary: 'Start a new AI trading session',
     description:
       'Requires onboarding complete (profile + risk acknowledgement + broker connected), ' +
-      'healthy broker connection, and kill switch inactive. No subscription is required ' +
-      '(performance-fee-only model). PAPER_ONLY mode is the default. FULL_AUTO does NOT ' +
-      'automatically enable live broker execution — live trading requires a separate ' +
-      'explicit enablement on the broker connection.',
+      'the EXACT brokerConnectionId to bind (no implicit discovery), a healthy broker ' +
+      'connection, and kill switch inactive. No subscription is required ' +
+      '(performance-fee-only model). executionMode defaults to PAPER_ONLY; it is persisted ' +
+      'on the session and binds all future NEW-exposure decisions (Round 5 session ' +
+      'authority). FULL_AUTO does NOT automatically enable live broker execution — live ' +
+      'trading requires a separate explicit enablement on the broker connection.',
   })
   @ApiResponse({ status: 201, type: TradingSessionResponseDto })
   async startSession(
@@ -84,9 +90,34 @@ export class TradingController {
     const session = await this.tradingService.startTradingSession(
       userId,
       dto.brokerConnectionId,
-      dto.requestedMode,
+      this.resolveExecutionMode(dto),
     );
     return toTradingSessionResponse(session);
+  }
+
+  /**
+   * Resolve the durable execution mode from the DTO (Round 5, #298).
+   *
+   * `executionMode` is authoritative; the legacy `requestedMode` alias is kept
+   * for backward compatibility. Both supplied and disagreeing → 400 (never a
+   * silent pick — the mode is part of the session authority).
+   */
+  private resolveExecutionMode(dto: StartSessionDto): ExecutionMode {
+    if (
+      dto.executionMode &&
+      dto.requestedMode &&
+      String(dto.executionMode) !== String(dto.requestedMode)
+    ) {
+      throw new BadRequestException(
+        'requestedMode and executionMode disagree. Supply only executionMode ' +
+          '(requestedMode is a deprecated alias with the same values).',
+      );
+    }
+    return (
+      dto.executionMode ??
+      (dto.requestedMode as ExecutionMode | undefined) ??
+      ExecutionMode.PAPER_ONLY
+    );
   }
 
   /**
@@ -102,6 +133,7 @@ export class TradingController {
     summary: 'Stop an active trading session',
     description:
       'Stops the specified session. Does not automatically close open trades. ' +
+      'Invalidates outstanding RiskGrants / SEMI_AUTO confirmations bound to the session. ' +
       'Emits a realtime session-stopped event.',
   })
   async stopSession(
@@ -110,6 +142,42 @@ export class TradingController {
   ): Promise<{ message: string; sessionId: string }> {
     await this.tradingService.stopTradingSession(userId, sessionId);
     return { message: 'Trading session stopped', sessionId };
+  }
+
+  /**
+   * Explicit + audited execution-mode change (Round 5, issue #298).
+   *
+   * Bumps the session authorityGeneration via CAS, INVALIDATES outstanding
+   * ACTIVE RiskGrants (reason SESSION_AUTHORITY_GENERATION_CHANGED — never
+   * revived) and REVOKES PENDING SEMI_AUTO confirmations. Requires the session
+   * to be ACTIVE and owned by the caller; the new mode must be permitted by
+   * the user's risk profile (FULL_AUTO additionally requires live enablement
+   * on the session's bound connection).
+   *
+   * POST /api/v1/trading/sessions/:id/mode
+   */
+  @Post(':id/mode')
+  @ApiOperation({
+    summary: 'Change the execution mode of an active session (audited)',
+    description:
+      'Explicit, audited execution-mode change. Advances authorityGeneration ' +
+      '(CAS) and invalidates all outstanding authority bound to the previous ' +
+      'generation: ACTIVE RiskGrants become INVALIDATED with reason ' +
+      'SESSION_AUTHORITY_GENERATION_CHANGED, PENDING confirmations become REVOKED. ' +
+      'Grants are never revived when switching back — a new risk evaluation is required.',
+  })
+  @ApiResponse({ status: 200, type: TradingSessionResponseDto })
+  async changeExecutionMode(
+    @CurrentUserId() userId: string,
+    @Param('id', ParseUUIDPipe) sessionId: string,
+    @Body() dto: ChangeExecutionModeDto,
+  ): Promise<TradingSessionResponseDto> {
+    const session = await this.tradingService.changeExecutionMode(
+      userId,
+      sessionId,
+      dto.executionMode,
+    );
+    return toTradingSessionResponse(session);
   }
 
   /**

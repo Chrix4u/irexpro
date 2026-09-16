@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { formatEnumLabel } from '@irexpro/types';
 import { Alert, Badge, Button, Card, DashboardShell, LoadingSpinner } from '@/components/ui';
 import { useAuth } from '@/context/auth-context';
+import { api } from '@/lib/api';
 import { mapApiError } from '@/lib/error-mapping';
 import {
   loadLiveAccountActivity,
@@ -23,6 +24,8 @@ import {
   type LivePositionRowView,
 } from '@/lib/live-account';
 import './live-account.css';
+import type { BrokerRegistryEntry } from '@irexpro/types';
+import { connectionVerificationLabel } from '@/lib/trader-session';
 
 const ORDERS_PAGE_SIZE = 10;
 const ACTIVITY_PAGE_SIZE = 10;
@@ -265,7 +268,38 @@ function AccountSummaryCard({ connection }: { connection: LiveAccountConnectionV
   );
 }
 
-function ConnectionStatusCard({ connection }: { connection: LiveAccountConnectionView }) {
+/** Badge semantics for the fixed verification-label taxonomy (risk-ascending). */
+function verificationLabelVariant(
+  label: ReturnType<typeof connectionVerificationLabel>['label'],
+): 'success' | 'warning' | 'error' | 'info' {
+  if (label === 'Production LIVE Verified') return 'success';
+  if (label === 'Production LIVE Unverified') return 'error';
+  if (label === 'DEMO only' || label === 'Ineligible') return 'warning';
+  if (label === 'execution disabled') return 'error';
+  return 'info';
+}
+
+function ConnectionStatusCard({
+  connection,
+  registryEntry,
+}: {
+  connection: LiveAccountConnectionView;
+  registryEntry: BrokerRegistryEntry | null;
+}) {
+  // Verification truth from the fixed six-label taxonomy — joined with the
+  // server registry when available; a missing entry degrades fail-closed
+  // (never toward a "Live"-sounding claim). The legacy live-trading flag is
+  // rendered ONLY as a clearly-subordinate compatibility mirror.
+  const verification = connectionVerificationLabel(
+    {
+      accountType: connection.accountType,
+      authorizationStatus: connection.authorizationStatus,
+      executable: connection.executable,
+      providerBrokerIdentity: connection.providerBrokerIdentity ?? null,
+      logicalAccountKey: connection.logicalAccountKey ?? null,
+    },
+    registryEntry,
+  );
   return (
     <Card className="cockpit-panel">
       <div className="live-connection-head">
@@ -288,6 +322,7 @@ function ConnectionStatusCard({ connection }: { connection: LiveAccountConnectio
         <Badge variant={credentialStatusVariant(connection.credentialStatus)}>
           {formatEnumLabel(connection.credentialStatus)}
         </Badge>
+        <Badge variant={verificationLabelVariant(verification.label)}>{verification.label}</Badge>
         <Badge variant={connection.executable ? 'success' : 'error'}>
           {connection.executable ? 'Execution enabled' : 'Execution disabled'}
         </Badge>
@@ -308,8 +343,12 @@ function ConnectionStatusCard({ connection }: { connection: LiveAccountConnectio
           </div>
         )}
         <div>
-          <dt>Live trading</dt>
-          <dd>{connection.liveTradingEnabled ? 'Enabled' : 'Not enabled'}</dd>
+          <dt>Provider identity</dt>
+          <dd>{connection.providerBrokerIdentity ?? 'Not reported'}</dd>
+        </div>
+        <div>
+          <dt>Logical account key</dt>
+          <dd>{connection.logicalAccountKey ?? 'Not derived yet'}</dd>
         </div>
         <div>
           <dt>Last sync</dt>
@@ -320,6 +359,11 @@ function ConnectionStatusCard({ connection }: { connection: LiveAccountConnectio
           <dd>{formatTimestamp(connection.lastHealthCheckAt)}</dd>
         </div>
       </dl>
+      <p className="live-record__subtle">
+        Verification label uses the fixed provider taxonomy. Live-trading flag (compatibility mirror,
+        not authoritative): {connection.liveTradingEnabled ? 'enabled' : 'not enabled'}. Authoritative
+        execution state is the trading session mode + authorization gates.
+      </p>
       {connection.lastErrorMessage && (
         <p className="live-record__subtle" style={{ overflowWrap: 'anywhere' }}>
           Last sanitized error: {connection.lastErrorMessage}
@@ -663,6 +707,8 @@ export default function LiveAccountPage() {
   const [overview, setOverview] = useState<LiveAccountOverviewView | null>(null);
   const [loadingOverview, setLoadingOverview] = useState(true);
   const [overviewError, setOverviewError] = useState<string | null>(null);
+  /** Server registry joined per connection for verification labels (fail-closed when absent). */
+  const [registryEntries, setRegistryEntries] = useState<BrokerRegistryEntry[]>([]);
 
   const [positions, setPositions] = useState<LivePositionRowView[] | null>(null);
   const [positionsTotal, setPositionsTotal] = useState(0);
@@ -689,9 +735,18 @@ export default function LiveAccountPage() {
     setLoadingOverview(true);
     setOverviewError(null);
     try {
-      setOverview(await loadLiveAccountOverview());
+      const [overviewPayload, registry] = await Promise.all([
+        loadLiveAccountOverview(),
+        // Registry join powers the verification-label taxonomy; a failure
+        // degrades fail-closed (labels fall back to the unverified/DEMO-only
+        // truth — the page never presents a connection as simply "Live").
+        api.listBrokerRegistry().catch(() => null),
+      ]);
+      setOverview(overviewPayload);
+      setRegistryEntries(registry?.brokers ?? []);
     } catch (err) {
       setOverview(null);
+      setRegistryEntries([]);
       setOverviewError(mapApiError(err).message);
     } finally {
       setLoadingOverview(false);
@@ -995,7 +1050,18 @@ export default function LiveAccountPage() {
               ) : (
                 <div className="live-connections-grid">
                   {connections.map((connection) => (
-                    <ConnectionStatusCard key={connection.id} connection={connection} />
+                    <ConnectionStatusCard
+                      key={connection.id}
+                      connection={connection}
+                      registryEntry={
+                        // Exact canonical-name match only: the connection's
+                        // brokerName is the registry entry name recorded at
+                        // connect time. Fuzzy joins could mislabel a provider
+                        // — anything not an exact match degrades fail-closed.
+                        registryEntries.find((entry) => entry.name === connection.brokerName) ??
+                        null
+                      }
+                    />
                   ))}
                 </div>
               )}

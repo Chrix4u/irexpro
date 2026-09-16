@@ -63,6 +63,31 @@ export enum AuditAction {
   BROKER_CREDENTIAL_ENCRYPTION_FAILED = 'BROKER_CREDENTIAL_ENCRYPTION_FAILED',
   BROKER_LIVE_TRADING_ENABLED = 'BROKER_LIVE_TRADING_ENABLED',
   BROKER_LIVE_TRADING_DISABLED = 'BROKER_LIVE_TRADING_DISABLED',
+  // Sprint 56 / Task 48-D — evidence-based write path for
+  // BrokerConnection.demoValidated: a DEMO connection validation checklist
+  // run (sanitized step evidence in metadata — never credentials). PASSED is
+  // the only action that confirms/sets demoValidated to true on top of the
+  // weak connect-implies-validated proxy write; FAILED revokes a blessed or
+  // stale true (fail-closed).
+  BROKER_DEMO_VALIDATION_PASSED = 'BROKER_DEMO_VALIDATION_PASSED',
+  BROKER_DEMO_VALIDATION_FAILED = 'BROKER_DEMO_VALIDATION_FAILED',
+  // Sprint 56 correction round 1 (audit point 1) — cTrader OAuth token
+  // lifecycle: refreshed token pairs are ATOMICALLY persisted (ROTATED);
+  // refresh rejections mark the credential INVALID (fail-closed). Metadata
+  // carries timestamps/ids ONLY — never token material.
+  BROKER_OAUTH_TOKENS_REFRESHED = 'BROKER_OAUTH_TOKENS_REFRESHED',
+  BROKER_OAUTH_TOKEN_REFRESH_FAILED = 'BROKER_OAUTH_TOKEN_REFRESH_FAILED',
+  // Sprint 56 correction round 1 (audit point 6) — the user-facing OAuth
+  // connection flow (authorize → external consent → complete → link).
+  BROKER_OAUTH_FLOW_STARTED = 'BROKER_OAUTH_FLOW_STARTED',
+  BROKER_OAUTH_AUTHORIZATION_COMPLETED = 'BROKER_OAUTH_AUTHORIZATION_COMPLETED',
+  BROKER_OAUTH_AUTHORIZATION_FAILED = 'BROKER_OAUTH_AUTHORIZATION_FAILED',
+  BROKER_OAUTH_ACCOUNT_LINKED = 'BROKER_OAUTH_ACCOUNT_LINKED',
+  // Sprint 56 correction round 2 (architect finding 4) — the mobile OAuth
+  // handoff token was exchanged for its flow (single-use consumption; the
+  // digest-verified token itself is never persisted or logged). Metadata
+  // carries brokerId ONLY — never token material.
+  BROKER_OAUTH_HANDOFF_EXCHANGED = 'BROKER_OAUTH_HANDOFF_EXCHANGED',
 
   // Sprint 50 — Live Account foundation (authorization state machine,
   // credential lifecycle, provider registry, emergency control plane)
@@ -82,6 +107,10 @@ export enum AuditAction {
   RISK_DAILY_LOSS_LIMIT_BREACHED = 'RISK_DAILY_LOSS_LIMIT_BREACHED',
   RISK_DRAWDOWN_LIMIT_BREACHED = 'RISK_DRAWDOWN_LIMIT_BREACHED',
   RISK_SESSION_SUSPENDED = 'RISK_SESSION_SUSPENDED',
+  // Sprint 56 correction round 5 (#301): a durable RiskGrant was issued (or
+  // idempotently reused) for an approved signal. Metadata carries ids/digests
+  // ONLY — never order secrets (there are none) or account credentials.
+  RISK_GRANT_ISSUED = 'RISK_GRANT_ISSUED',
 
   // Trade execution lifecycle
   TRADE_PREPARED = 'TRADE_PREPARED',
@@ -108,6 +137,25 @@ export enum AuditAction {
   AI_TRADING_ENABLED = 'AI_TRADING_ENABLED',
   AI_TRADING_DISABLED = 'AI_TRADING_DISABLED',
 
+  // Sprint 56 correction round 5 — session authority (issue #298): explicit +
+  // audited execution-mode change; bumps authorityGeneration and invalidates
+  // outstanding RiskGrants / SEMI_AUTO confirmations.
+  TRADING_SESSION_MODE_CHANGED = 'TRADING_SESSION_MODE_CHANGED',
+
+  // Sprint 56 correction round 5 (task 50-c) — final dispatch boundary:
+  // every typed NEW-exposure block (zero provider call) is audited with the
+  // blocked reason + authority facts; every successful one-time SEMI_AUTO
+  // confirmation consumption is audited (server-authoritative approval).
+  EXECUTION_AUTHORITY_BLOCKED = 'EXECUTION_AUTHORITY_BLOCKED',
+  EXECUTION_CONFIRMATION_CONSUMED = 'EXECUTION_CONFIRMATION_CONSUMED',
+  // Signal identity security event (issue #302): same signalId re-delivered
+  // with a DIFFERENT material payload digest — never a new logical signal.
+  AI_SIGNAL_IDENTITY_CONFLICT = 'AI_SIGNAL_IDENTITY_CONFLICT',
+  // Round 6 live-execution completion (§8): protective-order reconciliation
+  // — per-trade SL/TP verify/repair outcomes + per-connection summaries
+  // (PROTECTED/REPAIRED/REPAIR_FAILED/INTERNAL_UNPROVABLE/SKIPPED).
+  PROTECTIVE_ORDER_RECONCILED = 'PROTECTIVE_ORDER_RECONCILED',
+
   // Market data (internal)
   MARKET_DATA_REQUESTED = 'MARKET_DATA_REQUESTED',
   MARKET_DATA_REQUEST_FAILED = 'MARKET_DATA_REQUEST_FAILED',
@@ -119,6 +167,13 @@ export enum AuditAction {
   AI_SIGNAL_RISK_REJECTED = 'AI_SIGNAL_RISK_REJECTED',
   AI_SIGNAL_EXECUTED = 'AI_SIGNAL_EXECUTED',
   AI_SIGNAL_EXECUTION_FAILED = 'AI_SIGNAL_EXECUTION_FAILED',
+  // Round 6 live-execution completion (§10): the serialized AI exit pipeline
+  // — every exit decision is received/ignored/executed/failed with stable
+  // machine codes (metadata carries ids + instrument ONLY, never secrets).
+  AI_EXIT_SIGNAL_RECEIVED = 'AI_EXIT_SIGNAL_RECEIVED',
+  AI_EXIT_SIGNAL_IGNORED = 'AI_EXIT_SIGNAL_IGNORED',
+  AI_EXIT_SIGNAL_EXECUTED = 'AI_EXIT_SIGNAL_EXECUTED',
+  AI_EXIT_SIGNAL_FAILED = 'AI_EXIT_SIGNAL_FAILED',
 
   // Payment lifecycle
   PAYMENT_CHECKOUT_INITIATED = 'PAYMENT_CHECKOUT_INITIATED',

@@ -21,11 +21,17 @@ import {
  * - OANDA        → BETA (Sprint 51 PR-7: full v20 REST adapter implemented +
  *   shared §AN contract suite + unit specs; NOT yet live-verified against a
  *   real OANDA practice account — see docs/brokers/oanda-v20-adapter.md)
- * - cTrader → NOT_STARTED / PARTNER_APPROVAL_REQUIRED (no adapter — OAuth app +
- *   partner approval required before any build; do not fabricate support)
- * - Pepperstone / IC Markets / FP Markets via cTrader → PARTNER_APPROVAL_REQUIRED
- *   (requires operator research + partner approval before any build — see
- *   docs/brokers/provider-matrix.md)
+ * - cTrader → BETA (Task 48-B / Sprint 56: full Open API JSON-WebSocket adapter
+ *   implemented + contract-tested — MARKET/LIMIT/STOP/STOP_LIMIT orders,
+ *   order-state reconciliation surface, margin, history. CANNOT reach real
+ *   accounts until the operator registers a cTrader Open API application
+ *   (openapi.ctrader.com — Spotware partner approval) and supplies
+ *   CTRADER_CLIENT_ID/CTRADER_CLIENT_SECRET; without them connections fail
+ *   closed. Production-LIVE UNVERIFIED.)
+ * - pepperstone-ctrader / icmarkets-ctrader → BETA aliases of the same
+ *   universal cTrader engine (Task 48-B): they run through the shared
+ *   'ctrader' adapter; each broker additionally requires its own broker-side
+ *   cTrader Open API approval for real accounts. UNVERIFIED.
  *
  * PRODUCTION-LIVE VERIFICATION (architect Phase H): `status` describes
  * implementation evidence only — it is NOT production-LIVE approval. The
@@ -34,6 +40,17 @@ import {
  * enable-live are rejected — BETA is DEMO-only). Only metatrader5 carries
  * VERIFIED evidence today.
  */
+
+/**
+ * cTrader-family broker ids — every catalog entry backed by the shared
+ * universal 'ctrader' adapter (the Open API engine). Single definition
+ * point for OAuth token-lifecycle and OAuth-connection-flow gating.
+ */
+export const CTRADER_FAMILY_BROKER_IDS: readonly string[] = [
+  'ctrader',
+  'pepperstone-ctrader',
+  'icmarkets-ctrader',
+];
 
 export const BROKER_CATALOG: readonly BrokerDefinition[] = [
   {
@@ -144,19 +161,111 @@ export const BROKER_CATALOG: readonly BrokerDefinition[] = [
   },
   {
     id: 'ctrader',
-    name: 'cTrader Open API',
+    name: 'cTrader (Open API — BETA)',
     description:
-      'Multi-broker connector (Pepperstone, IC Markets, FP Markets and other ' +
-      'cTrader-affiliated brokers). Requires OAuth app approval per broker. ' +
-      'Adapter NOT implemented yet.',
-    adapterId: null,
-    status: BrokerAvailabilityStatus.PARTNER_APPROVAL_REQUIRED,
+      'Universal cTrader Open API adapter (JSON over WebSocket, port 5036; ' +
+      'Sprint 56 / Task 48-B). Accounts, pricing, instruments, MARKET/LIMIT/STOP/' +
+      'STOP_LIMIT orders, positions, working-order state (reconciliation), ' +
+      'deal history and native margin are implemented and contract-tested. ' +
+      'BETA — honest blocker: connecting to real (or demo) cTrader accounts ' +
+      'requires the platform cTrader Open API application credentials ' +
+      '(CTRADER_CLIENT_ID/CTRADER_CLIENT_SECRET), which can only be obtained ' +
+      'after Spotware partner approval of the platform application; without ' +
+      'them every connection fails closed. Production-LIVE is UNVERIFIED.',
+    adapterId: 'ctrader',
+    status: BrokerAvailabilityStatus.BETA,
+    // Task 48-B: adapter implemented + contract-tested; production-LIVE is
+    // UNVERIFIED (no operator-attested evidence). LIVE fails closed
+    // (isProductionLiveEligible === false) — BETA is DEMO-only until evidence.
+    productionLiveVerification: { status: 'UNVERIFIED' },
     connectionRoutes: [BrokerConnectionRoute.CTRADER],
     capabilities: [
+      BrokerCapability.ACCOUNT_READ,
+      BrokerCapability.BALANCE_READ,
+      BrokerCapability.POSITION_READ,
+      BrokerCapability.ORDER_READ,
+      BrokerCapability.HISTORY_READ,
+      // Request/response pricing — NO MARKET_DATA_STREAMING (honest).
+      BrokerCapability.MARKET_DATA,
       BrokerCapability.WEBSOCKET,
       BrokerCapability.OAUTH,
+      BrokerCapability.CTRADER,
       BrokerCapability.DEMO,
       BrokerCapability.LIVE,
+      BrokerCapability.ORDER_PLACEMENT,
+      BrokerCapability.ORDER_MODIFICATION,
+      BrokerCapability.CLOSE_ALL,
+      BrokerCapability.MARGIN_CALCULATION,
+    ],
+    authenticationType: 'OAUTH',
+    environments: ['DEMO', 'LIVE'],
+    regions: [],
+  },
+  {
+    id: 'pepperstone-ctrader',
+    name: 'Pepperstone (via cTrader Open API — BETA)',
+    description:
+      'Pepperstone cTrader accounts reached through the shared universal ' +
+      'cTrader Open API engine (adapterId ctrader — JSON over WebSocket). ' +
+      'BETA: the adapter is implemented and contract-tested, but reaching ' +
+      'real Pepperstone accounts additionally requires Pepperstone-side ' +
+      'cTrader Open API approval for the platform application on top of the ' +
+      'Spotware partner approval; production-LIVE is UNVERIFIED.',
+    adapterId: 'ctrader',
+    status: BrokerAvailabilityStatus.BETA,
+    productionLiveVerification: { status: 'UNVERIFIED' },
+    connectionRoutes: [BrokerConnectionRoute.CTRADER],
+    capabilities: [
+      BrokerCapability.ACCOUNT_READ,
+      BrokerCapability.BALANCE_READ,
+      BrokerCapability.POSITION_READ,
+      BrokerCapability.ORDER_READ,
+      BrokerCapability.HISTORY_READ,
+      BrokerCapability.MARKET_DATA,
+      BrokerCapability.WEBSOCKET,
+      BrokerCapability.OAUTH,
+      BrokerCapability.CTRADER,
+      BrokerCapability.DEMO,
+      BrokerCapability.LIVE,
+      BrokerCapability.ORDER_PLACEMENT,
+      BrokerCapability.ORDER_MODIFICATION,
+      BrokerCapability.CLOSE_ALL,
+      BrokerCapability.MARGIN_CALCULATION,
+    ],
+    authenticationType: 'OAUTH',
+    environments: ['DEMO', 'LIVE'],
+    regions: [],
+  },
+  {
+    id: 'icmarkets-ctrader',
+    name: 'IC Markets (via cTrader Open API — BETA)',
+    description:
+      'IC Markets cTrader accounts reached through the shared universal ' +
+      'cTrader Open API engine (adapterId ctrader — JSON over WebSocket). ' +
+      'BETA: the adapter is implemented and contract-tested, but reaching ' +
+      'real IC Markets accounts additionally requires IC Markets-side ' +
+      'cTrader Open API approval for the platform application on top of the ' +
+      'Spotware partner approval; production-LIVE is UNVERIFIED.',
+    adapterId: 'ctrader',
+    status: BrokerAvailabilityStatus.BETA,
+    productionLiveVerification: { status: 'UNVERIFIED' },
+    connectionRoutes: [BrokerConnectionRoute.CTRADER],
+    capabilities: [
+      BrokerCapability.ACCOUNT_READ,
+      BrokerCapability.BALANCE_READ,
+      BrokerCapability.POSITION_READ,
+      BrokerCapability.ORDER_READ,
+      BrokerCapability.HISTORY_READ,
+      BrokerCapability.MARKET_DATA,
+      BrokerCapability.WEBSOCKET,
+      BrokerCapability.OAUTH,
+      BrokerCapability.CTRADER,
+      BrokerCapability.DEMO,
+      BrokerCapability.LIVE,
+      BrokerCapability.ORDER_PLACEMENT,
+      BrokerCapability.ORDER_MODIFICATION,
+      BrokerCapability.CLOSE_ALL,
+      BrokerCapability.MARGIN_CALCULATION,
     ],
     authenticationType: 'OAUTH',
     environments: ['DEMO', 'LIVE'],

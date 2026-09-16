@@ -19,7 +19,7 @@ describe('StateReconciliationService — provider error redaction', () => {
       getOpenPositions: jest.fn().mockResolvedValue([]),
       getAccountInfo: jest.fn().mockResolvedValue({}),
     };
-    const adapterRegistry = { getAdapter: jest.fn().mockReturnValue(adapter) };
+    const adapterRegistry = { getAdapterForConnection: jest.fn().mockReturnValue(adapter) };
     const encryptionService = { decrypt: jest.fn() };
     const persistence = {
       createRun: jest

@@ -90,7 +90,8 @@ export function sanitizeDatabaseError(err: unknown): {
 /**
  * Redact sensitive values from a string (e.g. error message).
  */
-function redactString(str: string): string {
+/** Sanitizes credential-shaped `key=value` / `key: value` fragments out of free text (exported for adapter error normalization). */
+export function redactString(str: string): string {
   let result = str;
   result = result.replace(
     /(password|secret|token|key|credential)\s*[:=]\s*[^\s,;}]+/gi,

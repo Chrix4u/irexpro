@@ -18,6 +18,7 @@ import { AuditAction } from '../../common/enums/audit-action.enum';
 import { AuditSeverity } from '../audit/entities/audit-log.entity';
 import { DomainEventBus } from '../events/event-bus.service';
 import { DomainEventType } from '../events/enums/domain-event-type.enum';
+import { SharedControlRevisionService } from '../execution-authority/shared-control-revision.service';
 
 /** Result of an execution-permission check (fail-closed). */
 export interface ExecutionPermission {
@@ -84,6 +85,10 @@ export class ExecutionControlService {
     private readonly controlRepo: Repository<ExecutionControl>,
     private readonly auditService: AuditService,
     private readonly eventBus: DomainEventBus,
+    // Round 6 (#299/#14): activation AND deactivation AND expiry all advance
+    // the global execution-control revision — a boolean flip can never
+    // resurrect pre-control authority.
+    private readonly sharedControlRevisions: SharedControlRevisionService,
   ) {}
 
   // ─── Fail-closed permission checks ────────────────────────────────────────
@@ -210,17 +215,27 @@ export class ExecutionControlService {
 
     let control: ExecutionControl;
     try {
-      control = await this.controlRepo.save(
-        this.controlRepo.create({
-          scope: dto.scope,
-          scopeKey,
-          reason: dto.reason,
-          activatedByUserId: adminUserId,
-          activatedAt: new Date(),
-          expiresAt: dto.expiresAt ? new Date(dto.expiresAt) : null,
-          status: ExecutionControlStatus.ACTIVE,
-        }),
-      );
+      control = await this.controlRepo.manager.transaction(async (em) => {
+        const saved = await em.getRepository(ExecutionControl).save(
+          this.controlRepo.create({
+            scope: dto.scope,
+            scopeKey,
+            reason: dto.reason,
+            activatedByUserId: adminUserId,
+            activatedAt: new Date(),
+            expiresAt: dto.expiresAt ? new Date(dto.expiresAt) : null,
+            status: ExecutionControlStatus.ACTIVE,
+          }),
+        );
+        // Round 6 (#14): the activation fact + the shared control-plane
+        // revision bump commit ATOMICALLY.
+        await this.sharedControlRevisions.bumpExecutionControlRevision(
+          `execution control activated: scope=${dto.scope}` +
+            `${scopeKey ? ` key=${scopeKey}` : ''} reason=${dto.reason.slice(0, 80)}`,
+          em,
+        );
+        return saved;
+      });
     } catch (err) {
       // 23505 = unique_violation on uq_exec_controls_active_scope: a
       // concurrent activation won the slot. Deterministic single winner.
@@ -268,7 +283,16 @@ export class ExecutionControlService {
       throw new NotFoundException(`Execution control ${controlId} not found`);
     }
 
-    await this.controlRepo.delete(controlId);
+    await this.controlRepo.manager.transaction(async (em) => {
+      await em.getRepository(ExecutionControl).delete(controlId);
+      // Round 6 (#14): deactivation is ANOTHER revision (never a resurrection
+      // of pre-control grants) — bumped atomically with the fact.
+      await this.sharedControlRevisions.bumpExecutionControlRevision(
+        `execution control deactivated: scope=${control.scope}` +
+          `${control.scopeKey ? ` key=${control.scopeKey}` : ''}`,
+        em,
+      );
+    });
 
     await this.auditService.log({
       actorUserId: adminUserId,

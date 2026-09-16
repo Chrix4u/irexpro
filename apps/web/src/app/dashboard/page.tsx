@@ -197,15 +197,24 @@ function OnboardingCard({ status }: { status: OnboardingStatus }) {
     setStartError(null);
     setMissingSteps(null);
     try {
-      // Call POST /trading/sessions/start via the low-level request method.
-      // The API client doesn't have a typed trading method yet, so we use request().
-      await api.request('/trading/sessions/start', {
-        method: 'POST',
-        body: JSON.stringify({ requestedMode: 'PAPER_ONLY' }),
+      // The session-start contract (Sprint 56 correction round 5) binds the
+      // EXACT broker connection + a durable executionMode via the typed
+      // client method. The server validates everything fail-closed.
+      const connections = await api.listBrokerConnections();
+      const connection =
+        connections.find((candidate) => candidate.status === 'CONNECTED') ?? connections[0];
+      if (!connection) {
+        setStartError('Connect a broker account before starting a trading session.');
+        notify.warning('Connect a broker account first.');
+        return;
+      }
+      await api.startTradingSession({
+        brokerConnectionId: connection.id,
+        executionMode: 'PAPER_ONLY',
       });
       // Success — trading session started (no auto-redirect; user stays on dashboard)
       setStartError(null);
-      notify.success('Trading session started.');
+      notify.success('Paper trading session started.');
     } catch (err) {
       // Sprint 29 amendment: handle the structured TRADING_NOT_READY error.
       // The error body is { statusCode: 403, code: 'TRADING_NOT_READY', message, missingSteps }

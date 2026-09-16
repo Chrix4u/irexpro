@@ -33,6 +33,7 @@ import {
   IBrokerAdapter,
   OHLCV,
 } from '../../interfaces/broker-adapter.interface';
+import type { OrderCapabilityDeclaration } from '../../interfaces/order-capability';
 import {
   collectMoneyValues,
   CONTRACT_ASSERTION_TITLES,
@@ -85,6 +86,21 @@ class ToyContractAdapter implements IBrokerAdapter {
   private token = '';
 
   constructor(private readonly transport: ScriptedBackend) {}
+
+  // Round 6 §7: the declared order capability contract.
+  getOrderCapabilities(): OrderCapabilityDeclaration {
+    return {
+      brokerId: this.brokerId,
+      supportedOrderKinds: ['MARKET', 'LIMIT', 'STOP', 'STOP_LIMIT'],
+      requirements: {
+        MARKET: { limitPriceRequired: false, stopPriceRequired: false },
+        LIMIT: { limitPriceRequired: true, stopPriceRequired: false },
+        STOP: { limitPriceRequired: false, stopPriceRequired: true },
+        STOP_LIMIT: { limitPriceRequired: true, stopPriceRequired: true },
+      },
+      marketSlTpAttachedAtPlacement: true,
+    };
+  }
 
   setMode(mode: BrokerMode): void {
     this.mode = mode;

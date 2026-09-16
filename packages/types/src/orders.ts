@@ -14,6 +14,10 @@ export type OrderTimeInForce = 'GTC' | 'DAY' | 'IOC' | 'FOK';
 export type OrderStatus =
   | 'CREATED'
   | 'SUBMITTED'
+  /** Round 6 (#365): the provider-dispatch commitment point — the request
+   *  is committed and in-flight (mirrors the API's order.enums.ts; the
+   *  frontend may observe this state between SUBMITTED and the outcome). */
+  | 'DISPATCH_COMMITTED'
   | 'ACKNOWLEDGED'
   | 'PARTIALLY_FILLED'
   | 'FILLED'

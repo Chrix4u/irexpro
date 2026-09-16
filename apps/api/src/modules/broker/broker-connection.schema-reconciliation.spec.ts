@@ -29,11 +29,40 @@ describe('BrokerConnection schema reconciliation (hotfix)', () => {
     __dirname,
     '../../database/migrations/1753400000000-AddBrokerAuthorizationStateMachine.ts',
   );
+  // Sprint 56 correction round 2 (architect finding 3) — refresh lease +
+  // credential generation columns live in their own migration
+  const refreshProtectionMigrationPath = path.resolve(
+    __dirname,
+    '../../database/migrations/1753850000000-AddBrokerOAuthRefreshProtection.ts',
+  );
+  // Sprint 56 correction round 4 (architect finding 9) — server-derived
+  // provider identity column lives in its own migration
+  const providerIdentityMigrationPath = path.resolve(
+    __dirname,
+    '../../database/migrations/1753900000000-AddProviderBrokerIdentity.ts',
+  );
+  // Sprint 56 correction round 5 (architect issue #332) — logical account
+  // identity key column lives in its own migration
+  const logicalAccountMigrationPath = path.resolve(
+    __dirname,
+    '../../database/migrations/1754050000000-AddBrokerLogicalAccountIdentity.ts',
+  );
+  // Sprint 56 correction round 6 (task 6-d / R6-A) — the OAuth refresh-lease
+  // OWNER column (credential_refresh_lease_owner varchar(64) NULL) and the
+  // other round-6 authority columns live in the round-6 migration
+  const round6MigrationPath = path.resolve(
+    __dirname,
+    '../../database/migrations/1754300000000-CompleteExecutionAuthorityRound6.ts',
+  );
 
   let entitySource: string;
   let baselineSource: string;
   let reconcileSource: string;
   let authorizationSource: string;
+  let refreshProtectionSource: string;
+  let providerIdentitySource: string;
+  let logicalAccountSource: string;
+  let round6Source: string;
 
   beforeAll(() => {
     entitySource = fs.readFileSync(entityPath, 'utf-8');
@@ -42,6 +71,14 @@ describe('BrokerConnection schema reconciliation (hotfix)', () => {
     reconcileSource = fs.readFileSync(reconcileMigrationPath, 'utf-8');
     expect(fs.existsSync(authorizationMigrationPath)).toBe(true);
     authorizationSource = fs.readFileSync(authorizationMigrationPath, 'utf-8');
+    expect(fs.existsSync(refreshProtectionMigrationPath)).toBe(true);
+    refreshProtectionSource = fs.readFileSync(refreshProtectionMigrationPath, 'utf-8');
+    expect(fs.existsSync(providerIdentityMigrationPath)).toBe(true);
+    providerIdentitySource = fs.readFileSync(providerIdentityMigrationPath, 'utf-8');
+    expect(fs.existsSync(logicalAccountMigrationPath)).toBe(true);
+    logicalAccountSource = fs.readFileSync(logicalAccountMigrationPath, 'utf-8');
+    expect(fs.existsSync(round6MigrationPath)).toBe(true);
+    round6Source = fs.readFileSync(round6MigrationPath, 'utf-8');
   });
 
   /**
@@ -97,8 +134,9 @@ describe('BrokerConnection schema reconciliation (hotfix)', () => {
         }
       }
     }
-    // Match ADD COLUMN IF NOT EXISTS column_name
-    const addColumnRegex = /ADD COLUMN IF NOT EXISTS\s+(\w+)/gi;
+    // Match ADD COLUMN IF NOT EXISTS column_name (quoted or unquoted — the
+    // Sprint 56 refresh-protection migration quotes identifiers)
+    const addColumnRegex = /ADD COLUMN IF NOT EXISTS\s+"?(\w+)"?/gi;
     while ((match = addColumnRegex.exec(source)) !== null) {
       if (match[1]) columns.add(match[1]);
     }
@@ -137,10 +175,18 @@ describe('BrokerConnection schema reconciliation (hotfix)', () => {
     const baselineColumns = extractMigrationColumnNames(baselineSource);
     const reconcileColumns = extractMigrationColumnNames(reconcileSource);
     const authorizationColumns = extractMigrationColumnNames(authorizationSource);
+    const refreshProtectionColumns = extractMigrationColumnNames(refreshProtectionSource);
+    const providerIdentityColumns = extractMigrationColumnNames(providerIdentitySource);
+    const logicalAccountColumns = extractMigrationColumnNames(logicalAccountSource);
+    const round6Columns = extractMigrationColumnNames(round6Source);
     const allMigrationColumns = new Set([
       ...baselineColumns,
       ...reconcileColumns,
       ...authorizationColumns,
+      ...refreshProtectionColumns,
+      ...providerIdentityColumns,
+      ...logicalAccountColumns,
+      ...round6Columns,
     ]);
 
     // Every entity column must appear in at least one migration
@@ -165,6 +211,46 @@ describe('BrokerConnection schema reconciliation (hotfix)', () => {
     expect(reconcileColumns.has('consecutive_failure_count')).toBe(true);
   });
 
+  // ── Sprint 56 correction round 5 (issue #332) ──────────────────────────────
+
+  it('logical_account_key should exist in the logical-account migration', () => {
+    const logicalAccountColumns = extractMigrationColumnNames(logicalAccountSource);
+    expect(logicalAccountColumns.has('logical_account_key')).toBe(true);
+  });
+
+  it('logical-account migration should enforce per-user uniqueness over non-deleted rows', () => {
+    expect(logicalAccountSource).toContain('uq_broker_connections_logical_account');
+    expect(logicalAccountSource).toContain('deleted_at IS NULL');
+    expect(logicalAccountSource).toMatch(
+      /CREATE UNIQUE INDEX[^;]*\(user_id, logical_account_key\)/s,
+    );
+  });
+
+  it('logical-account migration should canonicalize cTrader aliases to one technology', () => {
+    expect(logicalAccountSource).toContain(
+      "WHEN broker_id IN ('ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader') THEN 'ctrader'",
+    );
+  });
+
+  it('logical-account migration preflight should fail on duplicates (no silent dedup)', () => {
+    expect(logicalAccountSource).toContain(
+      'preflight FAILED: duplicate durable BrokerConnection rows',
+    );
+  });
+
+  // ── Sprint 56 correction round 6 (task 6-d / R6-A) ──────────────────────
+
+  it('credential_refresh_lease_owner should exist in the round-6 migration (nullable, non-destructive)', () => {
+    const round6Columns = extractMigrationColumnNames(round6Source);
+    expect(round6Columns.has('credential_refresh_lease_owner')).toBe(true);
+    // Non-destructive ADD COLUMN IF NOT EXISTS + reversible down().
+    expect(round6Source).toContain('ADD COLUMN IF NOT EXISTS "credential_refresh_lease_owner"');
+    expect(round6Source).toContain('DROP COLUMN IF EXISTS "credential_refresh_lease_owner"');
+    // NULLable varchar(64) — a lease-owner token (random UUID) or nothing;
+    // `lease IS NULL` is never ownership.
+    expect(round6Source).toMatch(/credential_refresh_lease_owner" varchar\(64\) NULL/s);
+  });
+
   it('live_trading_enabled should exist in the reconciliation migration', () => {
     const reconcileColumns = extractMigrationColumnNames(reconcileSource);
     expect(reconcileColumns.has('live_trading_enabled')).toBe(true);
@@ -178,6 +264,17 @@ describe('BrokerConnection schema reconciliation (hotfix)', () => {
   it('account_leverage should exist in the reconciliation migration', () => {
     const reconcileColumns = extractMigrationColumnNames(reconcileSource);
     expect(reconcileColumns.has('account_leverage')).toBe(true);
+  });
+
+  // Sprint 56 correction round 4 (architect finding 9) — provider identity
+  it('provider_broker_identity should exist in the round-4 migration (nullable, non-destructive)', () => {
+    const providerIdentityColumns = extractMigrationColumnNames(providerIdentitySource);
+    expect(providerIdentityColumns.has('provider_broker_identity')).toBe(true);
+    // Non-destructive ADD COLUMN IF NOT EXISTS + reversible down().
+    expect(providerIdentitySource).toContain('ADD COLUMN IF NOT EXISTS "provider_broker_identity"');
+    expect(providerIdentitySource).toContain('DROP COLUMN IF EXISTS "provider_broker_identity"');
+    // NULLable — unknown identity stays fail-closed (no fabricated values).
+    expect(providerIdentitySource).toMatch(/provider_broker_identity.{0,20}varchar\(100\) NULL/s);
   });
 
   it('reconciliation migration should migrate data from failure_count to consecutive_failure_count', () => {

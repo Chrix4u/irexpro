@@ -3,9 +3,11 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { formatEnumLabel } from '@irexpro/types';
+import type { BrokerRegistryEntry } from '@irexpro/types';
 import type { AiCopilotView } from '@irexpro/types/ai-copilot';
 import type { AiDecisionExplorerView, AiDecisionOutcome } from '@irexpro/types/ai-decision-explorer';
 import type { TradeExecutionView } from '@irexpro/types/execution';
+import type { ExecutionConfirmationView } from '@irexpro/types/execution';
 import type { MarketCandleView, MarketIntelligenceView } from '@irexpro/types/market-intelligence';
 import type { RiskIntelligenceView } from '@irexpro/types/risk-intelligence';
 import type { StrategyLabView } from '@irexpro/types/strategy-lab';
@@ -13,14 +15,26 @@ import { Alert, Badge, Button, Card, DashboardShell, LoadingSpinner } from '@/co
 import { useAuth } from '@/context/auth-context';
 import { loadAiCopilot } from '@/lib/ai-copilot';
 import { loadAiDecisionExplorer } from '@/lib/ai-decision-explorer';
+import { api } from '@/lib/api';
 import { loadMarketIntelligence } from '@/lib/market-intelligence';
 import { loadStrategyLab } from '@/lib/strategy-lab';
+import {
+  changeSessionExecutionMode,
+  confirmPendingConfirmation,
+  connectionVerificationLabel,
+  EXECUTION_MODES,
+  executionBlockedReasons,
+  formatExpiryCountdown,
+  loadPendingExecutionConfirmations,
+  type ExecutionMode,
+} from '@/lib/trader-session';
 import { loadTraderExecutionSnapshot, type TraderExecutionSnapshot } from '@/lib/trader-execution';
 import { loadTraderRiskIntelligence } from '@/lib/trader-risk-intelligence';
 import {
   loadTraderTerminalStatus,
   type TraderTerminalStatus,
   type TradingSessionStatusView,
+  type TradingSessionView,
 } from '@/lib/trader-terminal-status';
 
 function sessionBadgeVariant(
@@ -71,6 +85,32 @@ function formatTimestamp(value: string | null | undefined): string {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(date);
+}
+
+/** Human copy for a durable execution mode (Selector + detail list). */
+function executionModeCopy(mode: ExecutionMode): string {
+  switch (mode) {
+    case 'PAPER_ONLY':
+      return 'Paper only — new exposure routes to the simulator path';
+    case 'SEMI_AUTO':
+      return 'Semi-auto — every new exposure requires your server-verified confirmation';
+    case 'FULL_AUTO':
+      return 'Full auto — automatic exposure only while all authority conditions hold';
+    default:
+      return mode;
+  }
+}
+
+/** Verification label badge semantics (fixed taxonomy, risk-ascending). */
+function verificationLabelVariant(
+  label: ReturnType<typeof connectionVerificationLabel>['label'],
+): 'success' | 'warning' | 'error' | 'info' {
+  if (label === 'Production LIVE Verified') return 'success';
+  if (label === 'Production LIVE Unverified') return 'error';
+  if (label === 'DEMO only') return 'warning';
+  if (label === 'Ineligible') return 'warning';
+  if (label === 'execution disabled') return 'error';
+  return 'info';
 }
 
 function formatScore(value: number | null): string {
@@ -171,6 +211,161 @@ function ExecutionRecord({ trade }: { trade: TradeExecutionView }) {
   );
 }
 
+/**
+ * Execution-mode selector (Sprint 56 correction round 5 — issues #292/#298).
+ *
+ * An EXPLICIT selector: choosing a mode POSTs the audited mode-change
+ * endpoint and the RETURNED session becomes the displayed state. The UI
+ * never optimistically re-labels the mode; while the request is in flight
+ * the selector stays disabled. Only an ACTIVE/PAUSED session may change its
+ * mode (ENDED/SUSPENDED sessions are server-controlled).
+ */
+function ExecutionModeSelector({
+  session,
+  modeChanging,
+  onModeChange,
+}: {
+  session: TradingSessionView | null;
+  modeChanging: boolean;
+  onModeChange: (mode: ExecutionMode) => void;
+}) {
+  const currentMode = session?.executionMode ?? null;
+  const selectorDisabled =
+    modeChanging || !session || session.status === 'ENDED' || session.status.startsWith('SUSPENDED');
+
+  return (
+    <div className="cockpit-mode-selector" role="group" aria-label="Execution mode selector">
+      {EXECUTION_MODES.map((mode) => {
+        const selected = currentMode === mode;
+        return (
+          <button
+            key={mode}
+            type="button"
+            className="filter-group__btn"
+            aria-pressed={selected}
+            disabled={selectorDisabled}
+            onClick={() => onModeChange(mode)}
+            title={executionModeCopy(mode)}
+          >
+            {mode === 'PAPER_ONLY' ? 'Paper only' : mode === 'SEMI_AUTO' ? 'Semi-auto' : 'Full auto'}
+          </button>
+        );
+      })}
+      {modeChanging && <LoadingSpinner text="Applying mode…" />}
+    </div>
+  );
+}
+
+/**
+ * SEMI_AUTO confirmation inbox (issue #298).
+ *
+ * Renders the SERVER-queued pending confirmations with FULL order detail
+ * (instrument, direction, quantity, SL, TP, expiry countdown, order-payload
+ * digest) and relays an explicit Confirm to the server endpoint. Approval
+ * state is NEVER fabricated locally: only the server-consumed CONSUMED
+ * result removes a row, and failures render the server's typed reason
+ * (expired / consumed / revoked / mismatched-generation).
+ */
+function ConfirmationInbox({
+  confirmations,
+  loading,
+  error,
+  confirmingId,
+  failure,
+  onConfirm,
+  now,
+}: {
+  confirmations: ExecutionConfirmationView[];
+  loading: boolean;
+  error: string | null;
+  confirmingId: string | null;
+  failure: { kind: string; message: string } | null;
+  onConfirm: (confirmationId: string) => void;
+  now: Date;
+}) {
+  return (
+    <section aria-labelledby="confirmation-inbox-title" className="cockpit-confirmation-inbox">
+      <div className="cockpit-section-heading">
+        <div>
+          <p className="terminal-foundation__eyebrow">Execution authority</p>
+          <h2 id="confirmation-inbox-title">Semi-auto confirmation inbox</h2>
+          <p className="muted">
+            Server-queued one-time confirmations bound to the exact order payload. Confirming sends the
+            request to the server — only its consumed result is shown as approved.
+          </p>
+        </div>
+      </div>
+      {error && <Alert variant="error">{error}</Alert>}
+      {failure && (
+        <Alert variant="error">
+          <div style={{ flex: 1 }}>
+            <strong>Server rejected the confirmation ({failure.kind}).</strong>
+            <p style={{ marginTop: 'var(--space-1)', marginBottom: 0 }}>{failure.message}</p>
+          </div>
+        </Alert>
+      )}
+      {loading ? (
+        <Card title="Loading confirmations" className="cockpit-panel">
+          <LoadingSpinner text="Checking server-queued confirmations…" />
+        </Card>
+      ) : confirmations.length === 0 ? (
+        <Card title="No pending confirmations" className="cockpit-panel">
+          <p className="muted" style={{ marginTop: 0 }}>
+            The server reports no queued semi-auto confirmations for this session. New exposure waits
+            for a server-issued confirmation.
+          </p>
+        </Card>
+      ) : (
+        <div className="cockpit-confirmation-grid">
+          {confirmations.map((confirmation) => {
+            const countdown = formatExpiryCountdown(confirmation.expiresAt, now);
+            const expired = countdown === 'Expired';
+            return (
+              <Card
+                key={confirmation.id}
+                title={`${confirmation.instrument} · ${confirmation.direction}`}
+                subtitle={`Signal ${confirmation.signalId}`}
+                className="cockpit-panel"
+              >
+                <div className="cockpit-card-badge">
+                  <Badge variant={confirmation.direction === 'BUY' ? 'success' : 'error'}>
+                    {confirmation.direction}
+                  </Badge>
+                  <Badge variant={expired ? 'error' : 'warning'}>
+                    {expired ? 'Expired' : `Expires in ${countdown}`}
+                  </Badge>
+                </div>
+                <dl className="cockpit-detail-list">
+                  <div><dt>Quantity</dt><dd>{confirmation.quantity}</dd></div>
+                  <div><dt>Stop loss</dt><dd>{confirmation.stopLoss ?? 'Not set'}</dd></div>
+                  <div><dt>Take profit</dt><dd>{confirmation.takeProfit ?? 'Not set'}</dd></div>
+                  <div><dt>Expiry</dt><dd>{formatTimestamp(confirmation.expiresAt)}</dd></div>
+                  <div>
+                    <dt>Order payload digest</dt>
+                    <dd className="text-sm" style={{ fontFamily: 'var(--font-mono)', wordBreak: 'break-all' }}>
+                      {confirmation.orderPayloadDigest}
+                    </dd>
+                  </div>
+                </dl>
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="sm"
+                  disabled={expired || confirmingId !== null}
+                  loading={confirmingId === confirmation.id}
+                  onClick={() => onConfirm(confirmation.id)}
+                >
+                  {confirmingId === confirmation.id ? 'Confirming…' : 'Confirm order'}
+                </Button>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export default function TradingWorkspacePage() {
   const { user, logout, restoring } = useAuth();
   const [terminal, setTerminal] = useState<TraderTerminalStatus | null>(null);
@@ -180,6 +375,22 @@ export default function TradingWorkspacePage() {
   const [decisions, setDecisions] = useState<AiDecisionExplorerView | null>(null);
   const [strategy, setStrategy] = useState<StrategyLabView | null>(null);
   const [copilot, setCopilot] = useState<AiCopilotView | null>(null);
+
+  // ── Execution authority state (Sprint 56 correction round 5) ──
+  /** Server registry entries — joined per connection for verification labels. */
+  const [registryEntries, setRegistryEntries] = useState<BrokerRegistryEntry[]>([]);
+  /** Server-queued SEMI_AUTO confirmations (only fetched in SEMI_AUTO mode). */
+  const [confirmations, setConfirmations] = useState<ExecutionConfirmationView[]>([]);
+  const [loadingConfirmations, setLoadingConfirmations] = useState(false);
+  const [confirmationsError, setConfirmationsError] = useState<string | null>(null);
+  /** Id of the confirmation whose confirm request is in flight. */
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  /** The server's typed failure for the last rejected confirm (rendered verbatim). */
+  const [confirmFailure, setConfirmFailure] = useState<{ kind: string; message: string } | null>(null);
+  const [modeChanging, setModeChanging] = useState(false);
+  const [modeError, setModeError] = useState<string | null>(null);
+  /** Ticks once per second so the expiry countdowns stay truthful. */
+  const [now, setNow] = useState(() => new Date());
 
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [loadingExecution, setLoadingExecution] = useState(true);
@@ -197,18 +408,128 @@ export default function TradingWorkspacePage() {
   const [strategyError, setStrategyError] = useState<string | null>(null);
   const [copilotError, setCopilotError] = useState<string | null>(null);
 
-  const refreshStatus = useCallback(async () => {
+  const refreshStatus = useCallback(async (): Promise<TraderTerminalStatus | null> => {
     setLoadingStatus(true);
     setStatusError(null);
     try {
-      setTerminal(await loadTraderTerminalStatus());
+      const [status, registry] = await Promise.all([
+        loadTraderTerminalStatus(),
+        // Server-authoritative registry joined per connection for the
+        // verification-label taxonomy; a failure degrades fail-closed (the
+        // label falls back to the unverified/DEMO-only truth, never "Live").
+        api.listBrokerRegistry().catch(() => null),
+      ]);
+      setTerminal(status);
+      setRegistryEntries(registry?.brokers ?? []);
+      return status;
     } catch {
       setTerminal(null);
+      setRegistryEntries([]);
       setStatusError('Unable to load the current trading status. No trading metrics have been inferred locally.');
+      return null;
     } finally {
       setLoadingStatus(false);
     }
   }, []);
+
+  /** Refresh the server-queued SEMI_AUTO confirmations for the active session.
+   *
+   * `modeOverride` lets a just-applied mode change re-read the queue against
+   * the NEW mode without waiting for a re-render (the captured terminal state
+   * would otherwise still hold the previous mode). */
+  const refreshConfirmations = useCallback(
+    async (modeOverride?: ExecutionMode | null) => {
+      // Only the active session's mode decides whether an inbox exists —
+      // the browser never infers it from connection state.
+      const mode = modeOverride !== undefined ? modeOverride : terminal?.session?.executionMode ?? null;
+      if (mode !== 'SEMI_AUTO') {
+        setConfirmations([]);
+        setConfirmationsError(null);
+        return;
+      }
+      setLoadingConfirmations(true);
+      setConfirmationsError(null);
+      try {
+        setConfirmations(await loadPendingExecutionConfirmations());
+      } catch {
+        setConfirmations([]);
+        setConfirmationsError('Unable to load server-queued confirmations. No confirmation state has been assumed locally.');
+      } finally {
+        setLoadingConfirmations(false);
+      }
+    },
+    [terminal?.session?.executionMode],
+  );
+
+  /**
+   * Explicit mode change (issue #298): POST the audited endpoint; the
+   * RETURNED session (bumped authorityGeneration) replaces the displayed
+   * state. Confirmations refresh afterwards because a generation bump
+   * invalidates any outstanding server-queued confirmation.
+   */
+  const handleModeChange = useCallback(
+    async (mode: ExecutionMode) => {
+      const session = terminal?.session ?? null;
+      if (!session || modeChanging) return;
+      setModeChanging(true);
+      setModeError(null);
+      try {
+        const updated = await changeSessionExecutionMode(session.id, mode);
+        setTerminal((prev) => (prev ? { ...prev, session: updated } : prev));
+        setConfirmFailure(null);
+        // A generation bump invalidates outstanding confirmations — re-read
+        // the server queue against the NEW mode instead of keeping (or
+        // clearing) rows locally.
+        await refreshConfirmations(updated.executionMode);
+      } catch (err) {
+        setModeError(
+          err instanceof Error
+            ? `The server rejected the mode change: ${err.message}`
+            : 'The server rejected the mode change.',
+        );
+      } finally {
+        setModeChanging(false);
+      }
+    },
+    [terminal?.session, modeChanging, refreshConfirmations],
+  );
+
+  /** Relay one explicit confirm to the server (never a local approval). */
+  const handleConfirm = useCallback(
+    async (confirmationId: string) => {
+      if (confirmingId) return;
+      setConfirmingId(confirmationId);
+      setConfirmFailure(null);
+      try {
+        const result = await confirmPendingConfirmation(confirmationId);
+        if (result.outcome === 'CONSUMED') {
+          // Server-consumed: re-read the authoritative queue.
+          try {
+            setConfirmations(await loadPendingExecutionConfirmations());
+          } catch {
+            setConfirmations([]);
+            setConfirmationsError('Unable to re-load server-queued confirmations after the server consumed one.');
+          }
+        } else {
+          // Surface the server's typed failure verbatim — no local success.
+          setConfirmFailure(result.failure);
+        }
+      } finally {
+        setConfirmingId(null);
+      }
+    },
+    [confirmingId],
+  );
+
+  // One-second clock tick ONLY while a semi-auto inbox with pending rows is
+  // rendered (drives the expiry countdowns).
+  useEffect(() => {
+    if (terminal?.session?.executionMode !== 'SEMI_AUTO' || confirmations.length === 0) {
+      return;
+    }
+    const timer = window.setInterval(() => setNow(new Date()), 1000);
+    return () => window.clearInterval(timer);
+  }, [terminal?.session?.executionMode, confirmations.length]);
 
   const refreshExecution = useCallback(async () => {
     setLoadingExecution(true);
@@ -291,7 +612,7 @@ export default function TradingWorkspacePage() {
   }, []);
 
   const refreshWorkspace = useCallback(async () => {
-    await Promise.all([
+    const [status] = await Promise.all([
       refreshStatus(),
       refreshExecution(),
       refreshMarket(),
@@ -300,8 +621,13 @@ export default function TradingWorkspacePage() {
       refreshStrategy(),
       refreshCopilot(),
     ]);
+    // Re-read the confirmation queue against the session mode the server
+    // JUST reported (passing the mode explicitly avoids the stale closure
+    // over the pre-refresh terminal state).
+    await refreshConfirmations(status?.session?.executionMode ?? null);
   }, [
     refreshStatus,
+    refreshConfirmations,
     refreshExecution,
     refreshMarket,
     refreshRisk,
@@ -336,6 +662,35 @@ export default function TradingWorkspacePage() {
 
   const session = terminal?.session ?? null;
   const broker = terminal?.sessionBroker ?? terminal?.primaryBroker ?? null;
+  const sessionBroker = terminal?.sessionBroker ?? null;
+
+  // ── Execution-authority derivations (server facts only) ──
+  /** Blocked reasons fed by the session/risk/authorization state the server reported. */
+  const blockedReasons = terminal
+    ? executionBlockedReasons({
+        session,
+        killSwitchActive: terminal.risk.killSwitchActive,
+        canTrade: terminal.risk.canTrade,
+        brokerConnected: terminal.risk.brokerConnected,
+        sessionAuthorizationStatus: sessionBroker?.authorizationStatus ?? null,
+        // The broker-connection view carries no executable gate — leave it
+        // unknown rather than guessing (the live-account surface shows it).
+        sessionConnectionExecutable: null,
+      })
+    : [];
+  /** Verification label assessment for the surfaced broker (fixed taxonomy). */
+  const brokerVerification =
+    broker !== null
+      ? connectionVerificationLabel(
+          {
+            accountType: broker.accountType,
+            authorizationStatus: broker.authorizationStatus ?? null,
+            providerBrokerIdentity: broker.providerBrokerIdentity ?? null,
+            logicalAccountKey: broker.logicalAccountKey ?? null,
+          },
+          registryEntries.find((entry) => entry.id === broker.brokerId) ?? null,
+        )
+      : null;
   const workspaceLoading =
     loadingStatus ||
     loadingExecution ||
@@ -431,32 +786,79 @@ export default function TradingWorkspacePage() {
                   <Link href="/onboarding/risk" className="cockpit-text-link">Review risk limits</Link>
                 </Card>
 
-                <Card title="AI Trading Session" className="cockpit-panel">
+                <Card title="Trading Session — Execution Authority" subtitle="Durable session mode; changes are audited server-side." className="cockpit-panel">
                   {session ? (
                     <>
-                      <div className="cockpit-card-badge"><Badge variant={sessionBadgeVariant(session.status)}>{formatEnumLabel(session.status)}</Badge></div>
+                      <div className="cockpit-card-badge">
+                        <Badge variant={sessionBadgeVariant(session.status)}>{formatEnumLabel(session.status)}</Badge>
+                        <Badge variant="info">{session.executionMode}</Badge>
+                      </div>
                       <dl className="cockpit-detail-list">
                         <div><dt>Started</dt><dd>{formatTimestamp(session.startedAt)}</dd></div>
+                        <div><dt>Authority generation</dt><dd>{session.authorityGeneration}</dd></div>
                         <div><dt>Lifecycle source</dt><dd>Trading session service</dd></div>
-                        <div><dt>Session financial fields</dt><dd>Not exposed to this browser contract</dd></div>
                       </dl>
+                      <p className="text-sm muted" style={{ marginTop: 0, marginBottom: 'var(--space-2)' }}>
+                        {executionModeCopy(session.executionMode)}
+                      </p>
+                      <ExecutionModeSelector
+                        session={session}
+                        modeChanging={modeChanging}
+                        onModeChange={(mode) => void handleModeChange(mode)}
+                      />
+                      {modeError && <Alert variant="error">{modeError}</Alert>}
+                      {blockedReasons.length > 0 && (
+                        <Alert variant="warning">
+                          <div style={{ flex: 1 }}>
+                            <strong>Execution blocked</strong>
+                            <ul style={{ margin: 'var(--space-1) 0 0', paddingLeft: '1.1rem' }}>
+                              {blockedReasons.map((reason) => (
+                                <li key={reason}>{reason}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        </Alert>
+                      )}
                     </>
                   ) : (
-                    <><Badge variant="info">No active session</Badge><p className="muted mt-4">No active AI trading session was returned. Eligibility remains server controlled.</p></>
+                    <>
+                      <Badge variant="info">No active session</Badge>
+                      <p className="muted mt-4">No active AI trading session was returned. Eligibility remains server controlled — execution authority is not started.</p>
+                    </>
                   )}
                 </Card>
 
                 <Card title="Broker Health" className="cockpit-panel">
                   {broker ? (
                     <>
-                      <div className="cockpit-card-badge"><Badge variant={brokerBadgeVariant(broker.status)}>{formatEnumLabel(broker.status)}</Badge></div>
+                      <div className="cockpit-card-badge">
+                        <Badge variant={brokerBadgeVariant(broker.status)}>{formatEnumLabel(broker.status)}</Badge>
+                        {brokerVerification && (
+                          <Badge variant={verificationLabelVariant(brokerVerification.label)}>
+                            {brokerVerification.label}
+                          </Badge>
+                        )}
+                      </div>
                       <dl className="cockpit-detail-list">
                         <div><dt>Broker</dt><dd>{broker.brokerName}</dd></div>
                         {broker.displayName && <div><dt>Account alias</dt><dd>{broker.displayName}</dd></div>}
                         <div><dt>Environment</dt><dd>{formatEnumLabel(broker.accountType)}</dd></div>
                         <div><dt>Last health check</dt><dd>{formatTimestamp(broker.lastHealthCheckAt)}</dd></div>
-                        <div><dt>Live execution enablement</dt><dd>{broker.liveTradingEnabled ? 'Enabled' : 'Not enabled'}</dd></div>
+                        <div>
+                          <dt>Current executability</dt>
+                          <dd>
+                            {brokerVerification
+                              ? brokerVerification.connectionExecutability === 'execution disabled'
+                                ? 'execution disabled'
+                                : brokerVerification.connectionExecutability
+                              : 'Unavailable'}
+                          </dd>
+                        </div>
                       </dl>
+                      <p className="text-sm muted" style={{ overflowWrap: 'anywhere' }}>
+                        Verification label is the fixed provider taxonomy. Live-trading flag (compatibility
+                        mirror, not authoritative): {broker.liveTradingEnabled ? 'enabled' : 'not enabled'}.
+                      </p>
                       <Link href="/onboarding/broker" className="cockpit-text-link">Review broker connection</Link>
                     </>
                   ) : <><Badge variant="warning">No broker connection</Badge><p className="muted mt-4">No sanitized broker connection was returned for this account.</p></>}
@@ -485,6 +887,18 @@ export default function TradingWorkspacePage() {
                 </div>
               ) : null}
             </section>
+
+            {session?.executionMode === 'SEMI_AUTO' && (
+              <ConfirmationInbox
+                confirmations={confirmations}
+                loading={loadingConfirmations}
+                error={confirmationsError}
+                confirmingId={confirmingId}
+                failure={confirmFailure}
+                onConfirm={(confirmationId) => void handleConfirm(confirmationId)}
+                now={now}
+              />
+            )}
           </div>
 
           <aside className="cockpit-side-stack" aria-label="AI and capital intelligence">

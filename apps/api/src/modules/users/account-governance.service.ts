@@ -20,6 +20,9 @@ import {
   AccountAppealStatus,
 } from './entities/account-appeal.entity';
 import { User, UserStatus } from './entities/user.entity';
+import { TradingAuthorityService } from '../execution-authority/trading-authority.service';
+import { GrantInvalidationService } from '../execution-authority/grant-invalidation.service';
+import type { AuthorityBumpReason } from '../execution-authority/trading-authority.service';
 
 export interface PublicAppealResult {
   /** Deliberately invariant: never reveals whether an account or appeal exists. */
@@ -78,6 +81,9 @@ export class AccountGovernanceService {
     private readonly appealRepo: Repository<AccountAppeal>,
     private readonly auditService: AuditService,
     private readonly dataSource: DataSource,
+    // Round 6 (#2/#300): governance transitions advance the unified authority.
+    private readonly tradingAuthorityService: TradingAuthorityService,
+    private readonly grantInvalidation: GrantInvalidationService,
   ) {}
 
   /**
@@ -270,6 +276,20 @@ export class AccountGovernanceService {
       }
       this.applyAdminStatusAction(targetUser, dto.action);
       await queryRunner.manager.save(User, targetUser);
+      // Round 6 (#2/#300): the governance transition + authority bump +
+      // NEW-exposure invalidation commit ATOMICALLY (same transaction —
+      // never a best-effort bump after the fact).
+      const bumpReason = this.authorityBumpReasonFor(dto.action);
+      await this.tradingAuthorityService.bumpGeneration(
+        targetUserId,
+        bumpReason,
+        queryRunner.manager,
+      );
+      await this.grantInvalidation.invalidateUserNewExposureAuthority(
+        targetUserId,
+        bumpReason,
+        queryRunner.manager,
+      );
       await queryRunner.commitTransaction();
     } catch (err) {
       await queryRunner.rollbackTransaction();
@@ -319,6 +339,18 @@ export class AccountGovernanceService {
         user.status = UserStatus.CLOSED;
         user.deletedAt = new Date();
         return;
+    }
+  }
+
+  /** Round 6 (#2): the authority bump reason for an admin status action. */
+  private authorityBumpReasonFor(action: AccountStatusAction): AuthorityBumpReason {
+    switch (action) {
+      case AccountStatusAction.DEACTIVATE:
+        return 'ACCOUNT_SUSPENDED';
+      case AccountStatusAction.PERMANENTLY_LOCK:
+        return 'ACCOUNT_PERMANENTLY_LOCKED';
+      case AccountStatusAction.DELETE:
+        return 'ACCOUNT_CLOSED';
     }
   }
 

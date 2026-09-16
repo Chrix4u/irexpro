@@ -80,11 +80,39 @@ describe('BrokerProviderRegistryService', () => {
       expect(oanda?.status).not.toBe(BrokerAvailabilityStatus.SUPPORTED);
     });
 
-    it('reports partner-approval entries honestly (cTrader)', async () => {
+    it('DOWNGRADES the BETA cTrader catalog entry to NOT_STARTED when no adapter is registered (Task 48-B)', async () => {
+      // Sprint 56 / Task 48-B: the cTrader entry is BETA with a real adapter
+      // implemented (adapterId 'ctrader'), but the runtime adapter registry
+      // here has no 'ctrader' — BETA must downgrade exactly like SUPPORTED
+      // (no fabricated BETA without a registered adapter).
       const service = await buildService(['metatrader5', 'paper-broker']);
       const ctrader = service.getCatalog().find((e) => e.id === 'ctrader');
-      expect(ctrader?.status).toBe(BrokerAvailabilityStatus.PARTNER_APPROVAL_REQUIRED);
+      expect(ctrader?.status).toBe(BrokerAvailabilityStatus.NOT_STARTED);
       expect(ctrader?.adapterAvailable).toBe(false);
+      // The alias entries ride the same engine — also downgraded + closed.
+      const pepperstone = service.getCatalog().find((e) => e.id === 'pepperstone-ctrader');
+      expect(pepperstone?.status).toBe(BrokerAvailabilityStatus.NOT_STARTED);
+      expect(pepperstone?.adapterAvailable).toBe(false);
+      expect(service.isConnectable('pepperstone-ctrader')).toBe(false);
+    });
+
+    it('reports cTrader (and its broker aliases) as BETA + connectable when the shared engine is registered (Task 48-B)', async () => {
+      const service = await buildService([
+        'metatrader5',
+        'paper-broker',
+        'ctrader',
+        'pepperstone-ctrader',
+        'icmarkets-ctrader',
+      ]);
+      for (const id of ['ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader']) {
+        const entry = service.getCatalog().find((e) => e.id === id);
+        expect(entry?.status).toBe(BrokerAvailabilityStatus.BETA);
+        expect(entry?.adapterAvailable).toBe(true);
+        expect(service.isConnectable(id)).toBe(true);
+        // BETA ≠ production-LIVE: UNVERIFIED fails closed.
+        expect(entry?.productionLiveVerification.status).toBe('UNVERIFIED');
+        expect(service.isProductionLiveEligible(id)).toBe(false);
+      }
     });
   });
 

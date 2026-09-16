@@ -6,12 +6,19 @@ import { ExecutionService } from './execution.service';
 import { ExecutionOrchestrator } from './orchestration/execution-orchestrator.service';
 import { Trade, TradeStatus } from './entities/trade.entity';
 import { TradingSession } from './entities/trading-session.entity';
+import { RiskGrant } from './entities/risk-grant.entity';
+import { ExecutionConfirmation } from './entities/execution-confirmation.entity';
+import { ExecutionMode, RiskGrantStatus } from './interfaces/execution-authority';
+import { ExecutionSessionResolutionService } from './execution-session.resolution';
 import { BrokerService } from '../broker/broker.service';
 import { AuditService } from '../audit/audit.service';
 import { AuditSeverity } from '../audit/entities/audit-log.entity';
 import { RiskDecision } from '../risk/interfaces/risk.interface';
 import { BrokerMode } from '../broker/interfaces/broker-adapter.interface';
 import { DomainEventBus } from '../events/event-bus.service';
+import { FinalDispatchBoundary } from './orchestration/final-dispatch-boundary';
+import { TradeLifecycleCasService } from './orders/trade-lifecycle-cas.service';
+import { TradeIntentService } from './services/trade-intent.service';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -31,6 +38,12 @@ const approvedDecision = (): RiskDecision => ({
   riskScore: 30,
   evaluatedAt: new Date(),
   maxDailyTrades: 10,
+  // Round 5 (task 50-c): executeTrade requires the server-issued grant handle
+  grantId: 'grant-1',
+  sessionId: 'session-1',
+  sessionGeneration: 1,
+  executionMode: 'PAPER_ONLY',
+  brokerConnectionId: 'conn-1',
 });
 
 // Sprint 50 PR-3: dispatch is mocked at the orchestrator seam — adapter-level
@@ -61,6 +74,14 @@ describe('ExecutionService — Sprint 32 Idempotency', () => {
       findOne: jest.fn().mockResolvedValue(null),
       find: jest.fn().mockResolvedValue([]),
       count: jest.fn().mockResolvedValue(0),
+      // Round 5 (task 50-c): countTodayTrades runs through the repository
+      // query builder (uncertain-exposure accounting, #314).
+      createQueryBuilder: jest.fn().mockReturnValue({
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        orWhere: jest.fn().mockReturnThis(),
+        getCount: jest.fn().mockResolvedValue(5),
+      }),
       create: jest.fn().mockImplementation((obj) => ({ id: 'trade-1', ...obj })),
       save: jest.fn().mockImplementation(async (obj) => ({ id: 'trade-1', ...obj })),
       update: jest.fn().mockResolvedValue({ affected: 1 }),
@@ -70,6 +91,42 @@ describe('ExecutionService — Sprint 32 Idempotency', () => {
       create: jest.fn().mockImplementation((obj) => obj),
       save: jest.fn().mockImplementation(async (obj) => obj),
       update: jest.fn().mockResolvedValue({ affected: 1 }),
+      createQueryBuilder: jest.fn().mockReturnValue({
+        update: jest.fn().mockReturnThis(),
+        set: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        execute: jest.fn().mockResolvedValue({ affected: 1 }),
+      }),
+    };
+    // Round 5: authority invalidation repos (store-backed matrix lives in
+    // execution-session.authority.spec.ts — chainable stubs here).
+    // Round 6 (#365): executeTrade's PRE-COMMITMENT grant preflight reads
+    // findOne({ id, userId }) — the canonical ACTIVE 'grant-1' fixture serves
+    // that read; per-test overrides still replace this wholesale.
+    const activeGrantFixture = {
+      id: 'grant-1',
+      userId: 'user-1',
+      signalId: 'sig-001',
+      sessionId: 'session-1',
+      sessionGeneration: 1,
+      executionMode: ExecutionMode.PAPER_ONLY,
+      brokerConnectionId: 'conn-1',
+      status: RiskGrantStatus.ACTIVE,
+      issuedAt: new Date(),
+      expiresAt: new Date(Date.now() + 60_000),
+    };
+    const authorityRepoStub = {
+      createQueryBuilder: jest.fn().mockReturnValue({
+        update: jest.fn().mockReturnThis(),
+        set: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        execute: jest.fn().mockResolvedValue({ affected: 0 }),
+      }),
+      update: jest.fn().mockResolvedValue({ affected: 0 }),
+      findOne: jest.fn().mockImplementation(async (opts?: { where?: Record<string, unknown> }) => {
+        if (opts?.where?.id === 'grant-1') return activeGrantFixture;
+        return null;
+      }),
     };
     auditService = { log: jest.fn().mockResolvedValue(undefined) };
 
@@ -78,7 +135,85 @@ describe('ExecutionService — Sprint 32 Idempotency', () => {
         ExecutionService,
         { provide: getRepositoryToken(Trade), useValue: tradeRepo },
         { provide: getRepositoryToken(TradingSession), useValue: sessionRepo },
+        { provide: getRepositoryToken(RiskGrant), useValue: authorityRepoStub },
+        { provide: getRepositoryToken(ExecutionConfirmation), useValue: authorityRepoStub },
         { provide: BrokerService, useValue: {} },
+        {
+          provide: ExecutionSessionResolutionService,
+          useValue: {
+            resolveActiveSessionAuthority: jest.fn().mockResolvedValue({
+              sessionId: 'session-1',
+              sessionGeneration: 1,
+              executionMode: ExecutionMode.PAPER_ONLY,
+              brokerConnectionId: 'conn-1',
+            }),
+          },
+        },
+        {
+          // Round 5 (task 50-c): the boundary is mocked at the SEAM here (its
+          // full matrix lives in final-dispatch-boundary.spec.ts).
+          provide: FinalDispatchBoundary,
+          useValue: {
+            authorizeNewExposureDispatch: jest.fn().mockResolvedValue({
+              context: {
+                userId: 'user-1',
+                signalId: 'sig-001',
+                operationType: 'NEW_EXPOSURE',
+                sessionId: 'session-1',
+                sessionGeneration: 1,
+                executionMode: 'PAPER_ONLY',
+                brokerConnectionId: 'conn-1',
+                brokerAccountId: null,
+                providerTechnology: 'paper-broker',
+                providerBrokerIdentity: null,
+                providerVerificationFingerprint: null,
+                financialSnapshotGeneration: null,
+                riskProfileId: null,
+                riskProfileVersion: null,
+                riskGrantId: 'grant-1',
+                authorityGeneration: 1,
+                validatedOrderDigest: null,
+              },
+              connection: {
+                id: 'conn-1',
+                userId: 'user-1',
+                brokerId: 'paper-broker',
+                accountType: 'DEMO',
+                status: 'CONNECTED',
+              },
+              confirmationId: null,
+              operationClass: 'NEW_EXPOSURE',
+            }),
+          },
+        },
+        {
+          provide: TradeLifecycleCasService,
+          useValue: {
+            applyCasTransition: jest
+              .fn()
+              .mockImplementation(async (params: { target: string; expectedStatus: string }) => ({
+                applied: true,
+                transitionedTo: params.target,
+                trade: { id: 'trade-1', status: params.target },
+              })),
+          },
+        },
+        {
+          // Round 6 §2: the durable TradeIntent guard — seam-level mock (the
+          // intent matrix lives in trade-intent.service.spec.ts).
+          provide: TradeIntentService,
+          useValue: {
+            resolveIntentForExecutionBySignal: jest.fn().mockResolvedValue({
+              id: 'intent-1',
+              userId: 'user-1',
+              signalId: 'sig-001',
+              status: 'CREATED',
+              expiresAt: new Date(Date.now() + 60_000),
+            }),
+            markExecuted: jest.fn().mockResolvedValue(undefined),
+            markRejected: jest.fn().mockResolvedValue(undefined),
+          },
+        },
         { provide: ExecutionOrchestrator, useValue: mockOrchestratorInstance },
         { provide: AuditService, useValue: auditService },
         {
@@ -128,9 +263,10 @@ describe('ExecutionService — Sprint 32 Idempotency', () => {
 
     service = module.get(ExecutionService);
 
-    // Mock brokerService.findActiveConnectionForUser
+    // Round 5 (#295): executeTrade resolves the EXACT session-bound connection
+    // by id (ownership-scoped) — never findActiveConnectionForUser.
     (service as unknown as { brokerService: Record<string, jest.Mock> }).brokerService = {
-      findActiveConnectionForUser: jest.fn().mockResolvedValue({
+      findConnectionById: jest.fn().mockResolvedValue({
         id: 'conn-1',
         brokerId: 'paper-broker',
         accountType: BrokerMode.DEMO,
@@ -240,15 +376,15 @@ describe('ExecutionService — Sprint 32 Idempotency', () => {
   // ── countTodayTrades (daily-limit helper) ──────────────────────────────────
 
   it('countTodayTrades returns the count of OPEN+CLOSED trades opened today', async () => {
-    const dataSource = (service as unknown as { dataSource: { query: jest.Mock } }).dataSource;
-    dataSource.query.mockResolvedValue([{ count: '5' }]);
+    const qb = tradeRepo.createQueryBuilder();
+    qb.getCount.mockResolvedValueOnce(5);
     const result = await service.countTodayTrades('user-1');
     expect(result).toBe(5);
   });
 
   it('countTodayTrades returns 0 when no trades today', async () => {
-    const dataSource = (service as unknown as { dataSource: { query: jest.Mock } }).dataSource;
-    dataSource.query.mockResolvedValue([{ count: '0' }]);
+    const qb = tradeRepo.createQueryBuilder();
+    qb.getCount.mockResolvedValueOnce(0);
     const result = await service.countTodayTrades('user-1');
     expect(result).toBe(0);
   });

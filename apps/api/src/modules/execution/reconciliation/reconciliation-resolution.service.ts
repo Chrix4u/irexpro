@@ -203,6 +203,9 @@ export class ReconciliationResolutionService {
         if (ahead) {
           // Apply the missed fill delta through the exact-decimal atomic
           // path (guarded WHERE status = current + overfill fail-closed).
+          // applyFill ITSELF transitions the order (RECONCILIATION_PENDING is
+          // fillable) to PARTIALLY_FILLED/FILLED — the fill-bearing state is
+          // reached atomically WITH its economic facts.
           const delta = subtractDecimal(providerFilled, order.filledQuantity ?? '0');
           const price = providerOrder.avgFillPrice ?? order.requestedPrice ?? '0';
           if (parseFloat(delta) > 0 && parseFloat(price) > 0) {
@@ -214,15 +217,22 @@ export class ReconciliationResolutionService {
           }
         }
 
-        if (order.status === OrderStatus.RECONCILIATION_PENDING) {
-          // A PARTIAL/FILLED provider state also resolves the pending state.
+        if (order.status === OrderStatus.RECONCILIATION_PENDING && !ahead) {
+          // CORRECTION ROUND 4 (architect finding 7): no fill delta to apply —
+          // the recorded fill facts ALREADY agree with the provider; record
+          // the provider-observed fill-bearing status through the dedicated
+          // FILL-BEARING entry point. The OLD status-only call
+          // (resolveReconciliation → FILLED/PARTIALLY_FILLED) threw by design
+          // ("a status-only reconciliation must never invent a fill") and
+          // broke the convergence of uncertain writes onto discovered fills.
           const target =
             providerOrder.status === 'FILLED' ? OrderStatus.FILLED : OrderStatus.PARTIALLY_FILLED;
-          await this.orderService.resolveReconciliation(order.id, target, {
+          await this.orderService.resolveReconciliationFillState(order.id, target, {
             providerOrderId: providerOrder.providerOrderId,
-            rejectReason: `Reconciliation resolved by provider state ${providerOrder.status}`,
           });
         }
+        // When `ahead`, applyFill above already performed the atomic
+        // fill-bearing transition — no second write (exactly one convergence).
 
         await this.auditResolved(order, `Provider state ${providerOrder.status} applied`);
         return true;

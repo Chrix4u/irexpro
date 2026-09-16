@@ -1,5 +1,6 @@
 import { Order } from '../orders/order.entity';
 import { OrderKind, OrderTimeInForce } from '../orders/order.enums';
+import { ProviderDispatchCertainty } from '../../broker/interfaces/provider-dispatch-certainty';
 
 /**
  * ExecutionIntent — Directive PHASE D "execution intent".
@@ -41,6 +42,16 @@ export interface ExecutionIntent {
   requestedPrice?: string | null;
   /** Required for STOP / STOP_LIMIT (decimal string). */
   stopPrice?: string | null;
+
+  /**
+   * Round 6 live-execution completion (§5/§18): the risk-validated reference
+   * price (the geometry quote the risk evaluation used). The final
+   * market-safety gate verifies the CURRENT price has not deviated
+   * materially from this reference before the provider commitment. Null for
+   * intents without a provable reference (the deviation check is skipped —
+   * freshness + spread still apply).
+   */
+  referencePrice?: string | null;
 
   stopLoss: string;
   takeProfit: string;
@@ -108,6 +119,14 @@ export type ProviderDispatchOutcome =
       order: Order;
       orderId: string;
       reason: string;
+      /**
+       * Round 5 (#314): the round-4 WRITE-CERTAINTY classification of the
+       * uncertain dispatch — persisted on the Trade when it transitions to
+       * RECONCILIATION_PENDING so uncertain-exposure accounting knows whether
+       * the capacity reservation must be RETAINED
+       * (MAY_HAVE_REACHED_PROVIDER) or released once (DEFINITELY_NOT_SENT).
+       */
+      certainty: ProviderDispatchCertainty;
     }
   | {
       outcome: 'DUPLICATE';

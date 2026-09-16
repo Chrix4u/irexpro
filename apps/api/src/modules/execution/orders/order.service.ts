@@ -17,6 +17,7 @@ import {
   ORDER_TIME_IN_FORCES,
 } from './order.enums';
 import { OrderStateMachine } from './order-state-machine';
+import { compareDecimal } from '../reconciliation/reconciliation-comparator';
 
 /** Input contract for idempotent order submission. */
 export interface SubmitOrderInput {
@@ -239,6 +240,62 @@ export class OrderService {
     return this.applyTransition(orderId, resolvedTo, {
       providerOrderId: data.providerOrderId ?? null,
       rejectReason: data.rejectReason ? data.rejectReason.slice(0, 500) : null,
+    });
+  }
+
+  /**
+   * FILL-BEARING reconciliation resolution (Sprint 56 correction round 4,
+   * architect finding 7): resolves a RECONCILIATION_PENDING order onto a
+   * provider-observed FILLED / PARTIALLY_FILLED state WITHOUT inventing
+   * economic facts.
+   *
+   * The caller (reconciliation) applies any MISSING fill delta through
+   * applyFill() FIRST — that atomic path itself transitions the order to
+   * PARTIALLY_FILLED/FILLED. This entry point is for the remaining case: the
+   * internal fill facts ALREADY agree with the provider (no delta) and only
+   * the provider-observed STATUS must be recorded. Guards:
+   * - target FILLED requires the recorded fill to have reached the requested
+   *   quantity;
+   * - target PARTIALLY_FILLED requires a non-zero recorded fill;
+   * - the order must currently be RECONCILIATION_PENDING (CAS via the state
+   *   machine transition).
+   * A pending order with no recorded fill CANNOT reach a fill-bearing state
+   * here — its delta must be applied through applyFill (fail-closed).
+   */
+  async resolveReconciliationFillState(
+    orderId: string,
+    target: OrderStatus,
+    data: { providerOrderId?: string | null } = {},
+  ): Promise<Order> {
+    if (target !== OrderStatus.FILLED && target !== OrderStatus.PARTIALLY_FILLED) {
+      throw new ConflictException(
+        'Fill-bearing reconciliation resolution targets are FILLED/PARTIALLY_FILLED only',
+      );
+    }
+    const current = await this.findOrderById(orderId);
+    if (!current) throw new NotFoundException(`Order ${orderId} not found`);
+    if (current.status !== OrderStatus.RECONCILIATION_PENDING) {
+      throw new ConflictException(
+        `Order ${orderId} is not RECONCILIATION_PENDING (status: ${current.status})`,
+      );
+    }
+    const filled = current.filledQuantity ?? '0';
+    if (target === OrderStatus.FILLED && compareDecimal(filled, current.requestedQuantity) < 0) {
+      throw new ConflictException(
+        `Order ${orderId} cannot resolve to FILLED — the recorded fill ${filled} has not ` +
+          `reached the requested quantity ${current.requestedQuantity}; apply the provider ` +
+          'fill delta through applyFill first (fail-closed — a status write never invents a fill).',
+      );
+    }
+    if (target === OrderStatus.PARTIALLY_FILLED && compareDecimal(filled, '0') <= 0) {
+      throw new ConflictException(
+        `Order ${orderId} cannot resolve to PARTIALLY_FILLED — no fill is recorded; apply ` +
+          'the provider fill delta through applyFill first (fail-closed).',
+      );
+    }
+    return this.applyTransition(orderId, target, {
+      providerOrderId: data.providerOrderId ?? null,
+      rejectReason: `Reconciliation resolved by provider fill-bearing state ${target}`,
     });
   }
 

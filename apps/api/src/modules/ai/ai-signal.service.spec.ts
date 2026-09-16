@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { AiSignalService } from './ai-signal.service';
 import { StrategyOrchestratorService } from '../strategy/strategy-orchestrator.service';
+import { AiExitOrchestratorService } from '../strategy/ai-exit-orchestrator.service';
 import { AuditService } from '../audit/audit.service';
 import { DomainEventBus } from '../events/event-bus.service';
 import { AiSignalCandidate } from './interfaces/ai-signal-candidate.interface';
@@ -54,6 +55,12 @@ describe('AiSignalService', () => {
       providers: [
         AiSignalService,
         { provide: StrategyOrchestratorService, useValue: orchestrator },
+        // Round 6 §10: the exit orchestrator seam (mocked — its own matrix
+        // lives in ai-exit-orchestrator.spec.ts).
+        {
+          provide: AiExitOrchestratorService,
+          useValue: { processExitSignal: jest.fn() },
+        },
         { provide: AuditService, useValue: auditService },
         { provide: DomainEventBus, useValue: eventBus },
       ],

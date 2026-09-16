@@ -71,6 +71,68 @@ export class Trade {
   @Index({ unique: true })
   idempotencyKey: string;
 
+  // ─── Round-6 immutable provenance (issue #362) ────────────────────────────
+
+  /**
+   * TradingSession the trade was executed under. IMMUTABLE provenance for
+   * the daily-loss budget scope (NULL = legacy rows without provenance —
+   * never guessed for LIVE risk decisions; such rows make the daily-loss
+   * measurement incomplete and consumers must fail closed on them).
+   */
+  @Column({ name: 'trading_session_id', type: 'uuid', nullable: true })
+  tradingSessionId: string | null;
+
+  /**
+   * Logical broker-account identity key at execution time. IMMUTABLE
+   * provenance — the historic account identity is NEVER re-derived from the
+   * (mutable) broker connection: the account may have changed since.
+   */
+  @Column({ name: 'logical_account_key', type: 'varchar', length: 255, nullable: true })
+  logicalAccountKey: string | null;
+
+  /**
+   * Account currency (ISO-4217 alpha-3) the trade's economics are
+   * denominated in. Immutable at execution time; heterogeneous currencies
+   * are never raw-summed into one budget (#362).
+   */
+  @Column({ name: 'account_currency', type: 'varchar', length: 3, nullable: true })
+  accountCurrency: string | null;
+
+  /**
+   * DailyRiskPeriod the trade's daily-loss budget belongs to (NULL = legacy
+   * rows without provenance).
+   */
+  @Column({ name: 'risk_period_id', type: 'uuid', nullable: true })
+  riskPeriodId: string | null;
+
+  /**
+   * Round 6 live-execution completion (§2): the durable TradeIntent this
+   * trade was executed from. IMMUTABLE provenance — links the executed trade
+   * back to the normalized AI decision for the §20 reconstruction chain
+   * (AI decision → intent → allocation → sizing → grant → dispatch →
+   * reconciliation). NULL = legacy rows executed before the intent layer.
+   */
+  @Column({ name: 'trade_intent_id', type: 'uuid', nullable: true })
+  tradeIntentId: string | null;
+
+  /**
+   * Round 6 live-execution completion (§20): the RiskGrant whose atomic
+   * consumption at the provider-dispatch commitment authorized THIS trade's
+   * exposure. IMMUTABLE authority provenance (previously signalId-only).
+   * NULL = legacy rows / dispatches without a grant.
+   */
+  @Column({ name: 'risk_grant_id', type: 'uuid', nullable: true })
+  riskGrantId: string | null;
+
+  /**
+   * Round 6 live-execution completion (§20): the internal Order row that
+   * carried the provider lifecycle of this trade (reservation → SUBMITTED →
+   * DISPATCH_COMMITTED → outcome). IMMUTABLE lifecycle provenance
+   * (previously a clientOrderId join). NULL = legacy rows.
+   */
+  @Column({ name: 'order_id', type: 'uuid', nullable: true })
+  orderId: string | null;
+
   // ─── Order parameters (Risk Engine-validated values) ─────────────────────
 
   @Column({ name: 'instrument', type: 'varchar', length: 50 })
@@ -158,6 +220,25 @@ export class Trade {
 
   @Column({ name: 'broker_rejection_reason', type: 'text', nullable: true })
   brokerRejectionReason: string | null;
+
+  /**
+   * Round 5 (#314): provider WRITE-CERTAINTY of the state-changing dispatch
+   * that left this trade RECONCILIATION_PENDING (round-4
+   * ProviderDispatchCertainty classification).
+   *
+   * UNCERTAIN-EXPOSURE ACCOUNTING RULE (issue #314):
+   *  - RECONCILIATION_PENDING + MAY_HAVE_REACHED_PROVIDER (or NULL — legacy
+   *    rows, conservatively uncertain) RETAINS its NEW-exposure capacity
+   *    reservation: counted as OPEN-like exposure by countOpenTrades() /
+   *    countTodayTrades() until reconciliation proves otherwise;
+   *  - RECONCILIATION_PENDING + DEFINITELY_NOT_SENT (provably never left
+   *    iRexPro) releases the capacity ONCE — never counted as exposure;
+   *  - a RECONCILIATION_PENDING reached via an AMBIGUOUS CLOSE keeps the same
+   *    uncertain value, so the underlying exposure is NOT released until
+   *    closure is proven (terminal CLOSED).
+   */
+  @Column({ name: 'dispatch_certainty', type: 'varchar', length: 30, nullable: true })
+  dispatchCertainty: string | null;
 
   // ─── Timestamps ───────────────────────────────────────────────────────────
 

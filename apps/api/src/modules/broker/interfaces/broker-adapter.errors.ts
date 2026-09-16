@@ -7,14 +7,25 @@
  * See: docs/architecture/09-broker-integration-architecture.md §12
  */
 export class BrokerAdapterError extends Error {
+  /**
+   * WRITE-CERTAINTY classification (Sprint 56 correction round 4, architect
+   * findings 5-6): for STATE-CHANGING operations this is the single authority
+   * deciding whether an automatic retry is allowed. Absent = UNKNOWN (treated
+   * conservatively as MAY_HAVE_REACHED_PROVIDER by the execution retry
+   * policy — never auto-resent). Read paths may omit it.
+   */
+  public readonly dispatchCertainty?: import('./provider-dispatch-certainty').ProviderDispatchCertainty;
+
   constructor(
     public readonly code: BrokerErrorCode,
     message: string,
     public readonly brokerMessage?: string,
     public readonly isRetryable: boolean = false,
+    dispatchCertainty?: import('./provider-dispatch-certainty').ProviderDispatchCertainty,
   ) {
     super(message);
     this.name = 'BrokerAdapterError';
+    this.dispatchCertainty = dispatchCertainty;
   }
 }
 

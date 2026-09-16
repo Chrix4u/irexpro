@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { ExecutionControlService } from './execution-control.service';
+import { SharedControlRevisionService } from '../execution-authority/shared-control-revision.service';
 import {
   ExecutionControl,
   ExecutionControlScope,
@@ -45,6 +46,7 @@ describe('ExecutionControlService', () => {
     create: jest.Mock;
     delete: jest.Mock;
     update: jest.Mock;
+    manager: { transaction: jest.Mock };
   };
   let auditService: { log: jest.Mock };
   let eventBus: { publish: jest.Mock };
@@ -57,6 +59,15 @@ describe('ExecutionControlService', () => {
       create: jest.fn().mockImplementation((c) => c),
       delete: jest.fn().mockResolvedValue({ affected: 1 }),
       update: jest.fn().mockResolvedValue({ affected: 1 }),
+      // Round 6 (#14): activate/deactivate wrap the fact + shared-revision
+      // bump in repo.manager.transaction — the mock EM delegates back.
+      manager: {
+        transaction: jest
+          .fn()
+          .mockImplementation(async (cb: (em: unknown) => Promise<unknown>) =>
+            cb({ getRepository: () => controlRepo }),
+          ),
+      },
     };
     auditService = { log: jest.fn().mockResolvedValue(undefined) };
     eventBus = { publish: jest.fn() };
@@ -67,6 +78,12 @@ describe('ExecutionControlService', () => {
         { provide: getRepositoryToken(ExecutionControl), useValue: controlRepo },
         { provide: AuditService, useValue: auditService },
         { provide: DomainEventBus, useValue: eventBus },
+        // Round 6 (#14): the shared control-plane revision seam (mocked —
+        // the revision CAS matrices live in the execution-authority suites).
+        {
+          provide: SharedControlRevisionService,
+          useValue: { bumpExecutionControlRevision: jest.fn().mockResolvedValue(1) },
+        },
       ],
     }).compile();
 

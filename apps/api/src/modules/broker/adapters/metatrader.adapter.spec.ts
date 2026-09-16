@@ -20,6 +20,7 @@ import { MetaTraderAdapter } from './metatrader.adapter';
 import { MetaApiClientService } from '../services/metaapi-client.service';
 import { BrokerMode } from '../interfaces/broker-adapter.interface';
 import { BrokerAdapterError, BrokerErrorCode } from '../interfaces/broker-adapter.errors';
+import { ProviderDispatchCertainty } from '../interfaces/provider-dispatch-certainty';
 
 // ─── MetaAPI SDK mock ─────────────────────────────────────────────────────────
 
@@ -675,10 +676,28 @@ describe('MetaTraderAdapter', () => {
       expect(err.isRetryable).toBe(expectedRetryable);
     });
 
-    it('returns the same BrokerAdapterError instance unchanged', () => {
-      const existing = new BrokerAdapterError(BrokerErrorCode.UNKNOWN, 'test');
+    it('returns a pre-classified BrokerAdapterError instance unchanged', () => {
+      const existing = new BrokerAdapterError(
+        BrokerErrorCode.UNKNOWN,
+        'test',
+        undefined,
+        false,
+        ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER,
+      );
       const result = adapter.mapError(existing);
       expect(result).toBe(existing);
+    });
+
+    it('fills in write certainty for an unclassified BrokerAdapterError (round 4, finding 6)', () => {
+      // The identity of the instance is not preserved — the certainty fill
+      // constructs the classified error — but code/message/retryability are.
+      const existing = new BrokerAdapterError(BrokerErrorCode.UNKNOWN, 'test');
+      const result = adapter.mapError(existing);
+      expect(result).not.toBe(existing);
+      expect(result.code).toBe(BrokerErrorCode.UNKNOWN);
+      expect(result.message).toBe('test');
+      expect(result.isRetryable).toBe(false);
+      expect(result.dispatchCertainty).toBe(ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER);
     });
   });
 });

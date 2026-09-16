@@ -1,6 +1,13 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { Logger } from '@nestjs/common';
 import { StrategyOrchestratorService } from './strategy-orchestrator.service';
+import { AiSignalIdentityGateService } from '../execution/orchestration/signal-identity.gate';
+import { SignalIdentityRegistration } from '../execution/orchestration/signal-identity.gate';
+import { TradeIntentService } from '../execution/services/trade-intent.service';
+import { TradingAuthorityService } from '../execution-authority/trading-authority.service';
+import { SharedControlRevisionService } from '../execution-authority/shared-control-revision.service';
+import { PositionSizingService } from '../execution/services/position-sizing.service';
+import { AllocationService } from '../execution/services/allocation.service';
 import { RiskService } from '../risk/risk.service';
 import { ExecutionService } from '../execution/execution.service';
 import { BrokerService } from '../broker/broker.service';
@@ -9,6 +16,7 @@ import { DomainEventBus } from '../events/event-bus.service';
 import { TradingSession, TradingSessionStatus } from '../execution/entities/trading-session.entity';
 import { AiSignalCandidate } from './interfaces/strategy.interface';
 import { Trade, TradeStatus } from '../execution/entities/trade.entity';
+import { AuditAction } from '../../common/enums/audit-action.enum';
 
 const validCandidate = (overrides: Partial<AiSignalCandidate> = {}): AiSignalCandidate => ({
   signalId: 'sig-001',
@@ -61,6 +69,40 @@ describe('StrategyOrchestratorService', () => {
   let brokerService: jest.Mocked<Partial<BrokerService>>;
   let auditService: jest.Mocked<Partial<AuditService>>;
   let eventBus: jest.Mocked<Partial<DomainEventBus>>;
+  let identityGateMock: { registerOrReuse: jest.Mock; markProcessed: jest.Mock };
+  /** Round 6 §2: TradeIntent-layer + authority-read mocks (seam level). */
+  let tradeIntentMock: {
+    recordOrReuseIntent: jest.Mock;
+    markRejected: jest.Mock;
+    markExecuted: jest.Mock;
+  };
+  let authorityReadMock: { getCurrentGeneration: jest.Mock };
+  let sharedRevisionMock: {
+    getCurrentTradingPolicyRevision: jest.Mock;
+    getCurrentProviderVerificationRevision: jest.Mock;
+    getCurrentExecutionControlRevision: jest.Mock;
+  };
+  /** Round 6 §3/§4: sizing + allocation seam mocks. */
+  let sizingMock: { sizePosition: jest.Mock };
+  let allocationMock: {
+    resolveOrAllocate: jest.Mock;
+    releaseAllocationForIntent: jest.Mock;
+  };
+
+  /** Full SignalIdentityRegistration shape (Round 6 mock contract). */
+  const registrationFor = (
+    signal: Record<string, unknown>,
+    duplicate = false,
+  ): SignalIdentityRegistration => ({
+    identityId: `identity-${String(signal.signalId ?? 'sig-1')}`,
+    signalId: String(signal.signalId ?? 'sig-1'),
+    payloadDigest: 'digest-fixture',
+    duplicate,
+    generatedAt:
+      signal.generatedAt instanceof Date
+        ? signal.generatedAt
+        : new Date(String(signal.generatedAt)),
+  });
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -76,10 +118,16 @@ describe('StrategyOrchestratorService', () => {
       executeTrade: jest
         .fn()
         .mockResolvedValue({ id: 'trade-1', status: TradeStatus.OPEN } as Trade),
+      findTradeBySignalId: jest.fn().mockResolvedValue(null),
     };
 
     brokerService = {
       hasActiveConnection: jest.fn().mockResolvedValue(true),
+      // Round 6 §2: best-effort logical-account-key read at intent intake.
+      findConnectionById: jest.fn().mockResolvedValue({
+        id: 'conn-1',
+        logicalAccountKey: 'paper-broker::demo::acct-1',
+      }),
     };
 
     auditService = {
@@ -91,6 +139,62 @@ describe('StrategyOrchestratorService', () => {
       subscribe: jest.fn().mockReturnValue(() => {}),
     };
 
+    identityGateMock = {
+      registerOrReuse: jest
+        .fn()
+        .mockImplementation(async (_userId: string, signal: Record<string, unknown>) =>
+          registrationFor(signal),
+        ),
+      markProcessed: jest.fn().mockResolvedValue(undefined),
+    };
+
+    // Round 6 §2: the durable TradeIntent layer is mocked at the seam (its
+    // own matrix lives in trade-intent.service.spec.ts) — every NEW signal
+    // records (or reuses) a CREATED intent with the authority generations
+    // CURRENT at creation.
+    tradeIntentMock = {
+      recordOrReuseIntent: jest
+        .fn()
+        .mockImplementation(async (facts: { signalId: string; userId: string }) => ({
+          created: true,
+          intent: {
+            id: `intent-${facts.signalId}`,
+            userId: facts.userId,
+            signalId: facts.signalId,
+            status: 'CREATED',
+            expiresAt: new Date(Date.now() + 60_000),
+          },
+        })),
+      markRejected: jest.fn().mockResolvedValue(undefined),
+      markExecuted: jest.fn().mockResolvedValue(undefined),
+    };
+
+    authorityReadMock = {
+      getCurrentGeneration: jest.fn().mockResolvedValue(1),
+    };
+
+    sharedRevisionMock = {
+      getCurrentTradingPolicyRevision: jest.fn().mockResolvedValue(1),
+      getCurrentProviderVerificationRevision: jest.fn().mockResolvedValue(1),
+      getCurrentExecutionControlRevision: jest.fn().mockResolvedValue(1),
+    };
+
+    // Round 6 §3/§4: sizing derives a proven volume and allocation reserves
+    // it (matrices live in their own suites).
+    sizingMock = {
+      sizePosition: jest.fn().mockResolvedValue({
+        lots: '0.05',
+        allocatedCapital: '5425.00',
+        accountCurrency: 'USD',
+        entryPrice: '1.08500',
+        inputs: { accountCurrency: 'USD', equity: '10000.00' },
+      }),
+    };
+    allocationMock = {
+      resolveOrAllocate: jest.fn().mockResolvedValue({ id: 'alloc-1', status: 'ACTIVE' }),
+      releaseAllocationForIntent: jest.fn().mockResolvedValue(undefined),
+    };
+
     module = await Test.createTestingModule({
       providers: [
         StrategyOrchestratorService,
@@ -99,6 +203,22 @@ describe('StrategyOrchestratorService', () => {
         { provide: BrokerService, useValue: brokerService },
         { provide: AuditService, useValue: auditService },
         { provide: DomainEventBus, useValue: eventBus },
+        {
+          // Round 5 (task 50-c): the durable signal-identity gate is mocked at
+          // the seam (its own matrix lives in signal-identity.gate.spec.ts).
+          // Round 6: the mock carries the FULL registration shape incl. the
+          // duplicate flag + persisted original generatedAt.
+          provide: AiSignalIdentityGateService,
+          useValue: identityGateMock,
+        },
+        // Round 6 §2: TradeIntent layer + authority/revision reads at intent
+        // creation (matrices live in their own suites).
+        { provide: TradeIntentService, useValue: tradeIntentMock },
+        { provide: TradingAuthorityService, useValue: authorityReadMock },
+        { provide: SharedControlRevisionService, useValue: sharedRevisionMock },
+        // Round 6 §3/§4: sizing + allocation at the seam.
+        { provide: PositionSizingService, useValue: sizingMock },
+        { provide: AllocationService, useValue: allocationMock },
       ],
     }).compile();
 
@@ -241,6 +361,135 @@ describe('StrategyOrchestratorService', () => {
     it('returns tradeId on success', async () => {
       const result = await service.processSignal(validCandidate());
       expect(result.tradeId).toBe('trade-1');
+    });
+  });
+
+  describe('Gate 4.6: deterministic duplicate recovery (#302, Round 6)', () => {
+    /** Flip the identity-gate seam: this delivery is a DUPLICATE re-delivery. */
+    const deliverAsDuplicate = (): void => {
+      identityGateMock.registerOrReuse.mockImplementation(
+        async (_userId: string, signal: Record<string, unknown>) => registrationFor(signal, true),
+      );
+    };
+
+    const existingTrade = (status: TradeStatus): Trade =>
+      ({ id: 'trade-existing', status, signalId: 'sig-001' }) as Trade;
+
+    it.each([
+      ['PENDING', TradeStatus.PENDING],
+      ['OPEN', TradeStatus.OPEN],
+      ['CLOSED', TradeStatus.CLOSED],
+      ['RECONCILIATION_PENDING', TradeStatus.RECONCILIATION_PENDING],
+    ])(
+      'duplicate with an existing %s trade → EXECUTION_SUCCEEDED + duplicateOfTrade (no fresh evaluation, no dispatch)',
+      async (_label: string, status: TradeStatus) => {
+        deliverAsDuplicate();
+        (executionService.findTradeBySignalId as jest.Mock).mockResolvedValue(
+          existingTrade(status),
+        );
+
+        const result = await service.processSignal(validCandidate());
+
+        expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
+        expect(result.tradeId).toBe('trade-existing');
+        expect(result.duplicateOfTrade).toEqual({
+          tradeId: 'trade-existing',
+          tradeStatus: status,
+          recoveredAs: 'EXECUTION_SUCCEEDED',
+        });
+        // The FIRST delivery's durable outcome is the truth — the duplicate
+        // NEVER re-enters risk evaluation or provider dispatch.
+        expect(riskService.validateProposedTrade).not.toHaveBeenCalled();
+        expect(executionService.executeTrade).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([
+      ['REJECTED', TradeStatus.REJECTED],
+      ['CANCELLED', TradeStatus.CANCELLED],
+    ])(
+      'duplicate with an existing %s trade → EXECUTION_FAILED + duplicateOfTrade (no fresh evaluation, no dispatch)',
+      async (_label: string, status: TradeStatus) => {
+        deliverAsDuplicate();
+        (executionService.findTradeBySignalId as jest.Mock).mockResolvedValue(
+          existingTrade(status),
+        );
+
+        const result = await service.processSignal(validCandidate());
+
+        expect(result.outcome).toBe('EXECUTION_FAILED');
+        expect(result.tradeId).toBe('trade-existing');
+        expect(result.duplicateOfTrade).toEqual({
+          tradeId: 'trade-existing',
+          tradeStatus: status,
+          recoveredAs: 'EXECUTION_FAILED',
+        });
+        expect(riskService.validateProposedTrade).not.toHaveBeenCalled();
+        expect(executionService.executeTrade).not.toHaveBeenCalled();
+      },
+    );
+
+    it('duplicate with NO existing trade → RISK_REJECTED + duplicateOfTrade{tradeId:null, tradeStatus:REJECTED_PREVIOUSLY} — a retry of a rejected signal stays rejected', async () => {
+      deliverAsDuplicate();
+      (executionService.findTradeBySignalId as jest.Mock).mockResolvedValue(null);
+
+      const result = await service.processSignal(validCandidate());
+
+      expect(result.outcome).toBe('RISK_REJECTED');
+      expect(result.duplicateOfTrade).toEqual({
+        tradeId: null,
+        tradeStatus: 'REJECTED_PREVIOUSLY',
+        recoveredAs: 'RISK_REJECTED',
+      });
+      expect(result.reason).toContain('previously rejected');
+      expect(riskService.validateProposedTrade).not.toHaveBeenCalled();
+      expect(executionService.executeTrade).not.toHaveBeenCalled();
+    });
+
+    it('duplicate recovery lookup FAILURE → fail-closed SIGNAL_INVALID (never a fresh evaluation)', async () => {
+      deliverAsDuplicate();
+      (executionService.findTradeBySignalId as jest.Mock).mockRejectedValue(
+        new Error('trade store unavailable'),
+      );
+
+      const result = await service.processSignal(validCandidate());
+
+      expect(result.outcome).toBe('SIGNAL_INVALID');
+      expect(riskService.validateProposedTrade).not.toHaveBeenCalled();
+      expect(executionService.executeTrade).not.toHaveBeenCalled();
+    });
+
+    it('audits the suppressed duplicate via AI_SIGNAL_IGNORED (DUPLICATE_SIGNAL_RECOVERED) with existing trade id/status + original generatedAt, and emits the domain event', async () => {
+      deliverAsDuplicate();
+      (executionService.findTradeBySignalId as jest.Mock).mockResolvedValue(
+        existingTrade(TradeStatus.OPEN),
+      );
+
+      await service.processSignal(validCandidate());
+
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: AuditAction.AI_SIGNAL_IGNORED,
+          resourceType: 'AiSignal',
+          resourceId: 'sig-001',
+          metadata: expect.objectContaining({
+            outcome: 'EXECUTION_SUCCEEDED',
+            reasonCode: 'DUPLICATE_SIGNAL_RECOVERED',
+            existingTradeId: 'trade-existing',
+            existingTradeStatus: TradeStatus.OPEN,
+            originalGeneratedAt: expect.any(String),
+          }),
+        }),
+      );
+      expect(eventBus.publish).toHaveBeenCalledWith(
+        'ai.signal.ignored',
+        'user-1',
+        expect.objectContaining({
+          signalId: 'sig-001',
+          existingTradeId: 'trade-existing',
+          existingTradeStatus: TradeStatus.OPEN,
+        }),
+      );
     });
   });
 

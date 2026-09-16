@@ -16,11 +16,16 @@ import { AiEngineClient } from '../ai-engine-client/ai-engine-client.service';
 import { AuditAction } from '../../common/enums/audit-action.enum';
 import { AuditSeverity } from '../audit/entities/audit-log.entity';
 import { TradingSession, TradingSessionStatus } from '../execution/entities/trading-session.entity';
+import { ExecutionMode } from '../execution/interfaces/execution-authority';
+import { BrokerConnectionRequiredException } from '../execution/execution-session.resolution';
 import { OnboardingService } from '../users/onboarding.service';
 import { TradingNotReadyException } from '../../common/exceptions/trading-not-ready.exception';
 import { AllowedTradingMode } from '../risk/entities/risk-profile.entity';
 import { BrokerConnection } from '../broker/entities/broker-connection.entity';
-import { BrokerConnectionStatus } from '../broker/interfaces/broker-adapter.interface';
+import { BrokerConnectionStatus, BrokerMode } from '../broker/interfaces/broker-adapter.interface';
+import { BrokerAccountSnapshotService } from '../broker/services/broker-account-snapshot.service';
+import { BrokerAccountSnapshot } from '../broker/entities/broker-account-snapshot.entity';
+import { ExactDecimal } from '../../common/utils/exact-decimal';
 
 /**
  * TradingService — Trading session lifecycle management.
@@ -66,22 +71,41 @@ export class TradingService {
     private readonly auditService: AuditService,
     private readonly eventBus: DomainEventBus,
     private readonly aiEngineClient: AiEngineClient,
+    // Round 6 (§6/#297/#312): the durable account-snapshot authority the
+    // session's opening financial state binds to (fail-closed — never `?? '0'`).
+    private readonly brokerAccountSnapshotService: BrokerAccountSnapshotService,
   ) {}
 
+  /** ExecutionMode → the risk-profile AllowedTradingMode it must satisfy. */
+  private static readonly ALLOWED_MODE_BY_EXECUTION_MODE: Record<
+    ExecutionMode,
+    AllowedTradingMode
+  > = {
+    [ExecutionMode.PAPER_ONLY]: AllowedTradingMode.PAPER_ONLY,
+    [ExecutionMode.SEMI_AUTO]: AllowedTradingMode.SEMI_AUTO,
+    [ExecutionMode.FULL_AUTO]: AllowedTradingMode.FULL_AUTO,
+  };
+
   /**
-   * Start a new trading session.
+   * Start a new trading session bound to the EXACT requested broker connection.
    *
    * Sprint 29 amendment: enforces the centralized canStartTrading gate FIRST,
    * before any other check. This gate cannot be bypassed.
    *
+   * Round 5 (architect issue #295): the session is the authoritative execution
+   * target — brokerConnectionId is REQUIRED (never discovered via
+   * findActiveConnectionForUser), and the persisted executionMode +
+   * authorityGeneration bind all future NEW-exposure decisions to this exact
+   * (session, connection, mode) triple.
+   *
    * @param userId - the authenticated user's ID
-   * @param brokerConnectionId - optional specific broker connection
-   * @param requestedMode - optional trading mode (defaults to PAPER_ONLY)
+   * @param brokerConnectionId - the EXACT broker connection to bind (required)
+   * @param executionMode - durable execution mode (defaults to PAPER_ONLY)
    */
   async startTradingSession(
     userId: string,
     brokerConnectionId?: string,
-    requestedMode: AllowedTradingMode = AllowedTradingMode.PAPER_ONLY,
+    executionMode: ExecutionMode = ExecutionMode.PAPER_ONLY,
   ): Promise<TradingSession> {
     // ── Gate 1 (Sprint 29): Centralized onboarding readiness gate ────────────
     // This is the HARD gate — profile + risk acknowledgement + broker + kill
@@ -92,28 +116,44 @@ export class TradingService {
       throw new TradingNotReadyException(readiness.missingSteps);
     }
 
-    // ── Gate 2: Resolve + verify broker connection health ────────────────────
+    // ── Gate 2: EXACT broker connection (Round 5 — no discovery fallback) ────
+    // The connection that will execute this session's new exposure is chosen
+    // HERE, by id, and bound into the session row. findConnectionById scopes
+    // by userId (ownership) and throws NotFound otherwise.
+    if (!brokerConnectionId) {
+      throw new BrokerConnectionRequiredException();
+    }
     const connection = await this.resolveConnection(userId, brokerConnectionId);
     this.assertBrokerConnectionHealthy(connection);
 
-    // ── Gate 3: Requested trading mode must be permitted by risk profile ─────
+    // ── Gate 3: Requested execution mode must be permitted by risk profile ───
     const riskProfile = await this.riskService.getOrCreateProfile(userId);
-    this.assertRequestedModeAllowed(requestedMode, riskProfile.allowedTradingModes);
+    this.assertRequestedModeAllowed(
+      TradingService.ALLOWED_MODE_BY_EXECUTION_MODE[executionMode],
+      riskProfile.allowedTradingModes,
+    );
 
     // ── Gate 4: Live trading requires explicit broker enablement ─────────────
     // FULL_AUTO does NOT automatically enable live broker execution. The user
     // must separately enable live trading on the broker connection (a distinct
     // explicit action with its own audit trail).
-    if (requestedMode === AllowedTradingMode.FULL_AUTO && !connection.liveTradingEnabled) {
+    if (executionMode === ExecutionMode.FULL_AUTO && !connection.liveTradingEnabled) {
       throw new ForbiddenException(
         'Live trading is not enabled on this broker connection. ' +
           'Enable live trading explicitly before requesting FULL_AUTO mode.',
       );
     }
 
-    // ── Start session via ExecutionService ───────────────────────────────────
-    const brokerState = await this.brokerService.getBrokerAccountState(connection.id);
-    const openingBalance = brokerState?.balance ?? '0';
+    // ── Gate 5 (Round 6, §6/#297/#312): fail-closed coherent opening state ──
+    // No production TradingSession may start with invented zero financial
+    // state. The opening balance/equity/currency come from ONE coherent
+    // observation of the EXACT requested connection — the durable accepted
+    // versioned snapshot when one exists (LIVE: freshness-enforced), else a
+    // STRICT broker-account read with non-null parseable balance/equity and a
+    // known currency. Missing / stale / malformed / unknown currency / read
+    // failure ⇒ NO session (typed, audited, fail-closed). Health-check
+    // timestamps are NEVER treated as financial freshness.
+    const opening = await this.acquireOpeningFinancialState(userId, connection);
 
     // Sprint 32: snapshot the risk profile at session start so future edits
     // don't rewrite history. The snapshot is a deterministic JSON object of
@@ -123,8 +163,10 @@ export class TradingService {
     const session = await this.executionService.startSession(
       userId,
       connection.id,
-      openingBalance,
+      opening.balance,
       riskProfileSnapshot,
+      executionMode,
+      opening.binding,
     );
 
     await this.auditService.log({
@@ -135,9 +177,14 @@ export class TradingService {
       resourceId: session.id,
       metadata: {
         brokerConnectionId: connection.id,
-        openingBalance,
+        openingBalance: opening.balance,
+        openingSource: opening.source,
+        openingSnapshotId: opening.binding?.openingSnapshotId ?? null,
+        openingSnapshotGeneration: opening.binding?.openingSnapshotGeneration ?? null,
+        accountCurrency: opening.binding?.accountCurrency ?? null,
         sessionId: session.id,
-        requestedMode,
+        executionMode: session.executionMode,
+        authorityGeneration: session.authorityGeneration,
         allowedTradingModes: riskProfile.allowedTradingModes,
       },
     });
@@ -146,21 +193,22 @@ export class TradingService {
       sessionId: session.id,
       userId,
       brokerConnectionId: connection.id,
+      executionMode: session.executionMode,
+      authorityGeneration: session.authorityGeneration,
       status: session.status,
       startedAt: session.startedAt,
     });
 
     this.logger.log(
-      `Trading session started: userId=${userId} sessionId=${session.id} mode=${requestedMode}`,
+      `Trading session started: userId=${userId} sessionId=${session.id} mode=${session.executionMode}`,
     );
 
     // Notify AI engine scheduler (non-blocking — failures are logged only).
-    // NOTE: the AI engine always runs in 'paper' mode from its perspective —
-    // it generates signals that flow through the Risk Engine before reaching
-    // the Execution Engine. AI never directly executes broker orders.
-    // The requestedMode controls the user's intent, but the AI engine payload
-    // is always 'paper' (the risk gate + execution service handle the actual
-    // broker interaction based on the broker connection's liveTradingEnabled flag).
+    // NOTE: the AI engine generates signals that flow through the Risk Engine
+    // before reaching the Execution Engine — AI never directly executes broker
+    // orders. The session's durable executionMode (NOT a hardcoded 'paper'
+    // literal) is forwarded so the scheduler notification reflects the session
+    // authority; the risk + execution gates remain the enforcement boundary.
     void this.aiEngineClient
       .notifySessionStarted({
         userId,
@@ -169,7 +217,7 @@ export class TradingService {
         instruments: ['EURUSD'],
         timeframe: 'H1',
         source: 'broker',
-        mode: 'paper',
+        mode: session.executionMode,
       })
       .catch((err: Error) =>
         this.logger.warn(
@@ -178,6 +226,50 @@ export class TradingService {
       );
 
     return session;
+  }
+
+  /**
+   * Explicit + audited execution-mode change on an ACTIVE session
+   * (Round 5, architect issue #298).
+   *
+   * The same risk-profile / live-enablement gates as startTradingSession apply
+   * (a mode change must not bypass them). ExecutionService performs the CAS
+   * generation bump and invalidates outstanding authority (RiskGrants /
+   * SEMI_AUTO confirmations).
+   */
+  async changeExecutionMode(
+    userId: string,
+    sessionId: string,
+    newMode: ExecutionMode,
+  ): Promise<TradingSession> {
+    // Ownership: the session must belong to the requesting user.
+    const session = await this.executionService.findSessionById(sessionId);
+    if (!session || session.userId !== userId) {
+      throw new NotFoundException(`Trading session ${sessionId} not found`);
+    }
+
+    // Gate: the requested mode must be permitted by the risk profile.
+    const riskProfile = await this.riskService.getOrCreateProfile(userId);
+    this.assertRequestedModeAllowed(
+      TradingService.ALLOWED_MODE_BY_EXECUTION_MODE[newMode],
+      riskProfile.allowedTradingModes,
+    );
+
+    // Gate: FULL_AUTO requires explicit live enablement on the session's
+    // EXACT bound connection (never re-discovered).
+    if (newMode === ExecutionMode.FULL_AUTO) {
+      const [connection] = await this.brokerService.findConnectionsByIds([
+        session.brokerConnectionId,
+      ]);
+      if (!connection?.liveTradingEnabled) {
+        throw new ForbiddenException(
+          'Live trading is not enabled on the session broker connection. ' +
+            'Enable live trading explicitly before requesting FULL_AUTO mode.',
+        );
+      }
+    }
+
+    return this.executionService.changeExecutionMode(userId, sessionId, newMode);
   }
 
   /** Stop the user's active trading session. */
@@ -230,27 +322,175 @@ export class TradingService {
     return session;
   }
 
-  // ─── Internal helpers ──────────────────────────────────────────────────────
+  // ─── Internal helpers ──────────────────────────────────────────────────
 
-  private async resolveConnection(userId: string, requestedId?: string): Promise<BrokerConnection> {
-    if (requestedId) {
-      const conn = await this.brokerService.findConnectionById(requestedId, userId);
-      if (!conn) {
-        throw new ForbiddenException('Broker connection not found or does not belong to you.');
-      }
-      if (conn.status !== BrokerConnectionStatus.CONNECTED) {
+  /**
+   * Round 6 (§6): the coherent, non-invented opening financial state.
+   *
+   * LIVE — the DURABLE accepted snapshot with the NEW-exposure freshness gate
+   * (missing / stale / malformed / unknown currency ⇒ no session, typed
+   * fail-closed with an audit trail). The ENTIRE binding (balance, equity,
+   * currency, snapshot id + generation) comes from that ONE observation —
+   * never blended with a second read.
+   *
+   * PAPER/DEMO — the latest accepted snapshot when one exists (same coherent
+   * binding); otherwise a STRICT broker-account read: absent state,
+   * null/unparseable balance or equity, or an unknown currency starts NO
+   * session (the `?? '0'` / synthesized-USD era is over).
+   */
+  private async acquireOpeningFinancialState(
+    userId: string,
+    connection: BrokerConnection,
+  ): Promise<{
+    balance: string;
+    source: 'ACCEPTED_SNAPSHOT' | 'BROKER_ACCOUNT_READ';
+    binding?: {
+      accountCurrency: string;
+      openingSnapshotId: string;
+      openingSnapshotGeneration: number;
+      initialPeakEquity: string;
+    };
+  }> {
+    if (connection.accountType === BrokerMode.LIVE) {
+      let snapshot: BrokerAccountSnapshot;
+      try {
+        snapshot = await this.brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure(
+          connection.id,
+        );
+      } catch (err) {
+        await this.auditService.log({
+          actorUserId: userId,
+          action: AuditAction.AI_TRADING_DISABLED,
+          severity: AuditSeverity.WARNING,
+          resourceType: 'TradingSession',
+          resourceId: 'not-started',
+          metadata: {
+            brokerConnectionId: connection.id,
+            blockedReason: 'OPENING_SNAPSHOT_UNAVAILABLE',
+            detail: (err as Error).message,
+          },
+        });
         throw new ForbiddenException(
-          `Broker connection is ${conn.status}, not CONNECTED. Connect it before starting a session.`,
+          `LIVE trading requires a fresh accepted account snapshot for connection ` +
+            `${connection.id} — ${(err as Error).message} (fail-closed, no session started).`,
         );
       }
-      return conn;
+      const fields = this.requireSnapshotFinancialFields(snapshot, connection.id);
+      return {
+        balance: fields.balance,
+        source: 'ACCEPTED_SNAPSHOT',
+        binding: {
+          accountCurrency: fields.currency,
+          openingSnapshotId: snapshot.id,
+          openingSnapshotGeneration: snapshot.generation,
+          initialPeakEquity: fields.equity,
+        },
+      };
     }
 
-    const connection = await this.brokerService.findActiveConnectionForUser(userId);
-    if (!connection) {
-      throw new ForbiddenException('No active broker connection found.');
+    // PAPER / DEMO: prefer the accepted versioned snapshot.
+    try {
+      const snapshot = await this.brokerAccountSnapshotService.readLatestAcceptedSnapshot(
+        connection.id,
+      );
+      if (snapshot) {
+        const fields = this.requireSnapshotFinancialFields(snapshot, connection.id);
+        return {
+          balance: fields.balance,
+          source: 'ACCEPTED_SNAPSHOT',
+          binding: {
+            accountCurrency: fields.currency,
+            openingSnapshotId: snapshot.id,
+            openingSnapshotGeneration: snapshot.generation,
+            initialPeakEquity: fields.equity,
+          },
+        };
+      }
+    } catch (err) {
+      throw new ForbiddenException(
+        `Broker account snapshot authority could not be read for connection ` +
+          `${connection.id} — ${(err as Error).message} (fail-closed, no session started).`,
+      );
     }
-    return connection;
+
+    // No accepted snapshot yet: STRICT projection read (never invented).
+    let state: { balance: string | null; equity: string | null; currency?: string | null } | null;
+    try {
+      state = await this.brokerService.getBrokerAccountState(connection.id);
+    } catch (err) {
+      throw new ForbiddenException(
+        `Broker account state read failed for connection ${connection.id} — ` +
+          `${(err as Error).message} (fail-closed, no session started).`,
+      );
+    }
+    const projectionBalance = state?.balance ?? null;
+    const projectionEquity = state?.equity ?? null;
+    const projectionCurrency = state?.currency ?? null;
+    const malformed =
+      !projectionBalance ||
+      !projectionEquity ||
+      !projectionCurrency ||
+      !ExactDecimal.tryParse(projectionBalance) ||
+      !ExactDecimal.tryParse(projectionEquity);
+    if (malformed) {
+      throw new ForbiddenException(
+        `Broker account financial state is unavailable for connection ${connection.id} ` +
+          '(missing/unparseable balance or equity, or unknown currency) — no trading ' +
+          'session may start on invented state (fail-closed).',
+      );
+    }
+    return {
+      balance: projectionBalance,
+      source: 'BROKER_ACCOUNT_READ',
+      // No snapshot provenance on this path — the session's opening-snapshot
+      // binding stays null (never fabricated), and the projection read's
+      // currency/equity are persisted through the audit + session columns.
+      binding: undefined,
+    };
+  }
+
+  /**
+   * §6: one coherent observation — returns the NARROWED non-null parseable
+   * money fields + known currency (throws typed ForbiddenException otherwise).
+   */
+  private requireSnapshotFinancialFields(
+    snapshot: BrokerAccountSnapshot,
+    connectionId: string,
+  ): { balance: string; equity: string; currency: string } {
+    if (
+      !snapshot.balance ||
+      !snapshot.equity ||
+      !snapshot.currency ||
+      !ExactDecimal.tryParse(snapshot.balance) ||
+      !ExactDecimal.tryParse(snapshot.equity)
+    ) {
+      throw new ForbiddenException(
+        `Accepted account snapshot for connection ${connectionId} carries malformed ` +
+          'financial fields — no trading session may start from it (fail-closed).',
+      );
+    }
+    return {
+      balance: snapshot.balance,
+      equity: snapshot.equity,
+      currency: snapshot.currency,
+    };
+  }
+
+  /**
+   * Resolve the EXACT requested broker connection (Round 5, issue #295).
+   *
+   * There is NO fallback to findActiveConnectionForUser — the exact connection
+   * is named by the caller and scoped by userId (ownership). Non-CONNECTED is
+   * rejected before any session state is touched.
+   */
+  private async resolveConnection(userId: string, requestedId: string): Promise<BrokerConnection> {
+    const conn = await this.brokerService.findConnectionById(requestedId, userId);
+    if (conn.status !== BrokerConnectionStatus.CONNECTED) {
+      throw new ForbiddenException(
+        `Broker connection is ${conn.status}, not CONNECTED. Connect it before starting a session.`,
+      );
+    }
+    return conn;
   }
 
   private assertBrokerConnectionHealthy(connection: BrokerConnection): void {

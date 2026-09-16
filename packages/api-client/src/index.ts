@@ -30,12 +30,28 @@ import type {
   UpdateAccountStatusRequest,
   RiskProfile,
   SupportedBroker,
+  BrokerRegistryCatalog,
+  BrokerOAuthChannel,
+  BrokerOAuthStartResult,
+  BrokerOAuthAccountsResult,
+  CompleteBrokerOAuthRequest,
+  ExchangeBrokerOAuthHandoffRequest,
+  LinkBrokerOAuthRequest,
   UpdateMyProfileRequest,
   UpdateRiskProfileRequest,
   ChangePasswordRequest,
   MyProfileView,
   SecurityEventListResponse,
 } from '@irexpro/types';
+import type {
+  ActiveTradingSessionResponse,
+  ChangeTradingSessionModeRequest,
+  ChangeTradingSessionModeResponse,
+  ConfirmExecutionConfirmationResponse,
+  PendingExecutionConfirmationsResponse,
+  StartTradingSessionRequest,
+  StartTradingSessionResponse,
+} from '@irexpro/types/execution';
 
 /**
  * Options for the shared API client.
@@ -163,6 +179,30 @@ export interface ApiClient {
   listSupportedBrokers(): Promise<SupportedBroker[]>;
   /** GET /broker/connections → user's broker connections (no credentials). */
   listBrokerConnections(): Promise<BrokerConnectionView[]>;
+  /** GET /broker/registry → server-authoritative catalog (Directive §AU). */
+  listBrokerRegistry(): Promise<BrokerRegistryCatalog>;
+  /**
+   * POST /broker/connections/oauth/authorize → consent URL + flowId
+   * (external browser). `channel: 'mobile'` claims a server-assigned HTTPS
+   * callback slot so the provider code is exchanged by the SERVER — the app
+   * only ever receives a one-time handoff token (architect finding 4). Web
+   * callers may keep calling startBrokerOAuth(brokerId).
+   */
+  startBrokerOAuth(
+    brokerId: string,
+    options?: { channel?: BrokerOAuthChannel },
+  ): Promise<BrokerOAuthStartResult>;
+  /** POST /broker/connections/oauth/complete → discovered cTID accounts (no tokens). */
+  completeBrokerOAuth(body: CompleteBrokerOAuthRequest): Promise<BrokerOAuthAccountsResult>;
+  /**
+   * POST /broker/connections/oauth/handoff → discovered cTID accounts via the
+   * one-time deep-link handoff token (no provider token material ever).
+   */
+  exchangeBrokerOAuthHandoff(
+    body: ExchangeBrokerOAuthHandoffRequest,
+  ): Promise<BrokerOAuthAccountsResult>;
+  /** POST /broker/connections/oauth/link → link a discovered account (encrypted server-side). */
+  linkBrokerOAuth(body: LinkBrokerOAuthRequest): Promise<BrokerConnectionView>;
   /** POST /broker/connections → create a new broker connection (encrypts credentials). */
   createBrokerConnection(body: CreateBrokerConnectionRequest): Promise<BrokerConnectionView>;
   /** POST /broker/connections/test → test credentials without saving (returns success/error). */
@@ -171,6 +211,42 @@ export interface ApiClient {
   connectBroker(connectionId: string): Promise<BrokerConnectionView>;
   /** POST /broker/connections/:id/disconnect → disconnect. */
   disconnectBroker(connectionId: string): Promise<void>;
+
+  // ── Sprint 56 correction round 5: execution authority (issues #295/#298) ──
+  /**
+   * GET /trading/sessions/active → 200 `{ session }` — the authoritative
+   * execution target (executionMode is durable session state, NEVER inferred
+   * from connection.accountType; `session` is null when none is active).
+   */
+  getActiveTradingSession(): Promise<ActiveTradingSessionResponse>;
+  /** POST /trading/sessions/start → 201 `{ session }` (body binds the exact
+   *  brokerConnectionId + executionMode; server-validated fail-closed). */
+  startTradingSession(body: StartTradingSessionRequest): Promise<StartTradingSessionResponse>;
+  /**
+   * POST /trading/sessions/:id/mode → 200 `{ session }` — audited mode change
+   * that bumps `authorityGeneration` (outstanding SEMI_AUTO confirmations
+   * bound to the old generation are invalidated server-side, never revived).
+   * The returned session is the authoritative new state.
+   */
+  changeTradingSessionMode(
+    sessionId: string,
+    body: ChangeTradingSessionModeRequest,
+  ): Promise<ChangeTradingSessionModeResponse>;
+  /**
+   * GET /execution/confirmations/pending → `{ confirmations }` — the
+   * SEMI_AUTO one-time confirmations queued by the SERVER. The client never
+   * fabricates approval state; it only lists what the server reports.
+   */
+  listPendingExecutionConfirmations(): Promise<PendingExecutionConfirmationsResponse>;
+  /**
+   * POST /execution/confirmations/:id/confirm → 200 `{ status: 'CONSUMED' }` —
+   * the SERVER-consumed authority result (one-time use). Expired, already
+   * consumed, revoked, or mismatched-generation confirmations fail with a
+   * 409-style typed error the caller must surface (never a local success).
+   */
+  confirmExecutionConfirmation(
+    confirmationId: string,
+  ): Promise<ConfirmExecutionConfirmationResponse>;
 
   // Payments
   listProviders(): Promise<PaymentProviderInfo[]>;
@@ -429,6 +505,40 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
     listBrokerConnections: () =>
       request<BrokerConnectionView[]>('/broker/connections'),
 
+    listBrokerRegistry: () =>
+      request<BrokerRegistryCatalog>('/broker/registry'),
+
+    startBrokerOAuth: (brokerId, options) =>
+      request<BrokerOAuthStartResult>('/broker/connections/oauth/authorize', {
+        method: 'POST',
+        // Architect finding 4: the body carries only the broker id and the
+        // optional channel — NO redirect URI. The server embeds its own
+        // HTTPS callback slot in the authorization URL it returns; custom
+        // app schemes are never registered as OAuth callbacks in production.
+        body: JSON.stringify({
+          brokerId,
+          ...(options?.channel ? { channel: options.channel } : {}),
+        }),
+      }),
+
+    completeBrokerOAuth: (body) =>
+      request<BrokerOAuthAccountsResult>('/broker/connections/oauth/complete', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+
+    exchangeBrokerOAuthHandoff: (body) =>
+      request<BrokerOAuthAccountsResult>('/broker/connections/oauth/handoff', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+
+    linkBrokerOAuth: (body) =>
+      request<BrokerConnectionView>('/broker/connections/oauth/link', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+
     createBrokerConnection: (body) =>
       request<BrokerConnectionView>('/broker/connections', {
         method: 'POST',
@@ -450,6 +560,38 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
       request<void>(`/broker/connections/${connectionId}/disconnect`, {
         method: 'POST',
       }),
+
+    // Sprint 56 correction round 5: execution authority (#295/#298)
+    getActiveTradingSession: () =>
+      request<ActiveTradingSessionResponse>('/trading/sessions/active'),
+
+    startTradingSession: (body) =>
+      request<StartTradingSessionResponse>('/trading/sessions/start', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+
+    changeTradingSessionMode: (sessionId, body) =>
+      request<ChangeTradingSessionModeResponse>(
+        `/trading/sessions/${encodeURIComponent(sessionId)}/mode`,
+        {
+          method: 'POST',
+          body: JSON.stringify(body),
+        },
+      ),
+
+    listPendingExecutionConfirmations: () =>
+      request<PendingExecutionConfirmationsResponse>(
+        '/execution/confirmations/pending',
+      ),
+
+    confirmExecutionConfirmation: (confirmationId) =>
+      request<ConfirmExecutionConfirmationResponse>(
+        `/execution/confirmations/${encodeURIComponent(confirmationId)}/confirm`,
+        {
+          method: 'POST',
+        },
+      ),
 
     listProviders: () =>
       request<PaymentProviderInfo[]>('/payments/providers'),

@@ -111,7 +111,11 @@ describe('ExecutionControlService — real PostgreSQL lifecycle (architect A2)',
     await dataSource.query('TRUNCATE TABLE "platform"."execution_controls"');
     const auditService = { log: jest.fn().mockResolvedValue(undefined) } as unknown as AuditService;
     const eventBus = { publish: jest.fn() } as unknown as DomainEventBus;
-    service = new ExecutionControlService(controlRepo, auditService, eventBus);
+    service = new ExecutionControlService(controlRepo, auditService, eventBus, {
+      // Round 6 (#14): the shared control-plane revision seam (mocked — the
+      // revision CAS matrices live in the execution-authority suites).
+      bumpExecutionControlRevision: jest.fn().mockResolvedValue(1),
+    } as never);
   });
 
   const activeRows = async (

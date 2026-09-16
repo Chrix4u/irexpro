@@ -10,7 +10,10 @@ import { CurrentUserId } from '../../common/decorators/current-user.decorator';
 import { AiSignalService } from './ai-signal.service';
 import { SimulateSignalDto } from './dto/simulate-signal.dto';
 import { InternalSignalDto } from './dto/internal-signal.dto';
+// Round 6 live-execution completion (§10): the internal exit-signal intake.
+import { InternalExitSignalDto } from './dto/internal-exit-signal.dto';
 import { StrategyResult } from '../strategy/interfaces/strategy.interface';
+import { AiExitResult } from '../strategy/interfaces/ai-exit-signal.interface';
 import { AiSignalCandidate } from './interfaces/ai-signal-candidate.interface';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -24,7 +27,8 @@ import { v4 as uuidv4 } from 'uuid';
  *    - Requires JWT authentication
  *    - Simulates signals for pipeline testing
  *
- * 2. INTERNAL — POST /ai/internal/signals
+ * 2. INTERNAL — POST /ai/internal/signals (entries)
+ *              POST /ai/internal/exit-signals (§10 exits)
  *    - For Python AI Engine → NestJS integration
  *    - Protected by x-irexpro-internal-api-key header (InternalApiKeyGuard)
  *    - Not accessible with user JWT alone
@@ -155,5 +159,54 @@ export class AiController {
     };
 
     return this.aiSignalService.receiveSignal(candidate);
+  }
+
+  /**
+   * INTERNAL: Receive an EXIT decision from the Python AI Engine (§10).
+   *
+   * Protected by InternalApiKeyGuard — requires x-irexpro-internal-api-key header.
+   * Routes through the SERIALIZED exit pipeline — session gate → signal
+   * identity gate → per-user serialization → closeTrade(AI_CLOSE_SIGNAL).
+   * Exits are risk-reducing: they never enter the NEW-exposure pipeline and
+   * are never blocked by emergency execution controls or the market-safety
+   * gate (de-risking must stay possible during anomalies).
+   *
+   * POST /api/v1/ai/internal/exit-signals
+   */
+  @Post('internal/exit-signals')
+  @Public()
+  @UseGuards(InternalApiKeyGuard)
+  @ApiOperation({
+    summary: '[INTERNAL] Receive an EXIT decision from the Python AI Engine',
+    description:
+      'Service-to-service endpoint for the Python AI Engine. Protected by internal ' +
+      'API key (x-irexpro-internal-api-key). Exits close open positions through the ' +
+      '§10 serialized pipeline — risk-reducing, never blocked by emergency controls.',
+  })
+  @ApiHeader({
+    name: INTERNAL_API_KEY_HEADER,
+    description: 'Internal service API key',
+    required: true,
+  })
+  async receiveInternalExitSignal(@Body() dto: InternalExitSignalDto): Promise<AiExitResult> {
+    this.logger.log(
+      `[INTERNAL] Exit signal received from AI engine: ` +
+        `instrument=${dto.instrument}` +
+        (dto.tradeId ? ` trade=${dto.tradeId}` : ' (flatten instrument)') +
+        ` user=${dto.userId}`,
+    );
+
+    return this.aiSignalService.receiveExitSignal({
+      signalId: dto.signalId ?? uuidv4(),
+      userId: dto.userId,
+      tradingSessionId: dto.tradingSessionId,
+      instrument: dto.instrument,
+      tradeId: dto.tradeId ?? null,
+      confidenceScore: dto.confidenceScore,
+      generatedAt: dto.generatedAt ? new Date(dto.generatedAt) : new Date(),
+      strategyCode: dto.strategyCode ?? null,
+      modelVersion: dto.modelVersion ?? null,
+      rationale: dto.rationale ?? null,
+    });
   }
 }

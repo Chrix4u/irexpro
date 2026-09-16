@@ -4,7 +4,15 @@ describe('UsersService — admin user pagination boundary', () => {
   const userRepo = {
     findAndCount: jest.fn().mockResolvedValue([[], 0]),
   };
-  const service = new UsersService(userRepo as never, {} as never, {} as never);
+  const service = new UsersService(
+    userRepo as never,
+    {} as never,
+    {} as never,
+    // Round 6 (#300): the unified authority seams (mocked — pagination
+    // boundary tests never exercise the bump path).
+    {} as never,
+    {} as never,
+  );
 
   beforeEach(() => {
     jest.clearAllMocks();

@@ -27,6 +27,25 @@ export interface RiskApprovalResult {
   /** Sprint 32 Gate 2: passed to ExecutionService for the final atomic
    * advisory-lock daily-trade-slot reservation. */
   maxDailyTrades: number;
+  /** Round 5 (#301): opaque handle to the durable server-authoritative
+   * RiskGrant issued with this approval. ExecutionService must verify +
+   * atomically consume the grant at the final dispatch boundary — a
+   * caller-constructed approval object is never sufficient. */
+  grantId?: string;
+  /** Round 5 (#295/#298): the exact authority the grant is bound to. */
+  sessionId?: string;
+  sessionGeneration?: number;
+  executionMode?: string;
+  brokerConnectionId?: string;
+  /** Round 6 (#362): immutable per-trade provenance carried from the risk
+   * decision into the durable Trade row — the daily-risk-period key inputs.
+   * Absent (undefined) on paths without provable account provenance (e.g.
+   * PAPER_ONLY projections without a bound snapshot) — ExecutionService
+   * persists null then, and the daily-loss aggregation marks such history
+   * incomplete rather than guessing. */
+  logicalAccountKey?: string;
+  accountCurrency?: string;
+  riskPeriodId?: string;
 }
 
 export interface RiskRejectionResult {
@@ -73,6 +92,17 @@ export interface ProposedTrade {
   volatilityScore?: number;
   /** Market regime classification from AI. */
   regime?: 'TRENDING' | 'RANGING' | 'LOW_LIQUIDITY' | 'HIGH_VOLATILITY';
+  /** Round 5 authority binding (#295/#298): the EXACT execution target.
+   * Supplied by the pipeline from the ACTIVE TradingSession; RiskService
+   * uses session.brokerConnectionId — never findActiveConnectionForUser().
+   * Missing binding for NEW exposure fails closed (typed rejection). */
+  sessionId?: string;
+  sessionGeneration?: number;
+  executionMode?: string;
+  brokerConnectionId?: string;
+  /** Round 5 (#302): producer-assigned signal generation timestamp for
+   * freshness + future-skew enforcement. */
+  generatedAt?: Date;
 }
 
 // ─── Rejection codes ──────────────────────────────────────────────────────────
@@ -105,6 +135,22 @@ export enum RiskRejectionCode {
   LEVERAGE_EXCEEDED = 'LEVERAGE_EXCEEDED',
   INSTRUMENT_NOT_ALLOWED = 'INSTRUMENT_NOT_ALLOWED',
 
+  // Round 5 (#295/#298) — session authority binding
+  AUTHORITY_BINDING_REQUIRED = 'AUTHORITY_BINDING_REQUIRED',
+  SESSION_AUTHORITY_MISMATCH = 'SESSION_AUTHORITY_MISMATCH',
+
+  // Round 5 (#317) — session baselines unavailable (fail-closed, never skipped)
+  SESSION_BASELINE_UNAVAILABLE = 'SESSION_BASELINE_UNAVAILABLE',
+  ACCOUNT_STATE_UNAVAILABLE = 'ACCOUNT_STATE_UNAVAILABLE',
+
+  // Round 5 (#316) — enforced per-trade controls
+  MAX_TRADE_RISK_EXCEEDED = 'MAX_TRADE_RISK_EXCEEDED',
+  RISK_QUOTE_UNAVAILABLE = 'RISK_QUOTE_UNAVAILABLE',
+  CONTRACT_SIZE_UNAVAILABLE = 'CONTRACT_SIZE_UNAVAILABLE',
+
+  // Round 5 (#330) — regime policy
+  UNKNOWN_MARKET_REGIME = 'UNKNOWN_MARKET_REGIME',
+
   // Volatility / regime
   HIGH_VOLATILITY = 'HIGH_VOLATILITY',
   LOW_LIQUIDITY_REGIME = 'LOW_LIQUIDITY_REGIME',
@@ -117,6 +163,14 @@ export enum RiskRejectionCode {
    * Trade is always REJECTED on system error — never approved.
    */
   RISK_ENGINE_ERROR = 'RISK_ENGINE_ERROR',
+
+  /**
+   * Round 5 (#296): a SAFETY-CRITICAL STATE QUERY failed (trade counts, daily
+   * P&L, account state read). Sanitized — never carries the raw driver error.
+   * The affected rule is REJECTED, never substituted with a default value and
+   * continued toward APPROVED.
+   */
+  RISK_ENGINE_QUERY_FAILED = 'RISK_ENGINE_QUERY_FAILED',
 }
 
 // ─── Risk context snapshot ────────────────────────────────────────────────────
@@ -135,4 +189,13 @@ export interface RiskContextSnapshot {
   proposedLotSize: string;
   proposedInstrument: string;
   checkedAt: Date;
+  /** Round 5 (#295/#298/#317): the session authority this evaluation bound to. */
+  sessionId?: string;
+  sessionGeneration?: number;
+  executionMode?: string;
+  brokerConnectionId?: string;
+  /** Round 5 (#317): the session-opening/day baseline used for daily-loss %. */
+  sessionOpeningBalance?: string;
+  /** Round 5 (#317): the monotonic peak equity used for drawdown. */
+  sessionPeakEquity?: string;
 }

@@ -5,13 +5,18 @@ import { BrokerConnection } from '../entities/broker-connection.entity';
 import { BrokerAdapterRegistry } from '../adapters/broker-adapter.registry';
 import { BrokerProviderRegistryService } from '../registry/broker-provider-registry.service';
 import { CredentialEncryptionService } from '../services/credential-encryption.service';
+import { BrokerOAuthTokenLifecycleService } from '../services/broker-oauth-token-lifecycle.service';
 import { AuditService } from '../../audit/audit.service';
 import { DomainEventBus } from '../../events/event-bus.service';
 import {
   BrokerAuthorizationStatus,
   BrokerAuthorizationStateMachine,
 } from './broker-authorization-status';
-import { BrokerConnectionStatus, BrokerMode } from '../interfaces/broker-adapter.interface';
+import {
+  BrokerConnectionStatus,
+  BrokerMode,
+  DecryptedBrokerCredentials,
+} from '../interfaces/broker-adapter.interface';
 
 /**
  * Sprint 50 correction (architect review A4) — atomic authorization
@@ -106,12 +111,17 @@ describe('BrokerService authorization transitions — real PostgreSQL concurrenc
         "broker_name" varchar(100) NOT NULL,
         "display_name" varchar(100) NULL,
         "account_id" varchar(100) NULL,
+        "provider_broker_identity" varchar(100) NULL,
+        "logical_account_key" varchar(255) NULL,
         "account_type" varchar(10) NOT NULL DEFAULT 'DEMO',
         "account_currency" varchar(3) NULL,
         "account_leverage" integer NULL,
         "status" varchar(32) NOT NULL DEFAULT 'DISCONNECTED',
         "authorization_status" varchar(30) NOT NULL DEFAULT 'NOT_CONNECTED',
         "credential_status" varchar(20) NOT NULL DEFAULT 'CREATED',
+        "credential_generation" integer NOT NULL DEFAULT 0,
+        "credential_refresh_lease_expires_at" timestamptz NULL,
+        "credential_refresh_lease_owner" varchar(64) NULL,
         "authorized_at" timestamptz NULL,
         "authorization_revoked_at" timestamptz NULL,
         "encrypted_credentials" text NULL,
@@ -153,6 +163,8 @@ describe('BrokerService authorization transitions — real PostgreSQL concurrenc
     };
     const adapterRegistry = {
       getAdapter: jest.fn().mockReturnValue(adapter),
+      getAdapterForConnection: jest.fn().mockReturnValue(adapter),
+      releaseAdapterForConnection: jest.fn(),
       isSupported: jest.fn().mockReturnValue(true),
     } as unknown as BrokerAdapterRegistry;
     const providerRegistry = {
@@ -166,6 +178,22 @@ describe('BrokerService authorization transitions — real PostgreSQL concurrenc
     } as unknown as CredentialEncryptionService;
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as unknown as AuditService;
     const eventBus = { publish: jest.fn() } as unknown as DomainEventBus;
+    // Sprint 56 correction round 1: OAuth token lifecycle (cTrader family
+    // only — these fixtures are metatrader5, so the gate is a no-op passthrough).
+    const tokenLifecycle = {
+      ensureFreshTokens: jest.fn((_connection: unknown, credentials: DecryptedBrokerCredentials) =>
+        Promise.resolve(credentials),
+      ),
+    } as unknown as BrokerOAuthTokenLifecycleService;
+    const tradingAuthority = {
+      bumpGeneration: jest.fn().mockResolvedValue(2),
+    };
+    const grantInvalidation = {
+      invalidateUserNewExposureAuthority: jest.fn().mockResolvedValue({
+        invalidatedGrants: 0,
+        revokedConfirmations: 0,
+      }),
+    };
     service = new BrokerService(
       connectionRepo,
       // accountRepo is unused by the transition paths under test
@@ -175,6 +203,15 @@ describe('BrokerService authorization transitions — real PostgreSQL concurrenc
       encryption,
       audit,
       eventBus,
+      tokenLifecycle,
+      // Sprint 56 correction round 5 (#332): link outbox — unused by the
+      // authorization-transition paths under test.
+      {} as never,
+      tradingAuthority as never,
+      grantInvalidation as never,
+      // Round 6 live-execution completion (§1a): snapshot authority seam —
+      // unused by the authorization-transition paths under test.
+      {} as never,
     );
   });
 

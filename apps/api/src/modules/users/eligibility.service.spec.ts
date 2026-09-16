@@ -4,6 +4,8 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { AuditService } from '../audit/audit.service';
 import { EligibilityService } from './eligibility.service';
+import { TradingAuthorityService } from '../execution-authority/trading-authority.service';
+import { GrantInvalidationService } from '../execution-authority/grant-invalidation.service';
 import {
   EligibilityDisclosureKey,
   UserDisclosureConsent,
@@ -43,6 +45,13 @@ describe('EligibilityService', () => {
     findOne: jest.fn(),
     find: jest.fn(),
     save: jest.fn(async (value) => value),
+    // Round 6 (#2): reviewKyc commits the KYC fact + authority bump inside
+    // userRepo.manager.transaction — the mock EM delegates back to this repo.
+    manager: {
+      transaction: jest.fn(async (cb: (em: unknown) => Promise<unknown>) =>
+        cb({ getRepository: () => userRepo }),
+      ),
+    },
   };
   const consentRepo = {
     find: jest.fn(),
@@ -54,6 +63,13 @@ describe('EligibilityService', () => {
     findOne: jest.fn(),
     create: jest.fn((value) => value),
     save: jest.fn(),
+    // Round 6 (#2): reviewUser commits the jurisdiction fact + authority bump
+    // inside reviewRepo.manager.transaction — the mock EM delegates back.
+    manager: {
+      transaction: jest.fn(async (cb: (em: unknown) => Promise<unknown>) =>
+        cb({ getRepository: () => reviewRepo }),
+      ),
+    },
   };
   const kycReviewRepo = {
     findOne: jest.fn(),
@@ -157,6 +173,23 @@ describe('EligibilityService', () => {
         { provide: getRepositoryToken(UserKycReview), useValue: kycReviewRepo },
         { provide: ConfigService, useValue: configService },
         { provide: AuditService, useValue: auditService },
+        // Round 6 (#300): the unified execution-authority seams (mocked —
+        // the bump matrices live in the execution-authority suites).
+        {
+          provide: TradingAuthorityService,
+          useValue: {
+            bumpGeneration: jest.fn().mockResolvedValue(2),
+            getCurrentGeneration: jest.fn().mockResolvedValue(1),
+          },
+        },
+        {
+          provide: GrantInvalidationService,
+          useValue: {
+            invalidateUserNewExposureAuthority: jest
+              .fn()
+              .mockResolvedValue({ invalidatedGrants: 0, revokedConfirmations: 0 }),
+          },
+        },
       ],
     }).compile();
 

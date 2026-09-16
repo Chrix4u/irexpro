@@ -279,6 +279,14 @@ function isLiveAccountConnectionView(value: unknown): value is LiveAccountConnec
     isBrokerCredentialStatus(value.credentialStatus) &&
     typeof value.executable === 'boolean' &&
     typeof value.liveTradingEnabled === 'boolean' &&
+    // Sprint 56 round-5 identity fields: optional on the wire (older
+    // payloads), but validated whenever present — never trusted blindly.
+    (value.providerBrokerIdentity === undefined ||
+      value.providerBrokerIdentity === null ||
+      typeof value.providerBrokerIdentity === 'string') &&
+    (value.logicalAccountKey === undefined ||
+      value.logicalAccountKey === null ||
+      typeof value.logicalAccountKey === 'string') &&
     isLiveConnectionHealth(value.health) &&
     isNullableIsoDateString(value.lastSyncAt) &&
     isNullableIsoDateString(value.lastHealthCheckAt) &&

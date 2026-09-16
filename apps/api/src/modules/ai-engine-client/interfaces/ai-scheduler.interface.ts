@@ -1,3 +1,5 @@
+import { ExecutionMode } from '../../execution/interfaces/execution-authority';
+
 export interface AiSchedulerSessionStartPayload {
   userId: string;
   tradingSessionId: string;
@@ -6,7 +8,12 @@ export interface AiSchedulerSessionStartPayload {
   timeframe: string;
   intervalSeconds?: number;
   source: 'broker' | 'mock';
-  mode: 'paper';
+  /**
+   * The session's durable execution mode (Round 5, #298) — NOT a hardcoded
+   * 'paper' literal. The AI engine still only generates paper-mode signals; the
+   * risk + execution gates remain the enforcement boundary.
+   */
+  mode: ExecutionMode;
 }
 
 export interface AiSchedulerSessionStopPayload {

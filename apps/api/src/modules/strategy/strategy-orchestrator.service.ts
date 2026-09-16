@@ -7,16 +7,40 @@ import { DomainEventBus } from '../events/event-bus.service';
 import { DomainEventType } from '../events/enums/domain-event-type.enum';
 import { AuditAction } from '../../common/enums/audit-action.enum';
 import { AuditSeverity } from '../audit/entities/audit-log.entity';
-import { TradingSessionStatus } from '../execution/entities/trading-session.entity';
+import { TradingSession, TradingSessionStatus } from '../execution/entities/trading-session.entity';
+import { Trade, TradeStatus } from '../execution/entities/trade.entity';
 import { ProposedTrade } from '../risk/interfaces/risk.interface';
 import {
+  AiSignalIdentityGateService,
+  SignalIdentityRegistration,
+} from '../execution/orchestration/signal-identity.gate';
+import { TradeIntentService, TradeIntentFacts } from '../execution/services/trade-intent.service';
+import { AllocationService } from '../execution/services/allocation.service';
+import { PositionSizingService } from '../execution/services/position-sizing.service';
+import { TradingAuthorityService } from '../execution-authority/trading-authority.service';
+import { SharedControlRevisionService } from '../execution-authority/shared-control-revision.service';
+import {
   AiSignalCandidate,
+  StrategyDuplicateOfTrade,
   StrategyOutcome,
   StrategyResult,
 } from './interfaces/strategy.interface';
 
 /** Minimum confidence score required for a signal to proceed. */
 const CONFIDENCE_THRESHOLD = 0.6;
+
+/**
+ * Round 6 (#302) — deterministic duplicate recovery: trade statuses whose
+ * original execution is treated as SUCCEEDED when a duplicate re-delivery is
+ * recovered from the existing durable trade (anything that reached or passed
+ * the provider). REJECTED/CANCELLED recover as EXECUTION_FAILED.
+ */
+const DUPLICATE_ALIVE_TRADE_STATUSES: readonly TradeStatus[] = [
+  TradeStatus.PENDING,
+  TradeStatus.OPEN,
+  TradeStatus.CLOSED,
+  TradeStatus.RECONCILIATION_PENDING,
+];
 
 /**
  * StrategyOrchestratorService — Routes AI signal candidates through the
@@ -29,6 +53,14 @@ const CONFIDENCE_THRESHOLD = 0.6;
  *     → confidence threshold
  *     → session active check
  *     → broker connection gate
+ *     → SIGNAL IDENTITY GATE (#302, Round 5 task 50-c — BEFORE risk
+ *       evaluation: persist-or-reuse AiSignalIdentity by (userId, signalId);
+ *       same canonical digest (material fields + the exact generatedAt
+ *       instant, Round 6) → idempotent proceed; different digest → typed
+ *       conflict; stale/future generatedAt → typed rejection)
+ *     → DUPLICATE RECOVERY (#302, Round 6 task 6-d: duplicate=true →
+ *       recoverDuplicateOutcome() — the FIRST delivery's durable outcome is
+ *       the truth; NEVER a fresh risk evaluation or provider dispatch)
  *     → RiskService.validateProposedTrade()  ← MANDATORY
  *     → ExecutionService.executeTrade()       ← only on APPROVED
  * ═══════════════════════════════════════════════════════════════════════
@@ -51,6 +83,19 @@ export class StrategyOrchestratorService {
     private readonly brokerService: BrokerService,
     private readonly auditService: AuditService,
     private readonly eventBus: DomainEventBus,
+    private readonly signalIdentityGate: AiSignalIdentityGateService,
+    // Round 6 live-execution completion (§2): the durable TradeIntent layer —
+    // every NEW AI decision is normalized + persisted at intake, BEFORE risk
+    // evaluation, with the authority generations CURRENT at creation.
+    private readonly tradeIntentService: TradeIntentService,
+    private readonly tradingAuthorityService: TradingAuthorityService,
+    private readonly sharedControlRevisionService: SharedControlRevisionService,
+    // Round 6 live-execution completion (§3/§4): the server-side
+    // authoritative allocation engine + the deterministic fail-closed
+    // position-sizing engine — every NEW decision is sized from PROVEN
+    // inputs and its capital reserved BEFORE risk evaluation.
+    private readonly positionSizingService: PositionSizingService,
+    private readonly allocationService: AllocationService,
   ) {}
 
   /**
@@ -64,6 +109,11 @@ export class StrategyOrchestratorService {
     this.logger.log(
       `Processing signal ${signalId} for user=${userId} instrument=${candidate.instrument}`,
     );
+
+    // Resolved ACTIVE session authority — the ProposedTrade binding is
+    // populated FROM this session (Round 5 #295/#298: never the candidate's
+    // possibly-stale connection reference, never re-discovered downstream).
+    let session: TradingSession | null = null;
 
     // ── Gate 1: Validate signal structure ─────────────────────────────────────
     const structureError = this.validateStructure(candidate);
@@ -93,7 +143,7 @@ export class StrategyOrchestratorService {
 
     // ── Gate 3: Trading session active ────────────────────────────────────────
     try {
-      const session = await this.executionService.getActiveSession(userId);
+      session = await this.executionService.getActiveSession(userId);
       if (!session || session.status !== TradingSessionStatus.ACTIVE) {
         const reason = 'No active trading session';
         this.logger.warn(`Signal ${signalId} rejected: ${reason}`);
@@ -154,18 +204,169 @@ export class StrategyOrchestratorService {
       return { outcome: 'NO_BROKER_CONNECTION', signalId, reason };
     }
 
-    // ── Build ProposedTrade ────────────────────────────────────────────────────
+    // Type-narrowing guard: Gate 3 returned on every failure path, so the
+    // session is non-null here (unreachable in practice — kept explicit so
+    // the compiler enforces the binding completeness below).
+    if (!session) {
+      return { outcome: 'SESSION_INACTIVE', signalId, reason: 'No active trading session' };
+    }
+
+    // ── Gate 4.5: Signal identity (#302, Round 5 task 50-c) ──────────────
+    // Persist-or-reuse the durable identity BEFORE risk evaluation: retries
+    // and redeliveries never produce a second logical evaluation; a same-
+    // signalId/different canonical digest (material fields OR generatedAt) is
+    // a SECURITY EVENT (typed conflict, audited by the gate — never a new
+    // idempotency key); stale/future generatedAt is typed-rejected.
+    let registration: SignalIdentityRegistration;
+    try {
+      registration = await this.signalIdentityGate.registerOrReuse(userId, {
+        signalId,
+        generatedAt: candidate.generatedAt,
+        materialFields: {
+          instrument: candidate.instrument,
+          direction: candidate.direction,
+          requestedLotSize: String(candidate.suggestedVolume),
+          entryPrice: candidate.suggestedEntryPrice,
+          stopLoss: candidate.suggestedStopLoss,
+          takeProfit: candidate.suggestedTakeProfit,
+          strategyCode: candidate.strategyCode,
+          timeframe: candidate.timeframe,
+          modelVersion: candidate.modelVersion,
+        },
+      });
+    } catch (err) {
+      const reason = (err as Error).message ?? 'Signal identity rejected';
+      this.logger.warn(`Signal ${signalId} rejected at the identity gate: ${reason}`);
+      await this.recordIgnored(
+        candidate,
+        'SIGNAL_INVALID',
+        'SIGNAL_IDENTITY_REJECTED',
+        `Signal identity gate rejected the delivery: ${reason}`,
+      );
+      return { outcome: 'SIGNAL_INVALID', signalId, reason };
+    }
+
+    // ── Gate 4.6: Deterministic duplicate recovery (#302, Round 6 6-d) ──
+    // A duplicate delivery NEVER re-enters risk evaluation or dispatch: the
+    // FIRST delivery's durable outcome is the truth for this signalId.
+    if (registration.duplicate) {
+      return this.recoverDuplicateOutcome(candidate, registration);
+    }
+
+    // ── Gate 4.7: Durable TradeIntent recording (Round 6 §2) ────────────
+    // EVERY new AI decision is normalized into a durable TradeIntent BEFORE
+    // risk evaluation: full decision provenance (source decision id +
+    // ORIGINAL generatedAt, user, connection/logical account, strategy/
+    // model/version, instrument, direction, entry type, requested exposure,
+    // protective parameters, expiry, rationale, authority generations at
+    // creation). Idempotent per (userId, signalId) — the unique intent key
+    // means retries/worker restarts/queue redelivery can never mint a second
+    // equivalent intent. Fail-closed: without the durable intent the decision
+    // may NOT proceed to risk evaluation (executeTrade enforces the guard).
+    let tradeIntentId: string;
+    try {
+      tradeIntentId = (await this.recordTradeIntent(candidate, session, registration)).id;
+    } catch (err) {
+      const reason = `Trade intent could not be recorded (fail-closed): ${(err as Error).message}`;
+      this.logger.error(`Signal ${signalId}: intent recording failed`, (err as Error).stack);
+      await this.auditService.log({
+        actorUserId: userId,
+        action: AuditAction.AI_SIGNAL_EXECUTION_FAILED,
+        severity: AuditSeverity.CRITICAL,
+        resourceType: 'AiSignal',
+        resourceId: signalId,
+        metadata: {
+          instrument: candidate.instrument,
+          direction: candidate.direction,
+          failureCode: 'TRADE_INTENT_RECORD_FAILED',
+          message: (err as Error).message,
+        },
+      });
+      return { outcome: 'EXECUTION_FAILED', signalId, reason };
+    }
+
+    // ── Gate 4.8: Position sizing + capital allocation (Round 6 §3/§4) ──
+    // The decision's volume is DERIVED from proven inputs (authoritative
+    // equity, risk budget, stop-loss distance, PROVEN contract size and
+    // instrument constraints — ExactDecimal only; missing input = typed
+    // fail-closed, NEVER a guessed lot size), then the capital is reserved
+    // against the account's explicit allocation budget inside the serialized
+    // critical section (double allocation / strategy conflicts / multi-worker
+    // races are impossible). The AI's suggested volume is provenance only —
+    // the SIZED volume is what flows to the Risk Engine.
+    let sized;
+    try {
+      sized = await this.positionSizingService.sizePosition({
+        userId,
+        brokerConnectionId: session.brokerConnectionId,
+        instrument: candidate.instrument,
+        direction: candidate.direction,
+        entryType: candidate.suggestedEntryPrice != null ? 'LIMIT' : 'MARKET',
+        requestedEntryPrice:
+          candidate.suggestedEntryPrice != null ? String(candidate.suggestedEntryPrice) : null,
+        stopLoss: candidate.suggestedStopLoss != null ? String(candidate.suggestedStopLoss) : null,
+      });
+      await this.allocationService.resolveOrAllocate({
+        intent: {
+          id: tradeIntentId,
+          userId,
+          brokerConnectionId: session.brokerConnectionId,
+          instrument: candidate.instrument,
+          direction: candidate.direction,
+          strategyCode: candidate.strategyCode ?? null,
+        },
+        logicalAccountKey: null, // resolved inside the allocation engine scope
+        sized,
+      });
+    } catch (err) {
+      const code = (err as { code?: string }).code ?? 'SIZING_ALLOCATION_FAILED';
+      const reason = `Position sizing/allocation failed closed [${code}]: ${(err as Error).message}`;
+      this.logger.warn(`Signal ${signalId}: ${reason}`);
+      await this.auditService.log({
+        actorUserId: userId,
+        action: AuditAction.AI_SIGNAL_EXECUTION_FAILED,
+        severity: AuditSeverity.WARNING,
+        resourceType: 'AiSignal',
+        resourceId: signalId,
+        metadata: {
+          instrument: candidate.instrument,
+          direction: candidate.direction,
+          failureCode: code,
+          message: (err as Error).message,
+        },
+      });
+      return { outcome: 'EXECUTION_FAILED', signalId, reason };
+    }
+
+    // ── Build ProposedTrade ────────────────────────────────────────────────────────
+    // (Round 5 #295/#298/#301/#302): the authority binding comes from the
+    // RESOLVED ACTIVE session (Gate 3) — sessionId, sessionGeneration,
+    // executionMode and the session's EXACT brokerConnectionId. The Risk
+    // Engine fails closed with AUTHORITY_BINDING_REQUIRED when these are
+    // missing, and rejects a stale binding (SESSION_AUTHORITY_MISMATCH)
+    // instead of silently rebinding. generatedAt flows from the signal
+    // producer (#302 freshness). marketRegime is normalized to the risk
+    // engine's regime vocabulary — an unrecognized label stays undefined so
+    // the risk layer fails closed when the profile enforces regime rules.
     const proposedTrade: ProposedTrade = {
       signalId: candidate.signalId,
       instrument: candidate.instrument,
       direction: candidate.direction,
-      requestedLotSize: String(candidate.suggestedVolume),
+      // Round 6 §4: the SIZED volume (risk-budget-derived, instrument-
+      // normalized) — never the raw AI suggestion.
+      requestedLotSize: sized.lots,
       entryPrice:
         candidate.suggestedEntryPrice != null ? String(candidate.suggestedEntryPrice) : '0',
       stopLoss: String(candidate.suggestedStopLoss),
       takeProfit: String(candidate.suggestedTakeProfit),
       idempotencyKey: `${candidate.userId}:${candidate.signalId}`,
       volatilityScore: candidate.volatilityScore,
+      regime: normalizeMarketRegime(candidate.marketRegime),
+      sessionId: session.id,
+      sessionGeneration: session.authorityGeneration,
+      executionMode: session.executionMode,
+      brokerConnectionId: session.brokerConnectionId,
+      generatedAt: candidate.generatedAt,
     };
 
     // ── Gate 5: Risk Engine ────────────────────────────────────────────────────
@@ -205,6 +406,27 @@ export class StrategyOrchestratorService {
       this.logger.warn(
         `Signal ${signalId} RISK ${riskDecision.decision}: ${riskDecision.rejectionCode}`,
       );
+      // §2: a risk rejection is DEFINITIVE for this decision — the intent is
+      // terminally REJECTED (a replay of the same AI decision can never
+      // re-enter exposure through the intent guard).
+      await this.tradeIntentService
+        .markRejected(tradeIntentId)
+        .catch((err) =>
+          this.logger.warn(
+            `Signal ${signalId}: intent ${tradeIntentId} could not be marked REJECTED ` +
+              `(${(err as Error).message}) — the duplicate-recovery path still fails closed`,
+          ),
+        );
+      // §3: the capital reservation is released with the decision (definitive
+      // non-exposure — the ledger records why).
+      await this.allocationService
+        .releaseAllocationForIntent(tradeIntentId, `RISK_${riskDecision.decision}`)
+        .catch((err) =>
+          this.logger.warn(
+            `Signal ${signalId}: allocation for intent ${tradeIntentId} could not be ` +
+              `released (${(err as Error).message}) — the aggregate self-heals from intent status`,
+          ),
+        );
       await this.auditService.log({
         actorUserId: userId,
         action: AuditAction.AI_SIGNAL_RISK_REJECTED,
@@ -238,6 +460,39 @@ export class StrategyOrchestratorService {
     });
 
     // ── Gate 6: Execution ──────────────────────────────────────────────────────
+    // SEMI_AUTO (Round 5 task 50-c, #298): the automated pipeline may NEVER
+    // dispatch NEW exposure for a SEMI_AUTO approval — the user's one-time
+    // confirmation (POST /execution/confirmations/:id/confirm) is the only
+    // dispatch path. The approval + its PENDING confirmation are durable;
+    // this outcome is honest: nothing failed, the trade awaits the user.
+    if (riskDecision.executionMode === 'SEMI_AUTO') {
+      this.logger.log(
+        `Signal ${signalId} approved under SEMI_AUTO — awaiting the user one-time ` +
+          'confirmation (no automated dispatch).',
+      );
+      await this.auditService.log({
+        actorUserId: userId,
+        action: AuditAction.AI_SIGNAL_RISK_APPROVED,
+        severity: AuditSeverity.INFO,
+        resourceType: 'AiSignal',
+        resourceId: signalId,
+        metadata: {
+          instrument: candidate.instrument,
+          direction: candidate.direction,
+          executionMode: riskDecision.executionMode,
+          grantId: riskDecision.grantId ?? null,
+          awaiting: 'USER_EXECUTION_CONFIRMATION',
+        },
+      });
+      return {
+        outcome: 'EXECUTION_PENDING_CONFIRMATION',
+        signalId,
+        reason:
+          'Approved under SEMI_AUTO — awaiting the user one-time confirmation ' +
+          '(the automated pipeline never dispatches SEMI_AUTO new exposure).',
+      };
+    }
+
     try {
       const trade = await this.executionService.executeTrade(userId, riskDecision);
       this.logger.log(`Signal ${signalId} executed: tradeId=${trade.id} status=${trade.status}`);
@@ -276,6 +531,209 @@ export class StrategyOrchestratorService {
 
   // ─── Internal helpers ──────────────────────────────────────────────────────
 
+  /**
+   * Round 6 live-execution completion (§2): record (or reuse) the durable
+   * TradeIntent for ONE new AI decision — the normalized, provenance-complete
+   * form of the decision, persisted BEFORE risk evaluation.
+   *
+   * Fail-closed by construction: the authority generations CURRENT at creation
+   * are read from the authoritative services (never defaulted); the ORIGINAL
+   * identity-gate-registered generatedAt is the decision instant (a replay can
+   * never refresh it); the connection's logical-account key is read
+   * best-effort (a transient read failure records NULL — the trade's own
+   * immutable provenance still carries the authoritative key at reservation).
+   *
+   * Returns the durable intent (created or reused — a UNIQUE(user_id,
+   * intent_key) race means a concurrent worker already recorded it; the
+   * winner's row is the truth, never a second intent).
+   */
+  private async recordTradeIntent(
+    candidate: AiSignalCandidate,
+    session: TradingSession,
+    registration: SignalIdentityRegistration,
+  ) {
+    const { userId, signalId } = candidate;
+
+    // Authority/policy generations CURRENT at creation — fail-closed reads
+    // (the services never default; an unreadable store throws, which the
+    // caller treats as a pipeline failure, not a silent 1/0).
+    const [
+      authorityGeneration,
+      tradingPolicyRevision,
+      providerVerificationRevision,
+      executionControlRevision,
+    ] = await Promise.all([
+      this.tradingAuthorityService.getCurrentGeneration(userId),
+      this.sharedControlRevisionService.getCurrentTradingPolicyRevision(),
+      this.sharedControlRevisionService.getCurrentProviderVerificationRevision(),
+      this.sharedControlRevisionService.getCurrentExecutionControlRevision(),
+    ]);
+
+    // Best-effort logical-account key at intake (§2 provenance; the
+    // authoritative key is re-proven at reservation from the grant binding).
+    let logicalAccountKey: string | null = null;
+    try {
+      const connection = await this.brokerService.findConnectionById(
+        session.brokerConnectionId,
+        userId,
+      );
+      logicalAccountKey = connection?.logicalAccountKey ?? null;
+    } catch {
+      logicalAccountKey = null;
+    }
+
+    const facts: TradeIntentFacts = {
+      userId,
+      signalId,
+      signalGeneratedAt: registration.generatedAt,
+      brokerConnectionId: session.brokerConnectionId,
+      logicalAccountKey,
+      tradingSessionId: session.id,
+      strategyCode: candidate.strategyCode ?? null,
+      modelVersion: candidate.modelVersion ?? null,
+      timeframe: candidate.timeframe ?? null,
+      instrument: candidate.instrument,
+      direction: candidate.direction,
+      requestedLotSize: String(candidate.suggestedVolume),
+      requestedEntryPrice:
+        candidate.suggestedEntryPrice != null ? String(candidate.suggestedEntryPrice) : null,
+      stopLoss: candidate.suggestedStopLoss != null ? String(candidate.suggestedStopLoss) : null,
+      takeProfit:
+        candidate.suggestedTakeProfit != null ? String(candidate.suggestedTakeProfit) : null,
+      trailingStopPips: null,
+      rationale: null,
+      metadata: {
+        confidenceScore: candidate.confidenceScore,
+        marketRegime: candidate.marketRegime ?? null,
+        volatilityScore: candidate.volatilityScore ?? null,
+        ...(candidate.metadata ?? {}),
+      },
+      authorityGeneration,
+      tradingPolicyRevision,
+      providerVerificationRevision,
+      executionControlRevision,
+    };
+
+    const registrationOutcome = await this.tradeIntentService.recordOrReuseIntent(facts);
+    if (!registrationOutcome.created) {
+      this.logger.log(
+        `Signal ${signalId}: trade intent reused (recorded by a concurrent worker) — ` +
+          'exactly-once intent identity',
+      );
+    }
+    return registrationOutcome.intent;
+  }
+
+  /**
+   * Round 6 (#302, task 6-d): recover a DUPLICATE signal delivery from the
+   * FIRST delivery's durable outcome — via the EXISTING
+   * executionService.findTradeBySignalId dependency (no fresh risk
+   * evaluation, no new trade, no provider dispatch, ever):
+   *
+   *  - existing trade (ANY status) → typed duplicate outcome carrying the
+   *    existing tradeId + status in StrategyResult.duplicateOfTrade
+   *    (EXECUTION_SUCCEEDED for PENDING/OPEN/CLOSED/RECONCILIATION_PENDING,
+   *    EXECUTION_FAILED for REJECTED/CANCELLED);
+   *  - NO trade → the original evaluation produced no execution: a transport
+   *    retry of a rejected signal stays rejected (RISK_REJECTED +
+   *    duplicateOfTrade{tradeId:null, tradeStatus:'REJECTED_PREVIOUSLY'});
+   *  - lookup failure → fail-closed SIGNAL_INVALID (the duplicate's durable
+   *    outcome could not be verified — never a fresh evaluation).
+   *
+   * The suppressed delivery is audited via the existing
+   * AuditAction.AI_SIGNAL_IGNORED (reasonCodes DUPLICATE_SIGNAL_RECOVERED /
+   * DUPLICATE_PREVIOUSLY_REJECTED / DUPLICATE_STATE_UNVERIFIED) and emits the
+   * AI_SIGNAL_IGNORED domain event, with metadata carrying the existing
+   * trade id/status + the original generatedAt.
+   */
+  private async recoverDuplicateOutcome(
+    candidate: AiSignalCandidate,
+    registration: SignalIdentityRegistration,
+  ): Promise<StrategyResult> {
+    const { signalId, userId } = candidate;
+    const originalGeneratedAt = registration.generatedAt.toISOString();
+
+    let existing: Trade | null;
+    try {
+      existing = await this.executionService.findTradeBySignalId(signalId, userId);
+    } catch (err) {
+      const reason =
+        'Duplicate delivery whose prior trade state could not be verified (fail-closed)';
+      this.logger.error(
+        `Signal ${signalId}: duplicate recovery lookup failed`,
+        (err as Error).message,
+      );
+      await this.recordIgnored(
+        candidate,
+        'SIGNAL_INVALID',
+        'DUPLICATE_STATE_UNVERIFIED',
+        'Duplicate delivery — the prior evaluation outcome could not be verified; fail-closed',
+        { existingTradeId: null, originalGeneratedAt },
+      );
+      return { outcome: 'SIGNAL_INVALID', signalId, reason };
+    }
+
+    if (existing) {
+      const recoveredAs: StrategyOutcome = DUPLICATE_ALIVE_TRADE_STATUSES.includes(existing.status)
+        ? 'EXECUTION_SUCCEEDED'
+        : 'EXECUTION_FAILED';
+      const duplicateOfTrade: StrategyDuplicateOfTrade = {
+        tradeId: existing.id,
+        tradeStatus: existing.status,
+        recoveredAs,
+      };
+      this.logger.log(
+        `Signal ${signalId} duplicate redelivery recovered from the existing ` +
+          `trade ${existing.id} (status ${existing.status}) — no fresh evaluation/dispatch`,
+      );
+      await this.recordIgnored(
+        candidate,
+        recoveredAs,
+        'DUPLICATE_SIGNAL_RECOVERED',
+        `Duplicate redelivery recovered from the existing trade ${existing.id} (${existing.status})`,
+        {
+          existingTradeId: existing.id,
+          existingTradeStatus: existing.status,
+          originalGeneratedAt,
+        },
+      );
+      return {
+        outcome: recoveredAs,
+        signalId,
+        tradeId: existing.id,
+        duplicateOfTrade,
+      };
+    }
+
+    // No trade exists for this signalId: the FIRST evaluation completed
+    // without creating one (risk-rejected, or a producer retry of a signal
+    // that never passed the pipeline). A transport retry of a rejected
+    // signal stays rejected — deterministically.
+    this.logger.log(
+      `Signal ${signalId} duplicate redelivery recovered as REJECTED_PREVIOUSLY ` +
+        '(no trade was created by the original evaluation)',
+    );
+    await this.recordIgnored(
+      candidate,
+      'RISK_REJECTED',
+      'DUPLICATE_PREVIOUSLY_REJECTED',
+      'Duplicate redelivery of a signal whose original evaluation produced no trade — stays rejected',
+      { existingTradeId: null, existingTradeStatus: 'REJECTED_PREVIOUSLY', originalGeneratedAt },
+    );
+    return {
+      outcome: 'RISK_REJECTED',
+      signalId,
+      reason:
+        'Duplicate delivery of a previously rejected signal — the original ' +
+        'evaluation produced no trade, and a retry may never mint a fresh one.',
+      duplicateOfTrade: {
+        tradeId: null,
+        tradeStatus: 'REJECTED_PREVIOUSLY',
+        recoveredAs: 'RISK_REJECTED',
+      },
+    };
+  }
+
   private validateStructure(candidate: AiSignalCandidate): string | null {
     if (!candidate.signalId) return 'Missing signalId';
     if (!candidate.userId) return 'Missing userId';
@@ -296,6 +754,7 @@ export class StrategyOrchestratorService {
     outcome: StrategyOutcome,
     reasonCode: string,
     reasonSummary: string,
+    extraMetadata: Record<string, unknown> = {},
   ): Promise<void> {
     await this.auditService.log({
       actorUserId: candidate.userId,
@@ -311,6 +770,7 @@ export class StrategyOrchestratorService {
         outcome,
         reasonCode,
         reasonSummary,
+        ...extraMetadata,
       },
     });
 
@@ -321,6 +781,31 @@ export class StrategyOrchestratorService {
       confidenceScore: candidate.confidenceScore,
       strategyCode: candidate.strategyCode,
       ignoredReason: reasonSummary,
+      ...extraMetadata,
     });
+  }
+}
+
+/**
+ * Normalize the AI engine's free-form market regime label to the risk
+ * engine's regime vocabulary (#330). Unrecognized labels return undefined —
+ * the Risk Engine then fails closed (UNKNOWN_MARKET_REGIME) when the profile
+ * enforces regime rules, rather than silently treating them as acceptable.
+ */
+function normalizeMarketRegime(marketRegime: string | undefined): ProposedTrade['regime'] {
+  if (!marketRegime || typeof marketRegime !== 'string') return undefined;
+  const normalized = marketRegime.trim().toUpperCase();
+  switch (normalized) {
+    case 'TRENDING':
+      return 'TRENDING';
+    case 'RANGING':
+      return 'RANGING';
+    case 'LOW_LIQUIDITY':
+      return 'LOW_LIQUIDITY';
+    case 'HIGH_VOLATILITY':
+    case 'VOLATILE':
+      return 'HIGH_VOLATILITY';
+    default:
+      return undefined;
   }
 }
