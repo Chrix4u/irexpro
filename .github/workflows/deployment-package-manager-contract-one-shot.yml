@@ -26,19 +26,14 @@ jobs:
           node-version: '22'
           package-manager-cache: false
 
-      - name: Patch deployment package-manager contract
+      - name: Patch non-workflow package-manager contract files
         shell: python
         run: |
           from pathlib import Path
 
-          workflow_path = Path('.github/workflows/deployment-script-safety.yml')
-          workflow = workflow_path.read_text()
-          anchor = "      - 'docs/operations/staging-deployment.md'\n      - '.github/workflows/deployment-script-safety.yml'"
-          replacement = "      - 'docs/operations/staging-deployment.md'\n      - 'package.json'\n      - '.github/workflows/deployment-script-safety.yml'"
-          if workflow.count(anchor) != 2:
-              raise SystemExit(f'expected deployment workflow path anchor twice, found {workflow.count(anchor)}')
-          workflow = workflow.replace(anchor, replacement)
-          workflow_path.write_text(workflow)
+          workflow = Path('.github/workflows/deployment-script-safety.yml').read_text()
+          if workflow.count("      - 'package.json'\n") != 2:
+              raise SystemExit('deployment workflow must already watch package.json on PR and push')
 
           gate_path = Path('scripts/security/required-ci-gate.mjs')
           gate = gate_path.read_text()
@@ -130,15 +125,12 @@ jobs:
       - name: Verify diff
         run: git diff --check
 
-      - name: Commit verified correction and remove helper
+      - name: Commit validated non-workflow correction
         shell: bash
         run: |
           set -Eeuo pipefail
-          rm .github/workflows/deployment-package-manager-contract-one-shot.yml
-          git add .github/workflows/deployment-script-safety.yml \
-                  scripts/security/required-ci-gate.mjs \
-                  scripts/deployment/test-deployment-scripts.sh \
-                  .github/workflows/deployment-package-manager-contract-one-shot.yml
+          git add scripts/security/required-ci-gate.mjs \
+                  scripts/deployment/test-deployment-scripts.sh
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m 'ci: bind deployment safety to root package manager'
