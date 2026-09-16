@@ -2,9 +2,9 @@
 set -Eeuo pipefail
 umask 077
 
-readonly EXPECTED_HTTPS_ORIGIN="https://github.com/christianagbotah/irexpro.git"
-readonly EXPECTED_SSH_ORIGIN="git@github.com:christianagbotah/irexpro.git"
-readonly EXPECTED_SSH_URL_ORIGIN="ssh://git@github.com/christianagbotah/irexpro.git"
+readonly EXPECTED_HTTPS_ORIGIN="https://github.com/Chrix4u/irexpro.git"
+readonly EXPECTED_SSH_ORIGIN="git@github.com:Chrix4u/irexpro.git"
+readonly EXPECTED_SSH_URL_ORIGIN="ssh://git@github.com/Chrix4u/irexpro.git"
 readonly PNPM_VERSION="10.34.5"
 readonly MAX_HEALTH_ATTEMPTS="${MAX_HEALTH_ATTEMPTS:-30}"
 readonly HEALTH_RETRY_SECONDS="${HEALTH_RETRY_SECONDS:-2}"
