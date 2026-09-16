@@ -10,6 +10,10 @@ ROOT_PACKAGE_MANAGER="$(node -e "const p=require(process.argv[1]); process.stdou
 readonly ROOT_PACKAGE_MANAGER
 DEPLOY_PNPM_VERSION="$(sed -n 's/^readonly PNPM_VERSION="\([^"\]*\)"/\1/p' "$SCRIPT_DIR/deploy-staging.sh")"
 readonly DEPLOY_PNPM_VERSION
+REAL_NODE="$(command -v node)"
+readonly REAL_NODE
+DEPLOY_NODE_MAJOR="$(sed -n 's/^readonly RELEASE_NODE_MAJOR="\([^"\]*\)"/\1/p' "$SCRIPT_DIR/deploy-staging.sh")"
+readonly DEPLOY_NODE_MAJOR
 TMP_ROOT="$(mktemp -d)"
 readonly TMP_ROOT
 readonly EXPECTED_HTTPS_ORIGIN="https://github.com/Chrix4u/irexpro.git"
@@ -29,6 +33,9 @@ fail() {
 [[ -n "$ROOT_PACKAGE_MANAGER" ]] || fail 'Root package.json must declare packageManager.'
 [[ -n "$DEPLOY_PNPM_VERSION" ]] || fail 'deploy-staging.sh must declare PNPM_VERSION.'
 [[ "$ROOT_PACKAGE_MANAGER" == "pnpm@${DEPLOY_PNPM_VERSION}" ]] || fail "Deployment pnpm pin (${DEPLOY_PNPM_VERSION}) does not match root packageManager (${ROOT_PACKAGE_MANAGER})."
+[[ -n "$REAL_NODE" ]] || fail 'Node.js must be available to run deployment safety tests.'
+[[ -n "$DEPLOY_NODE_MAJOR" ]] || fail 'deploy-staging.sh must declare RELEASE_NODE_MAJOR.'
+[[ "$("$REAL_NODE" -p "process.versions.node.split('.')[0]")" == "$DEPLOY_NODE_MAJOR" ]] || fail "Deployment Node major (${DEPLOY_NODE_MAJOR}) does not match the CI validation runtime."
 
 expect_failure() {
   local expected="$1"
@@ -85,6 +92,16 @@ make_command_shims() {
   mkdir -p "$FAKE_BIN"
   : > "$COMMAND_LOG"
 
+  cat > "$FAKE_BIN/node" <<'SHIM'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+if [[ -n "${FAKE_NODE_MAJOR:-}" && "${1:-}" == '-p' && "${2:-}" == "process.versions.node.split('.')[0]" ]]; then
+  printf '%s\n' "$FAKE_NODE_MAJOR"
+  exit 0
+fi
+exec "$REAL_NODE" "$@"
+SHIM
+
   cat > "$FAKE_BIN/corepack" <<'SHIM'
 #!/usr/bin/env bash
 set -Eeuo pipefail
@@ -130,7 +147,7 @@ else
 fi
 SHIM
 
-  chmod 700 "$FAKE_BIN/corepack" "$FAKE_BIN/pm2" "$FAKE_BIN/curl"
+  chmod 700 "$FAKE_BIN/node" "$FAKE_BIN/corepack" "$FAKE_BIN/pm2" "$FAKE_BIN/curl"
 }
 
 run_deploy() {
@@ -138,6 +155,7 @@ run_deploy() {
   shift
   env \
     PATH="$FAKE_BIN:$PATH" \
+    REAL_NODE="$REAL_NODE" \
     COMMAND_LOG="$COMMAND_LOG" \
     STAGING_ROOT="$FIXTURE_REPO" \
     API_PM2_NAME='irexpro-api-staging' \
@@ -164,6 +182,7 @@ run_rollback() {
   local rollback_sha="$2"
   env \
     PATH="$FAKE_BIN:$PATH" \
+    REAL_NODE="$REAL_NODE" \
     COMMAND_LOG="$COMMAND_LOG" \
     STAGING_ROOT="$FIXTURE_REPO" \
     API_PM2_NAME='irexpro-api-staging' \
@@ -215,6 +234,11 @@ git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
 git -C "$FIXTURE_REPO" remote set-url origin 'https://github.com/christianagbotah/irexpro.git'
 expect_failure 'Unexpected origin repository' run_deploy "$FIXTURE_CANDIDATE_SHA"
 [[ ! -s "$COMMAND_LOG" ]] || fail 'Stale-owner origin rejection must happen before install/build/restart commands.'
+
+make_fixture 'node-major-mismatch'
+git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
+expect_failure 'Node.js major version does not match the verified release baseline' run_deploy "$FIXTURE_CANDIDATE_SHA" FAKE_NODE_MAJOR=20
+[[ ! -s "$COMMAND_LOG" ]] || fail 'Node-major rejection must happen before install/build/restart commands.'
 
 make_fixture 'build-failure'
 git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
