@@ -115,7 +115,11 @@ jobs:
             exit 3
           }
 
-          bash scripts/deployment/deploy-staging.sh "$candidate_sha"
+          bootstrap_script="$(mktemp)"
+          trap 'rm -f "$bootstrap_script"' EXIT
+          git show "${candidate_sha}:scripts/deployment/deploy-staging.sh" > "$bootstrap_script"
+          chmod 700 "$bootstrap_script"
+          bash "$bootstrap_script" "$candidate_sha"
           REMOTE
 
       - name: Remove ephemeral SSH material
