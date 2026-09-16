@@ -55,7 +55,7 @@ jobs:
           spec_path.write_text(spec.replace(anchor, replacement, 1))
 
       - name: Format changed files
-        run: pnpm --filter @irexpro/api exec prettier --write apps/api/src/modules/broker/broker.service.ts apps/api/src/modules/broker/authorization/broker-authorization-lifecycle.spec.ts
+        run: pnpm --filter @irexpro/api exec prettier --write src/modules/broker/broker.service.ts src/modules/broker/authorization/broker-authorization-lifecycle.spec.ts
 
       - name: Run focused lifecycle suite
         run: pnpm --filter @irexpro/api exec jest src/modules/broker/authorization/broker-authorization-lifecycle.spec.ts --runInBand --forceExit
