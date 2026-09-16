@@ -941,6 +941,45 @@ describe('RiskGrant issuance + exact-decimal boundaries (Round 5, 50-b)', () => 
       const consumedRow = await confirmationRepo.findOne({ where: { signalId: 'sig-c2' } });
       expect(consumedRow!.status).toBe(ExecutionConfirmationStatus.CONSUMED);
     });
+
+    // ─── Round 7 (P1): the confirmation-expiry sweeper seam ──────────────
+
+    it('expireStalePendingConfirmations expires ONLY window-passed PENDING rows (Round 7 expiry hygiene)', async () => {
+      const seed = (
+        signalId: string,
+        expiresInMs: number,
+        status = ExecutionConfirmationStatus.PENDING,
+      ) =>
+        confirmationRepo.create({
+          userId: USER,
+          sessionId: 'session-1',
+          sessionGeneration: 1,
+          signalId,
+          brokerConnectionId: CONN,
+          orderPayloadDigest: 'b'.repeat(64),
+          instrument: 'EURUSD',
+          direction: 'BUY',
+          quantity: '0.05',
+          expiresAt: new Date(Date.now() + expiresInMs),
+          status,
+        });
+      await confirmationRepo.save([
+        seed('sig-stale-pending', -1_000), // window passed, PENDING -> expires
+        seed('sig-live-pending', 120_000), // window open, PENDING -> stays
+        seed('sig-stale-consumed', -1_000, ExecutionConfirmationStatus.CONSUMED), // terminal -> stays
+      ]);
+
+      const expired = await riskGrantService.expireStalePendingConfirmations();
+      expect(expired).toBe(1);
+      const stale = await confirmationRepo.findOne({ where: { signalId: 'sig-stale-pending' } });
+      expect(stale!.status).toBe(ExecutionConfirmationStatus.EXPIRED);
+      const live = await confirmationRepo.findOne({ where: { signalId: 'sig-live-pending' } });
+      expect(live!.status).toBe(ExecutionConfirmationStatus.PENDING);
+      const consumed = await confirmationRepo.findOne({
+        where: { signalId: 'sig-stale-consumed' },
+      });
+      expect(consumed!.status).toBe(ExecutionConfirmationStatus.CONSUMED);
+    });
   });
 
   // ─── EXACT-decimal boundaries through the REAL pipeline ──────────────────

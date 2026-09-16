@@ -473,6 +473,33 @@ export class RiskGrantService {
     return result.affected ?? 0;
   }
 
+  /**
+   * Round 7 (P1 — expiry hygiene sweeper): batch-expire every PENDING
+   * confirmation whose confirmation window has passed, returning the count.
+   * The boundary already refuses expired confirmations (CAS expires_at >
+   * now), so this is honest-state hygiene: without it an abandoned proposal
+   * stays listed as PENDING forever. Guarded CAS on status = PENDING only —
+   * a concurrently consumed confirmation is never rewritten.
+   */
+  async expireStalePendingConfirmations(now: Date = new Date()): Promise<number> {
+    const pending = await this.confirmationRepo.find({
+      where: { status: ExecutionConfirmationStatus.PENDING },
+    });
+    const stale = pending.filter((c) => c.expiresAt.getTime() <= now.getTime());
+    for (const c of stale) {
+      await this.confirmationRepo
+        .createQueryBuilder()
+        .update()
+        .set({ status: ExecutionConfirmationStatus.EXPIRED })
+        .where('id = :id AND status = :pending', {
+          id: c.id,
+          pending: ExecutionConfirmationStatus.PENDING,
+        })
+        .execute();
+    }
+    return stale.length;
+  }
+
   // ─── Internal helpers ─────────────────────────────────────────────────────
 
   /** Round 6 (#364): ACTIVE grant lookup is TENANT-SCOPED (user + signal). */

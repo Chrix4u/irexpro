@@ -48,6 +48,7 @@ import { SharedControlRevisionService } from '../execution-authority/shared-cont
 import { GrantInvalidationService } from '../execution-authority/grant-invalidation.service';
 import { DailyRiskPeriodService } from '../execution/services/daily-risk-period.service';
 import { BrokerAccountSnapshotService } from '../broker/services/broker-account-snapshot.service';
+import { SnapshotNotFreshError } from '../broker/services/broker-account-snapshot.service';
 
 /** Default pip size for standard 5-digit pairs (EURUSD, GBPUSD, etc.) */
 const DEFAULT_PIP_SIZE = '0.0001';
@@ -475,9 +476,32 @@ export class RiskService {
     let liveLossComplete = false;
     if (connection.accountType === BrokerMode.LIVE) {
       try {
-        const snapshot = await this.brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure(
-          connection.id,
-        );
+        let snapshot;
+        try {
+          snapshot = await this.brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure(
+            connection.id,
+          );
+        } catch (snapErr) {
+          // Round 7 (P1 — LIVE snapshot availability): the 30s freshness
+          // window is tighter than the 60s health-check writer cadence. On
+          // STALE/MISSING, make ONE bounded synchronous provider observation
+          // (the same §1a write path) and re-resolve — LIVE availability
+          // becomes structural instead of cadence-luck. Any refresh failure
+          // propagates the ORIGINAL typed staleness error (fail-closed — a
+          // failed refresh never authorizes a stale snapshot).
+          if (
+            snapErr instanceof SnapshotNotFreshError &&
+            (snapErr.failure.code === 'SNAPSHOT_STALE' ||
+              snapErr.failure.code === 'SNAPSHOT_MISSING')
+          ) {
+            await this.brokerService.observeAccountSnapshotNow(userId, connection.id);
+            snapshot = await this.brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure(
+              connection.id,
+            );
+          } else {
+            throw snapErr;
+          }
+        }
         const logicalAccountKey = connection.logicalAccountKey ?? null;
         if (!logicalAccountKey) {
           throw new Error(
@@ -1842,13 +1866,17 @@ export class RiskService {
     // flatten failure NEVER rolls it back; per-trade outcomes are audited
     // honestly and reconciliation converges unknowns. Deactivation NEVER
     // re-opens positions (only new decisions can, after re-validation).
+    // Round 7 (P1 — durable flatten): the flatten is enqueued as a DURABLE
+    // BullMQ job (crash-surviving, retrying) before the in-process fast
+    // path runs — a process death between the authority write above and the
+    // flatten can no longer lose the emergency de-risking.
     if (active) {
       await this.executionService
-        .emergencyCloseAllOpenPositions(userId)
+        .requestDurableEmergencyFlatten(userId, 'KILL_SWITCH_ACTIVATE')
         .catch((err) =>
           this.logger.error(
             `Kill-switch emergency flatten failed for user ${userId} (authority stands; ` +
-              `reconciliation will converge): ${(err as Error).message}`,
+              `the durable job retries; reconciliation will converge): ${(err as Error).message}`,
           ),
         );
     }

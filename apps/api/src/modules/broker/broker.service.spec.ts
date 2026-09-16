@@ -1101,6 +1101,59 @@ describe('BrokerService', () => {
     });
   });
 
+  // ─── Round 7 (P1): on-demand LIVE snapshot observation ──────────────────
+
+  describe('observeAccountSnapshotNow() — Round 7 P1 LIVE snapshot availability', () => {
+    it('observes the provider balance and records it as an authoritative snapshot', async () => {
+      const adapter = {
+        setMode: jest.fn(),
+        connect: jest.fn(),
+        getAccountBalance: jest.fn().mockResolvedValue({
+          balance: '10100.00',
+          equity: '10125.00',
+          currency: 'USD',
+          timestamp: new Date(),
+        }),
+      };
+      registry.getAdapter.mockReturnValue(adapter);
+      connectionRepo.findOne.mockResolvedValue(connectedConnection());
+
+      await service.observeAccountSnapshotNow('user-1', 'conn-1');
+
+      expect(adapter.getAccountBalance).toHaveBeenCalledTimes(1);
+      // The observation flows through the SAME §1a accept path the health
+      // check uses (acceptSnapshot + legacy projection).
+      expect(snapshotService.acceptSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({
+          connectionId: 'conn-1',
+          balance: '10100.00',
+          equity: '10125.00',
+          currency: 'USD',
+          source: 'on-demand-risk-evaluation',
+        }),
+      );
+    });
+
+    it('fails closed when the connection is not CONNECTED (never an observation of a dead transport)', async () => {
+      connectionRepo.findOne.mockResolvedValue(
+        connectedConnection({ status: BrokerConnectionStatus.SUSPENDED }),
+      );
+      await expect(service.observeAccountSnapshotNow('user-1', 'conn-1')).rejects.toThrow(
+        'not CONNECTED',
+      );
+    });
+
+    it('fails closed on unusable credentials (A3 — the provider is never contacted)', async () => {
+      connectionRepo.findOne.mockResolvedValue(
+        connectedConnection({ credentialStatus: 'REVOKED' }),
+      );
+      const adapter = { setMode: jest.fn(), getAccountBalance: jest.fn() };
+      registry.getAdapter.mockReturnValue(adapter);
+      await expect(service.observeAccountSnapshotNow('user-1', 'conn-1')).rejects.toThrow();
+      expect(adapter.getAccountBalance).not.toHaveBeenCalled();
+    });
+  });
+
   // ─── Round 6 live-execution completion (§1a): snapshot-authority routing ──
 
   describe('getBrokerAccountState() — authoritative snapshot routing', () => {

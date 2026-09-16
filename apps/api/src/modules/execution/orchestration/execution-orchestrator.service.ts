@@ -30,7 +30,7 @@ import {
   assertOrderWithinCapabilities,
   OrderCapabilityError,
 } from '../../broker/interfaces/order-capability';
-import { FinalDispatchBoundary } from './final-dispatch-boundary';
+import { FinalDispatchBoundary, FinalDispatchBlockedException } from './final-dispatch-boundary';
 import { mapProviderOrderResponse } from './provider-response.mapper';
 import { classifyIntentOperation, isExposureIncreasingOperation } from './provider-operation-class';
 import { ProviderOperationClass } from '../interfaces/execution-authority';
@@ -183,10 +183,22 @@ export class ExecutionOrchestrator {
     }
 
     // ── Gate B: LIVE authorization state machine (fail-closed, checked
-    // against the PERSISTED state — not the caller's snapshot) ─────────────
+    // against the PERSISTED state — not the caller's snapshot).
+    // Round 7 (§10 — OPERATION-AWARE): the authorization-state requirement
+    // binds EXPOSURE-INCREASING operations only. Risk-REDUCING dispatches
+    // (CLOSE_POSITION / CANCEL_PENDING / RISK_REDUCING_MODIFY /
+    // REDUCE_EXPOSURE / RECONCILE_READ) deliberately bypass this gate:
+    // de-risking must remain possible exactly when the connection's
+    // authorization has degraded (health suspension, admin suspension) —
+    // previously a suspended connection could not even be flattened. The
+    // credential gate (Gate C) still applies to every operation (the
+    // provider requires valid credentials for ANY call); a genuinely
+    // inaccessible provider/account surfaces as an honest typed dispatch
+    // failure + reconciliation — never a silently skipped de-risking. ─────
     if (
       connection.accountType === BrokerMode.LIVE &&
-      !this.brokerService.isConnectionExecutable(connection)
+      !this.brokerService.isConnectionExecutable(connection) &&
+      isExposureIncreasingOperation(operationClass)
     ) {
       this.logger.warn(
         `Dispatch blocked: LIVE connection ${ctx.connection.id} is not executable ` +
@@ -443,13 +455,56 @@ export class ExecutionOrchestrator {
     // in-flight (resolved through ProviderDispatchCertainty + reconciliation,
     // never replayed).
     if (commitment?.grantId) {
-      await this.finalDispatchBoundary.commitProviderDispatch({
-        userId: intent.userId,
-        grantId: commitment.grantId,
-        confirmationId: commitment.confirmationId ?? null,
-        orderId: order.id,
-        origin: commitment.origin ?? 'PIPELINE',
-      });
+      try {
+        await this.finalDispatchBoundary.commitProviderDispatch({
+          userId: intent.userId,
+          grantId: commitment.grantId,
+          confirmationId: commitment.confirmationId ?? null,
+          orderId: order.id,
+          origin: commitment.origin ?? 'PIPELINE',
+        });
+      } catch (err) {
+        // Round 7 (P1 — commitment-block outcome separation): a
+        // FinalDispatchBlockedException PROVES zero provider calls (the
+        // boundary threw BEFORE dispatchToProvider with nothing consumed).
+        // The reserved order must converge to a TERMINAL REJECTED state —
+        // never be left SUBMITTED to be mistaken for an uncertain dispatch.
+        // The typed exception still propagates so executeTrade can apply the
+        // DEFINITELY_NOT_SENT trade outcome (CAS-protected, newer truth
+        // preserved). Non-boundary errors propagate untouched.
+        if (err instanceof FinalDispatchBlockedException) {
+          const reason = `DISPATCH_BOUNDARY_${err.code}: ${err.message}`;
+          await this.orderService
+            .rejectOrder(order.id, reason)
+            .catch((rejectErr) =>
+              this.logger.error(
+                `Order ${order.id} could not be marked REJECTED after the dispatch ` +
+                  `boundary block [${err.code}] (${(rejectErr as Error).message}) — ` +
+                  'reconciliation will converge it',
+              ),
+            );
+          await this.emitOrderEvent(DomainEventType.ORDER_REJECTED, intent, order, {
+            status: OrderStatus.REJECTED,
+            reason: `${reason} [${err.code}]`,
+          });
+          await this.auditService.log({
+            actorUserId: intent.userId,
+            action: AuditAction.ORDER_REJECTED,
+            resourceType: 'Order',
+            resourceId: order.id,
+            metadata: {
+              clientOrderId: intent.clientOrderId,
+              reason,
+              blockedReason: err.code,
+              orderStatus: OrderStatus.REJECTED,
+              dispatchCertainty: ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+              gate: 'FINAL_DISPATCH_BOUNDARY',
+            },
+            severity: AuditSeverity.WARNING,
+          });
+        }
+        throw err;
+      }
     }
 
     // ── Provider dispatch (retry/timeout-wrapped) ─────────────────────────

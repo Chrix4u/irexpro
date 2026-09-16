@@ -3,6 +3,7 @@ import { ConflictException, ForbiddenException, Logger } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { ExecutionService } from './execution.service';
+import { EmergencyFlattenProducer } from './jobs/emergency-flatten.producer';
 import { ExecutionOrchestrator } from './orchestration/execution-orchestrator.service';
 import { FinalDispatchBoundary } from './orchestration/final-dispatch-boundary';
 import { TradeLifecycleCasService } from './orders/trade-lifecycle-cas.service';
@@ -20,6 +21,7 @@ import {
 } from './execution-session.resolution';
 import { TradeIntentService } from './services/trade-intent.service';
 import { MarketSafetyError } from './orchestration/market-safety-gate.service';
+import { FinalDispatchBlockedException } from './orchestration/final-dispatch-boundary';
 import { ProviderDispatchCertainty } from '../broker/interfaces/provider-dispatch-certainty';
 import { Order } from './orders/order.entity';
 import { BrokerService } from '../broker/broker.service';
@@ -344,6 +346,8 @@ describe('ExecutionService', () => {
     module = await Test.createTestingModule({
       providers: [
         ExecutionService,
+        // Round 7 (P1): the durable-flatten producer seam.
+        { provide: EmergencyFlattenProducer, useValue: { enqueueDurableFlatten: jest.fn() } },
         { provide: getRepositoryToken(Trade), useValue: tradeRepo },
         { provide: getRepositoryToken(TradingSession), useValue: sessionRepo },
         { provide: getRepositoryToken(RiskGrant), useValue: authorityRepoStubs },
@@ -485,6 +489,59 @@ describe('ExecutionService', () => {
         }),
       );
     });
+
+    // ─── Round 7 (P1): commitment-block outcome separation ────────────────
+
+    it('a FINAL-DISPATCH-BOUNDARY block rejects the trade DEFINITELY_NOT_SENT — never RECONCILIATION_PENDING for a provably-unsent dispatch', async () => {
+      orchestrator.dispatchOrder.mockRejectedValueOnce(
+        new FinalDispatchBlockedException(
+          'EXECUTION_CONTROL_REVISION_MISMATCH',
+          'The control plane advanced between approval and dispatch',
+        ),
+      );
+      const trade = await service.executeTrade('user-1', approvedDecision);
+
+      expect(trade.status).toBe(TradeStatus.REJECTED);
+      expect(tradeRepo.update).toHaveBeenCalledWith(
+        'trade-1',
+        expect.objectContaining({
+          status: TradeStatus.REJECTED,
+          // The boundary PROVES zero provider calls — the certainty is
+          // DEFINITELY_NOT_SENT, not MAY_HAVE_REACHED_PROVIDER.
+          dispatchCertainty: ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+          brokerRejectionReason: expect.stringContaining(
+            'DISPATCH_BOUNDARY_EXECUTION_CONTROL_REVISION_MISMATCH',
+          ),
+        }),
+      );
+      // The intent is terminally rejected (replay can never re-enter).
+      expect(tradeIntentService.markRejected).toHaveBeenCalledWith('intent-1');
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            blockedReason: 'EXECUTION_CONTROL_REVISION_MISMATCH',
+            gate: 'FINAL_DISPATCH_BOUNDARY',
+            dispatchCertainty: ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+          }),
+        }),
+      );
+    });
+
+    it('a NON-boundary orchestration error still converges RECONCILIATION_PENDING + MAY_HAVE (uncertainty preserved)', async () => {
+      orchestrator.dispatchOrder.mockRejectedValueOnce(
+        new Error('order store unavailable before reservation'),
+      );
+      const trade = await service.executeTrade('user-1', approvedDecision);
+
+      expect(trade.status).toBe(TradeStatus.RECONCILIATION_PENDING);
+      expect(tradeRepo.update).toHaveBeenCalledWith(
+        'trade-1',
+        expect.objectContaining({
+          status: TradeStatus.RECONCILIATION_PENDING,
+          dispatchCertainty: ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER,
+        }),
+      );
+    });
   });
 
   // ─── Idempotency ──────────────────────────────────────────────────────────
@@ -563,6 +620,63 @@ describe('ExecutionService', () => {
           origin: 'PIPELINE',
         }),
       );
+    });
+
+    it('MARKET reference propagation: a grant-bound geometry quote becomes the final deviation reference (Round 7 P1)', async () => {
+      // The grant carries the risk-validated M1 quote; the validated order
+      // carries the MARKET '0' sentinel.
+      authorityRepoStubs.findOne.mockImplementation(async () => ({
+        id: 'grant-1',
+        userId: 'user-1',
+        signalId: 'sig-001',
+        sessionId: 'session-1',
+        sessionGeneration: 1,
+        executionMode: ExecutionMode.PAPER_ONLY,
+        brokerConnectionId: 'conn-1',
+        status: RiskGrantStatus.ACTIVE,
+        issuedAt: new Date(),
+        expiresAt: new Date(Date.now() + 60_000),
+        quoteRef: {
+          instrument: 'EURUSD',
+          timeframe: 'M1',
+          price: '1.08500',
+          observedAt: new Date().toISOString(),
+          source: 'risk-order-geometry',
+        },
+      }));
+      const marketDecision: RiskDecision = {
+        ...approvedDecision,
+        validatedOrder: { ...approvedDecision.validatedOrder, entryPrice: '0' },
+      };
+
+      await service.executeTrade('user-1', marketDecision);
+
+      const intent = orchestrator.dispatchOrder.mock.calls[0][0] as {
+        referencePrice: string;
+      };
+      // The risk-validated geometry quote — NOT the inert '0' sentinel.
+      expect(intent.referencePrice).toBe('1.08500');
+    });
+
+    it('MARKET reference propagation: no provable grant quote keeps the sentinel (never a fabricated reference)', async () => {
+      const marketDecision: RiskDecision = {
+        ...approvedDecision,
+        validatedOrder: { ...approvedDecision.validatedOrder, entryPrice: '0' },
+      };
+      await service.executeTrade('user-1', marketDecision);
+
+      const intent = orchestrator.dispatchOrder.mock.calls[0][0] as {
+        referencePrice: string;
+      };
+      expect(intent.referencePrice).toBe('0');
+    });
+
+    it('LIMIT entries keep their validated limit price as the reference', async () => {
+      await service.executeTrade('user-1', approvedDecision);
+      const intent = orchestrator.dispatchOrder.mock.calls[0][0] as {
+        referencePrice: string;
+      };
+      expect(intent.referencePrice).toBe('1.08500');
     });
 
     it('updates trade to OPEN with externalOrderId on FILLED dispatch', async () => {
@@ -668,6 +782,44 @@ describe('ExecutionService', () => {
   });
 
   // ─── Round 6 §17: the kill-switch emergency flatten ─────────────────────
+
+  describe('requestDurableEmergencyFlatten() — Round 7 P1 durable kill-switch flatten', () => {
+    let flattenProducer: { enqueueDurableFlatten: jest.Mock };
+
+    beforeEach(() => {
+      flattenProducer = module.get(EmergencyFlattenProducer);
+    });
+
+    it('enqueues the DURABLE job and runs the in-process fast path (both idempotent together)', async () => {
+      flattenProducer.enqueueDurableFlatten.mockResolvedValue(undefined);
+      await service.requestDurableEmergencyFlatten('user-1', 'KILL_SWITCH_ACTIVATE');
+
+      expect(flattenProducer.enqueueDurableFlatten).toHaveBeenCalledWith(
+        'user-1',
+        'KILL_SWITCH_ACTIVATE',
+      );
+      expect(tradeRepo.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ userId: 'user-1', status: TradeStatus.OPEN }),
+        }),
+      );
+    });
+
+    it('a Redis/enqueue failure NEVER blocks the in-process flatten (crash fallbacks stand)', async () => {
+      flattenProducer.enqueueDurableFlatten.mockRejectedValueOnce(new Error('redis unavailable'));
+      await service.requestDurableEmergencyFlatten('user-1', 'KILL_SWITCH_ACTIVATE');
+      // The in-process path still ran (trade lookup for OPEN positions).
+      expect(tradeRepo.find).toHaveBeenCalled();
+    });
+
+    it('an in-process flatten failure never throws (the durable job retries)', async () => {
+      flattenProducer.enqueueDurableFlatten.mockResolvedValue(undefined);
+      tradeRepo.find.mockRejectedValueOnce(new Error('store unavailable'));
+      await expect(
+        service.requestDurableEmergencyFlatten('user-1', 'KILL_SWITCH_ACTIVATE'),
+      ).resolves.toBeUndefined();
+    });
+  });
 
   describe('emergencyCloseAllOpenPositions() — §17 fourth stop level', () => {
     it('returns [] when the user has no OPEN positions (nothing to flatten)', async () => {

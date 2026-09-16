@@ -1,6 +1,7 @@
 import { ForbiddenException } from '@nestjs/common';
 import { DataSource, Repository } from 'typeorm';
 import { ExecutionService } from './execution.service';
+import type { EmergencyFlattenProducer } from './jobs/emergency-flatten.producer';
 import { Trade } from './entities/trade.entity';
 import { TradingSession } from './entities/trading-session.entity';
 import { RiskGrant } from './entities/risk-grant.entity';
@@ -569,6 +570,8 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
       orchestrator,
       auditService,
       dataSource,
+      // Round 7 (P1): the durable-flatten producer is a stub seam here.
+      {} as EmergencyFlattenProducer,
       eventBus,
       riskGrantRepo,
       confirmationRepo,

@@ -2040,6 +2040,62 @@ export class BrokerService {
   // ─── Snapshot authority recording (§1a) ────────────────────────────────
 
   /**
+   * Round 7 (P1 — LIVE snapshot availability): ONE bounded synchronous
+   * provider observation, persisted as the next authoritative account
+   * snapshot (the same §1a write path the health check uses).
+   *
+   * WHY: the LIVE NEW-exposure freshness window (30s) is tighter than the
+   * health-check writer cadence (60s) — without an on-demand observation a
+   * LIVE evaluation whose latest accepted snapshot is moments past the
+   * window would fail closed SNAPSHOT_STALE even though the account is
+   * perfectly reachable. The risk engine calls this (at most once per
+   * evaluation) when the fresh-snapshot resolution reports staleness, then
+   * re-resolves.
+   *
+   * Fail-closed semantics: ANY failure here propagates — the caller keeps
+   * the ORIGINAL typed staleness error (a failed refresh must never
+   * authorize a stale snapshot). No health-state transitions occur (this is
+   * an observation, not a health check).
+   */
+  async observeAccountSnapshotNow(userId: string, connectionId: string): Promise<void> {
+    const connection = await this.findConnectionById(connectionId, userId);
+    if (!connection || connection.status !== BrokerConnectionStatus.CONNECTED) {
+      throw new Error(`connection ${connectionId} is not CONNECTED — cannot observe`);
+    }
+    if (!connection.encryptedCredentials || !connection.credentialIv || !connection.credentialTag) {
+      throw new Error(`connection ${connectionId} has no stored credentials — cannot observe`);
+    }
+    // A3: unusable credential states never reach the provider.
+    this.assertCredentialsUsable(connection, 'observeAccountSnapshotNow');
+
+    const adapter = this.adapterRegistry.getAdapterForConnection(
+      connection.id,
+      connection.brokerId,
+    );
+    const credentials = this.encryptionService.decrypt({
+      ciphertext: connection.encryptedCredentials,
+      iv: connection.credentialIv,
+      tag: connection.credentialTag,
+      keyId: connection.encryptionKeyId ?? 'env-key-v1',
+    });
+    adapter.setMode(connection.accountType);
+
+    // Reconnect first (idempotent — adapters reuse their connection pool and
+    // only reconnect when stale): the observation must succeed even when the
+    // pooled session aged out since the last health check.
+    await adapter.connect(credentials);
+
+    const balance = await adapter.getAccountBalance();
+    await this.recordAccountSnapshot(connection, {
+      balance: balance.balance,
+      equity: balance.equity,
+      currency: balance.currency,
+      providerObservedAt: balance.timestamp ?? null,
+      source: 'on-demand-risk-evaluation',
+    });
+  }
+
+  /**
    * Accept ONE provider account observation into the authoritative snapshot
    * model and project it into the legacy current-view.
    *

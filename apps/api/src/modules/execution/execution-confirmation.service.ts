@@ -1,7 +1,7 @@
 import { ConflictException, Injectable, Logger } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, MoreThan, Repository } from 'typeorm';
 import { ExecutionConfirmation } from './entities/execution-confirmation.entity';
 import { RiskGrant } from './entities/risk-grant.entity';
 import { RiskProfile } from '../risk/entities/risk-profile.entity';
@@ -122,7 +122,15 @@ export class ExecutionConfirmationService {
   /** The user's PENDING confirmations with full order detail. */
   async listPending(userId: string): Promise<PendingExecutionConfirmationView[]> {
     const confirmations = await this.confirmationRepo.find({
-      where: { userId, status: ExecutionConfirmationStatus.PENDING },
+      where: {
+        userId,
+        status: ExecutionConfirmationStatus.PENDING,
+        // Round 7 (P1 — expiry hygiene): a confirmation whose window has
+        // already passed is NOT listed as actionable — the boundary refuses
+        // it anyway (CAS expires_at > now); the sweeper converges its status
+        // to EXPIRED shortly after. Never surface a dead proposal as pending.
+        expiresAt: MoreThan(new Date()),
+      },
       order: { createdAt: 'ASC' },
     });
     if (confirmations.length === 0) return [];
