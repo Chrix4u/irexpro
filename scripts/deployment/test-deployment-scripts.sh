@@ -123,7 +123,16 @@ SHIM
   cat > "$FAKE_BIN/curl" <<'SHIM'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+printf 'curl %s\n' "$*" >> "$COMMAND_LOG"
 url="${*: -1}"
+web_failures="${FAKE_WEB_CONNECT_FAILURES:-0}"
+if [[ "$url" == 'http://local.test/web' && "$web_failures" =~ ^[0-9]+$ ]]; then
+  web_attempts="$(grep -F -c 'http://local.test/web' "$COMMAND_LOG" || true)"
+  if (( web_attempts <= web_failures )); then
+    printf 'simulated connection refused\n' >&2
+    exit 7
+  fi
+fi
 if [[ "$*" == *"--write-out"* ]]; then
   if [[ "$url" == *admin* ]]; then
     printf '307'
@@ -259,6 +268,13 @@ grep -q '^pm2 restart irexpro-api-staging ' "$COMMAND_LOG" || fail 'API was not 
 if grep -q '^pm2 restart irexpro-web-staging ' "$COMMAND_LOG" || grep -q '^pm2 restart irexpro-admin-staging ' "$COMMAND_LOG"; then
   fail 'Web/Admin restart occurred after API readiness failure.'
 fi
+
+make_fixture 'web-startup-retry'
+git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
+retry_output="$(run_deploy "$FIXTURE_CANDIDATE_SHA" FAKE_WEB_CONNECT_FAILURES=1 MAX_HEALTH_ATTEMPTS=2)"
+[[ "$retry_output" == *'STAGING DEPLOYMENT VERIFIED'* ]] || fail 'Transient web startup failure was not recovered by bounded smoke retries.'
+web_attempt_count="$(grep -F -c 'http://local.test/web' "$COMMAND_LOG" || true)"
+[[ "$web_attempt_count" -eq 2 ]] || fail 'Transient web startup regression test did not exercise exactly one retry.'
 
 make_fixture 'successful-deploy'
 git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"

@@ -107,6 +107,21 @@ wait_for_api() {
   die "API did not become live within the allowed attempts."
 }
 
+wait_for_http_status() {
+  local url="$1"
+  local allowed_csv="$2"
+  local attempt
+  for ((attempt = 1; attempt <= MAX_HEALTH_ATTEMPTS; attempt += 1)); do
+    if require_http_status "$url" "$allowed_csv" 2>/dev/null; then
+      return 0
+    fi
+    if ((attempt < MAX_HEALTH_ATTEMPTS)); then
+      sleep "$HEALTH_RETRY_SECONDS"
+    fi
+  done
+  die "HTTP endpoint did not become ready within the allowed attempts."
+}
+
 [[ "$#" -eq 1 ]] || die "Usage: deploy-staging.sh <40-character-commit-sha>"
 CANDIDATE_SHA="$1"
 readonly CANDIDATE_SHA
@@ -187,8 +202,8 @@ pm2 restart "$WEB_PM2_NAME" --update-env
 pm2 restart "$ADMIN_PM2_NAME" --update-env
 
 STAGE="local-smoke"
-require_http_status "$LOCAL_WEB_URL" 200
-require_http_status "$LOCAL_ADMIN_URL" "$ADMIN_EXPECTED_STATUSES"
+wait_for_http_status "$LOCAL_WEB_URL" 200
+wait_for_http_status "$LOCAL_ADMIN_URL" "$ADMIN_EXPECTED_STATUSES"
 STAGE="public-smoke"
 require_http_status "$PUBLIC_WEB_URL" 200
 require_http_status "$PUBLIC_ADMIN_URL" "$ADMIN_EXPECTED_STATUSES"
