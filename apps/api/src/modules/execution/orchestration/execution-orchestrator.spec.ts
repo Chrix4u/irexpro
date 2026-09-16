@@ -1,6 +1,8 @@
 import { ForbiddenException, Logger } from '@nestjs/common';
 import { ExecutionOrchestrator } from './execution-orchestrator.service';
+import { FinalDispatchBoundary, FinalDispatchBlockedException } from './final-dispatch-boundary';
 import type { MarketSafetyGateService } from './market-safety-gate.service';
+import { ProviderOperationClass } from '../interfaces/execution-authority';
 import { AccountDispatchLeaseService } from './account-dispatch-lease.service';
 import { ExecutionIntent } from './execution-intent.interface';
 import { Order } from '../orders/order.entity';
@@ -89,11 +91,23 @@ describe('ExecutionOrchestrator', () => {
   let auditService: { log: jest.Mock };
   let eventBus: { publish: jest.Mock };
   let encryptionService: { decrypt: jest.Mock };
+  // Round 7 (P1): the provider-dispatch commitment seam — mockable so the
+  // commitment-block matrix can drive it.
+  let boundaryMock: { commitProviderDispatch: jest.Mock };
 
   beforeEach(() => {
     jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
     jest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
     jest.spyOn(Logger.prototype, 'log').mockImplementation(() => {});
+
+    boundaryMock = {
+      commitProviderDispatch: jest.fn().mockResolvedValue({
+        context: {},
+        connection,
+        confirmationId: null,
+        operationClass: 'NEW_EXPOSURE',
+      }),
+    };
 
     orderService = {
       submitOrder: jest.fn().mockResolvedValue({ status: 'RESERVED_NEW', order: baseOrder }),
@@ -175,10 +189,9 @@ describe('ExecutionOrchestrator', () => {
       encryptionService as unknown as CredentialEncryptionService,
       auditService as unknown as AuditService,
       eventBus as unknown as DomainEventBus,
-      // Round 6 (#365): the provider-dispatch commitment seam — these suites
-      // drive dispatchOrder WITHOUT a commitment payload, so the boundary is
-      // never invoked.
-      {} as never,
+      // Round 6 (#365): the provider-dispatch commitment seam — suites that
+      // drive dispatchOrder WITHOUT a commitment payload never invoke it.
+      boundaryMock as unknown as FinalDispatchBoundary,
       // Round 6 §5/§18: the market-safety gate is exercised at the SEAM
       // (its own matrix lives in market-safety-gate.spec.ts) — passes by
       // default; per-test overrides make it fail closed.
@@ -261,6 +274,62 @@ describe('ExecutionOrchestrator', () => {
       await expect(
         orchestrator.assertDispatchable({ userId, connection: liveConnection }),
       ).resolves.toBeUndefined();
+    });
+
+    // ─── Round 7 (§10): Gate B is OPERATION-AWARE ─────────────────────────
+
+    it('Round 7 §10: a NON-executable LIVE connection still permits RISK-REDUCING CLOSE_POSITION (de-risking must survive authorization degradation)', async () => {
+      brokerService.isConnectionExecutable.mockReturnValue(false);
+      brokerService.findConnectionById.mockResolvedValue(liveConnection);
+      // The credential gate (C) still applies — usable credentials.
+      await expect(
+        orchestrator.assertDispatchable({
+          userId,
+          connection: liveConnection,
+          operationClass: ProviderOperationClass.CLOSE_POSITION,
+        }),
+      ).resolves.toBeUndefined();
+      // Gate B was consulted for the record but did not block the close.
+      expect(brokerService.isConnectionExecutable).toHaveBeenCalled();
+    });
+
+    it('Round 7 §10: a NON-executable LIVE connection still permits CANCEL_PENDING', async () => {
+      brokerService.isConnectionExecutable.mockReturnValue(false);
+      brokerService.findConnectionById.mockResolvedValue(liveConnection);
+      await expect(
+        orchestrator.assertDispatchable({
+          userId,
+          connection: liveConnection,
+          operationClass: ProviderOperationClass.CANCEL_PENDING,
+        }),
+      ).resolves.toBeUndefined();
+    });
+
+    it('Round 7 §10: NEW_EXPOSURE on a NON-executable LIVE connection stays BLOCKED (the fix never weakens new-exposure gates)', async () => {
+      brokerService.isConnectionExecutable.mockReturnValue(false);
+      brokerService.findConnectionById.mockResolvedValue(liveConnection);
+      await expect(
+        orchestrator.assertDispatchable({
+          userId,
+          connection: liveConnection,
+          operationClass: ProviderOperationClass.NEW_EXPOSURE,
+        }),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('Round 7 §10: the credential gate (C) still applies to risk-reducing closes — unusable credentials never reach the provider', async () => {
+      brokerService.isConnectionExecutable.mockReturnValue(false);
+      brokerService.findConnectionById.mockResolvedValue({
+        ...liveConnection,
+        credentialStatus: 'REVOKED',
+      } as unknown as BrokerConnection);
+      await expect(
+        orchestrator.assertDispatchable({
+          userId,
+          connection: liveConnection,
+          operationClass: ProviderOperationClass.CLOSE_POSITION,
+        }),
+      ).rejects.toThrow(ForbiddenException);
     });
 
     it('Phase D: stale snapshot defense — persisted state REVOKED blocks despite an ACTIVE snapshot', async () => {
@@ -351,6 +420,73 @@ describe('ExecutionOrchestrator', () => {
   });
 
   // ─── Idempotency: duplicates never re-dispatch ────────────────────────────
+
+  describe('dispatchOrder() — Round 7 P1: commitment-block outcome separation', () => {
+    it('a FINAL-DISPATCH-BOUNDARY block terminally REJECTS the order, makes ZERO provider calls, and propagates the typed exception', async () => {
+      boundaryMock.commitProviderDispatch.mockRejectedValueOnce(
+        new FinalDispatchBlockedException(
+          'TRADING_AUTHORITY_GENERATION_MISMATCH',
+          'The user authority generation advanced after the grant was issued',
+        ),
+      );
+
+      await expect(
+        orchestrator.dispatchOrder(intent, connection, {
+          grantId: 'grant-1',
+          origin: 'PIPELINE',
+        }),
+      ).rejects.toMatchObject({ code: 'TRADING_AUTHORITY_GENERATION_MISMATCH' });
+
+      // The reserved order converged to TERMINAL REJECTED — never left
+      // SUBMITTED to be mistaken for an uncertain dispatch.
+      expect(orderService.rejectOrder).toHaveBeenCalledWith(
+        'order-1',
+        expect.stringContaining('DISPATCH_BOUNDARY_TRADING_AUTHORITY_GENERATION_MISMATCH'),
+      );
+      // ZERO provider calls (the boundary threw before dispatchToProvider).
+      expect(adapter.placeOrder).not.toHaveBeenCalled();
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: AuditAction.ORDER_REJECTED,
+          metadata: expect.objectContaining({
+            blockedReason: 'TRADING_AUTHORITY_GENERATION_MISMATCH',
+            dispatchCertainty: 'DEFINITELY_NOT_SENT',
+            gate: 'FINAL_DISPATCH_BOUNDARY',
+          }),
+        }),
+      );
+    });
+
+    it('a NON-boundary commitment error propagates WITHOUT rejecting the order (uncertainty is preserved for the reconciliation path)', async () => {
+      boundaryMock.commitProviderDispatch.mockRejectedValueOnce(
+        new Error('db connection lost mid-commitment'),
+      );
+
+      await expect(
+        orchestrator.dispatchOrder(intent, connection, {
+          grantId: 'grant-1',
+          origin: 'PIPELINE',
+        }),
+      ).rejects.toThrow('db connection lost mid-commitment');
+
+      // A non-boundary failure is NOT provably unsent — the order stays
+      // untouched here (executeTrade's uncertain path converges it).
+      expect(orderService.rejectOrder).not.toHaveBeenCalled();
+      expect(adapter.placeOrder).not.toHaveBeenCalled();
+    });
+
+    it('a SUCCESSFUL commitment proceeds to the provider dispatch as before', async () => {
+      const outcome = await orchestrator.dispatchOrder(intent, connection, {
+        grantId: 'grant-1',
+        origin: 'PIPELINE',
+      });
+      expect(boundaryMock.commitProviderDispatch).toHaveBeenCalledWith(
+        expect.objectContaining({ grantId: 'grant-1', orderId: 'order-1', origin: 'PIPELINE' }),
+      );
+      expect(outcome.outcome).toBe('FILLED');
+      expect(adapter.placeOrder).toHaveBeenCalledTimes(1);
+    });
+  });
 
   describe('dispatchOrder() — idempotency', () => {
     it('DUPLICATE submission → NO provider call, audit suppression, DUPLICATE outcome', async () => {

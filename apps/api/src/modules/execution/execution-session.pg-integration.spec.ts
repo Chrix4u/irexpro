@@ -1,5 +1,6 @@
 import { DataSource, Repository } from 'typeorm';
 import { ExecutionService } from './execution.service';
+import type { EmergencyFlattenProducer } from './jobs/emergency-flatten.producer';
 import { TradingSession } from './entities/trading-session.entity';
 import { RiskGrant } from './entities/risk-grant.entity';
 import { ExecutionConfirmation } from './entities/execution-confirmation.entity';
@@ -190,6 +191,8 @@ describe('ExecutionService — session authority on real PostgreSQL (#295/#298)'
       {} as ExecutionOrchestrator,
       auditService as unknown as AuditService,
       dataSource,
+      // Round 7 (P1): the durable-flatten producer is a stub seam here.
+      {} as EmergencyFlattenProducer,
       eventBus,
       riskGrantRepo,
       confirmationRepo,

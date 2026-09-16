@@ -284,4 +284,25 @@ export class TradeIntentService {
       })
       .execute();
   }
+
+  /**
+   * Round 7 (P1 — expiry hygiene sweeper): batch-expire every CREATED
+   * intent whose validity window has passed, returning the expired intent
+   * ids. Lazy resolution already enforces the boundary per-intent, but an
+   * abandoned SEMI_AUTO decision (intent CREATED, no trade, no risk
+   * rejection) otherwise counts as in-flight capital FOREVER in the §3
+   * aggregate — the sweeper makes expiry proactive so the capital budget
+   * self-heals without a delivery ever arriving. Guarded per-id CAS (the
+   * exact markExpired transition — no bulk unguarded write).
+   */
+  async expireStaleCreatedIntents(now: Date = new Date()): Promise<string[]> {
+    const created = await this.intentRepo.find({
+      where: { status: TradeIntentStatus.CREATED },
+    });
+    const expired = created.filter((intent) => intent.expiresAt.getTime() <= now.getTime());
+    for (const intent of expired) {
+      await this.markExpired(intent.id);
+    }
+    return expired.map((intent) => intent.id);
+  }
 }

@@ -117,6 +117,46 @@ describe('ExecutionConfirmationService (Round 7 SEMI_AUTO confirm-path)', () => 
     buildService();
   });
 
+  describe('listPending() — Round 7 P1 expiry hygiene', () => {
+    it('never lists a PENDING confirmation whose window has already passed (dead proposals are not actionable)', async () => {
+      const liveRow = confirmationRow(); // live window
+      const deadRow = confirmationRow({
+        id: 'conf-expired',
+        expiresAt: new Date(Date.now() - 1),
+      });
+      // The mock REPOSITORY honors the where-clause exactly like the real
+      // store would (status = PENDING AND expiresAt > now).
+      confirmationRepo.find.mockImplementation(
+        async (opts?: { where?: { status?: unknown; expiresAt?: { value?: Date } } }) => {
+          const cutoff = opts?.where?.expiresAt?.value;
+          const rows = [liveRow, deadRow];
+          return cutoff instanceof Date
+            ? rows.filter((row) => row.expiresAt.getTime() > cutoff.getTime())
+            : rows;
+        },
+      );
+      riskGrantRepo.find.mockResolvedValue([]);
+
+      const views = await service.listPending(USER);
+      // The query carried the expiry predicate (MoreThan(now)).
+      const findArg = confirmationRepo.find.mock.calls[0][0] as {
+        where: { status: unknown; expiresAt: { value: Date } };
+      };
+      expect(findArg.where.status).toBe(ExecutionConfirmationStatus.PENDING);
+      expect(findArg.where.expiresAt.value instanceof Date).toBe(true);
+      // Only the live-window row is actionable.
+      expect(views).toHaveLength(1);
+      expect(views[0]!.id).toBe('conf-1');
+    });
+
+    it('an empty pending set returns [] without a grant lookup', async () => {
+      confirmationRepo.find.mockResolvedValue([]);
+      const views = await service.listPending(USER);
+      expect(views).toEqual([]);
+      expect(riskGrantRepo.find).not.toHaveBeenCalled();
+    });
+  });
+
   describe('confirm()', () => {
     it('drives the fresh §18 evaluation WITH rebindConfirmationId — the confirmation survives the supersession (P0 fix)', async () => {
       await service.confirm(USER, 'conf-1');

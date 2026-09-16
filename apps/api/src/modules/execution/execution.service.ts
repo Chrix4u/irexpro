@@ -27,7 +27,7 @@ import {
   SessionAuthorityGenerationConflictException,
   SessionAuthorityNotActiveException,
 } from './execution-session.resolution';
-import { RiskDecision } from '../risk/interfaces/risk.interface';
+import { RiskDecision, ValidatedOrder } from '../risk/interfaces/risk.interface';
 import { BrokerService } from '../broker/broker.service';
 import { BrokerConnectionStatus } from '../broker/interfaces/broker-adapter.interface';
 import { ProviderDispatchCertainty } from '../broker/interfaces/provider-dispatch-certainty';
@@ -39,10 +39,14 @@ import { DomainEventType } from '../events/enums/domain-event-type.enum';
 import { TradeLifecycleCasService } from './orders/trade-lifecycle-cas.service';
 import { OrderKind, OrderTimeInForce } from './orders/order.enums';
 import { ExecutionOrchestrator } from './orchestration/execution-orchestrator.service';
-import { FinalDispatchBoundary } from './orchestration/final-dispatch-boundary';
+import {
+  FinalDispatchBoundary,
+  FinalDispatchBlockedException,
+} from './orchestration/final-dispatch-boundary';
 import { ExecutionIntent } from './orchestration/execution-intent.interface';
 import { TradeIntentNotUsableError, TradeIntentService } from './services/trade-intent.service';
 import { MarketSafetyError } from './orchestration/market-safety-gate.service';
+import { EmergencyFlattenProducer } from './jobs/emergency-flatten.producer';
 
 /** Invalidation reason stamped on RiskGrants when the session authority
  *  generation advances (mode change / end / suspension — issue #298). */
@@ -96,6 +100,9 @@ export class ExecutionService {
     private orchestrator: ExecutionOrchestrator,
     private auditService: AuditService,
     private dataSource: DataSource,
+    // Round 7 (P1 — durable kill-switch flatten): enqueue-only dependency
+    // (the worker job lives in its own provider) — no cycle.
+    private readonly emergencyFlattenProducer: EmergencyFlattenProducer,
     private readonly eventBus: DomainEventBus,
     @InjectRepository(RiskGrant)
     private readonly riskGrantRepo: Repository<RiskGrant>,
@@ -406,7 +413,15 @@ export class ExecutionService {
       stopLoss: order.stopLoss,
       takeProfit: order.takeProfit,
       // §5/§18: the risk-validated reference for the final deviation check.
-      referencePrice: order.entryPrice,
+      // Round 7 (P1): for MARKET entries the validated entry price is the
+      // '0' sentinel — the risk-validated reference the final deviation
+      // check needs is the GEOMETRY QUOTE bound to the durable grant
+      // (quoteRef.price, the M1 close the risk engine validated). Without
+      // it PRICE_DEVIATION_EXCESSIVE was structurally inert for MARKET
+      // orders (the gate skips non-positive references) — the 1% final-
+      // horizon deviation control only ever fired for LIMIT signals, which
+      // this pipeline never produces for MARKET AI signals.
+      referencePrice: this.resolveMarketReferencePrice(order, preCommitmentGrant),
       comment: order.idempotencyKey,
       providerAction: 'PLACE',
     };
@@ -483,6 +498,60 @@ export class ExecutionService {
             instrument: order.instrument,
             dispatchCertainty: ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
             casOutcome: outcome.outcome,
+          },
+        });
+        return trade;
+      }
+
+      // ── Round 7 (P1): FinalDispatchBlockedException PROVES zero provider
+      // calls — the commitment threw BEFORE dispatchToProvider with NOTHING
+      // consumed (the orchestrator already terminally REJECTED the order).
+      // The trade follows as a DEFINITE non-exposure (PENDING → REJECTED,
+      // DEFINITELY_NOT_SENT releases the daily-capacity reservation) and the
+      // intent is terminally rejected — never a wedged RECONCILIATION_PENDING
+      // trade stamped MAY_HAVE_REACHED_PROVIDER for a dispatch that provably
+      // never happened.
+      if (err instanceof FinalDispatchBlockedException) {
+        this.logger.warn(
+          `Final dispatch boundary blocked trade ${trade.id} [${err.code}]: ${err.message}`,
+        );
+        const outcome = await this.tradeCas.applyCasTransition({
+          tradeId: trade.id,
+          expectedFrom: TradeStatus.PENDING,
+          target: TradeStatus.REJECTED,
+          patch: {
+            status: TradeStatus.REJECTED,
+            brokerRejectionReason: `DISPATCH_BOUNDARY_${err.code}: ${err.message}`,
+            dispatchCertainty: ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+          },
+          context: {
+            userId,
+            source: 'executeTrade:final-dispatch-boundary-blocked',
+            reason: err.message,
+          },
+        });
+        trade.status = outcome.trade?.status ?? TradeStatus.REJECTED;
+        await this.tradeIntents
+          .markRejected(tradeIntent.id)
+          .catch((intentErr) =>
+            this.logger.warn(
+              `Intent ${tradeIntent.id} could not be marked REJECTED after the ` +
+                `dispatch boundary block (${(intentErr as Error).message})`,
+            ),
+          );
+        await this.auditService.log({
+          actorUserId: userId,
+          action: AuditAction.TRADE_REJECTED,
+          resourceType: 'Trade',
+          resourceId: trade.id,
+          severity: AuditSeverity.WARNING,
+          metadata: {
+            blockedReason: err.code,
+            signalId,
+            instrument: order.instrument,
+            dispatchCertainty: ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+            casOutcome: outcome.outcome,
+            gate: 'FINAL_DISPATCH_BOUNDARY',
           },
         });
         return trade;
@@ -760,6 +829,38 @@ export class ExecutionService {
    * RECONCILIATION_PENDING for the convergence machinery. The summary audit
    * records the honest per-trade results.
    */
+  /**
+   * Round 7 (P1 — durable kill-switch flatten): the emergency entry point
+   * the kill switch calls AFTER its durable authority write. Guarantees the
+   * flatten SURVIVES a process crash:
+   *
+   *   1. Enqueue the DURABLE flatten job FIRST (BullMQ persists it in Redis;
+   *      attempts + exponential backoff redeliver after a crash).
+   *   2. Run the in-process fast path immediately (idempotent with the job —
+   *      per-trade close CAS + clientOrderId idempotency mean the two paths
+   *      can never double-close a position).
+   *
+   * A Redis/enqueue failure never blocks the flatten: the in-process path
+   * still runs and reconciliation + the operator remain the fallbacks.
+   */
+  async requestDurableEmergencyFlatten(userId: string, reason: string): Promise<void> {
+    try {
+      await this.emergencyFlattenProducer.enqueueDurableFlatten(userId, reason);
+    } catch (err) {
+      this.logger.error(
+        `Durable flatten enqueue failed for user ${userId} ` +
+          `(${(err as Error).message}) — the in-process flatten still runs; ` +
+          'reconciliation + operator action are the crash fallbacks',
+      );
+    }
+    await this.emergencyCloseAllOpenPositions(userId).catch((err) =>
+      this.logger.error(
+        `In-process emergency flatten failed for user ${userId} (the durable job ` +
+          `retries): ${(err as Error).message}`,
+      ),
+    );
+  }
+
   async emergencyCloseAllOpenPositions(
     userId: string,
     reason: TradeCloseReason = TradeCloseReason.KILL_SWITCH_FORCE_CLOSE,
@@ -1667,6 +1768,30 @@ export class ExecutionService {
   }
 
   // ─── Internal helpers ─────────────────────────────────────────────────────
+
+  /**
+   * Round 7 (P1 — MARKET reference propagation): the risk-validated
+   * reference price for the final deviation check. LIMIT entries carry the
+   * validated limit price; MARKET entries carry the '0' sentinel on the
+   * validated order, so the REAL reference is the geometry quote the risk
+   * engine validated — persisted on the durable grant as quoteRef.price.
+   * When the grant carries no provable quote, the sentinel flows through
+   * unchanged and the market-safety gate skips the deviation check exactly
+   * as before (fail-open ONLY on unprovable reference, never on a fabricated
+   * one).
+   */
+  private resolveMarketReferencePrice(order: ValidatedOrder, grant: RiskGrant | null): string {
+    const entry = order.entryPrice?.trim?.() ?? '';
+    const isMarketSentinel = entry === '' || entry === '0';
+    if (!isMarketSentinel) {
+      return order.entryPrice;
+    }
+    const quotePrice = grant?.quoteRef?.['price'];
+    if (typeof quotePrice === 'string' && quotePrice.trim() !== '' && quotePrice !== '0') {
+      return quotePrice;
+    }
+    return order.entryPrice;
+  }
 
   private generateIdempotencyKey(
     userId: string,

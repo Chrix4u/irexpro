@@ -377,6 +377,46 @@ describe('TradeIntentService — durable normalized AI decisions (Round 6 §2)',
     });
   });
 
+  // ─── Round 7 (P1): the proactive expiry sweeper ──────────────────────────
+
+  describe('expireStaleCreatedIntents (Round 7 expiry hygiene)', () => {
+    it('expires every CREATED intent past its window and returns the ids', async () => {
+      // A stale CREATED intent (generated 10 minutes ago ⇒ expired).
+      await service.recordOrReuseIntent(
+        facts({ signalId: 'sig-stale', signalGeneratedAt: new Date(Date.now() - 600_000) }),
+      );
+      // A fresh CREATED intent (still inside the window).
+      const fresh = await service.recordOrReuseIntent(
+        facts({ signalId: 'sig-fresh', signalGeneratedAt: new Date() }),
+      );
+
+      const expiredIds = await service.expireStaleCreatedIntents();
+
+      expect(expiredIds).toHaveLength(1);
+      const expiredRow = await repo.findOne({ where: { signalId: 'sig-stale' } });
+      expect(expiredRow?.status).toBe(TradeIntentStatus.EXPIRED);
+      // The fresh intent is untouched.
+      const freshRow = await repo.findOne({ where: { id: fresh.intent.id } });
+      expect(freshRow?.status).toBe(TradeIntentStatus.CREATED);
+    });
+
+    it('never touches terminal intents (EXECUTED/REJECTED stay as they are)', async () => {
+      const executed = await service.recordOrReuseIntent(
+        facts({ signalId: 'sig-exec', signalGeneratedAt: new Date(Date.now() - 600_000) }),
+      );
+      await service.markExecuted(executed.intent.id, 'trade-1');
+
+      const expiredIds = await service.expireStaleCreatedIntents();
+      expect(expiredIds).toHaveLength(0);
+      const row = await repo.findOne({ where: { id: executed.intent.id } });
+      expect(row?.status).toBe(TradeIntentStatus.EXECUTED);
+    });
+
+    it('an empty table is a clean no-op', async () => {
+      expect(await service.expireStaleCreatedIntents()).toEqual([]);
+    });
+  });
+
   // ─── helpers ─────────────────────────────────────────────────────────────
 
   describe('static helpers', () => {
