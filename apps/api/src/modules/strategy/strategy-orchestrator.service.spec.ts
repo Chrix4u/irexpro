@@ -163,6 +163,9 @@ describe('StrategyOrchestratorService', () => {
             signalId: facts.signalId,
             status: 'CREATED',
             expiresAt: new Date(Date.now() + 60_000),
+            // Round 7 (P0 allocation-scope fix): the durable intent carries
+            // the connection's real logical account key.
+            logicalAccountKey: 'paper-broker::demo::acct-1',
           },
         })),
       markRejected: jest.fn().mockResolvedValue(undefined),
@@ -348,6 +351,19 @@ describe('StrategyOrchestratorService', () => {
         'user-1',
         expect.objectContaining({ decision: 'APPROVED' }),
       );
+    });
+
+    it("P0 allocation-scope fix: reserves capital against the intent's REAL logical account key — never a null/synthetic scope", async () => {
+      const result = await service.processSignal(validCandidate());
+      expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
+      expect(allocationMock.resolveOrAllocate).toHaveBeenCalledTimes(1);
+      const call = allocationMock.resolveOrAllocate.mock.calls[0][0] as {
+        intent: { logicalAccountKey: string | null };
+        logicalAccountKey: string | null;
+      };
+      // The REAL per-account scope captured on the durable intent at creation.
+      expect(call.logicalAccountKey).toBe('paper-broker::demo::acct-1');
+      expect(call.intent.logicalAccountKey).toBe('paper-broker::demo::acct-1');
     });
 
     it('returns EXECUTION_FAILED when ExecutionService throws', async () => {

@@ -15,6 +15,7 @@ import {
   SignalIdentityRegistration,
 } from '../execution/orchestration/signal-identity.gate';
 import { TradeIntentService, TradeIntentFacts } from '../execution/services/trade-intent.service';
+import type { TradeIntent } from '../execution/entities/trade-intent.entity';
 import { AllocationService } from '../execution/services/allocation.service';
 import { PositionSizingService } from '../execution/services/position-sizing.service';
 import { TradingAuthorityService } from '../execution-authority/trading-authority.service';
@@ -263,9 +264,9 @@ export class StrategyOrchestratorService {
     // means retries/worker restarts/queue redelivery can never mint a second
     // equivalent intent. Fail-closed: without the durable intent the decision
     // may NOT proceed to risk evaluation (executeTrade enforces the guard).
-    let tradeIntentId: string;
+    let tradeIntent: TradeIntent;
     try {
-      tradeIntentId = (await this.recordTradeIntent(candidate, session, registration)).id;
+      tradeIntent = await this.recordTradeIntent(candidate, session, registration);
     } catch (err) {
       const reason = `Trade intent could not be recorded (fail-closed): ${(err as Error).message}`;
       this.logger.error(`Signal ${signalId}: intent recording failed`, (err as Error).stack);
@@ -308,14 +309,28 @@ export class StrategyOrchestratorService {
       });
       await this.allocationService.resolveOrAllocate({
         intent: {
-          id: tradeIntentId,
+          id: tradeIntent.id,
           userId,
           brokerConnectionId: session.brokerConnectionId,
           instrument: candidate.instrument,
           direction: candidate.direction,
           strategyCode: candidate.strategyCode ?? null,
+          // Round 7 (P0 allocation-scope fix): the durable intent carries the
+          // connection's server-computed logical account key captured at
+          // creation — the allocation engine must reserve against the REAL
+          // per-account scope (the budget is seeded per (user, logical
+          // account)), never a synthetic unseedable connection scope.
+          logicalAccountKey: tradeIntent.logicalAccountKey,
         },
-        logicalAccountKey: null, // resolved inside the allocation engine scope
+        // Round 7 (P0 allocation-scope fix): the REAL logical account scope.
+        // The previous `null` made the engine substitute a synthetic
+        // `conn:<connectionId>` scope whose budget can NEVER be seeded
+        // (budget seeding resolves connections by their REAL
+        // logical_account_key) — every entry failed
+        // ALLOCATION_BUDGET_UNPROVABLE. Null is still passed through when the
+        // intent genuinely carries none; the engine then fail-closes with the
+        // same typed code (no silent unseedable scoping).
+        logicalAccountKey: tradeIntent.logicalAccountKey,
         sized,
       });
     } catch (err) {
@@ -410,20 +425,20 @@ export class StrategyOrchestratorService {
       // terminally REJECTED (a replay of the same AI decision can never
       // re-enter exposure through the intent guard).
       await this.tradeIntentService
-        .markRejected(tradeIntentId)
+        .markRejected(tradeIntent.id)
         .catch((err) =>
           this.logger.warn(
-            `Signal ${signalId}: intent ${tradeIntentId} could not be marked REJECTED ` +
+            `Signal ${signalId}: intent ${tradeIntent.id} could not be marked REJECTED ` +
               `(${(err as Error).message}) — the duplicate-recovery path still fails closed`,
           ),
         );
       // §3: the capital reservation is released with the decision (definitive
       // non-exposure — the ledger records why).
       await this.allocationService
-        .releaseAllocationForIntent(tradeIntentId, `RISK_${riskDecision.decision}`)
+        .releaseAllocationForIntent(tradeIntent.id, `RISK_${riskDecision.decision}`)
         .catch((err) =>
           this.logger.warn(
-            `Signal ${signalId}: allocation for intent ${tradeIntentId} could not be ` +
+            `Signal ${signalId}: allocation for intent ${tradeIntent.id} could not be ` +
               `released (${(err as Error).message}) — the aggregate self-heals from intent status`,
           ),
         );

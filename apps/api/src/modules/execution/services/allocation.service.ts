@@ -109,7 +109,9 @@ function addTo(map: Map<string, string>, key: string, value: string): void {
  *    account). Seeded ONCE from the AUTHORITATIVE account snapshot (§1a
  *    routing, DB-only read) at first allocation; explicit thereafter. When
  *    neither exists, ALLOCATION_BUDGET_UNPROVABLE — never 0, never a
- *    guessed or stale equity echo (§1c).
+ *    guessed or stale equity echo (§1c). Round 7: the scope MUST be a real
+ *    logical account key — a null key fails closed up front (a synthetic
+ *    `conn:` scope is never fabricated; it could never be seeded).
  *  - EXACT MATH: every capital figure is ExactDecimal — JavaScript
  *    floating-point is never used (§3).
  *  - CURRENCY HONESTY: the budget and allocation must share ONE currency —
@@ -138,13 +140,34 @@ export class AllocationService {
   async resolveOrAllocate(params: {
     intent: Pick<
       TradeIntent,
-      'id' | 'userId' | 'brokerConnectionId' | 'instrument' | 'direction' | 'strategyCode'
+      | 'id'
+      | 'userId'
+      | 'brokerConnectionId'
+      | 'instrument'
+      | 'direction'
+      | 'strategyCode'
+      | 'logicalAccountKey'
     >;
     logicalAccountKey: string | null;
     sized: SizedPosition;
   }): Promise<CapitalAllocation> {
     const { intent, sized } = params;
-    const logicalAccountKey = params.logicalAccountKey ?? `conn:${intent.brokerConnectionId}`;
+    // Round 7 (P0 allocation-scope fix): the REAL per-account scope only.
+    // Callers pass the intent's durable logical account key; when absent the
+    // intent's own captured key is the fallback. A null key is a TYPED
+    // fail-closed rejection — the previous synthetic `conn:<connectionId>`
+    // scope was structurally unseedable (budget seeding resolves connections
+    // by their REAL logical_account_key), so it could only ever surface as
+    // ALLOCATION_BUDGET_UNPROVABLE downstream while masquerading as a scope.
+    const logicalAccountKey = params.logicalAccountKey ?? intent.logicalAccountKey;
+    if (!logicalAccountKey) {
+      throw new AllocationError(
+        'ALLOCATION_BUDGET_UNPROVABLE',
+        `intent ${intent.id} carries no logical account key for connection ` +
+          `${intent.brokerConnectionId} — the account's capital budget scope is unprovable ` +
+          '(fail-closed; never a synthetic connection scope)',
+      );
+    }
 
     // Fast path (no lock): an existing allocation is the durable truth.
     const existing = await this.allocationRepo.findOne({

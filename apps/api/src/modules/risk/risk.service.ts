@@ -155,12 +155,27 @@ export class RiskService {
    *   REJECTED   — trade is blocked; reason logged in RiskViolation
    *   SUSPENDED  — trading session suspended; requires manual review
    */
-  async validateProposedTrade(userId: string, trade: ProposedTrade): Promise<RiskDecision> {
+  async validateProposedTrade(
+    userId: string,
+    trade: ProposedTrade,
+    options?: {
+      /**
+       * Round 7 (SEMI_AUTO confirm-path P0 fix): the id of the PENDING
+       * ExecutionConfirmation this evaluation is RE-AUTHORIZING. Passed
+       * through to RiskGrantService.issueGrant so the user's existing
+       * one-time confirmation is RE-BOUND to the fresh grant (instead of
+       * being revoked by the supersession) — the commitment CAS then binds
+       * confirmation + fresh grant correctly. Only the SEMI_AUTO confirm()
+       * path sets this.
+       */
+      rebindConfirmationId?: string;
+    },
+  ): Promise<RiskDecision> {
     const evaluatedAt = new Date();
 
     // FAIL CLOSED wrapper — any uncaught error = REJECTED
     try {
-      return await this.runValidationPipeline(userId, trade, evaluatedAt);
+      return await this.runValidationPipeline(userId, trade, evaluatedAt, options);
     } catch (err) {
       this.logger.error(
         `Risk Engine error for user ${userId}, signal ${trade.signalId}: ${(err as Error).message}`,
@@ -182,6 +197,7 @@ export class RiskService {
     userId: string,
     trade: ProposedTrade,
     evaluatedAt: Date,
+    options?: { rebindConfirmationId?: string },
   ): Promise<RiskDecision> {
     const appliedRules: string[] = [];
     const contextSnapshot: Partial<RiskContextSnapshot> = {
@@ -1069,6 +1085,7 @@ export class RiskService {
         validatedOrder,
         geometryQuoteRef,
         liveSnapshotBinding,
+        options?.rebindConfirmationId,
       );
     } catch (err) {
       this.logger.error(
@@ -1394,6 +1411,7 @@ export class RiskService {
       currency: string;
       logicalAccountKey: string;
     } | null,
+    rebindConfirmationId?: string,
   ): Promise<string> {
     // Digest of the ProposedTrade MATERIAL fields (issue #301): the exact
     // signal content this approval was derived from.
@@ -1528,6 +1546,10 @@ export class RiskService {
       orderPayload,
       quoteRef,
       issuedAt,
+      // Round 7 (SEMI_AUTO confirm-path P0 fix): carry the user's existing
+      // one-time confirmation over to the fresh grant (see
+      // RiskGrantService.issueGrant).
+      rebindConfirmationId,
     });
 
     return grant.id;
