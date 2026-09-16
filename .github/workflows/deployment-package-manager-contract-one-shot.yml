@@ -1,0 +1,145 @@
+name: Deployment Package Manager Contract One-Shot
+
+on:
+  push:
+    branches: [fix/deployment-package-manager-contract]
+    paths:
+      - '.github/workflows/deployment-package-manager-contract-one-shot.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: fix/deployment-package-manager-contract
+          fetch-depth: 0
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Patch deployment package-manager contract
+        shell: python
+        run: |
+          from pathlib import Path
+
+          workflow_path = Path('.github/workflows/deployment-script-safety.yml')
+          workflow = workflow_path.read_text()
+          anchor = "      - 'docs/operations/staging-deployment.md'\n      - '.github/workflows/deployment-script-safety.yml'"
+          replacement = "      - 'docs/operations/staging-deployment.md'\n      - 'package.json'\n      - '.github/workflows/deployment-script-safety.yml'"
+          if workflow.count(anchor) != 2:
+              raise SystemExit(f'expected deployment workflow path anchor twice, found {workflow.count(anchor)}')
+          workflow = workflow.replace(anchor, replacement)
+          workflow_path.write_text(workflow)
+
+          gate_path = Path('scripts/security/required-ci-gate.mjs')
+          gate = gate_path.read_text()
+          gate_anchor = (
+              "      'scripts/deployment/**',\n"
+              "      'docs/operations/staging-deployment.md',\n"
+              "      '.github/workflows/deployment-script-safety.yml',\n"
+          )
+          gate_replacement = (
+              "      'scripts/deployment/**',\n"
+              "      'docs/operations/staging-deployment.md',\n"
+              "      'package.json',\n"
+              "      '.github/workflows/deployment-script-safety.yml',\n"
+          )
+          if gate.count(gate_anchor) != 1:
+              raise SystemExit(f'expected one deployment gate rule anchor, found {gate.count(gate_anchor)}')
+          gate = gate.replace(gate_anchor, gate_replacement, 1)
+
+          package_test_anchor = (
+              "      'Database Migration Compatibility',\n"
+              "      'UI E2E',\n"
+              "      'Mobile CI',\n"
+          )
+          package_test_replacement = (
+              "      'Database Migration Compatibility',\n"
+              "      'Deployment Script Safety',\n"
+              "      'UI E2E',\n"
+              "      'Mobile CI',\n"
+          )
+          if gate.count(package_test_anchor) != 1:
+              raise SystemExit(f'expected one package.json self-test anchor, found {gate.count(package_test_anchor)}')
+          gate = gate.replace(package_test_anchor, package_test_replacement, 1)
+          gate_path.write_text(gate)
+
+          test_path = Path('scripts/deployment/test-deployment-scripts.sh')
+          test = test_path.read_text()
+          root_anchor = 'readonly SCRIPT_DIR\nTMP_ROOT="$(mktemp -d)"'
+          root_replacement = (
+              'readonly SCRIPT_DIR\n'
+              'REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"\n'
+              'readonly REPO_ROOT\n'
+              'ROOT_PACKAGE_MANAGER="$(node -e "const p=require(process.argv[1]); process.stdout.write(p.packageManager || \'\')" "$REPO_ROOT/package.json")"\n'
+              'readonly ROOT_PACKAGE_MANAGER\n'
+              'DEPLOY_PNPM_VERSION="$(sed -n \'s/^readonly PNPM_VERSION="\\([^"\\]*\\)"/\\1/p\' "$SCRIPT_DIR/deploy-staging.sh")"\n'
+              'readonly DEPLOY_PNPM_VERSION\n'
+              'TMP_ROOT="$(mktemp -d)"'
+          )
+          if test.count(root_anchor) != 1:
+              raise SystemExit(f'expected one test root anchor, found {test.count(root_anchor)}')
+          test = test.replace(root_anchor, root_replacement, 1)
+
+          fail_anchor = (
+              "fail() {\n"
+              "  printf 'TEST FAILURE: %s\\n' \"$1\" >&2\n"
+              "  exit 1\n"
+              "}\n\n"
+          )
+          contract_checks = fail_anchor + (
+              "[[ -n \"$ROOT_PACKAGE_MANAGER\" ]] || fail 'Root package.json must declare packageManager.'\n"
+              "[[ -n \"$DEPLOY_PNPM_VERSION\" ]] || fail 'deploy-staging.sh must declare PNPM_VERSION.'\n"
+              "[[ \"$ROOT_PACKAGE_MANAGER\" == \"pnpm@${DEPLOY_PNPM_VERSION}\" ]] || fail \"Deployment pnpm pin (${DEPLOY_PNPM_VERSION}) does not match root packageManager (${ROOT_PACKAGE_MANAGER}).\"\n\n"
+          )
+          if test.count(fail_anchor) != 1:
+              raise SystemExit(f'expected one fail function anchor, found {test.count(fail_anchor)}')
+          test = test.replace(fail_anchor, contract_checks, 1)
+
+          fixture_anchor = "  printf '{\"packageManager\":\"pnpm@10.34.5\"}\\n' > \"$repo/package.json\""
+          fixture_replacement = "  printf '{\"packageManager\":\"%s\"}\\n' \"$ROOT_PACKAGE_MANAGER\" > \"$repo/package.json\""
+          if test.count(fixture_anchor) != 1:
+              raise SystemExit(f'expected one fixture packageManager anchor, found {test.count(fixture_anchor)}')
+          test = test.replace(fixture_anchor, fixture_replacement, 1)
+          test_path.write_text(test)
+
+      - name: Check shell syntax
+        run: bash -n scripts/deployment/*.sh
+
+      - name: Run deployment safety regression suite
+        run: bash scripts/deployment/test-deployment-scripts.sh
+
+      - name: Required CI gate self-tests
+        run: node scripts/security/required-ci-gate.mjs --self-test
+
+      - name: Trigger drift self-tests
+        run: node scripts/security/check-required-ci-trigger-drift.mjs --self-test
+
+      - name: Enforce trigger-path parity
+        run: node scripts/security/check-required-ci-trigger-drift.mjs
+
+      - name: Verify diff
+        run: git diff --check
+
+      - name: Commit verified correction and remove helper
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm .github/workflows/deployment-package-manager-contract-one-shot.yml
+          git add .github/workflows/deployment-script-safety.yml \
+                  scripts/security/required-ci-gate.mjs \
+                  scripts/deployment/test-deployment-scripts.sh \
+                  .github/workflows/deployment-package-manager-contract-one-shot.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'ci: bind deployment safety to root package manager'
+          git push origin HEAD:fix/deployment-package-manager-contract
