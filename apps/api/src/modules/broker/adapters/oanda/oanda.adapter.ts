@@ -23,6 +23,7 @@ import {
 } from '../../interfaces/broker-adapter.interface';
 import type { OrderCapabilityDeclaration } from '../../interfaces/order-capability';
 import { BrokerAdapterError, BrokerErrorCode } from '../../interfaces/broker-adapter.errors';
+import { ProviderDispatchCertainty } from '../../interfaces/provider-dispatch-certainty';
 import {
   isOandaOrderRejection,
   mapOandaError,
@@ -126,6 +127,16 @@ interface V3OrderRequest {
   };
 }
 
+interface V3OrderCancelResponse {
+  orderCancelTransaction?: {
+    id: string;
+    type?: string;
+    orderID?: string;
+    time?: string;
+    reason?: string;
+  };
+}
+
 interface V3Trade {
   id: string;
   instrument: string;
@@ -199,6 +210,16 @@ const FX_CONTRACT_SIZE = '100000';
 /** 5dp conversion precision for unit↔lot and spread computations. */
 const CONVERSION_DECIMALS = 5;
 const CONVERSION_SCALE = Math.pow(10, CONVERSION_DECIMALS);
+/**
+ * OANDA v20 clientExtensions.id transport constraint: at most 64 characters
+ * of alphanumeric characters and limited punctuation. This conservative
+ * internal allowlist covers every platform clientOrderId scheme
+ * (`sig-<signalId>`, `close-<tradeId>[-attempt]`) — anything the provider
+ * would reject is rejected LOCALLY (fail-closed) before a transport call.
+ */
+const OANDA_CLIENT_EXTENSIONS_ID_PATTERN = /^[A-Za-z0-9._:'()\-]{1,64}$/;
+/** OANDA v20 clientExtensions.id maximum length (documented provider limit). */
+const OANDA_CLIENT_EXTENSIONS_ID_MAX_LENGTH = 64;
 
 /**
  * OandaAdapter — native OANDA v20 REST integration (Sprint 51 PR-7).
@@ -216,7 +237,12 @@ const CONVERSION_SCALE = Math.pow(10, CONVERSION_DECIMALS);
  *   returned in results, and redacted from every error message.
  * - All monetary/quantity values are decimal STRINGS (v20 itself returns
  *   decimals as strings — passed through with validation, never floats).
- * - The idempotencyKey travels as clientExtensions.id (provider dedup).
+ * - Provider-side client identifier: the caller-supplied clientOrderId
+ *   travels as clientExtensions.id (Phase-7c crash-window echo alignment —
+ *   state-reconciliation matches provider-echoed clientExtensions.id
+ *   against the internal clientOrderId); the idempotencyKey is only the
+ *   fallback when no clientOrderId is supplied. NO provider-side dedup is
+ *   claimed either way (the certainty contract assumes none).
  * - Unknown provider states fail closed (UNKNOWN / throw — never guessed).
  */
 @Injectable()
@@ -647,6 +673,10 @@ export class OandaAdapter implements IBrokerAdapter, AdapterMetadata {
       }
 
       const providerInstrument = toProviderSymbol(order.instrument);
+      // Provider-side client identifier resolved (and validated) BEFORE any
+      // transport call — fail-fast, the adapter's price-validation style: an
+      // untransportable clientOrderId must never consume a provider request.
+      const providerClientId = this.providerClientOrderId(order);
       const contractSize = await this.contractSizeFor(providerInstrument, token);
       // Units conversion: lots × contractSize → signed integer units
       // (BUY positive, SELL negative).
@@ -658,9 +688,18 @@ export class OandaAdapter implements IBrokerAdapter, AdapterMetadata {
           instrument: providerInstrument,
           units,
           timeInForce: order.timeInForce ?? 'GTC',
-          // Idempotency passthrough (Directive §AN #6): the caller's
-          // idempotencyKey is the provider-side dedup surface.
-          clientExtensions: { id: order.idempotencyKey },
+          // Provider-side client identifier (Phase-7c crash-window echo
+          // alignment, Directive §26): the caller-supplied clientOrderId
+          // (sig-<signalId> / close-<tradeId>) MUST be what the provider
+          // echoes back — state-reconciliation's crash-window recovery
+          // proves provider arrival by matching the provider order's
+          // clientExtensions.id against the INTERNAL clientOrderId. The
+          // idempotencyKey (a sha256 digest upstream) is only the fallback
+          // when no clientOrderId exists — a hash can never match the
+          // echo lookup (the historical mismatch this corrects). No
+          // provider-side dedup is claimed (certainty contract assumes
+          // none); this is identifier alignment, not exactly-once.
+          clientExtensions: { id: providerClientId },
         },
       };
       if (kind === 'LIMIT') {
@@ -680,7 +719,8 @@ export class OandaAdapter implements IBrokerAdapter, AdapterMetadata {
 
       this.logger.log(
         `OANDA order submitted: instrument=${providerInstrument} units=${units} ` +
-          `kind=${kind} tif=${body.order.timeInForce} [idempotency clientExtensions.id present]`,
+          `kind=${kind} tif=${body.order.timeInForce} ` +
+          `[clientExtensions.id=${order.clientOrderId ? 'clientOrderId' : 'idempotencyKey'} present]`,
       );
 
       const response = await this.request<V3OrderCreateResponse>(
@@ -808,6 +848,73 @@ export class OandaAdapter implements IBrokerAdapter, AdapterMetadata {
             externalOrderId,
             status: 'REJECTED',
             brokerMessage: `OANDA close rejected: ${reject.reason}`,
+            rawResponse: err.body,
+          };
+        }
+      }
+      throw this.mapError(err);
+    }
+  }
+
+  // ─── ADDITIVE CONCRETE SURFACE — NOT part of IBrokerAdapter ───────────────
+
+  /**
+   * Cancels a WORKING (pending) order via PUT /v3/accounts/{accountID}/
+   * orders/{orderSpecifier}/cancel (OANDA v20 order cancellation).
+   *
+   * ADDITIVE CONCRETE METHOD (Sprint 50/51 contract decision — mirrors the
+   * cTrader/paper siblings): cancelOrder is deliberately NOT declared on
+   * the shared IBrokerAdapter interface; the provider-verification harness
+   * narrows with `'cancelOrder' in adapter` to exercise it (pending-cancel
+   * step). Do NOT widen the shared interface; do NOT remove it from this
+   * adapter.
+   *
+   * Outcome discipline (fail-closed, same as placeOrder/closeOrder):
+   * - 2xx WITH orderCancelTransaction.id → authoritative success (FILLED —
+   *   the cancellation itself executed, cTrader-sibling semantics);
+   * - 400 WITH orderCancelRejectTransaction → honest REJECTED result (the
+   *   provider answered: e.g. the order is no longer pending / already
+   *   filled — never a throw-that-looks-like-an-outage);
+   * - 404 order-not-found → POSITION_NOT_FOUND through the shared error
+   *   mapper (SENT_RESPONSE_RECEIVED — the provider answered);
+   * - timeout / network failure → CONNECTION_TIMEOUT /
+   *   PROVIDER_UNAVAILABLE with MAY_HAVE_REACHED_PROVIDER (the cancel may
+   *   have reached the provider — reconcile, never resend);
+   * - 2xx WITHOUT orderCancelTransaction.id → INVALID_REQUEST (a malformed
+   *   answer is NEVER interpreted as success).
+   */
+  async cancelOrder(externalOrderId: string): Promise<BrokerOrderResult> {
+    const { accountId, token } = this.requireConnection();
+    try {
+      const response = await this.request<V3OrderCancelResponse>(
+        'PUT',
+        `/v3/accounts/${this.enc(accountId)}/orders/${this.enc(externalOrderId)}/cancel`,
+        token,
+        {},
+      );
+      const cancel = response.orderCancelTransaction;
+      if (!cancel?.id) {
+        throw new BrokerAdapterError(
+          BrokerErrorCode.INVALID_REQUEST,
+          'OANDA order-cancel response missing orderCancelTransaction.id — outcome cannot be recorded',
+        );
+      }
+      return {
+        success: true,
+        externalOrderId,
+        status: 'FILLED',
+        brokerMessage: 'OANDA order cancelled',
+        rawResponse: response,
+      };
+    } catch (err) {
+      if (err instanceof OandaApiError && err.status === 400) {
+        const reject = err.body?.orderCancelRejectTransaction as { reason?: string } | undefined;
+        if (reject?.reason !== undefined) {
+          return {
+            success: false,
+            externalOrderId,
+            status: 'REJECTED',
+            brokerMessage: `OANDA order cancel rejected: ${reject.reason}`,
             rawResponse: err.body,
           };
         }
@@ -1049,6 +1156,47 @@ export class OandaAdapter implements IBrokerAdapter, AdapterMetadata {
     return map;
   }
 
+  /**
+   * Resolve the provider-side clientExtensions.id for a placed order
+   * (Phase-7c crash-window echo alignment, Directive §26).
+   *
+   * The caller-supplied clientOrderId is the identifier the crash-window
+   * recovery matches against the provider's echoed clientExtensions.id
+   * (state-reconciliation §7c(a): p.clientOrderId === order.clientOrderId) —
+   * it WINS over the idempotencyKey whenever present. OANDA v20 constrains
+   * clientExtensions.id (≤64 chars, alphanumeric + limited punctuation); an
+   * identifier that cannot be transported honestly fails closed
+   * (INVALID_REQUEST, pre-send → DEFINITELY_NOT_SENT) rather than being
+   * silently transformed (a mutated id would break the echo match this seam
+   * exists to make possible) or silently degraded to the hash fallback (the
+   * exact invisible mismatch this fix removes).
+   */
+  private providerClientOrderId(order: BrokerOrderRequest): string {
+    const clientOrderId = order.clientOrderId?.trim();
+    if (clientOrderId !== undefined && clientOrderId.length > 0) {
+      if (
+        clientOrderId.length > OANDA_CLIENT_EXTENSIONS_ID_MAX_LENGTH ||
+        !OANDA_CLIENT_EXTENSIONS_ID_PATTERN.test(clientOrderId)
+      ) {
+        // Local pre-send validation failure — nothing left iRexPro (the
+        // explicit certainty keeps the write-certainty contract complete;
+        // mapOandaError passes already-classified errors through unchanged).
+        throw new BrokerAdapterError(
+          BrokerErrorCode.INVALID_REQUEST,
+          `clientOrderId "${clientOrderId}" cannot travel as OANDA clientExtensions.id ` +
+            '(max 64 chars; alphanumeric and limited punctuation) — refusing to transform it',
+          undefined,
+          false,
+          ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+        );
+      }
+      return clientOrderId;
+    }
+    // No caller-supplied stable identifier — the idempotencyKey remains the
+    // honest passthrough (Directive §AN #6 contract).
+    return order.idempotencyKey;
+  }
+
   private async findOpenTrade(tradeSpecifier: string): Promise<V3Trade | null> {
     const { accountId, token } = this.requireConnection();
     const response = await this.request<V3OpenTradesResponse>(
@@ -1183,6 +1331,11 @@ export class OandaAdapter implements IBrokerAdapter, AdapterMetadata {
   }
 
   private mapOrderState(order: V3Order, contractSizes: Map<string, string>): BrokerOrderState {
+    // NOTE (Phase-7c echo alignment): the provider order's clientExtensions.id
+    // is surfaced VERBATIM as clientOrderId below — this is the field the
+    // crash-window recovery matches against the internal clientOrderId
+    // (placeOrder now sends the caller's clientOrderId as clientExtensions.id,
+    // so the round-trip matches).
     const contractSize = contractSizes.get(order.instrument);
     if (contractSize === undefined) {
       throw new BrokerAdapterError(

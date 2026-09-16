@@ -1,5 +1,13 @@
-import type { LiveAccountOverviewView } from '@irexpro/types/live-account';
-import { loadLiveAccountOverview, loadLiveAccountPositions } from './live-account';
+import type {
+  LiveAccountOrdersPage,
+  LiveAccountOverviewView,
+  LiveOrderRowView,
+} from '@irexpro/types/live-account';
+import {
+  loadLiveAccountOrders,
+  loadLiveAccountOverview,
+  loadLiveAccountPositions,
+} from './live-account';
 
 /**
  * Runtime contract-guard tests for the Live Account loaders (Directive §36
@@ -245,6 +253,91 @@ describe('loadLiveAccountPositions runtime guards', () => {
 
     await expect(loadLiveAccountPositions()).rejects.toThrow(
       'Live account positions contract mismatch',
+    );
+  });
+});
+
+describe('loadLiveAccountOrders runtime guards', () => {
+  beforeEach(() => {
+    requestMock.mockReset();
+  });
+
+  /**
+   * A valid order row, every field per the LiveOrderRowView contract. The
+   * default status is DISPATCH_COMMITTED — typing the fixture against
+   * LiveOrderRowView makes the union membership of DISPATCH_COMMITTED a
+   * compile-time guarantee (R7-audit-C A7).
+   */
+  const orderRow = (overrides: Partial<LiveOrderRowView> = {}): LiveOrderRowView => ({
+    id: 'ord_33333333-3333-4333-8333-333333333333',
+    brokerConnectionId: 'bconn_11111111-1111-4111-8111-111111111111',
+    brokerName: 'MetaTrader 5',
+    clientOrderId: 'client-ord-1',
+    providerOrderId: null,
+    tradeId: null,
+    orderKind: 'MARKET',
+    timeInForce: 'GTC',
+    instrument: 'EURUSD',
+    direction: 'BUY',
+    requestedQuantity: '0.1000',
+    requestedPrice: null,
+    stopPrice: null,
+    filledQuantity: '0.0000',
+    avgFillPrice: null,
+    status: 'DISPATCH_COMMITTED',
+    rejectReason: null,
+    submittedAt: '2026-09-01T11:00:00.000Z',
+    finalizedAt: null,
+    createdAt: '2026-09-01T10:59:00.000Z',
+    ...overrides,
+  });
+
+  const ordersPage = (orders: LiveOrderRowView[]): LiveAccountOrdersPage => ({
+    orders,
+    total: orders.length,
+    limit: 50,
+    offset: 0,
+  });
+
+  it('accepts an in-flight DISPATCH_COMMITTED row under the ALL filter (R7-audit-C A7)', async () => {
+    // Round 6 (#365): the API legitimately exposes orders in the
+    // dispatch-committed state while the provider call is in flight; ALL is
+    // the api-client default filter. The fail-closed guard must validate
+    // (not reject) this contract value.
+    requestMock.mockResolvedValue(
+      ordersPage([orderRow(), orderRow({ id: 'ord-2', status: 'SUBMITTED' })]),
+    );
+
+    const page = await loadLiveAccountOrders('ALL', 50, 0);
+
+    expect(page.orders[0].status).toBe('DISPATCH_COMMITTED');
+    expect(page.orders[1].status).toBe('SUBMITTED');
+    expect(page.total).toBe(2);
+  });
+
+  it('accepts a DISPATCH_COMMITTED row under the WORKING filter too (non-terminal state)', async () => {
+    requestMock.mockResolvedValue(ordersPage([orderRow()]));
+
+    const page = await loadLiveAccountOrders('WORKING', 50, 0);
+
+    expect(page.orders[0].status).toBe('DISPATCH_COMMITTED');
+  });
+
+  it('rejects an order status outside the contract (fail-closed)', async () => {
+    const invalidRow = { ...orderRow(), status: 'SOME_UNKNOWN_STATE' };
+    requestMock.mockResolvedValue({ orders: [invalidRow], total: 1, limit: 50, offset: 0 });
+
+    await expect(loadLiveAccountOrders('ALL', 50, 0)).rejects.toThrow(
+      'Live account orders contract mismatch',
+    );
+  });
+
+  it('rejects a non-string status value (fail-closed on unknown shapes)', async () => {
+    const invalidRow = { ...orderRow(), status: 7 };
+    requestMock.mockResolvedValue({ orders: [invalidRow], total: 1, limit: 50, offset: 0 });
+
+    await expect(loadLiveAccountOrders('ALL', 50, 0)).rejects.toThrow(
+      'Live account orders contract mismatch',
     );
   });
 });

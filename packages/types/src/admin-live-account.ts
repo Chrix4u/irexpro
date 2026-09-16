@@ -14,6 +14,7 @@ import type {
   BrokerConnectionStatus,
   BrokerCredentialStatus,
 } from './index';
+import type { BrokerProductionLiveVerification } from './broker-registry';
 
 // ─── Operational overview (GET /admin/live-account/overview) ────────────────
 
@@ -79,6 +80,15 @@ export interface AdminProviderRegistryEntry {
   capabilities: string[];
   supportsDemo: boolean;
   supportsLive: boolean;
+  /**
+   * Production-LIVE verification evidence (R7-audit-D #12) — the exact type
+   * the broker registry response carries (BrokerProductionLiveVerification),
+   * so Admin Live Ops can render verification state straight from the
+   * overview without a second /broker/registry call. BETA ≠ production-LIVE:
+   * absent/UNVERIFIED fails closed. Optional for wire compatibility with
+   * payloads emitted before this field existed (the API always emits it).
+   */
+  productionLiveVerification?: BrokerProductionLiveVerification;
 }
 
 export interface AdminLiveOpsOverviewView {

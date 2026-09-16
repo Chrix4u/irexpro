@@ -128,6 +128,31 @@ export class AdminExpiredControlsViewDto {
   controls: AdminExecutionControlViewDto[];
 }
 
+/**
+ * Production-LIVE verification evidence (R7-audit-D #12) — mirrors
+ * BrokerProductionLiveVerification from packages/types/src/broker-registry.ts
+ * (the exact type GET /broker/registry carries) so Admin Live Ops can render
+ * verification state from the overview without a second registry call.
+ */
+export class AdminProductionLiveVerificationDto {
+  @ApiProperty({ enum: ['UNVERIFIED', 'VERIFIED'] })
+  status: 'UNVERIFIED' | 'VERIFIED';
+
+  @ApiPropertyOptional({
+    nullable: true,
+    type: String,
+    format: 'date-time',
+    description: 'Operator-attested verification timestamp (null when unverified).',
+  })
+  verifiedAt: string | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Doc/ticket evidence reference (never secrets; null when unverified).',
+  })
+  evidenceRef: string | null;
+}
+
 export class AdminProviderRegistryEntryDto {
   @ApiProperty({ example: 'metatrader5' })
   brokerId: string;
@@ -143,6 +168,13 @@ export class AdminProviderRegistryEntryDto {
 
   @ApiProperty()
   supportsLive: boolean;
+
+  @ApiProperty({
+    type: AdminProductionLiveVerificationDto,
+    description:
+      'Production-LIVE verification evidence — BETA ≠ production-LIVE (always emitted; mirrors the broker registry response).',
+  })
+  productionLiveVerification: AdminProductionLiveVerificationDto;
 }
 
 export class AdminLiveOpsOverviewViewDto {

@@ -220,14 +220,19 @@ const mockPositions = {
 const WORKING_INSTRUMENTS = ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', 'AUDUSD'];
 
 function makeWorkingOrder(index: number): LiveOrderRowView {
+  // Round 6 (#365): index 1 is an in-flight DISPATCH_COMMITTED row — the
+  // ALL filter (and the WORKING set) can legitimately carry this state, so
+  // the e2e fixture exercises it (R7-audit-C A7).
   const status: LiveOrderRowView['status'] =
     index === 0
       ? 'RECONCILIATION_PENDING'
-      : index % 3 === 1
-        ? 'ACKNOWLEDGED'
-        : index % 3 === 2
-          ? 'PARTIALLY_FILLED'
-          : 'SUBMITTED';
+      : index === 1
+        ? 'DISPATCH_COMMITTED'
+        : index % 3 === 1
+          ? 'ACKNOWLEDGED'
+          : index % 3 === 2
+            ? 'PARTIALLY_FILLED'
+            : 'SUBMITTED';
   const isLimit = index % 2 === 0;
   return {
     id: `ord-work-${index}`,
@@ -581,6 +586,8 @@ test.describe('Live Account dashboard (Sprint 50 PR-5)', () => {
     );
     await expect(ordersSection.getByText('Showing 10 of 12 orders')).toBeVisible();
     await expect(ordersSection.getByText('Reconciliation Pending', { exact: true }).first()).toBeVisible();
+    // The in-flight dispatch commitment row renders under WORKING (non-terminal).
+    await expect(ordersSection.getByText('Dispatch Committed', { exact: true }).first()).toBeVisible();
 
     // Load more appends the second page fetched with offset=10.
     await ordersSection.getByRole('button', { name: 'Load more orders' }).click();

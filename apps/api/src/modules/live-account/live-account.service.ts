@@ -66,10 +66,18 @@ export const LIVE_ACCOUNT_SYNC_STALE_ALERT_MS = 60 * 60 * 1000;
 /** Sanitized lastErrorMessage never exceeds this length. */
 export const LIVE_ACCOUNT_ERROR_MESSAGE_MAX_LENGTH = 200;
 
-/** WORKING filter = orders still in flight (incl. reconciliation-held). */
+/**
+ * WORKING filter = every NON-TERMINAL order state (still in flight, incl.
+ * reconciliation-held). Round 6 (#365): DISPATCH_COMMITTED is in flight and
+ * NOT terminal — OrderStateMachine.isWorking includes it, fills legitimately
+ * arrive in that state, so it belongs in the working set (and in the
+ * workingOrders execution-health count). HISTORY = the terminal set below,
+ * so WORKING ∪ HISTORY covers the full OrderStatus enum with no overlap.
+ */
 export const ORDER_WORKING_STATUSES: readonly OrderStatus[] = [
   OrderStatus.CREATED,
   OrderStatus.SUBMITTED,
+  OrderStatus.DISPATCH_COMMITTED,
   OrderStatus.ACKNOWLEDGED,
   OrderStatus.PARTIALLY_FILLED,
   OrderStatus.RECONCILIATION_PENDING,
