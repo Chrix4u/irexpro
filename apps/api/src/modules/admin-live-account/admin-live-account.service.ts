@@ -540,6 +540,15 @@ export class AdminLiveAccountService {
       capabilities: [...entry.capabilities],
       supportsDemo: entry.environments.includes('DEMO'),
       supportsLive: entry.environments.includes('LIVE'),
+      // R7-audit-D #12: production-LIVE verification evidence (always
+      // materialized by the registry, default UNVERIFIED) so Admin Live Ops
+      // can render verification state from the overview without a second
+      // /broker/registry call. Copied — never a shared registry reference.
+      // Round 7.1 (P0-3): provenance + truthful derived certification state
+      // ride along so legacy attestation is never rendered as a fresh
+      // protocol certification.
+      productionLiveVerification: { ...entry.productionLiveVerification },
+      certificationState: entry.certificationState,
     }));
   }
 

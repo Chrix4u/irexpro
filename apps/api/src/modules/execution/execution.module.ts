@@ -27,6 +27,12 @@ import {
   TRADE_RECONCILIATION_QUEUE,
 } from './jobs/trade-reconciliation.job';
 import { TradeReconciliationProducer } from './jobs/trade-reconciliation.producer';
+// Round 7 (P1): the expiry-hygiene sweeper + the durable emergency flatten.
+import { ExecutionExpiryJob, EXECUTION_EXPIRY_QUEUE } from './jobs/execution-expiry.job';
+import { ExecutionExpiryProducer } from './jobs/execution-expiry.producer';
+import { EMERGENCY_FLATTEN_QUEUE } from './jobs/emergency-flatten.constants';
+import { EmergencyFlattenJob } from './jobs/emergency-flatten.job';
+import { EmergencyFlattenProducer } from './jobs/emergency-flatten.producer';
 import { StateReconciliationService } from './reconciliation/state-reconciliation.service';
 import { ReconciliationPersistenceService } from './reconciliation/reconciliation-persistence.service';
 import { ReconciliationResolutionService } from './reconciliation/reconciliation-resolution.service';
@@ -95,7 +101,13 @@ import { ProtectiveOrderReconciliationService } from './reconciliation/protectiv
       // entity itself is risk-module-owned).
       RiskProfile,
     ]),
-    BullModule.registerQueue({ name: TRADE_RECONCILIATION_QUEUE }),
+    BullModule.registerQueue(
+      { name: TRADE_RECONCILIATION_QUEUE },
+      // Round 7 (P1): the expiry-hygiene sweeper + the durable kill-switch
+      // flatten queue (crash-surviving emergency de-risking).
+      { name: EXECUTION_EXPIRY_QUEUE },
+      { name: EMERGENCY_FLATTEN_QUEUE },
+    ),
     forwardRef(() => RiskModule),
     BrokerModule,
     AuditModule,
@@ -157,6 +169,14 @@ import { ProtectiveOrderReconciliationService } from './reconciliation/protectiv
     ProtectiveOrderReconciliationService,
     TradeReconciliationJob,
     TradeReconciliationProducer,
+    // Round 7 (P1): the expiry-hygiene sweeper (stale intents/confirmations
+    // expire proactively; their capital reservations are released) + the
+    // durable emergency-flatten worker/producer (the kill-switch flatten
+    // survives a process crash between the authority write and the close).
+    ExecutionExpiryJob,
+    ExecutionExpiryProducer,
+    EmergencyFlattenJob,
+    EmergencyFlattenProducer,
   ],
   exports: [
     ExecutionService,

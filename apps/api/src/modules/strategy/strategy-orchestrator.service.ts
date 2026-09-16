@@ -1,4 +1,5 @@
 import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { RiskService } from '../risk/risk.service';
 import { ExecutionService } from '../execution/execution.service';
 import { BrokerService } from '../broker/broker.service';
@@ -15,10 +16,23 @@ import {
   SignalIdentityRegistration,
 } from '../execution/orchestration/signal-identity.gate';
 import { TradeIntentService, TradeIntentFacts } from '../execution/services/trade-intent.service';
+import type { TradeIntent } from '../execution/entities/trade-intent.entity';
 import { AllocationService } from '../execution/services/allocation.service';
 import { PositionSizingService } from '../execution/services/position-sizing.service';
+// Round 7.1 (P1 — sizing input freshness): the durable account-snapshot
+// authority whose 30s LIVE freshness window is now enforced BEFORE sizing.
+import {
+  BrokerAccountSnapshotService,
+  SnapshotNotFreshError,
+} from '../broker/services/broker-account-snapshot.service';
+import { BrokerMode } from '../broker/interfaces/broker-adapter.interface';
 import { TradingAuthorityService } from '../execution-authority/trading-authority.service';
 import { SharedControlRevisionService } from '../execution-authority/shared-control-revision.service';
+// Round 7 (P1 metrics — audit R7-audit-C A6): dependency-free in-process
+// counters. Resolved lazily via ModuleRef (see the getter below) — metrics
+// can never affect pipeline control flow.
+import { MetricsService } from '../metrics/metrics.service';
+import { METRIC_NAMES } from '../metrics/metric-names';
 import {
   AiSignalCandidate,
   StrategyDuplicateOfTrade,
@@ -81,6 +95,11 @@ export class StrategyOrchestratorService {
     @Inject(forwardRef(() => ExecutionService))
     private readonly executionService: ExecutionService,
     private readonly brokerService: BrokerService,
+    // Round 7.1 (P1 — sizing input freshness): the LIVE fresh-snapshot
+    // authority resolved BEFORE sizePosition (BrokerModule is already
+    // imported by StrategyModule and exports this provider — no module
+    // wiring change).
+    private readonly brokerAccountSnapshotService: BrokerAccountSnapshotService,
     private readonly auditService: AuditService,
     private readonly eventBus: DomainEventBus,
     private readonly signalIdentityGate: AiSignalIdentityGateService,
@@ -96,7 +115,29 @@ export class StrategyOrchestratorService {
     // inputs and its capital reserved BEFORE risk evaluation.
     private readonly positionSizingService: PositionSizingService,
     private readonly allocationService: AllocationService,
+    /** Round 7 (P1 metrics): lazy MetricsService seam (never a constructor
+     * injection — see the metrics getter for the DI decision). */
+    private readonly moduleRef: ModuleRef,
   ) {}
+
+  /**
+   * Round 7 (P1 metrics — audit R7-audit-C A6): lazy metrics seam. Resolved
+   * at CALL time via ModuleRef.get(..., { strict: false }) — the app-wide
+   * lookup finds the MetricsModule singleton (registered once in AppModule).
+   * Direct constructor injection was rejected: it would demand a
+   * MetricsService provider in EVERY spec constructing this service
+   * (incl. out-of-scope suites) plus module-file imports outside the approved
+   * file scope. In isolated test contexts the lookup fails → null → the
+   * `this.metrics?.increment(...)` call sites no-op (MetricsService methods
+   * never throw). Never affects control flow.
+   */
+  private get metrics(): MetricsService | null {
+    try {
+      return this.moduleRef.get(MetricsService, { strict: false });
+    } catch {
+      return null;
+    }
+  }
 
   /**
    * Process an AI signal candidate through the full validation pipeline.
@@ -263,9 +304,9 @@ export class StrategyOrchestratorService {
     // means retries/worker restarts/queue redelivery can never mint a second
     // equivalent intent. Fail-closed: without the durable intent the decision
     // may NOT proceed to risk evaluation (executeTrade enforces the guard).
-    let tradeIntentId: string;
+    let tradeIntent: TradeIntent;
     try {
-      tradeIntentId = (await this.recordTradeIntent(candidate, session, registration)).id;
+      tradeIntent = await this.recordTradeIntent(candidate, session, registration);
     } catch (err) {
       const reason = `Trade intent could not be recorded (fail-closed): ${(err as Error).message}`;
       this.logger.error(`Signal ${signalId}: intent recording failed`, (err as Error).stack);
@@ -282,6 +323,9 @@ export class StrategyOrchestratorService {
           message: (err as Error).message,
         },
       });
+      this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, {
+        outcome: 'EXECUTION_FAILED',
+      });
       return { outcome: 'EXECUTION_FAILED', signalId, reason };
     }
 
@@ -296,6 +340,16 @@ export class StrategyOrchestratorService {
     // the SIZED volume is what flows to the Risk Engine.
     let sized;
     try {
+      // Round 7.1 (P1 — sizing input freshness): resolve the LIVE fresh-
+      // snapshot authority BEFORE sizing. PositionSizingService reads equity
+      // from the durable account snapshot with NO age check at sizing time,
+      // and the 30s LIVE freshness window was previously enforced only LATER
+      // at risk Step 2-live — which refreshes the snapshot AFTER sizing — so
+      // lots could be computed from equity up to 60s+ old while risk
+      // validated with fresh numbers. DEMO/PAPER connections are unchanged
+      // (no sizing-time freshness gate). Any failure is the typed rejection
+      // below (never a stale-equity sizing).
+      await this.ensureLiveSizingSnapshotFresh(userId, session);
       sized = await this.positionSizingService.sizePosition({
         userId,
         brokerConnectionId: session.brokerConnectionId,
@@ -308,18 +362,37 @@ export class StrategyOrchestratorService {
       });
       await this.allocationService.resolveOrAllocate({
         intent: {
-          id: tradeIntentId,
+          id: tradeIntent.id,
           userId,
           brokerConnectionId: session.brokerConnectionId,
           instrument: candidate.instrument,
           direction: candidate.direction,
           strategyCode: candidate.strategyCode ?? null,
+          // Round 7 (P0 allocation-scope fix): the durable intent carries the
+          // connection's server-computed logical account key captured at
+          // creation — the allocation engine must reserve against the REAL
+          // per-account scope (the budget is seeded per (user, logical
+          // account)), never a synthetic unseedable connection scope.
+          logicalAccountKey: tradeIntent.logicalAccountKey,
         },
-        logicalAccountKey: null, // resolved inside the allocation engine scope
+        // Round 7 (P0 allocation-scope fix): the REAL logical account scope.
+        // The previous `null` made the engine substitute a synthetic
+        // `conn:<connectionId>` scope whose budget can NEVER be seeded
+        // (budget seeding resolves connections by their REAL
+        // logical_account_key) — every entry failed
+        // ALLOCATION_BUDGET_UNPROVABLE. Null is still passed through when the
+        // intent genuinely carries none; the engine then fail-closes with the
+        // same typed code (no silent unseedable scoping).
+        logicalAccountKey: tradeIntent.logicalAccountKey,
         sized,
       });
     } catch (err) {
-      const code = (err as { code?: string }).code ?? 'SIZING_ALLOCATION_FAILED';
+      // Round 7.1 (P1 — sizing input freshness): a LIVE freshness rejection
+      // surfaces its TYPED SNAPSHOT_* code — never the generic default.
+      const code =
+        (err as { code?: string }).code ??
+        (err instanceof SnapshotNotFreshError ? err.failure.code : undefined) ??
+        'SIZING_ALLOCATION_FAILED';
       const reason = `Position sizing/allocation failed closed [${code}]: ${(err as Error).message}`;
       this.logger.warn(`Signal ${signalId}: ${reason}`);
       await this.auditService.log({
@@ -335,6 +408,17 @@ export class StrategyOrchestratorService {
           message: (err as Error).message,
         },
       });
+      this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, {
+        outcome: 'EXECUTION_FAILED',
+      });
+      // Typed failure classification: AllocationError codes are all
+      // ALLOCATION_-prefixed; every other typed code is a sizing failure.
+      this.metrics?.increment(
+        code.startsWith('ALLOCATION_')
+          ? METRIC_NAMES.ALLOCATION_FAILURES
+          : METRIC_NAMES.SIZING_FAILURES,
+        { code },
+      );
       return { outcome: 'EXECUTION_FAILED', signalId, reason };
     }
 
@@ -397,6 +481,9 @@ export class StrategyOrchestratorService {
         rejectionCode: 'RISK_ENGINE_ERROR',
         rejectionReason: reason,
       });
+      this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, {
+        outcome: 'RISK_REJECTED',
+      });
       return { outcome: 'RISK_REJECTED', signalId, reason };
     }
 
@@ -410,20 +497,20 @@ export class StrategyOrchestratorService {
       // terminally REJECTED (a replay of the same AI decision can never
       // re-enter exposure through the intent guard).
       await this.tradeIntentService
-        .markRejected(tradeIntentId)
+        .markRejected(tradeIntent.id)
         .catch((err) =>
           this.logger.warn(
-            `Signal ${signalId}: intent ${tradeIntentId} could not be marked REJECTED ` +
+            `Signal ${signalId}: intent ${tradeIntent.id} could not be marked REJECTED ` +
               `(${(err as Error).message}) — the duplicate-recovery path still fails closed`,
           ),
         );
       // §3: the capital reservation is released with the decision (definitive
       // non-exposure — the ledger records why).
       await this.allocationService
-        .releaseAllocationForIntent(tradeIntentId, `RISK_${riskDecision.decision}`)
+        .releaseAllocationForIntent(tradeIntent.id, `RISK_${riskDecision.decision}`)
         .catch((err) =>
           this.logger.warn(
-            `Signal ${signalId}: allocation for intent ${tradeIntentId} could not be ` +
+            `Signal ${signalId}: allocation for intent ${tradeIntent.id} could not be ` +
               `released (${(err as Error).message}) — the aggregate self-heals from intent status`,
           ),
         );
@@ -439,6 +526,10 @@ export class StrategyOrchestratorService {
           rejectionCode: riskDecision.rejectionCode,
           rejectionReason: riskDecision.rejectionReason,
         },
+      });
+      this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, { outcome });
+      this.metrics?.increment(METRIC_NAMES.INTENTS_REJECTED, {
+        code: riskDecision.rejectionCode,
       });
       return {
         outcome,
@@ -484,6 +575,9 @@ export class StrategyOrchestratorService {
           awaiting: 'USER_EXECUTION_CONFIRMATION',
         },
       });
+      this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, {
+        outcome: 'EXECUTION_PENDING_CONFIRMATION',
+      });
       return {
         outcome: 'EXECUTION_PENDING_CONFIRMATION',
         signalId,
@@ -509,6 +603,9 @@ export class StrategyOrchestratorService {
           strategyCode: candidate.strategyCode,
         },
       });
+      this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, {
+        outcome: 'EXECUTION_SUCCEEDED',
+      });
       return { outcome: 'EXECUTION_SUCCEEDED', signalId, tradeId: trade.id };
     } catch (err) {
       const reason = `Execution failed: ${(err as Error).message}`;
@@ -525,11 +622,67 @@ export class StrategyOrchestratorService {
           failureCode: 'EXECUTION_ERROR',
         },
       });
+      this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, {
+        outcome: 'EXECUTION_FAILED',
+      });
       return { outcome: 'EXECUTION_FAILED', signalId, reason };
     }
   }
 
   // ─── Internal helpers ──────────────────────────────────────────────────────
+
+  /**
+   * Round 7.1 (P1 — sizing input freshness): resolve the LIVE fresh-snapshot
+   * authority BEFORE position sizing (Gate 4.8).
+   *
+   * The sizing engine derives lots from the durable account snapshot's
+   * equity; that read carries no age check, so the 30s LIVE freshness window
+   * must be enforced HERE — before the volume is computed — instead of only
+   * at risk Step 2-live, which resolves/refreshes the snapshot AFTER sizing
+   * (lots computed from equity up to 60s+ old while risk validated with
+   * fresh numbers).
+   *
+   * Resolution pattern — IDENTICAL to risk Step 2-live (risk.service.ts):
+   *   1. resolveFreshSnapshotForNewExposure(connection.id);
+   *   2. on SnapshotNotFreshError SNAPSHOT_STALE / SNAPSHOT_MISSING → ONE
+   *      bounded synchronous provider observation
+   *      (observeAccountSnapshotNow — the §1a write path) → re-resolve;
+   *   3. any failure propagates (typed, fail-closed — a failed refresh never
+   *      authorizes a stale snapshot, and a stale snapshot never sizes).
+   *
+   * DEMO/PAPER connections return immediately — no sizing-time freshness
+   * gate (their behavior is unchanged).
+   */
+  private async ensureLiveSizingSnapshotFresh(
+    userId: string,
+    session: TradingSession,
+  ): Promise<void> {
+    // The EXACT session-bound connection (ownership enforced by
+    // findConnectionById; a missing row is the caller's typed fail-closed
+    // rejection — the account type can never be guessed).
+    const connection = await this.brokerService.findConnectionById(
+      session.brokerConnectionId,
+      userId,
+    );
+    if (connection.accountType !== BrokerMode.LIVE) {
+      return; // DEMO/PAPER: no sizing-time freshness gate.
+    }
+    try {
+      await this.brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure(connection.id);
+    } catch (snapErr) {
+      if (
+        snapErr instanceof SnapshotNotFreshError &&
+        (snapErr.failure.code === 'SNAPSHOT_STALE' || snapErr.failure.code === 'SNAPSHOT_MISSING')
+      ) {
+        // ONE bounded synchronous provider observation, then re-resolve —
+        // LIVE sizing availability is structural, not cadence-luck.
+        await this.brokerService.observeAccountSnapshotNow(userId, connection.id);
+        await this.brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure(connection.id);
+      } else {
+        throw snapErr;
+      }
+    }
+  }
 
   /**
    * Round 6 live-execution completion (§2): record (or reuse) the durable
@@ -615,6 +768,11 @@ export class StrategyOrchestratorService {
     };
 
     const registrationOutcome = await this.tradeIntentService.recordOrReuseIntent(facts);
+    if (registrationOutcome.created) {
+      // Round 7 (P1 metrics): only a FRESH intent row is an intent created
+      // (a UNIQUE-race reuse is exactly-once identity, not a second intent).
+      this.metrics?.increment(METRIC_NAMES.INTENTS_CREATED);
+    }
     if (!registrationOutcome.created) {
       this.logger.log(
         `Signal ${signalId}: trade intent reused (recorded by a concurrent worker) — ` +
@@ -756,6 +914,11 @@ export class StrategyOrchestratorService {
     reasonSummary: string,
     extraMetadata: Record<string, unknown> = {},
   ): Promise<void> {
+    // Round 7 (P1 metrics): every ignored/duplicate-recovered signal outcome
+    // funnels through here — the received-signal counter stays honest for the
+    // whole gate-1..4.6 family (the remaining outcomes increment at their
+    // own return sites).
+    this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, { outcome });
     await this.auditService.log({
       actorUserId: candidate.userId,
       action: AuditAction.AI_SIGNAL_IGNORED,

@@ -25,7 +25,10 @@ import { TradingAuthorityService } from '../execution-authority/trading-authorit
 import { SharedControlRevisionService } from '../execution-authority/shared-control-revision.service';
 import { GrantInvalidationService } from '../execution-authority/grant-invalidation.service';
 import { DailyRiskPeriodService } from '../execution/services/daily-risk-period.service';
-import { BrokerAccountSnapshotService } from '../broker/services/broker-account-snapshot.service';
+import {
+  BrokerAccountSnapshotService,
+  SnapshotNotFreshError,
+} from '../broker/services/broker-account-snapshot.service';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -169,6 +172,8 @@ const mockBrokerService = () => ({
   }),
   // Sprint 32 Gate 2: mock required margin calculation
   getRequiredMargin: jest.fn().mockResolvedValue('100.00'),
+  // Round 7 (P1): the on-demand LIVE snapshot observation seam.
+  observeAccountSnapshotNow: jest.fn().mockResolvedValue(undefined),
 });
 
 const mockAuditService = () => ({
@@ -184,6 +189,8 @@ const mockExecutionService = () => ({
   reserveDailyTradeSlot: jest.fn().mockResolvedValue({ allowed: true, currentCount: 0 }),
   // Round 6 §17: the kill-switch emergency flatten seam.
   emergencyCloseAllOpenPositions: jest.fn().mockResolvedValue([]),
+  // Round 7 (P1): the durable kill-switch flatten entry point.
+  requestDurableEmergencyFlatten: jest.fn().mockResolvedValue(undefined),
 });
 
 // Sprint 50 — emergency control plane mock (default: execution allowed)
@@ -1278,6 +1285,70 @@ describe('RiskService', () => {
       }
     });
 
+    // ─── Round 7 (P1): stale-snapshot synchronous refresh ────────────────
+
+    it('LIVE evaluation with a STALE snapshot makes ONE on-demand observation, re-resolves, and approves', async () => {
+      brokerService.findConnectionById.mockResolvedValue(
+        defaultConnection({ accountType: 'LIVE' }),
+      );
+      orderGeometry.resolveOrderGeometry.mockResolvedValue({
+        contractSize: ExactDecimal.parse('100000'),
+        freshQuote: null,
+        quoteRef: null,
+      });
+      // First resolution: STALE (the 30s window vs 60s writer cadence gap).
+      // After the on-demand observation: a fresh snapshot resolves.
+      brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure
+        .mockRejectedValueOnce(
+          new SnapshotNotFreshError(
+            { code: 'SNAPSHOT_STALE', ageMs: 45_000, maxAgeMs: 30_000 },
+            'conn-1',
+          ),
+        )
+        .mockResolvedValueOnce({
+          id: 'snap-2',
+          generation: 2,
+          currency: 'USD',
+          balance: '10000.00',
+          equity: '10050.00',
+          providerObservedAt: new Date(),
+          acceptedAt: new Date(),
+        });
+
+      const result = await service.validateProposedTrade('user-1', validTrade());
+
+      expect(result.decision).toBe('APPROVED');
+      // The bounded synchronous observation ran exactly once.
+      expect(brokerService.observeAccountSnapshotNow).toHaveBeenCalledWith('user-1', 'conn-1');
+    });
+
+    it('a FAILED refresh keeps the typed fail-closed rejection (never a stale-snapshot approval)', async () => {
+      brokerService.findConnectionById.mockResolvedValue(
+        defaultConnection({ accountType: 'LIVE' }),
+      );
+      orderGeometry.resolveOrderGeometry.mockResolvedValue({
+        contractSize: ExactDecimal.parse('100000'),
+        freshQuote: null,
+        quoteRef: null,
+      });
+      brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure.mockRejectedValue(
+        new SnapshotNotFreshError(
+          { code: 'SNAPSHOT_STALE', ageMs: 45_000, maxAgeMs: 30_000 },
+          'conn-1',
+        ),
+      );
+      brokerService.observeAccountSnapshotNow.mockRejectedValueOnce(
+        new Error('provider unreachable'),
+      );
+
+      const result = await service.validateProposedTrade('user-1', validTrade());
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.ACCOUNT_STATE_UNAVAILABLE);
+      }
+    });
+
     it('PAPER/DEMO records the unverified geometry honestly and still approves', async () => {
       orderGeometry.resolveOrderGeometry.mockResolvedValue({
         contractSize: null,
@@ -1345,14 +1416,19 @@ describe('RiskService', () => {
 
     // ─── Round 6 §17: the FOURTH STOP LEVEL — emergency flatten ──────────
 
-    it('ACTIVATION emergency-flattens every OPEN position (§17 level 4)', async () => {
+    it('ACTIVATION emergency-flattens every OPEN position (§17 level 4) via the DURABLE flatten path (Round 7 P1)', async () => {
       await service.toggleKillSwitch('user-1', true, 'Manual pause');
-      expect(executionService.emergencyCloseAllOpenPositions).toHaveBeenCalledWith('user-1');
+      // Round 7 (P1 — durable flatten): activation routes through the durable
+      // entry point (BullMQ job enqueued + in-process fast path).
+      expect(executionService.requestDurableEmergencyFlatten).toHaveBeenCalledWith(
+        'user-1',
+        'KILL_SWITCH_ACTIVATE',
+      );
     });
 
     it('DEACTIVATION never re-opens positions (no flatten call)', async () => {
       await service.toggleKillSwitch('user-1', false);
-      expect(executionService.emergencyCloseAllOpenPositions).not.toHaveBeenCalled();
+      expect(executionService.requestDurableEmergencyFlatten).not.toHaveBeenCalled();
     });
 
     it('a flatten failure NEVER rolls back the kill-switch authority (durable switch stands)', async () => {

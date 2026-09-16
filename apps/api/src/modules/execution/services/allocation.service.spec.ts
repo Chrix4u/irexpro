@@ -46,6 +46,9 @@ const intent = (id: string, overrides: Partial<Record<string, unknown>> = {}) =>
   instrument: 'EURUSD',
   direction: 'BUY' as const,
   strategyCode: 'TREND_V1',
+  // Round 7 (P0 allocation-scope fix): the durable intent carries the
+  // connection's real logical account key.
+  logicalAccountKey: KEY,
   ...overrides,
 });
 
@@ -443,6 +446,44 @@ describe('AllocationService — server-side authoritative capital layer (Round 6
           sized: sized({ allocatedCapital: '100' }),
         }),
       ).rejects.toMatchObject({ code: 'ALLOCATION_BUDGET_UNPROVABLE' });
+    });
+
+    // ─── Round 7 (P0 allocation-scope fix) ─────────────────────────────
+
+    it('P0 fix: a null logical account key fails closed UP FRONT — no synthetic conn: scope is ever fabricated', async () => {
+      await expect(
+        service.resolveOrAllocate({
+          intent: intent('intent-1', { logicalAccountKey: null }),
+          logicalAccountKey: null,
+          sized: sized(),
+        }),
+      ).rejects.toMatchObject({
+        code: 'ALLOCATION_BUDGET_UNPROVABLE',
+        message: expect.stringContaining('no logical account key'),
+      });
+      // Nothing was reserved and no budget row was fabricated.
+      expect(store.allocations).toHaveLength(0);
+      expect(store.budgets).toHaveLength(1); // the pre-seeded fixture row only
+    });
+
+    it("P0 fix: the intent's durable logical account key is the fallback when the caller passes none", async () => {
+      const alloc = await service.resolveOrAllocate({
+        intent: intent('intent-1'), // carries logicalAccountKey: KEY
+        logicalAccountKey: null,
+        sized: sized(),
+      });
+      expect(alloc.status).toBe(CapitalAllocationStatus.ACTIVE);
+      // Reserved against the REAL account scope, never conn:<connectionId>.
+      expect(store.allocations[0].logical_account_key).toBe(KEY);
+    });
+
+    it("P0 fix: the caller's explicit key wins over the intent's captured key", async () => {
+      await service.resolveOrAllocate({
+        intent: intent('intent-1', { logicalAccountKey: 'other::DEMO::acct-9' }),
+        logicalAccountKey: KEY,
+        sized: sized(),
+      });
+      expect(store.allocations[0].logical_account_key).toBe(KEY);
     });
   });
 

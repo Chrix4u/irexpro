@@ -36,8 +36,18 @@ export class TradeReconciliationProducer implements OnModuleInit {
         { repeat: { every: RECONCILIATION_INTERVAL_MS } },
       );
 
+      // Round 7.1 (P0-5 — boot-time recovery convergence): after a process
+      // restart, in-flight states left behind by the crash (UNKNOWN provider
+      // outcomes, pre-commitment wedges, partially filled orders) otherwise
+      // wait up to a FULL interval (60s+) before the first sweep converges
+      // them. Enqueue ONE immediate, idempotent run so restart recovery
+      // starts in seconds. The worker is idempotent (guarded mutations +
+      // OPEN-row dedup) — a race with the repeatable schedule is harmless.
+      await this.reconciliationQueue.add(TRADE_RECONCILIATION_JOB, { immediateRecovery: true });
+
       this.logger.log(
-        `Trade reconciliation job scheduled (every ${RECONCILIATION_INTERVAL_MS / 1000}s)`,
+        `Trade reconciliation job scheduled (every ${RECONCILIATION_INTERVAL_MS / 1000}s) ` +
+          '+ one immediate boot-time recovery sweep enqueued',
       );
     } catch (err) {
       this.logger.error(

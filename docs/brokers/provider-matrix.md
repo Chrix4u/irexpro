@@ -128,6 +128,7 @@ tests never produce DEMO-VERIFIED or LIVE-VERIFIED evidence**:
 | --- | --- |
 | Catalog status (SUPPORTED / BETA / …) | Code change in `BROKER_CATALOG` + registered adapter + passing contract suite — never the reverse of evidence |
 | `productionLiveVerification` UNVERIFIED → VERIFIED | Operator edits `BROKER_CATALOG` with attested `verifiedAt` + `evidenceRef` (doc/ticket reference — never secrets). Tests never flip it. |
+| `certifiedVia` (Round 7.1) | `LEGACY_ATTESTATION` records historical verification predating the certification protocol; `HARNESS_CERTIFIED` is set ONLY after a genuine operator certification run produced a durable, read-back-verified evidence artifact (`certificationRunRef = runId@sha256:<hash>`). Nothing upgrades automatically — a passing harness run alone flips NOTHING. |
 | `demoValidated` (per connection) | `validate-demo` PASS sets it; FAIL revokes it; a successful DEMO connect auto-writes it (weak proxy, re-validated by the checklist) |
 | LIVE connection creation / `enableLiveTrading` | Server-side fail-closed gates (below) — no UI override |
 
@@ -148,11 +149,31 @@ when the entry is in the catalog, has a registered adapter, and carries
 connectable for **DEMO** use — the two facts are rendered distinctly by UI
 consumers.
 
+### Certification-state model (Round 7.1 — truthful provenance)
+
+`VERIFIED` alone no longer says HOW a provider was verified. Every registry
+entry carries a derived `certificationState` plus the raw provenance fields:
+
+| `certificationState` | Meaning | `status` | `certifiedVia` | Run reference |
+| --- | --- | --- | --- | --- |
+| `NOT_CERTIFIED` | No production-LIVE evidence at all | `UNVERIFIED` | null | null |
+| `LEGACY_VERIFIED` | Historical operator attestation — REAL evidence, but it predates the Round-7 certification protocol: no dated artifact, no harness run, `verifiedAt` may legitimately be null | `VERIFIED` | `LEGACY_ATTESTATION` | null (never fabricated) |
+| `CERTIFIED` | Verified through the documented operator-only LIVE certification protocol with a durable, read-back-verified evidence artifact | `VERIFIED` | `HARNESS_CERTIFIED` | `runId@sha256:<hash>` |
+
+`CERTIFICATION_PENDING` and `EVIDENCE_PERSISTENCE_FAILED` are deliberately
+NOT catalog states — they are RUN-level outcomes carried by the harness
+evidence (`LiveCertificationEvidence.certificationResult`). The catalog
+records only completed certifications; a pending or persistence-failed run
+flips nothing. Legacy attestation is never silently upgraded (and never
+silently revoked — eligibility semantics are unchanged); UI/API render the
+provenance distinctly so an operator can never mistake a legacy attestation
+for a current protocol certification.
+
 Current evidence state:
 
 | Broker | `productionLiveVerification` | Effect |
 | --- | --- | --- |
-| metatrader5 | `VERIFIED`, `verifiedAt: null`, `evidenceRef: "production operation — MetaApi bridge, live in production"` | LIVE allowed (all other gates still apply) |
+| metatrader5 | `VERIFIED` + `certifiedVia: LEGACY_ATTESTATION` (→ `LEGACY_VERIFIED`), `verifiedAt: null`, `evidenceRef: "production operation — MetaApi bridge, live in production"` — historical production-operation evidence, NOT a Round-7 protocol certification; no `certificationRunRef` exists | LIVE allowed (all other gates still apply; a future genuine certification run may upgrade provenance to `HARNESS_CERTIFIED`) |
 | oanda | `UNVERIFIED` | LIVE connections + enable-live fail closed; DEMO connectable |
 | paper-broker | not set (materialized `UNVERIFIED`) — LIVE unsupported by design (DEMO-only environments array) | LIVE already rejected by the environment gate |
 | ctrader, pepperstone-ctrader, icmarkets-ctrader | `UNVERIFIED` — additionally partner-approval-blocked (below) | DEMO connectable once OAuth app credentials are supplied; LIVE fail-closed |
@@ -630,3 +651,44 @@ What the completion layer adds ON TOP of the unified authority chain:
   provenance (migration 1754400000000; AI decision → intent → grant →
   order → provider dispatch → outcome → reconciliation is reconstructible
   by direct ids).
+
+---
+
+## Round 7 — production-LIVE certification program (2026-09)
+
+Round 7 added the missing producer side of the level-3 evidence program and
+closed the P0/P1 code gaps the production-live audit found. Verification
+TRUTH IS UNCHANGED for every route (one MetaApi attestation retained;
+everything else honestly UNVERIFIED) — what changed is that the evidence now
+has a producing tool and an exact protocol:
+
+- **`docs/brokers/production-live-certification.md`** — the authoritative
+  LIVE certification protocol: the `IREXPRO_ALLOW_LIVE_CERTIFICATION` gate,
+  the 16-stage checklist (ending in `VERIFY_ZERO_UNEXPECTED_OPEN_EXPOSURE`),
+  provider-minimum-capped canary sizing (never AI-derived), sanitized
+  evidence artifacts + operator identity, the only legitimate path to flip a
+  catalog entry to VERIFIED (and the fail-closed downgrade path), and the
+  broker-by-broker honest state table.
+- **`provider-live-certification-harness.ts`** — the operator-only engine
+  implementing that protocol (DEMO harness + its contract untouched); env-
+  gated operator entry points for MetaApi/OANDA/cTrader
+  (`*.live-certification.spec.ts`, describe.skip without gate+credentials);
+  always-on machinery suite proves the gate/cap/sizing/classification/
+  zero-unexpected-exposure disciplines with fake adapters. CI remains
+  credential-free and gate-closed.
+- **MetaApi hardening (VERIFIED route):** declared-vs-observed account-
+  environment enforcement at connect AND health check (a LIVE account
+  declared DEMO is a fail-closed CRITICAL event — previously it sailed to
+  AUTHORIZED + demoValidated and executed real money under DEMO semantics);
+  per-symbol `getSymbolSpecification` geometry (the hardcoded
+  contractSize=100000/digits=5-for-every-symbol fabrication is gone —
+  unprovable symbols are omitted); pending-order cancellation added.
+- **OANDA code gaps closed toward (not into) verification:** pending-order
+  cancellation (`PUT /orders/{id}/cancel`) and the Phase-7c crash-window
+  echo alignment (`clientExtensions.id = clientOrderId` — the provider-echo
+  recovery can now match; previously every OANDA crash-window order was
+  permanently RECONCILIATION_PENDING). LIVE stays UNVERIFIED — an operator
+  certification run under the protocol above is the remaining path.
+- **cTrader family:** engine, OAuth lifecycle, and host separation were
+  already production-grade; the remaining LIVE blocker is EXTERNAL (Spotware
+  partner approval + per-broker real-account approval) and unchanged.

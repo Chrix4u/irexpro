@@ -3,6 +3,7 @@ import { Logger } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { ExecutionService } from './execution.service';
+import { EmergencyFlattenProducer } from './jobs/emergency-flatten.producer';
 import { ExecutionOrchestrator } from './orchestration/execution-orchestrator.service';
 import { Trade, TradeStatus } from './entities/trade.entity';
 import { TradingSession } from './entities/trading-session.entity';
@@ -133,6 +134,8 @@ describe('ExecutionService — Sprint 32 Idempotency', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ExecutionService,
+        // Round 7 (P1): the durable-flatten producer seam.
+        { provide: EmergencyFlattenProducer, useValue: { enqueueDurableFlatten: jest.fn() } },
         { provide: getRepositoryToken(Trade), useValue: tradeRepo },
         { provide: getRepositoryToken(TradingSession), useValue: sessionRepo },
         { provide: getRepositoryToken(RiskGrant), useValue: authorityRepoStub },

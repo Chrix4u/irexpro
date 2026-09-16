@@ -76,6 +76,9 @@ export function defaultCertaintyForCode(code: BrokerErrorCode): ProviderDispatch
     case BrokerErrorCode.INVALID_INSTRUMENT:
     case BrokerErrorCode.NOT_CONNECTED:
     case BrokerErrorCode.DECRYPTION_FAILED:
+    // Round 7.1 (P0-1): an environment mismatch is detected BEFORE any
+    // state-changing provider call — nothing left iRexPro.
+    case BrokerErrorCode.ENVIRONMENT_MISMATCH:
       return ProviderDispatchCertainty.DEFINITELY_NOT_SENT;
     case BrokerErrorCode.CONNECTION_TIMEOUT:
     case BrokerErrorCode.CONNECTION_LOST:

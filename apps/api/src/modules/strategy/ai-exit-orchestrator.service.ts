@@ -1,4 +1,5 @@
 import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../../common/enums/audit-action.enum';
 import { AuditSeverity } from '../audit/entities/audit-log.entity';
@@ -16,6 +17,10 @@ import {
   AiExitTradeResult,
   AiExitOutcome,
 } from './interfaces/ai-exit-signal.interface';
+// Round 7 (P1 metrics — audit R7-audit-C A6): dependency-free in-process
+// counters (lazy ModuleRef seam — see the metrics getter below).
+import { MetricsService } from '../metrics/metrics.service';
+import { METRIC_NAMES } from '../metrics/metric-names';
 
 /** Same confidence threshold as entry signals (symmetric decision quality). */
 export const EXIT_CONFIDENCE_THRESHOLD = 0.6;
@@ -66,7 +71,29 @@ export class AiExitOrchestratorService {
     private readonly executionService: ExecutionService,
     private readonly executionReadService: ExecutionReadService,
     private readonly signalIdentityGate: AiSignalIdentityGateService,
+    /** Round 7 (P1 metrics): lazy MetricsService seam (never a constructor
+     * injection — see the metrics getter for the DI decision). */
+    private readonly moduleRef: ModuleRef,
   ) {}
+
+  /**
+   * Round 7 (P1 metrics — audit R7-audit-C A6): lazy metrics seam. Resolved
+   * at CALL time via ModuleRef.get(..., { strict: false }) — the app-wide
+   * lookup finds the MetricsModule singleton (registered once in AppModule).
+   * Direct constructor injection was rejected: it would demand a
+   * MetricsService provider in EVERY spec constructing this service (incl.
+   * out-of-scope suites) plus module-file imports outside the approved file
+   * scope. In isolated test contexts the lookup fails → null → the
+   * `this.metrics?.increment(...)` call sites no-op. Never affects control
+   * flow (MetricsService methods never throw).
+   */
+  private get metrics(): MetricsService | null {
+    try {
+      return this.moduleRef.get(MetricsService, { strict: false });
+    } catch {
+      return null;
+    }
+  }
 
   /** Process one AI exit decision through the serialized pipeline. */
   async processExitSignal(signal: AiExitSignal): Promise<AiExitResult> {
@@ -75,6 +102,10 @@ export class AiExitOrchestratorService {
       `Processing exit signal ${signalId} for user=${userId} instrument=${signal.instrument}` +
         (signal.tradeId ? ` trade=${signal.tradeId}` : ' (flatten instrument)'),
     );
+
+    // Round 7 (P1 metrics): exit-signal intake (kind-labeled so the entry
+    // funnel's outcome-labeled series stay a separate family).
+    this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, { kind: 'exit' });
 
     await this.auditService.log({
       actorUserId: userId,

@@ -201,6 +201,11 @@ function isOrderStatus(value: unknown): value is LiveOrderRowView['status'] {
   return (
     value === 'CREATED' ||
     value === 'SUBMITTED' ||
+    // Round 6 (#365): in-flight dispatch commitment — the API can legitimately
+    // return rows in this state (R7-audit-C A7); excluding it made the ALL
+    // filter (the api-client default) fail its own fail-closed validation
+    // during in-flight dispatches.
+    value === 'DISPATCH_COMMITTED' ||
     value === 'ACKNOWLEDGED' ||
     value === 'PARTIALLY_FILLED' ||
     value === 'FILLED' ||

@@ -57,6 +57,11 @@ export enum BrokerErrorCode {
   ACCOUNT_DISABLED = 'ACCOUNT_DISABLED',
   /** The provider rejected the request payload itself (validation failure). */
   INVALID_REQUEST = 'INVALID_REQUEST',
+  // Round 7.1 (P0-1): the provider-observed account environment contradicts
+  // the connection's DECLARED environment (LIVE vs DEMO). Detected at the
+  // dispatch boundary BEFORE any state-changing provider call — provably
+  // DEFINITELY_NOT_SENT (the throw site also classifies it explicitly).
+  ENVIRONMENT_MISMATCH = 'ENVIRONMENT_MISMATCH',
   /** Provider-side or network-level outage (retryable). */
   PROVIDER_UNAVAILABLE = 'PROVIDER_UNAVAILABLE',
   UNKNOWN = 'UNKNOWN',

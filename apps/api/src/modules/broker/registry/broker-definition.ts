@@ -49,6 +49,78 @@ export interface BrokerProductionLiveVerification {
   verifiedAt?: string | null;
   /** Short evidence reference (doc/ticket id — never secrets). */
   evidenceRef?: string | null;
+  /**
+   * Round 7.1 (P0-3): HOW the VERIFIED state came to be — the provenance
+   * discriminator that separates historical operator attestation from the
+   * documented production-LIVE certification protocol.
+   *
+   * - LEGACY_ATTESTATION: verified before the certification protocol
+   *   existed (Round 7). Honest record — no dated artifact, no harness run
+   *   reference. Rendered as LEGACY_VERIFIED; NEVER presented as a fresh
+   *   protocol certification.
+   * - HARNESS_CERTIFIED: verified through the documented operator-only
+   *   LIVE certification harness with a durable, read-back-verified
+   *   evidence artifact (certificationRunRef records it).
+   *
+   * Absent on UNVERIFIED entries.
+   */
+  certifiedVia?: 'LEGACY_ATTESTATION' | 'HARNESS_CERTIFIED';
+  /**
+   * Round 7.1 (P0-3): the certification-run reference for
+   * HARNESS_CERTIFIED entries — `<runId>@sha256:<evidenceSha256>` from the
+   * durable evidence artifact. Null for legacy attestations (none exists —
+   * recorded truthfully, never fabricated).
+   */
+  certificationRunRef?: string | null;
+}
+
+/**
+ * Round 7.1 (P0-3): the TRUTHFUL, derived certification state for
+ * UI/API display and production-LIVE authorization.
+ *
+ * - NOT_CERTIFIED: no production-LIVE evidence, or a purported current
+ *   certification whose required durable evidence is incomplete/malformed.
+ * - LEGACY_VERIFIED: VERIFIED via legacy operator attestation — real
+ *   historical evidence, but NOT a Round-7-protocol certification run.
+ * - CERTIFIED: VERIFIED via the documented certification protocol AND
+ *   carrying a valid timestamp, durable evidence reference, and
+ *   `<runId>@sha256:<64-hex>` certification run reference.
+ *
+ * CERTIFICATION_PENDING and EVIDENCE_PERSISTENCE_FAILED are deliberately
+ * NOT catalog states — they are RUN-level outcomes carried by
+ * LiveCertificationEvidence.certificationResult (the catalog records only
+ * completed certifications; a pending or persistence-failed run flips
+ * nothing).
+ */
+export type ProviderCertificationState = 'NOT_CERTIFIED' | 'LEGACY_VERIFIED' | 'CERTIFIED';
+
+/** Derive the truthful, fail-closed state from catalog verification evidence. */
+export function deriveProviderCertificationState(
+  verification: BrokerProductionLiveVerification | undefined,
+): ProviderCertificationState {
+  if (!verification || verification.status !== 'VERIFIED') {
+    return 'NOT_CERTIFIED';
+  }
+  if (verification.certifiedVia !== 'HARNESS_CERTIFIED') {
+    return 'LEGACY_VERIFIED';
+  }
+
+  const verifiedAt = verification.verifiedAt?.trim() ?? '';
+  const evidenceRef = verification.evidenceRef?.trim() ?? '';
+  const certificationRunRef = verification.certificationRunRef?.trim() ?? '';
+  const runRefPattern =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}@sha256:[0-9a-f]{64}$/i;
+
+  if (
+    !verifiedAt ||
+    Number.isNaN(Date.parse(verifiedAt)) ||
+    !evidenceRef ||
+    !runRefPattern.test(certificationRunRef)
+  ) {
+    return 'NOT_CERTIFIED';
+  }
+
+  return 'CERTIFIED';
 }
 
 export interface BrokerDefinition {
@@ -64,8 +136,8 @@ export interface BrokerDefinition {
   status: BrokerAvailabilityStatus;
   /**
    * Production-LIVE verification evidence — absent/UNVERIFIED means LIVE
-   * execution is fail-closed (BrokerProviderRegistryService.
-   * isProductionLiveEligible returns false; BETA is DEMO-only).
+   * execution is fail-closed. Historical LEGACY_ATTESTATION is informational
+   * only; only a complete current CERTIFIED state can authorize production LIVE.
    */
   productionLiveVerification?: BrokerProductionLiveVerification;
   /** Connectivity routes this broker can be reached through. */

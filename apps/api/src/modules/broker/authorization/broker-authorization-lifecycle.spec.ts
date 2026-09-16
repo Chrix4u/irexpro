@@ -638,6 +638,54 @@ describe('BrokerService — Sprint 50 authorization lifecycle', () => {
         ),
       ).rejects.toThrow(BadRequestException);
     });
+
+    // ─── Round 7.1 (P0-1): provider-observed environment at rotation ────────
+
+    it('P0-1: refuses rotation when the PROVIDER classifies the new credentials as a different environment (declared LIVE, provider reports DEMO — old credentials kept)', async () => {
+      connectionRepo.findOne.mockResolvedValue(baseConnection());
+      adapter.testConnection.mockResolvedValue({
+        success: true,
+        accountId: '123',
+        accountType: BrokerMode.DEMO,
+      });
+
+      await expect(
+        service.rotateCredentials(
+          'conn-1',
+          { brokerId: 'metatrader5', accountType: BrokerMode.LIVE, accountId: '123' } as never,
+          'user-1',
+        ),
+      ).rejects.toThrow(BadRequestException);
+
+      // Nothing is persisted — the previous credential set survives intact.
+      expect(connectionRepo.update).not.toHaveBeenCalled();
+      // CRITICAL audit with the typed environment-mismatch code.
+      const auditCall = (audit.log as jest.Mock).mock.calls.find(
+        (call) => call[0]?.metadata?.failureCode === 'ACCOUNT_TYPE_MISMATCH',
+      );
+      expect(auditCall).toBeDefined();
+      expect(auditCall[0].severity).toBe('CRITICAL');
+      expect(auditCall[0].metadata).toMatchObject({
+        declaredAccountType: BrokerMode.LIVE,
+        providerObservedAccountType: BrokerMode.DEMO,
+      });
+    });
+
+    it('P0-1: rotation proceeds when the provider does not report an environment (optional field — vacuously consistent)', async () => {
+      connectionRepo.findOne.mockResolvedValue(baseConnection());
+      adapter.testConnection.mockResolvedValue({ success: true, accountId: '123' });
+
+      await service.rotateCredentials(
+        'conn-1',
+        { brokerId: 'metatrader5', accountType: BrokerMode.LIVE, accountId: '123' } as never,
+        'user-1',
+      );
+
+      expect(connectionRepo.update).toHaveBeenCalledWith(
+        'conn-1',
+        expect.objectContaining({ credentialStatus: BrokerCredentialStatus.ROTATED }),
+      );
+    });
   });
 
   describe('A3: credential lifecycle gates every decrypt/consume path (fail closed)', () => {

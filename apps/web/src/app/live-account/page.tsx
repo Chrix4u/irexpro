@@ -135,6 +135,9 @@ function orderStatusVariant(status: LiveOrderRowView['status']): 'success' | 'wa
     status === 'RECONCILIATION_PENDING' ||
     status === 'CREATED' ||
     status === 'SUBMITTED' ||
+    // In-flight dispatch commitment (Round 6 #365) — same non-terminal
+    // in-flight family as SUBMITTED/ACKNOWLEDGED, never success/error.
+    status === 'DISPATCH_COMMITTED' ||
     status === 'ACKNOWLEDGED' ||
     status === 'PARTIALLY_FILLED'
   ) {

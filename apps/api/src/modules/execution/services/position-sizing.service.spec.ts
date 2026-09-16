@@ -179,6 +179,84 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
     });
   });
 
+  // ─── Round 7.1 (P1): volume-step + equality boundaries ──────────────────
+
+  describe('Round 7.1 (P1): volume-step + equality boundaries', () => {
+    it('exotic lotStep 0.001: a 0.2567… risk-budget volume floors to 0.256 (step-down, never rounded up)', async () => {
+      // distance |1.085 − 1.07721| = 0.00779 → risk per lot = 779 →
+      // 200 / 779 = 0.2567394… → floor at step 0.001 → 0.256.
+      orderGeometry.resolveOrderGeometry.mockResolvedValue(
+        geometry({ instrumentSpec: { ...EURUSD_SPEC, lotStep: '0.001' } }),
+      );
+      const sized = await service.sizePosition(baseParams({ stopLoss: '1.07721' }));
+      expect(sized.lots).toBe('0.256');
+      expect(sized.inputs.lotStep).toBe('0.001');
+      expect(sized.inputs.lotsByRiskBudget).toBe('0.2567394');
+      expect(sized.inputs.lotsBeforeStepNormalization).toBe('0.2567394');
+    });
+
+    it('coarse lotStep 0.1: a 0.25806451… risk-budget volume floors to 0.2 (the same budget sizes smaller at a coarser step)', async () => {
+      // distance |1.085 − 1.07725| = 0.00775 → risk per lot = 775 →
+      // 200 / 775 = 0.25806451… → floor at step 0.1 → 0.2. (Canonical form
+      // strips the trailing zero: 0.2580645.)
+      orderGeometry.resolveOrderGeometry.mockResolvedValue(
+        geometry({ instrumentSpec: { ...EURUSD_SPEC, lotStep: '0.1' } }),
+      );
+      const sized = await service.sizePosition(baseParams({ stopLoss: '1.07725' }));
+      expect(sized.lots).toBe('0.2');
+      expect(sized.inputs.lotStep).toBe('0.1');
+    });
+
+    it('equality boundary: lotsByRiskBudget EXACTLY equal to the instrument maxLot stays at maxLot (no off-by-one clamp)', async () => {
+      // Default budget computes exactly 0.2 lots; a maxLot of exactly 0.20
+      // must clamp to ITSELF — an equality boundary must never lose a step.
+      orderGeometry.resolveOrderGeometry.mockResolvedValue(
+        geometry({ instrumentSpec: { ...EURUSD_SPEC, maxLot: '0.20' } }),
+      );
+      const sized = await service.sizePosition(baseParams());
+      expect(sized.inputs.lotsByRiskBudget).toBe('0.2');
+      expect(sized.lots).toBe('0.2');
+      expect(sized.lots).toBe(sized.inputs.maxLot);
+    });
+
+    it('equality boundary: lotsByRiskBudget EXACTLY equal to profileMaxLots stays at profileMaxLots (no off-by-one clamp)', async () => {
+      profileRepo.findOne.mockResolvedValue(profileRow({ maxPositionSizeLot: '0.2000' }));
+      const sized = await service.sizePosition(baseParams());
+      expect(sized.inputs.lotsByRiskBudget).toBe('0.2');
+      expect(sized.lots).toBe('0.2');
+      expect(sized.lots).toBe(sized.inputs.profileMaxPositionSizeLot);
+    });
+
+    it('minLot == lotStep: an exactly-minimum risk-budget volume IS allowed (minimum-exact sizing)', async () => {
+      // equity 100 × 2% = 2 risk; distance |1.085 − 1.083| = 0.002 →
+      // risk per lot = 200 → 2 / 200 = exactly 0.01 lots = minLot = lotStep.
+      brokerService.getBrokerAccountState.mockResolvedValue(
+        accountState({ equity: '100.00', balance: '100.00' }),
+      );
+      const sized = await service.sizePosition(baseParams({ stopLoss: '1.08300' }));
+      expect(sized.inputs.lotsByRiskBudget).toBe('0.01');
+      expect(sized.lots).toBe('0.01');
+      expect(sized.lots).toBe(sized.inputs.minLot);
+    });
+
+    it('pathological spec minLot > maxLot: typed POSITION_SIZE_BELOW_MINIMUM (pin current behavior — the spec itself is inconsistent)', async () => {
+      // A self-contradictory instrument spec (minLot 0.50 > maxLot 0.10) can
+      // never admit a volume: the clamp lands at/below maxLot < minLot, so
+      // the typed below-minimum rejection fires. NOTE: this pins CURRENT
+      // behavior — a dedicated INSTRUMENT_SPEC_INCONSISTENT code would be
+      // cleaner, but no such distinction exists today and the sizing never
+      // invents a volume for an unprovable spec.
+      orderGeometry.resolveOrderGeometry.mockResolvedValue(
+        geometry({
+          instrumentSpec: { ...EURUSD_SPEC, minLot: '0.50', maxLot: '0.10' },
+        }),
+      );
+      await expect(service.sizePosition(baseParams())).rejects.toMatchObject({
+        code: 'POSITION_SIZE_BELOW_MINIMUM',
+      });
+    });
+  });
+
   // ─── Typed fail-closed matrix — a missing input NEVER guesses a volume ──
 
   describe('typed fail-closed guards', () => {

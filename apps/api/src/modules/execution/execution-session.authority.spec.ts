@@ -7,6 +7,7 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { ExecutionService } from './execution.service';
+import type { EmergencyFlattenProducer } from './jobs/emergency-flatten.producer';
 import { Trade } from './entities/trade.entity';
 import { TradingSession, TradingSessionStatus } from './entities/trading-session.entity';
 import { RiskGrant } from './entities/risk-grant.entity';
@@ -252,6 +253,9 @@ describe('ExecutionService — session authority (Round 5, issues #295/#298)', (
       orchestrator,
       auditService as unknown as AuditService,
       dataSource,
+      // Round 7 (P1): the durable-flatten producer is a stub seam in this
+      // matrix (the flatten matrix lives in its own suite).
+      {} as EmergencyFlattenProducer,
       eventBus,
       riskGrantRepo as unknown as Repository<RiskGrant>,
       confirmationRepo as unknown as Repository<ExecutionConfirmation>,

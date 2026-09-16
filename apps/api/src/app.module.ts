@@ -36,6 +36,11 @@ import { PerformanceBillingModule } from './modules/performance-billing/performa
 import { ExecutionControlModule } from './modules/execution-control/execution-control.module';
 import { LiveAccountModule } from './modules/live-account/live-account.module';
 import { AdminLiveAccountModule } from './modules/admin-live-account/admin-live-account.module';
+// Round 7 (P1 metrics — audit R7-audit-C A6): dependency-free in-process
+// metrics pipeline + internal /metrics scrape endpoint. Pure leaf module;
+// instrumented services reach MetricsService lazily via ModuleRef (strict:
+// false) so no consumer module imports it.
+import { MetricsModule } from './modules/metrics/metrics.module';
 
 @Module({
   imports: [
@@ -113,6 +118,9 @@ import { AdminLiveAccountModule } from './modules/admin-live-account/admin-live-
     // Sprint 50 PR-6 — admin live-operations + audit investigation read API
     // (Directive PHASE L §39). ADMIN/SUPER_ADMIN RBAC at the controllers.
     AdminLiveAccountModule,
+    // Round 7 (P1 metrics — audit R7-audit-C A6): in-process counters/gauges
+    // + the internal-key-guarded GET /api/v1/metrics Prometheus endpoint.
+    MetricsModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: AllExceptionsFilter },

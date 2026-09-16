@@ -23,12 +23,15 @@ import { BrokerLogicalAccountConflictError } from './interfaces/broker-connectio
 import {
   BrokerAccountInfo,
   BrokerConnectionStatus,
+  BrokerConnectionTestResult,
   BrokerInstrument,
   BrokerMode,
   BrokerPrice,
   DecryptedBrokerCredentials,
   OHLCV,
 } from './interfaces/broker-adapter.interface';
+// Round 7.1 (P0-1): typed fail-closed environment-mismatch error.
+import { BrokerEnvironmentMismatchError } from './interfaces/broker-environment-mismatch.error';
 import {
   BrokerAccountSnapshotService,
   type ProviderAccountObservation,
@@ -577,7 +580,25 @@ export class BrokerService {
       connectCredentials = await this.tokenLifecycle.ensureFreshTokens(connection, credentials);
       const result = await adapter.connect(connectCredentials);
 
-      if (!result.success) {
+      // Round 7 (P0 — declared-vs-observed environment enforcement): the
+      // provider-observed account environment (BrokerConnectionResult.
+      // accountType — e.g. MetaApi's info.type) must MATCH the connection's
+      // DECLARED accountType. A mislabeled environment is a SECURITY event:
+      // a LIVE provider account declared as DEMO would otherwise sail past
+      // the demo-authorization path (AUTHORIZED + demoValidated) and the
+      // LIVE verification gates — real money executing under DEMO semantics
+      // on the only VERIFIED real-money route. Fail-closed: ERROR transition,
+      // zero authorization advance, audited with a typed code. Adapters that
+      // only echo the requested mode never trip this gate; it bites exactly
+      // when the provider CONTRADICTS the declaration.
+      const environmentMismatch = this.evaluateEnvironmentMismatch(connection, result);
+      const failureError = environmentMismatch.mismatch
+        ? `Environment mismatch: the provider reports a ${environmentMismatch.observed} account, ` +
+          `but this connection was declared ${connection.accountType} — refusing to ` +
+          'authorize a mislabeled environment (fail-closed).'
+        : (result.error ?? 'Connection rejected by broker');
+
+      if (!result.success || environmentMismatch.mismatch) {
         // A4: terminal ERROR write guarded on the in-flight state. On a
         // concurrent state change the original broker failure remains the
         // primary outcome (logged), and the winner's authoritative state is
@@ -588,7 +609,7 @@ export class BrokerService {
             inFlightAuthorization,
             {
               status: BrokerConnectionStatus.ERROR,
-              lastErrorMessage: result.error ?? 'Connection rejected by broker',
+              lastErrorMessage: failureError,
               consecutiveFailureCount: () => 'consecutive_failure_count + 1',
               ...(BrokerAuthorizationStateMachine.canTransition(
                 inFlightAuthorization,
@@ -627,11 +648,24 @@ export class BrokerService {
           resourceType: 'BrokerConnection',
           resourceId: connectionId,
           ipAddress,
-          metadata: { brokerId: connection.brokerId, error: result.error },
-          severity: AuditSeverity.WARNING,
+          metadata: {
+            brokerId: connection.brokerId,
+            error: failureError,
+            // Round 7 (P0): typed machine code — the provider CONTRADICTED the
+            // declared environment (e.g. a LIVE MetaApi account labeled DEMO).
+            ...(environmentMismatch.mismatch
+              ? {
+                  failureCode: 'ACCOUNT_TYPE_MISMATCH',
+                  declaredAccountType: connection.accountType,
+                  providerObservedAccountType: result.accountType,
+                }
+              : {}),
+          },
+          // A mislabeled REAL-MONEY environment is a security event.
+          severity: environmentMismatch.mismatch ? AuditSeverity.CRITICAL : AuditSeverity.WARNING,
         });
 
-        throw new BadRequestException(`Broker connection failed: ${result.error}`);
+        throw new BadRequestException(`Broker connection failed: ${failureError}`);
       }
 
       // Upsert BrokerAccount with latest synced state
@@ -1098,10 +1132,11 @@ export class BrokerService {
 
     let testOk = false;
     let testError: string | undefined;
+    let testResult: BrokerConnectionTestResult | null = null;
     try {
-      const result = await validationAdapter.testConnection(newCredentials);
-      testOk = result.success;
-      testError = result.errorMessage;
+      testResult = await validationAdapter.testConnection(newCredentials);
+      testOk = testResult.success;
+      testError = testResult.errorMessage;
     } catch (err) {
       testError = err instanceof BrokerAdapterError ? err.message : 'Rotation test failed';
     }
@@ -1117,6 +1152,43 @@ export class BrokerService {
         severity: AuditSeverity.WARNING,
       });
       throw new BadRequestException(`Credential validation failed: ${testError}`);
+    }
+
+    // Round 7.1 (P0-1 — credential-rotation environment enforcement): the
+    // user-supplied DTO already had to repeat the declared account type, but
+    // the PROVIDER's own classification of the new credential set is the
+    // truth that matters — a LIVE account's credentials rotated onto a
+    // DEMO-declared connection (or vice versa) would re-bind the connection
+    // to a mislabeled environment that only the NEXT health check catches.
+    // The provider-observed type is optional on BrokerConnectionTestResult
+    // (some adapters cannot classify during a dry test); an ABSENT
+    // observation is vacuously consistent, a CONTRADICTORY one is refused
+    // BEFORE any ciphertext is replaced (previous credentials kept).
+    const rotationEnv = testResult
+      ? this.evaluateEnvironmentMismatch(connection, testResult, {
+          accountTypeOptional: true,
+        })
+      : { mismatch: false, observed: null };
+    if (rotationEnv.mismatch) {
+      await this.auditService.log({
+        actorUserId: userId,
+        action: AuditAction.BROKER_CREDENTIAL_ROTATION_FAILED,
+        resourceType: 'BrokerConnection',
+        resourceId: connectionId,
+        ipAddress,
+        metadata: {
+          brokerId: connection.brokerId,
+          failureCode: 'ACCOUNT_TYPE_MISMATCH',
+          declaredAccountType: connection.accountType,
+          providerObservedAccountType: rotationEnv.observed,
+        },
+        severity: AuditSeverity.CRITICAL,
+      });
+      throw new BadRequestException(
+        `Environment mismatch: the new credentials resolve to a ${rotationEnv.observed} ` +
+          `account, but this connection was declared ${connection.accountType} — ` +
+          'rotation refused (fail-closed; previous credentials kept).',
+      );
     }
 
     // Validated — replace ciphertext (old plaintext never leaves memory)
@@ -1236,7 +1308,75 @@ export class BrokerService {
         credentials,
       );
       // connect() reuses the MetaAPI connection pool — only reconnects if stale
-      await adapter.connect(healthCredentials);
+      const connectResult = await adapter.connect(healthCredentials);
+
+      // Round 7 (P0 — declared-vs-observed environment enforcement, the same
+      // rule as connectBroker): a post-connect provider-side environment
+      // change (broker migration, account relabel) must NEVER silently keep a
+      // mislabeled connection CONNECTED/executable. Immediate CRITICAL
+      // suspension on the FIRST observation — never the 3-failure threshold
+      // (a mislabeled REAL-MONEY environment is a security event, not a
+      // transient health blip).
+      if (
+        connectResult.success &&
+        this.evaluateEnvironmentMismatch(connection, connectResult).mismatch
+      ) {
+        let mismatchSuspended = false;
+        try {
+          await this.applyGuardedAuthorizationUpdate(
+            connectionId,
+            connection.authorizationStatus,
+            {
+              status: BrokerConnectionStatus.SUSPENDED,
+              lastErrorMessage:
+                `Environment mismatch: the provider reports a ${connectResult.accountType} ` +
+                `account, but this connection was declared ${connection.accountType} ` +
+                '(fail-closed).',
+              ...(this.canTransitionTo(connection, BrokerAuthorizationStatus.SUSPENDED)
+                ? { authorizationStatus: BrokerAuthorizationStatus.SUSPENDED }
+                : {}),
+            },
+            'healthCheck ENVIRONMENT_MISMATCH suspension',
+          );
+          mismatchSuspended = true;
+        } catch (transitionErr) {
+          this.logger.warn(
+            `healthCheck environment-mismatch suspension lost a concurrent state race for ` +
+              `${connectionId}: ${(transitionErr as Error).message}`,
+          );
+        }
+        if (mismatchSuspended) {
+          this.adapterRegistry.releaseAdapterForConnection(connectionId);
+          await this.invalidateBrokerAuthority(
+            connection.userId,
+            'BROKER_CONNECTION_SUSPENDED',
+            `environment mismatch on connection ${connectionId} (declared ` +
+              `${connection.accountType}, provider reports ${connectResult.accountType})`,
+          );
+          await this.auditService.log({
+            action: AuditAction.BROKER_SUSPENDED_HEALTH_FAILURE,
+            resourceType: 'BrokerConnection',
+            resourceId: connectionId,
+            metadata: {
+              brokerId: connection.brokerId,
+              userId: connection.userId,
+              failureCode: 'ACCOUNT_TYPE_MISMATCH',
+              declaredAccountType: connection.accountType,
+              providerObservedAccountType: connectResult.accountType,
+            },
+            severity: AuditSeverity.CRITICAL,
+          });
+          this.eventBus.publish(DomainEventType.BROKER_STATUS_CHANGED, connection.userId, {
+            userId: connection.userId,
+            connectionId,
+            status: BrokerConnectionStatus.SUSPENDED,
+            previousStatus: BrokerConnectionStatus.CONNECTED,
+            reason: 'Suspended: provider-reported environment contradicts the declared one',
+          });
+        }
+        return false;
+      }
+
       const balance = await adapter.getAccountBalance();
 
       await this.connectionRepo.update(connectionId, {
@@ -1941,7 +2081,212 @@ export class BrokerService {
     }
   }
 
+  // ─── Broker environment-mismatch enforcement (Round 7.1 P0-1) ──────────
+
+  /**
+   * Round 7.1 (P0-1 — shared environment-mismatch truth): evaluate a
+   * broker-observed account environment against the connection's DECLARED
+   * environment. This is the ONE truth shared by every synchronous
+   * observation path (connect, health check, on-demand risk refresh,
+   * reconciliation, credential rotation, dispatch) — no path may trust a
+   * provider observation whose environment contradicts the declaration.
+   *
+   * Semantics:
+   * - only SUCCESSFUL connections are evaluated (a failed connect is the
+   *   caller's own failure path, never an environment verdict);
+   * - `BrokerConnectionResult.accountType` is CONTRACTUALLY REQUIRED — a
+   *   successful result without it is a contract violation and fails closed
+   *   as a mismatch (an unclassifiable environment is never trusted);
+   * - `accountTypeOptional` (credential-rotation `testConnection` results,
+   *   where the field is genuinely optional) treats an ABSENT observation as
+   *   "provider did not report" — vacuously consistent, never a mismatch.
+   *
+   * Returns `{ mismatch, observed }` — `observed` carries the provider's
+   * classification (null when absent) for messages, audits and typed errors.
+   */
+  private evaluateEnvironmentMismatch(
+    connection: BrokerConnection,
+    result: { success: boolean; accountType?: BrokerMode | null },
+    options: { accountTypeOptional?: boolean } = {},
+  ): { mismatch: boolean; observed: BrokerMode | null } {
+    if (!result.success) {
+      return { mismatch: false, observed: result.accountType ?? null };
+    }
+    const observed = result.accountType ?? null;
+    if (observed === null && options.accountTypeOptional) {
+      return { mismatch: false, observed: null };
+    }
+    return { mismatch: observed !== connection.accountType, observed };
+  }
+
+  /**
+   * Round 7.1 (P0-1 — synchronous observation environment enforcement):
+   * assert that a broker-observed connection environment MATCHES the
+   * declared one, applying the full fail-closed discipline on mismatch —
+   * the same side-effect chain the health check performs:
+   *
+   *   guarded SUSPENDED transition → adapter release → trading-authority
+   *   invalidation → CRITICAL audit (typed ACCOUNT_TYPE_MISMATCH metadata)
+   *   → realtime status event → typed BrokerEnvironmentMismatchError.
+   *
+   * The typed error propagates so the CALLER fails closed too: the risk
+   * engine keeps its original staleness rejection, a reconciliation run
+   * records FAILED (no provider snapshot is persisted), and a dispatch
+   * boundary refuses the provider call.
+   *
+   * No-op when the connection result is unsuccessful (the caller's own
+   * failure handling owns that path) or the environment matches.
+   */
+  async assertConnectionEnvironment(
+    connection: BrokerConnection,
+    connectResult: { success: boolean; accountType?: BrokerMode | null },
+    source: string,
+  ): Promise<void> {
+    const { mismatch, observed } = this.evaluateEnvironmentMismatch(connection, connectResult);
+    if (!connectResult.success || !mismatch) {
+      return;
+    }
+    let suspended = false;
+    try {
+      await this.applyGuardedAuthorizationUpdate(
+        connection.id,
+        connection.authorizationStatus,
+        {
+          status: BrokerConnectionStatus.SUSPENDED,
+          lastErrorMessage:
+            `Environment mismatch (${source}): the provider reports a ${observed ?? 'UNKNOWN'} ` +
+            `account, but this connection was declared ${connection.accountType} (fail-closed).`,
+          ...(this.canTransitionTo(connection, BrokerAuthorizationStatus.SUSPENDED)
+            ? { authorizationStatus: BrokerAuthorizationStatus.SUSPENDED }
+            : {}),
+        },
+        `environment-mismatch suspension (${source})`,
+      );
+      suspended = true;
+    } catch (transitionErr) {
+      this.logger.warn(
+        `environment-mismatch suspension (${source}) lost a concurrent state race for ` +
+          `${connection.id}: ${(transitionErr as Error).message}`,
+      );
+    }
+    if (suspended) {
+      this.adapterRegistry.releaseAdapterForConnection(connection.id);
+      await this.invalidateBrokerAuthority(
+        connection.userId,
+        'BROKER_CONNECTION_SUSPENDED',
+        `environment mismatch on connection ${connection.id} via ${source} (declared ` +
+          `${connection.accountType}, provider reports ${observed ?? 'UNKNOWN'})`,
+      );
+      await this.auditService.log({
+        action: AuditAction.BROKER_ENVIRONMENT_MISMATCH_SUSPENDED,
+        resourceType: 'BrokerConnection',
+        resourceId: connection.id,
+        metadata: {
+          brokerId: connection.brokerId,
+          userId: connection.userId,
+          failureCode: 'ACCOUNT_TYPE_MISMATCH',
+          detectionSource: source,
+          declaredAccountType: connection.accountType,
+          providerObservedAccountType: observed ?? 'UNKNOWN',
+        },
+        severity: AuditSeverity.CRITICAL,
+      });
+      this.eventBus.publish(DomainEventType.BROKER_STATUS_CHANGED, connection.userId, {
+        userId: connection.userId,
+        connectionId: connection.id,
+        status: BrokerConnectionStatus.SUSPENDED,
+        previousStatus: BrokerConnectionStatus.CONNECTED,
+        reason: `Suspended: provider-reported environment contradicts the declared one (${source})`,
+      });
+    }
+    throw new BrokerEnvironmentMismatchError(connection.accountType, observed ?? 'UNKNOWN', source);
+  }
+
   // ─── Snapshot authority recording (§1a) ────────────────────────────────
+
+  /**
+   * Round 7 (P1 — LIVE snapshot availability): ONE bounded synchronous
+   * provider observation, persisted as the next authoritative account
+   * snapshot (the same §1a write path the health check uses).
+   *
+   * WHY: the LIVE NEW-exposure freshness window (30s) is tighter than the
+   * health-check writer cadence (60s) — without an on-demand observation a
+   * LIVE evaluation whose latest accepted snapshot is moments past the
+   * window would fail closed SNAPSHOT_STALE even though the account is
+   * perfectly reachable. The risk engine calls this (at most once per
+   * evaluation) when the fresh-snapshot resolution reports staleness, then
+   * re-resolves.
+   *
+   * Fail-closed semantics: ANY failure here propagates — the caller keeps
+   * the ORIGINAL typed staleness error (a failed refresh must never
+   * authorize a stale snapshot). No health-state transitions occur (this is
+   * an observation, not a health check).
+   */
+  async observeAccountSnapshotNow(userId: string, connectionId: string): Promise<void> {
+    const connection = await this.findConnectionById(connectionId, userId);
+    if (!connection || connection.status !== BrokerConnectionStatus.CONNECTED) {
+      throw new Error(`connection ${connectionId} is not CONNECTED — cannot observe`);
+    }
+    if (!connection.encryptedCredentials || !connection.credentialIv || !connection.credentialTag) {
+      throw new Error(`connection ${connectionId} has no stored credentials — cannot observe`);
+    }
+    // A3: unusable credential states never reach the provider.
+    this.assertCredentialsUsable(connection, 'observeAccountSnapshotNow');
+
+    const adapter = this.adapterRegistry.getAdapterForConnection(
+      connection.id,
+      connection.brokerId,
+    );
+    const credentials = this.encryptionService.decrypt({
+      ciphertext: connection.encryptedCredentials,
+      iv: connection.credentialIv,
+      tag: connection.credentialTag,
+      keyId: connection.encryptionKeyId ?? 'env-key-v1',
+    });
+    adapter.setMode(connection.accountType);
+
+    // Round 7.1 (P0-1): the SAME OAuth freshness gate as connectBroker and
+    // healthCheck — an on-demand LIVE observation must run on the CURRENT
+    // token pair (cTrader-family refresh + atomic persist before provider
+    // use); a rejected refresh fails closed.
+    const observationCredentials = await this.tokenLifecycle.ensureFreshTokens(
+      connection,
+      credentials,
+    );
+
+    // Reconnect first (idempotent — adapters reuse their connection pool and
+    // only reconnect when stale): the observation must succeed even when the
+    // pooled session aged out since the last health check.
+    const connectResult = await adapter.connect(observationCredentials);
+
+    // Round 7.1 (P0-1 — synchronous observation environment enforcement): a
+    // successful API call is NOT sufficient trust — the provider-observed
+    // account environment must MATCH the declared one before ANY snapshot
+    // from this session is persisted. This path exists precisely to serve
+    // in-flight LIVE risk evaluations; without the fence a provider-side
+    // relabel (LIVE→DEMO or DEMO→LIVE) would become the freshest TRUSTED
+    // snapshot up to a full health-check cadence before detection. On
+    // mismatch the full fail-closed discipline applies (suspension +
+    // authority invalidation + CRITICAL audit) and the typed error makes
+    // the risk evaluation fail closed (no snapshot is persisted).
+    await this.assertConnectionEnvironment(connection, connectResult, 'on-demand-risk-evaluation');
+
+    if (!connectResult.success) {
+      throw new Error(
+        `connection ${connectionId} reconnect failed — cannot observe: ` +
+          (connectResult.error ?? 'provider rejected the session'),
+      );
+    }
+
+    const balance = await adapter.getAccountBalance();
+    await this.recordAccountSnapshot(connection, {
+      balance: balance.balance,
+      equity: balance.equity,
+      currency: balance.currency,
+      providerObservedAt: balance.timestamp ?? null,
+      source: 'on-demand-risk-evaluation',
+    });
+  }
 
   /**
    * Accept ONE provider account observation into the authoritative snapshot

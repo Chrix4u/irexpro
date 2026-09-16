@@ -70,22 +70,34 @@ jest.mock('@nestjs/bullmq', () => {
     BullModule: {
       forRoot: jest.fn(() => noopModule()),
       forRootAsync: jest.fn(() => noopModule()),
-      registerQueue: jest.fn((opts: { name: string }) => {
-        const token = real.getQueueToken(opts.name);
-        const mockQueue = {
-          add: jest.fn().mockResolvedValue(undefined),
-          close: jest.fn().mockResolvedValue(undefined),
-          pause: jest.fn().mockResolvedValue(undefined),
-          resume: jest.fn().mockResolvedValue(undefined),
-          obliterate: jest.fn().mockResolvedValue(undefined),
-          getRepeatableJobs: jest.fn().mockResolvedValue([]),
-          getJobCounts: jest.fn().mockResolvedValue({}),
-          removeRepeatableByKey: jest.fn().mockResolvedValue(undefined),
-        };
+      // Round 7: the REAL registerQueue signature is VARIADIC — it accepts
+      // any number of queue options and returns ONE DynamicModule providing
+      // every queue token. The previous single-option mock silently dropped
+      // all but the first queue of a multi-queue registration (the
+      // execution module now registers three queues in one call), leaving
+      // the remaining @InjectQueue tokens unresolved (DI recursion at init).
+      registerQueue: jest.fn((...allOpts: Array<{ name: string }>) => {
+        const providers: Array<{ provide: symbol; useValue: unknown }> = [];
+        for (const opts of allOpts) {
+          const token = real.getQueueToken(opts.name);
+          providers.push({
+            provide: token,
+            useValue: {
+              add: jest.fn().mockResolvedValue(undefined),
+              close: jest.fn().mockResolvedValue(undefined),
+              pause: jest.fn().mockResolvedValue(undefined),
+              resume: jest.fn().mockResolvedValue(undefined),
+              obliterate: jest.fn().mockResolvedValue(undefined),
+              getRepeatableJobs: jest.fn().mockResolvedValue([]),
+              getJobCounts: jest.fn().mockResolvedValue({}),
+              removeRepeatableByKey: jest.fn().mockResolvedValue(undefined),
+            },
+          });
+        }
         return {
           module: class NoopQueueModule {},
-          providers: [{ provide: token, useValue: mockQueue }],
-          exports: [token],
+          providers,
+          exports: providers.map((p) => p.provide),
         };
       }),
     },

@@ -48,6 +48,11 @@ import { SharedControlRevisionService } from '../execution-authority/shared-cont
 import { GrantInvalidationService } from '../execution-authority/grant-invalidation.service';
 import { DailyRiskPeriodService } from '../execution/services/daily-risk-period.service';
 import { BrokerAccountSnapshotService } from '../broker/services/broker-account-snapshot.service';
+import { SnapshotNotFreshError } from '../broker/services/broker-account-snapshot.service';
+// Round 7 (P1 metrics — audit R7-audit-C A6): dependency-free in-process
+// counters (lazy ModuleRef seam — see the metrics getter below).
+import { MetricsService } from '../metrics/metrics.service';
+import { METRIC_NAMES } from '../metrics/metric-names';
 
 /** Default pip size for standard 5-digit pairs (EURUSD, GBPUSD, etc.) */
 const DEFAULT_PIP_SIZE = '0.0001';
@@ -141,6 +146,25 @@ export class RiskService {
     private readonly moduleRef: ModuleRef,
   ) {}
 
+  /**
+   * Round 7 (P1 metrics — audit R7-audit-C A6): lazy metrics seam. Resolved
+   * at CALL time via ModuleRef.get(..., { strict: false }) — the app-wide
+   * lookup finds the MetricsModule singleton (registered once in AppModule).
+   * Direct constructor injection was rejected: it would demand a
+   * MetricsService provider in EVERY spec constructing this service (incl.
+   * out-of-scope suites) plus module-file imports outside the approved file
+   * scope. In isolated test contexts the lookup fails → null → the
+   * `this.metrics?.increment(...)` call sites no-op. Never affects control
+   * flow (MetricsService methods never throw).
+   */
+  private get metrics(): MetricsService | null {
+    try {
+      return this.moduleRef.get(MetricsService, { strict: false });
+    } catch {
+      return null;
+    }
+  }
+
   // ─── Main validation entry point ──────────────────────────────────────────
 
   /**
@@ -155,12 +179,27 @@ export class RiskService {
    *   REJECTED   — trade is blocked; reason logged in RiskViolation
    *   SUSPENDED  — trading session suspended; requires manual review
    */
-  async validateProposedTrade(userId: string, trade: ProposedTrade): Promise<RiskDecision> {
+  async validateProposedTrade(
+    userId: string,
+    trade: ProposedTrade,
+    options?: {
+      /**
+       * Round 7 (SEMI_AUTO confirm-path P0 fix): the id of the PENDING
+       * ExecutionConfirmation this evaluation is RE-AUTHORIZING. Passed
+       * through to RiskGrantService.issueGrant so the user's existing
+       * one-time confirmation is RE-BOUND to the fresh grant (instead of
+       * being revoked by the supersession) — the commitment CAS then binds
+       * confirmation + fresh grant correctly. Only the SEMI_AUTO confirm()
+       * path sets this.
+       */
+      rebindConfirmationId?: string;
+    },
+  ): Promise<RiskDecision> {
     const evaluatedAt = new Date();
 
     // FAIL CLOSED wrapper — any uncaught error = REJECTED
     try {
-      return await this.runValidationPipeline(userId, trade, evaluatedAt);
+      return await this.runValidationPipeline(userId, trade, evaluatedAt, options);
     } catch (err) {
       this.logger.error(
         `Risk Engine error for user ${userId}, signal ${trade.signalId}: ${(err as Error).message}`,
@@ -182,6 +221,7 @@ export class RiskService {
     userId: string,
     trade: ProposedTrade,
     evaluatedAt: Date,
+    options?: { rebindConfirmationId?: string },
   ): Promise<RiskDecision> {
     const appliedRules: string[] = [];
     const contextSnapshot: Partial<RiskContextSnapshot> = {
@@ -459,9 +499,32 @@ export class RiskService {
     let liveLossComplete = false;
     if (connection.accountType === BrokerMode.LIVE) {
       try {
-        const snapshot = await this.brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure(
-          connection.id,
-        );
+        let snapshot;
+        try {
+          snapshot = await this.brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure(
+            connection.id,
+          );
+        } catch (snapErr) {
+          // Round 7 (P1 — LIVE snapshot availability): the 30s freshness
+          // window is tighter than the 60s health-check writer cadence. On
+          // STALE/MISSING, make ONE bounded synchronous provider observation
+          // (the same §1a write path) and re-resolve — LIVE availability
+          // becomes structural instead of cadence-luck. Any refresh failure
+          // propagates the ORIGINAL typed staleness error (fail-closed — a
+          // failed refresh never authorizes a stale snapshot).
+          if (
+            snapErr instanceof SnapshotNotFreshError &&
+            (snapErr.failure.code === 'SNAPSHOT_STALE' ||
+              snapErr.failure.code === 'SNAPSHOT_MISSING')
+          ) {
+            await this.brokerService.observeAccountSnapshotNow(userId, connection.id);
+            snapshot = await this.brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure(
+              connection.id,
+            );
+          } else {
+            throw snapErr;
+          }
+        }
         const logicalAccountKey = connection.logicalAccountKey ?? null;
         if (!logicalAccountKey) {
           throw new Error(
@@ -1069,6 +1132,7 @@ export class RiskService {
         validatedOrder,
         geometryQuoteRef,
         liveSnapshotBinding,
+        options?.rebindConfirmationId,
       );
     } catch (err) {
       this.logger.error(
@@ -1116,6 +1180,10 @@ export class RiskService {
         `(instrument=${trade.instrument}, lots=${effectiveLotSize}, rules=${appliedRules.length}, ` +
         `grant=${grantId}, session=${session.id}@${session.authorityGeneration}, mode=${session.executionMode})`,
     );
+
+    // Round 7 (P1 metrics): the APPROVED decision point (the durable grant
+    // already stands — observability follows the fact, never gates it).
+    this.metrics?.increment(METRIC_NAMES.RISK_APPROVALS);
 
     this.eventBus.publish(DomainEventType.RISK_SIGNAL_APPROVED, userId, {
       userId,
@@ -1394,6 +1462,7 @@ export class RiskService {
       currency: string;
       logicalAccountKey: string;
     } | null,
+    rebindConfirmationId?: string,
   ): Promise<string> {
     // Digest of the ProposedTrade MATERIAL fields (issue #301): the exact
     // signal content this approval was derived from.
@@ -1528,6 +1597,10 @@ export class RiskService {
       orderPayload,
       quoteRef,
       issuedAt,
+      // Round 7 (SEMI_AUTO confirm-path P0 fix): carry the user's existing
+      // one-time confirmation over to the fresh grant (see
+      // RiskGrantService.issueGrant).
+      rebindConfirmationId,
     });
 
     return grant.id;
@@ -1820,13 +1893,20 @@ export class RiskService {
     // flatten failure NEVER rolls it back; per-trade outcomes are audited
     // honestly and reconciliation converges unknowns. Deactivation NEVER
     // re-opens positions (only new decisions can, after re-validation).
+    // Round 7 (P1 — durable flatten): the flatten is enqueued as a DURABLE
+    // BullMQ job (crash-surviving, retrying) before the in-process fast
+    // path runs — a process death between the authority write above and the
+    // flatten can no longer lose the emergency de-risking.
     if (active) {
+      // Round 7 (P1 metrics): activation-only flatten counter (deactivation
+      // never re-opens positions — nothing to count there).
+      this.metrics?.increment(METRIC_NAMES.KILL_SWITCH_FLATTENS);
       await this.executionService
-        .emergencyCloseAllOpenPositions(userId)
+        .requestDurableEmergencyFlatten(userId, 'KILL_SWITCH_ACTIVATE')
         .catch((err) =>
           this.logger.error(
             `Kill-switch emergency flatten failed for user ${userId} (authority stands; ` +
-              `reconciliation will converge): ${(err as Error).message}`,
+              `the durable job retries; reconciliation will converge): ${(err as Error).message}`,
           ),
         );
     }
@@ -2055,6 +2135,9 @@ export class RiskService {
     reason: string,
     evaluatedAt: Date,
   ): RiskRejectionResult {
+    // Round 7 (P1 metrics): the fail-closed wrapper's rejection path (e.g.
+    // RISK_ENGINE_ERROR) never passes through rejectAndRecord — count it too.
+    this.metrics?.increment(METRIC_NAMES.RISK_REJECTIONS, { code });
     return {
       decision: 'REJECTED',
       signalId,
@@ -2083,6 +2166,10 @@ export class RiskService {
       rejectionReason: reason,
       evaluatedAt,
     };
+
+    // Round 7 (P1 metrics): the REJECTION funnel — every typed rejection code
+    // in the pipeline flows through here (one site, complete coverage).
+    this.metrics?.increment(METRIC_NAMES.RISK_REJECTIONS, { code });
 
     // Record violation asynchronously — don't block the rejection response
     this.violationRepo

@@ -9,6 +9,9 @@ import { AuditService } from '../../audit/audit.service';
 import { DomainEventBus } from '../../events/event-bus.service';
 import { DomainEventType } from '../../events/enums/domain-event-type.enum';
 import { Trade, TradeStatus } from '../entities/trade.entity';
+import { TradeIntent } from '../entities/trade-intent.entity';
+import { RiskGrant } from '../entities/risk-grant.entity';
+import { AllocationService } from '../services/allocation.service';
 import { Order } from '../orders/order.entity';
 import { OrderStatus } from '../orders/order.enums';
 import { OrderService } from '../orders/order.service';
@@ -86,7 +89,7 @@ describe('StateReconciliationService — Phase E: credential lifecycle + securit
   beforeEach(async () => {
     adapter = {
       setMode: jest.fn(),
-      connect: jest.fn().mockResolvedValue({ success: true }),
+      connect: jest.fn().mockResolvedValue({ success: true, accountType: 'DEMO' }),
       listOrders: jest.fn().mockResolvedValue([]),
     };
     encryptionService = { decrypt: jest.fn().mockReturnValue({ accountId: 'acc' }) };
@@ -120,6 +123,7 @@ describe('StateReconciliationService — Phase E: credential lifecycle + securit
           useValue: {
             applyProviderAccountSnapshot: jest.fn(),
             findConnectionsByIds: jest.fn().mockResolvedValue([]),
+            assertConnectionEnvironment: jest.fn().mockResolvedValue(undefined),
           },
         },
         {
@@ -137,6 +141,19 @@ describe('StateReconciliationService — Phase E: credential lifecycle + securit
           },
         },
         { provide: OrderService, useValue: {} },
+        // Round 7.1 (P0-5): pre-commitment recovery deps.
+        {
+          provide: getRepositoryToken(TradeIntent),
+          useValue: { findOne: jest.fn().mockResolvedValue(null) },
+        },
+        {
+          provide: getRepositoryToken(RiskGrant),
+          useValue: { findOne: jest.fn().mockResolvedValue(null) },
+        },
+        {
+          provide: AllocationService,
+          useValue: { releaseAllocationForIntent: jest.fn().mockResolvedValue(undefined) },
+        },
         { provide: AuditService, useValue: auditService },
         { provide: DomainEventBus, useValue: { publish: jest.fn() } },
       ],
@@ -176,7 +193,11 @@ describe('StateReconciliationService', () => {
   let tradeRepo: { find: jest.Mock; createQueryBuilder: jest.Mock };
   let orderRepo: { find: jest.Mock; createQueryBuilder: jest.Mock };
   let accountRepo: { findOne: jest.Mock; createQueryBuilder: jest.Mock };
-  let brokerService: { applyProviderAccountSnapshot: jest.Mock; findConnectionsByIds: jest.Mock };
+  let brokerService: {
+    applyProviderAccountSnapshot: jest.Mock;
+    findConnectionsByIds: jest.Mock;
+    assertConnectionEnvironment: jest.Mock;
+  };
   let adapterRegistry: { getAdapterForConnection: jest.Mock };
   let encryptionService: { decrypt: jest.Mock };
   let persistence: {
@@ -208,7 +229,7 @@ describe('StateReconciliationService', () => {
   beforeEach(async () => {
     adapter = {
       setMode: jest.fn(),
-      connect: jest.fn().mockResolvedValue({ success: true }),
+      connect: jest.fn().mockResolvedValue({ success: true, accountType: 'DEMO' }),
       listOrders: jest.fn().mockResolvedValue([]),
       getOpenPositions: jest.fn().mockResolvedValue([]),
       getAccountInfo: jest.fn().mockResolvedValue({
@@ -251,6 +272,7 @@ describe('StateReconciliationService', () => {
     };
     brokerService = {
       applyProviderAccountSnapshot: jest.fn().mockResolvedValue(undefined),
+      assertConnectionEnvironment: jest.fn().mockResolvedValue(undefined),
       findConnectionsByIds: jest.fn().mockResolvedValue([]),
     };
     adapterRegistry = { getAdapterForConnection: jest.fn().mockReturnValue(adapter) };
@@ -285,6 +307,19 @@ describe('StateReconciliationService', () => {
         { provide: ReconciliationPersistenceService, useValue: persistence },
         { provide: ReconciliationResolutionService, useValue: resolution },
         { provide: OrderService, useValue: {} },
+        // Round 7.1 (P0-5): pre-commitment recovery deps.
+        {
+          provide: getRepositoryToken(TradeIntent),
+          useValue: { findOne: jest.fn().mockResolvedValue(null) },
+        },
+        {
+          provide: getRepositoryToken(RiskGrant),
+          useValue: { findOne: jest.fn().mockResolvedValue(null) },
+        },
+        {
+          provide: AllocationService,
+          useValue: { releaseAllocationForIntent: jest.fn().mockResolvedValue(undefined) },
+        },
         { provide: AuditService, useValue: auditService },
         { provide: DomainEventBus, useValue: eventBus },
       ],
@@ -513,6 +548,49 @@ describe('StateReconciliationService', () => {
         }),
       );
       expect(brokerService.applyProviderAccountSnapshot).not.toHaveBeenCalled();
+    });
+
+    // ─── Round 7.1 (P0-1): environment enforcement on the reconciliation ──
+    // ─── session — no provider snapshot from a mislabeled environment ──────
+
+    it('P0-1: delegates every reconciliation session to the environment fence BEFORE reading provider state', async () => {
+      await service.runForConnection(connection());
+
+      expect(brokerService.assertConnectionEnvironment).toHaveBeenCalledTimes(1);
+      expect(brokerService.assertConnectionEnvironment).toHaveBeenCalledWith(
+        connection(),
+        { success: true, accountType: 'DEMO' },
+        'state-reconciliation',
+      );
+    });
+
+    it('P0-1: an environment mismatch on the reconciliation session fails the run closed — NO provider state is read, NO snapshot persisted', async () => {
+      const mismatch = new Error(
+        'Environment mismatch (state-reconciliation): the provider reports a LIVE account, ' +
+          'but this connection was declared DEMO — refusing to trust the observation (fail-closed).',
+      );
+      brokerService.assertConnectionEnvironment.mockRejectedValue(mismatch);
+
+      const outcome = await service.runForConnection(connection());
+
+      expect(outcome.status).toBe(ReconciliationRunStatus.FAILED);
+      // The provider session was never used for truth: no order/position/
+      // account reads happened after the fence, and NO snapshot from the
+      // mislabeled session was persisted (Phase 8 unreachable).
+      expect(adapter.listOrders).not.toHaveBeenCalled();
+      expect(adapter.getOpenPositions).not.toHaveBeenCalled();
+      expect(adapter.getAccountInfo).not.toHaveBeenCalled();
+      expect(brokerService.applyProviderAccountSnapshot).not.toHaveBeenCalled();
+      expect(persistence.failRun).toHaveBeenCalledWith(
+        'run-1',
+        expect.stringContaining('Environment mismatch'),
+      );
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: AuditAction.RECONCILIATION_RUN_FAILED,
+          severity: 'CRITICAL',
+        }),
+      );
     });
 
     it('counts per-item resolution errors but completes the run (retried next cycle)', async () => {

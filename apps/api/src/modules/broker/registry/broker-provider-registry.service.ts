@@ -4,6 +4,8 @@ import {
   BrokerAvailabilityStatus,
   BrokerConnectionRoute,
   BrokerDefinition,
+  deriveProviderCertificationState,
+  ProviderCertificationState,
 } from './broker-definition';
 import { BrokerCapability } from './broker-capability.enum';
 import { BrokerAdapterRegistry } from '../adapters/broker-adapter.registry';
@@ -18,15 +20,27 @@ export interface BrokerRegistryEntry {
   description: string;
   status: BrokerAvailabilityStatus;
   /**
-   * Production-LIVE verification evidence (architect Phase H) — always
-   * materialized. BETA ≠ production-LIVE: implementation status describes
-   * adapter evidence only; VERIFIED here is what gates LIVE execution.
+   * Production-LIVE verification evidence — always materialized. Historical
+   * VERIFIED evidence is retained for truth, but runtime production-LIVE
+   * eligibility is derived separately and requires current certification.
    */
   productionLiveVerification: {
     status: BrokerProductionLiveVerificationStatus;
     verifiedAt: string | null;
     evidenceRef: string | null;
+    /** Round 7.1 (P0-3): provenance — legacy attestation vs protocol certification. */
+    certifiedVia: 'LEGACY_ATTESTATION' | 'HARNESS_CERTIFIED' | null;
+    /** Harness run reference for HARNESS_CERTIFIED entries (null otherwise). */
+    certificationRunRef: string | null;
+    /**
+     * Truthful derived state. CERTIFIED requires complete current harness
+     * evidence; legacy verification is exposed as LEGACY_VERIFIED and does
+     * not authorize production LIVE.
+     */
+    certificationState: ProviderCertificationState;
   };
+  /** Top-level derived certification state for web/admin/mobile consumers. */
+  certificationState: ProviderCertificationState;
   connectionRoutes: BrokerConnectionRoute[];
   capabilities: BrokerCapability[];
   authenticationType: BrokerDefinition['authenticationType'];
@@ -40,20 +54,14 @@ export interface BrokerRegistryEntry {
  * BrokerProviderRegistryService — the single server-authoritative broker
  * catalog (Directive §N, §AU).
  *
- * Merges the static BROKER_CATALOG with live adapter availability:
- * an entry without a registered adapter can NEVER be reported as SUPPORTED
- * (status honesty — Directive §AB). Clients (web/admin/mobile) must render
- * this catalog instead of maintaining their own broker lists.
+ * Merges the static BROKER_CATALOG with live adapter availability. An entry
+ * without a registered adapter can NEVER be reported as SUPPORTED/BETA.
  *
- * Fail-closed: `isConnectable(id)` returns false for anything without a
- * registered adapter, regardless of catalog status.
- *
- * Production-LIVE truth (architect Phase H): implementation status and
- * adapter availability say NOTHING about production-LIVE approval.
- * `isProductionLiveEligible(id)` is the fail-closed LIVE gate — true only
- * with VERIFIED operator evidence AND a registered adapter. BETA/UNVERIFIED
- * providers remain connectable for DEMO use but can never open or enable
- * LIVE execution.
+ * Production-LIVE truth: implementation status and adapter availability say
+ * NOTHING about approval. `isProductionLiveEligible(id)` is the fail-closed
+ * LIVE gate and returns true only when a registered adapter exists AND the
+ * provider's derived state is CERTIFIED from complete current harness
+ * evidence. LEGACY_VERIFIED is informational and remains LIVE-ineligible.
  */
 @Injectable()
 export class BrokerProviderRegistryService {
@@ -65,10 +73,6 @@ export class BrokerProviderRegistryService {
       const adapterAvailable =
         entry.adapterId !== null && this.adapterRegistry.isSupported(entry.adapterId);
 
-      // Honesty rule: a definition can only be SUPPORTED or BETA when its
-      // adapter is actually registered at runtime. Otherwise downgrade to
-      // NOT_STARTED (Sprint 51 PR-7: BETA also requires a real registered
-      // adapter — a catalog entry alone can never claim BETA).
       const effectiveStatus =
         (entry.status === BrokerAvailabilityStatus.SUPPORTED ||
           entry.status === BrokerAvailabilityStatus.BETA) &&
@@ -76,19 +80,22 @@ export class BrokerProviderRegistryService {
           ? BrokerAvailabilityStatus.NOT_STARTED
           : entry.status;
 
+      const certificationState = deriveProviderCertificationState(entry.productionLiveVerification);
+
       return {
         id: entry.id,
         name: entry.name,
         description: entry.description,
         status: effectiveStatus,
-        // Phase H: production-LIVE evidence always materialized (default
-        // UNVERIFIED when the definition carries none) so UI consumers can
-        // render implementation status and LIVE verification distinctly.
         productionLiveVerification: {
           status: entry.productionLiveVerification?.status ?? 'UNVERIFIED',
           verifiedAt: entry.productionLiveVerification?.verifiedAt ?? null,
           evidenceRef: entry.productionLiveVerification?.evidenceRef ?? null,
+          certifiedVia: entry.productionLiveVerification?.certifiedVia ?? null,
+          certificationRunRef: entry.productionLiveVerification?.certificationRunRef ?? null,
+          certificationState,
         },
+        certificationState,
         connectionRoutes: [...entry.connectionRoutes],
         capabilities: [...entry.capabilities],
         authenticationType: entry.authenticationType,
@@ -106,11 +113,9 @@ export class BrokerProviderRegistryService {
 
   /**
    * FAIL-CLOSED connectability gate: only entries with BOTH a catalog
-   * definition and a registered adapter are connectable.
-   *
-   * Connectability = adapter presence only — a BETA/DEMO connection is
-   * still connectable for DEMO use (unchanged semantics, Phase H keeps
-   * this orthogonal to production-LIVE eligibility below).
+   * definition and a registered adapter are connectable. Connectability is
+   * intentionally orthogonal to production-LIVE eligibility so DEMO/BETA
+   * providers can still be used where permitted.
    */
   isConnectable(brokerId: string): boolean {
     const entry = this.getEntry(brokerId);
@@ -118,19 +123,14 @@ export class BrokerProviderRegistryService {
   }
 
   /**
-   * Production-LIVE eligibility: TRUE only with VERIFIED evidence.
-   * BETA/UNVERIFIED fails closed (architect Phase H) — no LIVE connections,
-   * no enable-live, regardless of adapter availability or catalog status.
-   * Unknown brokers and entries whose adapter is not currently registered
-   * are also ineligible.
+   * Production-LIVE eligibility: TRUE only for a current CERTIFIED provider
+   * with a registered adapter. Historical LEGACY_VERIFIED evidence, missing
+   * durable evidence, malformed run references, BETA/UNVERIFIED providers,
+   * unknown brokers, and unavailable adapters all fail closed.
    */
   isProductionLiveEligible(brokerId: string): boolean {
     const entry = this.getEntry(brokerId);
-    return (
-      entry !== null &&
-      entry.adapterAvailable &&
-      entry.productionLiveVerification.status === 'VERIFIED'
-    );
+    return entry !== null && entry.adapterAvailable && entry.certificationState === 'CERTIFIED';
   }
 
   /** Capability query (Directive §M) — never guess from broker name. */

@@ -1,4 +1,5 @@
 import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { BrokerConnection } from '../../broker/entities/broker-connection.entity';
 import { BrokerService } from '../../broker/broker.service';
 import { BrokerAdapterRegistry } from '../../broker/adapters/broker-adapter.registry';
@@ -9,7 +10,7 @@ import {
   BrokerOrderRequest,
   BrokerOrderResult,
 } from '../../broker/interfaces/broker-adapter.interface';
-import { BrokerAdapterError } from '../../broker/interfaces/broker-adapter.errors';
+import { BrokerAdapterError, BrokerErrorCode } from '../../broker/interfaces/broker-adapter.errors';
 import { ProviderDispatchCertainty } from '../../broker/interfaces/provider-dispatch-certainty';
 import { ExecutionControlService } from '../../execution-control/execution-control.service';
 import { AuditService } from '../../audit/audit.service';
@@ -30,7 +31,11 @@ import {
   assertOrderWithinCapabilities,
   OrderCapabilityError,
 } from '../../broker/interfaces/order-capability';
-import { FinalDispatchBoundary } from './final-dispatch-boundary';
+import { FinalDispatchBoundary, FinalDispatchBlockedException } from './final-dispatch-boundary';
+// Round 7 (P1 metrics — audit R7-audit-C A6): dependency-free in-process
+// counters (lazy ModuleRef seam — see the metrics getter below).
+import { MetricsService } from '../../metrics/metrics.service';
+import { METRIC_NAMES } from '../../metrics/metric-names';
 import { mapProviderOrderResponse } from './provider-response.mapper';
 import { classifyIntentOperation, isExposureIncreasingOperation } from './provider-operation-class';
 import { ProviderOperationClass } from '../interfaces/execution-authority';
@@ -106,7 +111,29 @@ export class ExecutionOrchestrator {
     // commitment → provider call → outcome) runs strictly serialized per
     // broker account, in-process (entries, §10 exits, confirmations).
     private readonly accountDispatchLease: AccountDispatchLeaseService,
+    /** Round 7 (P1 metrics): lazy MetricsService seam (never a constructor
+     * injection — see the metrics getter for the DI decision). */
+    private readonly moduleRef: ModuleRef,
   ) {}
+
+  /**
+   * Round 7 (P1 metrics — audit R7-audit-C A6): lazy metrics seam. Resolved
+   * at CALL time via ModuleRef.get(..., { strict: false }) — the app-wide
+   * lookup finds the MetricsModule singleton (registered once in AppModule).
+   * Direct constructor injection was rejected: it would demand a
+   * MetricsService provider in EVERY spec constructing this orchestrator
+   * (incl. out-of-scope suites) plus module-file imports outside the approved
+   * file scope. In isolated test contexts the lookup fails → null → the
+   * `this.metrics?.increment(...)` call sites no-op. Never affects control
+   * flow (MetricsService methods never throw).
+   */
+  private get metrics(): MetricsService | null {
+    try {
+      return this.moduleRef.get(MetricsService, { strict: false });
+    } catch {
+      return null;
+    }
+  }
 
   // ─── 1. Validation pipeline (fail-closed) ───────────────────────────────
 
@@ -161,6 +188,9 @@ export class ExecutionOrchestrator {
         },
         severity: AuditSeverity.WARNING,
       });
+      this.metrics?.increment(METRIC_NAMES.DISPATCH_BLOCKS, {
+        gate: 'EXECUTION_CONTROL',
+      });
       throw new ForbiddenException(
         `Execution blocked by platform control plane (${blocked?.scope ?? 'UNKNOWN'} scope).`,
       );
@@ -183,10 +213,22 @@ export class ExecutionOrchestrator {
     }
 
     // ── Gate B: LIVE authorization state machine (fail-closed, checked
-    // against the PERSISTED state — not the caller's snapshot) ─────────────
+    // against the PERSISTED state — not the caller's snapshot).
+    // Round 7 (§10 — OPERATION-AWARE): the authorization-state requirement
+    // binds EXPOSURE-INCREASING operations only. Risk-REDUCING dispatches
+    // (CLOSE_POSITION / CANCEL_PENDING / RISK_REDUCING_MODIFY /
+    // REDUCE_EXPOSURE / RECONCILE_READ) deliberately bypass this gate:
+    // de-risking must remain possible exactly when the connection's
+    // authorization has degraded (health suspension, admin suspension) —
+    // previously a suspended connection could not even be flattened. The
+    // credential gate (Gate C) still applies to every operation (the
+    // provider requires valid credentials for ANY call); a genuinely
+    // inaccessible provider/account surfaces as an honest typed dispatch
+    // failure + reconciliation — never a silently skipped de-risking. ─────
     if (
       connection.accountType === BrokerMode.LIVE &&
-      !this.brokerService.isConnectionExecutable(connection)
+      !this.brokerService.isConnectionExecutable(connection) &&
+      isExposureIncreasingOperation(operationClass)
     ) {
       this.logger.warn(
         `Dispatch blocked: LIVE connection ${ctx.connection.id} is not executable ` +
@@ -203,6 +245,9 @@ export class ExecutionOrchestrator {
           brokerConnectionId: ctx.connection.id,
         },
         severity: AuditSeverity.WARNING,
+      });
+      this.metrics?.increment(METRIC_NAMES.DISPATCH_BLOCKS, {
+        gate: 'LIVE_AUTHORIZATION',
       });
       throw new ForbiddenException(
         'Live account is not authorized for execution (authorization state is not ACTIVE).',
@@ -229,6 +274,9 @@ export class ExecutionOrchestrator {
           brokerConnectionId: ctx.connection.id,
         },
         severity: AuditSeverity.WARNING,
+      });
+      this.metrics?.increment(METRIC_NAMES.DISPATCH_BLOCKS, {
+        gate: 'CREDENTIAL_LIFECYCLE',
       });
       throw new ForbiddenException(
         'Broker credentials are not usable for execution (credential lifecycle is not active).',
@@ -293,6 +341,10 @@ export class ExecutionOrchestrator {
     // the operation-aware control gate.
     const operationClass = classifyIntentOperation(intent);
 
+    // Round 7 (P1 metrics): every dispatch entering the critical section
+    // (the outcome-specific counters below sub-classify how it resolved).
+    this.metrics?.increment(METRIC_NAMES.DISPATCH_ATTEMPTS, { operationClass });
+
     // ── Idempotent reservation ────────────────────────────────────────────
     const submission = await this.orderService.submitOrder({
       userId: intent.userId,
@@ -328,6 +380,7 @@ export class ExecutionOrchestrator {
         },
         severity: AuditSeverity.WARNING,
       });
+      this.metrics?.increment(METRIC_NAMES.DUPLICATE_SUPPRESSIONS);
       return { outcome: 'DUPLICATE', order: submission.order, orderId: submission.order.id };
     }
 
@@ -410,6 +463,9 @@ export class ExecutionOrchestrator {
               message: err.message,
             },
           });
+          this.metrics?.increment(METRIC_NAMES.DISPATCH_BLOCKS, {
+            gate: 'ORDER_CAPABILITY',
+          });
         }
         throw err;
       }
@@ -443,13 +499,59 @@ export class ExecutionOrchestrator {
     // in-flight (resolved through ProviderDispatchCertainty + reconciliation,
     // never replayed).
     if (commitment?.grantId) {
-      await this.finalDispatchBoundary.commitProviderDispatch({
-        userId: intent.userId,
-        grantId: commitment.grantId,
-        confirmationId: commitment.confirmationId ?? null,
-        orderId: order.id,
-        origin: commitment.origin ?? 'PIPELINE',
-      });
+      try {
+        await this.finalDispatchBoundary.commitProviderDispatch({
+          userId: intent.userId,
+          grantId: commitment.grantId,
+          confirmationId: commitment.confirmationId ?? null,
+          orderId: order.id,
+          origin: commitment.origin ?? 'PIPELINE',
+        });
+      } catch (err) {
+        // Round 7 (P1 — commitment-block outcome separation): a
+        // FinalDispatchBlockedException PROVES zero provider calls (the
+        // boundary threw BEFORE dispatchToProvider with nothing consumed).
+        // The reserved order must converge to a TERMINAL REJECTED state —
+        // never be left SUBMITTED to be mistaken for an uncertain dispatch.
+        // The typed exception still propagates so executeTrade can apply the
+        // DEFINITELY_NOT_SENT trade outcome (CAS-protected, newer truth
+        // preserved). Non-boundary errors propagate untouched.
+        if (err instanceof FinalDispatchBlockedException) {
+          const reason = `DISPATCH_BOUNDARY_${err.code}: ${err.message}`;
+          await this.orderService
+            .rejectOrder(order.id, reason)
+            .catch((rejectErr) =>
+              this.logger.error(
+                `Order ${order.id} could not be marked REJECTED after the dispatch ` +
+                  `boundary block [${err.code}] (${(rejectErr as Error).message}) — ` +
+                  'reconciliation will converge it',
+              ),
+            );
+          await this.emitOrderEvent(DomainEventType.ORDER_REJECTED, intent, order, {
+            status: OrderStatus.REJECTED,
+            reason: `${reason} [${err.code}]`,
+          });
+          await this.auditService.log({
+            actorUserId: intent.userId,
+            action: AuditAction.ORDER_REJECTED,
+            resourceType: 'Order',
+            resourceId: order.id,
+            metadata: {
+              clientOrderId: intent.clientOrderId,
+              reason,
+              blockedReason: err.code,
+              orderStatus: OrderStatus.REJECTED,
+              dispatchCertainty: ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+              gate: 'FINAL_DISPATCH_BOUNDARY',
+            },
+            severity: AuditSeverity.WARNING,
+          });
+          this.metrics?.increment(METRIC_NAMES.DISPATCH_BLOCKS, {
+            gate: 'FINAL_DISPATCH_BOUNDARY',
+          });
+        }
+        throw err;
+      }
     }
 
     // ── Provider dispatch (retry/timeout-wrapped) ─────────────────────────
@@ -486,6 +588,9 @@ export class ExecutionOrchestrator {
               orderStatus: filled.status,
             },
           });
+          this.metrics?.increment(METRIC_NAMES.PROVIDER_ACKNOWLEDGEMENTS, {
+            outcome: 'FILLED',
+          });
           return {
             outcome: 'FILLED',
             order: filled,
@@ -499,6 +604,9 @@ export class ExecutionOrchestrator {
         case 'ACKNOWLEDGE': {
           order = await this.orderService.markAcknowledged(order.id, action.providerOrderId);
           await this.emitAcknowledged(intent, order, action.providerOrderId);
+          this.metrics?.increment(METRIC_NAMES.PROVIDER_ACKNOWLEDGEMENTS, {
+            outcome: 'WORKING',
+          });
           return {
             outcome: 'WORKING',
             order,
@@ -528,6 +636,7 @@ export class ExecutionOrchestrator {
             },
             severity: AuditSeverity.WARNING,
           });
+          this.metrics?.increment(METRIC_NAMES.PROVIDER_REJECTS);
           return { outcome: 'REJECTED', order, orderId: order.id, reason: sanitizedReason };
         }
 
@@ -550,6 +659,9 @@ export class ExecutionOrchestrator {
               orderStatus: OrderStatus.RECONCILIATION_PENDING,
             },
             severity: AuditSeverity.CRITICAL,
+          });
+          this.metrics?.increment(METRIC_NAMES.AMBIGUOUS_PROVIDER_OUTCOMES, {
+            source: 'PROVIDER_RESPONSE',
           });
           return {
             outcome: 'UNKNOWN',
@@ -594,6 +706,9 @@ export class ExecutionOrchestrator {
             orderStatus: OrderStatus.RECONCILIATION_PENDING,
           },
           severity: AuditSeverity.CRITICAL,
+        });
+        this.metrics?.increment(METRIC_NAMES.AMBIGUOUS_PROVIDER_OUTCOMES, {
+          source: 'DISPATCH_ERROR',
         });
       } catch (transitionErr) {
         // The order row may already have moved (e.g. a terminal state won in a
@@ -648,13 +763,37 @@ export class ExecutionOrchestrator {
       connection.brokerId,
     );
     adapter.setMode(connection.accountType);
-    await adapter.connect(credentials);
+    const connectResult = await adapter.connect(credentials);
     const connectionReference = credentials.accountId;
 
-    // Zero credentials from memory immediately after connection
+    // Zero credentials from memory immediately after connection — BEFORE the
+    // environment fence below, so the hygiene guarantee is exception-safe: a
+    // fence rejection (or any later failure) can never leave plaintext
+    // credential material alive on the stack.
     (Object.keys(credentials) as (keyof typeof credentials)[]).forEach((k) => {
       (credentials as unknown as Record<string, unknown>)[k] = null;
     });
+
+    // Round 7.1 (P0-1 — pre-dispatch environment fence): the dispatch
+    // connection's provider-observed environment must MATCH the declared one
+    // BEFORE any state-changing provider call. A provider-side relabel
+    // (LIVE→DEMO or DEMO→LIVE) must never execute an order under the other
+    // environment's authority semantics. The fence throws BEFORE
+    // placeOrder/closeOrder — provably DEFINITELY_NOT_SENT — so the order
+    // fails closed into reconciliation (never resent; the health check or
+    // next observation performs the suspension + authority invalidation on
+    // its own cadence, and every subsequent dispatch re-fences).
+    if (connectResult.success && connectResult.accountType !== connection.accountType) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.ENVIRONMENT_MISMATCH,
+        `Environment mismatch at dispatch: the provider reports a ` +
+          `${connectResult.accountType} account, but this connection was declared ` +
+          `${connection.accountType} — refusing to dispatch (fail-closed).`,
+        undefined,
+        false,
+        ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+      );
+    }
 
     const execute = async (): Promise<BrokerOrderResult> => {
       if (intent.providerAction === 'CLOSE_POSITION') {
@@ -662,6 +801,22 @@ export class ExecutionOrchestrator {
           throw new Error('CLOSE_POSITION intent requires providerReferenceId');
         }
         return adapter.closeOrder(intent.providerReferenceId, intent.requestedQuantity);
+      }
+      // Round 7.1 (P0-4 — fail-closed action router): the only entry action
+      // that reaches the provider as an OPEN is PLACE. Any other/unknown
+      // providerAction previously fell through to placeOrder below — a
+      // future caller minting e.g. a CANCEL_PENDING intent here would have
+      // OPENED exposure under an exit label. Fail closed BEFORE any provider
+      // call (provably DEFINITELY_NOT_SENT) instead.
+      if (intent.providerAction !== 'PLACE') {
+        throw new BrokerAdapterError(
+          BrokerErrorCode.INVALID_REQUEST,
+          `Unsupported providerAction '${intent.providerAction}' at the dispatch ` +
+            'boundary — refusing to dispatch (fail-closed action router)',
+          undefined,
+          false,
+          ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+        );
       }
       const request: BrokerOrderRequest = {
         idempotencyKey: this.orderIdempotencyKey(intent),

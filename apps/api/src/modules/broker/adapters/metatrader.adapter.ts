@@ -31,6 +31,18 @@ import { redactString } from '../../../common/utils/redact-sensitive.util';
 /** MetaAPI stringCode for a successfully executed trade */
 const MT_SUCCESS_CODE = 'TRADE_RETCODE_DONE';
 
+/** MetaApi numeric retcode for a terminal request rejection (TRADE_RETCODE_REJECT). */
+const MT_REJECT_CODE = 10004;
+
+/**
+ * Per-symbol specification cache TTL (Round 7, Fix 1) — mirrors the house
+ * pattern of BrokerService.INSTRUMENT_SPEC_CACHE_TTL_MS (60s): short enough
+ * that a symbol-spec change at the broker re-resolves quickly, long enough
+ * that a risk-validation burst does not hammer the provider with one RPC
+ * getSymbolSpecification call per symbol.
+ */
+const SYMBOL_SPEC_CACHE_TTL_MS = 60_000;
+
 /**
  * MetaTraderAdapter — Full MT4/MT5 integration via MetaAPI cloud platform.
  *
@@ -63,6 +75,19 @@ export class MetaTraderAdapter implements IBrokerAdapter {
   private mode: BrokerMode = BrokerMode.DEMO;
   /** MetaAPI account UUID for the currently active user connection */
   private currentAccountId: string | null = null;
+
+  /**
+   * Connection-scoped per-symbol specification cache (key
+   * `<accountId>:<symbol>`) — the short-lived in-adapter cache behind
+   * getInstrumentList()'s per-symbol MetaApi getSymbolSpecification lookups
+   * (Round 7, Fix 1). Account-scoped key so an account switch on the shared
+   * adapter instance naturally re-resolves instead of serving another
+   * account's specifications.
+   */
+  private readonly symbolSpecCache = new Map<
+    string,
+    { spec: BrokerInstrument; expiresAt: number }
+  >();
 
   constructor(private readonly metaApiClient: MetaApiClientService) {}
 
@@ -284,23 +309,120 @@ export class MetaTraderAdapter implements IBrokerAdapter {
 
   // ─── Market data ──────────────────────────────────────────────────────────
 
+  /**
+   * Instrument catalog with PROVEN per-symbol specifications (Round 7, Fix 1).
+   *
+   * Every symbol's digits/minLot/maxLot/lotStep/contractSize comes from the
+   * broker's own MetatraderSymbolSpecification via the MetaApi RPC
+   * `getSymbolSpecification(symbol)` call — the contractSize geometry
+   * RiskOrderGeometryService "proves" for order sizing is the BROKER's
+   * truth, never a hardcoded FX constant (the old behavior returned
+   * digits=5/minLot 0.01/maxLot 100/lotStep 0.01/contractSize '100000' for
+   * EVERY symbol — wrong by orders of magnitude for non-FX instruments
+   * such as XAU, indices and crypto on LIVE accounts).
+   *
+   * FAIL CLOSED: a symbol whose specification cannot be proven (lookup
+   * failure or malformed/non-positive geometry fields) is OMITTED from the
+   * catalog — exactly the cTrader sibling's discipline ("excluded honestly
+   * instead of reporting fake volumes"). NO fabricated FX fallback.
+   *
+   * Lookups are backed by a short-lived connection-scoped cache (60s TTL,
+   * BrokerService.INSTRUMENT_SPEC_CACHE_TTL_MS house pattern) so repeated
+   * catalog reads do not re-query the provider per symbol.
+   */
   async getInstrumentList(): Promise<BrokerInstrument[]> {
     const conn = await this.getActiveConnection();
     try {
       const symbols: string[] = await conn.getSymbols();
-      // Return summaries — full specs fetched per symbol via getSymbolSpecification
-      return (symbols ?? []).map((s: string) => ({
-        symbol: s,
-        description: s,
-        digits: 5,
-        minLot: '0.01',
-        maxLot: '100',
-        lotStep: '0.01',
-        contractSize: '100000',
-      }));
+      const instruments: BrokerInstrument[] = [];
+      for (const symbol of symbols ?? []) {
+        const instrument = await this.getCachedSymbolSpec(conn, symbol);
+        if (instrument) instruments.push(instrument);
+      }
+      return instruments;
     } catch (err) {
       throw this.mapError(err);
     }
+  }
+
+  /**
+   * Resolve ONE symbol's BrokerInstrument through the connection-scoped
+   * spec cache. Returns null when the provider specification cannot be
+   * PROVEN — the caller omits the symbol (fail-closed, never fabricated).
+   */
+  private async getCachedSymbolSpec(conn: any, symbol: string): Promise<BrokerInstrument | null> {
+    const cacheKey = `${this.currentAccountId ?? 'unconnected'}:${symbol}`;
+    const cached = this.symbolSpecCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.spec;
+
+    let spec: any;
+    try {
+      spec = await conn.getSymbolSpecification(symbol);
+    } catch (err) {
+      // Fail-closed omission: the symbol is listed by the account but its
+      // specification is not provable right now — excluded honestly
+      // (cTrader sibling pattern), never reported with invented geometry.
+      this.logger.warn(
+        `Symbol "${symbol}" specification unavailable — instrument omitted ` +
+          `(fail-closed): ${redactString((err as Error)?.message ?? 'unknown error')}`,
+      );
+      return null;
+    }
+
+    const instrument = this.mapSymbolSpecification(symbol, spec);
+    if (!instrument) {
+      this.logger.warn(
+        `Symbol "${symbol}" returned an unprovable specification — instrument omitted (fail-closed)`,
+      );
+      return null;
+    }
+    this.symbolSpecCache.set(cacheKey, {
+      spec: instrument,
+      expiresAt: Date.now() + SYMBOL_SPEC_CACHE_TTL_MS,
+    });
+    return instrument;
+  }
+
+  /**
+   * Normalize a MetaApi MetatraderSymbolSpecification into the
+   * BrokerInstrument contract (decimal STRINGS for all geometry fields).
+   * Returns null when any required field is absent, malformed or
+   * non-positive — the specification is then NOT proven and the symbol must
+   * be omitted rather than reported with guessed values.
+   */
+  private mapSymbolSpecification(symbol: string, spec: any): BrokerInstrument | null {
+    if (!spec || typeof spec !== 'object') return null;
+    const digits =
+      typeof spec.digits === 'number' && Number.isInteger(spec.digits) && spec.digits >= 0
+        ? spec.digits
+        : null;
+    const minVolume = this.positiveFiniteNumber(spec.minVolume);
+    const maxVolume = this.positiveFiniteNumber(spec.maxVolume);
+    const volumeStep = this.positiveFiniteNumber(spec.volumeStep);
+    const contractSize = this.positiveFiniteNumber(spec.contractSize);
+    if (
+      digits === null ||
+      minVolume === null ||
+      maxVolume === null ||
+      volumeStep === null ||
+      contractSize === null
+    ) {
+      return null;
+    }
+    return {
+      symbol,
+      description: symbol,
+      digits,
+      minLot: minVolume.toFixed(8),
+      maxLot: maxVolume.toFixed(8),
+      lotStep: volumeStep.toFixed(8),
+      contractSize: contractSize.toFixed(8),
+    };
+  }
+
+  /** Positive finite number, or null when the value is absent/unprovable. */
+  private positiveFiniteNumber(value: unknown): number | null {
+    return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
   }
 
   async getCurrentPrice(instrument: string): Promise<BrokerPrice> {
@@ -581,6 +703,50 @@ export class MetaTraderAdapter implements IBrokerAdapter {
     }
   }
 
+  // ─── ADDITIVE CONCRETE SURFACE — NOT part of IBrokerAdapter ───────────────
+
+  /**
+   * Cancels a WORKING (pending) order through the MetaApi RPC `cancelOrder`
+   * command (orderId = the order ticket number; MetaApi relays it to the
+   * terminal as a trade request, and the terminal answers with the
+   * authoritative retcode).
+   *
+   * ADDITIVE CONCRETE METHOD (Sprint 50/51 contract decision — mirrors the
+   * cTrader/paper siblings): cancelOrder is deliberately NOT declared on the
+   * shared IBrokerAdapter interface. The provider-verification harness
+   * narrows with `'cancelOrder' in adapter` to exercise it on adapters that
+   * implement it (pending-cancel step). Do NOT widen the shared interface
+   * for this method; do NOT remove it from this adapter.
+   *
+   * WRITE-CERTAINTY discipline (same truth table as every state-changing
+   * call on this adapter, mapError): gateway-level rejections (401/429 —
+   * rejected BEFORE the terminal) are DEFINITELY_NOT_SENT — safe to retry;
+   * timeouts / connection loss / 5xx AFTER submission are
+   * MAY_HAVE_REACHED_PROVIDER — the terminal may have cancelled the order;
+   * reconcile, never resend; terminal-ANSWERED rejections (order not found,
+   * invalid ticket) are SENT_RESPONSE_RECEIVED — the broker definitively
+   * reported the outcome.
+   */
+  async cancelOrder(externalOrderId: string): Promise<BrokerOrderResult> {
+    try {
+      // Inside the try so the pre-send NOT_CONNECTED rejection also flows
+      // through mapError's certainty fill (DEFINITELY_NOT_SENT) — every
+      // error path of this state-changing call carries a classification.
+      const conn = await this.getActiveConnection();
+      const result = await conn.cancelOrder(externalOrderId);
+      const success = result?.stringCode === MT_SUCCESS_CODE;
+      return {
+        success,
+        externalOrderId,
+        status: success ? 'FILLED' : result?.numericCode === MT_REJECT_CODE ? 'REJECTED' : 'FAILED',
+        brokerMessage: result?.message,
+        rawResponse: result,
+      };
+    } catch (err) {
+      throw this.mapError(err);
+    }
+  }
+
   async closeAllOrders(): Promise<BrokerCloseAllResult> {
     const positions = await this.getOpenPositions();
     let closedCount = 0;
@@ -672,8 +838,19 @@ export class MetaTraderAdapter implements IBrokerAdapter {
   }
 
   private resolveAccountType(mtType: string | undefined): BrokerMode {
+    // Round 7.1 (P0-1): a CONTEST account is competition money, NOT real
+    // money — it must classify as DEMO so a LIVE-declared connection pointing
+    // at one fails closed as an environment mismatch instead of sailing
+    // through as LIVE. When the provider is silent about the account type
+    // the adapter can only echo the requested mode (documented limitation —
+    // the declared-vs-observed gate is vacuous for silent providers and
+    // bites exactly when the provider CONTRADICTS the declaration).
     if (!mtType) return this.mode;
-    return mtType.includes('DEMO') ? BrokerMode.DEMO : BrokerMode.LIVE;
+    const normalized = mtType.toUpperCase();
+    if (normalized.includes('DEMO') || normalized.includes('CONTEST')) {
+      return BrokerMode.DEMO;
+    }
+    return BrokerMode.LIVE;
   }
 
   /**

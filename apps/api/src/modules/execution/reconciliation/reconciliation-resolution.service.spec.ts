@@ -224,6 +224,30 @@ describe('ReconciliationResolutionService', () => {
       );
     });
 
+    it('Round 7.1 (P0-5): recovers a WORKING-outcome PENDING trade → OPEN (the restart edge with a live provider position)', async () => {
+      const working = baseTrade({ status: TradeStatus.PENDING, externalOrderId: 'pos-1' });
+      const recovered = await service.recoverTradeToOpen(working);
+
+      expect(recovered).toBe(true);
+      expect(tradeRepo.update).toHaveBeenCalledWith(
+        { id: 'trade-1', status: TradeStatus.PENDING },
+        { status: TradeStatus.OPEN },
+      );
+      // The audit records the from-state (PENDING recovery is distinct).
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: AuditAction.TRADE_RECONCILED,
+          metadata: expect.objectContaining({ recoveredFrom: TradeStatus.PENDING }),
+        }),
+      );
+    });
+
+    it('Round 7.1 (P0-5): refuses recovery from a state with no legal OPEN transition (fail-closed)', async () => {
+      const rejected = baseTrade({ status: TradeStatus.REJECTED });
+      await expect(service.recoverTradeToOpen(rejected)).rejects.toThrow();
+      expect(tradeRepo.update).not.toHaveBeenCalled();
+    });
+
     it('skips when the trade is no longer pending (race lost)', async () => {
       tradeRepo.update.mockResolvedValueOnce({ affected: 0 });
       const pending = baseTrade({ status: TradeStatus.RECONCILIATION_PENDING });

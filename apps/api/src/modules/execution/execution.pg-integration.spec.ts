@@ -1,6 +1,8 @@
 import { ForbiddenException } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { DataSource, Repository } from 'typeorm';
 import { ExecutionService } from './execution.service';
+import type { EmergencyFlattenProducer } from './jobs/emergency-flatten.producer';
 import { Trade } from './entities/trade.entity';
 import { TradingSession } from './entities/trading-session.entity';
 import { RiskGrant } from './entities/risk-grant.entity';
@@ -418,7 +420,7 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
         marketSlTpAttachedAtPlacement: true,
       }),
       setMode: jest.fn(),
-      connect: jest.fn().mockResolvedValue({ success: true }),
+      connect: jest.fn().mockResolvedValue({ success: true, accountType: 'DEMO' }),
       disconnect: jest.fn(),
       testConnection: jest.fn(),
       isConnected: jest.fn().mockReturnValue(true),
@@ -524,12 +526,21 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
       // Round 6 §14: the per-account dispatch lease (real implementation —
       // its own matrix lives in account-dispatch-lease.spec.ts).
       new AccountDispatchLeaseService(),
+      // Round 7 (P1 metrics): the lazy MetricsService ModuleRef seam — the
+      // stub's get() returns undefined, so every metrics call site no-ops.
+      { get: jest.fn() } as unknown as ModuleRef,
     );
     // Round 5 (task 50-c): the REAL final dispatch boundary + the REAL
     // RiskGrantService (the 50-b contract) + the REAL trade-lifecycle CAS —
     // grant consumption, confirmation fencing and CAS transitions run
     // against real PostgreSQL rows.
-    const riskGrantService = new RiskGrantService(riskGrantRepo, confirmationRepo, auditService);
+    const riskGrantService = new RiskGrantService(
+      riskGrantRepo,
+      confirmationRepo,
+      auditService,
+      // Round 7 (P1 metrics): the lazy MetricsService ModuleRef seam.
+      { get: jest.fn() } as unknown as ModuleRef,
+    );
     const boundary = new FinalDispatchBoundary(
       riskGrantRepo,
       sessionRepo,
@@ -569,6 +580,8 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
       orchestrator,
       auditService,
       dataSource,
+      // Round 7 (P1): the durable-flatten producer is a stub seam here.
+      {} as EmergencyFlattenProducer,
       eventBus,
       riskGrantRepo,
       confirmationRepo,

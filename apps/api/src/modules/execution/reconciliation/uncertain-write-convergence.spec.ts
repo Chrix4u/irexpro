@@ -9,6 +9,9 @@ import { CredentialEncryptionService } from '../../broker/services/credential-en
 import { AuditService } from '../../audit/audit.service';
 import { DomainEventBus } from '../../events/event-bus.service';
 import { Trade } from '../entities/trade.entity';
+import { TradeIntent } from '../entities/trade-intent.entity';
+import { RiskGrant } from '../entities/risk-grant.entity';
+import { AllocationService } from '../services/allocation.service';
 import { Order } from '../orders/order.entity';
 import { OrderStatus } from '../orders/order.enums';
 import { OrderService } from '../orders/order.service';
@@ -157,7 +160,7 @@ describe('Uncertain-write reconciliation convergence (Sprint 56 correction round
       // READ), never via a new placeOrder submission.
       adapter = {
         setMode: jest.fn(),
-        connect: jest.fn().mockResolvedValue({ success: true }),
+        connect: jest.fn().mockResolvedValue({ success: true, accountType: 'DEMO' }),
         listOrders: jest.fn().mockResolvedValue([]),
         getOpenPositions: jest.fn().mockResolvedValue([]),
         getAccountInfo: jest.fn().mockResolvedValue({
@@ -225,6 +228,9 @@ describe('Uncertain-write reconciliation convergence (Sprint 56 correction round
       const brokerService = {
         applyProviderAccountSnapshot: jest.fn().mockResolvedValue(undefined),
         findConnectionsByIds: jest.fn().mockResolvedValue([]),
+        // Round 7.1 (P0-1): the reconciliation environment fence (mocked —
+        // the real seam's matrix lives in broker.service.spec.ts).
+        assertConnectionEnvironment: jest.fn().mockResolvedValue(undefined),
       };
       const persistence = {
         createRun: jest
@@ -257,6 +263,19 @@ describe('Uncertain-write reconciliation convergence (Sprint 56 correction round
           { provide: CredentialEncryptionService, useValue: { decrypt: jest.fn() } },
           { provide: ReconciliationPersistenceService, useValue: persistence },
           { provide: OrderService, useValue: orderService },
+          // Round 7.1 (P0-5): pre-commitment recovery deps.
+          {
+            provide: getRepositoryToken(TradeIntent),
+            useValue: { findOne: jest.fn().mockResolvedValue(null) },
+          },
+          {
+            provide: getRepositoryToken(RiskGrant),
+            useValue: { findOne: jest.fn().mockResolvedValue(null) },
+          },
+          {
+            provide: AllocationService,
+            useValue: { releaseAllocationForIntent: jest.fn().mockResolvedValue(undefined) },
+          },
           { provide: AuditService, useValue: auditService },
           { provide: DomainEventBus, useValue: eventBus },
         ],
@@ -363,6 +382,19 @@ describe('Uncertain-write reconciliation convergence (Sprint 56 correction round
           ReconciliationResolutionService,
           { provide: TRADE_REPO, useValue: tradeRepo },
           { provide: OrderService, useValue: orderService },
+          // Round 7.1 (P0-5): pre-commitment recovery deps.
+          {
+            provide: getRepositoryToken(TradeIntent),
+            useValue: { findOne: jest.fn().mockResolvedValue(null) },
+          },
+          {
+            provide: getRepositoryToken(RiskGrant),
+            useValue: { findOne: jest.fn().mockResolvedValue(null) },
+          },
+          {
+            provide: AllocationService,
+            useValue: { releaseAllocationForIntent: jest.fn().mockResolvedValue(undefined) },
+          },
           { provide: AuditService, useValue: auditService },
           { provide: DomainEventBus, useValue: eventBus },
         ],

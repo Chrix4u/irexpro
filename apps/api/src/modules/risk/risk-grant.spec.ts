@@ -1,4 +1,5 @@
 import { DataSource, Repository } from 'typeorm';
+import { ModuleRef } from '@nestjs/core';
 import {
   Column,
   CreateDateColumn,
@@ -22,6 +23,7 @@ import {
   RiskGrantService,
   RISK_GRANT_TTL_MS,
   EXECUTION_CONFIRMATION_WINDOW_MS,
+  PendingConfirmationRebindError,
 } from './risk-grant.service';
 import { RiskOrderGeometryService } from './risk-order-geometry.service';
 import { BrokerService } from '../broker/broker.service';
@@ -337,6 +339,9 @@ describe('RiskGrant issuance + exact-decimal boundaries (Round 5, 50-b)', () => 
       grantRepo as unknown as Repository<RiskGrant>,
       confirmationRepo as unknown as Repository<ExecutionConfirmation>,
       auditService,
+      // Round 7 (P1 metrics): the lazy MetricsService ModuleRef seam — the
+      // stub's get() returns undefined, so every metrics call site no-ops.
+      { get: jest.fn() } as unknown as ModuleRef,
     );
 
     brokerService = {
@@ -639,6 +644,176 @@ describe('RiskGrant issuance + exact-decimal boundaries (Round 5, 50-b)', () => 
     });
   });
 
+  // ─── Round 7 (P0 fix): the SEMI_AUTO confirm-path grant re-bind ────────
+
+  describe('SEMI_AUTO confirm-path re-bind (Round 7 P0 fix)', () => {
+    it('the fresh §18 evaluation RE-BINDS the in-flight PENDING confirmation to the fresh grant instead of revoking it', async () => {
+      await setSessionMode(ExecutionMode.SEMI_AUTO);
+
+      // Original approval → G1 + C1 (PENDING, bound to G1).
+      const first = await riskService.validateProposedTrade(
+        USER,
+        trade({ executionMode: ExecutionMode.SEMI_AUTO }),
+      );
+      expect(first.decision).toBe('APPROVED');
+      if (first.decision !== 'APPROVED') return;
+      const confirmations = await confirmationRepo.find();
+      expect(confirmations).toHaveLength(1);
+      const c1 = confirmations[0]!;
+      expect(c1.riskGrantId).toBe(first.grantId);
+
+      // The user CONFIRMS → fresh evaluation (fresh quote ⇒ different binding
+      // digest ⇒ supersession) with rebindConfirmationId = C1.
+      const confirmed = await riskService.validateProposedTrade(
+        USER,
+        trade({
+          executionMode: ExecutionMode.SEMI_AUTO,
+          requestedLotSize: '0.06',
+        }),
+        { rebindConfirmationId: c1.id },
+      );
+      expect(confirmed.decision).toBe('APPROVED');
+      if (confirmed.decision !== 'APPROVED') return;
+      expect(confirmed.grantId).not.toBe(first.grantId);
+
+      // G1 superseded with the confirm-path reason.
+      const stale = await grantRepo.findOne({ where: { id: first.grantId! } });
+      expect(stale!.status).toBe(RiskGrantStatus.INVALIDATED);
+      expect(stale!.invalidationReason).toBe('SUPERSEDED_BY_CONFIRMATION_RE_EVALUATION');
+
+      // C1 SURVIVED as PENDING and is RE-BOUND to the fresh grant — the
+      // commitment CAS (risk_grant_id = fresh grant + PENDING + unexpired)
+      // is winnable. This is the exact regression the P0 fix closes.
+      const reloaded = await confirmationRepo.findOne({ where: { id: c1.id } });
+      expect(reloaded!.status).toBe(ExecutionConfirmationStatus.PENDING);
+      expect(reloaded!.riskGrantId).toBe(confirmed.grantId);
+      expect(reloaded!.revokedAt).toBeNull();
+
+      // EXACTLY ONE confirmation exists (no second row was created).
+      expect(await confirmationRepo.count()).toBe(1);
+
+      // The fresh grant is consumable AND the confirmation CAS precondition
+      // holds — simulate the commitment's two CAS legs.
+      const consume = await riskGrantService.consumeGrantAtomic(confirmed.grantId!, USER);
+      expect(consume.consumed).toBe(true);
+      await confirmationRepo.update(
+        { id: c1.id } as never,
+        { status: ExecutionConfirmationStatus.CONSUMED, consumedAt: new Date() } as never,
+      );
+      const after = await confirmationRepo.findOne({ where: { id: c1.id } });
+      expect(after!.status).toBe(ExecutionConfirmationStatus.CONSUMED);
+    });
+
+    it('the re-bind works when the ORIGINAL grant already expired (>60s confirm window) — the fresh grant re-anchors the CAS', async () => {
+      await setSessionMode(ExecutionMode.SEMI_AUTO);
+
+      const first = await riskService.validateProposedTrade(
+        USER,
+        trade({ executionMode: ExecutionMode.SEMI_AUTO }),
+      );
+      expect(first.decision).toBe('APPROVED');
+      if (first.decision !== 'APPROVED') return;
+      const c1 = (await confirmationRepo.find())[0]!;
+
+      // Time-travel: the original grant's TTL has passed (the row stays ACTIVE
+      // until superseded — exactly the production lazy-expiry shape).
+      await grantRepo.update(
+        { id: first.grantId! } as never,
+        { expiresAt: new Date(Date.now() - 1_000) } as never,
+      );
+
+      const confirmed = await riskService.validateProposedTrade(
+        USER,
+        trade({ executionMode: ExecutionMode.SEMI_AUTO, requestedLotSize: '0.06' }),
+        { rebindConfirmationId: c1.id },
+      );
+      expect(confirmed.decision).toBe('APPROVED');
+      if (confirmed.decision !== 'APPROVED') return;
+
+      const reloaded = await confirmationRepo.findOne({ where: { id: c1.id } });
+      expect(reloaded!.status).toBe(ExecutionConfirmationStatus.PENDING);
+      expect(reloaded!.riskGrantId).toBe(confirmed.grantId);
+
+      // The FRESH grant is unexpired + consumable (the old one never was again).
+      const consume = await riskGrantService.consumeGrantAtomic(confirmed.grantId!, USER);
+      expect(consume.consumed).toBe(true);
+      const staleConsume = await riskGrantService.consumeGrantAtomic(first.grantId!, USER);
+      expect(staleConsume.consumed).toBe(false);
+    });
+
+    it('a NON-PENDING confirmation (revoked concurrently) fails the re-bind CLOSED — typed error, no dispatchable approval', async () => {
+      await setSessionMode(ExecutionMode.SEMI_AUTO);
+
+      const first = await riskService.validateProposedTrade(
+        USER,
+        trade({ executionMode: ExecutionMode.SEMI_AUTO }),
+      );
+      expect(first.decision).toBe('APPROVED');
+      if (first.decision !== 'APPROVED') return;
+      const c1 = (await confirmationRepo.find())[0]!;
+
+      // A concurrent actor revoked the confirmation BEFORE the user's confirm
+      // landed (session end, authority change…).
+      await confirmationRepo.update(
+        { id: c1.id } as never,
+        {
+          status: ExecutionConfirmationStatus.REVOKED,
+          revokedAt: new Date(),
+        } as never,
+      );
+
+      // The fresh evaluation with the re-bind option must NOT approve: the
+      // fail-closed wrapper converts the typed rebind error into a REJECTED
+      // decision (zero provider calls).
+      const decision = await riskService.validateProposedTrade(
+        USER,
+        trade({ executionMode: ExecutionMode.SEMI_AUTO, requestedLotSize: '0.06' }),
+        { rebindConfirmationId: c1.id },
+      );
+      expect(decision.decision).not.toBe('APPROVED');
+
+      // The revoked confirmation was NOT resurrected.
+      const reloaded = await confirmationRepo.findOne({ where: { id: c1.id } });
+      expect(reloaded!.status).toBe(ExecutionConfirmationStatus.REVOKED);
+    });
+
+    it('a supersession WITHOUT the confirm-path option keeps the Round-6 revoke semantics (regression guard)', async () => {
+      await setSessionMode(ExecutionMode.SEMI_AUTO);
+
+      const first = await riskService.validateProposedTrade(
+        USER,
+        trade({ executionMode: ExecutionMode.SEMI_AUTO }),
+      );
+      expect(first.decision).toBe('APPROVED');
+      if (first.decision !== 'APPROVED') return;
+      const c1 = (await confirmationRepo.find())[0]!;
+
+      // A NON-confirm re-validation (e.g. orchestrator retry): the stale
+      // confirmation is revoked and a fresh one is created on the new grant.
+      const second = await riskService.validateProposedTrade(
+        USER,
+        trade({ executionMode: ExecutionMode.SEMI_AUTO, requestedLotSize: '0.06' }),
+      );
+      expect(second.decision).toBe('APPROVED');
+      if (second.decision !== 'APPROVED') return;
+
+      const reloaded = await confirmationRepo.findOne({ where: { id: c1.id } });
+      expect(reloaded!.status).toBe(ExecutionConfirmationStatus.REVOKED);
+      expect(await confirmationRepo.count()).toBe(2);
+      const fresh = (await confirmationRepo.find()).find((c) => c.id !== c1.id)!;
+      expect(fresh.status).toBe(ExecutionConfirmationStatus.PENDING);
+      expect(fresh.riskGrantId).toBe(second.grantId);
+    });
+
+    it('PendingConfirmationRebindError carries the typed shape', () => {
+      const err = new PendingConfirmationRebindError('conf-1', 'sig-1', 'detail');
+      expect(err.name).toBe('PendingConfirmationRebindError');
+      expect(err.confirmationId).toBe('conf-1');
+      expect(err.signalId).toBe('sig-1');
+      expect(err.message).toContain('conf-1');
+    });
+  });
+
   // ─── Grant lifecycle CAS (#301) ───────────────────────────────────────────
 
   describe('lifecycle', () => {
@@ -769,6 +944,45 @@ describe('RiskGrant issuance + exact-decimal boundaries (Round 5, 50-b)', () => 
       expect(pending!.revokedAt).not.toBeNull();
       const consumedRow = await confirmationRepo.findOne({ where: { signalId: 'sig-c2' } });
       expect(consumedRow!.status).toBe(ExecutionConfirmationStatus.CONSUMED);
+    });
+
+    // ─── Round 7 (P1): the confirmation-expiry sweeper seam ──────────────
+
+    it('expireStalePendingConfirmations expires ONLY window-passed PENDING rows (Round 7 expiry hygiene)', async () => {
+      const seed = (
+        signalId: string,
+        expiresInMs: number,
+        status = ExecutionConfirmationStatus.PENDING,
+      ) =>
+        confirmationRepo.create({
+          userId: USER,
+          sessionId: 'session-1',
+          sessionGeneration: 1,
+          signalId,
+          brokerConnectionId: CONN,
+          orderPayloadDigest: 'b'.repeat(64),
+          instrument: 'EURUSD',
+          direction: 'BUY',
+          quantity: '0.05',
+          expiresAt: new Date(Date.now() + expiresInMs),
+          status,
+        });
+      await confirmationRepo.save([
+        seed('sig-stale-pending', -1_000), // window passed, PENDING -> expires
+        seed('sig-live-pending', 120_000), // window open, PENDING -> stays
+        seed('sig-stale-consumed', -1_000, ExecutionConfirmationStatus.CONSUMED), // terminal -> stays
+      ]);
+
+      const expired = await riskGrantService.expireStalePendingConfirmations();
+      expect(expired).toBe(1);
+      const stale = await confirmationRepo.findOne({ where: { signalId: 'sig-stale-pending' } });
+      expect(stale!.status).toBe(ExecutionConfirmationStatus.EXPIRED);
+      const live = await confirmationRepo.findOne({ where: { signalId: 'sig-live-pending' } });
+      expect(live!.status).toBe(ExecutionConfirmationStatus.PENDING);
+      const consumed = await confirmationRepo.findOne({
+        where: { signalId: 'sig-stale-consumed' },
+      });
+      expect(consumed!.status).toBe(ExecutionConfirmationStatus.CONSUMED);
     });
   });
 

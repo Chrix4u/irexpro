@@ -58,6 +58,56 @@ const mockConnection = {
   ]),
   getPosition: jest.fn().mockResolvedValue(null),
   getSymbols: jest.fn().mockResolvedValue(['EURUSD', 'GBPUSD', 'USDJPY']),
+  // Round 7 Fix 1 — per-symbol specification source (MetatraderSymbolSpecification).
+  // Unknown symbols resolve null (the "specification not provable" case).
+  getSymbolSpecification: jest.fn((symbol: string) => {
+    const specs: Record<string, Record<string, unknown>> = {
+      EURUSD: {
+        symbol: 'EURUSD',
+        digits: 5,
+        tickSize: 0.00001,
+        minVolume: 0.01,
+        maxVolume: 100,
+        volumeStep: 0.01,
+        contractSize: 100000,
+      },
+      GBPUSD: {
+        symbol: 'GBPUSD',
+        digits: 5,
+        tickSize: 0.00001,
+        minVolume: 0.01,
+        maxVolume: 100,
+        volumeStep: 0.01,
+        contractSize: 100000,
+      },
+      USDJPY: {
+        symbol: 'USDJPY',
+        digits: 3,
+        tickSize: 0.001,
+        minVolume: 0.01,
+        maxVolume: 50,
+        volumeStep: 0.01,
+        contractSize: 100000,
+      },
+      XAUUSD: {
+        symbol: 'XAUUSD',
+        digits: 2,
+        tickSize: 0.01,
+        minVolume: 0.01,
+        maxVolume: 20,
+        volumeStep: 0.01,
+        contractSize: 100,
+      },
+    };
+    return Promise.resolve(specs[symbol] ?? null);
+  }),
+  // Round 7 Fix 2 — working-order cancellation primitive.
+  cancelOrder: jest.fn().mockResolvedValue({
+    stringCode: 'TRADE_RETCODE_DONE',
+    numericCode: 10009,
+    orderId: 'pending-limit-buy-1',
+    message: 'Request completed',
+  }),
   subscribeToMarketData: jest.fn().mockResolvedValue(undefined),
   unsubscribeFromMarketData: jest.fn().mockResolvedValue(undefined),
   getSymbolPrice: jest.fn().mockResolvedValue({
@@ -244,6 +294,76 @@ describe('MetaTraderAdapter', () => {
       expect(result.accountType).toBe(BrokerMode.DEMO);
     });
 
+    // ─── Round 7.1 (P0-1): provider-observed environment classification ────
+
+    it('P0-1: resolves LIVE from the provider-reported account type (a real-money account is classified LIVE)', async () => {
+      (mockConnection.getAccountInformation as jest.Mock).mockResolvedValueOnce({
+        login: '123456',
+        type: 'ACCOUNT_TRADE_MODE_LIVE',
+        currency: 'USD',
+        leverage: 100,
+        balance: 10000.5,
+        equity: 10050.25,
+        margin: 200.0,
+        freeMargin: 9850.25,
+        marginLevel: 5025.12,
+      });
+      const result = await adapter.connect(testCredentials);
+      expect(result.success).toBe(true);
+      expect(result.accountType).toBe(BrokerMode.LIVE);
+    });
+
+    it('P0-1: classifies a CONTEST account as DEMO (competition money is NOT real money — a LIVE-declared connection pointing at one must fail closed upstream)', async () => {
+      (mockConnection.getAccountInformation as jest.Mock).mockResolvedValueOnce({
+        login: '123456',
+        type: 'ACCOUNT_TRADE_MODE_CONTEST',
+        currency: 'USD',
+        leverage: 100,
+        balance: 10000.5,
+        equity: 10050.25,
+        margin: 200.0,
+        freeMargin: 9850.25,
+        marginLevel: 5025.12,
+      });
+      const result = await adapter.connect(testCredentials);
+      expect(result.success).toBe(true);
+      expect(result.accountType).toBe(BrokerMode.DEMO);
+    });
+
+    it('P0-1: normalizes provider casing (a lowercase "demo" is still DEMO)', async () => {
+      (mockConnection.getAccountInformation as jest.Mock).mockResolvedValueOnce({
+        login: '123456',
+        type: 'demo',
+        currency: 'USD',
+        leverage: 100,
+        balance: 1,
+        equity: 1,
+        margin: 0,
+        freeMargin: 1,
+        marginLevel: 0,
+      });
+      const result = await adapter.connect(testCredentials);
+      expect(result.accountType).toBe(BrokerMode.DEMO);
+    });
+
+    it('P0-1: a SILENT provider (no account type) echoes the requested mode — the declared-vs-observed gate is vacuous, never guessed', async () => {
+      (mockConnection.getAccountInformation as jest.Mock).mockResolvedValueOnce({
+        login: '123456',
+        type: undefined,
+        currency: 'USD',
+        leverage: 100,
+        balance: 1,
+        equity: 1,
+        margin: 0,
+        freeMargin: 1,
+        marginLevel: 0,
+      });
+      // Mode DEMO set by the service before connect.
+      const result = await adapter.connect(testCredentials);
+      expect(result.success).toBe(true);
+      expect(result.accountType).toBe(BrokerMode.DEMO);
+    });
+
     it('throws BrokerAdapterError on MetaAPI failure', async () => {
       jest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
       (metaApiClient.getOrCreateConnection as jest.Mock).mockRejectedValueOnce(
@@ -346,6 +466,120 @@ describe('MetaTraderAdapter', () => {
       expect(typeof pos.lotSize).toBe('string');
       expect(typeof pos.openPrice).toBe('string');
       expect(typeof pos.unrealisedPnl).toBe('string');
+    });
+  });
+
+  describe('getInstrumentList() — per-symbol specifications (Round 7, fail-closed)', () => {
+    beforeEach(async () => {
+      await adapter.connect(testCredentials);
+    });
+
+    it('returns PROVEN per-symbol provider values (digits/minLot/maxLot/lotStep/contractSize)', async () => {
+      const instruments = await adapter.getInstrumentList();
+      expect(instruments).toHaveLength(3);
+
+      const eurUsd = instruments.find((i) => i.symbol === 'EURUSD');
+      expect(eurUsd).toEqual({
+        symbol: 'EURUSD',
+        description: 'EURUSD',
+        digits: 5,
+        minLot: '0.01000000',
+        maxLot: '100.00000000',
+        lotStep: '0.01000000',
+        contractSize: '100000.00000000',
+      });
+      expect(mockConnection.getSymbolSpecification).toHaveBeenCalledWith('EURUSD');
+
+      // Provider truth per symbol — NOT the old hardcoded digits=5/maxLot 100.
+      const usdJpy = instruments.find((i) => i.symbol === 'USDJPY');
+      expect(usdJpy?.digits).toBe(3);
+      expect(usdJpy?.maxLot).toBe('50.00000000');
+    });
+
+    it('non-FX contract sizes come from the provider — NOT the fabricated 100000 FX constant', async () => {
+      mockConnection.getSymbols.mockResolvedValueOnce(['EURUSD', 'XAUUSD']);
+      const instruments = await adapter.getInstrumentList();
+
+      const xau = instruments.find((i) => i.symbol === 'XAUUSD');
+      expect(xau).toBeDefined();
+      // Gold: 100 oz per lot per the BROKER's specification — the value the
+      // RiskOrderGeometryService contractSize proof must see on LIVE.
+      expect(xau?.contractSize).toBe('100.00000000');
+      expect(xau?.contractSize).not.toBe('100000.00000000');
+      expect(xau?.digits).toBe(2);
+      expect(xau?.maxLot).toBe('20.00000000');
+    });
+
+    it('OMITS symbols whose specification is not provable (fail-closed — never FX fallback)', async () => {
+      mockConnection.getSymbols.mockResolvedValueOnce(['EURUSD', 'BOGUS', 'USDJPY']);
+      const instruments = await adapter.getInstrumentList();
+
+      expect(instruments.map((i) => i.symbol)).toEqual(['EURUSD', 'USDJPY']);
+      const bogus = instruments.find((i) => i.symbol === 'BOGUS');
+      expect(bogus).toBeUndefined();
+    });
+
+    it('OMITS symbols whose specification lookup FAILS (other symbols still listed)', async () => {
+      mockConnection.getSymbols.mockResolvedValueOnce(['BOGUS', 'EURUSD']);
+      mockConnection.getSymbolSpecification.mockRejectedValueOnce(
+        new Error('invalid symbol — unknown symbol'),
+      );
+      const instruments = await adapter.getInstrumentList();
+
+      expect(instruments.map((i) => i.symbol)).toEqual(['EURUSD']);
+    });
+
+    it('OMITS symbols whose specification resolves with malformed/non-positive geometry', async () => {
+      mockConnection.getSymbols.mockResolvedValueOnce(['BADGEO', 'EURUSD']);
+      mockConnection.getSymbolSpecification.mockResolvedValueOnce({
+        symbol: 'BADGEO',
+        digits: 5,
+        minVolume: 0,
+        maxVolume: 100,
+        volumeStep: 0.01,
+        contractSize: 0,
+      });
+      const instruments = await adapter.getInstrumentList();
+
+      expect(instruments.map((i) => i.symbol)).toEqual(['EURUSD']);
+    });
+
+    it('caches per-symbol specifications within the TTL (no repeated provider lookups)', async () => {
+      await adapter.getInstrumentList();
+      expect(mockConnection.getSymbolSpecification).toHaveBeenCalledTimes(3);
+
+      mockConnection.getSymbolSpecification.mockClear();
+      await adapter.getInstrumentList();
+      expect(mockConnection.getSymbolSpecification).not.toHaveBeenCalled();
+    });
+
+    it('re-queries the provider after the 60s cache TTL expires', async () => {
+      const nowSpy = jest.spyOn(Date, 'now');
+      try {
+        nowSpy.mockReturnValue(1_000_000);
+        await adapter.getInstrumentList();
+        expect(mockConnection.getSymbolSpecification).toHaveBeenCalledTimes(3);
+
+        // Still inside the TTL — served from the cache.
+        mockConnection.getSymbolSpecification.mockClear();
+        nowSpy.mockReturnValue(1_000_000 + 59_999);
+        await adapter.getInstrumentList();
+        expect(mockConnection.getSymbolSpecification).not.toHaveBeenCalled();
+
+        // Past the TTL — fresh provider lookups per symbol.
+        nowSpy.mockReturnValue(1_000_000 + 60_001);
+        await adapter.getInstrumentList();
+        expect(mockConnection.getSymbolSpecification).toHaveBeenCalledTimes(3);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it('throws BrokerAdapterError when getSymbols itself fails (no fabricated catalog)', async () => {
+      mockConnection.getSymbols.mockRejectedValueOnce(new Error('connection lost'));
+      await expect(adapter.getInstrumentList()).rejects.toMatchObject({
+        code: BrokerErrorCode.CONNECTION_LOST,
+      });
     });
   });
 
@@ -631,6 +865,78 @@ describe('MetaTraderAdapter', () => {
       const result = await adapter.closeOrder('pos-1', '0.05');
       expect(result.success).toBe(true);
       expect(mockConnection.closePositionPartially).toHaveBeenCalledWith('pos-1', 0.05);
+    });
+  });
+
+  describe('cancelOrder (additive concrete surface — Round 7, Fix 2)', () => {
+    beforeEach(async () => await adapter.connect(testCredentials));
+
+    it('cancels a working order via the MetaApi RPC cancelOrder command', async () => {
+      const result = await adapter.cancelOrder('pending-limit-buy-1');
+      expect(mockConnection.cancelOrder).toHaveBeenCalledWith('pending-limit-buy-1');
+      expect(result).toMatchObject({
+        success: true,
+        externalOrderId: 'pending-limit-buy-1',
+        status: 'FILLED',
+        brokerMessage: 'Request completed',
+      });
+      expect(result.rawResponse).toMatchObject({ stringCode: 'TRADE_RETCODE_DONE' });
+    });
+
+    it('maps a terminal retcode rejection (10004) to an honest REJECTED result', async () => {
+      mockConnection.cancelOrder.mockResolvedValueOnce({
+        stringCode: 'TRADE_RETCODE_REJECT',
+        numericCode: 10004,
+        message: 'Trade request rejected',
+      });
+      const result = await adapter.cancelOrder('555');
+      expect(result.success).toBe(false);
+      expect(result.status).toBe('REJECTED');
+      expect(result.brokerMessage).toBe('Trade request rejected');
+    });
+
+    it('maps a non-DONE terminal answer to FAILED (never success)', async () => {
+      mockConnection.cancelOrder.mockResolvedValueOnce({
+        stringCode: 'TRADE_RETCODE_INVALID',
+        numericCode: 10013,
+        message: 'Invalid request',
+      });
+      const result = await adapter.cancelOrder('556');
+      expect(result).toMatchObject({ success: false, status: 'FAILED' });
+    });
+
+    it('fails closed with NOT_CONNECTED (DEFINITELY_NOT_SENT) before connect()', async () => {
+      await adapter.disconnect();
+      const err = (await adapter.cancelOrder('555').catch((e) => e)) as BrokerAdapterError;
+      expect(err).toBeInstanceOf(BrokerAdapterError);
+      expect(err.code).toBe(BrokerErrorCode.NOT_CONNECTED);
+      expect(err.dispatchCertainty).toBe(ProviderDispatchCertainty.DEFINITELY_NOT_SENT);
+      expect(mockConnection.cancelOrder).not.toHaveBeenCalled();
+    });
+
+    it('maps a timeout to CONNECTION_TIMEOUT with MAY_HAVE_REACHED_PROVIDER (reconcile, never resend)', async () => {
+      mockConnection.cancelOrder.mockRejectedValueOnce(new Error('request timed out'));
+      const err = (await adapter.cancelOrder('555').catch((e) => e)) as BrokerAdapterError;
+      expect(err).toBeInstanceOf(BrokerAdapterError);
+      expect(err.code).toBe(BrokerErrorCode.CONNECTION_TIMEOUT);
+      expect(err.isRetryable).toBe(true);
+      expect(err.dispatchCertainty).toBe(ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER);
+    });
+
+    it('maps a gateway 401 to AUTHENTICATION_FAILED with DEFINITELY_NOT_SENT (safe to retry)', async () => {
+      mockConnection.cancelOrder.mockRejectedValueOnce(
+        Object.assign(new Error('authentication failed'), { status: 401 }),
+      );
+      const err = (await adapter.cancelOrder('555').catch((e) => e)) as BrokerAdapterError;
+      expect(err.code).toBe(BrokerErrorCode.AUTHENTICATION_FAILED);
+      expect(err.dispatchCertainty).toBe(ProviderDispatchCertainty.DEFINITELY_NOT_SENT);
+    });
+
+    it('maps a terminal-answered unknown ticket to POSITION_NOT_FOUND (SENT_RESPONSE_RECEIVED)', async () => {
+      mockConnection.cancelOrder.mockRejectedValueOnce(new Error('Order not found'));
+      const err = (await adapter.cancelOrder('555').catch((e) => e)) as BrokerAdapterError;
+      expect(err.code).toBe(BrokerErrorCode.POSITION_NOT_FOUND);
+      expect(err.dispatchCertainty).toBe(ProviderDispatchCertainty.SENT_RESPONSE_RECEIVED);
     });
   });
 

@@ -1,7 +1,7 @@
 import { ConflictException, Injectable, Logger } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, MoreThan, Repository } from 'typeorm';
 import { ExecutionConfirmation } from './entities/execution-confirmation.entity';
 import { RiskGrant } from './entities/risk-grant.entity';
 import { RiskProfile } from '../risk/entities/risk-profile.entity';
@@ -122,7 +122,15 @@ export class ExecutionConfirmationService {
   /** The user's PENDING confirmations with full order detail. */
   async listPending(userId: string): Promise<PendingExecutionConfirmationView[]> {
     const confirmations = await this.confirmationRepo.find({
-      where: { userId, status: ExecutionConfirmationStatus.PENDING },
+      where: {
+        userId,
+        status: ExecutionConfirmationStatus.PENDING,
+        // Round 7 (P1 — expiry hygiene): a confirmation whose window has
+        // already passed is NOT listed as actionable — the boundary refuses
+        // it anyway (CAS expires_at > now); the sweeper converges its status
+        // to EXPIRED shortly after. Never surface a dead proposal as pending.
+        expiresAt: MoreThan(new Date()),
+      },
       order: { createdAt: 'ASC' },
     });
     if (confirmations.length === 0) return [];
@@ -174,23 +182,37 @@ export class ExecutionConfirmationService {
     // CURRENT risk re-evaluation. ModuleRef at CALL time: constructor-injecting
     // RiskService would stack a provider dependency onto the existing
     // RiskModule↔ExecutionModule forwardRef cycle.
+    //
+    // Round 7 (SEMI_AUTO confirm-path P0 fix): `rebindConfirmationId` carries
+    // THIS confirmation through the fresh evaluation → grant issuance. The
+    // fresh grant (necessarily a different authority binding — the quote is
+    // fresh) supersedes the original grant WITHOUT revoking this confirmation;
+    // instead the confirmation is RE-BOUND to the fresh grant, so the
+    // commitment CAS (risk_grant_id = fresh grant + status PENDING + unexpired)
+    // is winnable. Previously the fresh evaluation revoked the in-flight
+    // confirmation — SEMI_AUTO dispatch was structurally impossible
+    // (CONFIRMATION_REVOKED <60s; DIGEST_MISMATCH/CAS_LOST >60s).
     const riskService = this.moduleRef.get(RiskService, { strict: false });
-    const decision: RiskDecision = await riskService.validateProposedTrade(userId, {
-      signalId: confirmation.signalId,
-      instrument: confirmation.instrument,
-      direction: confirmation.direction as 'BUY' | 'SELL',
-      requestedLotSize: String(confirmation.quantity),
-      // MARKET sentinel ('0'): the original authorization was a MARKET
-      // instruction — current-quote risk semantics apply (§18).
-      entryPrice: '0',
-      stopLoss: confirmation.stopLoss ?? undefined,
-      takeProfit: confirmation.takeProfit ?? undefined,
-      idempotencyKey: `${userId}:${confirmation.signalId}`,
-      sessionId: confirmation.sessionId,
-      sessionGeneration: confirmation.sessionGeneration,
-      executionMode: ExecutionMode.SEMI_AUTO,
-      brokerConnectionId: confirmation.brokerConnectionId,
-    });
+    const decision: RiskDecision = await riskService.validateProposedTrade(
+      userId,
+      {
+        signalId: confirmation.signalId,
+        instrument: confirmation.instrument,
+        direction: confirmation.direction as 'BUY' | 'SELL',
+        requestedLotSize: String(confirmation.quantity),
+        // MARKET sentinel ('0'): the original authorization was a MARKET
+        // instruction — current-quote risk semantics apply (§18).
+        entryPrice: '0',
+        stopLoss: confirmation.stopLoss ?? undefined,
+        takeProfit: confirmation.takeProfit ?? undefined,
+        idempotencyKey: `${userId}:${confirmation.signalId}`,
+        sessionId: confirmation.sessionId,
+        sessionGeneration: confirmation.sessionGeneration,
+        executionMode: ExecutionMode.SEMI_AUTO,
+        brokerConnectionId: confirmation.brokerConnectionId,
+      },
+      { rebindConfirmationId: confirmation.id },
+    );
 
     if (decision.decision !== 'APPROVED') {
       // Fresh risk rejection ⇒ ZERO provider calls (fail-closed).
