@@ -42,12 +42,15 @@ import { existsSync } from 'fs';
  * modification, full close, closure verification, history reconciliation and
  * the zero-unexpected-open-exposure diff against the baseline.
  *
- * EVIDENCE: the sanitized evidence object is console.log'd AND written to
- * ${IREXPRO_LIVE_CERT_EVIDENCE_DIR:-.}/live-certification-metatrader5-<timestamp>.json
+ * EVIDENCE (Round 7.1): the durable artifact is the ONLY evidence surface —
+ * written + read-back hash-verified to
+ * ${IREXPRO_LIVE_CERT_EVIDENCE_DIR:-.}/live-certification-metatrader5-<runId>-<timestamp>.json
  * (masked account ids, counts + masked fingerprints only — no credentials by
- * construction). That artifact is the evidenceRef material for the documented
- * operator catalog-edit + provider-matrix process (docs/brokers/provider-matrix.md);
- * the harness itself NEVER flips productionLiveVerification.
+ * construction). The console prints a static pointer only — no env-derived
+ * values are logged (CodeQL CWE-532 hygiene). That artifact is the
+ * evidenceRef material for the documented operator catalog-edit +
+ * provider-matrix process (docs/brokers/provider-matrix.md); the harness
+ * itself NEVER flips productionLiveVerification.
  */
 
 const gate = resolveLiveCertificationGateFromEnv();
@@ -89,11 +92,13 @@ describeMt5LiveCertification(
         await built.dispose?.();
       }
 
-      // Sanitized evidence — safe to print by construction (no credentials).
-      console.log('MetaTrader 5 LIVE certification evidence:\n', JSON.stringify(evidence, null, 2));
+      // Round 7.1 (CodeQL CWE-532 hygiene): the console is NOT an evidence
+      // surface — no env-derived values are printed. The durable, read-back
+      // verified artifact is the authority; the assertions below pin the
+      // certifiable contract (mode, broker, result, PERSISTED state, hash).
       console.log(
-        'Evidence artifact:',
-        evidence.artifactPath ?? '(NOT PERSISTED — run is not certifiable)',
+        'MetaTrader 5 LIVE certification run captured — full sanitized evidence is in ' +
+          'the operator evidence artifact; the assertions below pin the durable contract.',
       );
 
       expect(evidence.mode).toBe('LIVE');

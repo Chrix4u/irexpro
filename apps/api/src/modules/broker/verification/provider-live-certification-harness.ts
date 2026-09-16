@@ -173,7 +173,8 @@ export function resolveLiveCertificationGateFromEnv(
   };
 }
 
-// ─── Evidence types (sanitized — safe to log, persist, and console.log) ───────
+// ─── Evidence types (sanitized for PERSISTENCE — the durable artifact is the
+// only evidence surface; console output carries no env-derived values) ────────
 
 /** One certification step's sanitized result (provider order ids are non-secret by entity design). */
 export interface LiveCertificationStep {
@@ -812,10 +813,12 @@ export async function runLiveCertificationChecklist(
   // unique reference for every log line, artifact name and catalog record
   // this run can ever produce.
   const runId = randomUUID();
-  console.log(
-    `[live-certification] run started: runId=${runId} broker=${options.target.brokerId} ` +
-      `operator=${sanitizeVerificationDetail(options.operator.operatorId)}`,
-  );
+  // Round 7.1 (CodeQL CWE-532 hygiene): the console is NOT an evidence
+  // surface. Only the run-scoped UUID is logged — broker/operator identifiers
+  // arrive from operator-supplied env configuration and are recorded (already
+  // sanitized) in the durable evidence artifact, never in clear-text console
+  // output.
+  console.log(`[live-certification] run started: runId=${runId}`);
 
   const steps: LiveCertificationStep[] = [];
   const statuses = new Map<string, VerificationStepStatus>();
@@ -1685,10 +1688,16 @@ function finalizeLiveCertificationEvidence(
     evidence.evidenceState = 'PERSISTED';
     evidence.certificationResult = record.overall;
     evidence.artifactPath = path;
+    // Round 7.1 (CodeQL CWE-532 hygiene): no env-derived values in console
+    // output — the artifact directory and the sha256 (computed over a record
+    // that legitimately contains operator-supplied identifiers) live in the
+    // durable, read-back-verified artifact itself, not in logs. record.runId
+    // is the run-scoped UUID; record.overall is the harness-computed verdict —
+    // both read directly off the run record (no env-derived provenance).
     console.log(
-      `[live-certification] evidence artifact written + verified: ${path} ` +
-        `(runId=${evidence.runId}, sha256=${evidenceSha256.slice(0, 16)}…, ` +
-        `certificationResult=${evidence.certificationResult})`,
+      `[live-certification] evidence artifact written + verified: runId=${record.runId} ` +
+        `certificationResult=${record.overall} ` +
+        `(sha256 + artifact path are recorded inside the evidence artifact)`,
     );
     return evidence;
   } catch (err) {
