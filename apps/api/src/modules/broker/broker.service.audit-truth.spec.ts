@@ -14,8 +14,6 @@ describe('BrokerService connect-failure audit truth', () => {
     );
 
     expect(source).not.toMatch(/\.\.\.\(environmentMismatch\s*\?/);
-    expect(source).not.toMatch(
-      /severity:\s*environmentMismatch\s*\?\s*AuditSeverity\.CRITICAL/,
-    );
+    expect(source).not.toMatch(/severity:\s*environmentMismatch\s*\?\s*AuditSeverity\.CRITICAL/);
   });
 });
