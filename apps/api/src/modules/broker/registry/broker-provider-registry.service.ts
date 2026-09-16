@@ -4,6 +4,8 @@ import {
   BrokerAvailabilityStatus,
   BrokerConnectionRoute,
   BrokerDefinition,
+  deriveProviderCertificationState,
+  ProviderCertificationState,
 } from './broker-definition';
 import { BrokerCapability } from './broker-capability.enum';
 import { BrokerAdapterRegistry } from '../adapters/broker-adapter.registry';
@@ -26,7 +28,25 @@ export interface BrokerRegistryEntry {
     status: BrokerProductionLiveVerificationStatus;
     verifiedAt: string | null;
     evidenceRef: string | null;
+    /** Round 7.1 (P0-3): provenance — legacy attestation vs protocol certification. */
+    certifiedVia: 'LEGACY_ATTESTATION' | 'HARNESS_CERTIFIED' | null;
+    /** Harness run reference for HARNESS_CERTIFIED entries (null otherwise). */
+    certificationRunRef: string | null;
+    /**
+     * Round 7.1 (P0-3): the TRUTHFUL derived display state — NOT_CERTIFIED /
+     * LEGACY_VERIFIED / CERTIFIED. Legacy attestation is never presented as
+     * a fresh protocol certification; run-level states (pending/persistence
+     * failure) never appear here (they flip nothing in the catalog).
+     */
+    certificationState: ProviderCertificationState;
   };
+  /**
+   * Round 7.1 (P0-3): top-level derived certification state (mirrors the
+   * shared @irexpro/types contract — NOT_CERTIFIED / LEGACY_VERIFIED /
+   * CERTIFIED) so web/admin render legacy attestation distinctly from a
+   * current protocol certification without re-deriving it.
+   */
+  certificationState: ProviderCertificationState;
   connectionRoutes: BrokerConnectionRoute[];
   capabilities: BrokerCapability[];
   authenticationType: BrokerDefinition['authenticationType'];
@@ -88,7 +108,18 @@ export class BrokerProviderRegistryService {
           status: entry.productionLiveVerification?.status ?? 'UNVERIFIED',
           verifiedAt: entry.productionLiveVerification?.verifiedAt ?? null,
           evidenceRef: entry.productionLiveVerification?.evidenceRef ?? null,
+          // Round 7.1 (P0-3): provenance + truthful derived state, always
+          // materialized (null provenance on UNVERIFIED entries).
+          certifiedVia: entry.productionLiveVerification?.certifiedVia ?? null,
+          certificationRunRef: entry.productionLiveVerification?.certificationRunRef ?? null,
+          certificationState: deriveProviderCertificationState(
+            entry.productionLiveVerification,
+          ),
         },
+        // Round 7.1 (P0-3): top-level derived state (shared contract shape).
+        certificationState: deriveProviderCertificationState(
+          entry.productionLiveVerification,
+        ),
         connectionRoutes: [...entry.connectionRoutes],
         capabilities: [...entry.capabilities],
         authenticationType: entry.authenticationType,

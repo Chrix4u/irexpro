@@ -65,10 +65,21 @@ export const BROKER_CATALOG: readonly BrokerDefinition[] = [
     // production route (docs/brokers/provider-matrix.md). No single
     // attestation date exists in the repo history, so verifiedAt is null —
     // evidenceRef describes the production-operation evidence instead.
+    //
+    // Round 7.1 (P0-3): certifiedVia=LEGACY_ATTESTATION records the
+    // PROVENANCE truthfully — this verification PREDATES the Round-7
+    // production-LIVE certification protocol; no harness run, no dated
+    // durable artifact, no certificationRunRef exists (and none is
+    // fabricated). UI/API renders it as LEGACY_VERIFIED — distinct from a
+    // current protocol CERTIFIED state. A future genuine operator
+    // certification run (durable evidence artifact) may upgrade this entry
+    // to HARNESS_CERTIFIED; nothing upgrades it automatically.
     productionLiveVerification: {
       status: 'VERIFIED',
       verifiedAt: null,
       evidenceRef: 'production operation — MetaApi bridge, live in production',
+      certifiedVia: 'LEGACY_ATTESTATION',
+      certificationRunRef: null,
     },
     connectionRoutes: [BrokerConnectionRoute.METATRADER],
     capabilities: [

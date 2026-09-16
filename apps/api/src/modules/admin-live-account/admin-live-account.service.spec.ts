@@ -198,8 +198,17 @@ describe('AdminLiveAccountService', () => {
     environments: ['DEMO', 'LIVE'],
     regions: ['global'],
     adapterAvailable: true,
-    // Always materialized by the real registry service (default UNVERIFIED).
-    productionLiveVerification: { status: 'UNVERIFIED', verifiedAt: null, evidenceRef: null },
+    // Always materialized by the real registry service (default UNVERIFIED,
+    // with the Round 7.1 provenance + derived certification state).
+    productionLiveVerification: {
+      status: 'UNVERIFIED',
+      verifiedAt: null,
+      evidenceRef: null,
+      certifiedVia: null,
+      certificationRunRef: null,
+      certificationState: 'NOT_CERTIFIED',
+    },
+    certificationState: 'NOT_CERTIFIED',
     ...overrides,
   });
 
@@ -602,7 +611,11 @@ describe('AdminLiveAccountService', () => {
             status: 'UNVERIFIED',
             verifiedAt: null,
             evidenceRef: null,
+            certifiedVia: null,
+            certificationRunRef: null,
+            certificationState: 'NOT_CERTIFIED',
           },
+          certificationState: 'NOT_CERTIFIED',
         },
         {
           brokerId: 'oanda',
@@ -614,7 +627,11 @@ describe('AdminLiveAccountService', () => {
             status: 'UNVERIFIED',
             verifiedAt: null,
             evidenceRef: null,
+            certifiedVia: null,
+            certificationRunRef: null,
+            certificationState: 'NOT_CERTIFIED',
           },
+          certificationState: 'NOT_CERTIFIED',
         },
         {
           brokerId: 'paper-broker',
@@ -626,7 +643,11 @@ describe('AdminLiveAccountService', () => {
             status: 'UNVERIFIED',
             verifiedAt: null,
             evidenceRef: null,
+            certifiedVia: null,
+            certificationRunRef: null,
+            certificationState: 'NOT_CERTIFIED',
           },
+          certificationState: 'NOT_CERTIFIED',
         },
       ]);
     });
@@ -663,7 +684,55 @@ describe('AdminLiveAccountService', () => {
         status: 'UNVERIFIED',
         verifiedAt: null,
         evidenceRef: null,
+        certifiedVia: null,
+        certificationRunRef: null,
+        certificationState: 'NOT_CERTIFIED',
       });
+    });
+
+    // Round 7.1 (P0-3): the truthful derived certification state rides along
+    // so legacy attestation is never rendered as a fresh protocol
+    // certification.
+    it('carries the derived certificationState through from the registry (Round 7.1 P0-3) — legacy vs certified vs not-certified', async () => {
+      providerRegistry.getCatalog.mockReturnValue([
+        registryEntry({
+          id: 'metatrader5',
+          productionLiveVerification: {
+            status: 'VERIFIED',
+            verifiedAt: null,
+            evidenceRef: 'production operation — MetaApi bridge',
+            certifiedVia: 'LEGACY_ATTESTATION',
+            certificationRunRef: null,
+            certificationState: 'LEGACY_VERIFIED',
+          },
+          certificationState: 'LEGACY_VERIFIED',
+        }),
+        registryEntry({
+          id: 'future-broker',
+          productionLiveVerification: {
+            status: 'VERIFIED',
+            verifiedAt: '2026-09-16T00:00:00.000Z',
+            evidenceRef: 'live-certification artifact',
+            certifiedVia: 'HARNESS_CERTIFIED',
+            certificationRunRef: 'run-uuid@sha256:abcdef',
+            certificationState: 'CERTIFIED',
+          },
+          certificationState: 'CERTIFIED',
+        }),
+        registryEntry({ id: 'oanda', name: 'OANDA' }),
+      ]);
+
+      const overview = await service.getOverview(NOW);
+
+      expect(overview.providers[0].certificationState).toBe('LEGACY_VERIFIED');
+      expect(overview.providers[0].productionLiveVerification.certifiedVia).toBe(
+        'LEGACY_ATTESTATION',
+      );
+      expect(overview.providers[1].certificationState).toBe('CERTIFIED');
+      expect(overview.providers[1].productionLiveVerification.certificationRunRef).toBe(
+        'run-uuid@sha256:abcdef',
+      );
+      expect(overview.providers[2].certificationState).toBe('NOT_CERTIFIED');
     });
   });
 

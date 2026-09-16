@@ -142,7 +142,7 @@ export class AdminProductionLiveVerificationDto {
     nullable: true,
     type: String,
     format: 'date-time',
-    description: 'Operator-attested verification timestamp (null when unverified).',
+    description: 'Operator-attested verification timestamp (null when unverified or legacy-attested without a dated artifact).',
   })
   verifiedAt: string | null;
 
@@ -151,6 +151,31 @@ export class AdminProductionLiveVerificationDto {
     description: 'Doc/ticket evidence reference (never secrets; null when unverified).',
   })
   evidenceRef: string | null;
+
+  @ApiPropertyOptional({
+    enum: ['LEGACY_ATTESTATION', 'HARNESS_CERTIFIED'],
+    nullable: true,
+    description:
+      'Round 7.1 (P0-3): provenance — LEGACY_ATTESTATION (historical operator ' +
+      'attestation, predates the certification protocol) vs HARNESS_CERTIFIED ' +
+      '(documented protocol run with a durable evidence artifact).',
+  })
+  certifiedVia: 'LEGACY_ATTESTATION' | 'HARNESS_CERTIFIED' | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description:
+      'Harness run reference (runId@sha256:<hash>) for HARNESS_CERTIFIED entries; null otherwise.',
+  })
+  certificationRunRef: string | null;
+
+  @ApiProperty({
+    enum: ['NOT_CERTIFIED', 'LEGACY_VERIFIED', 'CERTIFIED'],
+    description:
+      'Round 7.1 (P0-3): truthful derived certification state — legacy ' +
+      'verification is NEVER presented as a current protocol certification.',
+  })
+  certificationState: 'NOT_CERTIFIED' | 'LEGACY_VERIFIED' | 'CERTIFIED';
 }
 
 export class AdminProviderRegistryEntryDto {
@@ -175,6 +200,14 @@ export class AdminProviderRegistryEntryDto {
       'Production-LIVE verification evidence — BETA ≠ production-LIVE (always emitted; mirrors the broker registry response).',
   })
   productionLiveVerification: AdminProductionLiveVerificationDto;
+
+  @ApiProperty({
+    enum: ['NOT_CERTIFIED', 'LEGACY_VERIFIED', 'CERTIFIED'],
+    description:
+      'Round 7.1 (P0-3): truthful derived certification state — legacy ' +
+      'verification is NEVER presented as a current protocol certification.',
+  })
+  certificationState: 'NOT_CERTIFIED' | 'LEGACY_VERIFIED' | 'CERTIFIED';
 }
 
 export class AdminLiveOpsOverviewViewDto {

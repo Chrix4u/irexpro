@@ -87,14 +87,28 @@ Stage 16 is the net-safety proof: a certification run that leaves ANY
 unexpected open exposure on the account has failed, regardless of the other
 stages.
 
-## 3. Evidence artifacts
+## 3. Evidence artifacts (durable — Round 7.1 P0-2)
 
 On completion the harness writes a sanitized JSON evidence artifact to
-`${evidenceDir}/live-certification-<brokerId>-<UTC timestamp>.json` and
-returns it. The artifact contains: the stage table with timestamps, the
-summary, `mode: 'LIVE'`, `operatorId`, the masked target account id, the
-canary record (instrument, provider minimum, cap, actual size), and the
-baseline/post exposure fingerprints (counts + masked ids only).
+`${evidenceDir}/live-certification-<brokerId>-<runId>-<UTC timestamp>.json`
+and returns it. The artifact contains: the unique `runId` (generated at run
+start, embedded in every artifact name — two same-second runs can never
+overwrite each other), the stage table with timestamps, the summary,
+`mode: 'LIVE'`, `operatorId`, the masked target account id, the canary record
+(instrument, provider minimum, cap, actual size), the baseline/post exposure
+fingerprints (counts + masked ids only), and the durability metadata:
+`evidenceSha256` (sha256 over the canonical run record), `evidenceState`
+(`PERSISTED` / `PERSISTENCE_FAILED`) and `certificationResult`.
+
+**A PASS requires durable evidence (Round 7.1, non-negotiable).**
+`certificationResult` may be `PASS` only when every required stage passed AND
+the artifact was durably written AND read-back verified (re-read + hash
+comparison). If the artifact write or its verification fails — unwritable or
+missing evidence dir, disk error, tampered content — the result is the
+explicit `EVIDENCE_PERSISTENCE_FAILED` state: the checklist outcome survives
+only as ephemeral console output and the run certifies NOTHING. Use the
+exported `isCertifiablePass(evidence)` guard; never promote a provider from a
+console PASS.
 
 The evidence NEVER contains credentials, tokens, API keys, or
 credential-shaped free text (every detail passes the platform's
@@ -104,8 +118,9 @@ platform's masking util).
 **Evidence retention.** Operators retain the artifact (and the console
 transcript) in the operational evidence store for the lifetime of the
 certification plus incident-retention policy. The repository accepts only the
-NON-SECRET reference: the catalog `evidenceRef` string + `verifiedAt` date
-point at the retained artifact; artifact contents are never committed.
+NON-SECRET reference: the catalog `evidenceRef` string + `certificationRunRef`
+(`runId@sha256:<hash>`) + `verifiedAt` date point at the retained artifact;
+artifact contents are never committed.
 
 ## 4. Flipping a catalog entry to VERIFIED (the only path)
 
@@ -120,10 +135,17 @@ point at the retained artifact; artifact contents are never committed.
    date, remaining limitations.
 4. The operator edits `broker-catalog.ts`:
    `productionLiveVerification: { status: 'VERIFIED', verifiedAt: <date>,
-   evidenceRef: <artifact reference> }` and ships the change through review.
-   The boot-time `SharedControlPlaneBootstrap` syncs the change into the
-   cross-replica revision store — grants bound to older verification
-   revisions fail closed at the final dispatch boundary.
+   evidenceRef: <artifact reference>, certifiedVia: 'HARNESS_CERTIFIED',
+   certificationRunRef: <runId@sha256:<hash> from the durable artifact> }`
+   and ships the change through review. Legacy attestations carry
+   `certifiedVia: 'LEGACY_ATTESTATION'` with `certificationRunRef: null`
+   (truthful — no run reference is ever fabricated). The boot-time
+   `SharedControlPlaneBootstrap` syncs the change into the cross-replica
+   revision store — grants bound to older verification revisions fail closed
+   at the final dispatch boundary. UI/API render the derived
+   `certificationState` (`NOT_CERTIFIED` / `LEGACY_VERIFIED` / `CERTIFIED`)
+   so historical attestation is never presented as a current protocol
+   certification.
 5. **Downgrade/rollback.** Any failed re-certification, provider incident, or
    evidence doubt flips the entry back to `UNVERIFIED` (same operator edit
    path). The verification-revision fence invalidates in-flight authority
@@ -132,7 +154,16 @@ point at the retained artifact; artifact contents are never committed.
 
 ## 5. Broker-by-broker certification state (honest, as of this document)
 
-### MetaTrader 4/5 (via MetaApi) — catalog: SUPPORTED, production-LIVE **VERIFIED**
+### MetaTrader 4/5 (via MetaApi) — catalog: SUPPORTED, production-LIVE **VERIFIED** (`certifiedVia: LEGACY_ATTESTATION` → `LEGACY_VERIFIED`)
+
+> **Round 7.1 provenance note:** this VERIFIED state is a LEGACY operator
+> attestation (historical production operation) — it PREDATES the Round-7
+> certification protocol. No certification harness run was executed for it,
+> no dated durable artifact exists, and `certificationRunRef` is truthfully
+> null. It is NOT a current protocol certification and must never be
+> presented as one. A genuine future operator certification run may upgrade
+> the provenance to `HARNESS_CERTIFIED` (with a run reference); nothing
+> upgrades it automatically.
 
 | Item | State | Evidence |
 | --- | --- | --- |

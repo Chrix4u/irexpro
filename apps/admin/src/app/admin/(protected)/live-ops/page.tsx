@@ -5,7 +5,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/context/auth-context';
 import { Alert, Badge, Button, Card, EmptyState } from '@/components/ui';
 import { formatEnumLabel } from '@irexpro/types';
-import type { BrokerRegistryEntry } from '@irexpro/types';
+import type { BrokerRegistryEntry, BrokerProductionLiveVerification } from '@irexpro/types';
+import {
+  deriveProviderCertificationState,
+  type ProviderCertificationState,
+} from '@irexpro/types/broker-registry';
 import { assessProviderVerification } from '@irexpro/types/provider-verification';
 import type { ProviderVerificationLabel } from '@irexpro/types/provider-verification';
 import {
@@ -158,6 +162,53 @@ function ProviderCapabilities({ capabilities }: { capabilities: string[] }) {
  * Identity eligibility (e) and current executability (f) are per-connection
  * facts and live in the connection authority table below.
  */
+/**
+ * Round 7.1 (P0-3) — truthful certification-state cell. Legacy attestation
+ * and protocol certification are visually and semantically distinct; a
+ * pending/failed certification RUN never appears here (run-level outcomes
+ * flip nothing in the catalog).
+ */
+function CertificationStateCell({
+  certificationState,
+  verification,
+}: {
+  certificationState: ProviderCertificationState;
+  verification: BrokerProductionLiveVerification | null;
+}) {
+  if (certificationState === 'CERTIFIED') {
+    return (
+      <div>
+        <Badge variant="success">CERTIFIED</Badge>
+        <div className="admin-table__cell-muted text-sm">
+          Harness-certified {formatAdminTimestamp(verification?.verifiedAt ?? null)}
+          {verification?.certificationRunRef
+            ? ` · run ${verification.certificationRunRef}`
+            : ''}
+        </div>
+      </div>
+    );
+  }
+  if (certificationState === 'LEGACY_VERIFIED') {
+    return (
+      <div>
+        <Badge variant="info">LEGACY_VERIFIED</Badge>
+        <div className="admin-table__cell-muted text-sm">
+          Legacy attestation (predates the certification protocol — no dated
+          artifact, no harness run)
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <Badge variant="error">NOT_CERTIFIED</Badge>
+      <div className="admin-table__cell-muted text-sm">
+        No protocol certification — operator LIVE certification run required
+      </div>
+    </div>
+  );
+}
+
 function ProviderMatrixRow({
   provider,
   registryEntry,
@@ -211,6 +262,19 @@ function ProviderMatrixRow({
             {formatAdminTimestamp(registryEntry.productionLiveVerification.verifiedAt)}
           </div>
         )}
+      </td>
+      {/* Round 7.1 (P0-3): the truthful certification column — legacy
+          attestation is NEVER rendered as a current protocol certification. */}
+      <td>
+        <CertificationStateCell
+          certificationState={
+            registryEntry?.certificationState ??
+            deriveProviderCertificationState(
+              registryEntry?.productionLiveVerification ?? null,
+            )
+          }
+          verification={registryEntry?.productionLiveVerification ?? null}
+        />
       </td>
       <td>
         <ProviderCapabilities capabilities={provider.capabilities} />
@@ -626,6 +690,7 @@ export default function AdminLiveOpsPage() {
                   <th scope="col">Implementation</th>
                   <th scope="col">Adapter</th>
                   <th scope="col">Production-LIVE verification</th>
+                  <th scope="col">Certification (Round 7.1)</th>
                   <th scope="col">Capabilities</th>
                 </tr>
               </thead>

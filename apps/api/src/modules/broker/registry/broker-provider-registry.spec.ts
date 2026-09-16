@@ -5,7 +5,13 @@ import { BrokerAdapterRegistry } from '../adapters/broker-adapter.registry';
 import { BrokerConnection } from '../entities/broker-connection.entity';
 import { BrokerAccount } from '../entities/broker-account.entity';
 import { BrokerCapability } from './broker-capability.enum';
-import { BrokerAvailabilityStatus, BrokerConnectionRoute } from './broker-definition';
+import {
+  BrokerAvailabilityStatus,
+  BrokerConnectionRoute,
+  deriveProviderCertificationState,
+} from './broker-definition';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 
 /**
  * Sprint 50 — BrokerProviderRegistryService tests.
@@ -164,6 +170,10 @@ describe('BrokerProviderRegistryService', () => {
         status: 'UNVERIFIED',
         verifiedAt: null,
         evidenceRef: null,
+        // Round 7.1 (P0-3): materialized provenance — null on UNVERIFIED.
+        certifiedVia: null,
+        certificationRunRef: null,
+        certificationState: 'NOT_CERTIFIED',
       });
       // Paper broker is DEMO-only by design — never LIVE-eligible.
       expect(service.isProductionLiveEligible('paper-broker')).toBe(false);
@@ -187,7 +197,12 @@ describe('BrokerProviderRegistryService', () => {
       for (const entry of catalog) {
         // Always materialized (no undefined leakage into JSON payloads).
         expect(entry.productionLiveVerification).toBeDefined();
+        // Round 7.1 (P0-3): the provenance + derived-state fields are part
+        // of the materialized contract.
         expect(Object.keys(entry.productionLiveVerification).sort()).toEqual([
+          'certificationRunRef',
+          'certificationState',
+          'certifiedVia',
           'evidenceRef',
           'status',
           'verifiedAt',
@@ -213,6 +228,113 @@ describe('BrokerProviderRegistryService', () => {
 
       expect(verified).toEqual(['metatrader5']);
       expect(service.isProductionLiveEligible('oanda')).toBe(false);
+    });
+
+    // ─── Round 7.1 (P0-3): truthful certification-state model ────────────────
+
+    describe('Round 7.1 (P0-3): truthful certification-state model', () => {
+      it('metatrader5 records its verification as LEGACY_ATTESTATION — legacy attestation, never a protocol certification', async () => {
+        const service = await buildService(['metatrader5', 'paper-broker']);
+        const mt5 = service.getEntry('metatrader5')!;
+
+        // Provenance discriminator: legacy attestation (predates the
+        // Round-7 protocol).
+        expect(mt5.productionLiveVerification.certifiedVia).toBe('LEGACY_ATTESTATION');
+        // Truthful absence: no harness run ever happened, so no runRef is
+        // fabricated (null — NOT a made-up reference).
+        expect(mt5.productionLiveVerification.certificationRunRef).toBeNull();
+        // Derived display state: LEGACY_VERIFIED — distinct from CERTIFIED.
+        expect(mt5.productionLiveVerification.certificationState).toBe('LEGACY_VERIFIED');
+        expect(mt5.certificationState).toBe('LEGACY_VERIFIED');
+      });
+
+      it('UNVERIFIED entries carry NOT_CERTIFIED with null provenance (never a guessed certification)', async () => {
+        const service = await buildService(['metatrader5', 'paper-broker', 'oanda']);
+        for (const id of ['oanda', 'paper-broker', 'ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader']) {
+          const entry = service.getEntry(id)!;
+          expect(entry.productionLiveVerification.status).toBe('UNVERIFIED');
+          expect(entry.productionLiveVerification.certifiedVia).toBeNull();
+          expect(entry.productionLiveVerification.certificationRunRef).toBeNull();
+          expect(entry.certificationState).toBe('NOT_CERTIFIED');
+          expect(entry.productionLiveVerification.certificationState).toBe('NOT_CERTIFIED');
+        }
+      });
+
+      it('eligibility semantics are UNCHANGED by the provenance model (LEGACY_VERIFIED stays eligible — no silent downgrade, no silent upgrade)', async () => {
+        const service = await buildService(['metatrader5', 'paper-broker', 'oanda']);
+        // metatrader5 remains the ONLY eligible provider (grandfathered
+        // legacy attestation — the model records provenance, it does not
+        // revoke or grant authority).
+        expect(service.isProductionLiveEligible('metatrader5')).toBe(true);
+        expect(service.isProductionLiveEligible('oanda')).toBe(false);
+        expect(service.isProductionLiveEligible('ctrader')).toBe(false);
+        expect(service.isProductionLiveEligible('pepperstone-ctrader')).toBe(false);
+        expect(service.isProductionLiveEligible('icmarkets-ctrader')).toBe(false);
+      });
+
+      it('deriveProviderCertificationState: the full truth table (catalog state vs provenance)', () => {
+        // NOT_CERTIFIED — no evidence / UNVERIFIED.
+        expect(deriveProviderCertificationState(undefined)).toBe('NOT_CERTIFIED');
+        expect(
+          deriveProviderCertificationState({ status: 'UNVERIFIED', verifiedAt: null, evidenceRef: null }),
+        ).toBe('NOT_CERTIFIED');
+        // LEGACY_VERIFIED — VERIFIED without (or with) a date, provenance
+        // legacy or absent-but-verified (back-compat: an older payload that
+        // predates the discriminator can not magically be a certification).
+        expect(
+          deriveProviderCertificationState({
+            status: 'VERIFIED',
+            verifiedAt: null,
+            evidenceRef: 'production operation',
+            certifiedVia: 'LEGACY_ATTESTATION',
+            certificationRunRef: null,
+          }),
+        ).toBe('LEGACY_VERIFIED');
+        expect(
+          deriveProviderCertificationState({
+            status: 'VERIFIED',
+            verifiedAt: '2026-01-01T00:00:00Z',
+            evidenceRef: 'old attestation',
+          }),
+        ).toBe('LEGACY_VERIFIED');
+        // CERTIFIED — only via the documented protocol with a run reference.
+        expect(
+          deriveProviderCertificationState({
+            status: 'VERIFIED',
+            verifiedAt: '2026-09-16T00:00:00Z',
+            evidenceRef: 'live-certification artifact',
+            certifiedVia: 'HARNESS_CERTIFIED',
+            certificationRunRef: 'run-uuid@sha256:abc',
+          }),
+        ).toBe('CERTIFIED');
+      });
+
+      it('PIN: no runtime writer flips productionLiveVerification — the harness never imports the catalog and the registry never writes it', () => {
+        // Source-graph assertion (the schema-reconciliation spec pattern):
+        // the certification harness must have NO code dependency on the
+        // broker catalog/registry (a harness PASS can never auto-upgrade a
+        // provider), and no service writes productionLiveVerification at
+        // runtime (the catalog is a reviewed, static, operator-edited file).
+        // Assertions target IMPORT statements and ASSIGNMENTS — the harness
+        // docblocks legitimately reference the operator process by name.
+        const harnessSource = readFileSync(
+          join(__dirname, '../verification/provider-live-certification-harness.ts'),
+          'utf8',
+        );
+        expect(harnessSource).not.toMatch(/from\s+['"][^'"]*broker-catalog['"]/);
+        expect(harnessSource).not.toMatch(/from\s+['"][^'"]*broker-provider-registry['"]/);
+        expect(harnessSource).not.toMatch(/from\s+['"][^'"]*broker-definition['"]/);
+        // And the harness never ASSIGNS a verification status anywhere.
+        expect(harnessSource).not.toMatch(/productionLiveVerification\s*=/);
+
+        const registrySource = readFileSync(
+          join(__dirname, './broker-provider-registry.service.ts'),
+          'utf8',
+        );
+        // The registry only READS the catalog's evidence and materializes
+        // it — it never assigns a verification status.
+        expect(registrySource).not.toMatch(/productionLiveVerification\.status\s*=\s*['"]/);
+      });
     });
   });
 

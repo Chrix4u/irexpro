@@ -249,7 +249,21 @@ function isBrokerRegistryEntry(value: unknown): value is BrokerRegistryEntry {
         (value.productionLiveVerification.verifiedAt === null ||
           typeof value.productionLiveVerification.verifiedAt === 'string') &&
         (value.productionLiveVerification.evidenceRef === null ||
-          typeof value.productionLiveVerification.evidenceRef === 'string')))
+          typeof value.productionLiveVerification.evidenceRef === 'string') &&
+        // Round 7.1 (P0-3): optional provenance + run reference.
+        (value.productionLiveVerification.certifiedVia === undefined ||
+          value.productionLiveVerification.certifiedVia === null ||
+          value.productionLiveVerification.certifiedVia === 'LEGACY_ATTESTATION' ||
+          value.productionLiveVerification.certifiedVia === 'HARNESS_CERTIFIED') &&
+        (value.productionLiveVerification.certificationRunRef === undefined ||
+          value.productionLiveVerification.certificationRunRef === null ||
+          typeof value.productionLiveVerification.certificationRunRef === 'string'))) &&
+    // Round 7.1 (P0-3): optional derived certification state.
+    (value.certificationState === undefined ||
+      value.certificationState === null ||
+      value.certificationState === 'NOT_CERTIFIED' ||
+      value.certificationState === 'LEGACY_VERIFIED' ||
+      value.certificationState === 'CERTIFIED')
   );
 }
 

@@ -94,8 +94,8 @@
  * Tests never flip it." The durable JSON artifact this harness writes is the
  * evidenceRef material for that process.
  */
-import { randomUUID } from 'crypto';
-import { writeFileSync } from 'fs';
+import { createHash, randomUUID } from 'crypto';
+import { readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -216,7 +216,15 @@ export interface LiveCanaryRecord {
   direction: 'BUY';
 }
 
-export interface LiveCertificationEvidence {
+export interface LiveCertificationRunRecord {
+  /**
+   * Round 7.1 (P0-2): the unique certification run identity — generated at
+   * run start, embedded in the evidence, and part of the artifact filename
+   * (two same-broker runs in the same UTC second can never overwrite each
+   * other). This is the reference an operator records against the broker
+   * catalog when (and only when) the run certifies.
+   */
+  runId: string;
   mode: 'LIVE';
   brokerId: string;
   operatorId: string;
@@ -237,9 +245,65 @@ export interface LiveCertificationEvidence {
   finishedAt: string;
   steps: LiveCertificationStep[];
   summary: ProviderVerificationSummary;
+  /** The raw checklist outcome (every stage green). NOT the certification decision — see certificationResult. */
   overall: VerificationOverallStatus;
-  /** Absolute path of the durable evidence artifact, when the write succeeded. */
+}
+
+/**
+ * The FINAL, durable certification record.
+ *
+ * Round 7.1 (P0-2 — durable-evidence requirement): a certification run may
+ * report `certificationResult === 'PASS'` ONLY when
+ *   1. every required certification stage passed (checklist overall PASS),
+ *   2. the run identity is known (runId),
+ *   3. provider/broker/account environment is captured (mode + target),
+ *   4. safety limits are captured (canary cap record),
+ *   5. relevant provider references are captured (step-level provider ids),
+ *   6. timestamps are captured (startedAt/finishedAt),
+ *   7. the evidence is sanitized (every detail redacted + bounded),
+ *   8. the evidence artifact is durably persisted to disk,
+ *   9. persistence is VERIFIED by read-back + hash comparison, and
+ *   10. an evidence identifier/hash is available (evidenceSha256).
+ * If artifact persistence (or its verification) fails, the result is the
+ * explicit `EVIDENCE_PERSISTENCE_FAILED` state — NEVER a PASS. An operator
+ * can therefore not promote a provider to production-certified from an
+ * ephemeral console result.
+ */
+export interface LiveCertificationEvidence extends LiveCertificationRunRecord {
+  /**
+   * sha256 (hex) over the canonical run-record content — every field of
+   * LiveCertificationRunRecord in insertion order, excluding the durability
+   * metadata fields. Embedded in the artifact and re-verified on read-back.
+   */
+  evidenceSha256: string;
+  /** Durable-evidence outcome of the artifact write + read-back verification. */
+  evidenceState: 'PERSISTED' | 'PERSISTENCE_FAILED';
+  /**
+   * THE authoritative certification decision. `PASS` requires a PASSING
+   * checklist AND verified durable evidence. `EVIDENCE_PERSISTENCE_FAILED`
+   * means the checklist outcome (see `overall`) exists only as ephemeral
+   * console output — the run certified nothing.
+   */
+  certificationResult: 'PASS' | 'FAIL' | 'EVIDENCE_PERSISTENCE_FAILED';
+  /** Absolute path of the durable evidence artifact (only once PERSISTED). */
   artifactPath?: string;
+}
+
+/**
+ * Round 7.1 (P0-2): the single certifiability predicate — true ONLY for a
+ * passing checklist whose evidence is durably persisted, read-back verified,
+ * hash-referenced and path-recorded. Operator workflows and tests use this
+ * guard instead of string-matching `overall`.
+ */
+export function isCertifiablePass(evidence: LiveCertificationEvidence): boolean {
+  return (
+    evidence.certificationResult === 'PASS' &&
+    evidence.evidenceState === 'PERSISTED' &&
+    evidence.overall === 'PASS' &&
+    typeof evidence.artifactPath === 'string' &&
+    evidence.artifactPath.length > 0 &&
+    /^[0-9a-f]{64}$/.test(evidence.evidenceSha256)
+  );
 }
 
 // ─── Canonical certification sequence ─────────────────────────────────────────
@@ -741,9 +805,17 @@ const NOT_APPLICABLE_ERROR_CODES: readonly BrokerErrorCode[] = [
 export async function runLiveCertificationChecklist(
   adapter: IBrokerAdapter,
   options: LiveCertificationOptions,
-): Promise<LiveCertificationEvidence> {
+): Promise<LiveCertificationRunRecord> {
   assertLiveCertificationGates(options);
   const startedAt = new Date();
+  // Round 7.1 (P0-2): the run identity exists BEFORE the first stage — the
+  // unique reference for every log line, artifact name and catalog record
+  // this run can ever produce.
+  const runId = randomUUID();
+  console.log(
+    `[live-certification] run started: runId=${runId} broker=${options.target.brokerId} ` +
+      `operator=${sanitizeVerificationDetail(options.operator.operatorId)}`,
+  );
 
   const steps: LiveCertificationStep[] = [];
   const statuses = new Map<string, VerificationStepStatus>();
@@ -1465,6 +1537,7 @@ export async function runLiveCertificationChecklist(
     summary.failed === 0 && summary.passed > 0 && lifecycleComplete ? 'PASS' : 'FAIL';
 
   return {
+    runId,
     mode: 'LIVE',
     brokerId: options.target.brokerId,
     operatorId: sanitizeVerificationDetail(options.operator.operatorId),
@@ -1498,7 +1571,7 @@ export async function runLiveCertificationChecklist(
   };
 }
 
-// ─── Durable evidence artifact ────────────────────────────────────────────────
+// ─── Durable evidence artifact (Round 7.1 P0-2 — fail-closed) ────────────────
 
 /** `YYYYMMDD-HHmmss` (UTC) — deterministic artifact timestamp segment. */
 export function liveCertificationArtifactTimestamp(date: Date): string {
@@ -1509,34 +1582,121 @@ export function liveCertificationArtifactTimestamp(date: Date): string {
   );
 }
 
-/** Artifact file name: live-certification-<brokerId>-<YYYYMMDD-HHmmss>.json */
-export function liveCertificationArtifactFileName(brokerId: string, date: Date): string {
-  return `live-certification-${brokerId}-${liveCertificationArtifactTimestamp(date)}.json`;
+/**
+ * Artifact file name: live-certification-<brokerId>-<runId>-<YYYYMMDD-HHmmss>.json
+ *
+ * Round 7.1 (P0-2): the runId segment makes every artifact name UNIQUE per
+ * run — two same-broker runs inside the same UTC second can never silently
+ * overwrite each other's evidence (writeFileSync truncates).
+ */
+export function liveCertificationArtifactFileName(
+  brokerId: string,
+  runId: string,
+  date: Date,
+): string {
+  return `live-certification-${brokerId}-${runId}-${liveCertificationArtifactTimestamp(date)}.json`;
 }
 
 /**
- * Best-effort durable evidence write: the sanitized evidence JSON lands at
- * `${evidenceDir ?? '.'}/live-certification-<brokerId>-<YYYYMMDD-HHmmss>.json`.
- * On success the evidence's artifactPath is set and the path is logged; on
- * failure the evidence is still returned (the write never masks the outcome).
+ * Durability metadata fields excluded from the canonical evidence hash (they
+ * describe the artifact write itself, not the run content).
  */
-function writeLiveCertificationArtifact(
+const EVIDENCE_DURABILITY_FIELDS: readonly string[] = [
+  'evidenceSha256',
+  'evidenceState',
+  'certificationResult',
+  'artifactPath',
+];
+
+/**
+ * sha256 (hex) over the canonical run-record content: every evidence field in
+ * insertion order EXCEPT the durability metadata. Stable across the in-memory
+ * record, the written artifact, and any re-parse (JSON preserves document
+ * order), so a read-back hash comparison proves the artifact content.
+ */
+export function computeLiveCertificationEvidenceSha256(
+  source: LiveCertificationRunRecord | LiveCertificationEvidence,
+): string {
+  const canonical: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (EVIDENCE_DURABILITY_FIELDS.includes(key)) continue;
+    canonical[key] = value;
+  }
+  return createHash('sha256').update(JSON.stringify(canonical), 'utf8').digest('hex');
+}
+
+/**
+ * Read-back verification of a written evidence artifact: the file must exist,
+ * parse, carry the same run identity, and hash identically to the evidence it
+ * claims to hold. ANY mismatch means the durability proof failed.
+ */
+export function verifyLiveCertificationArtifact(
+  path: string,
   evidence: LiveCertificationEvidence,
+): boolean {
+  try {
+    const raw = readFileSync(path, 'utf8');
+    const parsed = JSON.parse(raw) as LiveCertificationEvidence;
+    if (parsed.runId !== evidence.runId) return false;
+    return computeLiveCertificationEvidenceSha256(parsed) === evidence.evidenceSha256;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Round 7.1 (P0-2 — fail-closed evidence finalization): convert a checklist
+ * run record into the FINAL evidence by persisting it durably and VERIFYING
+ * the write. The returned object can only carry
+ * `certificationResult === 'PASS'` when the artifact write succeeded AND the
+ * read-back hash verified — a persistence failure (unwritable/missing
+ * evidence dir, disk error, tampered content) locks the result to the
+ * explicit `EVIDENCE_PERSISTENCE_FAILED` state, and the failure is printed
+ * loudly. No ephemeral console PASS can ever be mistaken for certification.
+ */
+function finalizeLiveCertificationEvidence(
+  record: LiveCertificationRunRecord,
   evidenceDir?: string,
-): void {
+): LiveCertificationEvidence {
+  const evidenceSha256 = computeLiveCertificationEvidenceSha256(record);
+  const evidence: LiveCertificationEvidence = {
+    ...record,
+    evidenceSha256,
+    evidenceState: 'PERSISTENCE_FAILED',
+    certificationResult: 'EVIDENCE_PERSISTENCE_FAILED',
+  };
   try {
     const path = join(
       evidenceDir ?? '.',
-      liveCertificationArtifactFileName(evidence.brokerId, new Date()),
+      // The artifact is named from the RUN's own finishedAt (part of the
+      // hashed record) — deterministic per run, unique via runId.
+      liveCertificationArtifactFileName(
+        evidence.brokerId,
+        evidence.runId,
+        new Date(record.finishedAt),
+      ),
     );
     writeFileSync(path, JSON.stringify(evidence, null, 2), { encoding: 'utf8' });
+    if (!verifyLiveCertificationArtifact(path, evidence)) {
+      throw new Error('read-back verification failed (artifact missing, unparsable, or hash mismatch)');
+    }
+    evidence.evidenceState = 'PERSISTED';
+    evidence.certificationResult = record.overall;
     evidence.artifactPath = path;
-    console.log(`[live-certification] evidence artifact written: ${path}`);
+    console.log(
+      `[live-certification] evidence artifact written + verified: ${path} ` +
+        `(runId=${evidence.runId}, sha256=${evidenceSha256.slice(0, 16)}…, ` +
+        `certificationResult=${evidence.certificationResult})`,
+    );
+    return evidence;
   } catch (err) {
-    console.warn(
-      '[live-certification] evidence artifact write FAILED (evidence still returned): ' +
+    console.error(
+      '[live-certification] EVIDENCE PERSISTENCE FAILED — this run is NOT certifiable: ' +
+        `certificationResult=EVIDENCE_PERSISTENCE_FAILED (checklist outcome ` +
+        `'${record.overall}' exists only as ephemeral console output). Cause: ` +
         `${err instanceof Error ? err.message : String(err)}`,
     );
+    return evidence;
   }
 }
 
@@ -1565,9 +1725,9 @@ export async function runLiveProviderCertification(
     ? null
     : await buildLiveCertificationAdapter(options.target.brokerId);
   const adapter = options.adapter ?? built!.adapter;
-  let evidence: LiveCertificationEvidence;
+  let record: LiveCertificationRunRecord;
   try {
-    evidence = await runLiveCertificationChecklist(adapter, options);
+    record = await runLiveCertificationChecklist(adapter, options);
   } finally {
     // Jest/CI hygiene + real-money hygiene: never leave a provider session
     // open behind the harness, whatever the outcome.
@@ -1584,8 +1744,11 @@ export async function runLiveProviderCertification(
       }
     }
   }
-  writeLiveCertificationArtifact(evidence, options.operator.evidenceDir);
-  return evidence;
+  // Round 7.1 (P0-2): the checklist outcome is only HALF the certification
+  // decision — the evidence must also be durably persisted and read-back
+  // verified before the result may be PASS. Persistence failure locks the
+  // result to EVIDENCE_PERSISTENCE_FAILED (never a certifiable PASS).
+  return finalizeLiveCertificationEvidence(record, options.operator.evidenceDir);
 }
 
 // ─── Adapter factories (real adapters, harness-owned lifecycles) ─────────────

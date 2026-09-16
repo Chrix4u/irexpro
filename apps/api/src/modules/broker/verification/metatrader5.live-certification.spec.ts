@@ -2,8 +2,10 @@ import {
   LiveCertificationGateDisabledError,
   buildMetaTraderCertificationHarness,
   resolveLiveCertificationGateFromEnv,
+  isCertifiablePass,
   runLiveProviderCertification,
 } from './provider-live-certification-harness';
+import { existsSync } from 'fs';
 
 /**
  * MetaTrader 5 PRODUCTION-LIVE certification harness — OPERATOR-ONLY,
@@ -89,11 +91,21 @@ describeMt5LiveCertification(
 
       // Sanitized evidence — safe to print by construction (no credentials).
       console.log('MetaTrader 5 LIVE certification evidence:\n', JSON.stringify(evidence, null, 2));
-      console.log('Evidence artifact:', evidence.artifactPath ?? '(artifact write failed)');
+      console.log(
+        'Evidence artifact:',
+        evidence.artifactPath ?? '(NOT PERSISTED — run is not certifiable)',
+      );
 
       expect(evidence.mode).toBe('LIVE');
       expect(evidence.brokerId).toBe('metatrader5');
       expect(evidence.overall).toBe('PASS');
+      // Round 7.1 (P0-2): a certification PASS requires DURABLE, read-back
+      // verified evidence — an ephemeral console PASS certifies nothing.
+      expect(evidence.certificationResult).toBe('PASS');
+      expect(evidence.evidenceState).toBe('PERSISTED');
+      expect(isCertifiablePass(evidence)).toBe(true);
+      expect(evidence.artifactPath).toBeDefined();
+      expect(existsSync(evidence.artifactPath!)).toBe(true);
       // A certification PASS means zero failures AND the complete canary
       // lifecycle (place → close → verify-closed → zero unexpected exposure).
       expect(evidence.summary.failed).toBe(0);

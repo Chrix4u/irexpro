@@ -14,7 +14,10 @@ import type {
   BrokerConnectionStatus,
   BrokerCredentialStatus,
 } from './index';
-import type { BrokerProductionLiveVerification } from './broker-registry';
+import type {
+  BrokerProductionLiveVerification,
+  ProviderCertificationState,
+} from './broker-registry';
 
 // ─── Operational overview (GET /admin/live-account/overview) ────────────────
 
@@ -89,6 +92,12 @@ export interface AdminProviderRegistryEntry {
    * payloads emitted before this field existed (the API always emits it).
    */
   productionLiveVerification?: BrokerProductionLiveVerification;
+  /**
+   * Round 7.1 (P0-3): truthful derived certification state — NOT_CERTIFIED /
+   * LEGACY_VERIFIED / CERTIFIED (legacy attestation is never presented as a
+   * current protocol certification). Optional for wire compatibility.
+   */
+  certificationState?: ProviderCertificationState;
 }
 
 export interface AdminLiveOpsOverviewView {

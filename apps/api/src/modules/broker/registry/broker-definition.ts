@@ -49,6 +49,62 @@ export interface BrokerProductionLiveVerification {
   verifiedAt?: string | null;
   /** Short evidence reference (doc/ticket id — never secrets). */
   evidenceRef?: string | null;
+  /**
+   * Round 7.1 (P0-3): HOW the VERIFIED state came to be — the provenance
+   * discriminator that separates historical operator attestation from the
+   * documented production-LIVE certification protocol.
+   *
+   * - LEGACY_ATTESTATION: verified before the certification protocol
+   *   existed (Round 7). Honest record — no dated artifact, no harness run
+   *   reference. Rendered as LEGACY_VERIFIED; NEVER presented as a fresh
+   *   protocol certification.
+   * - HARNESS_CERTIFIED: verified through the documented operator-only
+   *   LIVE certification harness with a durable, read-back-verified
+   *   evidence artifact (certificationRunRef records it).
+   *
+   * Absent on UNVERIFIED entries.
+   */
+  certifiedVia?: 'LEGACY_ATTESTATION' | 'HARNESS_CERTIFIED';
+  /**
+   * Round 7.1 (P0-3): the certification-run reference for
+   * HARNESS_CERTIFIED entries — `<runId>@sha256:<evidenceSha256>` from the
+   * durable evidence artifact. Null for legacy attestations (none exists —
+   * recorded truthfully, never fabricated).
+   */
+  certificationRunRef?: string | null;
+}
+
+/**
+ * Round 7.1 (P0-3): the TRUTHFUL, derived certification state for
+ * UI/API display — distinguishes historical/legacy verification from
+ * current production certification.
+ *
+ * - NOT_CERTIFIED: no production-LIVE evidence at all (UNVERIFIED).
+ * - LEGACY_VERIFIED: VERIFIED via legacy operator attestation — real
+ *   historical evidence, but NOT a Round-7-protocol certification run
+ *   (verifiedAt may legitimately be null; no dated artifact exists).
+ * - CERTIFIED: VERIFIED via the documented certification protocol
+ *   (HARNESS_CERTIFIED with a durable evidence artifact + runRef).
+ *
+ * CERTIFICATION_PENDING and EVIDENCE_PERSISTENCE_FAILED are deliberately
+ * NOT catalog states — they are RUN-level outcomes carried by
+ * LiveCertificationEvidence.certificationResult (the catalog records only
+ * completed certifications; a pending or persistence-failed run flips
+ * nothing).
+ */
+export type ProviderCertificationState =
+  | 'NOT_CERTIFIED'
+  | 'LEGACY_VERIFIED'
+  | 'CERTIFIED';
+
+/** Derive the truthful display state from catalog verification evidence. */
+export function deriveProviderCertificationState(
+  verification: BrokerProductionLiveVerification | undefined,
+): ProviderCertificationState {
+  if (!verification || verification.status !== 'VERIFIED') {
+    return 'NOT_CERTIFIED';
+  }
+  return verification.certifiedVia === 'HARNESS_CERTIFIED' ? 'CERTIFIED' : 'LEGACY_VERIFIED';
 }
 
 export interface BrokerDefinition {

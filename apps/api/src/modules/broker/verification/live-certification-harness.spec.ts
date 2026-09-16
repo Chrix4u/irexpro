@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
@@ -34,10 +34,14 @@ import {
   LiveCertificationGateDisabledError,
   buildLiveCertificationAdapter,
   buildMetaTraderCertificationHarness,
+  computeLiveCertificationEvidenceSha256,
   deriveMinimumSafeCanarySize,
+  isCertifiablePass,
+  liveCertificationArtifactFileName,
   liveCertificationArtifactTimestamp,
   resolveLiveCertificationGateFromEnv,
   runLiveProviderCertification,
+  verifyLiveCertificationArtifact,
 } from './provider-live-certification-harness';
 
 /**
@@ -507,19 +511,36 @@ describe('LIVE certification harness — full machinery (fake LIVE adapter, alwa
     expect(zeroExposure?.detail).toContain('zero unexpected open exposure');
   });
 
-  it('writes the durable evidence artifact (sanitized) and records its path', async () => {
+  it('writes the durable evidence artifact (sanitized), read-back verifies it, and certifies PASS with a runId + hash reference', async () => {
     const adapter = new FakeLiveCertificationAdapter();
     const evidence = await runLiveProviderCertification(liveGateOptions(adapter));
 
+    // Round 7.1 (P0-2): a passing checklist + durable verified evidence.
+    expect(evidence.overall).toBe('PASS');
+    expect(evidence.certificationResult).toBe('PASS');
+    expect(evidence.evidenceState).toBe('PERSISTED');
+    expect(isCertifiablePass(evidence)).toBe(true);
+    // Run identity: a UUID, embedded in the evidence and the artifact name.
+    expect(evidence.runId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
     expect(evidence.artifactPath).toBeDefined();
     const fileName = evidence.artifactPath!.split('/').pop()!;
-    expect(fileName).toMatch(/^live-certification-fake-live-\d{8}-\d{6}\.json$/);
+    expect(fileName).toBe(
+      `live-certification-fake-live-${evidence.runId}-${liveCertificationArtifactTimestamp(
+        new Date(evidence.finishedAt),
+      )}.json`,
+    );
     expect(existsSync(evidence.artifactPath!)).toBe(true);
     const written = JSON.parse(readFileSync(evidence.artifactPath!, 'utf8')) as unknown;
     // The durable artifact carries the sanitized evidence — no credentials.
     expect(JSON.stringify(written)).not.toContain(CREDENTIAL_MARKER);
     expect(JSON.stringify(written)).not.toContain(FAKE_ACCOUNT_ID);
     expect((written as { mode?: string }).mode).toBe('LIVE');
+    // The evidence hash is a sha256 hex digest and read-back verification
+    // passes against the artifact on disk.
+    expect(evidence.evidenceSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(verifyLiveCertificationArtifact(evidence.artifactPath!, evidence)).toBe(true);
   });
 
   it('never leaks credential material or the raw account id into the sanitized evidence', async () => {
@@ -663,6 +684,166 @@ describe('LIVE certification harness — full machinery (fake LIVE adapter, alwa
     expect(place?.status).toBe('SKIPPED');
     expect(adapter.calls).not.toContain('placeOrder');
     expect(adapter.openPositionCount()).toBe(0);
+  });
+});
+
+// ─── Round 7.1 (P0-2): PASS requires DURABLE evidence ────────────────────────
+
+describe('LIVE certification harness — Round 7.1 P0-2: durable-evidence finalization (fail-closed)', () => {
+  let artifactsDir: string;
+
+  beforeEach(() => {
+    artifactsDir = mkdtempSync(join(tmpdir(), 'live-cert-p02-'));
+  });
+
+  afterEach(() => {
+    rmSync(artifactsDir, { recursive: true, force: true });
+  });
+
+  function liveGateOptions(
+    adapter: FakeLiveCertificationAdapter,
+    overrides: { evidenceDir?: string } = {},
+  ) {
+    return {
+      gate: { allowLiveCertification: true, source: 'unit-test' },
+      target: {
+        brokerId: 'fake-live',
+        accountId: FAKE_ACCOUNT_ID,
+        credentialSource: 'unit-test fixture (no real credential)',
+      },
+      operator: {
+        operatorId: 'unit-test-operator',
+        evidenceDir: overrides.evidenceDir ?? artifactsDir,
+      },
+      maxCanaryExposure: '2000',
+      credentials: { apiKey: CREDENTIAL_MARKER, accountId: FAKE_ACCOUNT_ID },
+      adapter,
+    };
+  }
+
+  it('a PASSING checklist with an UNWRITABLE evidence dir can NEVER certify — EVIDENCE_PERSISTENCE_FAILED, not PASS', async () => {
+    // Adversarial setup: the evidence "directory" is a FILE — every artifact
+    // write beneath it fails with ENOTDIR.
+    const notADir = join(artifactsDir, 'evidence.json');
+    writeFileSync(notADir, 'occupied', 'utf8');
+    const unwritableDir = join(notADir, 'sub');
+
+    const adapter = new FakeLiveCertificationAdapter();
+    const evidence = await runLiveProviderCertification(
+      liveGateOptions(adapter, { evidenceDir: unwritableDir }),
+    );
+
+    // The checklist itself passed — but that is NOT a certification.
+    expect(evidence.overall).toBe('PASS');
+    // The explicit fail-closed state: no durable evidence, no PASS.
+    expect(evidence.certificationResult).toBe('EVIDENCE_PERSISTENCE_FAILED');
+    expect(evidence.evidenceState).toBe('PERSISTENCE_FAILED');
+    expect(evidence.artifactPath).toBeUndefined();
+    expect(isCertifiablePass(evidence)).toBe(false);
+  });
+
+  it('a PASSING checklist with a NONEXISTENT evidence dir can never certify either (typo\'d IREXPRO_LIVE_CERT_EVIDENCE_DIR)', async () => {
+    const adapter = new FakeLiveCertificationAdapter();
+    const evidence = await runLiveProviderCertification(
+      liveGateOptions(adapter, { evidenceDir: join(artifactsDir, 'does-not-exist') }),
+    );
+
+    expect(evidence.overall).toBe('PASS');
+    expect(evidence.certificationResult).toBe('EVIDENCE_PERSISTENCE_FAILED');
+    expect(evidence.evidenceState).toBe('PERSISTENCE_FAILED');
+    expect(isCertifiablePass(evidence)).toBe(false);
+  });
+
+  it('a FAILING checklist with a persistence failure reports EVIDENCE_PERSISTENCE_FAILED as the top-line result (overall retains the FAIL detail)', async () => {
+    const notADir = join(artifactsDir, 'occupied.json');
+    writeFileSync(notADir, 'occupied', 'utf8');
+
+    const adapter = new FakeLiveCertificationAdapter();
+    adapter.classification = BrokerMode.DEMO; // checklist fails at connect
+    const evidence = await runLiveProviderCertification(
+      liveGateOptions(adapter, { evidenceDir: join(notADir, 'sub') }),
+    );
+
+    expect(evidence.overall).toBe('FAIL');
+    expect(evidence.certificationResult).toBe('EVIDENCE_PERSISTENCE_FAILED');
+    expect(evidence.evidenceState).toBe('PERSISTENCE_FAILED');
+    expect(isCertifiablePass(evidence)).toBe(false);
+  });
+
+  it('two runs in the SAME UTC second produce DISTINCT artifacts (runId namespacing — no silent overwrite)', async () => {
+    const first = await runLiveProviderCertification(
+      liveGateOptions(new FakeLiveCertificationAdapter()),
+    );
+    const second = await runLiveProviderCertification(
+      liveGateOptions(new FakeLiveCertificationAdapter()),
+    );
+
+    expect(first.runId).not.toBe(second.runId);
+    expect(first.artifactPath).toBeDefined();
+    expect(second.artifactPath).toBeDefined();
+    expect(first.artifactPath!).not.toBe(second.artifactPath!);
+    // Even when finishedAt lands in the same second, the runId differentiates.
+    expect(
+      liveCertificationArtifactFileName(
+        'fake-live',
+        first.runId,
+        new Date(first.finishedAt),
+      ),
+    ).not.toBe(
+      liveCertificationArtifactFileName(
+        'fake-live',
+        second.runId,
+        new Date(second.finishedAt),
+      ),
+    );
+    expect(existsSync(first.artifactPath!)).toBe(true);
+    expect(existsSync(second.artifactPath!)).toBe(true);
+  });
+
+  it('read-back verification detects a TAMPERED artifact (hash mismatch ⇒ not certifiable)', async () => {
+    const evidence = await runLiveProviderCertification(
+      liveGateOptions(new FakeLiveCertificationAdapter()),
+    );
+    expect(isCertifiablePass(evidence)).toBe(true);
+
+    // Tamper: flip the recorded canary size on disk.
+    const raw = JSON.parse(readFileSync(evidence.artifactPath!, 'utf8')) as {
+      canary: { actualSize: string };
+    };
+    raw.canary.actualSize = '999.99';
+    writeFileSync(evidence.artifactPath!, JSON.stringify(raw, null, 2), 'utf8');
+
+    expect(verifyLiveCertificationArtifact(evidence.artifactPath!, evidence)).toBe(false);
+    // The in-memory hash still matches the UNTAMPERED content — the
+    // verification compares it against the (now different) artifact.
+    expect(evidence.evidenceSha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('the canonical evidence hash is stable across serialization round-trips (record → artifact → re-parse)', async () => {
+    const evidence = await runLiveProviderCertification(
+      liveGateOptions(new FakeLiveCertificationAdapter()),
+    );
+    const parsed = JSON.parse(readFileSync(evidence.artifactPath!, 'utf8'));
+
+    expect(computeLiveCertificationEvidenceSha256(parsed)).toBe(evidence.evidenceSha256);
+    // And the durability fields are excluded from the canonical content: the
+    // hash of the run record equals the hash of the full evidence.
+    expect(computeLiveCertificationEvidenceSha256(evidence)).toBe(evidence.evidenceSha256);
+  });
+
+  it('isCertifiablePass fails closed on every durability violation (not just certificationResult)', async () => {
+    const evidence = await runLiveProviderCertification(
+      liveGateOptions(new FakeLiveCertificationAdapter()),
+    );
+    expect(isCertifiablePass(evidence)).toBe(true);
+
+    expect(isCertifiablePass({ ...evidence, evidenceState: 'PERSISTENCE_FAILED' })).toBe(false);
+    expect(isCertifiablePass({ ...evidence, certificationResult: 'EVIDENCE_PERSISTENCE_FAILED' })).toBe(false);
+    expect(isCertifiablePass({ ...evidence, certificationResult: 'FAIL' })).toBe(false);
+    expect(isCertifiablePass({ ...evidence, overall: 'FAIL' })).toBe(false);
+    expect(isCertifiablePass({ ...evidence, artifactPath: undefined })).toBe(false);
+    expect(isCertifiablePass({ ...evidence, artifactPath: '' })).toBe(false);
+    expect(isCertifiablePass({ ...evidence, evidenceSha256: 'not-a-hash' })).toBe(false);
   });
 });
 

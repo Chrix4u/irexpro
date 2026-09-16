@@ -66,6 +66,16 @@ export interface ProviderLiveVerificationEvidence {
   readonly status: 'UNVERIFIED' | 'VERIFIED';
   readonly verifiedAt: string | null;
   readonly evidenceRef: string | null;
+  /**
+   * Round 7.1 (P0-3): provenance discriminator — LEGACY_ATTESTATION
+   * (historical operator attestation) vs HARNESS_CERTIFIED (documented
+   * certification protocol with a durable artifact). Optional so existing
+   * UNVERIFIED evidence units stay valid; a future VERIFIED unit records
+   * which path produced it (rendered distinctly, never conflated).
+   */
+  readonly certifiedVia?: 'LEGACY_ATTESTATION' | 'HARNESS_CERTIFIED';
+  /** Harness run reference for HARNESS_CERTIFIED evidence (null otherwise). */
+  readonly certificationRunRef?: string | null;
 }
 
 /** Query: does THIS connection satisfy identity-scoped LIVE verification? */

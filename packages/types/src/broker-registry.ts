@@ -76,6 +76,33 @@ export interface BrokerProductionLiveVerification {
   verifiedAt: string | null;
   /** Short evidence reference (doc/ticket id — never secrets; null when unverified). */
   evidenceRef: string | null;
+  /**
+   * Round 7.1 (P0-3): provenance — LEGACY_ATTESTATION (historical operator
+   * attestation, no dated artifact) vs HARNESS_CERTIFIED (documented
+   * certification protocol with a durable evidence artifact). Null when
+   * UNVERIFIED or on older payloads.
+   */
+  certifiedVia?: 'LEGACY_ATTESTATION' | 'HARNESS_CERTIFIED' | null;
+  /** Harness run reference (`runId@sha256:<hash>`) for HARNESS_CERTIFIED entries. */
+  certificationRunRef?: string | null;
+}
+
+/**
+ * Round 7.1 (P0-3): the truthful, derived certification state for UI
+ * display — distinguishes legacy verification from current protocol
+ * certification. CERTIFICATION_PENDING / EVIDENCE_PERSISTENCE_FAILED are
+ * run-level outcomes (harness evidence), NOT catalog states.
+ */
+export type ProviderCertificationState = 'NOT_CERTIFIED' | 'LEGACY_VERIFIED' | 'CERTIFIED';
+
+/** Derive the display state (mirror of the API-side derivation). */
+export function deriveProviderCertificationState(
+  verification: BrokerProductionLiveVerification | undefined | null,
+): ProviderCertificationState {
+  if (!verification || verification.status !== 'VERIFIED') {
+    return 'NOT_CERTIFIED';
+  }
+  return verification.certifiedVia === 'HARNESS_CERTIFIED' ? 'CERTIFIED' : 'LEGACY_VERIFIED';
 }
 
 export interface BrokerRegistryEntry {
@@ -89,6 +116,12 @@ export interface BrokerRegistryEntry {
    * remain valid for consumers.
    */
   productionLiveVerification?: BrokerProductionLiveVerification;
+  /**
+   * Round 7.1 (P0-3): always-materialized derived certification state
+   * (present in current API payloads; absent on older cached payloads —
+   * derive it client-side via deriveProviderCertificationState when missing).
+   */
+  certificationState?: ProviderCertificationState;
   connectionRoutes: BrokerConnectionRoute[];
   capabilities: BrokerCapability[];
   authenticationType: BrokerAuthenticationType;
