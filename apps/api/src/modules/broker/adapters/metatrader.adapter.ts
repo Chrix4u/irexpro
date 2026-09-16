@@ -838,8 +838,19 @@ export class MetaTraderAdapter implements IBrokerAdapter {
   }
 
   private resolveAccountType(mtType: string | undefined): BrokerMode {
+    // Round 7.1 (P0-1): a CONTEST account is competition money, NOT real
+    // money — it must classify as DEMO so a LIVE-declared connection pointing
+    // at one fails closed as an environment mismatch instead of sailing
+    // through as LIVE. When the provider is silent about the account type
+    // the adapter can only echo the requested mode (documented limitation —
+    // the declared-vs-observed gate is vacuous for silent providers and
+    // bites exactly when the provider CONTRADICTS the declaration).
     if (!mtType) return this.mode;
-    return mtType.includes('DEMO') ? BrokerMode.DEMO : BrokerMode.LIVE;
+    const normalized = mtType.toUpperCase();
+    if (normalized.includes('DEMO') || normalized.includes('CONTEST')) {
+      return BrokerMode.DEMO;
+    }
+    return BrokerMode.LIVE;
   }
 
   /**

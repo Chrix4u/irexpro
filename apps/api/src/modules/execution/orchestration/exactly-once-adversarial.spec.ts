@@ -170,7 +170,7 @@ describe('ExecutionOrchestrator exactly-once adversarial (Round 6 §13+§14 comp
         marketSlTpAttachedAtPlacement: true,
       }),
       setMode: jest.fn(),
-      connect: jest.fn().mockResolvedValue({ success: true }),
+      connect: jest.fn().mockResolvedValue({ success: true, accountType: 'DEMO' }),
       placeOrder: jest.fn().mockImplementation(async () => {
         await new Promise((r) => setTimeout(r, 10));
         return {

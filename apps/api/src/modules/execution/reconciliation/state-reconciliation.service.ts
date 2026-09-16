@@ -167,7 +167,21 @@ export class StateReconciliationService {
       adapter.setMode(connection.accountType);
       const credentials = this.buildCredentials(connection);
       try {
-        await adapter.connect(credentials);
+        const connectResult = await adapter.connect(credentials);
+        // Round 7.1 (P0-1 — reconciliation environment enforcement): a
+        // reconciliation run re-establishes the provider session and reads
+        // the account state it then PERSISTS as the authoritative snapshot
+        // (Phase 8). The provider-observed environment must MATCH the
+        // declared one BEFORE any provider truth from this session is
+        // trusted: on mismatch the BrokerService seam suspends the
+        // connection, invalidates trading authority and audits CRITICALLY,
+        // then throws — this run records FAILED and NO provider snapshot
+        // from the mislabeled session is ever persisted (fail-closed).
+        await this.brokerService.assertConnectionEnvironment(
+          connection,
+          connectResult,
+          'state-reconciliation',
+        );
       } finally {
         this.zeroCredentials(credentials);
       }

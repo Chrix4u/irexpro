@@ -145,7 +145,7 @@ describe('ExecutionOrchestrator provider-write certainty (Sprint 56 correction r
         marketSlTpAttachedAtPlacement: true,
       }),
       setMode: jest.fn(),
-      connect: jest.fn().mockResolvedValue({ success: true }),
+      connect: jest.fn().mockResolvedValue({ success: true, accountType: 'DEMO' }),
       placeOrder: jest.fn().mockResolvedValue({
         success: true,
         externalOrderId: 'pos-1',

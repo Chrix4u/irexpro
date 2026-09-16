@@ -294,6 +294,76 @@ describe('MetaTraderAdapter', () => {
       expect(result.accountType).toBe(BrokerMode.DEMO);
     });
 
+    // ─── Round 7.1 (P0-1): provider-observed environment classification ────
+
+    it('P0-1: resolves LIVE from the provider-reported account type (a real-money account is classified LIVE)', async () => {
+      (mockConnection.getAccountInformation as jest.Mock).mockResolvedValueOnce({
+        login: '123456',
+        type: 'ACCOUNT_TRADE_MODE_LIVE',
+        currency: 'USD',
+        leverage: 100,
+        balance: 10000.5,
+        equity: 10050.25,
+        margin: 200.0,
+        freeMargin: 9850.25,
+        marginLevel: 5025.12,
+      });
+      const result = await adapter.connect(testCredentials);
+      expect(result.success).toBe(true);
+      expect(result.accountType).toBe(BrokerMode.LIVE);
+    });
+
+    it('P0-1: classifies a CONTEST account as DEMO (competition money is NOT real money — a LIVE-declared connection pointing at one must fail closed upstream)', async () => {
+      (mockConnection.getAccountInformation as jest.Mock).mockResolvedValueOnce({
+        login: '123456',
+        type: 'ACCOUNT_TRADE_MODE_CONTEST',
+        currency: 'USD',
+        leverage: 100,
+        balance: 10000.5,
+        equity: 10050.25,
+        margin: 200.0,
+        freeMargin: 9850.25,
+        marginLevel: 5025.12,
+      });
+      const result = await adapter.connect(testCredentials);
+      expect(result.success).toBe(true);
+      expect(result.accountType).toBe(BrokerMode.DEMO);
+    });
+
+    it('P0-1: normalizes provider casing (a lowercase "demo" is still DEMO)', async () => {
+      (mockConnection.getAccountInformation as jest.Mock).mockResolvedValueOnce({
+        login: '123456',
+        type: 'demo',
+        currency: 'USD',
+        leverage: 100,
+        balance: 1,
+        equity: 1,
+        margin: 0,
+        freeMargin: 1,
+        marginLevel: 0,
+      });
+      const result = await adapter.connect(testCredentials);
+      expect(result.accountType).toBe(BrokerMode.DEMO);
+    });
+
+    it('P0-1: a SILENT provider (no account type) echoes the requested mode — the declared-vs-observed gate is vacuous, never guessed', async () => {
+      (mockConnection.getAccountInformation as jest.Mock).mockResolvedValueOnce({
+        login: '123456',
+        type: undefined,
+        currency: 'USD',
+        leverage: 100,
+        balance: 1,
+        equity: 1,
+        margin: 0,
+        freeMargin: 1,
+        marginLevel: 0,
+      });
+      // Mode DEMO set by the service before connect.
+      const result = await adapter.connect(testCredentials);
+      expect(result.success).toBe(true);
+      expect(result.accountType).toBe(BrokerMode.DEMO);
+    });
+
     it('throws BrokerAdapterError on MetaAPI failure', async () => {
       jest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
       (metaApiClient.getOrCreateConnection as jest.Mock).mockRejectedValueOnce(

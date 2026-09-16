@@ -11,10 +11,13 @@ describe('StateReconciliationService — provider error redaction', () => {
     const tradeRepo = {};
     const orderRepo = {};
     const accountRepo = {};
-    const brokerService = {};
+    const brokerService = {
+      // Round 7.1 (P0-1): the reconciliation environment fence.
+      assertConnectionEnvironment: jest.fn().mockResolvedValue(undefined),
+    };
     const adapter = {
       setMode: jest.fn(),
-      connect: jest.fn().mockResolvedValue({ success: true }),
+      connect: jest.fn().mockResolvedValue({ success: true, accountType: 'DEMO' }),
       listOrders: jest.fn().mockRejectedValue(new Error(`provider rejected token ${secret}`)),
       getOpenPositions: jest.fn().mockResolvedValue([]),
       getAccountInfo: jest.fn().mockResolvedValue({}),

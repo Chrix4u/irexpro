@@ -420,7 +420,7 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
         marketSlTpAttachedAtPlacement: true,
       }),
       setMode: jest.fn(),
-      connect: jest.fn().mockResolvedValue({ success: true }),
+      connect: jest.fn().mockResolvedValue({ success: true, accountType: 'DEMO' }),
       disconnect: jest.fn(),
       testConnection: jest.fn(),
       isConnected: jest.fn().mockReturnValue(true),

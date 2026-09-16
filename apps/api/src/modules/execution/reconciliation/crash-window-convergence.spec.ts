@@ -108,7 +108,11 @@ describe('StateReconciliationService — §12/§19 crash-window convergence (Rou
   };
   let orderRepo: { find: jest.Mock; createQueryBuilder: jest.Mock };
   let accountRepo: { findOne: jest.Mock; createQueryBuilder: jest.Mock };
-  let brokerService: { applyProviderAccountSnapshot: jest.Mock; findConnectionsByIds: jest.Mock };
+  let brokerService: {
+    applyProviderAccountSnapshot: jest.Mock;
+    findConnectionsByIds: jest.Mock;
+    assertConnectionEnvironment: jest.Mock;
+  };
   let adapterRegistry: { getAdapterForConnection: jest.Mock };
   let persistence: {
     createRun: jest.Mock;
@@ -138,7 +142,7 @@ describe('StateReconciliationService — §12/§19 crash-window convergence (Rou
   beforeEach(async () => {
     adapter = {
       setMode: jest.fn(),
-      connect: jest.fn().mockResolvedValue({ success: true }),
+      connect: jest.fn().mockResolvedValue({ success: true, accountType: 'DEMO' }),
       listOrders: jest.fn().mockResolvedValue([]),
       getOpenPositions: jest.fn().mockResolvedValue([]),
       getAccountInfo: jest.fn().mockResolvedValue({
@@ -181,6 +185,9 @@ describe('StateReconciliationService — §12/§19 crash-window convergence (Rou
       }),
     };
     brokerService = {
+      // Round 7.1 (P0-1): the reconciliation environment fence (mocked —
+      // the real seam's matrix lives in broker.service.spec.ts).
+      assertConnectionEnvironment: jest.fn().mockResolvedValue(undefined),
       applyProviderAccountSnapshot: jest.fn().mockResolvedValue(undefined),
       findConnectionsByIds: jest.fn().mockResolvedValue([]),
     };

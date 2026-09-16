@@ -10,7 +10,7 @@ import {
   BrokerOrderRequest,
   BrokerOrderResult,
 } from '../../broker/interfaces/broker-adapter.interface';
-import { BrokerAdapterError } from '../../broker/interfaces/broker-adapter.errors';
+import { BrokerAdapterError, BrokerErrorCode } from '../../broker/interfaces/broker-adapter.errors';
 import { ProviderDispatchCertainty } from '../../broker/interfaces/provider-dispatch-certainty';
 import { ExecutionControlService } from '../../execution-control/execution-control.service';
 import { AuditService } from '../../audit/audit.service';
@@ -763,13 +763,40 @@ export class ExecutionOrchestrator {
       connection.brokerId,
     );
     adapter.setMode(connection.accountType);
-    await adapter.connect(credentials);
+    const connectResult = await adapter.connect(credentials);
     const connectionReference = credentials.accountId;
 
-    // Zero credentials from memory immediately after connection
+    // Zero credentials from memory immediately after connection — BEFORE the
+    // environment fence below, so the hygiene guarantee is exception-safe: a
+    // fence rejection (or any later failure) can never leave plaintext
+    // credential material alive on the stack.
     (Object.keys(credentials) as (keyof typeof credentials)[]).forEach((k) => {
       (credentials as unknown as Record<string, unknown>)[k] = null;
     });
+
+    // Round 7.1 (P0-1 — pre-dispatch environment fence): the dispatch
+    // connection's provider-observed environment must MATCH the declared one
+    // BEFORE any state-changing provider call. A provider-side relabel
+    // (LIVE→DEMO or DEMO→LIVE) must never execute an order under the other
+    // environment's authority semantics. The fence throws BEFORE
+    // placeOrder/closeOrder — provably DEFINITELY_NOT_SENT — so the order
+    // fails closed into reconciliation (never resent; the health check or
+    // next observation performs the suspension + authority invalidation on
+    // its own cadence, and every subsequent dispatch re-fences).
+    if (
+      connectResult.success &&
+      connectResult.accountType !== connection.accountType
+    ) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.ENVIRONMENT_MISMATCH,
+        `Environment mismatch at dispatch: the provider reports a ` +
+          `${connectResult.accountType} account, but this connection was declared ` +
+          `${connection.accountType} — refusing to dispatch (fail-closed).`,
+        undefined,
+        false,
+        ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+      );
+    }
 
     const execute = async (): Promise<BrokerOrderResult> => {
       if (intent.providerAction === 'CLOSE_POSITION') {

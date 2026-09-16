@@ -89,6 +89,11 @@ describe('ExecutionOrchestrator', () => {
   let brokerService: { isConnectionExecutable: jest.Mock; findConnectionById: jest.Mock };
   let controlService: { checkExecutionPermission: jest.Mock };
   let adapter: Record<string, jest.Mock>;
+  // Round 7.1 (P0-1): the default adapter mock ECHOES the mode it was set
+  // to (the silent-provider contract — connect results carry the
+  // contractually-required accountType). Tests that need the provider to
+  // CONTRADICT the declaration override adapter.connect explicitly.
+  let adapterMode: BrokerMode;
   let auditService: { log: jest.Mock };
   let eventBus: { publish: jest.Mock };
   let encryptionService: { decrypt: jest.Mock };
@@ -100,6 +105,8 @@ describe('ExecutionOrchestrator', () => {
     jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
     jest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
     jest.spyOn(Logger.prototype, 'log').mockImplementation(() => {});
+    // Round 7.1 (P0-1): default echo mode (silent-provider contract).
+    adapterMode = BrokerMode.DEMO;
 
     boundaryMock = {
       commitProviderDispatch: jest.fn().mockResolvedValue({
@@ -154,8 +161,12 @@ describe('ExecutionOrchestrator', () => {
         },
         marketSlTpAttachedAtPlacement: true,
       }),
-      setMode: jest.fn(),
-      connect: jest.fn().mockResolvedValue({ success: true }),
+      setMode: jest.fn((mode: BrokerMode) => {
+        adapterMode = mode;
+      }),
+      connect: jest.fn().mockImplementation(() =>
+        Promise.resolve({ success: true, accountType: adapterMode }),
+      ),
       placeOrder: jest.fn().mockResolvedValue({
         success: true,
         externalOrderId: 'pos-1',
@@ -492,6 +503,78 @@ describe('ExecutionOrchestrator', () => {
     });
   });
 
+  // ─── Round 7.1 (P0-1): pre-dispatch environment fence ─────────────────────
+
+  describe('dispatchOrder() — Round 7.1 P0-1: pre-dispatch environment fence', () => {
+    it('a provider environment CONTRADICTION at the dispatch connection makes ZERO provider calls and fails closed with DEFINITELY_NOT_SENT certainty (declared DEMO, provider reports LIVE)', async () => {
+      // The provider session comes back LIVE while the connection is
+      // declared DEMO — the fence must throw BEFORE placeOrder.
+      adapter.connect.mockResolvedValueOnce({ success: true, accountType: BrokerMode.LIVE });
+
+      const outcome = await orchestrator.dispatchOrder(intent, connection);
+
+      // ZERO state-changing provider calls — the entire point of the fence.
+      expect(adapter.placeOrder).not.toHaveBeenCalled();
+      expect(adapter.closeOrder).not.toHaveBeenCalled();
+      // The order converges to RECONCILIATION_PENDING with the typed
+      // certainty (post-commitment errors never terminally reject — the
+      // reconciliation path owns convergence).
+      expect(outcome.outcome).toBe('UNKNOWN');
+      if (outcome.outcome === 'UNKNOWN') {
+        expect(outcome.certainty).toBe('DEFINITELY_NOT_SENT');
+        expect(outcome.reason).toContain('Environment mismatch at dispatch');
+      }
+      expect(orderService.markReconciliationPending).toHaveBeenCalledWith('order-1');
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: AuditAction.ORDER_RECONCILIATION_PENDING,
+          severity: AuditSeverity.CRITICAL,
+          metadata: expect.objectContaining({
+            dispatchCertainty: 'DEFINITELY_NOT_SENT',
+            reason: expect.stringContaining('Environment mismatch at dispatch'),
+          }),
+        }),
+      );
+    });
+
+    it('the symmetric contradiction fails closed too (declared LIVE, provider reports DEMO — never a DEMO session executing under LIVE authority)', async () => {
+      adapter.connect.mockResolvedValueOnce({ success: true, accountType: BrokerMode.DEMO });
+
+      const outcome = await orchestrator.dispatchOrder(intent, liveConnection);
+
+      expect(adapter.placeOrder).not.toHaveBeenCalled();
+      expect(outcome.outcome).toBe('UNKNOWN');
+      if (outcome.outcome === 'UNKNOWN') {
+        expect(outcome.certainty).toBe('DEFINITELY_NOT_SENT');
+      }
+    });
+
+    it('a MATCHING provider environment never trips the fence (no false positive — dispatch proceeds)', async () => {
+      const outcome = await orchestrator.dispatchOrder(intent, connection);
+
+      expect(outcome.outcome).toBe('FILLED');
+      expect(adapter.placeOrder).toHaveBeenCalledTimes(1);
+      expect(orderService.markReconciliationPending).not.toHaveBeenCalled();
+    });
+
+    it('the fence applies to CLOSE_POSITION dispatches too (an exit must never execute on a mislabeled session)', async () => {
+      adapter.connect.mockResolvedValueOnce({ success: true, accountType: BrokerMode.LIVE });
+      const closeIntent: ExecutionIntent = {
+        ...intent,
+        providerAction: 'CLOSE_POSITION',
+        providerReferenceId: 'pos-1',
+      };
+
+      const outcome = await orchestrator.dispatchOrder(closeIntent, connection);
+
+      expect(adapter.closeOrder).not.toHaveBeenCalled();
+      expect(outcome.outcome).toBe('UNKNOWN');
+      if (outcome.outcome === 'UNKNOWN') {
+        expect(outcome.certainty).toBe('DEFINITELY_NOT_SENT');
+      }
+    });
+  });
+
   describe('dispatchOrder() — idempotency', () => {
     it('DUPLICATE submission → NO provider call, audit suppression, DUPLICATE outcome', async () => {
       orderService.submitOrder.mockResolvedValue({
@@ -740,7 +823,7 @@ describe('ExecutionOrchestrator', () => {
       const captured: Record<string, unknown>[] = [];
       adapter.connect.mockImplementation(async (creds: Record<string, unknown>) => {
         captured.push(creds);
-        return { success: true };
+        return { success: true, accountType: BrokerMode.DEMO };
       });
 
       await orchestrator.dispatchOrder(intent, connection);

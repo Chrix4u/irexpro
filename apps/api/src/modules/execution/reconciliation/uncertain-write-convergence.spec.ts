@@ -157,7 +157,7 @@ describe('Uncertain-write reconciliation convergence (Sprint 56 correction round
       // READ), never via a new placeOrder submission.
       adapter = {
         setMode: jest.fn(),
-        connect: jest.fn().mockResolvedValue({ success: true }),
+        connect: jest.fn().mockResolvedValue({ success: true, accountType: 'DEMO' }),
         listOrders: jest.fn().mockResolvedValue([]),
         getOpenPositions: jest.fn().mockResolvedValue([]),
         getAccountInfo: jest.fn().mockResolvedValue({
@@ -225,6 +225,9 @@ describe('Uncertain-write reconciliation convergence (Sprint 56 correction round
       const brokerService = {
         applyProviderAccountSnapshot: jest.fn().mockResolvedValue(undefined),
         findConnectionsByIds: jest.fn().mockResolvedValue([]),
+        // Round 7.1 (P0-1): the reconciliation environment fence (mocked —
+        // the real seam's matrix lives in broker.service.spec.ts).
+        assertConnectionEnvironment: jest.fn().mockResolvedValue(undefined),
       };
       const persistence = {
         createRun: jest

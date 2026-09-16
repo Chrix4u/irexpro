@@ -60,6 +60,13 @@ export enum AuditAction {
   BROKER_CONNECT_FAILED = 'BROKER_CONNECT_FAILED',
   BROKER_DISCONNECTED = 'BROKER_DISCONNECTED',
   BROKER_SUSPENDED_HEALTH_FAILURE = 'BROKER_SUSPENDED_HEALTH_FAILURE',
+  // Round 7.1 (P0-1): a synchronous account observation (on-demand risk
+  // refresh, reconciliation, dispatch) observed a provider environment that
+  // CONTRADICTS the declared one — the connection was suspended and the
+  // observation refused (fail-closed). Metadata carries declared vs
+  // provider-observed account types + the detection source — never
+  // credentials.
+  BROKER_ENVIRONMENT_MISMATCH_SUSPENDED = 'BROKER_ENVIRONMENT_MISMATCH_SUSPENDED',
   BROKER_CREDENTIAL_ENCRYPTION_FAILED = 'BROKER_CREDENTIAL_ENCRYPTION_FAILED',
   BROKER_LIVE_TRADING_ENABLED = 'BROKER_LIVE_TRADING_ENABLED',
   BROKER_LIVE_TRADING_DISABLED = 'BROKER_LIVE_TRADING_DISABLED',
