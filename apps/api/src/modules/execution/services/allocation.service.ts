@@ -113,12 +113,11 @@ function addTo(map: Map<string, string>, key: string, value: string): void {
  *    cancelled trades and expired/rejected intents stop counting
  *    automatically (§9 — the aggregate self-heals from authoritative state).
  *  - EXPLICIT BUDGET: one durable capital_budgets row per (user, logical
- *    account). Seeded ONCE from the AUTHORITATIVE account snapshot (§1a
- *    routing, DB-only read) at first allocation; explicit thereafter. When
- *    neither exists, ALLOCATION_BUDGET_UNPROVABLE — never 0, never a
- *    guessed or stale equity echo (§1c). Round 7: the scope MUST be a real
- *    logical account key — a null key fails closed up front (a synthetic
- *    `conn:` scope is never fabricated; it could never be seeded).
+ *    account). The user must configure it before AI execution may reserve
+ *    capital. Authoritative broker equity validates that explicit amount but
+ *    is NEVER auto-copied into the budget. Missing budget fails closed with
+ *    ALLOCATION_BUDGET_UNPROVABLE. Round 7: the scope MUST be a real logical
+ *    account key — a null key fails closed up front.
  *  - EXACT MATH: every capital figure is ExactDecimal — JavaScript
  *    floating-point is never used (§3).
  *  - CURRENCY HONESTY: the budget and allocation must share ONE currency —
@@ -574,83 +573,11 @@ export class AllocationService {
       };
     }
 
-    // Seed from the AUTHORITATIVE account state — the connection bound to
-    // this account scope. The §1a routing is snapshot-backed and DB-only.
-    const seeded = await this.seedBudgetFromAuthoritativeState(manager, userId, logicalAccountKey);
-    if (seeded) return seeded;
-
     throw new AllocationError(
       'ALLOCATION_BUDGET_UNPROVABLE',
-      `no explicit capital budget for account ${logicalAccountKey} and the authoritative ` +
-        'account state cannot prove an equity baseline (§1c — no default, no guess)',
+      `no explicit user capital allocation is configured for account ${logicalAccountKey}`,
     );
   }
-
-  private async seedBudgetFromAuthoritativeState(
-    manager: { query: (sql: string, params?: unknown[]) => Promise<Record<string, unknown>[]> },
-    userId: string,
-    logicalAccountKey: string,
-  ): Promise<{
-    totalCapital: string;
-    accountCurrency: string;
-    maxInstrumentConcentration: string | null;
-    maxStrategyConcentration: string | null;
-  } | null> {
-    // Resolve the connection that owns this logical account scope.
-    const connRows = await manager.query(
-      `SELECT id FROM broker.broker_connections
-         WHERE user_id = $1 AND logical_account_key = $2
-         ORDER BY updated_at DESC LIMIT 1`,
-      [userId, logicalAccountKey],
-    );
-    if (connRows.length === 0) return null;
-    const connectionId = String(connRows[0].id);
-
-    const account = await this.brokerService.getBrokerAccountState(connectionId);
-    if (
-      !account ||
-      !account.equity ||
-      !account.currency ||
-      !/^[A-Z]{3}$/.test(account.currency.toUpperCase())
-    ) {
-      return null; // §1c — unprovable is unprovable; the caller fail-closes.
-    }
-    const equity = ExactDecimal.tryParse(account.equity);
-    if (!equity || !equity.isPositive()) return null;
-
-    // Seed with a conservative concentration policy: no more than 50% of
-    // the explicit allocation per instrument and 60% per strategy. These
-    // caps are the account's EXPLICIT baseline from this point on (the row
-    // is the truth; operators may adjust it explicitly later).
-    try {
-      await manager.query(
-        `INSERT INTO trading.capital_budgets
-           (id, user_id, logical_account_key, account_currency, total_capital,
-            max_instrument_concentration, max_strategy_concentration)
-         VALUES (gen_random_uuid(), $1, $2, $3, $4, '50.00', '60.00')
-         ON CONFLICT ON CONSTRAINT uq_capital_budgets_user_account DO NOTHING`,
-        [userId, logicalAccountKey, account.currency.toUpperCase(), equity.toString()],
-      );
-    } catch {
-      // A racing seeder won — fall through to the re-read below.
-    }
-    const rows = await manager.query(
-      `SELECT * FROM trading.capital_budgets
-         WHERE user_id = $1 AND logical_account_key = $2 LIMIT 1`,
-      [userId, logicalAccountKey],
-    );
-    if (rows.length === 0) return null;
-    const row = rows[0];
-    return {
-      totalCapital: String(row.total_capital),
-      accountCurrency: String(row.account_currency),
-      maxInstrumentConcentration:
-        row.max_instrument_concentration === null ? null : String(row.max_instrument_concentration),
-      maxStrategyConcentration:
-        row.max_strategy_concentration === null ? null : String(row.max_strategy_concentration),
-    };
-  }
-
   /**
    * Aggregate the account's ACTIVE allocation commitments from CURRENT
    * durable truth. The JOIN makes the buckets self-healing (§9):
