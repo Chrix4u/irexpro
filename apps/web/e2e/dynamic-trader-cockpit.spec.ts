@@ -408,54 +408,34 @@ async function gotoCockpit(
 
   await page.goto('/trade');
   await expect(page.getByTestId('dynamic-trader-cockpit')).toBeVisible();
-  await expect(page.getByRole('heading', { level: 1, name: 'Trading Workspace' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: 'AI Trading Workspace' })).toBeVisible();
 }
 
-test.describe('Dynamic Trader Cockpit', () => {
-  test('composes authoritative market, AI, risk, strategy, Copilot, broker, and execution state', async ({
-    page,
-  }) => {
+test.describe('AI-first Trading Workspace', () => {
+  test('keeps novice controls and execution activity primary while advanced evidence stays optional', async ({ page }) => {
     await gotoCockpit(page);
 
-    await expect(page.locator('.trader-cockpit .terminal-foundation__eyebrow').first()).toHaveText(
-      'Dynamic Trader Cockpit',
-    );
-    await expect(page.getByRole('heading', { level: 2, name: 'Broker Market · EURUSD' })).toBeVisible();
+    await expect(page.locator('.trader-cockpit .terminal-foundation__eyebrow').first()).toHaveText('AI Auto Trader');
+    await expect(page.getByRole('heading', { level: 2, name: /allocate\. switch on\. ai handles the rest/i })).toBeVisible();
+    await expect(page.getByRole('switch', { name: 'AI Auto' })).toBeVisible();
+    await expect(page.getByText('Broker equity', { exact: true })).toBeVisible();
+    await expect(page.getByText('AI allocation', { exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { level: 2, name: 'Market · EURUSD' })).toBeVisible();
     await expect(page.getByText('1.17001', { exact: true }).first()).toBeVisible();
-    await expect(page.getByRole('img', { name: /cockpit candlestick chart with 4 broker candles/i })).toBeVisible();
-
-    const decisionCard = page.getByRole('heading', { level: 2, name: 'AI Decision Pulse' }).locator('..');
-    await expect(decisionCard.getByText('EURUSD · BUY', { exact: true })).toBeVisible();
-    await expect(decisionCard.getByText('82%', { exact: true })).toBeVisible();
-    await expect(decisionCard.getByText('TREND_H1', { exact: true })).toBeVisible();
-
-    const guardrailCard = page.getByRole('heading', { level: 2, name: 'Capital Guardrails' }).locator('..');
-    await expect(guardrailCard.getByText('1 / 3', { exact: true })).toBeVisible();
-    await expect(guardrailCard.getByText('Full Auto', { exact: true })).toBeVisible();
-
-    const strategyCard = page.getByRole('heading', { level: 2, name: 'Strategy Lab Signal' }).locator('..');
-    await expect(strategyCard.getByText('TREND_H1', { exact: true })).toBeVisible();
-    await expect(strategyCard.getByText('Advisory only', { exact: true })).toBeVisible();
-
-    await expect(page.getByRole('heading', { level: 2, name: 'Contextual AI Copilot' })).toBeVisible();
-    await expect(
-      page.getByText('Evidence-based explanation · No hidden reasoning exposed', { exact: true }),
-    ).toBeVisible();
-    await expect(page.getByText('Authoritative context is aligned', { exact: true })).toBeVisible();
-    await expect(
-      page.getByLabel('Copilot authoritative context').getByText('NORMAL', { exact: true }),
-    ).toBeVisible();
-    await expect(page.getByText('Persisted AI decision evidence', { exact: true }).first()).toBeVisible();
-    await expect(page.getByText('Historical research · Advisory only', { exact: true })).toBeVisible();
-    await expect(page.getByText('Market', { exact: true }).last()).toBeVisible();
-    await expect(page.getByText('Strategy Research', { exact: true })).toBeVisible();
-
     await expect(page.getByRole('heading', { level: 2, name: 'Open Positions (1)' })).toBeVisible();
-    await expect(page.getByText(/authoritative data only/i)).toBeVisible();
-    await expect(page.getByText(/browser exposes no direct broker order control/i)).toBeVisible();
+    await expect(page.getByRole('heading', { level: 2, name: 'Recent Executions' })).toBeVisible();
+
+    const advanced = page.locator('details.cockpit-advanced');
+    await expect(advanced).not.toHaveAttribute('open', '');
+    await advanced.locator('summary').click();
+    await expect(page.getByRole('heading', { level: 2, name: 'AI Decision Pulse' })).toBeVisible();
+    await expect(page.getByRole('heading', { level: 2, name: 'Capital Guardrails' })).toBeVisible();
+    await expect(page.getByRole('heading', { level: 2, name: 'AI Copilot' })).toBeVisible();
+
+    await expect(page.getByText(/financial and execution values shown here come from server-authoritative/i)).toBeVisible();
+    await expect(page.getByText(/p&l is not fabricated/i)).toBeVisible();
 
     for (const marker of [
-      'brokerConnectionId',
       'providerAccountId',
       'encryptedCredentials',
       'credentialIv',
@@ -472,7 +452,7 @@ test.describe('Dynamic Trader Cockpit', () => {
     assertNoExternalRequests(page);
   });
 
-  test('remains structurally responsive across the nine release viewports', async ({ page }) => {
+  test('remains responsive across the nine release viewports', async ({ page }) => {
     const viewports = [
       { width: 320, height: 568 },
       { width: 360, height: 800 },
@@ -489,7 +469,7 @@ test.describe('Dynamic Trader Cockpit', () => {
     for (const viewport of viewports) {
       await page.setViewportSize(viewport);
       await expect(page.getByTestId('dynamic-trader-cockpit')).toBeVisible();
-      await expect(page.getByRole('heading', { level: 2, name: 'Contextual AI Copilot' })).toBeVisible();
+      await expect(page.getByRole('switch', { name: 'AI Auto' })).toBeVisible();
       await assertNoHorizontalOverflow(page);
     }
 
@@ -498,49 +478,13 @@ test.describe('Dynamic Trader Cockpit', () => {
     assertNoExternalRequests(page);
   });
 
-  test('rejects broadened Copilot payloads and clears unsafe evidence', async ({ page }) => {
+  test('fails closed when Copilot evidence broadens unexpectedly', async ({ page }) => {
     await gotoCockpit(page, () => ({
       status: 200,
       body: { ...copilotSnapshot, providerAccountId: 'provider-account-forbidden' },
     }));
 
-    await expect(page.getByText(/Contextual AI Copilot evidence is unavailable or failed verification/i)).toBeVisible();
-    await expect(page.getByText('Authoritative context is aligned', { exact: true })).toHaveCount(0);
-    await expect(page.getByText('providerAccountId', { exact: false })).toHaveCount(0);
-    await assertNoHorizontalOverflow(page);
-    assertNoConsoleErrors(page);
-    assertNoFailedRequests(page);
-    assertNoExternalRequests(page);
-  });
-
-  test('rejects Copilot responses that weaken the explanation-only policy', async ({ page }) => {
-    await gotoCockpit(page, () => ({
-      status: 200,
-      body: {
-        ...copilotSnapshot,
-        policy: { ...copilotSnapshot.policy, noTradeInstruction: false },
-      },
-    }));
-
-    await expect(page.getByText(/Contextual AI Copilot evidence is unavailable or failed verification/i)).toBeVisible();
-    await expect(page.getByText('Authoritative context is aligned', { exact: true })).toHaveCount(0);
-    await expect(page.getByText('Historical research · Advisory only', { exact: true })).toHaveCount(0);
-    await assertNoHorizontalOverflow(page);
-    assertNoConsoleErrors(page);
-    assertNoFailedRequests(page);
-    assertNoExternalRequests(page);
-  });
-
-  test('clears previous Copilot evidence immediately when refresh fails', async ({ page }) => {
-    await gotoCockpit(page, (call) =>
-      call === 1
-        ? { status: 200, body: copilotSnapshot }
-        : { status: 503, body: { message: 'Copilot unavailable' }, delayMs: 250 },
-    );
-
-    await expect(page.getByText('Authoritative context is aligned', { exact: true })).toBeVisible();
-    await page.getByRole('button', { name: 'Refresh cockpit' }).click();
-    await expect(page.getByText('Authoritative context is aligned', { exact: true })).toHaveCount(0);
+    await page.locator('details.cockpit-advanced summary').click();
     await expect(page.getByText(/Contextual AI Copilot evidence is unavailable or failed verification/i)).toBeVisible();
     await expect(page.getByText('providerAccountId', { exact: false })).toHaveCount(0);
     await assertNoHorizontalOverflow(page);
