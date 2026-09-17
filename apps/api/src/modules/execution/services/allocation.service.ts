@@ -65,6 +65,13 @@ export interface AllocationAccountState {
   byDirection: Array<{ direction: 'BUY' | 'SELL'; committedCapital: string }>;
 }
 
+/** User-facing explicit AI capital budget for one owned broker connection. */
+export interface UserCapitalBudgetView extends AllocationAccountState {
+  brokerConnectionId: string;
+  configured: boolean;
+  authoritativeEquity: string;
+}
+
 /** Aggregate buckets of one account's ACTIVE allocations. */
 interface AggregateBuckets {
   inFlight: string;
@@ -321,6 +328,145 @@ export class AllocationService {
     }
   }
 
+  /**
+   * Read the user's explicit AI capital allocation for one owned broker
+   * connection. Missing allocation is a normal setup state, never permission
+   * to infer 100% of the broker account equity.
+   */
+  async getUserCapitalBudget(
+    userId: string,
+    brokerConnectionId: string,
+  ): Promise<UserCapitalBudgetView> {
+    const connection = await this.brokerService.findConnectionById(brokerConnectionId, userId);
+    const logicalAccountKey = connection.logicalAccountKey;
+    if (!logicalAccountKey) {
+      throw new AllocationError(
+        'ALLOCATION_BUDGET_UNPROVABLE',
+        `broker connection ${brokerConnectionId} has no logical account key`,
+      );
+    }
+
+    const account = await this.brokerService.getBrokerAccountState(brokerConnectionId);
+    if (!account?.equity || !account.currency) {
+      throw new AllocationError(
+        'ALLOCATION_BUDGET_UNPROVABLE',
+        'authoritative broker equity/currency is unavailable; allocation cannot be validated',
+      );
+    }
+    const equity = ExactDecimal.tryParse(account.equity);
+    if (!equity || !equity.isPositive()) {
+      throw new AllocationError(
+        'ALLOCATION_BUDGET_UNPROVABLE',
+        'authoritative broker equity is missing or non-positive',
+      );
+    }
+
+    const budget = await this.budgetRepo.findOne({ where: { userId, logicalAccountKey } });
+    if (!budget) {
+      return {
+        brokerConnectionId,
+        configured: false,
+        authoritativeEquity: equity.toString(),
+        accountCurrency: account.currency.toUpperCase(),
+        totalCapital: ZERO,
+        committedCapital: ZERO,
+        pendingOrderCommitments: ZERO,
+        openPositionExposure: ZERO,
+        inFlightCommitments: ZERO,
+        availableCapital: ZERO,
+        byInstrument: [],
+        byStrategy: [],
+        byDirection: [],
+      };
+    }
+
+    const state = await this.getAllocationAccountState(userId, logicalAccountKey);
+    return {
+      brokerConnectionId,
+      configured: true,
+      authoritativeEquity: equity.toString(),
+      ...state,
+    };
+  }
+
+  /**
+   * Persist the amount of broker equity the user explicitly authorizes the AI
+   * engine to allocate. It cannot exceed current authoritative equity or be
+   * reduced below already-committed exposure.
+   */
+  async setUserCapitalBudget(
+    userId: string,
+    brokerConnectionId: string,
+    totalCapitalInput: string,
+  ): Promise<UserCapitalBudgetView> {
+    const connection = await this.brokerService.findConnectionById(brokerConnectionId, userId);
+    const logicalAccountKey = connection.logicalAccountKey;
+    if (!logicalAccountKey) {
+      throw new AllocationError(
+        'ALLOCATION_BUDGET_UNPROVABLE',
+        `broker connection ${brokerConnectionId} has no logical account key`,
+      );
+    }
+
+    const account = await this.brokerService.getBrokerAccountState(brokerConnectionId);
+    if (!account?.equity || !account.currency) {
+      throw new AllocationError(
+        'ALLOCATION_BUDGET_UNPROVABLE',
+        'authoritative broker equity/currency is unavailable; allocation cannot be validated',
+      );
+    }
+
+    const requested = ExactDecimal.tryParse(totalCapitalInput);
+    const equity = ExactDecimal.tryParse(account.equity);
+    if (!requested || !requested.isPositive()) {
+      throw new AllocationError(
+        'ALLOCATION_INSUFFICIENT_CAPITAL',
+        'allocation amount must be a positive decimal value',
+      );
+    }
+    if (!equity || !equity.isPositive()) {
+      throw new AllocationError(
+        'ALLOCATION_BUDGET_UNPROVABLE',
+        'authoritative broker equity is missing or non-positive',
+      );
+    }
+    if (requested.gt(equity)) {
+      throw new AllocationError(
+        'ALLOCATION_INSUFFICIENT_CAPITAL',
+        `requested allocation ${requested.toString()} exceeds authoritative equity ${equity.toString()}`,
+      );
+    }
+
+    await this.dataSource.transaction(async (manager) => {
+      await manager.query('SELECT pg_advisory_xact_lock($1)', [
+        this.computeAccountLockKey(userId, logicalAccountKey),
+      ]);
+
+      const aggregate = await this.aggregateActiveAllocations(manager, userId, logicalAccountKey);
+      const committed = ExactDecimal.parse(aggregate.committed);
+      if (requested.lt(committed)) {
+        throw new AllocationError(
+          'ALLOCATION_INSUFFICIENT_CAPITAL',
+          `requested allocation ${requested.toString()} is below already committed capital ${committed.toString()}`,
+        );
+      }
+
+      await manager.query(
+        `INSERT INTO trading.capital_budgets
+           (id, user_id, logical_account_key, account_currency, total_capital,
+            max_instrument_concentration, max_strategy_concentration)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4, '50.00', '60.00')
+         ON CONFLICT ON CONSTRAINT uq_capital_budgets_user_account
+         DO UPDATE SET
+           account_currency = EXCLUDED.account_currency,
+           total_capital = EXCLUDED.total_capital,
+           updated_at = NOW()`,
+        [userId, logicalAccountKey, account.currency.toUpperCase(), requested.toString()],
+      );
+    });
+
+    return this.getUserCapitalBudget(userId, brokerConnectionId);
+  }
   /**
    * The §3 aggregate account view: explicit allocation, committed capital
    * (pending-order + open-position + in-flight), remaining allocatable and
