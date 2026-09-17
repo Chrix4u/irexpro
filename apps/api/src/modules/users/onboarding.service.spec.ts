@@ -149,7 +149,7 @@ describe('OnboardingService readiness gate', () => {
     };
   }
 
-  it('returns all four steps incomplete for a new user', async () => {
+  it('returns identity, eligibility and broker steps incomplete for a new user', async () => {
     mockUserRepo.findOne.mockResolvedValue({
       id: 'new-user',
       status: UserStatus.ACTIVE,
@@ -172,12 +172,7 @@ describe('OnboardingService readiness gate', () => {
     expect(status.profileCompleted).toBe(false);
     expect(status.eligibilityCompleted).toBe(false);
     expect(status.canStartTrading).toBe(false);
-    expect(status.missingSteps).toEqual([
-      'PROFILE',
-      'ELIGIBILITY',
-      'RISK_PROFILE',
-      'BROKER_CONNECTION',
-    ]);
+    expect(status.missingSteps).toEqual(['PROFILE', 'ELIGIBILITY', 'BROKER_CONNECTION']);
     expect(status.nextStep).toBe('PROFILE');
   });
 
@@ -203,7 +198,7 @@ describe('OnboardingService readiness gate', () => {
     expect(status.nextStep).toBe('ELIGIBILITY');
   });
 
-  it('allows readiness only when profile, eligibility, risk, broker and kill switch gates pass', async () => {
+  it('allows readiness when identity, eligibility and broker gates pass', async () => {
     mockUserRepo.findOne.mockResolvedValue(completeUser());
     mockRiskProfileRepo.findOne.mockResolvedValue(completeRisk());
     mockBrokerQb.getOne.mockResolvedValue(connectedBroker());
@@ -233,17 +228,16 @@ describe('OnboardingService readiness gate', () => {
     );
   });
 
-  it('blocks readiness when the risk acknowledgement is missing', async () => {
-    const risk = completeRisk();
-    risk.riskAcknowledgementAccepted = false;
+  it('does not require a separately configured risk profile during onboarding', async () => {
     mockUserRepo.findOne.mockResolvedValue(completeUser());
-    mockRiskProfileRepo.findOne.mockResolvedValue(risk);
+    mockRiskProfileRepo.findOne.mockResolvedValue(null);
     mockBrokerQb.getOne.mockResolvedValue(connectedBroker());
 
     const status = await service.getOnboardingStatus('user-complete');
 
-    expect(status.canStartTrading).toBe(false);
-    expect(status.missingSteps).toEqual(['RISK_PROFILE']);
+    expect(status.riskProfileCompleted).toBe(true);
+    expect(status.canStartTrading).toBe(true);
+    expect(status.missingSteps).toEqual([]);
   });
 
   it('blocks readiness when the broker is unavailable', async () => {
@@ -325,12 +319,7 @@ describe('OnboardingService readiness gate', () => {
 
     expect(status.eligibilityCompleted).toBe(false);
     expect(status.canStartTrading).toBe(false);
-    expect(status.missingSteps).toEqual([
-      'PROFILE',
-      'ELIGIBILITY',
-      'RISK_PROFILE',
-      'BROKER_CONNECTION',
-    ]);
+    expect(status.missingSteps).toEqual(['PROFILE', 'ELIGIBILITY', 'BROKER_CONNECTION']);
     expect(mockEligibilityService.getStatus).not.toHaveBeenCalled();
   });
 
