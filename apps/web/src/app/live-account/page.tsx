@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { formatEnumLabel } from '@irexpro/types';
 import { Alert, Badge, Button, Card, DashboardShell, LoadingSpinner } from '@/components/ui';
+import AiAutoControl from '@/components/ai-auto-control';
 import { useAuth } from '@/context/auth-context';
 import { api } from '@/lib/api';
 import { mapApiError } from '@/lib/error-mapping';
@@ -26,6 +27,7 @@ import {
 import './live-account.css';
 import type { BrokerRegistryEntry } from '@irexpro/types';
 import { connectionVerificationLabel } from '@/lib/trader-session';
+import type { TradingSessionView } from '@irexpro/types/execution';
 
 const ORDERS_PAGE_SIZE = 10;
 const ACTIVITY_PAGE_SIZE = 10;
@@ -708,6 +710,7 @@ export default function LiveAccountPage() {
   const { user, logout, restoring } = useAuth();
 
   const [overview, setOverview] = useState<LiveAccountOverviewView | null>(null);
+  const [activeSession, setActiveSession] = useState<TradingSessionView | null>(null);
   const [loadingOverview, setLoadingOverview] = useState(true);
   const [overviewError, setOverviewError] = useState<string | null>(null);
   /** Server registry joined per connection for verification labels (fail-closed when absent). */
@@ -738,18 +741,21 @@ export default function LiveAccountPage() {
     setLoadingOverview(true);
     setOverviewError(null);
     try {
-      const [overviewPayload, registry] = await Promise.all([
+      const [overviewPayload, registry, session] = await Promise.all([
         loadLiveAccountOverview(),
         // Registry join powers the verification-label taxonomy; a failure
         // degrades fail-closed (labels fall back to the unverified/DEMO-only
         // truth — the page never presents a connection as simply "Live").
         api.listBrokerRegistry().catch(() => null),
+        api.getActiveTradingSession().catch(() => null),
       ]);
       setOverview(overviewPayload);
       setRegistryEntries(registry?.brokers ?? []);
+      setActiveSession(session);
     } catch (err) {
       setOverview(null);
       setRegistryEntries([]);
+      setActiveSession(null);
       setOverviewError(mapApiError(err).message);
     } finally {
       setLoadingOverview(false);
@@ -892,6 +898,14 @@ export default function LiveAccountPage() {
       ? connections.find((connection) => connection.id === automation.sessionConnectionId)
           ?.brokerName ?? null
       : null;
+  const primaryConnection =
+    (activeSession
+      ? connections.find((connection) => connection.id === activeSession.brokerConnectionId)
+      : null) ??
+    connections.find((connection) => connection.connectionStatus === 'CONNECTED') ??
+    connections[0] ??
+    null;
+
   const ordersEmptyCopy =
     ordersFilter === 'WORKING'
       ? 'No working orders right now. Orders appear here while they are open with the broker.'
