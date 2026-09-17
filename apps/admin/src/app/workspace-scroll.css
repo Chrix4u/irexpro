@@ -1,3 +1,35 @@
+/* Admin scrollbar treatment aligned with the trader web portal.
+ *
+ * The global rules provide the same premium rounded scrollbar for body-level,
+ * auth, modal, table, and other nested scroll containers. The authenticated
+ * desktop workspace keeps its more compact 6px pane-specific override below.
+ */
+* {
+  scrollbar-color: var(--border) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: var(--radius-full);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+
 /* Authenticated admin shell scroll isolation.
  *
  * Desktop/tablet (>700px): the shell is locked to the viewport. The sidebar
