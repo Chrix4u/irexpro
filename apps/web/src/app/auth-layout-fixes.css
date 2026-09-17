@@ -1,0 +1,35 @@
+/* Auth form overflow hardening.
+ *
+ * A scrollable flex container must not use cross-axis centering for content
+ * taller than the viewport: the centered overflow can begin above scrollTop=0
+ * and make the form heading/first fields unreachable. Keep the panel
+ * top-aligned on desktop, then use auto block margins on the single form child
+ * so short forms remain centered while tall forms start at the accessible top.
+ */
+@media (min-width: 901px) {
+  .auth-layout__form-side {
+    align-items: flex-start;
+  }
+
+  .auth-layout__form-container {
+    margin-block: auto;
+  }
+}
+
+/* Registration identity fields: equal, shrink-safe columns on wider screens. */
+.register-name-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.register-name-row > .input-group {
+  min-width: 0;
+}
+
+@media (max-width: 480px) {
+  .register-name-row {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+}
