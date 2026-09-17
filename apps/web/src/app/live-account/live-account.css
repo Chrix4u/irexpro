@@ -15,7 +15,8 @@
 
 /* ── Page root (follows terminal-foundation width discipline) ─────────────── */
 .live-account {
-  max-width: 1280px;
+  width: 100%;
+  max-width: 1600px;
 }
 
 /* ── §36 Environment banner — the critical strip ───────────────────────────── */
@@ -584,5 +585,141 @@
 @media (max-width: 960px) {
   .live-duo-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+
+/* AI-first command layout: important account/trading state fills the canvas;
+ * detailed provider diagnostics remain available without dominating the page. */
+.live-command-grid {
+  display: grid;
+  grid-template-columns: minmax(420px, 1.18fr) minmax(320px, 0.82fr);
+  gap: var(--space-4);
+  align-items: stretch;
+}
+
+.live-command-grid > .card {
+  height: 100%;
+}
+
+.live-command-empty,
+.live-empty-card {
+  min-height: 170px;
+  display: grid;
+  align-content: center;
+  gap: 0.55rem;
+}
+
+.live-health-strip {
+  margin-top: var(--space-1);
+}
+
+.live-trading-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.live-primary-panel {
+  min-width: 0;
+  padding: clamp(0.9rem, 1.4vw, 1.2rem);
+  border: 1px solid rgba(148, 163, 184, 0.13);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(145deg, rgba(20, 27, 43, 0.8), rgba(13, 20, 34, 0.68));
+}
+
+.live-section__heading--orders {
+  align-items: flex-end;
+}
+
+.live-section__heading--orders .live-filter-group {
+  margin-bottom: 0;
+}
+
+.live-records-grid--positions {
+  grid-template-columns: 1fr;
+}
+
+.live-diagnostics {
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: var(--radius-lg);
+  background: rgba(11, 17, 30, 0.6);
+}
+
+.live-diagnostics > summary {
+  list-style: none;
+  min-height: 64px;
+  padding: 1rem 1.15rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  cursor: pointer;
+}
+
+.live-diagnostics > summary::-webkit-details-marker {
+  display: none;
+}
+
+.live-diagnostics > summary > span:first-child {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.live-diagnostics > summary small {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.live-diagnostics[open] > summary {
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.live-diagnostics[open] > summary > span:last-child {
+  transform: rotate(45deg);
+}
+
+.live-diagnostics__body {
+  display: grid;
+  gap: var(--space-5);
+  padding: var(--space-4);
+}
+
+.live-diagnostics-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(300px, 0.5fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+
+@media (max-width: 1100px) {
+  .live-command-grid,
+  .live-trading-grid,
+  .live-diagnostics-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .live-records-grid--positions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 700px) {
+  .live-primary-panel {
+    padding: 0.8rem;
+  }
+
+  .live-records-grid--positions {
+    grid-template-columns: 1fr;
+  }
+
+  .live-diagnostics__body {
+    padding: 0.85rem;
+  }
+
+  .live-diagnostics > summary {
+    padding: 0.9rem;
   }
 }
