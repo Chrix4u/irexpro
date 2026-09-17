@@ -79,7 +79,7 @@ test.describe('Mobile bottom navigation', () => {
 
   // ── Primary destinations ───────────────────────────────────────────────────
 
-  test('bottom nav contains the 3 primary destinations on mobile', async ({ page }) => {
+  test('bottom nav contains the novice trading destinations on mobile', async ({ page }) => {
     const viewport = page.viewportSize();
     if (!viewport || viewport.width > 700) {
       // Skip on desktop — bottom nav is hidden there.
@@ -88,19 +88,15 @@ test.describe('Mobile bottom navigation', () => {
     }
 
     const bottomNav = page.locator('.mobile-bottom-nav').first();
-    // 2 primary <a> items (Dashboard, Payments) + 1 "More" <button> = 3 items.
-    // (Sprint 31 remediation: the redundant Onboarding primary — which linked
-    // to /onboarding/profile, the same destination as the "Profile" item in the
-    // More sheet — was removed. Onboarding is reachable via the dashboard's
-    // onboarding-checklist card and via Profile/Risk/Broker in the More sheet.)
+    // Dashboard + AI Trader + Live Account + More.
     const items = bottomNav.locator('.mobile-bottom-nav__item');
-    await expect(items).toHaveCount(3);
+    await expect(items).toHaveCount(4);
 
-    // Labels: Dashboard, Payments, More.
     const labels = await items.allTextContents();
     const joined = labels.join(' ').toLowerCase();
     expect(joined, `Expected primary destinations, got: ${labels.join(' | ')}`).toContain('dashboard');
-    expect(joined).toContain('payments');
+    expect(joined).toContain('ai trader');
+    expect(joined).toContain('live account');
     expect(joined).toContain('more');
   });
 
@@ -135,8 +131,8 @@ test.describe('Mobile bottom navigation', () => {
       expect(box, `Bottom nav item ${i} has no bounding box`).not.toBeNull();
       if (!box) continue;
       // Touch target ≥ 44px in both dimensions. The nav items are min-height:
-      // 56px (tall enough) and flex: 1 (so width is viewport/3 ≈ 120px on a
-      // 360px viewport with 3 items). We assert height ≥ 44 strictly.
+      // 56px (tall enough) and flex: 1 (so width is viewport/4 ≈ 90px on a
+      // 360px viewport with 4 items). We assert height ≥ 44 strictly.
       expect(box.height, `Bottom nav item ${i} height=${box.height} < 44`).toBeGreaterThanOrEqual(44);
       expect(box.width, `Bottom nav item ${i} width=${box.width} < 44`).toBeGreaterThanOrEqual(44);
     }
@@ -181,18 +177,18 @@ test.describe('Mobile bottom navigation', () => {
     const sheet = page.locator('#mobile-more-sheet');
     await expect(sheet).toBeVisible();
 
-    // The sheet should list the onboarding sub-routes (Profile, Risk, Broker)
-    // + a Log out button = 4 items.
+    // Only setup/account destinations belong in More.
     const items = sheet.locator('.mobile-sheet__item');
-    const count = await items.count();
-    expect(count, 'Expected 3 secondary destinations + logout').toBeGreaterThanOrEqual(4);
+    await expect(items).toHaveCount(4);
 
     const labels = (await items.allTextContents()).map((s) => s.trim().toLowerCase());
     const joined = labels.join(' | ');
-    expect(joined, `Expected secondary destinations, got: ${joined}`).toContain('profile');
-    expect(joined).toContain('risk');
-    expect(joined).toContain('broker');
+    expect(joined, `Expected secondary destinations, got: ${joined}`).toContain('broker accounts');
+    expect(joined).toContain('security');
+    expect(joined).toContain('fees & payments');
     expect(joined).toContain('log out');
+    expect(joined).not.toContain('risk limits');
+    expect(joined).not.toContain('strategy lab');
   });
 
   test('More sheet closes on Escape and restores focus to the trigger', async ({ page, browserName }) => {
