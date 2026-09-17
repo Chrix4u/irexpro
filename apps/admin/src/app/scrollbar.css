@@ -1,0 +1,37 @@
+/* Global admin scrollbar treatment.
+ * Mirrors the trader/web portal's premium scrollbar so document-level,
+ * auth, mobile, modal, table, and nested overflow containers never fall
+ * back to the browser's default chrome.
+ */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: var(--radius-full);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+
+/* Keep keyboard/mouse interaction smooth without changing scroll behaviour. */
+html {
+  scrollbar-gutter: stable;
+}
