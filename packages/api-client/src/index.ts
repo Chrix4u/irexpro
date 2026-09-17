@@ -214,6 +214,8 @@ export interface ApiClient {
   connectBroker(connectionId: string): Promise<BrokerConnectionView>;
   /** POST /broker/connections/:id/disconnect → disconnect. */
   disconnectBroker(connectionId: string): Promise<void>;
+  /** POST /broker/connections/:id/enable-live-trading — explicit user authorization. */
+  enableLiveTrading(connectionId: string): Promise<void>;
 
   // ── Explicit AI capital allocation ────────────────────────────────────────
   /** GET /execution/allocation?brokerConnectionId=... */
@@ -568,6 +570,11 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
 
     disconnectBroker: (connectionId) =>
       request<void>(`/broker/connections/${connectionId}/disconnect`, {
+        method: 'POST',
+      }),
+
+    enableLiveTrading: (connectionId) =>
+      request<void>(`/broker/connections/${encodeURIComponent(connectionId)}/enable-live-trading`, {
         method: 'POST',
       }),
 
