@@ -52,7 +52,10 @@ describe('ExecutionController frontend-safe responses', () => {
         }),
       ]),
     };
-    controller = new ExecutionController(readService as unknown as ExecutionReadService);
+    controller = new ExecutionController(
+      readService as unknown as ExecutionReadService,
+      { getUserCapitalBudget: jest.fn(), setUserCapitalBudget: jest.fn() } as never,
+    );
   });
 
   it('passes only the authenticated user UUID into open-position reads', async () => {
