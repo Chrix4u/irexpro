@@ -49,11 +49,10 @@ export class OnboardingService {
         brokerConnected: false,
         brokerConnectionStatus: 'NONE' as const,
         canStartTrading: false,
-        missingSteps: ['PROFILE', 'ELIGIBILITY', 'RISK_PROFILE', 'BROKER_CONNECTION'],
+        missingSteps: ['PROFILE', 'ELIGIBILITY', 'BROKER_CONNECTION'],
         blockedReasons: [
           'PROFILE_INCOMPLETE',
           'KYC_REQUIRED',
-          'RISK_PROFILE_MISSING',
           'BROKER_DISCONNECTED',
         ] as OnboardingBlockedReason[],
         nextStep: 'PROFILE',
@@ -68,7 +67,11 @@ export class OnboardingService {
     const eligibilityCompleted = eligibility.canProceed;
 
     const riskProfile = await this.riskProfileRepo.findOne({ where: { userId } });
-    const riskProfileCompleted = this.isRiskProfileComplete(riskProfile);
+    // Risk limits are platform-managed defaults, not a user onboarding step.
+    // Keep this compatibility field true once the eligibility disclosure gate
+    // is complete; execution-time RiskService still creates/enforces the
+    // conservative profile and kill switch server-side.
+    const riskProfileCompleted = eligibilityCompleted;
 
     const activeConnection = await this.findActiveBrokerConnection(userId);
     const brokerConnected = !!activeConnection;
@@ -82,7 +85,6 @@ export class OnboardingService {
     const missingSteps: OnboardingStep[] = [];
     if (!profileCompleted) missingSteps.push('PROFILE');
     if (!eligibilityCompleted) missingSteps.push('ELIGIBILITY');
-    if (!riskProfileCompleted) missingSteps.push('RISK_PROFILE');
     if (!brokerConnected) missingSteps.push('BROKER_CONNECTION');
 
     // ── Round 6 live-execution completion (§26 / §1d): STABLE
@@ -124,11 +126,6 @@ export class OnboardingService {
         blockedReasons.push('DISCLOSURE_OUTSTANDING');
       }
     }
-    if (!riskProfile) {
-      blockedReasons.push('RISK_PROFILE_MISSING');
-    } else if (!riskProfileCompleted) {
-      blockedReasons.push('RISK_ACK_REQUIRED');
-    }
     if (!brokerConnected) {
       blockedReasons.push('BROKER_DISCONNECTED');
     } else if (
@@ -145,7 +142,6 @@ export class OnboardingService {
       userActive &&
       profileCompleted &&
       eligibilityCompleted &&
-      riskProfileCompleted &&
       brokerConnected &&
       !killSwitchActive;
 
@@ -201,14 +197,8 @@ export class OnboardingService {
       profile.dateOfBirth &&
       user.countryCode &&
       user.timezone &&
-      user.preferredCurrency &&
-      profile.tradingExperienceLevel
+      user.preferredCurrency
     );
-  }
-
-  private isRiskProfileComplete(riskProfile: RiskProfile | null): boolean {
-    if (!riskProfile) return false;
-    return riskProfile.riskAcknowledgementAccepted === true;
   }
 
   /**
@@ -259,7 +249,7 @@ export class OnboardingService {
   }
 }
 
-export type OnboardingStep = 'PROFILE' | 'ELIGIBILITY' | 'RISK_PROFILE' | 'BROKER_CONNECTION';
+export type OnboardingStep = 'PROFILE' | 'ELIGIBILITY' | 'BROKER_CONNECTION';
 export type OnboardingNextStep = OnboardingStep | 'READY';
 
 /**
@@ -282,8 +272,6 @@ export type OnboardingBlockedReason =
   | 'KYC_REQUIRED'
   | 'KYC_REJECTED'
   | 'DISCLOSURE_OUTSTANDING'
-  | 'RISK_PROFILE_MISSING'
-  | 'RISK_ACK_REQUIRED'
   | 'KILL_SWITCH_ACTIVE'
   | 'BROKER_DISCONNECTED'
   | 'CREDENTIALS_INVALID';
