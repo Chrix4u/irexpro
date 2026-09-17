@@ -204,7 +204,20 @@ describe('executionBlockedReasons', () => {
     ).toEqual([]);
   });
 
-  it('derives each reason from server-reported state only', () => {
+  it('does not reinterpret AUTHORIZED as blocked when the server executable gate is true', () => {
+    expect(
+      executionBlockedReasons({
+        session: { ...SESSION, status: 'ACTIVE', executionMode: 'PAPER_ONLY' },
+        killSwitchActive: false,
+        canTrade: true,
+        brokerConnected: true,
+        sessionAuthorizationStatus: 'AUTHORIZED',
+        sessionConnectionExecutable: true,
+      }),
+    ).toEqual([]);
+  });
+
+  it('derives each authoritative blocking reason from server-reported state only', () => {
     const reasons = executionBlockedReasons({
       session: { ...SESSION, status: 'SUSPENDED_RISK_LIMIT' },
       killSwitchActive: true,
@@ -217,8 +230,8 @@ describe('executionBlockedReasons', () => {
     expect(reasons.some((reason) => reason.includes('Kill switch'))).toBe(true);
     expect(reasons.some((reason) => reason.includes('Risk gate'))).toBe(true);
     expect(reasons.some((reason) => reason.includes('SUSPENDED by a risk limit'))).toBe(true);
-    expect(reasons.some((reason) => reason.includes('Broker authorization is SUSPENDED'))).toBe(true);
     expect(reasons.some((reason) => reason.includes('not executable'))).toBe(true);
+    expect(reasons.some((reason) => reason.includes('Broker authorization'))).toBe(false);
   });
 
   it('reports the missing session first when no session is active', () => {

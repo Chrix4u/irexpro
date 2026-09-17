@@ -18,6 +18,8 @@ describe('MarketIntelligenceService', () => {
 
   const brokerService = {
     findActiveConnectionForUser: jest.fn(),
+    getCurrentPriceForConnection: jest.fn(),
+    getOhlcvForConnection: jest.fn(),
   };
   const marketDataReader = {
     getCurrentPrice: jest.fn(),
@@ -139,6 +141,7 @@ describe('MarketIntelligenceService', () => {
     ).rejects.toBeInstanceOf(ServiceUnavailableException);
     expect(encryptionService.decrypt).not.toHaveBeenCalled();
     expect(marketDataReader.getCurrentPrice).not.toHaveBeenCalled();
+    expect(brokerService.getCurrentPriceForConnection).not.toHaveBeenCalled();
   });
 
   it('A3: fails closed BEFORE decrypt when the credential lifecycle state is unusable', async () => {
@@ -157,10 +160,96 @@ describe('MarketIntelligenceService', () => {
     expect(marketDataReader.getOHLCV).not.toHaveBeenCalled();
   });
 
-  it('rejects paper/synthetic market adapters before decrypting credentials', async () => {
+  it('serves exact paper-broker DEMO evidence through the connection-scoped adapter seams', async () => {
+    jest.spyOn(Date, 'now').mockReturnValue(new Date('2026-09-17T15:00:30.000Z').getTime());
     brokerService.findActiveConnectionForUser.mockResolvedValue({
       ...connection,
       brokerId: 'paper-broker',
+      accountType: 'DEMO',
+    });
+    brokerService.getCurrentPriceForConnection.mockResolvedValue({
+      instrument: 'EURUSD',
+      bid: '1.10020',
+      ask: '1.10030',
+      spread: '0.00010',
+      timestamp: new Date('2026-09-17T15:00:15.000Z'),
+    });
+    brokerService.getOhlcvForConnection.mockResolvedValue([
+      {
+        timestamp: new Date('2026-09-17T14:00:00.000Z'),
+        open: '1.09980',
+        high: '1.10040',
+        low: '1.09960',
+        close: '1.10020',
+        volume: '1000',
+      },
+      {
+        timestamp: new Date('2026-09-17T15:00:00.000Z'),
+        open: '1.10020',
+        high: '1.10050',
+        low: '1.10000',
+        close: '1.10030',
+        volume: '1000',
+      },
+    ]);
+
+    const result = await createService().getSnapshot(userId, {
+      instrument: 'eurusd',
+      timeframe: 'H1',
+      limit: 60,
+    });
+
+    expect(brokerService.getCurrentPriceForConnection).toHaveBeenCalledWith(
+      userId,
+      connection.id,
+      'EURUSD',
+    );
+    expect(brokerService.getOhlcvForConnection).toHaveBeenCalledWith(
+      userId,
+      connection.id,
+      'EURUSD',
+      'H1',
+      60,
+    );
+    expect(encryptionService.decrypt).not.toHaveBeenCalled();
+    expect(marketDataReader.getCurrentPrice).not.toHaveBeenCalled();
+    expect(result).toEqual(
+      expect.objectContaining({
+        instrument: 'EURUSD',
+        timeframe: 'H1',
+        source: 'BROKER',
+        status: 'FRESH',
+        quote: expect.objectContaining({
+          bid: '1.10020',
+          ask: '1.10030',
+          spread: '0.00010',
+          freshness: 'FRESH',
+        }),
+      }),
+    );
+  });
+
+  it('does not widen paper market intelligence to a LIVE paper-broker row', async () => {
+    brokerService.findActiveConnectionForUser.mockResolvedValue({
+      ...connection,
+      brokerId: 'paper-broker',
+      accountType: 'LIVE',
+    });
+
+    await expect(
+      createService().getSnapshot(userId, { instrument: 'EURUSD', timeframe: 'H1', limit: 60 }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'MARKET_DATA_UNAVAILABLE' }),
+    });
+    expect(brokerService.getCurrentPriceForConnection).not.toHaveBeenCalled();
+    expect(brokerService.getOhlcvForConnection).not.toHaveBeenCalled();
+    expect(encryptionService.decrypt).not.toHaveBeenCalled();
+  });
+
+  it('keeps unsupported real brokers fail-closed before decrypting credentials', async () => {
+    brokerService.findActiveConnectionForUser.mockResolvedValue({
+      ...connection,
+      brokerId: 'oanda',
     });
 
     await expect(
@@ -170,6 +259,30 @@ describe('MarketIntelligenceService', () => {
     });
     expect(encryptionService.decrypt).not.toHaveBeenCalled();
     expect(marketDataReader.getOHLCV).not.toHaveBeenCalled();
+    expect(brokerService.getOhlcvForConnection).not.toHaveBeenCalled();
+  });
+
+  it('sanitizes paper simulator failures and does not fall through to provider credentials', async () => {
+    brokerService.findActiveConnectionForUser.mockResolvedValue({
+      ...connection,
+      brokerId: 'paper-broker',
+      accountType: 'DEMO',
+    });
+    brokerService.getCurrentPriceForConnection.mockResolvedValue(null);
+
+    await expect(
+      createService().getSnapshot(userId, { instrument: 'EURUSD', timeframe: 'H1', limit: 60 }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'MARKET_DATA_UNAVAILABLE' }),
+    });
+
+    expect(brokerService.getOhlcvForConnection).not.toHaveBeenCalled();
+    expect(encryptionService.decrypt).not.toHaveBeenCalled();
+    expect(auditService.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({ reason: 'simulator-unavailable' }),
+      }),
+    );
   });
 
   it('sanitizes provider failures and clears decrypted credentials', async () => {

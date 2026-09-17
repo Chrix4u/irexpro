@@ -28,8 +28,9 @@ import { api } from '@/lib/api';
  *   `{ status: 'CONSUMED' }` result; every rejection is the server's typed
  *   failure (expired / consumed / revoked / mismatched-generation).
  * - "Execution blocked" reasons are derived from server-reported state only
- *   (session status, risk gate, kill switch, connection authorization and
- *   executable gate) — never guessed client-side.
+ *   (session status, risk gate, kill switch, broker connectivity, and the
+ *   server-computed executable gate) — never re-derived from authorization
+ *   taxonomy in the browser.
  */
 
 // ── Session authority actions ───────────────────────────────────────────────
@@ -220,7 +221,7 @@ export interface ExecutionAuthorityFacts {
   killSwitchActive: boolean;
   canTrade: boolean;
   brokerConnected: boolean;
-  /** Authorization status of the session's broker connection (null if unknown). */
+  /** Authorization status is display taxonomy only; it is not reinterpreted as execution authority. */
   sessionAuthorizationStatus: BrokerConnectionView['authorizationStatus'] | null;
   /** Server-computed fail-closed executable gate for that connection (null if unknown). */
   sessionConnectionExecutable: boolean | null;
@@ -228,8 +229,11 @@ export interface ExecutionAuthorityFacts {
 
 /**
  * Derive the "execution blocked" reasons from server-reported state.
- * Empty array ⇒ nothing server-reported is blocking right now. The reasons
- * are rendered verbatim — the frontend adds no speculation of its own.
+ * Empty array ⇒ nothing server-reported is blocking right now. The browser
+ * deliberately does NOT infer executability from authorizationStatus because
+ * authorization taxonomy is broker-specific (for example, the built-in
+ * paper simulator is executable while AUTHORIZED). The server executable gate
+ * is the sole connection-level authority here.
  */
 export function executionBlockedReasons(facts: ExecutionAuthorityFacts): string[] {
   const reasons: string[] = [];
@@ -259,11 +263,6 @@ export function executionBlockedReasons(facts: ExecutionAuthorityFacts): string[
     reasons.push('The trading session is SUSPENDED by the broker.');
   }
 
-  if (facts.sessionAuthorizationStatus != null && facts.sessionAuthorizationStatus !== 'ACTIVE') {
-    reasons.push(
-      `Broker authorization is ${facts.sessionAuthorizationStatus} — only ACTIVE may execute.`,
-    );
-  }
   if (facts.sessionConnectionExecutable === false) {
     reasons.push('The server reports this broker connection as not executable.');
   }
