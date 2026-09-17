@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatEnumLabel } from '@irexpro/types';
 import type { BrokerRegistryEntry } from '@irexpro/types';
 import type { AiCopilotView } from '@irexpro/types/ai-copilot';
@@ -13,6 +13,8 @@ import type { RiskIntelligenceView } from '@irexpro/types/risk-intelligence';
 import type { StrategyLabView } from '@irexpro/types/strategy-lab';
 import { Alert, Badge, Button, Card, DashboardShell, LoadingSpinner } from '@/components/ui';
 import { useAuth } from '@/context/auth-context';
+import AiAutoControl from '@/components/ai-auto-control';
+import { useNotification } from '@/hooks/useNotification';
 import { loadAiCopilot } from '@/lib/ai-copilot';
 import { loadAiDecisionExplorer } from '@/lib/ai-decision-explorer';
 import { api } from '@/lib/api';
@@ -368,6 +370,8 @@ function ConfirmationInbox({
 
 export default function TradingWorkspacePage() {
   const { user, logout, restoring } = useAuth();
+  const notify = useNotification();
+  const executionToastBaselineRef = useRef<Map<string, string> | null>(null);
   const [terminal, setTerminal] = useState<TraderTerminalStatus | null>(null);
   const [execution, setExecution] = useState<TraderExecutionSnapshot | null>(null);
   const [market, setMarket] = useState<MarketIntelligenceView | null>(null);
@@ -535,14 +539,37 @@ export default function TradingWorkspacePage() {
     setLoadingExecution(true);
     setExecutionError(null);
     try {
-      setExecution(await loadTraderExecutionSnapshot());
+      const next = await loadTraderExecutionSnapshot();
+      const nextStates = new Map(next.recentExecutions.map((trade) => [trade.id, trade.status]));
+      const previous = executionToastBaselineRef.current;
+
+      if (previous) {
+        for (const trade of next.recentExecutions) {
+          const previousStatus = previous.get(trade.id);
+          if (previousStatus === trade.status) continue;
+
+          if (trade.status === 'OPEN') {
+            notify.success(`AI opened ${trade.direction} ${trade.instrument} · ${trade.lotSize} lot.`);
+          } else if (trade.status === 'CLOSED') {
+            const exit = trade.exitPrice ? ` at ${trade.exitPrice}` : '';
+            notify.success(`${trade.instrument} position closed${exit}.`);
+          } else if (trade.status === 'REJECTED' || trade.status === 'CANCELLED') {
+            notify.warning(`${trade.instrument} order ${trade.status.toLowerCase()} by the execution pipeline.`);
+          } else if (trade.status === 'RECONCILIATION_PENDING') {
+            notify.warning(`${trade.instrument} is awaiting broker reconciliation.`);
+          }
+        }
+      }
+
+      executionToastBaselineRef.current = nextStates;
+      setExecution(next);
     } catch {
       setExecution(null);
       setExecutionError('Unable to load the authoritative execution snapshot. Stale position data has been cleared.');
     } finally {
       setLoadingExecution(false);
     }
-  }, []);
+  }, [notify]);
 
   const refreshMarket = useCallback(async () => {
     setLoadingMarket(true);
@@ -640,6 +667,15 @@ export default function TradingWorkspacePage() {
     if (!user) return;
     void refreshWorkspace();
   }, [user, refreshWorkspace]);
+
+  useEffect(() => {
+    if (!user || terminal?.session?.status !== 'ACTIVE') return;
+    const timer = window.setInterval(() => {
+      void refreshExecution();
+    }, 8000);
+    return () => window.clearInterval(timer);
+  }, [user, terminal?.session?.status, refreshExecution]);
+
 
   const latestDecision = decisions?.decisions[0] ?? null;
   const strategyScenario = strategy?.scenarios[0] ?? null;
