@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BullModule } from '@nestjs/bullmq';
 import { BrokerService } from './broker.service';
+import { ExecutionAwareBrokerService } from './execution-aware-broker.service';
 import { BrokerController } from './broker.controller';
 import { BrokerOAuthController } from './broker-oauth.controller';
 import { BrokerOAuthCallbackController } from './broker-oauth-callback.controller';
@@ -82,7 +83,7 @@ import { BrokerAccountSnapshotService } from './services/broker-account-snapshot
     PortfolioController,
   ],
   providers: [
-    BrokerService,
+    { provide: BrokerService, useClass: ExecutionAwareBrokerService },
     // Round 6 (#297/#312): the durable monotonic account-snapshot authority
     // (accept generation-fenced writes, freshness gate for NEW exposure,
     // legacy current-view projection guarded by generation).
