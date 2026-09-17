@@ -7,6 +7,16 @@
  *
  * Mobile keeps the existing document-flow + bottom-navigation behaviour.
  */
+
+/* Give programmatic card reveals a few CSS pixels of breathing room. Chromium
+ * can otherwise settle scrollIntoView on a fractional device-pixel boundary
+ * just over the viewport edge (about 1.1–1.4px in the responsive matrix), even
+ * though the card is visually reachable. This keeps strict viewport assertions
+ * intact without changing card dimensions or weakening test tolerances. */
+.dashboard-content.terminal-content .card {
+  scroll-margin-block: 3px;
+}
+
 @media (min-width: 701px) {
   .dashboard-shell.terminal-shell {
     height: 100vh;
