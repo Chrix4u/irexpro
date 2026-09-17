@@ -98,8 +98,11 @@ export default function OnboardingBrokerPage() {
           setSelectedBrokerId(brokers[0].brokerId);
         }
       } catch (err) {
-        // Silently notify — don't block the page (user can still attempt actions).
-        if (!cancelled) notify.error(mapApiError(err).message);
+        if (!cancelled) {
+          const message = mapApiError(err).message;
+          setError(message);
+          notify.error(message);
+        }
       } finally {
         if (!cancelled) setFetching(false);
       }
@@ -132,12 +135,30 @@ export default function OnboardingBrokerPage() {
 
   const activeConnection = connections.find((c) => c.status === 'CONNECTED');
 
+  function revealConnection(connectionId: string) {
+    // React must first paint the refreshed connection list. Two animation frames
+    // make the hand-off deterministic without a timeout or stale DOM guess.
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        const connectButton = document.getElementById(`broker-connect-${connectionId}`);
+        const connectionCard = document.getElementById(`broker-connection-${connectionId}`);
+        const target = connectButton ?? connectionCard;
+        target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        if (connectButton instanceof HTMLElement) {
+          connectButton.focus({ preventScroll: true });
+        }
+      });
+    });
+  }
+
   async function handleTest(e: FormEvent) {
     e.preventDefault();
     setError(null);
     setTestResult(null);
     if (!selectedBrokerId || !accountId) {
-      setError('Please select a broker and enter your account ID.');
+      const message = 'Please select a broker and enter your account ID.';
+      setError(message);
+      notify.warning(message);
       return;
     }
     setAction('testing');
@@ -152,12 +173,19 @@ export default function OnboardingBrokerPage() {
       });
       setTestResult(result);
       if (result.success) {
+        setError(null);
         notify.success('Broker connection test passed.');
       } else {
-        notify.error('The broker connection test failed. Please check your credentials.');
+        const message = result.errorMessage
+          ? `Broker connection test failed: ${result.errorMessage}`
+          : 'The broker connection test failed. Please check your credentials.';
+        setError(message);
+        notify.error(message);
       }
     } catch (err) {
-      notify.error('The broker connection test failed. Please check your credentials.');
+      const message = mapApiError(err).message;
+      setError(message);
+      notify.error(message);
     } finally {
       setAction(null);
     }
@@ -167,12 +195,14 @@ export default function OnboardingBrokerPage() {
     e.preventDefault();
     setError(null);
     if (!selectedBrokerId || !accountId) {
-      setError('Please select a broker and enter your account ID.');
+      const message = 'Please select a broker and enter your account ID.';
+      setError(message);
+      notify.warning(message);
       return;
     }
     setAction('saving');
     try {
-      await api.createBrokerConnection({
+      const created = await api.createBrokerConnection({
         brokerId: selectedBrokerId,
         accountType: 'DEMO',
         accountId,
@@ -180,15 +210,21 @@ export default function OnboardingBrokerPage() {
         apiSecret: apiSecret || undefined,
         displayName: displayName || undefined,
       });
-      notify.success('Broker connection created.');
-      // Clear credential fields — never show them again after save
+      // Clear credential fields — never show them again after save.
       setApiKey('');
       setApiSecret('');
-      // Refresh connections list
+      setTestResult(null);
+      // Refresh first so the exact saved connection and Connect button exist in
+      // the DOM before moving the user to the next step.
       const conns = await api.listBrokerConnections();
       setConnections(conns);
+      setError(null);
+      notify.success(`Broker connection saved. Next: connect ${created.brokerName}.`);
+      revealConnection(created.id);
     } catch (err) {
-      notify.error(mapApiError(err).message);
+      const message = mapApiError(err).message;
+      setError(message);
+      notify.error(message);
     } finally {
       setAction(null);
     }
@@ -202,9 +238,12 @@ export default function OnboardingBrokerPage() {
       await api.connectBroker(connectionId);
       const conns = await api.listBrokerConnections();
       setConnections(conns);
+      setError(null);
       notify.success('Broker connected.');
     } catch (err) {
-      notify.error(mapApiError(err).message);
+      const message = mapApiError(err).message;
+      setError(message);
+      notify.error(message);
     } finally {
       setAction(null);
       setPendingConnectionId(null);
@@ -249,9 +288,12 @@ export default function OnboardingBrokerPage() {
       await api.disconnectBroker(connectionId);
       const conns = await api.listBrokerConnections();
       setConnections(conns);
+      setError(null);
       notify.success('Broker disconnected.');
     } catch (err) {
-      notify.error(mapApiError(err).message);
+      const message = mapApiError(err).message;
+      setError(message);
+      notify.error(message);
     } finally {
       setAction(null);
       setPendingConnectionId(null);
@@ -266,9 +308,12 @@ export default function OnboardingBrokerPage() {
       await api.request<void>(`/broker/connections/${connectionId}`, { method: 'DELETE' });
       const conns = await api.listBrokerConnections();
       setConnections(conns);
+      setError(null);
       notify.success('Broker connection deleted.');
     } catch (err) {
-      notify.error(mapApiError(err).message);
+      const message = mapApiError(err).message;
+      setError(message);
+      notify.error(message);
     } finally {
       setAction(null);
       setPendingConnectionId(null);
@@ -292,8 +337,9 @@ export default function OnboardingBrokerPage() {
       sessionStorage.setItem(IREXPRO_BROKER_OAUTH_FLOW_KEY, start.flowId);
       window.location.assign(start.authorizationUrl);
     } catch (err) {
-      setError(mapApiError(err).message);
-      notify.error(mapApiError(err).message);
+      const message = mapApiError(err).message;
+      setError(message);
+      notify.error(message);
       setAction(null);
     }
   }
@@ -355,6 +401,8 @@ export default function OnboardingBrokerPage() {
         </Alert>
       )}
 
+      {error && <Alert variant="error">{error}</Alert>}
+
       {/* ── Existing connections ──────────────────────────────────────────── */}
       <Card>
         <h2 className="card__title">Existing connections</h2>
@@ -372,6 +420,7 @@ export default function OnboardingBrokerPage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
             {connections.map((conn) => (
               <div
+                id={`broker-connection-${conn.id}`}
                 key={conn.id}
                 style={{
                   padding: 'var(--space-4)',
@@ -444,6 +493,7 @@ export default function OnboardingBrokerPage() {
                     </Button>
                   ) : (
                     <Button
+                      id={`broker-connect-${conn.id}`}
                       variant="primary"
                       size="sm"
                       onClick={() => handleConnect(conn.id)}
@@ -475,8 +525,6 @@ export default function OnboardingBrokerPage() {
         <p className="card__subtitle">
           Paper Broker is recommended for your first connection — it is simulated and safest.
         </p>
-
-        {error && <Alert variant="error">{error}</Alert>}
 
         <form onSubmit={handleCreate} className="onboarding-form">
           <div className="input-group">

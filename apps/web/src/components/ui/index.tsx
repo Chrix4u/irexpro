@@ -5,6 +5,7 @@
 import Link from 'next/link';
 import { ButtonHTMLAttributes, ComponentType, ReactNode } from 'react';
 import MobileBottomNav from '@/components/mobile-bottom-nav';
+import { AutoRevealAlert } from '@/components/ui/AutoRevealAlert';
 import {
   AiIcon,
   DashboardIcon,
@@ -74,7 +75,7 @@ export function Card({ title, subtitle, children, className = '' }: CardProps) {
 type AlertVariant = 'error' | 'success' | 'warning' | 'info';
 
 export function Alert({ variant = 'info', children }: { variant?: AlertVariant; children: ReactNode }) {
-  return <div className={`alert alert--${variant}`} role="alert">{children}</div>;
+  return <AutoRevealAlert variant={variant}>{children}</AutoRevealAlert>;
 }
 
 // ── Badge ────────────────────────────────────────────────────────────────────
