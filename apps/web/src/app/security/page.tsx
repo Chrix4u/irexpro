@@ -95,8 +95,6 @@ export default function SecurityPage() {
     setMfaMessage(null);
     try {
       await api.enableMfa(mfaCode);
-      // The backend intentionally increments sessionVersion when MFA changes.
-      // Clear any now-stale local session and require a fresh MFA-capable login.
       setMfaSetup(null);
       setMfaCode('');
       await logout();
@@ -178,187 +176,238 @@ export default function SecurityPage() {
 
   return (
     <DashboardShell user={user} onLogout={logout} activeRoute="/security" title="Account Security">
-      <main style={{ display: 'grid', gap: '1rem', maxWidth: 900 }}>
-        <section aria-labelledby="security-heading">
-          <p className="muted" style={{ marginBottom: '0.35rem' }}>Identity & access</p>
-          <h1 id="security-heading">Account Security</h1>
-          <p className="muted" style={{ marginTop: '0.5rem' }}>
-            Manage sign-in protection and verify the contact methods attached to your account.
-          </p>
-        </section>
-
-        <Card title="Multi-factor authentication" subtitle="Protect sign-in with a time-based authenticator code.">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
-            <strong>Status</strong>
+      <main className="workspace-page" aria-labelledby="security-heading">
+        <section className="workspace-hero">
+          <div className="workspace-hero__copy">
+            <p className="workspace-hero__eyebrow">Identity & access</p>
+            <h1 id="security-heading" className="workspace-hero__title">Account Security</h1>
+            <p className="workspace-hero__description">
+              Manage sign-in protection and verify the contact methods attached to your account. Security-sensitive changes revoke stale sessions and are confirmed by the server.
+            </p>
+          </div>
+          <div className="workspace-hero__actions">
             <Badge variant={user.mfaEnabled ? 'success' : 'warning'}>
-              {user.mfaEnabled ? 'Enabled' : 'Not enabled'}
+              MFA {user.mfaEnabled ? 'enabled' : 'recommended'}
             </Badge>
           </div>
-          {mfaError && <Alert variant="error">{mfaError}</Alert>}
-          {mfaMessage && <Alert variant="info">{mfaMessage}</Alert>}
+        </section>
 
-          {!user.mfaEnabled && !mfaSetup && (
-            <form onSubmit={beginMfaSetup}>
-              <Alert variant="info">
-                Confirm your current password before generating authenticator setup material.
-              </Alert>
-              <Input
-                label="Current password"
-                type="password"
-                value={mfaPassword}
-                onChange={(event) => setMfaPassword(event.target.value)}
-                autoComplete="current-password"
-                required
-                disabled={mfaBusy}
-              />
-              <Button type="submit" loading={mfaBusy} disabled={!mfaPassword}>
-                Start authenticator setup
-              </Button>
-            </form>
-          )}
+        <section className="workspace-grid-3" aria-label="Security summary">
+          <Card>
+            <div className="workspace-metric">
+              <span className="workspace-metric__label">Authenticator protection</span>
+              <strong className="workspace-metric__value">{user.mfaEnabled ? 'Enabled' : 'Off'}</strong>
+              <span className="workspace-metric__hint">Time-based authentication protects password sign-in.</span>
+            </div>
+          </Card>
+          <Card>
+            <div className="workspace-metric">
+              <span className="workspace-metric__label">Email verification</span>
+              <strong className="workspace-metric__value">{user.emailVerified ? 'Verified' : 'Pending'}</strong>
+              <span className="workspace-metric__hint">{user.email ?? 'No email address registered.'}</span>
+            </div>
+          </Card>
+          <Card>
+            <div className="workspace-metric">
+              <span className="workspace-metric__label">Phone verification</span>
+              <strong className="workspace-metric__value">{user.phoneVerified ? 'Verified' : 'Pending'}</strong>
+              <span className="workspace-metric__hint">{user.phone ?? 'No phone number registered.'}</span>
+            </div>
+          </Card>
+        </section>
 
-          {!user.mfaEnabled && mfaSetup && (
-            <form onSubmit={enableMfa}>
-              <Alert variant="warning">
-                Keep this setup material private. It is shown only for this enrollment attempt and is not stored by the browser UI.
-              </Alert>
-              <div style={{ margin: '1rem 0' }}>
-                <p className="text-sm muted" style={{ marginBottom: '0.35rem' }}>Manual setup key</p>
-                <code style={{ overflowWrap: 'anywhere' }}>{mfaSetup.secret}</code>
+        <section className="workspace-grid-2 workspace-security-grid">
+          <Card title="Multi-factor authentication" subtitle="Protect sign-in with a time-based authenticator code." className="workspace-span-full">
+            <div className="workspace-form-section">
+              <div className="workspace-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                <strong>Status</strong>
+                <Badge variant={user.mfaEnabled ? 'success' : 'warning'}>
+                  {user.mfaEnabled ? 'Enabled' : 'Not enabled'}
+                </Badge>
               </div>
-              <p style={{ marginBottom: '1rem' }}>
-                <a href={mfaSetup.otpauthUri}>Open in authenticator app</a>
-              </p>
-              <Input
-                label="6-digit authenticator code"
-                value={mfaCode}
-                onChange={(event) => setMfaCode(numericCode(event.target.value))}
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                pattern="[0-9]{6}"
-                maxLength={6}
-                required
-                disabled={mfaBusy}
-              />
-              <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-                <Button type="submit" loading={mfaBusy} disabled={mfaCode.length !== 6}>
-                  Enable MFA
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  disabled={mfaBusy}
-                  onClick={() => {
-                    setMfaSetup(null);
-                    setMfaCode('');
-                    setMfaPassword('');
-                    setMfaMessage(null);
-                  }}
-                >
-                  Cancel setup
-                </Button>
-              </div>
-            </form>
-          )}
+              {mfaError && <Alert variant="error">{mfaError}</Alert>}
+              {mfaMessage && <Alert variant="info">{mfaMessage}</Alert>}
 
-          {user.mfaEnabled && (
-            <form onSubmit={disableMfa}>
-              <Alert variant="warning">
-                Disabling MFA requires your current password and authenticator code. All existing sessions will be revoked.
-              </Alert>
-              <Input
-                label="Current password"
-                type="password"
-                value={mfaPassword}
-                onChange={(event) => setMfaPassword(event.target.value)}
-                autoComplete="current-password"
-                required
-                disabled={mfaBusy}
-              />
-              <Input
-                label="Current 6-digit authenticator code"
-                value={mfaCode}
-                onChange={(event) => setMfaCode(numericCode(event.target.value))}
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                pattern="[0-9]{6}"
-                maxLength={6}
-                required
-                disabled={mfaBusy}
-              />
-              <Button
-                type="submit"
-                variant="danger"
-                loading={mfaBusy}
-                disabled={mfaCode.length !== 6 || !mfaPassword}
-              >
-                Disable MFA
-              </Button>
-            </form>
-          )}
-        </Card>
-
-        <Card title="Email verification" subtitle="Confirm the email address registered on your account.">
-          {!user.email ? (
-            <Alert variant="info">No email address is registered on this account.</Alert>
-          ) : user.emailVerified ? (
-            <Alert variant="success">Your email address is verified.</Alert>
-          ) : (
-            <>
-              <p className="muted" style={{ marginBottom: '1rem', overflowWrap: 'anywhere' }}>
-                Verification pending for {user.email}.
-              </p>
-              {emailError && <Alert variant="error">{emailError}</Alert>}
-              {emailMessage && <Alert variant="info">{emailMessage}</Alert>}
-              <Button onClick={requestEmailVerification} loading={emailBusy}>
-                Send verification email
-              </Button>
-            </>
-          )}
-        </Card>
-
-        <Card title="Phone verification" subtitle="Confirm the international phone number registered on your account.">
-          {!user.phone ? (
-            <Alert variant="info">No phone number is registered on this account.</Alert>
-          ) : user.phoneVerified ? (
-            <Alert variant="success">Your phone number is verified.</Alert>
-          ) : (
-            <>
-              <p className="muted" style={{ marginBottom: '1rem', overflowWrap: 'anywhere' }}>
-                Verification pending for {user.phone}.
-              </p>
-              {phoneError && <Alert variant="error">{phoneError}</Alert>}
-              {phoneMessage && <Alert variant="info">{phoneMessage}</Alert>}
-              {!phoneRequested ? (
-                <Button onClick={requestPhoneVerification} loading={phoneBusy}>
-                  Send verification code
-                </Button>
-              ) : (
-                <form onSubmit={confirmPhoneVerification}>
-                  <Input
-                    label="6-digit SMS verification code"
-                    value={phoneCode}
-                    onChange={(event) => setPhoneCode(numericCode(event.target.value))}
-                    inputMode="numeric"
-                    autoComplete="one-time-code"
-                    pattern="[0-9]{6}"
-                    maxLength={6}
-                    required
-                    disabled={phoneBusy}
-                  />
-                  <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-                    <Button type="submit" loading={phoneBusy} disabled={phoneCode.length !== 6}>
-                      Confirm phone
-                    </Button>
-                    <Button type="button" variant="secondary" onClick={requestPhoneVerification} disabled={phoneBusy}>
-                      Send a new code
+              {!user.mfaEnabled && !mfaSetup && (
+                <form onSubmit={beginMfaSetup} className="workspace-form">
+                  <Alert variant="info">
+                    Confirm your current password before generating authenticator setup material.
+                  </Alert>
+                  <div className="workspace-form-grid">
+                    <Input
+                      label="Current password"
+                      type="password"
+                      value={mfaPassword}
+                      onChange={(event) => setMfaPassword(event.target.value)}
+                      autoComplete="current-password"
+                      required
+                      disabled={mfaBusy}
+                    />
+                  </div>
+                  <div className="workspace-actions">
+                    <Button type="submit" loading={mfaBusy} disabled={!mfaPassword}>
+                      Start authenticator setup
                     </Button>
                   </div>
                 </form>
               )}
-            </>
-          )}
-        </Card>
+
+              {!user.mfaEnabled && mfaSetup && (
+                <form onSubmit={enableMfa} className="workspace-form">
+                  <Alert variant="warning">
+                    Keep this setup material private. It is shown only for this enrollment attempt and is not stored by the browser UI.
+                  </Alert>
+                  <div className="workspace-grid-2">
+                    <div className="workspace-form-section">
+                      <span className="workspace-metric__label">Manual setup key</span>
+                      <code style={{ overflowWrap: 'anywhere' }}>{mfaSetup.secret}</code>
+                      <a href={mfaSetup.otpauthUri}>Open in authenticator app</a>
+                    </div>
+                    <Input
+                      label="6-digit authenticator code"
+                      value={mfaCode}
+                      onChange={(event) => setMfaCode(numericCode(event.target.value))}
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      pattern="[0-9]{6}"
+                      maxLength={6}
+                      required
+                      disabled={mfaBusy}
+                    />
+                  </div>
+                  <div className="workspace-actions" style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                    <Button type="submit" loading={mfaBusy} disabled={mfaCode.length !== 6}>
+                      Enable MFA
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      disabled={mfaBusy}
+                      onClick={() => {
+                        setMfaSetup(null);
+                        setMfaCode('');
+                        setMfaPassword('');
+                        setMfaMessage(null);
+                      }}
+                    >
+                      Cancel setup
+                    </Button>
+                  </div>
+                </form>
+              )}
+
+              {user.mfaEnabled && (
+                <form onSubmit={disableMfa} className="workspace-form">
+                  <Alert variant="warning">
+                    Disabling MFA requires your current password and authenticator code. All existing sessions will be revoked.
+                  </Alert>
+                  <div className="workspace-form-grid">
+                    <Input
+                      label="Current password"
+                      type="password"
+                      value={mfaPassword}
+                      onChange={(event) => setMfaPassword(event.target.value)}
+                      autoComplete="current-password"
+                      required
+                      disabled={mfaBusy}
+                    />
+                    <Input
+                      label="Current 6-digit authenticator code"
+                      value={mfaCode}
+                      onChange={(event) => setMfaCode(numericCode(event.target.value))}
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      pattern="[0-9]{6}"
+                      maxLength={6}
+                      required
+                      disabled={mfaBusy}
+                    />
+                  </div>
+                  <div className="workspace-actions">
+                    <Button
+                      type="submit"
+                      variant="danger"
+                      loading={mfaBusy}
+                      disabled={mfaCode.length !== 6 || !mfaPassword}
+                    >
+                      Disable MFA
+                    </Button>
+                  </div>
+                </form>
+              )}
+            </div>
+          </Card>
+
+          <Card title="Email verification" subtitle="Confirm the email address registered on your account.">
+            <div className="workspace-form-section">
+              {!user.email ? (
+                <Alert variant="info">No email address is registered on this account.</Alert>
+              ) : user.emailVerified ? (
+                <Alert variant="success">Your email address is verified.</Alert>
+              ) : (
+                <>
+                  <p className="muted" style={{ overflowWrap: 'anywhere' }}>
+                    Verification pending for {user.email}.
+                  </p>
+                  {emailError && <Alert variant="error">{emailError}</Alert>}
+                  {emailMessage && <Alert variant="info">{emailMessage}</Alert>}
+                  <div className="workspace-actions">
+                    <Button onClick={requestEmailVerification} loading={emailBusy}>
+                      Send verification email
+                    </Button>
+                  </div>
+                </>
+              )}
+            </div>
+          </Card>
+
+          <Card title="Phone verification" subtitle="Confirm the international phone number registered on your account.">
+            <div className="workspace-form-section">
+              {!user.phone ? (
+                <Alert variant="info">No phone number is registered on this account.</Alert>
+              ) : user.phoneVerified ? (
+                <Alert variant="success">Your phone number is verified.</Alert>
+              ) : (
+                <>
+                  <p className="muted" style={{ overflowWrap: 'anywhere' }}>
+                    Verification pending for {user.phone}.
+                  </p>
+                  {phoneError && <Alert variant="error">{phoneError}</Alert>}
+                  {phoneMessage && <Alert variant="info">{phoneMessage}</Alert>}
+                  {!phoneRequested ? (
+                    <div className="workspace-actions">
+                      <Button onClick={requestPhoneVerification} loading={phoneBusy}>
+                        Send verification code
+                      </Button>
+                    </div>
+                  ) : (
+                    <form onSubmit={confirmPhoneVerification} className="workspace-form">
+                      <Input
+                        label="6-digit SMS verification code"
+                        value={phoneCode}
+                        onChange={(event) => setPhoneCode(numericCode(event.target.value))}
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
+                        pattern="[0-9]{6}"
+                        maxLength={6}
+                        required
+                        disabled={phoneBusy}
+                      />
+                      <div className="workspace-actions" style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                        <Button type="submit" loading={phoneBusy} disabled={phoneCode.length !== 6}>
+                          Confirm phone
+                        </Button>
+                        <Button type="button" variant="secondary" onClick={requestPhoneVerification} disabled={phoneBusy}>
+                          Send a new code
+                        </Button>
+                      </div>
+                    </form>
+                  )}
+                </>
+              )}
+            </div>
+          </Card>
+        </section>
       </main>
     </DashboardShell>
   );
