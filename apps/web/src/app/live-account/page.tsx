@@ -957,330 +957,166 @@ export default function LiveAccountPage() {
   return (
     <DashboardShell user={user} onLogout={logout} activeRoute="/live-account" title="Live Account">
       <main className="terminal-foundation live-account" data-testid="live-account-dashboard">
-        {/* §36 environment banner — first strip in the content area, backend-authoritative. */}
         {overview ? (
-          <EnvironmentBanner
-            environment={overview.environment}
-            generatedAt={overview.generatedAt}
-          />
+          <EnvironmentBanner environment={overview.environment} generatedAt={overview.generatedAt} />
         ) : loadingOverview ? (
           <EnvironmentBannerPlaceholder />
         ) : null}
 
         <section className="terminal-foundation__hero" aria-labelledby="live-account-title">
           <div>
-            <p className="terminal-foundation__eyebrow">Live account</p>
-            <h1 id="live-account-title" className="terminal-foundation__title">
-              Live Account
-            </h1>
+            <p className="terminal-foundation__eyebrow">Broker account &amp; AI automation</p>
+            <h1 id="live-account-title" className="terminal-foundation__title">Live Account</h1>
             <p className="terminal-foundation__description">
-              Server-authoritative broker account state: connection gates, synchronized financials,
-              automation, execution health, reconciliation, alerts, and audit activity. Nothing on
-              this page is derived in the browser.
+              Your broker balance, AI allocation, automation status, positions and orders in one workspace. Advanced provider diagnostics are available below when needed.
             </p>
           </div>
-          <Button
-            type="button"
-            variant="secondary"
-            loading={workspaceLoading}
-            disabled={workspaceLoading}
-            onClick={() => void refreshAll()}
-          >
-            {workspaceLoading ? 'Refreshing…' : 'Refresh live account'}
+          <Button type="button" variant="secondary" loading={workspaceLoading} disabled={workspaceLoading} onClick={() => void refreshAll()}>
+            {workspaceLoading ? 'Refreshing…' : 'Refresh'}
           </Button>
         </section>
 
-        {overviewError && (
-          <Alert variant="error">
-            <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: 600, marginBottom: 'var(--space-1)' }}>
-                {overviewError}
-              </div>
-              <p className="text-sm muted" style={{ marginTop: 0 }}>
-                The environment banner and account panels are unavailable. No live-account values
-                are shown until the server responds with a verified payload.
-              </p>
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => void refreshAll()}
-                className="mt-4"
-              >
-                Retry loading
-              </Button>
-            </div>
-          </Alert>
-        )}
+        {overviewError && <Alert variant="error">{overviewError}</Alert>}
 
         {loadingOverview && !overview ? (
-          <Card title="Loading live account state" className="mt-4">
-            <LoadingSpinner text="Verifying connections, automation, and execution health…" />
-          </Card>
+          <Card title="Loading account"><LoadingSpinner text="Verifying broker account and automation state…" /></Card>
         ) : overview ? (
           <>
-            {/* §38 (2) — account summary per connection */}
-            <section className="live-section" aria-labelledby="live-summary-title">
-              <div className="live-section__heading">
-                <div>
-                  <p className="terminal-foundation__eyebrow">Synchronized financials</p>
-                  <h2 id="live-summary-title">Account Summary</h2>
-                  <p className="muted">
-                    Broker-reported balances per connection, rendered exactly as decimal strings.
-                    The browser never computes equity or margin values.
-                  </p>
-                </div>
-              </div>
-              {connections.length === 0 ? (
-                <Card className="cockpit-panel">
-                  <p className="muted">
-                    No broker connections yet. Connect a broker to synchronize account financials.
-                  </p>
-                  <Link href="/onboarding/broker" className="cockpit-text-link">
-                    Manage broker connections
-                  </Link>
-                </Card>
+            <section className="live-command-grid" aria-label="Account and AI controls">
+              <AiAutoControl
+                broker={primaryConnection ? {
+                  id: primaryConnection.id,
+                  brokerName: primaryConnection.brokerName,
+                  displayName: primaryConnection.displayName,
+                  accountType: primaryConnection.accountType,
+                  status: primaryConnection.connectionStatus,
+                  liveTradingEnabled: primaryConnection.liveTradingEnabled,
+                } : null}
+                session={activeSession}
+                onChanged={refreshAll}
+              />
+              {primaryConnection ? (
+                <AccountSummaryCard connection={primaryConnection} />
               ) : (
-                <div className="live-connections-grid">
-                  {connections.map((connection) => (
-                    <AccountSummaryCard key={connection.id} connection={connection} />
-                  ))}
-                </div>
-              )}
-            </section>
-
-            {/* §38 (3) — broker connection status per connection */}
-            <section className="live-section" aria-labelledby="live-connections-title">
-              <div className="live-section__heading">
-                <div>
-                  <p className="terminal-foundation__eyebrow">Connection gates</p>
-                  <h2 id="live-connections-title">Broker Connections</h2>
-                  <p className="muted">
-                    Connection, authorization, and credential state with the fail-closed execution
-                    gate — only the server can report execution as enabled.
-                  </p>
-                </div>
-              </div>
-              {connections.length === 0 ? (
-                <Card className="cockpit-panel">
-                  <p className="muted">No broker connections to report.</p>
-                </Card>
-              ) : (
-                <div className="live-connections-grid">
-                  {connections.map((connection) => (
-                    <ConnectionStatusCard
-                      key={connection.id}
-                      connection={connection}
-                      registryEntry={
-                        // Exact canonical-name match only: the connection's
-                        // brokerName is the registry entry name recorded at
-                        // connect time. Fuzzy joins could mislabel a provider
-                        // — anything not an exact match degrades fail-closed.
-                        registryEntries.find((entry) => entry.name === connection.brokerName) ??
-                        null
-                      }
-                    />
-                  ))}
-                </div>
-              )}
-            </section>
-
-            {/* §38 (4) — automation status */}
-            {automation && (
-              <section className="live-section" aria-labelledby="live-automation-title">
-                <div className="live-section__heading">
-                  <div>
-                    <p className="terminal-foundation__eyebrow">Automation control</p>
-                    <h2 id="live-automation-title">Automation Status</h2>
-                    <p className="muted">
-                      Session lifecycle and kill-switch state as governed by the server-side
-                      execution control plane.
-                    </p>
+                <Card title="Broker account" className="cockpit-panel">
+                  <div className="live-command-empty">
+                    <strong>No broker connected</strong>
+                    <p className="muted">Connect a broker account, then return here to allocate capital and switch AI Auto on.</p>
+                    <Link href="/onboarding/broker" className="btn btn--primary btn--sm">Connect broker</Link>
                   </div>
-                </div>
-                <AutomationCard automation={automation} sessionBrokerName={sessionBrokerName} />
-              </section>
-            )}
+                </Card>
+              )}
+            </section>
 
-            {/* §38 (5) — execution health tiles */}
-            <section className="live-section" aria-labelledby="live-health-title">
-              <div className="live-section__heading">
-                <div>
-                  <p className="terminal-foundation__eyebrow">Execution pipeline</p>
-                  <h2 id="live-health-title">Execution Health</h2>
-                  <p className="muted">
-                    Read-model counters from the execution engine and reconciliation runs over the
-                    last 24 hours.
-                  </p>
-                </div>
-              </div>
+            <section className="live-health-strip" aria-label="Execution summary">
               <ExecutionHealthTiles health={overview.executionHealth} />
             </section>
           </>
         ) : null}
 
-        {/* §38 (6) — open positions (independent of overview success) */}
-        <section className="live-section" aria-labelledby="live-positions-title">
-          <div className="live-section__heading">
-            <div>
-              <p className="terminal-foundation__eyebrow">Exposure</p>
-              <h2 id="live-positions-title">Open Positions ({positionsTotal})</h2>
-              <p className="muted">
-                Open trades with connection context. Reconciliation-pending rows stay flagged until
-                the provider diff resolves them.
-              </p>
-            </div>
-          </div>
-          {positionsError && (
-            <Alert variant="error">
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 600, marginBottom: 'var(--space-1)' }}>
-                  {positionsError}
-                </div>
-                <Button type="button" variant="secondary" onClick={() => void refreshPositions()}>
-                  Retry positions
-                </Button>
+        <section className="live-trading-grid" aria-label="Positions and orders">
+          <div className="live-primary-panel">
+            <div className="live-section__heading">
+              <div>
+                <p className="terminal-foundation__eyebrow">Open exposure</p>
+                <h2>Open Positions ({positionsTotal})</h2>
               </div>
-            </Alert>
-          )}
-          {loadingPositions && !positions ? (
-            <Card className="cockpit-panel">
-              <LoadingSpinner text="Loading open positions…" />
-            </Card>
-          ) : positions ? (
-            positions.length === 0 ? (
-              <Card className="cockpit-panel">
-                <p className="muted">No open positions for this account.</p>
-              </Card>
+            </div>
+            {positionsError && <Alert variant="error">{positionsError}</Alert>}
+            {loadingPositions && !positions ? (
+              <Card className="cockpit-panel"><LoadingSpinner text="Loading open positions…" /></Card>
+            ) : positions && positions.length > 0 ? (
+              <div className="live-records-grid live-records-grid--positions">
+                {positions.map((position) => <PositionRecord key={position.id} position={position} />)}
+              </div>
             ) : (
-              <div className="live-records-grid">
-                {positions.map((position) => (
-                  <PositionRecord key={position.id} position={position} />
+              <Card className="cockpit-panel live-empty-card">
+                <strong>No open positions</strong>
+                <p className="muted">{activeSession?.status === "ACTIVE" ? "AI Auto is monitoring the market. New server-approved positions will appear here." : "Allocate capital and switch AI Auto on to begin."}</p>
+              </Card>
+            )}
+          </div>
+
+          <div className="live-primary-panel">
+            <div className="live-section__heading live-section__heading--orders">
+              <div>
+                <p className="terminal-foundation__eyebrow">Execution lifecycle</p>
+                <h2>Orders</h2>
+              </div>
+              <div className="live-filter-group" role="group" aria-label="Order status filter">
+                {ORDER_FILTERS.map((filter) => (
+                  <button key={filter} type="button" aria-pressed={ordersFilter === filter} onClick={() => handleOrdersFilterChange(filter)}>
+                    {formatEnumLabel(filter)}
+                  </button>
                 ))}
               </div>
-            )
-          ) : null}
+            </div>
+            {ordersError && <Alert variant="error">{ordersError}</Alert>}
+            {loadingOrders ? (
+              <Card className="cockpit-panel"><LoadingSpinner text="Loading orders…" /></Card>
+            ) : orders.length === 0 && !ordersError ? (
+              <Card className="cockpit-panel live-empty-card"><p className="muted">{ordersEmptyCopy}</p></Card>
+            ) : (
+              <div className="live-records-grid">{orders.map((order) => <OrderRecord key={order.id} order={order} />)}</div>
+            )}
+            {!loadingOrders && ordersTotal > 0 && <p className="live-list-count">Showing {orders.length} of {ordersTotal} orders</p>}
+            {!loadingOrders && orders.length < ordersTotal && (
+              <div className="live-load-more"><Button type="button" variant="secondary" loading={loadingMoreOrders} disabled={loadingMoreOrders} onClick={handleLoadMoreOrders}>Load more orders</Button></div>
+            )}
+          </div>
         </section>
 
-        {/* §38 (7) — orders with WORKING/HISTORY/ALL filter + offset pagination */}
-        <section className="live-section" aria-labelledby="live-orders-title">
-          <div className="live-section__heading">
-            <div>
-              <p className="terminal-foundation__eyebrow">Order lifecycle</p>
-              <h2 id="live-orders-title">Orders</h2>
-              <p className="muted">
-                Normalized order rows from the order domain — working state, terminal history, or
-                the full ledger.
-              </p>
-            </div>
+        <details className="live-diagnostics">
+          <summary>
+            <span><strong>Account diagnostics</strong><small>Broker health, automation authority, reconciliation, alerts and audit trail</small></span>
+            <span aria-hidden="true">＋</span>
+          </summary>
+          <div className="live-diagnostics__body">
+            {overview && (
+              <>
+                <section className="live-diagnostics-grid" aria-label="Broker and automation diagnostics">
+                  <div>
+                    <div className="live-section__heading"><div><h2>Broker Connections</h2></div></div>
+                    <div className="live-connections-grid">
+                      {connections.length > 0 ? connections.map((connection) => (
+                        <ConnectionStatusCard
+                          key={connection.id}
+                          connection={connection}
+                          registryEntry={registryEntries.find((entry) => entry.name === connection.brokerName) ?? null}
+                        />
+                      )) : <Card className="cockpit-panel"><p className="muted">No broker connections.</p></Card>}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="live-section__heading"><div><h2>Automation Authority</h2></div></div>
+                    {automation ? <AutomationCard automation={automation} sessionBrokerName={sessionBrokerName} /> : <Card className="cockpit-panel"><p className="muted">Automation state unavailable.</p></Card>}
+                  </div>
+                </section>
+
+                <section>
+                  <div className="live-section__heading"><div><h2>Reconciliation</h2></div></div>
+                  {overview.reconciliationLoaded === false ? (
+                    <Card className="cockpit-panel"><p className="muted">Reconciliation state is unavailable.</p></Card>
+                  ) : (
+                    <div className="live-reconciliation-grid">
+                      {connections.map((connection) => <ReconciliationCard key={connection.id} connection={connection} />)}
+                    </div>
+                  )}
+                </section>
+
+                <section className="live-duo-grid" aria-label="Alerts and activity">
+                  <AlertsCard alerts={overview.alerts} />
+                  {activityTimelineCard}
+                </section>
+              </>
+            )}
+            {!overview && activityTimelineCard}
           </div>
-          <div className="live-filter-group" role="group" aria-label="Order status filter">
-            {ORDER_FILTERS.map((filter) => (
-              <button
-                key={filter}
-                type="button"
-                aria-pressed={ordersFilter === filter}
-                onClick={() => handleOrdersFilterChange(filter)}
-              >
-                {formatEnumLabel(filter)}
-              </button>
-            ))}
-          </div>
-          {ordersError && <Alert variant="error">{ordersError}</Alert>}
-          {loadingOrders ? (
-            <Card className="cockpit-panel">
-              <LoadingSpinner text="Loading orders…" />
-            </Card>
-          ) : orders.length === 0 && !ordersError ? (
-            <Card className="cockpit-panel">
-              <p className="muted">{ordersEmptyCopy}</p>
-            </Card>
-          ) : (
-            <div className="live-records-grid">
-              {orders.map((order) => (
-                <OrderRecord key={order.id} order={order} />
-              ))}
-            </div>
-          )}
-          {!loadingOrders && ordersTotal > 0 && (
-            <p className="live-list-count">
-              Showing {orders.length} of {ordersTotal} orders
-            </p>
-          )}
-          {!loadingOrders && orders.length < ordersTotal && (
-            <div className="live-load-more">
-              <Button
-                type="button"
-                variant="secondary"
-                loading={loadingMoreOrders}
-                disabled={loadingMoreOrders}
-                onClick={handleLoadMoreOrders}
-              >
-                {loadingMoreOrders ? 'Loading more…' : 'Load more orders'}
-              </Button>
-            </div>
-          )}
-        </section>
-
-        {overview && (
-          <>
-            {/* §38 (8) — reconciliation status per connection */}
-            <section className="live-section" aria-labelledby="live-reconciliation-title">
-              <div className="live-section__heading">
-                <div>
-                  <p className="terminal-foundation__eyebrow">Provider truth diff</p>
-                  <h2 id="live-reconciliation-title">Reconciliation Status</h2>
-                  <p className="muted">
-                    Internal state compared against provider truth on every run. Open
-                    discrepancies stay visible until resolved — never hidden.
-                  </p>
-                </div>
-              </div>
-              {overview.reconciliationLoaded === false ? (
-                <Card className="cockpit-panel">
-                  <p className="muted">
-                    Reconciliation status unavailable — the reconciliation state could not be
-                    loaded, so discrepancy counts are hidden rather than shown as zero.
-                  </p>
-                </Card>
-              ) : connections.length === 0 ? (
-                <Card className="cockpit-panel">
-                  <p className="muted">No broker connections to reconcile.</p>
-                </Card>
-              ) : (
-                <div className="live-reconciliation-grid">
-                  {connections.map((connection) => (
-                    <ReconciliationCard key={connection.id} connection={connection} />
-                  ))}
-                </div>
-              )}
-            </section>
-
-            {/* §38 (9) + (10) — alerts and the activity timeline side by side */}
-            <section className="live-section" aria-label="Alerts and recent activity">
-              <div className="live-duo-grid">
-                <AlertsCard alerts={overview.alerts} />
-                {activityTimelineCard}
-              </div>
-            </section>
-          </>
-        )}
-
-        {!overview && (
-          /* Activity still renders on overview failure — partial-failure design. */
-          <section className="live-section" aria-label="Recent activity">
-            {activityTimelineCard}
-          </section>
-        )}
+        </details>
 
         <aside className="terminal-foundation__policy" aria-label="Live account data integrity policy">
-          <strong>Backend-authoritative live account state</strong>
-          <p>
-            This dashboard renders server-computed read models only: environment, balances,
-            connection gates, automation, execution health, reconciliation, alerts, and audit
-            activity. The browser never derives the account environment, execution permission,
-            financial values, or reconciliation state, and no credential material is ever exposed
-            to this page.
-          </p>
+          <strong>Server-authoritative account state</strong>
+          <p>Balances, equity, allocation, automation, positions and orders come from backend read models. The browser never fabricates account values or trading results.</p>
         </aside>
       </main>
     </DashboardShell>
