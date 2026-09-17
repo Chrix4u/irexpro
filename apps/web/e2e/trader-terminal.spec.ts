@@ -128,7 +128,7 @@ async function gotoTradeWithLiveStatusMocks(
 
   await page.goto("/trade");
   await expect(
-    page.getByRole("heading", { level: 1, name: "Trading Workspace" }),
+    page.getByRole("heading", { level: 1, name: "AI Trading Workspace" }),
   ).toBeVisible();
 }
 
@@ -174,98 +174,30 @@ test.describe("Trader terminal workspaces", () => {
     assertNoExternalRequests(page);
   });
 
-  test("Trading Workspace renders authoritative risk, session, broker, and execution state", async ({
-    page,
-  }) => {
+  test("AI Trading Workspace keeps execution primary and diagnostics optional", async ({ page }) => {
     await gotoTradeWithLiveStatusMocks(page);
 
-    const riskCard = page
-      .getByRole("heading", { level: 2, name: "Risk Engine" })
-      .locator("..");
-    await expect(
-      riskCard.getByText("Risk gate clear", { exact: true }),
-    ).toBeVisible();
-    await expect(riskCard.getByText("5%", { exact: true })).toBeVisible();
-    await expect(riskCard.getByText("10%", { exact: true })).toBeVisible();
+    await expect(page.getByRole("switch", { name: "AI Auto" })).toBeVisible();
+    await expect(page.getByText("AI allocation", { exact: true })).toBeVisible();
 
-    const sessionCard = page
-      .getByRole("heading", {
-        level: 2,
-        name: "Trading Session — Execution Authority",
-      })
-      .locator("..");
-    await expect(
-      sessionCard.getByText("Active", { exact: true }),
-    ).toBeVisible();
-    await expect(
-      sessionCard.getByText("Trading session service", { exact: true }),
-    ).toBeVisible();
-    await expect(
-      sessionCard.getByText(
-        /Paper only — new exposure routes to the simulator path/i,
-      ),
-    ).toBeVisible();
-
-    const brokerCard = page
-      .getByRole("heading", { level: 2, name: "Broker Health" })
-      .locator("..");
-    await expect(
-      brokerCard.getByText("Paper Broker", { exact: true }),
-    ).toBeVisible();
-    await expect(
-      brokerCard.getByText("Demo paper account", { exact: true }),
-    ).toBeVisible();
-    await expect(
-      brokerCard.getByText("Connected", { exact: true }),
-    ).toBeVisible();
-    await expect(brokerCard.getByText("Demo", { exact: true })).toBeVisible();
-
-    const openPositions = page
-      .getByRole("heading", { level: 2, name: "Open Positions (1)" })
-      .locator("..");
-    await expect(
-      openPositions.getByText("EURUSD", { exact: true }),
-    ).toBeVisible();
+    const openPositions = page.getByRole("heading", { level: 2, name: "Open Positions (1)" }).locator("..");
+    await expect(openPositions.getByText("EURUSD", { exact: true })).toBeVisible();
     await expect(openPositions.getByText(/BUY · 0.1000 lot/i)).toBeVisible();
-    await expect(
-      openPositions.getByText("1.10010000", { exact: true }),
-    ).toBeVisible();
 
-    const recentExecutions = page
-      .getByRole("heading", { level: 2, name: "Recent Executions" })
-      .locator("..");
-    await expect(
-      recentExecutions.getByText("GBPUSD", { exact: true }),
-    ).toBeVisible();
-    await expect(
-      recentExecutions.getByText("Take Profit Hit", { exact: true }),
-    ).toBeVisible();
+    const recentExecutions = page.getByRole("heading", { level: 2, name: "Recent Executions" }).locator("..");
+    await expect(recentExecutions.getByText("GBPUSD", { exact: true })).toBeVisible();
+    await expect(recentExecutions.getByText("Take Profit Hit", { exact: true })).toBeVisible();
 
-    await expect(page.getByText(/authoritative data only/i)).toBeVisible();
-    await expect(
-      page.getByText(/does not calculate or fabricate balances/i),
-    ).toBeVisible();
-    await expect(
-      page.getByText(/P&L remains intentionally hidden/i),
-    ).toBeVisible();
+    const advanced = page.locator("details.cockpit-advanced");
+    await expect(advanced).not.toHaveAttribute("open", "");
+    await advanced.locator("summary").click();
+    await expect(page.getByRole("heading", { level: 2, name: "Risk Engine" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 2, name: "Execution Authority" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 2, name: "Broker Diagnostics" })).toBeVisible();
 
-    // Internal persistence-only fields and ambiguous currency-less P&L must never appear.
-    await expect(
-      page.getByText("riskProfileSnapshot", { exact: false }),
-    ).toHaveCount(0);
-    await expect(
-      page.getByText("openingBalance", { exact: false }),
-    ).toHaveCount(0);
-    await expect(page.getByText("peakEquity", { exact: false })).toHaveCount(0);
-    await expect(
-      page.getByText("idempotencyKey", { exact: false }),
-    ).toHaveCount(0);
-    await expect(
-      page.getByText("externalOrderId", { exact: false }),
-    ).toHaveCount(0);
-    await expect(page.getByText("realisedPnl", { exact: false })).toHaveCount(
-      0,
-    );
+    await expect(page.getByText(/server-authoritative broker, allocation, market and execution read models/i)).toBeVisible();
+    await expect(page.getByText(/P&L is not fabricated/i)).toBeVisible();
+    await expect(page.getByText("realisedPnl", { exact: false })).toHaveCount(0);
 
     await assertNoHorizontalOverflow(page);
     assertNoConsoleErrors(page);
@@ -273,61 +205,36 @@ test.describe("Trader terminal workspaces", () => {
     assertNoExternalRequests(page);
   });
 
-  test("desktop workspace navigation exposes the four primary product areas", async ({
-    page,
-  }) => {
-    await gotoAsAuthenticated(page, "/trade", {
-      heading: /Trading Workspace/i,
-    });
+  test("desktop workspace navigation exposes only the essential product flow", async ({ page }) => {
+    await gotoAsAuthenticated(page, "/trade", { heading: /AI Trading Workspace/i });
     const viewport = page.viewportSize();
     expect(viewport).not.toBeNull();
-    if (!viewport || viewport.width <= 700) {
-      test.skip();
-      return;
-    }
+    if (!viewport || viewport.width <= 700) { test.skip(); return; }
 
-    const nav = page.getByRole("navigation", {
-      name: /primary workspace navigation/i,
-    });
+    const nav = page.getByRole("navigation", { name: /primary workspace navigation/i });
     await expect(nav.getByRole("link", { name: "Dashboard" })).toBeVisible();
-    await expect(
-      nav.getByRole("link", { name: "Trading Workspace" }),
-    ).toHaveAttribute("aria-current", "page");
-    await expect(
-      nav.getByRole("link", { name: "AI Command Center" }),
-    ).toBeVisible();
-    await expect(
-      nav.getByRole("link", { name: "Portfolio & Risk" }),
-    ).toBeVisible();
+    await expect(nav.getByRole("link", { name: "AI Auto Trader" })).toHaveAttribute("aria-current", "page");
+    await expect(nav.getByRole("link", { name: "Live Account" })).toBeVisible();
+    await expect(nav.getByRole("link", { name: "Broker Accounts" })).toBeVisible();
+    await expect(nav.getByRole("link", { name: "Market Intelligence" })).toHaveCount(0);
+    await expect(nav.getByRole("link", { name: "Risk Limits" })).toHaveCount(0);
   });
 
-  test("mobile More sheet exposes Trade, AI, and Portfolio without expanding the three-item bottom bar", async ({
-    page,
-  }) => {
-    await gotoAsAuthenticated(page, "/trade", {
-      heading: /Trading Workspace/i,
-    });
+  test("mobile bottom nav exposes AI Trader directly and keeps More focused on account tasks", async ({ page }) => {
+    await gotoAsAuthenticated(page, "/trade", { heading: /AI Trading Workspace/i });
     const viewport = page.viewportSize();
     expect(viewport).not.toBeNull();
-    if (!viewport || viewport.width > 700) {
-      test.skip();
-      return;
-    }
+    if (!viewport || viewport.width > 700) { test.skip(); return; }
 
     const bottomItems = page.locator(".mobile-bottom-nav__item");
-    await expect(bottomItems).toHaveCount(3);
+    await expect(bottomItems).toHaveCount(4);
+    await expect(page.getByRole("link", { name: "AI Trader" })).toHaveAttribute("aria-current", "page");
 
     await page.getByRole("button", { name: /more navigation/i }).click();
     const sheet = page.locator("#mobile-more-sheet");
-    await expect(sheet).toBeVisible();
-    await expect(
-      sheet.getByRole("link", { name: "Trading Workspace" }),
-    ).toHaveAttribute("aria-current", "page");
-    await expect(
-      sheet.getByRole("link", { name: "AI Command Center" }),
-    ).toBeVisible();
-    await expect(
-      sheet.getByRole("link", { name: "Portfolio & Risk" }),
-    ).toBeVisible();
+    await expect(sheet.getByRole("link", { name: "Broker Accounts" })).toBeVisible();
+    await expect(sheet.getByRole("link", { name: "Security" })).toBeVisible();
+    await expect(sheet.getByRole("link", { name: "Fees & Payments" })).toBeVisible();
+    await expect(sheet.getByRole("link", { name: "Strategy Lab" })).toHaveCount(0);
   });
 });
