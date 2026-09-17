@@ -1,7 +1,9 @@
-import { Controller, DefaultValuePipe, Get, ParseIntPipe, Query } from '@nestjs/common';
+import { BadRequestException, Body, Controller, DefaultValuePipe, Get, ParseIntPipe, ParseUUIDPipe, Put, Query } from '@nestjs/common';
 import { ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUserId } from '../../common/decorators/current-user.decorator';
 import { ExecutionReadService } from './execution-read.service';
+import { AllocationError, AllocationService } from './services/allocation.service';
+import { UpdateCapitalBudgetDto } from './dto/update-capital-budget.dto';
 import {
   TradeExecutionResponseDto,
   toTradeExecutionResponse,
@@ -17,7 +19,46 @@ import {
 @ApiTags('Execution')
 @Controller('execution')
 export class ExecutionController {
-  constructor(private readonly executionReadService: ExecutionReadService) {}
+  constructor(
+    private readonly executionReadService: ExecutionReadService,
+    private readonly allocationService: AllocationService,
+  ) {}
+
+  @Get('allocation')
+  @ApiOperation({ summary: 'Get the explicit AI capital allocation for one broker connection' })
+  async getCapitalAllocation(
+    @CurrentUserId() userId: string,
+    @Query('brokerConnectionId', ParseUUIDPipe) brokerConnectionId: string,
+  ) {
+    try {
+      return await this.allocationService.getUserCapitalBudget(userId, brokerConnectionId);
+    } catch (error) {
+      if (error instanceof AllocationError) {
+        throw new BadRequestException({ code: error.code, message: error.message });
+      }
+      throw error;
+    }
+  }
+
+  @Put('allocation')
+  @ApiOperation({ summary: 'Set the explicit AI capital allocation for one broker connection' })
+  async updateCapitalAllocation(
+    @CurrentUserId() userId: string,
+    @Body() dto: UpdateCapitalBudgetDto,
+  ) {
+    try {
+      return await this.allocationService.setUserCapitalBudget(
+        userId,
+        dto.brokerConnectionId,
+        dto.totalCapital,
+      );
+    } catch (error) {
+      if (error instanceof AllocationError) {
+        throw new BadRequestException({ code: error.code, message: error.message });
+      }
+      throw error;
+    }
+  }
 
   @Get('positions/open')
   @ApiOperation({ summary: 'List current open positions for the authenticated user' })
