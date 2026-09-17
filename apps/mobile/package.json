@@ -14,7 +14,8 @@
     "test:broker-mobile": "jest",
     "test:broker-mobile:watch": "jest --watch",
     "validate:release-config": "node ./scripts/validate-release-config.cjs",
-    "release:preflight": "node ./scripts/validate-release-config.cjs --require-project-id"
+    "release:preflight": "node ./scripts/validate-release-config.cjs --require-project-id --require-production-api",
+    "eas-build-pre-install": "node ./scripts/validate-release-config.cjs --eas-build"
   },
   "dependencies": {
     "@irexpro/api-client": "workspace:*",

@@ -3,6 +3,8 @@ const path = require('node:path');
 
 const mobileRoot = path.resolve(__dirname, '..');
 const requireProjectId = process.argv.includes('--require-project-id');
+const requireProductionApi = process.argv.includes('--require-production-api');
+const easBuildMode = process.argv.includes('--eas-build');
 const errors = [];
 
 function readJson(fileName) {
@@ -72,6 +74,30 @@ function enablesHermesV1(options) {
     options.ios?.useHermesV1 === true;
 }
 
+function parseHttpsApi(value, label) {
+  if (typeof value !== 'string' || value.trim() === '') {
+    fail(`${label} must be a non-empty absolute HTTPS URL`);
+    return null;
+  }
+
+  try {
+    const url = new URL(value);
+    expect(url.protocol === 'https:', `${label} must use HTTPS`);
+    expect(
+      !['localhost', '127.0.0.1', '::1'].includes(url.hostname),
+      `${label} must not point to localhost`,
+    );
+    return url;
+  } catch {
+    fail(`${label} must be a valid absolute URL`);
+    return null;
+  }
+}
+
+function normalizedApiUrl(url) {
+  return url ? url.toString().replace(/\/$/, '') : null;
+}
+
 const appJson = readJson('app.json');
 const easJson = readJson('eas.json');
 const packageJson = readJson('package.json');
@@ -124,6 +150,9 @@ expect(build.base?.credentialsSource === 'remote', 'EAS base profile must use re
 expect(build.development?.extends === 'base', 'development profile must extend base');
 expect(build.preview?.extends === 'base', 'preview profile must extend base');
 expect(build.production?.extends === 'base', 'production profile must extend base');
+expect(build.development?.environment === 'development', 'development profile must use the EAS development environment');
+expect(build.preview?.environment === 'preview', 'preview profile must use the EAS preview environment');
+expect(build.production?.environment === 'production', 'production profile must use the EAS production environment');
 expect(build.development?.distribution === 'internal', 'development profile must use internal distribution');
 expect(build.preview?.distribution === 'internal', 'preview profile must use internal distribution');
 expect(build.production?.distribution === 'store', 'production profile must use store distribution');
@@ -135,19 +164,64 @@ validatePublicEnv(build);
 const developmentEnv = resolveProfileEnv(build, 'development');
 const previewEnv = resolveProfileEnv(build, 'preview');
 const productionEnv = resolveProfileEnv(build, 'production');
-const expectedProductionApi = 'https://irexpro.lightworldtech.com/api/v1';
+const expectedStagingApi = 'https://irexpro.lightworldtech.com/api/v1';
 
 expect(developmentEnv.EXPO_PUBLIC_APP_ENV === 'development', 'development profile must set EXPO_PUBLIC_APP_ENV=development');
 expect(previewEnv.EXPO_PUBLIC_APP_ENV === 'staging', 'preview profile must set EXPO_PUBLIC_APP_ENV=staging');
 expect(productionEnv.EXPO_PUBLIC_APP_ENV === 'production', 'production profile must set EXPO_PUBLIC_APP_ENV=production');
-expect(productionEnv.EXPO_PUBLIC_API_BASE_URL === expectedProductionApi, `production API base URL must be ${expectedProductionApi}`);
+expect(previewEnv.EXPO_PUBLIC_API_BASE_URL === expectedStagingApi, `preview API base URL must remain the verified staging endpoint ${expectedStagingApi}`);
+expect(
+  !Object.prototype.hasOwnProperty.call(build.base?.env || {}, 'EXPO_PUBLIC_API_BASE_URL'),
+  'base profile must not define EXPO_PUBLIC_API_BASE_URL because it would leak one endpoint into every environment',
+);
+expect(
+  !Object.prototype.hasOwnProperty.call(build.production?.env || {}, 'EXPO_PUBLIC_API_BASE_URL'),
+  'production profile must not commit EXPO_PUBLIC_API_BASE_URL; source it from the EAS production environment',
+);
 
-try {
-  const productionApi = new URL(productionEnv.EXPO_PUBLIC_API_BASE_URL || '');
-  expect(productionApi.protocol === 'https:', 'production API base URL must use HTTPS');
-  expect(!['localhost', '127.0.0.1', '::1'].includes(productionApi.hostname), 'production API base URL must not point to localhost');
-} catch {
-  fail('production API base URL must be a valid absolute URL');
+const stagingApi = parseHttpsApi(previewEnv.EXPO_PUBLIC_API_BASE_URL, 'preview/staging API base URL');
+
+const easBuildProfile = process.env.EAS_BUILD_PROFILE?.trim() || null;
+if (easBuildMode) {
+  expect(
+    ['development', 'preview', 'production'].includes(easBuildProfile),
+    `EAS_BUILD_PROFILE must identify development, preview, or production (got ${easBuildProfile || 'missing'})`,
+  );
+}
+
+const mustValidateRuntimeProductionApi =
+  requireProductionApi || (easBuildMode && easBuildProfile === 'production');
+
+if (easBuildMode && easBuildProfile === 'preview') {
+  const runtimePreviewApi = parseHttpsApi(
+    process.env.EXPO_PUBLIC_API_BASE_URL,
+    'EAS preview runtime API base URL',
+  );
+  if (runtimePreviewApi && stagingApi) {
+    expect(
+      normalizedApiUrl(runtimePreviewApi) === normalizedApiUrl(stagingApi),
+      `EAS preview runtime API must resolve to the verified staging endpoint ${expectedStagingApi}`,
+    );
+  }
+}
+
+if (mustValidateRuntimeProductionApi) {
+  const productionApi = parseHttpsApi(
+    process.env.EXPO_PUBLIC_API_BASE_URL,
+    'EAS production runtime API base URL',
+  );
+  if (productionApi && stagingApi) {
+    expect(
+      normalizedApiUrl(productionApi) !== normalizedApiUrl(stagingApi),
+      'production API base URL must not equal the preview/staging API base URL',
+    );
+    expect(
+      productionApi.hostname !== stagingApi.hostname,
+      `production API hostname must be distinct from the verified staging hostname ${stagingApi.hostname}`,
+    );
+  }
+} else {
+  console.log('Production API URL: intentionally externalized to the EAS production environment.');
 }
 
 const projectId = expo.extra?.eas?.projectId;
@@ -169,4 +243,7 @@ if (errors.length > 0) {
   process.exit(1);
 }
 
-console.log(`Mobile release configuration valid (${requireProjectId ? 'linked release preflight' : 'source validation'}).`);
+let validationMode = 'source validation';
+if (easBuildMode) validationMode = `EAS ${easBuildProfile || 'unknown'} build validation`;
+else if (requireProjectId || requireProductionApi) validationMode = 'linked release preflight';
+console.log(`Mobile release configuration valid (${validationMode}).`);
