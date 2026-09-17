@@ -46,7 +46,7 @@ export default function RegisterPage() {
     <AuthLayout title="Create your account" subtitle="Start trading with AI-powered risk-gated execution">
       <form onSubmit={handleSubmit}>
         {error && <Alert variant="error">{error}</Alert>}
-        <div style={{ display: 'flex', gap: '1rem' }}>
+        <div className="register-name-row">
           <Input label="First name" type="text" placeholder="John" value={firstName} onChange={(e) => setFirstName(e.target.value)} disabled={loading} />
           <Input label="Last name" type="text" placeholder="Doe" value={lastName} onChange={(e) => setLastName(e.target.value)} disabled={loading} />
         </div>
