@@ -737,14 +737,14 @@ export default function TradingWorkspacePage() {
     loadingCopilot;
 
   return (
-    <DashboardShell user={user} onLogout={logout} activeRoute="/trade" title="Dynamic Trader Cockpit">
+    <DashboardShell user={user} onLogout={logout} activeRoute="/trade" title="AI Auto Trader">
       <main className="terminal-foundation trader-cockpit" data-testid="dynamic-trader-cockpit">
         <section className="terminal-foundation__hero cockpit-hero" aria-labelledby="trading-workspace-title">
           <div>
-            <p className="terminal-foundation__eyebrow">Dynamic Trader Cockpit</p>
-            <h1 id="trading-workspace-title" className="terminal-foundation__title">Trading Workspace</h1>
+            <p className="terminal-foundation__eyebrow">AI Auto Trader</p>
+            <h1 id="trading-workspace-title" className="terminal-foundation__title">AI Trading Workspace</h1>
             <p className="terminal-foundation__description">
-              One AI-native operating surface for broker market evidence, autonomous decision evidence, capital guardrails, strategy research, and execution lifecycle state. Every panel preserves its authoritative source boundary.
+              Connect your broker, choose how much capital the AI may use, then switch AI Auto on. Positions, executions and AI activity update here while server-managed protection runs in the background.
             </p>
           </div>
           <Button type="button" variant="secondary" size="sm" loading={workspaceLoading} disabled={workspaceLoading} onClick={() => void refreshWorkspace()}>
@@ -782,147 +782,130 @@ export default function TradingWorkspacePage() {
           </div>
         )}
 
-        <section className="cockpit-grid" aria-label="Integrated trading intelligence">
-          <div className="cockpit-main-stack">
-            <Card title="Broker Market · EURUSD" subtitle="Provider-backed quote and OHLCV; presentation-only chart geometry." className="cockpit-panel cockpit-panel--market">
-              {marketError && <Alert variant="error">{marketError}</Alert>}
-              {loadingMarket && !market ? (
-                <LoadingSpinner text="Verifying broker quote and candles…" />
-              ) : market ? (
-                <>
-                  {market.status === 'STALE' && <Alert variant="warning">Broker market evidence is stale. The cockpit does not present it as live.</Alert>}
-                  <div className="cockpit-quote-grid">
-                    <div><span>Bid</span><strong>{market.quote.bid}</strong></div>
-                    <div><span>Ask</span><strong>{market.quote.ask}</strong></div>
-                    <div><span>Spread</span><strong>{market.quote.spread}</strong></div>
-                  </div>
-                  <CompactCandlestickChart candles={market.candles} />
-                  <div className="cockpit-panel-footer">
-                    <span className="text-sm muted">{market.timeframe} · {market.source} · retrieved {formatTimestamp(market.retrievedAt)}</span>
-                    <Link href="/market" className="cockpit-text-link">Open Market Intelligence</Link>
-                  </div>
-                </>
-              ) : null}
-            </Card>
+        <section className="ai-trader-command-grid" aria-label="AI trading controls and market">
+          <AiAutoControl
+            broker={broker ? {
+              id: broker.id,
+              brokerName: broker.brokerName,
+              displayName: broker.displayName,
+              accountType: broker.accountType,
+              status: broker.status,
+              liveTradingEnabled: broker.liveTradingEnabled,
+            } : null}
+            session={session}
+            onChanged={refreshWorkspace}
+          />
 
+          <Card title="Market · EURUSD" subtitle="Authoritative broker/simulator quote and H1 candles." className="cockpit-panel cockpit-panel--market ai-trader-market">
+            {marketError && <Alert variant="error">{marketError}</Alert>}
+            {loadingMarket && !market ? (
+              <LoadingSpinner text="Loading market evidence…" />
+            ) : market ? (
+              <>
+                {market.status === 'STALE' && <Alert variant="warning">Market evidence is stale. AI execution remains subject to server freshness checks.</Alert>}
+                <div className="cockpit-quote-grid">
+                  <div><span>Bid</span><strong>{market.quote.bid}</strong></div>
+                  <div><span>Ask</span><strong>{market.quote.ask}</strong></div>
+                  <div><span>Spread</span><strong>{market.quote.spread}</strong></div>
+                </div>
+                <CompactCandlestickChart candles={market.candles} />
+                <div className="cockpit-panel-footer">
+                  <span className="text-sm muted">{market.timeframe} · {market.source} · {formatTimestamp(market.retrievedAt)}</span>
+                </div>
+              </>
+            ) : (
+              <p className="muted">Verified market evidence is currently unavailable.</p>
+            )}
+          </Card>
+        </section>
+
+        <section aria-labelledby="execution-state-title" className="cockpit-execution-section ai-trader-execution">
+          <div className="cockpit-section-heading">
+            <div>
+              <p className="terminal-foundation__eyebrow">Live AI activity</p>
+              <h2 id="execution-state-title">Positions &amp; Executions</h2>
+              <p className="muted">Orders and positions reported by the server-side execution engine. New lifecycle changes appear as toasts while AI Auto is active.</p>
+            </div>
+            <Badge variant={session?.status === "ACTIVE" ? "success" : "info"}>{session?.status === "ACTIVE" ? "AI monitoring live" : "AI Auto off"}</Badge>
+          </div>
+          {loadingExecution && !execution ? (
+            <Card title="Loading execution activity" className="cockpit-panel"><LoadingSpinner text="Loading open positions and recent executions…" /></Card>
+          ) : execution ? (
+            <div className="cockpit-execution-grid ai-trader-execution-grid">
+              <Card title={`Open Positions (${execution.openPositions.length})`} className="cockpit-panel ai-trader-primary-card">
+                {execution.openPositions.length === 0 ? (
+                  <div className="ai-trader-empty-state">
+                    <strong>No open positions</strong>
+                    <p className="muted">{session?.status === "ACTIVE" ? "AI Auto is active. New positions will appear here when a server-approved trade is opened." : "Switch AI Auto on after allocating capital to let the engine trade."}</p>
+                  </div>
+                ) : (
+                  <div className="cockpit-record-stack">{execution.openPositions.map((trade) => <ExecutionRecord key={trade.id} trade={trade} />)}</div>
+                )}
+              </Card>
+              <Card title="Recent Executions" className="cockpit-panel ai-trader-primary-card">
+                {execution.recentExecutions.length === 0 ? (
+                  <div className="ai-trader-empty-state"><strong>No executions yet</strong><p className="muted">Filled, closed, rejected and reconciled execution records will appear here.</p></div>
+                ) : (
+                  <div className="cockpit-record-stack">{execution.recentExecutions.slice(0, 8).map((trade) => <ExecutionRecord key={trade.id} trade={trade} />)}</div>
+                )}
+              </Card>
+            </div>
+          ) : null}
+        </section>
+
+        <details className="cockpit-advanced">
+          <summary>
+            <span><strong>Advanced intelligence &amp; diagnostics</strong><small>Optional technical details</small></span>
+            <span aria-hidden="true">＋</span>
+          </summary>
+          <div className="cockpit-advanced__body">
             {loadingStatus && !terminal ? (
-              <Card title="Loading operational status" className="cockpit-panel"><LoadingSpinner text="Checking risk, session, and broker status…" /></Card>
+              <Card title="Loading operational status" className="cockpit-panel"><LoadingSpinner text="Checking AI, risk and broker status…" /></Card>
             ) : terminal ? (
-              <section className="cockpit-operational-grid" aria-label="Trading operational status">
+              <section className="cockpit-operational-grid" aria-label="Advanced operational status">
                 <Card title="Risk Engine" className="cockpit-panel">
-                  <div className="cockpit-card-badge"><Badge variant={terminal.risk.killSwitchActive ? 'error' : terminal.risk.canTrade ? 'success' : 'warning'}>{terminal.risk.killSwitchActive ? 'Kill switch active' : terminal.risk.canTrade ? 'Risk gate clear' : 'Trading blocked'}</Badge></div>
+                  <div className="cockpit-card-badge"><Badge variant={terminal.risk.killSwitchActive ? "error" : terminal.risk.canTrade ? "success" : "warning"}>{terminal.risk.killSwitchActive ? "Emergency stop active" : terminal.risk.canTrade ? "Protection clear" : "Trading blocked"}</Badge></div>
                   <dl className="cockpit-detail-list">
-                    <div><dt>Broker gate</dt><dd>{terminal.risk.brokerConnected ? 'Connected' : 'Not connected'}</dd></div>
-                    <div><dt>Max daily loss</dt><dd>{terminal.risk.limits.maxDailyLossPercent}%</dd></div>
-                    <div><dt>Max drawdown</dt><dd>{terminal.risk.limits.maxDrawdownPercent}%</dd></div>
-                    <div><dt>Max open trades</dt><dd>{terminal.risk.limits.maxOpenTrades}</dd></div>
-                    <div><dt>Max position size</dt><dd>{terminal.risk.limits.maxPositionSizeLot} lot</dd></div>
-                    <div><dt>Allowed instruments</dt><dd>{terminal.risk.limits.allowedInstruments === 'ALL' ? 'All configured instruments' : terminal.risk.limits.allowedInstruments.join(', ')}</dd></div>
+                    <div><dt>Daily loss ceiling</dt><dd>{terminal.risk.limits.maxDailyLossPercent}%</dd></div>
+                    <div><dt>Drawdown ceiling</dt><dd>{terminal.risk.limits.maxDrawdownPercent}%</dd></div>
+                    <div><dt>Open-position cap</dt><dd>{terminal.risk.limits.maxOpenTrades}</dd></div>
+                    <div><dt>Position cap</dt><dd>{terminal.risk.limits.maxPositionSizeLot} lot</dd></div>
                   </dl>
-                  <Link href="/onboarding/risk" className="cockpit-text-link">Review risk limits</Link>
                 </Card>
 
-                <Card title="Trading Session — Execution Authority" subtitle="Durable session mode; changes are audited server-side." className="cockpit-panel">
+                <Card title="Execution Authority" className="cockpit-panel">
                   {session ? (
                     <>
-                      <div className="cockpit-card-badge">
-                        <Badge variant={sessionBadgeVariant(session.status)}>{formatEnumLabel(session.status)}</Badge>
-                        <Badge variant="info">{session.executionMode}</Badge>
-                      </div>
+                      <div className="cockpit-card-badge"><Badge variant={sessionBadgeVariant(session.status)}>{formatEnumLabel(session.status)}</Badge><Badge variant="info">{session.executionMode}</Badge></div>
                       <dl className="cockpit-detail-list">
                         <div><dt>Started</dt><dd>{formatTimestamp(session.startedAt)}</dd></div>
                         <div><dt>Authority generation</dt><dd>{session.authorityGeneration}</dd></div>
-                        <div><dt>Lifecycle source</dt><dd>Trading session service</dd></div>
                       </dl>
-                      <p className="text-sm muted" style={{ marginTop: 0, marginBottom: 'var(--space-2)' }}>
-                        {executionModeCopy(session.executionMode)}
-                      </p>
-                      <ExecutionModeSelector
-                        session={session}
-                        modeChanging={modeChanging}
-                        onModeChange={(mode) => void handleModeChange(mode)}
-                      />
+                      <p className="text-sm muted">{executionModeCopy(session.executionMode)}</p>
+                      <ExecutionModeSelector session={session} modeChanging={modeChanging} onModeChange={(mode) => void handleModeChange(mode)} />
                       {modeError && <Alert variant="error">{modeError}</Alert>}
-                      {blockedReasons.length > 0 && (
-                        <Alert variant="warning">
-                          <div style={{ flex: 1 }}>
-                            <strong>Execution blocked</strong>
-                            <ul style={{ margin: 'var(--space-1) 0 0', paddingLeft: '1.1rem' }}>
-                              {blockedReasons.map((reason) => (
-                                <li key={reason}>{reason}</li>
-                              ))}
-                            </ul>
-                          </div>
-                        </Alert>
-                      )}
+                      {blockedReasons.length > 0 && <Alert variant="warning"><div><strong>Execution blocked</strong><ul>{blockedReasons.map((reason) => <li key={reason}>{reason}</li>)}</ul></div></Alert>}
                     </>
-                  ) : (
-                    <>
-                      <Badge variant="info">No active session</Badge>
-                      <p className="muted mt-4">No active AI trading session was returned. Eligibility remains server controlled — execution authority is not started.</p>
-                    </>
-                  )}
+                  ) : <p className="muted">No active execution session.</p>}
                 </Card>
 
-                <Card title="Broker Health" className="cockpit-panel">
+                <Card title="Broker Diagnostics" className="cockpit-panel">
                   {broker ? (
                     <>
                       <div className="cockpit-card-badge">
                         <Badge variant={brokerBadgeVariant(broker.status)}>{formatEnumLabel(broker.status)}</Badge>
-                        {brokerVerification && (
-                          <Badge variant={verificationLabelVariant(brokerVerification.label)}>
-                            {brokerVerification.label}
-                          </Badge>
-                        )}
+                        {brokerVerification && <Badge variant={verificationLabelVariant(brokerVerification.label)}>{brokerVerification.label}</Badge>}
                       </div>
                       <dl className="cockpit-detail-list">
                         <div><dt>Broker</dt><dd>{broker.brokerName}</dd></div>
-                        {broker.displayName && <div><dt>Account alias</dt><dd>{broker.displayName}</dd></div>}
                         <div><dt>Environment</dt><dd>{formatEnumLabel(broker.accountType)}</dd></div>
                         <div><dt>Last health check</dt><dd>{formatTimestamp(broker.lastHealthCheckAt)}</dd></div>
-                        <div>
-                          <dt>Current executability</dt>
-                          <dd>
-                            {brokerVerification
-                              ? brokerVerification.connectionExecutability === 'execution disabled'
-                                ? 'execution disabled'
-                                : brokerVerification.connectionExecutability
-                              : 'Unavailable'}
-                          </dd>
-                        </div>
                       </dl>
-                      <p className="text-sm muted" style={{ overflowWrap: 'anywhere' }}>
-                        Verification label is the fixed provider taxonomy. Live-trading flag (compatibility
-                        mirror, not authoritative): {broker.liveTradingEnabled ? 'enabled' : 'not enabled'}.
-                      </p>
-                      <Link href="/onboarding/broker" className="cockpit-text-link">Review broker connection</Link>
                     </>
-                  ) : <><Badge variant="warning">No broker connection</Badge><p className="muted mt-4">No sanitized broker connection was returned for this account.</p></>}
+                  ) : <p className="muted">No broker connection.</p>}
                 </Card>
               </section>
             ) : null}
-
-            <section aria-labelledby="execution-state-title" className="cockpit-execution-section">
-              <div className="cockpit-section-heading">
-                <div>
-                  <p className="terminal-foundation__eyebrow">Execution intelligence</p>
-                  <h2 id="execution-state-title">Positions &amp; Recent Executions</h2>
-                  <p className="muted">Read-only lifecycle state from the server-side execution engine. Values are never calculated from browser market data.</p>
-                </div>
-              </div>
-              {loadingExecution && !execution ? (
-                <Card title="Loading execution state" className="cockpit-panel"><LoadingSpinner text="Loading open positions and recent executions…" /></Card>
-              ) : execution ? (
-                <div className="cockpit-execution-grid">
-                  <Card title={`Open Positions (${execution.openPositions.length})`} className="cockpit-panel">
-                    {execution.openPositions.length === 0 ? <p className="muted">The execution engine reports no open positions for this account.</p> : <div className="cockpit-record-stack">{execution.openPositions.map((trade) => <ExecutionRecord key={trade.id} trade={trade} />)}</div>}
-                  </Card>
-                  <Card title="Recent Executions" className="cockpit-panel">
-                    {execution.recentExecutions.length === 0 ? <p className="muted">No execution lifecycle records are available yet.</p> : <div className="cockpit-record-stack">{execution.recentExecutions.slice(0, 6).map((trade) => <ExecutionRecord key={trade.id} trade={trade} />)}</div>}
-                  </Card>
-                </div>
-              ) : null}
-            </section>
 
             {session?.executionMode === 'SEMI_AUTO' && (
               <ConfirmationInbox
@@ -935,183 +918,70 @@ export default function TradingWorkspacePage() {
                 now={now}
               />
             )}
-          </div>
 
-          <aside className="cockpit-side-stack" aria-label="AI and capital intelligence">
-            <Card title="AI Decision Pulse" subtitle="Latest persisted autonomous-decision evidence." className="cockpit-panel">
-              {decisionError && <Alert variant="error">{decisionError}</Alert>}
-              {loadingDecisions && !decisions ? <LoadingSpinner text="Loading AI evidence…" /> : latestDecision ? (
-                <>
-                  <div className="cockpit-card-badge"><Badge variant={decisionBadgeVariant(latestDecision.outcome)}>{formatEnumLabel(latestDecision.outcome)}</Badge></div>
-                  <div className="cockpit-decision-title">{latestDecision.evidence.instrument ?? 'Instrument unavailable'}{latestDecision.evidence.direction ? ` · ${latestDecision.evidence.direction}` : ''}</div>
-                  <dl className="cockpit-detail-list">
-                    <div><dt>Confidence</dt><dd>{formatScore(latestDecision.evidence.confidenceScore)}</dd></div>
-                    <div><dt>Strategy</dt><dd>{latestDecision.evidence.strategyCode ?? 'Not available'}</dd></div>
-                    <div><dt>Model</dt><dd>{latestDecision.evidence.modelVersion ?? 'Not available'}</dd></div>
-                    <div><dt>Risk decision</dt><dd>{formatEnumLabel(latestDecision.risk.decision)}</dd></div>
-                  </dl>
-                  <p className="text-sm muted">Received {formatTimestamp(latestDecision.receivedAt)}</p>
-                  <Link href="/ai" className="cockpit-text-link">Open Decision Explorer</Link>
-                </>
-              ) : decisions ? <><p className="muted">No persisted AI decisions were returned.</p><Link href="/ai" className="cockpit-text-link">Open Decision Explorer</Link></> : null}
-            </Card>
+            <section className="cockpit-advanced-grid" aria-label="AI intelligence details">
+              <Card title="AI Decision Pulse" className="cockpit-panel">
+                {decisionError && <Alert variant="error">{decisionError}</Alert>}
+                {loadingDecisions && !decisions ? <LoadingSpinner text="Loading AI evidence…" /> : latestDecision ? (
+                  <>
+                    <div className="cockpit-card-badge"><Badge variant={decisionBadgeVariant(latestDecision.outcome)}>{formatEnumLabel(latestDecision.outcome)}</Badge></div>
+                    <p className="cockpit-decision-title">{latestDecision.evidence.instrument ?? "Instrument unavailable"}{latestDecision.evidence.direction ? ` · ${latestDecision.evidence.direction}` : ""}</p>
+                    <dl className="cockpit-detail-list">
+                      <div><dt>Confidence</dt><dd>{formatScore(latestDecision.evidence.confidenceScore)}</dd></div>
+                      <div><dt>Strategy</dt><dd>{latestDecision.evidence.strategyCode ?? "Not available"}</dd></div>
+                      <div><dt>Risk decision</dt><dd>{formatEnumLabel(latestDecision.risk.decision)}</dd></div>
+                    </dl>
+                  </>
+                ) : <p className="muted">No persisted AI decision yet.</p>}
+              </Card>
 
-            <Card title="Capital Guardrails" subtitle="Authoritative portfolio/risk capacity; no browser exposure math." className="cockpit-panel">
-              {riskError && <Alert variant="error">{riskError}</Alert>}
-              {loadingRisk && !risk ? <LoadingSpinner text="Loading capital guardrails…" /> : risk ? (
-                <>
-                  <div className="cockpit-card-badge"><Badge variant={risk.engine.killSwitchActive ? 'error' : risk.engine.brokerConnected ? 'success' : 'warning'}>{risk.engine.killSwitchActive ? 'Kill switch active' : risk.engine.brokerConnected ? 'Broker gate connected' : 'Broker unavailable'}</Badge></div>
+              <Card title="Capital Guardrails" className="cockpit-panel">
+                {riskError && <Alert variant="error">{riskError}</Alert>}
+                {loadingRisk && !risk ? <LoadingSpinner text="Loading guardrails…" /> : risk ? (
                   <dl className="cockpit-detail-list">
                     <div><dt>Open positions</dt><dd>{risk.execution.openPositions} / {risk.execution.maxOpenPositions}</dd></div>
-                    <div><dt>Open slots remaining</dt><dd>{risk.execution.openPositionSlotsRemaining}</dd></div>
+                    <div><dt>Open slots</dt><dd>{risk.execution.openPositionSlotsRemaining}</dd></div>
                     <div><dt>Trades today</dt><dd>{risk.execution.todayTrades} / {risk.execution.maxDailyTrades}</dd></div>
-                    <div><dt>Risk mode</dt><dd>{formatEnumLabel(risk.policy.allowedTradingMode)}</dd></div>
-                    <div><dt>Portfolio snapshots</dt><dd>{risk.portfolio.freshSnapshots} fresh · {risk.portfolio.staleSnapshots} stale</dd></div>
+                    <div><dt>Snapshots</dt><dd>{risk.portfolio.freshSnapshots} fresh · {risk.portfolio.staleSnapshots} stale</dd></div>
                   </dl>
-                  <Link href="/portfolio" className="cockpit-text-link">Open Portfolio &amp; Risk</Link>
-                </>
-              ) : null}
-            </Card>
+                ) : null}
+              </Card>
 
-            <Card title="Strategy Lab Signal" subtitle="Versioned deterministic research, never a live execution command." className="cockpit-panel">
-              {strategyError && <Alert variant="error">{strategyError}</Alert>}
-              {loadingStrategy && !strategy ? <LoadingSpinner text="Verifying strategy dataset…" /> : strategy && strategyScenario ? (
-                <>
-                  <div className="cockpit-card-badge"><Badge variant="info">Advisory only</Badge></div>
-                  <p className="cockpit-decision-title">{strategyScenario.name}</p>
-                  <p className="muted text-sm">{formatEnumLabel(strategyScenario.marketRegime)} · {formatEnumLabel(strategyScenario.volatility)} volatility</p>
-                  <dl className="cockpit-detail-list">
-                    <div><dt>Recommended fixture</dt><dd>{strategyScenario.recommendation.strategyCode}</dd></div>
-                    <div><dt>Dataset</dt><dd>{strategy.dataset.version}</dd></div>
-                    {strategyLeader && <div><dt>Composite score</dt><dd>{strategyLeader.score.toFixed(1)}</dd></div>}
-                  </dl>
-                  <p className="text-sm muted">{strategyScenario.recommendation.summary}</p>
-                  <Link href="/strategy-lab" className="cockpit-text-link">Open Strategy Lab</Link>
-                </>
-              ) : null}
-            </Card>
+              <Card title="Strategy Research" className="cockpit-panel">
+                {strategyError && <Alert variant="error">{strategyError}</Alert>}
+                {loadingStrategy && !strategy ? <LoadingSpinner text="Loading strategy evidence…" /> : strategy && strategyScenario ? (
+                  <>
+                    <p className="cockpit-decision-title">{strategyScenario.name}</p>
+                    <dl className="cockpit-detail-list">
+                      <div><dt>Fixture</dt><dd>{strategyScenario.recommendation.strategyCode}</dd></div>
+                      <div><dt>Dataset</dt><dd>{strategy.dataset.version}</dd></div>
+                      {strategyLeader && <div><dt>Score</dt><dd>{strategyLeader.score.toFixed(1)}</dd></div>}
+                    </dl>
+                  </>
+                ) : null}
+              </Card>
 
-            <Card
-              title="Contextual AI Copilot"
-              subtitle="Evidence-based explanation · No hidden reasoning exposed"
-              className="cockpit-panel cockpit-copilot"
-            >
-              {copilotError && <Alert variant="error">{copilotError}</Alert>}
-              {loadingCopilot && !copilot ? (
-                <LoadingSpinner text="Composing authoritative Copilot context…" />
-              ) : copilot ? (
-                <>
-                  <div className="cockpit-copilot-status">
-                    <div className="cockpit-copilot-badges">
-                      <Badge variant={copilot.status === 'READY' ? 'success' : 'warning'}>{copilot.status}</Badge>
-                      <Badge variant={copilotPostureBadgeVariant(copilot.posture)}>{copilot.posture}</Badge>
-                    </div>
-                    <span className="cockpit-copilot-context">{copilot.instrument} · {copilot.timeframe}</span>
-                  </div>
-
-                  <div className="cockpit-copilot-summary">
-                    <strong>{copilot.headline}</strong>
-                    <p>{copilot.explanation}</p>
-                  </div>
-
-                  <div className="cockpit-copilot-facts" aria-label="Copilot authoritative context">
-                    <div>
-                      <span>Market</span>
-                      <strong>{copilot.market ? copilot.market.freshness : 'Unavailable'}</strong>
-                    </div>
-                    <div>
-                      <span>Risk</span>
-                      <strong>{copilot.risk ? (copilot.risk.killSwitchActive ? 'Blocked' : copilot.posture) : 'Unavailable'}</strong>
-                    </div>
-                    <div>
-                      <span>Evidence</span>
-                      <strong>{copilot.evidence.length}</strong>
-                    </div>
-                  </div>
-
-                  {copilot.decision && (
-                    <section className="cockpit-copilot-block" aria-label="Persisted AI decision evidence">
-                      <span className="cockpit-copilot-kicker">Persisted AI decision evidence</span>
-                      <div className="cockpit-copilot-decision">
-                        <strong>
-                          {copilot.instrument}
-                          {copilot.decision.direction ? ` · ${copilot.decision.direction}` : ''}
-                        </strong>
-                        <Badge variant={decisionBadgeVariant(copilot.decision.outcome)}>
-                          {formatEnumLabel(copilot.decision.outcome)}
-                        </Badge>
-                      </div>
-                      <dl className="cockpit-detail-list">
-                        <div><dt>Confidence</dt><dd>{formatScore(copilot.decision.confidenceScore)}</dd></div>
-                        <div><dt>Strategy</dt><dd>{copilot.decision.strategyCode ?? 'Not available'}</dd></div>
-                        <div><dt>Risk decision</dt><dd>{formatEnumLabel(copilot.decision.riskDecision)}</dd></div>
-                      </dl>
-                    </section>
-                  )}
-
-                  {copilot.strategyResearch && (
-                    <section className="cockpit-copilot-block" aria-label="Historical strategy research">
-                      <span className="cockpit-copilot-kicker">Historical research · Advisory only</span>
-                      <dl className="cockpit-detail-list">
-                        <div><dt>Strategy</dt><dd>{copilot.strategyResearch.strategyCode}</dd></div>
-                        <div><dt>Dataset</dt><dd>{copilot.strategyResearch.datasetVersion}</dd></div>
-                        <div><dt>Fixture score</dt><dd>{copilot.strategyResearch.score.toFixed(1)}</dd></div>
-                        <div><dt>Constraint status</dt><dd>{copilot.strategyResearch.eligible ? 'Eligible in fixture' : 'Not eligible in fixture'}</dd></div>
-                      </dl>
-                    </section>
-                  )}
-
-                  <section className="cockpit-copilot-block" aria-label="Authoritative Copilot evidence">
-                    <span className="cockpit-copilot-kicker">Authoritative evidence</span>
-                    <div className="cockpit-copilot-evidence-list">
-                      {copilot.evidence.map((item) => (
-                        <div key={`${item.source}-${item.state}`} className="cockpit-copilot-evidence">
-                          <div>
-                            <strong>{formatEnumLabel(item.source)}</strong>
-                            <span>{item.summary}</span>
-                          </div>
-                          <Badge variant={item.state === 'BLOCKED' ? 'error' : item.state === 'STALE' ? 'warning' : item.state === 'UNAVAILABLE' ? 'warning' : 'info'}>
-                            {formatEnumLabel(item.state)}
-                          </Badge>
-                        </div>
-                      ))}
-                    </div>
-                  </section>
-
-                  {copilot.nextChecks.length > 0 && (
-                    <section className="cockpit-copilot-block" aria-label="Copilot next checks">
-                      <span className="cockpit-copilot-kicker">Next checks</span>
-                      <ul className="cockpit-copilot-checks">
-                        {copilot.nextChecks.map((item) => <li key={item}>{item}</li>)}
-                      </ul>
-                    </section>
-                  )}
-
-                  <div className="cockpit-copilot-policy">
-                    <strong>Explanation only</strong>
-                    <span>No hidden reasoning exposed. No trade instruction or broker mutation is available from this panel.</span>
-                  </div>
-                </>
-              ) : null}
-            </Card>
-
-            <Card title="Cockpit Provenance" className="cockpit-panel cockpit-provenance">
-              <ul>
-                <li>Market values: connected provider-backed broker.</li>
-                <li>AI state: persisted decision evidence only.</li>
-                <li>Risk/capacity: server-side Risk Engine contracts.</li>
-                <li>Strategy: deterministic research dataset, advisory only.</li>
-                <li>Copilot: server-composed evidence explanation, never execution authority.</li>
-                <li>Execution: server-side execution lifecycle read model.</li>
-              </ul>
-            </Card>
-          </aside>
-        </section>
-
+              <Card title="AI Copilot" className="cockpit-panel">
+                {copilotError && <Alert variant="error">{copilotError}</Alert>}
+                {loadingCopilot && !copilot ? <LoadingSpinner text="Loading AI context…" /> : copilot ? (
+                  <>
+                    <div className="cockpit-card-badge"><Badge variant={copilot.status === "READY" ? "success" : "warning"}>{copilot.status}</Badge><Badge variant={copilotPostureBadgeVariant(copilot.posture)}>{copilot.posture}</Badge></div>
+                    <p className="cockpit-decision-title">{copilot.headline}</p>
+                    <p className="text-sm muted">{copilot.explanation}</p>
+                    <dl className="cockpit-detail-list">
+                      <div><dt>Context</dt><dd>{copilot.instrument} · {copilot.timeframe}</dd></div>
+                      <div><dt>Evidence items</dt><dd>{copilot.evidence.length}</dd></div>
+                    </dl>
+                  </>
+                ) : null}
+              </Card>
+            </section>
+          </div>
+        </details>
         <aside className="terminal-foundation__policy" aria-label="Trading data integrity policy">
           <strong>Authoritative data only</strong>
           <p>
-            This cockpit composes broker market data, Risk Engine, trading-session, sanitized broker, persisted AI-decision, deterministic Strategy Lab, Contextual AI Copilot, portfolio-risk, and frontend-safe execution APIs. It does not calculate or fabricate balances, P&amp;L, unrealised P&amp;L, market prices, risk exposure, or execution quality in the browser. P&amp;L remains intentionally hidden until the backend returns it with authoritative currency context. The browser exposes no direct broker order control.
+            Financial and execution values shown here come from server-authoritative broker, allocation, market and execution read models. P&amp;L is not fabricated in the browser and will appear only when the backend supplies currency-bound realised or unrealised values.
           </p>
         </aside>
       </main>
