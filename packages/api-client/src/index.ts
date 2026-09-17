@@ -45,12 +45,15 @@ import type {
 } from '@irexpro/types';
 import type {
   ActiveTradingSessionResponse,
+  CapitalBudgetView,
   ChangeTradingSessionModeRequest,
   ChangeTradingSessionModeResponse,
   ConfirmExecutionConfirmationResponse,
   PendingExecutionConfirmationsResponse,
   StartTradingSessionRequest,
   StartTradingSessionResponse,
+  StopTradingSessionResponse,
+  UpdateCapitalBudgetRequest,
 } from '@irexpro/types/execution';
 
 /**
@@ -212,6 +215,11 @@ export interface ApiClient {
   /** POST /broker/connections/:id/disconnect → disconnect. */
   disconnectBroker(connectionId: string): Promise<void>;
 
+  // ── Explicit AI capital allocation ────────────────────────────────────────
+  /** GET /execution/allocation?brokerConnectionId=... */
+  getCapitalBudget(brokerConnectionId: string): Promise<CapitalBudgetView>;
+  /** PUT /execution/allocation */
+  updateCapitalBudget(body: UpdateCapitalBudgetRequest): Promise<CapitalBudgetView>;
   // ── Sprint 56 correction round 5: execution authority (issues #295/#298) ──
   /**
    * GET /trading/sessions/active → 200 `{ session }` — the authoritative
@@ -232,6 +240,8 @@ export interface ApiClient {
     sessionId: string,
     body: ChangeTradingSessionModeRequest,
   ): Promise<ChangeTradingSessionModeResponse>;
+  /** POST /trading/sessions/:id/stop — ends automation without force-closing positions. */
+  stopTradingSession(sessionId: string): Promise<StopTradingSessionResponse>;
   /**
    * GET /execution/confirmations/pending → `{ confirmations }` — the
    * SEMI_AUTO one-time confirmations queued by the SERVER. The client never
@@ -561,6 +571,17 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
         method: 'POST',
       }),
 
+    // Explicit AI capital allocation
+    getCapitalBudget: (brokerConnectionId) =>
+      request<CapitalBudgetView>(
+        `/execution/allocation?brokerConnectionId=${encodeURIComponent(brokerConnectionId)}`,
+      ),
+
+    updateCapitalBudget: (body) =>
+      request<CapitalBudgetView>('/execution/allocation', {
+        method: 'PUT',
+        body: JSON.stringify(body),
+      }),
     // Sprint 56 correction round 5: execution authority (#295/#298)
     getActiveTradingSession: () =>
       request<ActiveTradingSessionResponse>('/trading/sessions/active'),
@@ -578,6 +599,12 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
           method: 'POST',
           body: JSON.stringify(body),
         },
+      ),
+
+    stopTradingSession: (sessionId) =>
+      request<StopTradingSessionResponse>(
+        `/trading/sessions/${encodeURIComponent(sessionId)}/stop`,
+        { method: 'POST' },
       ),
 
     listPendingExecutionConfirmations: () =>
