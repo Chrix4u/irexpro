@@ -33,13 +33,13 @@ const PRIMARY_NAV: NavDestination[] = [
   { href: '/dashboard', label: 'Dashboard', Icon: DashboardIcon },
   { href: '/trade', label: 'AI Trader', Icon: TradeIcon, matchPrefix: true },
   { href: '/live-account', label: 'Live Account', Icon: PortfolioIcon, matchPrefix: true },
-]
+];
 
 const SECONDARY_NAV: NavDestination[] = [
   { href: '/onboarding/broker', label: 'Broker Accounts', Icon: PlugIcon },
   { href: '/security', label: 'Security', Icon: ShieldIcon },
   { href: '/payments/success', label: 'Fees & Payments', Icon: PaymentsIcon, matchPrefix: true },
-]
+];
 
 function isActive(pathname: string | null, dest: NavDestination): boolean {
   if (!pathname) return false;
