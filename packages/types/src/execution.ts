@@ -46,6 +46,49 @@ export interface TradeExecutionView {
   updatedAt: string;
 }
 
+// ─── Explicit AI capital allocation ──────────────────────────────────────────
+
+export interface CapitalBudgetBreakdownByInstrument {
+  instrument: string;
+  committedCapital: string;
+  allocatedLots: string;
+}
+
+export interface CapitalBudgetBreakdownByStrategy {
+  strategyCode: string;
+  committedCapital: string;
+}
+
+export interface CapitalBudgetBreakdownByDirection {
+  direction: TradeExecutionDirection;
+  committedCapital: string;
+}
+
+/**
+ * Authoritative per-broker AI capital allocation. configured=false means
+ * the user has not granted capital authority yet; broker equity is display
+ * truth only and must never be treated as automatically allocated.
+ */
+export interface CapitalBudgetView {
+  brokerConnectionId: string;
+  configured: boolean;
+  authoritativeEquity: string;
+  accountCurrency: string;
+  totalCapital: string;
+  committedCapital: string;
+  pendingOrderCommitments: string;
+  openPositionExposure: string;
+  inFlightCommitments: string;
+  availableCapital: string;
+  byInstrument: CapitalBudgetBreakdownByInstrument[];
+  byStrategy: CapitalBudgetBreakdownByStrategy[];
+  byDirection: CapitalBudgetBreakdownByDirection[];
+}
+
+export interface UpdateCapitalBudgetRequest {
+  brokerConnectionId: string;
+  totalCapital: string;
+}
 // ─── Execution authority: trading session (Sprint 56 correction round 5) ─────
 //
 // Issues #295/#298: the TradingSession is THE authoritative execution target.
@@ -120,6 +163,11 @@ export interface StartTradingSessionRequest {
 /** POST /trading/sessions/start → 201 bare session. */
 export type StartTradingSessionResponse = TradingSessionView;
 
+/** POST /trading/sessions/:id/stop -> session is ended; open positions are not force-closed. */
+export interface StopTradingSessionResponse {
+  message: string;
+  sessionId: string;
+}
 /** POST /trading/sessions/:id/mode request body (audited; bumps generation). */
 export interface ChangeTradingSessionModeRequest {
   executionMode: ExecutionMode;
