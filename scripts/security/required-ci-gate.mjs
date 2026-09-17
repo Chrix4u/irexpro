@@ -39,6 +39,9 @@ const WORKFLOW_RULES = [
     name: 'Backup Restore Rehearsal',
     patterns: [
       'apps/api/src/database/**',
+      'apps/api/scripts/validate-migration-scenario-d.ts',
+      'pnpm-lock.yaml',
+      'package.json',
       '.github/workflows/backup-restore-rehearsal.yml',
       'docs/runbooks/sprint-48-operational-security-readiness.md',
     ],
@@ -145,6 +148,17 @@ export function runSelfTests() {
     'database migration change',
   );
   assertEqual(
+    requiredWorkflowNames(['apps/api/scripts/validate-migration-scenario-d.ts']),
+    [
+      'Release Security',
+      'API CI',
+      'Risk Execution Concurrency',
+      'Database Migration Compatibility',
+      'Backup Restore Rehearsal',
+    ],
+    'shared migration-authority change',
+  );
+  assertEqual(
     requiredWorkflowNames(['scripts/deployment/deploy-staging.sh']),
     ['Release Security', 'Deployment Script Safety'],
     'deployment change',
@@ -191,6 +205,7 @@ export function runSelfTests() {
       'API CI',
       'Risk Execution Concurrency',
       'Database Migration Compatibility',
+      'Backup Restore Rehearsal',
       'Deployment Script Safety',
       'UI E2E',
       'Mobile CI',

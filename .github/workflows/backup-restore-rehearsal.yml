@@ -5,6 +5,9 @@ on:
   pull_request:
     paths:
       - 'apps/api/src/database/**'
+      - 'apps/api/scripts/validate-migration-scenario-d.ts'
+      - 'pnpm-lock.yaml'
+      - 'package.json'
       - '.github/workflows/backup-restore-rehearsal.yml'
       - 'docs/runbooks/sprint-48-operational-security-readiness.md'
 
@@ -12,6 +15,8 @@ permissions:
   contents: read
 
 env:
+  NODE_VERSION: '22'
+  PNPM_VERSION: '10.34.5'
   POSTGRES_CONTAINER_IMAGE: postgres:16-bookworm@sha256:92620daddcd947f8d5ab5ba66e848702fe443d87fed30c4cea8e389fd78dfc55 # Docker Official Image
   POSTGRES_PASSWORD: ci_disposable_restore_password
   SOURCE_DB: irexpro_backup_source
@@ -60,8 +65,6 @@ jobs:
       - name: Seed disposable source database
         run: |
           set -euo pipefail
-          # -i is required so the heredoc reaches psql inside the client
-          # container; without it Docker closes stdin and creates an empty dump.
           docker run --rm -i --network host \
             -e PGPASSWORD="$POSTGRES_PASSWORD" \
             "$POSTGRES_CONTAINER_IMAGE" \
@@ -194,5 +197,208 @@ jobs:
           path: |
             security-artifacts/synthetic-restore-evidence.txt
             security-artifacts/synthetic-restore.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  application-schema-restore:
+    name: Migrated iRexPro Schema Restore Rehearsal
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16-bookworm@sha256:92620daddcd947f8d5ab5ba66e848702fe443d87fed30c4cea8e389fd78dfc55 # Docker Official Image
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci_disposable_restore_password
+          POSTGRES_DB: irexpro_backup_source
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d irexpro_backup_source"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+
+      - name: Verify exact candidate checkout
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$CANDIDATE_SHA"
+          echo "CHECKED_OUT_SHA=$actual" >> "$GITHUB_ENV"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Install dependencies from frozen lockfile
+        run: pnpm install --frozen-lockfile
+
+      - name: Create sanitized evidence directory
+        run: mkdir -p security-artifacts
+
+      - name: Apply complete discovered migration chain and seed representative rows
+        working-directory: apps/api
+        run: pnpm exec ts-node scripts/validate-migration-scenario-d.ts
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: '5432'
+          DB_USER: postgres
+          DB_PASSWORD: ${{ env.POSTGRES_PASSWORD }}
+          DB_NAME: ${{ env.SOURCE_DB }}
+
+      - name: Record source migration state
+        run: |
+          set -Eeuo pipefail
+          source_migration_count="$(docker run --rm --network host \
+            -e PGPASSWORD="$POSTGRES_PASSWORD" \
+            "$POSTGRES_CONTAINER_IMAGE" \
+            psql -At -h 127.0.0.1 -U postgres -d "$SOURCE_DB" \
+              -c 'SELECT count(*) FROM migrations_table')"
+          test "$source_migration_count" -ge 20
+
+          source_migration_digest="$(docker run --rm --network host \
+            -e PGPASSWORD="$POSTGRES_PASSWORD" \
+            "$POSTGRES_CONTAINER_IMAGE" \
+            psql -At -h 127.0.0.1 -U postgres -d "$SOURCE_DB" \
+              -c "SELECT md5(string_agg(timestamp::text || ':' || name, ',' ORDER BY timestamp, name)) FROM migrations_table")"
+          test -n "$source_migration_digest"
+
+          echo "SOURCE_MIGRATION_COUNT=$source_migration_count" >> "$GITHUB_ENV"
+          echo "SOURCE_MIGRATION_DIGEST=$source_migration_digest" >> "$GITHUB_ENV"
+
+      - name: Create application-schema backup and integrity digest
+        run: |
+          set -Eeuo pipefail
+          docker run --rm --network host \
+            -e PGPASSWORD="$POSTGRES_PASSWORD" \
+            -v "$PWD/security-artifacts:/evidence" \
+            "$POSTGRES_CONTAINER_IMAGE" \
+            pg_dump -h 127.0.0.1 -U postgres -d "$SOURCE_DB" \
+              --format=custom --no-owner --no-privileges \
+              --file=/evidence/application-schema-restore.dump
+
+          sha256sum security-artifacts/application-schema-restore.dump \
+            | awk '{print $1}' > security-artifacts/application-schema-restore.sha256
+
+      - name: Restore application schema into isolated database
+        run: |
+          set -Eeuo pipefail
+          docker run --rm --network host \
+            -e PGPASSWORD="$POSTGRES_PASSWORD" \
+            "$POSTGRES_CONTAINER_IMAGE" \
+            psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U postgres -d postgres \
+              -c "CREATE DATABASE $RESTORE_DB"
+
+          docker run --rm --network host \
+            -e PGPASSWORD="$POSTGRES_PASSWORD" \
+            -v "$PWD/security-artifacts:/evidence" \
+            "$POSTGRES_CONTAINER_IMAGE" \
+            pg_restore -h 127.0.0.1 -U postgres -d "$RESTORE_DB" \
+              --no-owner --no-privileges --exit-on-error \
+              /evidence/application-schema-restore.dump
+
+      - name: Verify restored application schema, migration state and representative data
+        run: |
+          set -Eeuo pipefail
+
+          psql_restore() {
+            docker run --rm --network host \
+              -e PGPASSWORD="$POSTGRES_PASSWORD" \
+              "$POSTGRES_CONTAINER_IMAGE" \
+              psql -At -v ON_ERROR_STOP=1 -h 127.0.0.1 -U postgres -d "$RESTORE_DB" "$@"
+          }
+
+          restored_migration_count="$(psql_restore -c 'SELECT count(*) FROM migrations_table')"
+          restored_migration_digest="$(psql_restore -c "SELECT md5(string_agg(timestamp::text || ':' || name, ',' ORDER BY timestamp, name)) FROM migrations_table")"
+          test "$restored_migration_count" = "$SOURCE_MIGRATION_COUNT"
+          test "$restored_migration_digest" = "$SOURCE_MIGRATION_DIGEST"
+
+          user_rows="$(psql_restore -c "SELECT count(*) FROM identity.users WHERE email='scenario-d@test.local'")"
+          reconciled_trade_rows="$(psql_restore -c "SELECT count(*) FROM broker_reconciliation.broker_reconciled_trades WHERE broker_trade_id='trade-d-001'")"
+          billing_cycle_rows="$(psql_restore -c "SELECT count(*) FROM performance_billing.performance_fee_billing_cycles")"
+          test "$user_rows" = '1'
+          test "$reconciled_trade_rows" = '1'
+          test "$billing_cycle_rows" -ge 1
+
+          uuid_extension_rows="$(psql_restore -c "SELECT count(*) FROM pg_extension WHERE extname='uuid-ossp'")"
+          test "$uuid_extension_rows" = '1'
+
+          default_count="$(psql_restore -c "SELECT count(*) FROM pg_attrdef d JOIN pg_attribute a ON a.attrelid=d.adrelid AND a.attnum=d.adnum WHERE d.adrelid IN ('broker_reconciliation.broker_trade_reconciliation_runs'::regclass,'broker_reconciliation.broker_reconciled_trades'::regclass,'performance_billing.performance_fee_billing_cycles'::regclass) AND a.attname='id' AND pg_get_expr(d.adbin,d.adrelid)='gen_random_uuid()'")"
+          test "$default_count" = '3'
+
+          direction_check_rows="$(psql_restore -c "SELECT count(*) FROM pg_constraint WHERE conname='chk_trades_direction' AND contype='c' AND convalidated")"
+          test "$direction_check_rows" = '1'
+
+          fk_rows="$(psql_restore -c "SELECT count(*) FROM pg_constraint WHERE contype='f'")"
+          test "$fk_rows" -ge 1
+
+          digest="$(cat security-artifacts/application-schema-restore.sha256)"
+          {
+            echo "candidate_sha=$CANDIDATE_SHA"
+            echo "checked_out_sha=$CHECKED_OUT_SHA"
+            echo "trigger_sha=$TRIGGER_SHA"
+            echo 'database_version=PostgreSQL 16'
+            echo 'source=complete_discovered_irexpro_migration_chain'
+            echo "backup_sha256=$digest"
+            echo "migration_count=$restored_migration_count"
+            echo "migration_state_digest=$restored_migration_digest"
+            echo "representative_user_rows=$user_rows"
+            echo "representative_reconciled_trade_rows=$reconciled_trade_rows"
+            echo "representative_billing_cycle_rows=$billing_cycle_rows"
+            echo 'uuid_ossp_present=true'
+            echo 'critical_uuid_defaults_present=true'
+            echo 'domain_check_constraint_present=true'
+            echo 'foreign_keys_present=true'
+            echo 'raw_dump_retained=false'
+            echo 'production_data_used=false'
+            echo 'result=PASS'
+            echo "completed_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > security-artifacts/application-schema-restore-evidence.txt
+
+      - name: Destroy restored database and raw application dump
+        if: always()
+        run: |
+          set +e
+          docker run --rm --network host \
+            -e PGPASSWORD="$POSTGRES_PASSWORD" \
+            "$POSTGRES_CONTAINER_IMAGE" \
+            psql -h 127.0.0.1 -U postgres -d postgres \
+              -c "DROP DATABASE IF EXISTS $RESTORE_DB WITH (FORCE)"
+          rm -f security-artifacts/application-schema-restore.dump
+
+      - name: Assert raw application backup is not retained
+        run: |
+          set -Eeuo pipefail
+          test ! -e security-artifacts/application-schema-restore.dump
+          test -s security-artifacts/application-schema-restore-evidence.txt
+          test -s security-artifacts/application-schema-restore.sha256
+          grep -Fx "candidate_sha=$CANDIDATE_SHA" security-artifacts/application-schema-restore-evidence.txt
+          grep -Fx "checked_out_sha=$CANDIDATE_SHA" security-artifacts/application-schema-restore-evidence.txt
+          grep -Fx 'raw_dump_retained=false' security-artifacts/application-schema-restore-evidence.txt
+          grep -Fx 'production_data_used=false' security-artifacts/application-schema-restore-evidence.txt
+          grep -Fx 'result=PASS' security-artifacts/application-schema-restore-evidence.txt
+
+      - name: Upload sanitized application restore evidence
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: application-schema-postgres-restore-evidence
+          path: |
+            security-artifacts/application-schema-restore-evidence.txt
+            security-artifacts/application-schema-restore.sha256
           if-no-files-found: error
           retention-days: 14
