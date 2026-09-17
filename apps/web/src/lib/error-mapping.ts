@@ -4,21 +4,22 @@
  *
  * UX-1 utility.
  *
- * SECURITY: This function NEVER exposes SQL errors, stack traces, raw
- * exception names, credentials, tokens, internal URLs, or anything that
- * looks like internal diagnostics. Any unrecognized shape falls back to a
- * generic "Something went wrong" message.
+ * SECURITY: This function may surface a bounded backend message only when it
+ * came from a client-action 4xx response and passes the safe-detail filter.
+ * SQL errors, stack traces, filesystem paths, credentials, tokens, internal
+ * URLs, and server-side 5xx diagnostics remain hidden behind generic copy.
  *
  * Recognized error codes:
  * - TRADING_NOT_READY        → "Your trading setup is not ready." + missingSteps
  * - VALIDATION_ERROR         → "Please check the highlighted fields and try again."
  * - UNAUTHORIZED             → "Your session has expired. Please sign in again."
- * - FORBIDDEN                → "You don't have permission to perform this action."
- * - BROKER_CONNECTION_FAILED → "The broker connection test failed. Please check your credentials."
- * - BROKER_HEALTH_STALE      → "Your broker health check is outdated. Please test your connection."
- * - RISK_LIMIT_EXCEEDED      → "The requested action exceeds your risk limits."
+ * - FORBIDDEN                → safe server detail when available, otherwise permission copy
+ * - BROKER_CONNECTION_FAILED → safe server detail when available, otherwise connection copy
+ * - BROKER_HEALTH_STALE      → safe server detail when available, otherwise health copy
+ * - RISK_LIMIT_EXCEEDED      → safe server detail when available, otherwise risk copy
  * - Network errors           → "Unable to reach the server. Please check your connection."
- * - Default                  → "Something went wrong. Please try again."
+ * - Unknown safe 4xx         → bounded user-action detail supplied by the API
+ * - Everything else         → "Something went wrong. Please try again."
  */
 
 export interface ApiErrorResult {
@@ -32,6 +33,7 @@ export interface ApiErrorResult {
 
 const DEFAULT_MESSAGE = 'Something went wrong. Please try again.';
 const NETWORK_MESSAGE = 'Unable to reach the server. Please check your connection.';
+const MAX_SAFE_DETAIL_LENGTH = 500;
 
 /** Map of known error codes → safe user-facing copy. */
 const CODE_MESSAGES: Record<string, string> = {
@@ -101,30 +103,63 @@ function isNetworkError(err: unknown): boolean {
   return false;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' ? (value as Record<string, unknown>) : undefined;
+}
+
 /**
- * Safely extracts a `code` string from a backend error body. Looks in the
- * common locations used by the iRexPro API client and various HTTP libraries.
+ * ApiClientError stores the parsed API body under `.raw`. Other callers may
+ * surface axios/fetch-like shapes. Resolve the HTTP status without trusting a
+ * single transport implementation.
+ */
+function extractStatus(err: unknown): number | undefined {
+  const anyErr = asRecord(err);
+  if (!anyErr) return undefined;
+
+  const response = asRecord(anyErr.response);
+  const data = asRecord(anyErr.data);
+  const raw = asRecord(anyErr.raw);
+  const candidates = [anyErr.statusCode, anyErr.status, response?.status, data?.statusCode, data?.status, raw?.statusCode, raw?.status];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === 'number' && Number.isInteger(candidate) && candidate >= 0 && candidate <= 599) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Safely extracts a `code` string from a backend error body. Includes the
+ * shared ApiClientError `.raw` body in addition to common HTTP-client shapes.
  */
 function extractCode(err: unknown): string | undefined {
-  if (!err || typeof err !== 'object') return undefined;
-  const anyErr = err as Record<string, unknown>;
+  const anyErr = asRecord(err);
+  if (!anyErr) return undefined;
+
+  const response = asRecord(anyErr.response);
+  const responseData = asRecord(response?.data);
+  const data = asRecord(anyErr.data);
+  const body = asRecord(anyErr.body);
+  const nestedError = asRecord(anyErr.error);
+  const responseError = asRecord(responseData?.error);
+  const raw = asRecord(anyErr.raw);
+  const rawError = asRecord(raw?.error);
 
   const candidates: unknown[] = [
     anyErr.code,
-    (anyErr.response as Record<string, unknown> | undefined)?.data &&
-      ((anyErr.response as Record<string, unknown>).data as Record<string, unknown>).code,
-    (anyErr.data as Record<string, unknown> | undefined)?.code,
-    (anyErr.body as Record<string, unknown> | undefined)?.code,
-    (anyErr.error as Record<string, unknown> | undefined)?.code,
-    (anyErr.response as Record<string, unknown> | undefined)?.data &&
-      ((anyErr.response as Record<string, unknown>).data as Record<string, unknown>).error &&
-      (((anyErr.response as Record<string, unknown>).data as Record<string, unknown>).error as Record<string, unknown>)
-        .code,
+    responseData?.code,
+    data?.code,
+    body?.code,
+    nestedError?.code,
+    responseError?.code,
+    raw?.code,
+    rawError?.code,
   ];
 
-  for (const c of candidates) {
-    if (typeof c === 'string' && c.length > 0 && c.length <= 128) {
-      return c;
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.length > 0 && candidate.length <= 128) {
+      return candidate;
     }
   }
   return undefined;
@@ -135,24 +170,29 @@ function extractCode(err: unknown): string | undefined {
  * each to a known onboarding path. Unknown / suspicious step keys are dropped.
  */
 function extractMissingSteps(err: unknown): string[] | undefined {
-  if (!err || typeof err !== 'object') return undefined;
-  const anyErr = err as Record<string, unknown>;
+  const anyErr = asRecord(err);
+  if (!anyErr) return undefined;
+
+  const response = asRecord(anyErr.response);
+  const responseData = asRecord(response?.data);
+  const data = asRecord(anyErr.data);
+  const raw = asRecord(anyErr.raw);
 
   const candidates: unknown[] = [
-    (anyErr.response as Record<string, unknown> | undefined)?.data &&
-      ((anyErr.response as Record<string, unknown>).data as Record<string, unknown>).missingSteps,
-    (anyErr.response as Record<string, unknown> | undefined)?.data &&
-      ((anyErr.response as Record<string, unknown>).data as Record<string, unknown>).missing_steps,
-    (anyErr.data as Record<string, unknown> | undefined)?.missingSteps,
-    (anyErr.data as Record<string, unknown> | undefined)?.missing_steps,
+    responseData?.missingSteps,
+    responseData?.missing_steps,
+    data?.missingSteps,
+    data?.missing_steps,
     anyErr.missingSteps,
     anyErr.missing_steps,
+    raw?.missingSteps,
+    raw?.missing_steps,
   ];
 
-  for (const c of candidates) {
-    if (!Array.isArray(c)) continue;
+  for (const candidate of candidates) {
+    if (!Array.isArray(candidate)) continue;
     const mapped: string[] = [];
-    for (const step of c) {
+    for (const step of candidate) {
       if (typeof step !== 'string') continue;
       const key = step.toLowerCase().trim();
       const path = KNOWN_ONBOARDING_STEPS[key];
@@ -165,21 +205,58 @@ function extractMissingSteps(err: unknown): string[] | undefined {
 }
 
 /**
+ * Return a backend detail only when it is suitable for direct presentation.
+ * This is deliberately conservative: only 4xx client-action responses qualify,
+ * the message is bounded, and strings that look like diagnostics or secrets
+ * are rejected. 5xx messages are never surfaced.
+ */
+function extractSafeBackendMessage(err: unknown): string | undefined {
+  const status = extractStatus(err);
+  if (status === undefined || status < 400 || status >= 500) return undefined;
+
+  const anyErr = asRecord(err);
+  if (!anyErr) return undefined;
+  const response = asRecord(anyErr.response);
+  const responseData = asRecord(response?.data);
+  const data = asRecord(anyErr.data);
+  const body = asRecord(anyErr.body);
+  const raw = asRecord(anyErr.raw);
+
+  const candidates: unknown[] = [
+    raw?.message,
+    responseData?.message,
+    data?.message,
+    body?.message,
+    anyErr.message,
+  ];
+
+  const unsafePattern =
+    /(queryfailederror|typeorm|prisma|postgres|sqlstate|stack\s*trace|\/node_modules\/|\/home\/|[a-z]:\\|\bselect\b.+\bfrom\b|\binsert\s+into\b|\bdelete\s+from\b|\brelation\s+["'`]|\bbearer\s+[a-z0-9._~-]+|(?:api[_-]?key|api[_-]?secret|client[_-]?secret|access[_-]?token|refresh[_-]?token|password)\s*[:=])/i;
+  const internalUrlPattern = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|[^\s/]*\.internal)(?::\d+)?/i;
+
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'string') continue;
+    const normalized = candidate.replace(/\s+/g, ' ').trim();
+    if (!normalized || normalized.length > MAX_SAFE_DETAIL_LENGTH) continue;
+    if (unsafePattern.test(normalized) || internalUrlPattern.test(normalized)) continue;
+    return normalized;
+  }
+
+  return undefined;
+}
+
+/**
  * Determines whether the HTTP status code suggests an auth/network failure we
  * should special-case. Returns the matching message or undefined.
  */
 function messageForStatus(err: unknown): string | undefined {
-  if (!err || typeof err !== 'object') return undefined;
-  const anyErr = err as Record<string, unknown>;
-  const status =
-    (anyErr.response as Record<string, unknown> | undefined)?.status ??
-    anyErr.status ??
-    (anyErr.data as Record<string, unknown> | undefined)?.status;
-  if (typeof status !== 'number') return undefined;
+  const status = extractStatus(err);
+  if (status === undefined) return undefined;
 
   if (status === 401) return CODE_MESSAGES.UNAUTHORIZED;
-  if (status === 403) return CODE_MESSAGES.FORBIDDEN;
+  if (status === 403) return extractSafeBackendMessage(err) ?? CODE_MESSAGES.FORBIDDEN;
   if (status === 0 || status >= 500) return NETWORK_MESSAGE;
+  if (status >= 400) return extractSafeBackendMessage(err) ?? DEFAULT_MESSAGE;
   return undefined;
 }
 
@@ -194,7 +271,15 @@ export function mapApiError(error: unknown): ApiErrorResult {
   // 2. Recognized backend error code.
   const code = extractCode(error);
   if (code && Object.prototype.hasOwnProperty.call(CODE_MESSAGES, code)) {
-    const result: ApiErrorResult = { message: CODE_MESSAGES[code], code };
+    const baseMessage = CODE_MESSAGES[code];
+    // Keep validation/auth messages intentionally generic; they may contain
+    // sensitive field-level details. Other 4xx domain errors may surface the
+    // server's bounded, sanitized explanation so the toast is actionable.
+    const safeDetail =
+      code === 'VALIDATION_ERROR' || code === 'UNAUTHORIZED'
+        ? undefined
+        : extractSafeBackendMessage(error);
+    const result: ApiErrorResult = { message: safeDetail ?? baseMessage, code };
     if (code === 'TRADING_NOT_READY') {
       const steps = extractMissingSteps(error);
       // If the API didn't surface specific steps, default to all onboarding
@@ -208,13 +293,14 @@ export function mapApiError(error: unknown): ApiErrorResult {
     return result;
   }
 
-  // 3. Status-code-based inference (e.g. 401/403/5xx with no recognised code).
+  // 3. Status-code-based inference. Safe 4xx domain messages are retained;
+  // auth and server failures remain generic/fail-closed.
   const statusMessage = messageForStatus(error);
   if (statusMessage) {
-    return { message: statusMessage };
+    return { message: statusMessage, ...(code ? { code } : {}) };
   }
 
-  // 4. Default — never leak raw error details.
+  // 4. Default — never leak raw error details without a qualifying 4xx status.
   return { message: DEFAULT_MESSAGE };
 }
 
