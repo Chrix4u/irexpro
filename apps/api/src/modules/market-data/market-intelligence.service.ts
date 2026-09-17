@@ -117,7 +117,13 @@ export class MarketIntelligenceService {
           rawCandles,
         );
       } catch {
-        await this.auditFailure(userId, connection.id, instrument, timeframe, 'simulator-unavailable');
+        await this.auditFailure(
+          userId,
+          connection.id,
+          instrument,
+          timeframe,
+          'simulator-unavailable',
+        );
         this.logger.warn(
           `Paper market-data request failed user=${userId} instrument=${instrument} timeframe=${timeframe}`,
         );
