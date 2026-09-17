@@ -18,6 +18,13 @@ export function AutoRevealAlert({
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  // Complex React children are recreated frequently by parent renders. Treat
+  // them as one mounted alert instead of repeatedly scrolling the page. Plain
+  // text alerts may reveal again when their actual message changes.
+  const revealToken =
+    typeof children === 'string' || typeof children === 'number'
+      ? String(children)
+      : variant;
 
   useEffect(() => {
     if (variant !== 'error' && variant !== 'warning') return;
@@ -26,14 +33,16 @@ export function AutoRevealAlert({
 
     const frame = window.requestAnimationFrame(() => {
       const rect = element.getBoundingClientRect();
-      if (rect.top < 0 || rect.bottom < 0) {
+      // The user has scrolled completely below this alert. A partially visible
+      // alert is left alone to avoid unnecessary page motion.
+      if (rect.bottom < 0) {
         element.scrollIntoView({ behavior: 'smooth', block: 'center' });
         element.focus({ preventScroll: true });
       }
     });
 
     return () => window.cancelAnimationFrame(frame);
-  }, [variant, children]);
+  }, [variant, revealToken]);
 
   return (
     <div
