@@ -2,7 +2,6 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User, UserStatus } from '../users/entities/user.entity';
-import { UserProfile } from '../users/entities/user-profile.entity';
 import { RiskProfile } from '../risk/entities/risk-profile.entity';
 import { BrokerConnection } from '../broker/entities/broker-connection.entity';
 import { BrokerConnectionStatus } from '../broker/interfaces/broker-adapter.interface';
@@ -25,8 +24,6 @@ export class OnboardingService {
   constructor(
     @InjectRepository(User)
     private userRepo: Repository<User>,
-    @InjectRepository(UserProfile)
-    private profileRepo: Repository<UserProfile>,
     @InjectRepository(RiskProfile)
     private riskProfileRepo: Repository<RiskProfile>,
     @InjectRepository(BrokerConnection)
