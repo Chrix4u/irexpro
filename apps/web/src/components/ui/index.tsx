@@ -184,7 +184,7 @@ const WORKSPACE_NAV: WorkspaceNavGroup[] = [
       { href: '/payments/success', label: 'Fees & Payments', Icon: PaymentsIcon, matchPrefix: true },
     ],
   },
-]
+];
 
 function navItemActive(activeRoute: string | undefined, item: WorkspaceNavItem): boolean {
   if (!activeRoute) return false;
