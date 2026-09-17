@@ -105,6 +105,29 @@ jobs:
       - name: Validate EAS release configuration
         run: pnpm --filter @irexpro/mobile validate:release-config
 
+      - name: Test EAS preview and production API isolation policy
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          staging_api='https://irexpro.lightworldtech.com/api/v1'
+          distinct_production_fixture='https://prod-api.example.invalid/api/v1'
+
+          EAS_BUILD_PROFILE=preview \
+          EXPO_PUBLIC_API_BASE_URL="$staging_api" \
+            node apps/mobile/scripts/validate-release-config.cjs --eas-build
+
+          if EAS_BUILD_PROFILE=production \
+            EXPO_PUBLIC_API_BASE_URL="$staging_api" \
+              node apps/mobile/scripts/validate-release-config.cjs --eas-build; then
+            echo 'Production EAS validation unexpectedly accepted the staging API endpoint.' >&2
+            exit 1
+          fi
+
+          EAS_BUILD_PROFILE=production \
+          EXPO_PUBLIC_API_BASE_URL="$distinct_production_fixture" \
+            node apps/mobile/scripts/validate-release-config.cjs --eas-build
+
       - name: Validate Expo SDK dependency alignment
         run: pnpm --filter @irexpro/mobile exec expo install --check
 
