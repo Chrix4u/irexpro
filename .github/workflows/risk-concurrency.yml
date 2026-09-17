@@ -3,6 +3,7 @@ name: Risk Execution Concurrency
 on:
   push:
     branches:
+      - main
       - sprint-32-risk-engine-production-hardening
     paths:
       - 'apps/api/**'
