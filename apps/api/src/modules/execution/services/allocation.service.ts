@@ -455,7 +455,7 @@ export class AllocationService {
            (id, user_id, logical_account_key, account_currency, total_capital,
             max_instrument_concentration, max_strategy_concentration)
          VALUES (gen_random_uuid(), $1, $2, $3, $4, '50.00', '60.00')
-         ON CONFLICT ON CONSTRAINT uq_capital_budgets_user_account
+         ON CONFLICT (user_id, logical_account_key)
          DO UPDATE SET
            account_currency = EXCLUDED.account_currency,
            total_capital = EXCLUDED.total_capital,
