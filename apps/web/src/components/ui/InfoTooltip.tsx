@@ -14,6 +14,7 @@
  * - The panel has `role="tooltip"`.
  * - Positioned above the icon by default; flips below if it would overflow the
  *   top of the viewport.
+ * - Horizontally clamps inside the viewport on narrow/mobile screens.
  * - Styled with the existing CSS variables (--bg-elevated, --border, etc.).
  */
 
@@ -38,7 +39,8 @@ export function InfoTooltip({ label, content, children }: InfoTooltipProps) {
   const [open, setOpen] = useState(false);
   const [placement, setPlacement] = useState<Placement>('top');
 
-  // Recompute placement whenever the tooltip opens (or the viewport changes).
+  // Recompute placement and horizontal viewport containment whenever the
+  // tooltip opens or the viewport/scroll position changes.
   useLayoutEffect(() => {
     if (!open) return;
     const trigger = triggerRef.current;
@@ -48,12 +50,35 @@ export function InfoTooltip({ label, content, children }: InfoTooltipProps) {
     const recompute = () => {
       const triggerRect = trigger.getBoundingClientRect();
       const PANEL_HEIGHT_ESTIMATE = panel.offsetHeight || 80;
-      const PADDING = 12;
+      const EDGE_PADDING = 12;
+
       // If there isn't enough room above, show below.
-      if (triggerRect.top < PANEL_HEIGHT_ESTIMATE + PADDING) {
+      if (triggerRect.top < PANEL_HEIGHT_ESTIMATE + EDGE_PADDING) {
         setPlacement('bottom');
       } else {
         setPlacement('top');
+      }
+
+      // The base tooltip CSS centres the panel above/below the trigger with
+      // left:50% + translateX(-50%). Keep that geometry, but constrain the
+      // panel to the visual viewport so long risk explanations never clip on
+      // 360px-class phones. Reset first so repeated scroll/resize calls do not
+      // accumulate the previous correction.
+      panel.style.maxWidth = `calc(100vw - ${EDGE_PADDING * 2}px)`;
+      panel.style.transform = 'translateX(-50%)';
+      const panelRect = panel.getBoundingClientRect();
+      const viewportRight = window.innerWidth - EDGE_PADDING;
+      let shiftX = 0;
+
+      if (panelRect.right > viewportRight) {
+        shiftX -= panelRect.right - viewportRight;
+      }
+      if (panelRect.left + shiftX < EDGE_PADDING) {
+        shiftX += EDGE_PADDING - (panelRect.left + shiftX);
+      }
+
+      if (Math.abs(shiftX) > 0.5) {
+        panel.style.transform = `translateX(calc(-50% + ${shiftX}px))`;
       }
     };
 

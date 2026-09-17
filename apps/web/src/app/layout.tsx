@@ -5,6 +5,8 @@ import './cockpit.css';
 import './terminal-mobile.css';
 import './workspace-scroll.css';
 import './auth-layout-fixes.css';
+import './workspace-pages.css';
+import './legacy-page-polish.css';
 import { AuthProvider } from '@/context/auth-context';
 import { NotificationProvider } from '@/components/notifications/NotificationProvider';
 

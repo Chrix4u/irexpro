@@ -1,0 +1,66 @@
+/* Targeted presentation upgrade for legacy account/onboarding screens.
+   Route scoping comes from DashboardShell data-active-route; this changes only
+   visual hierarchy, never form or broker/risk behavior. */
+
+.terminal-shell[data-active-route='/onboarding/risk'] .terminal-content > div:first-child,
+.terminal-shell[data-active-route='/onboarding/broker'] .terminal-content > div:first-child {
+  margin-bottom: 0 !important;
+  padding: clamp(1.1rem, 2vw, 1.6rem);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at top right, rgba(20, 184, 166, 0.11), transparent 34%),
+    linear-gradient(145deg, rgba(17, 24, 39, 0.92), rgba(10, 14, 26, 0.96));
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.16);
+}
+
+.terminal-shell[data-active-route='/onboarding/risk'] .terminal-content > div:first-child h1,
+.terminal-shell[data-active-route='/onboarding/broker'] .terminal-content > div:first-child h1 {
+  margin: 0 !important;
+  font-size: clamp(1.55rem, 3vw, 2.15rem);
+  line-height: 1.12;
+  letter-spacing: -0.035em;
+}
+
+.terminal-shell[data-active-route='/onboarding/risk'] .terminal-content > div:first-child p,
+.terminal-shell[data-active-route='/onboarding/broker'] .terminal-content > div:first-child p {
+  max-width: 820px !important;
+  margin-top: 0.65rem;
+  line-height: 1.7 !important;
+}
+
+.terminal-shell[data-active-route='/onboarding/risk'] .terminal-content,
+.terminal-shell[data-active-route='/onboarding/broker'] .terminal-content {
+  display: grid;
+  align-content: start;
+  gap: clamp(1rem, 1.5vw, 1.5rem);
+}
+
+.terminal-shell[data-active-route='/onboarding/risk'] .terminal-content > .card,
+.terminal-shell[data-active-route='/onboarding/broker'] .terminal-content > .card {
+  margin-top: 0 !important;
+}
+
+.terminal-shell[data-active-route='/onboarding/broker'] .terminal-content > .alert {
+  margin: 0;
+}
+
+@media (min-width: 1101px) {
+  .terminal-shell[data-active-route='/onboarding/broker'] .terminal-content > .card:nth-of-type(1),
+  .terminal-shell[data-active-route='/onboarding/broker'] .terminal-content > .card:nth-of-type(2) {
+    width: 100%;
+  }
+}
+
+@media (max-width: 700px) {
+  .terminal-shell[data-active-route='/onboarding/risk'] .terminal-content > div:first-child,
+  .terminal-shell[data-active-route='/onboarding/broker'] .terminal-content > div:first-child {
+    padding: 1rem;
+    border-radius: 14px;
+  }
+
+  .terminal-shell[data-active-route='/onboarding/risk'] .terminal-content > div:first-child > div:first-child,
+  .terminal-shell[data-active-route='/onboarding/broker'] .terminal-content > div:first-child > div:first-child {
+    margin-bottom: 0.6rem !important;
+  }
+}

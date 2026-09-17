@@ -224,7 +224,7 @@ export function DashboardShell({ user, onLogout, activeRoute, title, children }:
     : null;
 
   return (
-    <div className="dashboard-shell terminal-shell">
+    <div className="dashboard-shell terminal-shell" data-active-route={activeRoute}>
       <aside className="dashboard-sidebar terminal-sidebar">
         <Link href="/dashboard" className="dashboard-sidebar__logo terminal-sidebar__brand" aria-label="iRexPro dashboard">
           <span className="auth-layout__logo-mark terminal-sidebar__logo-mark">iR</span>
