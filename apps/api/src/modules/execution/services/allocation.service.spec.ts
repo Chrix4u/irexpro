@@ -95,7 +95,7 @@ const joinRow = (alloc: Partial<Record<string, unknown>> = {}) => ({
 
 describe('AllocationService — server-side authoritative capital layer (Round 6 §3)', () => {
   let service: AllocationService;
-  let brokerService: { getBrokerAccountState: jest.Mock };
+  let brokerService: { getBrokerAccountState: jest.Mock; findConnectionById: jest.Mock };
   /** In-memory store behind the fake manager. */
   let store: {
     allocations: Array<Record<string, unknown>>;
@@ -128,10 +128,13 @@ describe('AllocationService — server-side authoritative capital layer (Round 6
         );
       }
       if (sql.includes('INSERT INTO trading.capital_budgets')) {
-        const existing = store.budgets.some(
+        const existing = store.budgets.find(
           (b) => b.user_id === params?.[0] && b.logical_account_key === params?.[1],
         );
-        if (!existing) {
+        if (existing) {
+          existing.account_currency = params?.[2];
+          existing.total_capital = params?.[3];
+        } else {
           store.budgets.push({
             user_id: params?.[0],
             logical_account_key: params?.[1],
@@ -260,6 +263,17 @@ describe('AllocationService — server-side authoritative capital layer (Round 6
     };
     txRan = false;
     brokerService = {
+      findConnectionById: jest.fn().mockImplementation(async (connectionId: string, userId: string) => {
+        const found = store.connections.find(
+          (connection) => connection.id === connectionId && connection.user_id === userId,
+        );
+        if (!found) throw new Error('connection not found');
+        return {
+          id: found.id,
+          userId: found.user_id,
+          logicalAccountKey: found.logical_account_key,
+        };
+      }),
       getBrokerAccountState: jest.fn().mockImplementation(async () =>
         store.seedAccountState
           ? {
@@ -277,6 +291,32 @@ describe('AllocationService — server-side authoritative capital layer (Round 6
       allocationRepo() as never,
       budgetRepo() as never,
     );
+  });
+
+  describe('explicit user capital budget', () => {
+    it('reports authoritative equity without auto-configuring a budget', async () => {
+      store.budgets = [];
+
+      const view = await service.getUserCapitalBudget(USER, CONN);
+
+      expect(view.configured).toBe(false);
+      expect(view.authoritativeEquity).toBe('10000');
+      expect(view.totalCapital).toBe('0');
+      expect(store.budgets).toHaveLength(0);
+    });
+
+    it('persists an explicit allocation and never permits more than authoritative equity', async () => {
+      store.budgets = [];
+      const view = await service.setUserCapitalBudget(USER, CONN, '2500.00');
+
+      expect(view.configured).toBe(true);
+      expect(view.totalCapital).toBe('2500');
+      expect(view.availableCapital).toBe('2500');
+
+      await expect(
+        service.setUserCapitalBudget(USER, CONN, '10000.01'),
+      ).rejects.toMatchObject({ code: 'ALLOCATION_INSUFFICIENT_CAPITAL' });
+    });
   });
 
   // ─── Reservation ────────────────────────────────────────────────────────
@@ -420,25 +460,10 @@ describe('AllocationService — server-side authoritative capital layer (Round 6
       expect(alloc.status).toBe(CapitalAllocationStatus.ACTIVE);
     });
 
-    // ─── Budget seeding (§1c — provable or fail-closed) ──────────────────
+    // ─── Explicit user budget authority ───────────────────────────────────
 
-    it('seeds the explicit budget ONCE from the authoritative account state when absent', async () => {
+    it('fail-closes when no explicit user capital budget is configured', async () => {
       store.budgets = [];
-      const alloc = await service.resolveOrAllocate({
-        intent: intent('intent-1'),
-        logicalAccountKey: KEY,
-        sized: sized({ allocatedCapital: '5000' }),
-      });
-      expect(alloc.status).toBe(CapitalAllocationStatus.ACTIVE);
-      // The seeded baseline is the authoritative equity.
-      expect(brokerService.getBrokerAccountState).toHaveBeenCalledWith(CONN);
-      expect(store.budgets).toHaveLength(1);
-      expect(store.budgets[0].total_capital).toBe('10000');
-    });
-
-    it('fail-closes with ALLOCATION_BUDGET_UNPROVABLE when neither the row nor the authoritative state exists (§1c)', async () => {
-      store.budgets = [];
-      store.seedAccountState = null;
       await expect(
         service.resolveOrAllocate({
           intent: intent('intent-1'),
@@ -446,6 +471,9 @@ describe('AllocationService — server-side authoritative capital layer (Round 6
           sized: sized({ allocatedCapital: '100' }),
         }),
       ).rejects.toMatchObject({ code: 'ALLOCATION_BUDGET_UNPROVABLE' });
+
+      expect(brokerService.getBrokerAccountState).not.toHaveBeenCalled();
+      expect(store.budgets).toHaveLength(0);
     });
 
     // ─── Round 7 (P0 allocation-scope fix) ─────────────────────────────
