@@ -4,6 +4,37 @@
  * and main content each own their vertical scrolling independently. Mobile
  * keeps the existing document-flow + bottom-navigation behaviour.
  */
+
+/* Match the web portal's premium scrollbar globally so document/body scrolling,
+ * authenticated workspace scrolling, and nested scrollable panels/tables all
+ * use one consistent treatment instead of falling back to browser defaults. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: var(--radius-full);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+
 @media (min-width: 701px) {
   .admin-shell:not(.admin-shell--loading) {
     height: 100vh;
@@ -29,38 +60,5 @@
     overflow-y: auto;
     overscroll-behavior-y: contain;
     scrollbar-gutter: stable;
-  }
-
-  /* Match the trader workspace with the same compact scrollbar treatment. */
-  .admin-shell:not(.admin-shell--loading) > .sidebar,
-  .admin-shell:not(.admin-shell--loading) > .content {
-    scrollbar-width: thin;
-    scrollbar-color: var(--border) transparent;
-  }
-
-  .admin-shell:not(.admin-shell--loading) > .sidebar::-webkit-scrollbar,
-  .admin-shell:not(.admin-shell--loading) > .content::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
-  }
-
-  .admin-shell:not(.admin-shell--loading) > .sidebar::-webkit-scrollbar-track,
-  .admin-shell:not(.admin-shell--loading) > .content::-webkit-scrollbar-track {
-    background: transparent;
-  }
-
-  .admin-shell:not(.admin-shell--loading) > .sidebar::-webkit-scrollbar-thumb,
-  .admin-shell:not(.admin-shell--loading) > .content::-webkit-scrollbar-thumb {
-    background: var(--border);
-    border-radius: var(--radius-full);
-    border: 1px solid transparent;
-    background-clip: padding-box;
-  }
-
-  .admin-shell:not(.admin-shell--loading) > .sidebar::-webkit-scrollbar-thumb:hover,
-  .admin-shell:not(.admin-shell--loading) > .content::-webkit-scrollbar-thumb:hover {
-    background: var(--text-muted);
-    background-clip: padding-box;
-    border: 1px solid transparent;
   }
 }
