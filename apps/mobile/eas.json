@@ -7,13 +7,11 @@
     "base": {
       "node": "22.23.2",
       "pnpm": "10.34.5",
-      "credentialsSource": "remote",
-      "env": {
-        "EXPO_PUBLIC_API_BASE_URL": "https://irexpro.lightworldtech.com/api/v1"
-      }
+      "credentialsSource": "remote"
     },
     "development": {
       "extends": "base",
+      "environment": "development",
       "distribution": "internal",
       "env": {
         "EXPO_PUBLIC_APP_ENV": "development",
@@ -22,6 +20,7 @@
     },
     "preview": {
       "extends": "base",
+      "environment": "preview",
       "distribution": "internal",
       "env": {
         "EXPO_PUBLIC_APP_ENV": "staging",
@@ -30,11 +29,11 @@
     },
     "production": {
       "extends": "base",
+      "environment": "production",
       "distribution": "store",
       "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_APP_ENV": "production",
-        "EXPO_PUBLIC_API_BASE_URL": "https://irexpro.lightworldtech.com/api/v1"
+        "EXPO_PUBLIC_APP_ENV": "production"
       },
       "android": {
         "buildType": "app-bundle"
