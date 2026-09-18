@@ -21,7 +21,7 @@ import {
 /**
  * Responsive mobile navigation for the authenticated trader workspace.
  *
- * The bottom bar intentionally remains three items (Dashboard, Payments,
+ * The bottom bar intentionally remains three items (Home, AI Trading,
  * More) to preserve comfortable touch targets. High-value trading workspaces
  * live in the accessible More sheet until the dedicated mobile terminal IA is
  * expanded in a later product slice.
@@ -34,21 +34,15 @@ interface NavDestination {
 }
 
 const PRIMARY_NAV: NavDestination[] = [
-  { href: '/dashboard', label: 'Dashboard', Icon: DashboardIcon },
-  { href: '/payments/success', label: 'Payments', Icon: PaymentsIcon, matchPrefix: true },
+  { href: '/dashboard', label: 'Home', Icon: DashboardIcon },
+  { href: '/trade', label: 'AI Trading', Icon: TradeIcon, matchPrefix: true },
 ];
 
 const SECONDARY_NAV: NavDestination[] = [
-  { href: '/trade', label: 'Trading Workspace', Icon: TradeIcon, matchPrefix: true },
-  { href: '/market', label: 'Market Intelligence', Icon: TradeIcon, matchPrefix: true },
-  { href: '/ai', label: 'AI Command Center', Icon: AiIcon, matchPrefix: true },
-  { href: '/strategy-lab', label: 'Strategy Lab', Icon: AiIcon, matchPrefix: true },
-  { href: '/portfolio', label: 'Portfolio & Risk', Icon: PortfolioIcon, matchPrefix: true },
-  { href: '/live-account', label: 'Live Account', Icon: PortfolioIcon, matchPrefix: true },
-  { href: '/onboarding/profile', label: 'Profile', Icon: UserIcon },
+  { href: '/live-account', label: 'Positions & Activity', Icon: PortfolioIcon, matchPrefix: true },
+  { href: '/onboarding/broker', label: 'Broker Account', Icon: PlugIcon },
   { href: '/security', label: 'Security', Icon: ShieldIcon },
-  { href: '/onboarding/risk', label: 'Risk limits', Icon: ShieldIcon },
-  { href: '/onboarding/broker', label: 'Broker', Icon: PlugIcon },
+  { href: '/payments/success', label: 'Fees & Payments', Icon: PaymentsIcon, matchPrefix: true },
 ];
 
 function isActive(pathname: string | null, dest: NavDestination): boolean {
