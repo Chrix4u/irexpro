@@ -182,11 +182,7 @@ export class PasswordResetDeliveryService {
     if (params.channel === ResetChannel.EMAIL) {
       return this.deliverEmail(params.destination, params.rawToken, params.userId);
     }
-    return this.deliverPhone(
-      params.destination,
-      params.rawToken,
-      params.countryCode ?? 'ZZ',
-    );
+    return this.deliverPhone(params.destination, params.rawToken, params.countryCode ?? 'ZZ');
   }
 
   /**
