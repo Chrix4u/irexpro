@@ -124,6 +124,7 @@ export default function AiTradingPage() {
   const [togglingAutomation, setTogglingAutomation] = useState(false);
   const [pendingAutomationAction, setPendingAutomationAction] = useState<'START' | 'STOP' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [activityWarning, setActivityWarning] = useState<string | null>(null);
 
   const initializedActivity = useRef(false);
   const seenPositionIds = useRef<Set<string>>(new Set());
@@ -192,15 +193,37 @@ export default function AiTradingPage() {
     if (showSpinner) setLoading(true);
     setError(null);
     try {
-      const [status, snapshot, positionSnapshot] = await Promise.all([
-        loadTraderTerminalStatus(),
+      // Core trading controls depend only on the authoritative terminal state.
+      // Activity/position read models are useful context but must never make
+      // the Start/Stop workspace unavailable when one of those secondary
+      // endpoints has a transient server-side failure.
+      const status = await loadTraderTerminalStatus();
+      setTerminal(status);
+
+      const [executionResult, positionsResult] = await Promise.allSettled([
         loadTraderExecutionSnapshot(),
         loadLiveAccountPositions(),
       ]);
-      setTerminal(status);
+
+      const snapshot =
+        executionResult.status === 'fulfilled' ? executionResult.value : null;
+      const positions =
+        positionsResult.status === 'fulfilled' ? positionsResult.value.positions : [];
+
       setExecution(snapshot);
-      setLivePositions(positionSnapshot.positions);
-      emitActivityToasts(positionSnapshot.positions, snapshot);
+      setLivePositions(positions);
+
+      if (snapshot) {
+        emitActivityToasts(positions, snapshot);
+      }
+
+      if (executionResult.status === 'rejected' || positionsResult.status === 'rejected') {
+        setActivityWarning(
+          'AI Trading controls are available, but recent activity or position details could not be loaded. You can continue using Start/Stop; refresh this page to retry the activity feed.',
+        );
+      } else {
+        setActivityWarning(null);
+      }
 
       const brokerId =
         status.sessionBroker?.id ||
@@ -426,6 +449,7 @@ export default function AiTradingPage() {
         </section>
 
         {error && <Alert variant="error">{error}</Alert>}
+        {activityWarning && <Alert variant="warning">{activityWarning}</Alert>}
 
         {loading && !terminal ? (
           <Card title="Loading AI Trader">
