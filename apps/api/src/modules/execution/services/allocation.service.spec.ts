@@ -516,9 +516,7 @@ describe('AllocationService — server-side authoritative capital layer (Round 6
 
     it('rejects reducing the allocation below currently committed exposure', async () => {
       store.seedAccountState = { equity: '100000.00', currency: 'USD' };
-      store.aggregateRows = [
-        joinRow({ allocated_capital: '20000', trade_status: 'OPEN' }),
-      ];
+      store.aggregateRows = [joinRow({ allocated_capital: '20000', trade_status: 'OPEN' })];
 
       await expect(service.setUserCapitalBudget(USER, CONN, '19999.99')).rejects.toMatchObject({
         code: 'ALLOCATION_INSUFFICIENT_CAPITAL',
@@ -528,9 +526,7 @@ describe('AllocationService — server-side authoritative capital layer (Round 6
     it('persists an explicit allocation and returns committed/available capital', async () => {
       store.budgets = [];
       store.seedAccountState = { equity: '10000.00', currency: 'USD' };
-      store.aggregateRows = [
-        joinRow({ allocated_capital: '1250', trade_status: 'OPEN' }),
-      ];
+      store.aggregateRows = [joinRow({ allocated_capital: '1250', trade_status: 'OPEN' })];
 
       const state = await service.setUserCapitalBudget(USER, CONN, '5000.00');
 
