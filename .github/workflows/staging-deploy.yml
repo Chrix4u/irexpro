@@ -101,6 +101,7 @@ jobs:
           export LOCAL_API_HEALTH_URL='http://127.0.0.1:3010/api/v1/health'
           export LOCAL_WEB_URL='http://127.0.0.1:3005/login'
           export LOCAL_ADMIN_URL='http://127.0.0.1:3006/'
+          export AI_HEALTH_URL='http://127.0.0.1:8011/api/v1/health'
 
           export PUBLIC_API_LIVE_URL='https://irexpro.lightworldtech.com/api/v1/health/live'
           export PUBLIC_API_READY_URL='https://irexpro.lightworldtech.com/api/v1/health/ready'
