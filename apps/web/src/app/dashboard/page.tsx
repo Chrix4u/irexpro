@@ -135,11 +135,6 @@ export default function DashboardPage() {
 }
 
 function OnboardingCard({ status }: { status: OnboardingStatus }) {
-  const notify = useNotification();
-  const [starting, setStarting] = useState(false);
-  const [startError, setStartError] = useState<string | null>(null);
-  const [missingSteps, setMissingSteps] = useState<string[] | null>(null);
-
   const steps = [
     {
       key: 'PROFILE',
@@ -173,45 +168,6 @@ function OnboardingCard({ status }: { status: OnboardingStatus }) {
     }
   }
 
-  async function handleStartTrading() {
-    setStarting(true);
-    setStartError(null);
-    setMissingSteps(null);
-    try {
-      const connections = await api.listBrokerConnections();
-      const connection = connections.find((candidate) => candidate.status === 'CONNECTED') ?? connections[0];
-      if (!connection) {
-        setStartError('Connect a broker account before starting a trading session.');
-        notify.warning('Connect a broker account first.');
-        return;
-      }
-      await api.startTradingSession({
-        brokerConnectionId: connection.id,
-        executionMode: 'PAPER_ONLY',
-      });
-      setStartError(null);
-      notify.success('Paper trading session started.');
-    } catch (err) {
-      if (err && typeof err === 'object' && 'statusCode' in err && err.statusCode === 403) {
-        const body = err as { code?: string; missingSteps?: string[]; message?: string };
-        if (body.code === 'TRADING_NOT_READY' && body.missingSteps) {
-          setMissingSteps(body.missingSteps);
-          setStartError('Your trading setup is not ready. Complete the missing steps below.');
-          notify.warning('Your trading setup is not ready.');
-        } else {
-          setStartError(body.message ?? 'Trading could not be started. Please try again.');
-          notify.error(mapApiError(err).message);
-        }
-      } else {
-        setStartError(err instanceof Error && !err.message.includes('fetch')
-          ? err.message
-          : 'Unable to start trading. Please try again or contact support.');
-        notify.error(mapApiError(err).message);
-      }
-    } finally {
-      setStarting(false);
-    }
-  }
 
   return (
     <Card
@@ -229,22 +185,6 @@ function OnboardingCard({ status }: { status: OnboardingStatus }) {
         </Alert>
       )}
 
-      {startError && (
-        <Alert variant="warning">
-          <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 600, marginBottom: 'var(--space-1)' }}>{startError}</div>
-            {missingSteps && missingSteps.length > 0 && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)', marginTop: 'var(--space-2)' }}>
-                {missingSteps.map((step) => (
-                  <Link key={step} href={stepToHref(step)} className="text-sm" style={{ textDecoration: 'underline' }}>
-                    Complete {formatEnumLabel(step)} →
-                  </Link>
-                ))}
-              </div>
-            )}
-          </div>
-        </Alert>
-      )}
 
       <div className="checklist" role="list">
         {steps.map((step) => (
@@ -269,9 +209,9 @@ function OnboardingCard({ status }: { status: OnboardingStatus }) {
       </div>
 
       {status.canStartTrading && (
-        <Button onClick={handleStartTrading} disabled={starting} loading={starting} variant="primary" size="lg" block>
-          {starting ? 'Starting…' : 'Start Paper Trading Session'}
-        </Button>
+        <Link href="/trade" className="btn btn--primary btn--lg btn--block">
+          Open AI Trading
+        </Link>
       )}
     </Card>
   );
