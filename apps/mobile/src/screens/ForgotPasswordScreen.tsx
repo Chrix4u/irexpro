@@ -20,9 +20,10 @@ import { api } from '../lib/api';
  *
  * Accepts email OR international phone number as the identifier.
  *
- * Email reset links can hand off to the app through the irexpro:// scheme.
- * Phone-only users can continue directly into the native 6-digit-code reset
- * flow after requesting instructions.
+ * Email reset links remain on the verified HTTPS web flow. Phone-only users
+ * can continue directly into the native 6-digit-code reset flow after
+ * requesting instructions. Raw recovery credentials are never placed in a
+ * custom mobile URI scheme.
  */
 export default function ForgotPasswordScreen({
   onBack,
