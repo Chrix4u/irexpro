@@ -152,6 +152,7 @@ test.describe('AI Trader novice workflow', () => {
 
     await expect(page.getByText('Paper Trading Broker', { exact: false }).first()).toBeVisible();
     await expect(page.getByText('2500 USD', { exact: false }).first()).toBeVisible();
+    await expect(page.getByRole('combobox', { name: 'Broker account' })).toBeDisabled();
     await expect(page.getByRole('button', { name: 'Turn AI automation off' })).toBeVisible();
 
     await expect(page.getByRole('heading', { level: 2, name: 'Open Positions' })).toBeVisible();

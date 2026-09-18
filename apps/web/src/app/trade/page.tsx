@@ -128,13 +128,20 @@ export default function AiTradingPage() {
   const seenPositionIds = useRef<Set<string>>(new Set());
   const seenExecutionStates = useRef<Map<string, string>>(new Map());
 
-  const selectedBroker = useMemo(
-    () => terminal?.brokers.find((broker) => broker.id === selectedBrokerId) ?? terminal?.primaryBroker ?? null,
-    [terminal, selectedBrokerId],
-  );
-
   const automationOn =
     terminal?.session?.status === 'ACTIVE' || terminal?.session?.status === 'PAUSED';
+
+  // The ACTIVE session is the execution authority. While it exists, the
+  // workspace must stay visibly pinned to that exact broker account instead
+  // of letting another selection inherit the global "AI ON" state.
+  const selectedBroker = useMemo(
+    () =>
+      terminal?.sessionBroker ??
+      terminal?.brokers.find((broker) => broker.id === selectedBrokerId) ??
+      terminal?.primaryBroker ??
+      null,
+    [terminal, selectedBrokerId],
+  );
 
   const emitActivityToasts = useCallback(
     (positions: LivePositionRowView[], snapshot: TraderExecutionSnapshot) => {
@@ -195,12 +202,12 @@ export default function AiTradingPage() {
       emitActivityToasts(positionSnapshot.positions, snapshot);
 
       const brokerId =
-        selectedBrokerId ||
         status.sessionBroker?.id ||
+        selectedBrokerId ||
         status.primaryBroker?.id ||
         '';
       if (brokerId) {
-        setSelectedBrokerId((current) => current || brokerId);
+        setSelectedBrokerId((current) => status.sessionBroker?.id || current || brokerId);
         try {
           const nextAllocation = await api.getCapitalAllocation(brokerId);
           setAllocation(nextAllocation);
@@ -371,6 +378,7 @@ export default function AiTradingPage() {
                       value={selectedBroker?.id ?? ''}
                       onChange={(event) => void handleBrokerChange(event.target.value)}
                       aria-label="Broker account"
+                      disabled={automationOn}
                     >
                       {terminal.brokers.map((broker) => (
                         <option key={broker.id} value={broker.id}>
