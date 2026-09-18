@@ -54,6 +54,7 @@ import {
 } from '../reconciliation/protective-order-reconciliation.service';
 import { ReconciliationRunStatus } from '../reconciliation/reconciliation.enums';
 import { BrokerConnection } from '../../broker/entities/broker-connection.entity';
+import { ExecutionService } from '../execution.service';
 
 const makeConnection = (id: string): BrokerConnection =>
   ({ id, userId: `user-${id}`, brokerId: 'paper-broker' }) as unknown as BrokerConnection;
@@ -94,6 +95,7 @@ describe('TradeReconciliationJob', () => {
     runForConnection: jest.Mock;
   };
   let protectiveOrderReconciliation: { reconcileProtectiveOrders: jest.Mock };
+  let executionService: { closeStopRequestedAiPositions: jest.Mock };
 
   beforeEach(async () => {
     stateReconciliation = {
@@ -102,6 +104,9 @@ describe('TradeReconciliationJob', () => {
     };
     protectiveOrderReconciliation = {
       reconcileProtectiveOrders: jest.fn().mockResolvedValue(makeProtectiveOutcome()),
+    };
+    executionService = {
+      closeStopRequestedAiPositions: jest.fn().mockResolvedValue([]),
     };
 
     const module = await Test.createTestingModule({
@@ -112,6 +117,7 @@ describe('TradeReconciliationJob', () => {
           provide: ProtectiveOrderReconciliationService,
           useValue: protectiveOrderReconciliation,
         },
+        { provide: ExecutionService, useValue: executionService },
       ],
     }).compile();
     module.useLogger(false);
@@ -225,9 +231,34 @@ describe('TradeReconciliationJob', () => {
 
     await job.process(fakeJob);
     expect(order).toEqual(['state-sweep', 'protective-loop']);
+    expect(executionService.closeStopRequestedAiPositions).toHaveBeenCalledWith(
+      'user-conn-1',
+      'conn-1',
+    );
     expect(protectiveOrderReconciliation.reconcileProtectiveOrders).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'conn-1' }),
     );
+  });
+
+  it('continues a durable user-stop flatten after the provider state sweep', async () => {
+    const order: string[] = [];
+    stateReconciliation.findReconcilableConnections.mockResolvedValue([makeConnection('conn-1')]);
+    stateReconciliation.runForConnection.mockImplementation(async () => {
+      order.push('state-sweep');
+      return makeOutcome('conn-1');
+    });
+    executionService.closeStopRequestedAiPositions.mockImplementation(async () => {
+      order.push('stop-flatten');
+      return [];
+    });
+    protectiveOrderReconciliation.reconcileProtectiveOrders.mockImplementation(async () => {
+      order.push('protective-loop');
+      return makeProtectiveOutcome();
+    });
+
+    await job.process(fakeJob);
+
+    expect(order).toEqual(['state-sweep', 'stop-flatten', 'protective-loop']);
   });
 
   it('aggregates protective-order counts across connections', async () => {

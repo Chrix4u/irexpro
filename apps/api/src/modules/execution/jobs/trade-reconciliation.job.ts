@@ -4,6 +4,7 @@ import { Job } from 'bullmq';
 import { BrokerConnection } from '../../broker/entities/broker-connection.entity';
 import { StateReconciliationService } from '../reconciliation/state-reconciliation.service';
 import { ReconciliationRunOutcome } from '../reconciliation/state-reconciliation.service';
+import { ExecutionService } from '../execution.service';
 // Round 6 live-execution completion (§8): the protective-order loop runs
 // after every per-connection state sweep.
 import {
@@ -51,6 +52,9 @@ export class TradeReconciliationJob extends WorkerHost {
     private readonly stateReconciliation: StateReconciliationService,
     // Round 6 §8: the protective-order loop (per-trade SL/TP verify/repair).
     private readonly protectiveOrderReconciliation: ProtectiveOrderReconciliationService,
+    // Explicit user Stop AI Trading continuation: after provider truth has
+    // been reconciled, flatten any late fill tied to a durably marked session.
+    private readonly executionService: ExecutionService,
   ) {
     super();
   }
@@ -112,6 +116,22 @@ export class TradeReconciliationJob extends WorkerHost {
         failedConnections++;
         this.logger.error(
           `Reconciliation run threw for connection ${connection.id}: ${(err as Error).message}`,
+        );
+      }
+
+      // A provider dispatch can cross the final commitment immediately before
+      // the user presses Stop. The state sweep above first converges that
+      // provider truth; this follow-up then closes any newly OPEN position
+      // belonging to a session durably marked closeAiPositionsOnStop.
+      try {
+        await this.executionService.closeStopRequestedAiPositions(
+          connection.userId,
+          connection.id,
+        );
+      } catch (err) {
+        this.logger.error(
+          `AI-stop reconciliation flatten threw for connection ${connection.id}: ` +
+            `${(err as Error).message}`,
         );
       }
 

@@ -130,6 +130,7 @@ describe('ExecutionService', () => {
   }>;
   let sessionRepo: jest.Mocked<{
     findOne: jest.Mock;
+    find: jest.Mock;
     create: jest.Mock;
     insert: jest.Mock;
     save: jest.Mock;
@@ -252,6 +253,7 @@ describe('ExecutionService', () => {
         if (opts?.where?.id) return insertedSession;
         return null;
       }),
+      find: jest.fn().mockResolvedValue([]),
       create: jest.fn().mockImplementation((obj) => obj),
       insert: jest.fn().mockImplementation(async (entity) => {
         insertedSession = entity;
@@ -821,7 +823,7 @@ describe('ExecutionService', () => {
     });
   });
 
-  describe('closeAllAiOpenPositions() — user Stop AI Trading', () => {
+  describe('AI Stop position flattening', () => {
     it('closes only OPEN positions with durable AI provenance and leaves non-AI rows untouched', async () => {
       tradeRepo.find.mockResolvedValue([
         {
@@ -842,8 +844,9 @@ describe('ExecutionService', () => {
 
       const closeSpy = jest
         .spyOn(service, 'closeTrade')
-        .mockImplementation(async (tradeId) =>
-          ({ ...baseTradeFixture, id: tradeId, status: TradeStatus.CLOSED } as Trade),
+        .mockImplementation(
+          async (tradeId) =>
+            ({ ...baseTradeFixture, id: tradeId, status: TradeStatus.CLOSED }) as Trade,
         );
 
       const results = await service.closeAllAiOpenPositions(
@@ -860,6 +863,55 @@ describe('ExecutionService', () => {
       expect(results).toEqual([
         expect.objectContaining({
           tradeId: 'trade-ai',
+          closed: true,
+          status: TradeStatus.CLOSED,
+        }),
+      ]);
+    });
+
+    it('reconciliation closes only late OPEN positions tied to sessions marked by explicit Stop', async () => {
+      sessionRepo.find.mockResolvedValue([
+        {
+          id: 'session-stop',
+          userId: 'user-1',
+          brokerConnectionId: 'conn-1',
+          status: TradingSessionStatus.ENDED,
+          closeAiPositionsOnStop: true,
+        },
+      ]);
+      tradeRepo.find.mockResolvedValue([
+        {
+          ...baseTradeFixture,
+          id: 'trade-late',
+          tradingSessionId: 'session-stop',
+          signalId: 'sig-late',
+        },
+        {
+          ...baseTradeFixture,
+          id: 'trade-other-session',
+          tradingSessionId: 'session-old',
+          signalId: 'sig-old',
+        },
+      ] as Trade[]);
+
+      const closeSpy = jest
+        .spyOn(service, 'closeTrade')
+        .mockImplementation(
+          async (tradeId) =>
+            ({ ...baseTradeFixture, id: tradeId, status: TradeStatus.CLOSED }) as Trade,
+        );
+
+      const results = await service.closeStopRequestedAiPositions('user-1', 'conn-1');
+
+      expect(closeSpy).toHaveBeenCalledTimes(1);
+      expect(closeSpy).toHaveBeenCalledWith(
+        'trade-late',
+        'user-1',
+        TradeCloseReason.MANUAL_CLOSE,
+      );
+      expect(results).toEqual([
+        expect.objectContaining({
+          tradeId: 'trade-late',
           closed: true,
           status: TradeStatus.CLOSED,
         }),

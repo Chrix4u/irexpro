@@ -848,18 +848,84 @@ export class ExecutionService {
       Boolean(trade.tradingSessionId || trade.tradeIntentId || trade.signalId),
     );
 
-    if (aiOpenTrades.length === 0) {
-      this.logger.log('AI-stop flatten for user ' + userId + ': no AI-proven OPEN positions');
+    return this.closeAiTrades(userId, aiOpenTrades, reason, 'AI-stop flatten');
+  }
+
+  /**
+   * Reconciliation continuation for an explicit user Stop AI Trading request.
+   *
+   * The durable session marker prevents this sweep from changing historical
+   * ENDED-session behavior. It exists specifically for the final-dispatch
+   * race: an entry order may already have crossed the provider commitment when
+   * Stop revokes authority, then surface as OPEN on a later reconciliation
+   * cycle. That late AI position must still be flattened automatically.
+   */
+  async closeStopRequestedAiPositions(
+    userId: string,
+    brokerConnectionId: string,
+  ): Promise<AiPositionCloseResult[]> {
+    const stopRequestedSessions = await this.sessionRepo.find({
+      where: {
+        userId,
+        brokerConnectionId,
+        closeAiPositionsOnStop: true,
+      },
+      order: { endedAt: 'DESC' },
+    });
+
+    if (stopRequestedSessions.length === 0) return [];
+
+    const stopRequestedSessionIds = new Set(
+      stopRequestedSessions.map((session) => session.id),
+    );
+    const openTrades = await this.tradeRepo.find({
+      where: {
+        userId,
+        brokerConnectionId,
+        status: TradeStatus.OPEN,
+      },
+      order: { openedAt: 'ASC' },
+    });
+
+    const lateAiPositions = openTrades.filter(
+      (trade) =>
+        Boolean(trade.tradingSessionId || trade.tradeIntentId || trade.signalId) &&
+        Boolean(
+          trade.tradingSessionId &&
+            stopRequestedSessionIds.has(trade.tradingSessionId),
+        ),
+    );
+
+    return this.closeAiTrades(
+      userId,
+      lateAiPositions,
+      TradeCloseReason.MANUAL_CLOSE,
+      'AI-stop reconciliation flatten',
+    );
+  }
+
+  private async closeAiTrades(
+    userId: string,
+    trades: Trade[],
+    reason: TradeCloseReason,
+    logPrefix: string,
+  ): Promise<AiPositionCloseResult[]> {
+    if (trades.length === 0) {
+      this.logger.log(logPrefix + ' for user ' + userId + ': no OPEN positions');
       return [];
     }
 
     this.logger.log(
-      'AI-stop flatten for user ' + userId + ': closing ' + aiOpenTrades.length +
+      logPrefix +
+        ' for user ' +
+        userId +
+        ': closing ' +
+        trades.length +
         ' AI-proven OPEN position(s)',
     );
 
     const results: AiPositionCloseResult[] = [];
-    for (const trade of aiOpenTrades) {
+    for (const trade of trades) {
       try {
         const closed = await this.closeTrade(trade.id, userId, reason);
         results.push({
@@ -873,14 +939,31 @@ export class ExecutionService {
         });
       } catch (err) {
         const detail = (err as Error).message;
+        const current = await this.tradeRepo
+          .findOne({ where: { id: trade.id, userId } })
+          .catch(() => null);
+
+        if (current?.status === TradeStatus.CLOSED) {
+          results.push({
+            tradeId: trade.id,
+            closed: true,
+            status: TradeStatus.CLOSED,
+          });
+          continue;
+        }
+
         results.push({
           tradeId: trade.id,
           closed: false,
-          status: trade.status,
+          status: current?.status ?? trade.status,
           detail,
         });
         this.logger.error(
-          'AI-stop flatten: close of trade ' + trade.id + ' failed — ' + detail +
+          logPrefix +
+            ': close of trade ' +
+            trade.id +
+            ' failed — ' +
+            detail +
             '; remaining AI positions will still be attempted',
         );
       }
@@ -1692,44 +1775,81 @@ export class ExecutionService {
    * the generation; outstanding ACTIVE RiskGrants / PENDING confirmations for
    * the session are invalidated/revoked in the same CAS style (issue #298).
    */
-  async endSession(userId: string, status = TradingSessionStatus.ENDED): Promise<void> {
-    const session = await this.findActiveSessionOrdered(userId);
-    if (!session) {
-      // Idempotent no-op — no ACTIVE session to end (legacy behavior).
-      return;
-    }
+  async endSession(
+    userId: string,
+    status = TradingSessionStatus.ENDED,
+    options: { closeAiPositionsOnStop?: boolean } = {},
+  ): Promise<void> {
+    const maxAttempts = 4;
 
-    const observed = session.authorityGeneration;
-    const ended = await this.sessionRepo
-      .createQueryBuilder()
-      .update()
-      .set({
-        status,
-        endedAt: new Date(),
-        authorityGeneration: () => 'authority_generation + 1',
-        updatedAt: new Date(),
-      })
-      .where(
-        'id = :id AND user_id = :userId AND status = :active AND authority_generation = :observed',
-        {
-          id: session.id,
-          userId,
-          active: TradingSessionStatus.ACTIVE,
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const session = await this.findActiveSessionOrdered(userId);
+      if (!session) {
+        // Idempotent no-op — no ACTIVE session remains. If a concurrent
+        // suspend/end won while this user explicitly requested Stop, persist
+        // the close-on-stop marker on that known non-active session below
+        // only when we can resolve it through a later CAS-loss re-read.
+        return;
+      }
+
+      const observed = session.authorityGeneration;
+      const ended = await this.sessionRepo
+        .createQueryBuilder()
+        .update()
+        .set({
+          status,
+          endedAt: new Date(),
+          closeAiPositionsOnStop: options.closeAiPositionsOnStop === true,
+          authorityGeneration: () => 'authority_generation + 1',
+          updatedAt: new Date(),
+        })
+        .where(
+          'id = :id AND user_id = :userId AND status = :active AND authority_generation = :observed',
+          {
+            id: session.id,
+            userId,
+            active: TradingSessionStatus.ACTIVE,
+            observed,
+          },
+        )
+        .execute();
+
+      if (ended.affected) {
+        await this.invalidateOutstandingAuthority(
+          session.id,
           observed,
-        },
-      )
-      .execute();
-    if (!ended.affected) {
-      // Lost the race to another end/suspend/mode-change — the winner owns
-      // the outstanding-authority invalidation. Idempotent return.
-      return;
-    }
+          SESSION_AUTHORITY_GENERATION_CHANGED,
+        );
+        return;
+      }
 
-    await this.invalidateOutstandingAuthority(
-      session.id,
-      observed,
-      SESSION_AUTHORITY_GENERATION_CHANGED,
-    );
+      // A concurrent mode change may have advanced the generation while
+      // leaving the session ACTIVE. Re-read and retry against the winner's
+      // generation instead of falsely reporting Stop success.
+      const current = await this.sessionRepo.findOne({
+        where: { id: session.id, userId },
+      });
+      if (!current) return;
+
+      if (current.status !== TradingSessionStatus.ACTIVE) {
+        // Another end/suspension already revoked new exposure. Preserve the
+        // explicit user Stop intent so reconciliation still flattens any late
+        // AI fill associated with this session.
+        if (options.closeAiPositionsOnStop === true) {
+          await this.sessionRepo.update(
+            { id: current.id, userId },
+            { closeAiPositionsOnStop: true },
+          );
+        }
+        return;
+      }
+
+      if (attempt === maxAttempts) {
+        throw new ConflictException(
+          'Trading session authority changed repeatedly while stopping. Retry Stop AI Trading.',
+        );
+      }
+    }
   }
 
   async getActiveSession(userId: string): Promise<TradingSession | null> {
