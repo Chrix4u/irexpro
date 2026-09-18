@@ -161,27 +161,47 @@ function isActiveTradingSessionPayload(
   return value === null || isTradingSession(value);
 }
 
-function isTerminalBroker(value: unknown): value is TerminalBrokerView {
-  if (!isRecord(value)) return false;
-  return (
-    typeof value.id === 'string' &&
-    typeof value.brokerId === 'string' &&
-    typeof value.brokerName === 'string' &&
-    (value.displayName === null || typeof value.displayName === 'string') &&
-    (value.accountType === 'DEMO' || value.accountType === 'LIVE') &&
-    isBrokerStatus(value.status) &&
-    (value.authorizationStatus === undefined ||
-      isTerminalBrokerAuthorizationStatus(value.authorizationStatus)) &&
-    typeof value.liveTradingEnabled === 'boolean' &&
-    (value.providerBrokerIdentity === undefined ||
-      value.providerBrokerIdentity === null ||
-      typeof value.providerBrokerIdentity === 'string') &&
-    (value.logicalAccountKey === undefined ||
-      value.logicalAccountKey === null ||
-      typeof value.logicalAccountKey === 'string') &&
-    (value.lastHealthCheckAt === null || typeof value.lastHealthCheckAt === 'string') &&
-    (value.lastErrorMessage === null || typeof value.lastErrorMessage === 'string')
-  );
+function normalizeTerminalBroker(value: unknown): TerminalBrokerView | null {
+  if (!isRecord(value)) return null;
+
+  // Security/identity-critical fields must be present and valid. We never
+  // fabricate a broker identity, account environment, or connection state.
+  if (
+    typeof value.id !== 'string' ||
+    typeof value.brokerId !== 'string' ||
+    typeof value.brokerName !== 'string' ||
+    (value.accountType !== 'DEMO' && value.accountType !== 'LIVE') ||
+    !isBrokerStatus(value.status)
+  ) {
+    return null;
+  }
+
+  const authorizationStatus = isTerminalBrokerAuthorizationStatus(value.authorizationStatus)
+    ? value.authorizationStatus
+    : 'NOT_CONNECTED';
+
+  // Historical/rolling-deploy rows may omit non-authoritative presentation
+  // metadata. Normalize those fields instead of rejecting the entire broker
+  // collection. Missing execution metadata always degrades fail-closed.
+  return {
+    id: value.id,
+    brokerId: value.brokerId,
+    brokerName: value.brokerName,
+    displayName: typeof value.displayName === 'string' ? value.displayName : null,
+    accountType: value.accountType,
+    status: value.status,
+    authorizationStatus,
+    liveTradingEnabled:
+      typeof value.liveTradingEnabled === 'boolean' ? value.liveTradingEnabled : false,
+    providerBrokerIdentity:
+      typeof value.providerBrokerIdentity === 'string' ? value.providerBrokerIdentity : null,
+    logicalAccountKey:
+      typeof value.logicalAccountKey === 'string' ? value.logicalAccountKey : null,
+    lastHealthCheckAt:
+      typeof value.lastHealthCheckAt === 'string' ? value.lastHealthCheckAt : null,
+    lastErrorMessage:
+      typeof value.lastErrorMessage === 'string' ? value.lastErrorMessage : null,
+  };
 }
 
 function isTerminalBrokerAuthorizationStatus(
@@ -224,26 +244,31 @@ export async function loadTraderTerminalStatus(): Promise<TraderTerminalStatus> 
   if (!isActiveTradingSessionPayload(sessionPayload)) {
     throw new Error('Trading session contract mismatch');
   }
-  if (!Array.isArray(brokerPayload) || !brokerPayload.every(isTerminalBroker)) {
+  if (!Array.isArray(brokerPayload)) {
+    throw new Error('Broker connection contract mismatch');
+  }
+
+  const brokers = brokerPayload.map(normalizeTerminalBroker);
+  if (brokers.some((broker) => broker === null)) {
     throw new Error('Broker connection contract mismatch');
   }
 
   const session = sessionPayload;
-  const brokers: TerminalBrokerView[] = brokerPayload;
+  const normalizedBrokers = brokers as TerminalBrokerView[];
   const sessionBroker = session
-    ? brokers.find((broker) => broker.id === session.brokerConnectionId) ?? null
+    ? normalizedBrokers.find((broker) => broker.id === session.brokerConnectionId) ?? null
     : null;
 
   const primaryBroker =
     sessionBroker ??
-    brokers.find((broker) => broker.status === 'CONNECTED') ??
-    brokers[0] ??
+    normalizedBrokers.find((broker) => broker.status === 'CONNECTED') ??
+    normalizedBrokers[0] ??
     null;
 
   return {
     risk: riskPayload,
     session,
-    brokers,
+    brokers: normalizedBrokers,
     sessionBroker,
     primaryBroker,
   };
