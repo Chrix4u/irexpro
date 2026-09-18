@@ -88,19 +88,15 @@ test.describe('Mobile bottom navigation', () => {
     }
 
     const bottomNav = page.locator('.mobile-bottom-nav').first();
-    // 2 primary <a> items (Dashboard, Payments) + 1 "More" <button> = 3 items.
-    // (Sprint 31 remediation: the redundant Onboarding primary — which linked
-    // to /onboarding/profile, the same destination as the "Profile" item in the
-    // More sheet — was removed. Onboarding is reachable via the dashboard's
-    // onboarding-checklist card and via Profile/Risk/Broker in the More sheet.)
+    // 2 primary <a> items (Home, AI Trading) + 1 "More" <button> = 3 items.
     const items = bottomNav.locator('.mobile-bottom-nav__item');
     await expect(items).toHaveCount(3);
 
-    // Labels: Dashboard, Payments, More.
+    // Labels: Home, AI Trading, More.
     const labels = await items.allTextContents();
     const joined = labels.join(' ').toLowerCase();
-    expect(joined, `Expected primary destinations, got: ${labels.join(' | ')}`).toContain('dashboard');
-    expect(joined).toContain('payments');
+    expect(joined, `Expected primary destinations, got: ${labels.join(' | ')}`).toContain('home');
+    expect(joined).toContain('ai trading');
     expect(joined).toContain('more');
   });
 
@@ -181,17 +177,18 @@ test.describe('Mobile bottom navigation', () => {
     const sheet = page.locator('#mobile-more-sheet');
     await expect(sheet).toBeVisible();
 
-    // The sheet should list the onboarding sub-routes (Profile, Risk, Broker)
-    // + a Log out button = 4 items.
+    // The sheet contains the compact secondary account/activity destinations
+    // plus a Log out button.
     const items = sheet.locator('.mobile-sheet__item');
     const count = await items.count();
-    expect(count, 'Expected 3 secondary destinations + logout').toBeGreaterThanOrEqual(4);
+    expect(count, 'Expected compact secondary destinations + logout').toBeGreaterThanOrEqual(5);
 
     const labels = (await items.allTextContents()).map((s) => s.trim().toLowerCase());
     const joined = labels.join(' | ');
-    expect(joined, `Expected secondary destinations, got: ${joined}`).toContain('profile');
-    expect(joined).toContain('risk');
+    expect(joined, `Expected secondary destinations, got: ${joined}`).toContain('positions');
     expect(joined).toContain('broker');
+    expect(joined).toContain('security');
+    expect(joined).toContain('fees');
     expect(joined).toContain('log out');
   });
 
@@ -259,10 +256,11 @@ test.describe('Mobile bottom navigation', () => {
 
     // The sheet's focusable elements (in tab order):
     //   1. Close button (focused on open)
-    //   2. Profile link
-    //   3. Risk limits link
-    //   4. Broker link
-    //   5. Log out button
+    //   2. Positions & Activity
+    //   3. Broker Account
+    //   4. Security
+    //   5. Fees & Payments
+    //   6. Log out button
     // Tabbing forward from the last focusable should wrap to the first (close).
     const logoutButton = sheet.locator('.mobile-sheet__item--danger');
     await logoutButton.focus();
