@@ -251,7 +251,15 @@ test.describe('AI Trader novice workflow', () => {
       failRiskStatus: true,
     });
 
-    await expect(page.getByText('Paper Trading Broker', { exact: false }).first()).toBeVisible();
+    await expect(page.getByRole('combobox', { name: 'Broker account' })).toHaveValue(
+      mockBrokerConnections[0].id,
+    );
+    await expect(
+      page.getByRole('option', {
+        name: `${mockBrokerConnections[0].displayName} · ${mockBrokerConnections[0].accountType}`,
+      }),
+    ).toBeChecked();
+    await expect(page.getByText('CONNECTED', { exact: true }).first()).toBeVisible();
     await expect(page.getByRole('link', { name: 'Connect broker' })).toHaveCount(0);
     await expect(
       page.getByText(/Your broker connection is still available, but AI Trading controls could not be loaded/i),
