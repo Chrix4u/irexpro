@@ -12,6 +12,7 @@ import AccountScreen from './src/screens/account/AccountScreen';
 import PaymentsScreen from './src/screens/PaymentsScreen';
 import BrokerScreen from './src/screens/BrokerScreen';
 import LiveAccountScreen from './src/screens/LiveAccountScreen';
+import AiTradingScreen from './src/screens/AiTradingScreen';
 
 /**
  * iRexPro mobile app entry (Expo + React Native + TypeScript).
@@ -34,7 +35,7 @@ import LiveAccountScreen from './src/screens/LiveAccountScreen';
  * realtime socket so no authenticated channel outlives the session.
  */
 
-type Tab = 'dashboard' | 'brokers' | 'live' | 'account' | 'payments';
+type Tab = 'dashboard' | 'ai' | 'brokers' | 'live' | 'account' | 'payments';
 
 /** Unauthenticated stack: login, forgot-password, and the pre-auth appeal. */
 type AuthScreen = 'login' | 'forgot-password' | 'appeal';
@@ -105,9 +106,10 @@ function AppShell() {
       <View style={styles.shell}>
         <SafeAreaView style={styles.content} edges={['top', 'left', 'right']}>
           {tab === 'dashboard' && <DashboardScreen />}
+          {tab === 'ai' && <AiTradingScreen />}
           {tab === 'brokers' && <BrokerScreen />}
           {tab === 'live' && <LiveAccountScreen />}
-          {tab === 'account' && <AccountScreen />}
+          {tab === 'account' && <AccountScreen onOpenPayments={() => setTab('payments')} />}
           {tab === 'payments' && <PaymentsScreen />}
         </SafeAreaView>
         <SafeAreaView
@@ -116,28 +118,28 @@ function AppShell() {
           accessibilityRole="tablist"
         >
           <TabButton
-            label="Dashboard"
+            label="Home"
             active={tab === 'dashboard'}
             onPress={() => setTab('dashboard')}
           />
           <TabButton
-            label="Brokers"
-            active={tab === 'brokers'}
-            onPress={() => setTab('brokers')}
+            label="AI"
+            active={tab === 'ai'}
+            onPress={() => setTab('ai')}
           />
           <TabButton
-            label="Live"
+            label="Activity"
             active={tab === 'live'}
             onPress={() => setTab('live')}
           />
           <TabButton
-            label="Payments"
-            active={tab === 'payments'}
-            onPress={() => setTab('payments')}
+            label="Broker"
+            active={tab === 'brokers'}
+            onPress={() => setTab('brokers')}
           />
           <TabButton
             label="Account"
-            active={tab === 'account'}
+            active={tab === 'account' || tab === 'payments'}
             onPress={() => setTab('account')}
           />
         </SafeAreaView>
@@ -193,6 +195,6 @@ const styles = StyleSheet.create({
   },
   tab: { flex: 1, paddingVertical: 14, alignItems: 'center' },
   tabActive: { borderTopWidth: 2, borderTopColor: '#14b8a6' },
-  tabLabel: { color: '#6b7494', fontSize: 13 },
+  tabLabel: { color: '#6b7494', fontSize: 11 },
   tabLabelActive: { color: '#14b8a6', fontWeight: '700' },
 });
