@@ -64,6 +64,25 @@ export interface TraderTerminalStatus {
   primaryBroker: TerminalBrokerView | null;
 }
 
+export type TraderTerminalLoadIssue =
+  | 'RISK_CONTRACT'
+  | 'SESSION_CONTRACT'
+  | 'BROKER_CONTRACT'
+  | 'BROKER_STATE_INCONSISTENT';
+
+export class TraderTerminalLoadError extends Error {
+  readonly userMessage: string;
+
+  constructor(readonly issue: TraderTerminalLoadIssue, technicalMessage: string) {
+    super(technicalMessage);
+    this.name = 'TraderTerminalLoadError';
+    this.userMessage =
+      issue === 'BROKER_CONTRACT' || issue === 'BROKER_STATE_INCONSISTENT'
+        ? 'Your broker connection is still on your account, but its details could not be loaded correctly. iRexPro will retry automatically. Do not reconnect the broker.'
+        : 'AI Trading account status could not be loaded correctly. Your broker connection has not been removed. iRexPro will retry automatically.';
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -161,27 +180,43 @@ function isActiveTradingSessionPayload(
   return value === null || isTradingSession(value);
 }
 
-function isTerminalBroker(value: unknown): value is TerminalBrokerView {
-  if (!isRecord(value)) return false;
-  return (
-    typeof value.id === 'string' &&
-    typeof value.brokerId === 'string' &&
-    typeof value.brokerName === 'string' &&
-    (value.displayName === null || typeof value.displayName === 'string') &&
-    (value.accountType === 'DEMO' || value.accountType === 'LIVE') &&
-    isBrokerStatus(value.status) &&
-    (value.authorizationStatus === undefined ||
-      isTerminalBrokerAuthorizationStatus(value.authorizationStatus)) &&
-    typeof value.liveTradingEnabled === 'boolean' &&
-    (value.providerBrokerIdentity === undefined ||
-      value.providerBrokerIdentity === null ||
-      typeof value.providerBrokerIdentity === 'string') &&
-    (value.logicalAccountKey === undefined ||
-      value.logicalAccountKey === null ||
-      typeof value.logicalAccountKey === 'string') &&
-    (value.lastHealthCheckAt === null || typeof value.lastHealthCheckAt === 'string') &&
-    (value.lastErrorMessage === null || typeof value.lastErrorMessage === 'string')
-  );
+function normalizeTerminalBroker(value: unknown): TerminalBrokerView | null {
+  if (!isRecord(value)) return null;
+
+  // Keep execution-relevant fields strict. Presentation/diagnostic fields are
+  // nullable on the API DTO and may be omitted entirely by class-transformer
+  // when an older/legacy row has no value. Omission must not invalidate the
+  // entire connected broker list.
+  if (
+    typeof value.id !== 'string' ||
+    typeof value.brokerId !== 'string' ||
+    typeof value.brokerName !== 'string' ||
+    (value.accountType !== 'DEMO' && value.accountType !== 'LIVE') ||
+    !isBrokerStatus(value.status) ||
+    (value.authorizationStatus !== undefined &&
+      !isTerminalBrokerAuthorizationStatus(value.authorizationStatus)) ||
+    typeof value.liveTradingEnabled !== 'boolean'
+  ) {
+    return null;
+  }
+
+  const nullableString = (candidate: unknown): string | null =>
+    typeof candidate === 'string' ? candidate : null;
+
+  return {
+    id: value.id,
+    brokerId: value.brokerId,
+    brokerName: value.brokerName,
+    displayName: nullableString(value.displayName),
+    accountType: value.accountType,
+    status: value.status,
+    authorizationStatus: value.authorizationStatus,
+    liveTradingEnabled: value.liveTradingEnabled,
+    providerBrokerIdentity: nullableString(value.providerBrokerIdentity),
+    logicalAccountKey: nullableString(value.logicalAccountKey),
+    lastHealthCheckAt: nullableString(value.lastHealthCheckAt),
+    lastErrorMessage: nullableString(value.lastErrorMessage),
+  } as TerminalBrokerView;
 }
 
 function isTerminalBrokerAuthorizationStatus(
@@ -219,31 +254,54 @@ export async function loadTraderTerminalStatus(): Promise<TraderTerminalStatus> 
   ]);
 
   if (!isRiskStatus(riskPayload)) {
-    throw new Error('Risk status contract mismatch');
+    throw new TraderTerminalLoadError('RISK_CONTRACT', 'Risk status contract mismatch');
   }
   if (!isActiveTradingSessionPayload(sessionPayload)) {
-    throw new Error('Trading session contract mismatch');
+    throw new TraderTerminalLoadError('SESSION_CONTRACT', 'Trading session contract mismatch');
   }
-  if (!Array.isArray(brokerPayload) || !brokerPayload.every(isTerminalBroker)) {
-    throw new Error('Broker connection contract mismatch');
+  if (!Array.isArray(brokerPayload)) {
+    throw new TraderTerminalLoadError('BROKER_CONTRACT', 'Broker connection contract mismatch');
+  }
+
+  const brokers = brokerPayload.map(normalizeTerminalBroker);
+  if (brokers.some((broker) => broker === null)) {
+    throw new TraderTerminalLoadError(
+      'BROKER_CONTRACT',
+      'Broker connection contract mismatch',
+    );
+  }
+  const normalizedBrokers = brokers as TerminalBrokerView[];
+
+  // The risk endpoint and broker list read the same tenant-owned connection
+  // state. If risk says a CONNECTED broker exists but the list contains none,
+  // this is a read/serialization inconsistency — never tell the user to
+  // reconnect an account that the server still reports as connected.
+  if (
+    riskPayload.brokerConnected &&
+    !normalizedBrokers.some((broker) => broker.status === 'CONNECTED')
+  ) {
+    throw new TraderTerminalLoadError(
+      'BROKER_STATE_INCONSISTENT',
+      'Risk status reports a connected broker but broker connection details are unavailable',
+    );
   }
 
   const session = sessionPayload;
-  const brokers: TerminalBrokerView[] = brokerPayload;
+  const brokersForView: TerminalBrokerView[] = normalizedBrokers;
   const sessionBroker = session
-    ? brokers.find((broker) => broker.id === session.brokerConnectionId) ?? null
+    ? brokersForView.find((broker) => broker.id === session.brokerConnectionId) ?? null
     : null;
 
   const primaryBroker =
     sessionBroker ??
-    brokers.find((broker) => broker.status === 'CONNECTED') ??
-    brokers[0] ??
+    brokersForView.find((broker) => broker.status === 'CONNECTED') ??
+    brokersForView[0] ??
     null;
 
   return {
     risk: riskPayload,
     session,
-    brokers,
+    brokers: brokersForView,
     sessionBroker,
     primaryBroker,
   };
