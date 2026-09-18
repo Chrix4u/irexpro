@@ -161,6 +161,7 @@ describe('PasswordResetService', () => {
         id: 'phone-user',
         email: null,
         phone: '+233241234567',
+        countryCode: 'GH',
         status: UserStatus.ACTIVE,
       });
 
@@ -168,7 +169,10 @@ describe('PasswordResetService', () => {
 
       expect(result.channel).toBe(ResetChannel.PHONE);
       expect(mockDeliveryService.deliver).toHaveBeenCalledWith(
-        expect.objectContaining({ channel: ResetChannel.PHONE }),
+        expect.objectContaining({
+          channel: ResetChannel.PHONE,
+          countryCode: 'GH',
+        }),
       );
     });
 

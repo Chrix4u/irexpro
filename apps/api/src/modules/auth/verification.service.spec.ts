@@ -120,6 +120,7 @@ describe('VerificationService request flow', () => {
       id: '11111111-1111-4111-8111-111111111111',
       phone: '+233244000000',
       phoneVerifiedAt: null,
+      countryCode: 'GH',
       status: UserStatus.ACTIVE,
     } as User;
     const saved: Partial<AuthVerificationToken>[] = [];
@@ -161,6 +162,8 @@ describe('VerificationService request flow', () => {
     });
 
     const code = phoneDelivery.sendVerificationCode.mock.calls[0][1] as string;
+    expect(phoneDelivery.isConfigured).toHaveBeenCalledWith('GH');
+    expect(phoneDelivery.sendVerificationCode.mock.calls[0][2]).toBe('GH');
     expect(code).toMatch(/^\d{6}$/u);
     expect(saved).toHaveLength(1);
 

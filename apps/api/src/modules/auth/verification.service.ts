@@ -175,7 +175,7 @@ export class VerificationService {
     if (!/^\+[1-9]\d{7,14}$/u.test(user.phone)) {
       throw new BadRequestException('Registered phone number cannot be verified');
     }
-    if (!this.phoneDelivery.isConfigured()) {
+    if (!this.phoneDelivery.isConfigured(user.countryCode ?? 'ZZ')) {
       throw new ServiceUnavailableException('Phone verification is temporarily unavailable');
     }
 
@@ -203,7 +203,11 @@ export class VerificationService {
     const persisted = await this.persistIssuedChallenge(user.id, VerificationChannel.PHONE, record);
     if (!persisted) throw new UnauthorizedException('User session is no longer valid');
 
-    const delivered = await this.phoneDelivery.sendVerificationCode(user.phone, code);
+    const delivered = await this.phoneDelivery.sendVerificationCode(
+      user.phone,
+      code,
+      user.countryCode ?? 'ZZ',
+    );
     if (!delivered) {
       await this.tokenRepo.update(
         {

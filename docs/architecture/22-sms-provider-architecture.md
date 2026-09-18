@@ -137,6 +137,14 @@ class SmsProviderRouter {
 
 ## 6. Supported SMS Providers
 
+> **Implementation status — 2026-09-18.** Twilio is production-capable when
+> its validated account/sender credentials are configured. Hubtel and Arkesel
+> remain registered placeholders and are deliberately excluded from runtime
+> selection until their adapters are implemented and configured. The registry
+> fails closed when no live provider can serve the target country; it never
+> routes a message to a placeholder merely because that provider is registered.
+
+
 ### 6.1 Global Providers
 
 | Provider | ID | Countries | Strengths |
@@ -214,10 +222,14 @@ To stop: irexpro.com/dashboard or reply STOP.
 ### 7.6 AI Auto Trading Stopped
 
 ```
-iRexPro: AI Auto Trading has been STOPPED. 
-Your open trades remain open at your broker. 
-Log in to review: irexpro.com/dashboard
+iRexPro: AI Trading has been STOPPED.
+iRexPro requested closure of positions opened by the AI.
+Log in to review any unverified or unresolved closures: irexpro.com/dashboard
 ```
+
+The server-authoritative stop result determines whether closure is COMPLETE,
+PARTIAL, or UNKNOWN. Notification copy must never claim a position is closed
+unless provider-backed state confirms it.
 
 ### 7.7 Trade Opened Alert
 

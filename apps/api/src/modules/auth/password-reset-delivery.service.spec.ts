@@ -6,6 +6,8 @@ import {
   EMAIL_PROVIDER,
 } from './password-reset-delivery.service';
 import { ResetChannel } from './entities/password-reset-token.entity';
+import { SmsMessageType } from '../notifications/interfaces/sms-provider.interface';
+import { SmsProviderRegistry } from '../notifications/registry/sms-provider.registry';
 
 /**
  * PasswordResetDeliveryService + NodemailerEmailProvider tests — Sprint 28 amendment.
@@ -17,18 +19,28 @@ import { ResetChannel } from './entities/password-reset-token.entity';
  *   - SMTP failure does not leak account existence (returns false, no raw token in logs)
  *   - raw token is not logged
  *   - reset link uses WEB_BASE_URL with a fragment-only token
- *   - phone delivery returns false (SMS providers are placeholders)
- *   - phone delivery does not log the raw code
+ *   - phone delivery routes through the configured live SMS provider
+ *   - phone delivery failures stay generic and do not log the raw code
  */
 describe('PasswordResetDeliveryService (Sprint 28 amendment — real email + rate limit)', () => {
   let module: TestingModule;
   let deliveryService: PasswordResetDeliveryService;
   let mockEmailProvider: { sendResetEmail: jest.Mock };
   let mockConfigService: { get: jest.Mock };
+  let mockSmsProvider: { providerId: string; isLive: boolean; sendSms: jest.Mock };
+  let mockSmsRegistry: { selectProvider: jest.Mock };
 
   beforeEach(async () => {
     jest.clearAllMocks();
     mockEmailProvider = { sendResetEmail: jest.fn().mockResolvedValue(true) };
+    mockSmsProvider = {
+      providerId: 'twilio',
+      isLive: true,
+      sendSms: jest.fn().mockResolvedValue({ success: true, provider: 'twilio' }),
+    };
+    mockSmsRegistry = {
+      selectProvider: jest.fn().mockReturnValue(mockSmsProvider),
+    };
     mockConfigService = {
       get: jest.fn((key: string, def?: unknown) => {
         const config: Record<string, unknown> = {
@@ -45,6 +57,7 @@ describe('PasswordResetDeliveryService (Sprint 28 amendment — real email + rat
         PasswordResetDeliveryService,
         { provide: ConfigService, useValue: mockConfigService },
         { provide: EMAIL_PROVIDER, useValue: mockEmailProvider },
+        { provide: SmsProviderRegistry, useValue: mockSmsRegistry },
       ],
     }).compile();
 
@@ -176,34 +189,62 @@ describe('PasswordResetDeliveryService (Sprint 28 amendment — real email + rat
     });
   });
 
-  describe('phone delivery (SMS placeholder)', () => {
-    it('should return false (SMS providers are placeholders)', async () => {
+  describe('phone delivery (live SMS provider)', () => {
+    it('routes the reset code through the shared SMS provider registry', async () => {
       const result = await deliveryService.deliver({
         channel: ResetChannel.PHONE,
         destination: '+233241234567',
         rawToken: '123456',
         userId: 'phone-user',
         userName: '+233241234567',
+        countryCode: 'GH',
       });
 
-      expect(result).toBe(false);
+      expect(result).toBe(true);
+      expect(mockSmsRegistry.selectProvider).toHaveBeenCalledWith('GH');
+      expect(mockSmsProvider.sendSms).toHaveBeenCalledWith({
+        to: '+233241234567',
+        messageType: SmsMessageType.PASSWORD_RESET,
+        templateData: { code: '123456' },
+        countryCode: 'GH',
+      });
+      expect(mockEmailProvider.sendResetEmail).not.toHaveBeenCalled();
     });
 
-    it('should NOT log the raw phone code', async () => {
-      // Phone delivery returns false (SMS placeholder). We verify the raw code
-      // is not passed to any logging mechanism by checking the service returns
-      // false without throwing (no side effects that could leak the code).
+    it('returns false when the live SMS provider rejects delivery', async () => {
+      mockSmsProvider.sendSms.mockResolvedValue({
+        success: false,
+        provider: 'twilio',
+        errorCode: 'PROVIDER_REJECTED',
+        errorMessage: 'SMS provider rejected the request',
+      });
+
       const result = await deliveryService.deliver({
         channel: ResetChannel.PHONE,
         destination: '+233241234567',
         rawToken: '654321',
         userId: 'phone-user',
         userName: '+233241234567',
+        countryCode: 'GH',
       });
 
       expect(result).toBe(false);
-      // The email provider is never called for phone channel
       expect(mockEmailProvider.sendResetEmail).not.toHaveBeenCalled();
+    });
+
+    it('rejects malformed phone reset inputs before provider selection', async () => {
+      await expect(
+        deliveryService.deliver({
+          channel: ResetChannel.PHONE,
+          destination: '0241234567',
+          rawToken: '654321',
+          userId: 'phone-user',
+          userName: '0241234567',
+          countryCode: 'GH',
+        }),
+      ).resolves.toBe(false);
+
+      expect(mockSmsRegistry.selectProvider).not.toHaveBeenCalled();
     });
   });
 });
