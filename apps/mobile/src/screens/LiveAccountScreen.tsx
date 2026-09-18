@@ -20,9 +20,11 @@ import {
   View,
 } from "react-native";
 import type {
+  LiveAccountActivityPage,
   LiveAccountOrdersPage,
   LiveAccountOverviewView,
   LiveAccountPositionsView,
+  LiveActivityRowView,
   LiveOrderRowView,
   LiveOrderStatusFilter,
   LivePositionRowView,
@@ -33,6 +35,8 @@ import { api } from "../lib/api";
 import { liveAccount } from "../lib/live-account";
 import { useRealtime } from "../context/realtime-context";
 import {
+  activityPresentation,
+  aiExitActivityRows,
   alertSeverityColor,
   environmentBanner,
   sessionAuthorityPresentation,
@@ -48,6 +52,7 @@ export default function LiveAccountScreen() {
     null,
   );
   const [orders, setOrders] = useState<LiveAccountOrdersPage | null>(null);
+  const [activity, setActivity] = useState<LiveAccountActivityPage | null>(null);
   const [orderFilter, setOrderFilter] = useState<LiveOrderStatusFilter>("ALL");
   // ── Trading session authority (Sprint 56 correction round 5) ──
   // The session mode/status/generation ARE the authoritative trading state
@@ -97,15 +102,17 @@ export default function LiveAccountScreen() {
         }
       })();
       try {
-        const [ov, pos, ord] = await Promise.all([
+        const [ov, pos, ord, act] = await Promise.all([
           liveAccount.getOverview(),
           liveAccount.getPositions(),
           liveAccount.getOrders(filter),
+          liveAccount.getActivity(30, 0),
           loadSession,
         ]);
         setOverview(ov);
         setPositions(pos);
         setOrders(ord);
+        setActivity(act);
         setError(null);
       } catch (err) {
         setError(
@@ -161,6 +168,8 @@ export default function LiveAccountScreen() {
   const tiles = overview ? summaryTiles(overview) : null;
   const alerts = overview ? sortAlerts(overview.alerts) : [];
   const sessionAuthority = sessionAuthorityPresentation(session);
+  const exitActivity = aiExitActivityRows(activity?.activity ?? []).slice(0, 8);
+  const recentActivity = (activity?.activity ?? []).slice(0, 10);
 
   return (
     <ScrollView
@@ -365,6 +374,57 @@ export default function LiveAccountScreen() {
         </>
       ) : null}
 
+      <Text style={styles.sectionTitle}>AI exit monitoring</Text>
+      <View style={styles.monitoringNote}>
+        <Text style={styles.monitoringNoteTitle}>Server-authoritative exit status</Text>
+        <Text style={styles.monitoringNoteText}>
+          AI exit events below come from the server audit trail. “Processed” does not
+          promise a confirmed close; the Positions list remains the authoritative view
+          of what is still open.
+        </Text>
+      </View>
+      {exitActivity.length > 0 ? (
+        exitActivity.map((row: LiveActivityRowView) => {
+          const presentation = activityPresentation(row.action);
+          const toneColor =
+            presentation.tone === "success"
+              ? "#047857"
+              : presentation.tone === "warning"
+                ? "#b45309"
+                : presentation.tone === "danger"
+                  ? "#be123c"
+                  : "#475569";
+          return (
+            <View
+              key={row.id}
+              style={styles.activityCard}
+              accessibilityLabel={`${presentation.label}, ${new Date(
+                row.createdAt,
+              ).toLocaleString()}`}
+            >
+              <View style={styles.rowBetween}>
+                <Text style={[styles.activityTitle, { color: toneColor }]}>
+                  {presentation.label}
+                </Text>
+                <Text style={styles.mutedSmall}>
+                  {new Date(row.createdAt).toLocaleString()}
+                </Text>
+              </View>
+              <Text style={styles.activityDetail}>{presentation.detail}</Text>
+              {row.severity !== "INFO" ? (
+                <Text style={[styles.activitySeverity, { color: toneColor }]}>
+                  {row.severity}
+                </Text>
+              ) : null}
+            </View>
+          );
+        })
+      ) : (
+        <View style={styles.card}>
+          <Text style={styles.muted}>No AI exit activity recorded yet.</Text>
+        </View>
+      )}
+
       <Text style={styles.sectionTitle}>Positions</Text>
       {positions && positions.positions.length > 0 ? (
         positions.positions.map((position: LivePositionRowView) => (
@@ -496,6 +556,30 @@ export default function LiveAccountScreen() {
       ) : (
         <View style={styles.card}>
           <Text style={styles.muted}>No orders in this view.</Text>
+        </View>
+      )}
+
+      <Text style={styles.sectionTitle}>Recent activity</Text>
+      {recentActivity.length > 0 ? (
+        recentActivity.map((row: LiveActivityRowView) => {
+          const presentation = activityPresentation(row.action);
+          return (
+            <View key={row.id} style={styles.activityCompactRow}>
+              <View style={styles.activityCompactCopy}>
+                <Text style={styles.activityCompactTitle}>
+                  {presentation.label}
+                </Text>
+                <Text style={styles.mutedSmall}>
+                  {new Date(row.createdAt).toLocaleString()}
+                </Text>
+              </View>
+              <Text style={styles.activityCompactSeverity}>{row.severity}</Text>
+            </View>
+          );
+        })
+      ) : (
+        <View style={styles.card}>
+          <Text style={styles.muted}>No recent activity.</Text>
         </View>
       )}
     </ScrollView>
@@ -630,6 +714,53 @@ const styles = StyleSheet.create({
   },
   errorText: { color: "#b91c1c", fontSize: 13 },
   errorTextSmall: { color: "#b91c1c", fontSize: 11 },
+  monitoringNote: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#99f6e4",
+    backgroundColor: "#f0fdfa",
+    padding: 12,
+    marginBottom: 10,
+    gap: 4,
+  },
+  monitoringNoteTitle: {
+    color: "#115e59",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  monitoringNoteText: {
+    color: "#0f766e",
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  activityCard: {
+    backgroundColor: "#ffffff",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    padding: 12,
+    marginBottom: 8,
+    gap: 5,
+  },
+  activityTitle: { fontSize: 13, fontWeight: "800" },
+  activityDetail: { color: "#475569", fontSize: 12, lineHeight: 17 },
+  activitySeverity: { fontSize: 10, fontWeight: "800", letterSpacing: 0.4 },
+  activityCompactRow: {
+    backgroundColor: "#ffffff",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 7,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 8,
+  },
+  activityCompactCopy: { flex: 1 },
+  activityCompactTitle: { color: "#334155", fontSize: 12, fontWeight: "700" },
+  activityCompactSeverity: { color: "#64748b", fontSize: 9, fontWeight: "800" },
   retryButton: {
     alignSelf: "flex-start",
     backgroundColor: "#fee2e2",

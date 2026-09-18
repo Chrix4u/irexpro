@@ -11,6 +11,7 @@ import type {
   LiveAccountAlertView,
   LiveAccountEnvironment,
   LiveAccountOverviewView,
+  LiveActivityRowView,
 } from "@irexpro/types";
 import type { TradingSessionView } from "@irexpro/types/execution";
 
@@ -126,6 +127,112 @@ export function summaryTiles(
     criticalAlerts: sorted.filter((a) => a.severity === "CRITICAL").length,
     warningAlerts: sorted.filter((a) => a.severity === "WARNING").length,
   };
+}
+
+
+
+// ── Activity / AI exit monitoring ───────────────────────────────────────────
+
+export interface ActivityPresentation {
+  label: string;
+  detail: string;
+  tone: "neutral" | "success" | "warning" | "danger";
+  isAiExit: boolean;
+}
+
+/**
+ * User-facing copy for audit actions. The presentation never infers broker
+ * execution beyond the server action. In particular, AI_EXIT_SIGNAL_EXECUTED
+ * is rendered as "processed" rather than "closed" because the durable audit
+ * metadata can represent a partial close; the Positions list remains the
+ * authoritative current-open-state surface.
+ */
+export function activityPresentation(action: string): ActivityPresentation {
+  switch (action) {
+    case "AI_EXIT_SIGNAL_RECEIVED":
+      return {
+        label: "AI exit received",
+        detail: "The AI submitted an exit decision for server processing.",
+        tone: "neutral",
+        isAiExit: true,
+      };
+    case "AI_EXIT_SIGNAL_EXECUTED":
+      return {
+        label: "AI exit processed",
+        detail:
+          "The server processed the AI exit request. Check Positions for the authoritative open-position state.",
+        tone: "success",
+        isAiExit: true,
+      };
+    case "AI_EXIT_SIGNAL_FAILED":
+      return {
+        label: "AI exit failed",
+        detail:
+          "The exit request did not complete successfully. The position may still be open; check Positions and alerts.",
+        tone: "danger",
+        isAiExit: true,
+      };
+    case "AI_EXIT_SIGNAL_IGNORED":
+      return {
+        label: "AI exit ignored",
+        detail:
+          "The server did not act on this exit decision, for example because it was stale, low confidence, or no open target remained.",
+        tone: "warning",
+        isAiExit: true,
+      };
+    case "TRADE_CLOSED":
+      return {
+        label: "Position closed",
+        detail: "A trade reached the server's closed state.",
+        tone: "success",
+        isAiExit: false,
+      };
+    case "TRADE_OPENED":
+      return {
+        label: "Position opened",
+        detail: "A trade reached the server's open state.",
+        tone: "neutral",
+        isAiExit: false,
+      };
+    case "ORDER_RECONCILIATION_PENDING":
+      return {
+        label: "Order needs reconciliation",
+        detail: "The order outcome is not yet fully proven by the provider.",
+        tone: "warning",
+        isAiExit: false,
+      };
+    case "RISK_SESSION_SUSPENDED":
+      return {
+        label: "AI Trading suspended",
+        detail: "The server suspended the trading session because of a risk condition.",
+        tone: "danger",
+        isAiExit: false,
+      };
+    default:
+      return {
+        label: action
+          .toLowerCase()
+          .split("_")
+          .filter(Boolean)
+          .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+          .join(" "),
+        detail: "Server-recorded trading activity.",
+        tone: "neutral",
+        isAiExit: false,
+      };
+  }
+}
+
+/** Recent AI-exit audit rows, newest first, without mutating the API payload. */
+export function aiExitActivityRows(
+  activity: readonly LiveActivityRowView[],
+): LiveActivityRowView[] {
+  return [...activity]
+    .filter((row) => activityPresentation(row.action).isAiExit)
+    .sort(
+      (a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+    );
 }
 
 // ── Trading session authority (Sprint 56 correction round 5) ────────────────
