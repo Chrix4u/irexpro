@@ -712,7 +712,10 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       expect(executionService.endSession).toHaveBeenCalledWith(
         'user-1',
         TradingSessionStatus.ENDED,
-        { closeAiPositionsOnStop: true },
+        {
+          closeAiPositionsOnStop: true,
+          expectedSessionId: 'session-1',
+        },
       );
       expect(executionService.closeAllAiOpenPositions).toHaveBeenCalledWith(
         'user-1',

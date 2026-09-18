@@ -1778,17 +1778,26 @@ export class ExecutionService {
   async endSession(
     userId: string,
     status = TradingSessionStatus.ENDED,
-    options: { closeAiPositionsOnStop?: boolean } = {},
+    options: {
+      closeAiPositionsOnStop?: boolean;
+      expectedSessionId?: string;
+    } = {},
   ): Promise<void> {
     const maxAttempts = 4;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       const session = await this.findActiveSessionOrdered(userId);
       if (!session) {
-        // Idempotent no-op — no ACTIVE session remains. If a concurrent
-        // suspend/end won while this user explicitly requested Stop, persist
-        // the close-on-stop marker on that known non-active session below
-        // only when we can resolve it through a later CAS-loss re-read.
+        // A concurrent suspension/end can win after TradingService has already
+        // read the exact session the user confirmed stopping. Preserve the
+        // durable flatten intent on that exact owned session even though no
+        // ACTIVE row remains.
+        if (options.closeAiPositionsOnStop === true && options.expectedSessionId) {
+          await this.sessionRepo.update(
+            { id: options.expectedSessionId, userId },
+            { closeAiPositionsOnStop: true },
+          );
+        }
         return;
       }
 

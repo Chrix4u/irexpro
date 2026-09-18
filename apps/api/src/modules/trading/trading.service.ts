@@ -310,6 +310,7 @@ export class TradingService {
     // flattening by the reconciliation worker.
     await this.executionService.endSession(userId, TradingSessionStatus.ENDED, {
       closeAiPositionsOnStop: true,
+      expectedSessionId: session.id,
     });
 
     let closeState: AiStopPositionCloseState = 'COMPLETE';
