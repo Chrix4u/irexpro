@@ -25,22 +25,30 @@ export class SmsProviderRegistry {
   }
 
   selectProvider(countryCode: string, preferredProviderId?: string): ISmsProvider {
+    const normalizedCountry = countryCode.trim().toUpperCase() || 'ZZ';
+
     if (preferredProviderId) {
       const preferred = this.providers.get(preferredProviderId);
-      if (preferred && preferred.supportedCountries.includes(countryCode)) return preferred;
+      if (
+        preferred?.isLive === true &&
+        (preferred.supportedCountries.includes(normalizedCountry) ||
+          preferred.supportedCountries.includes('*'))
+      ) {
+        return preferred;
+      }
     }
 
     const candidates = Array.from(this.providers.values()).filter(
-      (p) => p.supportedCountries.includes(countryCode) || p.supportedCountries.includes('*'),
+      (provider) =>
+        provider.isLive === true &&
+        (provider.supportedCountries.includes(normalizedCountry) ||
+          provider.supportedCountries.includes('*')),
     );
 
     if (candidates.length === 0) {
-      const twilio = this.providers.get('twilio');
-      if (twilio) {
-        this.logger.warn(`No SMS provider for ${countryCode}, falling back to Twilio`);
-        return twilio;
-      }
-      throw new NotFoundException(`No SMS provider available for country=${countryCode}`);
+      throw new NotFoundException(
+        `No configured live SMS provider available for country=${normalizedCountry}`,
+      );
     }
 
     return candidates[0];
