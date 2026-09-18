@@ -1,0 +1,82 @@
+name: UAT Runtime Smoke
+
+on:
+  push:
+    branches:
+      - 'fix/uat-ai-trading-runtime-diagnostics'
+    paths:
+      - '.github/workflows/uat-runtime-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Probe live UAT web/API routing
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      APP_ORIGIN: https://irexpro.lightworldtech.com
+      API_BASE: https://irexpro.lightworldtech.com/api/v1
+    steps:
+      - name: Verify public web and health endpoints
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          curl --fail --silent --show-error --location --max-time 15             --output /dev/null "$APP_ORIGIN/login"
+
+          live_payload="$(curl --fail --silent --show-error --max-time 15 "$API_BASE/health/live")"
+          ready_payload="$(curl --fail --silent --show-error --max-time 15 "$API_BASE/health/ready")"
+
+          LIVE_PAYLOAD="$live_payload" READY_PAYLOAD="$ready_payload" node --input-type=module <<'NODE'
+          const live = JSON.parse(process.env.LIVE_PAYLOAD);
+          const ready = JSON.parse(process.env.READY_PAYLOAD);
+          if (live.status !== 'alive') throw new Error('health/live did not report alive');
+          if (ready.status !== 'ready') throw new Error('health/ready did not report ready');
+          NODE
+
+      - name: Verify protected AI Trading routes are reachable
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          probe_protected() {
+            local path="$1"
+            local code
+            code="$(curl --silent --show-error --output /tmp/uat-body               --write-out '%{http_code}' --max-time 15 "$API_BASE/$path")"
+            if [[ "$code" != "401" ]]; then
+              printf 'Expected 401 from protected route %s, got %s\n' "$path" "$code" >&2
+              cat /tmp/uat-body >&2 || true
+              exit 1
+            fi
+            printf '%s reachable (401 without auth as expected)\n' "$path"
+          }
+
+          probe_protected 'risk/status'
+          probe_protected 'trading/sessions/active'
+          probe_protected 'broker/connections'
+
+      - name: Verify browser preflight contract for AI Trading routes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          probe_preflight() {
+            local path="$1"
+            local headers
+            headers="$(mktemp)"
+            curl --silent --show-error --output /dev/null --dump-header "$headers"               --request OPTIONS --max-time 15               --header "Origin: $APP_ORIGIN"               --header 'Access-Control-Request-Method: GET'               --header 'Access-Control-Request-Headers: authorization,content-type'               "$API_BASE/$path"
+
+            grep -qi '^access-control-allow-origin: https://irexpro\.lightworldtech\.com' "$headers"
+            grep -qi '^access-control-allow-credentials: true' "$headers"
+            grep -qi '^access-control-allow-methods:.*GET' "$headers"
+            grep -qi '^access-control-allow-headers:.*Authorization' "$headers"
+            rm -f "$headers"
+            printf '%s preflight accepted\n' "$path"
+          }
+
+          probe_preflight 'risk/status'
+          probe_preflight 'trading/sessions/active'
+          probe_preflight 'broker/connections'
