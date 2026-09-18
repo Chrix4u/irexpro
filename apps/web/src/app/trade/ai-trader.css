@@ -61,23 +61,25 @@
 
 .ai-control-card__label {
   color: var(--text-secondary);
-  font-size: 0.78rem;
-  font-weight: 750;
-  letter-spacing: 0.04em;
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.045em;
   text-transform: uppercase;
 }
 
 .ai-control-card__value {
-  font-size: clamp(1.35rem, 2.5vw, 2rem);
-  letter-spacing: -0.035em;
-  line-height: 1.15;
+  font-size: clamp(1.05rem, 1.65vw, 1.45rem);
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  line-height: 1.25;
   overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums lining-nums;
 }
 
 .ai-control-card__hint {
   margin-top: auto;
   color: var(--text-muted);
-  font-size: 0.8rem;
+  font-size: 0.76rem;
   line-height: 1.45;
 }
 
@@ -108,9 +110,9 @@
 }
 
 .ai-automation-action {
-  min-height: 48px;
+  min-height: 46px;
   justify-content: center;
-  font-weight: 850;
+  font-weight: 700;
 }
 
 .ai-confirm-overlay {
@@ -178,7 +180,9 @@
 }
 
 .ai-confirm-facts strong {
+  font-weight: 650;
   overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums lining-nums;
 }
 
 .ai-confirm-dialog__actions {
@@ -201,10 +205,12 @@
 }
 
 .ai-overview-card__value {
-  font-size: clamp(1.3rem, 2.3vw, 1.9rem);
-  font-weight: 800;
-  letter-spacing: -0.035em;
+  font-size: clamp(1.08rem, 1.8vw, 1.45rem);
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  line-height: 1.25;
   overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums lining-nums;
 }
 
 .ai-trading-grid {
@@ -291,8 +297,9 @@
 
 .ai-trade-metrics dd {
   margin: 0.18rem 0 0;
-  font-weight: 750;
+  font-weight: 650;
   overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums lining-nums;
 }
 
 .ai-activity-list {
@@ -366,7 +373,7 @@
 .ai-text-link {
   color: var(--brand-light);
   font-size: 0.84rem;
-  font-weight: 750;
+  font-weight: 700;
   text-decoration: none;
   white-space: nowrap;
 }
