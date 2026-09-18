@@ -875,9 +875,7 @@ export class ExecutionService {
 
     if (stopRequestedSessions.length === 0) return [];
 
-    const stopRequestedSessionIds = new Set(
-      stopRequestedSessions.map((session) => session.id),
-    );
+    const stopRequestedSessionIds = new Set(stopRequestedSessions.map((session) => session.id));
     const openTrades = await this.tradeRepo.find({
       where: {
         userId,
@@ -890,10 +888,7 @@ export class ExecutionService {
     const lateAiPositions = openTrades.filter(
       (trade) =>
         Boolean(trade.tradingSessionId || trade.tradeIntentId || trade.signalId) &&
-        Boolean(
-          trade.tradingSessionId &&
-            stopRequestedSessionIds.has(trade.tradingSessionId),
-        ),
+        Boolean(trade.tradingSessionId && stopRequestedSessionIds.has(trade.tradingSessionId)),
     );
 
     return this.closeAiTrades(
@@ -1808,7 +1803,9 @@ export class ExecutionService {
         .set({
           status,
           endedAt: new Date(),
-          closeAiPositionsOnStop: options.closeAiPositionsOnStop === true,
+          ...(options.closeAiPositionsOnStop === true
+            ? { closeAiPositionsOnStop: true }
+            : {}),
           authorityGeneration: () => 'authority_generation + 1',
           updatedAt: new Date(),
         })

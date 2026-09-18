@@ -47,6 +47,7 @@ describe('TradingService — Sprint 32 Snapshot Immutability', () => {
       riskProfileSnapshot: null,
       startedAt: new Date(),
       endedAt: null,
+      closeAiPositionsOnStop: false,
       createdAt: new Date(),
       updatedAt: new Date(),
     };

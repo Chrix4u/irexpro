@@ -855,11 +855,7 @@ describe('ExecutionService', () => {
       );
 
       expect(closeSpy).toHaveBeenCalledTimes(1);
-      expect(closeSpy).toHaveBeenCalledWith(
-        'trade-ai',
-        'user-1',
-        TradeCloseReason.MANUAL_CLOSE,
-      );
+      expect(closeSpy).toHaveBeenCalledWith('trade-ai', 'user-1', TradeCloseReason.MANUAL_CLOSE);
       expect(results).toEqual([
         expect.objectContaining({
           tradeId: 'trade-ai',
@@ -904,11 +900,7 @@ describe('ExecutionService', () => {
       const results = await service.closeStopRequestedAiPositions('user-1', 'conn-1');
 
       expect(closeSpy).toHaveBeenCalledTimes(1);
-      expect(closeSpy).toHaveBeenCalledWith(
-        'trade-late',
-        'user-1',
-        TradeCloseReason.MANUAL_CLOSE,
-      );
+      expect(closeSpy).toHaveBeenCalledWith('trade-late', 'user-1', TradeCloseReason.MANUAL_CLOSE);
       expect(results).toEqual([
         expect.objectContaining({
           tradeId: 'trade-late',

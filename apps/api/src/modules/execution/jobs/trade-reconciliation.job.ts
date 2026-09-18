@@ -124,10 +124,7 @@ export class TradeReconciliationJob extends WorkerHost {
       // provider truth; this follow-up then closes any newly OPEN position
       // belonging to a session durably marked closeAiPositionsOnStop.
       try {
-        await this.executionService.closeStopRequestedAiPositions(
-          connection.userId,
-          connection.id,
-        );
+        await this.executionService.closeStopRequestedAiPositions(connection.userId, connection.id);
       } catch (err) {
         this.logger.error(
           `AI-stop reconciliation flatten threw for connection ${connection.id}: ` +
