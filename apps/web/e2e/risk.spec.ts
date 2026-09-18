@@ -30,11 +30,12 @@ test.describe('AI Protection', () => {
     await expect(page.getByText(/3\. ai automation/i)).toBeVisible();
     await expect(page.getByText(/start or stop ai trading/i)).toBeVisible();
 
-    await expect(page.getByRole('link', { name: /broker account/i })).toHaveAttribute(
+    const protection = page.getByLabel('AI Protection');
+    await expect(protection.getByRole('link', { name: /broker account/i })).toHaveAttribute(
       'href',
       '/onboarding/broker',
     );
-    await expect(page.getByRole('link', { name: /open ai trading/i })).toHaveAttribute(
+    await expect(protection.getByRole('link', { name: /open ai trading/i })).toHaveAttribute(
       'href',
       '/trade',
     );

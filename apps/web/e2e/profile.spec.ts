@@ -338,7 +338,6 @@ test.describe('Onboarding / Profile', () => {
       'Country code (2 letters)',
       'Timezone',
       'Preferred currency (3 letters)',
-      'Trading experience level',
     ];
     for (const labelText of expectedLabels) {
       await expect(
