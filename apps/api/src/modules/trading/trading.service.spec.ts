@@ -17,6 +17,7 @@ import { BrokerConnectionRequiredException } from '../execution/execution-sessio
 import { AllowedTradingMode } from '../risk/entities/risk-profile.entity';
 import { BrokerAccountSnapshotService } from '../broker/services/broker-account-snapshot.service';
 import { BrokerConnectionStatus } from '../broker/interfaces/broker-adapter.interface';
+import { TradeCloseReason, TradeStatus } from '../execution/entities/trade.entity';
 
 /**
  * TradingService tests — Sprint 29 amendment + free-access regression +
@@ -166,6 +167,7 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
         .mockResolvedValue(
           mockSession({ executionMode: ExecutionMode.SEMI_AUTO, authorityGeneration: 2 }),
         ),
+      closeAllAiOpenPositions: jest.fn().mockResolvedValue([]),
     };
 
     auditService = { log: jest.fn().mockResolvedValue(undefined) };
@@ -704,12 +706,70 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
   });
 
   describe('stopTradingSession()', () => {
-    it('stops the active session', async () => {
+    it('ends execution authority BEFORE requesting AI-position closure', async () => {
       await service.stopTradingSession('user-1', 'session-1');
+
       expect(executionService.endSession).toHaveBeenCalledWith(
         'user-1',
         TradingSessionStatus.ENDED,
       );
+      expect(executionService.closeAllAiOpenPositions).toHaveBeenCalledWith(
+        'user-1',
+        TradeCloseReason.MANUAL_CLOSE,
+      );
+      expect(executionService.endSession.mock.invocationCallOrder[0]).toBeLessThan(
+        executionService.closeAllAiOpenPositions.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('returns COMPLETE only when every AI-opened position is confirmed closed', async () => {
+      executionService.closeAllAiOpenPositions.mockResolvedValue([
+        { tradeId: 'trade-1', closed: true, status: TradeStatus.CLOSED },
+        { tradeId: 'trade-2', closed: true, status: TradeStatus.CLOSED },
+      ]);
+
+      const result = await service.stopTradingSession('user-1', 'session-1');
+
+      expect(result.positionCloseSummary).toEqual({
+        state: 'COMPLETE',
+        targetCount: 2,
+        closedCount: 2,
+        unresolvedCount: 0,
+      });
+      expect(result.message).toMatch(/all 2 AI-opened positions were confirmed closed/i);
+    });
+
+    it('returns PARTIAL without reactivating AI Trading when a broker close is unresolved', async () => {
+      executionService.closeAllAiOpenPositions.mockResolvedValue([
+        { tradeId: 'trade-1', closed: true, status: TradeStatus.CLOSED },
+        { tradeId: 'trade-2', closed: false, status: TradeStatus.RECONCILIATION_PENDING },
+      ]);
+
+      const result = await service.stopTradingSession('user-1', 'session-1');
+
+      expect(result.positionCloseSummary).toEqual({
+        state: 'PARTIAL',
+        targetCount: 2,
+        closedCount: 1,
+        unresolvedCount: 1,
+      });
+      expect(executionService.endSession).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns UNKNOWN when the flatten cannot be verified but keeps the session ENDED', async () => {
+      executionService.closeAllAiOpenPositions.mockRejectedValue(
+        new Error('trade store unavailable'),
+      );
+
+      const result = await service.stopTradingSession('user-1', 'session-1');
+
+      expect(result.positionCloseSummary).toEqual({
+        state: 'UNKNOWN',
+        targetCount: null,
+        closedCount: 0,
+        unresolvedCount: null,
+      });
+      expect(executionService.endSession).toHaveBeenCalledTimes(1);
     });
 
     it('throws NotFoundException when no active session', async () => {
@@ -717,18 +777,27 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       await expect(service.stopTradingSession('user-1', 'session-1')).rejects.toThrow(
         NotFoundException,
       );
+      expect(executionService.closeAllAiOpenPositions).not.toHaveBeenCalled();
     });
 
     it('throws ForbiddenException when session ID does not match', async () => {
       await expect(service.stopTradingSession('user-1', 'other-session')).rejects.toThrow(
         ForbiddenException,
       );
+      expect(executionService.closeAllAiOpenPositions).not.toHaveBeenCalled();
     });
 
-    it('audit-logs the session stop', async () => {
+    it('audit-logs the stop-and-flatten summary', async () => {
       await service.stopTradingSession('user-1', 'session-1');
       expect(auditService.log).toHaveBeenCalledWith(
-        expect.objectContaining({ actorUserId: 'user-1', action: 'AI_TRADING_DISABLED' }),
+        expect.objectContaining({
+          actorUserId: 'user-1',
+          action: 'AI_TRADING_DISABLED',
+          metadata: expect.objectContaining({
+            reason: 'user-requested-stop-and-flatten',
+            positionCloseSummary: expect.objectContaining({ state: 'COMPLETE' }),
+          }),
+        }),
       );
     });
   });

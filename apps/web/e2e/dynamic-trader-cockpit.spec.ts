@@ -82,7 +82,10 @@ const marketSnapshot = {
   ],
 };
 
-async function gotoAiTrader(page: Parameters<typeof setupErrorCollectors>[0]) {
+async function gotoAiTrader(
+  page: Parameters<typeof setupErrorCollectors>[0],
+  options: { onStop?: () => void } = {},
+) {
   setupErrorCollectors(page);
   await page.route('**/api/v1/**', async (route) => {
     const url = new URL(route.request().url());
@@ -137,7 +140,19 @@ async function gotoAiTrader(page: Parameters<typeof setupErrorCollectors>[0]) {
       });
     }
     if (apiPath === 'market-data/intelligence') return fulfill(200, marketSnapshot);
-    if (apiPath.startsWith('trading/sessions/') && apiPath.endsWith('/stop')) return fulfill(200, {});
+    if (apiPath.startsWith('trading/sessions/') && apiPath.endsWith('/stop')) {
+      options.onStop?.();
+      return fulfill(200, {
+        message: 'AI Trading stopped and all 1 AI-opened positions were confirmed closed.',
+        sessionId: '44444444-4444-4444-8444-444444444444',
+        positionCloseSummary: {
+          state: 'COMPLETE',
+          targetCount: 1,
+          closedCount: 1,
+          unresolvedCount: 0,
+        },
+      });
+    }
     return fulfill(200, {});
   });
 
@@ -153,7 +168,7 @@ test.describe('AI Trader novice workflow', () => {
     await expect(page.getByText('Paper Trading Broker', { exact: false }).first()).toBeVisible();
     await expect(page.getByText('2500 USD', { exact: false }).first()).toBeVisible();
     await expect(page.getByRole('combobox', { name: 'Broker account' })).toBeDisabled();
-    await expect(page.getByRole('button', { name: 'Turn AI automation off' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Stop AI Trading' })).toBeVisible();
 
     await expect(page.getByRole('heading', { level: 2, name: 'Open Positions' })).toBeVisible();
     await expect(page.getByText('EURUSD', { exact: true }).first()).toBeVisible();
@@ -169,6 +184,26 @@ test.describe('AI Trader novice workflow', () => {
     await assertNoHorizontalOverflow(page);
     assertNoConsoleErrors(page);
     assertNoFailedRequests(page);
+    assertNoExternalRequests(page);
+  });
+
+  test('requires confirmation before stopping and warns that AI positions will close', async ({ page }) => {
+    let stopRequests = 0;
+    await gotoAiTrader(page, { onStop: () => { stopRequests += 1; } });
+
+    await page.getByRole('button', { name: 'Stop AI Trading' }).click();
+
+    const dialog = page.getByRole('alertdialog', {
+      name: 'Stop AI Trading and close AI positions?',
+    });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText(/stopping also closes ai-opened positions/i)).toBeVisible();
+    expect(stopRequests).toBe(0);
+
+    await dialog.getByRole('button', { name: 'Stop & Close AI Positions' }).click();
+    expect(stopRequests).toBe(1);
+    await expect(dialog).toHaveCount(0);
+
     assertNoExternalRequests(page);
   });
 
@@ -190,7 +225,7 @@ test.describe('AI Trader novice workflow', () => {
       await page.setViewportSize(viewport);
       await assertNoHorizontalOverflow(page);
       await expect(page.getByTestId('ai-trader-workspace')).toBeVisible();
-      await expect(page.getByRole('button', { name: 'Turn AI automation off' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Stop AI Trading' })).toBeVisible();
     }
 
     assertNoConsoleErrors(page);

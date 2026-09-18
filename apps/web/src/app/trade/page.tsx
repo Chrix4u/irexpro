@@ -122,6 +122,7 @@ export default function AiTradingPage() {
   const [loading, setLoading] = useState(true);
   const [savingAllocation, setSavingAllocation] = useState(false);
   const [togglingAutomation, setTogglingAutomation] = useState(false);
+  const [pendingAutomationAction, setPendingAutomationAction] = useState<'START' | 'STOP' | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const initializedActivity = useRef(false);
@@ -247,6 +248,22 @@ export default function AiTradingPage() {
     return () => window.clearInterval(timer);
   }, [user, refreshTradingData]);
 
+  useEffect(() => {
+    if (!pendingAutomationAction) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !togglingAutomation) {
+        setPendingAutomationAction(null);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [pendingAutomationAction, togglingAutomation]);
+
   async function handleBrokerChange(nextId: string) {
     setSelectedBrokerId(nextId);
     setAllocation(null);
@@ -288,20 +305,66 @@ export default function AiTradingPage() {
     }
   }
 
-  async function toggleAutomation() {
+  function requestAutomationAction() {
     if (!selectedBroker) {
       notify.warning('Connect a broker account first.');
       return;
     }
+    if (!automationOn && (!allocation?.hasAllocation || !allocation.allocatedCapital)) {
+      notify.warning('Allocate capital before starting AI Trading.');
+      return;
+    }
+    setPendingAutomationAction(automationOn ? 'STOP' : 'START');
+  }
+
+  async function confirmAutomationAction() {
+    if (!pendingAutomationAction || !selectedBroker) return;
+    const action = pendingAutomationAction;
+
     setTogglingAutomation(true);
     setError(null);
     try {
-      if (automationOn && terminal?.session) {
-        await api.stopTradingSession(terminal.session.id);
-        notify.info('AI automation turned off.');
+      if (action === 'STOP') {
+        if (!terminal?.session) {
+          notify.warning('AI Trading is already stopped.');
+          setPendingAutomationAction(null);
+          return;
+        }
+
+        const result = await api.stopTradingSession(terminal.session.id);
+        const summary = result.positionCloseSummary;
+
+        if (summary.state === 'COMPLETE') {
+          if (summary.closedCount > 0) {
+            notify.success(
+              'AI Trading stopped. ' +
+                summary.closedCount +
+                ' AI position' +
+                (summary.closedCount === 1 ? '' : 's') +
+                ' confirmed closed.',
+            );
+          } else {
+            notify.info('AI Trading stopped. No AI-opened positions were open.');
+          }
+        } else if (summary.state === 'PARTIAL') {
+          notify.warning(
+            'AI Trading stopped. ' +
+              summary.closedCount +
+              ' of ' +
+              (summary.targetCount ?? 'the') +
+              ' AI positions were confirmed closed; ' +
+              (summary.unresolvedCount ?? 'some') +
+              ' require follow-up.',
+          );
+        } else {
+          notify.warning(
+            'AI Trading stopped, but position closure could not be verified. Check Positions & Activity now.',
+          );
+        }
       } else {
         if (!allocation?.hasAllocation || !allocation.allocatedCapital) {
-          notify.warning('Allocate capital before turning on AI automation.');
+          notify.warning('Allocate capital before starting AI Trading.');
+          setPendingAutomationAction(null);
           return;
         }
         const executionMode = selectedBroker.accountType === 'LIVE' ? 'FULL_AUTO' : 'PAPER_ONLY';
@@ -311,11 +374,13 @@ export default function AiTradingPage() {
         });
         notify.success(
           selectedBroker.accountType === 'LIVE'
-            ? 'AI automation turned on for the verified live account.'
-            : 'AI automation turned on in paper/demo mode.',
+            ? 'AI Trading started for the verified live account.'
+            : 'AI Trading started in paper/demo mode.',
         );
       }
+
       await refreshTradingData(false);
+      setPendingAutomationAction(null);
     } catch (requestError) {
       const message = mapApiError(requestError).message;
       setError(message);
@@ -348,14 +413,14 @@ export default function AiTradingPage() {
             <p className="workspace-hero__eyebrow">AI trading made simple</p>
             <h1>AI Trader</h1>
             <p>
-              Connect your broker, choose how much capital the AI may use, then turn automation on.
+              Connect your broker, choose how much capital the AI may use, then start AI Trading.
               Strategy selection, position sizing and risk checks run automatically on the server.
             </p>
           </div>
           <div className="ai-trader__hero-state">
-            <span>AI Automation</span>
+            <span>AI Trading</span>
             <Badge variant={automationOn ? 'success' : 'info'}>
-              {automationOn ? 'ON' : 'OFF'}
+              {automationOn ? 'RUNNING' : 'STOPPED'}
             </Badge>
           </div>
         </section>
@@ -438,22 +503,30 @@ export default function AiTradingPage() {
               </Card>
 
               <Card className="ai-control-card ai-control-card--automation">
-                <span className="ai-control-card__label">AI automation</span>
-                <button
+                <span className="ai-control-card__label">AI Trading</span>
+                <div className="ai-automation-state">
+                  <Badge variant={automationOn ? 'success' : 'info'}>
+                    {automationOn ? 'Running' : 'Stopped'}
+                  </Badge>
+                </div>
+                <Button
                   type="button"
-                  className={`ai-toggle${automationOn ? ' ai-toggle--on' : ''}`}
-                  aria-pressed={automationOn}
-                  aria-label={automationOn ? 'Turn AI automation off' : 'Turn AI automation on'}
+                  variant={automationOn ? 'danger' : 'primary'}
+                  size="lg"
+                  block
+                  className="ai-automation-action"
+                  aria-label={automationOn ? 'Stop AI Trading' : 'Start AI Trading'}
                   disabled={!selectedBroker || togglingAutomation}
-                  onClick={() => void toggleAutomation()}
+                  onClick={requestAutomationAction}
                 >
-                  <span className="ai-toggle__track"><span className="ai-toggle__thumb" /></span>
-                  <span>{togglingAutomation ? 'Updating…' : automationOn ? 'ON' : 'OFF'}</span>
-                </button>
+                  {togglingAutomation
+                    ? automationOn ? 'Stopping…' : 'Starting…'
+                    : automationOn ? 'Stop AI Trading' : 'Start AI Trading'}
+                </Button>
                 <span className="ai-control-card__hint">
                   {automationOn
-                    ? 'The AI may create new exposure within your allocation and server protections.'
-                    : 'No new AI exposure is authorized while automation is off.'}
+                    ? 'AI Trading may open and manage positions within your allocation. Stop requires confirmation and closes AI-opened positions.'
+                    : 'AI Trading cannot create new positions while stopped.'}
                 </span>
               </Card>
             </section>
@@ -476,10 +549,10 @@ export default function AiTradingPage() {
               <Card className="ai-overview-card">
                 <span className="ai-control-card__label">AI session</span>
                 <strong className="ai-overview-card__value">
-                  {terminal?.session?.status ?? 'OFF'}
+                  {terminal?.session?.status ?? 'STOPPED'}
                 </strong>
                 <span className="muted text-sm">
-                  {terminal?.session ? `Started ${formatTimestamp(terminal.session.startedAt)}` : 'Turn automation on to start'}
+                  {terminal?.session ? `Started ${formatTimestamp(terminal.session.startedAt)}` : 'Start AI Trading to begin'}
                 </span>
               </Card>
               <Card className="ai-overview-card">
@@ -553,6 +626,90 @@ export default function AiTradingPage() {
               <Link href="/onboarding/risk" className="ai-text-link">View protection</Link>
             </section>
           </>
+        )}
+
+        {pendingAutomationAction && (
+          <div
+            className="ai-confirm-overlay"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget && !togglingAutomation) {
+                setPendingAutomationAction(null);
+              }
+            }}
+          >
+            <section
+              className="ai-confirm-dialog"
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="ai-confirm-title"
+              aria-describedby="ai-confirm-description"
+            >
+              <div className="ai-confirm-dialog__header">
+                <span className="ai-control-card__label">
+                  {pendingAutomationAction === 'STOP' ? 'Confirmation required' : 'Ready to start'}
+                </span>
+                <h2 id="ai-confirm-title">
+                  {pendingAutomationAction === 'STOP'
+                    ? 'Stop AI Trading and close AI positions?'
+                    : 'Start AI Trading?'}
+                </h2>
+              </div>
+
+              <p id="ai-confirm-description" className="ai-confirm-dialog__description">
+                {pendingAutomationAction === 'STOP'
+                  ? 'Confirming will stop new AI trading first, then immediately request closure of every currently open position that iRexPro can prove was opened by the AI.'
+                  : 'Confirm that you want iRexPro AI to begin trading this broker account automatically using the capital you allocated.'}
+              </p>
+
+              <div className="ai-confirm-facts" aria-label="AI Trading confirmation details">
+                <div>
+                  <span>Broker</span>
+                  <strong>{connectionLabel(selectedBroker)}</strong>
+                </div>
+                <div>
+                  <span>AI allocation</span>
+                  <strong>{money(allocation?.allocatedCapital, allocation?.accountCurrency)}</strong>
+                </div>
+                <div>
+                  <span>Open positions shown</span>
+                  <strong>{livePositions.length}</strong>
+                </div>
+              </div>
+
+              {pendingAutomationAction === 'STOP' ? (
+                <Alert variant="warning">
+                  <strong>Stopping also closes AI-opened positions.</strong>{' '}
+                  Broker market conditions determine the actual exit price. If a broker cannot immediately prove a closure, iRexPro will report it as unresolved/reconciliation pending instead of pretending it is closed.
+                </Alert>
+              ) : (
+                <Alert variant="info">
+                  Once started, the AI may open, manage and close positions automatically within your allocation and server-enforced protections until you stop AI Trading.
+                </Alert>
+              )}
+
+              <div className="ai-confirm-dialog__actions">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={togglingAutomation}
+                  onClick={() => setPendingAutomationAction(null)}
+                >
+                  {pendingAutomationAction === 'STOP' ? 'Keep AI Trading Running' : 'Cancel'}
+                </Button>
+                <Button
+                  type="button"
+                  variant={pendingAutomationAction === 'STOP' ? 'danger' : 'primary'}
+                  loading={togglingAutomation}
+                  autoFocus
+                  onClick={() => void confirmAutomationAction()}
+                >
+                  {pendingAutomationAction === 'STOP'
+                    ? 'Stop & Close AI Positions'
+                    : 'Start AI Trading'}
+                </Button>
+              </div>
+            </section>
+          </div>
         )}
       </main>
     </DashboardShell>

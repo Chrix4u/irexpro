@@ -10,7 +10,7 @@ import {
   Post,
 } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { TradingService } from './trading.service';
+import { TradingService, type StopTradingSessionResult } from './trading.service';
 import { StartSessionDto } from './dto/start-session.dto';
 import { ChangeExecutionModeDto } from './dto/change-execution-mode.dto';
 import {
@@ -123,8 +123,9 @@ export class TradingController {
   /**
    * Stop a specific trading session.
    *
-   * Only the session owner can stop their own session.
-   * Does NOT auto-close open trades in this sprint.
+   * Only the session owner can stop their own session. The server ends
+   * execution authority first, then requests closure of AI-proven OPEN
+   * positions and returns an honest closure summary.
    *
    * POST /api/v1/trading/sessions/:id/stop
    */
@@ -132,16 +133,16 @@ export class TradingController {
   @ApiOperation({
     summary: 'Stop an active trading session',
     description:
-      'Stops the specified session. Does not automatically close open trades. ' +
-      'Invalidates outstanding RiskGrants / SEMI_AUTO confirmations bound to the session. ' +
-      'Emits a realtime session-stopped event.',
+      'Stops the specified session, invalidates outstanding RiskGrants / SEMI_AUTO ' +
+      'confirmations, then requests closure of every OPEN position with durable iRexPro ' +
+      'AI provenance. The response reports confirmed versus unresolved closures; ' +
+      'unresolved broker outcomes remain visible for reconciliation.',
   })
   async stopSession(
     @CurrentUserId() userId: string,
     @Param('id', ParseUUIDPipe) sessionId: string,
-  ): Promise<{ message: string; sessionId: string }> {
-    await this.tradingService.stopTradingSession(userId, sessionId);
-    return { message: 'Trading session stopped', sessionId };
+  ): Promise<StopTradingSessionResult> {
+    return this.tradingService.stopTradingSession(userId, sessionId);
   }
 
   /**

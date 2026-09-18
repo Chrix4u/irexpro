@@ -26,6 +26,20 @@ import { BrokerConnectionStatus, BrokerMode } from '../broker/interfaces/broker-
 import { BrokerAccountSnapshotService } from '../broker/services/broker-account-snapshot.service';
 import { BrokerAccountSnapshot } from '../broker/entities/broker-account-snapshot.entity';
 import { ExactDecimal } from '../../common/utils/exact-decimal';
+import { TradeCloseReason } from '../execution/entities/trade.entity';
+
+export type AiStopPositionCloseState = 'COMPLETE' | 'PARTIAL' | 'UNKNOWN';
+
+export interface StopTradingSessionResult {
+  message: string;
+  sessionId: string;
+  positionCloseSummary: {
+    state: AiStopPositionCloseState;
+    targetCount: number | null;
+    closedCount: number;
+    unresolvedCount: number | null;
+  };
+}
 
 /**
  * TradingService — Trading session lifecycle management.
@@ -269,8 +283,22 @@ export class TradingService {
     return this.executionService.changeExecutionMode(userId, sessionId, newMode);
   }
 
-  /** Stop the user's active trading session. */
-  async stopTradingSession(userId: string, sessionId: string): Promise<void> {
+  /**
+   * Stop the user's active AI trading session AND flatten AI-opened positions.
+   *
+   * Ordering is safety-critical: end the session first so outstanding
+   * authority is invalidated and no new AI exposure can be committed, then
+   * request closure of every currently OPEN position with durable iRexPro AI
+   * provenance. Provider refusals/ambiguous outcomes are reported honestly
+   * rather than being presented as closed.
+   *
+   * A close failure never reactivates the session. New exposure stays disabled
+   * while unresolved broker truth remains visible for reconciliation.
+   */
+  async stopTradingSession(
+    userId: string,
+    sessionId: string,
+  ): Promise<StopTradingSessionResult> {
     const session = await this.executionService.getActiveSession(userId);
 
     if (!session) {
@@ -281,15 +309,56 @@ export class TradingService {
       throw new ForbiddenException('Session ID does not match your active session.');
     }
 
+    // Stop NEW exposure first.
     await this.executionService.endSession(userId, TradingSessionStatus.ENDED);
+
+    let closeState: AiStopPositionCloseState = 'COMPLETE';
+    let targetCount: number | null = 0;
+    let closedCount = 0;
+    let unresolvedCount: number | null = 0;
+
+    try {
+      const closeResults = await this.executionService.closeAllAiOpenPositions(
+        userId,
+        TradeCloseReason.MANUAL_CLOSE,
+      );
+      targetCount = closeResults.length;
+      closedCount = closeResults.filter((result) => result.closed).length;
+      unresolvedCount = closeResults.length - closedCount;
+      closeState = unresolvedCount === 0 ? 'COMPLETE' : 'PARTIAL';
+    } catch (err) {
+      closeState = 'UNKNOWN';
+      targetCount = null;
+      unresolvedCount = null;
+      this.logger.error(
+        'AI Trading stopped but AI-position closure could not be verified for user ' +
+          userId + ': ' + (err as Error).message,
+      );
+    }
+
+    const positionCloseSummary = {
+      state: closeState,
+      targetCount,
+      closedCount,
+      unresolvedCount,
+    };
 
     await this.auditService.log({
       actorUserId: userId,
       action: AuditAction.AI_TRADING_DISABLED,
-      severity: AuditSeverity.INFO,
+      severity:
+        closeState === 'COMPLETE'
+          ? AuditSeverity.INFO
+          : closeState === 'PARTIAL'
+            ? AuditSeverity.WARNING
+            : AuditSeverity.CRITICAL,
       resourceType: 'TradingSession',
       resourceId: sessionId,
-      metadata: { sessionId, reason: 'user-requested-stop' },
+      metadata: {
+        sessionId,
+        reason: 'user-requested-stop-and-flatten',
+        positionCloseSummary,
+      },
     });
 
     this.eventBus.publish(DomainEventType.TRADING_SESSION_STOPPED, userId, {
@@ -298,15 +367,34 @@ export class TradingService {
       brokerConnectionId: session.brokerConnectionId,
       status: TradingSessionStatus.ENDED,
       endedAt: new Date(),
+      positionCloseSummary,
     });
 
-    this.logger.log(`Trading session stopped: userId=${userId} sessionId=${sessionId}`);
+    this.logger.log(
+      'Trading session stopped: userId=' + userId + ' sessionId=' + sessionId +
+        ' closeState=' + closeState + ' closed=' + closedCount + '/' +
+        (targetCount ?? 'unknown'),
+    );
 
     void this.aiEngineClient
       .notifySessionStopped({ tradingSessionId: sessionId })
       .catch((err: Error) =>
-        this.logger.warn(`AI engine stop notification failed session=${sessionId}: ${err.message}`),
+        this.logger.warn('AI engine stop notification failed session=' + sessionId + ': ' + err.message),
       );
+
+    const message =
+      closeState === 'UNKNOWN'
+        ? 'AI Trading stopped, but AI position closure could not be verified. Check Positions & Activity.'
+        : closeState === 'PARTIAL'
+          ? 'AI Trading stopped. ' + closedCount + ' of ' + targetCount +
+            ' AI-opened positions were confirmed closed; ' + unresolvedCount +
+            ' require broker/reconciliation follow-up.'
+          : targetCount === 0
+            ? 'AI Trading stopped. No AI-opened positions were open.'
+            : 'AI Trading stopped and all ' + closedCount +
+              ' AI-opened positions were confirmed closed.';
+
+    return { message, sessionId, positionCloseSummary };
   }
 
   async getActiveSession(userId: string): Promise<TradingSession | null> {

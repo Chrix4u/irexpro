@@ -52,6 +52,13 @@ import { EmergencyFlattenProducer } from './jobs/emergency-flatten.producer';
  *  generation advances (mode change / end / suspension — issue #298). */
 export const SESSION_AUTHORITY_GENERATION_CHANGED = 'SESSION_AUTHORITY_GENERATION_CHANGED';
 
+export interface AiPositionCloseResult {
+  tradeId: string;
+  closed: boolean;
+  status: TradeStatus;
+  detail?: string;
+}
+
 /**
  * ExecutionService — Live trade execution engine (position aggregate owner).
  *
@@ -814,6 +821,73 @@ export class ExecutionService {
   }
 
   // ─── Trade close ──────────────────────────────────────────────────────────
+
+  /**
+   * User-requested AI-stop flatten.
+   *
+   * Stopping AI Trading is a user control action, not a kill-switch incident.
+   * Only OPEN trades with durable AI provenance are eligible (session, intent,
+   * or signal lineage), so broker/manual positions that were not opened by
+   * iRexPro are never swept merely because they share the same broker account.
+   *
+   * Each close still flows through closeTrade(), preserving provider
+   * idempotency, CLOSE_POSITION authorization, CAS lifecycle transitions, and
+   * reconciliation semantics. One failed or unresolved close never prevents
+   * attempts on the remaining AI positions.
+   */
+  async closeAllAiOpenPositions(
+    userId: string,
+    reason: TradeCloseReason = TradeCloseReason.MANUAL_CLOSE,
+  ): Promise<AiPositionCloseResult[]> {
+    const openTrades = await this.tradeRepo.find({
+      where: { userId, status: TradeStatus.OPEN },
+      order: { openedAt: 'ASC' },
+    });
+
+    const aiOpenTrades = openTrades.filter((trade) =>
+      Boolean(trade.tradingSessionId || trade.tradeIntentId || trade.signalId),
+    );
+
+    if (aiOpenTrades.length === 0) {
+      this.logger.log('AI-stop flatten for user ' + userId + ': no AI-proven OPEN positions');
+      return [];
+    }
+
+    this.logger.log(
+      'AI-stop flatten for user ' + userId + ': closing ' + aiOpenTrades.length +
+        ' AI-proven OPEN position(s)',
+    );
+
+    const results: AiPositionCloseResult[] = [];
+    for (const trade of aiOpenTrades) {
+      try {
+        const closed = await this.closeTrade(trade.id, userId, reason);
+        results.push({
+          tradeId: trade.id,
+          closed: closed.status === TradeStatus.CLOSED,
+          status: closed.status,
+          detail:
+            closed.status === TradeStatus.CLOSED
+              ? undefined
+              : 'close dispatched — trade now ' + closed.status,
+        });
+      } catch (err) {
+        const detail = (err as Error).message;
+        results.push({
+          tradeId: trade.id,
+          closed: false,
+          status: trade.status,
+          detail,
+        });
+        this.logger.error(
+          'AI-stop flatten: close of trade ' + trade.id + ' failed — ' + detail +
+            '; remaining AI positions will still be attempted',
+        );
+      }
+    }
+
+    return results;
+  }
 
   /**
    * Round 6 live-execution completion (§17) — the FOURTH STOP LEVEL: the

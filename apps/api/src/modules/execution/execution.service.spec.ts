@@ -821,6 +821,52 @@ describe('ExecutionService', () => {
     });
   });
 
+  describe('closeAllAiOpenPositions() — user Stop AI Trading', () => {
+    it('closes only OPEN positions with durable AI provenance and leaves non-AI rows untouched', async () => {
+      tradeRepo.find.mockResolvedValue([
+        {
+          ...baseTradeFixture,
+          id: 'trade-ai',
+          tradingSessionId: 'session-1',
+          tradeIntentId: 'intent-1',
+          signalId: 'sig-ai',
+        },
+        {
+          ...baseTradeFixture,
+          id: 'trade-without-ai-provenance',
+          tradingSessionId: null,
+          tradeIntentId: null,
+          signalId: null,
+        },
+      ] as Trade[]);
+
+      const closeSpy = jest
+        .spyOn(service, 'closeTrade')
+        .mockImplementation(async (tradeId) =>
+          ({ ...baseTradeFixture, id: tradeId, status: TradeStatus.CLOSED } as Trade),
+        );
+
+      const results = await service.closeAllAiOpenPositions(
+        'user-1',
+        TradeCloseReason.MANUAL_CLOSE,
+      );
+
+      expect(closeSpy).toHaveBeenCalledTimes(1);
+      expect(closeSpy).toHaveBeenCalledWith(
+        'trade-ai',
+        'user-1',
+        TradeCloseReason.MANUAL_CLOSE,
+      );
+      expect(results).toEqual([
+        expect.objectContaining({
+          tradeId: 'trade-ai',
+          closed: true,
+          status: TradeStatus.CLOSED,
+        }),
+      ]);
+    });
+  });
+
   describe('emergencyCloseAllOpenPositions() — §17 fourth stop level', () => {
     it('returns [] when the user has no OPEN positions (nothing to flatten)', async () => {
       tradeRepo.find.mockResolvedValue([]);

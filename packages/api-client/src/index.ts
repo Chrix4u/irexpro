@@ -51,6 +51,7 @@ import type {
   PendingExecutionConfirmationsResponse,
   StartTradingSessionRequest,
   StartTradingSessionResponse,
+  StopTradingSessionResponse,
   SetUserCapitalAllocationRequest,
   UserCapitalAllocationView,
 } from '@irexpro/types/execution';
@@ -232,8 +233,11 @@ export interface ApiClient {
   /** POST /trading/sessions/start → 201 `{ session }` (body binds the exact
    *  brokerConnectionId + executionMode; server-validated fail-closed). */
   startTradingSession(body: StartTradingSessionRequest): Promise<StartTradingSessionResponse>;
-  /** POST /trading/sessions/:id/stop → stop AI automation for the active session. */
-  stopTradingSession(sessionId: string): Promise<void>;
+  /**
+   * POST /trading/sessions/:id/stop → stop new AI exposure first, then request
+   * closure of AI-opened positions and return the server-authoritative summary.
+   */
+  stopTradingSession(sessionId: string): Promise<StopTradingSessionResponse>;
   /**
    * POST /trading/sessions/:id/mode → 200 `{ session }` — audited mode change
    * that bumps `authorityGeneration` (outstanding SEMI_AUTO confirmations
@@ -584,9 +588,10 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
       }),
 
     stopTradingSession: (sessionId) =>
-      request<void>(`/trading/sessions/${encodeURIComponent(sessionId)}/stop`, {
-        method: 'POST',
-      }),
+      request<StopTradingSessionResponse>(
+        `/trading/sessions/${encodeURIComponent(sessionId)}/stop`,
+        { method: 'POST' },
+      ),
 
     changeTradingSessionMode: (sessionId, body) =>
       request<ChangeTradingSessionModeResponse>(
