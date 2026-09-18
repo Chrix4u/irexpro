@@ -375,9 +375,7 @@ describe('RiskGrant issuance + exact-decimal boundaries (Round 5, 50-b)', () => 
       findTradeBySignalId: jest.fn().mockResolvedValue(null),
     };
     dailyRiskPeriod = {
-      getTodayRealisedLossExact: jest
-        .fn()
-        .mockResolvedValue({ total: '0', complete: true }),
+      getTodayRealisedLossExact: jest.fn().mockResolvedValue({ total: '0', complete: true }),
     };
     profileRepoMock = {
       findOne: jest.fn().mockResolvedValue(profileRow()),
