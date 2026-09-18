@@ -37,7 +37,11 @@ type AccountBusyAction = 'logout' | null;
  */
 export type AccountSubScreen = 'personal' | 'security' | 'access' | null;
 
-export default function AccountScreen() {
+export default function AccountScreen({
+  onOpenPayments,
+}: {
+  onOpenPayments?: () => void;
+}) {
   const {
     user,
     accessToken,
@@ -206,7 +210,7 @@ export default function AccountScreen() {
           <View style={styles.sectionRowCopy}>
             <Text style={styles.sectionRowTitle}>Personal Information</Text>
             <Text style={styles.sectionRowSubtitle}>
-              Name, date of birth, country, timezone, currency, trading experience
+              Name, date of birth, country, timezone and currency
             </Text>
           </View>
           <Text style={styles.sectionChevron}>›</Text>
@@ -246,6 +250,25 @@ export default function AccountScreen() {
           <Text style={styles.sectionChevron}>›</Text>
         </Pressable>
       </Card>
+
+      {onOpenPayments ? (
+        <Card style={styles.flushCard}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Fees and Payments"
+            onPress={onOpenPayments}
+            style={styles.sectionRow}
+          >
+            <View style={styles.sectionRowCopy}>
+              <Text style={styles.sectionRowTitle}>Fees &amp; Payments</Text>
+              <Text style={styles.sectionRowSubtitle}>
+                Review service fees and payment activity
+              </Text>
+            </View>
+            <Text style={styles.sectionChevron}>›</Text>
+          </Pressable>
+        </Card>
+      ) : null}
 
       <Card style={styles.flushCard}>
         <Pressable

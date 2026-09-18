@@ -5,11 +5,10 @@ import { api } from '../lib/api';
 import type { OnboardingStatus } from '@irexpro/types';
 
 /**
- * Mobile dashboard screen — Sprint 29.
+ * Mobile dashboard — novice AI-first flow.
  *
- * Fetches onboarding status via the shared API client and displays a simple
- * onboarding checklist. Full onboarding wizard screens are a next step
- * (documented in CURRENT_STATE.md) — this screen provides status visibility.
+ * Keeps eligibility and broker readiness visible without exposing strategy,
+ * risk-parameter, or execution-mode configuration to novice users.
  */
 export default function DashboardScreen() {
   const { user } = useAuth();
@@ -35,14 +34,14 @@ export default function DashboardScreen() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Dashboard</Text>
+      <Text style={styles.title}>Home</Text>
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Welcome back</Text>
         <Text style={styles.muted}>{user ? user.email ?? user.phone ?? 'Trader' : 'Not signed in'}</Text>
       </View>
 
       <View style={styles.card}>
-        <Text style={styles.cardTitle}>Onboarding status</Text>
+        <Text style={styles.cardTitle}>Ready for AI Trading?</Text>
         {loading ? (
           <ActivityIndicator color="#14b8a6" />
         ) : error ? (
@@ -56,9 +55,9 @@ export default function DashboardScreen() {
               </Text>
             </View>
             <View style={styles.statusRow}>
-              <Text style={styles.statusText}>{onboarding.riskProfileCompleted ? '✅' : '⬜'} Risk profile</Text>
-              <Text style={onboarding.riskProfileCompleted ? styles.doneText : styles.pendingText}>
-                {onboarding.riskProfileCompleted ? 'Done' : 'Pending'}
+              <Text style={styles.statusText}>{onboarding.eligibilityCompleted ? '✅' : '⬜'} Eligibility</Text>
+              <Text style={onboarding.eligibilityCompleted ? styles.doneText : styles.pendingText}>
+                {onboarding.eligibilityCompleted ? 'Done' : 'Pending'}
               </Text>
             </View>
             <View style={styles.statusRow}>
@@ -68,7 +67,7 @@ export default function DashboardScreen() {
               </Text>
             </View>
             <View style={[styles.statusRow, { marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#243049' }]}>
-              <Text style={styles.cardTitle}>Can start trading</Text>
+              <Text style={styles.cardTitle}>Can start AI Trading</Text>
               <Text style={onboarding.canStartTrading ? styles.doneText : styles.pendingText}>
                 {onboarding.canStartTrading ? 'Yes' : 'No'}
               </Text>
@@ -79,7 +78,7 @@ export default function DashboardScreen() {
               </Text>
             )}
             <Text style={[styles.muted, { marginTop: 8, fontSize: 12 }]}>
-              Complete onboarding on the web app at irexpro.lightworldtech.com
+              Complete any missing profile or eligibility step on the web, then use the Broker and AI tabs here.
             </Text>
           </View>
         ) : null}
