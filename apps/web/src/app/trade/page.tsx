@@ -15,6 +15,7 @@ import { loadMarketIntelligence } from '@/lib/market-intelligence';
 import { loadTraderExecutionSnapshot, type TraderExecutionSnapshot } from '@/lib/trader-execution';
 import {
   loadTraderTerminalStatus,
+  TraderTerminalLoadError,
   type TraderTerminalStatus,
   type TerminalBrokerView,
 } from '@/lib/trader-terminal-status';
@@ -124,6 +125,7 @@ export default function AiTradingPage() {
   const [togglingAutomation, setTogglingAutomation] = useState(false);
   const [pendingAutomationAction, setPendingAutomationAction] = useState<'START' | 'STOP' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [allocationWarning, setAllocationWarning] = useState<string | null>(null);
   const [activityWarning, setActivityWarning] = useState<string | null>(null);
 
   const initializedActivity = useRef(false);
@@ -235,15 +237,22 @@ export default function AiTradingPage() {
         try {
           const nextAllocation = await api.getCapitalAllocation(brokerId);
           setAllocation(nextAllocation);
+          setAllocationWarning(null);
           if (nextAllocation.allocatedCapital) {
             setAllocationAmount(nextAllocation.allocatedCapital);
           }
         } catch (requestError) {
           setAllocation(null);
-          if (showSpinner) setError(mapApiError(requestError).message);
+          const mapped = mapApiError(requestError).message;
+          setAllocationWarning(
+            mapped === 'Something went wrong. Please try again.'
+              ? 'Your broker is connected, but capital allocation and equity details are temporarily unavailable. iRexPro will retry automatically.'
+              : mapped,
+          );
         }
       } else {
         setAllocation(null);
+        setAllocationWarning(null);
       }
 
       try {
@@ -252,7 +261,11 @@ export default function AiTradingPage() {
         setMarket(null);
       }
     } catch (requestError) {
-      setError(mapApiError(requestError).message);
+      setError(
+        requestError instanceof TraderTerminalLoadError
+          ? requestError.userMessage
+          : mapApiError(requestError).message,
+      );
     } finally {
       if (showSpinner) setLoading(false);
     }
@@ -294,9 +307,15 @@ export default function AiTradingPage() {
     try {
       const nextAllocation = await api.getCapitalAllocation(nextId);
       setAllocation(nextAllocation);
+      setAllocationWarning(null);
       setAllocationAmount(nextAllocation.allocatedCapital ?? '');
     } catch (requestError) {
-      setError(mapApiError(requestError).message);
+      const mapped = mapApiError(requestError).message;
+      setAllocationWarning(
+        mapped === 'Something went wrong. Please try again.'
+          ? 'Your broker is connected, but capital allocation and equity details are temporarily unavailable. iRexPro will retry automatically.'
+          : mapped,
+      );
     }
   }
 
@@ -449,11 +468,26 @@ export default function AiTradingPage() {
         </section>
 
         {error && <Alert variant="error">{error}</Alert>}
+        {allocationWarning && <Alert variant="warning">{allocationWarning}</Alert>}
         {activityWarning && <Alert variant="warning">{activityWarning}</Alert>}
 
         {loading && !terminal ? (
           <Card title="Loading AI Trader">
             <LoadingSpinner text="Loading broker, allocation and trading activity…" />
+          </Card>
+        ) : !terminal ? (
+          <Card title="Broker status temporarily unavailable">
+            <p className="muted">
+              iRexPro could not verify the current AI Trading account state. This does not mean your broker was disconnected, so do not reconnect it.
+            </p>
+            <Button
+              type="button"
+              variant="primary"
+              className="mt-4"
+              onClick={() => void refreshTradingData(true)}
+            >
+              Retry now
+            </Button>
           </Card>
         ) : (
           <>
