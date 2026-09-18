@@ -84,9 +84,16 @@ const marketSnapshot = {
 
 async function gotoAiTrader(
   page: Parameters<typeof setupErrorCollectors>[0],
-  options: { active?: boolean; onStart?: () => void; onStop?: () => void } = {},
+  options: {
+    active?: boolean;
+    onStart?: () => void;
+    onStop?: () => void;
+    dropFirstRiskRead?: boolean;
+    onRiskRead?: () => void;
+  } = {},
 ) {
   setupErrorCollectors(page);
+  let riskReadCount = 0;
   await page.route('**/api/v1/**', async (route) => {
     const url = new URL(route.request().url());
     const apiPath = url.pathname.split('/api/v1/')[1] ?? '';
@@ -97,6 +104,11 @@ async function gotoAiTrader(
     if (apiPath === 'auth/me') return fulfill(200, mockAuthUser);
     if (apiPath === 'auth/logout') return fulfill(200, { message: 'Logged out' });
     if (apiPath === 'risk/status') {
+      riskReadCount += 1;
+      options.onRiskRead?.();
+      if (options.dropFirstRiskRead && riskReadCount === 1) {
+        return route.abort('connectionreset');
+      }
       return fulfill(200, {
         killSwitchActive: false,
         brokerConnected: true,
@@ -196,6 +208,24 @@ test.describe('AI Trader novice workflow', () => {
     await assertNoHorizontalOverflow(page);
     assertNoConsoleErrors(page);
     assertNoFailedRequests(page);
+    assertNoExternalRequests(page);
+  });
+
+  test('recovers from a transient network reset while opening AI Trading', async ({ page }) => {
+    let riskReads = 0;
+    await gotoAiTrader(page, {
+      dropFirstRiskRead: true,
+      onRiskRead: () => {
+        riskReads += 1;
+      },
+    });
+
+    await expect(page.getByRole('heading', { level: 1, name: 'AI Trader' })).toBeVisible();
+    await expect(page.getByText(/Unable to reach the server/i)).toHaveCount(0);
+    expect(riskReads).toBe(2);
+
+    await assertNoHorizontalOverflow(page);
+    assertNoConsoleErrors(page);
     assertNoExternalRequests(page);
   });
 
