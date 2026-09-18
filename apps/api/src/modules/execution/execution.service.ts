@@ -848,6 +848,26 @@ export class ExecutionService {
       Boolean(trade.tradingSessionId || trade.tradeIntentId || trade.signalId),
     );
 
+    // The Stop request applies to every AI-opened position visible at this
+    // moment, including any leftover position from an older AI session. Mark
+    // each linked session BEFORE issuing provider closes so a refused or
+    // uncertain close remains eligible for durable reconciliation retry.
+    const linkedSessionIds = [
+      ...new Set(
+        aiOpenTrades
+          .map((trade) => trade.tradingSessionId)
+          .filter((sessionId): sessionId is string => Boolean(sessionId)),
+      ),
+    ];
+    await Promise.all(
+      linkedSessionIds.map((sessionId) =>
+        this.sessionRepo.update(
+          { id: sessionId, userId },
+          { closeAiPositionsOnStop: true },
+        ),
+      ),
+    );
+
     return this.closeAiTrades(userId, aiOpenTrades, reason, 'AI-stop flatten');
   }
 

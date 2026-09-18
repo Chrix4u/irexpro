@@ -854,6 +854,10 @@ describe('ExecutionService', () => {
         TradeCloseReason.MANUAL_CLOSE,
       );
 
+      expect(sessionRepo.update).toHaveBeenCalledWith(
+        { id: 'session-1', userId: 'user-1' },
+        { closeAiPositionsOnStop: true },
+      );
       expect(closeSpy).toHaveBeenCalledTimes(1);
       expect(closeSpy).toHaveBeenCalledWith('trade-ai', 'user-1', TradeCloseReason.MANUAL_CLOSE);
       expect(results).toEqual([
