@@ -1,7 +1,16 @@
-name: Database Migration Compatibility
-
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/api/src/database/migrations/**'
+      - 'apps/api/scripts/validate-uuid-bridge.ts'
+      - 'apps/api/scripts/validate-migration-scenario-d.ts'
+      - 'apps/api/scripts/validate-migration-scenario-e.ts'
+      - 'apps/api/scripts/validate-migration-scenario-f.ts'
+      - 'pnpm-lock.yaml'
+      - 'package.json'
+      - '.github/workflows/db-migration-compat.yml'
   pull_request:
     paths:
       - 'apps/api/src/database/migrations/**'
