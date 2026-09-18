@@ -126,6 +126,7 @@ const mockBrokerService = () => ({
     authorizationStatus: 'ACTIVE',
     providerBrokerIdentity: null,
     credentialGeneration: 0,
+    logicalAccountKey: 'metatrader5|MetaQuotes-Demo|12345',
   }),
   // Sprint 50 — LIVE authorization gate (mocked permissive)
   isConnectionExecutable: jest.fn().mockReturnValue(true),
@@ -228,7 +229,14 @@ describe('RiskService — Sprint 32 Production Hardening', () => {
             getCurrentExecutionControlRevision: jest.fn().mockResolvedValue(1),
           },
         },
-        { provide: DailyRiskPeriodService, useValue: {} },
+        {
+          provide: DailyRiskPeriodService,
+          useValue: {
+            getTodayRealisedLossExact: jest
+              .fn()
+              .mockResolvedValue({ total: '0', complete: true }),
+          },
+        },
         {
           provide: GrantInvalidationService,
           useValue: {
