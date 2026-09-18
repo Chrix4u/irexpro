@@ -218,7 +218,7 @@ export interface ApiClient {
   /** GET /trading/capital-allocation?brokerConnectionId=... → explicit user allocation. */
   getCapitalAllocation(brokerConnectionId: string): Promise<UserCapitalAllocationView>;
   /** PUT /trading/capital-allocation → persist explicit allocation for the exact broker account. */
-  updateCapitalAllocation(
+  setCapitalAllocation(
     body: SetUserCapitalAllocationRequest,
   ): Promise<UserCapitalAllocationView>;
 
