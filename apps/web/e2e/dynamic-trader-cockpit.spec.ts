@@ -84,7 +84,7 @@ const marketSnapshot = {
 
 async function gotoAiTrader(
   page: Parameters<typeof setupErrorCollectors>[0],
-  options: { onStop?: () => void } = {},
+  options: { active?: boolean; onStart?: () => void; onStop?: () => void } = {},
 ) {
   setupErrorCollectors(page);
   await page.route('**/api/v1/**', async (route) => {
@@ -112,6 +112,7 @@ async function gotoAiTrader(
       });
     }
     if (apiPath === 'trading/sessions/active') {
+      if (options.active === false) return fulfill(200, null);
       return fulfill(200, {
         id: '44444444-4444-4444-8444-444444444444',
         brokerConnectionId: mockBrokerConnections[0].id,
@@ -140,6 +141,17 @@ async function gotoAiTrader(
       });
     }
     if (apiPath === 'market-data/intelligence') return fulfill(200, marketSnapshot);
+    if (apiPath === 'trading/sessions/start') {
+      options.onStart?.();
+      return fulfill(201, {
+        id: '55555555-5555-4555-8555-555555555555',
+        brokerConnectionId: mockBrokerConnections[0].id,
+        executionMode: 'PAPER_ONLY',
+        authorityGeneration: 1,
+        status: 'ACTIVE',
+        startedAt: '2026-09-18T12:00:00.000Z',
+      });
+    }
     if (apiPath.startsWith('trading/sessions/') && apiPath.endsWith('/stop')) {
       options.onStop?.();
       return fulfill(200, {
@@ -184,6 +196,31 @@ test.describe('AI Trader novice workflow', () => {
     await assertNoHorizontalOverflow(page);
     assertNoConsoleErrors(page);
     assertNoFailedRequests(page);
+    assertNoExternalRequests(page);
+  });
+
+  test('requires explicit confirmation before starting AI Trading', async ({ page }) => {
+    let startRequests = 0;
+    await gotoAiTrader(page, {
+      active: false,
+      onStart: () => {
+        startRequests += 1;
+      },
+    });
+
+    await page.getByRole('button', { name: 'Start AI Trading' }).click();
+
+    const dialog = page.getByRole('alertdialog', { name: 'Start AI Trading?' });
+    await expect(dialog).toBeVisible();
+    await expect(
+      dialog.getByText(/begin trading this broker account automatically/i),
+    ).toBeVisible();
+    expect(startRequests).toBe(0);
+
+    await dialog.getByRole('button', { name: 'Start AI Trading' }).click();
+    expect(startRequests).toBe(1);
+    await expect(dialog).toHaveCount(0);
+
     assertNoExternalRequests(page);
   });
 
