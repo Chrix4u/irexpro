@@ -113,75 +113,125 @@ function isBrokerStatus(value: unknown): value is TerminalBrokerView['status'] {
   );
 }
 
-function isRiskStatus(value: unknown): value is RiskStatusView {
-  if (!isRecord(value) || !isRecord(value.limits)) return false;
+function decimalAsString(value: unknown): string | null {
+  if (typeof value === 'string' && value.trim() !== '') return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return null;
+}
+
+function integerAsNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isInteger(value)) return value;
+  if (typeof value === 'string' && /^-?\d+$/.test(value.trim())) {
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function normalizeRiskStatus(value: unknown): RiskStatusView | null {
+  if (!isRecord(value) || !isRecord(value.limits)) return null;
   const limits = value.limits;
   const allowed = limits.allowedInstruments;
   const allowedIsValid =
     allowed === 'ALL' ||
     (Array.isArray(allowed) && allowed.every((instrument) => typeof instrument === 'string'));
+  const maxDailyLossPercent = decimalAsString(limits.maxDailyLossPercent);
+  const maxDrawdownPercent = decimalAsString(limits.maxDrawdownPercent);
+  const maxOpenTrades = integerAsNumber(limits.maxOpenTrades);
+  const maxPositionSizeLot = decimalAsString(limits.maxPositionSizeLot);
+  const maxVolatilityScore = decimalAsString(limits.maxVolatilityScore);
 
-  return (
-    typeof value.killSwitchActive === 'boolean' &&
-    typeof value.brokerConnected === 'boolean' &&
-    typeof value.canTrade === 'boolean' &&
-    typeof limits.maxDailyLossPercent === 'string' &&
-    typeof limits.maxDrawdownPercent === 'string' &&
-    typeof limits.maxOpenTrades === 'number' &&
-    typeof limits.maxPositionSizeLot === 'string' &&
-    allowedIsValid &&
-    typeof limits.maxVolatilityScore === 'string'
-  );
+  if (
+    typeof value.killSwitchActive !== 'boolean' ||
+    typeof value.brokerConnected !== 'boolean' ||
+    typeof value.canTrade !== 'boolean' ||
+    maxDailyLossPercent === null ||
+    maxDrawdownPercent === null ||
+    maxOpenTrades === null ||
+    maxPositionSizeLot === null ||
+    !allowedIsValid ||
+    maxVolatilityScore === null
+  ) {
+    return null;
+  }
+
+  return {
+    killSwitchActive: value.killSwitchActive,
+    brokerConnected: value.brokerConnected,
+    canTrade: value.canTrade,
+    limits: {
+      maxDailyLossPercent,
+      maxDrawdownPercent,
+      maxOpenTrades,
+      maxPositionSizeLot,
+      allowedInstruments: allowed as string[] | 'ALL',
+      maxVolatilityScore,
+    },
+  };
 }
 
-function isTradingSession(value: unknown): value is TradingSessionView {
-  if (!isRecord(value)) return false;
-  return (
-    typeof value.id === 'string' &&
-    typeof value.brokerConnectionId === 'string' &&
-    isExecutionMode(value.executionMode) &&
-    typeof value.authorityGeneration === 'number' &&
-    Number.isInteger(value.authorityGeneration) &&
-    value.authorityGeneration >= 1 &&
-    isTradingSessionStatus(value.status) &&
-    typeof value.startedAt === 'string'
-  );
+function normalizeTradingSession(value: unknown): TradingSessionView | null {
+  if (!isRecord(value)) return null;
+  const authorityGeneration = integerAsNumber(value.authorityGeneration);
+  if (
+    typeof value.id !== 'string' ||
+    typeof value.brokerConnectionId !== 'string' ||
+    !isExecutionMode(value.executionMode) ||
+    authorityGeneration === null ||
+    authorityGeneration < 1 ||
+    !isTradingSessionStatus(value.status) ||
+    typeof value.startedAt !== 'string'
+  ) {
+    return null;
+  }
+
+  return {
+    ...(value as unknown as TradingSessionView),
+    authorityGeneration,
+  };
 }
 
-/**
- * Guard the GET /trading/sessions/active payload.
- *
- * The API returns the session DTO DIRECTLY (bare object) — null when no
- * session is active. Any other shape fails CLOSED: the cockpit would
- * rather show a contract error than trust an unknown shape.
- */
-function isActiveTradingSessionPayload(
+function normalizeActiveTradingSessionPayload(
   value: unknown,
-): value is TradingSessionView | null {
-  return value === null || isTradingSession(value);
+): { valid: true; session: TradingSessionView | null } | { valid: false } {
+  if (value === null) return { valid: true, session: null };
+  const session = normalizeTradingSession(value);
+  return session ? { valid: true, session } : { valid: false };
 }
 
-function isTerminalBroker(value: unknown): value is TerminalBrokerView {
-  if (!isRecord(value)) return false;
-  return (
-    typeof value.id === 'string' &&
-    typeof value.brokerId === 'string' &&
-    typeof value.brokerName === 'string' &&
-    (value.displayName === null || typeof value.displayName === 'string') &&
-    (value.accountType === 'DEMO' || value.accountType === 'LIVE') &&
-    isBrokerStatus(value.status) &&
-    (value.authorizationStatus === undefined ||
-      isTerminalBrokerAuthorizationStatus(value.authorizationStatus)) &&
-    typeof value.liveTradingEnabled === 'boolean' &&
-    (value.providerBrokerIdentity === undefined ||
-      value.providerBrokerIdentity === null ||
-      typeof value.providerBrokerIdentity === 'string') &&
-    (value.logicalAccountKey === undefined ||
-      value.logicalAccountKey === null ||
-      typeof value.logicalAccountKey === 'string') &&
-    (value.lastHealthCheckAt === null || typeof value.lastHealthCheckAt === 'string') &&
-    (value.lastErrorMessage === null || typeof value.lastErrorMessage === 'string')
-  );
+function normalizeTerminalBroker(value: unknown): TerminalBrokerView | null {
+  if (!isRecord(value)) return null;
+  if (
+    typeof value.id !== 'string' ||
+    typeof value.brokerId !== 'string' ||
+    typeof value.brokerName !== 'string' ||
+    (value.accountType !== 'DEMO' && value.accountType !== 'LIVE') ||
+    !isBrokerStatus(value.status)
+  ) {
+    return null;
+  }
+
+  return {
+    id: value.id,
+    brokerId: value.brokerId,
+    brokerName: value.brokerName,
+    displayName: typeof value.displayName === 'string' ? value.displayName : null,
+    accountType: value.accountType,
+    status: value.status,
+    authorizationStatus: isTerminalBrokerAuthorizationStatus(value.authorizationStatus)
+      ? value.authorizationStatus
+      : 'NOT_CONNECTED',
+    liveTradingEnabled:
+      typeof value.liveTradingEnabled === 'boolean' ? value.liveTradingEnabled : false,
+    providerBrokerIdentity:
+      typeof value.providerBrokerIdentity === 'string' ? value.providerBrokerIdentity : null,
+    logicalAccountKey:
+      typeof value.logicalAccountKey === 'string' ? value.logicalAccountKey : null,
+    lastHealthCheckAt:
+      typeof value.lastHealthCheckAt === 'string' ? value.lastHealthCheckAt : null,
+    lastErrorMessage:
+      typeof value.lastErrorMessage === 'string' ? value.lastErrorMessage : null,
+  };
 }
 
 function isTerminalBrokerAuthorizationStatus(
@@ -203,6 +253,20 @@ function isTerminalBrokerAuthorizationStatus(
   );
 }
 
+/** Load only broker state so the UI can preserve a valid connected account
+ * even when another core read is temporarily incompatible/unavailable. */
+export async function loadTraderBrokerConnections(): Promise<TerminalBrokerView[]> {
+  const brokerPayload = await readWithSingleNetworkRetry(() => api.listBrokerConnections());
+  if (!Array.isArray(brokerPayload)) {
+    throw new Error('Broker connection contract mismatch');
+  }
+  const brokers = brokerPayload.map(normalizeTerminalBroker);
+  if (brokers.some((broker) => broker === null)) {
+    throw new Error('Broker connection contract mismatch');
+  }
+  return brokers as TerminalBrokerView[];
+}
+
 /**
  * Compose existing authoritative API contracts for the trading workspace.
  *
@@ -212,24 +276,22 @@ function isTerminalBrokerAuthorizationStatus(
  * not match the expected frontend-safe contract.
  */
 export async function loadTraderTerminalStatus(): Promise<TraderTerminalStatus> {
-  const [riskPayload, sessionPayload, brokerPayload] = await Promise.all([
+  const [riskPayload, sessionPayload, brokers] = await Promise.all([
     readWithSingleNetworkRetry(() => api.request<unknown>('/risk/status')),
     readWithSingleNetworkRetry(() => api.request<unknown>('/trading/sessions/active')),
-    readWithSingleNetworkRetry(() => api.listBrokerConnections()),
+    loadTraderBrokerConnections(),
   ]);
 
-  if (!isRiskStatus(riskPayload)) {
+  const risk = normalizeRiskStatus(riskPayload);
+  if (!risk) {
     throw new Error('Risk status contract mismatch');
   }
-  if (!isActiveTradingSessionPayload(sessionPayload)) {
+  const normalizedSession = normalizeActiveTradingSessionPayload(sessionPayload);
+  if (!normalizedSession.valid) {
     throw new Error('Trading session contract mismatch');
   }
-  if (!Array.isArray(brokerPayload) || !brokerPayload.every(isTerminalBroker)) {
-    throw new Error('Broker connection contract mismatch');
-  }
 
-  const session = sessionPayload;
-  const brokers: TerminalBrokerView[] = brokerPayload;
+  const session = normalizedSession.session;
   const sessionBroker = session
     ? brokers.find((broker) => broker.id === session.brokerConnectionId) ?? null
     : null;
@@ -241,7 +303,7 @@ export async function loadTraderTerminalStatus(): Promise<TraderTerminalStatus> 
     null;
 
   return {
-    risk: riskPayload,
+    risk,
     session,
     brokers,
     sessionBroker,
