@@ -305,6 +305,9 @@ describe('RiskGrant issuance + exact-decimal boundaries (Round 5, 50-b)', () => 
     getTodayRealisedLoss: jest.Mock;
     findTradeBySignalId: jest.Mock;
   };
+  let dailyRiskPeriod: {
+    getTodayRealisedLossExact: jest.Mock;
+  };
   let profileRepoMock: { findOne: jest.Mock; create: jest.Mock; save: jest.Mock };
   let authorityGenerationRepoMock: { findOne: jest.Mock };
   let geometryMock: { resolveOrderGeometry: jest.Mock };
@@ -354,6 +357,7 @@ describe('RiskGrant issuance + exact-decimal boundaries (Round 5, 50-b)', () => 
         authorizationStatus: 'ACTIVE',
         providerBrokerIdentity: 'MetaQuotes-Demo',
         credentialGeneration: 3,
+        logicalAccountKey: 'metatrader5|MetaQuotes-Demo|12345',
       }),
       isConnectionExecutable: jest.fn().mockReturnValue(true),
       getBrokerAccountState: jest.fn().mockResolvedValue({
@@ -369,6 +373,11 @@ describe('RiskGrant issuance + exact-decimal boundaries (Round 5, 50-b)', () => 
       countTodayTrades: jest.fn().mockResolvedValue(0),
       getTodayRealisedLoss: jest.fn().mockResolvedValue(0),
       findTradeBySignalId: jest.fn().mockResolvedValue(null),
+    };
+    dailyRiskPeriod = {
+      getTodayRealisedLossExact: jest
+        .fn()
+        .mockResolvedValue({ total: '0', complete: true }),
     };
     profileRepoMock = {
       findOne: jest.fn().mockResolvedValue(profileRow()),
@@ -411,7 +420,7 @@ describe('RiskGrant issuance + exact-decimal boundaries (Round 5, 50-b)', () => 
         getCurrentProviderVerificationRevision: jest.fn(),
         getCurrentExecutionControlRevision: jest.fn(),
       } as never,
-      {} as never,
+      dailyRiskPeriod as never,
       {} as never,
       {} as never,
       { get: jest.fn() } as never,
@@ -450,6 +459,10 @@ describe('RiskGrant issuance + exact-decimal boundaries (Round 5, 50-b)', () => 
     });
     brokerService.getRequiredMargin.mockResolvedValue('100.00');
     executionService.getTodayRealisedLoss.mockResolvedValue(0);
+    dailyRiskPeriod.getTodayRealisedLossExact.mockResolvedValue({
+      total: '0',
+      complete: true,
+    });
     executionService.countOpenTrades.mockResolvedValue(0);
     executionService.countTodayTrades.mockResolvedValue(0);
     executionService.findTradeBySignalId.mockResolvedValue(null);
@@ -990,7 +1003,10 @@ describe('RiskGrant issuance + exact-decimal boundaries (Round 5, 50-b)', () => 
 
   describe('exact boundaries (#313/#317/#316/#330/#296)', () => {
     it('daily-loss EXACT equality against the SESSION opening balance → SUSPENDED', async () => {
-      executionService.getTodayRealisedLoss.mockResolvedValue(-500); // 5% of 10000.00
+      dailyRiskPeriod.getTodayRealisedLossExact.mockResolvedValue({
+        total: '-500.00',
+        complete: true,
+      }); // 5% of 10000.00
 
       const decision = await riskService.validateProposedTrade(USER, trade());
 
@@ -1002,7 +1018,10 @@ describe('RiskGrant issuance + exact-decimal boundaries (Round 5, 50-b)', () => 
     });
 
     it('daily loss just below the exact boundary approves', async () => {
-      executionService.getTodayRealisedLoss.mockResolvedValue(-499.99);
+      dailyRiskPeriod.getTodayRealisedLossExact.mockResolvedValue({
+        total: '-499.99',
+        complete: true,
+      });
 
       const decision = await riskService.validateProposedTrade(USER, trade());
       expect(decision.decision).toBe('APPROVED');
@@ -1120,7 +1139,9 @@ describe('RiskGrant issuance + exact-decimal boundaries (Round 5, 50-b)', () => 
     });
 
     it('safety-query failure → RISK_ENGINE_QUERY_FAILED (never SKIPPED, sanitized)', async () => {
-      executionService.getTodayRealisedLoss.mockRejectedValue(new Error('secret db dsn leaked'));
+      dailyRiskPeriod.getTodayRealisedLossExact.mockRejectedValue(
+        new Error('secret db dsn leaked'),
+      );
 
       const decision = await riskService.validateProposedTrade(USER, trade());
 
