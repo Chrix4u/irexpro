@@ -1,3 +1,5 @@
+name: Backup Restore Rehearsal
+
 on:
   workflow_dispatch:
   push:
