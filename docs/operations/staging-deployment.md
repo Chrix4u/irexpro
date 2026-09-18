@@ -27,6 +27,7 @@ Health endpoints used by deployment verification:
 - local aggregate: `http://127.0.0.1:3010/api/v1/health`
 - public live: `https://irexpro.lightworldtech.com/api/v1/health/live`
 - public ready: `https://irexpro.lightworldtech.com/api/v1/health/ready`
+- private AI health: `http://127.0.0.1:8011/api/v1/health`
 
 The public readiness controller deliberately exposes only `{status}`. Internally, `HealthService.readiness()` returns `ready` only when both PostgreSQL and Redis probes succeed. Deployment therefore validates `status=ready` instead of requiring internal dependency fields to be publicly exposed.
 
@@ -41,6 +42,7 @@ The automatic staging release chain is:
 5. A successful `Main Staging Release Gate` triggers `.github/workflows/staging-deploy.yml`.
 6. The deploy workflow checks out the authorized SHA, proves it is still exact `origin/main`, opens a pinned-host SSH session to the staging VPS, and invokes `deploy-staging.sh` with that immutable SHA.
 7. The server builds API, Web, and Admin before runtime mutation, restarts API first, verifies liveness/readiness/aggregate health, then restarts Web/Admin and performs local/public smoke checks.
+8. Automatic staging CD queries the private AI health endpoint and fails closed unless the payload explicitly proves paper mode (`paper`, `paper-only`, or boolean paper-mode true). The AI service remains private and is not restarted by this workflow.
 
 Deployment concurrency is serialized. An older release is not allowed to race a newer `main` SHA.
 
@@ -108,7 +110,7 @@ Before any deployment, verify all of the following:
 
 The GitHub staging deployment workflow supplies these non-secret values explicitly for the verified staging topology above.
 
-`AI_HEALTH_URL` is optional. The deployment scripts never restart the AI service. When supplied, its observed payload must explicitly identify paper mode or the deployment fails. Automatic CD currently leaves it unset until that internal health contract is separately pinned.
+`AI_HEALTH_URL` is optional for manual operators, but automatic CD pins it to `http://127.0.0.1:8011/api/v1/health`. The deployment scripts never restart the AI service. When supplied, its observed payload must explicitly identify paper mode or the deployment fails. This keeps staging/UAT trading verification fail-closed without exposing the AI service publicly.
 
 `ADMIN_EXPECTED_STATUSES` defaults to `200,302,303,307,308,401,403`.
 
@@ -133,7 +135,7 @@ The script:
 9. requires API liveness, dependency-backed readiness, and aggregate health;
 10. restarts Web and Admin only after API readiness passes;
 11. requires local and public smoke checks;
-12. optionally observes AI paper mode when `AI_HEALTH_URL` is supplied;
+12. requires AI paper-mode proof when `AI_HEALTH_URL` is supplied (automatic CD always supplies it);
 13. re-verifies the final Git SHA and emits timestamped secret-safe evidence.
 
 ## Failure behavior
