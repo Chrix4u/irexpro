@@ -250,7 +250,7 @@ export class OnboardingService {
   }
 }
 
-export type OnboardingStep = 'PROFILE' | 'ELIGIBILITY' | 'RISK_PROFILE' | 'BROKER_CONNECTION';
+export type OnboardingStep = 'PROFILE' | 'ELIGIBILITY' | 'BROKER_CONNECTION';
 export type OnboardingNextStep = OnboardingStep | 'READY';
 
 /**
@@ -273,8 +273,6 @@ export type OnboardingBlockedReason =
   | 'KYC_REQUIRED'
   | 'KYC_REJECTED'
   | 'DISCLOSURE_OUTSTANDING'
-  | 'RISK_PROFILE_MISSING'
-  | 'RISK_ACK_REQUIRED'
   | 'KILL_SWITCH_ACTIVE'
   | 'BROKER_DISCONNECTED'
   | 'CREDENTIALS_INVALID';
