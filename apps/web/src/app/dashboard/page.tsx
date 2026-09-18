@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/context/auth-context';
-import { DashboardShell, Card, Badge, EmptyState, LoadingSpinner, Alert, Button } from '@/components/ui';
+import { DashboardShell, Card, Badge, EmptyState, LoadingSpinner, Alert } from '@/components/ui';
 import { useNotification } from '@/hooks/useNotification';
 import { mapApiError } from '@/lib/error-mapping';
 import { api } from '@/lib/api';
