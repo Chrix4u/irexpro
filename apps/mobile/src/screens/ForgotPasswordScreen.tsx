@@ -20,12 +20,17 @@ import { api } from '../lib/api';
  *
  * Accepts email OR international phone number as the identifier.
  *
- * Deep link reset (opening /reset-password?token=... in the mobile app) is a
- * next step — documented in CURRENT_STATE.md. For now, the user receives an
- * email link that opens in the web browser, or an SMS code for phone-only
- * users (once SMS delivery is configured).
+ * Email reset links can hand off to the app through the irexpro:// scheme.
+ * Phone-only users can continue directly into the native 6-digit-code reset
+ * flow after requesting instructions.
  */
-export default function ForgotPasswordScreen({ onBack }: { onBack: () => void }) {
+export default function ForgotPasswordScreen({
+  onBack,
+  onUseSmsCode,
+}: {
+  onBack: () => void;
+  onUseSmsCode: (identifier: string) => void;
+}) {
   const [identifier, setIdentifier] = useState('');
   const [submitted, setSubmitted] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -60,6 +65,13 @@ export default function ForgotPasswordScreen({ onBack }: { onBack: () => void })
             If an account exists for this identifier, password reset instructions
             have been sent. Check your email (including spam) or phone messages.
           </Text>
+          <Pressable
+            accessibilityRole="button"
+            style={styles.codeButton}
+            onPress={() => onUseSmsCode(identifier.trim())}
+          >
+            <Text style={styles.codeButtonText}>I received an SMS code</Text>
+          </Pressable>
         </View>
       ) : (
         <>
@@ -100,6 +112,16 @@ const styles = StyleSheet.create({
   buttonText: { color: '#06231f', fontWeight: '700', fontSize: 16 },
   infoBox: { backgroundColor: 'rgba(13,148,136,0.1)', borderColor: 'rgba(13,148,136,0.3)', borderWidth: 1, borderRadius: 10, padding: 16, marginBottom: 16 },
   infoText: { color: '#5eead4', fontSize: 14, lineHeight: 20 },
+  codeButton: {
+    marginTop: 14,
+    borderWidth: 1,
+    borderColor: '#14b8a6',
+    borderRadius: 9,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+  },
+  codeButtonText: { color: '#5eead4', fontSize: 14, fontWeight: '700' },
   backLink: { alignSelf: 'center', marginTop: 16 },
   backLinkText: { color: '#14b8a6', fontSize: 15, fontWeight: '500' },
 });
