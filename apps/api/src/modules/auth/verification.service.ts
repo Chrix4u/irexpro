@@ -203,7 +203,11 @@ export class VerificationService {
     const persisted = await this.persistIssuedChallenge(user.id, VerificationChannel.PHONE, record);
     if (!persisted) throw new UnauthorizedException('User session is no longer valid');
 
-    const delivered = await this.phoneDelivery.sendVerificationCode(user.phone, code);
+    const delivered = await this.phoneDelivery.sendVerificationCode(
+      user.phone,
+      code,
+      user.countryCode ?? 'ZZ',
+    );
     if (!delivered) {
       await this.tokenRepo.update(
         {
