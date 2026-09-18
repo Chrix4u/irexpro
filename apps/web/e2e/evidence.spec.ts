@@ -237,32 +237,24 @@ test.describe('Evidence — mobile-standard', () => {
     assertNoExternalRequests(page);
   });
 
-  test('risk tooltip open', async ({ page }, testInfo) => {
+  test('AI Protection default', async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== MOBILE_STD, 'mobile-standard only');
-    await gotoAsAuthenticated(page, '/onboarding/risk', { heading: /risk management/i });
-    await expect(page.getByRole('button', { name: /save risk profile & continue/i })).toBeVisible();
-    const trigger = page.getByRole('button', { name: /^explain maximum daily loss/i }).first();
-    await trigger.hover();
-    const tooltip = page.getByRole('tooltip');
-    await expect(tooltip).toBeVisible();
-    // Wait for the tooltip's aria-describedby relationship to be established
-    // (proves the tooltip is wired, not just briefly visible on hover).
-    await expect(trigger).toHaveAttribute('aria-describedby', /.+/, { timeout: 3000 });
+    await gotoAsAuthenticated(page, '/onboarding/risk', { heading: /ai protection/i });
+    await expect(page.getByText(/you do not need to configure trading risk/i)).toBeVisible();
+    await expect(page.getByText(/start or stop ai trading/i)).toBeVisible();
     await assertDomSafeForScreenshot(page);
-    await page.screenshot({ path: evidencePath(page, 'risk-tooltip-open'), fullPage: false });
+    await page.screenshot({ path: evidencePath(page, 'ai-protection-default'), fullPage: false });
     assertNoExternalRequests(page);
   });
 
-  test('risk validation error', async ({ page }, testInfo) => {
+  test('AI Protection automatic limits', async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== MOBILE_STD, 'mobile-standard only');
-    await gotoAsAuthenticated(page, '/onboarding/risk', { heading: /risk management/i });
-    await expect(page.getByRole('button', { name: /save risk profile & continue/i })).toBeVisible();
-    // Click Save WITHOUT checking the risk acknowledgement → deterministic
-    // validation error: "You must acknowledge the risk disclosure to continue."
-    await page.getByRole('button', { name: /save risk profile & continue/i }).click();
-    await expect(page.getByText(/acknowledge the risk disclosure/i)).toBeVisible();
+    await gotoAsAuthenticated(page, '/onboarding/risk', { heading: /ai protection/i });
+    await expect(page.getByText(/daily loss protection/i)).toBeVisible();
+    await expect(page.getByText(/drawdown protection/i)).toBeVisible();
+    await expect(page.getByText(/concurrent positions/i)).toBeVisible();
     await assertDomSafeForScreenshot(page);
-    await page.screenshot({ path: evidencePath(page, 'risk-validation-error'), fullPage: false });
+    await page.screenshot({ path: evidencePath(page, 'ai-protection-limits'), fullPage: false });
     assertNoExternalRequests(page);
   });
 
@@ -310,12 +302,13 @@ test.describe('Evidence — mobile-standard', () => {
         contentType: 'application/json',
         body: JSON.stringify({
           profileCompleted: true,
-          riskProfileCompleted: false,
+          eligibilityCompleted: false,
+          riskProfileCompleted: true,
           brokerConnected: false,
           brokerConnectionStatus: 'DISCONNECTED',
           canStartTrading: false,
-          missingSteps: ['RISK_PROFILE', 'BROKER_CONNECTION'],
-          nextStep: 'RISK_PROFILE',
+          missingSteps: ['ELIGIBILITY', 'BROKER_CONNECTION'],
+          nextStep: 'ELIGIBILITY',
         }),
       }),
     );
@@ -341,17 +334,13 @@ test.describe('Evidence — tablet-portrait', () => {
     assertNoExternalRequests(page);
   });
 
-  test('risk tooltip open', async ({ page }, testInfo) => {
+  test('AI Protection default', async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== TABLET_P, 'tablet-portrait only');
-    await gotoAsAuthenticated(page, '/onboarding/risk', { heading: /risk management/i });
-    await expect(page.getByRole('button', { name: /save risk profile & continue/i })).toBeVisible();
-    const trigger = page.getByRole('button', { name: /^explain maximum daily loss/i }).first();
-    await trigger.hover();
-    const tooltip = page.getByRole('tooltip');
-    await expect(tooltip).toBeVisible();
-    await expect(trigger).toHaveAttribute('aria-describedby', /.+/, { timeout: 3000 });
+    await gotoAsAuthenticated(page, '/onboarding/risk', { heading: /ai protection/i });
+    await expect(page.getByText(/automatic account protection/i)).toBeVisible();
+    await expect(page.getByText(/start or stop ai trading/i)).toBeVisible();
     await assertDomSafeForScreenshot(page);
-    await page.screenshot({ path: evidencePath(page, 'risk-tooltip-open'), fullPage: false });
+    await page.screenshot({ path: evidencePath(page, 'ai-protection-default'), fullPage: false });
     assertNoExternalRequests(page);
   });
 
@@ -372,7 +361,7 @@ test.describe('Evidence — tablet-portrait', () => {
   test('dashboard onboarding state', async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== TABLET_P, 'tablet-portrait only');
     await gotoAsAuthenticated(page, '/dashboard', { heading: /welcome back/i });
-    await expect(page.getByRole('button', { name: /start paper trading session/i })).toBeVisible();
+    await expect(page.getByRole('link', { name: /open ai trading/i }).last()).toBeVisible();
     await assertDomSafeForScreenshot(page);
     await page.screenshot({ path: evidencePath(page, 'dashboard-onboarding-state'), fullPage: false });
     assertNoExternalRequests(page);
@@ -418,11 +407,11 @@ test.describe('Evidence — desktop', () => {
   test('dashboard ready state', async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== DESKTOP, 'desktop only');
     await gotoAsAuthenticated(page, '/dashboard', { heading: /welcome back/i });
-    // The ready state is proven by the presence of the enabled Start button
-    // (only rendered when canStartTrading=true) plus the readiness card title.
-    const startButton = page.getByRole('button', { name: /start paper trading session/i });
-    await expect(startButton).toBeVisible();
-    await expect(startButton).toBeEnabled();
+    // The ready state hands the user to the novice AI Trading workspace;
+    // Dashboard itself never starts a trading session.
+    const openAiTrading = page.getByRole('link', { name: /open ai trading/i }).last();
+    await expect(openAiTrading).toBeVisible();
+    await expect(openAiTrading).toHaveAttribute('href', '/trade');
     await expect(page.locator('.readiness-card, .card', { hasText: /trading setup ready/i }).first()).toBeVisible();
     await assertDomSafeForScreenshot(page);
     await page.screenshot({ path: evidencePath(page, 'dashboard-ready-state'), fullPage: false });

@@ -76,7 +76,7 @@ test.describe('Sprint 31 closure — Web evidence', () => {
 
   test('onboarding risk @ 390', async ({ page }) => {
     const v = page.viewportSize()!;
-    await gotoAsAuthenticated(page, '/onboarding/risk', { heading: /risk/i });
+    await gotoAsAuthenticated(page, '/onboarding/risk', { heading: /ai protection/i });
     await page.screenshot({ path: evidencePath(v.width, v.height, 'onboarding-risk'), fullPage: false });
   });
 
