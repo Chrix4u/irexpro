@@ -92,6 +92,9 @@ async function gotoAiTrader(
     failPositionRead?: boolean;
     dropFirstRiskRead?: boolean;
     onRiskRead?: () => void;
+    riskContractMismatch?: boolean;
+    sessionContractMismatch?: boolean;
+    failAllocationRead?: boolean;
   } = {},
 ) {
   setupErrorCollectors(page);
@@ -111,6 +114,14 @@ async function gotoAiTrader(
       if (options.dropFirstRiskRead && riskReadCount === 1) {
         return route.abort('connectionreset');
       }
+      if (options.riskContractMismatch) {
+        return fulfill(200, {
+          killSwitchActive: false,
+          brokerConnected: true,
+          canTrade: true,
+          limits: { maxOpenTrades: 3 },
+        });
+      }
       return fulfill(200, {
         killSwitchActive: false,
         brokerConnected: true,
@@ -126,6 +137,9 @@ async function gotoAiTrader(
       });
     }
     if (apiPath === 'trading/sessions/active') {
+      if (options.sessionContractMismatch) {
+        return fulfill(200, { status: 'ACTIVE' });
+      }
       if (options.active === false) return fulfill(200, null);
       return fulfill(200, {
         id: '44444444-4444-4444-8444-444444444444',
@@ -153,6 +167,9 @@ async function gotoAiTrader(
         : fulfill(200, { positions: [livePosition], total: 1 });
     }
     if (apiPath === 'execution/capital-allocation') {
+      if (options.failAllocationRead) {
+        return fulfill(500, { statusCode: 500, message: 'Internal Server Error' });
+      }
       return fulfill(200, {
         brokerConnectionId: mockBrokerConnections[0].id,
         logicalAccountKey: 'paper-broker|demo|demo-001',
@@ -223,6 +240,44 @@ test.describe('AI Trader novice workflow', () => {
     assertNoExternalRequests(page);
   });
 
+
+  test('keeps the connected broker visible when risk/session control state is degraded', async ({ page }) => {
+    await gotoAiTrader(page, {
+      riskContractMismatch: true,
+      sessionContractMismatch: true,
+    });
+
+    await expect(page.getByText('Paper Trading Broker', { exact: false }).first()).toBeVisible();
+    await expect(page.getByText(/No broker connected/i)).toHaveCount(0);
+    await expect(page.getByRole('link', { name: 'Connect broker' })).toHaveCount(0);
+    await expect(
+      page.getByText(/Risk protection status could not be verified/i),
+    ).toBeVisible();
+    await expect(
+      page.getByText(/AI session status could not be verified/i),
+    ).toBeVisible();
+
+    const startButton = page.getByRole('button', { name: 'Start AI Trading' });
+    await expect(startButton).toBeVisible();
+    await expect(startButton).toBeDisabled();
+    await expect(page.getByText('UNAVAILABLE', { exact: true })).toBeVisible();
+    await expect(page.getByText(/Something went wrong/i)).toHaveCount(0);
+
+    assertNoExternalRequests(page);
+  });
+
+  test('keeps broker identity visible when capital allocation temporarily fails', async ({ page }) => {
+    await gotoAiTrader(page, { active: false, failAllocationRead: true });
+
+    await expect(page.getByText('Paper Trading Broker', { exact: false }).first()).toBeVisible();
+    await expect(page.getByText(/No broker connected/i)).toHaveCount(0);
+    await expect(
+      page.getByText(/broker account is connected, but its AI capital allocation could not be loaded/i),
+    ).toBeVisible();
+    await expect(page.getByText(/Something went wrong/i)).toHaveCount(0);
+
+    assertNoExternalRequests(page);
+  });
 
   test('keeps Start/Stop controls usable when activity and position reads return 5xx', async ({ page }) => {
     await gotoAiTrader(page, {
