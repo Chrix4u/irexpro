@@ -214,6 +214,14 @@ export interface ApiClient {
   /** POST /broker/connections/:id/disconnect → disconnect. */
   disconnectBroker(connectionId: string): Promise<void>;
 
+  // ── AI capital allocation ───────────────────────────────────────────────
+  /** GET /trading/capital-allocation?brokerConnectionId=... → explicit user allocation. */
+  getCapitalAllocation(brokerConnectionId: string): Promise<UserCapitalAllocationView>;
+  /** PUT /trading/capital-allocation → persist explicit allocation for the exact broker account. */
+  updateCapitalAllocation(
+    body: SetUserCapitalAllocationRequest,
+  ): Promise<UserCapitalAllocationView>;
+
   // ── Sprint 56 correction round 5: execution authority (issues #295/#298) ──
   /**
    * GET /trading/sessions/active → 200 `{ session }` — the authoritative

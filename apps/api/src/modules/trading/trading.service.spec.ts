@@ -566,7 +566,8 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
         expect.any(String),
         expect.any(Object),
         ExecutionMode.PAPER_ONLY,
-        expect.any(Object),
+        // No accepted account snapshot exists on the default fixture path.
+        undefined,
       );
     });
   });

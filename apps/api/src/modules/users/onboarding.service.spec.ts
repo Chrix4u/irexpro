@@ -321,11 +321,7 @@ describe('OnboardingService readiness gate', () => {
 
     expect(status.eligibilityCompleted).toBe(false);
     expect(status.canStartTrading).toBe(false);
-    expect(status.missingSteps).toEqual([
-      'PROFILE',
-      'ELIGIBILITY',
-      'BROKER_CONNECTION',
-    ]);
+    expect(status.missingSteps).toEqual(['PROFILE', 'ELIGIBILITY', 'BROKER_CONNECTION']);
     expect(mockEligibilityService.getStatus).not.toHaveBeenCalled();
   });
 

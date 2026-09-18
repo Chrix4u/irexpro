@@ -90,6 +90,7 @@ export const mockAdminUsers: AdminUser[] = [
 
 export const mockAdminOnboardingStatus: OnboardingStatus = {
   profileCompleted: true,
+  eligibilityCompleted: true,
   riskProfileCompleted: true,
   brokerConnected: true,
   brokerConnectionStatus: 'CONNECTED',

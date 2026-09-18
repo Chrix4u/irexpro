@@ -58,6 +58,7 @@ export const mockUserProfile = {
 
 export const mockOnboardingStatus: OnboardingStatus = {
   profileCompleted: true,
+  eligibilityCompleted: true,
   riskProfileCompleted: true,
   brokerConnected: true,
   brokerConnectionStatus: 'CONNECTED',
