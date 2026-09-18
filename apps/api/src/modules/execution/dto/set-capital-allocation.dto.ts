@@ -2,7 +2,10 @@ import { ApiProperty } from '@nestjs/swagger';
 import { IsString, IsUUID, Matches } from 'class-validator';
 
 export class SetCapitalAllocationDto {
-  @ApiProperty({ format: 'uuid', description: 'Exact broker connection to allocate capital against.' })
+  @ApiProperty({
+    format: 'uuid',
+    description: 'Exact broker connection to allocate capital against.',
+  })
   @IsUUID()
   brokerConnectionId: string;
 
