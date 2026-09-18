@@ -485,7 +485,7 @@ export default function AiTradingPage() {
 
         {error && <Alert variant="error">{error}</Alert>}
         {terminalWarning && <Alert variant="warning">{terminalWarning}</Alert>}
-        {activityWarning && <Alert variant="warning">{activityWarning}</Alert>
+        {activityWarning && <Alert variant="warning">{activityWarning}</Alert>}
 
         {loading && !terminal && brokerFallback.length === 0 ? (
           <Card title="Loading AI Trader">
