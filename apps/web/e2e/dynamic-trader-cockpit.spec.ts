@@ -95,6 +95,7 @@ async function gotoAiTrader(
     brokerPayload?: unknown[];
     riskContractMismatch?: boolean;
     sessionContractMismatch?: boolean;
+    sessionEnvelope?: boolean;
     failAllocationRead?: boolean;
   } = {},
 ) {
@@ -141,15 +142,18 @@ async function gotoAiTrader(
       if (options.sessionContractMismatch) {
         return fulfill(200, { status: 'ACTIVE' });
       }
-      if (options.active === false) return fulfill(200, null);
-      return fulfill(200, {
+      if (options.active === false) {
+        return fulfill(200, options.sessionEnvelope ? { session: null } : null);
+      }
+      const session = {
         id: '44444444-4444-4444-8444-444444444444',
         brokerConnectionId: mockBrokerConnections[0].id,
         executionMode: 'PAPER_ONLY',
         authorityGeneration: 1,
         status: 'ACTIVE',
         startedAt: '2026-08-31T00:30:00.000Z',
-      });
+      };
+      return fulfill(200, options.sessionEnvelope ? { session } : session);
     }
     if (apiPath === 'broker/connections') {
       return fulfill(200, options.brokerPayload ?? mockBrokerConnections);
@@ -177,11 +181,11 @@ async function gotoAiTrader(
         brokerConnectionId: mockBrokerConnections[0].id,
         logicalAccountKey: 'paper-broker|demo|demo-001',
         accountCurrency: 'USD',
-        brokerEquity: '10000',
+        brokerEquity: '10000.00000000',
         hasAllocation: true,
-        allocatedCapital: '2500',
-        committedCapital: '250',
-        availableCapital: '2250',
+        allocatedCapital: '2500.00000000',
+        committedCapital: '250.00000000',
+        availableCapital: '2250.00000000',
       });
     }
     if (apiPath === 'market-data/intelligence') return fulfill(200, marketSnapshot);
@@ -222,7 +226,9 @@ test.describe('AI Trader novice workflow', () => {
     await gotoAiTrader(page);
 
     await expect(page.getByText('Paper Trading Broker', { exact: false }).first()).toBeVisible();
-    await expect(page.getByText('2500 USD', { exact: false }).first()).toBeVisible();
+    await expect(page.getByText('10,000.00 USD', { exact: true })).toBeVisible();
+    await expect(page.getByText('2,500.00 USD', { exact: true }).first()).toBeVisible();
+    await expect(page.getByText(/Committed: 250\.00 USD/i)).toBeVisible();
     await expect(page.getByRole('combobox', { name: 'Broker account' })).toBeDisabled();
     await expect(page.getByRole('button', { name: 'Stop AI Trading' })).toBeVisible();
 
@@ -243,6 +249,16 @@ test.describe('AI Trader novice workflow', () => {
     assertNoExternalRequests(page);
   });
 
+
+  test('accepts the active-session envelope during rolling deployments', async ({ page }) => {
+    await gotoAiTrader(page, { sessionEnvelope: true });
+
+    await expect(page.getByRole('button', { name: 'Stop AI Trading' })).toBeEnabled();
+    await expect(page.getByText(/AI session status could not be verified/i)).toHaveCount(0);
+    await expect(page.getByText('ACTIVE', { exact: true })).toBeVisible();
+
+    assertNoExternalRequests(page);
+  });
 
   test('keeps an already-connected broker visible when optional broker metadata is omitted', async ({ page }) => {
     const historicalConnectedBroker = {
