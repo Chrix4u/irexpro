@@ -14,7 +14,7 @@ import type { PositionSizingInputs, SizedPosition } from './position-sizing.serv
  * implements the exact SQL contract against in-memory rows (the raw-SQL
  * semantics are re-proven by the CI-gated pg-integration suites). The
  * ALLOCATION LOGIC under test — ExactDecimal aggregate math, idempotency,
- * sufficiency, concentration caps, budget seeding, currency honesty, CAS
+ * sufficiency, concentration caps, explicit budgets, currency honesty, CAS
  * release — is the REAL production code.
  *
  * Matrix (§3/§13):
@@ -420,25 +420,10 @@ describe('AllocationService — server-side authoritative capital layer (Round 6
       expect(alloc.status).toBe(CapitalAllocationStatus.ACTIVE);
     });
 
-    // ─── Budget seeding (§1c — provable or fail-closed) ──────────────────
+    // ─── Explicit user budget (no silent full-equity seeding) ───────────
 
-    it('seeds the explicit budget ONCE from the authoritative account state when absent', async () => {
+    it('fail-closes when no explicit user allocation exists even if broker equity is available', async () => {
       store.budgets = [];
-      const alloc = await service.resolveOrAllocate({
-        intent: intent('intent-1'),
-        logicalAccountKey: KEY,
-        sized: sized({ allocatedCapital: '5000' }),
-      });
-      expect(alloc.status).toBe(CapitalAllocationStatus.ACTIVE);
-      // The seeded baseline is the authoritative equity.
-      expect(brokerService.getBrokerAccountState).toHaveBeenCalledWith(CONN);
-      expect(store.budgets).toHaveLength(1);
-      expect(store.budgets[0].total_capital).toBe('10000');
-    });
-
-    it('fail-closes with ALLOCATION_BUDGET_UNPROVABLE when neither the row nor the authoritative state exists (§1c)', async () => {
-      store.budgets = [];
-      store.seedAccountState = null;
       await expect(
         service.resolveOrAllocate({
           intent: intent('intent-1'),
@@ -446,6 +431,10 @@ describe('AllocationService — server-side authoritative capital layer (Round 6
           sized: sized({ allocatedCapital: '100' }),
         }),
       ).rejects.toMatchObject({ code: 'ALLOCATION_BUDGET_UNPROVABLE' });
+
+      expect(brokerService.getBrokerAccountState).not.toHaveBeenCalled();
+      expect(store.budgets).toHaveLength(0);
+      expect(store.allocations).toHaveLength(0);
     });
 
     // ─── Round 7 (P0 allocation-scope fix) ─────────────────────────────
