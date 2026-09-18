@@ -84,7 +84,13 @@ const marketSnapshot = {
 
 async function gotoAiTrader(
   page: Parameters<typeof setupErrorCollectors>[0],
-  options: { active?: boolean; onStart?: () => void; onStop?: () => void } = {},
+  options: {
+    active?: boolean;
+    onStart?: () => void;
+    onStop?: () => void;
+    failExecutionReads?: boolean;
+    failPositionRead?: boolean;
+  } = {},
 ) {
   setupErrorCollectors(page);
   await page.route('**/api/v1/**', async (route) => {
@@ -123,10 +129,20 @@ async function gotoAiTrader(
       });
     }
     if (apiPath === 'broker/connections') return fulfill(200, mockBrokerConnections);
-    if (apiPath === 'execution/positions/open') return fulfill(200, [executionPosition]);
-    if (apiPath === 'execution/trades/recent') return fulfill(200, [executionPosition]);
+    if (apiPath === 'execution/positions/open') {
+      return options.failExecutionReads
+        ? fulfill(500, { statusCode: 500, message: 'Internal Server Error' })
+        : fulfill(200, [executionPosition]);
+    }
+    if (apiPath === 'execution/trades/recent') {
+      return options.failExecutionReads
+        ? fulfill(500, { statusCode: 500, message: 'Internal Server Error' })
+        : fulfill(200, [executionPosition]);
+    }
     if (apiPath === 'live-account/positions') {
-      return fulfill(200, { positions: [livePosition], total: 1 });
+      return options.failPositionRead
+        ? fulfill(500, { statusCode: 500, message: 'Internal Server Error' })
+        : fulfill(200, { positions: [livePosition], total: 1 });
     }
     if (apiPath === 'execution/capital-allocation') {
       return fulfill(200, {
@@ -196,6 +212,25 @@ test.describe('AI Trader novice workflow', () => {
     await assertNoHorizontalOverflow(page);
     assertNoConsoleErrors(page);
     assertNoFailedRequests(page);
+    assertNoExternalRequests(page);
+  });
+
+
+  test('keeps Start/Stop controls usable when activity and position reads return 5xx', async ({ page }) => {
+    await gotoAiTrader(page, {
+      active: false,
+      failExecutionReads: true,
+      failPositionRead: true,
+    });
+
+    await expect(
+      page.getByText(/AI Trading controls are available, but recent activity or position details could not be loaded/i),
+    ).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Start AI Trading' })).toBeVisible();
+    await expect(page.getByText(/Unable to reach the server/i)).toHaveCount(0);
+    await expect(page.getByText(/No open positions/i)).toBeVisible();
+    await expect(page.getByText(/No execution activity yet/i)).toBeVisible();
+
     assertNoExternalRequests(page);
   });
 
