@@ -5,6 +5,7 @@ import { BrokerService } from '../broker/broker.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { RiskService } from '../risk/risk.service';
 import { ExecutionService } from '../execution/execution.service';
+import { AllocationService } from '../execution/services/allocation.service';
 import { AuditService } from '../audit/audit.service';
 import { DomainEventBus } from '../events/event-bus.service';
 import { AiEngineClient } from '../ai-engine-client/ai-engine-client.service';
@@ -87,6 +88,7 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
   let subscriptionsService: Record<string, jest.Mock>;
   let riskService: Record<string, jest.Mock>;
   let executionService: Record<string, jest.Mock>;
+  let allocationService: Record<string, jest.Mock>;
   let auditService: Record<string, jest.Mock>;
   let eventBus: Record<string, jest.Mock>;
   let aiEngineClient: Record<string, jest.Mock>;
@@ -141,6 +143,19 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       })),
     };
 
+    allocationService = {
+      getUserCapitalAllocationState: jest.fn().mockResolvedValue({
+        brokerConnectionId: 'conn-1',
+        logicalAccountKey: 'paper-broker|demo|account-1',
+        accountCurrency: 'USD',
+        brokerEquity: '10000',
+        hasAllocation: true,
+        allocatedCapital: '1000',
+        committedCapital: '0',
+        availableCapital: '1000',
+      }),
+    };
+
     executionService = {
       startSession: jest.fn().mockResolvedValue(mockSession()),
       endSession: jest.fn().mockResolvedValue(undefined),
@@ -174,6 +189,7 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
         { provide: SubscriptionsService, useValue: subscriptionsService },
         { provide: RiskService, useValue: riskService },
         { provide: ExecutionService, useValue: executionService },
+        { provide: AllocationService, useValue: allocationService },
         { provide: AuditService, useValue: auditService },
         { provide: DomainEventBus, useValue: eventBus },
         { provide: AiEngineClient, useValue: aiEngineClient },
