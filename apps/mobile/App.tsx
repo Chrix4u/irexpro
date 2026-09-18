@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useState } from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { AuthProvider, useAuth } from '@/context/auth-context';
 import { RealtimeProvider } from '@/context/realtime-context';
@@ -14,7 +14,6 @@ import PaymentsScreen from './src/screens/PaymentsScreen';
 import BrokerScreen from './src/screens/BrokerScreen';
 import LiveAccountScreen from './src/screens/LiveAccountScreen';
 import AiTradingScreen from './src/screens/AiTradingScreen';
-import { parsePasswordResetDeepLink, type MobileResetIntent } from './src/screens/password-recovery.logic';
 
 /**
  * iRexPro mobile app entry (Expo + React Native + TypeScript).
@@ -58,38 +57,15 @@ function AppShell() {
   const { user, loading, error, restoreSession, clearSession } = useAuth();
   const [tab, setTab] = useState<Tab>('dashboard');
   const [authScreen, setAuthScreen] = useState<AuthScreen>('login');
-  const [resetIntent, setResetIntent] = useState<MobileResetIntent>(null);
+  const [phoneResetIdentifier, setPhoneResetIdentifier] = useState<string | null>(null);
 
-  useEffect(() => {
-    let mounted = true;
-
-    const handleUrl = (url: string | null | undefined) => {
-      const intent = parsePasswordResetDeepLink(url);
-      if (intent && mounted) {
-        setResetIntent(intent);
-      }
-    };
-
-    void Linking.getInitialURL().then(handleUrl).catch(() => {
-      // A platform URL lookup failure must not block ordinary login.
-    });
-
-    const subscription = Linking.addEventListener('url', ({ url }) => handleUrl(url));
-
-    return () => {
-      mounted = false;
-      subscription.remove();
-    };
-  }, []);
-
-  if (resetIntent) {
+  if (phoneResetIdentifier) {
     return (
       <SafeAreaView style={styles.shell}>
         <ResetPasswordScreen
-          token={resetIntent.kind === 'email-token' ? resetIntent.token : undefined}
-          identifier={resetIntent.kind === 'phone-code' ? resetIntent.identifier : undefined}
+          identifier={phoneResetIdentifier}
           onBack={() => {
-            setResetIntent(null);
+            setPhoneResetIdentifier(null);
             setAuthScreen('login');
           }}
           onCompleted={async () => {
@@ -133,9 +109,7 @@ function AppShell() {
         {authScreen === 'forgot-password' ? (
           <ForgotPasswordScreen
             onBack={() => setAuthScreen('login')}
-            onUseSmsCode={(identifier) =>
-              setResetIntent({ kind: 'phone-code', identifier })
-            }
+            onUseSmsCode={(identifier) => setPhoneResetIdentifier(identifier)}
           />
         ) : authScreen === 'appeal' ? (
           <AppealScreen onBack={() => setAuthScreen('login')} />
