@@ -90,6 +90,7 @@ async function gotoAiTrader(
     onStop?: () => void;
     failExecutionReads?: boolean;
     failPositionRead?: boolean;
+    failRiskStatus?: boolean;
     dropFirstRiskRead?: boolean;
     onRiskRead?: () => void;
   } = {},
@@ -107,6 +108,9 @@ async function gotoAiTrader(
     if (apiPath === 'auth/logout') return fulfill(200, { message: 'Logged out' });
     if (apiPath === 'risk/status') {
       riskReadCount += 1;
+      if (options.failRiskStatus) {
+        return fulfill(500, { statusCode: 500, message: 'Internal Server Error' });
+      }
       options.onRiskRead?.();
       if (options.dropFirstRiskRead && riskReadCount === 1) {
         return route.abort('connectionreset');
@@ -238,6 +242,21 @@ test.describe('AI Trader novice workflow', () => {
     await expect(page.getByText(/Unable to reach the server/i)).toHaveCount(0);
     await expect(page.getByText(/No open positions/i)).toBeVisible();
     await expect(page.getByText(/No execution activity yet/i)).toBeVisible();
+
+    assertNoExternalRequests(page);
+  });
+
+  test('preserves a connected broker when the AI control snapshot fails', async ({ page }) => {
+    await gotoAiTrader(page, {
+      failRiskStatus: true,
+    });
+
+    await expect(page.getByText('Paper Trading Broker', { exact: false }).first()).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Connect broker' })).toHaveCount(0);
+    await expect(
+      page.getByText(/Your broker connection is still available, but AI Trading controls could not be loaded/i),
+    ).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Start AI Trading' })).toBeDisabled();
 
     assertNoExternalRequests(page);
   });
