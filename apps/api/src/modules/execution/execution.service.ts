@@ -861,10 +861,7 @@ export class ExecutionService {
     ];
     await Promise.all(
       linkedSessionIds.map((sessionId) =>
-        this.sessionRepo.update(
-          { id: sessionId, userId },
-          { closeAiPositionsOnStop: true },
-        ),
+        this.sessionRepo.update({ id: sessionId, userId }, { closeAiPositionsOnStop: true }),
       ),
     );
 
@@ -1823,9 +1820,7 @@ export class ExecutionService {
         .set({
           status,
           endedAt: new Date(),
-          ...(options.closeAiPositionsOnStop === true
-            ? { closeAiPositionsOnStop: true }
-            : {}),
+          ...(options.closeAiPositionsOnStop === true ? { closeAiPositionsOnStop: true } : {}),
           authorityGeneration: () => 'authority_generation + 1',
           updatedAt: new Date(),
         })
