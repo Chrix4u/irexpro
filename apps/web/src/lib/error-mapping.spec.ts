@@ -128,7 +128,7 @@ describe('mapApiError', () => {
       raw: { statusCode: 500, message: 'Internal provider failure at /home/app/services/provider.ts:42' },
     };
     const result = mapApiError(error);
-    expect(result.message).toBe('Unable to reach the server. Please check your connection.');
+    expect(result.message).toBe('The server returned an error. Please try again.');
     expect(result.message).not.toContain('/home/app');
   });
 
