@@ -55,6 +55,16 @@ test.describe('AI-first trader workspace navigation', () => {
   });
 
   test('AI Decision Explorer remains evidence-only and does not expose hidden reasoning', async ({ page }) => {
+    await page.route('**/api/v1/ai/decisions', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          generatedAt: '2026-09-18T13:00:00.000Z',
+          decisions: [],
+        }),
+      }),
+    );
     await gotoAsAuthenticated(page, '/ai', { heading: /AI Decision Explorer/i });
     await expect(page.getByText(/does not expose hidden model reasoning/i)).toBeVisible();
     await assertNoHorizontalOverflow(page);

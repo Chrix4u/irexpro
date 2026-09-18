@@ -471,13 +471,14 @@ test.describe('Positions & Activity', () => {
     await gotoLiveAccount(page);
 
     await expect(page.getByTestId('trading-activity')).toBeVisible();
-    await expect(page.getByText('Broker account', { exact: true })).toBeVisible();
-    await expect(page.getByText('Primary live account', { exact: true })).toBeVisible();
-    await expect(page.getByText('10432.50 USD', { exact: true })).toBeVisible();
-    await expect(page.getByText('10501.23 USD', { exact: true })).toBeVisible();
-    await expect(page.getByText('AI Trading', { exact: true })).toBeVisible();
-    await expect(page.getByText('ACTIVE', { exact: true })).toBeVisible();
-    await expect(page.getByRole('link', { name: /open ai trading/i })).toHaveAttribute('href', '/trade');
+    const summary = page.locator('.activity-summary-grid');
+    await expect(summary.getByText('Broker account', { exact: true })).toBeVisible();
+    await expect(summary.getByText('Primary live account', { exact: true })).toBeVisible();
+    await expect(summary.getByText('10432.50 USD', { exact: true })).toBeVisible();
+    await expect(summary.getByText('10501.23 USD', { exact: true })).toBeVisible();
+    await expect(summary.getByText('AI Trading', { exact: true })).toBeVisible();
+    await expect(summary.getByText('ACTIVE', { exact: true })).toBeVisible();
+    await expect(summary.getByRole('link', { name: /open ai trading/i })).toHaveAttribute('href', '/trade');
 
     await assertNoHorizontalOverflow(page);
     assertNoConsoleErrors(page);
@@ -488,7 +489,7 @@ test.describe('Positions & Activity', () => {
   test('renders open positions with broker-provided current price and P&L only when available', async ({ page }) => {
     await gotoLiveAccount(page);
 
-    const positions = page.getByRole('heading', { level: 2, name: 'Open Positions' }).locator('..');
+    const positions = liveSection(page, 'positions-title');
     await expect(positions.getByText('EURUSD', { exact: true })).toBeVisible();
     await expect(positions.getByText('1.10420000', { exact: true })).toBeVisible();
     await expect(positions.getByText('+41.00 USD', { exact: true })).toBeVisible();
