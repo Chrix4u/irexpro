@@ -92,6 +92,7 @@ async function gotoAiTrader(
     failPositionRead?: boolean;
     dropFirstRiskRead?: boolean;
     onRiskRead?: () => void;
+    brokerPayload?: unknown[];
   } = {},
 ) {
   setupErrorCollectors(page);
@@ -136,7 +137,9 @@ async function gotoAiTrader(
         startedAt: '2026-08-31T00:30:00.000Z',
       });
     }
-    if (apiPath === 'broker/connections') return fulfill(200, mockBrokerConnections);
+    if (apiPath === 'broker/connections') {
+      return fulfill(200, options.brokerPayload ?? mockBrokerConnections);
+    }
     if (apiPath === 'execution/positions/open') {
       return options.failExecutionReads
         ? fulfill(500, { statusCode: 500, message: 'Internal Server Error' })
@@ -223,6 +226,32 @@ test.describe('AI Trader novice workflow', () => {
     assertNoExternalRequests(page);
   });
 
+
+  test('keeps an already-connected broker visible when optional broker metadata is omitted', async ({ page }) => {
+    const historicalConnectedBroker = {
+      id: mockBrokerConnections[0].id,
+      brokerId: mockBrokerConnections[0].brokerId,
+      brokerName: mockBrokerConnections[0].brokerName,
+      accountType: 'DEMO',
+      status: 'CONNECTED',
+      // Intentionally omit displayName, authorizationStatus,
+      // liveTradingEnabled, health/error metadata and newer identity fields.
+      // The UI must preserve the connected account while execution metadata
+      // degrades fail-closed.
+    };
+
+    await gotoAiTrader(page, {
+      active: false,
+      brokerPayload: [historicalConnectedBroker],
+    });
+
+    await expect(page.getByText('Paper Trading Broker', { exact: false }).first()).toBeVisible();
+    await expect(page.getByText('No broker connected', { exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Start AI Trading' })).toBeVisible();
+    await expect(page.getByText(/Something went wrong\. Please try again\./i)).toHaveCount(0);
+
+    assertNoExternalRequests(page);
+  });
 
   test('keeps Start/Stop controls usable when activity and position reads return 5xx', async ({ page }) => {
     await gotoAiTrader(page, {
