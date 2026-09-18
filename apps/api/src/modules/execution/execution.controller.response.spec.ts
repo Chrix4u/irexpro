@@ -1,5 +1,6 @@
 import { ExecutionController } from './execution.controller';
 import { ExecutionReadService } from './execution-read.service';
+import { AllocationService } from './services/allocation.service';
 import { Trade, TradeCloseReason, TradeDirection, TradeStatus } from './entities/trade.entity';
 
 function makeTrade(overrides: Partial<Trade> = {}): Trade {
@@ -21,7 +22,10 @@ function makeTrade(overrides: Partial<Trade> = {}): Trade {
     externalOrderId: 'broker-order-secret-ish-id',
     status: TradeStatus.OPEN,
     exitPrice: null,
+    accountCurrency: 'USD',
     realisedPnl: null,
+    commission: '0.20',
+    swap: '0',
     closeReason: null,
     brokerRejectionReason: null,
     openedAt: new Date('2026-08-28T12:00:00.000Z'),
@@ -52,7 +56,10 @@ describe('ExecutionController frontend-safe responses', () => {
         }),
       ]),
     };
-    controller = new ExecutionController(readService as unknown as ExecutionReadService);
+    controller = new ExecutionController(
+      readService as unknown as ExecutionReadService,
+      {} as AllocationService,
+    );
   });
 
   it('passes only the authenticated user UUID into open-position reads', async () => {
@@ -65,7 +72,7 @@ describe('ExecutionController frontend-safe responses', () => {
     expect(readService.listRecentExecutions).toHaveBeenCalledWith(USER_ID, 25);
   });
 
-  it('does not expose internal execution entity fields or currency-less P&L', async () => {
+  it('does not expose internal execution entity identifiers', async () => {
     const [response] = await controller.listOpenPositions(USER_ID);
     const keys = Object.keys(response);
 
@@ -75,20 +82,24 @@ describe('ExecutionController frontend-safe responses', () => {
     expect(keys).not.toContain('idempotencyKey');
     expect(keys).not.toContain('externalOrderId');
     expect(keys).not.toContain('brokerRejectionReason');
-    expect(keys).not.toContain('realisedPnl');
 
     expect(response).toMatchObject({
       instrument: 'EURUSD',
       direction: TradeDirection.BUY,
       status: TradeStatus.OPEN,
       fillPrice: '1.10010000',
+      accountCurrency: 'USD',
+      realisedPnl: null,
     });
   });
 
-  it('returns authoritative lifecycle fields without exposing persisted currency-less P&L', async () => {
+  it('returns authoritative lifecycle fields and currency-bound realized P&L', async () => {
     const [response] = await controller.listRecentExecutions(USER_ID, 50);
     expect(response.exitPrice).toBe('1.10800000');
     expect(response.closeReason).toBe(TradeCloseReason.TAKE_PROFIT_HIT);
-    expect(Object.keys(response)).not.toContain('realisedPnl');
+    expect(response.accountCurrency).toBe('USD');
+    expect(response.realisedPnl).toBe('80.25');
+    expect(response.commission).toBe('0.20');
+    expect(response.swap).toBe('0');
   });
 });
