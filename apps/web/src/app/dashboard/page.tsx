@@ -143,31 +143,31 @@ function OnboardingCard({ status }: { status: OnboardingStatus }) {
   const steps = [
     {
       key: 'PROFILE',
-      label: 'Complete profile',
+      label: 'Verify your profile',
       href: '/onboarding/profile',
       done: status.profileCompleted,
-      description: 'Set your name, country, timezone, currency, and trading experience.',
+      description: 'Provide the identity and regional details required for account verification.',
     },
     {
-      key: 'RISK_PROFILE',
-      label: 'Set risk limits',
-      href: '/onboarding/risk',
-      done: status.riskProfileCompleted,
-      description: 'Configure your daily loss limit, max trade risk, and acknowledge the risk disclosure.',
+      key: 'ELIGIBILITY',
+      label: 'Complete required disclosures',
+      href: '/onboarding/eligibility',
+      done: status.eligibilityCompleted,
+      description: 'Complete the server-required age, identity, jurisdiction and disclosure checks.',
     },
     {
       key: 'BROKER_CONNECTION',
       label: 'Connect broker',
       href: '/onboarding/broker',
       done: status.brokerConnected,
-      description: 'Connect a Paper Trading or MetaTrader 5 broker account.',
+      description: 'Connect the broker account the AI will trade through.',
     },
   ];
 
   function stepToHref(step: string): string {
     switch (step) {
       case 'PROFILE': return '/onboarding/profile';
-      case 'RISK_PROFILE': return '/onboarding/risk';
+      case 'ELIGIBILITY': return '/onboarding/eligibility';
       case 'BROKER_CONNECTION': return '/onboarding/broker';
       default: return '/dashboard';
     }
@@ -217,12 +217,12 @@ function OnboardingCard({ status }: { status: OnboardingStatus }) {
     <Card
       title={status.canStartTrading ? 'Trading setup ready' : 'Complete your onboarding'}
       subtitle={status.canStartTrading
-        ? 'All required steps are complete. Start a paper session when you are ready.'
+        ? 'All required steps are complete. Open AI Trading to allocate capital and turn automation on.'
         : 'Complete these steps to enable the trading workflow.'}
       className="readiness-card"
     >
       {status.canStartTrading ? (
-        <Alert variant="success">Trading setup ready. Start a paper trading session below when you are ready.</Alert>
+        <Alert variant="success">Trading setup ready. Continue to AI Trading to allocate capital and turn automation on.</Alert>
       ) : (
         <Alert variant="info">
           Next step: <strong>{status.nextStep === 'READY' ? 'All complete' : status.nextStep.replace(/_/g, ' ').toLowerCase()}</strong>
