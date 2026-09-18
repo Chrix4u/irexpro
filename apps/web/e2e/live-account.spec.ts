@@ -170,6 +170,11 @@ const mockPositions = {
       lotSize: '0.1000',
       requestedEntryPrice: '1.10000000',
       fillPrice: '1.10010000',
+      accountCurrency: 'USD',
+      currentPrice: '1.10420000',
+      unrealisedPnl: '41.00',
+      commission: '-0.50',
+      swap: '0.00',
       stopLoss: '1.09500000',
       takeProfit: '1.11000000',
       trailingStopPips: null,
@@ -187,6 +192,11 @@ const mockPositions = {
       lotSize: '0.0500',
       requestedEntryPrice: '2510.500000',
       fillPrice: '2510.250000',
+      accountCurrency: 'USD',
+      currentPrice: '2504.500000',
+      unrealisedPnl: '28.75',
+      commission: '-0.40',
+      swap: '-0.10',
       stopLoss: '2525.000000',
       takeProfit: '2480.000000',
       trailingStopPips: null,
@@ -204,6 +214,11 @@ const mockPositions = {
       lotSize: '0.0200',
       requestedEntryPrice: '1.31250000',
       fillPrice: null,
+      accountCurrency: 'USD',
+      currentPrice: null,
+      unrealisedPnl: null,
+      commission: null,
+      swap: null,
       stopLoss: '1.30800000',
       takeProfit: '1.32000000',
       trailingStopPips: null,
@@ -441,7 +456,7 @@ async function gotoLiveAccount(page: Page): Promise<void> {
   setupErrorCollectors(page);
   await setupLiveAccountRoutes(page);
   await page.goto('/live-account');
-  await expect(page.getByRole('heading', { level: 1, name: 'Live Account' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: 'Positions & Activity' })).toBeVisible();
 }
 
 /** Deterministic section locator — the page owns these heading ids. */
@@ -451,88 +466,18 @@ function liveSection(page: Page, headingId: string) {
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
-test.describe('Live Account dashboard (Sprint 50 PR-5)', () => {
-  test('renders the §36 environment banner and authoritative per-connection state', async ({
-    page,
-  }) => {
+test.describe('Positions & Activity', () => {
+  test('renders broker-authoritative account summary and AI Trading state', async ({ page }) => {
     await gotoLiveAccount(page);
 
-    // §36 banner — worst-case environment (LIVE) straight from the overview.
-    const banner = page.getByTestId('live-env-banner');
-    await expect(banner).toBeVisible();
-    await expect(banner.getByText(/LIVE ACCOUNT — REAL FUNDS AT RISK/i)).toBeVisible();
-    await expect(banner.getByText(/snapshot generated/i)).toBeVisible();
-
-    // Account summary per connection.
-    const summarySection = liveSection(page, 'live-summary-title');
-    await expect(summarySection.getByText('Primary live account', { exact: true })).toBeVisible();
-    await expect(summarySection.getByText('Demo paper account', { exact: true })).toBeVisible();
-    await expect(summarySection.getByText('•••4123', { exact: true })).toBeVisible();
-    await expect(summarySection.getByText('10432.50', { exact: true })).toBeVisible();
-    await expect(summarySection.getByText('2551.26', { exact: true })).toBeVisible();
-    await expect(
-      summarySection.getByText(/no synchronized account data yet/i),
-    ).toBeVisible();
-
-    // Broker connection cards for both brokers + fail-closed execution gate.
-    const connectionsSection = liveSection(page, 'live-connections-title');
-    await expect(connectionsSection.getByText('MetaTrader 5', { exact: true })).toBeVisible();
-    await expect(connectionsSection.getByText('Paper Broker', { exact: true })).toBeVisible();
-    await expect(connectionsSection.getByText('Demo', { exact: true })).toBeVisible();
-    await expect(connectionsSection.getByText('Execution enabled', { exact: true })).toBeVisible();
-    await expect(connectionsSection.getByText('Execution disabled', { exact: true })).toBeVisible();
-    await expect(connectionsSection.getByText('Degraded', { exact: true })).toBeVisible();
-    await expect(connectionsSection.getByText('Expired', { exact: true })).toBeVisible();
-    await expect(
-      connectionsSection.getByRole('link', { name: 'Manage broker connections' }).first(),
-    ).toBeVisible();
-
-    // Automation status.
-    const automationSection = liveSection(page, 'live-automation-title');
-    await expect(automationSection.getByText('Active', { exact: true })).toBeVisible();
-    await expect(
-      automationSection.getByRole('link', { name: 'Open the trading workspace' }),
-    ).toBeVisible();
-
-    // Execution health tiles — reconciliation-pending is warning-colored.
-    const healthSection = liveSection(page, 'live-health-title');
-    await expect(healthSection.getByText('Open positions', { exact: true })).toBeVisible();
-    await expect(healthSection.getByText('Reconciliation pending', { exact: true })).toBeVisible();
-    await expect(healthSection.getByText('12', { exact: true })).toBeVisible();
-    await expect(healthSection.getByText('Needs attention', { exact: true })).toBeVisible();
-
-    // Open positions incl. a RECONCILIATION_PENDING row.
-    const positionsSection = liveSection(page, 'live-positions-title');
-    await expect(positionsSection.getByText('EURUSD', { exact: true })).toBeVisible();
-    await expect(positionsSection.getByText('XAUUSD', { exact: true })).toBeVisible();
-    await expect(positionsSection.getByText('GBPUSD', { exact: true })).toBeVisible();
-    await expect(
-      positionsSection.getByText('Reconciliation Pending', { exact: true }).first(),
-    ).toBeVisible();
-
-    // Orders default to the WORKING filter with the total count surfaced.
-    const ordersSection = liveSection(page, 'live-orders-title');
-    await expect(ordersSection.getByText('Showing 10 of 12 orders')).toBeVisible();
-
-    // Reconciliation per connection — demo connection is not in sync.
-    const reconciliationSection = liveSection(page, 'live-reconciliation-title');
-    await expect(reconciliationSection.getByText('In sync', { exact: true })).toBeVisible();
-    await expect(reconciliationSection.getByText('3 open discrepancies', { exact: true })).toBeVisible();
-    await expect(
-      reconciliationSection.getByText(/last run: completed with warnings/i),
-    ).toBeVisible();
-
-    // Alerts panel shows the CRITICAL alert with its remediation hint.
-    const alertsCard = page.getByRole('heading', { level: 2, name: 'Alerts' }).locator('..');
-    await expect(alertsCard.getByText('Credentials Expired', { exact: true })).toBeVisible();
-    await expect(alertsCard.getByText('Critical', { exact: true })).toBeVisible();
-    await expect(alertsCard.getByText(/rotate the broker credentials/i)).toBeVisible();
-
-    // Activity timeline renders audited rows.
-    await expect(page.getByText('Order Submitted', { exact: true }).first()).toBeVisible();
-
-    // Data-integrity policy footer.
-    await expect(page.getByText(/backend-authoritative live account state/i)).toBeVisible();
+    await expect(page.getByTestId('trading-activity')).toBeVisible();
+    await expect(page.getByText('Broker account', { exact: true })).toBeVisible();
+    await expect(page.getByText('Primary live account', { exact: true })).toBeVisible();
+    await expect(page.getByText('10432.50 USD', { exact: true })).toBeVisible();
+    await expect(page.getByText('10501.23 USD', { exact: true })).toBeVisible();
+    await expect(page.getByText('AI Trading', { exact: true })).toBeVisible();
+    await expect(page.getByText('ACTIVE', { exact: true })).toBeVisible();
+    await expect(page.getByRole('link', { name: /open ai trading/i })).toHaveAttribute('href', '/trade');
 
     await assertNoHorizontalOverflow(page);
     assertNoConsoleErrors(page);
@@ -540,178 +485,53 @@ test.describe('Live Account dashboard (Sprint 50 PR-5)', () => {
     assertNoExternalRequests(page);
   });
 
-  test('renders the UNKNOWN environment banner when provenance is unprovable (§36 fail-closed)', async ({
-    page,
-  }) => {
-    setupErrorCollectors(page);
-    await setupLiveAccountRoutes(page);
-    // Later-registered routes take precedence: override ONLY the overview so
-    // the server reports UNKNOWN (no connection mode proven).
-    await page.route('**/api/v1/live-account/overview', (route) =>
-      route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ ...mockOverview, environment: 'UNKNOWN' }),
-      }),
-    );
-    await page.goto('/live-account');
-    await expect(page.getByRole('heading', { level: 1, name: 'Live Account' })).toBeVisible();
-
-    // §36 — UNKNOWN is its own cautionary banner, never a silent PAPER claim.
-    const banner = page.getByTestId('live-env-banner');
-    await expect(banner).toBeVisible();
-    await expect(banner).toHaveClass(/live-env-banner--unknown/);
-    await expect(
-      banner.getByText(/ACCOUNT ENVIRONMENT UNKNOWN — VERIFY BROKER CONNECTION/i),
-    ).toBeVisible();
-    await expect(banner.getByText(/PAPER TRADING/i)).toHaveCount(0);
-
-    assertNoConsoleErrors(page);
-    assertNoFailedRequests(page);
-    assertNoExternalRequests(page);
-  });
-
-  test('orders filter switches between WORKING and HISTORY and paginates with offset', async ({
-    page,
-  }) => {
+  test('renders open positions with broker-provided current price and P&L only when available', async ({ page }) => {
     await gotoLiveAccount(page);
 
-    const ordersSection = liveSection(page, 'live-orders-title');
-    const filterGroup = ordersSection.getByRole('group', { name: /order status filter/i });
+    const positions = page.getByRole('heading', { level: 2, name: 'Open Positions' }).locator('..');
+    await expect(positions.getByText('EURUSD', { exact: true })).toBeVisible();
+    await expect(positions.getByText('1.10420000', { exact: true })).toBeVisible();
+    await expect(positions.getByText('+41.00 USD', { exact: true })).toBeVisible();
 
-    // Default WORKING filter is pressed and the first page is shown.
-    await expect(filterGroup.getByRole('button', { name: 'Working' })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    );
-    await expect(ordersSection.getByText('Showing 10 of 12 orders')).toBeVisible();
-    await expect(ordersSection.getByText('Reconciliation Pending', { exact: true }).first()).toBeVisible();
-    // The in-flight dispatch commitment row renders under WORKING (non-terminal).
-    await expect(ordersSection.getByText('Dispatch Committed', { exact: true }).first()).toBeVisible();
+    await expect(positions.getByText('XAUUSD', { exact: true })).toBeVisible();
+    await expect(positions.getByText('+28.75 USD', { exact: true })).toBeVisible();
 
-    // Load more appends the second page fetched with offset=10.
-    await ordersSection.getByRole('button', { name: 'Load more orders' }).click();
-    await expect(ordersSection.getByText('Showing 12 of 12 orders')).toBeVisible();
-
-    // Switching to HISTORY replaces the list with terminal orders.
-    await filterGroup.getByRole('button', { name: 'History' }).click();
-    await expect(ordersSection.getByText('Showing 3 of 3 orders')).toBeVisible();
-    await expect(ordersSection.getByText('Filled', { exact: true }).first()).toBeVisible();
-    await expect(ordersSection.getByText('Rejected', { exact: true })).toBeVisible();
-    await expect(ordersSection.getByText('Cancelled', { exact: true })).toBeVisible();
-    await expect(
-      ordersSection.getByText('Insufficient margin for the requested position size.', {
-        exact: true,
-      }),
-    ).toBeVisible();
-    await expect(ordersSection.getByRole('button', { name: 'Load more orders' })).toHaveCount(0);
-
-    await assertNoHorizontalOverflow(page);
-    assertNoConsoleErrors(page);
-    assertNoFailedRequests(page);
-    assertNoExternalRequests(page);
+    await expect(positions.getByText('GBPUSD', { exact: true })).toBeVisible();
+    await expect(positions.getByText('P&L unavailable', { exact: true })).toBeVisible();
   });
 
-  test('activity timeline paginates with offset and the refresh button reloads state', async ({
-    page,
-  }) => {
+  test('renders recent orders, audited AI activity, alerts and execution health', async ({ page }) => {
     await gotoLiveAccount(page);
 
-    const activityCard = page
-      .getByRole('heading', { level: 2, name: 'Activity Timeline' })
-      .locator('..');
-    await expect(activityCard.getByText('Showing 10 of 12 activity rows')).toBeVisible();
+    await expect(page.getByRole('heading', { level: 2, name: 'Recent Orders' })).toBeVisible();
+    await expect(page.getByText('RECONCILIATION PENDING', { exact: true }).first()).toBeVisible();
+    await expect(page.getByText('DISPATCH COMMITTED', { exact: true }).first()).toBeVisible();
 
-    // The timeline is bounded and internally scrollable.
-    await expect(activityCard.locator('.live-activity-list')).toBeVisible();
+    await expect(page.getByText('ORDER SUBMITTED', { exact: true }).first()).toBeVisible();
+    await expect(page.getByText(/credentials have expired/i)).toBeVisible();
 
-    await activityCard.getByRole('button', { name: 'Load more activity' }).click();
-    await expect(activityCard.getByText('Showing 12 of 12 activity rows')).toBeVisible();
-    await expect(
-      activityCard.getByText('Execution Control Activated', { exact: true }),
-    ).toBeVisible();
-    await expect(activityCard.getByText('Kill Switch Deactivated', { exact: true })).toBeVisible();
-
-    // Refresh reloads every panel from the intercepted contract routes.
-    await page.getByRole('button', { name: /refresh live account/i }).click();
-    await expect(page.getByTestId('live-env-banner')).toBeVisible();
-    await expect(activityCard.getByText('Showing 10 of 12 activity rows')).toBeVisible();
-    await expect(
-      liveSection(page, 'live-orders-title').getByText('Showing 10 of 12 orders'),
-    ).toBeVisible();
-
-    await assertNoHorizontalOverflow(page);
-    assertNoConsoleErrors(page);
-    assertNoFailedRequests(page);
-    assertNoExternalRequests(page);
+    const health = page.getByRole('heading', { level: 2, name: 'Execution Health' }).locator('..');
+    await expect(health.getByText('Open positions', { exact: true })).toBeVisible();
+    await expect(health.getByText('Working orders', { exact: true })).toBeVisible();
+    await expect(health.getByText('12', { exact: true })).toBeVisible();
   });
 
-  test('overview failure keeps independent panels rendering (partial-failure design)', async ({
-    page,
-  }) => {
-    setupErrorCollectors(page);
+  test('refresh reloads the simplified activity surface without exposing legacy expert controls', async ({ page }) => {
+    await gotoLiveAccount(page);
 
-    await page.route('**/api/v1/**', (route) => {
-      const url = new URL(route.request().url());
-      const apiPath = url.pathname.split('/api/v1/')[1] ?? '';
+    await page.getByRole('button', { name: 'Refresh' }).click();
+    await expect(page.getByRole('heading', { level: 1, name: 'Positions & Activity' })).toBeVisible();
 
-      const fulfill = (status: number, body: unknown) =>
-        route.fulfill({
-          status,
-          contentType: 'application/json',
-          body: JSON.stringify(body),
-        });
-
-      if (apiPath === 'auth/refresh') return fulfill(200, mockAuthTokens);
-      if (apiPath === 'auth/me') return fulfill(200, mockAuthUser);
-
-      // The overview endpoint returns an invalid 200 payload; the runtime
-      // guards must reject it (fail-closed) while the other panels keep their
-      // verified data.
-      if (apiPath === 'live-account/overview') {
-        return fulfill(200, { environment: 'LIVE', generatedAt: 'not-a-timestamp' });
-      }
-      if (apiPath === 'live-account/positions') return fulfill(200, mockPositions);
-      if (apiPath === 'live-account/orders') {
-        const limit = Number(url.searchParams.get('limit') ?? '10');
-        const offset = Number(url.searchParams.get('offset') ?? '0');
-        return fulfill(
-          200,
-          ordersPage(allWorkingOrders, allWorkingOrders.length, limit, offset),
-        );
-      }
-      if (apiPath === 'live-account/activity') {
-        const limit = Number(url.searchParams.get('limit') ?? '10');
-        const offset = Number(url.searchParams.get('offset') ?? '0');
-        return fulfill(200, activityPage(limit, offset));
-      }
-
-      return fulfill(200, {});
-    });
-    await page.route('**/favicon.ico', (route) => route.fulfill({ status: 204, body: '' }));
-
-    await page.goto('/live-account');
-    await expect(page.getByRole('heading', { level: 1, name: 'Live Account' })).toBeVisible();
-
-    // No environment is claimed when the overview cannot be verified.
     await expect(page.getByTestId('live-env-banner')).toHaveCount(0);
-    await expect(page.getByText(/something went wrong/i)).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Retry loading' })).toBeVisible();
+    await expect(page.getByRole('button', { name: /order status filter/i })).toHaveCount(0);
+    await expect(page.getByText(/reconciliation status panel/i)).toHaveCount(0);
 
-    // Positions / orders / activity still render their verified payloads.
-    await expect(page.getByText('EURUSD', { exact: true }).first()).toBeVisible();
-    await expect(page.getByText('Showing 10 of 12 orders')).toBeVisible();
-    await expect(page.getByText('Showing 10 of 12 activity rows')).toBeVisible();
-
-    await assertNoHorizontalOverflow(page);
     assertNoConsoleErrors(page);
     assertNoFailedRequests(page);
     assertNoExternalRequests(page);
   });
 
-  test('desktop sidebar marks Live Account as the active workspace destination', async ({
-    page,
-  }) => {
+  test('desktop navigation marks Positions & Activity active', async ({ page }) => {
     await gotoLiveAccount(page);
     const viewport = page.viewportSize();
     expect(viewport).not.toBeNull();
@@ -721,15 +541,13 @@ test.describe('Live Account dashboard (Sprint 50 PR-5)', () => {
     }
 
     const nav = page.getByRole('navigation', { name: /primary workspace navigation/i });
-    await expect(nav.getByRole('link', { name: 'Live Account' })).toHaveAttribute(
+    await expect(nav.getByRole('link', { name: 'Positions & Activity' })).toHaveAttribute(
       'aria-current',
       'page',
     );
   });
 
-  test('mobile More sheet exposes Live Account without expanding the bottom bar', async ({
-    page,
-  }) => {
+  test('mobile More sheet exposes Positions & Activity as the current destination', async ({ page }) => {
     await gotoLiveAccount(page);
     const viewport = page.viewportSize();
     expect(viewport).not.toBeNull();
@@ -738,13 +556,10 @@ test.describe('Live Account dashboard (Sprint 50 PR-5)', () => {
       return;
     }
 
-    const bottomItems = page.locator('.mobile-bottom-nav__item');
-    await expect(bottomItems).toHaveCount(3);
-
     await page.getByRole('button', { name: /more navigation/i }).click();
     const sheet = page.locator('#mobile-more-sheet');
     await expect(sheet).toBeVisible();
-    await expect(sheet.getByRole('link', { name: 'Live Account' })).toHaveAttribute(
+    await expect(sheet.getByRole('link', { name: 'Positions & Activity' })).toHaveAttribute(
       'aria-current',
       'page',
     );

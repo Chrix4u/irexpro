@@ -5,17 +5,18 @@ import {
   gotoAsAuthenticated,
 } from './fixtures';
 
-const LEGACY_WORKSPACE_ROUTES = [
+const WORKSPACE_ROUTES = [
   { path: '/dashboard', heading: /welcome back/i, label: 'Dashboard' },
   { path: '/onboarding/profile', heading: /trader profile/i, label: 'Profile' },
-  { path: '/onboarding/risk', heading: /risk management/i, label: 'Risk Limits' },
-  { path: '/onboarding/broker', heading: /broker connection/i, label: 'Broker Accounts' },
+  { path: '/onboarding/risk', heading: /ai protection/i, label: 'AI Protection' },
+  { path: '/onboarding/broker', heading: /broker connection/i, label: 'Broker Account' },
+  { path: '/live-account', heading: /positions & activity/i, label: 'Positions & Activity' },
   { path: '/security', heading: /account security/i, label: 'Security' },
   { path: '/payments/success', heading: /fees & payments/i, label: 'Fees & Payments' },
 ] as const;
 
 test.describe('Responsive workspace refresh', () => {
-  for (const route of LEGACY_WORKSPACE_ROUTES) {
+  for (const route of WORKSPACE_ROUTES) {
     test(`${route.label} remains responsive and inside the workspace shell`, async ({ page }) => {
       await gotoAsAuthenticated(page, route.path, { heading: route.heading });
 

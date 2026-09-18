@@ -113,7 +113,7 @@ export default function AiProtectionPage() {
                 </div>
                 <div className="workspace-form-section">
                   <strong>3. AI automation</strong>
-                  <span className="muted text-sm">Turn AI automation on or off. The engine handles strategy and risk checks.</span>
+                  <span className="muted text-sm">Start or stop AI Trading. The engine handles strategy and risk checks.</span>
                 </div>
               </div>
               <div className="workspace-actions mt-4" style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>

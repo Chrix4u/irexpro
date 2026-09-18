@@ -203,14 +203,14 @@ export default function TradingActivityPage() {
                 </span>
               </Card>
               <Card>
-                <span className="activity-summary__label">AI Automation</span>
+                <span className="activity-summary__label">AI Trading</span>
                 <strong className="activity-summary__value">
                   {overview?.automation.status ?? 'IDLE'}
                 </strong>
                 <span className="activity-summary__meta">
                   {overview?.automation.startedAt
                     ? `Started ${formatTimestamp(overview.automation.startedAt)}`
-                    : 'Control automation from AI Trading'}
+                    : 'Start or stop AI Trading from the AI Trading workspace'}
                 </span>
                 <Link href="/trade" className="activity-link mt-4">Open AI Trading</Link>
               </Card>

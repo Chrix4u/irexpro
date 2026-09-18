@@ -173,12 +173,12 @@ function OnboardingCard({ status }: { status: OnboardingStatus }) {
     <Card
       title={status.canStartTrading ? 'Trading setup ready' : 'Complete your onboarding'}
       subtitle={status.canStartTrading
-        ? 'All required steps are complete. Open AI Trading to allocate capital and turn automation on.'
+        ? 'All required steps are complete. Open AI Trading to allocate capital and start AI Trading.'
         : 'Complete these steps to enable the trading workflow.'}
       className="readiness-card"
     >
       {status.canStartTrading ? (
-        <Alert variant="success">Trading setup ready. Continue to AI Trading to allocate capital and turn automation on.</Alert>
+        <Alert variant="success">Trading setup ready. Continue to AI Trading to allocate capital and start AI Trading.</Alert>
       ) : (
         <Alert variant="info">
           Next step: <strong>{status.nextStep === 'READY' ? 'All complete' : status.nextStep.replace(/_/g, ' ').toLowerCase()}</strong>
