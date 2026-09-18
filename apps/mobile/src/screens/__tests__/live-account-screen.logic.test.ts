@@ -6,6 +6,8 @@ import type {
   LiveAccountOverviewView,
 } from "@irexpro/types";
 import {
+  activityPresentation,
+  aiExitActivityRows,
   alertSeverityColor,
   environmentBanner,
   pnlSignClass,
@@ -186,6 +188,66 @@ describe("summaryTiles (§38 derived tiles)", () => {
     expect(tiles.reconciliationPending).toBe(1);
     expect(tiles.criticalAlerts).toBe(2);
     expect(tiles.warningAlerts).toBe(1);
+  });
+});
+
+
+
+describe("AI exit activity monitoring", () => {
+  it("never overstates AI_EXIT_SIGNAL_EXECUTED as a confirmed closed position", () => {
+    const presentation = activityPresentation("AI_EXIT_SIGNAL_EXECUTED");
+
+    expect(presentation.isAiExit).toBe(true);
+    expect(presentation.label).toBe("AI exit processed");
+    expect(presentation.detail).toContain("Check Positions");
+    expect(presentation.label.toLowerCase()).not.toContain("closed");
+  });
+
+  it("makes failed and ignored exit decisions visibly distinct", () => {
+    const failed = activityPresentation("AI_EXIT_SIGNAL_FAILED");
+    const ignored = activityPresentation("AI_EXIT_SIGNAL_IGNORED");
+
+    expect(failed.tone).toBe("danger");
+    expect(failed.detail).toContain("may still be open");
+    expect(ignored.tone).toBe("warning");
+  });
+
+  it("filters only AI exit rows and orders them newest first", () => {
+    const rows = [
+      {
+        id: "a",
+        action: "AI_EXIT_SIGNAL_RECEIVED",
+        resourceType: "AiSignal",
+        resourceId: "sig-1",
+        severity: "INFO" as const,
+        createdAt: "2026-09-18T10:00:00.000Z",
+      },
+      {
+        id: "b",
+        action: "TRADE_OPENED",
+        resourceType: "Trade",
+        resourceId: "trade-1",
+        severity: "INFO" as const,
+        createdAt: "2026-09-18T11:00:00.000Z",
+      },
+      {
+        id: "c",
+        action: "AI_EXIT_SIGNAL_EXECUTED",
+        resourceType: "AiSignal",
+        resourceId: "sig-1",
+        severity: "INFO" as const,
+        createdAt: "2026-09-18T12:00:00.000Z",
+      },
+    ];
+
+    expect(aiExitActivityRows(rows).map((row) => row.id)).toEqual(["c", "a"]);
+  });
+
+  it("provides readable fallback copy for unknown audit actions", () => {
+    const presentation = activityPresentation("SOME_NEW_SERVER_ACTION");
+
+    expect(presentation.label).toBe("Some New Server Action");
+    expect(presentation.isAiExit).toBe(false);
   });
 });
 
