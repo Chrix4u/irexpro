@@ -776,7 +776,10 @@ describe('RiskService', () => {
 
     it('daily loss EXACT boundary: |loss| == 5% of the session OPENING balance rejects (SUSPENDED)', async () => {
       // 5% of 10000.00 = 500.00 exactly.
-      dailyRiskPeriod.getTodayRealisedLossExact.mockResolvedValue({ total: '-500.00', complete: true });
+      dailyRiskPeriod.getTodayRealisedLossExact.mockResolvedValue({
+        total: '-500.00',
+        complete: true,
+      });
 
       const result = await service.validateProposedTrade('user-1', validTrade());
 
@@ -789,7 +792,10 @@ describe('RiskService', () => {
     });
 
     it('daily loss just below the exact boundary approves', async () => {
-      dailyRiskPeriod.getTodayRealisedLossExact.mockResolvedValue({ total: '-499.99', complete: true });
+      dailyRiskPeriod.getTodayRealisedLossExact.mockResolvedValue({
+        total: '-499.99',
+        complete: true,
+      });
 
       const result = await service.validateProposedTrade('user-1', validTrade());
 
@@ -846,7 +852,10 @@ describe('RiskService', () => {
     // ─── Round 6 §16: autonomous session degradation on hard breaches ────
 
     it('a daily-loss breach degrades the ACTIVE session to SUSPENDED_RISK_LIMIT (§16)', async () => {
-      dailyRiskPeriod.getTodayRealisedLossExact.mockResolvedValue({ total: '-500.00', complete: true });
+      dailyRiskPeriod.getTodayRealisedLossExact.mockResolvedValue({
+        total: '-500.00',
+        complete: true,
+      });
       sessionRepo.findOne.mockResolvedValue(defaultSession());
 
       const result = await service.validateProposedTrade('user-1', validTrade());
@@ -865,7 +874,10 @@ describe('RiskService', () => {
     });
 
     it('the degradation is idempotent — no ACTIVE session means nothing to degrade', async () => {
-      dailyRiskPeriod.getTodayRealisedLossExact.mockResolvedValue({ total: '-500.00', complete: true });
+      dailyRiskPeriod.getTodayRealisedLossExact.mockResolvedValue({
+        total: '-500.00',
+        complete: true,
+      });
       // The risk pipeline's own session lookups find the session; the
       // degradation lookup finds none ACTIVE (already degraded/ended).
       let callCount = 0;
@@ -1521,7 +1533,10 @@ describe('RiskService', () => {
     });
 
     it('uses the session opening balance + exact decimals (equality = breached)', async () => {
-      dailyRiskPeriod.getTodayRealisedLossExact.mockResolvedValue({ total: '-500.00', complete: true });
+      dailyRiskPeriod.getTodayRealisedLossExact.mockResolvedValue({
+        total: '-500.00',
+        complete: true,
+      });
       expect(await service.hasDailyLossLimitBreached('user-1')).toBe(true);
     });
 
