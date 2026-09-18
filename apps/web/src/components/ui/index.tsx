@@ -7,14 +7,12 @@ import { ButtonHTMLAttributes, ComponentType, ReactNode } from 'react';
 import MobileBottomNav from '@/components/mobile-bottom-nav';
 import { AutoRevealAlert } from '@/components/ui/AutoRevealAlert';
 import {
-  AiIcon,
   DashboardIcon,
   PaymentsIcon,
   PlugIcon,
   PortfolioIcon,
   ShieldIcon,
   TradeIcon,
-  UserIcon,
   type IconProps,
 } from '@/components/icons';
 
