@@ -65,6 +65,10 @@ export function isTradeExecutionView(value: unknown): value is TradeExecutionVie
     isNullableString(value.trailingStopPips) &&
     isStatus(value.status) &&
     isNullableString(value.exitPrice) &&
+    isNullableString(value.accountCurrency) &&
+    isNullableString(value.realisedPnl) &&
+    isNullableString(value.commission) &&
+    isNullableString(value.swap) &&
     isCloseReason(value.closeReason) &&
     isNullableString(value.openedAt) &&
     isNullableString(value.closedAt) &&
@@ -75,8 +79,7 @@ export function isTradeExecutionView(value: unknown): value is TradeExecutionVie
     !('signalId' in value) &&
     !('idempotencyKey' in value) &&
     !('externalOrderId' in value) &&
-    !('brokerRejectionReason' in value) &&
-    !('realisedPnl' in value)
+    !('brokerRejectionReason' in value)
   );
 }
 
