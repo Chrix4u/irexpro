@@ -1,8 +1,21 @@
-import { BadRequestException, Body, Controller, DefaultValuePipe, Get, ParseIntPipe, Post, Query } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  DefaultValuePipe,
+  Get,
+  ParseIntPipe,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUserId } from '../../common/decorators/current-user.decorator';
 import { ExecutionReadService } from './execution-read.service';
-import { AllocationError, AllocationService, type UserCapitalAllocationState } from './services/allocation.service';
+import {
+  AllocationError,
+  AllocationService,
+  type UserCapitalAllocationState,
+} from './services/allocation.service';
 import { SetCapitalAllocationDto } from './dto/set-capital-allocation.dto';
 import {
   TradeExecutionResponseDto,
