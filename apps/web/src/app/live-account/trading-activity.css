@@ -1,0 +1,321 @@
+.trading-activity {
+  display: grid;
+  gap: clamp(1rem, 1.6vw, 1.5rem);
+  width: 100%;
+  min-width: 0;
+}
+
+.trading-activity__hero {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+  padding: clamp(1.15rem, 2vw, 1.75rem);
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 84% 12%, rgba(59, 130, 246, 0.13), transparent 35%),
+    linear-gradient(145deg, rgba(17, 24, 39, 0.97), rgba(10, 14, 26, 0.98));
+}
+
+.trading-activity__hero > div:first-child {
+  min-width: 0;
+  max-width: 840px;
+}
+
+.trading-activity__hero h1 {
+  margin: 0;
+  font-size: clamp(1.7rem, 3vw, 2.45rem);
+  letter-spacing: -0.045em;
+}
+
+.trading-activity__hero p:not(.workspace-hero__eyebrow) {
+  margin: 0.6rem 0 0;
+  color: var(--text-secondary);
+  line-height: 1.7;
+}
+
+.trading-activity__hero-actions {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.activity-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: clamp(0.8rem, 1.25vw, 1.1rem);
+}
+
+.activity-summary-grid .card {
+  display: grid;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.activity-summary__label {
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.activity-summary__value {
+  font-size: clamp(1.2rem, 2.2vw, 1.8rem);
+  line-height: 1.18;
+  letter-spacing: -0.035em;
+  overflow-wrap: anywhere;
+}
+
+.activity-summary__meta {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.activity-link {
+  color: var(--brand-light);
+  font-weight: 750;
+  font-size: 0.82rem;
+  text-decoration: none;
+}
+
+.activity-alert-strip {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.activity-main-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(340px, 0.75fr);
+  gap: clamp(1rem, 1.5vw, 1.35rem);
+  align-items: start;
+}
+
+.activity-section {
+  display: grid;
+  gap: 0.85rem;
+  min-width: 0;
+}
+
+.activity-section__head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.activity-section__head h2 {
+  margin: 0;
+  font-size: clamp(1.15rem, 2vw, 1.5rem);
+  letter-spacing: -0.025em;
+}
+
+.activity-position-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.85rem;
+}
+
+.activity-position {
+  display: grid;
+  min-width: 0;
+  gap: 0.9rem;
+  padding: 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 15px;
+  background: linear-gradient(155deg, rgba(21, 28, 44, 0.95), rgba(15, 23, 42, 0.9));
+}
+
+.activity-position__top,
+.activity-position__foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.activity-position__top > div {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.activity-position__top span,
+.activity-position__foot {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+}
+
+.activity-position__prices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.activity-position__prices > div {
+  display: grid;
+  min-width: 0;
+  gap: 0.15rem;
+  padding: 0.65rem;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.48);
+}
+
+.activity-position__prices span,
+.activity-row span,
+.activity-row time {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+}
+
+.activity-position__prices strong {
+  overflow-wrap: anywhere;
+}
+
+.activity-list {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.activity-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.35rem 0.7rem;
+  align-items: center;
+  min-width: 0;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.activity-row > div {
+  display: grid;
+  min-width: 0;
+  gap: 0.12rem;
+}
+
+.activity-row time {
+  grid-column: 1 / -1;
+}
+
+.activity-empty {
+  min-height: 150px;
+  display: grid;
+  place-content: center;
+  text-align: center;
+}
+
+.activity-bottom-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
+  gap: clamp(1rem, 1.5vw, 1.35rem);
+  align-items: stretch;
+}
+
+.activity-timeline {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.activity-timeline__item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.7rem;
+  align-items: start;
+}
+
+.activity-timeline__item > div {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.activity-timeline__item span:not(.activity-dot) {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.activity-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  margin-top: 0.38rem;
+  background: var(--text-muted);
+}
+
+.activity-dot--warning {
+  background: #f59e0b;
+}
+
+.activity-dot--critical {
+  background: #ef4444;
+}
+
+.activity-dot--info {
+  background: #2dd4bf;
+}
+
+.activity-health-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.activity-health-grid > div {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.85rem;
+  border-radius: 11px;
+  background: rgba(15, 23, 42, 0.48);
+}
+
+.activity-health-grid span {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.activity-health-grid strong {
+  font-size: 1.35rem;
+}
+
+@media (max-width: 1180px) {
+  .activity-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .activity-main-grid,
+  .activity-bottom-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 760px) {
+  .trading-activity__hero,
+  .activity-section__head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .trading-activity__hero-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .activity-summary-grid,
+  .activity-position-grid,
+  .activity-health-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .activity-position__prices {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .activity-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
