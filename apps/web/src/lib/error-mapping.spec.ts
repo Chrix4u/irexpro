@@ -95,6 +95,24 @@ describe('mapApiError', () => {
     expect(result.message).toBe('The requested action exceeds your risk limits.');
   });
 
+  it('should read typed allocation errors nested in Nest BadRequestException message', () => {
+    const error = {
+      statusCode: 400,
+      raw: {
+        statusCode: 400,
+        message: {
+          code: 'ALLOCATION_BUDGET_UNPROVABLE',
+          message: 'The broker account identity is not yet verified for capital allocation.',
+        },
+        error: 'Bad Request',
+      },
+    };
+    const result = mapApiError(error);
+    expect(result.code).toBe('ALLOCATION_BUDGET_UNPROVABLE');
+    expect(result.message).toContain('broker is connected');
+    expect(result.message).not.toBe('Something went wrong. Please try again.');
+  });
+
   it('should map network errors to a safe message', () => {
     const error = new Error('Network error contacting API: fetch failed');
     const result = mapApiError(error);
