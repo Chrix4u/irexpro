@@ -9,6 +9,7 @@ import {
 import { BrokerService } from '../broker/broker.service';
 import { RiskService } from '../risk/risk.service';
 import { ExecutionService } from '../execution/execution.service';
+import { AllocationService } from '../execution/services/allocation.service';
 import { AuditService } from '../audit/audit.service';
 import { DomainEventBus } from '../events/event-bus.service';
 import { DomainEventType } from '../events/enums/domain-event-type.enum';
@@ -20,7 +21,6 @@ import { ExecutionMode } from '../execution/interfaces/execution-authority';
 import { BrokerConnectionRequiredException } from '../execution/execution-session.resolution';
 import { OnboardingService } from '../users/onboarding.service';
 import { TradingNotReadyException } from '../../common/exceptions/trading-not-ready.exception';
-import { AllowedTradingMode } from '../risk/entities/risk-profile.entity';
 import { BrokerConnection } from '../broker/entities/broker-connection.entity';
 import { BrokerConnectionStatus, BrokerMode } from '../broker/interfaces/broker-adapter.interface';
 import { BrokerAccountSnapshotService } from '../broker/services/broker-account-snapshot.service';
@@ -35,12 +35,15 @@ import { ExactDecimal } from '../../common/utils/exact-decimal';
  * be bypassed — it runs inside the service, not just the controller.
  *
  * Mandatory gates before starting a session (ALL must pass):
- *   1. OnboardingService.canStartTrading() — profile complete + risk
- *      acknowledgement accepted + broker CONNECTED + kill switch NOT active
- *      + user ACTIVE. Returns structured 403 TRADING_NOT_READY + missingSteps.
- *   2. Broker connection is CONNECTED AND healthy (fresh health check)
- *   3. Requested trading mode is permitted by riskProfile.allowedTradingModes
- *   4. Live trading (if requested) requires explicit broker enablement
+ *   1. OnboardingService.canStartTrading() — identity/eligibility complete,
+ *      broker CONNECTED, kill switch NOT active, and user ACTIVE.
+ *   2. Broker connection is CONNECTED AND healthy (fresh health check).
+ *   3. User has explicitly allocated AI capital for the exact broker account.
+ *   4. Live trading (if requested) requires explicit broker enablement.
+ *
+ * Risk limits and mode policy are server-managed. The user's AI automation
+ * toggle is the explicit execution-mode decision; users are not required to
+ * configure a separate risk-profile mode preference.
  *
  * Subscription/payment state is intentionally NOT an access or trading gate.
  * Users may access the application and start trading without a paid plan.
@@ -68,6 +71,7 @@ export class TradingService {
     private readonly onboardingService: OnboardingService,
     @Inject(forwardRef(() => ExecutionService))
     private readonly executionService: ExecutionService,
+    private readonly allocationService: AllocationService,
     private readonly auditService: AuditService,
     private readonly eventBus: DomainEventBus,
     private readonly aiEngineClient: AiEngineClient,
@@ -75,16 +79,6 @@ export class TradingService {
     // session's opening financial state binds to (fail-closed — never `?? '0'`).
     private readonly brokerAccountSnapshotService: BrokerAccountSnapshotService,
   ) {}
-
-  /** ExecutionMode → the risk-profile AllowedTradingMode it must satisfy. */
-  private static readonly ALLOWED_MODE_BY_EXECUTION_MODE: Record<
-    ExecutionMode,
-    AllowedTradingMode
-  > = {
-    [ExecutionMode.PAPER_ONLY]: AllowedTradingMode.PAPER_ONLY,
-    [ExecutionMode.SEMI_AUTO]: AllowedTradingMode.SEMI_AUTO,
-    [ExecutionMode.FULL_AUTO]: AllowedTradingMode.FULL_AUTO,
-  };
 
   /**
    * Start a new trading session bound to the EXACT requested broker connection.
@@ -126,12 +120,20 @@ export class TradingService {
     const connection = await this.resolveConnection(userId, brokerConnectionId);
     this.assertBrokerConnectionHealthy(connection);
 
-    // ── Gate 3: Requested execution mode must be permitted by risk profile ───
-    const riskProfile = await this.riskService.getOrCreateProfile(userId);
-    this.assertRequestedModeAllowed(
-      TradingService.ALLOWED_MODE_BY_EXECUTION_MODE[executionMode],
-      riskProfile.allowedTradingModes,
+    // ── Gate 3: Explicit AI capital allocation for this exact account ───────
+    const allocation = await this.allocationService.getUserCapitalAllocationState(
+      userId,
+      connection.id,
     );
+    if (!allocation.hasAllocation || !allocation.allocatedCapital) {
+      throw new ForbiddenException(
+        'Allocate capital to AI Trading before turning automation on.',
+      );
+    }
+
+    // Risk policy is server-managed. The profile still exists because the
+    // execution engine snapshots and enforces its conservative limits.
+    const riskProfile = await this.riskService.getOrCreateProfile(userId);
 
     // ── Gate 4: Live trading requires explicit broker enablement ─────────────
     // FULL_AUTO does NOT automatically enable live broker execution. The user
@@ -248,12 +250,9 @@ export class TradingService {
       throw new NotFoundException(`Trading session ${sessionId} not found`);
     }
 
-    // Gate: the requested mode must be permitted by the risk profile.
-    const riskProfile = await this.riskService.getOrCreateProfile(userId);
-    this.assertRequestedModeAllowed(
-      TradingService.ALLOWED_MODE_BY_EXECUTION_MODE[newMode],
-      riskProfile.allowedTradingModes,
-    );
+    // The AI automation toggle is the explicit mode decision. Risk limits
+    // remain enforced by the server for every new-exposure decision.
+    await this.riskService.getOrCreateProfile(userId);
 
     // Gate: FULL_AUTO requires explicit live enablement on the session's
     // EXACT bound connection (never re-discovered).
@@ -516,34 +515,5 @@ export class TradingService {
     }
   }
 
-  private assertRequestedModeAllowed(
-    requested: AllowedTradingMode,
-    allowed: AllowedTradingMode,
-  ): void {
-    if (requested === AllowedTradingMode.PAPER_ONLY) {
-      return;
-    }
 
-    if (requested === AllowedTradingMode.SEMI_AUTO) {
-      if (allowed === AllowedTradingMode.PAPER_ONLY) {
-        throw new ForbiddenException(
-          'Your risk profile only allows PAPER_ONLY mode. ' +
-            'Update your risk profile to enable SEMI_AUTO.',
-        );
-      }
-      return;
-    }
-
-    if (requested === AllowedTradingMode.FULL_AUTO) {
-      if (allowed !== AllowedTradingMode.FULL_AUTO) {
-        throw new ForbiddenException(
-          'Your risk profile does not allow FULL_AUTO mode. ' +
-            'Update your risk profile to enable FULL_AUTO.',
-        );
-      }
-      return;
-    }
-
-    throw new ForbiddenException(`Unsupported trading mode: ${requested}`);
-  }
 }
