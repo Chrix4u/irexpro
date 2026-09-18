@@ -92,6 +92,8 @@ async function gotoAiTrader(
     failPositionRead?: boolean;
     dropFirstRiskRead?: boolean;
     onRiskRead?: () => void;
+    omitOptionalBrokerFields?: boolean;
+    emptyBrokerList?: boolean;
   } = {},
 ) {
   setupErrorCollectors(page);
@@ -136,7 +138,22 @@ async function gotoAiTrader(
         startedAt: '2026-08-31T00:30:00.000Z',
       });
     }
-    if (apiPath === 'broker/connections') return fulfill(200, mockBrokerConnections);
+    if (apiPath === 'broker/connections') {
+      if (options.emptyBrokerList) return fulfill(200, []);
+      if (options.omitOptionalBrokerFields) {
+        const broker = mockBrokerConnections[0];
+        return fulfill(200, [{
+          id: broker.id,
+          brokerId: broker.brokerId,
+          brokerName: broker.brokerName,
+          accountType: broker.accountType,
+          status: broker.status,
+          authorizationStatus: broker.authorizationStatus,
+          liveTradingEnabled: broker.liveTradingEnabled,
+        }]);
+      }
+      return fulfill(200, mockBrokerConnections);
+    }
     if (apiPath === 'execution/positions/open') {
       return options.failExecutionReads
         ? fulfill(500, { statusCode: 500, message: 'Internal Server Error' })
@@ -223,6 +240,43 @@ test.describe('AI Trader novice workflow', () => {
     assertNoExternalRequests(page);
   });
 
+
+  test('accepts a connected broker when nullable presentation fields are omitted', async ({ page }) => {
+    await gotoAiTrader(page, {
+      active: false,
+      omitOptionalBrokerFields: true,
+    });
+
+    await expect(page.getByRole('combobox', { name: 'Broker account' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Start AI Trading' })).toBeVisible();
+    await expect(page.getByText(/No broker connected/i)).toHaveCount(0);
+    await expect(page.getByRole('link', { name: /Connect broker/i })).toHaveCount(0);
+    await expect(page.getByText(/Something went wrong/i)).toHaveCount(0);
+
+    await assertNoHorizontalOverflow(page);
+    assertNoConsoleErrors(page);
+    assertNoFailedRequests(page);
+    assertNoExternalRequests(page);
+  });
+
+  test('never tells the user to reconnect when connected broker state is temporarily inconsistent', async ({ page }) => {
+    await gotoAiTrader(page, {
+      active: false,
+      emptyBrokerList: true,
+    });
+
+    await expect(page.getByText(/Broker status temporarily unavailable/i)).toBeVisible();
+    await expect(page.getByText(/Do not reconnect/i)).toBeVisible();
+    await expect(page.getByText(/No broker connected/i)).toHaveCount(0);
+    await expect(page.getByRole('link', { name: /Connect broker/i })).toHaveCount(0);
+    await expect(page.getByText(/Something went wrong/i)).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /Retry now/i })).toBeVisible();
+
+    await assertNoHorizontalOverflow(page);
+    assertNoConsoleErrors(page);
+    assertNoFailedRequests(page);
+    assertNoExternalRequests(page);
+  });
 
   test('keeps Start/Stop controls usable when activity and position reads return 5xx', async ({ page }) => {
     await gotoAiTrader(page, {
