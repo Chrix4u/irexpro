@@ -4,13 +4,11 @@ import { useEffect, useRef, useState, type ComponentType } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
-  AiIcon,
   DashboardIcon,
   PaymentsIcon,
   MoreIcon,
   PortfolioIcon,
   TradeIcon,
-  UserIcon,
   ShieldIcon,
   PlugIcon,
   LogoutIcon,
