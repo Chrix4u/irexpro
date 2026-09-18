@@ -5,6 +5,7 @@ import { BrokerService } from '../broker/broker.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { RiskService } from '../risk/risk.service';
 import { ExecutionService } from '../execution/execution.service';
+import { AllocationService } from '../execution/services/allocation.service';
 import { AuditService } from '../audit/audit.service';
 import { DomainEventBus } from '../events/event-bus.service';
 import { AiEngineClient } from '../ai-engine-client/ai-engine-client.service';
@@ -128,6 +129,21 @@ describe('TradingService — Sprint 32 Snapshot Immutability', () => {
         },
         { provide: RiskService, useValue: riskService },
         { provide: ExecutionService, useValue: executionService },
+        {
+          provide: AllocationService,
+          useValue: {
+            getUserCapitalAllocationState: jest.fn().mockResolvedValue({
+              brokerConnectionId: 'conn-1',
+              logicalAccountKey: 'paper-broker|demo|account-1',
+              accountCurrency: 'USD',
+              brokerEquity: '10050',
+              hasAllocation: true,
+              allocatedCapital: '2500',
+              committedCapital: '0',
+              availableCapital: '2500',
+            }),
+          },
+        },
         { provide: AuditService, useValue: { log: jest.fn() } },
         { provide: DomainEventBus, useValue: { publish: jest.fn() } },
         {
