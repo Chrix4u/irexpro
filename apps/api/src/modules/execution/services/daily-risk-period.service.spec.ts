@@ -395,6 +395,37 @@ describe('DailyRiskPeriodService (Round 6, 6-c — #362/#313)', () => {
       expect(result.complete).toBe(true);
     });
 
+    it('keeps two DEMO logical accounts with heterogeneous currencies strictly isolated (#43)', async () => {
+      await seedTrade(dataSource, {
+        id: 'demo-usd-loss',
+        logicalAccountKey: KEY,
+        accountCurrency: 'USD',
+        realisedPnl: '-125.25',
+      });
+      await seedTrade(dataSource, {
+        id: 'demo-eur-loss',
+        logicalAccountKey: OTHER_KEY,
+        accountCurrency: 'EUR',
+        realisedPnl: '-900.75',
+      });
+
+      const usd = await service.getTodayRealisedLossExact({
+        userId: USER,
+        logicalAccountKey: KEY,
+        accountCurrency: 'USD',
+        now: NOW,
+      });
+      const eur = await service.getTodayRealisedLossExact({
+        userId: USER,
+        logicalAccountKey: OTHER_KEY,
+        accountCurrency: 'EUR',
+        now: NOW,
+      });
+
+      expect(usd).toEqual({ total: '-125.25', complete: true });
+      expect(eur).toEqual({ total: '-900.75', complete: true });
+    });
+
     it('excludes losses of a DIFFERENT user', async () => {
       await seedTrade(dataSource, { id: 't1', realisedPnl: '-100.50' });
       await seedTrade(dataSource, { id: 't2', realisedPnl: '-999.75', userId: OTHER_USER });
