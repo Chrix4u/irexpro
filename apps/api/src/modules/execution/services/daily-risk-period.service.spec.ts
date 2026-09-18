@@ -42,7 +42,7 @@ import {
  *    day-start literal the service binds (lexicographic comparison on the
  *    mirror; semantic timestamptz comparison on production PostgreSQL).
  *
- * Matrix (15 tests):
+ * Matrix (16 tests):
  *   - utcDayKey: UTC 'YYYY-MM-DD' at both sides of the midnight boundary.
  *   - resolveDailyRiskPeriod: exact snapshot baseline + lineage persisted;
  *     same scope re-resolution returns the SAME row (budget NEVER resets,
@@ -393,6 +393,37 @@ describe('DailyRiskPeriodService (Round 6, 6-c — #362/#313)', () => {
       const result = await todayLoss();
       expect(result.total).toBe('-100.50');
       expect(result.complete).toBe(true);
+    });
+
+    it('keeps two DEMO logical accounts with heterogeneous currencies strictly isolated (#43)', async () => {
+      await seedTrade(dataSource, {
+        id: 'demo-usd-loss',
+        logicalAccountKey: KEY,
+        accountCurrency: 'USD',
+        realisedPnl: '-125.25',
+      });
+      await seedTrade(dataSource, {
+        id: 'demo-eur-loss',
+        logicalAccountKey: OTHER_KEY,
+        accountCurrency: 'EUR',
+        realisedPnl: '-900.75',
+      });
+
+      const usd = await service.getTodayRealisedLossExact({
+        userId: USER,
+        logicalAccountKey: KEY,
+        accountCurrency: 'USD',
+        now: NOW,
+      });
+      const eur = await service.getTodayRealisedLossExact({
+        userId: USER,
+        logicalAccountKey: OTHER_KEY,
+        accountCurrency: 'EUR',
+        now: NOW,
+      });
+
+      expect(usd).toEqual({ total: '-125.25', complete: true });
+      expect(eur).toEqual({ total: '-900.75', complete: true });
     });
 
     it('excludes losses of a DIFFERENT user', async () => {

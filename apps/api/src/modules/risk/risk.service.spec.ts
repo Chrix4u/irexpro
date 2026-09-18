@@ -776,7 +776,10 @@ describe('RiskService', () => {
 
     it('daily loss EXACT boundary: |loss| == 5% of the session OPENING balance rejects (SUSPENDED)', async () => {
       // 5% of 10000.00 = 500.00 exactly.
-      executionService.getTodayRealisedLoss.mockResolvedValue(-500);
+      dailyRiskPeriod.getTodayRealisedLossExact.mockResolvedValue({
+        total: '-500.00',
+        complete: true,
+      });
 
       const result = await service.validateProposedTrade('user-1', validTrade());
 
@@ -789,17 +792,70 @@ describe('RiskService', () => {
     });
 
     it('daily loss just below the exact boundary approves', async () => {
-      executionService.getTodayRealisedLoss.mockResolvedValue(-499.99);
+      dailyRiskPeriod.getTodayRealisedLossExact.mockResolvedValue({
+        total: '-499.99',
+        complete: true,
+      });
 
       const result = await service.validateProposedTrade('user-1', validTrade());
 
       expect(result.decision).toBe('APPROVED');
     });
 
+    it('scopes PAPER/DEMO loss to the active session logical account and account currency (#43)', async () => {
+      dailyRiskPeriod.getTodayRealisedLossExact.mockResolvedValue({
+        total: '-125.25',
+        complete: true,
+      });
+
+      const result = await service.validateProposedTrade('user-1', validTrade());
+
+      expect(result.decision).toBe('APPROVED');
+      expect(dailyRiskPeriod.getTodayRealisedLossExact).toHaveBeenCalledWith({
+        userId: 'user-1',
+        logicalAccountKey: 'metatrader5|MetaQuotes-Demo|12345',
+        accountCurrency: 'USD',
+      });
+      expect(executionService.getTodayRealisedLoss).not.toHaveBeenCalled();
+    });
+
+    it('fails closed for PAPER/DEMO when durable logical-account provenance is missing (#43)', async () => {
+      brokerService.findConnectionById.mockResolvedValue(
+        defaultConnection({ logicalAccountKey: null }),
+      );
+
+      const result = await service.validateProposedTrade('user-1', validTrade());
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.RISK_ENGINE_QUERY_FAILED);
+        expect(result.rejectionReason).toContain('active broker account and currency');
+      }
+      expect(dailyRiskPeriod.getTodayRealisedLossExact).not.toHaveBeenCalled();
+    });
+
+    it('fails closed for PAPER/DEMO when legacy losing rows make scoped loss incomplete (#43)', async () => {
+      dailyRiskPeriod.getTodayRealisedLossExact.mockResolvedValue({
+        total: '-100.00',
+        complete: false,
+      });
+
+      const result = await service.validateProposedTrade('user-1', validTrade());
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.RISK_ENGINE_QUERY_FAILED);
+        expect(result.rejectionReason).toContain('legacy rows');
+      }
+    });
+
     // ─── Round 6 §16: autonomous session degradation on hard breaches ────
 
     it('a daily-loss breach degrades the ACTIVE session to SUSPENDED_RISK_LIMIT (§16)', async () => {
-      executionService.getTodayRealisedLoss.mockResolvedValue(-500);
+      dailyRiskPeriod.getTodayRealisedLossExact.mockResolvedValue({
+        total: '-500.00',
+        complete: true,
+      });
       sessionRepo.findOne.mockResolvedValue(defaultSession());
 
       const result = await service.validateProposedTrade('user-1', validTrade());
@@ -818,7 +874,10 @@ describe('RiskService', () => {
     });
 
     it('the degradation is idempotent — no ACTIVE session means nothing to degrade', async () => {
-      executionService.getTodayRealisedLoss.mockResolvedValue(-500);
+      dailyRiskPeriod.getTodayRealisedLossExact.mockResolvedValue({
+        total: '-500.00',
+        complete: true,
+      });
       // The risk pipeline's own session lookups find the session; the
       // degradation lookup finds none ACTIVE (already degraded/ended).
       let callCount = 0;
@@ -839,7 +898,7 @@ describe('RiskService', () => {
     });
 
     it('REJECTS with RISK_ENGINE_QUERY_FAILED when the daily-loss query throws (no SKIPPED)', async () => {
-      executionService.getTodayRealisedLoss.mockRejectedValue(new Error('timeout'));
+      dailyRiskPeriod.getTodayRealisedLossExact.mockRejectedValue(new Error('timeout'));
 
       const result = await service.validateProposedTrade('user-1', validTrade());
 
@@ -1474,8 +1533,35 @@ describe('RiskService', () => {
     });
 
     it('uses the session opening balance + exact decimals (equality = breached)', async () => {
-      executionService.getTodayRealisedLoss.mockResolvedValue(-500);
+      dailyRiskPeriod.getTodayRealisedLossExact.mockResolvedValue({
+        total: '-500.00',
+        complete: true,
+      });
       expect(await service.hasDailyLossLimitBreached('user-1')).toBe(true);
+    });
+
+    it('uses the active session broker account + currency scope for status (#43)', async () => {
+      dailyRiskPeriod.getTodayRealisedLossExact.mockResolvedValue({
+        total: '-1.00',
+        complete: true,
+      });
+
+      expect(await service.hasDailyLossLimitBreached('user-1')).toBe(false);
+      expect(dailyRiskPeriod.getTodayRealisedLossExact).toHaveBeenCalledWith({
+        userId: 'user-1',
+        logicalAccountKey: 'metatrader5|MetaQuotes-Demo|12345',
+        accountCurrency: 'USD',
+      });
+      expect(executionService.getTodayRealisedLoss).not.toHaveBeenCalled();
+    });
+
+    it('returns false for informational status when scoped provenance is incomplete (#43)', async () => {
+      dailyRiskPeriod.getTodayRealisedLossExact.mockResolvedValue({
+        total: '-999.00',
+        complete: false,
+      });
+
+      expect(await service.hasDailyLossLimitBreached('user-1')).toBe(false);
     });
   });
 });

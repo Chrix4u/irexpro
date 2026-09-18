@@ -627,12 +627,44 @@ export class RiskService {
         }
         todayLoss = ExactDecimal.tryParse(liveLossTotal);
       } else {
-        // PAPER/DEMO: ExecutionService boundary (number → the exact decimal
-        // of its shortest round-trip string). Malformed (NaN/Infinity) fails
-        // closed below.
-        todayLoss = this.parseNumberAsDecimal(
-          await this.executionService.getTodayRealisedLoss(userId),
-        );
+        // PAPER/DEMO (#43): use the SAME durable account + currency scoped
+        // exact-decimal measurement as LIVE. A user's other demo accounts
+        // must never contribute loss in a different logical account or
+        // currency, and legacy NULL-provenance rows are never guessed into
+        // this scope.
+        const logicalAccountKey = connection.logicalAccountKey?.trim() || null;
+        const accountCurrency = accountState.currency?.trim() || null;
+        if (!logicalAccountKey || !accountCurrency) {
+          appliedRules.push('DAILY_LOSS_LIMIT:ACCOUNT_PROVENANCE_UNAVAILABLE');
+          return this.rejectAndRecord(
+            userId,
+            trade,
+            RiskRejectionCode.RISK_ENGINE_QUERY_FAILED,
+            "Today's realised loss cannot be scoped to the active broker account and currency " +
+              '— rejecting (fail-closed)',
+            contextSnapshot as RiskContextSnapshot,
+            evaluatedAt,
+          );
+        }
+
+        const exact = await this.dailyRiskPeriod.getTodayRealisedLossExact({
+          userId,
+          logicalAccountKey,
+          accountCurrency,
+        });
+        if (!exact.complete) {
+          appliedRules.push('DAILY_LOSS_LIMIT:INCOMPLETE_PROVENANCE');
+          return this.rejectAndRecord(
+            userId,
+            trade,
+            RiskRejectionCode.RISK_ENGINE_QUERY_FAILED,
+            "Today's realised loss cannot be proven complete for this account " +
+              '(legacy rows without account/currency provenance) — rejecting (fail-closed)',
+            contextSnapshot as RiskContextSnapshot,
+            evaluatedAt,
+          );
+        }
+        todayLoss = ExactDecimal.tryParse(exact.total);
       }
     } catch (err) {
       this.logger.error(
@@ -1736,9 +1768,28 @@ export class RiskService {
       const openingBalance = this.parseSessionDecimal(session.openingBalance);
       if (!openingBalance || !openingBalance.isPositive()) return false;
 
-      const todayLoss = this.parseNumberAsDecimal(
-        await this.executionService.getTodayRealisedLoss(userId),
+      // Issue #43: informational status must use the same exact,
+      // logical-account + account-currency scoped measurement as the
+      // enforcement path. Never raw-sum another broker account or currency.
+      const connection = await this.brokerService.findConnectionById(
+        session.brokerConnectionId,
+        userId,
       );
+      if (connection.status !== BrokerConnectionStatus.CONNECTED) return false;
+
+      const accountState = await this.brokerService.getBrokerAccountState(connection.id);
+      const logicalAccountKey = connection.logicalAccountKey?.trim() || null;
+      const accountCurrency = accountState?.currency?.trim() || null;
+      if (!logicalAccountKey || !accountCurrency) return false;
+
+      const exact = await this.dailyRiskPeriod.getTodayRealisedLossExact({
+        userId,
+        logicalAccountKey,
+        accountCurrency,
+      });
+      if (!exact.complete) return false;
+
+      const todayLoss = ExactDecimal.tryParse(exact.total);
       if (!todayLoss || !todayLoss.isNegative()) return false;
 
       const maxLossAmount = ExactDecimal.percentOf(
