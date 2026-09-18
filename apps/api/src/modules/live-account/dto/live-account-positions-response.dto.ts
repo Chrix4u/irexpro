@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Trade, TradeDirection, TradeStatus } from '../../execution/entities/trade.entity';
-import { BrokerMode } from '../../broker/interfaces/broker-adapter.interface';
+import { BrokerMode, type BrokerPosition } from '../../broker/interfaces/broker-adapter.interface';
 import { LiveAccountEnvironment, LivePositionStatus } from './live-account.enums';
 
 /**
@@ -42,6 +42,21 @@ export class LivePositionRowViewDto {
 
   @ApiPropertyOptional({ nullable: true, description: 'Actual fill price as a decimal string.' })
   fillPrice: string | null;
+
+  @ApiPropertyOptional({ nullable: true, example: 'USD' })
+  accountCurrency: string | null;
+
+  @ApiPropertyOptional({ nullable: true, description: 'Provider-reported current position price.' })
+  currentPrice: string | null;
+
+  @ApiPropertyOptional({ nullable: true, description: 'Provider-reported unrealized P&L in account currency.' })
+  unrealisedPnl: string | null;
+
+  @ApiPropertyOptional({ nullable: true, description: 'Provider-reported commission in account currency.' })
+  commission: string | null;
+
+  @ApiPropertyOptional({ nullable: true, description: 'Provider-reported swap/financing in account currency.' })
+  swap: string | null;
 
   @ApiProperty({ description: 'Stop-loss price as a decimal string.' })
   stopLoss: string;
@@ -91,6 +106,7 @@ export function toLivePositionRowView(
   trade: Trade,
   brokerName: string | null,
   environment: LiveAccountEnvironment,
+  providerPosition: BrokerPosition | null = null,
 ): LivePositionRowViewDto {
   return {
     id: trade.id,
@@ -102,6 +118,11 @@ export function toLivePositionRowView(
     lotSize: trade.lotSize,
     requestedEntryPrice: trade.requestedEntryPrice,
     fillPrice: trade.fillPrice ?? null,
+    accountCurrency: trade.accountCurrency ?? null,
+    currentPrice: providerPosition?.currentPrice ?? null,
+    unrealisedPnl: trade.accountCurrency ? (providerPosition?.unrealisedPnl ?? null) : null,
+    commission: trade.accountCurrency ? (providerPosition?.commission ?? trade.commission ?? null) : null,
+    swap: trade.accountCurrency ? (providerPosition?.swap ?? trade.swap ?? null) : null,
     stopLoss: trade.stopLoss,
     takeProfit: trade.takeProfit,
     trailingStopPips: trade.trailingStopPips ?? null,
