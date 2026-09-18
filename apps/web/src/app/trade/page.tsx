@@ -14,6 +14,7 @@ import { loadLiveAccountPositions } from '@/lib/live-account';
 import { loadMarketIntelligence } from '@/lib/market-intelligence';
 import { loadTraderExecutionSnapshot, type TraderExecutionSnapshot } from '@/lib/trader-execution';
 import {
+  loadTraderBrokerConnections,
   loadTraderTerminalStatus,
   type TraderTerminalStatus,
   type TerminalBrokerView,
@@ -113,6 +114,7 @@ export default function AiTradingPage() {
   const notify = useNotification();
 
   const [terminal, setTerminal] = useState<TraderTerminalStatus | null>(null);
+  const [brokerFallback, setBrokerFallback] = useState<TerminalBrokerView[]>([]);
   const [execution, setExecution] = useState<TraderExecutionSnapshot | null>(null);
   const [livePositions, setLivePositions] = useState<LivePositionRowView[]>([]);
   const [market, setMarket] = useState<MarketIntelligenceView | null>(null);
@@ -124,6 +126,7 @@ export default function AiTradingPage() {
   const [togglingAutomation, setTogglingAutomation] = useState(false);
   const [pendingAutomationAction, setPendingAutomationAction] = useState<'START' | 'STOP' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [terminalWarning, setTerminalWarning] = useState<string | null>(null);
   const [activityWarning, setActivityWarning] = useState<string | null>(null);
 
   const initializedActivity = useRef(false);
@@ -133,16 +136,23 @@ export default function AiTradingPage() {
   const automationOn =
     terminal?.session?.status === 'ACTIVE' || terminal?.session?.status === 'PAUSED';
 
-  // The ACTIVE session is the execution authority. While it exists, the
-  // workspace must stay visibly pinned to that exact broker account instead
-  // of letting another selection inherit the global "AI ON" state.
+  const availableBrokers = useMemo(
+    () => terminal?.brokers ?? brokerFallback,
+    [terminal, brokerFallback],
+  );
+
+  // Broker fallback is display-only. It prevents a terminal/risk read problem
+  // from being mislabeled as "No broker connected", but it never grants
+  // execution authority.
   const selectedBroker = useMemo(
     () =>
       terminal?.sessionBroker ??
-      terminal?.brokers.find((broker) => broker.id === selectedBrokerId) ??
+      availableBrokers.find((broker) => broker.id === selectedBrokerId) ??
       terminal?.primaryBroker ??
+      availableBrokers.find((broker) => broker.status === 'CONNECTED') ??
+      availableBrokers[0] ??
       null,
-    [terminal, selectedBrokerId],
+    [terminal, availableBrokers, selectedBrokerId],
   );
 
   const emitActivityToasts = useCallback(
@@ -199,6 +209,8 @@ export default function AiTradingPage() {
       // endpoints has a transient server-side failure.
       const status = await loadTraderTerminalStatus();
       setTerminal(status);
+      setBrokerFallback(status.brokers);
+      setTerminalWarning(null);
 
       const [executionResult, positionsResult] = await Promise.allSettled([
         loadTraderExecutionSnapshot(),
@@ -252,7 +264,26 @@ export default function AiTradingPage() {
         setMarket(null);
       }
     } catch (requestError) {
-      setError(mapApiError(requestError).message);
+      const message = mapApiError(requestError).message;
+      try {
+        const brokers = await loadTraderBrokerConnections();
+        setBrokerFallback(brokers);
+        if (brokers.length > 0) {
+          const preferred =
+            brokers.find((broker) => broker.id === selectedBrokerId) ??
+            brokers.find((broker) => broker.status === 'CONNECTED') ??
+            brokers[0];
+          setSelectedBrokerId((current) => current || preferred.id);
+          setError(null);
+          setTerminalWarning(
+            'Your broker account is connected, but AI Trading status could not be fully loaded yet. The page will retry automatically; Start/Stop stays disabled until the server confirms session and risk state.',
+          );
+        } else {
+          setError(message);
+        }
+      } catch {
+        setError(message);
+      }
     } finally {
       if (showSpinner) setLoading(false);
     }
@@ -331,6 +362,10 @@ export default function AiTradingPage() {
   function requestAutomationAction() {
     if (!selectedBroker) {
       notify.warning('Connect a broker account first.');
+      return;
+    }
+    if (!terminal) {
+      notify.warning('Your broker is connected, but AI Trading status is still reloading. Please retry in a moment.');
       return;
     }
     if (!automationOn && (!allocation?.hasAllocation || !allocation.allocatedCapital)) {
@@ -449,9 +484,10 @@ export default function AiTradingPage() {
         </section>
 
         {error && <Alert variant="error">{error}</Alert>}
-        {activityWarning && <Alert variant="warning">{activityWarning}</Alert>}
+        {terminalWarning && <Alert variant="warning">{terminalWarning}</Alert>}
+        {activityWarning && <Alert variant="warning">{activityWarning}</Alert>
 
-        {loading && !terminal ? (
+        {loading && !terminal && brokerFallback.length === 0 ? (
           <Card title="Loading AI Trader">
             <LoadingSpinner text="Loading broker, allocation and trading activity…" />
           </Card>
@@ -460,16 +496,16 @@ export default function AiTradingPage() {
             <section className="ai-control-deck" aria-label="AI trading controls">
               <Card className="ai-control-card ai-control-card--broker">
                 <span className="ai-control-card__label">Broker account</span>
-                {terminal?.brokers.length ? (
+                {availableBrokers.length ? (
                   <>
                     <select
                       className="input"
                       value={selectedBroker?.id ?? ''}
                       onChange={(event) => void handleBrokerChange(event.target.value)}
                       aria-label="Broker account"
-                      disabled={automationOn}
+                      disabled={automationOn || !terminal}
                     >
-                      {terminal.brokers.map((broker) => (
+                      {availableBrokers.map((broker) => (
                         <option key={broker.id} value={broker.id}>
                           {broker.displayName || broker.brokerName} · {broker.accountType}
                         </option>
@@ -540,7 +576,7 @@ export default function AiTradingPage() {
                   block
                   className="ai-automation-action"
                   aria-label={automationOn ? 'Stop AI Trading' : 'Start AI Trading'}
-                  disabled={!selectedBroker || togglingAutomation}
+                  disabled={!selectedBroker || !terminal || togglingAutomation}
                   onClick={requestAutomationAction}
                 >
                   {togglingAutomation
