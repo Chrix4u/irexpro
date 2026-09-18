@@ -510,14 +510,8 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
     });
   });
 
-  describe('startTradingSession — requested mode enforcement', () => {
-    it('should always allow PAPER_ONLY mode', async () => {
-      riskService.getOrCreateProfile.mockResolvedValue({
-        id: 'profile-1',
-        userId: 'user-1',
-        allowedTradingModes: AllowedTradingMode.PAPER_ONLY,
-        riskAcknowledgementAccepted: true,
-      } as never);
+  describe('startTradingSession — automation mode authority', () => {
+    it('allows PAPER_ONLY for paper/demo automation', async () => {
       const session = await service.startTradingSession(
         'user-1',
         'conn-1',
@@ -526,25 +520,12 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       expect(session.id).toBe('session-1');
     });
 
-    it('should reject SEMI_AUTO when risk profile only allows PAPER_ONLY', async () => {
+    it('does not require a separate risk-profile preference for SEMI_AUTO', async () => {
       riskService.getOrCreateProfile.mockResolvedValue({
         id: 'profile-1',
         userId: 'user-1',
         allowedTradingModes: AllowedTradingMode.PAPER_ONLY,
-        riskAcknowledgementAccepted: true,
-      } as never);
-      await expect(
-        service.startTradingSession('user-1', 'conn-1', ExecutionMode.SEMI_AUTO),
-      ).rejects.toThrow(ForbiddenException);
-      expect(executionService.startSession).not.toHaveBeenCalled();
-    });
-
-    it('should allow SEMI_AUTO when risk profile allows SEMI_AUTO', async () => {
-      riskService.getOrCreateProfile.mockResolvedValue({
-        id: 'profile-1',
-        userId: 'user-1',
-        allowedTradingModes: AllowedTradingMode.SEMI_AUTO,
-        riskAcknowledgementAccepted: true,
+        riskAcknowledgementAccepted: false,
       } as never);
       const session = await service.startTradingSession(
         'user-1',
@@ -554,25 +535,7 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       expect(session.id).toBe('session-1');
     });
 
-    it('should reject FULL_AUTO when risk profile does not allow it', async () => {
-      riskService.getOrCreateProfile.mockResolvedValue({
-        id: 'profile-1',
-        userId: 'user-1',
-        allowedTradingModes: AllowedTradingMode.SEMI_AUTO,
-        riskAcknowledgementAccepted: true,
-      } as never);
-      await expect(
-        service.startTradingSession('user-1', 'conn-1', ExecutionMode.FULL_AUTO),
-      ).rejects.toThrow(ForbiddenException);
-    });
-
-    it('should reject FULL_AUTO when live trading is not enabled on broker connection', async () => {
-      riskService.getOrCreateProfile.mockResolvedValue({
-        id: 'profile-1',
-        userId: 'user-1',
-        allowedTradingModes: AllowedTradingMode.FULL_AUTO,
-        riskAcknowledgementAccepted: true,
-      } as never);
+    it('rejects FULL_AUTO when live trading is not enabled on broker connection', async () => {
       brokerService.findConnectionById.mockResolvedValue(
         buildHealthyConnection({ liveTradingEnabled: false }),
       );
@@ -582,13 +545,7 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       expect(executionService.startSession).not.toHaveBeenCalled();
     });
 
-    it('should allow FULL_AUTO when risk profile allows it AND live trading is enabled', async () => {
-      riskService.getOrCreateProfile.mockResolvedValue({
-        id: 'profile-1',
-        userId: 'user-1',
-        allowedTradingModes: AllowedTradingMode.FULL_AUTO,
-        riskAcknowledgementAccepted: true,
-      } as never);
+    it('allows FULL_AUTO when the exact broker connection is live-enabled', async () => {
       brokerService.findConnectionById.mockResolvedValue(
         buildHealthyConnection({ liveTradingEnabled: true }),
       );
@@ -601,14 +558,16 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
     });
 
     it('should default to PAPER_ONLY when no mode is requested', async () => {
-      riskService.getOrCreateProfile.mockResolvedValue({
-        id: 'profile-1',
-        userId: 'user-1',
-        allowedTradingModes: AllowedTradingMode.PAPER_ONLY,
-        riskAcknowledgementAccepted: true,
-      } as never);
       const session = await service.startTradingSession('user-1', 'conn-1');
       expect(session.id).toBe('session-1');
+      expect(executionService.startSession).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(String),
+        expect.any(String),
+        expect.any(Object),
+        ExecutionMode.PAPER_ONLY,
+        expect.any(Object),
+      );
     });
   });
 
@@ -693,17 +652,19 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       expect(executionService.changeExecutionMode).not.toHaveBeenCalled();
     });
 
-    it('rejects a mode the risk profile does not allow (mode change cannot bypass start gates)', async () => {
+    it('does not require a separate risk-profile mode preference for an explicit mode change', async () => {
       riskService.getOrCreateProfile.mockResolvedValue({
         id: 'profile-1',
         userId: 'user-1',
         allowedTradingModes: AllowedTradingMode.PAPER_ONLY,
-        riskAcknowledgementAccepted: true,
+        riskAcknowledgementAccepted: false,
       } as never);
-      await expect(
-        service.changeExecutionMode('user-1', 'session-1', ExecutionMode.SEMI_AUTO),
-      ).rejects.toThrow(ForbiddenException);
-      expect(executionService.changeExecutionMode).not.toHaveBeenCalled();
+      await service.changeExecutionMode('user-1', 'session-1', ExecutionMode.SEMI_AUTO);
+      expect(executionService.changeExecutionMode).toHaveBeenCalledWith(
+        'user-1',
+        'session-1',
+        ExecutionMode.SEMI_AUTO,
+      );
     });
 
     it('rejects FULL_AUTO when live trading is not enabled on the session connection', async () => {
