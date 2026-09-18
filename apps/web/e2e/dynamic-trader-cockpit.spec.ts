@@ -111,7 +111,7 @@ async function gotoAiTrader(
       if (options.dropFirstRiskRead && riskReadCount === 1) {
         return route.abort('connectionreset');
       }
-      return fulfill(200, {
+      return fulfill(200, options.riskPayload ?? {
         killSwitchActive: false,
         brokerConnected: true,
         canTrade: true,
@@ -153,6 +153,16 @@ async function gotoAiTrader(
         : fulfill(200, { positions: [livePosition], total: 1 });
     }
     if (apiPath === 'execution/capital-allocation') {
+      if (options.allocationFailure) {
+        return fulfill(400, {
+          statusCode: 400,
+          message: {
+            code: 'ALLOCATION_BUDGET_UNPROVABLE',
+            message: 'The broker account identity is not yet verified for capital allocation.',
+          },
+          error: 'Bad Request',
+        });
+      }
       return fulfill(200, {
         brokerConnectionId: mockBrokerConnections[0].id,
         logicalAccountKey: 'paper-broker|demo|demo-001',
@@ -223,6 +233,64 @@ test.describe('AI Trader novice workflow', () => {
     assertNoExternalRequests(page);
   });
 
+
+  test('keeps the connected broker visible when core trading status is temporarily incompatible', async ({ page }) => {
+    await gotoAiTrader(page, {
+      active: false,
+      riskPayload: { unexpected: true },
+    });
+
+    await expect(page.getByText('Paper Trading Broker', { exact: false }).first()).toBeVisible();
+    await expect(page.getByText('No broker connected', { exact: true })).toHaveCount(0);
+    await expect(
+      page.getByText(/Your broker account is connected, but AI Trading status could not be fully loaded yet/i),
+    ).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Start AI Trading' })).toBeDisabled();
+    await expect(page.getByText(/Something went wrong\. Please try again\./i)).toHaveCount(0);
+
+    assertNoExternalRequests(page);
+  });
+
+  test('accepts numeric JSON representations for read-only risk limits', async ({ page }) => {
+    await gotoAiTrader(page, {
+      active: false,
+      riskPayload: {
+        killSwitchActive: false,
+        brokerConnected: true,
+        canTrade: true,
+        limits: {
+          maxDailyLossPercent: 5,
+          maxDrawdownPercent: 10,
+          maxOpenTrades: '3',
+          maxPositionSizeLot: 0.1,
+          allowedInstruments: 'ALL',
+          maxVolatilityScore: 0.85,
+        },
+      },
+    });
+
+    await expect(page.getByText('Paper Trading Broker', { exact: false }).first()).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Start AI Trading' })).toBeVisible();
+    await expect(page.getByText(/Something went wrong\. Please try again\./i)).toHaveCount(0);
+
+    assertNoExternalRequests(page);
+  });
+
+  test('shows an actionable allocation error without losing the connected broker', async ({ page }) => {
+    await gotoAiTrader(page, {
+      active: false,
+      allocationFailure: true,
+    });
+
+    await expect(page.getByText('Paper Trading Broker', { exact: false }).first()).toBeVisible();
+    await expect(page.getByText('No broker connected', { exact: true })).toHaveCount(0);
+    await expect(
+      page.getByText(/broker is connected, but its account identity or equity is still unavailable/i),
+    ).toBeVisible();
+    await expect(page.getByText(/Something went wrong\. Please try again\./i)).toHaveCount(0);
+
+    assertNoExternalRequests(page);
+  });
 
   test('keeps Start/Stop controls usable when activity and position reads return 5xx', async ({ page }) => {
     await gotoAiTrader(page, {
