@@ -232,9 +232,7 @@ describe('RiskService — Sprint 32 Production Hardening', () => {
         {
           provide: DailyRiskPeriodService,
           useValue: {
-            getTodayRealisedLossExact: jest
-              .fn()
-              .mockResolvedValue({ total: '0', complete: true }),
+            getTodayRealisedLossExact: jest.fn().mockResolvedValue({ total: '0', complete: true }),
           },
         },
         {
