@@ -89,8 +89,8 @@ Sprint 28 implements secure forgot-password and reset-password functionality, th
 - No account enumeration — forgot-password always returns the same generic message.
 - Password hashed with argon2 (same as register/login).
 
-**Session invalidation limitation:**
-Refresh tokens are currently stateless JWTs (no server-side session store). After a password reset, existing refresh tokens are NOT automatically revoked. This is a known limitation. A Redis-based token blacklist is a future enhancement. The password change IS effective immediately for new login attempts.
+**Session invalidation status (resolved):**
+Authentication now uses a durable `User.sessionVersion` generation. Access/refresh JWTs carry that generation, refresh rotation advances it atomically, logout/password change/password reset revoke prior sessions by advancing it, and stale/replayed refresh generations fail closed. Successful password reset revokes existing sessions transactionally with the password change; no Redis token blacklist is required for this invariant.
 
 ### Frontend changes
 
@@ -108,7 +108,9 @@ Refresh tokens are currently stateless JWTs (no server-side session store). Afte
 - Admin reset does NOT bypass security — same endpoints, same validation.
 
 **Mobile (apps/mobile):**
-- `ForgotPasswordScreen.tsx` — wired to real backend via shared API client. Accepts email or phone. Shows generic success message. Deep link reset (opening reset link in-app) is a next step.
+- `ForgotPasswordScreen.tsx` — wired to the real backend via the shared API client. Accepts email or phone and preserves the generic anti-enumeration response.
+- `ResetPasswordScreen.tsx` — native phone-code recovery is implemented: after requesting reset instructions, a phone user can enter the six-digit SMS code and a new password, using the same server-authoritative reset endpoint. Successful reset clears the local SecureStore session because the server has revoked prior session generations.
+- Email reset remains on the verified HTTPS web reset flow. Raw email reset credentials are intentionally not placed in a custom mobile URI scheme; production Universal Links/App Links require verified Apple/Android domain-signing metadata before they should carry recovery credentials.
 
 ### Email delivery (Sprint 28 amendment — real SMTP via nodemailer)
 Email reset link flow is implemented with REAL SMTP delivery via nodemailer.
@@ -134,14 +136,13 @@ Security: raw token is NEVER logged. Email body is NEVER logged. SMTP errors
 are logged without the raw token or email body. The recipient email is masked
 in logs (e***e@example.com).
 
-### Phone/SMS recovery (LIMITATION — clearly documented)
+### Phone/SMS recovery
 Phone code flow is implemented (6-digit code, 10-min expiry, max 5 attempts).
-However, all SMS providers (Twilio/Hubtel/Arkesel) are currently placeholders
-that throw `NotImplementedException`. **Phone-only users CANNOT receive reset
-codes until a live SMS provider is wired.** The API still returns the generic
-response to avoid account enumeration. When a live SMS provider is configured,
-wire it in `PasswordResetDeliveryService.deliverPhone()` via the
-`SmsProviderRegistry`. Until then, phone-only users should contact support.
+Twilio is now a live provider behind the shared `SmsProviderRegistry` when its
+required production configuration is present. Hubtel and Arkesel remain honest
+non-live placeholders and are excluded from live provider selection. The native
+mobile app now completes the phone-code reset flow end to end through
+`/auth/reset-password`.
 
 ### Tests added (34 new, 881 total across 53 suites)
 - `password-reset.service.spec.ts` (21 tests): generic response for existing/non-existing/suspended users, phone-only user recovery, prior token invalidation, hash-only storage, no raw token in audit, valid token reset, argon2 password hashing, invalid/expired/used token rejection, phone code reset, empty identifier rejection, no account enumeration, high-entropy token (64 hex chars), 6-digit phone code, 15-min email expiry, 10-min phone expiry, no sensitive data in result.
