@@ -134,7 +134,7 @@ test.describe('Sprint 46 policy-bound eligibility onboarding gate', () => {
     await page.goto('/onboarding/eligibility');
 
     await expect(page.getByRole('heading', { level: 1, name: 'Eligibility & disclosures' })).toBeVisible();
-    await expect(page.getByText('Step 2 of 4', { exact: true })).toBeVisible();
+    await expect(page.getByText('Step 2 of 3', { exact: true })).toBeVisible();
     await expect(page.getByText(/eligibility\.2026-09/)).toBeVisible();
     await expect(page.getByText(/Policy fingerprint:/)).toBeVisible();
     await expect(page.getByText(new RegExp(`${POLICY_FINGERPRINT.slice(0, 12)}…`))).toBeVisible();
@@ -227,7 +227,7 @@ test.describe('Sprint 46 policy-bound eligibility onboarding gate', () => {
     await expect(page.getByText(/something went wrong/i)).toHaveCount(0);
     await expect(page.getByText('4 disclosures outstanding', { exact: true })).toBeVisible();
     await expect(page.getByText('Disclosures complete', { exact: true })).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Continue to next step' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Continue to broker connection' })).toHaveCount(0);
 
     // The mocked HTTP 400 is the expected fail-closed behavior for this test.
     // Chromium logs the intentional rejected request as a console error, so
@@ -256,7 +256,7 @@ test.describe('Sprint 46 policy-bound eligibility onboarding gate', () => {
     for (const checkbox of await page.getByRole('checkbox').all()) {
       await expect(checkbox).toBeDisabled();
     }
-    await expect(page.getByRole('button', { name: 'Continue to next step' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Continue to broker connection' })).toHaveCount(0);
 
     assertNoConsoleErrors(page);
     assertNoFailedRequests(page);
@@ -281,7 +281,7 @@ test.describe('Sprint 46 policy-bound eligibility onboarding gate', () => {
     await expect(page.getByRole('heading', { level: 2, name: 'KYC review pending' })).toBeVisible();
     await expect(page.getByText('Disclosures complete', { exact: true })).toBeVisible();
     await expect(page.getByText('Readiness blocked', { exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Continue to next step' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Continue to broker connection' })).toHaveCount(0);
 
     assertNoConsoleErrors(page);
     assertNoFailedRequests(page);
@@ -302,7 +302,7 @@ test.describe('Sprint 46 policy-bound eligibility onboarding gate', () => {
     await page.goto('/onboarding/eligibility');
 
     await expect(page.getByRole('heading', { level: 2, name: 'Eligibility unavailable' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Continue to next step' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Continue to broker connection' })).toHaveCount(0);
     await expect(page.getByText(/frontend-safe contract verification/i)).toHaveCount(0);
 
     assertNoConsoleErrors(page);
