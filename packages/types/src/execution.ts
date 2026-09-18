@@ -55,6 +55,12 @@ export interface TradeExecutionView {
   trailingStopPips: string | null;
   status: TradeExecutionStatus;
   exitPrice: string | null;
+  /** Account currency for monetary execution economics, when proven. */
+  accountCurrency: string | null;
+  /** Server/provider-recorded realized P&L in account currency. */
+  realisedPnl: string | null;
+  commission: string | null;
+  swap: string | null;
   closeReason: TradeExecutionCloseReason | null;
   openedAt: string | null;
   closedAt: string | null;
