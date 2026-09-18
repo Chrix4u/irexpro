@@ -6,6 +6,7 @@ import { RealtimeProvider } from '@/context/realtime-context';
 import AppErrorBoundary from '@/components/AppErrorBoundary';
 import LoginScreen from './src/screens/LoginScreen';
 import ForgotPasswordScreen from './src/screens/ForgotPasswordScreen';
+import ResetPasswordScreen from './src/screens/ResetPasswordScreen';
 import AppealScreen from './src/screens/AppealScreen';
 import DashboardScreen from './src/screens/DashboardScreen';
 import AccountScreen from './src/screens/account/AccountScreen';
@@ -53,9 +54,27 @@ export default function App() {
 }
 
 function AppShell() {
-  const { user, loading, error, restoreSession } = useAuth();
+  const { user, loading, error, restoreSession, clearSession } = useAuth();
   const [tab, setTab] = useState<Tab>('dashboard');
   const [authScreen, setAuthScreen] = useState<AuthScreen>('login');
+  const [phoneResetIdentifier, setPhoneResetIdentifier] = useState<string | null>(null);
+
+  if (phoneResetIdentifier) {
+    return (
+      <SafeAreaView style={styles.shell}>
+        <ResetPasswordScreen
+          identifier={phoneResetIdentifier}
+          onBack={() => {
+            setPhoneResetIdentifier(null);
+            setAuthScreen('login');
+          }}
+          onCompleted={async () => {
+            await clearSession();
+          }}
+        />
+      </SafeAreaView>
+    );
+  }
 
   if (loading && !user) {
     return (
@@ -88,7 +107,10 @@ function AppShell() {
           </View>
         ) : null}
         {authScreen === 'forgot-password' ? (
-          <ForgotPasswordScreen onBack={() => setAuthScreen('login')} />
+          <ForgotPasswordScreen
+            onBack={() => setAuthScreen('login')}
+            onUseSmsCode={(identifier) => setPhoneResetIdentifier(identifier)}
+          />
         ) : authScreen === 'appeal' ? (
           <AppealScreen onBack={() => setAuthScreen('login')} />
         ) : (
