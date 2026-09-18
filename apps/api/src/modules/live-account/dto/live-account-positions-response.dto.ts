@@ -49,13 +49,22 @@ export class LivePositionRowViewDto {
   @ApiPropertyOptional({ nullable: true, description: 'Provider-reported current position price.' })
   currentPrice: string | null;
 
-  @ApiPropertyOptional({ nullable: true, description: 'Provider-reported unrealized P&L in account currency.' })
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Provider-reported unrealized P&L in account currency.',
+  })
   unrealisedPnl: string | null;
 
-  @ApiPropertyOptional({ nullable: true, description: 'Provider-reported commission in account currency.' })
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Provider-reported commission in account currency.',
+  })
   commission: string | null;
 
-  @ApiPropertyOptional({ nullable: true, description: 'Provider-reported swap/financing in account currency.' })
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Provider-reported swap/financing in account currency.',
+  })
   swap: string | null;
 
   @ApiProperty({ description: 'Stop-loss price as a decimal string.' })
@@ -121,7 +130,9 @@ export function toLivePositionRowView(
     accountCurrency: trade.accountCurrency ?? null,
     currentPrice: providerPosition?.currentPrice ?? null,
     unrealisedPnl: trade.accountCurrency ? (providerPosition?.unrealisedPnl ?? null) : null,
-    commission: trade.accountCurrency ? (providerPosition?.commission ?? trade.commission ?? null) : null,
+    commission: trade.accountCurrency
+      ? (providerPosition?.commission ?? trade.commission ?? null)
+      : null,
     swap: trade.accountCurrency ? (providerPosition?.swap ?? trade.swap ?? null) : null,
     stopLoss: trade.stopLoss,
     takeProfit: trade.takeProfit,
