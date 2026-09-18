@@ -47,8 +47,8 @@ test.describe('Network isolation — no external/production host is contacted', 
   });
 
   test('risk page contacts no forbidden host', async ({ page }) => {
-    await gotoAsAuthenticated(page, '/onboarding/risk', { heading: /risk management/i });
-    await expect(page.getByRole('button', { name: /save risk profile & continue/i })).toBeVisible();
+    await gotoAsAuthenticated(page, '/onboarding/risk', { heading: /ai protection/i });
+    await expect(page.getByRole('link', { name: /open ai trading/i })).toBeVisible();
     assertNoExternalRequests(page);
   });
 
@@ -60,7 +60,7 @@ test.describe('Network isolation — no external/production host is contacted', 
 
   test('dashboard contacts no forbidden host', async ({ page }) => {
     await gotoAsAuthenticated(page, '/dashboard', { heading: /welcome back/i });
-    await expect(page.getByRole('button', { name: /start paper trading session/i })).toBeVisible();
+    await expect(page.getByRole('link', { name: /open ai trading/i })).toBeVisible();
     assertNoExternalRequests(page);
   });
 
@@ -89,9 +89,9 @@ test.describe('Network isolation — no external/production host is contacted', 
     // if any matches a forbidden pattern. We additionally assert the explicit
     // host list never appears.
     assertNoExternalRequests(page);
-    // Re-run for the dashboard route (exercises the trading-session start path).
+    // Re-run for the dashboard route (exercises the AI-trading entry path).
     await page.goto('/dashboard');
-    await expect(page.getByRole('button', { name: /start paper trading session/i })).toBeVisible();
+    await expect(page.getByRole('link', { name: /open ai trading/i })).toBeVisible();
     assertNoExternalRequests(page);
     // Sanity: the forbidden host names are not even substrings of any collected
     // host (a stricter check than the regex patterns in fixtures).
