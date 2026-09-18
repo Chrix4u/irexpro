@@ -299,10 +299,13 @@ export function mapApiError(error: unknown): ApiErrorResult {
     // Keep validation/auth messages intentionally generic; they may contain
     // sensitive field-level details. Other 4xx domain errors may surface the
     // server's bounded, sanitized explanation so the toast is actionable.
-    const safeDetail =
-      code === 'VALIDATION_ERROR' || code === 'UNAUTHORIZED'
-        ? undefined
-        : extractSafeBackendMessage(error);
+    const usesCuratedCopy =
+      code === 'VALIDATION_ERROR' ||
+      code === 'UNAUTHORIZED' ||
+      code === 'ALLOCATION_BUDGET_UNPROVABLE' ||
+      code === 'ALLOCATION_CURRENCY_MISMATCH' ||
+      code === 'ALLOCATION_INSUFFICIENT_CAPITAL';
+    const safeDetail = usesCuratedCopy ? undefined : extractSafeBackendMessage(error);
     const result: ApiErrorResult = { message: safeDetail ?? baseMessage, code };
     if (code === 'TRADING_NOT_READY') {
       const steps = extractMissingSteps(error);
