@@ -55,13 +55,21 @@ export type TerminalBrokerView = Pick<
 >;
 
 export interface TraderTerminalStatus {
-  risk: RiskStatusView;
+  /** Null means the authoritative risk read could not be validated. */
+  risk: RiskStatusView | null;
+  /**
+   * Null means the server authoritatively reported no active session.
+   * When sessionStateKnown=false, null MUST NOT be interpreted as stopped.
+   */
   session: TradingSessionView | null;
+  sessionStateKnown: boolean;
   brokers: TerminalBrokerView[];
   /** Broker bound to the active session, when one exists and is visible. */
   sessionBroker: TerminalBrokerView | null;
   /** Best broker to surface when there is no active-session match. */
   primaryBroker: TerminalBrokerView | null;
+  /** Non-fatal core-read problems. Broker identity remains visible. */
+  controlWarnings: string[];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -161,27 +169,44 @@ function isActiveTradingSessionPayload(
   return value === null || isTradingSession(value);
 }
 
-function isTerminalBroker(value: unknown): value is TerminalBrokerView {
-  if (!isRecord(value)) return false;
-  return (
-    typeof value.id === 'string' &&
-    typeof value.brokerId === 'string' &&
-    typeof value.brokerName === 'string' &&
-    (value.displayName === null || typeof value.displayName === 'string') &&
-    (value.accountType === 'DEMO' || value.accountType === 'LIVE') &&
-    isBrokerStatus(value.status) &&
-    (value.authorizationStatus === undefined ||
-      isTerminalBrokerAuthorizationStatus(value.authorizationStatus)) &&
-    typeof value.liveTradingEnabled === 'boolean' &&
-    (value.providerBrokerIdentity === undefined ||
-      value.providerBrokerIdentity === null ||
-      typeof value.providerBrokerIdentity === 'string') &&
-    (value.logicalAccountKey === undefined ||
-      value.logicalAccountKey === null ||
-      typeof value.logicalAccountKey === 'string') &&
-    (value.lastHealthCheckAt === null || typeof value.lastHealthCheckAt === 'string') &&
-    (value.lastErrorMessage === null || typeof value.lastErrorMessage === 'string')
-  );
+function normalizeTerminalBroker(value: unknown): TerminalBrokerView | null {
+  if (!isRecord(value)) return null;
+
+  // Identity and connection-state fields are authoritative and mandatory.
+  if (
+    typeof value.id !== 'string' ||
+    typeof value.brokerId !== 'string' ||
+    typeof value.brokerName !== 'string' ||
+    (value.accountType !== 'DEMO' && value.accountType !== 'LIVE') ||
+    !isBrokerStatus(value.status)
+  ) {
+    return null;
+  }
+
+  // Presentation/rolling-deploy metadata may legitimately be absent on older
+  // rows or DTO versions. Missing execution metadata always degrades
+  // fail-closed instead of making a real broker disappear from the UI.
+  return {
+    id: value.id,
+    brokerId: value.brokerId,
+    brokerName: value.brokerName,
+    displayName: typeof value.displayName === 'string' ? value.displayName : null,
+    accountType: value.accountType,
+    status: value.status,
+    authorizationStatus: isTerminalBrokerAuthorizationStatus(value.authorizationStatus)
+      ? value.authorizationStatus
+      : 'NOT_CONNECTED',
+    liveTradingEnabled:
+      typeof value.liveTradingEnabled === 'boolean' ? value.liveTradingEnabled : false,
+    providerBrokerIdentity:
+      typeof value.providerBrokerIdentity === 'string' ? value.providerBrokerIdentity : null,
+    logicalAccountKey:
+      typeof value.logicalAccountKey === 'string' ? value.logicalAccountKey : null,
+    lastHealthCheckAt:
+      typeof value.lastHealthCheckAt === 'string' ? value.lastHealthCheckAt : null,
+    lastErrorMessage:
+      typeof value.lastErrorMessage === 'string' ? value.lastErrorMessage : null,
+  };
 }
 
 function isTerminalBrokerAuthorizationStatus(
@@ -212,27 +237,57 @@ function isTerminalBrokerAuthorizationStatus(
  * not match the expected frontend-safe contract.
  */
 export async function loadTraderTerminalStatus(): Promise<TraderTerminalStatus> {
-  const [riskPayload, sessionPayload, brokerPayload] = await Promise.all([
+  const [riskResult, sessionResult, brokerResult] = await Promise.allSettled([
     readWithSingleNetworkRetry(() => api.request<unknown>('/risk/status')),
     readWithSingleNetworkRetry(() => api.request<unknown>('/trading/sessions/active')),
     readWithSingleNetworkRetry(() => api.listBrokerConnections()),
   ]);
 
-  if (!isRiskStatus(riskPayload)) {
-    throw new Error('Risk status contract mismatch');
+  // Broker discovery is independently valuable UI state. If it fails at the
+  // transport/API layer we still throw, because we have no truthful broker
+  // inventory to display.
+  if (brokerResult.status === 'rejected') {
+    throw brokerResult.reason;
   }
-  if (!isActiveTradingSessionPayload(sessionPayload)) {
-    throw new Error('Trading session contract mismatch');
-  }
-  if (!Array.isArray(brokerPayload) || !brokerPayload.every(isTerminalBroker)) {
+  if (!Array.isArray(brokerResult.value)) {
     throw new Error('Broker connection contract mismatch');
   }
 
-  const session = sessionPayload;
-  const brokers: TerminalBrokerView[] = brokerPayload;
-  const sessionBroker = session
-    ? brokers.find((broker) => broker.id === session.brokerConnectionId) ?? null
-    : null;
+  const normalizedBrokers = brokerResult.value.map(normalizeTerminalBroker);
+  if (normalizedBrokers.some((broker) => broker === null)) {
+    throw new Error('Broker connection contract mismatch');
+  }
+  const brokers = normalizedBrokers as TerminalBrokerView[];
+
+  const controlWarnings: string[] = [];
+
+  let risk: RiskStatusView | null = null;
+  if (riskResult.status === 'fulfilled' && isRiskStatus(riskResult.value)) {
+    risk = riskResult.value;
+  } else {
+    controlWarnings.push(
+      'Risk protection status could not be verified. AI Trading controls are temporarily disabled.',
+    );
+  }
+
+  let session: TradingSessionView | null = null;
+  let sessionStateKnown = false;
+  if (
+    sessionResult.status === 'fulfilled' &&
+    isActiveTradingSessionPayload(sessionResult.value)
+  ) {
+    session = sessionResult.value;
+    sessionStateKnown = true;
+  } else {
+    controlWarnings.push(
+      'AI session status could not be verified. Start/Stop is temporarily disabled.',
+    );
+  }
+
+  const sessionBroker =
+    sessionStateKnown && session
+      ? brokers.find((broker) => broker.id === session.brokerConnectionId) ?? null
+      : null;
 
   const primaryBroker =
     sessionBroker ??
@@ -241,10 +296,12 @@ export async function loadTraderTerminalStatus(): Promise<TraderTerminalStatus> 
     null;
 
   return {
-    risk: riskPayload,
+    risk,
     session,
+    sessionStateKnown,
     brokers,
     sessionBroker,
     primaryBroker,
+    controlWarnings,
   };
 }
