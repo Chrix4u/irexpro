@@ -33,6 +33,18 @@ export class BrokerConnectionResponseDto {
   accountId: string | null;
 
   @Expose()
+  @ApiPropertyOptional({
+    description: 'Server-derived normalized broker identity; null when not established.',
+  })
+  providerBrokerIdentity: string | null;
+
+  @Expose()
+  @ApiPropertyOptional({
+    description: 'Server-derived canonical logical broker-account key; null for legacy/unverified rows.',
+  })
+  logicalAccountKey: string | null;
+
+  @Expose()
   @ApiProperty({ enum: BrokerMode })
   accountType: BrokerMode;
 
