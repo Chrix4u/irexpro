@@ -42,7 +42,7 @@ import {
  *    day-start literal the service binds (lexicographic comparison on the
  *    mirror; semantic timestamptz comparison on production PostgreSQL).
  *
- * Matrix (15 tests):
+ * Matrix (16 tests):
  *   - utcDayKey: UTC 'YYYY-MM-DD' at both sides of the midnight boundary.
  *   - resolveDailyRiskPeriod: exact snapshot baseline + lineage persisted;
  *     same scope re-resolution returns the SAME row (budget NEVER resets,
