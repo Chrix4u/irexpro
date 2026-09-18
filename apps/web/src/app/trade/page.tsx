@@ -200,8 +200,10 @@ export default function AiTradingPage() {
 
   const refreshTradingData = useCallback(async (showSpinner = false) => {
     if (!user) return;
-    if (showSpinner) setLoading(true);
-    setError(null);
+    if (showSpinner) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       // Core trading controls depend only on the authoritative terminal state.
       // Activity/position read models are useful context but must never make
@@ -247,12 +249,13 @@ export default function AiTradingPage() {
         try {
           const nextAllocation = await api.getCapitalAllocation(brokerId);
           setAllocation(nextAllocation);
+          setError(null);
           if (nextAllocation.allocatedCapital) {
             setAllocationAmount(nextAllocation.allocatedCapital);
           }
         } catch (requestError) {
           setAllocation(null);
-          if (showSpinner) setError(mapApiError(requestError).message);
+          setError(mapApiError(requestError).message);
         }
       } else {
         setAllocation(null);
