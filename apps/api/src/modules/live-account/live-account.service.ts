@@ -324,12 +324,44 @@ export class LiveAccountService {
       this.loadConnectionContext(userId),
     ]);
 
+    // Provider marks are best-effort read enrichment. Each connection is
+    // isolated: one unavailable provider must not erase the durable open
+    // positions from other accounts. No browser-side P&L is ever calculated.
+    const connectionIds = [...new Set(trades.map((trade) => trade.brokerConnectionId))];
+    const providerPositionsByConnection = new Map<
+      string,
+      Map<string, import('../broker/interfaces/broker-adapter.interface').BrokerPosition>
+    >();
+    await Promise.all(
+      connectionIds.map(async (connectionId) => {
+        try {
+          const snapshot = await this.brokerService.getOpenPositionsForConnection(
+            connectionId,
+            userId,
+          );
+          providerPositionsByConnection.set(
+            connectionId,
+            new Map(snapshot.positions.map((position) => [position.externalOrderId, position])),
+          );
+        } catch {
+          // Partial failure is intentional: durable position rows remain
+          // visible, with currentPrice/unrealisedPnl explicitly null.
+        }
+      }),
+    );
+
     const positions: LivePositionRowViewDto[] = trades.map((trade) => {
       const context = connectionContext.get(trade.brokerConnectionId);
+      const providerPositions = providerPositionsByConnection.get(trade.brokerConnectionId);
+      const providerPosition =
+        (trade.externalPositionId ? providerPositions?.get(trade.externalPositionId) : undefined) ??
+        (trade.externalOrderId ? providerPositions?.get(trade.externalOrderId) : undefined) ??
+        null;
       return toLivePositionRowView(
         trade,
         context?.brokerName ?? null,
         accountTypeToEnvironment(context?.accountType),
+        providerPosition,
       );
     });
 
