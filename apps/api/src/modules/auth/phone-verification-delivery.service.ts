@@ -16,11 +16,7 @@ export class PhoneVerificationDeliveryService {
     }
   }
 
-  async sendVerificationCode(
-    to: string,
-    code: string,
-    countryCode = 'ZZ',
-  ): Promise<boolean> {
+  async sendVerificationCode(to: string, code: string, countryCode = 'ZZ'): Promise<boolean> {
     if (!/^\+[1-9]\d{7,14}$/u.test(to) || !/^\d{6}$/u.test(code)) {
       return false;
     }
