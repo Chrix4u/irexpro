@@ -55,13 +55,21 @@ export type TerminalBrokerView = Pick<
 >;
 
 export interface TraderTerminalStatus {
-  risk: RiskStatusView;
+  /** Null means the authoritative risk read could not be validated. */
+  risk: RiskStatusView | null;
+  /**
+   * Null means the API authoritatively reported no active session only when
+   * sessionStateKnown=true. If false, null means unknown and MUST fail closed.
+   */
   session: TradingSessionView | null;
+  sessionStateKnown: boolean;
   brokers: TerminalBrokerView[];
   /** Broker bound to the active session, when one exists and is visible. */
   sessionBroker: TerminalBrokerView | null;
   /** Best broker to surface when there is no active-session match. */
   primaryBroker: TerminalBrokerView | null;
+  /** Non-fatal control-state failures that must not erase broker identity. */
+  controlWarnings: string[];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -232,44 +240,70 @@ function isTerminalBrokerAuthorizationStatus(
  * not match the expected frontend-safe contract.
  */
 export async function loadTraderTerminalStatus(): Promise<TraderTerminalStatus> {
-  const [riskPayload, sessionPayload, brokerPayload] = await Promise.all([
+  const [riskResult, sessionResult, brokerResult] = await Promise.allSettled([
     readWithSingleNetworkRetry(() => api.request<unknown>('/risk/status')),
     readWithSingleNetworkRetry(() => api.request<unknown>('/trading/sessions/active')),
     readWithSingleNetworkRetry(() => api.listBrokerConnections()),
   ]);
 
-  if (!isRiskStatus(riskPayload)) {
-    throw new Error('Risk status contract mismatch');
+  // Broker inventory is independently meaningful. If it cannot be loaded or
+  // validated we have no truthful broker state and the page may fail normally.
+  if (brokerResult.status === 'rejected') {
+    throw brokerResult.reason;
   }
-  if (!isActiveTradingSessionPayload(sessionPayload)) {
-    throw new Error('Trading session contract mismatch');
-  }
-  if (!Array.isArray(brokerPayload)) {
+  if (!Array.isArray(brokerResult.value)) {
     throw new Error('Broker connection contract mismatch');
   }
 
-  const brokers = brokerPayload.map(normalizeTerminalBroker);
-  if (brokers.some((broker) => broker === null)) {
+  const normalized = brokerResult.value.map(normalizeTerminalBroker);
+  if (normalized.some((broker) => broker === null)) {
     throw new Error('Broker connection contract mismatch');
   }
+  const brokers = normalized as TerminalBrokerView[];
 
-  const session = sessionPayload;
-  const normalizedBrokers = brokers as TerminalBrokerView[];
-  const sessionBroker = session
-    ? normalizedBrokers.find((broker) => broker.id === session.brokerConnectionId) ?? null
-    : null;
+  const controlWarnings: string[] = [];
+
+  let risk: RiskStatusView | null = null;
+  if (riskResult.status === 'fulfilled' && isRiskStatus(riskResult.value)) {
+    risk = riskResult.value;
+  } else {
+    controlWarnings.push(
+      'Risk protection status could not be verified. AI Trading controls are temporarily disabled.',
+    );
+  }
+
+  let session: TradingSessionView | null = null;
+  let sessionStateKnown = false;
+  if (
+    sessionResult.status === 'fulfilled' &&
+    isActiveTradingSessionPayload(sessionResult.value)
+  ) {
+    session = sessionResult.value;
+    sessionStateKnown = true;
+  } else {
+    controlWarnings.push(
+      'AI session status could not be verified. Start/Stop is temporarily disabled.',
+    );
+  }
+
+  const sessionBroker =
+    sessionStateKnown && session
+      ? brokers.find((broker) => broker.id === session.brokerConnectionId) ?? null
+      : null;
 
   const primaryBroker =
     sessionBroker ??
-    normalizedBrokers.find((broker) => broker.status === 'CONNECTED') ??
-    normalizedBrokers[0] ??
+    brokers.find((broker) => broker.status === 'CONNECTED') ??
+    brokers[0] ??
     null;
 
   return {
-    risk: riskPayload,
+    risk,
     session,
-    brokers: normalizedBrokers,
+    sessionStateKnown,
+    brokers,
     sessionBroker,
     primaryBroker,
+    controlWarnings,
   };
 }
