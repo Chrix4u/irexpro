@@ -1,9 +1,14 @@
-import { SmsMessageType } from '../notifications/interfaces/sms-provider.interface';
+import {
+  SmsDeliveryResult,
+  SmsMessageType,
+} from '../notifications/interfaces/sms-provider.interface';
 import { SmsProviderRegistry } from '../notifications/registry/sms-provider.registry';
 import { PhoneVerificationDeliveryService } from './phone-verification-delivery.service';
 
 describe('PhoneVerificationDeliveryService', () => {
-  function setup(result = { success: true, provider: 'twilio' }) {
+  function setup(
+    result: SmsDeliveryResult = { success: true, provider: 'twilio' },
+  ) {
     const provider = {
       providerId: 'twilio',
       displayName: 'Twilio',
