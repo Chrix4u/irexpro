@@ -2,11 +2,7 @@ import { NotFoundException } from '@nestjs/common';
 import type { ISmsProvider } from '../interfaces/sms-provider.interface';
 import { SmsProviderRegistry } from './sms-provider.registry';
 
-function provider(
-  providerId: string,
-  supportedCountries: string[],
-  isLive: boolean,
-): ISmsProvider {
+function provider(providerId: string, supportedCountries: string[], isLive: boolean): ISmsProvider {
   return {
     providerId,
     displayName: providerId,
