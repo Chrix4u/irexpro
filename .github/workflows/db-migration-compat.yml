@@ -1,3 +1,5 @@
+name: Database Migration Compatibility
+
 on:
   workflow_dispatch:
   push:
