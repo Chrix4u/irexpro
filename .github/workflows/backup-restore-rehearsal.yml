@@ -2,6 +2,15 @@ name: Backup Restore Rehearsal
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/api/src/database/**'
+      - 'apps/api/scripts/validate-migration-scenario-d.ts'
+      - 'pnpm-lock.yaml'
+      - 'package.json'
+      - '.github/workflows/backup-restore-rehearsal.yml'
+      - 'docs/runbooks/sprint-48-operational-security-readiness.md'
   pull_request:
     paths:
       - 'apps/api/src/database/**'
