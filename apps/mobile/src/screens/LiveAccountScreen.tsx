@@ -1,5 +1,5 @@
 /**
- * LiveAccountScreen — mobile Live Account dashboard (Sprint 51 PR-8,
+ * LiveAccountScreen — mobile Positions & Activity dashboard (Sprint 51 PR-8,
  * Directive §36/§38 — mobile phases M7/M8).
  *
  * Renders the SAME authenticated live-account surface the web consumes
@@ -175,7 +175,7 @@ export default function LiveAccountScreen() {
       }
     >
       <View style={styles.headerRow}>
-        <Text style={styles.title}>Live Account</Text>
+        <Text style={styles.title}>Positions &amp; Activity</Text>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={
@@ -226,7 +226,7 @@ export default function LiveAccountScreen() {
         style={styles.card}
         accessibilityLabel="Trading session authority"
       >
-        <Text style={styles.cardTitle}>Trading session authority</Text>
+        <Text style={styles.cardTitle}>AI Trading state</Text>
         {sessionUnavailable ? (
           <Text style={styles.muted}>
             Session state unavailable from the server — the execution mode is
@@ -397,6 +397,18 @@ export default function LiveAccountScreen() {
                   : `req ${position.requestedEntryPrice}`}
               </Text>
             </View>
+            {position.currentPrice || position.unrealisedPnl ? (
+              <View style={styles.rowBetween}>
+                <Text style={styles.mutedSmall}>
+                  {position.currentPrice ? `Current ${position.currentPrice}` : "Current price —"}
+                </Text>
+                <Text style={styles.positionPnl}>
+                  {position.unrealisedPnl && position.accountCurrency
+                    ? `${position.accountCurrency} ${position.unrealisedPnl}`
+                    : "P&L —"}
+                </Text>
+              </View>
+            ) : null}
             <View style={styles.rowBetween}>
               <Text style={styles.mutedSmall}>SL {position.stopLoss}</Text>
               <Text style={styles.mutedSmall}>TP {position.takeProfit}</Text>
@@ -592,6 +604,7 @@ const styles = StyleSheet.create({
   orderStatus: { fontSize: 10, fontWeight: "700", color: "#475569" },
   muted: { color: "#64748b", fontSize: 13 },
   mutedSmall: { color: "#94a3b8", fontSize: 11 },
+  positionPnl: { color: "#0f766e", fontSize: 11, fontWeight: "700" },
   sessionMode: { color: "#e2e8f0", fontSize: 14, fontWeight: "700" },
   sessionStatus: { fontSize: 12, fontWeight: "700" },
   filterOption: {
