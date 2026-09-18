@@ -112,9 +112,7 @@ describe('TwilioSmsProvider', () => {
         messageType: SmsMessageType.PASSWORD_RESET,
         templateData: { code: '654321' },
       }),
-    ).resolves.toEqual(
-      expect.objectContaining({ success: true, providerMessageId: 'SM456' }),
-    );
+    ).resolves.toEqual(expect.objectContaining({ success: true, providerMessageId: 'SM456' }));
 
     const options = fetchMock.mock.calls[0][1] as RequestInit;
     const body = new URLSearchParams(options.body as string);
@@ -133,7 +131,9 @@ describe('TwilioSmsProvider', () => {
         messageType: SmsMessageType.OTP,
         templateData: { code: '123456' },
       }),
-    ).resolves.toEqual(expect.objectContaining({ success: false, errorCode: 'INVALID_DESTINATION' }));
+    ).resolves.toEqual(
+      expect.objectContaining({ success: false, errorCode: 'INVALID_DESTINATION' }),
+    );
 
     await expect(
       provider.sendSms({
