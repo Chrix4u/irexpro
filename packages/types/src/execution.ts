@@ -24,6 +24,22 @@ export type TradeExecutionCloseReason =
   | 'BROKER_CLOSE'
   | 'RECONCILIATION';
 
+export interface UserCapitalAllocationView {
+  brokerConnectionId: string;
+  logicalAccountKey: string;
+  accountCurrency: string;
+  brokerEquity: string;
+  hasAllocation: boolean;
+  allocatedCapital: string | null;
+  committedCapital: string;
+  availableCapital: string | null;
+}
+
+export interface SetUserCapitalAllocationRequest {
+  brokerConnectionId: string;
+  amount: string;
+}
+
 export interface TradeExecutionView {
   id: string;
   instrument: string;
