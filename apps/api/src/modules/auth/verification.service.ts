@@ -175,7 +175,7 @@ export class VerificationService {
     if (!/^\+[1-9]\d{7,14}$/u.test(user.phone)) {
       throw new BadRequestException('Registered phone number cannot be verified');
     }
-    if (!this.phoneDelivery.isConfigured()) {
+    if (!this.phoneDelivery.isConfigured(user.countryCode ?? 'ZZ')) {
       throw new ServiceUnavailableException('Phone verification is temporarily unavailable');
     }
 
