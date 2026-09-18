@@ -42,9 +42,9 @@ describe('PhoneVerificationDeliveryService', () => {
   it('routes the verification code through the shared provider registry', async () => {
     const { service, provider, registry } = setup();
 
-    await expect(
-      service.sendVerificationCode('+233244000000', '123456', 'GH'),
-    ).resolves.toBe(true);
+    await expect(service.sendVerificationCode('+233244000000', '123456', 'GH')).resolves.toBe(
+      true,
+    );
 
     expect(registry.selectProvider).toHaveBeenCalledWith('GH');
     expect(provider.sendSms).toHaveBeenCalledWith({
@@ -59,9 +59,9 @@ describe('PhoneVerificationDeliveryService', () => {
     const { service, provider, registry } = setup();
 
     await expect(service.sendVerificationCode('0244000000', '123456', 'GH')).resolves.toBe(false);
-    await expect(
-      service.sendVerificationCode('+233244000000', '12345', 'GH'),
-    ).resolves.toBe(false);
+    await expect(service.sendVerificationCode('+233244000000', '12345', 'GH')).resolves.toBe(
+      false,
+    );
 
     expect(registry.selectProvider).not.toHaveBeenCalled();
     expect(provider.sendSms).not.toHaveBeenCalled();
@@ -75,8 +75,8 @@ describe('PhoneVerificationDeliveryService', () => {
       errorMessage: 'SMS provider rejected the request',
     });
 
-    await expect(
-      service.sendVerificationCode('+233244000000', '123456', 'GH'),
-    ).resolves.toBe(false);
+    await expect(service.sendVerificationCode('+233244000000', '123456', 'GH')).resolves.toBe(
+      false,
+    );
   });
 });
