@@ -47,6 +47,12 @@ const CODE_MESSAGES: Record<string, string> = {
   BROKER_HEALTH_STALE:
     'Your broker health check is outdated. Please test your connection.',
   RISK_LIMIT_EXCEEDED: 'The requested action exceeds your risk limits.',
+  ALLOCATION_BUDGET_UNPROVABLE:
+    'Your broker is connected, but its account identity or equity is still unavailable for AI capital allocation. Open Broker Account, refresh/reconnect the account, then retry.',
+  ALLOCATION_CURRENCY_MISMATCH:
+    'The saved AI allocation currency no longer matches the broker account currency. Review the broker account before continuing.',
+  ALLOCATION_INSUFFICIENT_CAPITAL:
+    'The requested AI allocation is not available from the broker account.',
 };
 
 /**
@@ -146,6 +152,10 @@ function extractCode(err: unknown): string | undefined {
   const responseError = asRecord(responseData?.error);
   const raw = asRecord(anyErr.raw);
   const rawError = asRecord(raw?.error);
+  const rawMessage = asRecord(raw?.message);
+  const responseMessage = asRecord(responseData?.message);
+  const dataMessage = asRecord(data?.message);
+  const bodyMessage = asRecord(body?.message);
 
   const candidates: unknown[] = [
     anyErr.code,
@@ -156,6 +166,10 @@ function extractCode(err: unknown): string | undefined {
     responseError?.code,
     raw?.code,
     rawError?.code,
+    rawMessage?.code,
+    responseMessage?.code,
+    dataMessage?.code,
+    bodyMessage?.code,
   ];
 
   for (const candidate of candidates) {
@@ -222,8 +236,16 @@ function extractSafeBackendMessage(err: unknown): string | undefined {
   const data = asRecord(anyErr.data);
   const body = asRecord(anyErr.body);
   const raw = asRecord(anyErr.raw);
+  const rawMessage = asRecord(raw?.message);
+  const responseMessage = asRecord(responseData?.message);
+  const dataMessage = asRecord(data?.message);
+  const bodyMessage = asRecord(body?.message);
 
   const candidates: unknown[] = [
+    rawMessage?.message,
+    responseMessage?.message,
+    dataMessage?.message,
+    bodyMessage?.message,
     raw?.message,
     responseData?.message,
     data?.message,
