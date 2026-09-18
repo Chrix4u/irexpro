@@ -2,6 +2,8 @@ import { Injectable, Logger, Inject } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createTransport, Transporter } from 'nodemailer';
 import { ResetChannel } from './entities/password-reset-token.entity';
+import { SmsMessageType } from '../notifications/interfaces/sms-provider.interface';
+import { SmsProviderRegistry } from '../notifications/registry/sms-provider.registry';
 
 /**
  * EmailProviderInterface — abstraction over the email delivery mechanism.
@@ -151,9 +153,9 @@ export class NodemailerEmailProvider implements EmailProviderInterface {
  *   - If SMTP send fails → safe warning (no raw token or provider exception details), returns false.
  *
  * Phone flow:
- *   - SMS providers are placeholders (throw NotImplementedException).
- *   - Logs a safe warning (no raw code or account identifier) and returns false.
- *   - Phone-only users cannot recover via SMS until a live provider is wired.
+ *   - Routes through SmsProviderRegistry; only configured live providers may be selected.
+ *   - Uses the same fixed-template, no-secret-logging discipline as phone verification.
+ *   - A provider rejection/unavailability returns false; the public API response remains generic.
  *
  * Security:
  *   - Raw token/code is NEVER logged.
@@ -168,6 +170,7 @@ export class PasswordResetDeliveryService {
   constructor(
     private configService: ConfigService,
     @Inject(EMAIL_PROVIDER) private emailProvider: EmailProviderInterface,
+    private readonly smsRegistry: SmsProviderRegistry,
   ) {}
 
   /**
@@ -179,7 +182,11 @@ export class PasswordResetDeliveryService {
     if (params.channel === ResetChannel.EMAIL) {
       return this.deliverEmail(params.destination, params.rawToken, params.userId);
     }
-    return this.deliverPhone(params.destination, params.rawToken, params.userId);
+    return this.deliverPhone(
+      params.destination,
+      params.rawToken,
+      params.countryCode ?? 'ZZ',
+    );
   }
 
   /**
@@ -228,27 +235,36 @@ export class PasswordResetDeliveryService {
   }
 
   /**
-   * Phone flow: send a 6-digit code via SMS.
-   *
-   * LIMITATION: all SMS providers (Twilio/Hubtel/Arkesel) are currently
-   * placeholders that throw NotImplementedException. Phone-only users CANNOT
-   * receive reset codes until a live SMS provider is wired. The API still
-   * returns the generic response to avoid account enumeration.
-   *
-   * When a live SMS provider is available, wire it here:
-   *   const provider = this.smsRegistry.selectProvider(countryCode);
-   *   await provider.sendSms({ to: phone, messageType: SmsMessageType.PASSWORD_RESET, templateData: { code: rawCode } });
+   * Phone flow: send the 6-digit reset code via the configured live provider.
+   * Raw codes and phone numbers are never logged by this service.
    */
-  private async deliverPhone(_phone: string, _rawCode: string, _userId: string): Promise<boolean> {
-    // Do NOT log the raw code or account identifier.
-    this.logger.warn(
-      'Password reset SMS NOT sent: SMS providers are currently placeholders ' +
-        '(Twilio/Hubtel/Arkesel throw NotImplementedException). ' +
-        'Phone reset delivery is not available. ' +
-        'Phone-only users cannot recover via SMS until a live SMS provider is configured. ' +
-        'The reset code hash is stored — the user can request a new reset once SMS is configured.',
-    );
-    return false;
+  private async deliverPhone(
+    phone: string,
+    rawCode: string,
+    countryCode: string,
+  ): Promise<boolean> {
+    if (!/^\+[1-9]\d{7,14}$/u.test(phone) || !/^\d{6}$/u.test(rawCode)) {
+      return false;
+    }
+
+    try {
+      const provider = this.smsRegistry.selectProvider(countryCode);
+      const result = await provider.sendSms({
+        to: phone,
+        messageType: SmsMessageType.PASSWORD_RESET,
+        templateData: { code: rawCode },
+        countryCode,
+      });
+      if (!result.success) {
+        this.logger.warn(
+          `Password reset SMS was not accepted (provider=${provider.providerId}, code=${result.errorCode ?? 'UNKNOWN'})`,
+        );
+      }
+      return result.success;
+    } catch {
+      this.logger.warn('Password reset SMS delivery is unavailable');
+      return false;
+    }
   }
 }
 
@@ -258,4 +274,6 @@ export interface DeliverParams {
   rawToken: string;
   userId: string;
   userName: string;
+  /** ISO 3166-1 alpha-2 when known; ZZ lets a global provider handle fallback. */
+  countryCode?: string;
 }
