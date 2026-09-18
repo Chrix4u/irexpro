@@ -30,13 +30,15 @@ export class BrokerConnectionResponseDto {
 
   @Expose()
   @ApiPropertyOptional({
-    description: 'Server-derived normalized broker identity; null when provider discovery has not supplied one.',
+    description:
+      'Server-derived normalized broker identity; null when provider discovery has not supplied one.',
   })
   providerBrokerIdentity: string | null;
 
   @Expose()
   @ApiPropertyOptional({
-    description: 'Server-derived canonical logical broker-account key; null when account identity evidence is insufficient.',
+    description:
+      'Server-derived canonical logical broker-account key; null when account identity evidence is insufficient.',
   })
   logicalAccountKey: string | null;
 
