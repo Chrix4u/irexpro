@@ -548,7 +548,29 @@ async function main(): Promise<void> {
       assert(after.display_name === before.display_name, `broker connection ${i} display_name unchanged`);
     }
 
-    // 4f. Three CHECK constraints exist via pg_constraint + semantic validation
+    // 4f. BrokerConnection entity/schema parity for OAuth refresh fencing.
+    const leaseOwnerColumn = await verifyClient.query(
+      `SELECT data_type, character_maximum_length, is_nullable
+       FROM information_schema.columns
+       WHERE table_schema = 'broker'
+         AND table_name = 'broker_connections'
+         AND column_name = 'credential_refresh_lease_owner'`,
+    );
+    assert(
+      leaseOwnerColumn.rows.length === 1,
+      'broker_connections.credential_refresh_lease_owner exists after upgrade',
+    );
+    if (leaseOwnerColumn.rows.length === 1) {
+      const col = leaseOwnerColumn.rows[0];
+      assert(col.data_type === 'character varying', 'credential_refresh_lease_owner is varchar');
+      assert(
+        Number(col.character_maximum_length) === 64,
+        'credential_refresh_lease_owner has length 64',
+      );
+      assert(col.is_nullable === 'YES', 'credential_refresh_lease_owner remains nullable');
+    }
+
+    // 4g. Three CHECK constraints exist via pg_constraint + semantic validation
     // PostgreSQL canonicalizes CHECK expressions (e.g., IN → ANY(ARRAY[])),
     // so we verify semantic components rather than exact SQL text.
     const chk1 = await getCheckConstraint(verifyClient, 'chk_trades_direction');
