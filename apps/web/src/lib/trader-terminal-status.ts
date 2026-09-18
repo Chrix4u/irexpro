@@ -211,11 +211,19 @@ function isTerminalBrokerAuthorizationStatus(
  * backend contracts exist. Runtime checks fail closed when an API response does
  * not match the expected frontend-safe contract.
  */
+export async function loadTraderBrokerConnections(): Promise<TerminalBrokerView[]> {
+  const brokerPayload = await readWithSingleNetworkRetry(() => api.listBrokerConnections());
+  if (!Array.isArray(brokerPayload) || !brokerPayload.every(isTerminalBroker)) {
+    throw new Error('Broker connection contract mismatch');
+  }
+  return brokerPayload;
+}
+
 export async function loadTraderTerminalStatus(): Promise<TraderTerminalStatus> {
-  const [riskPayload, sessionPayload, brokerPayload] = await Promise.all([
+  const [riskPayload, sessionPayload, brokers] = await Promise.all([
     readWithSingleNetworkRetry(() => api.request<unknown>('/risk/status')),
     readWithSingleNetworkRetry(() => api.request<unknown>('/trading/sessions/active')),
-    readWithSingleNetworkRetry(() => api.listBrokerConnections()),
+    loadTraderBrokerConnections(),
   ]);
 
   if (!isRiskStatus(riskPayload)) {
@@ -224,12 +232,8 @@ export async function loadTraderTerminalStatus(): Promise<TraderTerminalStatus> 
   if (!isActiveTradingSessionPayload(sessionPayload)) {
     throw new Error('Trading session contract mismatch');
   }
-  if (!Array.isArray(brokerPayload) || !brokerPayload.every(isTerminalBroker)) {
-    throw new Error('Broker connection contract mismatch');
-  }
 
   const session = sessionPayload;
-  const brokers: TerminalBrokerView[] = brokerPayload;
   const sessionBroker = session
     ? brokers.find((broker) => broker.id === session.brokerConnectionId) ?? null
     : null;

@@ -14,6 +14,7 @@ import { loadLiveAccountPositions } from '@/lib/live-account';
 import { loadMarketIntelligence } from '@/lib/market-intelligence';
 import { loadTraderExecutionSnapshot, type TraderExecutionSnapshot } from '@/lib/trader-execution';
 import {
+  loadTraderBrokerConnections,
   loadTraderTerminalStatus,
   type TraderTerminalStatus,
   type TerminalBrokerView,
@@ -113,6 +114,7 @@ export default function AiTradingPage() {
   const notify = useNotification();
 
   const [terminal, setTerminal] = useState<TraderTerminalStatus | null>(null);
+  const [recoveredBrokers, setRecoveredBrokers] = useState<TerminalBrokerView[]>([]);
   const [execution, setExecution] = useState<TraderExecutionSnapshot | null>(null);
   const [livePositions, setLivePositions] = useState<LivePositionRowView[]>([]);
   const [market, setMarket] = useState<MarketIntelligenceView | null>(null);
@@ -133,16 +135,21 @@ export default function AiTradingPage() {
   const automationOn =
     terminal?.session?.status === 'ACTIVE' || terminal?.session?.status === 'PAUSED';
 
+  const visibleBrokers = terminal?.brokers ?? recoveredBrokers;
+  const tradingControlsAvailable = terminal !== null;
+
   // The ACTIVE session is the execution authority. While it exists, the
   // workspace must stay visibly pinned to that exact broker account instead
   // of letting another selection inherit the global "AI ON" state.
   const selectedBroker = useMemo(
     () =>
       terminal?.sessionBroker ??
-      terminal?.brokers.find((broker) => broker.id === selectedBrokerId) ??
+      visibleBrokers.find((broker) => broker.id === selectedBrokerId) ??
       terminal?.primaryBroker ??
+      visibleBrokers.find((broker) => broker.status === 'CONNECTED') ??
+      visibleBrokers[0] ??
       null,
-    [terminal, selectedBrokerId],
+    [terminal, visibleBrokers, selectedBrokerId],
   );
 
   const emitActivityToasts = useCallback(
@@ -199,6 +206,7 @@ export default function AiTradingPage() {
       // endpoints has a transient server-side failure.
       const status = await loadTraderTerminalStatus();
       setTerminal(status);
+      setRecoveredBrokers(status.brokers);
 
       const [executionResult, positionsResult] = await Promise.allSettled([
         loadTraderExecutionSnapshot(),
@@ -252,7 +260,44 @@ export default function AiTradingPage() {
         setMarket(null);
       }
     } catch (requestError) {
-      setError(mapApiError(requestError).message);
+      setTerminal(null);
+
+      // Preserve the independently authoritative broker list even when the
+      // combined risk/session snapshot cannot be validated. A control-plane
+      // read failure must never be rendered as "No broker connected".
+      try {
+        const brokers = await loadTraderBrokerConnections();
+        setRecoveredBrokers(brokers);
+
+        const broker =
+          brokers.find((candidate) => candidate.id === selectedBrokerId) ??
+          brokers.find((candidate) => candidate.status === 'CONNECTED') ??
+          brokers[0] ??
+          null;
+
+        if (broker) {
+          setSelectedBrokerId((current) => current || broker.id);
+          try {
+            const nextAllocation = await api.getCapitalAllocation(broker.id);
+            setAllocation(nextAllocation);
+            if (nextAllocation.allocatedCapital) {
+              setAllocationAmount(nextAllocation.allocatedCapital);
+            }
+          } catch {
+            setAllocation(null);
+          }
+
+          setError(
+            'Your broker connection is still available, but AI Trading controls could not be loaded. Trading remains safely stopped until the control status refresh succeeds.',
+          );
+        } else {
+          setRecoveredBrokers([]);
+          setError(mapApiError(requestError).message);
+        }
+      } catch {
+        setRecoveredBrokers([]);
+        setError(mapApiError(requestError).message);
+      }
     } finally {
       if (showSpinner) setLoading(false);
     }
@@ -460,16 +505,16 @@ export default function AiTradingPage() {
             <section className="ai-control-deck" aria-label="AI trading controls">
               <Card className="ai-control-card ai-control-card--broker">
                 <span className="ai-control-card__label">Broker account</span>
-                {terminal?.brokers.length ? (
+                {visibleBrokers.length ? (
                   <>
                     <select
                       className="input"
                       value={selectedBroker?.id ?? ''}
                       onChange={(event) => void handleBrokerChange(event.target.value)}
                       aria-label="Broker account"
-                      disabled={automationOn}
+                      disabled={automationOn || !tradingControlsAvailable}
                     >
-                      {terminal.brokers.map((broker) => (
+                      {visibleBrokers.map((broker) => (
                         <option key={broker.id} value={broker.id}>
                           {broker.displayName || broker.brokerName} · {broker.accountType}
                         </option>
@@ -509,13 +554,13 @@ export default function AiTradingPage() {
                     value={allocationAmount}
                     onChange={(event) => setAllocationAmount(event.target.value)}
                     placeholder={allocation?.brokerEquity ?? '0.00'}
-                    disabled={!selectedBroker || savingAllocation || automationOn}
+                    disabled={!selectedBroker || savingAllocation || automationOn || !tradingControlsAvailable}
                   />
                   <Button
                     type="button"
                     size="sm"
                     loading={savingAllocation}
-                    disabled={!selectedBroker || automationOn}
+                    disabled={!selectedBroker || automationOn || !tradingControlsAvailable}
                     onClick={() => void saveAllocation()}
                   >
                     Allocate
@@ -540,7 +585,7 @@ export default function AiTradingPage() {
                   block
                   className="ai-automation-action"
                   aria-label={automationOn ? 'Stop AI Trading' : 'Start AI Trading'}
-                  disabled={!selectedBroker || togglingAutomation}
+                  disabled={!selectedBroker || togglingAutomation || !tradingControlsAvailable}
                   onClick={requestAutomationAction}
                 >
                   {togglingAutomation
@@ -550,7 +595,9 @@ export default function AiTradingPage() {
                 <span className="ai-control-card__hint">
                   {automationOn
                     ? 'AI Trading may open and manage positions within your allocation. Stop requires confirmation and closes AI-opened positions.'
-                    : 'AI Trading cannot create new positions while stopped.'}
+                    : !tradingControlsAvailable
+                      ? 'Broker connection retained. AI Trading controls are temporarily unavailable and fail closed.'
+                      : 'AI Trading cannot create new positions while stopped.'}
                 </span>
               </Card>
             </section>
