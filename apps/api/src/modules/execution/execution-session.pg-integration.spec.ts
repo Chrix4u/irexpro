@@ -92,6 +92,7 @@ describe('ExecutionService — session authority on real PostgreSQL (#295/#298)'
       risk_profile_snapshot jsonb,
       started_at timestamptz NOT NULL DEFAULT NOW(),
       ended_at timestamptz,
+      close_ai_positions_on_stop boolean NOT NULL DEFAULT false,
       created_at timestamptz NOT NULL DEFAULT NOW(),
       updated_at timestamptz NOT NULL DEFAULT NOW(),
       CONSTRAINT ck_trading_sessions_execution_mode

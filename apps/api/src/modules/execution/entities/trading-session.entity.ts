@@ -124,6 +124,16 @@ export class TradingSession {
   @Column({ name: 'ended_at', type: 'timestamptz', nullable: true })
   endedAt: Date | null;
 
+  /**
+   * Durable user intent: an explicit Stop AI Trading request requires every
+   * AI-opened position from this session to be flattened. Reconciliation uses
+   * this marker to catch late fills that surface after the initial stop scan.
+   *
+   * Default false preserves historical ENDED/suspended-session behavior.
+   */
+  @Column({ name: 'close_ai_positions_on_stop', type: 'boolean', default: false })
+  closeAiPositionsOnStop: boolean;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 

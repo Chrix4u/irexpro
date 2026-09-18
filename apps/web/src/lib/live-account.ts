@@ -396,6 +396,11 @@ function isLivePositionRowView(value: unknown): value is LivePositionRowView {
     isString(value.lotSize) &&
     isString(value.requestedEntryPrice) &&
     isNullableString(value.fillPrice) &&
+    isNullableString(value.accountCurrency) &&
+    isNullableString(value.currentPrice) &&
+    isNullableString(value.unrealisedPnl) &&
+    isNullableString(value.commission) &&
+    isNullableString(value.swap) &&
     isString(value.stopLoss) &&
     isString(value.takeProfit) &&
     isNullableString(value.trailingStopPips) &&

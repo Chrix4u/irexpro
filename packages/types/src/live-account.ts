@@ -277,6 +277,11 @@ export interface LivePositionRowView {
   lotSize: string;
   requestedEntryPrice: string;
   fillPrice: string | null;
+  accountCurrency: string | null;
+  currentPrice: string | null;
+  unrealisedPnl: string | null;
+  commission: string | null;
+  swap: string | null;
   stopLoss: string;
   takeProfit: string;
   trailingStopPips: string | null;

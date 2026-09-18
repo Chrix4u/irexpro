@@ -700,12 +700,14 @@ export interface BrokerTestResult {
 // ── Sprint 29: Onboarding + Risk Profile ─────────────────────────────────────
 
 /** Onboarding step identifiers. */
-export type OnboardingStep = 'PROFILE' | 'RISK_PROFILE' | 'BROKER_CONNECTION';
+export type OnboardingStep = 'PROFILE' | 'ELIGIBILITY' | 'BROKER_CONNECTION';
 export type OnboardingNextStep = OnboardingStep | 'READY';
 
 /** GET /users/me/onboarding-status response. */
 export interface OnboardingStatus {
   profileCompleted: boolean;
+  eligibilityCompleted: boolean;
+  /** Compatibility flag: risk policy is server-managed and always onboarding-complete. */
   riskProfileCompleted: boolean;
   brokerConnected: boolean;
   brokerConnectionStatus: BrokerConnectionStatus;

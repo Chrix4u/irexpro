@@ -201,6 +201,7 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
       risk_profile_snapshot JSONB,
       started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       ended_at TIMESTAMPTZ,
+      close_ai_positions_on_stop BOOLEAN NOT NULL DEFAULT false,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
     // trade_intents — mirrors migration 1754400000000 (Round 6 §2: the

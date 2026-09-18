@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/context/auth-context';
-import { DashboardShell, Card, Badge, EmptyState, LoadingSpinner, Alert, Button } from '@/components/ui';
+import { DashboardShell, Card, Badge, EmptyState, LoadingSpinner, Alert } from '@/components/ui';
 import { useNotification } from '@/hooks/useNotification';
 import { mapApiError } from '@/lib/error-mapping';
 import { api } from '@/lib/api';
@@ -135,116 +135,56 @@ export default function DashboardPage() {
 }
 
 function OnboardingCard({ status }: { status: OnboardingStatus }) {
-  const notify = useNotification();
-  const [starting, setStarting] = useState(false);
-  const [startError, setStartError] = useState<string | null>(null);
-  const [missingSteps, setMissingSteps] = useState<string[] | null>(null);
-
   const steps = [
     {
       key: 'PROFILE',
-      label: 'Complete profile',
+      label: 'Verify your profile',
       href: '/onboarding/profile',
       done: status.profileCompleted,
-      description: 'Set your name, country, timezone, currency, and trading experience.',
+      description: 'Provide the identity and regional details required for account verification.',
     },
     {
-      key: 'RISK_PROFILE',
-      label: 'Set risk limits',
-      href: '/onboarding/risk',
-      done: status.riskProfileCompleted,
-      description: 'Configure your daily loss limit, max trade risk, and acknowledge the risk disclosure.',
+      key: 'ELIGIBILITY',
+      label: 'Complete required disclosures',
+      href: '/onboarding/eligibility',
+      done: status.eligibilityCompleted,
+      description: 'Complete the server-required age, identity, jurisdiction and disclosure checks.',
     },
     {
       key: 'BROKER_CONNECTION',
       label: 'Connect broker',
       href: '/onboarding/broker',
       done: status.brokerConnected,
-      description: 'Connect a Paper Trading or MetaTrader 5 broker account.',
+      description: 'Connect the broker account the AI will trade through.',
     },
   ];
 
   function stepToHref(step: string): string {
     switch (step) {
       case 'PROFILE': return '/onboarding/profile';
-      case 'RISK_PROFILE': return '/onboarding/risk';
+      case 'ELIGIBILITY': return '/onboarding/eligibility';
       case 'BROKER_CONNECTION': return '/onboarding/broker';
       default: return '/dashboard';
     }
   }
 
-  async function handleStartTrading() {
-    setStarting(true);
-    setStartError(null);
-    setMissingSteps(null);
-    try {
-      const connections = await api.listBrokerConnections();
-      const connection = connections.find((candidate) => candidate.status === 'CONNECTED') ?? connections[0];
-      if (!connection) {
-        setStartError('Connect a broker account before starting a trading session.');
-        notify.warning('Connect a broker account first.');
-        return;
-      }
-      await api.startTradingSession({
-        brokerConnectionId: connection.id,
-        executionMode: 'PAPER_ONLY',
-      });
-      setStartError(null);
-      notify.success('Paper trading session started.');
-    } catch (err) {
-      if (err && typeof err === 'object' && 'statusCode' in err && err.statusCode === 403) {
-        const body = err as { code?: string; missingSteps?: string[]; message?: string };
-        if (body.code === 'TRADING_NOT_READY' && body.missingSteps) {
-          setMissingSteps(body.missingSteps);
-          setStartError('Your trading setup is not ready. Complete the missing steps below.');
-          notify.warning('Your trading setup is not ready.');
-        } else {
-          setStartError(body.message ?? 'Trading could not be started. Please try again.');
-          notify.error(mapApiError(err).message);
-        }
-      } else {
-        setStartError(err instanceof Error && !err.message.includes('fetch')
-          ? err.message
-          : 'Unable to start trading. Please try again or contact support.');
-        notify.error(mapApiError(err).message);
-      }
-    } finally {
-      setStarting(false);
-    }
-  }
 
   return (
     <Card
       title={status.canStartTrading ? 'Trading setup ready' : 'Complete your onboarding'}
       subtitle={status.canStartTrading
-        ? 'All required steps are complete. Start a paper session when you are ready.'
+        ? 'All required steps are complete. Open AI Trading to allocate capital and start AI Trading.'
         : 'Complete these steps to enable the trading workflow.'}
       className="readiness-card"
     >
       {status.canStartTrading ? (
-        <Alert variant="success">Trading setup ready. Start a paper trading session below when you are ready.</Alert>
+        <Alert variant="success">Trading setup ready. Continue to AI Trading to allocate capital and start AI Trading.</Alert>
       ) : (
         <Alert variant="info">
           Next step: <strong>{status.nextStep === 'READY' ? 'All complete' : status.nextStep.replace(/_/g, ' ').toLowerCase()}</strong>
         </Alert>
       )}
 
-      {startError && (
-        <Alert variant="warning">
-          <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 600, marginBottom: 'var(--space-1)' }}>{startError}</div>
-            {missingSteps && missingSteps.length > 0 && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)', marginTop: 'var(--space-2)' }}>
-                {missingSteps.map((step) => (
-                  <Link key={step} href={stepToHref(step)} className="text-sm" style={{ textDecoration: 'underline' }}>
-                    Complete {formatEnumLabel(step)} →
-                  </Link>
-                ))}
-              </div>
-            )}
-          </div>
-        </Alert>
-      )}
 
       <div className="checklist" role="list">
         {steps.map((step) => (
@@ -269,9 +209,9 @@ function OnboardingCard({ status }: { status: OnboardingStatus }) {
       </div>
 
       {status.canStartTrading && (
-        <Button onClick={handleStartTrading} disabled={starting} loading={starting} variant="primary" size="lg" block>
-          {starting ? 'Starting…' : 'Start Paper Trading Session'}
-        </Button>
+        <Link href="/trade" className="btn btn--primary btn--lg btn--block">
+          Open AI Trading
+        </Link>
       )}
     </Card>
   );

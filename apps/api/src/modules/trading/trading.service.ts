@@ -9,6 +9,7 @@ import {
 import { BrokerService } from '../broker/broker.service';
 import { RiskService } from '../risk/risk.service';
 import { ExecutionService } from '../execution/execution.service';
+import { AllocationService } from '../execution/services/allocation.service';
 import { AuditService } from '../audit/audit.service';
 import { DomainEventBus } from '../events/event-bus.service';
 import { DomainEventType } from '../events/enums/domain-event-type.enum';
@@ -20,12 +21,25 @@ import { ExecutionMode } from '../execution/interfaces/execution-authority';
 import { BrokerConnectionRequiredException } from '../execution/execution-session.resolution';
 import { OnboardingService } from '../users/onboarding.service';
 import { TradingNotReadyException } from '../../common/exceptions/trading-not-ready.exception';
-import { AllowedTradingMode } from '../risk/entities/risk-profile.entity';
 import { BrokerConnection } from '../broker/entities/broker-connection.entity';
 import { BrokerConnectionStatus, BrokerMode } from '../broker/interfaces/broker-adapter.interface';
 import { BrokerAccountSnapshotService } from '../broker/services/broker-account-snapshot.service';
 import { BrokerAccountSnapshot } from '../broker/entities/broker-account-snapshot.entity';
 import { ExactDecimal } from '../../common/utils/exact-decimal';
+import { TradeCloseReason } from '../execution/entities/trade.entity';
+
+export type AiStopPositionCloseState = 'COMPLETE' | 'PARTIAL' | 'UNKNOWN';
+
+export interface StopTradingSessionResult {
+  message: string;
+  sessionId: string;
+  positionCloseSummary: {
+    state: AiStopPositionCloseState;
+    targetCount: number | null;
+    closedCount: number;
+    unresolvedCount: number | null;
+  };
+}
 
 /**
  * TradingService — Trading session lifecycle management.
@@ -35,12 +49,15 @@ import { ExactDecimal } from '../../common/utils/exact-decimal';
  * be bypassed — it runs inside the service, not just the controller.
  *
  * Mandatory gates before starting a session (ALL must pass):
- *   1. OnboardingService.canStartTrading() — profile complete + risk
- *      acknowledgement accepted + broker CONNECTED + kill switch NOT active
- *      + user ACTIVE. Returns structured 403 TRADING_NOT_READY + missingSteps.
- *   2. Broker connection is CONNECTED AND healthy (fresh health check)
- *   3. Requested trading mode is permitted by riskProfile.allowedTradingModes
- *   4. Live trading (if requested) requires explicit broker enablement
+ *   1. OnboardingService.canStartTrading() — identity/eligibility complete,
+ *      broker CONNECTED, kill switch NOT active, and user ACTIVE.
+ *   2. Broker connection is CONNECTED AND healthy (fresh health check).
+ *   3. User has explicitly allocated AI capital for the exact broker account.
+ *   4. Live trading (if requested) requires explicit broker enablement.
+ *
+ * Risk limits and mode policy are server-managed. The user's AI automation
+ * toggle is the explicit execution-mode decision; users are not required to
+ * configure a separate risk-profile mode preference.
  *
  * Subscription/payment state is intentionally NOT an access or trading gate.
  * Users may access the application and start trading without a paid plan.
@@ -68,6 +85,7 @@ export class TradingService {
     private readonly onboardingService: OnboardingService,
     @Inject(forwardRef(() => ExecutionService))
     private readonly executionService: ExecutionService,
+    private readonly allocationService: AllocationService,
     private readonly auditService: AuditService,
     private readonly eventBus: DomainEventBus,
     private readonly aiEngineClient: AiEngineClient,
@@ -75,16 +93,6 @@ export class TradingService {
     // session's opening financial state binds to (fail-closed — never `?? '0'`).
     private readonly brokerAccountSnapshotService: BrokerAccountSnapshotService,
   ) {}
-
-  /** ExecutionMode → the risk-profile AllowedTradingMode it must satisfy. */
-  private static readonly ALLOWED_MODE_BY_EXECUTION_MODE: Record<
-    ExecutionMode,
-    AllowedTradingMode
-  > = {
-    [ExecutionMode.PAPER_ONLY]: AllowedTradingMode.PAPER_ONLY,
-    [ExecutionMode.SEMI_AUTO]: AllowedTradingMode.SEMI_AUTO,
-    [ExecutionMode.FULL_AUTO]: AllowedTradingMode.FULL_AUTO,
-  };
 
   /**
    * Start a new trading session bound to the EXACT requested broker connection.
@@ -126,12 +134,18 @@ export class TradingService {
     const connection = await this.resolveConnection(userId, brokerConnectionId);
     this.assertBrokerConnectionHealthy(connection);
 
-    // ── Gate 3: Requested execution mode must be permitted by risk profile ───
-    const riskProfile = await this.riskService.getOrCreateProfile(userId);
-    this.assertRequestedModeAllowed(
-      TradingService.ALLOWED_MODE_BY_EXECUTION_MODE[executionMode],
-      riskProfile.allowedTradingModes,
+    // ── Gate 3: Explicit AI capital allocation for this exact account ───────
+    const allocation = await this.allocationService.getUserCapitalAllocationState(
+      userId,
+      connection.id,
     );
+    if (!allocation.hasAllocation || !allocation.allocatedCapital) {
+      throw new ForbiddenException('Allocate capital to AI Trading before turning automation on.');
+    }
+
+    // Risk policy is server-managed. The profile still exists because the
+    // execution engine snapshots and enforces its conservative limits.
+    const riskProfile = await this.riskService.getOrCreateProfile(userId);
 
     // ── Gate 4: Live trading requires explicit broker enablement ─────────────
     // FULL_AUTO does NOT automatically enable live broker execution. The user
@@ -248,12 +262,9 @@ export class TradingService {
       throw new NotFoundException(`Trading session ${sessionId} not found`);
     }
 
-    // Gate: the requested mode must be permitted by the risk profile.
-    const riskProfile = await this.riskService.getOrCreateProfile(userId);
-    this.assertRequestedModeAllowed(
-      TradingService.ALLOWED_MODE_BY_EXECUTION_MODE[newMode],
-      riskProfile.allowedTradingModes,
-    );
+    // The AI automation toggle is the explicit mode decision. Risk limits
+    // remain enforced by the server for every new-exposure decision.
+    await this.riskService.getOrCreateProfile(userId);
 
     // Gate: FULL_AUTO requires explicit live enablement on the session's
     // EXACT bound connection (never re-discovered).
@@ -272,8 +283,19 @@ export class TradingService {
     return this.executionService.changeExecutionMode(userId, sessionId, newMode);
   }
 
-  /** Stop the user's active trading session. */
-  async stopTradingSession(userId: string, sessionId: string): Promise<void> {
+  /**
+   * Stop the user's active AI trading session AND flatten AI-opened positions.
+   *
+   * Ordering is safety-critical: end the session first so outstanding
+   * authority is invalidated and no new AI exposure can be committed, then
+   * request closure of every currently OPEN position with durable iRexPro AI
+   * provenance. Provider refusals/ambiguous outcomes are reported honestly
+   * rather than being presented as closed.
+   *
+   * A close failure never reactivates the session. New exposure stays disabled
+   * while unresolved broker truth remains visible for reconciliation.
+   */
+  async stopTradingSession(userId: string, sessionId: string): Promise<StopTradingSessionResult> {
     const session = await this.executionService.getActiveSession(userId);
 
     if (!session) {
@@ -284,15 +306,62 @@ export class TradingService {
       throw new ForbiddenException('Session ID does not match your active session.');
     }
 
-    await this.executionService.endSession(userId, TradingSessionStatus.ENDED);
+    // Stop NEW exposure first and durably mark this session for late-fill
+    // flattening by the reconciliation worker.
+    await this.executionService.endSession(userId, TradingSessionStatus.ENDED, {
+      closeAiPositionsOnStop: true,
+      expectedSessionId: session.id,
+    });
+
+    let closeState: AiStopPositionCloseState = 'COMPLETE';
+    let targetCount: number | null = 0;
+    let closedCount = 0;
+    let unresolvedCount: number | null = 0;
+
+    try {
+      const closeResults = await this.executionService.closeAllAiOpenPositions(
+        userId,
+        TradeCloseReason.MANUAL_CLOSE,
+      );
+      targetCount = closeResults.length;
+      closedCount = closeResults.filter((result) => result.closed).length;
+      unresolvedCount = closeResults.length - closedCount;
+      closeState = unresolvedCount === 0 ? 'COMPLETE' : 'PARTIAL';
+    } catch (err) {
+      closeState = 'UNKNOWN';
+      targetCount = null;
+      unresolvedCount = null;
+      this.logger.error(
+        'AI Trading stopped but AI-position closure could not be verified for user ' +
+          userId +
+          ': ' +
+          (err as Error).message,
+      );
+    }
+
+    const positionCloseSummary = {
+      state: closeState,
+      targetCount,
+      closedCount,
+      unresolvedCount,
+    };
 
     await this.auditService.log({
       actorUserId: userId,
       action: AuditAction.AI_TRADING_DISABLED,
-      severity: AuditSeverity.INFO,
+      severity:
+        closeState === 'COMPLETE'
+          ? AuditSeverity.INFO
+          : closeState === 'PARTIAL'
+            ? AuditSeverity.WARNING
+            : AuditSeverity.CRITICAL,
       resourceType: 'TradingSession',
       resourceId: sessionId,
-      metadata: { sessionId, reason: 'user-requested-stop' },
+      metadata: {
+        sessionId,
+        reason: 'user-requested-stop-and-flatten',
+        positionCloseSummary,
+      },
     });
 
     this.eventBus.publish(DomainEventType.TRADING_SESSION_STOPPED, userId, {
@@ -301,15 +370,48 @@ export class TradingService {
       brokerConnectionId: session.brokerConnectionId,
       status: TradingSessionStatus.ENDED,
       endedAt: new Date(),
+      positionCloseSummary,
     });
 
-    this.logger.log(`Trading session stopped: userId=${userId} sessionId=${sessionId}`);
+    this.logger.log(
+      'Trading session stopped: userId=' +
+        userId +
+        ' sessionId=' +
+        sessionId +
+        ' closeState=' +
+        closeState +
+        ' closed=' +
+        closedCount +
+        '/' +
+        (targetCount ?? 'unknown'),
+    );
 
     void this.aiEngineClient
       .notifySessionStopped({ tradingSessionId: sessionId })
       .catch((err: Error) =>
-        this.logger.warn(`AI engine stop notification failed session=${sessionId}: ${err.message}`),
+        this.logger.warn(
+          'AI engine stop notification failed session=' + sessionId + ': ' + err.message,
+        ),
       );
+
+    const message =
+      closeState === 'UNKNOWN'
+        ? 'AI Trading stopped, but AI position closure could not be verified. Check Positions & Activity.'
+        : closeState === 'PARTIAL'
+          ? 'AI Trading stopped. ' +
+            closedCount +
+            ' of ' +
+            targetCount +
+            ' AI-opened positions were confirmed closed; ' +
+            unresolvedCount +
+            ' require broker/reconciliation follow-up.'
+          : targetCount === 0
+            ? 'AI Trading stopped. No AI-opened positions were open.'
+            : 'AI Trading stopped and all ' +
+              closedCount +
+              ' AI-opened positions were confirmed closed.';
+
+    return { message, sessionId, positionCloseSummary };
   }
 
   async getActiveSession(userId: string): Promise<TradingSession | null> {
@@ -514,36 +616,5 @@ export class TradingService {
         'Broker health check is stale. Test your broker connection before starting a session.',
       );
     }
-  }
-
-  private assertRequestedModeAllowed(
-    requested: AllowedTradingMode,
-    allowed: AllowedTradingMode,
-  ): void {
-    if (requested === AllowedTradingMode.PAPER_ONLY) {
-      return;
-    }
-
-    if (requested === AllowedTradingMode.SEMI_AUTO) {
-      if (allowed === AllowedTradingMode.PAPER_ONLY) {
-        throw new ForbiddenException(
-          'Your risk profile only allows PAPER_ONLY mode. ' +
-            'Update your risk profile to enable SEMI_AUTO.',
-        );
-      }
-      return;
-    }
-
-    if (requested === AllowedTradingMode.FULL_AUTO) {
-      if (allowed !== AllowedTradingMode.FULL_AUTO) {
-        throw new ForbiddenException(
-          'Your risk profile does not allow FULL_AUTO mode. ' +
-            'Update your risk profile to enable FULL_AUTO.',
-        );
-      }
-      return;
-    }
-
-    throw new ForbiddenException(`Unsupported trading mode: ${requested}`);
   }
 }

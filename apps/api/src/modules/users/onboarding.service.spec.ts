@@ -149,7 +149,7 @@ describe('OnboardingService readiness gate', () => {
     };
   }
 
-  it('returns all four steps incomplete for a new user', async () => {
+  it('returns the three required setup steps incomplete for a new user', async () => {
     mockUserRepo.findOne.mockResolvedValue({
       id: 'new-user',
       status: UserStatus.ACTIVE,
@@ -172,12 +172,7 @@ describe('OnboardingService readiness gate', () => {
     expect(status.profileCompleted).toBe(false);
     expect(status.eligibilityCompleted).toBe(false);
     expect(status.canStartTrading).toBe(false);
-    expect(status.missingSteps).toEqual([
-      'PROFILE',
-      'ELIGIBILITY',
-      'RISK_PROFILE',
-      'BROKER_CONNECTION',
-    ]);
+    expect(status.missingSteps).toEqual(['PROFILE', 'ELIGIBILITY', 'BROKER_CONNECTION']);
     expect(status.nextStep).toBe('PROFILE');
   });
 
@@ -233,7 +228,7 @@ describe('OnboardingService readiness gate', () => {
     );
   });
 
-  it('blocks readiness when the risk acknowledgement is missing', async () => {
+  it('does not require a user-managed risk acknowledgement for beginner readiness', async () => {
     const risk = completeRisk();
     risk.riskAcknowledgementAccepted = false;
     mockUserRepo.findOne.mockResolvedValue(completeUser());
@@ -242,8 +237,9 @@ describe('OnboardingService readiness gate', () => {
 
     const status = await service.getOnboardingStatus('user-complete');
 
-    expect(status.canStartTrading).toBe(false);
-    expect(status.missingSteps).toEqual(['RISK_PROFILE']);
+    expect(status.riskProfileCompleted).toBe(true);
+    expect(status.canStartTrading).toBe(true);
+    expect(status.missingSteps).toEqual([]);
   });
 
   it('blocks readiness when the broker is unavailable', async () => {
@@ -325,12 +321,7 @@ describe('OnboardingService readiness gate', () => {
 
     expect(status.eligibilityCompleted).toBe(false);
     expect(status.canStartTrading).toBe(false);
-    expect(status.missingSteps).toEqual([
-      'PROFILE',
-      'ELIGIBILITY',
-      'RISK_PROFILE',
-      'BROKER_CONNECTION',
-    ]);
+    expect(status.missingSteps).toEqual(['PROFILE', 'ELIGIBILITY', 'BROKER_CONNECTION']);
     expect(mockEligibilityService.getStatus).not.toHaveBeenCalled();
   });
 
@@ -418,30 +409,22 @@ describe('OnboardingService readiness gate', () => {
     }
   });
 
-  it('§1d: risk/broker blockers — RISK_ACK_REQUIRED, RISK_PROFILE_MISSING, BROKER_DISCONNECTED, CREDENTIALS_INVALID, KILL_SWITCH_ACTIVE', async () => {
-    // No risk profile at all
+  it('§1d: broker and kill-switch blockers remain fail-closed while risk defaults are platform-managed', async () => {
     mockUserRepo.findOne.mockResolvedValue(completeUser());
     mockRiskProfileRepo.findOne.mockResolvedValue(null);
     mockBrokerQb.getOne.mockResolvedValue(null);
     mockEligibilityService.getStatus.mockResolvedValue(eligibleStatus);
 
     let status = await service.getOnboardingStatus('user-complete');
-    expect(status.blockedReasons).toEqual(
-      expect.arrayContaining(['RISK_PROFILE_MISSING', 'BROKER_DISCONNECTED']),
-    );
+    expect(status.blockedReasons).toContain('BROKER_DISCONNECTED');
+    expect(status.blockedReasons).not.toContain('RISK_PROFILE_MISSING');
 
-    // Risk profile without acknowledgement + connected broker with INVALID creds
-    mockRiskProfileRepo.findOne.mockResolvedValue({
-      ...completeRisk(),
-      riskAcknowledgementAccepted: false,
-    });
+    mockRiskProfileRepo.findOne.mockResolvedValue(null);
     mockBrokerQb.getOne.mockResolvedValue({ ...connectedBroker(), credentialStatus: 'INVALID' });
     status = await service.getOnboardingStatus('user-complete');
-    expect(status.blockedReasons).toEqual(
-      expect.arrayContaining(['RISK_ACK_REQUIRED', 'CREDENTIALS_INVALID']),
-    );
+    expect(status.blockedReasons).toContain('CREDENTIALS_INVALID');
+    expect(status.blockedReasons).not.toContain('RISK_ACK_REQUIRED');
 
-    // Kill switch
     mockRiskProfileRepo.findOne.mockResolvedValue({ ...completeRisk(), killSwitchActive: true });
     mockBrokerQb.getOne.mockResolvedValue(connectedBroker());
     status = await service.getOnboardingStatus('user-complete');
@@ -468,7 +451,6 @@ describe('OnboardingService readiness gate', () => {
     expect(status.blockedReasons).toEqual([
       'PROFILE_INCOMPLETE',
       'KYC_REQUIRED',
-      'RISK_PROFILE_MISSING',
       'BROKER_DISCONNECTED',
     ]);
   });

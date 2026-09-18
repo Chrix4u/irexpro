@@ -51,6 +51,9 @@ import type {
   PendingExecutionConfirmationsResponse,
   StartTradingSessionRequest,
   StartTradingSessionResponse,
+  StopTradingSessionResponse,
+  SetUserCapitalAllocationRequest,
+  UserCapitalAllocationView,
 } from '@irexpro/types/execution';
 
 /**
@@ -212,6 +215,14 @@ export interface ApiClient {
   /** POST /broker/connections/:id/disconnect → disconnect. */
   disconnectBroker(connectionId: string): Promise<void>;
 
+  // ── AI capital allocation ───────────────────────────────────────────────
+  /** GET /execution/capital-allocation?brokerConnectionId=... → explicit user allocation. */
+  getCapitalAllocation(brokerConnectionId: string): Promise<UserCapitalAllocationView>;
+  /** POST /execution/capital-allocation → persist explicit allocation for the exact broker account. */
+  setCapitalAllocation(
+    body: SetUserCapitalAllocationRequest,
+  ): Promise<UserCapitalAllocationView>;
+
   // ── Sprint 56 correction round 5: execution authority (issues #295/#298) ──
   /**
    * GET /trading/sessions/active → 200 `{ session }` — the authoritative
@@ -222,6 +233,11 @@ export interface ApiClient {
   /** POST /trading/sessions/start → 201 `{ session }` (body binds the exact
    *  brokerConnectionId + executionMode; server-validated fail-closed). */
   startTradingSession(body: StartTradingSessionRequest): Promise<StartTradingSessionResponse>;
+  /**
+   * POST /trading/sessions/:id/stop → stop new AI exposure first, then request
+   * closure of AI-opened positions and return the server-authoritative summary.
+   */
+  stopTradingSession(sessionId: string): Promise<StopTradingSessionResponse>;
   /**
    * POST /trading/sessions/:id/mode → 200 `{ session }` — audited mode change
    * that bumps `authorityGeneration` (outstanding SEMI_AUTO confirmations
@@ -571,6 +587,12 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
         body: JSON.stringify(body),
       }),
 
+    stopTradingSession: (sessionId) =>
+      request<StopTradingSessionResponse>(
+        `/trading/sessions/${encodeURIComponent(sessionId)}/stop`,
+        { method: 'POST' },
+      ),
+
     changeTradingSessionMode: (sessionId, body) =>
       request<ChangeTradingSessionModeResponse>(
         `/trading/sessions/${encodeURIComponent(sessionId)}/mode`,
@@ -579,6 +601,17 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
           body: JSON.stringify(body),
         },
       ),
+
+    getCapitalAllocation: (brokerConnectionId) =>
+      request<UserCapitalAllocationView>(
+        `/execution/capital-allocation?brokerConnectionId=${encodeURIComponent(brokerConnectionId)}`,
+      ),
+
+    setCapitalAllocation: (body) =>
+      request<UserCapitalAllocationView>('/execution/capital-allocation', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
 
     listPendingExecutionConfirmations: () =>
       request<PendingExecutionConfirmationsResponse>(

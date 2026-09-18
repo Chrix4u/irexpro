@@ -5,10 +5,9 @@ import { Trade, TradeCloseReason, TradeDirection, TradeStatus } from '../entitie
  * Frontend-safe execution read model.
  *
  * Deliberately excludes internal ownership, signal lineage, idempotency keys,
- * broker connection identifiers, raw external order identifiers, broker
- * rejection diagnostics, and realised P&L. Realised P&L is withheld here
- * because the Trade entity does not carry its account currency; exposing a
- * currency-less monetary value would be ambiguous for a global client.
+ * broker connection identifiers, raw external order identifiers, and broker
+ * rejection diagnostics. Monetary execution economics are exposed only with
+ * the trade's immutable account currency provenance.
  */
 export class TradeExecutionResponseDto {
   @ApiProperty({ format: 'uuid' })
@@ -44,6 +43,18 @@ export class TradeExecutionResponseDto {
   @ApiPropertyOptional({ nullable: true })
   exitPrice: string | null;
 
+  @ApiPropertyOptional({ nullable: true, example: 'USD' })
+  accountCurrency: string | null;
+
+  @ApiPropertyOptional({ nullable: true, description: 'Realized P&L in account currency.' })
+  realisedPnl: string | null;
+
+  @ApiPropertyOptional({ nullable: true, description: 'Broker commission in account currency.' })
+  commission: string | null;
+
+  @ApiPropertyOptional({ nullable: true, description: 'Swap/financing in account currency.' })
+  swap: string | null;
+
   @ApiPropertyOptional({ enum: TradeCloseReason, nullable: true })
   closeReason: TradeCloseReason | null;
 
@@ -73,6 +84,10 @@ export function toTradeExecutionResponse(trade: Trade): TradeExecutionResponseDt
     trailingStopPips: trade.trailingStopPips,
     status: trade.status,
     exitPrice: trade.exitPrice,
+    accountCurrency: trade.accountCurrency,
+    realisedPnl: trade.accountCurrency ? trade.realisedPnl : null,
+    commission: trade.accountCurrency ? trade.commission : null,
+    swap: trade.accountCurrency ? trade.swap : null,
     closeReason: trade.closeReason,
     openedAt: trade.openedAt,
     closedAt: trade.closedAt,

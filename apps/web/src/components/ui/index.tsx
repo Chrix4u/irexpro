@@ -7,14 +7,12 @@ import { ButtonHTMLAttributes, ComponentType, ReactNode } from 'react';
 import MobileBottomNav from '@/components/mobile-bottom-nav';
 import { AutoRevealAlert } from '@/components/ui/AutoRevealAlert';
 import {
-  AiIcon,
   DashboardIcon,
   PaymentsIcon,
   PlugIcon,
   PortfolioIcon,
   ShieldIcon,
   TradeIcon,
-  UserIcon,
   type IconProps,
 } from '@/components/icons';
 
@@ -165,34 +163,17 @@ interface WorkspaceNavGroup {
 
 const WORKSPACE_NAV: WorkspaceNavGroup[] = [
   {
-    label: 'Overview',
-    items: [{ href: '/dashboard', label: 'Dashboard', Icon: DashboardIcon }],
-  },
-  {
-    label: 'Trade',
-    items: [{ href: '/trade', label: 'Trading Workspace', Icon: TradeIcon, matchPrefix: true }],
-  },
-  {
-    label: 'Intelligence',
+    label: 'Trading',
     items: [
-      { href: '/market', label: 'Market Intelligence', Icon: TradeIcon, matchPrefix: true },
-      { href: '/ai', label: 'AI Command Center', Icon: AiIcon, matchPrefix: true },
-      { href: '/strategy-lab', label: 'Strategy Lab', Icon: AiIcon, matchPrefix: true },
-    ],
-  },
-  {
-    label: 'Portfolio',
-    items: [
-      { href: '/portfolio', label: 'Portfolio & Risk', Icon: PortfolioIcon, matchPrefix: true },
-      { href: '/live-account', label: 'Live Account', Icon: PortfolioIcon, matchPrefix: true },
+      { href: '/dashboard', label: 'Dashboard', Icon: DashboardIcon },
+      { href: '/trade', label: 'AI Trading', Icon: TradeIcon, matchPrefix: true },
+      { href: '/live-account', label: 'Positions & Activity', Icon: PortfolioIcon, matchPrefix: true },
     ],
   },
   {
     label: 'Account',
     items: [
-      { href: '/onboarding/broker', label: 'Broker Accounts', Icon: PlugIcon },
-      { href: '/onboarding/risk', label: 'Risk Limits', Icon: ShieldIcon },
-      { href: '/onboarding/profile', label: 'Profile', Icon: UserIcon },
+      { href: '/onboarding/broker', label: 'Broker Account', Icon: PlugIcon },
       { href: '/security', label: 'Security', Icon: ShieldIcon },
       { href: '/payments/success', label: 'Fees & Payments', Icon: PaymentsIcon, matchPrefix: true },
     ],
@@ -275,7 +256,7 @@ export function DashboardShell({ user, onLogout, activeRoute, title, children }:
             <span className="dashboard-header__title terminal-header__title">{title ?? routeTitle(activeRoute)}</span>
           </div>
           <div className="terminal-header__principle" aria-label="Execution safety principle">
-            Autonomous execution · risk-gated
+            AI automation · protected by server risk controls
           </div>
         </header>
         <div className="dashboard-content terminal-content">{children}</div>

@@ -63,14 +63,10 @@ test.describe('Accessibility (axe)', () => {
     ).toEqual([]);
   });
 
-  test('risk page with tooltip open — no critical/serious violations', async ({ page, browserName }) => {
+  test('AI Protection page — no critical/serious violations', async ({ page, browserName }) => {
     test.skip(browserName !== 'chromium', 'Axe scans run on Chromium only');
-    await gotoAsAuthenticated(page, '/onboarding/risk', { heading: /risk management/i });
-    await expect(page.getByRole('button', { name: /save risk profile & continue/i })).toBeVisible();
-
-    // Open an InfoTooltip via hover (click would toggle it closed — see risk.spec.ts).
-    await page.getByRole('button', { name: /^explain maximum daily loss/i }).first().hover();
-    await expect(page.getByRole('tooltip')).toBeVisible();
+    await gotoAsAuthenticated(page, '/onboarding/risk', { heading: /ai protection/i });
+    await expect(page.getByText(/you do not need to configure trading risk/i)).toBeVisible();
 
     const results = await new AxeBuilder({ page })
       .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
@@ -81,7 +77,7 @@ test.describe('Accessibility (axe)', () => {
     );
     expect(
       severe,
-      `Critical/serious axe violations on /onboarding/risk (tooltip open):\n${formatViolations(severe)}`,
+      `Critical/serious axe violations on /onboarding/risk:\n${formatViolations(severe)}`,
     ).toEqual([]);
   });
 
@@ -112,8 +108,8 @@ test.describe('Accessibility (axe)', () => {
     test.skip(browserName !== 'chromium', 'Axe scans run on Chromium only');
     await gotoAsAuthenticated(page, '/dashboard', { heading: /welcome back/i });
 
-    // Wait for the onboarding card to render (canStartTrading=true per mock).
-    await expect(page.getByRole('button', { name: /start paper trading session/i })).toBeVisible();
+    // Wait for the current novice-first readiness action.
+    await expect(page.getByRole('link', { name: /open ai trading/i }).last()).toBeVisible();
 
     const results = await new AxeBuilder({ page })
       .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])

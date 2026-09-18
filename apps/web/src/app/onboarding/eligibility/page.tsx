@@ -167,7 +167,7 @@ export default function EligibilityOnboardingPage() {
     }
 
     if (missing.length === 0) {
-      if (status.canProceed) router.push('/onboarding/risk');
+      if (status.canProceed) router.push('/onboarding/broker');
       return;
     }
 
@@ -185,8 +185,8 @@ export default function EligibilityOnboardingPage() {
       setStatus(next);
       setSelected(new Set());
       if (next.canProceed) {
-        setMessage('Eligibility evidence is complete. Continuing to the next onboarding step…');
-        router.push('/onboarding/risk');
+        setMessage('Eligibility evidence is complete. Continuing to broker connection…');
+        router.push('/onboarding/broker');
       } else if (next.jurisdictionStatus === 'REVIEW_REQUIRED') {
         setMessage('Disclosure evidence is recorded. Jurisdiction review is still required.');
       } else if (next.kycStatus !== 'APPROVED') {
@@ -209,7 +209,7 @@ export default function EligibilityOnboardingPage() {
   return (
     <DashboardShell user={user} onLogout={logout} activeRoute="/onboarding/eligibility">
       <div style={{ marginBottom: 'var(--space-6)' }}>
-        <Badge variant="info">Step 2 of 4</Badge>
+        <Badge variant="info">Step 2 of 3</Badge>
         <h1 style={{ margin: 'var(--space-3) 0 var(--space-2)' }}>Eligibility & disclosures</h1>
         <p className="muted" style={{ maxWidth: '780px', lineHeight: 1.65 }}>
           Readiness is server-authoritative: adult age, KYC status, jurisdiction policy, and exact
@@ -366,7 +366,7 @@ export default function EligibilityOnboardingPage() {
                 </Button>
               )}
               {status.canProceed && (
-                <Button type="button" size="lg" onClick={() => router.push('/onboarding/risk')}>
+                <Button type="button" size="lg" onClick={() => router.push('/onboarding/broker')}>
                   Continue to next step
                 </Button>
               )}

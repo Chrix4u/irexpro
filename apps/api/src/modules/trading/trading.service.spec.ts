@@ -5,6 +5,7 @@ import { BrokerService } from '../broker/broker.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { RiskService } from '../risk/risk.service';
 import { ExecutionService } from '../execution/execution.service';
+import { AllocationService } from '../execution/services/allocation.service';
 import { AuditService } from '../audit/audit.service';
 import { DomainEventBus } from '../events/event-bus.service';
 import { AiEngineClient } from '../ai-engine-client/ai-engine-client.service';
@@ -16,6 +17,7 @@ import { BrokerConnectionRequiredException } from '../execution/execution-sessio
 import { AllowedTradingMode } from '../risk/entities/risk-profile.entity';
 import { BrokerAccountSnapshotService } from '../broker/services/broker-account-snapshot.service';
 import { BrokerConnectionStatus } from '../broker/interfaces/broker-adapter.interface';
+import { TradeCloseReason, TradeStatus } from '../execution/entities/trade.entity';
 
 /**
  * TradingService tests — Sprint 29 amendment + free-access regression +
@@ -87,6 +89,7 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
   let subscriptionsService: Record<string, jest.Mock>;
   let riskService: Record<string, jest.Mock>;
   let executionService: Record<string, jest.Mock>;
+  let allocationService: Record<string, jest.Mock>;
   let auditService: Record<string, jest.Mock>;
   let eventBus: Record<string, jest.Mock>;
   let aiEngineClient: Record<string, jest.Mock>;
@@ -141,6 +144,19 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       })),
     };
 
+    allocationService = {
+      getUserCapitalAllocationState: jest.fn().mockResolvedValue({
+        brokerConnectionId: 'conn-1',
+        logicalAccountKey: 'paper-broker|demo|account-1',
+        accountCurrency: 'USD',
+        brokerEquity: '10000',
+        hasAllocation: true,
+        allocatedCapital: '1000',
+        committedCapital: '0',
+        availableCapital: '1000',
+      }),
+    };
+
     executionService = {
       startSession: jest.fn().mockResolvedValue(mockSession()),
       endSession: jest.fn().mockResolvedValue(undefined),
@@ -151,6 +167,7 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
         .mockResolvedValue(
           mockSession({ executionMode: ExecutionMode.SEMI_AUTO, authorityGeneration: 2 }),
         ),
+      closeAllAiOpenPositions: jest.fn().mockResolvedValue([]),
     };
 
     auditService = { log: jest.fn().mockResolvedValue(undefined) };
@@ -174,6 +191,7 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
         { provide: SubscriptionsService, useValue: subscriptionsService },
         { provide: RiskService, useValue: riskService },
         { provide: ExecutionService, useValue: executionService },
+        { provide: AllocationService, useValue: allocationService },
         { provide: AuditService, useValue: auditService },
         { provide: DomainEventBus, useValue: eventBus },
         { provide: AiEngineClient, useValue: aiEngineClient },
@@ -494,14 +512,8 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
     });
   });
 
-  describe('startTradingSession — requested mode enforcement', () => {
-    it('should always allow PAPER_ONLY mode', async () => {
-      riskService.getOrCreateProfile.mockResolvedValue({
-        id: 'profile-1',
-        userId: 'user-1',
-        allowedTradingModes: AllowedTradingMode.PAPER_ONLY,
-        riskAcknowledgementAccepted: true,
-      } as never);
+  describe('startTradingSession — automation mode authority', () => {
+    it('allows PAPER_ONLY for paper/demo automation', async () => {
       const session = await service.startTradingSession(
         'user-1',
         'conn-1',
@@ -510,25 +522,12 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       expect(session.id).toBe('session-1');
     });
 
-    it('should reject SEMI_AUTO when risk profile only allows PAPER_ONLY', async () => {
+    it('does not require a separate risk-profile preference for SEMI_AUTO', async () => {
       riskService.getOrCreateProfile.mockResolvedValue({
         id: 'profile-1',
         userId: 'user-1',
         allowedTradingModes: AllowedTradingMode.PAPER_ONLY,
-        riskAcknowledgementAccepted: true,
-      } as never);
-      await expect(
-        service.startTradingSession('user-1', 'conn-1', ExecutionMode.SEMI_AUTO),
-      ).rejects.toThrow(ForbiddenException);
-      expect(executionService.startSession).not.toHaveBeenCalled();
-    });
-
-    it('should allow SEMI_AUTO when risk profile allows SEMI_AUTO', async () => {
-      riskService.getOrCreateProfile.mockResolvedValue({
-        id: 'profile-1',
-        userId: 'user-1',
-        allowedTradingModes: AllowedTradingMode.SEMI_AUTO,
-        riskAcknowledgementAccepted: true,
+        riskAcknowledgementAccepted: false,
       } as never);
       const session = await service.startTradingSession(
         'user-1',
@@ -538,25 +537,7 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       expect(session.id).toBe('session-1');
     });
 
-    it('should reject FULL_AUTO when risk profile does not allow it', async () => {
-      riskService.getOrCreateProfile.mockResolvedValue({
-        id: 'profile-1',
-        userId: 'user-1',
-        allowedTradingModes: AllowedTradingMode.SEMI_AUTO,
-        riskAcknowledgementAccepted: true,
-      } as never);
-      await expect(
-        service.startTradingSession('user-1', 'conn-1', ExecutionMode.FULL_AUTO),
-      ).rejects.toThrow(ForbiddenException);
-    });
-
-    it('should reject FULL_AUTO when live trading is not enabled on broker connection', async () => {
-      riskService.getOrCreateProfile.mockResolvedValue({
-        id: 'profile-1',
-        userId: 'user-1',
-        allowedTradingModes: AllowedTradingMode.FULL_AUTO,
-        riskAcknowledgementAccepted: true,
-      } as never);
+    it('rejects FULL_AUTO when live trading is not enabled on broker connection', async () => {
       brokerService.findConnectionById.mockResolvedValue(
         buildHealthyConnection({ liveTradingEnabled: false }),
       );
@@ -566,13 +547,7 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       expect(executionService.startSession).not.toHaveBeenCalled();
     });
 
-    it('should allow FULL_AUTO when risk profile allows it AND live trading is enabled', async () => {
-      riskService.getOrCreateProfile.mockResolvedValue({
-        id: 'profile-1',
-        userId: 'user-1',
-        allowedTradingModes: AllowedTradingMode.FULL_AUTO,
-        riskAcknowledgementAccepted: true,
-      } as never);
+    it('allows FULL_AUTO when the exact broker connection is live-enabled', async () => {
       brokerService.findConnectionById.mockResolvedValue(
         buildHealthyConnection({ liveTradingEnabled: true }),
       );
@@ -585,14 +560,17 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
     });
 
     it('should default to PAPER_ONLY when no mode is requested', async () => {
-      riskService.getOrCreateProfile.mockResolvedValue({
-        id: 'profile-1',
-        userId: 'user-1',
-        allowedTradingModes: AllowedTradingMode.PAPER_ONLY,
-        riskAcknowledgementAccepted: true,
-      } as never);
       const session = await service.startTradingSession('user-1', 'conn-1');
       expect(session.id).toBe('session-1');
+      expect(executionService.startSession).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(String),
+        expect.any(String),
+        expect.any(Object),
+        ExecutionMode.PAPER_ONLY,
+        // No accepted account snapshot exists on the default fixture path.
+        undefined,
+      );
     });
   });
 
@@ -677,17 +655,19 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       expect(executionService.changeExecutionMode).not.toHaveBeenCalled();
     });
 
-    it('rejects a mode the risk profile does not allow (mode change cannot bypass start gates)', async () => {
+    it('does not require a separate risk-profile mode preference for an explicit mode change', async () => {
       riskService.getOrCreateProfile.mockResolvedValue({
         id: 'profile-1',
         userId: 'user-1',
         allowedTradingModes: AllowedTradingMode.PAPER_ONLY,
-        riskAcknowledgementAccepted: true,
+        riskAcknowledgementAccepted: false,
       } as never);
-      await expect(
-        service.changeExecutionMode('user-1', 'session-1', ExecutionMode.SEMI_AUTO),
-      ).rejects.toThrow(ForbiddenException);
-      expect(executionService.changeExecutionMode).not.toHaveBeenCalled();
+      await service.changeExecutionMode('user-1', 'session-1', ExecutionMode.SEMI_AUTO);
+      expect(executionService.changeExecutionMode).toHaveBeenCalledWith(
+        'user-1',
+        'session-1',
+        ExecutionMode.SEMI_AUTO,
+      );
     });
 
     it('rejects FULL_AUTO when live trading is not enabled on the session connection', async () => {
@@ -726,12 +706,74 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
   });
 
   describe('stopTradingSession()', () => {
-    it('stops the active session', async () => {
+    it('ends execution authority BEFORE requesting AI-position closure', async () => {
       await service.stopTradingSession('user-1', 'session-1');
+
       expect(executionService.endSession).toHaveBeenCalledWith(
         'user-1',
         TradingSessionStatus.ENDED,
+        {
+          closeAiPositionsOnStop: true,
+          expectedSessionId: 'session-1',
+        },
       );
+      expect(executionService.closeAllAiOpenPositions).toHaveBeenCalledWith(
+        'user-1',
+        TradeCloseReason.MANUAL_CLOSE,
+      );
+      expect(executionService.endSession.mock.invocationCallOrder[0]).toBeLessThan(
+        executionService.closeAllAiOpenPositions.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('returns COMPLETE only when every AI-opened position is confirmed closed', async () => {
+      executionService.closeAllAiOpenPositions.mockResolvedValue([
+        { tradeId: 'trade-1', closed: true, status: TradeStatus.CLOSED },
+        { tradeId: 'trade-2', closed: true, status: TradeStatus.CLOSED },
+      ]);
+
+      const result = await service.stopTradingSession('user-1', 'session-1');
+
+      expect(result.positionCloseSummary).toEqual({
+        state: 'COMPLETE',
+        targetCount: 2,
+        closedCount: 2,
+        unresolvedCount: 0,
+      });
+      expect(result.message).toMatch(/all 2 AI-opened positions were confirmed closed/i);
+    });
+
+    it('returns PARTIAL without reactivating AI Trading when a broker close is unresolved', async () => {
+      executionService.closeAllAiOpenPositions.mockResolvedValue([
+        { tradeId: 'trade-1', closed: true, status: TradeStatus.CLOSED },
+        { tradeId: 'trade-2', closed: false, status: TradeStatus.RECONCILIATION_PENDING },
+      ]);
+
+      const result = await service.stopTradingSession('user-1', 'session-1');
+
+      expect(result.positionCloseSummary).toEqual({
+        state: 'PARTIAL',
+        targetCount: 2,
+        closedCount: 1,
+        unresolvedCount: 1,
+      });
+      expect(executionService.endSession).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns UNKNOWN when the flatten cannot be verified but keeps the session ENDED', async () => {
+      executionService.closeAllAiOpenPositions.mockRejectedValue(
+        new Error('trade store unavailable'),
+      );
+
+      const result = await service.stopTradingSession('user-1', 'session-1');
+
+      expect(result.positionCloseSummary).toEqual({
+        state: 'UNKNOWN',
+        targetCount: null,
+        closedCount: 0,
+        unresolvedCount: null,
+      });
+      expect(executionService.endSession).toHaveBeenCalledTimes(1);
     });
 
     it('throws NotFoundException when no active session', async () => {
@@ -739,18 +781,27 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       await expect(service.stopTradingSession('user-1', 'session-1')).rejects.toThrow(
         NotFoundException,
       );
+      expect(executionService.closeAllAiOpenPositions).not.toHaveBeenCalled();
     });
 
     it('throws ForbiddenException when session ID does not match', async () => {
       await expect(service.stopTradingSession('user-1', 'other-session')).rejects.toThrow(
         ForbiddenException,
       );
+      expect(executionService.closeAllAiOpenPositions).not.toHaveBeenCalled();
     });
 
-    it('audit-logs the session stop', async () => {
+    it('audit-logs the stop-and-flatten summary', async () => {
       await service.stopTradingSession('user-1', 'session-1');
       expect(auditService.log).toHaveBeenCalledWith(
-        expect.objectContaining({ actorUserId: 'user-1', action: 'AI_TRADING_DISABLED' }),
+        expect.objectContaining({
+          actorUserId: 'user-1',
+          action: 'AI_TRADING_DISABLED',
+          metadata: expect.objectContaining({
+            reason: 'user-requested-stop-and-flatten',
+            positionCloseSummary: expect.objectContaining({ state: 'COMPLETE' }),
+          }),
+        }),
       );
     });
   });

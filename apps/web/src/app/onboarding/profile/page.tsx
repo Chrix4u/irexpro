@@ -9,7 +9,6 @@ import { TimezoneSelect } from '@/components/forms/TimezoneSelect';
 import { useNotification } from '@/hooks/useNotification';
 import { mapApiError } from '@/lib/error-mapping';
 import { api } from '@/lib/api';
-import type { TradingExperienceLevel } from '@irexpro/types';
 
 export default function OnboardingProfilePage() {
   const router = useRouter();
@@ -25,7 +24,6 @@ export default function OnboardingProfilePage() {
   const [countryCode, setCountryCode] = useState('');
   const [timezone, setTimezone] = useState('');
   const [preferredCurrency, setPreferredCurrency] = useState('USD');
-  const [tradingExperienceLevel, setTradingExperienceLevel] = useState<TradingExperienceLevel | ''>('');
 
   useEffect(() => {
     if (!user) return;
@@ -42,15 +40,11 @@ export default function OnboardingProfilePage() {
           preferredCurrency?: string;
           profile?: {
             dateOfBirth?: string | null;
-            tradingExperienceLevel?: TradingExperienceLevel;
           };
         };
         if (profile.timezone) setTimezone(profile.timezone);
         if (profile.preferredCurrency) setPreferredCurrency(profile.preferredCurrency);
         if (profile.profile?.dateOfBirth) setDateOfBirth(profile.profile.dateOfBirth);
-        if (profile.profile?.tradingExperienceLevel) {
-          setTradingExperienceLevel(profile.profile.tradingExperienceLevel);
-        }
       })
       .catch((requestError) => {
         notify.error(mapApiError(requestError).message);
@@ -79,11 +73,6 @@ export default function OnboardingProfilePage() {
       setError('Please provide your date of birth.');
       return;
     }
-    if (!tradingExperienceLevel) {
-      setError('Please select your trading experience level.');
-      return;
-    }
-
     setLoading(true);
     try {
       await api.request('/users/me', {
@@ -95,7 +84,6 @@ export default function OnboardingProfilePage() {
           countryCode: countryCode.toUpperCase() || undefined,
           timezone: timezone || undefined,
           preferredCurrency: preferredCurrency.toUpperCase() || undefined,
-          tradingExperienceLevel,
         }),
       });
       setSuccess(true);
@@ -118,11 +106,11 @@ export default function OnboardingProfilePage() {
             <p className="workspace-hero__eyebrow">Onboarding · identity</p>
             <h1 id="profile-title" className="workspace-hero__title">Trader Profile</h1>
             <p className="workspace-hero__description">
-              Complete your identity, jurisdiction and trading-experience details. The server independently evaluates adult-age, KYC and jurisdiction readiness after this step.
+              Complete the identity and regional details needed for account verification. No trading experience is required — iRexPro is designed to be usable by first-time traders.
             </p>
           </div>
           <div className="workspace-hero__actions">
-            <Badge variant="info">Step 1 of 4</Badge>
+            <Badge variant="info">Step 1 of 3</Badge>
           </div>
         </section>
 
@@ -185,30 +173,6 @@ export default function OnboardingProfilePage() {
                     maxLength={3}
                   />
                   <p className="helper-text">ISO 4217 code — e.g. USD, GHS, EUR.</p>
-                </div>
-              </div>
-            </section>
-
-            <section className="form-section">
-              <h3 className="form-section__title">Trading experience</h3>
-              <div className="workspace-form-grid">
-                <div className="input-group">
-                  <label className="input-label" htmlFor="profile-trading-experience">Trading experience level</label>
-                  <select
-                    id="profile-trading-experience"
-                    className="input"
-                    value={tradingExperienceLevel}
-                    onChange={(e) => setTradingExperienceLevel(e.target.value as TradingExperienceLevel)}
-                    disabled={loading}
-                    required
-                  >
-                    <option value="">Select your experience…</option>
-                    <option value="BEGINNER">Beginner — new to trading</option>
-                    <option value="INTERMEDIATE">Intermediate — some trading experience</option>
-                    <option value="ADVANCED">Advanced — experienced trader</option>
-                    <option value="PROFESSIONAL">Professional — full-time trader</option>
-                  </select>
-                  <p className="helper-text">Self-reported experience does not bypass age, KYC or jurisdiction controls.</p>
                 </div>
               </div>
             </section>

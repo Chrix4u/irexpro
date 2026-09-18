@@ -1543,6 +1543,58 @@ export class BrokerService {
   }
 
   /**
+   * Fetch current broker positions for one owned connected account.
+   * Credentials remain server-side; callers receive only normalized provider
+   * position economics from the adapter contract.
+   */
+  async getOpenPositionsForConnection(
+    connectionId: string,
+    userId: string,
+  ): Promise<{
+    connection: BrokerConnection;
+    positions: import('./interfaces/broker-adapter.interface').BrokerPosition[];
+  }> {
+    const connection = await this.findConnectionById(connectionId, userId);
+    if (connection.status !== BrokerConnectionStatus.CONNECTED) {
+      throw new ForbiddenException(
+        `Broker connection ${connectionId} is not CONNECTED (status: ${connection.status})`,
+      );
+    }
+
+    const adapter = this.adapterRegistry.getAdapterForConnection(
+      connection.id,
+      connection.brokerId,
+    );
+    if (!connection.encryptedCredentials || !connection.credentialIv || !connection.credentialTag) {
+      throw new ForbiddenException('Broker connection credentials unavailable');
+    }
+    this.assertCredentialsUsable(connection, 'getOpenPositionsForConnection');
+
+    const credentials = this.encryptionService.decrypt({
+      ciphertext: connection.encryptedCredentials,
+      iv: connection.credentialIv,
+      tag: connection.credentialTag,
+      keyId: connection.encryptionKeyId ?? 'env-key-v1',
+    });
+    adapter.setMode(connection.accountType);
+
+    try {
+      await adapter.connect(credentials);
+      const positions = await adapter.getOpenPositions();
+      return { connection, positions };
+    } catch (err) {
+      this.logger.warn(
+        `getOpenPositions failed connection=${connectionId}: ${(err as Error).message}`,
+      );
+      throw err;
+    } finally {
+      Object.keys(credentials).forEach((key) => {
+        (credentials as unknown as Record<string, unknown>)[key] = null;
+      });
+    }
+  }
+
+  /**
    * Fetch closed trades for a broker connection using stored credentials.
    *
    * SECURITY:

@@ -1,0 +1,453 @@
+.ai-trader {
+  display: grid;
+  gap: clamp(1rem, 1.6vw, 1.5rem);
+  width: 100%;
+  min-width: 0;
+}
+
+.ai-trader__hero {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  padding: clamp(1.15rem, 2vw, 1.75rem);
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 80% 10%, rgba(20, 184, 166, 0.14), transparent 34%),
+    linear-gradient(145deg, rgba(17, 24, 39, 0.97), rgba(10, 14, 26, 0.98));
+  overflow: hidden;
+}
+
+.ai-trader__hero > div:first-child {
+  min-width: 0;
+  max-width: 850px;
+}
+
+.ai-trader__hero h1 {
+  margin: 0;
+  font-size: clamp(1.7rem, 3vw, 2.45rem);
+  letter-spacing: -0.045em;
+}
+
+.ai-trader__hero p:not(.workspace-hero__eyebrow) {
+  margin: 0.6rem 0 0;
+  color: var(--text-secondary);
+  line-height: 1.7;
+}
+
+.ai-trader__hero-state {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+  white-space: nowrap;
+}
+
+.ai-control-deck {
+  display: grid;
+  grid-template-columns: minmax(240px, 1.3fr) minmax(190px, 0.85fr) minmax(280px, 1.25fr) minmax(230px, 1fr);
+  gap: clamp(0.8rem, 1.25vw, 1.1rem);
+  align-items: stretch;
+}
+
+.ai-control-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 0.65rem;
+  height: 100%;
+}
+
+.ai-control-card__label {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.ai-control-card__value {
+  font-size: clamp(1.35rem, 2.5vw, 2rem);
+  letter-spacing: -0.035em;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.ai-control-card__hint {
+  margin-top: auto;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.ai-control-card__meta {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.ai-allocation-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.65rem;
+  align-items: end;
+}
+
+.ai-allocation-row .input-group {
+  margin: 0;
+}
+
+.ai-automation-state {
+  display: flex;
+  align-items: center;
+  min-height: 30px;
+}
+
+.ai-automation-action {
+  min-height: 48px;
+  justify-content: center;
+  font-weight: 850;
+}
+
+.ai-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(2, 6, 23, 0.76);
+  backdrop-filter: blur(5px);
+}
+
+.ai-confirm-dialog {
+  width: min(620px, 100%);
+  max-height: min(760px, calc(100dvh - 2rem));
+  overflow-y: auto;
+  display: grid;
+  gap: 1rem;
+  padding: clamp(1.1rem, 2.5vw, 1.6rem);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 18px;
+  background: linear-gradient(155deg, rgba(17, 24, 39, 0.99), rgba(9, 14, 27, 0.99));
+  box-shadow: 0 24px 80px rgba(2, 6, 23, 0.55);
+}
+
+.ai-confirm-dialog__header {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.ai-confirm-dialog__header h2 {
+  margin: 0;
+  font-size: clamp(1.35rem, 3vw, 1.8rem);
+  letter-spacing: -0.03em;
+}
+
+.ai-confirm-dialog__description {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.65;
+}
+
+.ai-confirm-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.ai-confirm-facts > div {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+  padding: 0.8rem;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.58);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.ai-confirm-facts span {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.ai-confirm-facts strong {
+  overflow-wrap: anywhere;
+}
+
+.ai-confirm-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.ai-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: clamp(0.8rem, 1.25vw, 1.1rem);
+}
+
+.ai-overview-card {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.ai-overview-card__value {
+  font-size: clamp(1.3rem, 2.3vw, 1.9rem);
+  font-weight: 800;
+  letter-spacing: -0.035em;
+  overflow-wrap: anywhere;
+}
+
+.ai-trading-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(360px, 0.85fr);
+  gap: clamp(1rem, 1.5vw, 1.35rem);
+  align-items: start;
+}
+
+.ai-section {
+  display: grid;
+  gap: 0.9rem;
+  min-width: 0;
+}
+
+.ai-section__heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.ai-section__heading h2 {
+  margin: 0;
+  font-size: clamp(1.15rem, 2vw, 1.5rem);
+  letter-spacing: -0.025em;
+}
+
+.ai-position-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.85rem;
+}
+
+.ai-position-card {
+  display: grid;
+  gap: 0.9rem;
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 15px;
+  background: linear-gradient(155deg, rgba(21, 28, 44, 0.95), rgba(15, 23, 42, 0.9));
+}
+
+.ai-position-card__head,
+.ai-position-card__foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.ai-position-card__head > div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.ai-position-card__head span,
+.ai-position-card__foot {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.ai-trade-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem;
+  margin: 0;
+}
+
+.ai-trade-metrics > div {
+  min-width: 0;
+  padding: 0.7rem;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.48);
+}
+
+.ai-trade-metrics dt {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.ai-trade-metrics dd {
+  margin: 0.18rem 0 0;
+  font-weight: 750;
+  overflow-wrap: anywhere;
+}
+
+.ai-activity-list {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.ai-activity-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.45rem 0.8rem;
+  align-items: center;
+  min-width: 0;
+  padding: 0.85rem 0.9rem;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.ai-activity-row__symbol {
+  display: grid;
+  min-width: 0;
+  gap: 0.15rem;
+}
+
+.ai-activity-row__symbol span,
+.ai-activity-row__time {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+}
+
+.ai-activity-row__state {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.ai-activity-row__time {
+  grid-column: 1 / -1;
+}
+
+.ai-empty-card {
+  min-height: 150px;
+  display: grid;
+  place-content: center;
+  text-align: center;
+}
+
+.ai-simple-note {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem 1.15rem;
+  border: 1px solid rgba(45, 212, 191, 0.18);
+  border-radius: 14px;
+  background: rgba(20, 184, 166, 0.06);
+}
+
+.ai-simple-note > div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.ai-simple-note span {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+.ai-text-link {
+  color: var(--brand-light);
+  font-size: 0.84rem;
+  font-weight: 750;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+@media (max-width: 1240px) {
+  .ai-control-deck {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ai-overview-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ai-trading-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ai-position-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 700px) {
+  .ai-trader__hero {
+    flex-direction: column;
+    border-radius: 14px;
+  }
+
+  .ai-control-deck,
+  .ai-overview-grid,
+  .ai-position-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ai-allocation-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ai-allocation-row .btn {
+    width: 100%;
+  }
+
+  .ai-confirm-overlay {
+    align-items: end;
+    padding: 0;
+  }
+
+  .ai-confirm-dialog {
+    width: 100%;
+    max-height: min(88dvh, 760px);
+    border-radius: 18px 18px 0 0;
+  }
+
+  .ai-confirm-facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ai-confirm-dialog__actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ai-confirm-dialog__actions .btn {
+    width: 100%;
+  }
+
+  .ai-section__heading,
+  .ai-simple-note {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .ai-trade-metrics {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ai-activity-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ai-activity-row__state {
+    justify-content: flex-start;
+  }
+}

@@ -24,6 +24,22 @@ export type TradeExecutionCloseReason =
   | 'BROKER_CLOSE'
   | 'RECONCILIATION';
 
+export interface UserCapitalAllocationView {
+  brokerConnectionId: string;
+  logicalAccountKey: string;
+  accountCurrency: string;
+  brokerEquity: string;
+  hasAllocation: boolean;
+  allocatedCapital: string | null;
+  committedCapital: string;
+  availableCapital: string | null;
+}
+
+export interface SetUserCapitalAllocationRequest {
+  brokerConnectionId: string;
+  amount: string;
+}
+
 export interface TradeExecutionView {
   id: string;
   instrument: string;
@@ -39,6 +55,12 @@ export interface TradeExecutionView {
   trailingStopPips: string | null;
   status: TradeExecutionStatus;
   exitPrice: string | null;
+  /** Account currency for monetary execution economics, when proven. */
+  accountCurrency: string | null;
+  /** Server/provider-recorded realized P&L in account currency. */
+  realisedPnl: string | null;
+  commission: string | null;
+  swap: string | null;
   closeReason: TradeExecutionCloseReason | null;
   openedAt: string | null;
   closedAt: string | null;
@@ -119,6 +141,27 @@ export interface StartTradingSessionRequest {
 
 /** POST /trading/sessions/start → 201 bare session. */
 export type StartTradingSessionResponse = TradingSessionView;
+
+export type AiStopPositionCloseState = 'COMPLETE' | 'PARTIAL' | 'UNKNOWN';
+
+/**
+ * POST /trading/sessions/:id/stop response.
+ *
+ * The session is stopped before risk-reducing close requests are sent. The
+ * server never fabricates closure: PARTIAL means at least one AI-opened
+ * position was not yet proved CLOSED; UNKNOWN means the flatten itself could
+ * not be verified and the user must inspect Positions & Activity.
+ */
+export interface StopTradingSessionResponse {
+  message: string;
+  sessionId: string;
+  positionCloseSummary: {
+    state: AiStopPositionCloseState;
+    targetCount: number | null;
+    closedCount: number;
+    unresolvedCount: number | null;
+  };
+}
 
 /** POST /trading/sessions/:id/mode request body (audited; bumps generation). */
 export interface ChangeTradingSessionModeRequest {
