@@ -163,10 +163,33 @@ function isTradingSession(value: unknown): value is TradingSessionView {
  * session is active. Any other shape fails CLOSED: the cockpit would
  * rather show a contract error than trust an unknown shape.
  */
-function isActiveTradingSessionPayload(
+function normalizeActiveTradingSessionPayload(
   value: unknown,
-): value is TradingSessionView | null {
-  return value === null || isTradingSession(value);
+): { known: true; session: TradingSessionView | null } | null {
+  if (value === null) {
+    return { known: true, session: null };
+  }
+
+  if (isTradingSession(value)) {
+    return { known: true, session: value };
+  }
+
+  // Rolling-deploy compatibility: older/shared-client documentation and some
+  // intermediate builds used a { session } envelope while the current API
+  // returns the session DTO directly. Accept either transport shape, but only
+  // after validating the exact same authoritative session fields. Unknown
+  // shapes still fail closed.
+  if (isRecord(value) && Object.prototype.hasOwnProperty.call(value, 'session')) {
+    const nested = value.session;
+    if (nested === null) {
+      return { known: true, session: null };
+    }
+    if (isTradingSession(nested)) {
+      return { known: true, session: nested };
+    }
+  }
+
+  return null;
 }
 
 function normalizeTerminalBroker(value: unknown): TerminalBrokerView | null {
@@ -274,12 +297,14 @@ export async function loadTraderTerminalStatus(): Promise<TraderTerminalStatus> 
 
   let session: TradingSessionView | null = null;
   let sessionStateKnown = false;
-  if (
-    sessionResult.status === 'fulfilled' &&
-    isActiveTradingSessionPayload(sessionResult.value)
-  ) {
-    session = sessionResult.value;
-    sessionStateKnown = true;
+  const normalizedSession =
+    sessionResult.status === 'fulfilled'
+      ? normalizeActiveTradingSessionPayload(sessionResult.value)
+      : null;
+
+  if (normalizedSession) {
+    session = normalizedSession.session;
+    sessionStateKnown = normalizedSession.known;
   } else {
     controlWarnings.push(
       'AI session status could not be verified. Start/Stop is temporarily disabled.',
