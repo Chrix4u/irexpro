@@ -1,7 +1,9 @@
-import { Controller, DefaultValuePipe, Get, ParseIntPipe, Query } from '@nestjs/common';
+import { BadRequestException, Body, Controller, DefaultValuePipe, Get, ParseIntPipe, Post, Query } from '@nestjs/common';
 import { ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUserId } from '../../common/decorators/current-user.decorator';
 import { ExecutionReadService } from './execution-read.service';
+import { AllocationError, AllocationService, type UserCapitalAllocationState } from './services/allocation.service';
+import { SetCapitalAllocationDto } from './dto/set-capital-allocation.dto';
 import {
   TradeExecutionResponseDto,
   toTradeExecutionResponse,
@@ -17,7 +19,47 @@ import {
 @ApiTags('Execution')
 @Controller('execution')
 export class ExecutionController {
-  constructor(private readonly executionReadService: ExecutionReadService) {}
+  constructor(
+    private readonly executionReadService: ExecutionReadService,
+    private readonly allocationService: AllocationService,
+  ) {}
+
+  @Get('capital-allocation')
+  @ApiOperation({ summary: 'Read explicit AI capital allocation for one broker account' })
+  @ApiQuery({ name: 'brokerConnectionId', required: true, type: String })
+  async getCapitalAllocation(
+    @CurrentUserId() userId: string,
+    @Query('brokerConnectionId') brokerConnectionId: string,
+  ): Promise<UserCapitalAllocationState> {
+    try {
+      return await this.allocationService.getUserCapitalAllocationState(userId, brokerConnectionId);
+    } catch (error) {
+      if (error instanceof AllocationError) {
+        throw new BadRequestException({ code: error.code, message: error.message });
+      }
+      throw error;
+    }
+  }
+
+  @Post('capital-allocation')
+  @ApiOperation({ summary: 'Set the capital amount the AI may allocate for one broker account' })
+  async setCapitalAllocation(
+    @CurrentUserId() userId: string,
+    @Body() dto: SetCapitalAllocationDto,
+  ): Promise<UserCapitalAllocationState> {
+    try {
+      return await this.allocationService.setUserCapitalBudget(
+        userId,
+        dto.brokerConnectionId,
+        dto.amount,
+      );
+    } catch (error) {
+      if (error instanceof AllocationError) {
+        throw new BadRequestException({ code: error.code, message: error.message });
+      }
+      throw error;
+    }
+  }
 
   @Get('positions/open')
   @ApiOperation({ summary: 'List current open positions for the authenticated user' })
