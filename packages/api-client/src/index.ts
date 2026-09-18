@@ -51,6 +51,8 @@ import type {
   PendingExecutionConfirmationsResponse,
   StartTradingSessionRequest,
   StartTradingSessionResponse,
+  SetUserCapitalAllocationRequest,
+  UserCapitalAllocationView,
 } from '@irexpro/types/execution';
 
 /**
@@ -579,6 +581,17 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
           body: JSON.stringify(body),
         },
       ),
+
+    getCapitalAllocation: (brokerConnectionId) =>
+      request<UserCapitalAllocationView>(
+        `/execution/capital-allocation?brokerConnectionId=${encodeURIComponent(brokerConnectionId)}`,
+      ),
+
+    setCapitalAllocation: (body) =>
+      request<UserCapitalAllocationView>('/execution/capital-allocation', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
 
     listPendingExecutionConfirmations: () =>
       request<PendingExecutionConfirmationsResponse>(
