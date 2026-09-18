@@ -110,6 +110,10 @@ if [[ "${FAKE_BUILD_FAILURE:-}" == 'api' && "$*" == *'--filter @irexpro/api buil
   printf 'simulated API build failure\n' >&2
   exit 41
 fi
+if [[ "${FAKE_MIGRATION_FAILURE:-0}" == '1' && "$*" == *'--filter @irexpro/api migration:run'* ]]; then
+  printf 'simulated database migration failure\n' >&2
+  exit 42
+fi
 exit 0
 SHIM
 
@@ -269,6 +273,14 @@ if grep -q '@irexpro/web build' "$COMMAND_LOG"; then
   fail 'Web build must not continue after an API build failure.'
 fi
 
+make_fixture 'migration-failure'
+git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
+expect_failure 'failed_stage=database-migrations' run_deploy "$FIXTURE_CANDIDATE_SHA" FAKE_MIGRATION_FAILURE=1
+grep -q '@irexpro/api migration:run' "$COMMAND_LOG" || fail 'Database migration was not attempted.'
+if grep -q '^pm2 ' "$COMMAND_LOG"; then
+  fail 'Runtime mutation occurred even though the database migration failed.'
+fi
+
 make_fixture 'readiness-failure'
 git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
 expect_failure 'failed_stage=api-readiness' run_deploy "$FIXTURE_CANDIDATE_SHA" FAKE_READY_FAILURE=1
@@ -353,6 +365,7 @@ deploy_output="$(run_deploy "$FIXTURE_CANDIDATE_SHA")"
 grep -q '@irexpro/api build' "$COMMAND_LOG" || fail 'API build missing.'
 grep -q '@irexpro/web build' "$COMMAND_LOG" || fail 'Web build missing.'
 grep -q '@irexpro/admin build' "$COMMAND_LOG" || fail 'Admin build missing.'
+grep -q '@irexpro/api migration:run' "$COMMAND_LOG" || fail 'Database migration missing.'
 
 make_fixture 'rollback-verification'
 rollback_output="$(run_rollback "$FIXTURE_CANDIDATE_SHA" "$FIXTURE_PRIOR_SHA")"

@@ -41,8 +41,10 @@ The automatic staging release chain is:
 4. `scripts/deployment/main-staging-release-gate.mjs` compares the previous `main` SHA with the new SHA, derives the applicable required push workflows, waits for those exact-SHA runs, and fails if the candidate is no longer current `main`.
 5. A successful `Main Staging Release Gate` triggers `.github/workflows/staging-deploy.yml`.
 6. The deploy workflow checks out the authorized SHA, proves it is still exact `origin/main`, opens a pinned-host SSH session to the staging VPS, and invokes `deploy-staging.sh` with that immutable SHA.
-7. The server builds API, Web, and Admin before runtime mutation, restarts API first, verifies liveness/readiness/aggregate health, then restarts Web/Admin and performs local/public smoke checks.
-8. Automatic staging CD queries the private AI health endpoint and fails closed unless the payload explicitly proves paper mode (`paper`, `paper-only`, or boolean paper-mode true). The AI service remains private and is not restarted by this workflow.
+7. The server builds API, Web, and Admin before runtime mutation.
+8. Pending TypeORM database migrations are applied from the exact candidate SHA before any PM2 restart; migration failure stops the deployment while the previous runtime remains untouched.
+9. The API is restarted first, then liveness/readiness/aggregate health are verified before Web/Admin restart and local/public smoke checks.
+10. Automatic staging CD queries the private AI health endpoint and fails closed unless the payload explicitly proves paper mode (`paper`, `paper-only`, or boolean paper-mode true). The AI service remains private and is not restarted by this workflow.
 
 Deployment concurrency is serialized. An older release is not allowed to race a newer `main` SHA.
 
@@ -131,16 +133,17 @@ The script:
 5. verifies Node.js 22 and the approved pnpm version;
 6. installs from the frozen lockfile;
 7. builds API, Web, and Admin before runtime mutation;
-8. restarts API first;
-9. requires API liveness, dependency-backed readiness, and aggregate health;
-10. restarts Web and Admin only after API readiness passes;
-11. requires local and public smoke checks;
-12. requires AI paper-mode proof when `AI_HEALTH_URL` is supplied (automatic CD always supplies it);
-13. re-verifies the final Git SHA and emits timestamped secret-safe evidence.
+8. applies pending TypeORM migrations using the candidate release before any PM2 restart;
+9. restarts API first;
+10. requires API liveness, dependency-backed readiness, and aggregate health;
+11. restarts Web and Admin only after API readiness passes;
+12. requires local and public smoke checks;
+13. requires AI paper-mode proof when `AI_HEALTH_URL` is supplied (automatic CD always supplies it);
+14. re-verifies the final Git SHA and emits timestamped secret-safe evidence.
 
 ## Failure behavior
 
-The deployment stops immediately on install, build, restart, health, or final-SHA failure. Failure evidence contains only safe control-plane metadata: UTC timestamp, candidate SHA, previous SHA, failed stage, and exit code.
+The deployment stops immediately on install, build, database migration, restart, health, or final-SHA failure. Failure evidence contains only safe control-plane metadata: UTC timestamp, candidate SHA, previous SHA, failed stage, and exit code.
 
 The workflow does not silently auto-rollback. Failed releases remain visible and rollback must explicitly identify the failed and rollback SHAs.
 

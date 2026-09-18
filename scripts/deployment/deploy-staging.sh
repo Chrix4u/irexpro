@@ -184,6 +184,13 @@ corepack pnpm@"$PNPM_VERSION" --filter @irexpro/web build
 STAGE="build-admin"
 corepack pnpm@"$PNPM_VERSION" --filter @irexpro/admin build
 
+# Keep the staging database schema on the same immutable release as the API.
+# Migrations run only after every application build succeeds and before ANY
+# PM2 process is restarted. A migration failure therefore fails closed while
+# the previously running release remains untouched.
+STAGE="database-migrations"
+corepack pnpm@"$PNPM_VERSION" --filter @irexpro/api migration:run
+
 STAGE="restart-api"
 pm2 restart "$API_PM2_NAME" --update-env
 STAGE="api-liveness"
