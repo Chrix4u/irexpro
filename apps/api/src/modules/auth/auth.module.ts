@@ -25,6 +25,7 @@ import { Role } from '../users/entities/role.entity';
 import { PasswordResetToken } from './entities/password-reset-token.entity';
 import { AuthVerificationToken } from './entities/auth-verification-token.entity';
 import { AuditModule } from '../audit/audit.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
@@ -63,6 +64,7 @@ import { AuditModule } from '../audit/audit.module';
       }),
     }),
     AuditModule,
+    NotificationsModule,
   ],
   controllers: [AuthController],
   providers: [
