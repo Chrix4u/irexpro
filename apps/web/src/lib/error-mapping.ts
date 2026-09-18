@@ -33,6 +33,7 @@ export interface ApiErrorResult {
 
 const DEFAULT_MESSAGE = 'Something went wrong. Please try again.';
 const NETWORK_MESSAGE = 'Unable to reach the server. Please check your connection.';
+const SERVER_MESSAGE = 'The server returned an error. Please try again.';
 const MAX_SAFE_DETAIL_LENGTH = 500;
 
 /** Map of known error codes → safe user-facing copy. */
@@ -255,7 +256,8 @@ function messageForStatus(err: unknown): string | undefined {
 
   if (status === 401) return CODE_MESSAGES.UNAUTHORIZED;
   if (status === 403) return extractSafeBackendMessage(err) ?? CODE_MESSAGES.FORBIDDEN;
-  if (status === 0 || status >= 500) return NETWORK_MESSAGE;
+  if (status === 0) return NETWORK_MESSAGE;
+  if (status >= 500) return SERVER_MESSAGE;
   if (status >= 400) return extractSafeBackendMessage(err) ?? DEFAULT_MESSAGE;
   return undefined;
 }
