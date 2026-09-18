@@ -126,9 +126,7 @@ export class TradingService {
       connection.id,
     );
     if (!allocation.hasAllocation || !allocation.allocatedCapital) {
-      throw new ForbiddenException(
-        'Allocate capital to AI Trading before turning automation on.',
-      );
+      throw new ForbiddenException('Allocate capital to AI Trading before turning automation on.');
     }
 
     // Risk policy is server-managed. The profile still exists because the
@@ -514,6 +512,4 @@ export class TradingService {
       );
     }
   }
-
-
 }
