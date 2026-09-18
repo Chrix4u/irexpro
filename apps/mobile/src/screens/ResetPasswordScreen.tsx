@@ -17,19 +17,16 @@ import {
 } from './password-recovery.logic';
 
 type Props = {
-  token?: string;
-  identifier?: string;
+  identifier: string;
   onBack: () => void;
   onCompleted: () => Promise<void> | void;
 };
 
 export default function ResetPasswordScreen({
-  token,
   identifier,
   onBack,
   onCompleted,
 }: Props) {
-  const emailTokenMode = Boolean(token);
   const [code, setCode] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -37,12 +34,14 @@ export default function ResetPasswordScreen({
   const [completed, setCompleted] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const canSubmit = useMemo(() => {
-    if (!isValidResetPassword(password)) return false;
-    if (password !== confirmPassword) return false;
-    if (emailTokenMode) return true;
-    return Boolean(identifier?.trim()) && isValidPhoneResetCode(code);
-  }, [code, confirmPassword, emailTokenMode, identifier, password]);
+  const canSubmit = useMemo(
+    () =>
+      Boolean(identifier.trim()) &&
+      isValidPhoneResetCode(code) &&
+      isValidResetPassword(password) &&
+      password === confirmPassword,
+    [code, confirmPassword, identifier, password],
+  );
 
   async function submit() {
     if (!canSubmit || loading) return;
@@ -50,19 +49,17 @@ export default function ResetPasswordScreen({
     setLoading(true);
     setError(null);
     try {
-      await api.resetPassword(
-        emailTokenMode
-          ? { token: token!, password }
-          : { identifier: identifier!.trim(), code: code.trim(), password },
-      );
+      await api.resetPassword({
+        identifier: identifier.trim(),
+        code: code.trim(),
+        password,
+      });
       setCompleted(true);
       await onCompleted();
     } catch (err) {
       if (err instanceof ApiClientError && (err.statusCode === 400 || err.statusCode === 401)) {
         setError(
-          emailTokenMode
-            ? 'This reset link is invalid or has expired. Request a new password reset.'
-            : 'This reset code is invalid or has expired. Request a new code and try again.',
+          'This reset code is invalid or has expired. Request a new code and try again.',
         );
       } else {
         setError('Unable to reset your password right now. Check your connection and try again.');
@@ -80,9 +77,7 @@ export default function ResetPasswordScreen({
       <Text style={styles.eyebrow}>ACCOUNT RECOVERY</Text>
       <Text style={styles.title}>Create a new password</Text>
       <Text style={styles.subtitle}>
-        {emailTokenMode
-          ? 'Your secure reset link has been opened in iRexPro.'
-          : `Enter the 6-digit code sent to ${identifier ?? 'your phone'}.`}
+        Enter the 6-digit code sent to {identifier || 'your phone'}.
       </Text>
 
       {completed ? (
@@ -97,18 +92,16 @@ export default function ResetPasswordScreen({
         </View>
       ) : (
         <>
-          {!emailTokenMode ? (
-            <TextInput
-              accessibilityLabel="Password reset code"
-              style={styles.input}
-              placeholder="6-digit code"
-              placeholderTextColor="#6b7494"
-              value={code}
-              onChangeText={setCode}
-              keyboardType="number-pad"
-              maxLength={6}
-            />
-          ) : null}
+          <TextInput
+            accessibilityLabel="Password reset code"
+            style={styles.input}
+            placeholder="6-digit code"
+            placeholderTextColor="#6b7494"
+            value={code}
+            onChangeText={setCode}
+            keyboardType="number-pad"
+            maxLength={6}
+          />
 
           <TextInput
             accessibilityLabel="New password"
