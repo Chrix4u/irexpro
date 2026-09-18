@@ -68,6 +68,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function isNetworkReadFailure(error: unknown): boolean {
+  if (!isRecord(error)) return false;
+  if (error.statusCode === 0) return true;
+  const message = typeof error.message === 'string' ? error.message.toLowerCase() : '';
+  return (
+    message.includes('network error contacting api') ||
+    message.includes('failed to fetch') ||
+    message.includes('network request failed')
+  );
+}
+
+async function readWithSingleNetworkRetry<T>(read: () => Promise<T>): Promise<T> {
+  try {
+    return await read();
+  } catch (error) {
+    if (!isNetworkReadFailure(error)) throw error;
+    // Browser/network edges can transiently reset one request while sibling
+    // reads succeed. Retry idempotent GET reads once only; never retry writes,
+    // auth failures, validation errors, or 5xx responses.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    return read();
+  }
+}
+
 function isTradingSessionStatus(value: unknown): value is TradingSessionView['status'] {
   return (
     value === 'ACTIVE' ||
@@ -192,9 +216,9 @@ function isTerminalBrokerAuthorizationStatus(
  */
 export async function loadTraderTerminalStatus(): Promise<TraderTerminalStatus> {
   const [riskPayload, sessionPayload, brokerPayload] = await Promise.all([
-    api.request<unknown>('/risk/status'),
-    api.request<unknown>('/trading/sessions/active'),
-    api.listBrokerConnections(),
+    readWithSingleNetworkRetry(() => api.request<unknown>('/risk/status')),
+    readWithSingleNetworkRetry(() => api.request<unknown>('/trading/sessions/active')),
+    readWithSingleNetworkRetry(() => api.listBrokerConnections()),
   ]);
 
   if (!isRiskStatus(riskPayload)) {
