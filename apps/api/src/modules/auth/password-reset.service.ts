@@ -130,6 +130,7 @@ export class PasswordResetService {
       rawToken,
       userId: user.id,
       userName: user.email ?? user.phone ?? user.id,
+      ...(user.countryCode ? { countryCode: user.countryCode } : {}),
     });
 
     await this.auditService.log({
