@@ -40,7 +40,8 @@ export class BrokerConnectionResponseDto {
 
   @Expose()
   @ApiPropertyOptional({
-    description: 'Server-derived canonical logical broker-account key; null for legacy/unverified rows.',
+    description:
+      'Server-derived canonical logical broker-account key; null for legacy/unverified rows.',
   })
   logicalAccountKey: string | null;
 
