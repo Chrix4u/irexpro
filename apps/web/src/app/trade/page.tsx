@@ -124,14 +124,17 @@ export default function AiTradingPage() {
   const [togglingAutomation, setTogglingAutomation] = useState(false);
   const [pendingAutomationAction, setPendingAutomationAction] = useState<'START' | 'STOP' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [allocationWarning, setAllocationWarning] = useState<string | null>(null);
   const [activityWarning, setActivityWarning] = useState<string | null>(null);
 
   const initializedActivity = useRef(false);
   const seenPositionIds = useRef<Set<string>>(new Set());
   const seenExecutionStates = useRef<Map<string, string>>(new Map());
 
+  const controlStateReady = Boolean(terminal?.risk && terminal?.sessionStateKnown);
   const automationOn =
-    terminal?.session?.status === 'ACTIVE' || terminal?.session?.status === 'PAUSED';
+    terminal?.sessionStateKnown === true &&
+    (terminal.session?.status === 'ACTIVE' || terminal.session?.status === 'PAUSED');
 
   // The ACTIVE session is the execution authority. While it exists, the
   // workspace must stay visibly pinned to that exact broker account instead
@@ -235,12 +238,15 @@ export default function AiTradingPage() {
         try {
           const nextAllocation = await api.getCapitalAllocation(brokerId);
           setAllocation(nextAllocation);
+          setAllocationWarning(null);
           if (nextAllocation.allocatedCapital) {
             setAllocationAmount(nextAllocation.allocatedCapital);
           }
-        } catch (requestError) {
+        } catch {
           setAllocation(null);
-          if (showSpinner) setError(mapApiError(requestError).message);
+          setAllocationWarning(
+            'Your broker account is connected, but its AI capital allocation could not be loaded. Trading controls remain disabled until this data is available.',
+          );
         }
       } else {
         setAllocation(null);
@@ -294,9 +300,13 @@ export default function AiTradingPage() {
     try {
       const nextAllocation = await api.getCapitalAllocation(nextId);
       setAllocation(nextAllocation);
+      setAllocationWarning(null);
       setAllocationAmount(nextAllocation.allocatedCapital ?? '');
-    } catch (requestError) {
-      setError(mapApiError(requestError).message);
+    } catch {
+      setAllocation(null);
+      setAllocationWarning(
+        'This broker is connected, but its AI capital allocation could not be loaded yet.',
+      );
     }
   }
 
@@ -331,6 +341,12 @@ export default function AiTradingPage() {
   function requestAutomationAction() {
     if (!selectedBroker) {
       notify.warning('Connect a broker account first.');
+      return;
+    }
+    if (!controlStateReady) {
+      notify.warning(
+        'AI Trading controls are temporarily unavailable while risk protection and session status are being verified.',
+      );
       return;
     }
     if (!automationOn && (!allocation?.hasAllocation || !allocation.allocatedCapital)) {
@@ -449,6 +465,10 @@ export default function AiTradingPage() {
         </section>
 
         {error && <Alert variant="error">{error}</Alert>}
+        {terminal?.controlWarnings.map((warning) => (
+          <Alert key={warning} variant="warning">{warning}</Alert>
+        ))}
+        {allocationWarning && <Alert variant="warning">{allocationWarning}</Alert>}
         {activityWarning && <Alert variant="warning">{activityWarning}</Alert>}
 
         {loading && !terminal ? (
@@ -540,7 +560,7 @@ export default function AiTradingPage() {
                   block
                   className="ai-automation-action"
                   aria-label={automationOn ? 'Stop AI Trading' : 'Start AI Trading'}
-                  disabled={!selectedBroker || togglingAutomation}
+                  disabled={!selectedBroker || !controlStateReady || togglingAutomation}
                   onClick={requestAutomationAction}
                 >
                   {togglingAutomation
@@ -573,10 +593,16 @@ export default function AiTradingPage() {
               <Card className="ai-overview-card">
                 <span className="ai-control-card__label">AI session</span>
                 <strong className="ai-overview-card__value">
-                  {terminal?.session?.status ?? 'STOPPED'}
+                  {!terminal?.sessionStateKnown
+                    ? 'UNAVAILABLE'
+                    : terminal.session?.status ?? 'STOPPED'}
                 </strong>
                 <span className="muted text-sm">
-                  {terminal?.session ? `Started ${formatTimestamp(terminal.session.startedAt)}` : 'Start AI Trading to begin'}
+                  {!terminal?.sessionStateKnown
+                    ? 'Session status is being verified'
+                    : terminal.session
+                      ? `Started ${formatTimestamp(terminal.session.startedAt)}`
+                      : 'Start AI Trading to begin'}
                 </span>
               </Card>
               <Card className="ai-overview-card">
