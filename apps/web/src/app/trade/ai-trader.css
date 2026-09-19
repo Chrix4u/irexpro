@@ -40,7 +40,7 @@
   display: flex;
   align-items: center;
   gap: 0.65rem;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   white-space: nowrap;
 }
 
@@ -96,17 +96,32 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.65rem;
-  align-items: end;
+  align-items: stretch;
 }
 
 .ai-allocation-row .input-group {
   margin: 0;
+  min-width: 0;
 }
 
-.ai-automation-state {
+.ai-allocation-row .input,
+.ai-allocation-row .btn {
+  height: 46px;
+  min-height: 46px;
+}
+
+.ai-allocation-row .btn {
+  align-self: stretch;
+  padding-block: 0;
+}
+
+.ai-control-card__status-row {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
   min-height: 30px;
+  flex-wrap: nowrap;
 }
 
 .ai-automation-action {
@@ -400,6 +415,10 @@
   .ai-trader__hero {
     flex-direction: column;
     border-radius: 14px;
+  }
+
+  .ai-trader__hero-state {
+    flex-wrap: wrap;
   }
 
   .ai-control-deck,
