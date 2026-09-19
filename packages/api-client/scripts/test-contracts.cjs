@@ -732,6 +732,78 @@ async function testConfirmExecutionConfirmation409Contract() {
   );
 }
 
+async function testUnauthorizedRecoverySingleFlightContract() {
+  const calls = [];
+  let accessToken = 'fixture-expired-token';
+  let recoveryCalls = 0;
+
+  const fakeFetch = async (url, init) => {
+    calls.push({ url, init });
+    if (init.headers.Authorization === 'Bearer fixture-expired-token') {
+      return {
+        ok: false,
+        status: 401,
+        statusText: 'Unauthorized',
+        json: async () => ({ statusCode: 401, message: 'Expired access token' }),
+      };
+    }
+    assert.equal(init.headers.Authorization, 'Bearer fixture-refreshed-token');
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => ({ ok: true }),
+    };
+  };
+
+  const { createApiClient } = loadApiClient(fakeFetch);
+  const client = createApiClient({
+    baseUrl: 'https://api.example.test/api/v1',
+    getAccessToken: () => accessToken,
+    onUnauthorized: async () => {
+      recoveryCalls += 1;
+      await Promise.resolve();
+      accessToken = 'fixture-refreshed-token';
+      return accessToken;
+    },
+  });
+
+  await Promise.all([
+    client.request('/fixture/a'),
+    client.request('/fixture/b'),
+  ]);
+
+  assert.equal(recoveryCalls, 1);
+  assert.equal(calls.length, 4);
+}
+
+async function testUnauthorizedRecoverySkipsRefreshEndpoint() {
+  let recoveryCalls = 0;
+  const fakeFetch = async () => ({
+    ok: false,
+    status: 401,
+    statusText: 'Unauthorized',
+    json: async () => ({ statusCode: 401, message: 'Expired refresh token' }),
+  });
+
+  const { createApiClient, ApiClientError } = loadApiClient(fakeFetch);
+  const client = createApiClient({
+    baseUrl: 'https://api.example.test/api/v1',
+    getAccessToken: () => 'fixture-expired-token',
+    onUnauthorized: async () => {
+      recoveryCalls += 1;
+      return 'fixture-refreshed-token';
+    },
+  });
+
+  await assert.rejects(client.refresh(), (error) => {
+    assert.ok(error instanceof ApiClientError);
+    assert.equal(error.statusCode, 401);
+    return true;
+  });
+  assert.equal(recoveryCalls, 0);
+}
+
 async function main() {
   await testMfaSetupPasswordContract();
   console.log('api-client MFA setup contract test passed.');
@@ -763,6 +835,10 @@ async function main() {
   console.log('api-client execution confirmations contract test passed.');
   await testConfirmExecutionConfirmation409Contract();
   console.log('api-client confirmation 409-failure contract test passed.');
+  await testUnauthorizedRecoverySingleFlightContract();
+  console.log('api-client single-flight auth recovery contract test passed.');
+  await testUnauthorizedRecoverySkipsRefreshEndpoint();
+  console.log('api-client auth refresh recursion guard test passed.');
 }
 
 main().catch((error) => {
