@@ -21,7 +21,6 @@
 import type {
   MyProfileView,
   SecurityEventSeverity,
-  TradingExperienceLevel,
   UpdateMyProfileRequest,
   UserStatus,
 } from '@irexpro/types';
@@ -37,33 +36,13 @@ const COUNTRY_CODE_PATTERN = /^[A-Z]{2}$/u;
 const CURRENCY_PATTERN = /^[A-Z]{3}$/u;
 const TIMEZONE_PATTERN = /^[A-Za-z0-9_+\-]+(\/[A-Za-z0-9_+\-]+)*$/u;
 
-/** All valid self-reported trading experience levels (enum member order). */
-export const TRADING_EXPERIENCE_LEVELS: readonly TradingExperienceLevel[] = [
-  'BEGINNER',
-  'INTERMEDIATE',
-  'ADVANCED',
-  'PROFESSIONAL',
-];
-
-/** Pill-selector options for the trading experience level field. */
-export const PROFILE_EXPERIENCE_OPTIONS: ReadonlyArray<{
-  value: TradingExperienceLevel;
-  label: string;
-}> = [
-  { value: 'BEGINNER', label: 'Beginner' },
-  { value: 'INTERMEDIATE', label: 'Intermediate' },
-  { value: 'ADVANCED', label: 'Advanced' },
-  { value: 'PROFESSIONAL', label: 'Professional' },
-];
-
 // ─── Editable form values ──────────────────────────────────────────────────
 
 /**
  * Editable Personal Information form fields.
  *
  * Server values are nullable; the form stores them as strings where an empty
- * (or all-whitespace) value means "not set". `tradingExperienceLevel` uses ''
- * for "not set" so the whole form stays string-friendly for inputs.
+ * (or all-whitespace) value means "not set".
  */
 export interface ProfileFieldValues {
   firstName: string;
@@ -72,7 +51,6 @@ export interface ProfileFieldValues {
   countryCode: string;
   timezone: string;
   preferredCurrency: string;
-  tradingExperienceLevel: TradingExperienceLevel | '';
 }
 
 export type ProfileFieldKey = keyof ProfileFieldValues;
@@ -200,26 +178,6 @@ export function validateDateOfBirth(value: string): string | null {
   return null;
 }
 
-/** Whether a string is a valid trading experience level enum member. */
-export function isValidTradingExperienceLevel(
-  value: string,
-): value is TradingExperienceLevel {
-  return (TRADING_EXPERIENCE_LEVELS as readonly string[]).includes(value);
-}
-
-/**
- * Trading experience level: optional (empty = "not set"), but when present it
- * must be one of the four enum members.
- */
-export function validateTradingExperienceLevel(value: string): string | null {
-  const trimmed = value.trim();
-  if (trimmed.length === 0) return null;
-  if (!isValidTradingExperienceLevel(trimmed)) {
-    return 'Select a trading experience level.';
-  }
-  return null;
-}
-
 /**
  * Aggregate field-level validation errors for the Personal Information form.
  * Keys are present only for fields that currently fail validation.
@@ -247,11 +205,6 @@ export function profileFieldErrors(
   const preferredCurrency = validatePreferredCurrency(values.preferredCurrency);
   if (preferredCurrency) errors.preferredCurrency = preferredCurrency;
 
-  const tradingExperienceLevel = validateTradingExperienceLevel(
-    values.tradingExperienceLevel,
-  );
-  if (tradingExperienceLevel) errors.tradingExperienceLevel = tradingExperienceLevel;
-
   return errors;
 }
 
@@ -266,14 +219,12 @@ export function toProfileFieldValues(view: MyProfileView): ProfileFieldValues {
     countryCode: view.countryCode ?? '',
     timezone: view.timezone ?? '',
     preferredCurrency: view.preferredCurrency ?? '',
-    tradingExperienceLevel: view.profile.tradingExperienceLevel ?? '',
   };
 }
 
 /**
  * Whether any editable field differs from the stored profile (trim-aware).
- * Country code and currency compare after normalization; the experience
- * level compares directly (enum member or "not set").
+ * Country code and currency compare after normalization.
  */
 export function isProfileDirty(
   base: MyProfileView,
@@ -287,8 +238,7 @@ export function isProfileDirty(
     normalizeCountryCode(stored.countryCode) !== normalizeCountryCode(values.countryCode) ||
     stored.timezone.trim() !== values.timezone.trim() ||
     normalizePreferredCurrency(stored.preferredCurrency) !==
-      normalizePreferredCurrency(values.preferredCurrency) ||
-    stored.tradingExperienceLevel !== values.tradingExperienceLevel
+      normalizePreferredCurrency(values.preferredCurrency)
   );
 }
 
@@ -338,10 +288,6 @@ export function buildUpdateMyProfileRequest(
     preferredCurrency !== normalizePreferredCurrency(base.preferredCurrency ?? '')
   ) {
     request.preferredCurrency = preferredCurrency;
-  }
-
-  if (values.tradingExperienceLevel !== '' && values.tradingExperienceLevel !== base.profile.tradingExperienceLevel) {
-    request.tradingExperienceLevel = values.tradingExperienceLevel;
   }
 
   return request;
