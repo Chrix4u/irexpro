@@ -152,23 +152,6 @@ jobs:
           journalctl -k --since '-45 min' --no-pager 2>/dev/null | grep -Ei 'out of memory|oom|killed process|i/o error|ext4|xfs|nvme|blk_update|no space left' | tail -n 120 || true
           echo
 
-          echo '=== major tree first-level sizes ==='
-          for parent in /home/lightworld /usr/local /var /root /opt; do
-            [[ -d "$parent" ]] || continue
-            echo "--- $parent ---"
-            timeout 150s du -x -B1 --max-depth=1 "$parent" 2>/dev/null \
-              | sort -n \
-              | awk '{size=$1; $1=""; sub(/^ /,""); printf "%.2f GiB\t%s\n", size/1073741824, $0}' || true
-          done
-          echo
-
-          echo '=== obvious very large files >=5 GiB ==='
-          timeout 90s find /home/lightworld /usr/local /var /root /opt \
-            -xdev -type f -size +5G -printf '%s %p\n' 2>/dev/null \
-            | sort -n \
-            | awk '{size=$1; $1=""; sub(/^ /,""); printf "%.2f GiB\t%s\n", size/1073741824, $0}' || true
-          echo
-
           echo '=== filesystem df ==='
           df -B1 / || true
           echo
