@@ -423,6 +423,27 @@ export class TradingService {
     if (!session || session.userId !== userId) {
       throw new NotFoundException(`Trading session ${sessionId} not found`);
     }
+
+    if (session.executionMode !== ExecutionMode.PAPER_ONLY) {
+      return {
+        enabled: this.aiEngineClient.isSchedulerIntegrationEnabled(),
+        registered: false,
+        trading_session_id: sessionId,
+        active: false,
+        instruments: [],
+        timeframe: null,
+        interval_seconds: null,
+        source: null,
+        last_run_at: null,
+        next_run_at: null,
+        last_decision: 'BLOCKED',
+        last_reason: 'model_not_approved_for_live',
+        last_confidence_score: null,
+        confidence_threshold: null,
+        last_publish_failed: false,
+      };
+    }
+
     return this.aiEngineClient.getSessionStatus(sessionId);
   }
 
