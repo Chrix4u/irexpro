@@ -72,7 +72,12 @@ def test_collect_historical_corpus_pages_backwards_and_deduplicates(tmp_path: Pa
     assert result["row_count"] == 300
     assert result["pages_fetched"] == 2
     assert result["closed_candles_only"] is True
+    assert result["source_account_fingerprint"]
+    assert "broker_connection_id" not in result
     assert Path(result["manifest_path"]).is_file()
+    manifest_text = Path(result["manifest_path"]).read_text(encoding="utf-8")
+    assert "00000000-0000-0000-0000-000000000001" not in manifest_text
+    assert "00000000-0000-0000-0000-000000000002" not in manifest_text
     assert requested_before[1] < requested_before[0]
 
 
