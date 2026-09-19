@@ -110,9 +110,19 @@ if [[ "${FAKE_BUILD_FAILURE:-}" == 'api' && "$*" == *'--filter @irexpro/api buil
   printf 'simulated API build failure\n' >&2
   exit 41
 fi
-if [[ "${FAKE_MIGRATION_FAILURE:-0}" == '1' && "$*" == *'--filter @irexpro/api migration:run'* ]]; then
-  printf 'simulated database migration failure\n' >&2
-  exit 42
+if [[ "$*" == *'--filter @irexpro/api migration:run'* ]]; then
+  if [[ "${FAKE_MIGRATION_FAILURE:-0}" == '1' ]]; then
+    printf 'simulated database migration failure\n' >&2
+    exit 42
+  fi
+  transient_failures="${FAKE_MIGRATION_TRANSIENT_FAILURES:-0}"
+  if [[ "$transient_failures" =~ ^[0-9]+$ ]]; then
+    migration_attempts="$(grep -F -c '@irexpro/api migration:run' "$COMMAND_LOG" || true)"
+    if (( migration_attempts <= transient_failures )); then
+      printf 'error: the database system is not yet accepting connections\n' >&2
+      exit 43
+    fi
+  fi
 fi
 exit 0
 SHIM
@@ -195,6 +205,8 @@ run_deploy() {
     AI_HEALTH_URL='http://local.test/ai/health' \
     MAX_HEALTH_ATTEMPTS=1 \
     HEALTH_RETRY_SECONDS=0 \
+    MIGRATION_MAX_ATTEMPTS=3 \
+    MIGRATION_RETRY_SECONDS=0 \
     "$@" \
     bash "$SCRIPT_DIR/deploy-staging.sh" "$candidate"
 }
@@ -282,6 +294,18 @@ grep -q '@irexpro/api migration:run' "$COMMAND_LOG" || fail 'Database migration 
 if grep -q '^pm2 ' "$COMMAND_LOG"; then
   fail 'Runtime mutation occurred even though the database migration failed.'
 fi
+
+migration_failure_attempts="$(grep -F -c '@irexpro/api migration:run' "$COMMAND_LOG" || true)"
+[[ "$migration_failure_attempts" -eq 1 ]] || fail 'Non-transient migration failures must not be retried.'
+
+make_fixture 'migration-transient-retry'
+git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
+migration_retry_output="$(run_deploy "$FIXTURE_CANDIDATE_SHA" FAKE_MIGRATION_TRANSIENT_FAILURES=2)"
+[[ "$migration_retry_output" == *'STAGING DEPLOYMENT VERIFIED'* ]] || fail 'Transient PostgreSQL startup failures were not recovered by bounded migration retries.'
+migration_retry_attempts="$(grep -F -c '@irexpro/api migration:run' "$COMMAND_LOG" || true)"
+[[ "$migration_retry_attempts" -eq 3 ]] || fail 'Transient migration retry test must exercise exactly two retries before success.'
+grep -q '^pm2 restart irexpro-ai-staging ' "$COMMAND_LOG" || fail 'Runtime restart must proceed after transient migration recovery.'
+
 
 make_fixture 'readiness-failure'
 git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
