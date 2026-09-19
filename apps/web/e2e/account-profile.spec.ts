@@ -16,6 +16,8 @@ test.describe('Signed-in account profile center', () => {
     await expect(page.getByLabel('Date of birth')).toHaveValue('1990-05-15');
     await expect(page.getByText(/KYC · Approved/i)).toBeVisible();
     await expect(page.getByRole('button', { name: /save profile/i })).toBeVisible();
+    await expect(page.getByLabel(/experience level/i)).toHaveCount(0);
+    await expect(page.getByText(/^Trading experience$/i)).toHaveCount(0);
     await expect(page.getByRole('button', { name: /change password/i })).toBeVisible();
     await expect(page.getByRole('link', { name: /forgot current password/i })).toHaveAttribute(
       'href',

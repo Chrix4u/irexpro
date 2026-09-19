@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsInt, IsString, IsUUID, Max, Min } from 'class-validator';
+import { IsISO8601, IsInt, IsOptional, IsString, IsUUID, Max, Min } from 'class-validator';
 
 export class InternalOhlcvQueryDto {
   @IsUUID()
@@ -19,4 +19,8 @@ export class InternalOhlcvQueryDto {
   @Min(10)
   @Max(500)
   limit: number = 100;
+
+  @IsOptional()
+  @IsISO8601()
+  before?: string;
 }
