@@ -283,6 +283,7 @@ function assertKycQueue(value: unknown): KycReviewQueueItem[] {
 
 export interface EligibilityApi {
   getMyStatus(): Promise<EligibilityStatusView>;
+  submitKyc(): Promise<EligibilityStatusView>;
   acceptDisclosures(body: AcceptEligibilityDisclosuresRequest): Promise<EligibilityStatusView>;
   listReviewQueue(): Promise<EligibilityReviewQueueItem[]>;
   reviewUser(userId: string, body: ReviewUserEligibilityRequest): Promise<EligibilityStatusView>;
@@ -298,6 +299,12 @@ export interface EligibilityApi {
 export function createEligibilityApi(client: Pick<ApiClient, 'request'>): EligibilityApi {
   return {
     getMyStatus: async () => assertStatus(await client.request<unknown>('/users/me/eligibility')),
+    submitKyc: async () =>
+      assertStatus(
+        await client.request<unknown>('/users/me/eligibility/kyc-submission', {
+          method: 'POST',
+        }),
+      ),
     acceptDisclosures: async (body) =>
       assertStatus(
         await client.request<unknown>('/users/me/eligibility/disclosures', {

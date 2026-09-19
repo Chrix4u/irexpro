@@ -17,7 +17,7 @@ import {
   UserEligibilityReview,
 } from './entities/user-eligibility-review.entity';
 import { KycReviewDecision, UserKycReview } from './entities/user-kyc-review.entity';
-import { KycStatus } from './entities/user-profile.entity';
+import { KycStatus, UserProfile } from './entities/user-profile.entity';
 import { User, UserStatus } from './entities/user.entity';
 import { TradingAuthorityService } from '../execution-authority/trading-authority.service';
 import { GrantInvalidationService } from '../execution-authority/grant-invalidation.service';
@@ -147,6 +147,8 @@ export class EligibilityService {
     private readonly reviewRepo: Repository<UserEligibilityReview>,
     @InjectRepository(UserKycReview)
     private readonly kycReviewRepo: Repository<UserKycReview>,
+    @InjectRepository(UserProfile)
+    private readonly profileRepo: Repository<UserProfile>,
     private readonly configService: ConfigService,
     private readonly auditService: AuditService,
     // Round 6 (#300/#363): the unified execution-authority seams (leaf module
@@ -239,6 +241,59 @@ export class EligibilityService {
     return this.buildStatus(user);
   }
 
+  async submitKyc(userId: string): Promise<EligibilityStatusView> {
+    const user = await this.userRepo.findOne({ where: { id: userId }, relations: ['profile'] });
+    if (!user) throw new NotFoundException('User not found.');
+
+    const profile = user.profile;
+    if (!profile?.dateOfBirth) {
+      throw new BadRequestException(
+        'Complete your identity profile and date of birth before submitting KYC.',
+      );
+    }
+    if (!user.countryCode) {
+      throw new BadRequestException('Complete your country information before submitting KYC.');
+    }
+    if (this.evaluateAge(profile.dateOfBirth) !== 'ADULT') {
+      throw new BadRequestException(
+        'KYC submission is available only when the adult-age requirement is met.',
+      );
+    }
+
+    const currentStatus = await this.resolveKycStatus(
+      user.id,
+      profile.dateOfBirth,
+      profile.kycStatus,
+    );
+
+    if (currentStatus === KycStatus.APPROVED || currentStatus === KycStatus.PENDING) {
+      return this.buildStatus(user);
+    }
+    if (currentStatus === KycStatus.REJECTED) {
+      throw new BadRequestException(
+        'KYC was rejected for the current identity record. Update the required identity information or contact support before submitting again.',
+      );
+    }
+
+    profile.kycStatus = KycStatus.PENDING;
+    profile.kycSubmittedAt = new Date();
+    profile.kycApprovedAt = null;
+    await this.profileRepo.save(profile);
+
+    await this.auditService.log({
+      actorUserId: userId,
+      action: AuditAction.USER_KYC_SUBMITTED,
+      resourceType: 'UserProfile',
+      resourceId: profile.id,
+      metadata: {
+        dateOfBirthBound: true,
+        countryCode: user.countryCode.toUpperCase(),
+      },
+    });
+
+    return this.buildStatus(user);
+  }
+
   async listReviewQueue(): Promise<EligibilityReviewQueueItem[]> {
     const policy = this.currentPolicy();
     const users = await this.userRepo.find({
@@ -286,7 +341,10 @@ export class EligibilityService {
         profile.dateOfBirth,
         profile.kycStatus,
       );
-      if (kycStatus !== KycStatus.NONE && kycStatus !== KycStatus.PENDING) continue;
+      // Only an explicit user submission enters the administrator review
+      // queue. Merely having a complete profile must not silently opt a user
+      // into identity review.
+      if (kycStatus !== KycStatus.PENDING) continue;
 
       queue.push({
         userId: user.id,
