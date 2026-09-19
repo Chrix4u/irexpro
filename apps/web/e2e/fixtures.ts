@@ -8,6 +8,7 @@ import type {
   SupportedBroker,
   BrokerRegistryCatalog,
 } from '@irexpro/types';
+import type { EligibilityStatusView } from '@irexpro/types/eligibility';
 
 /**
  * Shared E2E fixtures for the iRexPro web Playwright suite.
@@ -48,12 +49,62 @@ export const mockUserProfile = {
   id: mockAuthUser.id,
   email: mockAuthUser.email,
   phone: mockAuthUser.phone,
+  status: mockAuthUser.status,
+  emailVerifiedAt: '2026-08-01T08:00:00.000Z',
+  phoneVerifiedAt: '2026-08-02T08:00:00.000Z',
   countryCode: mockAuthUser.countryCode,
   timezone: 'Africa/Accra',
   preferredCurrency: 'USD',
+  mfaEnabled: false,
+  lastLoginAt: mockAuthUser.lastLoginAt,
+  createdAt: mockAuthUser.createdAt,
   profile: {
+    firstName: mockAuthUser.firstName,
+    lastName: mockAuthUser.lastName,
+    dateOfBirth: '1990-05-15',
     tradingExperienceLevel: 'INTERMEDIATE' as const,
+    kycStatus: 'APPROVED' as const,
   },
+};
+
+const eligibilityHash = 'a'.repeat(64);
+const eligibilityPolicyFingerprint = 'f'.repeat(64);
+const eligibilityDisclosureKeys = [
+  'AUTOMATED_TRADING_RISK',
+  'NO_PROFIT_GUARANTEE',
+  'BROKER_EXECUTION_AUTHORITY',
+  'LEGAL_ELIGIBILITY_ATTESTATION',
+] as const;
+
+export const mockEligibilityStatus: EligibilityStatusView = {
+  policyVersion: 'eligibility.e2e',
+  policyFingerprint: eligibilityPolicyFingerprint,
+  countryCode: 'GH',
+  jurisdictionStatus: 'ELIGIBLE',
+  decisionSource: 'POLICY',
+  reasonCode: 'POLICY_ALLOWED',
+  reviewedAt: null,
+  ageStatus: 'ADULT',
+  kycStatus: 'APPROVED',
+  identityReasonCode: 'IDENTITY_APPROVED',
+  disclosures: eligibilityDisclosureKeys.map((key) => ({
+    key,
+    version: '1.0',
+    title: key.replaceAll('_', ' '),
+    body: `E2E disclosure for ${key}.`,
+    contentSha256: eligibilityHash,
+    required: true as const,
+  })),
+  consents: eligibilityDisclosureKeys.map((key) => ({
+    policyVersion: 'eligibility.e2e',
+    policyFingerprint: eligibilityPolicyFingerprint,
+    key,
+    version: '1.0',
+    contentSha256: eligibilityHash,
+    acceptedAt: '2026-08-03T08:00:00.000Z',
+  })),
+  missingConsentKeys: [],
+  canProceed: true,
 };
 
 export const mockOnboardingStatus: OnboardingStatus = {
@@ -247,15 +298,45 @@ export async function setupAuthInterception(page: Page): Promise<void> {
     if (apiPath === 'auth/logout') {
       return route.fulfill(jsonFulfill(200, { message: 'Logged out' }));
     }
+    if (apiPath === 'auth/change-password' && method === 'POST') {
+      return route.fulfill(jsonFulfill(200, { message: 'Password changed successfully' }));
+    }
 
     // ── Users / onboarding ──────────────────────────────────────────────
     if (apiPath === 'users/me/onboarding-status') {
       return route.fulfill(jsonFulfill(200, mockOnboardingStatus));
     }
+    if (apiPath === 'users/me/eligibility/kyc-submission' && method === 'POST') {
+      return route.fulfill(
+        jsonFulfill(200, {
+          ...mockEligibilityStatus,
+          kycStatus: 'PENDING',
+          identityReasonCode: 'KYC_PENDING',
+          canProceed: false,
+        }),
+      );
+    }
+    if (apiPath === 'users/me/eligibility') {
+      return route.fulfill(jsonFulfill(200, mockEligibilityStatus));
+    }
     if (apiPath === 'users/me') {
       if (method === 'PATCH') {
+        const body = parseBody(request.postData());
         return route.fulfill(
-          jsonFulfill(200, { ...mockUserProfile, ...parseBody(request.postData()) }),
+          jsonFulfill(200, {
+            ...mockUserProfile,
+            countryCode: body.countryCode ?? mockUserProfile.countryCode,
+            timezone: body.timezone ?? mockUserProfile.timezone,
+            preferredCurrency: body.preferredCurrency ?? mockUserProfile.preferredCurrency,
+            profile: {
+              ...mockUserProfile.profile,
+              firstName: body.firstName ?? mockUserProfile.profile.firstName,
+              lastName: body.lastName ?? mockUserProfile.profile.lastName,
+              dateOfBirth: body.dateOfBirth ?? mockUserProfile.profile.dateOfBirth,
+              tradingExperienceLevel:
+                body.tradingExperienceLevel ?? mockUserProfile.profile.tradingExperienceLevel,
+            },
+          }),
         );
       }
       return route.fulfill(jsonFulfill(200, mockUserProfile));
