@@ -18,6 +18,7 @@ class HealthResponse(BaseModel):
     version: str
     timestamp: str
     signal_mode: str
+    scheduler_enabled: bool
 
 
 @router.get("/health", response_model=HealthResponse, tags=["Health"])
@@ -30,4 +31,5 @@ async def health() -> HealthResponse:
         version=settings.ai_engine_version,
         timestamp=datetime.now(UTC).isoformat(),
         signal_mode=settings.ai_signal_mode,
+        scheduler_enabled=settings.ai_scheduler_enabled,
     )
