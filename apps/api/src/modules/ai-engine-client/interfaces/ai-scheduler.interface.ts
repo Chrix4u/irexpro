@@ -20,7 +20,6 @@ export interface AiSchedulerSessionStopPayload {
   tradingSessionId: string;
 }
 
-
 export interface AiSchedulerSessionStatus {
   enabled: boolean;
   registered: boolean;
