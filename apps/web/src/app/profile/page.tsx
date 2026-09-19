@@ -418,7 +418,9 @@ export default function ProfilePage() {
               <Button type="submit" loading={changingPassword}>
                 Change password
               </Button>
-              <Link href="/forgot-password" className="btn btn--secondary mt-3">
+            </div>
+            <div className="workspace-actions mt-3">
+              <Link href="/forgot-password" className="btn btn--secondary">
                 Forgot current password?
               </Link>
             </div>
