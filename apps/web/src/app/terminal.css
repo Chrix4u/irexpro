@@ -324,3 +324,126 @@
   .terminal-foundation__title { font-size: 1.7rem; }
   .terminal-foundation__stage { justify-self: start; }
 }
+
+
+/* ── Collapsible desktop workspace sidebar ───────────────────────────────────
+ * Desktop/tablet users can compact the workspace navigation to an icon rail.
+ * The mobile breakpoint remains unchanged: the sidebar is hidden at <=700px
+ * and the dedicated bottom navigation continues to own mobile navigation.
+ */
+@media (min-width: 701px) {
+  .terminal-sidebar {
+    transition: width 180ms ease, padding 180ms ease;
+  }
+
+  .terminal-sidebar__top {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin: 0 var(--space-2) var(--space-6);
+  }
+
+  .terminal-sidebar__top .terminal-sidebar__brand {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+  }
+
+  .terminal-sidebar__brand-copy {
+    min-width: 0;
+  }
+
+  .terminal-sidebar__collapse {
+    width: 34px;
+    height: 34px;
+    flex: 0 0 34px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    color: var(--text-secondary);
+    background: rgba(148, 163, 184, 0.05);
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    border-radius: 9px;
+    cursor: pointer;
+    transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
+  }
+
+  .terminal-sidebar__collapse:hover,
+  .terminal-sidebar__collapse:focus-visible {
+    color: var(--text);
+    background: rgba(148, 163, 184, 0.1);
+    border-color: rgba(45, 212, 191, 0.2);
+    outline: none;
+  }
+
+  .terminal-sidebar__collapse span {
+    font-size: 1.35rem;
+    line-height: 1;
+    transform: translateY(-1px);
+  }
+
+  .terminal-sidebar__user-name {
+    margin-bottom: 0.5rem;
+    word-break: break-word;
+  }
+
+  .terminal-sidebar__logout-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .terminal-sidebar.terminal-sidebar--collapsed {
+    width: 84px;
+    padding-left: 0.65rem;
+    padding-right: 0.65rem;
+    scrollbar-gutter: auto;
+  }
+
+  .terminal-sidebar--collapsed .terminal-sidebar__top {
+    flex-direction: column;
+    margin-left: 0;
+    margin-right: 0;
+    gap: 0.55rem;
+  }
+
+  .terminal-sidebar--collapsed .terminal-sidebar__brand {
+    flex: 0 0 auto;
+    justify-content: center;
+  }
+
+  .terminal-sidebar--collapsed .terminal-sidebar__brand-copy,
+  .terminal-sidebar--collapsed .terminal-nav__group-label,
+  .terminal-sidebar--collapsed .terminal-nav__label,
+  .terminal-sidebar--collapsed .terminal-sidebar__user-label,
+  .terminal-sidebar--collapsed .terminal-sidebar__user-name,
+  .terminal-sidebar--collapsed .terminal-sidebar__logout-label {
+    display: none;
+  }
+
+  .terminal-sidebar--collapsed .dashboard-sidebar__nav .terminal-nav__group a {
+    justify-content: center;
+    min-height: 44px;
+    padding-left: 0.65rem;
+    padding-right: 0.65rem;
+  }
+
+  .terminal-sidebar--collapsed .terminal-nav__icon {
+    width: 24px;
+    flex-basis: 24px;
+  }
+
+  .terminal-sidebar--collapsed .terminal-sidebar__user {
+    margin-left: 0;
+    margin-right: 0;
+    padding-top: var(--space-3);
+  }
+
+  .terminal-sidebar--collapsed .terminal-sidebar__logout {
+    min-width: 44px;
+    min-height: 44px;
+    padding-left: 0;
+    padding-right: 0;
+  }
+}

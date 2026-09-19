@@ -185,7 +185,9 @@ test.describe('Mobile bottom navigation', () => {
 
     const labels = (await items.allTextContents()).map((s) => s.trim().toLowerCase());
     const joined = labels.join(' | ');
-    expect(joined, `Expected secondary destinations, got: ${joined}`).toContain('positions');
+    expect(joined, `Expected secondary destinations, got: ${joined}`).toContain('portfolio');
+    expect(joined).toContain('portfolio & risk');
+    expect(joined).toContain('positions');
     expect(joined).toContain('broker');
     expect(joined).toContain('security');
     expect(joined).toContain('fees');

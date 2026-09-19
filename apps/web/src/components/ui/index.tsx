@@ -2,20 +2,10 @@
  * Web UI primitives shared across the iRexPro trader application.
  */
 
-import Link from 'next/link';
-import { ButtonHTMLAttributes, ComponentType, ReactNode } from 'react';
+import { ButtonHTMLAttributes, ReactNode } from 'react';
 import MobileBottomNav from '@/components/mobile-bottom-nav';
+import WorkspaceSidebar from '@/components/workspace-sidebar';
 import { AutoRevealAlert } from '@/components/ui/AutoRevealAlert';
-import {
-  DashboardIcon,
-  PaymentsIcon,
-  PlugIcon,
-  PortfolioIcon,
-  ShieldIcon,
-  TradeIcon,
-  type IconProps,
-} from '@/components/icons';
-
 // ── Button ───────────────────────────────────────────────────────────────────
 type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
 type ButtonSize = 'sm' | 'md' | 'lg';
@@ -149,111 +139,32 @@ interface DashboardShellProps {
   children: ReactNode;
 }
 
-interface WorkspaceNavItem {
-  href: string;
-  label: string;
-  Icon: ComponentType<IconProps>;
-  matchPrefix?: boolean;
-}
-
-interface WorkspaceNavGroup {
-  label: string;
-  items: WorkspaceNavItem[];
-}
-
-const WORKSPACE_NAV: WorkspaceNavGroup[] = [
-  {
-    label: 'Trading',
-    items: [
-      { href: '/dashboard', label: 'Dashboard', Icon: DashboardIcon },
-      { href: '/trade', label: 'AI Trading', Icon: TradeIcon, matchPrefix: true },
-      { href: '/live-account', label: 'Positions & Activity', Icon: PortfolioIcon, matchPrefix: true },
-    ],
-  },
-  {
-    label: 'Account',
-    items: [
-      { href: '/onboarding/broker', label: 'Broker Account', Icon: PlugIcon },
-      { href: '/security', label: 'Security', Icon: ShieldIcon },
-      { href: '/payments/success', label: 'Fees & Payments', Icon: PaymentsIcon, matchPrefix: true },
-    ],
-  },
-];
-
-function navItemActive(activeRoute: string | undefined, item: WorkspaceNavItem): boolean {
-  if (!activeRoute) return false;
-  if (item.matchPrefix) {
-    return activeRoute === item.href || activeRoute.startsWith(`${item.href}/`);
+function workspaceRouteTitle(activeRoute: string | undefined): string {
+  if (activeRoute === '/dashboard') return 'Dashboard';
+  if (activeRoute === '/trade') return 'AI Trading';
+  if (activeRoute === '/trade/portfolio') return 'Portfolio';
+  if (activeRoute === '/portfolio') return 'Portfolio & Risk';
+  if (activeRoute === '/live-account' || activeRoute?.startsWith('/live-account/')) {
+    return 'Positions & Activity';
   }
-  return activeRoute === item.href;
-}
-
-function routeTitle(activeRoute: string | undefined): string {
-  for (const group of WORKSPACE_NAV) {
-    for (const item of group.items) {
-      if (navItemActive(activeRoute, item)) return item.label;
-    }
+  if (activeRoute === '/onboarding/broker') return 'Broker Account';
+  if (activeRoute === '/security') return 'Security';
+  if (activeRoute === '/payments/success' || activeRoute?.startsWith('/payments/success/')) {
+    return 'Fees & Payments';
   }
   return 'Dashboard';
 }
 
 export function DashboardShell({ user, onLogout, activeRoute, title, children }: DashboardShellProps) {
-  const userLabel = user
-    ? (user.firstName || user.lastName
-      ? `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim()
-      : user.email)
-    : null;
-
   return (
     <div className="dashboard-shell terminal-shell" data-active-route={activeRoute}>
-      <aside className="dashboard-sidebar terminal-sidebar">
-        <Link href="/dashboard" className="dashboard-sidebar__logo terminal-sidebar__brand" aria-label="iRexPro dashboard">
-          <span className="auth-layout__logo-mark terminal-sidebar__logo-mark">iR</span>
-          <span>
-            <span className="terminal-sidebar__brand-name">iRexPro</span>
-            <span className="terminal-sidebar__brand-subtitle">AI Trading</span>
-          </span>
-        </Link>
-
-        <nav className="dashboard-sidebar__nav terminal-nav" aria-label="Primary workspace navigation">
-          {WORKSPACE_NAV.map((group) => (
-            <div className="terminal-nav__group" key={group.label}>
-              <div className="terminal-nav__group-label">{group.label}</div>
-              {group.items.map((item) => {
-                const { Icon } = item;
-                const active = navItemActive(activeRoute, item);
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    className={active ? 'active' : ''}
-                    aria-current={active ? 'page' : undefined}
-                  >
-                    <span className="terminal-nav__icon" aria-hidden="true"><Icon size={18} /></span>
-                    <span>{item.label}</span>
-                  </Link>
-                );
-              })}
-            </div>
-          ))}
-        </nav>
-
-        {user && (
-          <div className="dashboard-sidebar__user terminal-sidebar__user">
-            <span className="terminal-sidebar__user-label">Signed in</span>
-            <p className="text-sm" style={{ marginBottom: '0.5rem', wordBreak: 'break-word' }}>
-              {userLabel}
-            </p>
-            <Button variant="ghost" size="sm" block onClick={onLogout}>Log out</Button>
-          </div>
-        )}
-      </aside>
+      <WorkspaceSidebar user={user} onLogout={onLogout} activeRoute={activeRoute} />
 
       <div className="dashboard-main terminal-main">
         <header className="dashboard-header terminal-header">
           <div>
             <span className="terminal-header__eyebrow">AI trading workspace</span>
-            <span className="dashboard-header__title terminal-header__title">{title ?? routeTitle(activeRoute)}</span>
+            <span className="dashboard-header__title terminal-header__title">{title ?? workspaceRouteTitle(activeRoute)}</span>
           </div>
           <div className="terminal-header__principle" aria-label="Execution safety principle">
             AI automation · protected by server risk controls
