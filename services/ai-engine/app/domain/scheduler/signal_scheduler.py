@@ -44,6 +44,15 @@ class ScheduledSessionJob:
     last_decision: str | None = None
     last_reason: str | None = None
     last_confidence_score: float | None = None
+    last_model_evaluated_at: datetime | None = None
+    model_version: str | None = None
+    model_mode: str | None = None
+    model_loaded: bool = False
+    market_data_cache_status: str | None = None
+    market_data_cache_age_seconds: float | None = None
+    latest_market_data_at: datetime | None = None
+    market_data_age_seconds: float | None = None
+    last_market_data_fingerprints: dict[str, str] = field(default_factory=dict)
     registered_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -193,16 +202,38 @@ class SignalScheduler:
                     instrument=instrument,
                     timeframe=job.timeframe,
                     source=job.source,
+                    bypass_market_data_cache=job.source == "broker",
+                    previous_market_data_fingerprint=job.last_market_data_fingerprints.get(
+                        instrument
+                    ),
                 )
 
-                job.last_run_at = datetime.now(UTC)
+                job.last_run_at = result.market_data_fetched_at or datetime.now(UTC)
+                job.model_version = result.model_version
+                job.model_mode = result.model_mode
+                job.model_loaded = result.model_loaded
+                job.market_data_cache_status = result.market_data_cache_status
+                job.market_data_cache_age_seconds = result.market_data_cache_age_seconds
+                job.latest_market_data_at = result.latest_market_data_at
+                job.market_data_age_seconds = result.market_data_age_seconds
+
+                if result.market_data_fingerprint:
+                    job.last_market_data_fingerprints[instrument] = (
+                        result.market_data_fingerprint
+                    )
+
+                if result.model_evaluated:
+                    job.last_model_evaluated_at = datetime.now(UTC)
 
                 if not result.generated or result.signal is None:
-                    job.last_decision = "NO_TRADE"
                     job.last_reason = result.no_signal.reason if result.no_signal else "unknown"
-                    job.last_confidence_score = (
-                        result.no_signal.confidence_score if result.no_signal else None
-                    )
+                    if job.last_reason == "market_data_unchanged":
+                        job.last_decision = "NO_NEW_DATA"
+                    else:
+                        job.last_decision = "NO_TRADE"
+                        job.last_confidence_score = (
+                            result.no_signal.confidence_score if result.no_signal else None
+                        )
                     logger.debug(
                         "No signal to publish",
                         trading_session_id=trading_session_id,
