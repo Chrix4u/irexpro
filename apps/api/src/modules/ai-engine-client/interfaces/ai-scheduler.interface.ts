@@ -19,3 +19,27 @@ export interface AiSchedulerSessionStartPayload {
 export interface AiSchedulerSessionStopPayload {
   tradingSessionId: string;
 }
+
+export interface AiSchedulerSessionStatus {
+  enabled: boolean;
+  registered: boolean;
+  trading_session_id: string;
+  active: boolean;
+  instruments: string[];
+  timeframe: string | null;
+  interval_seconds: number | null;
+  source: string | null;
+  last_run_at: string | null;
+  next_run_at: string | null;
+  last_decision: string | null;
+  last_reason: string | null;
+  last_confidence_score: number | null;
+  confidence_threshold: number | null;
+  last_publish_failed: boolean;
+}
+
+export interface AiSchedulerSessionRegistration {
+  registered: boolean;
+  trading_session_id: string;
+  message: string;
+}

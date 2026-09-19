@@ -93,6 +93,7 @@ jobs:
 
           export STAGING_ROOT='/home/lightworld/webapps/irexpro-staging'
           export API_PM2_NAME='irexpro-api-staging'
+          export AI_PM2_NAME='irexpro-ai-staging'
           export WEB_PM2_NAME='irexpro-web-staging'
           export ADMIN_PM2_NAME='irexpro-admin-staging'
 

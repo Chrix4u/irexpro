@@ -162,7 +162,7 @@ if [[ "$url" == *ready* ]]; then
 elif [[ "$url" == *live* ]]; then
   printf '{"status":"alive"}'
 elif [[ "$url" == *ai* ]]; then
-  printf '{"signal_mode":"paper"}'
+  printf '{"signal_mode":"paper","scheduler_enabled":true}'
 else
   printf '{"status":"ok"}'
 fi
@@ -180,6 +180,7 @@ run_deploy() {
     COMMAND_LOG="$COMMAND_LOG" \
     STAGING_ROOT="$FIXTURE_REPO" \
     API_PM2_NAME='irexpro-api-staging' \
+    AI_PM2_NAME='irexpro-ai-staging' \
     WEB_PM2_NAME='irexpro-web-staging' \
     ADMIN_PM2_NAME='irexpro-admin-staging' \
     LOCAL_API_LIVE_URL='http://local.test/api/live' \
@@ -207,6 +208,7 @@ run_rollback() {
     COMMAND_LOG="$COMMAND_LOG" \
     STAGING_ROOT="$FIXTURE_REPO" \
     API_PM2_NAME='irexpro-api-staging' \
+    AI_PM2_NAME='irexpro-ai-staging' \
     WEB_PM2_NAME='irexpro-web-staging' \
     ADMIN_PM2_NAME='irexpro-admin-staging' \
     LOCAL_API_LIVE_URL='http://local.test/api/live' \
@@ -331,9 +333,8 @@ web_exhausted_admin_attempts="$(grep -F -c 'http://local.test/admin' "$COMMAND_L
 if grep -q 'https://public.test' "$COMMAND_LOG"; then
   fail 'Public smoke must not run after exhausted local web readiness retries.'
 fi
-if grep -q 'ai/health' "$COMMAND_LOG"; then
-  fail 'AI paper-mode observation must not run after exhausted local web readiness retries.'
-fi
+web_exhausted_ai_checks="$(grep -F -c 'ai/health' "$COMMAND_LOG" || true)"
+[[ "$web_exhausted_ai_checks" -eq 2 ]] || fail 'Web readiness exhaustion must not run the later AI post-smoke verification.'
 
 # Scenario: repeated Admin connection refusals through the maximum attempt
 # count must fail the deployment at local-smoke, with the web smoke already
@@ -353,9 +354,8 @@ admin_exhausted_web_attempts="$(grep -F -c 'http://local.test/web' "$COMMAND_LOG
 if grep -q 'https://public.test' "$COMMAND_LOG"; then
   fail 'Public smoke must not run after exhausted local admin readiness retries.'
 fi
-if grep -q 'ai/health' "$COMMAND_LOG"; then
-  fail 'AI paper-mode observation must not run after exhausted local admin readiness retries.'
-fi
+admin_exhausted_ai_checks="$(grep -F -c 'ai/health' "$COMMAND_LOG" || true)"
+[[ "$admin_exhausted_ai_checks" -eq 2 ]] || fail 'Admin readiness exhaustion must not run the later AI post-smoke verification.'
 
 make_fixture 'successful-deploy'
 git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
@@ -366,6 +366,7 @@ grep -q '@irexpro/api build' "$COMMAND_LOG" || fail 'API build missing.'
 grep -q '@irexpro/web build' "$COMMAND_LOG" || fail 'Web build missing.'
 grep -q '@irexpro/admin build' "$COMMAND_LOG" || fail 'Admin build missing.'
 grep -q '@irexpro/api migration:run' "$COMMAND_LOG" || fail 'Database migration missing.'
+grep -q '^pm2 restart irexpro-ai-staging ' "$COMMAND_LOG" || fail 'AI engine restart missing.'
 
 make_fixture 'rollback-verification'
 rollback_output="$(run_rollback "$FIXTURE_CANDIDATE_SHA" "$FIXTURE_PRIOR_SHA")"

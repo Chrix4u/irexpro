@@ -193,6 +193,25 @@ async function gotoAiTrader(
       });
     }
     if (apiPath === 'market-data/intelligence') return fulfill(200, marketSnapshot);
+    if (apiPath.startsWith('trading/sessions/') && apiPath.endsWith('/automation-status')) {
+      return fulfill(200, {
+        enabled: true,
+        registered: true,
+        trading_session_id: '44444444-4444-4444-8444-444444444444',
+        active: true,
+        instruments: ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF'],
+        timeframe: 'H1',
+        interval_seconds: 60,
+        source: 'broker',
+        last_run_at: '2026-09-19T11:30:00.000Z',
+        next_run_at: '2026-09-19T11:31:00.000Z',
+        last_decision: 'NO_TRADE',
+        last_reason: 'confidence_below_threshold',
+        last_confidence_score: 0.54,
+        confidence_threshold: 0.6,
+        last_publish_failed: false,
+      });
+    }
     if (apiPath === 'trading/sessions/start') {
       options.onStart?.();
       return fulfill(201, {
@@ -236,6 +255,15 @@ test.describe('AI Trader novice workflow', () => {
     await expect(page.getByRole('combobox', { name: 'Broker account' })).toBeDisabled();
     await expect(page.getByRole('button', { name: 'Stop AI Trading' })).toBeVisible();
 
+    await expect(page.getByRole('heading', { level: 2, name: 'AI Engine Monitor' })).toBeVisible();
+    await expect(page.getByText('SCANNING', { exact: true })).toBeVisible();
+    await expect(page.getByText(/EURUSD.*GBPUSD.*USDJPY/i)).toBeVisible();
+    await expect(page.getByText('NO TRADE', { exact: true })).toBeVisible();
+    await expect(page.getByText('54% / 60% required', { exact: true })).toBeVisible();
+    await expect(
+      page.getByText('Market setup did not meet the confidence threshold', { exact: true }),
+    ).toBeVisible();
+
     await expect(page.getByRole('heading', { level: 2, name: 'Open Positions' })).toBeVisible();
     await expect(page.getByText('EURUSD', { exact: true }).first()).toBeVisible();
     await expect(page.getByText('+41.00 USD', { exact: true })).toBeVisible();
@@ -259,7 +287,11 @@ test.describe('AI Trader novice workflow', () => {
 
     await expect(page.getByRole('button', { name: 'Stop AI Trading' })).toBeEnabled();
     await expect(page.getByText(/AI session status could not be verified/i)).toHaveCount(0);
-    await expect(page.getByText('ACTIVE', { exact: true })).toBeVisible();
+    await expect(
+      page.locator('.ai-overview-card').filter({ hasText: 'AI session' }).getByText('ACTIVE', {
+        exact: true,
+      }),
+    ).toBeVisible();
 
     assertNoExternalRequests(page);
   });
@@ -272,7 +304,11 @@ test.describe('AI Trader novice workflow', () => {
 
     await expect(page.getByRole('button', { name: 'Stop AI Trading' })).toBeEnabled();
     await expect(page.getByText(/AI session status could not be verified/i)).toHaveCount(0);
-    await expect(page.getByText('ACTIVE', { exact: true })).toBeVisible();
+    await expect(
+      page.locator('.ai-overview-card').filter({ hasText: 'AI session' }).getByText('ACTIVE', {
+        exact: true,
+      }),
+    ).toBeVisible();
 
     const allocationInput = page.getByRole('textbox', { name: 'AI capital allocation amount' });
     const allocateButton = page.getByRole('button', { name: 'Allocate' });

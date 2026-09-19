@@ -80,6 +80,13 @@ export interface CreateApiClientOptions {
   includeCredentials?: boolean;
   /** Optional token getter — used to attach Authorization: Bearer <token>. */
   getAccessToken?: () => string | null | undefined;
+  /**
+   * Browser/session recovery hook. Called once when an authenticated request
+   * receives 401. Implementations should refresh/rotate credentials and update
+   * the token source used by getAccessToken. Return true only when retrying the
+   * original request is safe.
+   */
+  recoverUnauthorized?: () => Promise<boolean>;
 }
 
 export interface ApiClient {
@@ -296,7 +303,8 @@ export class ApiClientError extends Error {
  * platform-agnostic and never hardcodes a URL.
  */
 export function createApiClient(options: CreateApiClientOptions): ApiClient {
-  const { baseUrl, includeCredentials = false, getAccessToken } = options;
+  const { baseUrl, includeCredentials = false, getAccessToken, recoverUnauthorized } = options;
+  let unauthorizedRecovery: Promise<boolean> | null = null;
 
   if (!baseUrl) {
     throw new Error(
@@ -304,7 +312,11 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
     );
   }
 
-  async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  async function request<T>(
+    path: string,
+    init?: RequestInit,
+    hasRetriedAfterUnauthorized = false,
+  ): Promise<T> {
     const url = `${baseUrl}${path}`;
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -329,6 +341,24 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
         0,
         `Network error contacting API: ${(err as Error).message}`,
       );
+    }
+
+    const mayRecover =
+      res.status === 401 &&
+      !hasRetriedAfterUnauthorized &&
+      Boolean(recoverUnauthorized) &&
+      !path.startsWith('/auth/refresh') &&
+      !path.startsWith('/auth/login') &&
+      !path.startsWith('/auth/register');
+
+    if (mayRecover) {
+      unauthorizedRecovery ??= recoverUnauthorized!().finally(() => {
+        unauthorizedRecovery = null;
+      });
+      const recovered = await unauthorizedRecovery;
+      if (recovered) {
+        return request<T>(path, init, true);
+      }
     }
 
     if (!res.ok) {

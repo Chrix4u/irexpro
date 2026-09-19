@@ -732,6 +732,67 @@ async function testConfirmExecutionConfirmation409Contract() {
   );
 }
 
+
+async function testUnauthorizedRecoveryIsSingleFlightAndRetriesOnce() {
+  const calls = [];
+  let token = 'expired-token';
+  let recoveryCalls = 0;
+  let releaseRecovery;
+  const recoveryGate = new Promise((resolve) => {
+    releaseRecovery = resolve;
+  });
+
+  const fakeFetch = async (url, init) => {
+    calls.push({ url, auth: init.headers.Authorization });
+    if (init.headers.Authorization === 'Bearer expired-token') {
+      return {
+        ok: false,
+        status: 401,
+        statusText: 'Unauthorized',
+        json: async () => ({ statusCode: 401, message: 'Expired' }),
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => ({ ok: true }),
+    };
+  };
+
+  const { createApiClient } = loadApiClient(fakeFetch);
+  const client = createApiClient({
+    baseUrl: 'https://api.example.test/api/v1',
+    getAccessToken: () => token,
+    recoverUnauthorized: async () => {
+      recoveryCalls += 1;
+      await recoveryGate;
+      token = 'fresh-token';
+      return true;
+    },
+  });
+
+  const first = client.request('/fixture/one');
+  const second = client.request('/fixture/two');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(recoveryCalls, 1, 'concurrent 401s must share one recovery');
+  releaseRecovery();
+
+  const results = await Promise.all([first, second]);
+  assert.deepEqual(results, [{ ok: true }, { ok: true }]);
+  assert.equal(recoveryCalls, 1, 'recovery must remain single-flight');
+  assert.equal(calls.length, 4, 'each request should run once before and once after recovery');
+  assert.deepEqual(
+    calls.map((call) => call.auth),
+    [
+      'Bearer expired-token',
+      'Bearer expired-token',
+      'Bearer fresh-token',
+      'Bearer fresh-token',
+    ],
+  );
+}
+
 async function main() {
   await testMfaSetupPasswordContract();
   console.log('api-client MFA setup contract test passed.');
@@ -763,6 +824,8 @@ async function main() {
   console.log('api-client execution confirmations contract test passed.');
   await testConfirmExecutionConfirmation409Contract();
   console.log('api-client confirmation 409-failure contract test passed.');
+  await testUnauthorizedRecoveryIsSingleFlightAndRetriesOnce();
+  console.log('api-client single-flight unauthorized recovery test passed.');
 }
 
 main().catch((error) => {

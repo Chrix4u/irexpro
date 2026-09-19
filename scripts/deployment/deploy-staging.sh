@@ -96,6 +96,20 @@ if (!verified) process.exit(3);
 NODE
 }
 
+require_ai_scheduler_enabled() {
+  local payload
+  payload="$(safe_curl "$AI_HEALTH_URL")"
+  HEALTH_PAYLOAD="$payload" node --input-type=module <<'NODE'
+let payload;
+try {
+  payload = JSON.parse(process.env.HEALTH_PAYLOAD);
+} catch {
+  process.exit(2);
+}
+if (payload.scheduler_enabled !== true) process.exit(3);
+NODE
+}
+
 wait_for_api() {
   local attempt
   for ((attempt = 1; attempt <= MAX_HEALTH_ATTEMPTS; attempt += 1)); do
@@ -130,6 +144,7 @@ readonly CANDIDATE_SHA
 for name in \
   STAGING_ROOT \
   API_PM2_NAME \
+  AI_PM2_NAME \
   WEB_PM2_NAME \
   ADMIN_PM2_NAME \
   LOCAL_API_LIVE_URL \
@@ -143,6 +158,12 @@ for name in \
   PUBLIC_ADMIN_URL; do
   require_value "$name"
 done
+
+# Staging is our paper/demo UAT environment. Enable both sides of scheduler
+# coordination explicitly for this process restart without changing production
+# defaults or committing secrets.
+export AI_ENGINE_SCHEDULER_ENABLED=true
+export AI_SCHEDULER_ENABLED=true
 
 STAGE="repository-preflight"
 cd "$STAGING_ROOT"
@@ -191,6 +212,12 @@ corepack pnpm@"$PNPM_VERSION" --filter @irexpro/admin build
 STAGE="database-migrations"
 corepack pnpm@"$PNPM_VERSION" --filter @irexpro/api migration:run
 
+STAGE="restart-ai"
+pm2 restart "$AI_PM2_NAME" --update-env
+STAGE="ai-runtime-readiness"
+require_ai_paper_mode
+require_ai_scheduler_enabled
+
 STAGE="restart-api"
 pm2 restart "$API_PM2_NAME" --update-env
 STAGE="api-liveness"
@@ -220,6 +247,7 @@ require_health_field "$PUBLIC_API_READY_URL" status ready
 if [[ -n "${AI_HEALTH_URL:-}" ]]; then
   STAGE="ai-paper-mode-observation"
   require_ai_paper_mode
+  require_ai_scheduler_enabled
 fi
 
 STAGE="final-sha-verification"

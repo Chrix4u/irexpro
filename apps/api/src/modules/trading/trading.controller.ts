@@ -197,6 +197,15 @@ export class TradingController {
     };
   }
 
+  @Get(':id/automation-status')
+  @ApiOperation({ summary: 'Get AI automation runtime status for a trading session' })
+  async getAutomationStatus(
+    @CurrentUserId() userId: string,
+    @Param('id', ParseUUIDPipe) sessionId: string,
+  ) {
+    return this.tradingService.getAutomationRuntimeStatus(userId, sessionId);
+  }
+
   /**
    * Get a specific session by ID (must belong to authenticated user).
    *

@@ -228,6 +228,75 @@
   font-variant-numeric: tabular-nums lining-nums;
 }
 
+
+.ai-runtime-panel {
+  display: grid;
+  gap: 1rem;
+  padding: clamp(1rem, 1.6vw, 1.35rem);
+  border: 1px solid rgba(56, 189, 248, 0.18);
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at 92% 8%, rgba(14, 165, 233, 0.1), transparent 30%),
+    rgba(15, 23, 42, 0.52);
+}
+
+.ai-runtime-panel__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.ai-runtime-panel__heading h2 {
+  margin: 0;
+  font-size: clamp(1.15rem, 2vw, 1.45rem);
+  letter-spacing: -0.025em;
+}
+
+.ai-runtime-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.7rem;
+}
+
+.ai-runtime-grid > div,
+.ai-runtime-reason {
+  min-width: 0;
+  padding: 0.8rem;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.46);
+}
+
+.ai-runtime-grid > div {
+  display: grid;
+  gap: 0.28rem;
+}
+
+.ai-runtime-grid span,
+.ai-runtime-reason span {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.ai-runtime-grid strong,
+.ai-runtime-reason strong {
+  font-size: 0.88rem;
+  font-weight: 650;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.ai-runtime-reason {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
 .ai-trading-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(360px, 0.85fr);
@@ -402,6 +471,10 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .ai-runtime-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .ai-trading-grid {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -423,6 +496,7 @@
 
   .ai-control-deck,
   .ai-overview-grid,
+  .ai-runtime-grid,
   .ai-position-grid {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -460,7 +534,9 @@
   }
 
   .ai-section__heading,
-  .ai-simple-note {
+  .ai-simple-note,
+  .ai-runtime-panel__heading,
+  .ai-runtime-reason {
     align-items: flex-start;
     flex-direction: column;
   }

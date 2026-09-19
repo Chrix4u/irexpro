@@ -15,6 +15,7 @@ async def test_health_returns_ok(client: AsyncClient):
     assert "timestamp" in data
     assert "version" in data
     assert "environment" in data
+    assert isinstance(data["scheduler_enabled"], bool)
 
 
 @pytest.mark.asyncio

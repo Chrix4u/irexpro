@@ -228,7 +228,7 @@ export class TradingService {
         userId,
         tradingSessionId: session.id,
         brokerConnectionId: connection.id,
-        instruments: ['EURUSD'],
+        instruments: ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF'],
         timeframe: 'H1',
         source: 'broker',
         mode: session.executionMode,
@@ -416,6 +416,54 @@ export class TradingService {
 
   async getActiveSession(userId: string): Promise<TradingSession | null> {
     return this.executionService.getActiveSessionForClient(userId);
+  }
+
+  async getAutomationRuntimeStatus(userId: string, sessionId: string) {
+    const session = await this.executionService.findSessionById(sessionId);
+    if (!session || session.userId !== userId) {
+      throw new NotFoundException(`Trading session ${sessionId} not found`);
+    }
+
+    if (session.executionMode !== ExecutionMode.PAPER_ONLY) {
+      return {
+        enabled: this.aiEngineClient.isSchedulerIntegrationEnabled(),
+        registered: false,
+        trading_session_id: sessionId,
+        active: false,
+        instruments: [],
+        timeframe: null,
+        interval_seconds: null,
+        source: null,
+        last_run_at: null,
+        next_run_at: null,
+        last_decision: 'BLOCKED',
+        last_reason: 'model_not_approved_for_live',
+        last_confidence_score: null,
+        confidence_threshold: null,
+        last_publish_failed: false,
+      };
+    }
+
+    const runtime = await this.aiEngineClient.getSessionStatus(sessionId);
+
+    // AI scheduler jobs are intentionally in-memory. If the Python service was
+    // restarted while this trading session remained ACTIVE, heal the missing
+    // registration from the durable session authority instead of requiring the
+    // user to Stop/Start manually.
+    if (runtime.enabled && !runtime.registered && session.status === TradingSessionStatus.ACTIVE) {
+      await this.aiEngineClient.notifySessionStarted({
+        userId,
+        tradingSessionId: session.id,
+        brokerConnectionId: session.brokerConnectionId,
+        instruments: ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF'],
+        timeframe: 'H1',
+        source: 'broker',
+        mode: ExecutionMode.PAPER_ONLY,
+      });
+      return this.aiEngineClient.getSessionStatus(sessionId);
+    }
+
+    return runtime;
   }
 
   async getSessionById(userId: string, sessionId: string): Promise<TradingSession | null> {

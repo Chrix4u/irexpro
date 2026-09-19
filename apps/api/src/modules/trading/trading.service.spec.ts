@@ -175,8 +175,29 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
     eventBus = { publish: jest.fn(), subscribe: jest.fn().mockReturnValue(() => {}) };
     aiEngineClient = {
       isSchedulerIntegrationEnabled: jest.fn().mockReturnValue(true),
-      notifySessionStarted: jest.fn().mockResolvedValue(undefined),
+      notifySessionStarted: jest.fn().mockResolvedValue({
+        registered: true,
+        trading_session_id: 'session-1',
+        message: 'Session scheduler registered',
+      }),
       notifySessionStopped: jest.fn().mockResolvedValue(undefined),
+      getSessionStatus: jest.fn().mockResolvedValue({
+        enabled: true,
+        registered: true,
+        trading_session_id: 'session-1',
+        active: true,
+        instruments: ['EURUSD'],
+        timeframe: 'H1',
+        interval_seconds: 60,
+        source: 'broker',
+        last_run_at: null,
+        next_run_at: null,
+        last_decision: null,
+        last_reason: null,
+        last_confidence_score: null,
+        confidence_threshold: 0.6,
+        last_publish_failed: false,
+      }),
     };
 
     onboardingService = {
@@ -804,6 +825,80 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
           }),
         }),
       );
+    });
+  });
+
+  describe('getAutomationRuntimeStatus()', () => {
+    it('returns the registered paper scheduler runtime', async () => {
+      const status = await service.getAutomationRuntimeStatus('user-1', 'session-1');
+
+      expect(status.registered).toBe(true);
+      expect(status.active).toBe(true);
+      expect(aiEngineClient.getSessionStatus).toHaveBeenCalledWith('session-1');
+    });
+
+    it('self-heals a missing scheduler job for an ACTIVE paper session', async () => {
+      aiEngineClient.getSessionStatus
+        .mockResolvedValueOnce({
+          enabled: true,
+          registered: false,
+          trading_session_id: 'session-1',
+          active: false,
+          instruments: [],
+          timeframe: null,
+          interval_seconds: null,
+          source: null,
+          last_run_at: null,
+          next_run_at: null,
+          last_decision: null,
+          last_reason: null,
+          last_confidence_score: null,
+          confidence_threshold: 0.6,
+          last_publish_failed: false,
+        })
+        .mockResolvedValueOnce({
+          enabled: true,
+          registered: true,
+          trading_session_id: 'session-1',
+          active: true,
+          instruments: ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF'],
+          timeframe: 'H1',
+          interval_seconds: 60,
+          source: 'broker',
+          last_run_at: null,
+          next_run_at: null,
+          last_decision: null,
+          last_reason: null,
+          last_confidence_score: null,
+          confidence_threshold: 0.6,
+          last_publish_failed: false,
+        });
+
+      const status = await service.getAutomationRuntimeStatus('user-1', 'session-1');
+
+      expect(aiEngineClient.notifySessionStarted).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'user-1',
+          tradingSessionId: 'session-1',
+          brokerConnectionId: 'conn-1',
+          mode: ExecutionMode.PAPER_ONLY,
+          instruments: ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF'],
+        }),
+      );
+      expect(status.registered).toBe(true);
+    });
+
+    it('reports live automation blocked by model governance', async () => {
+      executionService.findSessionById.mockResolvedValue(
+        mockSession({ executionMode: ExecutionMode.FULL_AUTO }),
+      );
+
+      const status = await service.getAutomationRuntimeStatus('user-1', 'session-1');
+
+      expect(status.registered).toBe(false);
+      expect(status.last_decision).toBe('BLOCKED');
+      expect(status.last_reason).toBe('model_not_approved_for_live');
+      expect(aiEngineClient.getSessionStatus).not.toHaveBeenCalled();
     });
   });
 
