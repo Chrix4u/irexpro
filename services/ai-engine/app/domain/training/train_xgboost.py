@@ -34,6 +34,7 @@ from app.domain.training.validation import (
     compute_classification_metrics,
     time_ordered_split,
 )
+from app.domain.training.walk_forward import evaluate_walk_forward
 
 
 def _safe_model_version(model_version: str) -> str:
@@ -94,6 +95,9 @@ def train_offline(
     training_data_source: str = "operator_supplied_historical_ohlcv",
     approve_for_paper: bool = False,
     min_samples: int = 250,
+    walk_forward_min_train_size: int | None = None,
+    walk_forward_validation_size: int | None = None,
+    minimum_walk_forward_windows: int = 3,
 ) -> dict[str, Any]:
     """
     Train and persist a real XGBoost binary direction classifier.
@@ -114,6 +118,21 @@ def train_offline(
         raise ValueError(
             f"Insufficient supervised samples: {len(supervised)}; "
             f"at least {min_samples} required"
+        )
+
+    walk_forward = evaluate_walk_forward(
+        supervised,
+        purge_gap=horizon_bars,
+        min_train_size=walk_forward_min_train_size,
+        validation_size=walk_forward_validation_size,
+        minimum_windows=minimum_walk_forward_windows,
+    )
+    paper_eligibility = walk_forward["paper_evaluation_eligibility"]
+    if approve_for_paper and not paper_eligibility["eligible_for_paper_evaluation"]:
+        reasons = "; ".join(str(reason) for reason in paper_eligibility["reasons"])
+        raise ValueError(
+            "Paper evaluation approval requested but walk-forward evidence is "
+            f"insufficient: {reasons}"
         )
 
     train_df, val_df = time_ordered_split(
@@ -196,8 +215,9 @@ def train_offline(
             "train": _time_range(train_df),
             "validation": _time_range(val_df),
         },
-        "validation_status": "offline_directional_validation_complete",
+        "validation_status": "walk_forward_and_holdout_validation_complete",
         "validation_metrics": metrics,
+        "walk_forward_validation": walk_forward,
         "approved_for_paper": bool(approve_for_paper),
         "approved_for_sandbox": False,
         "approved_for_live": False,
@@ -225,6 +245,7 @@ def train_offline(
         "train_rows": len(train_df),
         "validation_rows": len(val_df),
         "metrics": metrics,
+        "walk_forward_validation": walk_forward,
         "approved_for_paper": bool(approve_for_paper),
         "approved_for_live": False,
     }
@@ -247,8 +268,14 @@ def main() -> None:
     parser.add_argument(
         "--approve-for-paper",
         action="store_true",
-        help="Explicitly mark the trained artifact eligible for paper-mode loading",
+        help=(
+            "Request paper-evaluation eligibility. This fails closed unless "
+            "multi-window walk-forward validation evidence is structurally complete."
+        ),
     )
+    parser.add_argument("--walk-forward-min-train-size", type=int)
+    parser.add_argument("--walk-forward-validation-size", type=int)
+    parser.add_argument("--minimum-walk-forward-windows", type=int, default=3)
     args = parser.parse_args()
 
     result = train_offline(
@@ -262,6 +289,9 @@ def main() -> None:
         output_dir=args.output_dir,
         training_data_source=args.training_data_source,
         approve_for_paper=args.approve_for_paper,
+        walk_forward_min_train_size=args.walk_forward_min_train_size,
+        walk_forward_validation_size=args.walk_forward_validation_size,
+        minimum_walk_forward_windows=args.minimum_walk_forward_windows,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
 
