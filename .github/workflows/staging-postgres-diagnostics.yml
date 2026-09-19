@@ -168,6 +168,28 @@ jobs:
           fi
           echo
 
+          echo '=== /home first-level usage ==='
+          timeout 240s du -x -B1 --max-depth=1 /home 2>/dev/null \
+            | sort -n \
+            | awk '{size=$1; $1=""; sub(/^ /,""); printf "%.2f GiB\t%s\n", size/1073741824, $0}' || true
+          echo
+
+          echo '=== /usr first-level usage ==='
+          timeout 180s du -x -B1 --max-depth=1 /usr 2>/dev/null \
+            | sort -n \
+            | awk '{size=$1; $1=""; sub(/^ /,""); printf "%.2f GiB\t%s\n", size/1073741824, $0}' || true
+          echo
+
+          echo '=== root-level regular files >=100 MiB ==='
+          find / -maxdepth 1 -xdev -type f -size +100M -printf '%s %p\n' 2>/dev/null \
+            | sort -n \
+            | awk '{size=$1; $1=""; sub(/^ /,""); printf "%.2f GiB\t%s\n", size/1073741824, $0}' || true
+          echo
+
+          echo '=== root-level directories present ==='
+          find / -maxdepth 1 -mindepth 1 -xdev -type d -printf '%p\n' 2>/dev/null | sort
+          echo
+
           echo '=== PostgreSQL log configuration ==='
           pgconf='/var/lib/pgsql/data/postgresql.conf'
           if [[ -r "$pgconf" ]]; then
