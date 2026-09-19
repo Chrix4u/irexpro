@@ -54,6 +54,7 @@ test.describe('Workspace sidebar navigation', () => {
     await expect(sidebar.getByRole('link', { name: 'Portfolio', exact: true })).toBeVisible();
     await expect(sidebar.getByRole('link', { name: 'Portfolio & Risk', exact: true })).toBeVisible();
 
+    await expect(sidebar).toHaveCSS('width', '84px');
     const collapsedBox = await sidebar.boundingBox();
     expect(collapsedBox).not.toBeNull();
     if (expandedBox && collapsedBox) {
