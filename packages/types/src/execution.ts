@@ -106,8 +106,8 @@ export const EXECUTION_MODES: readonly ExecutionMode[] = [
 /**
  * Frontend-safe view of the authoritative trading session.
  *
- * NOTE (Round-5 integration): the API returns the session DTO DIRECTLY
- * (bare object, no envelope) — TradingSessionResponseDto deliberately
+ * NOTE: the active-session read uses an explicit `{ session }` envelope so
+ * the stopped state is always valid JSON. TradingSessionResponseDto deliberately
  * excludes internal financial session fields (openingBalance/peakEquity)
  * from browser-facing responses; those live in account/performance
  * endpoints. The frontend renders authority fields only and never derives
@@ -129,8 +129,10 @@ export interface TradingSessionView {
   startedAt: string;
 }
 
-/** GET /trading/sessions/active → 200 bare session (null when none is active). */
-export type ActiveTradingSessionResponse = TradingSessionView | null;
+/** GET /trading/sessions/active → 200 `{ session }`; session is null when stopped. */
+export interface ActiveTradingSessionResponse {
+  session: TradingSessionView | null;
+}
 
 /** POST /trading/sessions/start request body. */
 export interface StartTradingSessionRequest {
