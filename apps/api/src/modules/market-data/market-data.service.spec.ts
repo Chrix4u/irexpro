@@ -33,6 +33,7 @@ describe('MarketDataService', () => {
   beforeEach(async () => {
     brokerService = {
       getOhlcvForConnection: jest.fn().mockResolvedValue(mockCandles),
+      getHistoricalOhlcvForConnection: jest.fn().mockResolvedValue(mockCandles),
     };
     auditService = {
       log: jest.fn().mockResolvedValue(undefined),
@@ -72,6 +73,28 @@ describe('MarketDataService', () => {
       'EURUSD',
       'H1',
       50,
+    );
+  });
+
+  it('routes endTime requests through the cursor-based historical capability', async () => {
+    const endTime = '2025-01-15T12:00:00.000Z';
+
+    const result = await service.getInternalOhlcv({ ...query, endTime });
+
+    expect(result.count).toBe(1);
+    expect(brokerService.getHistoricalOhlcvForConnection).toHaveBeenCalledWith(
+      query.userId,
+      query.brokerConnectionId,
+      'EURUSD',
+      'H1',
+      new Date(endTime),
+      50,
+    );
+    expect(brokerService.getOhlcvForConnection).not.toHaveBeenCalled();
+    expect(auditService.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({ endTime }),
+      }),
     );
   });
 
