@@ -77,6 +77,32 @@ mypy app
 
 ---
 
+## Building the historical training corpus
+
+For MetaTrader/MetaAPI-connected accounts, the internal OHLCV endpoint supports
+an optional `before` cursor. The collector pages backward in blocks of up to
+500 candles, removes duplicates, excludes the still-forming candle, validates
+the result, and writes a CSV plus a SHA-256 manifest.
+
+Use the internal API key through the environment so it does not end up in shell
+history:
+
+```powershell
+$env:NESTJS_INTERNAL_API_KEY="<internal-key>"
+python -m app.domain.training.collect_historical \
+  --api-base-url https://irexpro.lightworldtech.com/api/v1 \
+  --user-id <user-uuid> \
+  --broker-connection-id <connection-uuid> \
+  --instrument EURUSD \
+  --timeframe H1 \
+  --target-rows 10000 \
+  --output data/EURUSD_H1.csv
+```
+
+Repeat this for each approved training instrument. Generated datasets and model
+artifacts remain excluded from Git. The manifest records the corpus date range,
+row count, collection time, and dataset fingerprint for reproducibility.
+
 ## Training a real XGBoost model
 
 The runtime can load a real fitted XGBoost classifier, but generated artifacts
