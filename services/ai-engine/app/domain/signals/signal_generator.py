@@ -12,6 +12,7 @@ IMPORTANT SAFETY RULES:
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import hashlib
 from uuid import uuid4
 
 from app.core.config import get_settings
@@ -48,10 +49,16 @@ class SignalGenerator:
         timeframe: str = "H1",
         candles: list[OHLCVCandle] | None = None,
         source: MarketDataSource = "mock",
+        bypass_market_data_cache: bool = False,
+        previous_market_data_fingerprint: str | None = None,
     ) -> SignalGenerationResponse:
         """
         Full signal generation pipeline.
-        Returns SignalGenerationResponse with either a candidate or a no-signal result.
+
+        Scheduler-driven broker scans can bypass Redis and pass the previously
+        evaluated market fingerprint. If the fresh broker observation is
+        unchanged, model inference is deliberately skipped instead of reporting
+        a duplicate decision as fresh AI analysis.
         """
         settings = get_settings()
 
@@ -61,8 +68,11 @@ class SignalGenerator:
                 "Use AI_SIGNAL_MODE=paper."
             )
 
-        # 1. Fetch OHLCV data
+        # 1. Fetch OHLCV data.
+        market_data_fetched_at = datetime.now(UTC)
+        market_data_cache_status = "provided"
         if candles is None:
+            market_data_cache_status = "bypassed" if bypass_market_data_cache else "enabled"
             candles = await self._ohlcv.get_ohlcv(
                 source=source,
                 instrument=instrument,
@@ -70,29 +80,88 @@ class SignalGenerator:
                 limit=100,
                 user_id=user_id,
                 broker_connection_id=broker_connection_id,
+                bypass_cache=bypass_market_data_cache,
             )
+            market_data_fetched_at = datetime.now(UTC)
 
         if len(candles) < 10:
             raise SignalGenerationError(
                 f"Insufficient candle data: {len(candles)} candles (minimum 10 required)"
             )
 
-        # 2. Feature engineering
-        df = candles_to_dataframe(candles)
-        features = extract_latest_features(df)
+        latest_candle = candles[-1]
+        latest_market_data_at = latest_candle.timestamp
+        if latest_market_data_at.tzinfo is None:
+            latest_market_data_at = latest_market_data_at.replace(tzinfo=UTC)
 
-        # 3. Model inference
+        market_data_age_seconds = max(
+            0.0,
+            (market_data_fetched_at - latest_market_data_at).total_seconds(),
+        )
+        market_data_fingerprint = self._fingerprint_latest_candle(latest_candle)
+
+        # 2. Resolve model identity/governance before deciding whether inference is needed.
         model = self._registry.get_active_model()
-        governance = self._registry.get_governance(model.get_model_version())
+        model_version = model.get_model_version()
+        model_metadata = model.get_model_metadata()
+        model_mode = (
+            str(model_metadata.get("mode", "unknown"))
+            if isinstance(model_metadata, dict)
+            else "unknown"
+        )
+        model_loaded = (
+            bool(model_metadata.get("loaded", False))
+            if isinstance(model_metadata, dict)
+            else False
+        )
+        governance = self._registry.get_governance(model_version)
 
         if not governance.approved_for_paper:
             raise SignalGenerationError(
-                f"Model {model.get_model_version()} is not approved for paper mode"
+                f"Model {model_version} is not approved for paper mode"
             )
 
+        common_telemetry = {
+            "model_version": model_version,
+            "model_mode": model_mode,
+            "model_loaded": model_loaded,
+            "market_data_source": source,
+            "market_data_cache_status": market_data_cache_status,
+            "market_data_cache_age_seconds": None,
+            "market_data_fetched_at": market_data_fetched_at,
+            "latest_market_data_at": latest_market_data_at,
+            "market_data_age_seconds": market_data_age_seconds,
+            "market_data_fingerprint": market_data_fingerprint,
+        }
+
+        if (
+            previous_market_data_fingerprint
+            and previous_market_data_fingerprint == market_data_fingerprint
+        ):
+            logger.debug(
+                "Market observation unchanged — model inference skipped",
+                instrument=instrument,
+                timeframe=timeframe,
+            )
+            return SignalGenerationResponse(
+                generated=False,
+                no_signal=NoSignalResult(
+                    reason="market_data_unchanged",
+                    instrument=instrument,
+                    confidence_score=None,
+                    threshold=get_threshold(),
+                ),
+                mode=settings.ai_signal_mode,
+                model_evaluated=False,
+                **common_telemetry,
+            )
+
+        # 3. Feature engineering + model inference only for a changed observation.
+        df = candles_to_dataframe(candles)
+        features = extract_latest_features(df)
         prediction = model.predict_signal(features)
 
-        # 4. Confidence threshold gate
+        # 4. Confidence threshold gate.
         if not is_above_threshold(prediction.confidence_score):
             logger.info(
                 "Signal below confidence threshold — no signal generated",
@@ -109,9 +178,11 @@ class SignalGenerator:
                     threshold=get_threshold(),
                 ),
                 mode=settings.ai_signal_mode,
+                model_evaluated=True,
+                **common_telemetry,
             )
 
-        # 5. Compute SL/TP from latest price (simple ATR-like placeholder)
+        # 5. Compute SL/TP from latest price (simple ATR-like placeholder).
         last_price = candles[-1].close
         atr_estimate = features.get("hl_range", last_price * 0.001) * 1.5
 
@@ -122,7 +193,7 @@ class SignalGenerator:
             sl = round(last_price + atr_estimate * 1.5, 5)
             tp = round(last_price - atr_estimate * 2.0, 5)
 
-        # 6. Market regime estimation (placeholder)
+        # 6. Market regime estimation (placeholder).
         volatility = features.get("volatility_10", 0.0)
         if volatility > 0.003:
             market_regime = "volatile"
@@ -131,12 +202,12 @@ class SignalGenerator:
         else:
             market_regime = "ranging"
 
-        # 7. Build explainability metadata
+        # 7. Build explainability metadata.
         explainability = build_explainability_metadata(
             prediction.explainability, features, instrument, timeframe
         )
 
-        # 8. Construct candidate
+        # 8. Construct candidate.
         metadata = sanitize_metadata({
             **explainability,
             "raw_scores": prediction.raw_scores,
@@ -176,4 +247,23 @@ class SignalGenerator:
             generated=True,
             signal=candidate,
             mode=settings.ai_signal_mode,
+            model_evaluated=True,
+            **common_telemetry,
         )
+
+    @staticmethod
+    def _fingerprint_latest_candle(candle: OHLCVCandle) -> str:
+        """Stable identity for the latest market observation, excluding secrets."""
+        payload = "|".join(
+            [
+                candle.timestamp.isoformat(),
+                f"{candle.open:.10g}",
+                f"{candle.high:.10g}",
+                f"{candle.low:.10g}",
+                f"{candle.close:.10g}",
+                f"{candle.volume:.10g}",
+                candle.instrument.upper(),
+                candle.timeframe.upper(),
+            ]
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
