@@ -1,6 +1,13 @@
 name: AI Engine CI
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'services/ai-engine/**'
+      - '.github/workflows/ai-engine-ci.yml'
+      - 'scripts/security/required-ci-gate.mjs'
+
   pull_request:
     branches: [main]
     paths:
@@ -12,12 +19,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: ai-engine-ci-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+  group: ai-engine-ci-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: true
 
 env:
   PYTHON_VERSION: '3.11'
-  CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
+  CANDIDATE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 
 jobs:
   ai-engine:
