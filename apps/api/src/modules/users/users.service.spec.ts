@@ -62,6 +62,48 @@ describe('UsersService Sprint 45 DOB/KYC invariants', () => {
 
   afterEach(async () => module.close());
 
+  it('returns a privacy-safe self-profile view without legacy experience or secrets', async () => {
+    const user = {
+      id: 'user-safe',
+      email: 'safe@example.com',
+      phone: '+233200000000',
+      passwordHash: 'must-never-leak',
+      status: UserStatus.ACTIVE,
+      emailVerifiedAt: new Date('2026-01-01T00:00:00Z'),
+      phoneVerifiedAt: null,
+      countryCode: 'GH',
+      timezone: 'Africa/Accra',
+      preferredCurrency: 'USD',
+      mfaEnabled: true,
+      mfaSecret: 'must-never-leak',
+      lastLoginAt: new Date('2026-09-19T18:00:00Z'),
+      createdAt: new Date('2026-01-01T00:00:00Z'),
+      profile: {
+        firstName: 'Ama',
+        lastName: 'Mensah',
+        dateOfBirth: '1990-01-01',
+        kycStatus: KycStatus.APPROVED,
+        tradingExperienceLevel: 'PROFESSIONAL',
+      },
+      userRoles: [{ role: { name: 'ADMIN' } }],
+    } as unknown as User;
+    userRepo.findOne.mockResolvedValue(user);
+
+    const view = await service.getMyProfileView(user.id);
+    const serialized = JSON.stringify(view);
+
+    expect(view.profile).toEqual({
+      firstName: 'Ama',
+      lastName: 'Mensah',
+      dateOfBirth: '1990-01-01',
+      kycStatus: KycStatus.APPROVED,
+    });
+    expect(serialized).not.toContain('tradingExperienceLevel');
+    expect(serialized).not.toContain('passwordHash');
+    expect(serialized).not.toContain('mfaSecret');
+    expect(serialized).not.toContain('userRoles');
+  });
+
   it('resets approved KYC whenever the stored date of birth changes', async () => {
     const user = {
       id: 'user-1',
