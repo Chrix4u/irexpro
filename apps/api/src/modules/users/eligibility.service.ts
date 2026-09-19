@@ -252,9 +252,7 @@ export class EligibilityService {
       );
     }
     if (!user.countryCode) {
-      throw new BadRequestException(
-        'Complete your country information before submitting KYC.',
-      );
+      throw new BadRequestException('Complete your country information before submitting KYC.');
     }
     if (this.evaluateAge(profile.dateOfBirth) !== 'ADULT') {
       throw new BadRequestException(
