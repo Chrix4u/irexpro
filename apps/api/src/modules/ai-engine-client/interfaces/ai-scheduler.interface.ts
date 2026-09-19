@@ -34,7 +34,14 @@ export interface AiSchedulerSessionStatus {
   last_decision: string | null;
   last_reason: string | null;
   last_confidence_score: number | null;
+  last_confidence_at: string | null;
   confidence_threshold: number | null;
+  model_version: string | null;
+  model_mode: string | null;
+  model_loaded: boolean | null;
+  last_market_data_at: string | null;
+  market_data_age_seconds: number | null;
+  market_data_cache_bypassed: boolean;
   last_publish_failed: boolean;
 }
 
