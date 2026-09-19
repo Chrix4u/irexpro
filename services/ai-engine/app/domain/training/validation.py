@@ -1,6 +1,8 @@
 """Chronological validation helpers for offline model training."""
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pandas as pd
 from sklearn.metrics import (
@@ -43,6 +45,58 @@ def time_ordered_split(
     return train, val
 
 
+def purged_walk_forward_splits(
+    df: pd.DataFrame,
+    *,
+    min_train_size: int,
+    validation_size: int,
+    purge_gap: int,
+    embargo_gap: int = 0,
+    max_splits: int | None = None,
+) -> list[tuple[pd.DataFrame, pd.DataFrame]]:
+    """
+    Build expanding-window walk-forward folds with purge and embargo gaps.
+
+    The purge sits between each training window and its validation window so a
+    forward-return label cannot cross the fold boundary. The embargo separates
+    consecutive validation windows. Later folds may legitimately train on old
+    validation observations because those observations are historical by then.
+    """
+    if min_train_size < 1:
+        raise ValueError("min_train_size must be at least 1")
+    if validation_size < 1:
+        raise ValueError("validation_size must be at least 1")
+    if purge_gap < 0:
+        raise ValueError("purge_gap cannot be negative")
+    if embargo_gap < 0:
+        raise ValueError("embargo_gap cannot be negative")
+    if max_splits is not None and max_splits < 1:
+        raise ValueError("max_splits must be at least 1 when provided")
+
+    validation_start = min_train_size + purge_gap
+    splits: list[tuple[pd.DataFrame, pd.DataFrame]] = []
+
+    while validation_start + validation_size <= len(df):
+        train_end = validation_start - purge_gap
+        train = df.iloc[:train_end].copy()
+        validation = df.iloc[
+            validation_start : validation_start + validation_size
+        ].copy()
+
+        if train.empty or validation.empty:
+            break
+
+        splits.append((train, validation))
+        if max_splits is not None and len(splits) >= max_splits:
+            break
+
+        validation_start += validation_size + embargo_gap
+
+    if not splits:
+        raise ValueError("Dataset is too small for requested walk-forward configuration")
+    return splits
+
+
 def compute_classification_metrics(
     y_true: pd.Series | np.ndarray,
     positive_probabilities: pd.Series | np.ndarray,
@@ -72,6 +126,65 @@ def compute_classification_metrics(
         "brier_score": float(brier_score_loss(y, probabilities)),
         "sample_count": float(len(y)),
         "positive_rate": float(y.mean()),
+    }
+
+
+def compute_backtest_metrics(
+    net_returns: pd.Series | np.ndarray,
+    *,
+    annualization_factor: float,
+) -> dict[str, float | int | None]:
+    """
+    Compute net-of-cost return diagnostics for model-gating backtests.
+
+    net_returns must already include spread, commission, slippage, and any other
+    execution-cost assumptions. The annualization factor must match the return
+    sampling interval used by the backtest.
+    """
+    returns = np.asarray(net_returns, dtype=float)
+    if len(returns) == 0:
+        raise ValueError("net_returns must be non-empty")
+    if not np.isfinite(returns).all():
+        raise ValueError("net_returns contains non-finite values")
+    if annualization_factor <= 0:
+        raise ValueError("annualization_factor must be greater than zero")
+    if (returns <= -1.0).any():
+        raise ValueError("net_returns cannot be less than or equal to -100%")
+
+    equity = np.cumprod(1.0 + returns)
+    running_peak = np.maximum.accumulate(np.concatenate(([1.0], equity)))[1:]
+    drawdowns = (equity / running_peak) - 1.0
+
+    mean_return = float(returns.mean())
+    sample_std = float(returns.std(ddof=1)) if len(returns) > 1 else 0.0
+    downside = returns[returns < 0]
+    downside_std = float(downside.std(ddof=1)) if len(downside) > 1 else 0.0
+
+    sharpe = (
+        mean_return / sample_std * math.sqrt(annualization_factor)
+        if sample_std > 0
+        else None
+    )
+    sortino = (
+        mean_return / downside_std * math.sqrt(annualization_factor)
+        if downside_std > 0
+        else None
+    )
+
+    gross_profit = float(returns[returns > 0].sum())
+    gross_loss = float(-returns[returns < 0].sum())
+    profit_factor = gross_profit / gross_loss if gross_loss > 0 else None
+
+    return {
+        "trade_or_period_count": int(len(returns)),
+        "total_return": float(equity[-1] - 1.0),
+        "average_net_return": mean_return,
+        "median_net_return": float(np.median(returns)),
+        "win_rate": float((returns > 0).mean()),
+        "profit_factor": float(profit_factor) if profit_factor is not None else None,
+        "sharpe_ratio": float(sharpe) if sharpe is not None else None,
+        "sortino_ratio": float(sortino) if sortino is not None else None,
+        "max_drawdown": float(abs(drawdowns.min())),
     }
 
 
