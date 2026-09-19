@@ -1501,6 +1501,7 @@ export class BrokerService {
     instrument: string,
     timeframe: string,
     limit: number,
+    before?: Date,
   ): Promise<OHLCV[]> {
     const connection = await this.findConnectionById(brokerConnectionId, userId);
 
@@ -1532,7 +1533,7 @@ export class BrokerService {
 
     try {
       await adapter.connect(credentials);
-      return await adapter.getOHLCV(instrument, timeframe, limit);
+      return await adapter.getOHLCV(instrument, timeframe, limit, before);
     } catch (err) {
       this.logger.warn(
         `OHLCV fetch failed connection=${brokerConnectionId} instrument=${instrument}: ` +
