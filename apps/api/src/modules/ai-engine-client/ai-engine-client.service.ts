@@ -89,13 +89,8 @@ export class AiEngineClient {
       };
     }
 
-    const url =
-      `${this.getBaseUrl()}/scheduler/sessions/${encodeURIComponent(tradingSessionId)}`;
-    return this.requestJson<AiSchedulerSessionStatus>(
-      url,
-      { method: 'GET' },
-      tradingSessionId,
-    );
+    const url = `${this.getBaseUrl()}/scheduler/sessions/${encodeURIComponent(tradingSessionId)}`;
+    return this.requestJson<AiSchedulerSessionStatus>(url, { method: 'GET' }, tradingSessionId);
   }
 
   private async requestJson<T>(
@@ -127,9 +122,7 @@ export class AiEngineClient {
       });
 
       if (!response.ok) {
-        throw new Error(
-          `AI engine request failed session=${sessionId} status=${response.status}`,
-        );
+        throw new Error(`AI engine request failed session=${sessionId} status=${response.status}`);
       }
       return (await response.json()) as T;
     } finally {
