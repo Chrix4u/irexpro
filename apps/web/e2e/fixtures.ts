@@ -332,8 +332,6 @@ export async function setupAuthInterception(page: Page): Promise<void> {
               firstName: body.firstName ?? mockUserProfile.profile.firstName,
               lastName: body.lastName ?? mockUserProfile.profile.lastName,
               dateOfBirth: body.dateOfBirth ?? mockUserProfile.profile.dateOfBirth,
-              tradingExperienceLevel:
-                body.tradingExperienceLevel ?? mockUserProfile.profile.tradingExperienceLevel,
             },
           }),
         );
