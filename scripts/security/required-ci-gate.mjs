@@ -4,6 +4,14 @@ const WORKFLOW_RULES = [
     always: true,
   },
   {
+    name: 'AI Engine CI',
+    patterns: [
+      'services/ai-engine/**',
+      '.github/workflows/ai-engine-ci.yml',
+      'scripts/security/required-ci-gate.mjs',
+    ],
+  },
+  {
     name: 'API CI',
     patterns: [
       'apps/api/**',
@@ -130,6 +138,11 @@ export function runSelfTests() {
     requiredWorkflowNames(['README.md']),
     ['Release Security'],
     'docs-only PR',
+  );
+  assertEqual(
+    requiredWorkflowNames(['services/ai-engine/app/domain/scheduler/signal_scheduler.py']),
+    ['Release Security', 'AI Engine CI'],
+    'AI engine change',
   );
   assertEqual(
     requiredWorkflowNames(['apps/api/src/modules/auth/auth.service.ts']),
