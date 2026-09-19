@@ -475,6 +475,45 @@ export class MetaTraderAdapter implements IBrokerAdapter {
     }
   }
 
+  async getHistoricalOHLCV(
+    instrument: string,
+    timeframe: string,
+    endTime: Date,
+    count: number,
+  ): Promise<OHLCV[]> {
+    await this.getActiveConnection();
+    if (!(endTime instanceof Date) || Number.isNaN(endTime.getTime())) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.INVALID_REQUEST,
+        'Historical OHLCV endTime is invalid',
+      );
+    }
+
+    try {
+      const entry = this.metaApiClient['connectionPool']?.get(this.currentAccountId!);
+      if (!entry) {
+        throw new BrokerAdapterError(BrokerErrorCode.NOT_CONNECTED, 'No active connection');
+      }
+
+      const candles = await entry.account.getHistoricalCandles(
+        instrument,
+        this.mapTimeframe(timeframe),
+        endTime,
+        count,
+      );
+      return (candles ?? []).map((c: any) => ({
+        timestamp: c.time,
+        open: this.toDecimalString(c.open),
+        high: this.toDecimalString(c.high),
+        low: this.toDecimalString(c.low),
+        close: this.toDecimalString(c.close),
+        volume: this.toDecimalString(c.tickVolume ?? c.volume ?? 0),
+      }));
+    } catch (err) {
+      throw this.mapError(err);
+    }
+  }
+
   // ─── Order management ─────────────────────────────────────────────────────
 
   // ─── Order capability contract (Round 6 §7) ──────────────────────────────
