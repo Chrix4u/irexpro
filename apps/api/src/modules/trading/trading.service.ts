@@ -515,9 +515,7 @@ export class TradingService {
         .filter((symbol): symbol is string => Boolean(symbol)),
     );
 
-    return TradingService.AI_PREFERRED_INSTRUMENTS.filter((symbol) =>
-      supported.has(symbol),
-    );
+    return TradingService.AI_PREFERRED_INSTRUMENTS.filter((symbol) => supported.has(symbol));
   }
 
   async getSessionById(userId: string, sessionId: string): Promise<TradingSession | null> {
