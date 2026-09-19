@@ -39,6 +39,8 @@ def _load_corpus_manifest(dataset_path: Path) -> dict[str, Any]:
     actual_sha = _sha256_file(dataset_path)
     if not expected_sha or expected_sha != actual_sha:
         raise ValueError(f"Corpus checksum mismatch for {dataset_path.name}")
+    if manifest.get("source") != "broker_internal_historical_ohlcv":
+        raise ValueError(f"Corpus is not broker-authoritative: {dataset_path.name}")
     if manifest.get("closed_candles_only") is not True:
         raise ValueError(f"Corpus is not declared closed-candle-only: {dataset_path.name}")
     return manifest
