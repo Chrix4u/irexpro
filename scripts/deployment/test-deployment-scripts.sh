@@ -333,9 +333,8 @@ web_exhausted_admin_attempts="$(grep -F -c 'http://local.test/admin' "$COMMAND_L
 if grep -q 'https://public.test' "$COMMAND_LOG"; then
   fail 'Public smoke must not run after exhausted local web readiness retries.'
 fi
-if grep -q 'ai/health' "$COMMAND_LOG"; then
-  fail 'AI paper-mode observation must not run after exhausted local web readiness retries.'
-fi
+web_exhausted_ai_checks="$(grep -F -c 'ai/health' "$COMMAND_LOG" || true)"
+[[ "$web_exhausted_ai_checks" -eq 2 ]] || fail 'Web readiness exhaustion must not run the later AI post-smoke verification.'
 
 # Scenario: repeated Admin connection refusals through the maximum attempt
 # count must fail the deployment at local-smoke, with the web smoke already
@@ -355,9 +354,8 @@ admin_exhausted_web_attempts="$(grep -F -c 'http://local.test/web' "$COMMAND_LOG
 if grep -q 'https://public.test' "$COMMAND_LOG"; then
   fail 'Public smoke must not run after exhausted local admin readiness retries.'
 fi
-if grep -q 'ai/health' "$COMMAND_LOG"; then
-  fail 'AI paper-mode observation must not run after exhausted local admin readiness retries.'
-fi
+admin_exhausted_ai_checks="$(grep -F -c 'ai/health' "$COMMAND_LOG" || true)"
+[[ "$admin_exhausted_ai_checks" -eq 2 ]] || fail 'Admin readiness exhaustion must not run the later AI post-smoke verification.'
 
 make_fixture 'successful-deploy'
 git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
