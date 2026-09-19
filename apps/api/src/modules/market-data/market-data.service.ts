@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -31,16 +32,25 @@ export class MarketDataService {
   ) {}
 
   async getInternalOhlcv(query: InternalOhlcvQueryDto): Promise<InternalOhlcvResponseDto> {
-    const { userId, brokerConnectionId, instrument, timeframe, limit } = query;
+    const { userId, brokerConnectionId, instrument, timeframe, limit, endTime } = query;
 
     try {
-      const rawCandles = await this.brokerService.getOhlcvForConnection(
-        userId,
-        brokerConnectionId,
-        instrument,
-        timeframe,
-        limit,
-      );
+      const rawCandles = endTime
+        ? await this.brokerService.getHistoricalOhlcvForConnection(
+            userId,
+            brokerConnectionId,
+            instrument,
+            timeframe,
+            new Date(endTime),
+            limit,
+          )
+        : await this.brokerService.getOhlcvForConnection(
+            userId,
+            brokerConnectionId,
+            instrument,
+            timeframe,
+            limit,
+          );
 
       const candles = rawCandles.map((c) =>
         this.normalizeCandle(c, instrument.toUpperCase(), timeframe.toUpperCase()),
@@ -55,6 +65,7 @@ export class MarketDataService {
           instrument: instrument.toUpperCase(),
           timeframe: timeframe.toUpperCase(),
           limit,
+          ...(endTime ? { endTime } : {}),
           count: candles.length,
         },
       });
@@ -88,7 +99,7 @@ export class MarketDataService {
           `instrument=${instrument}: ${message}`,
       );
 
-      if (err instanceof ForbiddenException) {
+      if (err instanceof ForbiddenException || err instanceof BadRequestException) {
         throw err;
       }
 

@@ -1,5 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ForbiddenException, ServiceUnavailableException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { MarketDataService } from './market-data.service';
 import { BrokerService } from '../broker/broker.service';
 import { AuditService } from '../audit/audit.service';
@@ -33,6 +37,7 @@ describe('MarketDataService', () => {
   beforeEach(async () => {
     brokerService = {
       getOhlcvForConnection: jest.fn().mockResolvedValue(mockCandles),
+      getHistoricalOhlcvForConnection: jest.fn().mockResolvedValue(mockCandles),
     };
     auditService = {
       log: jest.fn().mockResolvedValue(undefined),
@@ -75,6 +80,28 @@ describe('MarketDataService', () => {
     );
   });
 
+  it('routes endTime requests through the cursor-based historical capability', async () => {
+    const endTime = '2025-01-15T12:00:00.000Z';
+
+    const result = await service.getInternalOhlcv({ ...query, endTime });
+
+    expect(result.count).toBe(1);
+    expect(brokerService.getHistoricalOhlcvForConnection).toHaveBeenCalledWith(
+      query.userId,
+      query.brokerConnectionId,
+      'EURUSD',
+      'H1',
+      new Date(endTime),
+      50,
+    );
+    expect(brokerService.getOhlcvForConnection).not.toHaveBeenCalled();
+    expect(auditService.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({ endTime }),
+      }),
+    );
+  });
+
   it('audits successful market-data requests', async () => {
     await service.getInternalOhlcv(query);
 
@@ -85,6 +112,19 @@ describe('MarketDataService', () => {
         resourceId: query.brokerConnectionId,
       }),
     );
+  });
+
+  it('rethrows unsupported historical capability as BadRequestException', async () => {
+    (brokerService.getHistoricalOhlcvForConnection as jest.Mock).mockRejectedValue(
+      new BadRequestException('Historical OHLCV not supported'),
+    );
+
+    await expect(
+      service.getInternalOhlcv({
+        ...query,
+        endTime: '2025-01-15T12:00:00.000Z',
+      }),
+    ).rejects.toThrow(BadRequestException);
   });
 
   it('rethrows ForbiddenException from broker service', async () => {

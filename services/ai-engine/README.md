@@ -77,6 +77,41 @@ mypy app
 
 ---
 
+## Collecting a real historical training corpus
+
+The training pipeline should use broker-authoritative, fully closed candles rather
+than mock/runtime fixtures. The collector pages backwards through the internal
+market-data endpoint in bounded 500-candle requests and writes one deterministic
+CSV plus integrity manifest per instrument.
+
+Example for the default H1 universe:
+
+```powershell
+python -m app.domain.training.collect_broker_history \
+  --user-id <user-uuid> \
+  --broker-connection-id <connected-broker-uuid> \
+  --instruments EURUSD,GBPUSD,USDJPY,AUDUSD,USDCAD,USDCHF \
+  --timeframe H1 \
+  --rows 15000 \
+  --output-dir data/corpus
+```
+
+The collector:
+
+- uses the connected broker through the NestJS internal API; Python never receives broker credentials;
+- requests historical pages using an explicit `endTime` cursor;
+- drops still-open candles;
+- deduplicates overlapping provider pages;
+- stores candles in chronological order;
+- writes a SHA-256 manifest for every CSV;
+- keeps generated corpora out of Git.
+
+The normal signal scanner remains unchanged and continues to request only the
+latest candles. Historical cursor reads are available only to broker adapters
+that explicitly declare the historical capability.
+
+---
+
 ## Training a real XGBoost model
 
 The runtime can load a real fitted XGBoost classifier, but generated artifacts

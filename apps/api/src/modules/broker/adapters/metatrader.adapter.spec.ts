@@ -952,6 +952,23 @@ describe('MetaTraderAdapter', () => {
     });
   });
 
+  describe('getHistoricalOHLCV()', () => {
+    it('passes the explicit historical cursor to MetaAPI', async () => {
+      await adapter.connect(testCredentials);
+      const endTime = new Date('2025-06-30T23:00:00.000Z');
+
+      const candles = await adapter.getHistoricalOHLCV('EURUSD', 'H1', endTime, 250);
+
+      expect(candles).toHaveLength(2);
+      expect(mockAccount.getHistoricalCandles).toHaveBeenLastCalledWith(
+        'EURUSD',
+        '1h',
+        endTime,
+        250,
+      );
+    });
+  });
+
   describe('getClosedTrades()', () => {
     it('returns only DEAL_ENTRY_OUT deals mapped to BrokerClosedTrade', async () => {
       await adapter.connect(testCredentials);

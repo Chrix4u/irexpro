@@ -1,6 +1,7 @@
 """Tests for BrokerMarketDataProvider."""
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -35,6 +36,22 @@ def test_builds_correct_url():
     assert "instrument=EURUSD" in url
     assert "timeframe=H1" in url
     assert "limit=50" in url
+
+
+def test_builds_historical_url_with_encoded_end_time():
+    provider = BrokerMarketDataProvider(settings=TEST_SETTINGS)
+    end_time = datetime(2025, 1, 15, 12, 0, tzinfo=UTC)
+
+    url = provider.build_request_url(
+        user_id="user-1",
+        broker_connection_id="conn-1",
+        instrument="eurusd",
+        timeframe="h1",
+        limit=500,
+        end_time=end_time,
+    )
+
+    assert "endTime=2025-01-15T12%3A00%3A00%2B00%3A00" in url
 
 
 def test_sends_internal_api_key_header():
@@ -81,6 +98,50 @@ async def test_parses_successful_ohlcv_response():
     assert len(candles) == 1
     assert candles[0].source == "broker"
     assert candles[0].close == 1.10050
+
+
+@pytest.mark.asyncio
+async def test_fetches_historical_ohlcv_page():
+    provider = BrokerMarketDataProvider(settings=TEST_SETTINGS)
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "candles": [
+            {
+                "timestamp": "2024-01-01T00:00:00+00:00",
+                "open": "1.10000",
+                "high": "1.10100",
+                "low": "1.09900",
+                "close": "1.10050",
+                "volume": "1000",
+                "instrument": "EURUSD",
+                "timeframe": "H1",
+            }
+        ]
+    }
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=mock_response)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    end_time = datetime(2025, 1, 15, 12, 0, tzinfo=UTC)
+    with patch(
+        "app.domain.market_data.providers.broker_provider.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        candles = await provider.get_historical_ohlcv(
+            "EURUSD",
+            "H1",
+            end_time=end_time,
+            limit=500,
+            user_id="user-1",
+            broker_connection_id="conn-1",
+        )
+
+    assert len(candles) == 1
+    called_url = mock_client.get.await_args.args[0]
+    assert "endTime=2025-01-15T12%3A00%3A00%2B00%3A00" in called_url
 
 
 @pytest.mark.asyncio

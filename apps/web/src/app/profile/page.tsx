@@ -3,7 +3,7 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import type { MyProfileView, TradingExperienceLevel } from '@irexpro/types';
+import type { MyProfileView } from '@irexpro/types';
 import type { EligibilityStatusView } from '@irexpro/types/eligibility';
 import { createEligibilityApi } from '@irexpro/api-client/eligibility';
 import { Alert, Badge, Button, Card, DashboardShell, Input, LoadingSpinner } from '@/components/ui';
@@ -48,8 +48,6 @@ export default function ProfilePage() {
   const [countryCode, setCountryCode] = useState('');
   const [timezone, setTimezone] = useState('');
   const [preferredCurrency, setPreferredCurrency] = useState('USD');
-  const [tradingExperienceLevel, setTradingExperienceLevel] =
-    useState<TradingExperienceLevel | ''>('');
 
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -63,7 +61,6 @@ export default function ProfilePage() {
     setCountryCode(value.countryCode ?? '');
     setTimezone(value.timezone ?? '');
     setPreferredCurrency(value.preferredCurrency ?? 'USD');
-    setTradingExperienceLevel(value.profile.tradingExperienceLevel ?? '');
   }, []);
 
   const loadAccount = useCallback(async () => {
@@ -118,7 +115,6 @@ export default function ProfilePage() {
         countryCode: countryCode.trim().toUpperCase() || undefined,
         timezone: timezone || undefined,
         preferredCurrency: preferredCurrency.trim().toUpperCase() || undefined,
-        tradingExperienceLevel: tradingExperienceLevel || undefined,
       });
       applyProfile(updated);
       await Promise.all([refreshUser(), loadAccount()]);
@@ -373,28 +369,6 @@ export default function ProfilePage() {
               </div>
             </section>
 
-            <section className="form-section">
-              <h3 className="form-section__title">Trading experience</h3>
-              <div className="input-group">
-                <label className="input-label" htmlFor="profile-experience">Experience level</label>
-                <select
-                  id="profile-experience"
-                  className="input"
-                  value={tradingExperienceLevel}
-                  onChange={(event) =>
-                    setTradingExperienceLevel(event.target.value as TradingExperienceLevel | '')
-                  }
-                  disabled={savingProfile}
-                >
-                  <option value="">Not specified</option>
-                  <option value="BEGINNER">Beginner</option>
-                  <option value="INTERMEDIATE">Intermediate</option>
-                  <option value="ADVANCED">Advanced</option>
-                  <option value="PROFESSIONAL">Professional</option>
-                </select>
-              </div>
-            </section>
-
             <div className="workspace-actions">
               <Button type="submit" size="lg" loading={savingProfile}>
                 Save profile
@@ -443,7 +417,7 @@ export default function ProfilePage() {
               <Button type="submit" loading={changingPassword}>
                 Change password
               </Button>
-              <Link href="/forgot-password" className="btn btn--secondary">
+              <Link href="/forgot-password" className="btn btn--secondary profile-forgot-password">
                 Forgot current password?
               </Link>
             </div>

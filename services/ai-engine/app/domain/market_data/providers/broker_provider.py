@@ -9,6 +9,7 @@ IMPORTANT:
 from __future__ import annotations
 
 from datetime import datetime
+from urllib.parse import urlencode
 
 import httpx
 
@@ -50,13 +51,19 @@ class BrokerMarketDataProvider(MarketDataProvider):
         instrument: str,
         timeframe: str,
         limit: int,
+        end_time: datetime | None = None,
     ) -> str:
         base = self._settings.nestjs_market_data_url
-        params = (
-            f"userId={user_id}&brokerConnectionId={broker_connection_id}"
-            f"&instrument={instrument.upper()}&timeframe={timeframe.upper()}&limit={limit}"
-        )
-        return f"{base}?{params}"
+        params: dict[str, str | int] = {
+            "userId": user_id,
+            "brokerConnectionId": broker_connection_id,
+            "instrument": instrument.upper(),
+            "timeframe": timeframe.upper(),
+            "limit": limit,
+        }
+        if end_time is not None:
+            params["endTime"] = end_time.isoformat()
+        return f"{base}?{urlencode(params)}"
 
     async def get_ohlcv(
         self,
@@ -113,6 +120,48 @@ class BrokerMarketDataProvider(MarketDataProvider):
                 )
             )
         return candles
+
+    async def get_historical_ohlcv(
+        self,
+        instrument: str,
+        timeframe: str,
+        *,
+        end_time: datetime,
+        limit: int = 500,
+        user_id: str,
+        broker_connection_id: str,
+    ) -> list[OHLCVCandle]:
+        """Fetch one backwards-paginated historical candle page."""
+        if limit < 10 or limit > 500:
+            raise MarketDataError("Historical market data limit must be between 10 and 500")
+
+        url = self.build_request_url(
+            user_id,
+            broker_connection_id,
+            instrument,
+            timeframe,
+            limit,
+            end_time=end_time,
+        )
+
+        try:
+            async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
+                response = await client.get(url, headers=self._get_headers())
+
+            if response.status_code in (401, 403):
+                raise MarketDataError("Market data access denied")
+            if response.status_code >= 400:
+                raise MarketDataError(
+                    f"Historical market data request failed with HTTP {response.status_code}"
+                )
+
+            return self._parse_response(response.json(), instrument, timeframe)
+        except MarketDataError:
+            raise
+        except httpx.TimeoutException as e:
+            raise MarketDataError("Historical market data request timed out") from e
+        except Exception as e:
+            raise MarketDataError("Unable to fetch historical broker market data") from e
 
     async def get_latest_price(self, instrument: str) -> float:
         raise NotImplementedError("Use get_ohlcv for broker-sourced prices")

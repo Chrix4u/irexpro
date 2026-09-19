@@ -1543,6 +1543,69 @@ export class BrokerService {
   }
 
   /**
+   * Fetch a bounded historical OHLCV page ending at the supplied cursor.
+   *
+   * This capability is intentionally separate from the normal runtime read:
+   * only adapters that explicitly implement getHistoricalOHLCV may serve it.
+   * It is used by offline corpus collection and never by order execution.
+   */
+  async getHistoricalOhlcvForConnection(
+    userId: string,
+    brokerConnectionId: string,
+    instrument: string,
+    timeframe: string,
+    endTime: Date,
+    limit: number,
+  ): Promise<OHLCV[]> {
+    const connection = await this.findConnectionById(brokerConnectionId, userId);
+
+    if (connection.status !== BrokerConnectionStatus.CONNECTED) {
+      throw new ForbiddenException('Broker connection is not active');
+    }
+
+    const adapter = this.adapterRegistry.getAdapterForConnection(
+      connection.id,
+      connection.brokerId,
+    );
+
+    if (!adapter.getHistoricalOHLCV) {
+      throw new BadRequestException(
+        `Broker ${connection.brokerId} does not support cursor-based historical OHLCV reads`,
+      );
+    }
+
+    if (!connection.encryptedCredentials || !connection.credentialIv || !connection.credentialTag) {
+      throw new ForbiddenException('Broker connection credentials unavailable');
+    }
+
+    this.assertCredentialsUsable(connection, 'getHistoricalOhlcvForConnection');
+
+    const credentials = this.encryptionService.decrypt({
+      ciphertext: connection.encryptedCredentials,
+      iv: connection.credentialIv,
+      tag: connection.credentialTag,
+      keyId: connection.encryptionKeyId ?? 'env-key-v1',
+    });
+
+    adapter.setMode(connection.accountType);
+
+    try {
+      await adapter.connect(credentials);
+      return await adapter.getHistoricalOHLCV(instrument, timeframe, endTime, limit);
+    } catch (err) {
+      this.logger.warn(
+        `Historical OHLCV fetch failed connection=${brokerConnectionId} instrument=${instrument}: ` +
+          `${(err as Error).message}`,
+      );
+      throw err;
+    } finally {
+      Object.keys(credentials).forEach((key) => {
+        (credentials as unknown as Record<string, unknown>)[key] = null;
+      });
+    }
+  }
+
+  /**
    * Fetch current broker positions for one owned connected account.
    * Credentials remain server-side; callers receive only normalized provider
    * position economics from the adapter contract.
