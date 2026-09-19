@@ -99,11 +99,11 @@ export default function AiTradingScreen() {
       ]);
 
       setConnections(userConnections);
-      setSession(activeSession);
+      setSession(activeSession.session);
 
       const nextBrokerId = pinnedBrokerId(
         userConnections,
-        activeSession,
+        activeSession.session,
         selectedBrokerIdRef.current,
       );
       selectedBrokerIdRef.current = nextBrokerId;
