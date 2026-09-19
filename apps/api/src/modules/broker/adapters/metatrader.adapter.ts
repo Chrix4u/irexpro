@@ -443,7 +443,12 @@ export class MetaTraderAdapter implements IBrokerAdapter {
     }
   }
 
-  async getOHLCV(instrument: string, timeframe: string, count: number): Promise<OHLCV[]> {
+  async getOHLCV(
+    instrument: string,
+    timeframe: string,
+    count: number,
+    before: Date = new Date(),
+  ): Promise<OHLCV[]> {
     // Precheck: throws BrokerAdapterError(NOT_CONNECTED) if no active connection.
     // The account-level historical-candles API below does not use the returned
     // connection handle directly (it reaches into the connection pool instead),
@@ -459,7 +464,7 @@ export class MetaTraderAdapter implements IBrokerAdapter {
       const candles = await entry.account.getHistoricalCandles(
         instrument,
         this.mapTimeframe(timeframe),
-        new Date(),
+        before,
         count,
       );
       return (candles ?? []).map((c: any) => ({
