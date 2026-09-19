@@ -462,7 +462,14 @@ export class TradingService {
         last_decision: 'BLOCKED',
         last_reason: 'model_not_approved_for_live',
         last_confidence_score: null,
+        last_confidence_at: null,
         confidence_threshold: null,
+        model_version: null,
+        model_mode: null,
+        model_loaded: null,
+        last_market_data_at: null,
+        market_data_age_seconds: null,
+        market_data_cache_bypassed: false,
         last_publish_failed: false,
       };
     }
