@@ -2,7 +2,11 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { UserCapitalAllocationView, TradeExecutionView } from '@irexpro/types/execution';
+import type {
+  AiAutomationStatusView,
+  UserCapitalAllocationView,
+  TradeExecutionView,
+} from '@irexpro/types/execution';
 import type { LivePositionRowView } from '@irexpro/types/live-account';
 import type { MarketIntelligenceView } from '@irexpro/types/market-intelligence';
 import { Alert, Badge, Button, Card, DashboardShell, Input, LoadingSpinner } from '@/components/ui';
@@ -86,6 +90,32 @@ function connectionLabel(broker: TerminalBrokerView | null): string {
   return broker.displayName || broker.brokerName;
 }
 
+function automationBadgeVariant(
+  state: AiAutomationStatusView['state'] | undefined,
+): 'success' | 'warning' | 'error' | 'info' {
+  if (state === 'ACTIVE') return 'success';
+  if (state === 'BLOCKED' || state === 'DEGRADED') return 'warning';
+  return 'info';
+}
+
+function decisionLabel(value: AiAutomationStatusView['lastDecision']): string {
+  if (!value) return 'No decision yet';
+  return value.replaceAll('_', ' ');
+}
+
+function confidenceLabel(value: number | null | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
+  return `${Math.round(value * 100)}%`;
+}
+
+function decisionReason(status: AiAutomationStatusView | null): string {
+  if (!status?.lastReason) return 'Waiting for AI engine telemetry';
+  if (status.lastReason === 'confidence_below_threshold') {
+    return `No qualifying setup — confidence ${confidenceLabel(status.lastConfidenceScore)} is below the ${confidenceLabel(status.confidenceThreshold)} threshold.`;
+  }
+  return status.lastReason;
+}
+
 function PositionCard({ position }: { position: LivePositionRowView }) {
   return (
     <article className="ai-position-card">
@@ -153,6 +183,7 @@ export default function AiTradingPage() {
 
   const [terminal, setTerminal] = useState<TraderTerminalStatus | null>(null);
   const [execution, setExecution] = useState<TraderExecutionSnapshot | null>(null);
+  const [automationStatus, setAutomationStatus] = useState<AiAutomationStatusView | null>(null);
   const [livePositions, setLivePositions] = useState<LivePositionRowView[]>([]);
   const [market, setMarket] = useState<MarketIntelligenceView | null>(null);
   const [allocation, setAllocation] = useState<UserCapitalAllocationView | null>(null);
@@ -165,6 +196,7 @@ export default function AiTradingPage() {
   const [error, setError] = useState<string | null>(null);
   const [allocationWarning, setAllocationWarning] = useState<string | null>(null);
   const [activityWarning, setActivityWarning] = useState<string | null>(null);
+  const [automationWarning, setAutomationWarning] = useState<string | null>(null);
 
   const initializedActivity = useRef(false);
   const seenPositionIds = useRef<Set<string>>(new Set());
@@ -242,9 +274,10 @@ export default function AiTradingPage() {
       const status = await loadTraderTerminalStatus();
       setTerminal(status);
 
-      const [executionResult, positionsResult] = await Promise.allSettled([
+      const [executionResult, positionsResult, automationResult] = await Promise.allSettled([
         loadTraderExecutionSnapshot(),
         loadLiveAccountPositions(),
+        api.getAiAutomationStatus(),
       ]);
 
       const snapshot =
@@ -254,6 +287,15 @@ export default function AiTradingPage() {
 
       setExecution(snapshot);
       setLivePositions(positions);
+      if (automationResult.status === 'fulfilled') {
+        setAutomationStatus(automationResult.value);
+        setAutomationWarning(null);
+      } else {
+        setAutomationStatus(null);
+        setAutomationWarning(
+          'AI Trading is running, but AI engine telemetry could not be loaded. Start/Stop remains available while telemetry retries automatically.',
+        );
+      }
 
       if (snapshot) {
         emitActivityToasts(positions, snapshot);
@@ -509,6 +551,12 @@ export default function AiTradingPage() {
         ))}
         {allocationWarning && <Alert variant="warning">{allocationWarning}</Alert>}
         {activityWarning && <Alert variant="warning">{activityWarning}</Alert>}
+        {automationWarning && <Alert variant="warning">{automationWarning}</Alert>}
+        {automationStatus?.state === 'BLOCKED' && (
+          <Alert variant="warning">
+            AI Trading session is active, but new AI signals are blocked: {decisionReason(automationStatus)}
+          </Alert>
+        )}
 
         {loading && !terminal ? (
           <Card title="Loading AI Trader">
@@ -651,6 +699,84 @@ export default function AiTradingPage() {
                   {market ? `Spread ${market.quote.spread} · ${market.status}` : 'Market snapshot unavailable'}
                 </span>
               </Card>
+            </section>
+
+            <section className="ai-operations" aria-labelledby="ai-operations-title">
+              <div className="ai-section__heading">
+                <div>
+                  <p className="workspace-hero__eyebrow">AI engine operations</p>
+                  <h2 id="ai-operations-title">What the AI is doing now</h2>
+                </div>
+                <Badge variant={automationBadgeVariant(automationStatus?.state)}>
+                  {automationStatus?.state ?? (automationOn ? 'CHECKING' : 'STOPPED')}
+                </Badge>
+              </div>
+
+              <div className="ai-operations__grid">
+                <Card className="ai-operation-tile">
+                  <span className="ai-control-card__label">AI Engine</span>
+                  <strong>{automationStatus?.engineReachable ? 'Connected' : automationOn ? 'Checking' : 'Idle'}</strong>
+                  <span>{automationStatus?.activeModelVersion ?? 'Model telemetry pending'}</span>
+                </Card>
+                <Card className="ai-operation-tile">
+                  <span className="ai-control-card__label">Signal Scheduler</span>
+                  <strong>
+                    {automationStatus?.registered
+                      ? 'Active'
+                      : automationStatus?.schedulerEnabled
+                        ? 'Starting'
+                        : automationOn
+                          ? 'Unavailable'
+                          : 'Stopped'}
+                  </strong>
+                  <span>
+                    {automationStatus?.intervalSeconds
+                      ? `Scans every ${automationStatus.intervalSeconds}s`
+                      : 'Waiting for session'}
+                  </span>
+                </Card>
+                <Card className="ai-operation-tile ai-operation-tile--wide">
+                  <span className="ai-control-card__label">Markets Watching</span>
+                  <strong>
+                    {automationStatus?.instruments.length
+                      ? automationStatus.instruments.join(' · ')
+                      : 'Waiting for scheduler'}
+                  </strong>
+                  <span>
+                    {automationStatus?.timeframes.length
+                      ? `Timeframes: ${automationStatus.timeframes.join(' · ')}`
+                      : 'Timeframes pending'}
+                  </span>
+                </Card>
+                <Card className="ai-operation-tile">
+                  <span className="ai-control-card__label">Last Market Scan</span>
+                  <strong>{formatTimestamp(automationStatus?.lastScanAt)}</strong>
+                  <span>{automationStatus ? `${automationStatus.scanCount} scan checks completed` : 'Telemetry pending'}</span>
+                </Card>
+                <Card className="ai-operation-tile">
+                  <span className="ai-control-card__label">Next Scan</span>
+                  <strong>{formatTimestamp(automationStatus?.nextScanAt)}</strong>
+                  <span>
+                    {automationStatus?.lastInstrument && automationStatus.lastTimeframe
+                      ? `Last checked ${automationStatus.lastInstrument} · ${automationStatus.lastTimeframe}`
+                      : 'Waiting for first scan'}
+                  </span>
+                </Card>
+                <Card className="ai-operation-tile ai-operation-tile--decision">
+                  <span className="ai-control-card__label">Last AI Decision</span>
+                  <strong>{decisionLabel(automationStatus?.lastDecision ?? null)}</strong>
+                  <span>{decisionReason(automationStatus)}</span>
+                  {(automationStatus?.lastConfidenceScore !== null &&
+                    automationStatus?.lastConfidenceScore !== undefined) && (
+                    <small>
+                      Confidence {confidenceLabel(automationStatus.lastConfidenceScore)}
+                      {automationStatus.confidenceThreshold !== null
+                        ? ` · Minimum ${confidenceLabel(automationStatus.confidenceThreshold)}`
+                        : ''}
+                    </small>
+                  )}
+                </Card>
+              </div>
             </section>
 
             <section className="ai-trading-grid">
