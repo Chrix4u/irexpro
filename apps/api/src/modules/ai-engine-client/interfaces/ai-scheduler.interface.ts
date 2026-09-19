@@ -21,7 +21,6 @@ export interface AiSchedulerSessionStopPayload {
   tradingSessionId: string;
 }
 
-
 export type AiSchedulerDecision =
   | 'WAITING_FOR_FIRST_SCAN'
   | 'NO_SIGNAL'
