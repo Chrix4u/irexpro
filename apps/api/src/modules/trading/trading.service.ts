@@ -228,7 +228,7 @@ export class TradingService {
         userId,
         tradingSessionId: session.id,
         brokerConnectionId: connection.id,
-        instruments: ['EURUSD'],
+        instruments: ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF'],
         timeframe: 'H1',
         source: 'broker',
         mode: session.executionMode,
@@ -417,6 +417,15 @@ export class TradingService {
   async getActiveSession(userId: string): Promise<TradingSession | null> {
     return this.executionService.getActiveSessionForClient(userId);
   }
+
+  async getAutomationRuntimeStatus(userId: string, sessionId: string) {
+    const session = await this.executionService.findSessionById(sessionId);
+    if (!session || session.userId !== userId) {
+      throw new NotFoundException(`Trading session ${sessionId} not found`);
+    }
+    return this.aiEngineClient.getSessionStatus(sessionId);
+  }
+
 
   async getSessionById(userId: string, sessionId: string): Promise<TradingSession | null> {
     const session = await this.executionService.findSessionById(sessionId);
