@@ -50,6 +50,13 @@ async def start_session_scheduler(
     """
     settings = get_settings()
 
+    if request.mode not in ("paper", "PAPER_ONLY"):
+        return SessionSchedulerResponse(
+            registered=False,
+            trading_session_id=request.trading_session_id,
+            message="Current AI model is not approved for live automation",
+        )
+
     if request.source == "mock" and settings.is_production and not settings.ai_allow_mock_market_data:
         raise HTTPException(status_code=403, detail="Mock source is blocked in production")
 
