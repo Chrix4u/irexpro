@@ -732,6 +732,58 @@ async function testConfirmExecutionConfirmation409Contract() {
   );
 }
 
+async function testAiAutomationStatusContract() {
+  const calls = [];
+  const responseBody = {
+    sessionId: 'fixture-session-id',
+    executionMode: 'PAPER_ONLY',
+    state: 'ACTIVE',
+    engineReachable: true,
+    schedulerEnabled: true,
+    schedulerRunning: true,
+    registered: true,
+    activeModelVersion: 'baseline-xgboost-v0.1.0',
+    approvedForLive: false,
+    instruments: ['EURUSD', 'GBPUSD'],
+    timeframes: ['M15', 'H1'],
+    intervalSeconds: 60,
+    lastScanAt: '2026-09-19T09:00:00.000Z',
+    nextScanAt: '2026-09-19T09:01:00.000Z',
+    scanCount: 12,
+    lastDecision: 'NO_SIGNAL',
+    lastReason: 'confidence_below_threshold',
+    lastInstrument: 'GBPUSD',
+    lastTimeframe: 'M15',
+    lastConfidenceScore: 0.54,
+    confidenceThreshold: 0.6,
+    lastSignalId: null,
+  };
+  const fakeFetch = async (url, init) => {
+    calls.push({ url, init });
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => responseBody,
+    };
+  };
+
+  const { createApiClient } = loadApiClient(fakeFetch);
+  const client = createApiClient({
+    baseUrl: 'https://api.example.test/api/v1',
+    getAccessToken: () => 'fixture-access-token',
+  });
+
+  const result = await client.getAiAutomationStatus();
+  assert.deepEqual(result, responseBody);
+  assert.equal(calls.length, 1);
+  assert.equal(
+    calls[0].url,
+    'https://api.example.test/api/v1/trading/sessions/active/automation-status',
+  );
+  assert.equal(calls[0].init.headers.Authorization, 'Bearer fixture-access-token');
+}
+
 async function testUnauthorizedRecoverySingleFlightContract() {
   const calls = [];
   let accessToken = 'fixture-expired-token';
@@ -835,6 +887,8 @@ async function main() {
   console.log('api-client execution confirmations contract test passed.');
   await testConfirmExecutionConfirmation409Contract();
   console.log('api-client confirmation 409-failure contract test passed.');
+  await testAiAutomationStatusContract();
+  console.log('api-client AI automation status contract test passed.');
   await testUnauthorizedRecoverySingleFlightContract();
   console.log('api-client single-flight auth recovery contract test passed.');
   await testUnauthorizedRecoverySkipsRefreshEndpoint();
