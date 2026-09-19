@@ -218,8 +218,11 @@ run_rollback() {
     COMMAND_LOG="$COMMAND_LOG" \
     STAGING_ROOT="$FIXTURE_REPO" \
     API_PM2_NAME='irexpro-api-staging' \
+    AI_PM2_NAME='irexpro-ai-staging' \
     WEB_PM2_NAME='irexpro-web-staging' \
     ADMIN_PM2_NAME='irexpro-admin-staging' \
+    AI_ENGINE_SCHEDULER_ENABLED='true' \
+    AI_SCHEDULER_ENABLED='true' \
     LOCAL_API_LIVE_URL='http://local.test/api/live' \
     LOCAL_API_READY_URL='http://local.test/api/ready' \
     LOCAL_API_HEALTH_URL='http://local.test/api/health' \
