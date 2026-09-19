@@ -7,7 +7,7 @@ import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Protocol
 
 import pandas as pd
 
@@ -15,6 +15,19 @@ from app.domain.market_data.providers.broker_provider import BrokerMarketDataPro
 from app.domain.market_data.schemas import OHLCVCandle
 
 DEFAULT_INSTRUMENTS = ("EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF")
+
+
+class HistoricalMarketDataProvider(Protocol):
+    async def get_historical_ohlcv(
+        self,
+        instrument: str,
+        timeframe: str,
+        *,
+        end_time: datetime,
+        limit: int,
+        user_id: str,
+        broker_connection_id: str,
+    ) -> list[OHLCVCandle]: ...
 TIMEFRAME_SECONDS = {
     "M1": 60,
     "M5": 5 * 60,
@@ -45,7 +58,7 @@ def _sha256_file(path: Path) -> str:
 
 
 async def collect_instrument_history(
-    provider: BrokerMarketDataProvider,
+    provider: HistoricalMarketDataProvider,
     *,
     user_id: str,
     broker_connection_id: str,
