@@ -450,11 +450,7 @@ export class TradingService {
     // restarted while this trading session remained ACTIVE, heal the missing
     // registration from the durable session authority instead of requiring the
     // user to Stop/Start manually.
-    if (
-      runtime.enabled &&
-      !runtime.registered &&
-      session.status === TradingSessionStatus.ACTIVE
-    ) {
+    if (runtime.enabled && !runtime.registered && session.status === TradingSessionStatus.ACTIVE) {
       await this.aiEngineClient.notifySessionStarted({
         userId,
         tradingSessionId: session.id,
