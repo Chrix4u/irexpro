@@ -29,6 +29,30 @@ class SessionStopRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class SessionStatusRequest(BaseModel):
+    trading_session_id: str = Field(..., alias="tradingSessionId")
+
+    model_config = {"populate_by_name": True}
+
+
+class SessionSchedulerStatusResponse(BaseModel):
+    enabled: bool
+    registered: bool
+    trading_session_id: str
+    active: bool
+    instruments: list[str]
+    timeframe: str | None = None
+    interval_seconds: int | None = None
+    source: str | None = None
+    last_run_at: str | None = None
+    next_run_at: str | None = None
+    last_decision: str | None = None
+    last_reason: str | None = None
+    last_confidence_score: float | None = None
+    confidence_threshold: float | None = None
+    last_publish_failed: bool = False
+
+
 class SessionSchedulerResponse(BaseModel):
     registered: bool
     trading_session_id: str
