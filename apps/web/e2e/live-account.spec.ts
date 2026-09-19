@@ -474,8 +474,8 @@ test.describe('Positions & Activity', () => {
     const summary = page.locator('.activity-summary-grid');
     await expect(summary.getByText('Broker account', { exact: true })).toBeVisible();
     await expect(summary.getByText('Primary live account', { exact: true })).toBeVisible();
-    await expect(summary.getByText('10432.50 USD', { exact: true })).toBeVisible();
-    await expect(summary.getByText('10501.23 USD', { exact: true })).toBeVisible();
+    await expect(summary.getByText('10,432.50 USD', { exact: true })).toBeVisible();
+    await expect(summary.getByText('10,501.23 USD', { exact: true })).toBeVisible();
     await expect(summary.getByText('AI Trading', { exact: true })).toBeVisible();
     await expect(summary.getByText('ACTIVE', { exact: true })).toBeVisible();
     await expect(summary.getByRole('link', { name: /open ai trading/i })).toHaveAttribute('href', '/trade');
@@ -515,6 +515,11 @@ test.describe('Positions & Activity', () => {
     await expect(health.getByText('Open positions', { exact: true })).toBeVisible();
     await expect(health.getByText('Working orders', { exact: true })).toBeVisible();
     await expect(health.getByText('12', { exact: true })).toBeVisible();
+
+
+    const timeline = page.locator('.activity-timeline');
+    await expect(timeline).toBeVisible();
+    await expect(timeline).toHaveCSS('overflow-y', 'auto');
   });
 
   test('refresh reloads the simplified activity surface without exposing legacy expert controls', async ({ page }) => {
