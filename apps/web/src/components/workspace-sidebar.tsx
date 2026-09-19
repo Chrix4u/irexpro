@@ -10,6 +10,7 @@ import {
   PortfolioIcon,
   ShieldIcon,
   TradeIcon,
+  UserIcon,
   type IconProps,
 } from '@/components/icons';
 
@@ -39,6 +40,7 @@ const WORKSPACE_NAV: WorkspaceNavGroup[] = [
   {
     label: 'Account',
     items: [
+      { href: '/profile', label: 'My Profile', Icon: UserIcon },
       { href: '/onboarding/broker', label: 'Broker Account', Icon: PlugIcon },
       { href: '/security', label: 'Security', Icon: ShieldIcon },
       { href: '/payments/success', label: 'Fees & Payments', Icon: PaymentsIcon, matchPrefix: true },
