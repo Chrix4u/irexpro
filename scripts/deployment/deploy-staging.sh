@@ -123,6 +123,19 @@ wait_for_api() {
   die "API did not become live within the allowed attempts."
 }
 
+wait_for_ai() {
+  local attempt
+  for ((attempt = 1; attempt <= MAX_HEALTH_ATTEMPTS; attempt += 1)); do
+    if require_ai_paper_mode 2>/dev/null && require_ai_scheduler_enabled 2>/dev/null; then
+      return 0
+    fi
+    if ((attempt < MAX_HEALTH_ATTEMPTS)); then
+      sleep "$HEALTH_RETRY_SECONDS"
+    fi
+  done
+  die "AI engine did not become ready within the allowed attempts."
+}
+
 wait_for_http_status() {
   local url="$1"
   local allowed_csv="$2"
@@ -259,8 +272,7 @@ run_database_migrations
 STAGE="restart-ai"
 pm2 restart "$AI_PM2_NAME" --update-env
 STAGE="ai-runtime-readiness"
-require_ai_paper_mode
-require_ai_scheduler_enabled
+wait_for_ai
 
 STAGE="restart-api"
 pm2 restart "$API_PM2_NAME" --update-env
