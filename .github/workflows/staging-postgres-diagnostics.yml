@@ -169,9 +169,8 @@ jobs:
             | awk '{size=$1; $1=""; sub(/^ /,""); printf "%.2f GiB\t%s\n", size/1073741824, $0}' || true
           echo
 
-          echo '=== filesystem df vs visible du ==='
+          echo '=== filesystem df ==='
           df -B1 / || true
-          timeout 180s du -x -s -B1 / 2>/dev/null || true
           echo
 
           echo '=== deleted-but-open files ==='
