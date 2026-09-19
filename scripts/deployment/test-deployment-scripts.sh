@@ -119,7 +119,11 @@ if [[ "$*" == *'--filter @irexpro/api migration:run'* ]]; then
   if [[ "$transient_failures" =~ ^[0-9]+$ ]]; then
     migration_attempts="$(grep -F -c '@irexpro/api migration:run' "$COMMAND_LOG" || true)"
     if (( migration_attempts <= transient_failures )); then
-      printf 'error: the database system is not yet accepting connections\n' >&2
+      if (( migration_attempts == 1 )); then
+        printf 'error: the database system is not yet accepting connections\n' >&2
+      else
+        printf 'error: the database system is in recovery mode\n' >&2
+      fi
       exit 43
     fi
   fi
@@ -301,7 +305,7 @@ migration_failure_attempts="$(grep -F -c '@irexpro/api migration:run' "$COMMAND_
 make_fixture 'migration-transient-retry'
 git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
 migration_retry_output="$(run_deploy "$FIXTURE_CANDIDATE_SHA" FAKE_MIGRATION_TRANSIENT_FAILURES=2)"
-[[ "$migration_retry_output" == *'STAGING DEPLOYMENT VERIFIED'* ]] || fail 'Transient PostgreSQL startup failures were not recovered by bounded migration retries.'
+[[ "$migration_retry_output" == *'STAGING DEPLOYMENT VERIFIED'* ]] || fail 'Transient PostgreSQL startup/recovery failures were not recovered by bounded migration retries.'
 migration_retry_attempts="$(grep -F -c '@irexpro/api migration:run' "$COMMAND_LOG" || true)"
 [[ "$migration_retry_attempts" -eq 3 ]] || fail 'Transient migration retry test must exercise exactly two retries before success.'
 grep -q '^pm2 restart irexpro-ai-staging ' "$COMMAND_LOG" || fail 'Runtime restart must proceed after transient migration recovery.'
