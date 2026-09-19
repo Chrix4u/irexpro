@@ -155,11 +155,14 @@ def test_real_xgboost_training_artifact_loads_and_registers(tmp_path, monkeypatc
     assert prediction.explainability["method"] == "xgboost_predict_proba"
 
     registry = build_default_registry()
-    active = registry.get_active_model()
-    governance = registry.get_governance(active.get_model_version())
-    assert active.get_model_version() == "xgboost-eurusd-h1-test-v1"
+    fallback = registry.get_active_model()
+    routed = registry.get_model_for("EURUSD", "H1")
+    governance = registry.get_governance(routed.get_model_version())
+    assert fallback.get_model_version() == "baseline-xgboost-v0.1.0"
+    assert routed.get_model_version() == "xgboost-eurusd-h1-test-v1"
     assert governance.approved_for_paper is True
     assert governance.approved_for_live is False
+    assert registry.get_model_for("GBPUSD", "H1") is fallback
 
     # Prove the same verified artifact can be routed only to its declared pair
     # through a bundle while other instruments retain the truthful fallback.
