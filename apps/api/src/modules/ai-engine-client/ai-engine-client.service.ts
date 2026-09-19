@@ -1,7 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
+  AiSchedulerRegistrationResponse,
   AiSchedulerSessionStartPayload,
+  AiSchedulerSessionStatus,
   AiSchedulerSessionStopPayload,
 } from './interfaces/ai-scheduler.interface';
 
@@ -34,21 +36,73 @@ export class AiEngineClient {
     return this.configService.get<string>('internalApi.key');
   }
 
-  async notifySessionStarted(payload: AiSchedulerSessionStartPayload): Promise<void> {
-    if (!this.isSchedulerIntegrationEnabled()) return;
+  getSchedulerUniverse(): {
+    instruments: string[];
+    timeframes: string[];
+    intervalSeconds: number;
+  } {
+    const instruments = this.configService.get<string[]>('aiEngine.instruments', ['EURUSD']);
+    const timeframes = this.configService.get<string[]>('aiEngine.timeframes', ['H1']);
+    const intervalSeconds = this.configService.get<number>('aiEngine.signalIntervalSeconds', 60);
+    return {
+      instruments: instruments.length ? instruments : ['EURUSD'],
+      timeframes: timeframes.length ? timeframes : ['H1'],
+      intervalSeconds,
+    };
+  }
+
+  async notifySessionStarted(
+    payload: AiSchedulerSessionStartPayload,
+  ): Promise<AiSchedulerRegistrationResponse | null> {
+    if (!this.isSchedulerIntegrationEnabled()) return null;
 
     const url = `${this.getBaseUrl()}/scheduler/sessions/start`;
-    await this.post(url, { ...payload }, payload.tradingSessionId);
+    return this.requestJson<AiSchedulerRegistrationResponse>(
+      url,
+      { method: 'POST', body: { ...payload } },
+      payload.tradingSessionId,
+    );
   }
 
-  async notifySessionStopped(payload: AiSchedulerSessionStopPayload): Promise<void> {
-    if (!this.isSchedulerIntegrationEnabled()) return;
+  async notifySessionStopped(
+    payload: AiSchedulerSessionStopPayload,
+  ): Promise<AiSchedulerRegistrationResponse | null> {
+    if (!this.isSchedulerIntegrationEnabled()) return null;
 
     const url = `${this.getBaseUrl()}/scheduler/sessions/stop`;
-    await this.post(url, { ...payload }, payload.tradingSessionId);
+    return this.requestJson<AiSchedulerRegistrationResponse>(
+      url,
+      { method: 'POST', body: { ...payload } },
+      payload.tradingSessionId,
+    );
   }
 
-  private async post(url: string, body: Record<string, unknown>, sessionId: string): Promise<void> {
+  async getSessionStatus(tradingSessionId: string): Promise<AiSchedulerSessionStatus> {
+    if (!this.isSchedulerIntegrationEnabled()) {
+      return {
+        scheduler_enabled: false,
+        scheduler_running: false,
+        registered: false,
+        active_model_version: null,
+        approved_for_live: null,
+        job: null,
+      };
+    }
+
+    const url =
+      `${this.getBaseUrl()}/scheduler/sessions/${encodeURIComponent(tradingSessionId)}`;
+    return this.requestJson<AiSchedulerSessionStatus>(
+      url,
+      { method: 'GET' },
+      tradingSessionId,
+    );
+  }
+
+  private async requestJson<T>(
+    url: string,
+    request: { method: 'GET' | 'POST'; body?: Record<string, unknown> },
+    sessionId: string,
+  ): Promise<T> {
     const apiKey = this.getInternalApiKey();
     if (!apiKey) {
       this.logger.warn(
@@ -62,25 +116,22 @@ export class AiEngineClient {
 
     try {
       const response = await fetch(url, {
-        method: 'POST',
+        method: request.method,
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
           [INTERNAL_API_KEY_HEADER]: apiKey,
         },
-        body: JSON.stringify(body),
+        ...(request.body ? { body: JSON.stringify(request.body) } : {}),
         signal: controller.signal,
       });
 
       if (!response.ok) {
-        this.logger.warn(
-          `AI engine notification failed session=${sessionId} status=${response.status}`,
+        throw new Error(
+          `AI engine request failed session=${sessionId} status=${response.status}`,
         );
       }
-    } catch (err) {
-      this.logger.warn(
-        `AI engine notification error session=${sessionId}: ${(err as Error).message}`,
-      );
+      return (await response.json()) as T;
     } finally {
       clearTimeout(timeout);
     }
