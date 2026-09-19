@@ -96,6 +96,61 @@
   line-height: 1.65;
 }
 
+.workspace-kv-list {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.workspace-kv-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-width: 0;
+  padding: 0.15rem 0;
+}
+
+.workspace-kv-row > :first-child {
+  min-width: 0;
+}
+
+.workspace-kv-row > :last-child,
+.workspace-kv-row dd {
+  margin: 0;
+  flex: 0 1 auto;
+  max-width: 62%;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.workspace-kv-row strong,
+.workspace-kv-row dd {
+  font-weight: 650;
+  color: var(--text);
+}
+
+.checklist__step-title .badge {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.readiness-card__cta {
+  margin-top: var(--space-3);
+}
+
+.broker-complete-alert {
+  width: 100%;
+  display: grid;
+  gap: 0.8rem;
+}
+
+.broker-complete-alert__action {
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
+}
+
 .workspace-stat-grid,
 .stat-grid {
   display: grid;
