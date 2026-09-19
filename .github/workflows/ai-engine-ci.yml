@@ -1,0 +1,64 @@
+name: AI Engine CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'services/ai-engine/**'
+      - '.github/workflows/ai-engine-ci.yml'
+      - 'scripts/security/required-ci-gate.mjs'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-engine-ci-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: '3.11'
+  CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
+
+jobs:
+  ai-engine:
+    name: Python AI Engine Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+
+      - name: Verify exact candidate checkout
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: services/ai-engine/requirements.lock
+
+      - name: Install locked runtime and pinned test tooling
+        working-directory: services/ai-engine
+        run: |
+          python -m pip install --disable-pip-version-check --require-hashes -r requirements.lock
+          python -m pip install --disable-pip-version-check             'pytest==8.3.5'             'pytest-asyncio==0.24.0'             'ruff==0.7.4'
+
+      - name: Ruff
+        working-directory: services/ai-engine
+        run: python -m ruff check app tests
+
+      - name: Compile Python sources
+        working-directory: services/ai-engine
+        run: python -m compileall -q app
+
+      - name: Run AI engine tests
+        working-directory: services/ai-engine
+        run: python -m pytest -q
