@@ -123,6 +123,13 @@ def test_real_xgboost_training_artifact_loads_and_registers(tmp_path, monkeypatc
     assert result["validation_rows"] > 0
     assert "accuracy" in result["metrics"]
     assert "log_loss" in result["metrics"]
+    assert result["walk_forward_validation"]["summary"]["window_count"] >= 3
+    assert (
+        result["walk_forward_validation"]["paper_evaluation_eligibility"][
+            "eligible_for_paper_evaluation"
+        ]
+        is True
+    )
 
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     assert metadata["model_type"] == "xgboost_binary_direction_classifier"
@@ -131,6 +138,8 @@ def test_real_xgboost_training_artifact_loads_and_registers(tmp_path, monkeypatc
     assert metadata["approved_for_paper"] is True
     assert metadata["approved_for_live"] is False
     assert metadata["artifact_sha256"] == result["artifact_sha256"]
+    assert metadata["validation_status"] == "walk_forward_and_holdout_validation_complete"
+    assert metadata["walk_forward_validation"]["summary"]["window_count"] >= 3
 
     monkeypatch.setenv(MODEL_PATH_ENV, str(artifact_path))
     monkeypatch.setenv(MODEL_METADATA_PATH_ENV, str(metadata_path))
