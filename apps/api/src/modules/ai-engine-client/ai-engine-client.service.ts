@@ -51,11 +51,7 @@ export class AiEngineClient {
     if (!this.isSchedulerIntegrationEnabled()) return null;
 
     const url = `${this.getBaseUrl()}/scheduler/sessions/stop`;
-    return this.post<AiSchedulerSessionRegistration>(
-      url,
-      { ...payload },
-      payload.tradingSessionId,
-    );
+    return this.post<AiSchedulerSessionRegistration>(url, { ...payload }, payload.tradingSessionId);
   }
 
   async getSessionStatus(tradingSessionId: string): Promise<AiSchedulerSessionStatus> {
