@@ -45,6 +45,7 @@ import type {
 } from '@irexpro/types';
 import type {
   ActiveTradingSessionResponse,
+  AiAutomationStatusView,
   ChangeTradingSessionModeRequest,
   ChangeTradingSessionModeResponse,
   ConfirmExecutionConfirmationResponse,
@@ -240,6 +241,8 @@ export interface ApiClient {
    * from connection.accountType; `session` is null when none is active).
    */
   getActiveTradingSession(): Promise<ActiveTradingSessionResponse>;
+  /** GET /trading/sessions/active/automation-status → scheduler/model/scan telemetry. */
+  getAiAutomationStatus(): Promise<AiAutomationStatusView>;
   /** POST /trading/sessions/start → 201 `{ session }` (body binds the exact
    *  brokerConnectionId + executionMode; server-validated fail-closed). */
   startTradingSession(body: StartTradingSessionRequest): Promise<StartTradingSessionResponse>;
@@ -628,6 +631,9 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
     // Sprint 56 correction round 5: execution authority (#295/#298)
     getActiveTradingSession: () =>
       request<ActiveTradingSessionResponse>('/trading/sessions/active'),
+
+    getAiAutomationStatus: () =>
+      request<AiAutomationStatusView>('/trading/sessions/active/automation-status'),
 
     startTradingSession: (body) =>
       request<StartTradingSessionResponse>('/trading/sessions/start', {
