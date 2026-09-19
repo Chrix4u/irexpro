@@ -287,7 +287,11 @@ test.describe('AI Trader novice workflow', () => {
 
     await expect(page.getByRole('button', { name: 'Stop AI Trading' })).toBeEnabled();
     await expect(page.getByText(/AI session status could not be verified/i)).toHaveCount(0);
-    await expect(page.getByText('ACTIVE', { exact: true })).toBeVisible();
+    await expect(
+      page.locator('.ai-overview-card').filter({ hasText: 'AI session' }).getByText('ACTIVE', {
+        exact: true,
+      }),
+    ).toBeVisible();
 
     assertNoExternalRequests(page);
   });
@@ -300,7 +304,11 @@ test.describe('AI Trader novice workflow', () => {
 
     await expect(page.getByRole('button', { name: 'Stop AI Trading' })).toBeEnabled();
     await expect(page.getByText(/AI session status could not be verified/i)).toHaveCount(0);
-    await expect(page.getByText('ACTIVE', { exact: true })).toBeVisible();
+    await expect(
+      page.locator('.ai-overview-card').filter({ hasText: 'AI session' }).getByText('ACTIVE', {
+        exact: true,
+      }),
+    ).toBeVisible();
 
     const allocationInput = page.getByRole('textbox', { name: 'AI capital allocation amount' });
     const allocateButton = page.getByRole('button', { name: 'Allocate' });
