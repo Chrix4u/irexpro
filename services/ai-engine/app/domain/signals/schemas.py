@@ -85,9 +85,21 @@ class SignalGenerationRequest(BaseModel):
     candles_limit: int = Field(default=100, ge=10, le=500)
 
 
+class SignalEvaluationTelemetry(BaseModel):
+    """Truthful metadata describing the exact model + market input evaluated."""
+    evaluated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    model_version: str
+    model_mode: str
+    model_loaded: bool
+    market_data_last_candle_at: datetime
+    market_data_revision: str
+    market_data_cache_bypassed: bool = False
+
+
 class SignalGenerationResponse(BaseModel):
     """Response from signal generation — either a candidate or a no-signal."""
     generated: bool
     signal: AiSignalCandidate | None = None
     no_signal: NoSignalResult | None = None
+    telemetry: SignalEvaluationTelemetry | None = None
     mode: str = "paper"
