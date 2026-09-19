@@ -60,7 +60,7 @@ def test_collect_historical_corpus_pages_backwards_and_deduplicates(tmp_path: Pa
         broker_connection_id="00000000-0000-0000-0000-000000000002",
         instrument="EURUSD",
         timeframe="H1",
-        target_rows_per_instrument=300,
+        target_rows=300,
         page_size=200,
         output_path=output,
         client=client,
