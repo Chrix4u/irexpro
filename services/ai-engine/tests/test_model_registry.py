@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import pytest
+from unittest.mock import MagicMock
 
 from app.core.errors import ModelNotFoundError
 from app.domain.models.baseline_xgboost import MODEL_VERSION, BaselineXGBoostModel
@@ -61,3 +62,51 @@ def test_registry_rollback_unknown_version_raises():
     registry = build_default_registry()
     with pytest.raises(ModelNotFoundError):
         registry.rollback_model("nonexistent-model-v9.9.9")
+
+
+def test_registry_routes_exact_market_and_falls_back_to_default():
+    registry = ModelRegistry()
+    fallback = BaselineXGBoostModel()
+    registry.register_model(fallback, create_baseline_governance())
+
+    routed = MagicMock(spec=BaselineXGBoostModel)
+    routed.get_model_version.return_value = "xgboost-eurusd-h1-v1"
+    routed.get_artifact_metadata.return_value = {
+        "instrument": "EURUSD",
+        "timeframe": "H1",
+    }
+    routed.get_model_metadata.return_value = {"mode": "trained_xgboost"}
+
+    from app.domain.models.schemas import ModelGovernanceMetadata
+
+    governance = ModelGovernanceMetadata(
+        model_version="xgboost-eurusd-h1-v1",
+        approved_for_paper=True,
+        approved_for_live=False,
+        validation_status="offline_directional_validation_complete",
+    )
+    registry.register_route("eurusd", "h1", routed, governance)
+
+    assert registry.get_model_for("EURUSD", "H1") is routed
+    assert registry.get_model_for("GBPUSD", "H1") is fallback
+
+
+def test_registry_rejects_route_that_disagrees_with_artifact_metadata():
+    registry = ModelRegistry()
+    routed = MagicMock(spec=BaselineXGBoostModel)
+    routed.get_model_version.return_value = "xgboost-eurusd-h1-v1"
+    routed.get_artifact_metadata.return_value = {
+        "instrument": "GBPUSD",
+        "timeframe": "H1",
+    }
+
+    from app.domain.models.schemas import ModelGovernanceMetadata
+
+    governance = ModelGovernanceMetadata(
+        model_version="xgboost-eurusd-h1-v1",
+        approved_for_paper=True,
+        approved_for_live=False,
+    )
+
+    with pytest.raises(ValueError, match="route does not match metadata"):
+        registry.register_route("EURUSD", "H1", routed, governance)
