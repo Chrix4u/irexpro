@@ -15,7 +15,9 @@ test.describe('Dashboard', () => {
   });
 
   test('renders authenticated account, broker and performance-fee status', async ({ page }) => {
-    await expect(page.getByRole('heading', { level: 1, name: /welcome back/i })).toContainText('Adaezi');
+    await expect(page.getByRole('heading', { level: 1, name: /welcome back/i })).toHaveText(
+      'WELCOME BACK, ADAEZI',
+    );
     await expect(page.locator('.card__title', { hasText: /account status/i })).toBeVisible();
     await expect(page.locator('.card__title', { hasText: /broker connection/i })).toBeVisible();
     await expect(page.locator('.card__title', { hasText: /performance fee/i })).toBeVisible();
@@ -38,6 +40,9 @@ test.describe('Dashboard', () => {
     const openAiTrading = page.getByRole('link', { name: /open ai trading/i }).last();
     await expect(openAiTrading).toBeVisible();
     await expect(openAiTrading).toHaveAttribute('href', '/trade');
+    expect(
+      await openAiTrading.evaluate((element) => parseFloat(getComputedStyle(element).marginTop)),
+    ).toBeGreaterThan(0);
 
     await expect(page.getByRole('button', { name: /start paper trading session/i })).toHaveCount(0);
     await expect(page.getByRole('button', { name: /start ai trading/i })).toHaveCount(0);
