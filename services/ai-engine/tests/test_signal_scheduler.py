@@ -44,13 +44,25 @@ async def test_register_and_unregister_job():
 
 
 @pytest.mark.asyncio
-async def test_duplicate_session_job_rejected():
+async def test_duplicate_session_job_is_reconciled_idempotently():
     settings = Settings(ai_scheduler_enabled=True, ai_signal_interval_seconds=3600)
     scheduler = SignalScheduler()
     scheduler._settings = settings
 
     assert scheduler.register_session(make_start_request()) is True
-    assert scheduler.register_session(make_start_request()) is False
+    first_job = scheduler.get_session_job("session-1")
+    assert first_job is not None
+
+    replacement = make_start_request()
+    replacement.instruments = ["GBPUSD", "USDJPY"]
+    replacement.timeframes = ["M15", "H1"]
+    assert scheduler.register_session(replacement) is True
+
+    current = scheduler.get_session_job("session-1")
+    assert current is not None
+    assert current is not first_job
+    assert current.instruments == ["GBPUSD", "USDJPY"]
+    assert current.timeframes == ["M15", "H1"]
     scheduler.shutdown()
 
 
@@ -133,6 +145,15 @@ class ScheduledSessionJobStub:
     user_id = "user-1"
     trading_session_id = "session-1"
     broker_connection_id = "conn-1"
-    timeframe = "H1"
+    timeframes = ["H1"]
     source = "mock"
+    execution_mode = "PAPER_ONLY"
     last_publish_failed = False
+    scan_count = 0
+    last_decision = "WAITING_FOR_FIRST_SCAN"
+    last_reason = None
+    last_instrument = None
+    last_timeframe = None
+    last_confidence_score = None
+    confidence_threshold = None
+    last_signal_id = None
