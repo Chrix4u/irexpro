@@ -158,8 +158,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const refreshUser = useCallback(async () => {
     if (!accessToken) throw new Error('Not authenticated');
-    await fetchMe(accessToken);
-  }, [accessToken, fetchMe]);
+    try {
+      const me = await api.me();
+      setUser(me);
+    } catch (err) {
+      setAccessTokenState(null);
+      setAccessToken(null);
+      setUser(null);
+      throw err;
+    }
+  }, [accessToken]);
 
   const clearError = useCallback(() => setError(null), []);
 
