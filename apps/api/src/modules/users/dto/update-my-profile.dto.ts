@@ -1,13 +1,15 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsOptional, IsString, Length, Matches, MaxLength } from 'class-validator';
-import { TradingExperienceLevel } from '../entities/user-profile.entity';
+import { IsOptional, IsString, Length, Matches, MaxLength } from 'class-validator';
 
 /**
  * UpdateMyProfileDto — onboarding profile contract.
  *
- * Supports UserProfile fields plus the User-level regional fields required by
+ * Supports identity/profile fields plus the User-level regional fields required by
  * readiness checks. Date of birth is collected for the independent Sprint 45
  * adult-age gate. Changing an already-reviewed DOB resets KYC state server-side.
+ *
+ * Trading experience is intentionally not user-configurable: automation uses the
+ * platform's professional model/risk policy for every account.
  *
  * Email and phone are NOT updateable here (they require separate verification
  * flows). Password is NOT updateable here (use /auth/reset-password).
@@ -51,12 +53,4 @@ export class UpdateMyProfileDto {
   @IsString()
   @Length(3, 3)
   preferredCurrency?: string;
-
-  @ApiPropertyOptional({
-    enum: TradingExperienceLevel,
-    description: 'Self-reported trading experience level',
-  })
-  @IsOptional()
-  @IsEnum(TradingExperienceLevel)
-  tradingExperienceLevel?: TradingExperienceLevel;
 }
