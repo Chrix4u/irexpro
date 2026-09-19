@@ -1,6 +1,7 @@
 """Tests for BrokerMarketDataProvider."""
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -35,6 +36,21 @@ def test_builds_correct_url():
     assert "instrument=EURUSD" in url
     assert "timeframe=H1" in url
     assert "limit=50" in url
+
+
+def test_builds_historical_url_with_encoded_before_cursor():
+    provider = BrokerMarketDataProvider(settings=TEST_SETTINGS)
+    before = datetime(2026, 9, 19, 12, 30, tzinfo=UTC)
+    url = provider.build_request_url(
+        user_id="user-1",
+        broker_connection_id="conn-1",
+        instrument="eurusd",
+        timeframe="h1",
+        limit=500,
+        before=before,
+    )
+    assert "limit=500" in url
+    assert "before=2026-09-19T12%3A30%3A00%2B00%3A00" in url
 
 
 def test_sends_internal_api_key_header():
