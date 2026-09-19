@@ -97,9 +97,18 @@ validation, and writes both a model JSON artifact and a metadata sidecar with
 SHA-256 checksums, feature schema, dataset fingerprint, label definition,
 validation period, and held-out classification metrics.
 
-After reviewing the validation output, an operator can explicitly create a
-paper-eligible artifact with `--approve-for-paper`. Live approval is never
-created by the training script.
+Before a model can be marked eligible for paper evaluation, the trainer also
+runs expanding-window walk-forward validation. Each window uses only earlier
+observations for training, preserves a purge gap before validation, and uses a
+fixed XGBoost training length so that the validation window does not select its
+own early-stopping point. Metadata records every window plus mean, median, min
+and max metrics. This evidence gate verifies validation-process completeness;
+it is not a profitability claim.
+
+An operator can request paper eligibility with `--approve-for-paper`, but the
+command fails closed unless the required number of chronological windows has
+valid samples, both target classes, and finite probability-loss metrics. Live
+approval is never created by the training script.
 
 Configure the runtime with both paths:
 
