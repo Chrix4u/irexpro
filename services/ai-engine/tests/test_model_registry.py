@@ -8,7 +8,7 @@ import pytest
 from app.core.errors import ModelNotFoundError
 from app.domain.models.baseline_xgboost import MODEL_VERSION, BaselineXGBoostModel
 from app.domain.models.governance import create_baseline_governance
-from app.domain.models.registry import ModelRegistry, build_default_registry
+from app.domain.models.registry import ModelRegistry, _resolve_bundle_path, build_default_registry
 from app.domain.models.schemas import ModelGovernanceMetadata
 
 
@@ -108,3 +108,14 @@ def test_registry_rejects_route_that_disagrees_with_artifact_metadata():
 
     with pytest.raises(ValueError, match="route does not match metadata"):
         registry.register_route("EURUSD", "H1", routed, governance)
+
+
+def test_bundle_artifact_paths_cannot_escape_bundle_directory(tmp_path):
+    bundle_path = tmp_path / "models" / "candidate.bundle.json"
+    bundle_path.parent.mkdir()
+
+    with pytest.raises(ValueError, match="must be relative"):
+        _resolve_bundle_path(bundle_path, "/tmp/model.json")
+
+    with pytest.raises(ValueError, match="escapes the bundle directory"):
+        _resolve_bundle_path(bundle_path, "../outside.json")
