@@ -142,18 +142,37 @@ function isRiskStatus(value: unknown): value is RiskStatusView {
   );
 }
 
-function isTradingSession(value: unknown): value is TradingSessionView {
-  if (!isRecord(value)) return false;
-  return (
-    typeof value.id === 'string' &&
-    typeof value.brokerConnectionId === 'string' &&
-    isExecutionMode(value.executionMode) &&
-    typeof value.authorityGeneration === 'number' &&
-    Number.isInteger(value.authorityGeneration) &&
-    value.authorityGeneration >= 1 &&
-    isTradingSessionStatus(value.status) &&
-    typeof value.startedAt === 'string'
-  );
+function normalizeTradingSession(value: unknown): TradingSessionView | null {
+  if (!isRecord(value)) return null;
+
+  const rawGeneration = value.authorityGeneration;
+  const authorityGeneration =
+    typeof rawGeneration === 'number'
+      ? rawGeneration
+      : typeof rawGeneration === 'string' && /^[1-9]\d*$/.test(rawGeneration)
+        ? Number(rawGeneration)
+        : Number.NaN;
+
+  if (
+    typeof value.id !== 'string' ||
+    typeof value.brokerConnectionId !== 'string' ||
+    !isExecutionMode(value.executionMode) ||
+    !Number.isSafeInteger(authorityGeneration) ||
+    authorityGeneration < 1 ||
+    !isTradingSessionStatus(value.status) ||
+    typeof value.startedAt !== 'string'
+  ) {
+    return null;
+  }
+
+  return {
+    id: value.id,
+    brokerConnectionId: value.brokerConnectionId,
+    executionMode: value.executionMode,
+    authorityGeneration,
+    status: value.status,
+    startedAt: value.startedAt,
+  };
 }
 
 /**
@@ -170,22 +189,26 @@ function normalizeActiveTradingSessionPayload(
     return { known: true, session: null };
   }
 
-  if (isTradingSession(value)) {
-    return { known: true, session: value };
+  const direct = normalizeTradingSession(value);
+  if (direct) {
+    return { known: true, session: direct };
   }
 
-  // Rolling-deploy compatibility: older/shared-client documentation and some
-  // intermediate builds used a { session } envelope while the current API
-  // returns the session DTO directly. Accept either transport shape, but only
-  // after validating the exact same authoritative session fields. Unknown
-  // shapes still fail closed.
-  if (isRecord(value) && Object.prototype.hasOwnProperty.call(value, 'session')) {
-    const nested = value.session;
-    if (nested === null) {
-      return { known: true, session: null };
-    }
-    if (isTradingSession(nested)) {
-      return { known: true, session: nested };
+  // Rolling-deploy/proxy compatibility: deployments have historically exposed
+  // either a bare session, { session }, or a standard { data } wrapper.
+  // Every accepted shape is normalized through the SAME authoritative field
+  // validation; unknown/incomplete payloads still fail closed.
+  if (isRecord(value)) {
+    for (const key of ['session', 'data'] as const) {
+      if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+      const nested = value[key];
+      if (nested === null) {
+        return { known: true, session: null };
+      }
+      const normalized = normalizeTradingSession(nested);
+      if (normalized) {
+        return { known: true, session: normalized };
+      }
     }
   }
 
