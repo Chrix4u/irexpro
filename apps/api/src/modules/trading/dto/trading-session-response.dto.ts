@@ -76,3 +76,13 @@ export function toTradingSessionResponse(session: TradingSession): TradingSessio
   response.updatedAt = session.updatedAt;
   return response;
 }
+
+
+export class ActiveTradingSessionResponseDto {
+  @ApiPropertyOptional({
+    type: TradingSessionResponseDto,
+    nullable: true,
+    description: 'Authoritative active trading session, or null when AI Trading is stopped.',
+  })
+  session: TradingSessionResponseDto | null;
+}
