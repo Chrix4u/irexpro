@@ -732,7 +732,6 @@ export interface UpdateMyProfileRequest {
   countryCode?: string;
   timezone?: string;
   preferredCurrency?: string;
-  tradingExperienceLevel?: TradingExperienceLevel;
 }
 
 /** Allowed trading mode (Sprint 29). */
