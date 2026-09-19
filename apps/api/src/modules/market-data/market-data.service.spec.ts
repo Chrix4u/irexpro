@@ -72,6 +72,25 @@ describe('MarketDataService', () => {
       'EURUSD',
       'H1',
       50,
+      undefined,
+    );
+  });
+
+  it('passes an ISO historical cursor to the broker service', async () => {
+    const cursorQuery: InternalOhlcvQueryDto = {
+      ...query,
+      before: '2025-01-15T12:00:00.000Z',
+    };
+
+    await service.getInternalOhlcv(cursorQuery);
+
+    expect(brokerService.getOhlcvForConnection).toHaveBeenCalledWith(
+      query.userId,
+      query.brokerConnectionId,
+      'EURUSD',
+      'H1',
+      50,
+      new Date('2025-01-15T12:00:00.000Z'),
     );
   });
 
