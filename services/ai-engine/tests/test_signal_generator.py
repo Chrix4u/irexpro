@@ -127,3 +127,36 @@ async def test_signal_candidate_never_calls_execution_directly():
     assert not hasattr(gen, "broker_adapter")
     assert not hasattr(gen, "place_order")
     assert not hasattr(gen, "execute_trade")
+
+
+@pytest.mark.asyncio
+async def test_unchanged_market_observation_skips_repeat_inference():
+    gen = make_generator()
+    candles = await gen._ohlcv.get_ohlcv("mock", "EURUSD", "H1", limit=100)
+
+    first = await gen.generate(
+        user_id="u1",
+        trading_session_id="s1",
+        broker_connection_id="c1",
+        instrument="EURUSD",
+        timeframe="H1",
+        candles=candles,
+    )
+    assert first.market_data_fingerprint
+    assert first.model_evaluated is True
+
+    second = await gen.generate(
+        user_id="u1",
+        trading_session_id="s1",
+        broker_connection_id="c1",
+        instrument="EURUSD",
+        timeframe="H1",
+        candles=candles,
+        previous_market_data_fingerprint=first.market_data_fingerprint,
+    )
+
+    assert second.generated is False
+    assert second.model_evaluated is False
+    assert second.no_signal is not None
+    assert second.no_signal.reason == "market_data_unchanged"
+    assert second.no_signal.confidence_score is None
