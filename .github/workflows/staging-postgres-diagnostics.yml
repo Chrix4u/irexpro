@@ -152,49 +152,47 @@ jobs:
           journalctl -k --since '-45 min' --no-pager 2>/dev/null | grep -Ei 'out of memory|oom|killed process|i/o error|ext4|xfs|nvme|blk_update|no space left' | tail -n 120 || true
           echo
 
-          echo '=== targeted disk consumers ==='
+          echo '=== fixed hotspot sizes ==='
           for path in \
-            /var/lib/pgsql/data \
             /var/lib/pgsql/data/pg_wal \
+            /var/lib/pgsql/data/base \
             /var/lib/pgsql/data/log \
             /var/lib/pgsql/data/pg_log \
             /var/log \
-            /home/lightworld/webapps/irexpro-staging \
-            /home/lightworld/releases \
-            /home/lightworld/.pm2 \
-            /root/.pm2 \
+            /home/lightworld/webapps/irexpro-staging/node_modules \
+            /home/lightworld/webapps/irexpro-staging/apps/api/dist \
+            /home/lightworld/webapps/irexpro-staging/apps/web/.next \
+            /home/lightworld/webapps/irexpro-staging/apps/admin/.next \
+            /home/lightworld/.pm2/logs \
+            /root/.pm2/logs \
             /root/.cache \
             /home/lightworld/.cache \
             /tmp; do
             if [[ -e "$path" ]]; then
-              du -x -s -B1 "$path" 2>/dev/null || true
+              size="$(du -x -s -B1 "$path" 2>/dev/null | awk '{print $1}' || true)"
+              if [[ -n "$size" ]]; then
+                awk -v s="$size" -v p="$path" 'BEGIN {printf "%.2f GiB\t%s\n", s/1073741824, p}'
+              fi
             fi
-          done | sort -n | awk '{printf "%.2f GiB\t%s\n", $1/1073741824, $2}'
+          done
           echo
 
-          echo '=== iRexPro staging immediate children ==='
-          if [[ -d /home/lightworld/webapps/irexpro-staging ]]; then
-            for path in /home/lightworld/webapps/irexpro-staging/* /home/lightworld/webapps/irexpro-staging/.[!.]*; do
-              [[ -e "$path" ]] || continue
-              du -x -s -B1 "$path" 2>/dev/null || true
-            done | sort -n | tail -n 30 | awk '{printf "%.2f GiB\t%s\n", $1/1073741824, $2}'
+          echo '=== largest PM2 logs ==='
+          for d in /home/lightworld/.pm2/logs /root/.pm2/logs; do
+            if [[ -d "$d" ]]; then
+              find "$d" -maxdepth 1 -type f -printf '%s %p\n' 2>/dev/null \
+                | sort -n | tail -n 20 \
+                | awk '{size=$1; $1=""; sub(/^ /,""); printf "%.2f MiB\t%s\n", size/1048576, $0}'
+            fi
+          done
+          echo
+
+          echo '=== largest PostgreSQL WAL files ==='
+          if [[ -d /var/lib/pgsql/data/pg_wal ]]; then
+            find /var/lib/pgsql/data/pg_wal -maxdepth 1 -type f -printf '%s %p\n' 2>/dev/null \
+              | sort -n | tail -n 20 \
+              | awk '{size=$1; $1=""; sub(/^ /,""); printf "%.2f MiB\t%s\n", size/1048576, $0}'
           fi
-          echo
-
-          echo '=== PostgreSQL immediate children ==='
-          if [[ -d /var/lib/pgsql/data ]]; then
-            for path in /var/lib/pgsql/data/*; do
-              [[ -e "$path" ]] || continue
-              du -x -s -B1 "$path" 2>/dev/null || true
-            done | sort -n | tail -n 30 | awk '{printf "%.2f GiB\t%s\n", $1/1073741824, $2}'
-          fi
-          echo
-
-          echo '=== files larger than 500 MiB in likely operational trees ==='
-          find /var/lib/pgsql /var/log /home/lightworld /root/.pm2 /root/.cache \
-            -xdev -type f -size +500M -printf '%s %p\n' 2>/dev/null \
-            | sort -n | tail -n 60 \
-            | awk '{size=$1; $1=""; sub(/^ /,""); printf "%.2f GiB\t%s\n", size/1073741824, $0}' || true
           echo
 
           echo '=== PostgreSQL log configuration ==='
