@@ -19,10 +19,9 @@ test.describe('Signed-in account profile center', () => {
     await expect(page.getByLabel(/experience level/i)).toHaveCount(0);
     await expect(page.getByText(/^Trading experience$/i)).toHaveCount(0);
     await expect(page.getByRole('button', { name: /change password/i })).toBeVisible();
-    await expect(page.getByRole('link', { name: /forgot current password/i })).toHaveAttribute(
-      'href',
-      '/forgot-password',
-    );
+    const forgotPasswordLink = page.getByRole('link', { name: /forgot current password/i });
+    await expect(forgotPasswordLink).toHaveAttribute('href', '/forgot-password');
+    await expect(forgotPasswordLink.locator('..')).toHaveClass(/mt-3/);
     await expect(page.getByRole('link', { name: /open security center/i })).toHaveAttribute(
       'href',
       '/security',
