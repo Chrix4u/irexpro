@@ -45,7 +45,7 @@ class ScheduledSessionJob:
     last_reason: str | None = None
     last_confidence_score: float | None = None
     last_confidence_at: datetime | None = None
-    last_market_data_revision: str | None = None
+    market_data_revisions: dict[str, str] = field(default_factory=dict)
     last_market_data_at: datetime | None = None
     model_version: str | None = None
     model_mode: str | None = None
@@ -206,7 +206,7 @@ class SignalScheduler:
                 job.last_run_at = datetime.now(UTC)
                 telemetry = result.telemetry
                 if telemetry is not None:
-                    previous_revision = job.last_market_data_revision
+                    previous_revision = job.market_data_revisions.get(instrument)
                     job.last_market_data_at = telemetry.market_data_last_candle_at
                     job.model_version = telemetry.model_version
                     job.model_mode = telemetry.model_mode
@@ -224,7 +224,7 @@ class SignalScheduler:
                         )
                         continue
 
-                    job.last_market_data_revision = telemetry.market_data_revision
+                    job.market_data_revisions[instrument] = telemetry.market_data_revision
 
                 if not result.generated or result.signal is None:
                     job.last_decision = "NO_TRADE"
