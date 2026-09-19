@@ -955,9 +955,9 @@ describe('MetaTraderAdapter', () => {
       expect(typeof candles[0].open).toBe('string');
       expect(typeof candles[0].close).toBe('string');
       expect(candles[0].timestamp).toBeInstanceOf(Date);
-      expect(candles[0].tickVolume).toBe('5000');
-      expect(candles[0].tradeVolume).toBe('3.25');
-      expect(candles[0].spreadPoints).toBe('12');
+      expect(candles[0].tickVolume).toBe('5000.00000000');
+      expect(candles[0].tradeVolume).toBe('3.25000000');
+      expect(candles[0].spreadPoints).toBe('12.00000000');
       expect(candles[0].priceDigits).toBe(5);
       expect(candles[0].brokerTime).toBe('2026-01-01 02:00:00.000');
     });
