@@ -1877,6 +1877,35 @@ export class ExecutionService {
     return this.findActiveSessionOrdered(userId);
   }
 
+  /**
+   * Browser/control-plane active-session read.
+   *
+   * Select only the fields exposed by TradingSessionResponseDto. This keeps
+   * Start/Stop status verification independent from unrelated financial,
+   * reconciliation, or newly-added session columns: a drift in one of those
+   * columns must not make the browser lose authoritative session state.
+   */
+  async getActiveSessionForClient(userId: string): Promise<TradingSession | null> {
+    return this.sessionRepo
+      .createQueryBuilder('session')
+      .select([
+        'session.id',
+        'session.brokerConnectionId',
+        'session.executionMode',
+        'session.authorityGeneration',
+        'session.status',
+        'session.startedAt',
+        'session.endedAt',
+        'session.createdAt',
+        'session.updatedAt',
+      ])
+      .where('session.userId = :userId', { userId })
+      .andWhere('session.status = :status', { status: TradingSessionStatus.ACTIVE })
+      .orderBy('session.authorityGeneration', 'DESC')
+      .addOrderBy('session.startedAt', 'DESC')
+      .getOne();
+  }
+
   async findSessionById(sessionId: string): Promise<TradingSession | null> {
     return this.sessionRepo.findOne({ where: { id: sessionId } });
   }
