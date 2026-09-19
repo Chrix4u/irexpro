@@ -53,7 +53,7 @@ async def test_signal_generator_no_signal_for_low_confidence():
     )
 
     mock_registry = MagicMock()
-    mock_registry.get_active_model.return_value = mock_model
+    mock_registry.get_model_for.return_value = mock_model
     governance = MagicMock()
     governance.approved_for_paper = True
     mock_registry.get_governance.return_value = governance
@@ -90,7 +90,7 @@ async def test_signal_generator_creates_valid_candidate_for_high_confidence():
     )
 
     mock_registry = MagicMock()
-    mock_registry.get_active_model.return_value = mock_model
+    mock_registry.get_model_for.return_value = mock_model
     governance = MagicMock()
     governance.approved_for_paper = True
     mock_registry.get_governance.return_value = governance
@@ -104,6 +104,7 @@ async def test_signal_generator_creates_valid_candidate_for_high_confidence():
         instrument="EURUSD",
         timeframe="H1",
     )
+    mock_registry.get_model_for.assert_called_with("EURUSD", "H1")
     assert result.generated is True
     assert result.signal is not None
     assert result.signal.direction == "BUY"
