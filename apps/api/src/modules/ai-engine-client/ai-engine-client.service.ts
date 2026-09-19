@@ -42,11 +42,7 @@ export class AiEngineClient {
     if (!this.isSchedulerIntegrationEnabled()) return null;
 
     const url = `${this.getBaseUrl()}/scheduler/sessions/start`;
-    return this.post<AiSchedulerSessionRegistration>(
-      url,
-      { ...payload },
-      payload.tradingSessionId,
-    );
+    return this.post<AiSchedulerSessionRegistration>(url, { ...payload }, payload.tradingSessionId);
   }
 
   async notifySessionStopped(
@@ -84,24 +80,16 @@ export class AiEngineClient {
     }
 
     const url = `${this.getBaseUrl()}/scheduler/sessions/status`;
-    return this.post<AiSchedulerSessionStatus>(
-      url,
-      { tradingSessionId },
-      tradingSessionId,
-    );
+    return this.post<AiSchedulerSessionStatus>(url, { tradingSessionId }, tradingSessionId);
   }
 
-  private async post<T>(
-    url: string,
-    body: Record<string, unknown>,
-    sessionId: string,
-  ): Promise<T> {
+  private async post<T>(url: string, body: Record<string, unknown>, sessionId: string): Promise<T> {
     const apiKey = this.getInternalApiKey();
     if (!apiKey) {
       this.logger.warn(
         `AI engine notification skipped — internal API key not configured session=${sessionId}`,
       );
-      return;
+      throw new Error('AI engine internal API key is not configured');
     }
 
     const controller = new AbortController();
@@ -131,6 +119,7 @@ export class AiEngineClient {
       this.logger.warn(
         `AI engine notification error session=${sessionId}: ${(err as Error).message}`,
       );
+      throw err;
     } finally {
       clearTimeout(timeout);
     }
