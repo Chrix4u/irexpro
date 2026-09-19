@@ -171,6 +171,12 @@ def _load_bundle_routes(registry: ModelRegistry, bundle_path: Path) -> None:
         if not model.load_model():
             raise ValueError(f"Unable to verify model route {instrument} {timeframe}")
 
+        declared_version = str(entry.get("model_version", "")).strip()
+        if declared_version and declared_version != model.get_model_version():
+            raise ValueError(
+                f"Bundle model version mismatch for {instrument} {timeframe}"
+            )
+
         governance = create_trained_model_governance(model.get_artifact_metadata())
         registry.register_route(instrument, timeframe, model, governance)
 
