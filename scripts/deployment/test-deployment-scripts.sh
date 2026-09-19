@@ -54,10 +54,11 @@ make_fixture() {
   local repo="$root/repo"
 
   mkdir -p "$(dirname "$remote")" "$repo/scripts/deployment" "$repo/apps/api" "$repo/services/ai-engine"
-  printf 'NESTJS_INTERNAL_API_KEY=%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' > "$repo/apps/api/.env"
-  printf 'NESTJS_INTERNAL_API_KEY=%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' > "$repo/services/ai-engine/.env"
   git init --quiet --bare --initial-branch=main "$remote"
   git -C "$repo" init --quiet --initial-branch=main
+  printf '/apps/api/.env\n/services/ai-engine/.env\n' >> "$repo/.git/info/exclude"
+  printf 'NESTJS_INTERNAL_API_KEY=%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' > "$repo/apps/api/.env"
+  printf 'NESTJS_INTERNAL_API_KEY=%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' > "$repo/services/ai-engine/.env"
   git -C "$repo" config user.email 'ci@example.invalid'
   git -C "$repo" config user.name 'Deployment Safety CI'
 
