@@ -81,7 +81,12 @@ export interface IBrokerAdapter {
 
   getInstrumentList(): Promise<BrokerInstrument[]>;
   getCurrentPrice(instrument: string): Promise<BrokerPrice>;
-  getOHLCV(instrument: string, timeframe: string, count: number): Promise<OHLCV[]>;
+  getOHLCV(
+    instrument: string,
+    timeframe: string,
+    count: number,
+    before?: Date,
+  ): Promise<OHLCV[]>;
 
   // ─── Order management ─────────────────────────────────────────────────────
 
