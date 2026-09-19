@@ -11,9 +11,18 @@ if (!baseUrl) {
 }
 
 let cachedAccessToken: string | null = null;
+const accessTokenListeners = new Set<(token: string | null) => void>();
 
 export function setAccessToken(token: string | null): void {
   cachedAccessToken = token;
+  for (const listener of accessTokenListeners) listener(token);
+}
+
+export function subscribeAccessToken(
+  listener: (token: string | null) => void,
+): () => void {
+  accessTokenListeners.add(listener);
+  return () => accessTokenListeners.delete(listener);
 }
 
 async function refreshAccessTokenFromCookie(): Promise<string | null> {
@@ -28,16 +37,16 @@ async function refreshAccessTokenFromCookie(): Promise<string | null> {
       body: JSON.stringify({}),
     });
     if (!response.ok) {
-      cachedAccessToken = null;
+      setAccessToken(null);
       return null;
     }
     const payload = (await response.json()) as { accessToken?: unknown };
     if (typeof payload.accessToken !== 'string' || payload.accessToken.length === 0) {
-      cachedAccessToken = null;
+      setAccessToken(null);
       return null;
     }
-    cachedAccessToken = payload.accessToken;
-    return cachedAccessToken;
+    setAccessToken(payload.accessToken);
+    return payload.accessToken;
   } catch {
     return null;
   }
