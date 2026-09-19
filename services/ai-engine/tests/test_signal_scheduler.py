@@ -88,6 +88,9 @@ async def test_job_calls_signal_generator_and_publishes_valid_signal():
     await scheduler._run_session_job("session-1")
     mock_generator.generate.assert_called_once()
     scheduler._nestjs_client.publish_signal.assert_called_once_with(candidate)
+    assert job.last_decision == "SIGNAL_PUBLISHED"
+    assert job.last_reason == "confidence_threshold_passed"
+    assert job.last_confidence_score == 0.8
 
 
 @pytest.mark.asyncio
@@ -114,6 +117,10 @@ async def test_low_confidence_not_published():
 
     await scheduler._run_session_job("session-1")
     scheduler._nestjs_client.publish_signal.assert_not_called()
+    job = scheduler._jobs["session-1"]
+    assert job.last_decision == "NO_TRADE"
+    assert job.last_reason == "confidence_below_threshold"
+    assert job.last_confidence_score == 0.2
 
 
 @pytest.mark.asyncio
@@ -136,3 +143,6 @@ class ScheduledSessionJobStub:
     timeframe = "H1"
     source = "mock"
     last_publish_failed = False
+    last_decision = None
+    last_reason = None
+    last_confidence_score = None
