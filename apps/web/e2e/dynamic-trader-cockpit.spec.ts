@@ -91,7 +91,9 @@ async function gotoAiTrader(
     failExecutionReads?: boolean;
     failPositionRead?: boolean;
     dropFirstRiskRead?: boolean;
+    unauthorizedFirstRiskRead?: boolean;
     onRiskRead?: () => void;
+    onRefresh?: () => void;
     brokerPayload?: unknown[];
     riskContractMismatch?: boolean;
     sessionContractMismatch?: boolean;
@@ -109,7 +111,10 @@ async function gotoAiTrader(
     const fulfill = (status: number, body: unknown) =>
       route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 
-    if (apiPath === 'auth/refresh') return fulfill(200, mockAuthTokens);
+    if (apiPath === 'auth/refresh') {
+      options.onRefresh?.();
+      return fulfill(200, mockAuthTokens);
+    }
     if (apiPath === 'auth/me') return fulfill(200, mockAuthUser);
     if (apiPath === 'auth/logout') return fulfill(200, { message: 'Logged out' });
     if (apiPath === 'risk/status') {
@@ -117,6 +122,12 @@ async function gotoAiTrader(
       options.onRiskRead?.();
       if (options.dropFirstRiskRead && riskReadCount === 1) {
         return route.abort('connectionreset');
+      }
+      if (options.unauthorizedFirstRiskRead && riskReadCount === 1) {
+        return fulfill(401, {
+          statusCode: 401,
+          message: 'Your session has expired. Please sign in again.',
+        });
       }
       if (options.riskContractMismatch) {
         return fulfill(200, {
@@ -418,6 +429,28 @@ test.describe('AI Trader novice workflow', () => {
     await expect(page.getByText(/Unable to reach the server/i)).toHaveCount(0);
     await expect(page.getByText(/No open positions/i)).toBeVisible();
     await expect(page.getByText(/No execution activity yet/i)).toBeVisible();
+
+    assertNoExternalRequests(page);
+  });
+
+  test('renews an expired access token without signing the user out', async ({ page }) => {
+    let riskReads = 0;
+    let refreshReads = 0;
+    await gotoAiTrader(page, {
+      unauthorizedFirstRiskRead: true,
+      onRiskRead: () => {
+        riskReads += 1;
+      },
+      onRefresh: () => {
+        refreshReads += 1;
+      },
+    });
+
+    await expect(page.getByText('Paper Trading Broker', { exact: false }).first()).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Stop AI Trading' })).toBeVisible();
+    await expect(page.getByText(/Your session has expired/i)).toHaveCount(0);
+    expect(riskReads).toBe(2);
+    expect(refreshReads).toBeGreaterThanOrEqual(2);
 
     assertNoExternalRequests(page);
   });
