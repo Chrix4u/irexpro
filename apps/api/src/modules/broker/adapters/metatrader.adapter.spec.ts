@@ -950,6 +950,15 @@ describe('MetaTraderAdapter', () => {
       expect(typeof candles[0].close).toBe('string');
       expect(candles[0].timestamp).toBeInstanceOf(Date);
     });
+
+    it('passes an explicit historical cursor to MetaAPI', async () => {
+      await adapter.connect(testCredentials);
+      const before = new Date('2025-01-01T00:00:00.000Z');
+
+      await adapter.getOHLCV('EURUSD', 'H1', 2, before);
+
+      expect(mockAccount.getHistoricalCandles).toHaveBeenLastCalledWith('EURUSD', '1h', before, 2);
+    });
   });
 
   describe('getClosedTrades()', () => {

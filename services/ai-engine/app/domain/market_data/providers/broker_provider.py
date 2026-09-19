@@ -9,6 +9,7 @@ IMPORTANT:
 from __future__ import annotations
 
 from datetime import datetime
+from urllib.parse import urlencode
 
 import httpx
 
@@ -50,13 +51,19 @@ class BrokerMarketDataProvider(MarketDataProvider):
         instrument: str,
         timeframe: str,
         limit: int,
+        before: datetime | None = None,
     ) -> str:
         base = self._settings.nestjs_market_data_url
-        params = (
-            f"userId={user_id}&brokerConnectionId={broker_connection_id}"
-            f"&instrument={instrument.upper()}&timeframe={timeframe.upper()}&limit={limit}"
-        )
-        return f"{base}?{params}"
+        params: dict[str, str | int] = {
+            "userId": user_id,
+            "brokerConnectionId": broker_connection_id,
+            "instrument": instrument.upper(),
+            "timeframe": timeframe.upper(),
+            "limit": limit,
+        }
+        if before is not None:
+            params["before"] = before.isoformat()
+        return f"{base}?{urlencode(params)}"
 
     async def get_ohlcv(
         self,
@@ -66,10 +73,37 @@ class BrokerMarketDataProvider(MarketDataProvider):
         user_id: str | None = None,
         broker_connection_id: str | None = None,
     ) -> list[OHLCVCandle]:
+        return await self.get_historical_ohlcv(
+            instrument=instrument,
+            timeframe=timeframe,
+            limit=limit,
+            user_id=user_id,
+            broker_connection_id=broker_connection_id,
+        )
+
+    async def get_historical_ohlcv(
+        self,
+        instrument: str,
+        timeframe: str,
+        limit: int = 500,
+        user_id: str | None = None,
+        broker_connection_id: str | None = None,
+        before: datetime | None = None,
+    ) -> list[OHLCVCandle]:
+        """Fetch one broker-authoritative historical page."""
         if not user_id or not broker_connection_id:
             raise MarketDataError("Broker market data requires userId and brokerConnectionId")
+        if limit < 10 or limit > 500:
+            raise MarketDataError("Historical market-data page size must be between 10 and 500")
 
-        url = self.build_request_url(user_id, broker_connection_id, instrument, timeframe, limit)
+        url = self.build_request_url(
+            user_id,
+            broker_connection_id,
+            instrument,
+            timeframe,
+            limit,
+            before=before,
+        )
 
         try:
             async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:

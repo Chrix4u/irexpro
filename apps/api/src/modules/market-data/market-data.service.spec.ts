@@ -72,6 +72,32 @@ describe('MarketDataService', () => {
       'EURUSD',
       'H1',
       50,
+      undefined,
+    );
+  });
+
+  it('forwards an historical before cursor without exposing credentials', async () => {
+    const historicalQuery: InternalOhlcvQueryDto = {
+      ...query,
+      before: '2026-09-01T00:00:00.000Z',
+    };
+
+    await service.getInternalOhlcv(historicalQuery);
+
+    expect(brokerService.getOhlcvForConnection).toHaveBeenCalledWith(
+      query.userId,
+      query.brokerConnectionId,
+      'EURUSD',
+      'H1',
+      50,
+      new Date('2026-09-01T00:00:00.000Z'),
+    );
+    expect(auditService.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          before: '2026-09-01T00:00:00.000Z',
+        }),
+      }),
     );
   });
 
