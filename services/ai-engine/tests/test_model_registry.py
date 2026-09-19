@@ -1,8 +1,9 @@
 """Tests for ModelRegistry and baseline model governance."""
 from __future__ import annotations
 
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
 
 from app.core.errors import ModelNotFoundError
 from app.domain.models.baseline_xgboost import MODEL_VERSION, BaselineXGBoostModel
