@@ -31,7 +31,8 @@ export class MarketDataService {
   ) {}
 
   async getInternalOhlcv(query: InternalOhlcvQueryDto): Promise<InternalOhlcvResponseDto> {
-    const { userId, brokerConnectionId, instrument, timeframe, limit } = query;
+    const { userId, brokerConnectionId, instrument, timeframe, limit, before } = query;
+    const beforeDate = before ? new Date(before) : undefined;
 
     try {
       const rawCandles = await this.brokerService.getOhlcvForConnection(
@@ -40,6 +41,7 @@ export class MarketDataService {
         instrument,
         timeframe,
         limit,
+        beforeDate,
       );
 
       const candles = rawCandles.map((c) =>
@@ -55,6 +57,7 @@ export class MarketDataService {
           instrument: instrument.toUpperCase(),
           timeframe: timeframe.toUpperCase(),
           limit,
+          before: before ?? null,
           count: candles.length,
         },
       });
