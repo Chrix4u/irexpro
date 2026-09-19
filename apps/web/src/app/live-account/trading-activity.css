@@ -220,6 +220,11 @@
 .activity-timeline {
   display: grid;
   gap: 0.75rem;
+  max-height: 340px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding-right: 0.35rem;
 }
 
 .activity-timeline__item {
