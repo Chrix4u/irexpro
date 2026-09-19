@@ -31,9 +31,46 @@ function formatTimestamp(value: string | null | undefined): string {
   }).format(date);
 }
 
-function money(value: string | null | undefined, currency: string | null | undefined): string {
+function formatFixedDecimal(
+  value: string | null | undefined,
+  fractionDigits = 2,
+): string {
   if (!value) return '—';
-  return currency ? `${value} ${currency}` : value;
+
+  const normalized = value.trim();
+  const match = /^([+-]?)(\d+)(?:\.(\d+))?$/.exec(normalized);
+  if (!match) return normalized;
+
+  const negative = match[1] === '-';
+  const integerPart = match[2];
+  const fractionalPart = match[3] ?? '';
+  const scale = 10n ** BigInt(fractionDigits);
+  const paddedFraction = fractionalPart.padEnd(fractionDigits + 1, '0');
+  const keptFraction = paddedFraction.slice(0, fractionDigits) || '0';
+
+  let scaled =
+    BigInt(integerPart) * scale +
+    (fractionDigits > 0 ? BigInt(keptFraction) : 0n);
+
+  const roundDigit = paddedFraction[fractionDigits] ?? '0';
+  if (roundDigit >= '5') scaled += 1n;
+
+  const whole = scaled / scale;
+  const fraction = fractionDigits > 0
+    ? (scaled % scale).toString().padStart(fractionDigits, '0')
+    : '';
+  const groupedWhole = whole.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const sign = negative && scaled !== 0n ? '-' : '';
+
+  return fractionDigits > 0
+    ? `${sign}${groupedWhole}.${fraction}`
+    : `${sign}${groupedWhole}`;
+}
+
+function money(value: string | null | undefined, currency: string | null | undefined): string {
+  const formatted = formatFixedDecimal(value, 2);
+  if (formatted === '—') return formatted;
+  return currency ? `${formatted} ${currency}` : formatted;
 }
 
 function pnlVariant(value: string | null): 'success' | 'error' | 'info' {
@@ -47,7 +84,7 @@ function PositionTile({ position }: { position: LivePositionRowView }) {
       <div className="activity-position__top">
         <div>
           <strong>{position.instrument}</strong>
-          <span>{position.direction} · {position.lotSize} lot</span>
+          <span>{position.direction} · {formatFixedDecimal(position.lotSize, 2)} lot</span>
         </div>
         <Badge variant={pnlVariant(position.unrealisedPnl)}>
           {position.unrealisedPnl === null
@@ -56,10 +93,10 @@ function PositionTile({ position }: { position: LivePositionRowView }) {
         </Badge>
       </div>
       <div className="activity-position__prices">
-        <div><span>Entry</span><strong>{position.fillPrice ?? position.requestedEntryPrice}</strong></div>
-        <div><span>Current</span><strong>{position.currentPrice ?? '—'}</strong></div>
-        <div><span>Stop loss</span><strong>{position.stopLoss}</strong></div>
-        <div><span>Take profit</span><strong>{position.takeProfit}</strong></div>
+        <div><span>Entry</span><strong>{formatFixedDecimal(position.fillPrice ?? position.requestedEntryPrice, 5)}</strong></div>
+        <div><span>Current</span><strong>{formatFixedDecimal(position.currentPrice, 5)}</strong></div>
+        <div><span>Stop loss</span><strong>{formatFixedDecimal(position.stopLoss, 5)}</strong></div>
+        <div><span>Take profit</span><strong>{formatFixedDecimal(position.takeProfit, 5)}</strong></div>
       </div>
       <div className="activity-position__foot">
         <span>{position.brokerName ?? 'Broker'}</span>
@@ -278,7 +315,7 @@ export default function TradingActivityPage() {
                     <article className="activity-row" key={order.id}>
                       <div>
                         <strong>{order.instrument}</strong>
-                        <span>{order.direction} · {order.requestedQuantity}</span>
+                        <span>{order.direction} · {formatFixedDecimal(order.requestedQuantity, 2)}</span>
                       </div>
                       <Badge
                         variant={
