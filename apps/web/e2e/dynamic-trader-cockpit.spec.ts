@@ -140,6 +140,58 @@ async function gotoAiTrader(
         },
       });
     }
+    if (apiPath === 'trading/sessions/active/automation-status') {
+      if (options.active === false) {
+        return fulfill(200, {
+          sessionId: null,
+          executionMode: null,
+          state: 'STOPPED',
+          engineReachable: true,
+          schedulerEnabled: true,
+          schedulerRunning: false,
+          registered: false,
+          activeModelVersion: null,
+          approvedForLive: null,
+          instruments: ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCHF', 'USDCAD'],
+          timeframes: ['M15', 'H1', 'H4'],
+          intervalSeconds: 60,
+          lastScanAt: null,
+          nextScanAt: null,
+          scanCount: 0,
+          lastDecision: null,
+          lastReason: 'AI Trading is stopped',
+          lastInstrument: null,
+          lastTimeframe: null,
+          lastConfidenceScore: null,
+          confidenceThreshold: null,
+          lastSignalId: null,
+        });
+      }
+      return fulfill(200, {
+        sessionId: '44444444-4444-4444-8444-444444444444',
+        executionMode: 'PAPER_ONLY',
+        state: 'ACTIVE',
+        engineReachable: true,
+        schedulerEnabled: true,
+        schedulerRunning: true,
+        registered: true,
+        activeModelVersion: 'baseline-xgboost-v0.1.0',
+        approvedForLive: false,
+        instruments: ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCHF', 'USDCAD'],
+        timeframes: ['M15', 'H1', 'H4'],
+        intervalSeconds: 60,
+        lastScanAt: '2026-08-31T01:00:00.000Z',
+        nextScanAt: '2026-08-31T01:01:00.000Z',
+        scanCount: 18,
+        lastDecision: 'NO_SIGNAL',
+        lastReason: 'confidence_below_threshold',
+        lastInstrument: 'GBPUSD',
+        lastTimeframe: 'M15',
+        lastConfidenceScore: 0.54,
+        confidenceThreshold: 0.6,
+        lastSignalId: null,
+      });
+    }
     if (apiPath === 'trading/sessions/active') {
       if (options.sessionContractMismatch) {
         return fulfill(200, { status: 'ACTIVE' });
@@ -242,6 +294,13 @@ test.describe('AI Trader novice workflow', () => {
 
     await expect(page.getByRole('heading', { level: 2, name: 'Recent AI Activity' })).toBeVisible();
     await expect(page.getByText('OPEN', { exact: true }).first()).toBeVisible();
+
+    await expect(page.getByRole('heading', { level: 2, name: 'What the AI is doing now' })).toBeVisible();
+    await expect(page.getByText('Connected', { exact: true })).toBeVisible();
+    await expect(page.getByText('Active', { exact: true })).toBeVisible();
+    await expect(page.getByText(/EURUSD · GBPUSD · USDJPY/i)).toBeVisible();
+    await expect(page.getByText('NO SIGNAL', { exact: true })).toBeVisible();
+    await expect(page.getByText(/confidence 54% is below the 60% threshold/i)).toBeVisible();
 
     await expect(page.getByText(/execution mode selector/i)).toHaveCount(0);
     await expect(page.getByText(/trading experience/i)).toHaveCount(0);
