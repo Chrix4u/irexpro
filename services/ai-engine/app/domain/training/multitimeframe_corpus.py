@@ -52,7 +52,16 @@ def normalize_m1_frame(frame: pd.DataFrame) -> pd.DataFrame:
     if missing:
         raise ValueError(f"M1 dataset missing columns: {sorted(missing)}")
 
-    result = frame.loc[:, ["timestamp", "open", "high", "low", "close", "volume"]].copy()
+    base_columns = ["timestamp", "open", "high", "low", "close", "volume"]
+    optional_columns = [
+        "tick_volume",
+        "trade_volume",
+        "spread_points",
+        "price_digits",
+        "broker_time",
+    ]
+    present_optional = [column for column in optional_columns if column in frame.columns]
+    result = frame.loc[:, [*base_columns, *present_optional]].copy()
     result["timestamp"] = pd.to_datetime(result["timestamp"], utc=True, errors="coerce")
     if result["timestamp"].isna().any():
         raise ValueError("M1 dataset contains invalid timestamps")
@@ -66,7 +75,12 @@ def normalize_m1_frame(frame: pd.DataFrame) -> pd.DataFrame:
         raise ValueError("M1 timestamps must be aligned to exact UTC minute boundaries")
 
     numeric_columns = ["open", "high", "low", "close", "volume"]
-    for column in numeric_columns:
+    optional_numeric = [
+        column
+        for column in ["tick_volume", "trade_volume", "spread_points", "price_digits"]
+        if column in result.columns
+    ]
+    for column in [*numeric_columns, *optional_numeric]:
         result[column] = pd.to_numeric(result[column], errors="coerce")
 
     if result[numeric_columns].isna().any().any():
@@ -77,10 +91,24 @@ def normalize_m1_frame(frame: pd.DataFrame) -> pd.DataFrame:
         raise ValueError("M1 OHLC prices must be greater than zero")
     if (result["volume"] < 0).any():
         raise ValueError("M1 volume cannot be negative")
+    for column in ["tick_volume", "trade_volume", "spread_points"]:
+        if column in result.columns and (result[column].dropna() < 0).any():
+            raise ValueError(f"M1 {column} cannot be negative")
+    if "price_digits" in result.columns:
+        digits = result["price_digits"].dropna()
+        if ((digits % 1) != 0).any() or (digits < 0).any() or (digits > 12).any():
+            raise ValueError("M1 price_digits must be an integer between 0 and 12")
     if (result["high"] < result[["open", "close", "low"]].max(axis=1)).any():
         raise ValueError("M1 dataset contains invalid candle highs")
     if (result["low"] > result[["open", "close", "high"]].min(axis=1)).any():
         raise ValueError("M1 dataset contains invalid candle lows")
+
+    if {"spread_points", "price_digits"}.issubset(result.columns):
+        point_size = np.power(10.0, -result["price_digits"].astype(float))
+        result["spread_price"] = result["spread_points"].astype(float) * point_size
+        result["spread_bps"] = (
+            result["spread_price"] / result["close"].astype(float)
+        ) * 10_000.0
 
     return result
 
@@ -105,15 +133,24 @@ def derive_closed_bars(m1_frame: pd.DataFrame, timeframe: str) -> pd.DataFrame:
             closed="left",
             origin="epoch",
         )
-        result = grouped.agg(
-            {
-                "open": "first",
-                "high": "max",
-                "low": "min",
-                "close": "last",
-                "volume": "sum",
-            }
-        )
+        aggregations: dict[str, str] = {
+            "open": "first",
+            "high": "max",
+            "low": "min",
+            "close": "last",
+            "volume": "sum",
+        }
+        for column in ["tick_volume", "trade_volume"]:
+            if column in normalized.columns:
+                aggregations[column] = "sum"
+        for column in ["spread_points", "spread_price", "spread_bps", "price_digits"]:
+            if column in normalized.columns:
+                aggregations[column] = "last"
+
+        result = grouped.agg(aggregations)
+        if "spread_points" in normalized.columns:
+            result["spread_points_mean"] = grouped["spread_points"].mean()
+            result["spread_points_max"] = grouped["spread_points"].max()
         result["m1_count"] = grouped["close"].count()
         result = result[result["m1_count"] == duration_minutes]
         result = result.dropna(subset=["open", "high", "low", "close", "volume"])
@@ -140,6 +177,20 @@ def _timeframe_feature_frame(m1_frame: pd.DataFrame, timeframe: str) -> pd.DataF
             f"{prefix}_volume": bars["volume"].astype(float),
         }
     )
+    for field in [
+        "tick_volume",
+        "trade_volume",
+        "spread_points",
+        "spread_price",
+        "spread_bps",
+        "spread_points_mean",
+        "spread_points_max",
+        "price_digits",
+    ]:
+        if field in bars.columns:
+            result[f"{prefix}_{field}"] = pd.to_numeric(
+                bars[field], errors="coerce"
+            ).astype(float)
     for feature_name in FEATURE_COLUMNS:
         result[f"{prefix}_{feature_name}"] = featured[feature_name].astype(float)
     return result
@@ -227,6 +278,21 @@ def build_multitimeframe_corpus_from_m1_csv(
     output.parent.mkdir(parents=True, exist_ok=True)
     corpus.to_csv(output, index=False)
 
+    friction_columns = [
+        "m1_spread_points",
+        "m1_spread_bps",
+        "m1_tick_volume",
+        "m1_price_digits",
+    ]
+    friction_coverage = {
+        column: (
+            float(corpus[column].notna().mean())
+            if column in corpus.columns and len(corpus)
+            else 0.0
+        )
+        for column in friction_columns
+    }
+
     manifest = {
         "manifest_version": 1,
         "instrument": instrument.upper(),
@@ -243,6 +309,8 @@ def build_multitimeframe_corpus_from_m1_csv(
         "closed_bars_only": True,
         "canonical_utc_boundaries": True,
         "lookahead_validation": "passed",
+        "friction_data_complete": all(value == 1.0 for value in friction_coverage.values()),
+        "friction_coverage": friction_coverage,
         "raw_m1_sha256": _sha256_file(source_path),
         "dataset_sha256": _sha256_file(output),
     }
