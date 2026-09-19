@@ -70,7 +70,7 @@ class NoSignalResult(BaseModel):
     """Returned when the AI engine decides not to generate a signal."""
     reason: str
     instrument: str
-    confidence_score: float
+    confidence_score: float | None = None
     threshold: float
     generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -86,8 +86,19 @@ class SignalGenerationRequest(BaseModel):
 
 
 class SignalGenerationResponse(BaseModel):
-    """Response from signal generation — either a candidate or a no-signal."""
+    """Response from signal generation plus truthful inference/data provenance."""
     generated: bool
     signal: AiSignalCandidate | None = None
     no_signal: NoSignalResult | None = None
     mode: str = "paper"
+    model_version: str | None = None
+    model_mode: str | None = None
+    model_loaded: bool = False
+    model_evaluated: bool = False
+    market_data_source: str | None = None
+    market_data_cache_status: str | None = None
+    market_data_cache_age_seconds: float | None = None
+    market_data_fetched_at: datetime | None = None
+    latest_market_data_at: datetime | None = None
+    market_data_age_seconds: float | None = None
+    market_data_fingerprint: str | None = None
