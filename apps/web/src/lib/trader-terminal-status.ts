@@ -150,7 +150,7 @@ function normalizeAuthorityGeneration(value: unknown): number | null {
   // Some JSON/database transport layers serialize integer columns as strings.
   // Accept only a canonical positive integer string and normalize it before the
   // value reaches execution-authority UI logic.
-  if (typeof value === 'string' && /^[1-9]\\d*$/.test(value)) {
+  if (typeof value === 'string' && /^[1-9]\d*$/.test(value)) {
     const parsed = Number(value);
     return Number.isSafeInteger(parsed) ? parsed : null;
   }
