@@ -198,6 +198,41 @@ export class ReconcileTradingSessionSchema1754800000000 implements MigrationInte
       ON trading.trading_sessions (broker_connection_id, close_ai_positions_on_stop)
       WHERE close_ai_positions_on_stop = true
     `);
+
+
+    const requiredColumns = [
+      'execution_mode',
+      'authority_generation',
+      'account_currency',
+      'opening_snapshot_id',
+      'opening_snapshot_generation',
+      'close_ai_positions_on_stop',
+    ];
+    const presentColumns = await queryRunner.query(`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = 'trading'
+        AND table_name = 'trading_sessions'
+        AND column_name IN (
+          'execution_mode',
+          'authority_generation',
+          'account_currency',
+          'opening_snapshot_id',
+          'opening_snapshot_generation',
+          'close_ai_positions_on_stop'
+        )
+    `);
+    const present = new Set(
+      Array.isArray(presentColumns)
+        ? presentColumns.map((row: { column_name: string }) => row.column_name)
+        : [],
+    );
+    const missing = requiredColumns.filter((column) => !present.has(column));
+    if (missing.length > 0) {
+      throw new Error(
+        `Trading session schema reconciliation failed verification; missing columns: ${missing.join(', ')}`,
+      );
+    }
   }
 
   public async down(_queryRunner: QueryRunner): Promise<void> {
