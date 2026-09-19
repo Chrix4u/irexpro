@@ -64,10 +64,12 @@
 }
 
 .activity-summary__value {
-  font-size: clamp(1.2rem, 2.2vw, 1.8rem);
-  line-height: 1.18;
-  letter-spacing: -0.035em;
+  font-size: clamp(1.05rem, 1.65vw, 1.45rem);
+  font-weight: 700;
+  line-height: 1.22;
+  letter-spacing: -0.02em;
   overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums lining-nums;
 }
 
 .activity-summary__meta {
@@ -174,6 +176,7 @@
 
 .activity-position__prices strong {
   overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums lining-nums;
 }
 
 .activity-list {
@@ -217,9 +220,32 @@
   align-items: stretch;
 }
 
+.activity-ai-card {
+  min-height: 0;
+}
+
 .activity-timeline {
   display: grid;
   gap: 0.75rem;
+  max-height: min(360px, 42vh);
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  padding-right: 0.35rem;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.activity-timeline::-webkit-scrollbar {
+  width: 6px;
+}
+
+.activity-timeline::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.activity-timeline::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: var(--radius-full);
 }
 
 .activity-timeline__item {
