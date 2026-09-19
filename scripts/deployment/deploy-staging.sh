@@ -41,6 +41,39 @@ require_value() {
   local name="$1"
   [[ -n "${!name:-}" ]] || die "Required configuration is missing: ${name}"
 }
+read_dotenv_value() {
+  local file="$1"
+  local key="$2"
+  local line
+
+  [[ -f "$file" ]] || return 1
+  line="$(grep -E "^${key}=[^[:space:]]+$" "$file" | tail -n 1 || true)"
+  [[ -n "$line" ]] || return 1
+  printf '%s' "${line#*=}"
+}
+
+validate_internal_api_key_alignment() {
+  local api_env="$STAGING_ROOT/apps/api/.env"
+  local ai_env="$STAGING_ROOT/services/ai-engine/.env"
+  local api_key
+  local ai_key
+
+  api_key="$(read_dotenv_value "$api_env" NESTJS_INTERNAL_API_KEY)" ||
+    die "API staging internal API key is missing or malformed."
+  ai_key="$(read_dotenv_value "$ai_env" NESTJS_INTERNAL_API_KEY)" ||
+    die "AI engine staging internal API key is missing or malformed."
+
+  [[ ${#api_key} -ge 32 ]] || die "API staging internal API key is too short."
+  [[ ${#ai_key} -ge 32 ]] || die "AI engine staging internal API key is too short."
+  [[ "$api_key" != "dev_internal_key_change_me" ]] ||
+    die "API staging internal API key still uses the development placeholder."
+  [[ "$ai_key" != "dev_internal_key_change_me" ]] ||
+    die "AI engine staging internal API key still uses the development placeholder."
+  [[ "$api_key" == "$ai_key" ]] ||
+    die "API and AI engine staging internal API keys do not match."
+
+  unset api_key ai_key
+}
 
 safe_curl() {
   curl --fail --silent --show-error --max-time 10 "$1"
@@ -243,6 +276,8 @@ git merge-base --is-ancestor "$CANDIDATE_SHA" origin/main || die "Candidate is n
 git switch --quiet --detach "$CANDIDATE_SHA"
 [[ "$(git rev-parse HEAD)" == "$CANDIDATE_SHA" ]] || die "Exact candidate checkout failed."
 [[ -z "$(git status --porcelain)" ]] || die "Exact candidate checkout is not clean."
+STAGE="internal-api-key-preflight"
+validate_internal_api_key_alignment
 
 STAGE="release-toolchain-verification"
 node_major="$(node -p "process.versions.node.split('.')[0]")"

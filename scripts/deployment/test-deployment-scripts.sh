@@ -53,9 +53,12 @@ make_fixture() {
   local remote="$root/remotes/Chrix4u/irexpro.git"
   local repo="$root/repo"
 
-  mkdir -p "$(dirname "$remote")" "$repo/scripts/deployment"
+  mkdir -p "$(dirname "$remote")" "$repo/scripts/deployment" "$repo/apps/api" "$repo/services/ai-engine"
   git init --quiet --bare --initial-branch=main "$remote"
   git -C "$repo" init --quiet --initial-branch=main
+  printf '/apps/api/.env\n/services/ai-engine/.env\n' >> "$repo/.git/info/exclude"
+  printf 'NESTJS_INTERNAL_API_KEY=%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' > "$repo/apps/api/.env"
+  printf 'NESTJS_INTERNAL_API_KEY=%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' > "$repo/services/ai-engine/.env"
   git -C "$repo" config user.email 'ci@example.invalid'
   git -C "$repo" config user.name 'Deployment Safety CI'
 
@@ -286,6 +289,18 @@ make_fixture 'node-major-mismatch'
 git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
 expect_failure 'Node.js major version does not match the verified release baseline' run_deploy "$FIXTURE_CANDIDATE_SHA" FAKE_NODE_MAJOR=20
 [[ ! -s "$COMMAND_LOG" ]] || fail 'Node-major rejection must happen before install/build/restart commands.'
+make_fixture 'internal-key-mismatch'
+git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
+printf 'NESTJS_INTERNAL_API_KEY=%s\n' 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' > "$FIXTURE_REPO/services/ai-engine/.env"
+expect_failure 'failed_stage=internal-api-key-preflight' run_deploy "$FIXTURE_CANDIDATE_SHA"
+[[ ! -s "$COMMAND_LOG" ]] || fail 'Internal-key mismatch must fail before install/build/restart commands.'
+
+make_fixture 'internal-key-placeholder'
+git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
+printf 'NESTJS_INTERNAL_API_KEY=%s\n' 'dev_internal_key_change_me' > "$FIXTURE_REPO/apps/api/.env"
+printf 'NESTJS_INTERNAL_API_KEY=%s\n' 'dev_internal_key_change_me' > "$FIXTURE_REPO/services/ai-engine/.env"
+expect_failure 'failed_stage=internal-api-key-preflight' run_deploy "$FIXTURE_CANDIDATE_SHA"
+[[ ! -s "$COMMAND_LOG" ]] || fail 'Development internal-key placeholder must fail before install/build/restart commands.'
 
 make_fixture 'build-failure'
 git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
