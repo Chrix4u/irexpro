@@ -393,12 +393,16 @@ export default function OnboardingBrokerPage() {
 
       {activeConnection && (
         <Alert variant="success">
-          <div style={{ flex: 1 }}>
-            ✅ A broker is connected ({activeConnection.brokerName}). Onboarding is complete!
+          <div className="broker-complete-alert">
+            <div>
+              ✅ A broker is connected ({activeConnection.brokerName}). Onboarding is complete!
+            </div>
+            <div className="broker-complete-alert__action">
+              <Button variant="secondary" size="sm" onClick={() => router.push('/dashboard')}>
+                Go to dashboard
+              </Button>
+            </div>
           </div>
-          <Button variant="secondary" size="sm" onClick={() => router.push('/dashboard')}>
-            Go to dashboard
-          </Button>
         </Alert>
       )}
 
