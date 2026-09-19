@@ -317,8 +317,6 @@ export interface MyProfileView {
     lastName: string | null;
     /** Date of birth in YYYY-MM-DD calendar format; null if unset. */
     dateOfBirth: string | null;
-    /** Self-reported trading experience level; null if unset. */
-    tradingExperienceLevel: TradingExperienceLevel | null;
     /** KYC review state; "NONE" means never submitted. */
     kycStatus: 'NONE' | 'PENDING' | 'APPROVED' | 'REJECTED';
   };
