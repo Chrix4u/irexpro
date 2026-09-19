@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -179,7 +180,11 @@ def collect_historical_corpus(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Collect historical broker OHLCV for XGBoost")
     parser.add_argument("--api-base-url", required=True)
-    parser.add_argument("--internal-api-key", required=True)
+    parser.add_argument(
+        "--internal-api-key",
+        default=os.getenv("NESTJS_INTERNAL_API_KEY", ""),
+        help="Internal API key; defaults to NESTJS_INTERNAL_API_KEY env var",
+    )
     parser.add_argument("--user-id", required=True)
     parser.add_argument("--broker-connection-id", required=True)
     parser.add_argument("--instrument", required=True)
