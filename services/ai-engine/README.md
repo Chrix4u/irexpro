@@ -103,6 +103,42 @@ Repeat this for each approved training instrument. Generated datasets and model
 artifacts remain excluded from Git. The manifest records the corpus date range,
 row count, collection time, and dataset fingerprint for reproducibility.
 
+## Collecting the real historical training corpus
+
+Use a connected broker account and the internal service API to page backwards
+through broker OHLCV history. Generated datasets and manifests stay outside Git.
+
+Single instrument:
+
+```powershell
+python -m app.domain.training.collect_historical \
+  --api-base-url https://irexpro.lightworldtech.com/api/v1 \
+  --user-id <USER_UUID> \
+  --broker-connection-id <CONNECTION_UUID> \
+  --instrument EURUSD \
+  --timeframe H1 \
+  --target-rows 10000 \
+  --output data/EURUSD_H1.csv
+```
+
+Current six-pair training universe:
+
+```powershell
+python -m app.domain.training.collect_universe \
+  --api-base-url https://irexpro.lightworldtech.com/api/v1 \
+  --user-id <USER_UUID> \
+  --broker-connection-id <CONNECTION_UUID> \
+  --timeframe H1 \
+  --target-rows-per-instrument 10000 \
+  --output-dir data/fx-h1
+```
+
+The internal API key is read from `NESTJS_INTERNAL_API_KEY`; do not place it
+in shell history or commit it. The universe collector uses one common cutoff
+for EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, and USDCHF, stores only closed
+candles, validates each CSV, and writes dataset SHA-256 fingerprints plus a
+universe manifest.
+
 ## Training a real XGBoost model
 
 The runtime can load a real fitted XGBoost classifier, but generated artifacts
