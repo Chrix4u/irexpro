@@ -103,10 +103,24 @@
   margin: 0;
 }
 
-.ai-automation-state {
+.ai-allocation-row .input,
+.ai-allocation-row .btn {
+  height: 46px;
+  min-height: 46px;
+}
+
+.ai-allocation-row .btn {
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.ai-automation-heading {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
   min-height: 30px;
+  flex-wrap: nowrap;
 }
 
 .ai-automation-action {
