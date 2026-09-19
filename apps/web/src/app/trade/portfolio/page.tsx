@@ -188,7 +188,7 @@ export default function AccountPortfolioPage() {
     <DashboardShell
       user={user}
       onLogout={logout}
-      activeRoute="/trade"
+      activeRoute="/trade/portfolio"
       title="Portfolio Truth"
     >
       <main className="terminal-foundation">
