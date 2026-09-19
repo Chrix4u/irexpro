@@ -90,7 +90,7 @@ class SignalGenerator:
         features = extract_latest_features(df)
 
         # 3. Model inference
-        model = self._registry.get_active_model()
+        model = self._registry.get_model_for(instrument, timeframe)
         model_metadata = model.get_model_metadata()
         governance = self._registry.get_governance(model.get_model_version())
 
