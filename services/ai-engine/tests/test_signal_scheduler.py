@@ -146,3 +146,70 @@ class ScheduledSessionJobStub:
     last_decision = None
     last_reason = None
     last_confidence_score = None
+    last_model_evaluated_at = None
+    model_version = None
+    model_mode = None
+    model_loaded = False
+    market_data_cache_status = None
+    market_data_cache_age_seconds = None
+    latest_market_data_at = None
+    market_data_age_seconds = None
+    last_market_data_fingerprints = {}
+
+
+@pytest.mark.asyncio
+async def test_broker_scheduler_bypasses_cache_and_skips_unchanged_inference():
+    from datetime import UTC, datetime
+
+    from app.domain.signals.schemas import NoSignalResult
+
+    settings = Settings(ai_scheduler_enabled=True, ai_signal_mode="paper")
+    scheduler = SignalScheduler(nestjs_client=AsyncMock())
+    scheduler._settings = settings
+
+    mock_generator = AsyncMock()
+    mock_generator.generate.return_value = SignalGenerationResponse(
+        generated=False,
+        no_signal=NoSignalResult(
+            reason="market_data_unchanged",
+            instrument="EURUSD",
+            confidence_score=None,
+            threshold=0.6,
+        ),
+        mode="paper",
+        model_version="baseline-xgboost-v0.1.0",
+        model_mode="heuristic_placeholder",
+        model_loaded=False,
+        model_evaluated=False,
+        market_data_source="broker",
+        market_data_cache_status="bypassed",
+        market_data_fetched_at=datetime.now(UTC),
+        latest_market_data_at=datetime.now(UTC),
+        market_data_age_seconds=0.0,
+        market_data_fingerprint="same-market-observation",
+    )
+    scheduler._signal_generator = mock_generator
+
+    job = ScheduledSessionJobStub()
+    job.source = "broker"
+    job.last_confidence_score = 0.0312
+    job.last_market_data_fingerprints = {"EURUSD": "same-market-observation"}
+    scheduler._jobs["session-1"] = job
+
+    await scheduler._run_session_job("session-1")
+
+    mock_generator.generate.assert_called_once_with(
+        user_id="user-1",
+        trading_session_id="session-1",
+        broker_connection_id="conn-1",
+        instrument="EURUSD",
+        timeframe="H1",
+        source="broker",
+        bypass_market_data_cache=True,
+        previous_market_data_fingerprint="same-market-observation",
+    )
+    assert job.last_decision == "NO_NEW_DATA"
+    assert job.last_reason == "market_data_unchanged"
+    assert job.last_confidence_score == 0.0312
+    assert job.market_data_cache_status == "bypassed"
+    assert job.model_mode == "heuristic_placeholder"

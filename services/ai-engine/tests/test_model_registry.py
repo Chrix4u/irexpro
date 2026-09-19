@@ -17,6 +17,8 @@ def test_baseline_model_returns_paper_only_metadata():
     assert metadata["approved_for_live"] is False
     assert metadata["approved_for_paper"] is True
     assert metadata["mode"] == "heuristic_placeholder"
+    assert metadata["trained_model_active"] is False
+    assert metadata["load_status"] == "not_configured"
     assert metadata["version"] == MODEL_VERSION
 
 

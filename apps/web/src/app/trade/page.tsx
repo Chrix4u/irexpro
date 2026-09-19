@@ -101,6 +101,14 @@ interface AiAutomationRuntimeStatus {
   last_reason: string | null;
   last_confidence_score: number | null;
   confidence_threshold: number | null;
+  last_model_evaluated_at?: string | null;
+  model_version?: string | null;
+  model_mode?: string | null;
+  model_loaded?: boolean;
+  market_data_cache_status?: string | null;
+  market_data_cache_age_seconds?: number | null;
+  latest_market_data_at?: string | null;
+  market_data_age_seconds?: number | null;
   last_publish_failed: boolean;
 }
 
@@ -109,11 +117,46 @@ function runtimeReasonLabel(reason: string | null | undefined): string {
   const labels: Record<string, string> = {
     confidence_below_threshold: 'Market setup did not meet the confidence threshold',
     confidence_threshold_passed: 'Signal passed the confidence threshold and was published',
+    market_data_unchanged:
+      'Fresh broker fetch returned unchanged market data; model inference was not repeated',
     scheduler_integration_disabled: 'AI scheduler integration is disabled',
     model_not_approved_for_live:
       'Current AI model is not yet approved for live-money automation',
   };
   return labels[reason] ?? reason.replaceAll('_', ' ');
+}
+
+function formatConfidence(value: number | null | undefined): string {
+  if (value == null) return '—';
+  return `${(value * 100).toFixed(2)}%`;
+}
+
+function modelModeLabel(mode: string | null | undefined): string {
+  if (!mode) return 'UNKNOWN';
+  const labels: Record<string, string> = {
+    trained_xgboost: 'TRAINED XGBOOST',
+    heuristic_placeholder: 'HEURISTIC SCAFFOLD',
+    heuristic_fallback: 'HEURISTIC FALLBACK',
+  };
+  return labels[mode] ?? mode.replaceAll('_', ' ').toUpperCase();
+}
+
+function marketCacheLabel(status: string | null | undefined): string {
+  if (!status) return '—';
+  if (status === 'bypassed') return 'BYPASSED · FRESH BROKER READ';
+  if (status === 'provided') return 'DIRECT INPUT';
+  return status.replaceAll('_', ' ').toUpperCase();
+}
+
+function formatAgeSeconds(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '—';
+  const seconds = Math.max(0, Math.round(value));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  if (minutes < 60) return `${minutes}m ${remainder}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
 }
 
 function PositionCard({ position }: { position: LivePositionRowView }) {
@@ -762,26 +805,58 @@ export default function AiTradingPage() {
                     </strong>
                   </div>
                   <div>
-                    <span>Last market scan</span>
+                    <span>Last broker fetch</span>
                     <strong>{formatTimestamp(automationRuntime?.last_run_at)}</strong>
+                  </div>
+                  <div>
+                    <span>Latest market data</span>
+                    <strong>{formatTimestamp(automationRuntime?.latest_market_data_at)}</strong>
+                  </div>
+                  <div>
+                    <span>Market data age</span>
+                    <strong>{formatAgeSeconds(automationRuntime?.market_data_age_seconds)}</strong>
+                  </div>
+                  <div>
+                    <span>Last model evaluation</span>
+                    <strong>{formatTimestamp(automationRuntime?.last_model_evaluated_at)}</strong>
                   </div>
                   <div>
                     <span>Next scan</span>
                     <strong>{formatTimestamp(automationRuntime?.next_run_at)}</strong>
                   </div>
                   <div>
+                    <span>Model</span>
+                    <strong>{automationRuntime?.model_version ?? '—'}</strong>
+                  </div>
+                  <div>
+                    <span>Model mode</span>
+                    <strong>{modelModeLabel(automationRuntime?.model_mode)}</strong>
+                  </div>
+                  <div>
+                    <span>Market-data cache</span>
+                    <strong>{marketCacheLabel(automationRuntime?.market_data_cache_status)}</strong>
+                  </div>
+                  <div>
                     <span>Last decision</span>
                     <strong>{automationRuntime?.last_decision?.replaceAll('_', ' ') ?? 'WAITING'}</strong>
                   </div>
                   <div>
-                    <span>Confidence</span>
+                    <span>Last model confidence</span>
                     <strong>
                       {automationRuntime?.last_confidence_score == null
                         ? '—'
-                        : `${Math.round(automationRuntime.last_confidence_score * 100)}% / ${Math.round((automationRuntime.confidence_threshold ?? 0) * 100)}% required`}
+                        : `${formatConfidence(automationRuntime.last_confidence_score)} / ${formatConfidence(automationRuntime.confidence_threshold)} required`}
                     </strong>
                   </div>
                 </div>
+
+                {!automationRuntime?.model_loaded && automationRuntime?.model_mode && (
+                  <Alert variant="warning">
+                    <strong>AI model status:</strong>{' '}
+                    {modelModeLabel(automationRuntime.model_mode)} is active. No trained XGBoost
+                    artifact is currently driving this runtime.
+                  </Alert>
+                )}
 
                 <div className="ai-runtime-reason">
                   <span>Decision explanation</span>

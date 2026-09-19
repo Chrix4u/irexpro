@@ -39,6 +39,8 @@ class BaselineXGBoostModel:
     def __init__(self) -> None:
         self._model: Any = None
         self._model_loaded = False
+        self._model_path_configured = False
+        self._model_load_status = "not_configured"
 
     def load_model(self) -> bool:
         """
@@ -46,10 +48,19 @@ class BaselineXGBoostModel:
         Returns True if loaded, False if no model file found (placeholder mode).
         """
         model_path = os.getenv(MODEL_PATH_ENV)
-        if not model_path or not os.path.exists(model_path):
-            logger.info(
-                "No XGBoost model file found — running in heuristic placeholder mode",
-                model_path=model_path,
+        self._model_loaded = False
+        self._model = None
+        self._model_path_configured = bool(model_path)
+
+        if not model_path:
+            self._model_load_status = "not_configured"
+            logger.info("No XGBoost model path configured — heuristic scaffold is active")
+            return False
+
+        if not os.path.exists(model_path):
+            self._model_load_status = "artifact_missing"
+            logger.error(
+                "Configured XGBoost model artifact is missing — heuristic fallback is active"
             )
             return False
 
@@ -58,9 +69,11 @@ class BaselineXGBoostModel:
             self._model = xgb.Booster()
             self._model.load_model(model_path)
             self._model_loaded = True
+            self._model_load_status = "loaded"
             logger.info("XGBoost model loaded", path=model_path, version=MODEL_VERSION)
             return True
         except Exception as e:
+            self._model_load_status = "load_failed"
             logger.error("Failed to load XGBoost model", error=str(e))
             return False
 
@@ -140,11 +153,21 @@ class BaselineXGBoostModel:
         return MODEL_VERSION
 
     def get_model_metadata(self) -> dict:
+        if self._model_loaded:
+            mode = "trained_xgboost"
+        elif self._model_path_configured:
+            mode = "heuristic_fallback"
+        else:
+            mode = "heuristic_placeholder"
+
         return {
             "version": MODEL_VERSION,
             "type": "xgboost_scaffold",
             "loaded": self._model_loaded,
-            "mode": "real" if self._model_loaded else "heuristic_placeholder",
+            "trained_model_active": self._model_loaded,
+            "model_path_configured": self._model_path_configured,
+            "load_status": self._model_load_status,
+            "mode": mode,
             "approved_for_live": False,
             "approved_for_paper": True,
         }

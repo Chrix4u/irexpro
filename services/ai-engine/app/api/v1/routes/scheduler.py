@@ -128,5 +128,17 @@ async def session_scheduler_status(
         last_reason=job.last_reason,
         last_confidence_score=job.last_confidence_score,
         confidence_threshold=settings.ai_min_confidence_score,
+        last_model_evaluated_at=(
+            job.last_model_evaluated_at.isoformat() if job.last_model_evaluated_at else None
+        ),
+        model_version=job.model_version,
+        model_mode=job.model_mode,
+        model_loaded=job.model_loaded,
+        market_data_cache_status=job.market_data_cache_status,
+        market_data_cache_age_seconds=job.market_data_cache_age_seconds,
+        latest_market_data_at=(
+            job.latest_market_data_at.isoformat() if job.latest_market_data_at else None
+        ),
+        market_data_age_seconds=job.market_data_age_seconds,
         last_publish_failed=job.last_publish_failed,
     )

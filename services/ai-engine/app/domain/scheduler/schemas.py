@@ -50,6 +50,14 @@ class SessionSchedulerStatusResponse(BaseModel):
     last_reason: str | None = None
     last_confidence_score: float | None = None
     confidence_threshold: float | None = None
+    last_model_evaluated_at: str | None = None
+    model_version: str | None = None
+    model_mode: str | None = None
+    model_loaded: bool = False
+    market_data_cache_status: str | None = None
+    market_data_cache_age_seconds: float | None = None
+    latest_market_data_at: str | None = None
+    market_data_age_seconds: float | None = None
     last_publish_failed: bool = False
 
 
