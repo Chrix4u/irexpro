@@ -1,0 +1,534 @@
+"""Friction-aware pooled multi-timeframe XGBoost walk-forward evaluation."""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import pandas as pd
+from xgboost import XGBClassifier
+
+from app.domain.training.multitimeframe_corpus import (
+    ALL_TIMEFRAMES,
+    validate_no_lookahead,
+)
+from app.domain.training.validation import (
+    compute_backtest_metrics,
+    compute_classification_metrics,
+    purged_walk_forward_time_splits,
+)
+
+INITIAL_FOREX_UNIVERSE = (
+    "EURUSD",
+    "GBPUSD",
+    "USDJPY",
+    "AUDUSD",
+    "USDCAD",
+    "USDCHF",
+)
+
+NORMALIZED_FEATURE_SUFFIXES = (
+    "simple_return",
+    "price_vs_ma20",
+    "volatility_10",
+    "candle_body",
+    "volume_change",
+    "range_pct",
+    "ma5_vs_ma20",
+    "ma10_vs_ma20",
+    "log_tick_volume",
+)
+
+TIME_FEATURE_COLUMNS = (
+    "minute_of_day_sin",
+    "minute_of_day_cos",
+    "day_of_week_sin",
+    "day_of_week_cos",
+)
+
+TARGET_COLUMN = "target"
+LONG_NET_RETURN_COLUMN = "long_net_return"
+SHORT_NET_RETURN_COLUMN = "short_net_return"
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def multitimeframe_feature_columns() -> list[str]:
+    columns = [
+        f"{timeframe.lower()}_{suffix}"
+        for timeframe in ALL_TIMEFRAMES
+        for suffix in NORMALIZED_FEATURE_SUFFIXES
+    ]
+    columns.extend(["m1_spread_bps", *TIME_FEATURE_COLUMNS])
+    columns.extend(f"instrument_{instrument}" for instrument in INITIAL_FOREX_UNIVERSE)
+    return columns
+
+
+MULTITIMEFRAME_FEATURE_COLUMNS = multitimeframe_feature_columns()
+
+
+def _parse_corpus_dates(frame: pd.DataFrame) -> pd.DataFrame:
+    result = frame.copy()
+    date_columns = [
+        column
+        for column in result.columns
+        if column == "decision_time"
+        or column.endswith("_available_at")
+        or column.endswith("_source_bar_open")
+    ]
+    for column in date_columns:
+        result[column] = pd.to_datetime(result[column], utc=True, errors="coerce")
+        if result[column].isna().any():
+            raise ValueError(f"Corpus contains invalid timestamp values in {column}")
+    return result
+
+
+def prepare_instrument_corpus(
+    corpus: pd.DataFrame,
+    *,
+    instrument: str,
+    horizon_bars: int,
+    min_net_return_bps: float = 0.0,
+    commission_bps: float = 0.0,
+    slippage_bps: float = 0.0,
+) -> pd.DataFrame:
+    """
+    Convert a causal MTF corpus into a friction-aware supervised dataset.
+
+    Historical spread is charged as half-spread at entry plus half-spread at
+    exit. Commission/slippage are optional extra round-trip costs in bps.
+    Future prices/spreads are used only for labels/evaluation, never features.
+    """
+    if instrument not in INITIAL_FOREX_UNIVERSE:
+        raise ValueError(f"Unsupported initial-universe instrument: {instrument}")
+    if horizon_bars < 1:
+        raise ValueError("horizon_bars must be at least 1")
+    if min_net_return_bps < 0:
+        raise ValueError("min_net_return_bps cannot be negative")
+    if commission_bps < 0 or slippage_bps < 0:
+        raise ValueError("commission_bps/slippage_bps cannot be negative")
+
+    frame = _parse_corpus_dates(corpus)
+    validate_no_lookahead(frame)
+
+    required_friction = [
+        "m1_close",
+        "m1_spread_points",
+        "m1_spread_bps",
+        "m1_price_digits",
+        "m1_tick_volume",
+    ]
+    missing = [column for column in required_friction if column not in frame.columns]
+    if missing:
+        raise ValueError(f"Corpus missing required real-friction fields: {missing}")
+    if frame[required_friction].isna().any().any():
+        raise ValueError("Corpus contains missing real-friction values")
+
+    for timeframe in ALL_TIMEFRAMES:
+        prefix = timeframe.lower()
+        required = [
+            f"{prefix}_high",
+            f"{prefix}_low",
+            f"{prefix}_close",
+            f"{prefix}_ma_5",
+            f"{prefix}_ma_10",
+            f"{prefix}_ma_20",
+            f"{prefix}_simple_return",
+            f"{prefix}_price_vs_ma20",
+            f"{prefix}_volatility_10",
+            f"{prefix}_candle_body",
+            f"{prefix}_volume_change",
+            f"{prefix}_tick_volume",
+        ]
+        absent = [column for column in required if column not in frame.columns]
+        if absent:
+            raise ValueError(f"Corpus missing {timeframe} model fields: {absent}")
+
+        eps = 1e-12
+        frame[f"{prefix}_range_pct"] = (
+            (frame[f"{prefix}_high"] - frame[f"{prefix}_low"])
+            / frame[f"{prefix}_close"].abs().clip(lower=eps)
+        )
+        frame[f"{prefix}_ma5_vs_ma20"] = (
+            frame[f"{prefix}_ma_5"] / frame[f"{prefix}_ma_20"].abs().clip(lower=eps)
+        ) - 1.0
+        frame[f"{prefix}_ma10_vs_ma20"] = (
+            frame[f"{prefix}_ma_10"] / frame[f"{prefix}_ma_20"].abs().clip(lower=eps)
+        ) - 1.0
+        frame[f"{prefix}_log_tick_volume"] = np.log1p(
+            pd.to_numeric(frame[f"{prefix}_tick_volume"], errors="coerce").clip(lower=0.0)
+        )
+
+    decision_time = frame["decision_time"]
+    minute_of_day = decision_time.dt.hour * 60 + decision_time.dt.minute
+    frame["minute_of_day_sin"] = np.sin(2.0 * np.pi * minute_of_day / 1440.0)
+    frame["minute_of_day_cos"] = np.cos(2.0 * np.pi * minute_of_day / 1440.0)
+    day_of_week = decision_time.dt.dayofweek
+    frame["day_of_week_sin"] = np.sin(2.0 * np.pi * day_of_week / 7.0)
+    frame["day_of_week_cos"] = np.cos(2.0 * np.pi * day_of_week / 7.0)
+
+    for candidate in INITIAL_FOREX_UNIVERSE:
+        frame[f"instrument_{candidate}"] = 1.0 if candidate == instrument else 0.0
+    frame["instrument"] = instrument
+
+    current_close = pd.to_numeric(frame["m1_close"], errors="coerce")
+    current_spread_price = (
+        current_close * pd.to_numeric(frame["m1_spread_bps"], errors="coerce") / 10_000.0
+    )
+    future_close = current_close.shift(-horizon_bars)
+    future_spread_price = current_spread_price.shift(-horizon_bars)
+
+    long_entry = current_close + current_spread_price / 2.0
+    long_exit = future_close - future_spread_price / 2.0
+    short_entry = current_close - current_spread_price / 2.0
+    short_exit = future_close + future_spread_price / 2.0
+
+    extra_cost = (commission_bps + slippage_bps) / 10_000.0
+    frame[LONG_NET_RETURN_COLUMN] = (long_exit / long_entry) - 1.0 - extra_cost
+    frame[SHORT_NET_RETURN_COLUMN] = (short_entry - short_exit) / short_entry - extra_cost
+
+    best_net_return = frame[[LONG_NET_RETURN_COLUMN, SHORT_NET_RETURN_COLUMN]].max(axis=1)
+    threshold = min_net_return_bps / 10_000.0
+    frame = frame[
+        np.isfinite(frame[LONG_NET_RETURN_COLUMN])
+        & np.isfinite(frame[SHORT_NET_RETURN_COLUMN])
+        & (best_net_return >= threshold)
+    ].copy()
+    frame[TARGET_COLUMN] = (
+        frame[LONG_NET_RETURN_COLUMN] > frame[SHORT_NET_RETURN_COLUMN]
+    ).astype(int)
+
+    feature_values = frame[MULTITIMEFRAME_FEATURE_COLUMNS].apply(
+        pd.to_numeric, errors="coerce"
+    )
+    finite_mask = np.isfinite(feature_values.to_numpy(dtype=float)).all(axis=1)
+    frame.loc[:, MULTITIMEFRAME_FEATURE_COLUMNS] = feature_values
+    frame = frame.loc[finite_mask].copy()
+
+    if frame.empty:
+        raise ValueError(f"No supervised samples remain for {instrument}")
+    return frame.sort_values("decision_time").reset_index(drop=True)
+
+
+def load_and_prepare_corpora(
+    datasets: dict[str, str | Path],
+    *,
+    horizon_bars: int,
+    min_net_return_bps: float = 0.0,
+    commission_bps: float = 0.0,
+    slippage_bps: float = 0.0,
+) -> tuple[pd.DataFrame, dict[str, str]]:
+    """Load multiple pair corpora and return one pooled chronological dataset."""
+    if not datasets:
+        raise ValueError("At least one instrument corpus is required")
+
+    frames: list[pd.DataFrame] = []
+    hashes: dict[str, str] = {}
+    for instrument, raw_path in datasets.items():
+        path = Path(raw_path)
+        frame = pd.read_csv(path)
+        prepared = prepare_instrument_corpus(
+            frame,
+            instrument=instrument.upper(),
+            horizon_bars=horizon_bars,
+            min_net_return_bps=min_net_return_bps,
+            commission_bps=commission_bps,
+            slippage_bps=slippage_bps,
+        )
+        frames.append(prepared)
+        hashes[instrument.upper()] = _sha256_file(path)
+
+    pooled = pd.concat(frames, ignore_index=True)
+    pooled = pooled.sort_values(["decision_time", "instrument"]).reset_index(drop=True)
+    return pooled, hashes
+
+
+def _build_model() -> XGBClassifier:
+    return XGBClassifier(
+        objective="binary:logistic",
+        eval_metric="logloss",
+        n_estimators=600,
+        learning_rate=0.025,
+        max_depth=4,
+        min_child_weight=3.0,
+        subsample=0.85,
+        colsample_bytree=0.8,
+        reg_alpha=0.05,
+        reg_lambda=1.2,
+        random_state=42,
+        n_jobs=1,
+        tree_method="hist",
+        early_stopping_rounds=50,
+    )
+
+
+def _trade_metrics(predictions: pd.DataFrame) -> dict[str, Any]:
+    active = predictions[predictions["active_trade"]].copy()
+    if active.empty:
+        return {
+            "trade_or_period_count": 0,
+            "total_return": 0.0,
+            "average_net_return": 0.0,
+            "median_net_return": 0.0,
+            "win_rate": 0.0,
+            "profit_factor": None,
+            "sharpe_ratio": None,
+            "sortino_ratio": None,
+            "max_drawdown": 0.0,
+        }
+
+    start = active["decision_time"].min()
+    end = active["decision_time"].max()
+    span_years = max((end - start).total_seconds() / (365.25 * 24 * 3600), 1.0 / 365.25)
+    trades_per_year = max(float(len(active)) / span_years, 1.0)
+    return compute_backtest_metrics(
+        active["selected_net_return"].to_numpy(dtype=float),
+        annualization_factor=trades_per_year,
+    )
+
+
+def _summarize_predictions(predictions: pd.DataFrame) -> dict[str, Any]:
+    classification = compute_classification_metrics(
+        predictions[TARGET_COLUMN].to_numpy(dtype=int),
+        predictions["positive_probability"].to_numpy(dtype=float),
+    )
+    return {
+        "classification": classification,
+        "trading": _trade_metrics(predictions),
+        "rows": int(len(predictions)),
+        "active_trades": int(predictions["active_trade"].sum()),
+        "average_spread_bps": float(predictions["m1_spread_bps"].mean()),
+        "median_spread_bps": float(predictions["m1_spread_bps"].median()),
+    }
+
+
+def run_pooled_walk_forward(
+    dataset: pd.DataFrame,
+    *,
+    horizon_bars: int,
+    confidence_threshold: float = 0.60,
+    min_train_periods: int | None = None,
+    validation_periods: int | None = None,
+    purge_periods: int | None = None,
+    embargo_periods: int | None = None,
+    max_splits: int = 5,
+) -> dict[str, Any]:
+    """Run expanding pooled walk-forward evaluation and return detailed metrics."""
+    if not 0.5 <= confidence_threshold < 1.0:
+        raise ValueError("confidence_threshold must be in [0.5, 1.0)")
+    if dataset[TARGET_COLUMN].nunique() < 2:
+        raise ValueError("Pooled dataset must contain both directional classes")
+
+    unique_periods = dataset["decision_time"].nunique()
+    min_train = min_train_periods or max(250, int(unique_periods * 0.60))
+    validation = validation_periods or max(100, int(unique_periods * 0.07))
+    purge = horizon_bars if purge_periods is None else purge_periods
+    embargo = horizon_bars if embargo_periods is None else embargo_periods
+
+    splits = purged_walk_forward_time_splits(
+        dataset,
+        time_column="decision_time",
+        min_train_periods=min_train,
+        validation_periods=validation,
+        purge_periods=purge,
+        embargo_periods=embargo,
+        max_splits=max_splits,
+    )
+
+    fold_reports: list[dict[str, Any]] = []
+    prediction_frames: list[pd.DataFrame] = []
+
+    for fold_index, (train, validation_frame) in enumerate(splits, start=1):
+        if train[TARGET_COLUMN].nunique() < 2:
+            raise ValueError(f"Fold {fold_index} training data contains one class")
+        if validation_frame[TARGET_COLUMN].nunique() < 2:
+            raise ValueError(f"Fold {fold_index} validation data contains one class")
+
+        model = _build_model()
+        model.fit(
+            train[MULTITIMEFRAME_FEATURE_COLUMNS],
+            train[TARGET_COLUMN].astype(int),
+            eval_set=[
+                (
+                    validation_frame[MULTITIMEFRAME_FEATURE_COLUMNS],
+                    validation_frame[TARGET_COLUMN].astype(int),
+                )
+            ],
+            verbose=False,
+        )
+
+        probabilities = model.predict_proba(
+            validation_frame[MULTITIMEFRAME_FEATURE_COLUMNS]
+        )[:, 1]
+        predictions = validation_frame[
+            [
+                "decision_time",
+                "instrument",
+                TARGET_COLUMN,
+                LONG_NET_RETURN_COLUMN,
+                SHORT_NET_RETURN_COLUMN,
+                "m1_spread_bps",
+            ]
+        ].copy()
+        predictions["positive_probability"] = probabilities
+        predictions["predicted_long"] = probabilities >= 0.5
+        predictions["confidence"] = np.maximum(probabilities, 1.0 - probabilities)
+        predictions["active_trade"] = predictions["confidence"] >= confidence_threshold
+        predictions["selected_net_return"] = np.where(
+            predictions["predicted_long"],
+            predictions[LONG_NET_RETURN_COLUMN],
+            predictions[SHORT_NET_RETURN_COLUMN],
+        )
+        predictions["fold"] = fold_index
+        prediction_frames.append(predictions)
+
+        by_instrument = {
+            instrument: _summarize_predictions(group)
+            for instrument, group in predictions.groupby("instrument", sort=True)
+        }
+        fold_reports.append(
+            {
+                "fold": fold_index,
+                "train_rows": int(len(train)),
+                "validation_rows": int(len(validation_frame)),
+                "train_start": train["decision_time"].min().isoformat(),
+                "train_end": train["decision_time"].max().isoformat(),
+                "validation_start": validation_frame["decision_time"].min().isoformat(),
+                "validation_end": validation_frame["decision_time"].max().isoformat(),
+                "best_iteration": int(getattr(model, "best_iteration", -1)),
+                "aggregate": _summarize_predictions(predictions),
+                "by_instrument": by_instrument,
+            }
+        )
+
+    all_predictions = pd.concat(prediction_frames, ignore_index=True)
+    overall_by_instrument = {
+        instrument: _summarize_predictions(group)
+        for instrument, group in all_predictions.groupby("instrument", sort=True)
+    }
+    return {
+        "folds": fold_reports,
+        "overall": _summarize_predictions(all_predictions),
+        "by_instrument": overall_by_instrument,
+        "fold_count": len(fold_reports),
+        "evaluated_rows": int(len(all_predictions)),
+        "walk_forward": {
+            "unique_periods": int(unique_periods),
+            "min_train_periods": int(min_train),
+            "validation_periods": int(validation),
+            "purge_periods": int(purge),
+            "embargo_periods": int(embargo),
+            "confidence_threshold": confidence_threshold,
+        },
+    }
+
+
+def evaluate_multi_pair_corpora(
+    datasets: dict[str, str | Path],
+    *,
+    horizon_bars: int,
+    report_path: str | Path,
+    confidence_threshold: float = 0.60,
+    min_net_return_bps: float = 0.0,
+    commission_bps: float = 0.0,
+    slippage_bps: float = 0.0,
+    max_splits: int = 5,
+) -> dict[str, Any]:
+    pooled, hashes = load_and_prepare_corpora(
+        datasets,
+        horizon_bars=horizon_bars,
+        min_net_return_bps=min_net_return_bps,
+        commission_bps=commission_bps,
+        slippage_bps=slippage_bps,
+    )
+    evaluation = run_pooled_walk_forward(
+        pooled,
+        horizon_bars=horizon_bars,
+        confidence_threshold=confidence_threshold,
+        max_splits=max_splits,
+    )
+    report: dict[str, Any] = {
+        "report_version": 1,
+        "model_type": "pooled_multitimeframe_xgboost_research",
+        "instruments": sorted(datasets),
+        "feature_columns": MULTITIMEFRAME_FEATURE_COLUMNS,
+        "feature_count": len(MULTITIMEFRAME_FEATURE_COLUMNS),
+        "horizon_bars": horizon_bars,
+        "cost_model": {
+            "historical_spread": "half spread at entry + half spread at exit",
+            "commission_bps_round_trip": commission_bps,
+            "slippage_bps_round_trip": slippage_bps,
+            "minimum_net_return_bps_for_label": min_net_return_bps,
+        },
+        "dataset_sha256": hashes,
+        "governance": {
+            "lookahead_allowed": False,
+            "approved_for_staging": False,
+            "approved_for_live": False,
+            "purpose": "research walk-forward evaluation only",
+        },
+        **evaluation,
+    }
+
+    output = Path(report_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+    return {**report, "report_path": str(output)}
+
+
+def _parse_dataset_args(values: list[str]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for value in values:
+        instrument, separator, path = value.partition("=")
+        instrument = instrument.strip().upper()
+        if not separator or not path.strip():
+            raise ValueError("--dataset values must use INSTRUMENT=/path/to/corpus.csv")
+        if instrument in result:
+            raise ValueError(f"Duplicate dataset for {instrument}")
+        result[instrument] = path.strip()
+    return result
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Evaluate pooled causal MTF XGBoost with historical spread costs"
+    )
+    parser.add_argument(
+        "--dataset",
+        action="append",
+        required=True,
+        help="Repeat as INSTRUMENT=/path/to/MTF.csv",
+    )
+    parser.add_argument("--horizon-bars", type=int, default=5)
+    parser.add_argument("--confidence-threshold", type=float, default=0.60)
+    parser.add_argument("--min-net-return-bps", type=float, default=0.0)
+    parser.add_argument("--commission-bps", type=float, default=0.0)
+    parser.add_argument("--slippage-bps", type=float, default=0.0)
+    parser.add_argument("--max-splits", type=int, default=5)
+    parser.add_argument("--report", required=True)
+    args = parser.parse_args()
+
+    report = evaluate_multi_pair_corpora(
+        _parse_dataset_args(args.dataset),
+        horizon_bars=args.horizon_bars,
+        report_path=args.report,
+        confidence_threshold=args.confidence_threshold,
+        min_net_return_bps=args.min_net_return_bps,
+        commission_bps=args.commission_bps,
+        slippage_bps=args.slippage_bps,
+        max_splits=args.max_splits,
+    )
+    print(json.dumps(report, indent=2, sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()
