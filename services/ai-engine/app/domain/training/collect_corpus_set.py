@@ -52,7 +52,7 @@ def collect_corpus_set(
     broker_connection_id: str,
     instruments: Iterable[str] = DEFAULT_H1_INSTRUMENTS,
     timeframe: str = "H1",
-    target_rows: int = 10000,
+    target_rows_per_instrument: int = 10000,
     output_dir: str | Path = "data/corpus",
     page_size: int = 500,
     client: httpx.Client | None = None,
@@ -73,6 +73,10 @@ def collect_corpus_set(
 
     destination = Path(output_dir)
     destination.mkdir(parents=True, exist_ok=True)
+    manifest_path = destination / "corpus-set.manifest.json"
+    # The manifest is the completion marker. Remove any previous marker before
+    # starting so a failed refresh cannot leave a stale "complete" corpus.
+    manifest_path.unlink(missing_ok=True)
 
     owned_client = client is None
     http = client or httpx.Client(timeout=30.0)
@@ -88,7 +92,7 @@ def collect_corpus_set(
                 broker_connection_id=broker_connection_id,
                 instrument=instrument,
                 timeframe=timeframe,
-                target_rows=target_rows,
+                target_rows=target_rows_per_instrument,
                 output_path=dataset_path,
                 before=observed_now,
                 page_size=page_size,
@@ -129,7 +133,7 @@ def collect_corpus_set(
     fingerprint_payload = {
         "manifest_version": 1,
         "timeframe": timeframe.upper(),
-        "target_rows_per_instrument": target_rows,
+        "target_rows_per_instrument": target_rows_per_instrument,
         "cutoff": observed_now.isoformat(),
         "members": [
             {
@@ -143,15 +147,19 @@ def collect_corpus_set(
         ],
     }
     corpus_set_sha256 = _canonical_sha256(fingerprint_payload)
+    corpus_set_id = f"{timeframe.lower()}-{corpus_set_sha256[:16]}"
+    total_row_count = sum(int(member["row_count"]) for member in members)
 
     manifest = {
         "manifest_version": 1,
         "corpus_type": "multi_instrument_ohlcv",
+        "corpus_set_id": corpus_set_id,
         "source": "irexpro_internal_broker_ohlcv",
         "timeframe": timeframe.upper(),
         "instruments": selected,
         "instrument_count": len(selected),
-        "target_rows_per_instrument": target_rows,
+        "target_rows_per_instrument": target_rows_per_instrument,
+        "total_row_count": total_row_count,
         "cutoff": observed_now.isoformat(),
         "collected_at": observed_now.isoformat(),
         "source_account_fingerprint": next(iter(source_fingerprints)),
@@ -160,7 +168,6 @@ def collect_corpus_set(
         "corpus_set_sha256": corpus_set_sha256,
     }
 
-    manifest_path = destination / f"corpus_{timeframe.upper()}.manifest.json"
     manifest_path.write_text(
         json.dumps(manifest, indent=2, sort_keys=True),
         encoding="utf-8",
@@ -186,7 +193,7 @@ def main() -> None:
         help="Comma-separated instrument codes",
     )
     parser.add_argument("--timeframe", default="H1")
-    parser.add_argument("--target-rows", type=int, default=10000)
+    parser.add_argument("--target-rows-per-instrument", type=int, default=10000)
     parser.add_argument("--page-size", type=int, default=500)
     parser.add_argument("--output-dir", default="data/corpus")
     args = parser.parse_args()
@@ -198,7 +205,7 @@ def main() -> None:
         broker_connection_id=args.broker_connection_id,
         instruments=args.instruments.split(","),
         timeframe=args.timeframe,
-        target_rows=args.target_rows,
+        target_rows_per_instrument=args.target_rows_per_instrument,
         page_size=args.page_size,
         output_dir=args.output_dir,
     )
