@@ -415,7 +415,7 @@ export class TradingService {
   }
 
   async getActiveSession(userId: string): Promise<TradingSession | null> {
-    return this.executionService.getActiveSession(userId);
+    return this.executionService.getActiveSessionForClient(userId);
   }
 
   async getSessionById(userId: string, sessionId: string): Promise<TradingSession | null> {

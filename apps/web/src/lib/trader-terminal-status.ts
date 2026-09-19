@@ -142,56 +142,81 @@ function isRiskStatus(value: unknown): value is RiskStatusView {
   );
 }
 
-function isTradingSession(value: unknown): value is TradingSessionView {
-  if (!isRecord(value)) return false;
-  return (
-    typeof value.id === 'string' &&
-    typeof value.brokerConnectionId === 'string' &&
-    isExecutionMode(value.executionMode) &&
-    typeof value.authorityGeneration === 'number' &&
-    Number.isInteger(value.authorityGeneration) &&
-    value.authorityGeneration >= 1 &&
-    isTradingSessionStatus(value.status) &&
-    typeof value.startedAt === 'string'
-  );
-}
-
-/**
- * Guard the GET /trading/sessions/active payload.
- *
- * The API returns the session DTO DIRECTLY (bare object) — null when no
- * session is active. Any other shape fails CLOSED: the cockpit would
- * rather show a contract error than trust an unknown shape.
- */
-function normalizeActiveTradingSessionPayload(
-  value: unknown,
-): { known: true; session: TradingSessionView | null } | null {
-  if (value === null) {
-    return { known: true, session: null };
+function normalizeAuthorityGeneration(value: unknown): number | null {
+  if (typeof value === 'number') {
+    return Number.isSafeInteger(value) && value >= 1 ? value : null;
   }
 
-  if (isTradingSession(value)) {
-    return { known: true, session: value };
-  }
-
-  // Rolling-deploy compatibility: older/shared-client documentation and some
-  // intermediate builds used a { session } envelope while the current API
-  // returns the session DTO directly. Accept either transport shape, but only
-  // after validating the exact same authoritative session fields. Unknown
-  // shapes still fail closed.
-  if (isRecord(value) && Object.prototype.hasOwnProperty.call(value, 'session')) {
-    const nested = value.session;
-    if (nested === null) {
-      return { known: true, session: null };
-    }
-    if (isTradingSession(nested)) {
-      return { known: true, session: nested };
-    }
+  // Some JSON/database transport layers serialize integer columns as strings.
+  // Accept only a canonical positive integer string and normalize it before the
+  // value reaches execution-authority UI logic.
+  if (typeof value === 'string' && /^[1-9]\d*$/.test(value)) {
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) ? parsed : null;
   }
 
   return null;
 }
 
+function normalizeTradingSession(value: unknown): TradingSessionView | null {
+  if (!isRecord(value)) return null;
+
+  const authorityGeneration = normalizeAuthorityGeneration(value.authorityGeneration);
+  if (
+    typeof value.id !== 'string' ||
+    typeof value.brokerConnectionId !== 'string' ||
+    !isExecutionMode(value.executionMode) ||
+    authorityGeneration === null ||
+    !isTradingSessionStatus(value.status) ||
+    typeof value.startedAt !== 'string'
+  ) {
+    return null;
+  }
+
+  return {
+    id: value.id,
+    brokerConnectionId: value.brokerConnectionId,
+    executionMode: value.executionMode,
+    authorityGeneration,
+    status: value.status,
+    startedAt: value.startedAt,
+  };
+}
+
+/**
+ * Normalize GET /trading/sessions/active without weakening authority checks.
+ *
+ * The canonical API returns a bare session DTO (or null). During rolling
+ * deployments/proxy transitions we also tolerate { session } and generic
+ * { data } JSON envelopes. Only those transport wrappers are tolerated; the
+ * inner session must still pass the exact authority-field validation above.
+ * Unknown shapes continue to fail closed.
+ */
+function normalizeActiveTradingSessionPayload(
+  value: unknown,
+  depth = 0,
+): { known: true; session: TradingSessionView | null } | null {
+  if (depth > 2) return null;
+
+  if (value === null) {
+    return { known: true, session: null };
+  }
+
+  const direct = normalizeTradingSession(value);
+  if (direct) {
+    return { known: true, session: direct };
+  }
+
+  if (!isRecord(value)) return null;
+
+  for (const key of ['session', 'data'] as const) {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+    const nested = normalizeActiveTradingSessionPayload(value[key], depth + 1);
+    if (nested) return nested;
+  }
+
+  return null;
+}
 function normalizeTerminalBroker(value: unknown): TerminalBrokerView | null {
   if (!isRecord(value)) return null;
 

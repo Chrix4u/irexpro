@@ -161,6 +161,7 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       startSession: jest.fn().mockResolvedValue(mockSession()),
       endSession: jest.fn().mockResolvedValue(undefined),
       getActiveSession: jest.fn().mockResolvedValue(mockSession()),
+      getActiveSessionForClient: jest.fn().mockResolvedValue(mockSession()),
       findSessionById: jest.fn().mockResolvedValue(mockSession()),
       changeExecutionMode: jest
         .fn()
@@ -807,13 +808,15 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
   });
 
   describe('getActiveSession() + getSessionById()', () => {
-    it('returns the active session', async () => {
+    it('returns the projected browser active session', async () => {
       const session = await service.getActiveSession('user-1');
       expect(session?.id).toBe('session-1');
+      expect(executionService.getActiveSessionForClient).toHaveBeenCalledWith('user-1');
+      expect(executionService.getActiveSession).not.toHaveBeenCalled();
     });
 
     it('returns null when no session', async () => {
-      executionService.getActiveSession.mockResolvedValue(null);
+      executionService.getActiveSessionForClient.mockResolvedValue(null);
       const session = await service.getActiveSession('user-1');
       expect(session).toBeNull();
     });

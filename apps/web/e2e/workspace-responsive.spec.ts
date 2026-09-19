@@ -38,6 +38,20 @@ test.describe('Responsive workspace refresh', () => {
         await expect(sidebar).toBeVisible();
       }
 
+      if (route.path === '/onboarding/broker' && viewport.width > 700) {
+        await expect(page.getByTestId('broker-onboarding-workspace')).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'Existing connections' })).toBeVisible();
+        const connectNew = page.getByRole('heading', { name: 'Connect a new broker' });
+        await expect(connectNew).toBeVisible();
+        await connectNew.scrollIntoViewIfNeeded();
+        const connectNewBox = await connectNew.boundingBox();
+        expect(connectNewBox).not.toBeNull();
+        if (connectNewBox) {
+          expect(connectNewBox.y).toBeGreaterThanOrEqual(0);
+          expect(connectNewBox.y + connectNewBox.height).toBeLessThanOrEqual(viewport.height + 1);
+        }
+      }
+
       const visibleButtons = page.locator('a.btn:visible, button.btn:visible');
       const buttonCount = await visibleButtons.count();
       for (let index = 0; index < buttonCount; index += 1) {

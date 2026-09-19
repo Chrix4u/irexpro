@@ -1192,6 +1192,53 @@ describe('ExecutionService', () => {
 
   // ─── Session management (Round 5 — session is the authoritative target) ───
 
+  describe('getActiveSessionForClient()', () => {
+    it('reads only browser-authority fields with deterministic active-session ordering', async () => {
+      const projectedSession = {
+        id: 'session-1',
+        brokerConnectionId: 'conn-1',
+        executionMode: ExecutionMode.PAPER_ONLY,
+        authorityGeneration: 3,
+        status: TradingSessionStatus.ACTIVE,
+        startedAt: new Date('2026-09-18T12:00:00.000Z'),
+        endedAt: null,
+        createdAt: new Date('2026-09-18T12:00:00.000Z'),
+        updatedAt: new Date('2026-09-18T12:00:00.000Z'),
+      } as TradingSession;
+
+      const qb = {
+        select: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        addOrderBy: jest.fn().mockReturnThis(),
+        getOne: jest.fn().mockResolvedValue(projectedSession),
+      };
+
+      sessionRepo.createQueryBuilder.mockReturnValue(qb as never);
+
+      await expect(service.getActiveSessionForClient('user-1')).resolves.toBe(projectedSession);
+      expect(sessionRepo.createQueryBuilder).toHaveBeenCalledWith('session');
+      expect(qb.select).toHaveBeenCalledWith([
+        'session.id',
+        'session.brokerConnectionId',
+        'session.executionMode',
+        'session.authorityGeneration',
+        'session.status',
+        'session.startedAt',
+        'session.endedAt',
+        'session.createdAt',
+        'session.updatedAt',
+      ]);
+      expect(qb.where).toHaveBeenCalledWith('session.userId = :userId', { userId: 'user-1' });
+      expect(qb.andWhere).toHaveBeenCalledWith('session.status = :status', {
+        status: TradingSessionStatus.ACTIVE,
+      });
+      expect(qb.orderBy).toHaveBeenCalledWith('session.authorityGeneration', 'DESC');
+      expect(qb.addOrderBy).toHaveBeenCalledWith('session.startedAt', 'DESC');
+    });
+  });
+
   describe('startSession()', () => {
     it('creates new session with executionMode + authorityGeneration 1 when none exists', async () => {
       const created = await service.startSession('user-1', 'conn-1', '10000.00');
