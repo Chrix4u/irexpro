@@ -1,0 +1,158 @@
+name: Staging PostgreSQL Diagnostics
+
+on:
+  push:
+    branches:
+      - 'ops/staging-postgres-diagnostics'
+    paths:
+      - '.github/workflows/staging-postgres-diagnostics.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-postgres-diagnostics
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    name: Read-only staging PostgreSQL diagnostics
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: staging
+
+    env:
+      STAGING_SSH_HOST: vps.lightworldtech.com
+      STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
+      STAGING_SSH_USER: ${{ vars.STAGING_SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+
+    steps:
+      - name: Validate SSH configuration
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$STAGING_SSH_HOST"
+          test -n "$STAGING_SSH_PORT"
+          test -n "$STAGING_SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          [[ "$STAGING_SSH_PORT" =~ ^[0-9]+$ ]]
+
+      - name: Configure pinned SSH identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Collect read-only PostgreSQL diagnostics
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh \
+            -i "$HOME/.ssh/irexpro_staging" \
+            -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            'bash -s' <<'REMOTE'
+          set -u
+
+          echo '=== timestamp ==='
+          date -u
+          echo
+
+          echo '=== uptime/load ==='
+          uptime || true
+          echo
+
+          echo '=== memory ==='
+          free -h || true
+          echo
+
+          echo '=== root/postgres filesystem ==='
+          df -hT / /var/lib/pgsql /tmp 2>/dev/null || df -hT /
+          echo
+          df -i / /var/lib/pgsql /tmp 2>/dev/null || df -i /
+          echo
+
+          echo '=== postgres services ==='
+          systemctl list-units --type=service --all --no-legend 'postgresql*' || true
+          echo
+
+          echo '=== postgres service status ==='
+          while read -r unit _; do
+            [[ -n "$unit" ]] || continue
+            systemctl status "$unit" --no-pager -l || true
+          done < <(systemctl list-units --type=service --all --no-legend 'postgresql*' 2>/dev/null)
+          echo
+
+          echo '=== postgres processes ==='
+          ps -eo pid,ppid,stat,etimes,%cpu,%mem,cmd | grep -E '[p]ostgres|[p]ostmaster' || true
+          echo
+
+          echo '=== listeners ==='
+          ss -ltnp 2>/dev/null | grep -E '(:5432|postgres)' || true
+          echo
+
+          echo '=== pg_isready ==='
+          if command -v pg_isready >/dev/null 2>&1; then
+            pg_isready -h 127.0.0.1 -p 5432 || true
+          elif [[ -x /usr/pgsql-18/bin/pg_isready ]]; then
+            /usr/pgsql-18/bin/pg_isready -h 127.0.0.1 -p 5432 || true
+          else
+            echo 'pg_isready not found'
+          fi
+          echo
+
+          echo '=== local postgres read-only probe ==='
+          if command -v psql >/dev/null 2>&1; then
+            sudo -u postgres psql -X -d postgres -Atqc "select current_timestamp, pg_is_in_recovery(), pg_postmaster_start_time();" || true
+          elif [[ -x /usr/pgsql-18/bin/psql ]]; then
+            sudo -u postgres /usr/pgsql-18/bin/psql -X -d postgres -Atqc "select current_timestamp, pg_is_in_recovery(), pg_postmaster_start_time();" || true
+          else
+            echo 'psql not found'
+          fi
+          echo
+
+          echo '=== cluster state ==='
+          pgdata="$(ps -eo args | sed -n 's/.*[p]ostgres .* -D \([^ ]*\).*/\1/p' | head -n1)"
+          if [[ -n "$pgdata" ]]; then
+            echo "PGDATA=$pgdata"
+            if command -v pg_controldata >/dev/null 2>&1; then
+              sudo -u postgres pg_controldata "$pgdata" 2>/dev/null | grep -E 'Database cluster state|Latest checkpoint|Time of latest checkpoint|Minimum recovery ending location|Min recovery ending loc' || true
+            elif [[ -x /usr/pgsql-18/bin/pg_controldata ]]; then
+              sudo -u postgres /usr/pgsql-18/bin/pg_controldata "$pgdata" 2>/dev/null | grep -E 'Database cluster state|Latest checkpoint|Time of latest checkpoint|Minimum recovery ending location|Min recovery ending loc' || true
+            fi
+          else
+            echo 'Could not infer PGDATA from process arguments'
+          fi
+          echo
+
+          echo '=== recent postgres journal ==='
+          units="$(systemctl list-units --type=service --all --no-legend 'postgresql*' 2>/dev/null | awk '{print $1}')"
+          if [[ -n "$units" ]]; then
+            for unit in $units; do
+              echo "--- $unit ---"
+              journalctl -u "$unit" --since '-45 min' --no-pager -n 250 || true
+            done
+          else
+            echo 'No postgresql* systemd unit found'
+          fi
+          echo
+
+          echo '=== recent kernel memory/storage warnings ==='
+          journalctl -k --since '-45 min' --no-pager 2>/dev/null | grep -Ei 'out of memory|oom|killed process|i/o error|ext4|xfs|nvme|blk_update|no space left' | tail -n 120 || true
+          REMOTE
+
+      - name: Remove ephemeral SSH material
+        if: ${{ always() }}
+        shell: bash
+        run: rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
