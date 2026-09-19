@@ -60,7 +60,7 @@ def test_collect_historical_corpus_pages_backwards_and_deduplicates(tmp_path: Pa
         broker_connection_id="00000000-0000-0000-0000-000000000002",
         instrument="EURUSD",
         timeframe="H1",
-        target_rows=300,
+        target_rows_per_instrument=300,
         page_size=200,
         output_path=output,
         client=client,
@@ -175,7 +175,7 @@ def test_collect_corpus_set_builds_complete_six_pair_manifest(tmp_path: Path):
         internal_api_key="test-internal-key",
         user_id="00000000-0000-0000-0000-000000000001",
         broker_connection_id="00000000-0000-0000-0000-000000000002",
-        target_rows=300,
+        target_rows_per_instrument=300,
         page_size=200,
         output_dir=tmp_path / "corpus",
         client=client,
@@ -184,6 +184,8 @@ def test_collect_corpus_set_builds_complete_six_pair_manifest(tmp_path: Path):
 
     assert result["complete"] is True
     assert result["instrument_count"] == 6
+    assert result["total_row_count"] == 1800
+    assert result["corpus_set_id"].startswith("h1-")
     assert result["instruments"] == list(DEFAULT_H1_INSTRUMENTS)
     assert result["cutoff"] == cutoff.isoformat()
     assert result["corpus_set_sha256"]
@@ -247,7 +249,7 @@ def test_collect_corpus_set_does_not_publish_complete_manifest_when_pair_fails(t
             internal_api_key="test-internal-key",
             user_id="00000000-0000-0000-0000-000000000001",
             broker_connection_id="00000000-0000-0000-0000-000000000002",
-            target_rows=300,
+            target_rows_per_instrument=300,
             page_size=200,
             output_dir=destination,
             client=client,
@@ -258,4 +260,4 @@ def test_collect_corpus_set_does_not_publish_complete_manifest_when_pair_fails(t
     else:
         raise AssertionError("Expected corpus collection to fail for incomplete USDJPY history")
 
-    assert not (destination / "corpus_H1.manifest.json").exists()
+    assert not (destination / "corpus-set.manifest.json").exists()
