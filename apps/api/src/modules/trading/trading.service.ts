@@ -463,6 +463,14 @@ export class TradingService {
         last_reason: 'model_not_approved_for_live',
         last_confidence_score: null,
         confidence_threshold: null,
+        last_model_evaluated_at: null,
+        model_version: null,
+        model_mode: null,
+        model_loaded: false,
+        market_data_cache_status: null,
+        market_data_cache_age_seconds: null,
+        latest_market_data_at: null,
+        market_data_age_seconds: null,
         last_publish_failed: false,
       };
     }
