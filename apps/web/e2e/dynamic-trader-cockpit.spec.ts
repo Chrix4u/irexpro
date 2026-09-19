@@ -96,6 +96,8 @@ async function gotoAiTrader(
     riskContractMismatch?: boolean;
     sessionContractMismatch?: boolean;
     sessionEnvelope?: boolean;
+    sessionDataEnvelope?: boolean;
+    authorityGenerationAsString?: boolean;
     failAllocationRead?: boolean;
   } = {},
 ) {
@@ -149,10 +151,11 @@ async function gotoAiTrader(
         id: '44444444-4444-4444-8444-444444444444',
         brokerConnectionId: mockBrokerConnections[0].id,
         executionMode: 'PAPER_ONLY',
-        authorityGeneration: 1,
+        authorityGeneration: options.authorityGenerationAsString ? '1' : 1,
         status: 'ACTIVE',
         startedAt: '2026-08-31T00:30:00.000Z',
       };
+      if (options.sessionDataEnvelope) return fulfill(200, { data: session });
       return fulfill(200, options.sessionEnvelope ? { session } : session);
     }
     if (apiPath === 'broker/connections') {
@@ -252,6 +255,19 @@ test.describe('AI Trader novice workflow', () => {
 
   test('accepts the active-session envelope during rolling deployments', async ({ page }) => {
     await gotoAiTrader(page, { sessionEnvelope: true });
+
+    await expect(page.getByRole('button', { name: 'Stop AI Trading' })).toBeEnabled();
+    await expect(page.getByText(/AI session status could not be verified/i)).toHaveCount(0);
+    await expect(page.getByText('ACTIVE', { exact: true })).toBeVisible();
+
+    assertNoExternalRequests(page);
+  });
+
+  test('accepts verified data-wrapped sessions and integer-string authority generation', async ({ page }) => {
+    await gotoAiTrader(page, {
+      sessionDataEnvelope: true,
+      authorityGenerationAsString: true,
+    });
 
     await expect(page.getByRole('button', { name: 'Stop AI Trading' })).toBeEnabled();
     await expect(page.getByText(/AI session status could not be verified/i)).toHaveCount(0);
