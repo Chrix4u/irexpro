@@ -80,6 +80,16 @@ export interface CreateApiClientOptions {
   includeCredentials?: boolean;
   /** Optional token getter — used to attach Authorization: Bearer <token>. */
   getAccessToken?: () => string | null | undefined;
+  /**
+   * Browser/session recovery hook invoked after an authenticated request returns
+   * 401. The shared client single-flights concurrent recoveries and retries the
+   * original request exactly once with the newly supplied access token.
+   *
+   * Native/mobile callers normally leave this undefined and manage refresh
+   * tokens explicitly. Browser callers should rotate their HttpOnly refresh
+   * cookie through /auth/refresh and return the new access token.
+   */
+  onUnauthorized?: () => Promise<string | null | undefined>;
 }
 
 export interface ApiClient {
@@ -296,7 +306,7 @@ export class ApiClientError extends Error {
  * platform-agnostic and never hardcodes a URL.
  */
 export function createApiClient(options: CreateApiClientOptions): ApiClient {
-  const { baseUrl, includeCredentials = false, getAccessToken } = options;
+  const { baseUrl, includeCredentials = false, getAccessToken, onUnauthorized } = options;
 
   if (!baseUrl) {
     throw new Error(
@@ -304,7 +314,33 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
     );
   }
 
-  async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  let unauthorizedRecovery: Promise<string | null | undefined> | null = null;
+
+  function isRefreshEligible(path: string, hadBearer: boolean): boolean {
+    if (!hadBearer || !onUnauthorized) return false;
+    return !(
+      path.startsWith('/auth/login') ||
+      path.startsWith('/auth/register') ||
+      path.startsWith('/auth/refresh') ||
+      path.startsWith('/auth/browser-session')
+    );
+  }
+
+  async function recoverUnauthorized(): Promise<string | null | undefined> {
+    if (!onUnauthorized) return null;
+    if (!unauthorizedRecovery) {
+      unauthorizedRecovery = onUnauthorized().finally(() => {
+        unauthorizedRecovery = null;
+      });
+    }
+    return unauthorizedRecovery;
+  }
+
+  async function request<T>(
+    path: string,
+    init?: RequestInit,
+    allowUnauthorizedRecovery = true,
+  ): Promise<T> {
     const url = `${baseUrl}${path}`;
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -316,6 +352,7 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
     if (token && !headers['Authorization']) {
       headers['Authorization'] = `Bearer ${token}`;
     }
+    const hadBearer = typeof headers['Authorization'] === 'string';
 
     let res: Response;
     try {
@@ -329,6 +366,17 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
         0,
         `Network error contacting API: ${(err as Error).message}`,
       );
+    }
+
+    if (
+      res.status === 401 &&
+      allowUnauthorizedRecovery &&
+      isRefreshEligible(path, hadBearer)
+    ) {
+      const recoveredToken = await recoverUnauthorized().catch(() => null);
+      if (recoveredToken) {
+        return request<T>(path, init, false);
+      }
     }
 
     if (!res.ok) {
