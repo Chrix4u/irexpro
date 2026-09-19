@@ -1906,6 +1906,23 @@ export class ExecutionService {
       .getOne();
   }
 
+  async listActiveSessionsForScheduler(): Promise<TradingSession[]> {
+    return this.sessionRepo
+      .createQueryBuilder('session')
+      .select([
+        'session.id',
+        'session.userId',
+        'session.brokerConnectionId',
+        'session.executionMode',
+        'session.authorityGeneration',
+        'session.status',
+        'session.startedAt',
+      ])
+      .where('session.status = :status', { status: TradingSessionStatus.ACTIVE })
+      .orderBy('session.startedAt', 'ASC')
+      .getMany();
+  }
+
   async findSessionById(sessionId: string): Promise<TradingSession | null> {
     return this.sessionRepo.findOne({ where: { id: sessionId } });
   }
