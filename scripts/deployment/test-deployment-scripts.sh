@@ -53,7 +53,7 @@ make_fixture() {
   local remote="$root/remotes/Chrix4u/irexpro.git"
   local repo="$root/repo"
 
-  mkdir -p "$(dirname "$remote")" "$repo/scripts/deployment"
+  mkdir -p "$(dirname "$remote")" "$repo/scripts/deployment" "$repo/services/ai-engine/.venv/bin" "$repo/services/ai-engine/app"
   git init --quiet --bare --initial-branch=main "$remote"
   git -C "$repo" init --quiet --initial-branch=main
   git -C "$repo" config user.email 'ci@example.invalid'
@@ -62,6 +62,14 @@ make_fixture() {
   cp "$SCRIPT_DIR/deploy-staging.sh" "$repo/scripts/deployment/deploy-staging.sh"
   cp "$SCRIPT_DIR/rollback-staging.sh" "$repo/scripts/deployment/rollback-staging.sh"
   printf '{"packageManager":"%s"}\n' "$ROOT_PACKAGE_MANAGER" > "$repo/package.json"
+  cat > "$repo/services/ai-engine/.venv/bin/python" <<'PYSHIM'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+printf 'python %s\n' "$*" >> "${COMMAND_LOG:-/dev/null}"
+exit 0
+PYSHIM
+  chmod 700 "$repo/services/ai-engine/.venv/bin/python"
+  printf 'fixture\n' > "$repo/services/ai-engine/app/__init__.py"
   printf 'prior\n' > "$repo/release-marker.txt"
   git -C "$repo" add .
   git -C "$repo" commit --quiet -m 'fixture: prior verified release'
@@ -162,7 +170,7 @@ if [[ "$url" == *ready* ]]; then
 elif [[ "$url" == *live* ]]; then
   printf '{"status":"alive"}'
 elif [[ "$url" == *ai* ]]; then
-  printf '{"signal_mode":"paper"}'
+  printf '{"status":"ok","signal_mode":"paper","scheduler_enabled":true,"scheduler_running":false}'
 else
   printf '{"status":"ok"}'
 fi
@@ -180,7 +188,10 @@ run_deploy() {
     COMMAND_LOG="$COMMAND_LOG" \
     STAGING_ROOT="$FIXTURE_REPO" \
     API_PM2_NAME='irexpro-api-staging' \
+    AI_PM2_NAME='irexpro-ai-staging' \
     WEB_PM2_NAME='irexpro-web-staging' \
+    AI_ENGINE_SCHEDULER_ENABLED='true' \
+    AI_SCHEDULER_ENABLED='true' \
     ADMIN_PM2_NAME='irexpro-admin-staging' \
     LOCAL_API_LIVE_URL='http://local.test/api/live' \
     LOCAL_API_READY_URL='http://local.test/api/ready' \
@@ -331,9 +342,6 @@ web_exhausted_admin_attempts="$(grep -F -c 'http://local.test/admin' "$COMMAND_L
 if grep -q 'https://public.test' "$COMMAND_LOG"; then
   fail 'Public smoke must not run after exhausted local web readiness retries.'
 fi
-if grep -q 'ai/health' "$COMMAND_LOG"; then
-  fail 'AI paper-mode observation must not run after exhausted local web readiness retries.'
-fi
 
 # Scenario: repeated Admin connection refusals through the maximum attempt
 # count must fail the deployment at local-smoke, with the web smoke already
@@ -353,9 +361,6 @@ admin_exhausted_web_attempts="$(grep -F -c 'http://local.test/web' "$COMMAND_LOG
 if grep -q 'https://public.test' "$COMMAND_LOG"; then
   fail 'Public smoke must not run after exhausted local admin readiness retries.'
 fi
-if grep -q 'ai/health' "$COMMAND_LOG"; then
-  fail 'AI paper-mode observation must not run after exhausted local admin readiness retries.'
-fi
 
 make_fixture 'successful-deploy'
 git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
@@ -366,6 +371,8 @@ grep -q '@irexpro/api build' "$COMMAND_LOG" || fail 'API build missing.'
 grep -q '@irexpro/web build' "$COMMAND_LOG" || fail 'Web build missing.'
 grep -q '@irexpro/admin build' "$COMMAND_LOG" || fail 'Admin build missing.'
 grep -q '@irexpro/api migration:run' "$COMMAND_LOG" || fail 'Database migration missing.'
+grep -q '^pm2 restart irexpro-ai-staging ' "$COMMAND_LOG" || fail 'AI engine restart missing.'
+grep -q 'ai/health' "$COMMAND_LOG" || fail 'AI scheduler readiness check missing.'
 
 make_fixture 'rollback-verification'
 rollback_output="$(run_rollback "$FIXTURE_CANDIDATE_SHA" "$FIXTURE_PRIOR_SHA")"
