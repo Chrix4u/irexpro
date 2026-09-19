@@ -85,8 +85,8 @@ describe('TradingController frontend-safe session response', () => {
   it('sanitizes the current active session', async () => {
     const { controller } = buildController();
     const response = await controller.getActive(USER_ID);
-    expect(response).not.toBeNull();
-    expectSafeSession(response!);
+    expect(response.session).not.toBeNull();
+    expectSafeSession(response.session!);
   });
 
   it('returns null when there is no active session', async () => {
@@ -95,7 +95,7 @@ describe('TradingController frontend-safe session response', () => {
     };
     const controller = new TradingController(tradingService as unknown as TradingService);
 
-    await expect(controller.getActive(USER_ID)).resolves.toBeNull();
+    await expect(controller.getActive(USER_ID)).resolves.toEqual({ session: null });
   });
 
   it('sanitizes a session returned by id', async () => {
