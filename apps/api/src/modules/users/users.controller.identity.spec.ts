@@ -2,7 +2,6 @@ import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
 import { OnboardingService } from './onboarding.service';
 import { UpdateMyProfileDto } from './dto/update-my-profile.dto';
-import { TradingExperienceLevel } from './entities/user-profile.entity';
 import { AuditService } from '../audit/audit.service';
 
 /**
@@ -20,6 +19,7 @@ describe('UsersController (Hotfix — UUID identity contract)', () => {
   beforeEach(() => {
     usersService = {
       findById: jest.fn().mockResolvedValue({ id: USER_ID }),
+      getMyProfileView: jest.fn().mockResolvedValue({ id: USER_ID }),
       updateMyProfile: jest.fn().mockResolvedValue({ id: USER_ID }),
       findAll: jest.fn().mockResolvedValue({ users: [], total: 0 }),
     };
@@ -43,19 +43,19 @@ describe('UsersController (Hotfix — UUID identity contract)', () => {
     );
   });
 
-  it('getMe passes UUID string to findById', async () => {
+  it('getMe passes UUID string to the privacy-safe profile projection', async () => {
     await controller.getMe(USER_ID);
-    expect(usersService.findById).toHaveBeenCalledWith(USER_ID);
-    expect(typeof usersService.findById.mock.calls[0][0]).toBe('string');
+    expect(usersService.getMyProfileView).toHaveBeenCalledWith(USER_ID);
+    expect(typeof usersService.getMyProfileView.mock.calls[0][0]).toBe('string');
   });
 
   it('updateMe passes UUID string to updateMyProfile', async () => {
     const dto: UpdateMyProfileDto = {
       firstName: 'John',
-      tradingExperienceLevel: TradingExperienceLevel.BEGINNER,
     };
     await controller.updateMe(USER_ID, dto);
     expect(usersService.updateMyProfile).toHaveBeenCalledWith(USER_ID, dto);
+    expect(usersService.getMyProfileView).toHaveBeenCalledWith(USER_ID);
     expect(typeof usersService.updateMyProfile.mock.calls[0][0]).toBe('string');
   });
 
