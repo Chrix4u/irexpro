@@ -41,6 +41,9 @@ class ScheduledSessionJob:
     active: bool = True
     last_run_at: datetime | None = None
     last_publish_failed: bool = False
+    last_decision: str | None = None
+    last_reason: str | None = None
+    last_confidence_score: float | None = None
     registered_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -195,17 +198,27 @@ class SignalScheduler:
                 job.last_run_at = datetime.now(UTC)
 
                 if not result.generated or result.signal is None:
+                    job.last_decision = "NO_TRADE"
+                    job.last_reason = result.no_signal.reason if result.no_signal else "unknown"
+                    job.last_confidence_score = (
+                        result.no_signal.confidence_score if result.no_signal else None
+                    )
                     logger.debug(
                         "No signal to publish",
                         trading_session_id=trading_session_id,
                         instrument=instrument,
-                        reason=result.no_signal.reason if result.no_signal else "unknown",
+                        reason=job.last_reason,
                     )
                     continue
 
                 await self._nestjs_client.publish_signal(result.signal)
+                job.last_decision = "SIGNAL_PUBLISHED"
+                job.last_reason = "confidence_threshold_passed"
+                job.last_confidence_score = result.signal.confidence_score
             except Exception as e:
                 job.last_publish_failed = True
+                job.last_decision = "ERROR"
+                job.last_reason = type(e).__name__
                 logger.warning(
                     "Scheduled signal generation failed",
                     trading_session_id=trading_session_id,
