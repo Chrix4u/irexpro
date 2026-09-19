@@ -1,7 +1,7 @@
 """Scheduler HTTP endpoints — internal use by NestJS only."""
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -113,6 +113,16 @@ async def session_scheduler_status(
 
     anchor = job.last_run_at or job.registered_at
     next_run_at = anchor + timedelta(seconds=job.interval_seconds)
+    market_data_age_seconds = None
+    if job.last_market_data_at is not None:
+        market_data_at = job.last_market_data_at
+        if market_data_at.tzinfo is None:
+            market_data_at = market_data_at.replace(tzinfo=UTC)
+        market_data_age_seconds = max(
+            0.0,
+            (datetime.now(UTC) - market_data_at).total_seconds(),
+        )
+
     return SessionSchedulerStatusResponse(
         enabled=scheduler.is_enabled,
         registered=True,
@@ -127,6 +137,13 @@ async def session_scheduler_status(
         last_decision=job.last_decision,
         last_reason=job.last_reason,
         last_confidence_score=job.last_confidence_score,
+        last_confidence_at=job.last_confidence_at.isoformat() if job.last_confidence_at else None,
         confidence_threshold=settings.ai_min_confidence_score,
+        model_version=job.model_version,
+        model_mode=job.model_mode,
+        model_loaded=job.model_loaded,
+        last_market_data_at=job.last_market_data_at.isoformat() if job.last_market_data_at else None,
+        market_data_age_seconds=market_data_age_seconds,
+        market_data_cache_bypassed=job.market_data_cache_bypassed,
         last_publish_failed=job.last_publish_failed,
     )
