@@ -86,6 +86,36 @@ function connectionLabel(broker: TerminalBrokerView | null): string {
   return broker.displayName || broker.brokerName;
 }
 
+interface AiAutomationRuntimeStatus {
+  enabled: boolean;
+  registered: boolean;
+  trading_session_id: string;
+  active: boolean;
+  instruments: string[];
+  timeframe: string | null;
+  interval_seconds: number | null;
+  source: string | null;
+  last_run_at: string | null;
+  next_run_at: string | null;
+  last_decision: string | null;
+  last_reason: string | null;
+  last_confidence_score: number | null;
+  confidence_threshold: number | null;
+  last_publish_failed: boolean;
+}
+
+function runtimeReasonLabel(reason: string | null | undefined): string {
+  if (!reason) return 'Waiting for first market scan';
+  const labels: Record<string, string> = {
+    confidence_below_threshold: 'Market setup did not meet the confidence threshold',
+    confidence_threshold_passed: 'Signal passed the confidence threshold and was published',
+    scheduler_integration_disabled: 'AI scheduler integration is disabled',
+    model_not_approved_for_live:
+      'Current AI model is not yet approved for live-money automation',
+  };
+  return labels[reason] ?? reason.replaceAll('_', ' ');
+}
+
 function PositionCard({ position }: { position: LivePositionRowView }) {
   return (
     <article className="ai-position-card">
@@ -165,6 +195,8 @@ export default function AiTradingPage() {
   const [error, setError] = useState<string | null>(null);
   const [allocationWarning, setAllocationWarning] = useState<string | null>(null);
   const [activityWarning, setActivityWarning] = useState<string | null>(null);
+  const [automationRuntime, setAutomationRuntime] = useState<AiAutomationRuntimeStatus | null>(null);
+  const [automationRuntimeWarning, setAutomationRuntimeWarning] = useState<string | null>(null);
 
   const initializedActivity = useRef(false);
   const seenPositionIds = useRef<Set<string>>(new Set());
@@ -241,6 +273,24 @@ export default function AiTradingPage() {
       // endpoints has a transient server-side failure.
       const status = await loadTraderTerminalStatus();
       setTerminal(status);
+
+      if (status.session) {
+        try {
+          const runtime = await api.request<AiAutomationRuntimeStatus>(
+            `/trading/sessions/${encodeURIComponent(status.session.id)}/automation-status`,
+          );
+          setAutomationRuntime(runtime);
+          setAutomationRuntimeWarning(null);
+        } catch {
+          setAutomationRuntime(null);
+          setAutomationRuntimeWarning(
+            'AI Trading is running, but the AI engine runtime status could not be verified yet.',
+          );
+        }
+      } else {
+        setAutomationRuntime(null);
+        setAutomationRuntimeWarning(null);
+      }
 
       const [executionResult, positionsResult] = await Promise.allSettled([
         loadTraderExecutionSnapshot(),
@@ -509,6 +559,7 @@ export default function AiTradingPage() {
         ))}
         {allocationWarning && <Alert variant="warning">{allocationWarning}</Alert>}
         {activityWarning && <Alert variant="warning">{activityWarning}</Alert>}
+        {automationRuntimeWarning && <Alert variant="warning">{automationRuntimeWarning}</Alert>}
 
         {loading && !terminal ? (
           <Card title="Loading AI Trader">
@@ -652,6 +703,92 @@ export default function AiTradingPage() {
                 </span>
               </Card>
             </section>
+
+            {automationOn && (
+              <section className="ai-runtime-panel" aria-label="AI engine runtime">
+                <div className="ai-runtime-panel__heading">
+                  <div>
+                    <p className="workspace-hero__eyebrow">Automation runtime</p>
+                    <h2>AI Engine Monitor</h2>
+                  </div>
+                  <Badge
+                    variant={
+                      automationRuntime?.active && automationRuntime?.registered
+                        ? 'success'
+                        : automationRuntime?.last_decision === 'BLOCKED'
+                          ? 'warning'
+                          : 'info'
+                    }
+                  >
+                    {automationRuntime?.active && automationRuntime?.registered
+                      ? 'SCANNING'
+                      : automationRuntime?.last_decision === 'BLOCKED'
+                        ? 'BLOCKED'
+                        : automationRuntime?.enabled
+                          ? 'WAITING'
+                          : 'OFFLINE'}
+                  </Badge>
+                </div>
+
+                <div className="ai-runtime-grid">
+                  <div>
+                    <span>AI engine</span>
+                    <strong>{automationRuntime?.enabled ? 'CONNECTED' : 'NOT ACTIVE'}</strong>
+                  </div>
+                  <div>
+                    <span>Signal scheduler</span>
+                    <strong>
+                      {automationRuntime?.registered && automationRuntime?.active
+                        ? 'ACTIVE'
+                        : automationRuntime?.last_decision === 'BLOCKED'
+                          ? 'BLOCKED'
+                          : 'NOT REGISTERED'}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Watching</span>
+                    <strong>
+                      {automationRuntime?.instruments?.length
+                        ? `${automationRuntime.instruments.join(' · ')}${automationRuntime.timeframe ? ` · ${automationRuntime.timeframe}` : ''}`
+                        : '—'}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Scan interval</span>
+                    <strong>
+                      {automationRuntime?.interval_seconds
+                        ? `Every ${automationRuntime.interval_seconds}s`
+                        : '—'}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Last market scan</span>
+                    <strong>{formatTimestamp(automationRuntime?.last_run_at)}</strong>
+                  </div>
+                  <div>
+                    <span>Next scan</span>
+                    <strong>{formatTimestamp(automationRuntime?.next_run_at)}</strong>
+                  </div>
+                  <div>
+                    <span>Last decision</span>
+                    <strong>{automationRuntime?.last_decision?.replaceAll('_', ' ') ?? 'WAITING'}</strong>
+                  </div>
+                  <div>
+                    <span>Confidence</span>
+                    <strong>
+                      {automationRuntime?.last_confidence_score == null
+                        ? '—'
+                        : `${Math.round(automationRuntime.last_confidence_score * 100)}% / ${Math.round((automationRuntime.confidence_threshold ?? 0) * 100)}% required`}
+                    </strong>
+                  </div>
+                </div>
+
+                <div className="ai-runtime-reason">
+                  <span>Decision explanation</span>
+                  <strong>{runtimeReasonLabel(automationRuntime?.last_reason)}</strong>
+                </div>
+              </section>
+            )}
 
             <section className="ai-trading-grid">
               <section className="ai-section ai-section--positions" aria-labelledby="open-positions-title">
