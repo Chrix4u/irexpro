@@ -106,57 +106,49 @@ export default function PortfolioRiskPage() {
               }}
             >
               <Card title="Risk Engine">
-                <div style={{ display: 'grid', gap: 'var(--space-3)' }}>
-                  <div>
+                <div className="workspace-kv-list">
+                  <div className="workspace-kv-row">
                     <span className="text-sm muted">Kill switch</span>
-                    <div className="mt-1">
-                      <Badge variant={snapshot.engine.killSwitchActive ? 'error' : 'success'}>
-                        {snapshot.engine.killSwitchActive ? 'Active' : 'Clear'}
-                      </Badge>
-                    </div>
+                    <Badge variant={snapshot.engine.killSwitchActive ? 'error' : 'success'}>
+                      {snapshot.engine.killSwitchActive ? 'Active' : 'Clear'}
+                    </Badge>
                   </div>
-                  <div>
+                  <div className="workspace-kv-row">
                     <span className="text-sm muted">Broker gate</span>
-                    <div className="mt-1">
-                      <Badge variant={snapshot.engine.brokerConnected ? 'success' : 'warning'}>
-                        {snapshot.engine.brokerConnected ? 'Connected' : 'Unavailable'}
-                      </Badge>
-                    </div>
+                    <Badge variant={snapshot.engine.brokerConnected ? 'success' : 'warning'}>
+                      {snapshot.engine.brokerConnected ? 'Connected' : 'Unavailable'}
+                    </Badge>
                   </div>
-                  <div>
+                  <div className="workspace-kv-row">
                     <span className="text-sm muted">Risk acknowledgement</span>
-                    <div className="mt-1">
-                      <Badge
-                        variant={
-                          snapshot.policy.riskAcknowledgementAccepted ? 'success' : 'warning'
-                        }
-                      >
-                        {snapshot.policy.riskAcknowledgementAccepted ? 'Accepted' : 'Required'}
-                      </Badge>
-                    </div>
+                    <Badge
+                      variant={snapshot.policy.riskAcknowledgementAccepted ? 'success' : 'warning'}
+                    >
+                      {snapshot.policy.riskAcknowledgementAccepted ? 'Accepted' : 'Required'}
+                    </Badge>
                   </div>
                 </div>
               </Card>
 
               <Card title="Execution Capacity">
-                <dl style={{ display: 'grid', gap: 'var(--space-3)' }}>
-                  <div>
+                <dl className="workspace-kv-list">
+                  <div className="workspace-kv-row">
                     <dt className="text-sm muted">Open positions</dt>
                     <dd>
                       {snapshot.execution.openPositions} / {snapshot.execution.maxOpenPositions}
                     </dd>
                   </div>
-                  <div>
+                  <div className="workspace-kv-row">
                     <dt className="text-sm muted">Open-position slots remaining</dt>
                     <dd>{snapshot.execution.openPositionSlotsRemaining}</dd>
                   </div>
-                  <div>
+                  <div className="workspace-kv-row">
                     <dt className="text-sm muted">Trades opened today</dt>
                     <dd>
                       {snapshot.execution.todayTrades} / {snapshot.execution.maxDailyTrades}
                     </dd>
                   </div>
-                  <div>
+                  <div className="workspace-kv-row">
                     <dt className="text-sm muted">Daily trade slots remaining</dt>
                     <dd>{snapshot.execution.dailyTradeSlotsRemaining}</dd>
                   </div>
@@ -165,15 +157,15 @@ export default function PortfolioRiskPage() {
 
               <Card title="Portfolio Freshness">
                 <dl style={{ display: 'grid', gap: 'var(--space-3)' }}>
-                  <div>
+                  <div className="workspace-kv-row">
                     <dt className="text-sm muted">Broker accounts</dt>
                     <dd>{snapshot.portfolio.totalAccounts}</dd>
                   </div>
-                  <div>
+                  <div className="workspace-kv-row">
                     <dt className="text-sm muted">Connected</dt>
                     <dd>{snapshot.portfolio.connectedAccounts}</dd>
                   </div>
-                  <div>
+                  <div className="workspace-kv-row">
                     <dt className="text-sm muted">Fresh / stale / unavailable</dt>
                     <dd>
                       {snapshot.portfolio.freshSnapshots} / {snapshot.portfolio.staleSnapshots} /{' '}
@@ -189,48 +181,42 @@ export default function PortfolioRiskPage() {
 
             <section className="mt-4">
               <Card title="Risk Policy">
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-                    gap: 'var(--space-4)',
-                  }}
-                >
-                  <div>
+                <div className="workspace-kv-list">
+                  <div className="workspace-kv-row">
                     <span className="text-sm muted">Trading mode</span>
-                    <div>{formatEnumLabel(snapshot.policy.allowedTradingMode)}</div>
+                    <strong>{formatEnumLabel(snapshot.policy.allowedTradingMode)}</strong>
                   </div>
-                  <div>
+                  <div className="workspace-kv-row">
                     <span className="text-sm muted">Max daily loss</span>
-                    <div>{snapshot.policy.limits.maxDailyLossPercent}%</div>
+                    <strong>{snapshot.policy.limits.maxDailyLossPercent}%</strong>
                   </div>
-                  <div>
+                  <div className="workspace-kv-row">
                     <span className="text-sm muted">Max drawdown</span>
-                    <div>{snapshot.policy.limits.maxDrawdownPercent}%</div>
+                    <strong>{snapshot.policy.limits.maxDrawdownPercent}%</strong>
                   </div>
-                  <div>
+                  <div className="workspace-kv-row">
                     <span className="text-sm muted">Max risk per trade</span>
-                    <div>{snapshot.policy.limits.maxTradeRiskPercent}%</div>
+                    <strong>{snapshot.policy.limits.maxTradeRiskPercent}%</strong>
                   </div>
-                  <div>
+                  <div className="workspace-kv-row">
                     <span className="text-sm muted">Max position size</span>
-                    <div>{snapshot.policy.limits.maxPositionSizeLot} lot</div>
+                    <strong>{snapshot.policy.limits.maxPositionSizeLot} lot</strong>
                   </div>
-                  <div>
+                  <div className="workspace-kv-row">
                     <span className="text-sm muted">Min stop-loss distance</span>
-                    <div>{snapshot.policy.limits.minStopLossPips} pips</div>
+                    <strong>{snapshot.policy.limits.minStopLossPips} pips</strong>
                   </div>
-                  <div>
+                  <div className="workspace-kv-row">
                     <span className="text-sm muted">Max leverage allowed</span>
-                    <div>{snapshot.policy.limits.maxLeverageAllowed}:1</div>
+                    <strong>{snapshot.policy.limits.maxLeverageAllowed}:1</strong>
                   </div>
-                  <div>
+                  <div className="workspace-kv-row">
                     <span className="text-sm muted">Instrument policy</span>
-                    <div>
+                    <strong>
                       {snapshot.policy.limits.allowedInstruments?.length
                         ? snapshot.policy.limits.allowedInstruments.join(', ')
                         : 'All instruments'}
-                    </div>
+                    </strong>
                   </div>
                 </div>
               </Card>

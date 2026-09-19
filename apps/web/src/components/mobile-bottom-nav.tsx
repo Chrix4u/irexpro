@@ -13,6 +13,7 @@ import {
   PlugIcon,
   LogoutIcon,
   CloseIcon,
+  UserIcon,
   type IconProps,
 } from '@/components/icons';
 
@@ -40,6 +41,7 @@ const SECONDARY_NAV: NavDestination[] = [
   { href: '/trade/portfolio', label: 'Portfolio', Icon: PortfolioIcon },
   { href: '/portfolio', label: 'Portfolio & Risk', Icon: ShieldIcon },
   { href: '/live-account', label: 'Positions & Activity', Icon: PortfolioIcon, matchPrefix: true },
+  { href: '/profile', label: 'My Profile', Icon: UserIcon },
   { href: '/onboarding/broker', label: 'Broker Account', Icon: PlugIcon },
   { href: '/security', label: 'Security', Icon: ShieldIcon },
   { href: '/payments/success', label: 'Fees & Payments', Icon: PaymentsIcon, matchPrefix: true },

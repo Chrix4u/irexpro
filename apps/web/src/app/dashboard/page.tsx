@@ -66,7 +66,7 @@ export default function DashboardPage() {
           <div className="workspace-hero__copy">
             <p className="workspace-hero__eyebrow">Trading operations overview</p>
             <h1 id="dashboard-title" className="workspace-hero__title">
-              Welcome back, {fullName.split(' ')[0]}
+              {`WELCOME BACK, ${fullName.split(' ')[0]}`.toUpperCase()}
             </h1>
             <p className="workspace-hero__description">
               Track onboarding readiness, broker connectivity, account protection and the next step in your trading workflow from one responsive overview.
@@ -209,7 +209,7 @@ function OnboardingCard({ status }: { status: OnboardingStatus }) {
       </div>
 
       {status.canStartTrading && (
-        <Link href="/trade" className="btn btn--primary btn--lg btn--block">
+        <Link href="/trade" className="btn btn--primary btn--lg btn--block readiness-card__cta">
           Open AI Trading
         </Link>
       )}
