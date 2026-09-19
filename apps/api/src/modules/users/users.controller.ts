@@ -44,7 +44,9 @@ export class UsersController {
    * Sprint 29: update the current user's profile for onboarding.
    * Uses a proper DTO with validation (no more raw Record<string, unknown>).
    * Updates BOTH User-level fields (countryCode, timezone, preferredCurrency)
-   * AND UserProfile fields (firstName, lastName, tradingExperienceLevel).
+   * AND UserProfile identity fields (firstName, lastName, dateOfBirth).
+   * Trading experience is intentionally not a user-controlled setting; risk
+   * policy and AI automation remain server-governed.
    * Audits ONBOARDING_PROFILE_UPDATED.
    */
   @Patch('users/me')
