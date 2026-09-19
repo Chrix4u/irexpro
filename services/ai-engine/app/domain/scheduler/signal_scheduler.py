@@ -44,6 +44,13 @@ class ScheduledSessionJob:
     last_decision: str | None = None
     last_reason: str | None = None
     last_confidence_score: float | None = None
+    last_confidence_at: datetime | None = None
+    last_market_data_revision: str | None = None
+    last_market_data_at: datetime | None = None
+    model_version: str | None = None
+    model_mode: str | None = None
+    model_loaded: bool | None = None
+    market_data_cache_bypassed: bool = False
     registered_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -193,9 +200,31 @@ class SignalScheduler:
                     instrument=instrument,
                     timeframe=job.timeframe,
                     source=job.source,
+                    bypass_market_data_cache=job.source == "broker",
                 )
 
                 job.last_run_at = datetime.now(UTC)
+                telemetry = result.telemetry
+                if telemetry is not None:
+                    previous_revision = job.last_market_data_revision
+                    job.last_market_data_at = telemetry.market_data_last_candle_at
+                    job.model_version = telemetry.model_version
+                    job.model_mode = telemetry.model_mode
+                    job.model_loaded = telemetry.model_loaded
+                    job.market_data_cache_bypassed = telemetry.market_data_cache_bypassed
+
+                    if previous_revision == telemetry.market_data_revision:
+                        job.last_decision = "NO_NEW_MARKET_DATA"
+                        job.last_reason = "market_data_unchanged"
+                        logger.debug(
+                            "Market data revision unchanged — duplicate signal opportunity suppressed",
+                            trading_session_id=trading_session_id,
+                            instrument=instrument,
+                            market_data_revision=telemetry.market_data_revision,
+                        )
+                        continue
+
+                    job.last_market_data_revision = telemetry.market_data_revision
 
                 if not result.generated or result.signal is None:
                     job.last_decision = "NO_TRADE"
@@ -203,6 +232,7 @@ class SignalScheduler:
                     job.last_confidence_score = (
                         result.no_signal.confidence_score if result.no_signal else None
                     )
+                    job.last_confidence_at = job.last_run_at if job.last_confidence_score is not None else None
                     logger.debug(
                         "No signal to publish",
                         trading_session_id=trading_session_id,
@@ -215,6 +245,7 @@ class SignalScheduler:
                 job.last_decision = "SIGNAL_PUBLISHED"
                 job.last_reason = "confidence_threshold_passed"
                 job.last_confidence_score = result.signal.confidence_score
+                job.last_confidence_at = job.last_run_at
             except Exception as e:
                 job.last_publish_failed = True
                 job.last_decision = "ERROR"
