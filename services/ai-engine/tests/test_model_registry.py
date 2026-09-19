@@ -9,6 +9,7 @@ from app.core.errors import ModelNotFoundError
 from app.domain.models.baseline_xgboost import MODEL_VERSION, BaselineXGBoostModel
 from app.domain.models.governance import create_baseline_governance
 from app.domain.models.registry import ModelRegistry, build_default_registry
+from app.domain.models.schemas import ModelGovernanceMetadata
 
 
 def test_baseline_model_returns_paper_only_metadata():
@@ -78,8 +79,6 @@ def test_registry_routes_exact_market_and_falls_back_to_default():
     }
     routed.get_model_metadata.return_value = {"mode": "trained_xgboost"}
 
-    from app.domain.models.schemas import ModelGovernanceMetadata
-
     governance = ModelGovernanceMetadata(
         model_version="xgboost-eurusd-h1-v1",
         approved_for_paper=True,
@@ -100,8 +99,6 @@ def test_registry_rejects_route_that_disagrees_with_artifact_metadata():
         "instrument": "GBPUSD",
         "timeframe": "H1",
     }
-
-    from app.domain.models.schemas import ModelGovernanceMetadata
 
     governance = ModelGovernanceMetadata(
         model_version="xgboost-eurusd-h1-v1",
