@@ -316,6 +316,12 @@
   min-width: 0;
 }
 
+.profile-password-recovery {
+  flex-basis: 100%;
+  width: 100%;
+  margin-top: 0.45rem;
+}
+
 .terminal-content .table-wrap,
 .terminal-content [class*='table-wrap'],
 .terminal-content table {

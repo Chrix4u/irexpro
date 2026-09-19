@@ -305,7 +305,7 @@ export default function ProfilePage() {
           </Card>
         </section>
 
-        <Card title="Personal profile" subtitle="Changing your date of birth invalidates previous KYC approval and requires a new review.">
+        <Card title="Personal profile" subtitle="Changing your date of birth invalidates previous KYC approval and requires a new review. Trading automation always uses iRexPro's professional model and risk controls; no experience setting is required.">
           <form onSubmit={handleProfileSubmit} className="onboarding-form">
             <section className="form-section">
               <h3 className="form-section__title">Personal information</h3>
@@ -418,9 +418,11 @@ export default function ProfilePage() {
               <Button type="submit" loading={changingPassword}>
                 Change password
               </Button>
-              <Link href="/forgot-password" className="btn btn--secondary mt-3">
-                Forgot current password?
-              </Link>
+              <div className="profile-password-recovery">
+                <Link href="/forgot-password" className="btn btn--secondary">
+                  Forgot current password?
+                </Link>
+              </div>
             </div>
           </form>
         </Card>
