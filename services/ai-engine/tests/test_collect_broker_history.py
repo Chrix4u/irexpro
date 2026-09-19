@@ -76,7 +76,7 @@ async def test_collects_closed_deduplicated_pages_backwards():
     provider = HistoricalProviderStub(_candles(now))
 
     candles = await collect_instrument_history(
-        provider,  # type: ignore[arg-type]
+        provider,
         user_id="user-1",
         broker_connection_id="connection-1",
         instrument="EURUSD",
