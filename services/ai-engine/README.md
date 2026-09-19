@@ -112,6 +112,39 @@ that explicitly declare the historical capability.
 
 ---
 
+## Training a pair-specific model bundle
+
+After collecting and reviewing the broker corpus, train one candidate per
+instrument/timeframe rather than pooling unrelated price scales into one model:
+
+```powershell
+python -m app.domain.training.train_corpus \
+  --corpus-dir data/corpus \
+  --output-dir models \
+  --bundle-name fx-h1-candidate-v1 \
+  --timeframe H1
+```
+
+The batch trainer verifies every corpus manifest SHA-256 before training. It
+writes one model + metadata sidecar per pair and a bundle manifest containing
+the exact instrument/timeframe routes. Paper approval is still false by
+default; `--approve-for-paper` is an explicit operator decision and never
+enables live trading.
+
+To activate a reviewed paper bundle:
+
+```text
+XGBOOST_MODEL_BUNDLE_PATH=/secure/model-store/fx-h1-candidate-v1.bundle.json
+```
+
+At runtime the registry selects an exact route such as `EURUSD/H1`. If no
+verified route exists for a requested pair/timeframe, the default model is
+used and telemetry continues to identify whether that fallback is trained or
+the heuristic scaffold. A model whose artifact metadata claims a different
+instrument/timeframe is rejected from that route.
+
+---
+
 ## Training a real XGBoost model
 
 The runtime can load a real fitted XGBoost classifier, but generated artifacts
