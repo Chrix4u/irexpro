@@ -150,6 +150,51 @@ jobs:
 
           echo '=== recent kernel memory/storage warnings ==='
           journalctl -k --since '-45 min' --no-pager 2>/dev/null | grep -Ei 'out of memory|oom|killed process|i/o error|ext4|xfs|nvme|blk_update|no space left' | tail -n 120 || true
+          echo
+
+          echo '=== largest top-level consumers ==='
+          for path in /home /var /root /usr /opt /tmp; do
+            if [[ -e "$path" ]]; then
+              du -x -s -B1 "$path" 2>/dev/null || true
+            fi
+          done | sort -n | awk '{printf "%.2f GiB\t%s\n", $1/1073741824, $2}'
+          echo
+
+          echo '=== largest /home/lightworld children ==='
+          du -x -B1 --max-depth=2 /home/lightworld 2>/dev/null | sort -n | tail -n 40 | awk '{printf "%.2f GiB\t%s\n", $1/1073741824, $2}'
+          echo
+
+          echo '=== largest PostgreSQL children ==='
+          du -x -B1 --max-depth=2 /var/lib/pgsql 2>/dev/null | sort -n | tail -n 40 | awk '{printf "%.2f GiB\t%s\n", $1/1073741824, $2}'
+          echo
+
+          echo '=== largest /var/log children ==='
+          du -x -B1 --max-depth=2 /var/log 2>/dev/null | sort -n | tail -n 40 | awk '{printf "%.2f GiB\t%s\n", $1/1073741824, $2}'
+          echo
+
+          echo '=== PostgreSQL log configuration ==='
+          pgconf='/var/lib/pgsql/data/postgresql.conf'
+          if [[ -r "$pgconf" ]]; then
+            grep -E '^[[:space:]]*(logging_collector|log_directory|log_filename|log_destination)[[:space:]]*=' "$pgconf" || true
+          fi
+          echo
+
+          echo '=== candidate PostgreSQL log files ==='
+          find /var/lib/pgsql/data /var/log -xdev -type f \
+            \( -name 'postgresql-*.log' -o -name 'postgresql.log' -o -path '*/log/postgresql*' -o -path '*/pg_log/*' \) \
+            -printf '%T@ %s %p\n' 2>/dev/null | sort -n | tail -n 20 || true
+          echo
+
+          echo '=== recent PostgreSQL file log tail ==='
+          latest_log="$(find /var/lib/pgsql/data /var/log -xdev -type f \
+            \( -name 'postgresql-*.log' -o -name 'postgresql.log' -o -path '*/log/postgresql*' -o -path '*/pg_log/*' \) \
+            -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -n1 | cut -d' ' -f2-)"
+          if [[ -n "$latest_log" ]]; then
+            echo "log=$latest_log"
+            tail -n 160 "$latest_log" | sed -E 's/(password|secret|token|key)=([^ ]+)/\1=[REDACTED]/Ig' || true
+          else
+            echo 'No PostgreSQL file log discovered'
+          fi
           REMOTE
 
       - name: Remove ephemeral SSH material
