@@ -115,3 +115,24 @@ def test_batch_training_rejects_tampered_corpus(tmp_path):
         assert "checksum mismatch" in str(exc)
     else:
         raise AssertionError("tampered corpus should be rejected")
+
+
+def test_batch_training_rejects_non_broker_corpus_provenance(tmp_path):
+    corpus_dir = tmp_path / "corpus"
+    corpus_dir.mkdir()
+    dataset = _write_verified_corpus(corpus_dir, "EURUSD")
+    manifest_path = dataset.with_suffix(".manifest.json")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["source"] = "synthetic_fixture"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    try:
+        train_corpus.train_corpus_bundle(
+            corpus_dir=corpus_dir,
+            output_dir=tmp_path / "models",
+            bundle_name="candidate-v1",
+        )
+    except ValueError as exc:
+        assert "not broker-authoritative" in str(exc)
+    else:
+        raise AssertionError("non-broker corpus should be rejected")
