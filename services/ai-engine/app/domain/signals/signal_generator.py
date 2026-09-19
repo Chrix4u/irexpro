@@ -175,6 +175,12 @@ class SignalGenerator:
             "signal_mode": settings.ai_signal_mode,
         })
 
+        strategy_family = (
+            "xgboost-trained"
+            if model_metadata.get("mode") == "trained_xgboost"
+            else "baseline"
+        )
+
         candidate = AiSignalCandidate(
             signal_id=str(uuid4()),
             user_id=user_id,
@@ -188,7 +194,7 @@ class SignalGenerator:
             suggested_take_profit=tp,
             suggested_volume=0.01,  # Conservative minimum lot size for paper mode
             timeframe=timeframe,
-            strategy_code=f"baseline-{timeframe.lower()}",
+            strategy_code=f"{strategy_family}-{timeframe.lower()}",
             market_regime=market_regime,
             volatility_score=min(volatility * 100, 1.0),
             generated_at=datetime.now(UTC),
