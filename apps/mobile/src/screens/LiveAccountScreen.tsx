@@ -30,7 +30,6 @@ import type {
   LivePositionRowView,
 } from "@irexpro/types";
 import type { TradingSessionView } from "@irexpro/types/execution";
-import { ApiClientError } from "@irexpro/api-client";
 import { api } from "../lib/api";
 import { liveAccount } from "../lib/live-account";
 import { useRealtime } from "../context/realtime-context";
@@ -77,18 +76,16 @@ export default function LiveAccountScreen() {
       const loadSession = (async () => {
         try {
           const payload = await api.getActiveTradingSession();
-          // The API returns the session DTO DIRECTLY (bare object) — null
-          // means no active session. Any other unexpected shape is a
-          // contract mismatch and is reported as UNAVAILABLE — never as
-          // "no active session".
+          // The API uses an explicit { session } envelope so the normal
+          // stopped state remains valid JSON instead of an empty 200 body.
+          const activeSession = payload.session;
           const payloadOk =
-            payload === null ||
-            (typeof payload === "object" &&
-              typeof (payload as { id?: unknown }).id === "string" &&
-              typeof (payload as { executionMode?: unknown }).executionMode ===
-                "string");
+            activeSession === null ||
+            (typeof activeSession === "object" &&
+              typeof activeSession.id === "string" &&
+              typeof activeSession.executionMode === "string");
           if (payloadOk) {
-            setSession(payload);
+            setSession(activeSession);
             setSessionUnavailable(false);
           } else {
             setSession(null);
@@ -96,9 +93,7 @@ export default function LiveAccountScreen() {
           }
         } catch (err) {
           setSession(null);
-          // 404 = no active session (truthful null); anything else = the
-          // authoritative state is unavailable — never guessed.
-          setSessionUnavailable(!(err instanceof ApiClientError && err.statusCode === 404));
+          setSessionUnavailable(true);
         }
       })();
       try {

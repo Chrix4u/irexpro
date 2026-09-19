@@ -14,6 +14,7 @@ import { TradingService, type StopTradingSessionResult } from './trading.service
 import { StartSessionDto } from './dto/start-session.dto';
 import { ChangeExecutionModeDto } from './dto/change-execution-mode.dto';
 import {
+  ActiveTradingSessionResponseDto,
   TradingSessionResponseDto,
   toTradingSessionResponse,
 } from './dto/trading-session-response.dto';
@@ -188,10 +189,12 @@ export class TradingController {
    */
   @Get('active')
   @ApiOperation({ summary: 'Get the current active trading session' })
-  @ApiResponse({ status: 200, type: TradingSessionResponseDto })
-  async getActive(@CurrentUserId() userId: string): Promise<TradingSessionResponseDto | null> {
+  @ApiResponse({ status: 200, type: ActiveTradingSessionResponseDto })
+  async getActive(@CurrentUserId() userId: string): Promise<ActiveTradingSessionResponseDto> {
     const session = await this.tradingService.getActiveSession(userId);
-    return session ? toTradingSessionResponse(session) : null;
+    return {
+      session: session ? toTradingSessionResponse(session) : null,
+    };
   }
 
   /**
