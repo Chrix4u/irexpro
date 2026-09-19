@@ -12,7 +12,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-
 REQUIRED_OHLCV_COLUMNS = {"timestamp", "open", "high", "low", "close", "volume"}
 TARGET_COLUMN = "target"
 FUTURE_RETURN_COLUMN = "future_return"
