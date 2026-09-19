@@ -1,6 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsOptional, IsString, Length, Matches, MaxLength } from 'class-validator';
-import { TradingExperienceLevel } from '../entities/user-profile.entity';
+import { IsOptional, IsString, Length, Matches, MaxLength } from 'class-validator';
 
 /**
  * UpdateMyProfileDto — onboarding profile contract.
@@ -51,12 +50,4 @@ export class UpdateMyProfileDto {
   @IsString()
   @Length(3, 3)
   preferredCurrency?: string;
-
-  @ApiPropertyOptional({
-    enum: TradingExperienceLevel,
-    description: 'Self-reported trading experience level',
-  })
-  @IsOptional()
-  @IsEnum(TradingExperienceLevel)
-  tradingExperienceLevel?: TradingExperienceLevel;
 }
