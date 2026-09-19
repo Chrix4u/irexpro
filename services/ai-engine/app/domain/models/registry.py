@@ -141,7 +141,14 @@ class ModelRegistry:
 
 def _resolve_bundle_path(bundle_path: Path, entry_path: str) -> Path:
     candidate = Path(entry_path)
-    return candidate if candidate.is_absolute() else bundle_path.parent / candidate
+    if candidate.is_absolute():
+        raise ValueError("Model bundle artifact paths must be relative")
+
+    root = bundle_path.parent.resolve()
+    resolved = (root / candidate).resolve()
+    if resolved.parent != root:
+        raise ValueError("Model bundle artifact path escapes the bundle directory")
+    return resolved
 
 
 def _load_bundle_routes(registry: ModelRegistry, bundle_path: Path) -> None:
