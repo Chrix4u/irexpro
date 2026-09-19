@@ -1542,7 +1542,6 @@ export class BrokerService {
     }
   }
 
-
   /**
    * Fetch a bounded historical OHLCV page ending at the supplied cursor.
    *
