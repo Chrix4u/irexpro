@@ -5,6 +5,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  OnApplicationBootstrap,
 } from '@nestjs/common';
 import { BrokerService } from '../broker/broker.service';
 import { RiskService } from '../risk/risk.service';
@@ -14,6 +15,7 @@ import { AuditService } from '../audit/audit.service';
 import { DomainEventBus } from '../events/event-bus.service';
 import { DomainEventType } from '../events/enums/domain-event-type.enum';
 import { AiEngineClient } from '../ai-engine-client/ai-engine-client.service';
+import type { AiSchedulerDecision } from '../ai-engine-client/interfaces/ai-scheduler.interface';
 import { AuditAction } from '../../common/enums/audit-action.enum';
 import { AuditSeverity } from '../audit/entities/audit-log.entity';
 import { TradingSession, TradingSessionStatus } from '../execution/entities/trading-session.entity';
@@ -29,6 +31,39 @@ import { ExactDecimal } from '../../common/utils/exact-decimal';
 import { TradeCloseReason } from '../execution/entities/trade.entity';
 
 export type AiStopPositionCloseState = 'COMPLETE' | 'PARTIAL' | 'UNKNOWN';
+
+export type AiAutomationOperationalState =
+  | 'STOPPED'
+  | 'STARTING'
+  | 'ACTIVE'
+  | 'WAITING'
+  | 'DEGRADED'
+  | 'BLOCKED';
+
+export interface AiAutomationStatusView {
+  sessionId: string | null;
+  executionMode: ExecutionMode | null;
+  state: AiAutomationOperationalState;
+  engineReachable: boolean;
+  schedulerEnabled: boolean;
+  schedulerRunning: boolean;
+  registered: boolean;
+  activeModelVersion: string | null;
+  approvedForLive: boolean | null;
+  instruments: string[];
+  timeframes: string[];
+  intervalSeconds: number | null;
+  lastScanAt: string | null;
+  nextScanAt: string | null;
+  scanCount: number;
+  lastDecision: AiSchedulerDecision | null;
+  lastReason: string | null;
+  lastInstrument: string | null;
+  lastTimeframe: string | null;
+  lastConfidenceScore: number | null;
+  confidenceThreshold: number | null;
+  lastSignalId: string | null;
+}
 
 export interface StopTradingSessionResult {
   message: string;
@@ -73,7 +108,7 @@ export interface StopTradingSessionResult {
  * See: docs/architecture/09-broker-integration-architecture.md
  */
 @Injectable()
-export class TradingService {
+export class TradingService implements OnApplicationBootstrap {
   private readonly logger = new Logger(TradingService.name);
 
   /** Max staleness for broker health check before requiring a fresh check. */
@@ -93,6 +128,48 @@ export class TradingService {
     // session's opening financial state binds to (fail-closed — never `?? '0'`).
     private readonly brokerAccountSnapshotService: BrokerAccountSnapshotService,
   ) {}
+
+  async onApplicationBootstrap(): Promise<void> {
+    if (!this.aiEngineClient.isSchedulerIntegrationEnabled()) return;
+
+    try {
+      const sessions = await this.executionService.listActiveSessionsForScheduler();
+      const results = await Promise.allSettled(
+        sessions.map((session) => this.registerSessionWithAiEngine(session.userId, session)),
+      );
+      const failed = results.filter((result) => result.status === 'rejected').length;
+      if (failed > 0) {
+        this.logger.warn(
+          `AI scheduler reconciliation completed with ${failed}/${sessions.length} failures`,
+        );
+      } else if (sessions.length > 0) {
+        this.logger.log(`AI scheduler reconciled ${sessions.length} active trading session(s)`);
+      }
+    } catch (err) {
+      this.logger.warn(`AI scheduler reconciliation failed: ${(err as Error).message}`);
+    }
+  }
+
+  private async registerSessionWithAiEngine(
+    userId: string,
+    session: Pick<TradingSession, 'id' | 'brokerConnectionId' | 'executionMode'>,
+  ): Promise<void> {
+    const universe = this.aiEngineClient.getSchedulerUniverse();
+    const registration = await this.aiEngineClient.notifySessionStarted({
+      userId,
+      tradingSessionId: session.id,
+      brokerConnectionId: session.brokerConnectionId,
+      instruments: universe.instruments,
+      timeframe: universe.timeframes[0] ?? 'H1',
+      timeframes: universe.timeframes,
+      intervalSeconds: universe.intervalSeconds,
+      source: 'broker',
+      mode: session.executionMode,
+    });
+    if (registration && !registration.registered) {
+      throw new Error(registration.message || 'AI scheduler registration was not accepted');
+    }
+  }
 
   /**
    * Start a new trading session bound to the EXACT requested broker connection.
@@ -223,21 +300,9 @@ export class TradingService {
     // orders. The session's durable executionMode (NOT a hardcoded 'paper'
     // literal) is forwarded so the scheduler notification reflects the session
     // authority; the risk + execution gates remain the enforcement boundary.
-    void this.aiEngineClient
-      .notifySessionStarted({
-        userId,
-        tradingSessionId: session.id,
-        brokerConnectionId: connection.id,
-        instruments: ['EURUSD'],
-        timeframe: 'H1',
-        source: 'broker',
-        mode: session.executionMode,
-      })
-      .catch((err: Error) =>
-        this.logger.warn(
-          `AI engine start notification failed session=${session.id}: ${err.message}`,
-        ),
-      );
+    void this.registerSessionWithAiEngine(userId, session).catch((err: Error) =>
+      this.logger.warn(`AI engine start notification failed session=${session.id}: ${err.message}`),
+    );
 
     return session;
   }
@@ -280,7 +345,11 @@ export class TradingService {
       }
     }
 
-    return this.executionService.changeExecutionMode(userId, sessionId, newMode);
+    const changed = await this.executionService.changeExecutionMode(userId, sessionId, newMode);
+    void this.registerSessionWithAiEngine(userId, changed).catch((err: Error) =>
+      this.logger.warn(`AI engine mode reconciliation failed session=${sessionId}: ${err.message}`),
+    );
+    return changed;
   }
 
   /**
@@ -412,6 +481,108 @@ export class TradingService {
               ' AI-opened positions were confirmed closed.';
 
     return { message, sessionId, positionCloseSummary };
+  }
+
+  async getAutomationStatus(userId: string): Promise<AiAutomationStatusView> {
+    const session = await this.executionService.getActiveSessionForClient(userId);
+    const universe = this.aiEngineClient.getSchedulerUniverse();
+
+    if (!session) {
+      return {
+        sessionId: null,
+        executionMode: null,
+        state: 'STOPPED',
+        engineReachable: true,
+        schedulerEnabled: this.aiEngineClient.isSchedulerIntegrationEnabled(),
+        schedulerRunning: false,
+        registered: false,
+        activeModelVersion: null,
+        approvedForLive: null,
+        instruments: universe.instruments,
+        timeframes: universe.timeframes,
+        intervalSeconds: universe.intervalSeconds,
+        lastScanAt: null,
+        nextScanAt: null,
+        scanCount: 0,
+        lastDecision: null,
+        lastReason: 'AI Trading is stopped',
+        lastInstrument: null,
+        lastTimeframe: null,
+        lastConfidenceScore: null,
+        confidenceThreshold: null,
+        lastSignalId: null,
+      };
+    }
+
+    try {
+      const status = await this.aiEngineClient.getSessionStatus(session.id);
+      if (!status.registered && status.scheduler_enabled) {
+        void this.registerSessionWithAiEngine(userId, session).catch((err: Error) =>
+          this.logger.warn(`AI scheduler self-heal failed session=${session.id}: ${err.message}`),
+        );
+      }
+      const job = status.job;
+      let state: AiAutomationOperationalState = 'ACTIVE';
+      if (!status.scheduler_enabled) state = 'DEGRADED';
+      else if (!status.registered) state = 'STARTING';
+      else if (job?.last_decision === 'WAITING_FOR_FIRST_SCAN') state = 'WAITING';
+      else if (job?.last_decision === 'LIVE_MODEL_BLOCKED') state = 'BLOCKED';
+      else if (job?.last_decision === 'ERROR') state = 'DEGRADED';
+
+      return {
+        sessionId: session.id,
+        executionMode: session.executionMode,
+        state,
+        engineReachable: true,
+        schedulerEnabled: status.scheduler_enabled,
+        schedulerRunning: status.scheduler_running,
+        registered: status.registered,
+        activeModelVersion: status.active_model_version,
+        approvedForLive: status.approved_for_live,
+        instruments: job?.instruments ?? universe.instruments,
+        timeframes: job?.timeframes ?? universe.timeframes,
+        intervalSeconds: job?.interval_seconds ?? universe.intervalSeconds,
+        lastScanAt: job?.last_run_at ?? null,
+        nextScanAt: job?.next_run_at ?? null,
+        scanCount: job?.scan_count ?? 0,
+        lastDecision: job?.last_decision ?? null,
+        lastReason:
+          job?.last_reason ??
+          (status.registered
+            ? 'Waiting for scheduler telemetry'
+            : 'Scheduler registration pending'),
+        lastInstrument: job?.last_instrument ?? null,
+        lastTimeframe: job?.last_timeframe ?? null,
+        lastConfidenceScore: job?.last_confidence_score ?? null,
+        confidenceThreshold: job?.confidence_threshold ?? null,
+        lastSignalId: job?.last_signal_id ?? null,
+      };
+    } catch (err) {
+      return {
+        sessionId: session.id,
+        executionMode: session.executionMode,
+        state: 'DEGRADED',
+        engineReachable: false,
+        schedulerEnabled: this.aiEngineClient.isSchedulerIntegrationEnabled(),
+        schedulerRunning: false,
+        registered: false,
+        activeModelVersion: null,
+        approvedForLive: null,
+        instruments: universe.instruments,
+        timeframes: universe.timeframes,
+        intervalSeconds: universe.intervalSeconds,
+        lastScanAt: null,
+        nextScanAt: null,
+        scanCount: 0,
+        lastDecision: 'ERROR',
+        lastReason: `AI engine status unavailable: ${(err as Error).message}`,
+        lastInstrument: null,
+        lastTimeframe: null,
+        lastConfidenceScore: null,
+        confidenceThreshold: null,
+        lastSignalId: null,
+      };
+    }
   }
 
   async getActiveSession(userId: string): Promise<TradingSession | null> {

@@ -93,6 +93,7 @@ const verified = candidates.some((value) =>
   value === true || String(value).toLowerCase() === 'paper' || String(value).toLowerCase() === 'paper-only'
 );
 if (!verified) process.exit(3);
+if (payload.scheduler_enabled !== true) process.exit(4);
 NODE
 }
 
@@ -105,6 +106,17 @@ wait_for_api() {
     sleep "$HEALTH_RETRY_SECONDS"
   done
   die "API did not become live within the allowed attempts."
+}
+
+wait_for_ai() {
+  local attempt
+  for ((attempt = 1; attempt <= MAX_HEALTH_ATTEMPTS; attempt += 1)); do
+    if require_health_field "$AI_HEALTH_URL" status ok 2>/dev/null; then
+      return 0
+    fi
+    sleep "$HEALTH_RETRY_SECONDS"
+  done
+  die "AI engine did not become healthy within the allowed attempts."
 }
 
 wait_for_http_status() {
@@ -130,11 +142,13 @@ readonly CANDIDATE_SHA
 for name in \
   STAGING_ROOT \
   API_PM2_NAME \
+  AI_PM2_NAME \
   WEB_PM2_NAME \
   ADMIN_PM2_NAME \
   LOCAL_API_LIVE_URL \
   LOCAL_API_READY_URL \
   LOCAL_API_HEALTH_URL \
+  AI_HEALTH_URL \
   LOCAL_WEB_URL \
   LOCAL_ADMIN_URL \
   PUBLIC_API_LIVE_URL \
@@ -191,6 +205,17 @@ corepack pnpm@"$PNPM_VERSION" --filter @irexpro/admin build
 STAGE="database-migrations"
 corepack pnpm@"$PNPM_VERSION" --filter @irexpro/api migration:run
 
+STAGE="ai-source-verification"
+test -x services/ai-engine/.venv/bin/python || die "AI engine virtualenv is missing."
+services/ai-engine/.venv/bin/python -m compileall -q services/ai-engine/app
+
+STAGE="restart-ai-engine"
+pm2 restart "$AI_PM2_NAME" --update-env
+STAGE="ai-liveness"
+wait_for_ai
+STAGE="ai-scheduler-readiness"
+require_ai_paper_mode
+
 STAGE="restart-api"
 pm2 restart "$API_PM2_NAME" --update-env
 STAGE="api-liveness"
@@ -217,10 +242,8 @@ require_http_status "$PUBLIC_ADMIN_URL" "$ADMIN_EXPECTED_STATUSES"
 require_health_field "$PUBLIC_API_LIVE_URL" status alive
 require_health_field "$PUBLIC_API_READY_URL" status ready
 
-if [[ -n "${AI_HEALTH_URL:-}" ]]; then
-  STAGE="ai-paper-mode-observation"
-  require_ai_paper_mode
-fi
+STAGE="ai-final-readiness"
+require_ai_paper_mode
 
 STAGE="final-sha-verification"
 [[ "$(git rev-parse HEAD)" == "$CANDIDATE_SHA" ]] || die "Final exact-SHA verification failed."

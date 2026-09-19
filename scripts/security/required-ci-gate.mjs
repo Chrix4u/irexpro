@@ -14,6 +14,13 @@ const WORKFLOW_RULES = [
     ],
   },
   {
+    name: 'AI Engine CI',
+    patterns: [
+      'services/ai-engine/**',
+      '.github/workflows/ai-engine-ci.yml',
+    ],
+  },
+  {
     name: 'Risk Execution Concurrency',
     patterns: [
       'apps/api/**',
@@ -135,6 +142,11 @@ export function runSelfTests() {
     requiredWorkflowNames(['apps/api/src/modules/auth/auth.service.ts']),
     ['Release Security', 'API CI', 'Risk Execution Concurrency'],
     'API change',
+  );
+  assertEqual(
+    requiredWorkflowNames(['services/ai-engine/app/domain/scheduler/signal_scheduler.py']),
+    ['Release Security', 'AI Engine CI'],
+    'AI engine change',
   );
   assertEqual(
     requiredWorkflowNames(['apps/api/src/database/migrations/123-example.ts']),

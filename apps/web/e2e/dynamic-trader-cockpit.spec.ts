@@ -91,7 +91,9 @@ async function gotoAiTrader(
     failExecutionReads?: boolean;
     failPositionRead?: boolean;
     dropFirstRiskRead?: boolean;
+    unauthorizedFirstRiskRead?: boolean;
     onRiskRead?: () => void;
+    onRefresh?: () => void;
     brokerPayload?: unknown[];
     riskContractMismatch?: boolean;
     sessionContractMismatch?: boolean;
@@ -109,7 +111,10 @@ async function gotoAiTrader(
     const fulfill = (status: number, body: unknown) =>
       route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 
-    if (apiPath === 'auth/refresh') return fulfill(200, mockAuthTokens);
+    if (apiPath === 'auth/refresh') {
+      options.onRefresh?.();
+      return fulfill(200, mockAuthTokens);
+    }
     if (apiPath === 'auth/me') return fulfill(200, mockAuthUser);
     if (apiPath === 'auth/logout') return fulfill(200, { message: 'Logged out' });
     if (apiPath === 'risk/status') {
@@ -117,6 +122,12 @@ async function gotoAiTrader(
       options.onRiskRead?.();
       if (options.dropFirstRiskRead && riskReadCount === 1) {
         return route.abort('connectionreset');
+      }
+      if (options.unauthorizedFirstRiskRead && riskReadCount === 1) {
+        return fulfill(401, {
+          statusCode: 401,
+          message: 'Your session has expired. Please sign in again.',
+        });
       }
       if (options.riskContractMismatch) {
         return fulfill(200, {
@@ -138,6 +149,58 @@ async function gotoAiTrader(
           allowedInstruments: 'ALL',
           maxVolatilityScore: '0.85',
         },
+      });
+    }
+    if (apiPath === 'trading/sessions/active/automation-status') {
+      if (options.active === false) {
+        return fulfill(200, {
+          sessionId: null,
+          executionMode: null,
+          state: 'STOPPED',
+          engineReachable: true,
+          schedulerEnabled: true,
+          schedulerRunning: false,
+          registered: false,
+          activeModelVersion: null,
+          approvedForLive: null,
+          instruments: ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCHF', 'USDCAD'],
+          timeframes: ['M15', 'H1', 'H4'],
+          intervalSeconds: 60,
+          lastScanAt: null,
+          nextScanAt: null,
+          scanCount: 0,
+          lastDecision: null,
+          lastReason: 'AI Trading is stopped',
+          lastInstrument: null,
+          lastTimeframe: null,
+          lastConfidenceScore: null,
+          confidenceThreshold: null,
+          lastSignalId: null,
+        });
+      }
+      return fulfill(200, {
+        sessionId: '44444444-4444-4444-8444-444444444444',
+        executionMode: 'PAPER_ONLY',
+        state: 'ACTIVE',
+        engineReachable: true,
+        schedulerEnabled: true,
+        schedulerRunning: true,
+        registered: true,
+        activeModelVersion: 'baseline-xgboost-v0.1.0',
+        approvedForLive: false,
+        instruments: ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCHF', 'USDCAD'],
+        timeframes: ['M15', 'H1', 'H4'],
+        intervalSeconds: 60,
+        lastScanAt: '2026-08-31T01:00:00.000Z',
+        nextScanAt: '2026-08-31T01:01:00.000Z',
+        scanCount: 18,
+        lastDecision: 'NO_SIGNAL',
+        lastReason: 'confidence_below_threshold',
+        lastInstrument: 'GBPUSD',
+        lastTimeframe: 'M15',
+        lastConfidenceScore: 0.54,
+        confidenceThreshold: 0.6,
+        lastSignalId: null,
       });
     }
     if (apiPath === 'trading/sessions/active') {
@@ -242,6 +305,13 @@ test.describe('AI Trader novice workflow', () => {
 
     await expect(page.getByRole('heading', { level: 2, name: 'Recent AI Activity' })).toBeVisible();
     await expect(page.getByText('OPEN', { exact: true }).first()).toBeVisible();
+
+    await expect(page.getByRole('heading', { level: 2, name: 'What the AI is doing now' })).toBeVisible();
+    await expect(page.getByText('Connected', { exact: true })).toBeVisible();
+    await expect(page.getByText('Active', { exact: true })).toBeVisible();
+    await expect(page.getByText(/EURUSD · GBPUSD · USDJPY/i)).toBeVisible();
+    await expect(page.getByText('NO SIGNAL', { exact: true })).toBeVisible();
+    await expect(page.getByText(/confidence 54% is below the 60% threshold/i)).toBeVisible();
 
     await expect(page.getByText(/execution mode selector/i)).toHaveCount(0);
     await expect(page.getByText(/trading experience/i)).toHaveCount(0);
@@ -359,6 +429,28 @@ test.describe('AI Trader novice workflow', () => {
     await expect(page.getByText(/Unable to reach the server/i)).toHaveCount(0);
     await expect(page.getByText(/No open positions/i)).toBeVisible();
     await expect(page.getByText(/No execution activity yet/i)).toBeVisible();
+
+    assertNoExternalRequests(page);
+  });
+
+  test('renews an expired access token without signing the user out', async ({ page }) => {
+    let riskReads = 0;
+    let refreshReads = 0;
+    await gotoAiTrader(page, {
+      unauthorizedFirstRiskRead: true,
+      onRiskRead: () => {
+        riskReads += 1;
+      },
+      onRefresh: () => {
+        refreshReads += 1;
+      },
+    });
+
+    await expect(page.getByText('Paper Trading Broker', { exact: false }).first()).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Stop AI Trading' })).toBeVisible();
+    await expect(page.getByText(/Your session has expired/i)).toHaveCount(0);
+    expect(riskReads).toBe(2);
+    expect(refreshReads).toBeGreaterThanOrEqual(2);
 
     assertNoExternalRequests(page);
   });

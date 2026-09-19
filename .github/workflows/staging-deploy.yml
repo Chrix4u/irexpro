@@ -93,8 +93,15 @@ jobs:
 
           export STAGING_ROOT='/home/lightworld/webapps/irexpro-staging'
           export API_PM2_NAME='irexpro-api-staging'
+          export AI_PM2_NAME='irexpro-ai-staging'
           export WEB_PM2_NAME='irexpro-web-staging'
           export ADMIN_PM2_NAME='irexpro-admin-staging'
+
+          # UAT/staging explicitly enables the scheduler. The active baseline
+          # model is still paper-approved only; FULL_AUTO signal publication
+          # remains blocked by model governance in the AI engine.
+          export AI_ENGINE_SCHEDULER_ENABLED='true'
+          export AI_SCHEDULER_ENABLED='true'
 
           export LOCAL_API_LIVE_URL='http://127.0.0.1:3010/api/v1/health/live'
           export LOCAL_API_READY_URL='http://127.0.0.1:3010/api/v1/health/ready'

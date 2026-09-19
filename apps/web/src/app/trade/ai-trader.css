@@ -393,6 +393,48 @@
   white-space: nowrap;
 }
 
+
+.ai-operations {
+  display: grid;
+  gap: 1rem;
+}
+
+.ai-operations__grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.85rem;
+}
+
+.ai-operation-tile {
+  min-width: 0;
+}
+
+.ai-operation-tile .card__body {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.ai-operation-tile strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: clamp(0.98rem, 1.2vw, 1.2rem);
+}
+
+.ai-operation-tile span,
+.ai-operation-tile small {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.ai-operation-tile--wide {
+  grid-column: span 2;
+}
+
+.ai-operation-tile--decision {
+  grid-column: span 2;
+}
+
 @media (max-width: 1240px) {
   .ai-control-deck {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -404,6 +446,10 @@
 
   .ai-trading-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ai-operations__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .ai-position-grid {
@@ -423,8 +469,14 @@
 
   .ai-control-deck,
   .ai-overview-grid,
-  .ai-position-grid {
+  .ai-position-grid,
+  .ai-operations__grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ai-operation-tile--wide,
+  .ai-operation-tile--decision {
+    grid-column: auto;
   }
 
   .ai-allocation-row {

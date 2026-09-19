@@ -169,14 +169,36 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
           mockSession({ executionMode: ExecutionMode.SEMI_AUTO, authorityGeneration: 2 }),
         ),
       closeAllAiOpenPositions: jest.fn().mockResolvedValue([]),
+      listActiveSessionsForScheduler: jest.fn().mockResolvedValue([]),
     };
 
     auditService = { log: jest.fn().mockResolvedValue(undefined) };
     eventBus = { publish: jest.fn(), subscribe: jest.fn().mockReturnValue(() => {}) };
     aiEngineClient = {
       isSchedulerIntegrationEnabled: jest.fn().mockReturnValue(true),
-      notifySessionStarted: jest.fn().mockResolvedValue(undefined),
-      notifySessionStopped: jest.fn().mockResolvedValue(undefined),
+      getSchedulerUniverse: jest.fn().mockReturnValue({
+        instruments: ['EURUSD', 'GBPUSD'],
+        timeframes: ['M15', 'H1'],
+        intervalSeconds: 60,
+      }),
+      notifySessionStarted: jest.fn().mockResolvedValue({
+        registered: true,
+        trading_session_id: 'session-1',
+        message: 'Session scheduler registered',
+      }),
+      notifySessionStopped: jest.fn().mockResolvedValue({
+        registered: true,
+        trading_session_id: 'session-1',
+        message: 'Session scheduler stopped',
+      }),
+      getSessionStatus: jest.fn().mockResolvedValue({
+        scheduler_enabled: true,
+        scheduler_running: true,
+        registered: true,
+        active_model_version: 'baseline-xgboost-v0.1.0',
+        approved_for_live: false,
+        job: null,
+      }),
     };
 
     onboardingService = {

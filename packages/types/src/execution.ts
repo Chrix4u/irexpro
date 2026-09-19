@@ -134,6 +134,48 @@ export interface ActiveTradingSessionResponse {
   session: TradingSessionView | null;
 }
 
+export type AiAutomationOperationalState =
+  | 'STOPPED'
+  | 'STARTING'
+  | 'ACTIVE'
+  | 'WAITING'
+  | 'DEGRADED'
+  | 'BLOCKED';
+
+export type AiSchedulerDecision =
+  | 'WAITING_FOR_FIRST_SCAN'
+  | 'NO_SIGNAL'
+  | 'SIGNAL_PUBLISHED'
+  | 'LIVE_MODEL_BLOCKED'
+  | 'ERROR';
+
+export interface AiAutomationStatusView {
+  sessionId: string | null;
+  executionMode: ExecutionMode | null;
+  state: AiAutomationOperationalState;
+  engineReachable: boolean;
+  schedulerEnabled: boolean;
+  schedulerRunning: boolean;
+  registered: boolean;
+  activeModelVersion: string | null;
+  approvedForLive: boolean | null;
+  instruments: string[];
+  timeframes: string[];
+  intervalSeconds: number | null;
+  lastScanAt: string | null;
+  nextScanAt: string | null;
+  scanCount: number;
+  lastDecision: AiSchedulerDecision | null;
+  lastReason: string | null;
+  lastInstrument: string | null;
+  lastTimeframe: string | null;
+  lastConfidenceScore: number | null;
+  confidenceThreshold: number | null;
+  lastSignalId: string | null;
+}
+
+/** GET /trading/sessions/active/automation-status → operational AI scheduler truth. */
+
 /** POST /trading/sessions/start request body. */
 export interface StartTradingSessionRequest {
   /** Exact connection to bind as the execution target (server-validated). */

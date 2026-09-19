@@ -123,6 +123,15 @@ export default () => ({
   aiEngine: {
     baseUrl: process.env.AI_ENGINE_BASE_URL ?? 'http://localhost:8001/api/v1',
     schedulerEnabled: process.env.AI_ENGINE_SCHEDULER_ENABLED === 'true',
+    instruments: (process.env.AI_ENGINE_INSTRUMENTS ?? 'EURUSD,GBPUSD,USDJPY,AUDUSD,USDCHF,USDCAD')
+      .split(',')
+      .map((value) => value.trim().toUpperCase())
+      .filter(Boolean),
+    timeframes: (process.env.AI_ENGINE_TIMEFRAMES ?? 'M15,H1,H4')
+      .split(',')
+      .map((value) => value.trim().toUpperCase())
+      .filter(Boolean),
+    signalIntervalSeconds: parseInt(process.env.AI_ENGINE_SIGNAL_INTERVAL_SECONDS ?? '60', 10),
   },
   paystack: {
     // Fail-closed by default — PAYSTACK_ENABLED must be explicitly 'true' to

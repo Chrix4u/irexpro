@@ -10,7 +10,11 @@ import {
   Post,
 } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { TradingService, type StopTradingSessionResult } from './trading.service';
+import {
+  TradingService,
+  type AiAutomationStatusView,
+  type StopTradingSessionResult,
+} from './trading.service';
 import { StartSessionDto } from './dto/start-session.dto';
 import { ChangeExecutionModeDto } from './dto/change-execution-mode.dto';
 import {
@@ -195,6 +199,18 @@ export class TradingController {
     return {
       session: session ? toTradingSessionResponse(session) : null,
     };
+  }
+
+  /**
+   * Operational AI-engine/scheduler truth for the current active session.
+   *
+   * GET /api/v1/trading/sessions/active/automation-status
+   */
+  @Get('active/automation-status')
+  @ApiOperation({ summary: 'Get AI Trading scheduler and model operational status' })
+  @ApiResponse({ status: 200, description: 'Current AI automation operational state' })
+  async getAutomationStatus(@CurrentUserId() userId: string): Promise<AiAutomationStatusView> {
+    return this.tradingService.getAutomationStatus(userId);
   }
 
   /**

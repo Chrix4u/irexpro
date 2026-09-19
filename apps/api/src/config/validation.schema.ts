@@ -106,6 +106,9 @@ export const validationSchema = Joi.object({
   // Python AI engine scheduler coordination (NestJS → AI engine)
   AI_ENGINE_BASE_URL: Joi.string().default('http://localhost:8001/api/v1'),
   AI_ENGINE_SCHEDULER_ENABLED: Joi.boolean().default(false),
+  AI_ENGINE_INSTRUMENTS: Joi.string().default('EURUSD,GBPUSD,USDJPY,AUDUSD,USDCHF,USDCAD'),
+  AI_ENGINE_TIMEFRAMES: Joi.string().default('M15,H1,H4'),
+  AI_ENGINE_SIGNAL_INTERVAL_SECONDS: Joi.number().integer().min(15).max(3600).default(60),
 
   // Paystack sandbox integration (Sprint 15) — fail-closed by default.
   // PAYSTACK_SECRET_KEY must never be logged or returned; only present in local .env.
