@@ -20,9 +20,10 @@ test.describe('AI-first trader workspace navigation', () => {
     const nav = page.getByRole('navigation', { name: /primary workspace navigation/i });
     await expect(nav.getByRole('link', { name: 'Dashboard' })).toHaveAttribute('aria-current', 'page');
     await expect(nav.getByRole('link', { name: 'AI Trading' })).toBeVisible();
+    await expect(nav.getByRole('link', { name: 'Portfolio', exact: true })).toBeVisible();
+    await expect(nav.getByRole('link', { name: 'Portfolio & Risk', exact: true })).toBeVisible();
     await expect(nav.getByRole('link', { name: 'Positions & Activity' })).toBeVisible();
     await expect(nav.getByRole('link', { name: /trading workspace/i })).toHaveCount(0);
-    await expect(nav.getByRole('link', { name: /portfolio & risk/i })).toHaveCount(0);
 
     await assertNoHorizontalOverflow(page);
     assertNoConsoleErrors(page);
