@@ -77,7 +77,6 @@ export function toTradingSessionResponse(session: TradingSession): TradingSessio
   return response;
 }
 
-
 export class ActiveTradingSessionResponseDto {
   @ApiPropertyOptional({
     type: TradingSessionResponseDto,
