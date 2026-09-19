@@ -192,13 +192,25 @@ def build_default_registry() -> ModelRegistry:
     """
     registry = ModelRegistry()
 
-    default_model = BaselineXGBoostModel()
-    trained_loaded = default_model.load_model()
-    if trained_loaded:
-        governance = create_trained_model_governance(default_model.get_artifact_metadata())
-    else:
-        governance = create_baseline_governance()
-    registry.register_model(default_model, governance)
+    # The default fallback is always the explicitly-labelled heuristic. A
+    # fitted artifact trained for one market must never become a global model
+    # for unrelated instruments.
+    fallback_model = BaselineXGBoostModel()
+    registry.register_model(fallback_model, create_baseline_governance())
+
+    configured_model = BaselineXGBoostModel()
+    if configured_model.load_model():
+        metadata = configured_model.get_artifact_metadata()
+        instrument = str(metadata.get("instrument", "")).strip().upper()
+        timeframe = str(metadata.get("timeframe", "")).strip().upper()
+        if instrument and instrument != "UNKNOWN" and timeframe:
+            governance = create_trained_model_governance(metadata)
+            registry.register_route(instrument, timeframe, configured_model, governance)
+        else:
+            logger.error(
+                "Configured trained model lacks an exact market route; ignoring it",
+                version=configured_model.get_model_version(),
+            )
 
     raw_bundle_path = os.getenv(MODEL_BUNDLE_PATH_ENV, "").strip()
     if raw_bundle_path:
