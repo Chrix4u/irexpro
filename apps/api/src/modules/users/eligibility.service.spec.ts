@@ -15,7 +15,7 @@ import {
   UserEligibilityReview,
 } from './entities/user-eligibility-review.entity';
 import { KycReviewDecision, UserKycReview } from './entities/user-kyc-review.entity';
-import { KycStatus } from './entities/user-profile.entity';
+import { KycStatus, UserProfile } from './entities/user-profile.entity';
 import { User, UserStatus } from './entities/user.entity';
 
 describe('EligibilityService', () => {
@@ -75,6 +75,9 @@ describe('EligibilityService', () => {
     findOne: jest.fn(),
     create: jest.fn((value) => value),
     save: jest.fn(),
+  };
+  const profileRepo = {
+    save: jest.fn(async (value) => value),
   };
   const configService = {
     get: jest.fn((key: string) => config[key]),
@@ -171,6 +174,7 @@ describe('EligibilityService', () => {
         { provide: getRepositoryToken(UserDisclosureConsent), useValue: consentRepo },
         { provide: getRepositoryToken(UserEligibilityReview), useValue: reviewRepo },
         { provide: getRepositoryToken(UserKycReview), useValue: kycReviewRepo },
+        { provide: getRepositoryToken(UserProfile), useValue: profileRepo },
         { provide: ConfigService, useValue: configService },
         { provide: AuditService, useValue: auditService },
         // Round 6 (#300): the unified execution-authority seams (mocked —
@@ -364,6 +368,80 @@ describe('EligibilityService', () => {
     expect(kycReviewRepo.save).not.toHaveBeenCalled();
   });
 
+  it('requires an explicit adult user submission before KYC enters the review queue', async () => {
+    const awaiting = {
+      ...user,
+      id: 'submit-kyc',
+      countryCode: 'GH',
+      profile: {
+        ...user.profile,
+        id: 'profile-submit-kyc',
+        userId: 'submit-kyc',
+        dateOfBirth: '1992-05-15',
+        kycStatus: KycStatus.NONE,
+        kycSubmittedAt: null,
+        kycApprovedAt: null,
+      },
+    } as User;
+    userRepo.findOne.mockResolvedValue(awaiting);
+
+    const submitted = await service.submitKyc(awaiting.id);
+
+    expect(profileRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: awaiting.id,
+        kycStatus: KycStatus.PENDING,
+        kycApprovedAt: null,
+      }),
+    );
+    expect(awaiting.profile.kycSubmittedAt).toBeInstanceOf(Date);
+    expect(submitted.kycStatus).toBe(KycStatus.PENDING);
+    expect(submitted.identityReasonCode).toBe('KYC_PENDING');
+    expect(auditService.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorUserId: awaiting.id,
+        action: 'USER_KYC_SUBMITTED',
+        resourceType: 'UserProfile',
+        resourceId: 'profile-submit-kyc',
+      }),
+    );
+  });
+
+  it('keeps KYC submission idempotent while pending and refuses under-age submission', async () => {
+    const pending = {
+      ...user,
+      id: 'pending-submit',
+      countryCode: 'GH',
+      profile: {
+        ...user.profile,
+        id: 'profile-pending-submit',
+        userId: 'pending-submit',
+        dateOfBirth: '1990-01-01',
+        kycStatus: KycStatus.PENDING,
+        kycSubmittedAt: new Date('2026-09-19T00:00:00Z'),
+        kycApprovedAt: null,
+      },
+    } as User;
+    userRepo.findOne.mockResolvedValue(pending);
+    kycReviewRows = [];
+
+    const same = await service.submitKyc(pending.id);
+    expect(same.kycStatus).toBe(KycStatus.PENDING);
+    expect(profileRepo.save).not.toHaveBeenCalled();
+
+    const underageYear = new Date().getUTCFullYear() - 10;
+    userRepo.findOne.mockResolvedValue({
+      ...pending,
+      profile: {
+        ...pending.profile,
+        dateOfBirth: `${underageYear}-01-01`,
+        kycStatus: KycStatus.NONE,
+      },
+    });
+
+    await expect(service.submitKyc(pending.id)).rejects.toThrow(/adult-age requirement/i);
+  });
+
   it('queues adult users without current approval evidence and records immutable approval evidence', async () => {
     const awaiting = {
       ...user,
@@ -395,16 +473,12 @@ describe('EligibilityService', () => {
     userRepo.find.mockResolvedValue([awaiting, pending, legacyApprovedWithoutEvidence]);
 
     const queue = await service.listKycReviewQueue();
-    expect(queue.map((item) => item.userId)).toEqual([
-      'awaiting-kyc',
-      'pending-kyc',
-      'approved-kyc',
-    ]);
-    expect(queue.at(-1)).toEqual(
+    expect(queue.map((item) => item.userId)).toEqual(['pending-kyc']);
+    expect(queue[0]).toEqual(
       expect.objectContaining({
-        userId: 'approved-kyc',
-        kycStatus: KycStatus.NONE,
-        reasonCode: 'KYC_REQUIRED',
+        userId: 'pending-kyc',
+        kycStatus: KycStatus.PENDING,
+        reasonCode: 'KYC_PENDING',
       }),
     );
     expect(JSON.stringify(queue)).not.toMatch(/passwordHash|reviewerNote|brokerConnectionId/);
