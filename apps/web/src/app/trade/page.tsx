@@ -100,7 +100,14 @@ interface AiAutomationRuntimeStatus {
   last_decision: string | null;
   last_reason: string | null;
   last_confidence_score: number | null;
+  last_confidence_at: string | null;
   confidence_threshold: number | null;
+  model_version: string | null;
+  model_mode: string | null;
+  model_loaded: boolean | null;
+  last_market_data_at: string | null;
+  market_data_age_seconds: number | null;
+  market_data_cache_bypassed: boolean;
   last_publish_failed: boolean;
 }
 
@@ -109,11 +116,33 @@ function runtimeReasonLabel(reason: string | null | undefined): string {
   const labels: Record<string, string> = {
     confidence_below_threshold: 'Market setup did not meet the confidence threshold',
     confidence_threshold_passed: 'Signal passed the confidence threshold and was published',
+    market_data_unchanged:
+      'No new market-data revision was available, so no duplicate signal was published',
     scheduler_integration_disabled: 'AI scheduler integration is disabled',
     model_not_approved_for_live:
       'Current AI model is not yet approved for live-money automation',
   };
   return labels[reason] ?? reason.replaceAll('_', ' ');
+}
+
+function formatConfidence(value: number | null | undefined): string {
+  if (value == null) return '—';
+  return `${(value * 100).toFixed(2)}%`;
+}
+
+function formatAgeSeconds(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '—';
+  if (value < 60) return `${Math.round(value)}s ago`;
+  const minutes = Math.floor(value / 60);
+  const seconds = Math.round(value % 60);
+  return `${minutes}m ${seconds}s ago`;
+}
+
+function modelModeLabel(mode: string | null | undefined): string {
+  if (!mode) return 'Unknown';
+  if (mode === 'heuristic_placeholder') return 'Heuristic scaffold';
+  if (mode === 'real') return 'Trained XGBoost';
+  return mode.replaceAll('_', ' ');
 }
 
 function PositionCard({ position }: { position: LivePositionRowView }) {
@@ -770,6 +799,32 @@ export default function AiTradingPage() {
                     <strong>{formatTimestamp(automationRuntime?.next_run_at)}</strong>
                   </div>
                   <div>
+                    <span>Model</span>
+                    <strong>
+                      {automationRuntime?.model_version
+                        ? `${automationRuntime.model_version} · ${modelModeLabel(automationRuntime.model_mode)}`
+                        : 'Awaiting first evaluation'}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Market data</span>
+                    <strong>
+                      {automationRuntime?.last_market_data_at
+                        ? `${formatTimestamp(automationRuntime.last_market_data_at)} · ${formatAgeSeconds(automationRuntime.market_data_age_seconds)}`
+                        : 'Awaiting first broker snapshot'}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Data read</span>
+                    <strong>
+                      {automationRuntime?.market_data_cache_bypassed
+                        ? 'Fresh broker read per scan'
+                        : automationRuntime?.source
+                          ? `${automationRuntime.source.toUpperCase()} · cache eligible`
+                          : '—'}
+                    </strong>
+                  </div>
+                  <div>
                     <span>Last decision</span>
                     <strong>{automationRuntime?.last_decision?.replaceAll('_', ' ') ?? 'WAITING'}</strong>
                   </div>
@@ -778,10 +833,22 @@ export default function AiTradingPage() {
                     <strong>
                       {automationRuntime?.last_confidence_score == null
                         ? '—'
-                        : `${Math.round(automationRuntime.last_confidence_score * 100)}% / ${Math.round((automationRuntime.confidence_threshold ?? 0) * 100)}% required`}
+                        : `${formatConfidence(automationRuntime.last_confidence_score)} / ${formatConfidence(automationRuntime.confidence_threshold)} required`}
                     </strong>
                   </div>
+                  <div>
+                    <span>Confidence evaluated</span>
+                    <strong>{formatTimestamp(automationRuntime?.last_confidence_at)}</strong>
+                  </div>
                 </div>
+
+                {automationRuntime?.model_mode === 'heuristic_placeholder' && (
+                  <Alert variant="warning">
+                    The active model is the baseline heuristic scaffold, not a trained XGBoost model.
+                    Confidence is calculated from engineered market features and must not be interpreted
+                    as a production-model probability.
+                  </Alert>
+                )}
 
                 <div className="ai-runtime-reason">
                   <span>Decision explanation</span>
