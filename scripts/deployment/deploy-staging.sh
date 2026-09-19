@@ -9,6 +9,8 @@ readonly PNPM_VERSION="10.34.5"
 readonly RELEASE_NODE_MAJOR="22"
 readonly MAX_HEALTH_ATTEMPTS="${MAX_HEALTH_ATTEMPTS:-30}"
 readonly HEALTH_RETRY_SECONDS="${HEALTH_RETRY_SECONDS:-2}"
+readonly MIGRATION_MAX_ATTEMPTS="${MIGRATION_MAX_ATTEMPTS:-5}"
+readonly MIGRATION_RETRY_SECONDS="${MIGRATION_RETRY_SECONDS:-3}"
 readonly ADMIN_EXPECTED_STATUSES="${ADMIN_EXPECTED_STATUSES:-200,302,303,307,308,401,403}"
 
 STAGE="preflight"
@@ -136,6 +138,48 @@ wait_for_http_status() {
   die "HTTP endpoint did not become ready within the allowed attempts."
 }
 
+is_transient_postgres_migration_failure() {
+  local output_file="$1"
+  grep -Eiq     'database system is not yet accepting connections|database system is starting up|database system is shutting down|could not connect to server|connection refused|ECONNREFUSED|server closed the connection unexpectedly|Connection terminated unexpectedly'     "$output_file"
+}
+
+run_database_migrations() {
+  local attempt
+  local exit_code
+  local output_file
+  output_file="$(mktemp)"
+
+  for ((attempt = 1; attempt <= MIGRATION_MAX_ATTEMPTS; attempt += 1)); do
+    : > "$output_file"
+
+    if corepack pnpm@"$PNPM_VERSION" --filter @irexpro/api migration:run >"$output_file" 2>&1; then
+      cat "$output_file"
+      rm -f "$output_file"
+      return 0
+    else
+      exit_code=$?
+      cat "$output_file" >&2
+    fi
+
+    if ! is_transient_postgres_migration_failure "$output_file"; then
+      rm -f "$output_file"
+      return "$exit_code"
+    fi
+
+    if ((attempt >= MIGRATION_MAX_ATTEMPTS)); then
+      printf 'Database migration transient failure persisted after %s attempts.\n'         "$MIGRATION_MAX_ATTEMPTS" >&2
+      rm -f "$output_file"
+      return "$exit_code"
+    fi
+
+    printf 'Database is temporarily unavailable; retrying migration attempt %s/%s.\n'       "$((attempt + 1))" "$MIGRATION_MAX_ATTEMPTS" >&2
+    sleep "$MIGRATION_RETRY_SECONDS"
+  done
+
+  rm -f "$output_file"
+  return 1
+}
+
 [[ "$#" -eq 1 ]] || die "Usage: deploy-staging.sh <40-character-commit-sha>"
 CANDIDATE_SHA="$1"
 readonly CANDIDATE_SHA
@@ -210,7 +254,7 @@ corepack pnpm@"$PNPM_VERSION" --filter @irexpro/admin build
 # PM2 process is restarted. A migration failure therefore fails closed while
 # the previously running release remains untouched.
 STAGE="database-migrations"
-corepack pnpm@"$PNPM_VERSION" --filter @irexpro/api migration:run
+run_database_migrations
 
 STAGE="restart-ai"
 pm2 restart "$AI_PM2_NAME" --update-env
