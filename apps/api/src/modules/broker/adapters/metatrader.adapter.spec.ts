@@ -957,12 +957,7 @@ describe('MetaTraderAdapter', () => {
 
       await adapter.getOHLCV('EURUSD', 'H1', 2, before);
 
-      expect(mockAccount.getHistoricalCandles).toHaveBeenLastCalledWith(
-        'EURUSD',
-        '1h',
-        before,
-        2,
-      );
+      expect(mockAccount.getHistoricalCandles).toHaveBeenLastCalledWith('EURUSD', '1h', before, 2);
     });
   });
 
