@@ -31,6 +31,10 @@ def _m1_fixture(periods: int = 12 * 60) -> pd.DataFrame:
             "low": open_ - 0.0001,
             "close": close,
             "volume": 1000.0 + (index % 37),
+            "tick_volume": 1000.0 + (index % 37),
+            "trade_volume": 10.0 + (index % 11),
+            "spread_points": 12.0 + (index % 3),
+            "price_digits": 5,
         }
     )
 
@@ -42,6 +46,9 @@ def test_multitimeframe_alignment_uses_only_fully_closed_context():
 
     assert row["m1_source_bar_open"] == pd.Timestamp("2026-01-01T10:14:00Z")
     assert row["m1_available_at"] == decision_time
+    assert row["m1_spread_points"] >= 12.0
+    assert row["m1_spread_bps"] > 0.0
+    assert row["m1_tick_volume"] > 0.0
 
     assert row["m5_source_bar_open"] == pd.Timestamp("2026-01-01T10:10:00Z")
     assert row["m5_available_at"] == decision_time
@@ -109,4 +116,6 @@ def test_multitimeframe_corpus_writes_reproducible_manifest(tmp_path: Path):
     assert manifest["alignment_method"] == "backward_asof_on_available_at"
     assert manifest["canonical_utc_boundaries"] is True
     assert manifest["lookahead_validation"] == "passed"
+    assert manifest["friction_data_complete"] is True
+    assert manifest["friction_coverage"]["m1_spread_bps"] == 1.0
     assert manifest["dataset_sha256"] == result["dataset_sha256"]
