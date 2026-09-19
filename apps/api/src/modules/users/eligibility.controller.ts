@@ -48,6 +48,16 @@ export class EligibilityController {
     return this.eligibilityService.acceptDisclosures(userId, dto);
   }
 
+  @Post('users/me/eligibility/kyc-submission')
+  @Header('Cache-Control', 'no-store')
+  @Header('Pragma', 'no-cache')
+  @ApiOperation({
+    summary: 'Submit the current adult identity profile for administrator KYC review',
+  })
+  submitKyc(@CurrentUserId() userId: string) {
+    return this.eligibilityService.submitKyc(userId);
+  }
+
   @Get('admin/eligibility/reviews')
   @UseGuards(RolesGuard)
   @Roles(RoleName.ADMIN, RoleName.SUPER_ADMIN)
