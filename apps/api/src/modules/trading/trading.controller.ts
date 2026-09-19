@@ -209,9 +209,7 @@ export class TradingController {
   @Get('active/automation-status')
   @ApiOperation({ summary: 'Get AI Trading scheduler and model operational status' })
   @ApiResponse({ status: 200, description: 'Current AI automation operational state' })
-  async getAutomationStatus(
-    @CurrentUserId() userId: string,
-  ): Promise<AiAutomationStatusView> {
+  async getAutomationStatus(@CurrentUserId() userId: string): Promise<AiAutomationStatusView> {
     return this.tradingService.getAutomationStatus(userId);
   }
 
