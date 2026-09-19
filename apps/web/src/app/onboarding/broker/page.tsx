@@ -12,6 +12,7 @@ import { api } from '@/lib/api';
 import { IREXPRO_BROKER_OAUTH_FLOW_KEY } from '@/lib/broker-oauth-flow';
 import { formatEnumLabel } from '@irexpro/types';
 import { connectionVerificationLabel } from '@/lib/trader-session';
+import './broker-onboarding.css';
 import type {
   SupportedBroker,
   BrokerConnectionView,
@@ -403,8 +404,9 @@ export default function OnboardingBrokerPage() {
 
       {error && <Alert variant="error">{error}</Alert>}
 
-      {/* ── Existing connections ──────────────────────────────────────────── */}
-      <Card>
+      <div className="broker-onboarding-grid">
+        {/* ── Existing connections ──────────────────────────────────────────── */}
+        <Card className="broker-onboarding-card broker-onboarding-card--existing">
         <h2 className="card__title">Existing connections</h2>
         <p className="card__subtitle">
           Manage your linked broker accounts. Disconnect a connection before deleting it.
@@ -519,8 +521,8 @@ export default function OnboardingBrokerPage() {
         )}
       </Card>
 
-      {/* ── Connect a new broker ──────────────────────────────────────────── */}
-      <Card>
+        {/* ── Connect a new broker ──────────────────────────────────────────── */}
+        <Card className="broker-onboarding-card broker-onboarding-card--new">
         <h2 className="card__title">Connect a new broker</h2>
         <p className="card__subtitle">
           Paper Broker is recommended for your first connection — it is simulated and safest.
@@ -642,6 +644,8 @@ export default function OnboardingBrokerPage() {
           <Link href="/dashboard" className="text-sm">Back to dashboard →</Link>
         </div>
       </Card>
+
+      </div>
 
       <ConfirmDialog
         open={confirmDialog.open}
