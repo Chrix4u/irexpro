@@ -105,3 +105,42 @@ def test_collect_corpus_set_fails_closed_on_incomplete_pair(tmp_path: Path):
         raise AssertionError("Expected incomplete corpus-set failure")
 
     assert not (tmp_path / "corpus-set.manifest.json").exists()
+
+
+def test_collect_corpus_set_clears_stale_complete_manifest_before_refresh(tmp_path: Path):
+    stale_manifest = tmp_path / "corpus-set.manifest.json"
+    stale_manifest.write_text('{"complete": true}', encoding="utf-8")
+
+    def collector(**kwargs):
+        instrument = kwargs["instrument"]
+        output = Path(kwargs["output_path"])
+        return {
+            "instrument": instrument,
+            "timeframe": "H1",
+            "row_count": 10 if instrument == "EURUSD" else 10000,
+            "pages_fetched": 1,
+            "start": "2024-01-01T00:00:00+00:00",
+            "end": "2025-02-20T15:00:00+00:00",
+            "dataset_sha256": "c" * 64,
+            "closed_candles_only": True,
+            "source_account_fingerprint": "a" * 64,
+            "dataset_path": str(output),
+            "manifest_path": str(output.with_suffix(".manifest.json")),
+        }
+
+    try:
+        collect_historical_corpus_set(
+            api_base_url="https://api.example.test/api/v1",
+            internal_api_key="internal-key",
+            user_id="u",
+            broker_connection_id="c",
+            output_dir=tmp_path,
+            collector=collector,
+            collected_at=datetime(2026, 9, 19, 18, 0, tzinfo=UTC),
+        )
+    except ValueError as exc:
+        assert "EURUSD corpus incomplete" in str(exc)
+    else:
+        raise AssertionError("Expected incomplete corpus-set failure")
+
+    assert not stale_manifest.exists()
