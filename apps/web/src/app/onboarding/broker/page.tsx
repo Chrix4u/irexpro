@@ -378,6 +378,7 @@ export default function OnboardingBrokerPage() {
 
   return (
     <DashboardShell user={user} onLogout={logout} activeRoute="/onboarding/broker">
+      <main className="workspace-page broker-onboarding-page" data-testid="broker-onboarding-workspace">
       {/* Premium page header — secure, enterprise-grade tone */}
       <div style={{ marginBottom: 'var(--space-6)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', marginBottom: 'var(--space-2)' }}>
@@ -642,6 +643,8 @@ export default function OnboardingBrokerPage() {
           <Link href="/dashboard" className="text-sm">Back to dashboard →</Link>
         </div>
       </Card>
+
+      </main>
 
       <ConfirmDialog
         open={confirmDialog.open}
