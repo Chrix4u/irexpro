@@ -199,7 +199,6 @@ export class ReconcileTradingSessionSchema1754800000000 implements MigrationInte
       WHERE close_ai_positions_on_stop = true
     `);
 
-
     const requiredColumns = [
       'execution_mode',
       'authority_generation',
