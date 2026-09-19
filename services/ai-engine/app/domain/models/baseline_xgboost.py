@@ -49,12 +49,18 @@ class BaselineXGBoostModel:
     heuristic scaffold used by existing paper-mode development.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        model_path: str | Path | None = None,
+        metadata_path: str | Path | None = None,
+    ) -> None:
         self._model: Any = None
         self._model_loaded = False
         self._model_version = MODEL_VERSION
         self._feature_names = list(FEATURE_COLUMNS)
         self._artifact_metadata: dict[str, Any] = {}
+        self._configured_model_path = Path(model_path) if model_path else None
+        self._configured_metadata_path = Path(metadata_path) if metadata_path else None
 
     def load_model(self) -> bool:
         """
@@ -64,17 +70,17 @@ class BaselineXGBoostModel:
         The caller can then truthfully report heuristic_placeholder mode.
         """
         raw_model_path = os.getenv(MODEL_PATH_ENV, "").strip()
-        if not raw_model_path:
+        model_path = self._configured_model_path or (Path(raw_model_path) if raw_model_path else None)
+        if model_path is None:
             logger.info("No XGBoost model configured — heuristic placeholder mode")
             return False
 
-        model_path = Path(raw_model_path)
         if not model_path.is_file():
             logger.error("Configured XGBoost model file does not exist", path=str(model_path))
             return False
 
         raw_metadata_path = os.getenv(MODEL_METADATA_PATH_ENV, "").strip()
-        metadata_path = (
+        metadata_path = self._configured_metadata_path or (
             Path(raw_metadata_path)
             if raw_metadata_path
             else model_path.with_suffix(".metadata.json")
