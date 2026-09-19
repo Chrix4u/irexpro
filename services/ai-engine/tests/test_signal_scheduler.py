@@ -129,6 +129,62 @@ async def test_low_confidence_not_published():
 
 
 @pytest.mark.asyncio
+async def test_full_auto_cycle_blocks_when_active_model_is_not_live_approved():
+    from app.domain.models.registry import build_default_registry
+    from app.main import app_state
+
+    settings = Settings(ai_scheduler_enabled=True, ai_signal_mode="paper")
+    scheduler = SignalScheduler(nestjs_client=AsyncMock())
+    scheduler._settings = settings
+
+    mock_generator = AsyncMock()
+    scheduler._signal_generator = mock_generator
+    job = ScheduledSessionJobStub()
+    job.execution_mode = "FULL_AUTO"
+    scheduler._jobs["session-1"] = job
+    app_state["registry"] = build_default_registry()
+
+    await scheduler._run_session_job("session-1")
+
+    mock_generator.generate.assert_not_called()
+    scheduler._nestjs_client.publish_signal.assert_not_called()
+    assert job.last_decision == "LIVE_MODEL_BLOCKED"
+    assert "not approved for live trading" in (job.last_reason or "")
+
+
+@pytest.mark.asyncio
+async def test_job_scans_each_configured_instrument_and_timeframe():
+    settings = Settings(ai_scheduler_enabled=True, ai_signal_mode="paper")
+    scheduler = SignalScheduler(nestjs_client=AsyncMock())
+    scheduler._settings = settings
+
+    mock_generator = AsyncMock()
+    from app.domain.signals.schemas import NoSignalResult
+
+    mock_generator.generate.return_value = SignalGenerationResponse(
+        generated=False,
+        no_signal=NoSignalResult(
+            reason="confidence_below_threshold",
+            instrument="EURUSD",
+            confidence_score=0.4,
+            threshold=0.6,
+        ),
+        mode="paper",
+    )
+    scheduler._signal_generator = mock_generator
+    job = ScheduledSessionJobStub()
+    job.instruments = ["EURUSD", "GBPUSD"]
+    job.timeframes = ["M15", "H1"]
+    scheduler._jobs["session-1"] = job
+
+    await scheduler._run_session_job("session-1")
+
+    assert mock_generator.generate.await_count == 4
+    assert job.scan_count == 4
+    assert job.last_decision == "NO_SIGNAL"
+
+
+@pytest.mark.asyncio
 async def test_shutdown_stops_scheduler_cleanly():
     settings = Settings(ai_scheduler_enabled=True, ai_signal_interval_seconds=3600)
     scheduler = SignalScheduler()
