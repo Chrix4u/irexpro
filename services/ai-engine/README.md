@@ -99,9 +99,28 @@ python -m app.domain.training.collect_historical \
   --output data/EURUSD_H1.csv
 ```
 
-Repeat this for each approved training instrument. Generated datasets and model
-artifacts remain excluded from Git. The manifest records the corpus date range,
-row count, collection time, and dataset fingerprint for reproducibility.
+For the standard iRexPro H1 training universe, collect all six scheduler pairs
+with one common cut-off and one top-level corpus-set manifest:
+
+```powershell
+$env:NESTJS_INTERNAL_API_KEY="<internal-key>"
+python -m app.domain.training.collect_corpus_set \
+  --api-base-url https://irexpro.lightworldtech.com/api/v1 \
+  --user-id <user-uuid> \
+  --broker-connection-id <connection-uuid> \
+  --timeframe H1 \
+  --target-rows-per-instrument 10000 \
+  --output-dir data/h1-corpus-v1
+```
+
+The default set is `EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF`.
+Collection fails closed if any pair is incomplete. Each child dataset has its
+own SHA-256 manifest, while `corpus-set.manifest.json` records a corpus-set ID,
+the common historical cut-off, per-pair hashes/date ranges, total row count,
+and a non-reversible source-account fingerprint. Raw user/broker identifiers
+are not written into corpus manifests.
+
+Generated datasets and model artifacts remain excluded from Git.
 
 ## Training a real XGBoost model
 
