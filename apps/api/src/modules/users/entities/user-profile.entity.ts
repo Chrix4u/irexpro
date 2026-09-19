@@ -17,9 +17,12 @@ export enum KycStatus {
 }
 
 /**
- * Sprint 29: self-reported trading experience level.
- * Used for onboarding profile completion + personalized risk defaults.
- * Stored as a Postgres enum (identity.trading_experience_level).
+ * Legacy Sprint 29 trading-experience enum.
+ *
+ * Retained only for database/backward compatibility. It is no longer
+ * user-editable and MUST NOT drive risk limits, model selection, position
+ * sizing, or automation behavior. iRexPro applies server-governed risk policy
+ * independently of a user's historical self-reported experience.
  */
 export enum TradingExperienceLevel {
   BEGINNER = 'BEGINNER',
@@ -87,8 +90,7 @@ export class UserProfile {
   riskDisclosureAcceptedAt: Date | null;
 
   /**
-   * Sprint 29: self-reported trading experience level.
-   * Null until the user completes the onboarding profile step.
+   * Legacy compatibility field only. Not authoritative for trading behavior.
    */
   @Column({
     name: 'trading_experience_level',
