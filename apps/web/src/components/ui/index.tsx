@@ -4,7 +4,7 @@
 
 import { ButtonHTMLAttributes, ReactNode } from 'react';
 import MobileBottomNav from '@/components/mobile-bottom-nav';
-import WorkspaceSidebar, { workspaceRouteTitle } from '@/components/workspace-sidebar';
+import WorkspaceSidebar from '@/components/workspace-sidebar';
 import { AutoRevealAlert } from '@/components/ui/AutoRevealAlert';
 // ── Button ───────────────────────────────────────────────────────────────────
 type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
@@ -137,6 +137,22 @@ interface DashboardShellProps {
   activeRoute?: string;
   title?: string;
   children: ReactNode;
+}
+
+function workspaceRouteTitle(activeRoute: string | undefined): string {
+  if (activeRoute === '/dashboard') return 'Dashboard';
+  if (activeRoute === '/trade') return 'AI Trading';
+  if (activeRoute === '/trade/portfolio') return 'Portfolio';
+  if (activeRoute === '/portfolio') return 'Portfolio & Risk';
+  if (activeRoute === '/live-account' || activeRoute?.startsWith('/live-account/')) {
+    return 'Positions & Activity';
+  }
+  if (activeRoute === '/onboarding/broker') return 'Broker Account';
+  if (activeRoute === '/security') return 'Security';
+  if (activeRoute === '/payments/success' || activeRoute?.startsWith('/payments/success/')) {
+    return 'Fees & Payments';
+  }
+  return 'Dashboard';
 }
 
 export function DashboardShell({ user, onLogout, activeRoute, title, children }: DashboardShellProps) {
