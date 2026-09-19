@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -98,7 +99,7 @@ export class MarketDataService {
           `instrument=${instrument}: ${message}`,
       );
 
-      if (err instanceof ForbiddenException) {
+      if (err instanceof ForbiddenException || err instanceof BadRequestException) {
         throw err;
       }
 
