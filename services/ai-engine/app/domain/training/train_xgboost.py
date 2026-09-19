@@ -127,9 +127,9 @@ def train_offline(
     if val_df[TARGET_COLUMN].nunique() < 2:
         raise ValueError("Validation split must contain both directional classes")
 
-    X_train = train_df[FEATURE_COLUMNS]
+    x_train = train_df[FEATURE_COLUMNS]
     y_train = train_df[TARGET_COLUMN].astype(int)
-    X_val = val_df[FEATURE_COLUMNS]
+    x_val = val_df[FEATURE_COLUMNS]
     y_val = val_df[TARGET_COLUMN].astype(int)
 
     model = XGBClassifier(
@@ -149,13 +149,13 @@ def train_offline(
         early_stopping_rounds=40,
     )
     model.fit(
-        X_train,
+        x_train,
         y_train,
-        eval_set=[(X_val, y_val)],
+        eval_set=[(x_val, y_val)],
         verbose=False,
     )
 
-    positive_probabilities = model.predict_proba(X_val)[:, 1]
+    positive_probabilities = model.predict_proba(x_val)[:, 1]
     metrics = compute_classification_metrics(y_val, positive_probabilities)
 
     artifact_path = default_model_artifact_path(model_version, output_dir)
