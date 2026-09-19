@@ -301,9 +301,7 @@ export class TradingService implements OnApplicationBootstrap {
     // literal) is forwarded so the scheduler notification reflects the session
     // authority; the risk + execution gates remain the enforcement boundary.
     void this.registerSessionWithAiEngine(userId, session).catch((err: Error) =>
-      this.logger.warn(
-        `AI engine start notification failed session=${session.id}: ${err.message}`,
-      ),
+      this.logger.warn(`AI engine start notification failed session=${session.id}: ${err.message}`),
     );
 
     return session;
@@ -349,9 +347,7 @@ export class TradingService implements OnApplicationBootstrap {
 
     const changed = await this.executionService.changeExecutionMode(userId, sessionId, newMode);
     void this.registerSessionWithAiEngine(userId, changed).catch((err: Error) =>
-      this.logger.warn(
-        `AI engine mode reconciliation failed session=${sessionId}: ${err.message}`,
-      ),
+      this.logger.warn(`AI engine mode reconciliation failed session=${sessionId}: ${err.message}`),
     );
     return changed;
   }
@@ -522,9 +518,7 @@ export class TradingService implements OnApplicationBootstrap {
       const status = await this.aiEngineClient.getSessionStatus(session.id);
       if (!status.registered && status.scheduler_enabled) {
         void this.registerSessionWithAiEngine(userId, session).catch((err: Error) =>
-          this.logger.warn(
-            `AI scheduler self-heal failed session=${session.id}: ${err.message}`,
-          ),
+          this.logger.warn(`AI scheduler self-heal failed session=${session.id}: ${err.message}`),
         );
       }
       const job = status.job;
@@ -554,7 +548,9 @@ export class TradingService implements OnApplicationBootstrap {
         lastDecision: job?.last_decision ?? null,
         lastReason:
           job?.last_reason ??
-          (status.registered ? 'Waiting for scheduler telemetry' : 'Scheduler registration pending'),
+          (status.registered
+            ? 'Waiting for scheduler telemetry'
+            : 'Scheduler registration pending'),
         lastInstrument: job?.last_instrument ?? null,
         lastTimeframe: job?.last_timeframe ?? null,
         lastConfidenceScore: job?.last_confidence_score ?? null,
