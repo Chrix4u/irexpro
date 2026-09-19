@@ -444,9 +444,31 @@ export class TradingService {
       };
     }
 
-    return this.aiEngineClient.getSessionStatus(sessionId);
-  }
+    const runtime = await this.aiEngineClient.getSessionStatus(sessionId);
 
+    // AI scheduler jobs are intentionally in-memory. If the Python service was
+    // restarted while this trading session remained ACTIVE, heal the missing
+    // registration from the durable session authority instead of requiring the
+    // user to Stop/Start manually.
+    if (
+      runtime.enabled &&
+      !runtime.registered &&
+      session.status === TradingSessionStatus.ACTIVE
+    ) {
+      await this.aiEngineClient.notifySessionStarted({
+        userId,
+        tradingSessionId: session.id,
+        brokerConnectionId: session.brokerConnectionId,
+        instruments: ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF'],
+        timeframe: 'H1',
+        source: 'broker',
+        mode: ExecutionMode.PAPER_ONLY,
+      });
+      return this.aiEngineClient.getSessionStatus(sessionId);
+    }
+
+    return runtime;
+  }
 
   async getSessionById(userId: string, sessionId: string): Promise<TradingSession | null> {
     const session = await this.executionService.findSessionById(sessionId);
