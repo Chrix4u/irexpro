@@ -1,7 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
+  AiSchedulerSessionRegistration,
   AiSchedulerSessionStartPayload,
+  AiSchedulerSessionStatus,
   AiSchedulerSessionStopPayload,
 } from './interfaces/ai-scheduler.interface';
 
@@ -34,21 +36,66 @@ export class AiEngineClient {
     return this.configService.get<string>('internalApi.key');
   }
 
-  async notifySessionStarted(payload: AiSchedulerSessionStartPayload): Promise<void> {
-    if (!this.isSchedulerIntegrationEnabled()) return;
+  async notifySessionStarted(
+    payload: AiSchedulerSessionStartPayload,
+  ): Promise<AiSchedulerSessionRegistration | null> {
+    if (!this.isSchedulerIntegrationEnabled()) return null;
 
     const url = `${this.getBaseUrl()}/scheduler/sessions/start`;
-    await this.post(url, { ...payload }, payload.tradingSessionId);
+    return this.post<AiSchedulerSessionRegistration>(
+      url,
+      { ...payload },
+      payload.tradingSessionId,
+    );
   }
 
-  async notifySessionStopped(payload: AiSchedulerSessionStopPayload): Promise<void> {
-    if (!this.isSchedulerIntegrationEnabled()) return;
+  async notifySessionStopped(
+    payload: AiSchedulerSessionStopPayload,
+  ): Promise<AiSchedulerSessionRegistration | null> {
+    if (!this.isSchedulerIntegrationEnabled()) return null;
 
     const url = `${this.getBaseUrl()}/scheduler/sessions/stop`;
-    await this.post(url, { ...payload }, payload.tradingSessionId);
+    return this.post<AiSchedulerSessionRegistration>(
+      url,
+      { ...payload },
+      payload.tradingSessionId,
+    );
   }
 
-  private async post(url: string, body: Record<string, unknown>, sessionId: string): Promise<void> {
+  async getSessionStatus(tradingSessionId: string): Promise<AiSchedulerSessionStatus> {
+    if (!this.isSchedulerIntegrationEnabled()) {
+      return {
+        enabled: false,
+        registered: false,
+        trading_session_id: tradingSessionId,
+        active: false,
+        instruments: [],
+        timeframe: null,
+        interval_seconds: null,
+        source: null,
+        last_run_at: null,
+        next_run_at: null,
+        last_decision: null,
+        last_reason: 'scheduler_integration_disabled',
+        last_confidence_score: null,
+        confidence_threshold: null,
+        last_publish_failed: false,
+      };
+    }
+
+    const url = `${this.getBaseUrl()}/scheduler/sessions/status`;
+    return this.post<AiSchedulerSessionStatus>(
+      url,
+      { tradingSessionId },
+      tradingSessionId,
+    );
+  }
+
+  private async post<T>(
+    url: string,
+    body: Record<string, unknown>,
+    sessionId: string,
+  ): Promise<T> {
     const apiKey = this.getInternalApiKey();
     if (!apiKey) {
       this.logger.warn(
@@ -76,7 +123,10 @@ export class AiEngineClient {
         this.logger.warn(
           `AI engine notification failed session=${sessionId} status=${response.status}`,
         );
+        throw new Error(`AI engine returned HTTP ${response.status}`);
       }
+
+      return (await response.json()) as T;
     } catch (err) {
       this.logger.warn(
         `AI engine notification error session=${sessionId}: ${(err as Error).message}`,
