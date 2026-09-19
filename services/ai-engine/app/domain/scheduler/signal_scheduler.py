@@ -109,8 +109,11 @@ class SignalScheduler:
 
         session_id = request.trading_session_id
         if session_id in self._jobs:
-            logger.info("Duplicate scheduler job ignored", trading_session_id=session_id)
-            return False
+            logger.info(
+                "Reconciling existing scheduler job",
+                trading_session_id=session_id,
+            )
+            self.unregister_session(session_id)
 
         interval = request.interval_seconds or settings.ai_signal_interval_seconds
         timeframes = request.timeframes or [request.timeframe]
