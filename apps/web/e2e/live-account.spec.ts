@@ -474,8 +474,8 @@ test.describe('Positions & Activity', () => {
     const summary = page.locator('.activity-summary-grid');
     await expect(summary.getByText('Broker account', { exact: true })).toBeVisible();
     await expect(summary.getByText('Primary live account', { exact: true })).toBeVisible();
-    await expect(summary.getByText('10432.50 USD', { exact: true })).toBeVisible();
-    await expect(summary.getByText('10501.23 USD', { exact: true })).toBeVisible();
+    await expect(summary.getByText('10,432.50 USD', { exact: true })).toBeVisible();
+    await expect(summary.getByText('10,501.23 USD', { exact: true })).toBeVisible();
     await expect(summary.getByText('AI Trading', { exact: true })).toBeVisible();
     await expect(summary.getByText('ACTIVE', { exact: true })).toBeVisible();
     await expect(summary.getByRole('link', { name: /open ai trading/i })).toHaveAttribute('href', '/trade');
@@ -491,7 +491,7 @@ test.describe('Positions & Activity', () => {
 
     const positions = liveSection(page, 'positions-title');
     await expect(positions.getByText('EURUSD', { exact: true })).toBeVisible();
-    await expect(positions.getByText('1.10420000', { exact: true })).toBeVisible();
+    await expect(positions.getByText('1.10420', { exact: true })).toBeVisible();
     await expect(positions.getByText('+41.00 USD', { exact: true })).toBeVisible();
 
     await expect(positions.getByText('XAUUSD', { exact: true })).toBeVisible();
@@ -510,6 +510,9 @@ test.describe('Positions & Activity', () => {
 
     await expect(page.getByText('ORDER SUBMITTED', { exact: true }).first()).toBeVisible();
     await expect(page.getByText(/credentials have expired/i)).toBeVisible();
+
+    const activityTimeline = page.locator('.activity-ai-card .activity-timeline');
+    await expect(activityTimeline).toHaveCSS('overflow-y', 'auto');
 
     const health = page.getByRole('heading', { level: 2, name: 'Execution Health' }).locator('..');
     await expect(health.getByText('Open positions', { exact: true })).toBeVisible();
