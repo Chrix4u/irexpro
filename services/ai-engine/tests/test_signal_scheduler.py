@@ -151,7 +151,7 @@ class ScheduledSessionJobStub:
     last_reason = None
     last_confidence_score = None
     last_confidence_at = None
-    last_market_data_revision = None
+    market_data_revisions = {}
     last_market_data_at = None
     model_version = None
     model_mode = None
@@ -196,7 +196,7 @@ async def test_unchanged_market_revision_suppresses_duplicate_signal_publish():
     )
     scheduler._signal_generator = mock_generator
     job = ScheduledSessionJobStub()
-    job.last_market_data_revision = "same-market-revision"
+    job.market_data_revisions["EURUSD"] = "same-market-revision"
     scheduler._jobs["session-1"] = job
 
     await scheduler._run_session_job("session-1")
