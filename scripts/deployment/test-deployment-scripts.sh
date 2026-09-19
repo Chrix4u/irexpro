@@ -162,7 +162,7 @@ if [[ "$url" == *ready* ]]; then
 elif [[ "$url" == *live* ]]; then
   printf '{"status":"alive"}'
 elif [[ "$url" == *ai* ]]; then
-  printf '{"signal_mode":"paper"}'
+  printf '{"signal_mode":"paper","scheduler_enabled":true}'
 else
   printf '{"status":"ok"}'
 fi
@@ -180,6 +180,7 @@ run_deploy() {
     COMMAND_LOG="$COMMAND_LOG" \
     STAGING_ROOT="$FIXTURE_REPO" \
     API_PM2_NAME='irexpro-api-staging' \
+    AI_PM2_NAME='irexpro-ai-staging' \
     WEB_PM2_NAME='irexpro-web-staging' \
     ADMIN_PM2_NAME='irexpro-admin-staging' \
     LOCAL_API_LIVE_URL='http://local.test/api/live' \
@@ -207,6 +208,7 @@ run_rollback() {
     COMMAND_LOG="$COMMAND_LOG" \
     STAGING_ROOT="$FIXTURE_REPO" \
     API_PM2_NAME='irexpro-api-staging' \
+    AI_PM2_NAME='irexpro-ai-staging' \
     WEB_PM2_NAME='irexpro-web-staging' \
     ADMIN_PM2_NAME='irexpro-admin-staging' \
     LOCAL_API_LIVE_URL='http://local.test/api/live' \
@@ -366,6 +368,7 @@ grep -q '@irexpro/api build' "$COMMAND_LOG" || fail 'API build missing.'
 grep -q '@irexpro/web build' "$COMMAND_LOG" || fail 'Web build missing.'
 grep -q '@irexpro/admin build' "$COMMAND_LOG" || fail 'Admin build missing.'
 grep -q '@irexpro/api migration:run' "$COMMAND_LOG" || fail 'Database migration missing.'
+grep -q '^pm2 restart irexpro-ai-staging ' "$COMMAND_LOG" || fail 'AI engine restart missing.'
 
 make_fixture 'rollback-verification'
 rollback_output="$(run_rollback "$FIXTURE_CANDIDATE_SHA" "$FIXTURE_PRIOR_SHA")"
