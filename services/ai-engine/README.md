@@ -191,6 +191,7 @@ it is **not** a probability of profit or a guarantee of future performance.
 |--------|------|-------------|
 | GET | `/api/v1/health` | Service health |
 | GET | `/api/v1/models/active` | Active model metadata |
+| GET | `/api/v1/models/resolve?instrument=EURUSD&timeframe=H1` | Resolve the exact routed model for a market |
 | GET | `/api/v1/models` | All registered models |
 | POST | `/api/v1/market-data/mock-ohlcv` | Mock OHLCV data (dev only) |
 | POST | `/api/v1/signals/generate` | Generate signal candidate (not published) |
