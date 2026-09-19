@@ -52,3 +52,7 @@ Thumbs.db
 apps/web/playwright-report/
 apps/web/test-results/
 apps/web/.playwright/
+
+# AI training data and generated model artifacts
+services/ai-engine/data/
+services/ai-engine/models/*.json
