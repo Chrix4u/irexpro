@@ -159,6 +159,14 @@ if [[ "$url" == 'http://local.test/admin' && "$admin_failures" =~ ^[0-9]+$ ]]; t
     exit 7
   fi
 fi
+ai_failures="${FAKE_AI_CONNECT_FAILURES:-0}"
+if [[ "$url" == 'http://local.test/ai/health' && "$ai_failures" =~ ^[0-9]+$ ]]; then
+  ai_attempts="$(grep -F -c 'http://local.test/ai/health' "$COMMAND_LOG" || true)"
+  if (( ai_attempts <= ai_failures )); then
+    printf 'simulated AI connection refused\n' >&2
+    exit 7
+  fi
+fi
 if [[ "$*" == *"--write-out"* ]]; then
   if [[ "$url" == *admin* ]]; then
     printf '307'
@@ -310,6 +318,27 @@ migration_retry_attempts="$(grep -F -c '@irexpro/api migration:run' "$COMMAND_LO
 [[ "$migration_retry_attempts" -eq 3 ]] || fail 'Transient migration retry test must exercise exactly two retries before success.'
 grep -q '^pm2 restart irexpro-ai-staging ' "$COMMAND_LOG" || fail 'Runtime restart must proceed after transient migration recovery.'
 
+
+make_fixture 'ai-startup-retry'
+git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
+ai_retry_output="$(run_deploy "$FIXTURE_CANDIDATE_SHA" FAKE_AI_CONNECT_FAILURES=1 MAX_HEALTH_ATTEMPTS=2)"
+[[ "$ai_retry_output" == *'STAGING DEPLOYMENT VERIFIED'* ]] || fail 'Transient AI startup refusal was not recovered by bounded readiness retries.'
+ai_retry_attempts="$(grep -F -c 'http://local.test/ai/health' "$COMMAND_LOG" || true)"
+[[ "$ai_retry_attempts" -eq 5 ]] || fail 'AI startup retry test must exercise one failed probe, a successful two-probe readiness check, and the final two-probe observation.'
+grep -q '^pm2 restart irexpro-api-staging ' "$COMMAND_LOG" || fail 'API restart must proceed after AI readiness recovery.'
+
+make_fixture 'ai-startup-exhausted'
+git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
+if ai_exhausted_output="$(run_deploy "$FIXTURE_CANDIDATE_SHA" FAKE_AI_CONNECT_FAILURES=99 MAX_HEALTH_ATTEMPTS=2 2>&1)"; then
+  fail 'Exhausted AI readiness retries must fail the deployment.'
+fi
+[[ "$ai_exhausted_output" == *'failed_stage=ai-runtime-readiness'* ]] || fail 'Exhausted AI readiness retries must fail at the ai-runtime-readiness stage.'
+[[ "$ai_exhausted_output" == *'AI engine did not become ready within the allowed attempts.'* ]] || fail 'Exhausted AI readiness retries must emit a clear hold reason.'
+ai_exhausted_attempts="$(grep -F -c 'http://local.test/ai/health' "$COMMAND_LOG" || true)"
+[[ "$ai_exhausted_attempts" -eq 2 ]] || fail 'AI readiness exhaustion must stop exactly at MAX_HEALTH_ATTEMPTS.'
+if grep -q '^pm2 restart irexpro-api-staging ' "$COMMAND_LOG"; then
+  fail 'API must not restart after AI readiness exhaustion.'
+fi
 
 make_fixture 'readiness-failure'
 git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
