@@ -15,6 +15,8 @@ async def test_health_returns_ok(client: AsyncClient):
     assert "timestamp" in data
     assert "version" in data
     assert "environment" in data
+    assert "scheduler_enabled" in data
+    assert "scheduler_running" in data
 
 
 @pytest.mark.asyncio
@@ -25,3 +27,12 @@ async def test_health_signal_mode_is_paper(client: AsyncClient):
     data = response.json()
     assert data["signal_mode"] in ("paper", "sandbox")
     assert data["signal_mode"] != "live"
+
+
+@pytest.mark.asyncio
+async def test_health_reports_scheduler_truth(client: AsyncClient):
+    response = await client.get("/api/v1/health")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["scheduler_enabled"] is False
+    assert data["scheduler_running"] is False
