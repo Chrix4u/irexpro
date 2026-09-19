@@ -30,7 +30,6 @@ import type {
   LivePositionRowView,
 } from "@irexpro/types";
 import type { TradingSessionView } from "@irexpro/types/execution";
-import { ApiClientError } from "@irexpro/api-client";
 import { api } from "../lib/api";
 import { liveAccount } from "../lib/live-account";
 import { useRealtime } from "../context/realtime-context";
