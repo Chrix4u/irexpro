@@ -10,6 +10,7 @@ on:
       - '.github/workflows/deployment-script-safety.yml'
       - '.github/workflows/main-staging-release-gate.yml'
       - '.github/workflows/staging-deploy.yml'
+      - '.github/workflows/uat-runtime-smoke.yml'
   push:
     branches: [main]
     paths:
@@ -19,6 +20,7 @@ on:
       - '.github/workflows/deployment-script-safety.yml'
       - '.github/workflows/main-staging-release-gate.yml'
       - '.github/workflows/staging-deploy.yml'
+      - '.github/workflows/uat-runtime-smoke.yml'
 
 permissions:
   contents: read
