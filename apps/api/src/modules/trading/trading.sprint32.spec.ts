@@ -95,6 +95,7 @@ describe('TradingService — Sprint 32 Snapshot Immutability', () => {
       startSession: jest.fn().mockResolvedValue(mockSession),
       endSession: jest.fn().mockResolvedValue(undefined),
       getActiveSession: jest.fn().mockResolvedValue(mockSession),
+      getActiveSessionForClient: jest.fn().mockResolvedValue(mockSession),
       findSessionById: jest.fn().mockResolvedValue(mockSession),
     };
 
