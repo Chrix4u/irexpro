@@ -49,6 +49,11 @@ def _parse_candles(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "low": candle.get("low"),
                 "close": candle.get("close"),
                 "volume": candle.get("volume"),
+                "tick_volume": candle.get("tickVolume"),
+                "trade_volume": candle.get("tradeVolume"),
+                "spread_points": candle.get("spreadPoints"),
+                "price_digits": candle.get("priceDigits"),
+                "broker_time": candle.get("brokerTime"),
             }
         )
     return rows
@@ -75,6 +80,7 @@ def collect_historical_corpus(
     page_size: int = 500,
     client: httpx.Client | None = None,
     now: datetime | None = None,
+    require_friction: bool = False,
 ) -> dict[str, Any]:
     """Page backwards through broker history and persist a validated CSV + manifest."""
     if target_rows < 250:
@@ -150,9 +156,33 @@ def collect_historical_corpus(
             key=lambda row: pd.Timestamp(row["timestamp"]),
         )[-target_rows:]
 
+        frame = pd.DataFrame(ordered)
+        friction_required_columns = ["spread_points", "price_digits", "tick_volume"]
+        friction_coverage = {
+            column: (
+                float(frame[column].notna().mean())
+                if column in frame.columns and len(frame)
+                else 0.0
+            )
+            for column in [*friction_required_columns, "trade_volume"]
+        }
+        friction_data_complete = all(
+            friction_coverage[column] == 1.0 for column in friction_required_columns
+        )
+        if require_friction and not friction_data_complete:
+            missing = [
+                column
+                for column in friction_required_columns
+                if friction_coverage[column] < 1.0
+            ]
+            raise ValueError(
+                "Historical source is missing required real-friction fields: "
+                + ", ".join(missing)
+            )
+
         output = Path(output_path)
         output.parent.mkdir(parents=True, exist_ok=True)
-        pd.DataFrame(ordered).to_csv(output, index=False)
+        frame.to_csv(output, index=False)
         validated = load_ohlcv_csv(output)
 
         manifest = {
@@ -168,6 +198,9 @@ def collect_historical_corpus(
             "collected_at": observed_now.isoformat(),
             "dataset_sha256": _sha256_file(output),
             "closed_candles_only": True,
+            "friction_data_complete": friction_data_complete,
+            "friction_coverage": friction_coverage,
+            "spread_units": "broker_points",
         }
         manifest_path = output.with_suffix(".manifest.json")
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
@@ -192,6 +225,11 @@ def main() -> None:
     parser.add_argument("--target-rows", type=int, default=10000)
     parser.add_argument("--output", required=True)
     parser.add_argument("--before")
+    parser.add_argument(
+        "--require-friction",
+        action="store_true",
+        help="Fail if spread points, price digits, or tick volume are missing",
+    )
     args = parser.parse_args()
 
     before = datetime.fromisoformat(args.before.replace("Z", "+00:00")) if args.before else None
@@ -205,6 +243,7 @@ def main() -> None:
         target_rows=args.target_rows,
         output_path=args.output,
         before=before,
+        require_friction=args.require_friction,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
 

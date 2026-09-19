@@ -403,5 +403,19 @@ export interface OHLCV {
   high: string;
   low: string;
   close: string;
+  /**
+   * Backward-compatible activity volume used by existing feature code.
+   * MetaTrader adapters populate this from tickVolume when available.
+   */
   volume: string;
+  /** Broker-local candle open time when the provider exposes it. */
+  brokerTime?: string;
+  /** Number of quote ticks observed inside the candle. */
+  tickVolume?: string;
+  /** Provider-reported traded volume, distinct from tick volume. */
+  tradeVolume?: string;
+  /** Historical bid/ask spread in broker points. Never assume missing means zero. */
+  spreadPoints?: string;
+  /** Decimal digits for this instrument, used to convert spread points to price. */
+  priceDigits?: number;
 }

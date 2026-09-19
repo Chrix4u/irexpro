@@ -209,6 +209,9 @@ const mockAccount = {
       low: 1.07,
       close: 1.085,
       tickVolume: 5000,
+      spread: 12,
+      volume: 3.25,
+      brokerTime: '2026-01-01 02:00:00.000',
     },
     {
       time: new Date('2026-01-02'),
@@ -217,6 +220,9 @@ const mockAccount = {
       low: 1.083,
       close: 1.09,
       tickVolume: 4800,
+      spread: 14,
+      volume: 2.75,
+      brokerTime: '2026-01-02 02:00:00.000',
     },
   ]),
 };
@@ -949,6 +955,11 @@ describe('MetaTraderAdapter', () => {
       expect(typeof candles[0].open).toBe('string');
       expect(typeof candles[0].close).toBe('string');
       expect(candles[0].timestamp).toBeInstanceOf(Date);
+      expect(candles[0].tickVolume).toBe('5000.00000000');
+      expect(candles[0].tradeVolume).toBe('3.25000000');
+      expect(candles[0].spreadPoints).toBe('12.00000000');
+      expect(candles[0].priceDigits).toBe(5);
+      expect(candles[0].brokerTime).toBe('2026-01-01 02:00:00.000');
     });
   });
 

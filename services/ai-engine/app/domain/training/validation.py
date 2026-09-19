@@ -97,6 +97,68 @@ def purged_walk_forward_splits(
     return splits
 
 
+
+
+def purged_walk_forward_time_splits(
+    df: pd.DataFrame,
+    *,
+    time_column: str,
+    min_train_periods: int,
+    validation_periods: int,
+    purge_periods: int,
+    embargo_periods: int = 0,
+    max_splits: int | None = None,
+) -> list[tuple[pd.DataFrame, pd.DataFrame]]:
+    """
+    Expanding walk-forward splits based on unique decision timestamps.
+
+    This variant is intended for pooled multi-instrument datasets where several
+    instruments share the same minute. Purge/embargo counts therefore operate
+    on unique timestamps, not physical dataframe row counts.
+    """
+    if time_column not in df.columns:
+        raise ValueError(f"Missing time column: {time_column}")
+    if min_train_periods < 1:
+        raise ValueError("min_train_periods must be at least 1")
+    if validation_periods < 1:
+        raise ValueError("validation_periods must be at least 1")
+    if purge_periods < 0:
+        raise ValueError("purge_periods cannot be negative")
+    if embargo_periods < 0:
+        raise ValueError("embargo_periods cannot be negative")
+    if max_splits is not None and max_splits < 1:
+        raise ValueError("max_splits must be at least 1 when provided")
+
+    times = pd.Series(pd.to_datetime(df[time_column], utc=True, errors="coerce"))
+    if times.isna().any():
+        raise ValueError(f"{time_column} contains invalid timestamps")
+
+    unique_times = pd.Index(times.drop_duplicates().sort_values())
+    validation_start = min_train_periods + purge_periods
+    splits: list[tuple[pd.DataFrame, pd.DataFrame]] = []
+
+    while validation_start + validation_periods <= len(unique_times):
+        train_end = validation_start - purge_periods
+        train_times = unique_times[:train_end]
+        validation_times = unique_times[
+            validation_start : validation_start + validation_periods
+        ]
+
+        train = df.loc[times.isin(train_times)].copy()
+        validation = df.loc[times.isin(validation_times)].copy()
+        if train.empty or validation.empty:
+            break
+
+        splits.append((train, validation))
+        if max_splits is not None and len(splits) >= max_splits:
+            break
+
+        validation_start += validation_periods + embargo_periods
+
+    if not splits:
+        raise ValueError("Dataset is too small for requested time-based walk-forward configuration")
+    return splits
+
 def compute_classification_metrics(
     y_true: pd.Series | np.ndarray,
     positive_probabilities: pd.Series | np.ndarray,

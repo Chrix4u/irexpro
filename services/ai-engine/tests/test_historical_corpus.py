@@ -24,6 +24,11 @@ def test_collect_historical_corpus_pages_backwards_and_deduplicates(tmp_path: Pa
                 "low": f"{close - 0.0002:.5f}",
                 "close": f"{close:.5f}",
                 "volume": str(1000 + index),
+                "tickVolume": str(1000 + index),
+                "tradeVolume": f"{10 + index / 100:.2f}",
+                "spreadPoints": "12",
+                "priceDigits": 5,
+                "brokerTime": timestamp.strftime("%Y-%m-%d %H:%M:%S.000"),
             }
         )
 
@@ -64,6 +69,7 @@ def test_collect_historical_corpus_pages_backwards_and_deduplicates(tmp_path: Pa
         output_path=output,
         client=client,
         now=datetime(2026, 2, 1, tzinfo=UTC),
+        require_friction=True,
     )
 
     frame = pd.read_csv(output)
@@ -72,6 +78,10 @@ def test_collect_historical_corpus_pages_backwards_and_deduplicates(tmp_path: Pa
     assert result["row_count"] == 300
     assert result["pages_fetched"] == 2
     assert result["closed_candles_only"] is True
+    assert result["friction_data_complete"] is True
+    assert result["friction_coverage"]["spread_points"] == 1.0
+    assert frame["spread_points"].eq(12).all()
+    assert frame["price_digits"].eq(5).all()
     assert Path(result["manifest_path"]).is_file()
     assert requested_before[1] < requested_before[0]
 

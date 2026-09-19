@@ -454,9 +454,12 @@ export class MetaTraderAdapter implements IBrokerAdapter {
     // connection handle directly (it reaches into the connection pool instead),
     // but the precheck preserves the same connectivity gate as every other
     // method on this adapter.
-    await this.getActiveConnection();
+    const conn = await this.getActiveConnection();
     try {
-      // MetaAPI uses account-level historical candles API
+      // MetaAPI uses account-level historical candles API. Resolve symbol
+      // precision separately so spread-in-points can be converted later
+      // without guessing a pip/point size.
+      const instrumentSpec = await this.getCachedSymbolSpec(conn, instrument);
       const entry = this.metaApiClient['connectionPool']?.get(this.currentAccountId!);
       if (!entry)
         throw new BrokerAdapterError(BrokerErrorCode.NOT_CONNECTED, 'No active connection');
@@ -474,6 +477,11 @@ export class MetaTraderAdapter implements IBrokerAdapter {
         low: this.toDecimalString(c.low),
         close: this.toDecimalString(c.close),
         volume: this.toDecimalString(c.tickVolume ?? c.volume ?? 0),
+        brokerTime: typeof c.brokerTime === 'string' ? c.brokerTime : undefined,
+        tickVolume: c.tickVolume == null ? undefined : this.toDecimalString(c.tickVolume),
+        tradeVolume: c.volume == null ? undefined : this.toDecimalString(c.volume),
+        spreadPoints: c.spread == null ? undefined : this.toDecimalString(c.spread),
+        priceDigits: instrumentSpec?.digits,
       }));
     } catch (err) {
       throw this.mapError(err);
