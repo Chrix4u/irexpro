@@ -87,8 +87,9 @@ export class UserProfile {
   riskDisclosureAcceptedAt: Date | null;
 
   /**
-   * Sprint 29: self-reported trading experience level.
-   * Null until the user completes the onboarding profile step.
+   * Legacy Sprint 29 self-reported experience field.
+   * Retained only for schema/backward compatibility; it is not user-editable
+   * and MUST NOT influence automated trading, model selection, or risk policy.
    */
   @Column({
     name: 'trading_experience_level',
