@@ -34,7 +34,7 @@ def _sha256_file(path: Path) -> str:
 
 
 def _source_account_fingerprint(user_id: str, broker_connection_id: str) -> str:
-    material = f"{user_id}:{broker_connection_id}".encode("utf-8")
+    material = f"{user_id}:{broker_connection_id}".encode()
     return hashlib.sha256(material).hexdigest()
 
 
