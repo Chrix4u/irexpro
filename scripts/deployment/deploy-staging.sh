@@ -140,7 +140,7 @@ wait_for_http_status() {
 
 is_transient_postgres_migration_failure() {
   local output_file="$1"
-  grep -Eiq     'database system is not yet accepting connections|database system is starting up|database system is shutting down|could not connect to server|connection refused|ECONNREFUSED|server closed the connection unexpectedly|Connection terminated unexpectedly'     "$output_file"
+  grep -Eiq     'database system is not yet accepting connections|database system is in recovery mode|database system is starting up|database system is shutting down|could not connect to server|connection refused|ECONNREFUSED|server closed the connection unexpectedly|Connection terminated unexpectedly'     "$output_file"
 }
 
 run_database_migrations() {
