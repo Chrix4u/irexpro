@@ -69,10 +69,13 @@ test.describe('Workspace sidebar navigation', () => {
       'true',
     );
 
-    const restoredBox = await sidebar.boundingBox();
-    expect(restoredBox).not.toBeNull();
-    if (expandedBox && restoredBox) {
-      expect(Math.abs(restoredBox.width - expandedBox.width)).toBeLessThanOrEqual(1);
+    if (expandedBox) {
+      await expect
+        .poll(async () => {
+          const restoredBox = await sidebar.boundingBox();
+          return restoredBox ? Math.abs(restoredBox.width - expandedBox.width) : Number.POSITIVE_INFINITY;
+        })
+        .toBeLessThanOrEqual(1);
     }
 
     await assertNoHorizontalOverflow(page);
