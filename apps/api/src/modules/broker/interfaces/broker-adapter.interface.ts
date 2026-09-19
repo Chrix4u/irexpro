@@ -82,6 +82,17 @@ export interface IBrokerAdapter {
   getInstrumentList(): Promise<BrokerInstrument[]>;
   getCurrentPrice(instrument: string): Promise<BrokerPrice>;
   getOHLCV(instrument: string, timeframe: string, count: number): Promise<OHLCV[]>;
+  /**
+   * Optional backward-paginated historical OHLCV capability used for
+   * offline research/training corpus collection. Adapters that cannot prove
+   * cursor-based historical reads should leave this undefined.
+   */
+  getHistoricalOHLCV?(
+    instrument: string,
+    timeframe: string,
+    endTime: Date,
+    count: number,
+  ): Promise<OHLCV[]>;
 
   // ─── Order management ─────────────────────────────────────────────────────
 
