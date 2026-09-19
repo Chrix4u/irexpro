@@ -400,6 +400,8 @@ code { font-family: var(--font-mono); font-size: 0.9em; }
 .btn--lg { padding: var(--space-4) var(--space-8); font-size: 1rem; }
 .btn--block { width: 100%; }
 
+.profile-forgot-password { margin-top: var(--space-3); }
+
 /* Input */
 .input-group { margin-bottom: var(--space-4); }
 
