@@ -91,7 +91,6 @@ async def collect_instrument_history(
         if not page:
             break
 
-        normalized: list[OHLCVCandle] = []
         for candle in page:
             timestamp = candle.timestamp
             if timestamp.tzinfo is None:
@@ -102,7 +101,6 @@ async def collect_instrument_history(
             if not _closed_before(candle, timeframe, observed_now):
                 continue
             by_timestamp[timestamp] = candle
-            normalized.append(candle)
 
         page_timestamps = [
             candle.timestamp if candle.timestamp.tzinfo is not None
