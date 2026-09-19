@@ -127,3 +127,23 @@ async def test_signal_candidate_never_calls_execution_directly():
     assert not hasattr(gen, "broker_adapter")
     assert not hasattr(gen, "place_order")
     assert not hasattr(gen, "execute_trade")
+
+
+@pytest.mark.asyncio
+async def test_signal_generator_reports_truthful_model_and_market_telemetry():
+    gen = make_generator()
+    result = await gen.generate(
+        user_id="u1",
+        trading_session_id="s1",
+        broker_connection_id="c1",
+        instrument="EURUSD",
+        timeframe="H1",
+        bypass_market_data_cache=True,
+    )
+
+    assert result.telemetry is not None
+    assert result.telemetry.model_version == "baseline-xgboost-v0.1.0"
+    assert result.telemetry.model_mode == "heuristic_placeholder"
+    assert result.telemetry.model_loaded is False
+    assert result.telemetry.market_data_revision
+    assert result.telemetry.market_data_cache_bypassed is True
