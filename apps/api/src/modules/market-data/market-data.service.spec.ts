@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ForbiddenException, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, ServiceUnavailableException } from '@nestjs/common';
 import { MarketDataService } from './market-data.service';
 import { BrokerService } from '../broker/broker.service';
 import { AuditService } from '../audit/audit.service';
@@ -108,6 +108,19 @@ describe('MarketDataService', () => {
         resourceId: query.brokerConnectionId,
       }),
     );
+  });
+
+  it('rethrows unsupported historical capability as BadRequestException', async () => {
+    (brokerService.getHistoricalOhlcvForConnection as jest.Mock).mockRejectedValue(
+      new BadRequestException('Historical OHLCV not supported'),
+    );
+
+    await expect(
+      service.getInternalOhlcv({
+        ...query,
+        endTime: '2025-01-15T12:00:00.000Z',
+      }),
+    ).rejects.toThrow(BadRequestException);
   });
 
   it('rethrows ForbiddenException from broker service', async () => {
