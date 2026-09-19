@@ -478,12 +478,9 @@ export class MetaTraderAdapter implements IBrokerAdapter {
         close: this.toDecimalString(c.close),
         volume: this.toDecimalString(c.tickVolume ?? c.volume ?? 0),
         brokerTime: typeof c.brokerTime === 'string' ? c.brokerTime : undefined,
-        tickVolume:
-          c.tickVolume == null ? undefined : this.toDecimalString(c.tickVolume),
-        tradeVolume:
-          c.volume == null ? undefined : this.toDecimalString(c.volume),
-        spreadPoints:
-          c.spread == null ? undefined : this.toDecimalString(c.spread),
+        tickVolume: c.tickVolume == null ? undefined : this.toDecimalString(c.tickVolume),
+        tradeVolume: c.volume == null ? undefined : this.toDecimalString(c.volume),
+        spreadPoints: c.spread == null ? undefined : this.toDecimalString(c.spread),
         priceDigits: instrumentSpec?.digits,
       }));
     } catch (err) {
