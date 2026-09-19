@@ -259,7 +259,7 @@ test.describe('AI Trader novice workflow', () => {
     await expect(page.getByText('SCANNING', { exact: true })).toBeVisible();
     await expect(page.getByText(/EURUSD.*GBPUSD.*USDJPY/i)).toBeVisible();
     await expect(page.getByText('NO TRADE', { exact: true })).toBeVisible();
-    await expect(page.getByText('54% / 60% required', { exact: true })).toBeVisible();
+    await expect(page.getByText('54.00% / 60.00% required', { exact: true })).toBeVisible();
     await expect(
       page.getByText('Market setup did not meet the confidence threshold', { exact: true }),
     ).toBeVisible();
