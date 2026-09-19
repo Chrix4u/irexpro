@@ -106,9 +106,9 @@ export class AiEngineClient {
     const apiKey = this.getInternalApiKey();
     if (!apiKey) {
       this.logger.warn(
-        `AI engine notification skipped — internal API key not configured session=${sessionId}`,
+        `AI engine request blocked — internal API key not configured session=${sessionId}`,
       );
-      return;
+      throw new Error('AI engine internal API key is not configured');
     }
 
     const controller = new AbortController();
