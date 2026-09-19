@@ -58,10 +58,23 @@ export class ReconcileTradingSessionSchema1754800000000 implements MigrationInte
       ALTER TABLE trading.trading_sessions
       ADD COLUMN IF NOT EXISTS authority_generation integer
     `);
+    const invalidGeneration = await queryRunner.query(`
+      SELECT id, authority_generation
+      FROM trading.trading_sessions
+      WHERE authority_generation IS NOT NULL
+        AND authority_generation < 1
+      LIMIT 10
+    `);
+    if (Array.isArray(invalidGeneration) && invalidGeneration.length > 0) {
+      throw new Error(
+        'Trading session schema reconciliation failed: an existing authority_generation is below 1. Repair the invalid authority lineage explicitly before deployment.',
+      );
+    }
+
     await queryRunner.query(`
       UPDATE trading.trading_sessions
       SET authority_generation = 1
-      WHERE authority_generation IS NULL OR authority_generation < 1
+      WHERE authority_generation IS NULL
     `);
     await queryRunner.query(`
       ALTER TABLE trading.trading_sessions
@@ -187,15 +200,9 @@ export class ReconcileTradingSessionSchema1754800000000 implements MigrationInte
     `);
   }
 
-  public async down(queryRunner: QueryRunner): Promise<void> {
-    // Reconciliation migrations do not destructively remove columns that may
-    // have existed before this migration. Only indexes created here are safe
-    // to remove on rollback.
-    await queryRunner.query(`
-      DROP INDEX IF EXISTS trading.ix_trading_sessions_ai_stop_flatten
-    `);
-    await queryRunner.query(`
-      DROP INDEX IF EXISTS trading.uq_trading_sessions_one_active_per_user
-    `);
+  public async down(_queryRunner: QueryRunner): Promise<void> {
+    // Intentionally non-destructive. This migration may have repaired objects
+    // that legitimately predated it, so rollback must not remove columns,
+    // constraints, or indexes whose provenance cannot be distinguished.
   }
 }
