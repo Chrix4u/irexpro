@@ -148,6 +148,17 @@ function marketCacheLabel(status: string | null | undefined): string {
   return status.replaceAll('_', ' ').toUpperCase();
 }
 
+function formatAgeSeconds(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '—';
+  const seconds = Math.max(0, Math.round(value));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  if (minutes < 60) return `${minutes}m ${remainder}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+}
+
 function PositionCard({ position }: { position: LivePositionRowView }) {
   return (
     <article className="ai-position-card">
@@ -800,6 +811,10 @@ export default function AiTradingPage() {
                   <div>
                     <span>Latest market data</span>
                     <strong>{formatTimestamp(automationRuntime?.latest_market_data_at)}</strong>
+                  </div>
+                  <div>
+                    <span>Market data age</span>
+                    <strong>{formatAgeSeconds(automationRuntime?.market_data_age_seconds)}</strong>
                   </div>
                   <div>
                     <span>Last model evaluation</span>
