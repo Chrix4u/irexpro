@@ -33,10 +33,12 @@ interface NavDestination {
 
 const PRIMARY_NAV: NavDestination[] = [
   { href: '/dashboard', label: 'Home', Icon: DashboardIcon },
-  { href: '/trade', label: 'AI Trading', Icon: TradeIcon, matchPrefix: true },
+  { href: '/trade', label: 'AI Trading', Icon: TradeIcon },
 ];
 
 const SECONDARY_NAV: NavDestination[] = [
+  { href: '/trade/portfolio', label: 'Portfolio', Icon: PortfolioIcon },
+  { href: '/portfolio', label: 'Portfolio & Risk', Icon: ShieldIcon },
   { href: '/live-account', label: 'Positions & Activity', Icon: PortfolioIcon, matchPrefix: true },
   { href: '/onboarding/broker', label: 'Broker Account', Icon: PlugIcon },
   { href: '/security', label: 'Security', Icon: ShieldIcon },
