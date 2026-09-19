@@ -8,7 +8,11 @@ import pytest
 from app.core.config import Settings
 from app.domain.scheduler.schemas import SessionStartRequest
 from app.domain.scheduler.signal_scheduler import SignalScheduler
-from app.domain.signals.schemas import AiSignalCandidate, SignalGenerationResponse
+from app.domain.signals.schemas import (
+    AiSignalCandidate,
+    SignalEvaluationTelemetry,
+    SignalGenerationResponse,
+)
 
 
 def make_start_request(session_id: str = "session-1") -> SessionStartRequest:
@@ -146,3 +150,60 @@ class ScheduledSessionJobStub:
     last_decision = None
     last_reason = None
     last_confidence_score = None
+    last_confidence_at = None
+    last_market_data_revision = None
+    last_market_data_at = None
+    model_version = None
+    model_mode = None
+    model_loaded = None
+    market_data_cache_bypassed = False
+
+
+@pytest.mark.asyncio
+async def test_unchanged_market_revision_suppresses_duplicate_signal_publish():
+    settings = Settings(ai_scheduler_enabled=True, ai_signal_mode="paper")
+    scheduler = SignalScheduler(nestjs_client=AsyncMock())
+    scheduler._settings = settings
+
+    mock_generator = AsyncMock()
+    candidate = AiSignalCandidate(
+        user_id="user-1",
+        trading_session_id="session-1",
+        broker_connection_id="conn-1",
+        instrument="EURUSD",
+        direction="BUY",
+        confidence_score=0.8,
+        suggested_stop_loss=1.09,
+        suggested_take_profit=1.12,
+        suggested_volume=0.01,
+        timeframe="H1",
+        strategy_code="baseline-h1",
+        model_version="baseline-xgboost-v0.1.0",
+    )
+    telemetry = SignalEvaluationTelemetry(
+        model_version="baseline-xgboost-v0.1.0",
+        model_mode="heuristic_placeholder",
+        model_loaded=False,
+        market_data_last_candle_at="2026-09-19T15:00:00Z",
+        market_data_revision="same-market-revision",
+        market_data_cache_bypassed=True,
+    )
+    mock_generator.generate.return_value = SignalGenerationResponse(
+        generated=True,
+        signal=candidate,
+        telemetry=telemetry,
+        mode="paper",
+    )
+    scheduler._signal_generator = mock_generator
+    job = ScheduledSessionJobStub()
+    job.last_market_data_revision = "same-market-revision"
+    scheduler._jobs["session-1"] = job
+
+    await scheduler._run_session_job("session-1")
+
+    scheduler._nestjs_client.publish_signal.assert_not_called()
+    assert job.last_decision == "NO_NEW_MARKET_DATA"
+    assert job.last_reason == "market_data_unchanged"
+    assert job.last_confidence_score is None
+    assert job.model_mode == "heuristic_placeholder"
+    assert job.market_data_cache_bypassed is True
