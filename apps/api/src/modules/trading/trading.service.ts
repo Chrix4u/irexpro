@@ -79,6 +79,18 @@ export class TradingService {
   /** Max staleness for broker health check before requiring a fresh check. */
   private static readonly BROKER_HEALTH_MAX_STALENESS_MS = 5 * 60 * 1000; // 5 minutes
 
+  /** Preferred majors for the first AI scheduler release. The effective
+   * watchlist is always intersected with the bound broker's proven canonical
+   * instrument list before registration. */
+  private static readonly AI_PREFERRED_INSTRUMENTS = [
+    'EURUSD',
+    'GBPUSD',
+    'USDJPY',
+    'AUDUSD',
+    'USDCAD',
+    'USDCHF',
+  ] as const;
+
   constructor(
     private readonly brokerService: BrokerService,
     private readonly riskService: RiskService,
@@ -217,27 +229,38 @@ export class TradingService {
       `Trading session started: userId=${userId} sessionId=${session.id} mode=${session.executionMode}`,
     );
 
-    // Notify AI engine scheduler (non-blocking — failures are logged only).
-    // NOTE: the AI engine generates signals that flow through the Risk Engine
-    // before reaching the Execution Engine — AI never directly executes broker
-    // orders. The session's durable executionMode (NOT a hardcoded 'paper'
-    // literal) is forwarded so the scheduler notification reflects the session
-    // authority; the risk + execution gates remain the enforcement boundary.
-    void this.aiEngineClient
-      .notifySessionStarted({
-        userId,
-        tradingSessionId: session.id,
-        brokerConnectionId: connection.id,
-        instruments: ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF'],
-        timeframe: 'H1',
-        source: 'broker',
-        mode: session.executionMode,
-      })
-      .catch((err: Error) =>
+    // Notify AI engine scheduler after resolving the effective watchlist from
+    // the bound broker's proven instrument capabilities. Unsupported symbols
+    // are never sent to the AI engine, so a single constrained adapter (such
+    // as the deterministic paper broker) cannot poison the whole scan cycle.
+    try {
+      const instruments = await this.resolveAiSchedulerInstruments(userId, connection.id);
+      if (instruments.length > 0) {
+        void this.aiEngineClient
+          .notifySessionStarted({
+            userId,
+            tradingSessionId: session.id,
+            brokerConnectionId: connection.id,
+            instruments,
+            timeframe: 'H1',
+            source: 'broker',
+            mode: session.executionMode,
+          })
+          .catch((err: Error) =>
+            this.logger.warn(
+              `AI engine start notification failed session=${session.id}: ${err.message}`,
+            ),
+          );
+      } else {
         this.logger.warn(
-          `AI engine start notification failed session=${session.id}: ${err.message}`,
-        ),
+          `AI engine scheduler not registered session=${session.id}: broker exposes none of the preferred instruments`,
+        );
+      }
+    } catch (err) {
+      this.logger.warn(
+        `AI engine watchlist resolution failed session=${session.id}: ${(err as Error).message}`,
       );
+    }
 
     return session;
   }
@@ -451,11 +474,23 @@ export class TradingService {
     // registration from the durable session authority instead of requiring the
     // user to Stop/Start manually.
     if (runtime.enabled && !runtime.registered && session.status === TradingSessionStatus.ACTIVE) {
+      const instruments = await this.resolveAiSchedulerInstruments(
+        userId,
+        session.brokerConnectionId,
+      );
+      if (instruments.length === 0) {
+        return {
+          ...runtime,
+          last_decision: 'BLOCKED',
+          last_reason: 'broker_supported_instruments_unavailable',
+        };
+      }
+
       await this.aiEngineClient.notifySessionStarted({
         userId,
         tradingSessionId: session.id,
         brokerConnectionId: session.brokerConnectionId,
-        instruments: ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF'],
+        instruments,
         timeframe: 'H1',
         source: 'broker',
         mode: ExecutionMode.PAPER_ONLY,
@@ -464,6 +499,23 @@ export class TradingService {
     }
 
     return runtime;
+  }
+
+  private async resolveAiSchedulerInstruments(
+    userId: string,
+    brokerConnectionId: string,
+  ): Promise<string[]> {
+    const instruments = await this.brokerService.getSupportedInstrumentsForConnection(
+      userId,
+      brokerConnectionId,
+    );
+    const supported = new Set(
+      instruments
+        .map((instrument) => instrument.symbol?.trim().toUpperCase())
+        .filter((symbol): symbol is string => Boolean(symbol)),
+    );
+
+    return TradingService.AI_PREFERRED_INSTRUMENTS.filter((symbol) => supported.has(symbol));
   }
 
   async getSessionById(userId: string, sessionId: string): Promise<TradingSession | null> {

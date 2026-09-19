@@ -1483,6 +1483,64 @@ describe('BrokerService', () => {
     });
   });
 
+  describe('getSupportedInstrumentsForConnection() — scheduler capability surface', () => {
+    const connectedConn = {
+      id: 'conn-scheduler',
+      userId: 'user-1',
+      brokerId: 'paper-broker',
+      status: BrokerConnectionStatus.CONNECTED,
+      accountType: BrokerMode.DEMO,
+      credentialStatus: 'VERIFIED',
+      encryptedCredentials: 'ciphertext',
+      credentialIv: 'iv',
+      credentialTag: 'tag',
+      encryptionKeyId: 'env-key-v1',
+    };
+
+    it('returns only the canonical instrument list proved by the bound adapter', async () => {
+      connectionRepo.findOne.mockResolvedValue(connectedConn);
+      const adapter = {
+        setMode: jest.fn(),
+        connect: jest.fn().mockResolvedValue(undefined),
+        getInstrumentList: jest.fn().mockResolvedValue([
+          {
+            symbol: 'EURUSD',
+            description: 'Euro vs US Dollar (Paper)',
+            digits: 5,
+            minLot: '0.01',
+            maxLot: '100.00',
+            lotStep: '0.01',
+            contractSize: '100000',
+          },
+        ]),
+      };
+      registry.getAdapterForConnection.mockReturnValue(adapter);
+      encryption.decrypt.mockReturnValue({ accountId: 'paper-account-001' });
+
+      await expect(
+        service.getSupportedInstrumentsForConnection('user-1', 'conn-scheduler'),
+      ).resolves.toEqual([expect.objectContaining({ symbol: 'EURUSD' })]);
+
+      expect(adapter.getInstrumentList).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns an empty list when the provider cannot prove its instrument capabilities', async () => {
+      connectionRepo.findOne.mockResolvedValue(connectedConn);
+      const adapter = {
+        setMode: jest.fn(),
+        connect: jest.fn().mockRejectedValue(new Error('provider unavailable')),
+        getInstrumentList: jest.fn(),
+      };
+      registry.getAdapterForConnection.mockReturnValue(adapter);
+      encryption.decrypt.mockReturnValue({ accountId: 'paper-account-001' });
+
+      await expect(
+        service.getSupportedInstrumentsForConnection('user-1', 'conn-scheduler'),
+      ).resolves.toEqual([]);
+      expect(adapter.getInstrumentList).not.toHaveBeenCalled();
+    });
+  });
+
   describe('getInstrumentSpecForConnection() — the contract-size seam (§1a/§4/§18)', () => {
     const connectedConn = {
       id: 'conn-1',

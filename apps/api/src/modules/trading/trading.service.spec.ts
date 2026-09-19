@@ -112,6 +112,11 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
         freeMargin: '9000.00',
         currency: 'USD',
       }),
+      getSupportedInstrumentsForConnection: jest.fn().mockResolvedValue(
+        ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF'].map((symbol) => ({
+          symbol,
+        })),
+      ),
     };
 
     // Round 6 (§6/#297/#312): the durable account-snapshot authority seam.
@@ -329,6 +334,25 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       expect(session.id).toBe('session-1');
       expect(subscriptionsService.canUserStartAiAutoTrading).not.toHaveBeenCalled();
       expect(executionService.startSession).toHaveBeenCalled();
+    });
+
+    it('registers only preferred instruments the bound broker actually supports', async () => {
+      brokerService.getSupportedInstrumentsForConnection.mockResolvedValue([
+        { symbol: 'EURUSD' },
+        { symbol: 'XAUUSD' },
+      ]);
+
+      await service.startTradingSession('user-1', 'conn-1');
+
+      expect(brokerService.getSupportedInstrumentsForConnection).toHaveBeenCalledWith(
+        'user-1',
+        'conn-1',
+      );
+      expect(aiEngineClient.notifySessionStarted).toHaveBeenCalledWith(
+        expect.objectContaining({
+          instruments: ['EURUSD'],
+        }),
+      );
     });
   });
 
@@ -886,6 +910,52 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
         }),
       );
       expect(status.registered).toBe(true);
+    });
+
+    it('self-heal also narrows the scheduler watchlist to broker-supported pairs', async () => {
+      brokerService.getSupportedInstrumentsForConnection.mockResolvedValue([{ symbol: 'EURUSD' }]);
+      aiEngineClient.getSessionStatus
+        .mockResolvedValueOnce({
+          enabled: true,
+          registered: false,
+          trading_session_id: 'session-1',
+          active: false,
+          instruments: [],
+          timeframe: null,
+          interval_seconds: null,
+          source: null,
+          last_run_at: null,
+          next_run_at: null,
+          last_decision: null,
+          last_reason: null,
+          last_confidence_score: null,
+          confidence_threshold: 0.6,
+          last_publish_failed: false,
+        })
+        .mockResolvedValueOnce({
+          enabled: true,
+          registered: true,
+          trading_session_id: 'session-1',
+          active: true,
+          instruments: ['EURUSD'],
+          timeframe: 'H1',
+          interval_seconds: 60,
+          source: 'broker',
+          last_run_at: null,
+          next_run_at: null,
+          last_decision: null,
+          last_reason: null,
+          last_confidence_score: null,
+          confidence_threshold: 0.6,
+          last_publish_failed: false,
+        });
+
+      const status = await service.getAutomationRuntimeStatus('user-1', 'session-1');
+
+      expect(aiEngineClient.notifySessionStarted).toHaveBeenCalledWith(
+        expect.objectContaining({ instruments: ['EURUSD'] }),
+      );
+      expect(status.instruments).toEqual(['EURUSD']);
     });
 
     it('reports live automation blocked by model governance', async () => {

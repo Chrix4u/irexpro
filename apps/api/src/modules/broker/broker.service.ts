@@ -1788,6 +1788,62 @@ export class BrokerService {
   }
 
   /**
+   * Return the broker adapter's canonical instrument list for one owned,
+   * CONNECTED account. This is the capability source used by AI scheduler
+   * registration so automation never scans symbols the bound broker cannot
+   * actually serve.
+   *
+   * Security/lifecycle invariants match the other broker market-data seams:
+   * ownership is verified, credentials remain server-side/in-memory only,
+   * unusable credentials fail closed, and provider failures never invent
+   * instruments.
+   */
+  async getSupportedInstrumentsForConnection(
+    userId: string,
+    brokerConnectionId: string,
+  ): Promise<BrokerInstrument[]> {
+    const connection = await this.findConnectionById(brokerConnectionId, userId);
+
+    if (connection.status !== BrokerConnectionStatus.CONNECTED) {
+      throw new ForbiddenException('Broker connection is not active');
+    }
+
+    if (!connection.encryptedCredentials || !connection.credentialIv || !connection.credentialTag) {
+      throw new ForbiddenException('Broker connection credentials unavailable');
+    }
+
+    this.assertCredentialsUsable(connection, 'getSupportedInstrumentsForConnection');
+
+    const adapter = this.adapterRegistry.getAdapterForConnection(
+      connection.id,
+      connection.brokerId,
+    );
+    const credentials = this.encryptionService.decrypt({
+      ciphertext: connection.encryptedCredentials,
+      iv: connection.credentialIv,
+      tag: connection.credentialTag,
+      keyId: connection.encryptionKeyId ?? 'env-key-v1',
+    });
+
+    adapter.setMode(connection.accountType);
+
+    try {
+      await adapter.connect(credentials);
+      const instruments = await adapter.getInstrumentList();
+      return Array.isArray(instruments) ? instruments : [];
+    } catch (err) {
+      this.logger.warn(
+        `Instrument-list resolution failed connection=${brokerConnectionId}: ${(err as Error).message}`,
+      );
+      return [];
+    } finally {
+      Object.keys(credentials).forEach((k) => {
+        (credentials as unknown as Record<string, unknown>)[k] = null;
+      });
+    }
+  }
+
+  /**
    * Round 6 live-execution completion (§1a/§4/§18): resolve the normalized
    * instrument specification (contract size, min/max volume, lot step,
    * digits) for a connection through the adapter's getInstrumentList().
