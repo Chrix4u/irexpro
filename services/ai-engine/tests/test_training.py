@@ -13,7 +13,7 @@ from app.domain.models.baseline_xgboost import (
     BaselineXGBoostModel,
 )
 from app.domain.models.feature_engineering import FEATURE_COLUMNS, compute_features
-from app.domain.models.registry import build_default_registry
+from app.domain.models.registry import MODEL_BUNDLE_PATH_ENV, build_default_registry
 from app.domain.training.dataset_builder import (
     build_supervised_dataset,
     detect_future_leakage,
@@ -160,6 +160,37 @@ def test_real_xgboost_training_artifact_loads_and_registers(tmp_path, monkeypatc
     assert active.get_model_version() == "xgboost-eurusd-h1-test-v1"
     assert governance.approved_for_paper is True
     assert governance.approved_for_live is False
+
+    # Prove the same verified artifact can be routed only to its declared pair
+    # through a bundle while other instruments retain the truthful fallback.
+    monkeypatch.delenv(MODEL_PATH_ENV)
+    monkeypatch.delenv(MODEL_METADATA_PATH_ENV)
+    bundle_path = output_dir / "candidate.bundle.json"
+    bundle_path.write_text(
+        json.dumps(
+            {
+                "bundle_version": 1,
+                "models": [
+                    {
+                        "instrument": "EURUSD",
+                        "timeframe": "H1",
+                        "artifact_path": artifact_path.name,
+                        "metadata_path": metadata_path.name,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(MODEL_BUNDLE_PATH_ENV, str(bundle_path))
+
+    routed_registry = build_default_registry()
+    eurusd_model = routed_registry.get_model_for("EURUSD", "H1")
+    gbpusd_model = routed_registry.get_model_for("GBPUSD", "H1")
+    assert eurusd_model.get_model_version() == "xgboost-eurusd-h1-test-v1"
+    assert eurusd_model.get_model_metadata()["mode"] == "trained_xgboost"
+    assert gbpusd_model.get_model_version() == "baseline-xgboost-v0.1.0"
+    assert gbpusd_model.get_model_metadata()["mode"] == "heuristic_placeholder"
 
 
 def test_live_approval_remains_false():
