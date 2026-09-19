@@ -1,32 +1,58 @@
 name: UAT Runtime Smoke
 
 on:
-  push:
-    branches:
-      - 'fix/uat-ai-trading-core-read-retry'
-    paths:
-      - '.github/workflows/uat-runtime-smoke.yml'
+  workflow_run:
+    workflows: ['Staging Deploy']
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: uat-runtime-smoke-${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+  cancel-in-progress: true
+
 jobs:
   probe:
     name: Probe live UAT web/API routing
+    if: >-
+      ${{
+        github.repository == 'Chrix4u/irexpro' &&
+        (
+          github.event_name == 'workflow_dispatch' ||
+          (
+            github.event.workflow_run.conclusion == 'success' &&
+            github.event.workflow_run.head_branch == 'main'
+          )
+        )
+      }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
       APP_ORIGIN: https://irexpro.lightworldtech.com
       API_BASE: https://irexpro.lightworldtech.com/api/v1
+      DEPLOYED_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+
     steps:
+      - name: Record exact deployed candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$DEPLOYED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          printf 'Post-deploy UAT smoke candidate: %s\n' "$DEPLOYED_SHA"
+
       - name: Verify public web and health endpoints
         shell: bash
         run: |
           set -Eeuo pipefail
           curl --fail --silent --show-error --location --max-time 15 --output /dev/null "$APP_ORIGIN/login"
+          curl --fail --silent --show-error --location --max-time 15 --output /dev/null "$APP_ORIGIN/trade"
+
           live_payload="$(curl --fail --silent --show-error --max-time 15 "$API_BASE/health/live")"
           ready_payload="$(curl --fail --silent --show-error --max-time 15 "$API_BASE/health/ready")"
+
           LIVE_PAYLOAD="$live_payload" READY_PAYLOAD="$ready_payload" node --input-type=module <<'NODE'
           const live = JSON.parse(process.env.LIVE_PAYLOAD);
           const ready = JSON.parse(process.env.READY_PAYLOAD);
@@ -48,9 +74,11 @@ jobs:
               exit 1
             fi
           }
+
           probe_protected 'risk/status'
           probe_protected 'trading/sessions/active'
           probe_protected 'broker/connections'
+          probe_protected 'execution/capital-allocation'
 
       - name: Verify browser preflight contract for AI Trading routes
         shell: bash
@@ -60,13 +88,19 @@ jobs:
             local path="$1"
             local headers
             headers="$(mktemp)"
-            curl --silent --show-error --output /dev/null --dump-header "$headers" --request OPTIONS --max-time 15               --header "Origin: $APP_ORIGIN"               --header 'Access-Control-Request-Method: GET'               --header 'Access-Control-Request-Headers: authorization,content-type'               "$API_BASE/$path"
+            curl --silent --show-error --output /dev/null --dump-header "$headers" --request OPTIONS --max-time 15 \
+              --header "Origin: $APP_ORIGIN" \
+              --header 'Access-Control-Request-Method: GET' \
+              --header 'Access-Control-Request-Headers: authorization,content-type' \
+              "$API_BASE/$path"
             grep -qi '^access-control-allow-origin: https://irexpro\.lightworldtech\.com' "$headers"
             grep -qi '^access-control-allow-credentials: true' "$headers"
             grep -qi '^access-control-allow-methods:.*GET' "$headers"
             grep -qi '^access-control-allow-headers:.*Authorization' "$headers"
             rm -f "$headers"
           }
+
           probe_preflight 'risk/status'
           probe_preflight 'trading/sessions/active'
           probe_preflight 'broker/connections'
+          probe_preflight 'execution/capital-allocation'
