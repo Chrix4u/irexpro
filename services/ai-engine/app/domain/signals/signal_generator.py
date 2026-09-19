@@ -12,6 +12,7 @@ IMPORTANT SAFETY RULES:
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from hashlib import sha256
 from uuid import uuid4
 
 from app.core.config import get_settings
@@ -24,7 +25,12 @@ from app.domain.models.feature_engineering import candles_to_dataframe, extract_
 from app.domain.models.registry import ModelRegistry
 from app.domain.signals.confidence import get_threshold, is_above_threshold
 from app.domain.signals.explainability import build_explainability_metadata
-from app.domain.signals.schemas import AiSignalCandidate, NoSignalResult, SignalGenerationResponse
+from app.domain.signals.schemas import (
+    AiSignalCandidate,
+    NoSignalResult,
+    SignalEvaluationTelemetry,
+    SignalGenerationResponse,
+)
 
 logger = get_logger(__name__)
 
@@ -48,6 +54,7 @@ class SignalGenerator:
         timeframe: str = "H1",
         candles: list[OHLCVCandle] | None = None,
         source: MarketDataSource = "mock",
+        bypass_market_data_cache: bool = False,
     ) -> SignalGenerationResponse:
         """
         Full signal generation pipeline.
@@ -70,6 +77,7 @@ class SignalGenerator:
                 limit=100,
                 user_id=user_id,
                 broker_connection_id=broker_connection_id,
+                bypass_cache=bypass_market_data_cache,
             )
 
         if len(candles) < 10:
@@ -83,6 +91,7 @@ class SignalGenerator:
 
         # 3. Model inference
         model = self._registry.get_active_model()
+        model_metadata = model.get_model_metadata()
         governance = self._registry.get_governance(model.get_model_version())
 
         if not governance.approved_for_paper:
@@ -91,6 +100,28 @@ class SignalGenerator:
             )
 
         prediction = model.predict_signal(features)
+
+        latest_candle = candles[-1]
+        revision_material = "|".join(
+            [
+                instrument.upper(),
+                timeframe.upper(),
+                latest_candle.timestamp.isoformat(),
+                str(latest_candle.open),
+                str(latest_candle.high),
+                str(latest_candle.low),
+                str(latest_candle.close),
+                str(latest_candle.volume),
+            ]
+        )
+        telemetry = SignalEvaluationTelemetry(
+            model_version=prediction.model_version,
+            model_mode=str(model_metadata.get("mode", "unknown")),
+            model_loaded=bool(model_metadata.get("loaded", False)),
+            market_data_last_candle_at=latest_candle.timestamp,
+            market_data_revision=sha256(revision_material.encode("utf-8")).hexdigest(),
+            market_data_cache_bypassed=bypass_market_data_cache,
+        )
 
         # 4. Confidence threshold gate
         if not is_above_threshold(prediction.confidence_score):
@@ -108,6 +139,7 @@ class SignalGenerator:
                     confidence_score=prediction.confidence_score,
                     threshold=get_threshold(),
                 ),
+                telemetry=telemetry,
                 mode=settings.ai_signal_mode,
             )
 
@@ -175,5 +207,6 @@ class SignalGenerator:
         return SignalGenerationResponse(
             generated=True,
             signal=candidate,
+            telemetry=telemetry,
             mode=settings.ai_signal_mode,
         )
