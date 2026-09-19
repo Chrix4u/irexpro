@@ -12,8 +12,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from app.domain.models import feature_engineering
-
 
 REQUIRED_OHLCV_COLUMNS = {"timestamp", "open", "high", "low", "close", "volume"}
 TARGET_COLUMN = "target"
@@ -68,8 +66,10 @@ def build_feature_rows(df: pd.DataFrame, min_history: int = 20) -> pd.DataFrame:
     if len(df) <= min_history:
         raise ValueError("Dataset is too small for requested feature history")
 
-    featured = feature_engineering.compute_features(df)
-    rows = featured.loc[:, feature_engineering.FEATURE_COLUMNS].copy()
+    from app.domain.models.feature_engineering import FEATURE_COLUMNS, compute_features
+
+    featured = compute_features(df)
+    rows = featured.loc[:, FEATURE_COLUMNS].copy()
     rows["target_index"] = np.arange(len(df))
     rows["timestamp"] = df["timestamp"].values
     return rows.iloc[min_history:].reset_index(drop=True)
