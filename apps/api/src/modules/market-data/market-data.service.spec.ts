@@ -27,6 +27,11 @@ describe('MarketDataService', () => {
       low: '1.09900',
       close: '1.10050',
       volume: '1000',
+      tickVolume: '1000',
+      tradeVolume: '4.25',
+      spreadPoints: '13',
+      priceDigits: 5,
+      brokerTime: '2024-01-01 02:00:00.000',
     },
   ];
 
@@ -62,6 +67,11 @@ describe('MarketDataService', () => {
       low: '1.09900',
       close: '1.10050',
       volume: '1000',
+      tickVolume: '1000',
+      tradeVolume: '4.25',
+      spreadPoints: '13',
+      priceDigits: 5,
+      brokerTime: '2024-01-01 02:00:00.000',
       instrument: 'EURUSD',
       timeframe: 'H1',
       source: 'broker',
