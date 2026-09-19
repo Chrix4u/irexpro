@@ -152,24 +152,49 @@ jobs:
           journalctl -k --since '-45 min' --no-pager 2>/dev/null | grep -Ei 'out of memory|oom|killed process|i/o error|ext4|xfs|nvme|blk_update|no space left' | tail -n 120 || true
           echo
 
-          echo '=== largest top-level consumers ==='
-          for path in /home /var /root /usr /opt /tmp; do
+          echo '=== targeted disk consumers ==='
+          for path in \
+            /var/lib/pgsql/data \
+            /var/lib/pgsql/data/pg_wal \
+            /var/lib/pgsql/data/log \
+            /var/lib/pgsql/data/pg_log \
+            /var/log \
+            /home/lightworld/webapps/irexpro-staging \
+            /home/lightworld/releases \
+            /home/lightworld/.pm2 \
+            /root/.pm2 \
+            /root/.cache \
+            /home/lightworld/.cache \
+            /tmp; do
             if [[ -e "$path" ]]; then
               du -x -s -B1 "$path" 2>/dev/null || true
             fi
           done | sort -n | awk '{printf "%.2f GiB\t%s\n", $1/1073741824, $2}'
           echo
 
-          echo '=== largest /home/lightworld children ==='
-          du -x -B1 --max-depth=2 /home/lightworld 2>/dev/null | sort -n | tail -n 40 | awk '{printf "%.2f GiB\t%s\n", $1/1073741824, $2}'
+          echo '=== iRexPro staging immediate children ==='
+          if [[ -d /home/lightworld/webapps/irexpro-staging ]]; then
+            for path in /home/lightworld/webapps/irexpro-staging/* /home/lightworld/webapps/irexpro-staging/.[!.]*; do
+              [[ -e "$path" ]] || continue
+              du -x -s -B1 "$path" 2>/dev/null || true
+            done | sort -n | tail -n 30 | awk '{printf "%.2f GiB\t%s\n", $1/1073741824, $2}'
+          fi
           echo
 
-          echo '=== largest PostgreSQL children ==='
-          du -x -B1 --max-depth=2 /var/lib/pgsql 2>/dev/null | sort -n | tail -n 40 | awk '{printf "%.2f GiB\t%s\n", $1/1073741824, $2}'
+          echo '=== PostgreSQL immediate children ==='
+          if [[ -d /var/lib/pgsql/data ]]; then
+            for path in /var/lib/pgsql/data/*; do
+              [[ -e "$path" ]] || continue
+              du -x -s -B1 "$path" 2>/dev/null || true
+            done | sort -n | tail -n 30 | awk '{printf "%.2f GiB\t%s\n", $1/1073741824, $2}'
+          fi
           echo
 
-          echo '=== largest /var/log children ==='
-          du -x -B1 --max-depth=2 /var/log 2>/dev/null | sort -n | tail -n 40 | awk '{printf "%.2f GiB\t%s\n", $1/1073741824, $2}'
+          echo '=== files larger than 500 MiB in likely operational trees ==='
+          find /var/lib/pgsql /var/log /home/lightworld /root/.pm2 /root/.cache \
+            -xdev -type f -size +500M -printf '%s %p\n' 2>/dev/null \
+            | sort -n | tail -n 60 \
+            | awk '{size=$1; $1=""; sub(/^ /,""); printf "%.2f GiB\t%s\n", size/1073741824, $0}' || true
           echo
 
           echo '=== PostgreSQL log configuration ==='
