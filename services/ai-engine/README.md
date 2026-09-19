@@ -77,6 +77,37 @@ mypy app
 
 ---
 
+## Collecting the historical training corpus
+
+Training data should come from the connected broker rather than mock fixtures or
+the runtime scan cache. The collector pages backward through the internal
+broker-authoritative OHLCV endpoint, keeps closed candles only, rejects
+instrument/timeframe mismatches, deduplicates timestamps, and writes an
+integrity metadata sidecar.
+
+Example for EURUSD H1:
+
+```powershell
+python -m app.domain.training.corpus_collector \
+  --user-id <USER_UUID> \
+  --broker-connection-id <BROKER_CONNECTION_UUID> \
+  --instrument EURUSD \
+  --timeframe H1 \
+  --target-candles 20000 \
+  --page-size 500 \
+  --output data/corpus/EURUSD_H1.csv
+```
+
+The generated metadata records the candle count, covered time range, collection
+time and CSV SHA-256. It deliberately does not persist the user id, connection
+id or broker credentials. If the broker cannot supply the requested number of
+closed candles, collection fails instead of silently padding with synthetic
+data.
+
+For the initial H1 model research, collect the watched FX instruments
+independently (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD and USDCHF) so validation
+can expose instrument-specific behavior before considering a combined model.
+
 ## Training a real XGBoost model
 
 The runtime can load a real fitted XGBoost classifier, but generated artifacts
