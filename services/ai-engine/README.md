@@ -77,6 +77,46 @@ mypy app
 
 ---
 
+## Training a real XGBoost model
+
+The runtime can load a real fitted XGBoost classifier, but generated artifacts
+are deliberately not committed to Git. Supply a genuine historical OHLCV CSV
+with columns `timestamp, open, high, low, close, volume`, then train offline:
+
+```powershell
+python -m app.domain.training.train_xgboost \
+  --dataset data/EURUSD_H1.csv \
+  --model-version xgboost-eurusd-h1-v1 \
+  --instrument EURUSD \
+  --timeframe H1
+```
+
+Training uses forward-return directional labels, excludes near-flat labels,
+keeps chronological order, purges the prediction horizon between train and
+validation, and writes both a model JSON artifact and a metadata sidecar with
+SHA-256 checksums, feature schema, dataset fingerprint, label definition,
+validation period, and held-out classification metrics.
+
+After reviewing the validation output, an operator can explicitly create a
+paper-eligible artifact with `--approve-for-paper`. Live approval is never
+created by the training script.
+
+Configure the runtime with both paths:
+
+```text
+XGBOOST_MODEL_PATH=/secure/model-store/xgboost-eurusd-h1-v1.json
+XGBOOST_MODEL_METADATA_PATH=/secure/model-store/xgboost-eurusd-h1-v1.metadata.json
+```
+
+At startup the runtime verifies the artifact SHA-256 and exact feature schema
+before loading it. If verification fails, telemetry continues to report the
+heuristic fallback rather than claiming that a trained model is active.
+
+Model confidence is the classifier's directional class probability estimate;
+it is **not** a probability of profit or a guarantee of future performance.
+
+---
+
 ## Endpoints
 
 | Method | Path | Description |
@@ -106,7 +146,7 @@ NestJS internal market-data endpoint (called by `BrokerMarketDataProvider`):
 5. Signal candidates are never executed by this service.
 6. Secrets are never logged or included in signal payloads.
 7. Mock market data is blocked in production unless `AI_ALLOW_MOCK_MARKET_DATA=true`.
-8. The baseline XGBoost model is a scaffold — it does not contain real trained weights.
+8. The runtime supports verified trained XGBoost artifacts; without one it truthfully reports the heuristic scaffold.
 9. Backtest results are `simulatedOnly=True` and never reflect real trading performance.
 10. `BacktestEngine` never calls NestJS signal endpoint or any broker API.
 
