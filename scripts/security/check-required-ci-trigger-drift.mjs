@@ -4,6 +4,7 @@ const GATE_PATH = 'scripts/security/required-ci-gate.mjs';
 
 export const WORKFLOW_FILES = new Map([
   ['Release Security', '.github/workflows/release-security.yml'],
+  ['AI Engine CI', '.github/workflows/ai-engine-ci.yml'],
   ['API CI', '.github/workflows/api-ci.yml'],
   ['Risk Execution Concurrency', '.github/workflows/risk-concurrency.yml'],
   [
@@ -199,6 +200,10 @@ export function runSelfTests() {
       'always-required',
     ),
     'unexpected always-workflow path filter should be detected',
+  );
+  assert(
+    WORKFLOW_FILES.get('AI Engine CI') === '.github/workflows/ai-engine-ci.yml',
+    'AI Engine CI workflow mapping must remain canonical',
   );
   assert(WORKFLOW_FILES.has('Mobile CI'), 'required workflow registry must include Mobile CI');
   assert(
