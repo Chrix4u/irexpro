@@ -62,7 +62,6 @@ export const mockUserProfile = {
     firstName: mockAuthUser.firstName,
     lastName: mockAuthUser.lastName,
     dateOfBirth: '1990-05-15',
-    tradingExperienceLevel: 'INTERMEDIATE' as const,
     kycStatus: 'APPROVED' as const,
   },
 };
