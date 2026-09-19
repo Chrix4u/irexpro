@@ -1,0 +1,32 @@
+.broker-onboarding-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.broker-onboarding-card {
+  min-width: 0;
+  height: auto;
+}
+
+@media (min-width: 1100px) {
+  .broker-onboarding-grid {
+    grid-template-columns: minmax(360px, 0.9fr) minmax(460px, 1.1fr);
+    gap: var(--space-6);
+  }
+
+  .broker-onboarding-card {
+    margin-bottom: 0;
+    max-height: calc(100vh - 230px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
+}
+
+@media (max-width: 1099px) {
+  .broker-onboarding-card {
+    overflow: visible;
+  }
+}
