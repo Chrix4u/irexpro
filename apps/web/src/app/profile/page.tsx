@@ -284,21 +284,27 @@ export default function ProfilePage() {
             )}
 
             {eligibility?.kycStatus === 'PENDING' && (
-              <Alert variant="info" className="mt-4">
-                Your KYC submission is pending administrator review. Trading readiness remains restricted until approval is recorded.
-              </Alert>
+              <div className="mt-4">
+                <Alert variant="info">
+                  Your KYC submission is pending administrator review. Trading readiness remains restricted until approval is recorded.
+                </Alert>
+              </div>
             )}
 
             {eligibility?.kycStatus === 'APPROVED' && (
-              <Alert variant="success" className="mt-4">
-                Your identity review is approved for the current date-of-birth record.
-              </Alert>
+              <div className="mt-4">
+                <Alert variant="success">
+                  Your identity review is approved for the current date-of-birth record.
+                </Alert>
+              </div>
             )}
 
             {eligibility?.kycStatus === 'REJECTED' && (
-              <Alert variant="error" className="mt-4">
-                Your current identity record was rejected. Review your profile information and contact support for the required correction before another review.
-              </Alert>
+              <div className="mt-4">
+                <Alert variant="error">
+                  Your current identity record was rejected. Review your profile information and contact support for the required correction before another review.
+                </Alert>
+              </div>
             )}
           </Card>
         </section>
