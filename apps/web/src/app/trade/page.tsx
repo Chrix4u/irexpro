@@ -586,8 +586,8 @@ export default function AiTradingPage() {
               </Card>
 
               <Card className="ai-control-card ai-control-card--automation">
-                <span className="ai-control-card__label">AI Trading</span>
-                <div className="ai-automation-state">
+                <div className="ai-control-card__status-row">
+                  <span className="ai-control-card__label">AI Trading</span>
                   <Badge variant={automationOn ? 'success' : 'info'}>
                     {automationOn ? 'Running' : 'Stopped'}
                   </Badge>
