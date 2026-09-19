@@ -31,9 +31,46 @@ function formatTimestamp(value: string | null | undefined): string {
   }).format(date);
 }
 
-function money(value: string | null | undefined, currency: string | null | undefined): string {
+function formatFixedDecimal(
+  value: string | null | undefined,
+  fractionDigits = 2,
+): string {
   if (!value) return '—';
-  return currency ? `${value} ${currency}` : value;
+
+  const normalized = value.trim();
+  const match = /^([+-]?)(\d+)(?:\.(\d+))?$/.exec(normalized);
+  if (!match) return normalized;
+
+  const negative = match[1] === '-';
+  const integerPart = match[2];
+  const fractionalPart = match[3] ?? '';
+  const scale = 10n ** BigInt(fractionDigits);
+  const paddedFraction = fractionalPart.padEnd(fractionDigits + 1, '0');
+  const keptFraction = paddedFraction.slice(0, fractionDigits) || '0';
+
+  let scaled =
+    BigInt(integerPart) * scale +
+    (fractionDigits > 0 ? BigInt(keptFraction) : 0n);
+
+  if ((paddedFraction[fractionDigits] ?? '0') >= '5') scaled += 1n;
+
+  const whole = scaled / scale;
+  const fraction =
+    fractionDigits > 0
+      ? (scaled % scale).toString().padStart(fractionDigits, '0')
+      : '';
+  const groupedWhole = whole.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const sign = negative && scaled !== 0n ? '-' : '';
+
+  return fractionDigits > 0
+    ? `${sign}${groupedWhole}.${fraction}`
+    : `${sign}${groupedWhole}`;
+}
+
+function money(value: string | null | undefined, currency: string | null | undefined): string {
+  const formatted = formatFixedDecimal(value, 2);
+  if (formatted === '—') return formatted;
+  return currency ? `${formatted} ${currency}` : formatted;
 }
 
 function pnlVariant(value: string | null): 'success' | 'error' | 'info' {
