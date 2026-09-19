@@ -23,10 +23,8 @@ import {
 import { api } from '@/lib/api';
 import { accountSecurityError } from '@/lib/account-security';
 import {
-  PROFILE_EXPERIENCE_OPTIONS,
   buildUpdateMyProfileRequest,
   isProfileDirty,
-  isValidTradingExperienceLevel,
   profileFieldErrors,
   toProfileFieldValues,
   verificationBadges,
@@ -102,13 +100,7 @@ export default function PersonalInformationScreen({
     setNotice(null);
     setValues((current) => {
       if (!current) return current;
-      const next: ProfileFieldValues = { ...current };
-      if (field === 'tradingExperienceLevel') {
-        next.tradingExperienceLevel = isValidTradingExperienceLevel(value) ? value : '';
-      } else {
-        next[field] = value;
-      }
-      return next;
+      return { ...current, [field]: value };
     });
   }
 
@@ -269,38 +261,10 @@ export default function PersonalInformationScreen({
                 <Text style={styles.helper}>Format: YYYY-MM-DD.</Text>
               )}
 
-              <View
-                style={styles.optionGroup}
-                accessibilityRole="radiogroup"
-                accessibilityLabel="Trading experience level"
-              >
-                <Text style={styles.fieldLabel}>Trading experience level</Text>
-                <View style={styles.optionRow}>
-                  {PROFILE_EXPERIENCE_OPTIONS.map((option) => {
-                    const selected = values.tradingExperienceLevel === option.value;
-                    return (
-                      <Pressable
-                        key={option.value}
-                        accessibilityRole="radio"
-                        accessibilityLabel={option.label}
-                        accessibilityState={{ selected }}
-                        onPress={() => setFieldValue('tradingExperienceLevel', option.value)}
-                        style={[styles.optionPill, selected && styles.optionPillSelected]}
-                        disabled={saving}
-                      >
-                        <Text
-                          style={[styles.optionPillText, selected && styles.optionPillTextSelected]}
-                        >
-                          {option.label}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-                {errors.tradingExperienceLevel ? (
-                  <Text style={styles.fieldErrorText}>{errors.tradingExperienceLevel}</Text>
-                ) : null}
-              </View>
+              <Text style={styles.helper}>
+                AI trading always uses iRexPro&apos;s professional model and risk controls. No
+                experience setting is required.
+              </Text>
             </Card>
 
             <Card>
@@ -420,28 +384,7 @@ const styles = StyleSheet.create({
   muted: { color: palette.muted, fontSize: 13, lineHeight: 19 },
   helper: { color: palette.helper, fontSize: 12, lineHeight: 18, marginTop: 6 },
   warningText: { color: palette.warningText, fontSize: 12, lineHeight: 18, marginTop: 6 },
-  fieldLabel: { color: palette.body, fontSize: 13, fontWeight: '600', marginBottom: 6 },
-  fieldErrorText: { color: palette.errorText, fontSize: 12, lineHeight: 18, marginTop: 6 },
   skeletonGap: { marginTop: 13 },
-  optionGroup: { marginTop: 13 },
-  optionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  optionPill: {
-    minHeight: 46,
-    borderWidth: 1,
-    borderColor: palette.inputBorder,
-    backgroundColor: palette.input,
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  optionPillSelected: {
-    backgroundColor: palette.success.background,
-    borderColor: palette.accent,
-  },
-  optionPillText: { color: palette.body, fontSize: 13, fontWeight: '700' },
-  optionPillTextSelected: { color: palette.pill.positive.text },
   readonlyRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 15 },
   readonlyCopy: { flex: 1 },
   rowTitle: { color: palette.text, fontSize: 14, fontWeight: '700', marginBottom: 3 },
