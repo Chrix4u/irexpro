@@ -18,7 +18,10 @@ import pandas as pd
 
 from app.core.logging import get_logger
 from app.domain.models.feature_engineering import FEATURE_COLUMNS
-from app.domain.models.multitimeframe_features import MULTITIMEFRAME_FEATURE_COLUMNS
+from app.domain.models.multitimeframe_features import (
+    MULTITIMEFRAME_FEATURE_COLUMNS,
+    MULTITIMEFRAME_RUNTIME_PROFILE,
+)
 from app.domain.models.schemas import ModelPrediction
 
 logger = get_logger(__name__)
@@ -29,7 +32,6 @@ MODEL_METADATA_PATH_ENV = "XGBOOST_MODEL_METADATA_PATH"
 
 SINGLE_TIMEFRAME_MODEL_TYPE = "xgboost_binary_direction_classifier"
 MULTITIMEFRAME_MODEL_TYPE = "xgboost_pooled_multitimeframe_direction_classifier"
-MULTITIMEFRAME_RUNTIME_PROFILE = "multitimeframe_v1"
 
 
 def _sha256_file(path: Path) -> str:
