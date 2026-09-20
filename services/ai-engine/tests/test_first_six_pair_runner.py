@@ -75,8 +75,15 @@ def test_dukascopy_source_requires_no_broker_credentials(
 
     collected: list[str] = []
 
-    def fake_collect(*, instrument: str, target_rows: int, output_path, now=None):
-        del target_rows, now
+    def fake_collect(
+        *,
+        instrument: str,
+        target_rows: int,
+        output_path,
+        now=None,
+        cache_dir=None,
+    ):
+        del target_rows, now, cache_dir
         collected.append(instrument)
         Path(output_path).write_text(
             "timestamp,open,high,low,close,volume,tick_volume,spread_points,price_digits\n",
