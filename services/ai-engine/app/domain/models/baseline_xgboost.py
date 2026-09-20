@@ -18,6 +18,7 @@ import pandas as pd
 
 from app.core.logging import get_logger
 from app.domain.models.feature_engineering import FEATURE_COLUMNS
+from app.domain.models.multitimeframe_features import MULTITIMEFRAME_FEATURE_COLUMNS
 from app.domain.models.schemas import ModelPrediction
 
 logger = get_logger(__name__)
@@ -25,6 +26,10 @@ logger = get_logger(__name__)
 MODEL_VERSION = "baseline-xgboost-v0.1.0"
 MODEL_PATH_ENV = "XGBOOST_MODEL_PATH"
 MODEL_METADATA_PATH_ENV = "XGBOOST_MODEL_METADATA_PATH"
+
+SINGLE_TIMEFRAME_MODEL_TYPE = "xgboost_binary_direction_classifier"
+MULTITIMEFRAME_MODEL_TYPE = "xgboost_pooled_multitimeframe_direction_classifier"
+MULTITIMEFRAME_RUNTIME_PROFILE = "multitimeframe_v1"
 
 
 def _sha256_file(path: Path) -> str:
@@ -55,6 +60,8 @@ class BaselineXGBoostModel:
         self._model_version = MODEL_VERSION
         self._feature_names = list(FEATURE_COLUMNS)
         self._artifact_metadata: dict[str, Any] = {}
+        self._model_type = SINGLE_TIMEFRAME_MODEL_TYPE
+        self._runtime_feature_profile = "single_timeframe_v1"
 
     def load_model(self) -> bool:
         """
@@ -88,7 +95,11 @@ class BaselineXGBoostModel:
 
         try:
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-            if metadata.get("model_type") != "xgboost_binary_direction_classifier":
+            model_type = str(metadata.get("model_type", "")).strip()
+            if model_type not in {
+                SINGLE_TIMEFRAME_MODEL_TYPE,
+                MULTITIMEFRAME_MODEL_TYPE,
+            }:
                 raise ValueError("Unsupported model_type")
 
             expected_sha = str(metadata.get("artifact_sha256", "")).lower()
@@ -96,12 +107,26 @@ class BaselineXGBoostModel:
             if not expected_sha or expected_sha != actual_sha:
                 raise ValueError("Model artifact SHA-256 does not match metadata")
 
+            runtime_feature_profile = str(
+                metadata.get("runtime_feature_profile", "single_timeframe_v1")
+            ).strip()
+            expected_features = (
+                MULTITIMEFRAME_FEATURE_COLUMNS
+                if model_type == MULTITIMEFRAME_MODEL_TYPE
+                else FEATURE_COLUMNS
+            )
+            if (
+                model_type == MULTITIMEFRAME_MODEL_TYPE
+                and runtime_feature_profile != MULTITIMEFRAME_RUNTIME_PROFILE
+            ):
+                raise ValueError("MTF artifact runtime_feature_profile is unsupported")
+
             feature_names = metadata.get("feature_columns")
-            if feature_names != FEATURE_COLUMNS:
+            if feature_names != expected_features:
                 raise ValueError("Model feature columns do not match runtime feature schema")
 
             expected_schema_hash = str(metadata.get("feature_schema_hash", "")).lower()
-            if expected_schema_hash != _feature_schema_hash(FEATURE_COLUMNS):
+            if expected_schema_hash != _feature_schema_hash(expected_features):
                 raise ValueError("Model feature schema hash does not match runtime schema")
 
             model_version = str(metadata.get("model_version", "")).strip()
@@ -121,6 +146,8 @@ class BaselineXGBoostModel:
             self._model_version = model_version
             self._feature_names = list(feature_names)
             self._artifact_metadata = metadata
+            self._model_type = model_type
+            self._runtime_feature_profile = runtime_feature_profile
 
             logger.info(
                 "Verified trained XGBoost model loaded",
@@ -140,6 +167,8 @@ class BaselineXGBoostModel:
             self._model_version = MODEL_VERSION
             self._feature_names = list(FEATURE_COLUMNS)
             self._artifact_metadata = {}
+            self._model_type = SINGLE_TIMEFRAME_MODEL_TYPE
+            self._runtime_feature_profile = "single_timeframe_v1"
             return False
 
     def predict_signal(self, features: dict[str, float]) -> ModelPrediction:
@@ -229,11 +258,15 @@ class BaselineXGBoostModel:
 
     def get_model_metadata(self) -> dict[str, Any]:
         if self._model_loaded:
+            mtf = self._model_type == MULTITIMEFRAME_MODEL_TYPE
             return {
                 "version": self._model_version,
-                "type": "xgboost_trained",
+                "type": "xgboost_trained_mtf" if mtf else "xgboost_trained",
                 "loaded": True,
-                "mode": "trained_xgboost",
+                "mode": "trained_xgboost_mtf" if mtf else "trained_xgboost",
+                "model_type": self._model_type,
+                "runtime_feature_profile": self._runtime_feature_profile,
+                "feature_count": len(self._feature_names),
                 "approved_for_live": False,
                 "approved_for_paper": bool(
                     self._artifact_metadata.get("approved_for_paper", False)
@@ -243,6 +276,8 @@ class BaselineXGBoostModel:
                     "unknown",
                 ),
                 "artifact_sha256": self._artifact_metadata.get("artifact_sha256"),
+                "horizon_bars": self._artifact_metadata.get("horizon_bars"),
+                "instruments": self._artifact_metadata.get("instruments", []),
             }
 
         return {
