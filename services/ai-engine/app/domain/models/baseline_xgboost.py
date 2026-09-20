@@ -22,6 +22,7 @@ from app.domain.models.multitimeframe_features import (
     MULTITIMEFRAME_BACKTEST_POLICY,
     MULTITIMEFRAME_FEATURE_COLUMNS,
     MULTITIMEFRAME_LABEL_SELECTION_POLICY,
+    MULTITIMEFRAME_RESEARCH_VALIDATION_POLICY,
     MULTITIMEFRAME_RUNTIME_PROFILE,
 )
 from app.domain.models.schemas import ModelPrediction
@@ -138,6 +139,13 @@ class BaselineXGBoostModel:
                 != MULTITIMEFRAME_BACKTEST_POLICY
             ):
                 raise ValueError("MTF artifact backtest_evaluation_policy is unsupported")
+
+            if (
+                model_type == MULTITIMEFRAME_MODEL_TYPE
+                and metadata.get("research_validation_policy")
+                != MULTITIMEFRAME_RESEARCH_VALIDATION_POLICY
+            ):
+                raise ValueError("MTF artifact research_validation_policy is unsupported")
 
             feature_names = metadata.get("feature_columns")
             if feature_names != expected_features:
@@ -289,6 +297,9 @@ class BaselineXGBoostModel:
                 ),
                 "backtest_evaluation_policy": self._artifact_metadata.get(
                     "backtest_evaluation_policy"
+                ),
+                "research_validation_policy": self._artifact_metadata.get(
+                    "research_validation_policy"
                 ),
                 "feature_count": len(self._feature_names),
                 "approved_for_live": False,
