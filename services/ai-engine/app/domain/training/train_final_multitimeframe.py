@@ -30,6 +30,7 @@ from app.domain.models.multitimeframe_features import (
     MULTITIMEFRAME_BACKTEST_POLICY,
     MULTITIMEFRAME_FEATURE_COLUMNS,
     MULTITIMEFRAME_LABEL_SELECTION_POLICY,
+    MULTITIMEFRAME_RESEARCH_VALIDATION_POLICY,
 )
 from app.domain.training.train_multitimeframe import (
     INITIAL_FOREX_UNIVERSE,
@@ -81,6 +82,13 @@ def _load_research_qualification(
     if payload.get("backtest_evaluation_policy") != MULTITIMEFRAME_BACKTEST_POLICY:
         raise ValueError(
             "Qualification summary uses an unsupported backtest-evaluation policy"
+        )
+    if (
+        payload.get("research_validation_policy")
+        != MULTITIMEFRAME_RESEARCH_VALIDATION_POLICY
+    ):
+        raise ValueError(
+            "Qualification summary uses an unsupported research-validation policy"
         )
     block = payload.get("horizon_reports", {}).get(f"{horizon_bars}m")
     if not isinstance(block, dict):
@@ -357,6 +365,7 @@ def train_final_candidate(
         "runtime_feature_profile": MULTITIMEFRAME_RUNTIME_PROFILE,
         "label_selection_policy": MULTITIMEFRAME_LABEL_SELECTION_POLICY,
         "backtest_evaluation_policy": MULTITIMEFRAME_BACKTEST_POLICY,
+        "research_validation_policy": MULTITIMEFRAME_RESEARCH_VALIDATION_POLICY,
         "model_version": model_version,
         "artifact_sha256": _sha256_file(output),
         "feature_columns": MULTITIMEFRAME_FEATURE_COLUMNS,
