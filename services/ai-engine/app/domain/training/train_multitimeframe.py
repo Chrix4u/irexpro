@@ -16,6 +16,7 @@ from app.domain.models.multitimeframe_features import (
     MULTITIMEFRAME_BACKTEST_POLICY,
     MULTITIMEFRAME_FEATURE_COLUMNS,
     MULTITIMEFRAME_LABEL_SELECTION_POLICY,
+    MULTITIMEFRAME_RESEARCH_VALIDATION_POLICY,
     RUNTIME_TIMEFRAMES,
 )
 from app.domain.training.multitimeframe_corpus import validate_no_lookahead
@@ -266,6 +267,51 @@ def _build_model() -> XGBClassifier:
     )
 
 
+
+def _split_internal_early_stopping_tail(
+    training_window: pd.DataFrame,
+    *,
+    horizon_bars: int,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Split an outer training window into fit + internal early-stopping periods.
+
+    The outer walk-forward validation fold must not influence tree-count
+    selection. The internal tail is chronological, and a horizon-sized purge
+    separates it from the fit portion so forward-return labels cannot cross
+    the boundary.
+    """
+    if horizon_bars < 1:
+        raise ValueError("horizon_bars must be positive")
+
+    times = pd.Series(
+        pd.to_datetime(training_window["decision_time"], utc=True, errors="coerce")
+    )
+    if times.isna().any():
+        raise ValueError("training window contains invalid decision_time values")
+
+    unique_times = pd.Index(times.drop_duplicates().sort_values())
+    early_stop_periods = max(50, int(len(unique_times) * 0.15))
+    early_start_index = len(unique_times) - early_stop_periods
+    fit_end_index = early_start_index - horizon_bars
+    if fit_end_index < 50:
+        raise ValueError(
+            "Training window is too small for purged internal early stopping"
+        )
+
+    fit_times = unique_times[:fit_end_index]
+    early_stop_times = unique_times[early_start_index:]
+    fit_frame = training_window.loc[times.isin(fit_times)].copy()
+    early_stop_frame = training_window.loc[times.isin(early_stop_times)].copy()
+    if fit_frame.empty or early_stop_frame.empty:
+        raise ValueError("Internal early-stopping split produced an empty frame")
+    if fit_frame[TARGET_COLUMN].nunique() < 2:
+        raise ValueError("Internal fit data contains one directional class")
+    if early_stop_frame[TARGET_COLUMN].nunique() < 2:
+        raise ValueError("Internal early-stopping data contains one directional class")
+
+    return fit_frame, early_stop_frame
+
 def _non_overlapping_portfolio_periods(
     predictions: pd.DataFrame,
     *,
@@ -427,14 +473,18 @@ def run_pooled_walk_forward(
         if validation_frame[TARGET_COLUMN].nunique() < 2:
             raise ValueError(f"Fold {fold_index} validation data contains one class")
 
+        fit_train, early_stop_frame = _split_internal_early_stopping_tail(
+            train,
+            horizon_bars=horizon_bars,
+        )
         model = _build_model()
         model.fit(
-            train[MULTITIMEFRAME_FEATURE_COLUMNS],
-            train[TARGET_COLUMN].astype(int),
+            fit_train[MULTITIMEFRAME_FEATURE_COLUMNS],
+            fit_train[TARGET_COLUMN].astype(int),
             eval_set=[
                 (
-                    validation_frame[MULTITIMEFRAME_FEATURE_COLUMNS],
-                    validation_frame[TARGET_COLUMN].astype(int),
+                    early_stop_frame[MULTITIMEFRAME_FEATURE_COLUMNS],
+                    early_stop_frame[TARGET_COLUMN].astype(int),
                 )
             ],
             verbose=False,
@@ -473,9 +523,17 @@ def run_pooled_walk_forward(
             {
                 "fold": fold_index,
                 "train_rows": int(len(train)),
+                "fit_rows": int(len(fit_train)),
+                "internal_early_stopping_rows": int(len(early_stop_frame)),
                 "validation_rows": int(len(validation_frame)),
                 "train_start": train["decision_time"].min().isoformat(),
                 "train_end": train["decision_time"].max().isoformat(),
+                "internal_early_stopping_start": early_stop_frame[
+                    "decision_time"
+                ].min().isoformat(),
+                "internal_early_stopping_end": early_stop_frame[
+                    "decision_time"
+                ].max().isoformat(),
                 "validation_start": validation_frame["decision_time"].min().isoformat(),
                 "validation_end": validation_frame["decision_time"].max().isoformat(),
                 "best_iteration": int(getattr(model, "best_iteration", -1)),
@@ -541,6 +599,7 @@ def evaluate_multi_pair_corpora(
         "horizon_bars": horizon_bars,
         "label_selection_policy": MULTITIMEFRAME_LABEL_SELECTION_POLICY,
         "backtest_evaluation_policy": MULTITIMEFRAME_BACKTEST_POLICY,
+        "research_validation_policy": MULTITIMEFRAME_RESEARCH_VALIDATION_POLICY,
         "qualification_decision_time_before": (
             pd.Timestamp(decision_time_before).isoformat()
             if decision_time_before is not None
