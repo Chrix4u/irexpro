@@ -315,7 +315,7 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
   async function request<T>(
     path: string,
     init?: RequestInit,
-    hasRetriedAfterUnauthorized = false,
+    unauthorizedAttempts = 0,
   ): Promise<T> {
     const url = `${baseUrl}${path}`;
     const headers: Record<string, string> = {
@@ -324,7 +324,7 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
       ...((init?.headers as Record<string, string>) ?? {}),
     };
 
-    const token = getAccessToken?.();
+    const token = getAccessToken?.() ?? null;
     if (token && !headers['Authorization']) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -343,21 +343,33 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
       );
     }
 
-    const mayRecover =
+    const mayHandleUnauthorized =
       res.status === 401 &&
-      !hasRetriedAfterUnauthorized &&
-      Boolean(recoverUnauthorized) &&
+      unauthorizedAttempts < 2 &&
       !path.startsWith('/auth/refresh') &&
       !path.startsWith('/auth/login') &&
       !path.startsWith('/auth/register');
 
-    if (mayRecover) {
-      unauthorizedRecovery ??= recoverUnauthorized!().finally(() => {
-        unauthorizedRecovery = null;
-      });
-      const recovered = await unauthorizedRecovery;
-      if (recovered) {
-        return request<T>(path, init, true);
+    if (mayHandleUnauthorized) {
+      const latestToken = getAccessToken?.() ?? null;
+
+      // A different bearer already exists: this 401 belongs to a request that
+      // left the browser before another request completed refresh rotation.
+      // Retrying with the current bearer avoids a second refresh-token
+      // rotation and the session-version cascade that polling-heavy pages can
+      // otherwise trigger.
+      if (token && latestToken && latestToken !== token) {
+        return request<T>(path, init, unauthorizedAttempts + 1);
+      }
+
+      if (recoverUnauthorized) {
+        unauthorizedRecovery ??= recoverUnauthorized().finally(() => {
+          unauthorizedRecovery = null;
+        });
+        const recovered = await unauthorizedRecovery;
+        if (recovered) {
+          return request<T>(path, init, unauthorizedAttempts + 1);
+        }
       }
     }
 
