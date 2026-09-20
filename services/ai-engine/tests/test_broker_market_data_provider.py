@@ -58,6 +58,11 @@ async def test_parses_successful_ohlcv_response():
                 "low": "1.09900",
                 "close": "1.10050",
                 "volume": "1000",
+                "tickVolume": "950",
+                "tradeVolume": "12.5",
+                "spreadPoints": "2",
+                "priceDigits": 5,
+                "brokerTime": "2024-01-01 00:00:00.000",
                 "instrument": "EURUSD",
                 "timeframe": "H1",
             }
@@ -81,6 +86,11 @@ async def test_parses_successful_ohlcv_response():
     assert len(candles) == 1
     assert candles[0].source == "broker"
     assert candles[0].close == 1.10050
+    assert candles[0].tick_volume == 950.0
+    assert candles[0].trade_volume == 12.5
+    assert candles[0].spread_points == 2.0
+    assert candles[0].price_digits == 5
+    assert candles[0].broker_time == "2024-01-01 00:00:00.000"
 
 
 @pytest.mark.asyncio
