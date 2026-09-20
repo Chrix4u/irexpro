@@ -18,6 +18,7 @@ from app.domain.training.train_final_multitimeframe import (
     _load_research_qualification,
 )
 
+
 def _split_frame(periods: int = 700) -> pd.DataFrame:
     start = datetime(2026, 1, 5, 0, 0, tzinfo=UTC)
     return pd.DataFrame(
