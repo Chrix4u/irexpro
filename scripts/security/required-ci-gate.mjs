@@ -63,6 +63,7 @@ const WORKFLOW_RULES = [
       '.github/workflows/deployment-script-safety.yml',
       '.github/workflows/main-staging-release-gate.yml',
       '.github/workflows/staging-deploy.yml',
+      '.github/workflows/uat-runtime-smoke.yml',
     ],
   },
   {
@@ -185,6 +186,11 @@ export function runSelfTests() {
     requiredWorkflowNames(['.github/workflows/staging-deploy.yml']),
     ['Release Security', 'Deployment Script Safety'],
     'staging deploy workflow change',
+  );
+  assertEqual(
+    requiredWorkflowNames(['.github/workflows/uat-runtime-smoke.yml']),
+    ['Release Security', 'Deployment Script Safety'],
+    'UAT runtime smoke workflow change',
   );
   assertEqual(
     requiredWorkflowNames(['infrastructure/nginx/irexpro.conf']),
