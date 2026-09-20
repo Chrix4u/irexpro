@@ -193,14 +193,17 @@ jobs:
             mv -f "$temp" "$RESEARCH_STATE"
           }
 
-          mark_on_success() {
+          mark_on_exit() {
             local status=$?
+            trap - EXIT
             if (( status == 0 )); then
-              mark_research_evaluated
+              if ! mark_research_evaluated; then
+                printf 'RESEARCH WARNING: could not persist evaluated SHA marker; a future deploy will research again.\n' >&2
+              fi
             fi
-            return "$status"
+            exit "$status"
           }
-          trap mark_on_success EXIT
+          trap mark_on_exit EXIT
 
           cd "$STAGING_ROOT"
           test "$(git rev-parse --show-toplevel)" = "$STAGING_ROOT"
