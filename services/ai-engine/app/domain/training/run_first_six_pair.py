@@ -10,13 +10,13 @@ from typing import Any
 
 import pandas as pd
 
+from app.domain.models.multitimeframe_features import (
+    MULTITIMEFRAME_LABEL_SELECTION_POLICY,
+)
 from app.domain.training.collect_dukascopy import collect_dukascopy_m1_corpus
 from app.domain.training.collect_historical import collect_historical_corpus
 from app.domain.training.multitimeframe_corpus import (
     build_multitimeframe_corpus_from_m1_csv,
-)
-from app.domain.models.multitimeframe_features import (
-    MULTITIMEFRAME_LABEL_SELECTION_POLICY,
 )
 from app.domain.training.train_multitimeframe import (
     INITIAL_FOREX_UNIVERSE,
