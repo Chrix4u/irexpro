@@ -229,7 +229,7 @@ jobs:
             (a.horizon - b.horizon)
           );
           if (candidates.length > 0) process.stdout.write(String(candidates[0].horizon));
-NODE
+          NODE
           )"
 
           if [[ -z "$selected_horizon" ]]; then
@@ -302,7 +302,7 @@ NODE
           if metadata.get("approved_for_live") is not False:
               raise SystemExit("MODEL PROMOTION HOLD: live approval must remain false")
           print(f"MODEL_ARTIFACT_VERIFIED version={metadata.get('version')}")
-PY
+          PY
 
           # Persist only the two non-secret model paths in the ignored staging .env
           # and atomically replace the file. deploy-staging.sh reloads these values
@@ -341,7 +341,7 @@ PY
           temp.write_text("\n".join(output) + "\n", encoding="utf-8")
           temp.chmod(path.stat().st_mode & 0o777)
           os.replace(temp, path)
-PY
+          PY
 
           export XGBOOST_MODEL_PATH="$MODEL_PATH"
           export XGBOOST_MODEL_METADATA_PATH="$METADATA_PATH"
