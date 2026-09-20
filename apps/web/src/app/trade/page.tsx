@@ -141,7 +141,8 @@ function formatAgeSeconds(value: number | null | undefined): string {
 function modelModeLabel(mode: string | null | undefined): string {
   if (!mode) return 'Unknown';
   if (mode === 'heuristic_placeholder') return 'Heuristic scaffold';
-  if (mode === 'real') return 'Trained XGBoost';
+  if (mode === 'trained_xgboost_mtf') return 'Trained MTF XGBoost';
+  if (mode === 'trained_xgboost' || mode === 'real') return 'Trained XGBoost';
   return mode.replaceAll('_', ' ');
 }
 

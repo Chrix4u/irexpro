@@ -122,3 +122,29 @@ def test_pooled_walk_forward_reports_pair_breakdown(monkeypatch):
     assert set(report["by_instrument"]) == {"EURUSD", "USDJPY"}
     assert report["overall"]["active_trades"] > 0
     assert report["overall"]["average_spread_bps"] > 0
+
+
+
+def test_prepare_instrument_corpus_rejects_labels_that_cross_missing_minutes():
+    corpus = build_multitimeframe_feature_corpus(_m1_fixture())
+    corpus = corpus.copy()
+    corpus["m1_close"] = 1.0 + np.arange(len(corpus), dtype=float) * 0.001
+
+    gap_time = pd.Timestamp("2026-01-01T08:00:00Z")
+    corpus = corpus.loc[corpus["decision_time"] != gap_time].reset_index(drop=True)
+
+    prepared = prepare_instrument_corpus(
+        corpus,
+        instrument="EURUSD",
+        horizon_bars=5,
+    )
+
+    invalid_window = pd.date_range(
+        gap_time - pd.Timedelta(minutes=5),
+        gap_time - pd.Timedelta(minutes=1),
+        freq="min",
+    )
+
+    assert not prepared["decision_time"].isin(invalid_window).any()
+    assert pd.Timestamp("2026-01-01T07:54:00Z") in set(prepared["decision_time"])
+    assert pd.Timestamp("2026-01-01T08:01:00Z") in set(prepared["decision_time"])

@@ -17,6 +17,11 @@ class OHLCVCandle(BaseModel):
     low: float
     close: float
     volume: float
+    tick_volume: float | None = None
+    trade_volume: float | None = None
+    spread_points: float | None = None
+    price_digits: int | None = None
+    broker_time: str | None = None
     instrument: str
     timeframe: str
     source: str = "mock"

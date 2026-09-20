@@ -11,42 +11,16 @@ import numpy as np
 import pandas as pd
 from xgboost import XGBClassifier
 
-from app.domain.training.multitimeframe_corpus import (
-    ALL_TIMEFRAMES,
-    validate_no_lookahead,
+from app.domain.models.multitimeframe_features import (
+    INITIAL_FOREX_UNIVERSE,
+    MULTITIMEFRAME_FEATURE_COLUMNS,
+    RUNTIME_TIMEFRAMES,
 )
+from app.domain.training.multitimeframe_corpus import validate_no_lookahead
 from app.domain.training.validation import (
     compute_backtest_metrics,
     compute_classification_metrics,
     purged_walk_forward_time_splits,
-)
-
-INITIAL_FOREX_UNIVERSE = (
-    "EURUSD",
-    "GBPUSD",
-    "USDJPY",
-    "AUDUSD",
-    "USDCAD",
-    "USDCHF",
-)
-
-NORMALIZED_FEATURE_SUFFIXES = (
-    "simple_return",
-    "price_vs_ma20",
-    "volatility_10",
-    "candle_body",
-    "volume_change",
-    "range_pct",
-    "ma5_vs_ma20",
-    "ma10_vs_ma20",
-    "log_tick_volume",
-)
-
-TIME_FEATURE_COLUMNS = (
-    "minute_of_day_sin",
-    "minute_of_day_cos",
-    "day_of_week_sin",
-    "day_of_week_cos",
 )
 
 TARGET_COLUMN = "target"
@@ -60,20 +34,6 @@ def _sha256_file(path: Path) -> str:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
-
-
-def multitimeframe_feature_columns() -> list[str]:
-    columns = [
-        f"{timeframe.lower()}_{suffix}"
-        for timeframe in ALL_TIMEFRAMES
-        for suffix in NORMALIZED_FEATURE_SUFFIXES
-    ]
-    columns.extend(["m1_spread_bps", *TIME_FEATURE_COLUMNS])
-    columns.extend(f"instrument_{instrument}" for instrument in INITIAL_FOREX_UNIVERSE)
-    return columns
-
-
-MULTITIMEFRAME_FEATURE_COLUMNS = multitimeframe_feature_columns()
 
 
 def _parse_corpus_dates(frame: pd.DataFrame) -> pd.DataFrame:
@@ -133,7 +93,7 @@ def prepare_instrument_corpus(
     if frame[required_friction].isna().any().any():
         raise ValueError("Corpus contains missing real-friction values")
 
-    for timeframe in ALL_TIMEFRAMES:
+    for timeframe in RUNTIME_TIMEFRAMES:
         prefix = timeframe.lower()
         required = [
             f"{prefix}_high",
@@ -186,6 +146,9 @@ def prepare_instrument_corpus(
     )
     future_close = current_close.shift(-horizon_bars)
     future_spread_price = current_spread_price.shift(-horizon_bars)
+    future_decision_time = decision_time.shift(-horizon_bars)
+    expected_horizon = pd.Timedelta(minutes=horizon_bars)
+    exact_horizon = (future_decision_time - decision_time) == expected_horizon
 
     long_entry = current_close + current_spread_price / 2.0
     long_exit = future_close - future_spread_price / 2.0
@@ -199,7 +162,8 @@ def prepare_instrument_corpus(
     best_net_return = frame[[LONG_NET_RETURN_COLUMN, SHORT_NET_RETURN_COLUMN]].max(axis=1)
     threshold = min_net_return_bps / 10_000.0
     frame = frame[
-        np.isfinite(frame[LONG_NET_RETURN_COLUMN])
+        exact_horizon
+        & np.isfinite(frame[LONG_NET_RETURN_COLUMN])
         & np.isfinite(frame[SHORT_NET_RETURN_COLUMN])
         & (best_net_return >= threshold)
     ].copy()
@@ -226,10 +190,20 @@ def load_and_prepare_corpora(
     min_net_return_bps: float = 0.0,
     commission_bps: float = 0.0,
     slippage_bps: float = 0.0,
+    decision_time_before: str | pd.Timestamp | None = None,
 ) -> tuple[pd.DataFrame, dict[str, str]]:
     """Load multiple pair corpora and return one pooled chronological dataset."""
     if not datasets:
         raise ValueError("At least one instrument corpus is required")
+
+    cutoff: pd.Timestamp | None = None
+    if decision_time_before is not None:
+        cutoff = pd.Timestamp(decision_time_before)
+        cutoff = (
+            cutoff.tz_localize("UTC")
+            if cutoff.tzinfo is None
+            else cutoff.tz_convert("UTC")
+        )
 
     frames: list[pd.DataFrame] = []
     hashes: dict[str, str] = {}
@@ -244,6 +218,17 @@ def load_and_prepare_corpora(
             commission_bps=commission_bps,
             slippage_bps=slippage_bps,
         )
+        if cutoff is not None:
+            # The research decision and its horizon outcome must both remain
+            # strictly before the reserved future boundary.
+            latest_research_decision = cutoff - pd.Timedelta(minutes=horizon_bars)
+            prepared = prepared.loc[
+                prepared["decision_time"] < latest_research_decision
+            ].copy()
+            if prepared.empty:
+                raise ValueError(
+                    f"No research samples remain before qualification cutoff for {instrument}"
+                )
         frames.append(prepared)
         hashes[instrument.upper()] = _sha256_file(path)
 
@@ -442,6 +427,7 @@ def evaluate_multi_pair_corpora(
     commission_bps: float = 0.0,
     slippage_bps: float = 0.0,
     max_splits: int = 5,
+    decision_time_before: str | pd.Timestamp | None = None,
 ) -> dict[str, Any]:
     pooled, hashes = load_and_prepare_corpora(
         datasets,
@@ -449,6 +435,7 @@ def evaluate_multi_pair_corpora(
         min_net_return_bps=min_net_return_bps,
         commission_bps=commission_bps,
         slippage_bps=slippage_bps,
+        decision_time_before=decision_time_before,
     )
     evaluation = run_pooled_walk_forward(
         pooled,
@@ -463,6 +450,11 @@ def evaluate_multi_pair_corpora(
         "feature_columns": MULTITIMEFRAME_FEATURE_COLUMNS,
         "feature_count": len(MULTITIMEFRAME_FEATURE_COLUMNS),
         "horizon_bars": horizon_bars,
+        "qualification_decision_time_before": (
+            pd.Timestamp(decision_time_before).isoformat()
+            if decision_time_before is not None
+            else None
+        ),
         "cost_model": {
             "historical_spread": "half spread at entry + half spread at exit",
             "commission_bps_round_trip": commission_bps,
