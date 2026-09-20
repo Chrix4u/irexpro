@@ -13,6 +13,7 @@ from xgboost import XGBClassifier
 
 from app.domain.models.multitimeframe_features import (
     INITIAL_FOREX_UNIVERSE,
+    MULTITIMEFRAME_BACKTEST_POLICY,
     MULTITIMEFRAME_FEATURE_COLUMNS,
     MULTITIMEFRAME_LABEL_SELECTION_POLICY,
     RUNTIME_TIMEFRAMES,
@@ -265,11 +266,75 @@ def _build_model() -> XGBClassifier:
     )
 
 
-def _trade_metrics(predictions: pd.DataFrame) -> dict[str, Any]:
+def _non_overlapping_portfolio_periods(
+    predictions: pd.DataFrame,
+    *,
+    horizon_bars: int,
+) -> pd.DataFrame:
+    """
+    Build a conservative portfolio-return stream for trading-gate metrics.
+
+    Signals sharing one decision time are equal-weighted into one portfolio
+    period. Once a period is accepted, later decisions are ignored until its
+    horizon has elapsed. This prevents simultaneous pairs and overlapping
+    M1 decision windows from being compounded as independent full-capital
+    returns.
+    """
+    if horizon_bars < 1:
+        raise ValueError("horizon_bars must be positive")
+
     active = predictions[predictions["active_trade"]].copy()
     if active.empty:
+        return pd.DataFrame(columns=["decision_time", "portfolio_net_return", "signal_count"])
+
+    active["decision_time"] = pd.to_datetime(
+        active["decision_time"],
+        utc=True,
+        errors="raise",
+    )
+    grouped = (
+        active.groupby("decision_time", sort=True)["selected_net_return"]
+        .agg(portfolio_net_return="mean", signal_count="size")
+        .reset_index()
+        .sort_values("decision_time")
+        .reset_index(drop=True)
+    )
+
+    accepted: list[dict[str, Any]] = []
+    next_available: pd.Timestamp | None = None
+    holding_period = pd.Timedelta(minutes=horizon_bars)
+    for row in grouped.itertuples(index=False):
+        decision_time = pd.Timestamp(row.decision_time)
+        if next_available is not None and decision_time < next_available:
+            continue
+        accepted.append(
+            {
+                "decision_time": decision_time,
+                "portfolio_net_return": float(row.portfolio_net_return),
+                "signal_count": int(row.signal_count),
+            }
+        )
+        next_available = decision_time + holding_period
+
+    return pd.DataFrame.from_records(accepted)
+
+
+def _trade_metrics(
+    predictions: pd.DataFrame,
+    *,
+    horizon_bars: int,
+) -> dict[str, Any]:
+    raw_active_signals = int(predictions["active_trade"].sum())
+    periods = _non_overlapping_portfolio_periods(
+        predictions,
+        horizon_bars=horizon_bars,
+    )
+    if periods.empty:
         return {
             "trade_or_period_count": 0,
+            "raw_active_signals": raw_active_signals,
+            "non_overlapping_periods": 0,
+            "backtest_evaluation_policy": MULTITIMEFRAME_BACKTEST_POLICY,
             "total_return": 0.0,
             "average_net_return": 0.0,
             "median_net_return": 0.0,
@@ -280,30 +345,42 @@ def _trade_metrics(predictions: pd.DataFrame) -> dict[str, Any]:
             "max_drawdown": 0.0,
         }
 
-    start = active["decision_time"].min()
-    end = active["decision_time"].max()
-    span_years = max((end - start).total_seconds() / (365.25 * 24 * 3600), 1.0 / 365.25)
-    trades_per_year = max(float(len(active)) / span_years, 1.0)
-    return compute_backtest_metrics(
-        active["selected_net_return"].to_numpy(dtype=float),
-        annualization_factor=trades_per_year,
+    start = periods["decision_time"].min()
+    end = periods["decision_time"].max()
+    span_years = max(
+        (end - start).total_seconds() / (365.25 * 24 * 3600),
+        1.0 / 365.25,
     )
+    periods_per_year = max(float(len(periods)) / span_years, 1.0)
+    metrics = compute_backtest_metrics(
+        periods["portfolio_net_return"].to_numpy(dtype=float),
+        annualization_factor=periods_per_year,
+    )
+    return {
+        **metrics,
+        "raw_active_signals": raw_active_signals,
+        "non_overlapping_periods": int(len(periods)),
+        "backtest_evaluation_policy": MULTITIMEFRAME_BACKTEST_POLICY,
+    }
 
 
-def _summarize_predictions(predictions: pd.DataFrame) -> dict[str, Any]:
+def _summarize_predictions(
+    predictions: pd.DataFrame,
+    *,
+    horizon_bars: int,
+) -> dict[str, Any]:
     classification = compute_classification_metrics(
         predictions[TARGET_COLUMN].to_numpy(dtype=int),
         predictions["positive_probability"].to_numpy(dtype=float),
     )
     return {
         "classification": classification,
-        "trading": _trade_metrics(predictions),
+        "trading": _trade_metrics(predictions, horizon_bars=horizon_bars),
         "rows": int(len(predictions)),
         "active_trades": int(predictions["active_trade"].sum()),
         "average_spread_bps": float(predictions["m1_spread_bps"].mean()),
         "median_spread_bps": float(predictions["m1_spread_bps"].median()),
     }
-
 
 def run_pooled_walk_forward(
     dataset: pd.DataFrame,
@@ -386,7 +463,7 @@ def run_pooled_walk_forward(
         prediction_frames.append(predictions)
 
         by_instrument = {
-            instrument: _summarize_predictions(group)
+            instrument: _summarize_predictions(group, horizon_bars=horizon_bars)
             for instrument, group in predictions.groupby("instrument", sort=True)
         }
         fold_reports.append(
@@ -399,19 +476,19 @@ def run_pooled_walk_forward(
                 "validation_start": validation_frame["decision_time"].min().isoformat(),
                 "validation_end": validation_frame["decision_time"].max().isoformat(),
                 "best_iteration": int(getattr(model, "best_iteration", -1)),
-                "aggregate": _summarize_predictions(predictions),
+                "aggregate": _summarize_predictions(predictions, horizon_bars=horizon_bars),
                 "by_instrument": by_instrument,
             }
         )
 
     all_predictions = pd.concat(prediction_frames, ignore_index=True)
     overall_by_instrument = {
-        instrument: _summarize_predictions(group)
+        instrument: _summarize_predictions(group, horizon_bars=horizon_bars)
         for instrument, group in all_predictions.groupby("instrument", sort=True)
     }
     return {
         "folds": fold_reports,
-        "overall": _summarize_predictions(all_predictions),
+        "overall": _summarize_predictions(all_predictions, horizon_bars=horizon_bars),
         "by_instrument": overall_by_instrument,
         "fold_count": len(fold_reports),
         "evaluated_rows": int(len(all_predictions)),
@@ -422,7 +499,6 @@ def run_pooled_walk_forward(
             "purge_periods": int(purge),
             "embargo_periods": int(embargo),
             "confidence_threshold": confidence_threshold,
-        "label_selection_policy": MULTITIMEFRAME_LABEL_SELECTION_POLICY,
         },
     }
 
@@ -454,12 +530,14 @@ def evaluate_multi_pair_corpora(
         max_splits=max_splits,
     )
     report: dict[str, Any] = {
-        "report_version": 1,
+        "report_version": 2,
         "model_type": "pooled_multitimeframe_xgboost_research",
         "instruments": sorted(datasets),
         "feature_columns": MULTITIMEFRAME_FEATURE_COLUMNS,
         "feature_count": len(MULTITIMEFRAME_FEATURE_COLUMNS),
         "horizon_bars": horizon_bars,
+        "label_selection_policy": MULTITIMEFRAME_LABEL_SELECTION_POLICY,
+        "backtest_evaluation_policy": MULTITIMEFRAME_BACKTEST_POLICY,
         "qualification_decision_time_before": (
             pd.Timestamp(decision_time_before).isoformat()
             if decision_time_before is not None
