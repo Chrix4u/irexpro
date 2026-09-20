@@ -111,7 +111,7 @@ class SignalGenerator:
                 )
 
             candles_by_timeframe: dict[str, list[OHLCVCandle]] = {}
-            for required_timeframe in RUNTIME_TIMEFRAMES:
+            for index, required_timeframe in enumerate(RUNTIME_TIMEFRAMES):
                 candles_by_timeframe[required_timeframe] = await self._ohlcv.get_ohlcv(
                     source=source,
                     instrument=instrument,
@@ -120,6 +120,7 @@ class SignalGenerator:
                     user_id=user_id,
                     broker_connection_id=broker_connection_id,
                     bypass_cache=True,
+                    advance_simulation=(source == "broker" and index == 0),
                 )
 
             try:
@@ -161,6 +162,7 @@ class SignalGenerator:
                     user_id=user_id,
                     broker_connection_id=broker_connection_id,
                     bypass_cache=bypass_market_data_cache,
+                    advance_simulation=(source == "broker"),
                 )
 
             if len(candles) < 10:
