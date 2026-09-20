@@ -9,6 +9,7 @@ import { Alert, Badge, Button, Card, DashboardShell, Input, LoadingSpinner } fro
 import { useAuth } from '@/context/auth-context';
 import { useNotification } from '@/hooks/useNotification';
 import { api } from '@/lib/api';
+import { formatAgeSeconds } from '@/lib/duration';
 import { mapApiError } from '@/lib/error-mapping';
 import { loadLiveAccountPositions } from '@/lib/live-account';
 import { loadMarketIntelligence } from '@/lib/market-intelligence';
@@ -130,14 +131,6 @@ function runtimeReasonLabel(reason: string | null | undefined): string {
 function formatConfidence(value: number | null | undefined): string {
   if (value == null) return '—';
   return `${(value * 100).toFixed(2)}%`;
-}
-
-function formatAgeSeconds(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return '—';
-  if (value < 60) return `${Math.round(value)}s ago`;
-  const minutes = Math.floor(value / 60);
-  const seconds = Math.round(value % 60);
-  return `${minutes}m ${seconds}s ago`;
 }
 
 function modelModeLabel(mode: string | null | undefined): string {
@@ -815,11 +808,24 @@ export default function AiTradingPage() {
                   </div>
                   <div>
                     <span>Market data</span>
-                    <strong>
+                    <strong className="ai-runtime-market-data">
                       {automationRuntime?.last_market_data_at
                         ? selectedBroker?.brokerId === 'paper-broker'
-                          ? `Simulated · ${formatTimestamp(automationRuntime.last_market_data_at)}`
-                          : `${formatTimestamp(automationRuntime.last_market_data_at)} · ${formatAgeSeconds(automationRuntime.market_data_age_seconds)}`
+                          ? (
+                            <time dateTime={automationRuntime.last_market_data_at}>
+                              Simulated · {formatTimestamp(automationRuntime.last_market_data_at)}
+                            </time>
+                          )
+                          : (
+                            <>
+                              <time dateTime={automationRuntime.last_market_data_at}>
+                                {formatTimestamp(automationRuntime.last_market_data_at)}
+                              </time>
+                              <small className="ai-runtime-market-data__age">
+                                {formatAgeSeconds(automationRuntime.market_data_age_seconds)}
+                              </small>
+                            </>
+                          )
                         : selectedBroker?.brokerId === 'paper-broker'
                           ? 'Awaiting simulated market snapshot'
                           : 'Awaiting first broker snapshot'}
