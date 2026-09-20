@@ -1,6 +1,7 @@
 """Tests for six-pair research source selection."""
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -106,8 +107,11 @@ def test_dukascopy_source_requires_no_broker_credentials(
             "dataset_sha256": "mtf123",
         }
 
+    qualification_cutoff = datetime(2026, 1, 2, 0, 0, tzinfo=UTC)
+
     def fake_evaluate(datasets, *, report_path, **kwargs):
-        del datasets, kwargs
+        del datasets
+        assert kwargs["decision_time_before"] == qualification_cutoff
         return _fake_evaluation(report_path)
 
     monkeypatch.setattr(runner, "collect_dukascopy_m1_corpus", fake_collect)
@@ -117,6 +121,11 @@ def test_dukascopy_source_requires_no_broker_credentials(
         fake_build,
     )
     monkeypatch.setattr(runner, "evaluate_multi_pair_corpora", fake_evaluate)
+    monkeypatch.setattr(
+        runner,
+        "_research_qualification_cutoff",
+        lambda corpora: qualification_cutoff,
+    )
 
     result = runner.run_first_six_pair_study(
         output_dir=tmp_path / "research",
@@ -131,6 +140,10 @@ def test_dukascopy_source_requires_no_broker_credentials(
         "dukascopy_public_datafeed_ticks"
     )
     assert Path(result["summary_path"]).is_file()
+    assert result["qualification_window"]["research_fraction"] == 0.80
+    assert result["qualification_window"]["decision_time_before"] == (
+        qualification_cutoff.isoformat()
+    )
 
 
 def test_metaapi_source_remains_fail_closed_without_credentials(tmp_path: Path):
