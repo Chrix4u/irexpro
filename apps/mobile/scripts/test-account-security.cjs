@@ -131,7 +131,6 @@ const PROFILE_VIEW = {
     firstName: 'Ada',
     lastName: 'Lovelace',
     dateOfBirth: '1990-06-15',
-    tradingExperienceLevel: 'BEGINNER',
     kycStatus: 'NONE',
   },
 };
@@ -143,7 +142,6 @@ const PROFILE_VALUES = {
   countryCode: 'GH',
   timezone: 'Africa/Accra',
   preferredCurrency: 'USD',
-  tradingExperienceLevel: 'BEGINNER',
 };
 
 /** Local-calendar YYYY-MM-DD for a Date (mirrors the validator's local logic). */
@@ -382,26 +380,6 @@ defineSuite('profile field validation and request building', (test) => {
   test('validateDateOfBirth: empty means "not set" (valid)', () => {
     assert.equal(L.validateDateOfBirth(''), null);
   });
-  test('validateTradingExperienceLevel accepts enum members, rejects non-members, empty = not set', () => {
-    for (const level of L.TRADING_EXPERIENCE_LEVELS) {
-      assert.equal(L.validateTradingExperienceLevel(level), null);
-    }
-    assert.equal(L.validateTradingExperienceLevel(''), null);
-    assert.equal(L.validateTradingExperienceLevel('EXPERT'), 'Select a trading experience level.');
-    assert.equal(L.validateTradingExperienceLevel('beginner'), 'Select a trading experience level.');
-  });
-  test('PROFILE_EXPERIENCE_OPTIONS lists the 4 enum members with labels', () => {
-    assert.equal(L.PROFILE_EXPERIENCE_OPTIONS.length, 4);
-    assert.deepEqual(
-      L.PROFILE_EXPERIENCE_OPTIONS.map((option) => option.value),
-      [...L.TRADING_EXPERIENCE_LEVELS],
-    );
-    for (const option of L.PROFILE_EXPERIENCE_OPTIONS) {
-      assert.equal(typeof option.label, 'string');
-      assert.ok(option.label.length > 0);
-    }
-    assert.deepEqual(L.PROFILE_EXPERIENCE_OPTIONS[0], { value: 'BEGINNER', label: 'Beginner' });
-  });
   test('profileFieldErrors aggregates only failing fields', () => {
     assert.deepEqual(L.profileFieldErrors(PROFILE_VALUES), {});
     const errors = L.profileFieldErrors({
@@ -425,7 +403,6 @@ defineSuite('profile field validation and request building', (test) => {
           firstName: null,
           lastName: null,
           dateOfBirth: null,
-          tradingExperienceLevel: null,
           kycStatus: 'NONE',
         },
       }),
@@ -436,7 +413,6 @@ defineSuite('profile field validation and request building', (test) => {
         countryCode: '',
         timezone: '',
         preferredCurrency: '',
-        tradingExperienceLevel: '',
       },
     );
   });
@@ -461,11 +437,10 @@ defineSuite('profile field validation and request building', (test) => {
       false,
     );
   });
-  test('isProfileDirty detects real changes including enum and "not set" transitions', () => {
+  test('isProfileDirty detects real identity and regional changes', () => {
     assert.equal(L.isProfileDirty(PROFILE_VIEW, { ...PROFILE_VALUES, firstName: 'Grace' }), true);
     assert.equal(L.isProfileDirty(PROFILE_VIEW, { ...PROFILE_VALUES, dateOfBirth: '1991-01-31' }), true);
-    assert.equal(L.isProfileDirty(PROFILE_VIEW, { ...PROFILE_VALUES, tradingExperienceLevel: 'ADVANCED' }), true);
-    assert.equal(L.isProfileDirty(PROFILE_VIEW, { ...PROFILE_VALUES, tradingExperienceLevel: '' }), true);
+    assert.equal(L.isProfileDirty(PROFILE_VIEW, { ...PROFILE_VALUES, timezone: 'UTC' }), true);
   });
   test('buildUpdateMyProfileRequest emits an empty request when nothing changed', () => {
     assert.deepEqual(L.buildUpdateMyProfileRequest(PROFILE_VIEW, PROFILE_VALUES), {});
@@ -494,7 +469,6 @@ defineSuite('profile field validation and request building', (test) => {
       countryCode: 'us',
       preferredCurrency: 'eur',
       timezone: 'UTC',
-      tradingExperienceLevel: 'PROFESSIONAL',
     });
     assert.deepEqual(request, {
       firstName: 'Grace',
@@ -502,7 +476,6 @@ defineSuite('profile field validation and request building', (test) => {
       countryCode: 'US',
       preferredCurrency: 'EUR',
       timezone: 'UTC',
-      tradingExperienceLevel: 'PROFESSIONAL',
     });
   });
   test('buildUpdateMyProfileRequest normalizes country/currency case in the emitted body', () => {

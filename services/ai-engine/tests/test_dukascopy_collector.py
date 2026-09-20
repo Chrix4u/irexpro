@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 
 from app.domain.training.collect_dukascopy import (
+    _fetch_hour,
     _hour_url,
     aggregate_ticks_to_m1,
     collect_dukascopy_m1_corpus,
@@ -234,3 +235,42 @@ def test_collection_recovers_transient_hour_without_silent_gap(
     assert result["recovered_hours"] == 1
     assert attempts[datetime(2026, 1, 5, 10, tzinfo=UTC)] == 2
     assert len(pd.read_csv(output)) == 250
+
+
+def test_fetch_hour_does_not_require_http2_extra(monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        status_code = 404
+        content = b""
+
+        def raise_for_status(self):
+            return None
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, _url, headers=None):
+            del headers
+            return FakeResponse()
+
+    monkeypatch.setattr("app.domain.training.collect_dukascopy.httpx.Client", FakeClient)
+
+    hour = datetime(2026, 1, 5, 10, tzinfo=UTC)
+    result = _fetch_hour(
+        instrument="EURUSD",
+        hour=hour,
+        price_digits=5,
+        timeout_seconds=5.0,
+        max_retries=0,
+    )
+
+    assert result == (hour, [], 0, True)
+    assert "http2" not in captured

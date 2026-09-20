@@ -317,8 +317,6 @@ export interface MyProfileView {
     lastName: string | null;
     /** Date of birth in YYYY-MM-DD calendar format; null if unset. */
     dateOfBirth: string | null;
-    /** Self-reported trading experience level; null if unset. */
-    tradingExperienceLevel: TradingExperienceLevel | null;
     /** KYC review state; "NONE" means never submitted. */
     kycStatus: 'NONE' | 'PENDING' | 'APPROVED' | 'REJECTED';
   };
@@ -716,7 +714,7 @@ export interface OnboardingStatus {
   nextStep: OnboardingNextStep;
 }
 
-/** Self-reported trading experience level. */
+/** @deprecated Legacy persisted value; not authoritative for AI or risk behavior. */
 export type TradingExperienceLevel = 'BEGINNER' | 'INTERMEDIATE' | 'ADVANCED' | 'PROFESSIONAL';
 
 /** PATCH /users/me request body (onboarding profile update). */
@@ -732,7 +730,6 @@ export interface UpdateMyProfileRequest {
   countryCode?: string;
   timezone?: string;
   preferredCurrency?: string;
-  tradingExperienceLevel?: TradingExperienceLevel;
 }
 
 /** Allowed trading mode (Sprint 29). */
