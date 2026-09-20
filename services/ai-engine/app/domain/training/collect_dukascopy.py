@@ -53,6 +53,22 @@ def _hour_url(instrument: str, hour: datetime) -> str:
     )
 
 
+
+def _raw_cache_path(
+    cache_dir: Path,
+    instrument: str,
+    hour: datetime,
+) -> Path:
+    hour = hour.astimezone(UTC)
+    return (
+        cache_dir
+        / instrument.upper()
+        / f"{hour.year:04d}"
+        / f"{hour.month - 1:02d}"
+        / f"{hour.day:02d}"
+        / f"{hour.hour:02d}h_ticks.bi5"
+    )
+
 def decode_dukascopy_ticks(
     payload: bytes,
     *,
@@ -168,8 +184,35 @@ def _fetch_hour(
     price_digits: int,
     timeout_seconds: float,
     max_retries: int,
+    cache_dir: Path | None = None,
 ) -> tuple[datetime, list[dict[str, Any]], int, bool]:
     url = _hour_url(instrument, hour)
+    cache_path = (
+        _raw_cache_path(cache_dir, instrument, hour)
+        if cache_dir is not None
+        else None
+    )
+    missing_marker = (
+        cache_path.with_suffix(cache_path.suffix + ".missing")
+        if cache_path is not None
+        else None
+    )
+
+    if missing_marker is not None and missing_marker.is_file():
+        return hour, [], 0, True
+
+    if cache_path is not None and cache_path.is_file():
+        payload = cache_path.read_bytes()
+        try:
+            ticks = decode_dukascopy_ticks(
+                payload,
+                hour_start=hour,
+                price_digits=price_digits,
+            )
+            rows = aggregate_ticks_to_m1(ticks, price_digits=price_digits)
+            return hour, rows, 0, False
+        except (lzma.LZMAError, ValueError):
+            cache_path.unlink(missing_ok=True)
     headers = {
         "User-Agent": "iRexPro-Research/1.0",
         "Accept": "*/*",
@@ -183,6 +226,9 @@ def _fetch_hour(
             try:
                 response = client.get(url, headers=headers)
                 if response.status_code == 404:
+                    if missing_marker is not None:
+                        missing_marker.parent.mkdir(parents=True, exist_ok=True)
+                        missing_marker.touch(exist_ok=True)
                     return hour, [], 0, True
 
                 transient = response.status_code == 429 or response.status_code >= 500
@@ -198,6 +244,13 @@ def _fetch_hour(
                     price_digits=price_digits,
                 )
                 rows = aggregate_ticks_to_m1(ticks, price_digits=price_digits)
+                if cache_path is not None:
+                    cache_path.parent.mkdir(parents=True, exist_ok=True)
+                    temporary = cache_path.with_suffix(cache_path.suffix + ".tmp")
+                    temporary.write_bytes(response.content)
+                    temporary.replace(cache_path)
+                    if missing_marker is not None:
+                        missing_marker.unlink(missing_ok=True)
                 return hour, rows, len(response.content), False
             except httpx.HTTPStatusError as exc:
                 retryable = (
@@ -226,6 +279,7 @@ def collect_dukascopy_m1_corpus(
     batch_hours: int = 24,
     timeout_seconds: float = 30.0,
     max_retries: int = 5,
+    cache_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Collect latest real Dukascopy bid/ask ticks and aggregate to M1."""
     symbol = instrument.upper()
@@ -250,6 +304,9 @@ def collect_dukascopy_m1_corpus(
     cursor = observed_now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
     earliest = cursor - timedelta(days=max_lookback_days)
     price_digits = INITIAL_FOREX_PRICE_DIGITS[symbol]
+    cache_root = Path(cache_dir) if cache_dir is not None else None
+    if cache_root is not None:
+        cache_root.mkdir(parents=True, exist_ok=True)
 
     rows_by_timestamp: dict[str, dict[str, Any]] = {}
     hours_requested = 0
@@ -279,6 +336,7 @@ def collect_dukascopy_m1_corpus(
                     price_digits=price_digits,
                     timeout_seconds=timeout_seconds,
                     max_retries=max_retries,
+                    cache_dir=cache_root,
                 ): hour
                 for hour in hours
             }
@@ -312,6 +370,7 @@ def collect_dukascopy_m1_corpus(
                     price_digits=price_digits,
                     timeout_seconds=max(timeout_seconds, 30.0),
                     max_retries=max(max_retries + 2, 7),
+                    cache_dir=cache_root,
                 )
             except Exception as recovery_error:
                 raise RuntimeError(
@@ -377,6 +436,7 @@ def collect_dukascopy_m1_corpus(
         "collected_at": observed_now.isoformat(),
         "closed_candles_only": True,
         "friction_data_complete": True,
+        "raw_cache_enabled": cache_root is not None,
         "dataset_sha256": _sha256_file(output),
     }
     manifest_path = output.with_suffix(".manifest.json")
@@ -400,6 +460,7 @@ def main() -> None:
     parser.add_argument("--output", required=True)
     parser.add_argument("--max-lookback-days", type=int, default=90)
     parser.add_argument("--parallelism", type=int, default=3)
+    parser.add_argument("--cache-dir")
     args = parser.parse_args()
 
     result = collect_dukascopy_m1_corpus(
@@ -408,6 +469,7 @@ def main() -> None:
         output_path=args.output,
         max_lookback_days=args.max_lookback_days,
         parallelism=args.parallelism,
+        cache_dir=args.cache_dir,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
 
