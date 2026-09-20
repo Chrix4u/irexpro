@@ -1,12 +1,9 @@
 name: Six Pair Research Run
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - '.github/workflows/six-pair-research-run.yml'
-  workflow_dispatch:
+  workflow_run:
+    workflows: ['Staging Deploy']
+    types: [completed]
 
 permissions:
   contents: read
@@ -18,13 +15,16 @@ concurrency:
 jobs:
   research:
     name: Run secured six-pair XGBoost pilot on staging
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     environment:
       name: staging
 
     env:
-      CANDIDATE_SHA: ${{ github.sha }}
+      CANDIDATE_SHA: ${{ github.event.workflow_run.head_sha }}
       STAGING_SSH_HOST: vps.lightworldtech.com
       STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
       STAGING_SSH_USER: ${{ vars.STAGING_SSH_USER }}
