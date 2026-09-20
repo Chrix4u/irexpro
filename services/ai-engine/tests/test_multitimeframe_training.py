@@ -9,6 +9,7 @@ from app.domain.training.multitimeframe_corpus import build_multitimeframe_featu
 from app.domain.training.train_multitimeframe import (
     MULTITIMEFRAME_FEATURE_COLUMNS,
     _non_overlapping_portfolio_periods,
+    _split_internal_early_stopping_tail,
     _trade_metrics,
     prepare_instrument_corpus,
     run_pooled_walk_forward,
@@ -137,6 +138,26 @@ def test_prepare_instrument_corpus_fails_closed_without_spread():
         )
 
 
+def test_internal_early_stopping_tail_is_purged_and_before_outer_validation():
+    eurusd = prepare_instrument_corpus(
+        build_multitimeframe_feature_corpus(_m1_fixture()),
+        instrument="EURUSD",
+        horizon_bars=5,
+    )
+    training_window = eurusd.iloc[:240].copy()
+    fit_frame, early_stop = _split_internal_early_stopping_tail(
+        training_window,
+        horizon_bars=5,
+    )
+
+    assert fit_frame["decision_time"].max() < early_stop["decision_time"].min()
+    gap_minutes = (
+        early_stop["decision_time"].min() - fit_frame["decision_time"].max()
+    ).total_seconds() / 60.0
+    assert gap_minutes > 5
+    assert set(fit_frame["decision_time"]).isdisjoint(early_stop["decision_time"])
+
+
 def test_pooled_walk_forward_reports_pair_breakdown(monkeypatch):
     eurusd = prepare_instrument_corpus(
         build_multitimeframe_feature_corpus(_m1_fixture()),
@@ -190,6 +211,13 @@ def test_pooled_walk_forward_reports_pair_breakdown(monkeypatch):
     assert set(report["by_instrument"]) == {"EURUSD", "USDJPY"}
     assert report["overall"]["active_trades"] > 0
     assert report["overall"]["average_spread_bps"] > 0
+    for fold in report["folds"]:
+        assert (
+            pd.Timestamp(fold["internal_early_stopping_end"])
+            < pd.Timestamp(fold["validation_start"])
+        )
+        assert fold["fit_rows"] > 0
+        assert fold["internal_early_stopping_rows"] > 0
 
 
 
