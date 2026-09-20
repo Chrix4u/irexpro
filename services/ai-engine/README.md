@@ -102,6 +102,25 @@ python -m app.domain.training.collect_historical \
 Repeat for the approved initial major-pair universe:
 `EURUSD`, `GBPUSD`, `USDJPY`, `AUDUSD`, `USDCAD`, and `USDCHF`.
 
+For the first reproducible public-data study, iRexPro also provides a one-command
+runner backed by real Dukascopy bid/ask tick history:
+
+```powershell
+python -m app.domain.training.run_first_six_pair \
+  --source dukascopy \
+  --output-dir research/first-six-pair-run \
+  --target-rows 50000 \
+  --dukascopy-max-lookback-days 180 \
+  --horizons 1,5,10 \
+  --max-splits 3
+```
+
+The GitHub workflow `First Six-Pair Research` runs the same study and uploads
+the raw M1 data, derived multi-timeframe corpora, and walk-forward reports as a
+short-retention Actions artifact. A larger 250,000-row run should use a longer
+lookback (the runner defaults to 365 days) rather than the old 90-day collector
+ceiling.
+
 Generated market datasets and model artifacts remain excluded from Git.
 
 ### 2. Build the causal multi-timeframe corpus
