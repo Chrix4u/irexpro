@@ -352,7 +352,10 @@ def collect_dukascopy_m1_corpus(
             hours.append(candidate_hour)
 
         if not hours:
-            break
+            # A whole batch can fall inside the weekly FX closure. Keep
+            # walking backward until the lookback boundary rather than
+            # treating a closed-market batch as end-of-history.
+            continue
 
         failed_hours: list[tuple[datetime, Exception]] = []
         with ThreadPoolExecutor(max_workers=parallelism) as pool:
