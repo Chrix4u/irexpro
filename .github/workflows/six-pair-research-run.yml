@@ -199,6 +199,182 @@ jobs:
           NODE
 
           printf 'report_path=%s\n' "$summary"
+
+          # Select exactly one horizon using research evidence only. The untouched
+          # test set is deliberately NOT used for horizon selection; it remains a
+          # final gate for the pre-selected candidate.
+          selected_horizon="$(SUMMARY_PATH="$summary" node <<'NODE'
+          const fs = require('fs');
+          const report = JSON.parse(fs.readFileSync(process.env.SUMMARY_PATH, 'utf8'));
+          const candidates = [];
+          for (const horizon of report.horizons_minutes || []) {
+            const block = report.horizon_reports?.[String(horizon) + 'm'];
+            if (!block?.research_gate?.research_gate_passed) continue;
+            const classification = block.overall?.classification || {};
+            const trading = block.overall?.trading || {};
+            const sharpe = Number(trading.sharpe_ratio);
+            const balanced = Number(classification.balanced_accuracy);
+            const drawdown = Number(trading.max_drawdown);
+            candidates.push({
+              horizon: Number(horizon),
+              sharpe: Number.isFinite(sharpe) ? sharpe : -Infinity,
+              balanced: Number.isFinite(balanced) ? balanced : -Infinity,
+              drawdown: Number.isFinite(drawdown) ? drawdown : Infinity,
+            });
+          }
+          candidates.sort((a, b) =>
+            (b.sharpe - a.sharpe) ||
+            (b.balanced - a.balanced) ||
+            (a.drawdown - b.drawdown) ||
+            (a.horizon - b.horizon)
+          );
+          if (candidates.length > 0) process.stdout.write(String(candidates[0].horizon));
+NODE
+          )"
+
+          if [[ -z "$selected_horizon" ]]; then
+            printf 'MODEL_PROMOTION_HOLD reason=no_research_horizon_passed\n'
+            exit 0
+          fi
+          [[ "$selected_horizon" =~ ^(1|5|10)$ ]] || {
+            printf 'MODEL_PROMOTION_HOLD reason=invalid_selected_horizon\n' >&2
+            exit 16
+          }
+          printf 'selected_horizon=%sm\n' "$selected_horizon"
+
+          readonly MODEL_ROOT="/home/lightworld/research/irexpro-models/$candidate_sha/h$selected_horizon"
+          readonly MODEL_PATH="$MODEL_ROOT/model.json"
+          readonly METADATA_PATH="$MODEL_ROOT/model.metadata.json"
+          readonly TRAIN_RESULT="$MODEL_ROOT/train-result.json"
+          readonly TRAIN_ERROR="$MODEL_ROOT/train-error.log"
+          rm -rf "$MODEL_ROOT"
+          install -d -m 700 "$MODEL_ROOT"
+
+          if "$python_bin" -m app.domain.training.train_final_multitimeframe \
+            --dataset "EURUSD=$OUTPUT_ROOT/corpora/EURUSD_MTF.csv" \
+            --dataset "GBPUSD=$OUTPUT_ROOT/corpora/GBPUSD_MTF.csv" \
+            --dataset "USDJPY=$OUTPUT_ROOT/corpora/USDJPY_MTF.csv" \
+            --dataset "AUDUSD=$OUTPUT_ROOT/corpora/AUDUSD_MTF.csv" \
+            --dataset "USDCAD=$OUTPUT_ROOT/corpora/USDCAD_MTF.csv" \
+            --dataset "USDCHF=$OUTPUT_ROOT/corpora/USDCHF_MTF.csv" \
+            --horizon-bars "$selected_horizon" \
+            --output-model "$MODEL_PATH" \
+            --qualification-summary "$summary" \
+            --confidence-threshold 0.60 \
+            --commission-bps 0 \
+            --slippage-bps 0 \
+            --approve-paper \
+            > "$TRAIN_RESULT" 2> "$TRAIN_ERROR"; then
+            :
+          else
+            training_status=$?
+            if grep -Fq \
+              'Paper approval requested but research and/or untouched-test gate did not pass' \
+              "$TRAIN_ERROR"; then
+              printf 'MODEL_PROMOTION_HOLD reason=untouched_test_gate_failed horizon=%sm\n' \
+                "$selected_horizon"
+              rm -f "$TRAIN_ERROR"
+              exit 0
+            fi
+            cat "$TRAIN_ERROR" >&2
+            exit "$training_status"
+          fi
+          rm -f "$TRAIN_ERROR"
+          test -s "$MODEL_PATH"
+          test -s "$METADATA_PATH"
+
+          # Load the exact candidate through the production loader before changing
+          # the staging process. This re-verifies artifact SHA, feature schema,
+          # runtime profile and paper/live governance.
+          XGBOOST_MODEL_PATH="$MODEL_PATH" \
+          XGBOOST_MODEL_METADATA_PATH="$METADATA_PATH" \
+          "$python_bin" - <<'PY'
+          from app.domain.models.baseline_xgboost import BaselineXGBoostModel
+
+          model = BaselineXGBoostModel()
+          if not model.load_model():
+              raise SystemExit("MODEL PROMOTION HOLD: verified loader rejected artifact")
+          metadata = model.get_model_metadata()
+          if metadata.get("mode") != "trained_xgboost_mtf":
+              raise SystemExit("MODEL PROMOTION HOLD: model is not trained MTF XGBoost")
+          if metadata.get("approved_for_paper") is not True:
+              raise SystemExit("MODEL PROMOTION HOLD: artifact is not paper approved")
+          if metadata.get("approved_for_live") is not False:
+              raise SystemExit("MODEL PROMOTION HOLD: live approval must remain false")
+          print(f"MODEL_ARTIFACT_VERIFIED version={metadata.get('version')}")
+PY
+
+          # Persist only the two non-secret model paths in the ignored staging .env
+          # and atomically replace the file. deploy-staging.sh reloads these values
+          # on every later restart, preventing silent heuristic regression.
+          AI_ENV_PATH="$STAGING_ROOT/services/ai-engine/.env" \
+          PROMOTED_MODEL_PATH="$MODEL_PATH" \
+          PROMOTED_METADATA_PATH="$METADATA_PATH" \
+          "$python_bin" - <<'PY'
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["AI_ENV_PATH"])
+          if not path.is_file():
+              raise SystemExit("MODEL PROMOTION HOLD: staging AI .env is missing")
+          updates = {
+              "XGBOOST_MODEL_PATH": os.environ["PROMOTED_MODEL_PATH"],
+              "XGBOOST_MODEL_METADATA_PATH": os.environ["PROMOTED_METADATA_PATH"],
+          }
+          lines = path.read_text(encoding="utf-8").splitlines()
+          seen = set()
+          output = []
+          for line in lines:
+              replaced = False
+              for key, value in updates.items():
+                  if line.startswith(f"{key}="):
+                      output.append(f"{key}={value}")
+                      seen.add(key)
+                      replaced = True
+                      break
+              if not replaced:
+                  output.append(line)
+          for key, value in updates.items():
+              if key not in seen:
+                  output.append(f"{key}={value}")
+          temp = path.with_name(f"{path.name}.model-promotion.tmp")
+          temp.write_text("\n".join(output) + "\n", encoding="utf-8")
+          temp.chmod(path.stat().st_mode & 0o777)
+          os.replace(temp, path)
+PY
+
+          export XGBOOST_MODEL_PATH="$MODEL_PATH"
+          export XGBOOST_MODEL_METADATA_PATH="$METADATA_PATH"
+          pm2 restart irexpro-ai-staging --update-env >/dev/null
+
+          runtime_ready=false
+          for attempt in {1..30}; do
+            if ai_health="$(curl --fail --silent --show-error --max-time 10 \
+              http://127.0.0.1:8011/api/v1/health 2>/dev/null)"; then
+              if AI_HEALTH="$ai_health" node -e '
+                const p = JSON.parse(process.env.AI_HEALTH);
+                const paper = [p.signal_mode, p.execution_mode, p.mode, p.paper_mode, p.paperMode]
+                  .some((v) => v === true || ["paper", "paper-only"].includes(String(v).toLowerCase()));
+                if (!paper || p.scheduler_enabled !== true) process.exit(1);
+              '; then
+                runtime_ready=true
+                break
+              fi
+            fi
+            sleep 2
+          done
+          [[ "$runtime_ready" == true ]] || {
+            printf 'MODEL PROMOTION FAILED: AI runtime did not recover in paper mode.\n' >&2
+            exit 18
+          }
+
+          model_version="$(METADATA_PATH="$METADATA_PATH" node -e '
+            const fs = require("fs");
+            const m = JSON.parse(fs.readFileSync(process.env.METADATA_PATH, "utf8"));
+            process.stdout.write(String(m.model_version || "unknown"));
+          ')"
+          printf 'MODEL_PROMOTED_PAPER_UAT version=%s horizon=%sm approved_for_live=false\n' \
+            "$model_version" "$selected_horizon"
           REMOTE
 
       - name: Remove ephemeral SSH material
