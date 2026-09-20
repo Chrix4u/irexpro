@@ -96,6 +96,7 @@ class OHLCVService:
         user_id: str | None = None,
         broker_connection_id: str | None = None,
         bypass_cache: bool = False,
+        advance_simulation: bool = False,
     ) -> list[OHLCVCandle]:
         settings = get_settings()
 
@@ -125,6 +126,7 @@ class OHLCVService:
                 limit,
                 user_id=user_id,
                 broker_connection_id=broker_connection_id,
+                advance_simulation=advance_simulation,
             )
 
         validated = self._validate_candles(candles, instrument, timeframe, source)
@@ -140,6 +142,7 @@ class OHLCVService:
         source: MarketDataSource = "mock",
         user_id: str | None = None,
         broker_connection_id: str | None = None,
+        advance_simulation: bool = False,
     ) -> list[OHLCVCandle]:
         """Backward-compatible wrapper for mock/broker OHLCV fetch."""
         return await self.get_ohlcv(
@@ -150,6 +153,7 @@ class OHLCVService:
             user_id=user_id,
             broker_connection_id=broker_connection_id,
             bypass_cache=bypass_cache,
+            advance_simulation=advance_simulation,
         )
 
     def _validate_candles(
@@ -179,32 +183,41 @@ class OHLCVService:
             seen_timestamps.add(ts)
 
         if source == "broker":
-            latest = _as_utc(sorted_candles[-1].timestamp)
-            wall_age_seconds = max(0.0, (now - latest).total_seconds())
-            if wall_age_seconds > BROKER_MAX_WALL_AGE_SECONDS:
-                raise MarketDataError(
-                    "Broker market data is stale: latest candle is more than 7 days old"
-                )
+            observed_sources = {str(candle.source) for candle in sorted_candles}
+            if len(observed_sources) != 1:
+                raise MarketDataError("Mixed broker market-data provenance detected")
 
-            timeframe_seconds = TIMEFRAME_SECONDS.get(timeframe.upper())
-            if timeframe_seconds is None:
-                raise MarketDataError(
-                    f"Unsupported broker timeframe for freshness validation: {timeframe}"
-                )
+            # Paper trading uses a deliberately simulated clock. Its timestamps
+            # must never be compared with wall-clock UTC as though they came
+            # from a real provider. Provider-backed data remains fail-closed.
+            simulated_paper = observed_sources == {"paper-broker"}
+            if not simulated_paper:
+                latest = _as_utc(sorted_candles[-1].timestamp)
+                wall_age_seconds = max(0.0, (now - latest).total_seconds())
+                if wall_age_seconds > BROKER_MAX_WALL_AGE_SECONDS:
+                    raise MarketDataError(
+                        "Broker market data is stale: latest candle is more than 7 days old"
+                    )
 
-            allowed_open_age = max(
-                BROKER_FRESHNESS_MIN_OPEN_SECONDS,
-                timeframe_seconds * BROKER_FRESHNESS_MULTIPLIER,
-            )
-            open_age_seconds = (
-                _fx_market_open_elapsed_seconds(latest, now)
-                if _looks_like_fx_symbol(instrument)
-                else wall_age_seconds
-            )
-            if open_age_seconds > allowed_open_age:
-                raise MarketDataError(
-                    "Broker market data is stale: latest candle is outside the "
-                    f"{timeframe.upper()} freshness window"
+                timeframe_seconds = TIMEFRAME_SECONDS.get(timeframe.upper())
+                if timeframe_seconds is None:
+                    raise MarketDataError(
+                        f"Unsupported broker timeframe for freshness validation: {timeframe}"
+                    )
+
+                allowed_open_age = max(
+                    BROKER_FRESHNESS_MIN_OPEN_SECONDS,
+                    timeframe_seconds * BROKER_FRESHNESS_MULTIPLIER,
                 )
+                open_age_seconds = (
+                    _fx_market_open_elapsed_seconds(latest, now)
+                    if _looks_like_fx_symbol(instrument)
+                    else wall_age_seconds
+                )
+                if open_age_seconds > allowed_open_age:
+                    raise MarketDataError(
+                        "Broker market data is stale: latest candle is outside the "
+                        f"{timeframe.upper()} freshness window"
+                    )
 
         return sorted_candles
