@@ -36,5 +36,5 @@ export class InternalOhlcvQueryDto {
   @IsOptional()
   @Transform(({ value }) => value === true || value === 'true')
   @IsBoolean()
-  advanceSimulation: boolean = false;
+  advanceSimulation?: boolean;
 }
