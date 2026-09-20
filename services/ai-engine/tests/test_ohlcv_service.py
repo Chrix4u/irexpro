@@ -62,7 +62,11 @@ async def test_cache_hit_skips_provider():
     assert len(cached) >= 10
 
 
-def _broker_candles(latest: datetime, timeframe: str = "H1") -> list[OHLCVCandle]:
+def _broker_candles(
+    latest: datetime,
+    timeframe: str = "H1",
+    source: str = "broker",
+) -> list[OHLCVCandle]:
     spacing = timedelta(hours=1)
     candles: list[OHLCVCandle] = []
     for index in range(12):
@@ -78,7 +82,7 @@ def _broker_candles(latest: datetime, timeframe: str = "H1") -> list[OHLCVCandle
                 volume=1000,
                 instrument="EURUSD",
                 timeframe=timeframe,
-                source="broker",
+                source=source,
             )
         )
     return candles
@@ -127,3 +131,32 @@ async def test_broker_source_accepts_recent_candles():
     )
 
     assert len(candles) == 12
+
+
+@pytest.mark.asyncio
+async def test_paper_simulator_uses_simulated_time_not_wall_clock_freshness():
+    broker = AsyncMock()
+    broker.get_ohlcv = AsyncMock(
+        return_value=_broker_candles(
+            datetime(2024, 1, 2, 3, 4, 6, tzinfo=UTC),
+            source="paper-broker",
+        )
+    )
+    service = OHLCVService(
+        broker_provider=broker,
+        cache=OHLCVRedisCache(redis_client=None),
+    )
+
+    candles = await service.get_ohlcv(
+        "broker",
+        "EURUSD",
+        "H1",
+        user_id="user-1",
+        broker_connection_id="conn-1",
+        bypass_cache=True,
+        advance_simulation=True,
+    )
+
+    assert len(candles) == 12
+    assert candles[-1].source == "paper-broker"
+    assert broker.get_ohlcv.await_args.kwargs["advance_simulation"] is True
