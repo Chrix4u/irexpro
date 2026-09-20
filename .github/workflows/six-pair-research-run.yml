@@ -4,27 +4,32 @@ on:
   workflow_run:
     workflows: ['Staging Deploy']
     types: [completed]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+# This workflow and Staging Deploy touch the same checkout on the VPS.
+# Share one non-cancelling lock so a deploy can never switch the staging
+# worktree while a research run is reading/training from that exact SHA.
 concurrency:
-  group: irexpro-six-pair-research
-  cancel-in-progress: true
+  group: irexpro-staging-worktree
+  cancel-in-progress: false
 
 jobs:
   research:
     name: Run secured six-pair XGBoost pilot on staging
     if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'main'
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     environment:
       name: staging
 
     env:
-      CANDIDATE_SHA: ${{ github.event.workflow_run.head_sha }}
+      CANDIDATE_SHA: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.workflow_run.head_sha }}
       STAGING_SSH_HOST: vps.lightworldtech.com
       STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
       STAGING_SSH_USER: ${{ vars.STAGING_SSH_USER }}
@@ -60,7 +65,117 @@ jobs:
           printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
 
+      - name: Determine whether model research is required
+        id: relevance
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            printf 'run=true\n' >> "$GITHUB_OUTPUT"
+            printf 'RESEARCH_REQUIRED reason=manual_dispatch\n'
+            exit 0
+          fi
+
+          decision="$(
+            ssh \
+              -i "$HOME/.ssh/irexpro_staging" \
+              -p "$STAGING_SSH_PORT" \
+              -o BatchMode=yes \
+              -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=yes \
+              "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+              "bash -s -- $CANDIDATE_SHA" <<'REMOTE'
+          set -Eeuo pipefail
+          umask 077
+
+          candidate_sha="$1"
+          readonly STAGING_ROOT='/home/lightworld/webapps/irexpro-staging'
+          readonly RESEARCH_ROOT='/home/lightworld/research/irexpro-six-pair'
+          readonly RESEARCH_STATE="$RESEARCH_ROOT/last-research-sha"
+
+          cd "$STAGING_ROOT"
+          test "$(git rev-parse --show-toplevel)" = "$STAGING_ROOT"
+          test "$(git rev-parse HEAD)" = "$candidate_sha"
+
+          baseline_sha=''
+          if [[ -s "$RESEARCH_STATE" ]]; then
+            proposed="$(tr -d '[:space:]' < "$RESEARCH_STATE")"
+            if [[ "$proposed" =~ ^[0-9a-f]{40}$ ]] &&
+               git cat-file -e "${proposed}^{commit}" 2>/dev/null &&
+               git merge-base --is-ancestor "$proposed" "$candidate_sha"; then
+              baseline_sha="$proposed"
+            fi
+          fi
+
+          # Bootstrap the marker from the immediately previous main SHA when
+          # that SHA already has a completed six-pair summary (e.g. the run
+          # which predates introduction of this marker).
+          if [[ -z "$baseline_sha" ]]; then
+            parent_sha="$(git rev-parse "${candidate_sha}^1" 2>/dev/null || true)"
+            if [[ "$parent_sha" =~ ^[0-9a-f]{40}$ ]] &&
+               [[ -s "$RESEARCH_ROOT/$parent_sha/reports/six_pair_walkforward_summary.json" ]]; then
+              baseline_sha="$parent_sha"
+            fi
+          fi
+
+          relevant_pattern='^(services/ai-engine/app/domain/(training|models)/|services/ai-engine/(pyproject\.toml|requirements\.lock)$)'
+
+          if [[ -z "$baseline_sha" ]]; then
+            # No successful/evaluated research lineage exists yet. For an
+            # irrelevant workflow/UI/API-only deployment, do NOT launch the
+            # expensive study and do NOT advance the marker. The first later
+            # deployment that actually changes model/training inputs will
+            # still be forced to research.
+            parent_sha="$(git rev-parse "${candidate_sha}^1" 2>/dev/null || true)"
+            if [[ ! "$parent_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              printf 'true'
+              exit 0
+            fi
+
+            changed_files="$(git diff --name-only "$parent_sha" "$candidate_sha")"
+            if grep -Eq "$relevant_pattern" <<<"$changed_files"; then
+              printf 'true'
+            else
+              printf 'false'
+            fi
+            exit 0
+          fi
+
+          changed_files="$(git diff --name-only "$baseline_sha" "$candidate_sha")"
+          if grep -Eq "$relevant_pattern" <<<"$changed_files"; then
+            printf 'true'
+            exit 0
+          fi
+
+          # A prior research result is already valid for these model/training
+          # inputs. Carry that evaluated lineage forward atomically.
+          install -d -m 700 "$RESEARCH_ROOT"
+          temp="$RESEARCH_STATE.tmp"
+          printf '%s\n' "$candidate_sha" > "$temp"
+          chmod 600 "$temp"
+          mv -f "$temp" "$RESEARCH_STATE"
+          printf 'false'
+          REMOTE
+          )"
+
+          case "$decision" in
+            true)
+              printf 'run=true\n' >> "$GITHUB_OUTPUT"
+              printf 'RESEARCH_REQUIRED reason=model_or_training_inputs_changed\n'
+              ;;
+            false)
+              printf 'run=false\n' >> "$GITHUB_OUTPUT"
+              printf 'RESEARCH_SKIPPED reason=no_model_or_training_input_changes\n'
+              ;;
+            *)
+              printf 'RESEARCH HOLD: invalid relevance decision.\n' >&2
+              exit 19
+              ;;
+          esac
+
       - name: Run real-data six-pair pilot
+        if: steps.relevance.outputs.run == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -82,9 +197,31 @@ jobs:
           }
 
           readonly STAGING_ROOT='/home/lightworld/webapps/irexpro-staging'
-          readonly OUTPUT_ROOT="/home/lightworld/research/irexpro-six-pair/$candidate_sha"
+          readonly RESEARCH_ROOT='/home/lightworld/research/irexpro-six-pair'
+          readonly OUTPUT_ROOT="$RESEARCH_ROOT/$candidate_sha"
+          readonly RESEARCH_STATE="$RESEARCH_ROOT/last-research-sha"
           readonly DUKASCOPY_CACHE="/home/lightworld/research/dukascopy-raw-cache"
           readonly TARGET_ROWS=25000
+
+          mark_research_evaluated() {
+            install -d -m 700 "$RESEARCH_ROOT"
+            local temp="$RESEARCH_STATE.tmp"
+            printf '%s\n' "$candidate_sha" > "$temp"
+            chmod 600 "$temp"
+            mv -f "$temp" "$RESEARCH_STATE"
+          }
+
+          mark_on_exit() {
+            local status=$?
+            trap - EXIT
+            if (( status == 0 )); then
+              if ! mark_research_evaluated; then
+                printf 'RESEARCH WARNING: could not persist evaluated SHA marker; a future deploy will research again.\n' >&2
+              fi
+            fi
+            exit "$status"
+          }
+          trap mark_on_exit EXIT
 
           cd "$STAGING_ROOT"
           test "$(git rev-parse --show-toplevel)" = "$STAGING_ROOT"

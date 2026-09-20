@@ -8,8 +8,11 @@ on:
 permissions:
   contents: read
 
+# Staging Deploy and Six Pair Research Run share the same VPS checkout.
+# A single lock prevents git checkout/build/restart from racing an active
+# research process that requires the staging worktree to remain on its SHA.
 concurrency:
-  group: irexpro-staging-deploy
+  group: irexpro-staging-worktree
   cancel-in-progress: false
 
 jobs:
