@@ -145,11 +145,13 @@ jobs:
             await client.connect();
             try {
               const result = await client.query(
-                `SELECT user_id::text AS user_id, id::text AS connection_id
+                `SELECT user_id::text AS user_id,
+                        id::text AS connection_id,
+                        account_type::text AS account_type
                    FROM broker.broker_connections
                   WHERE deleted_at IS NULL
                     AND broker_id = 'metatrader5'
-                    AND account_type = 'DEMO'
+                    AND account_type IN ('DEMO', 'LIVE')
                     AND status = 'CONNECTED'
                     AND credential_status IN ('CREATED', 'VERIFIED', 'ROTATED')
                     AND encrypted_credentials IS NOT NULL
@@ -161,14 +163,14 @@ jobs:
 
               if (result.rows.length !== 1) {
                 process.stderr.write(
-                  `RESEARCH HOLD: expected exactly one eligible connected MetaTrader5 DEMO account; found ${result.rows.length}.\n`,
+                  `RESEARCH HOLD: expected exactly one eligible connected MetaTrader5 market-data account; found ${result.rows.length}.\n`,
                 );
                 process.exitCode = 12;
                 return;
               }
 
               process.stdout.write(
-                `${result.rows[0].user_id}|${result.rows[0].connection_id}`,
+                `${result.rows[0].user_id}|${result.rows[0].connection_id}|${result.rows[0].account_type}`,
               );
             } finally {
               await client.end();
@@ -182,9 +184,11 @@ jobs:
           NODE
           )"
 
-          IFS='|' read -r research_user_id research_connection_id <<< "$selection"
+          IFS='|' read -r research_user_id research_connection_id research_account_type <<< "$selection"
           [[ "$research_user_id" =~ ^[0-9a-fA-F-]{36}$ ]]
           [[ "$research_connection_id" =~ ^[0-9a-fA-F-]{36}$ ]]
+          [[ "$research_account_type" == "DEMO" || "$research_account_type" == "LIVE" ]]
+          printf 'market_data_source_mode=%s\n' "$research_account_type"
           unset selection
 
           ai_health="$(curl --fail --silent --show-error --max-time 10 http://127.0.0.1:8011/api/v1/health)"
@@ -241,7 +245,7 @@ jobs:
             --max-splits 5 \
             > "$OUTPUT_ROOT/run-result.json"
 
-          unset research_user_id research_connection_id NESTJS_INTERNAL_API_KEY
+          unset research_user_id research_connection_id research_account_type NESTJS_INTERNAL_API_KEY
 
           summary="$OUTPUT_ROOT/reports/six_pair_walkforward_summary.json"
           test -s "$summary"
