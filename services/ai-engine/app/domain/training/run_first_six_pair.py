@@ -11,6 +11,7 @@ from typing import Any
 import pandas as pd
 
 from app.domain.models.multitimeframe_features import (
+    MULTITIMEFRAME_BACKTEST_POLICY,
     MULTITIMEFRAME_LABEL_SELECTION_POLICY,
 )
 from app.domain.training.collect_dukascopy import collect_dukascopy_m1_corpus
@@ -265,6 +266,7 @@ def run_first_six_pair_study(
         "horizons_minutes": list(horizons),
         "target_m1_rows_per_instrument": target_rows,
         "label_selection_policy": MULTITIMEFRAME_LABEL_SELECTION_POLICY,
+        "backtest_evaluation_policy": MULTITIMEFRAME_BACKTEST_POLICY,
         "qualification_window": {
             "research_fraction": RESEARCH_QUALIFICATION_FRACTION,
             "reserved_future_fraction": 1.0 - RESEARCH_QUALIFICATION_FRACTION,
