@@ -1,7 +1,7 @@
 """Tests for expanded OHLCVService."""
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -11,6 +11,7 @@ from app.core.errors import MarketDataError
 from app.domain.market_data.ohlcv_service import OHLCVService
 from app.domain.market_data.providers.mock_provider import MockMarketDataProvider
 from app.domain.market_data.redis_cache import OHLCVRedisCache
+from app.domain.market_data.schemas import OHLCVCandle
 
 
 @pytest.mark.asyncio
@@ -59,3 +60,70 @@ async def test_cache_hit_skips_provider():
 
     cached = await service.get_ohlcv("mock", "EURUSD", "H1", limit=50)
     assert len(cached) >= 10
+
+
+def _broker_candles(latest: datetime, timeframe: str = "H1") -> list[OHLCVCandle]:
+    spacing = timedelta(hours=1)
+    candles: list[OHLCVCandle] = []
+    for index in range(12):
+        timestamp = latest - spacing * (11 - index)
+        close = 1.10 + index * 0.00001
+        candles.append(
+            OHLCVCandle(
+                timestamp=timestamp,
+                open=close - 0.00002,
+                high=close + 0.00005,
+                low=close - 0.00005,
+                close=close,
+                volume=1000,
+                instrument="EURUSD",
+                timeframe=timeframe,
+                source="broker",
+            )
+        )
+    return candles
+
+
+@pytest.mark.asyncio
+async def test_broker_source_rejects_years_stale_candles_before_inference():
+    broker = AsyncMock()
+    broker.get_ohlcv = AsyncMock(
+        return_value=_broker_candles(datetime.now(UTC) - timedelta(days=30))
+    )
+    service = OHLCVService(
+        broker_provider=broker,
+        cache=OHLCVRedisCache(redis_client=None),
+    )
+
+    with pytest.raises(MarketDataError, match="stale"):
+        await service.get_ohlcv(
+            "broker",
+            "EURUSD",
+            "H1",
+            user_id="user-1",
+            broker_connection_id="conn-1",
+            bypass_cache=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_broker_source_accepts_recent_candles():
+    broker = AsyncMock()
+    broker.get_ohlcv = AsyncMock(
+        return_value=_broker_candles(datetime.now(UTC) - timedelta(minutes=30))
+    )
+    service = OHLCVService(
+        broker_provider=broker,
+        cache=OHLCVRedisCache(redis_client=None),
+    )
+
+    candles = await service.get_ohlcv(
+        "broker",
+        "EURUSD",
+        "H1",
+        user_id="user-1",
+        broker_connection_id="conn-1",
+        bypass_cache=True,
+    )
+
+    assert len(candles) == 12
