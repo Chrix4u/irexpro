@@ -2,13 +2,18 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+import json
 
 import pandas as pd
 import pytest
 
+from app.domain.models.multitimeframe_features import (
+    MULTITIMEFRAME_LABEL_SELECTION_POLICY,
+)
 from app.domain.training.train_final_multitimeframe import (
     _chronological_final_split,
     _final_gate,
+    _load_research_qualification,
 )
 
 
@@ -80,3 +85,59 @@ def test_final_gate_requires_all_metrics_to_pass():
     result = _final_gate(failing)
     assert result["passed"] is False
     assert result["checks"]["balanced_accuracy"] is False
+
+
+
+def _qualification_payload(*, label_policy: str | None) -> dict:
+    payload = {
+        "target_m1_rows_per_instrument": 25_000,
+        "qualification_window": {
+            "decision_time_before": "2026-01-20T00:00:00+00:00",
+        },
+        "horizon_reports": {
+            "5m": {
+                "research_gate": {
+                    "research_gate_passed": True,
+                }
+            }
+        },
+    }
+    if label_policy is not None:
+        payload["label_selection_policy"] = label_policy
+    return payload
+
+
+def test_final_packaging_accepts_only_current_label_selection_policy(tmp_path):
+    summary = tmp_path / "summary.json"
+    summary.write_text(
+        json.dumps(
+            _qualification_payload(
+                label_policy=MULTITIMEFRAME_LABEL_SELECTION_POLICY
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    gate, cutoff, target_rows = _load_research_qualification(
+        summary,
+        horizon_bars=5,
+    )
+
+    assert gate is not None and gate["research_gate_passed"] is True
+    assert cutoff is not None
+    assert target_rows == 25_000
+
+
+@pytest.mark.parametrize("legacy_policy", [None, "future_profitable_rows_only_v1"])
+def test_final_packaging_rejects_legacy_label_selection_policy(
+    tmp_path,
+    legacy_policy,
+):
+    summary = tmp_path / "legacy-summary.json"
+    summary.write_text(
+        json.dumps(_qualification_payload(label_policy=legacy_policy)),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="label-selection policy"):
+        _load_research_qualification(summary, horizon_bars=5)
