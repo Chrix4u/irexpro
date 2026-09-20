@@ -122,7 +122,7 @@ function runtimeReasonLabel(reason: string | null | undefined): string {
     model_not_approved_for_live:
       'Current AI model is not yet approved for live-money automation',
     MarketDataError:
-      'Broker market data is stale or unavailable; this scan was skipped and no confidence was evaluated',
+      'Market data is unavailable or invalid; this scan was skipped and no confidence was evaluated',
   };
   return labels[reason] ?? reason.replaceAll('_', ' ');
 }
@@ -817,18 +817,24 @@ export default function AiTradingPage() {
                     <span>Market data</span>
                     <strong>
                       {automationRuntime?.last_market_data_at
-                        ? `${formatTimestamp(automationRuntime.last_market_data_at)} · ${formatAgeSeconds(automationRuntime.market_data_age_seconds)}`
-                        : 'Awaiting first broker snapshot'}
+                        ? selectedBroker?.brokerId === 'paper-broker'
+                          ? `Simulated · ${formatTimestamp(automationRuntime.last_market_data_at)}`
+                          : `${formatTimestamp(automationRuntime.last_market_data_at)} · ${formatAgeSeconds(automationRuntime.market_data_age_seconds)}`
+                        : selectedBroker?.brokerId === 'paper-broker'
+                          ? 'Awaiting simulated market snapshot'
+                          : 'Awaiting first broker snapshot'}
                     </strong>
                   </div>
                   <div>
                     <span>Data read</span>
                     <strong>
-                      {automationRuntime?.market_data_cache_bypassed
-                        ? 'Broker queried every scan'
-                        : automationRuntime?.source
-                          ? `${automationRuntime.source.toUpperCase()} · cache eligible`
-                          : '—'}
+                      {selectedBroker?.brokerId === 'paper-broker'
+                        ? 'Paper simulator · one heartbeat per scan'
+                        : automationRuntime?.market_data_cache_bypassed
+                          ? 'Broker queried every scan'
+                          : automationRuntime?.source
+                            ? `${automationRuntime.source.toUpperCase()} · cache eligible`
+                            : '—'}
                     </strong>
                   </div>
                   <div>
