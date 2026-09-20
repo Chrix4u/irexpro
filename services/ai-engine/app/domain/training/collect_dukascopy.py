@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 import pandas as pd
@@ -34,6 +35,28 @@ INITIAL_FOREX_PRICE_DIGITS = {
     "USDCHF": 5,
 }
 _RECORD = struct.Struct(">IIIff")
+_NEW_YORK = ZoneInfo("America/New_York")
+
+
+def _is_forex_market_closed_hour(hour: datetime) -> bool:
+    """Return True for hours inside the standard FX weekend closure.
+
+    The global spot-FX trading week is treated as Sunday 17:00 New York
+    through Friday 17:00 New York. Using America/New_York keeps the UTC
+    boundary correct across DST transitions.
+    """
+    if hour.tzinfo is None:
+        hour = hour.replace(tzinfo=UTC)
+    local = hour.astimezone(_NEW_YORK)
+    weekday = local.weekday()
+
+    if weekday == 5:  # Saturday
+        return True
+    if weekday == 6 and local.hour < 17:  # Sunday before weekly open
+        return True
+    if weekday == 4 and local.hour >= 17:  # Friday after weekly close
+        return True
+    return False
 
 
 def _sha256_file(path: Path) -> str:
@@ -314,14 +337,19 @@ def collect_dukascopy_m1_corpus(
     missing_hours = 0
     bytes_downloaded = 0
     recovered_hours = 0
+    market_closed_hours = 0
 
     while len(rows_by_timestamp) < target_rows and cursor >= earliest:
         hours: list[datetime] = []
         for _ in range(batch_hours):
             if cursor < earliest:
                 break
-            hours.append(cursor)
+            candidate_hour = cursor
             cursor -= timedelta(hours=1)
+            if _is_forex_market_closed_hour(candidate_hour):
+                market_closed_hours += 1
+                continue
+            hours.append(candidate_hour)
 
         if not hours:
             break
@@ -430,6 +458,7 @@ def collect_dukascopy_m1_corpus(
         "hours_with_data": hours_with_data,
         "missing_hours": missing_hours,
         "recovered_hours": recovered_hours,
+        "market_closed_hours_skipped": market_closed_hours,
         "bytes_downloaded": bytes_downloaded,
         "start": validated["timestamp"].iloc[0].isoformat(),
         "end": validated["timestamp"].iloc[-1].isoformat(),
