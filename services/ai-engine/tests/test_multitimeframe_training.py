@@ -57,6 +57,38 @@ def test_prepare_instrument_corpus_uses_real_spread_and_tick_volume():
     ).median() < 0
 
 
+def test_prepare_instrument_corpus_keeps_both_direction_losing_periods():
+    # Deliberately large spread makes many exact-horizon periods loss-making
+    # in BOTH directions. Those rows still exist at runtime and therefore must
+    # remain in training/evaluation rather than being removed by hindsight.
+    corpus = build_multitimeframe_feature_corpus(
+        _m1_fixture(spread_points=500.0)
+    )
+    prepared = prepare_instrument_corpus(
+        corpus,
+        instrument="EURUSD",
+        horizon_bars=1,
+    )
+
+    both_lose = (
+        (prepared["long_net_return"] < 0.0)
+        & (prepared["short_net_return"] < 0.0)
+    )
+    assert both_lose.any()
+
+
+def test_prepare_instrument_corpus_rejects_future_profitability_row_filter():
+    corpus = build_multitimeframe_feature_corpus(_m1_fixture())
+
+    with pytest.raises(ValueError, match="future.*profitability|future-profitability"):
+        prepare_instrument_corpus(
+            corpus,
+            instrument="EURUSD",
+            horizon_bars=5,
+            min_net_return_bps=0.1,
+        )
+
+
 def test_prepare_instrument_corpus_fails_closed_without_spread():
     corpus = build_multitimeframe_feature_corpus(_m1_fixture())
     corpus = corpus.drop(columns=["m1_spread_points", "m1_spread_bps"])
