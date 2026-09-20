@@ -21,6 +21,7 @@ from app.domain.models.multitimeframe_features import (
     MULTITIMEFRAME_BACKTEST_POLICY,
     MULTITIMEFRAME_FEATURE_COLUMNS,
     MULTITIMEFRAME_LABEL_SELECTION_POLICY,
+    MULTITIMEFRAME_RESEARCH_VALIDATION_POLICY,
     MULTITIMEFRAME_RUNTIME_PROFILE,
 )
 from app.domain.models.registry import ModelRegistry, build_default_registry
@@ -87,6 +88,7 @@ def _write_mtf_artifact(
     mutate_schema: bool = False,
     include_label_policy: bool = True,
     include_backtest_policy: bool = True,
+    include_research_validation_policy: bool = True,
 ):
     model_path = tmp_path / "mtf-model.json"
     metadata_path = tmp_path / "mtf-model.metadata.json"
@@ -135,6 +137,10 @@ def _write_mtf_artifact(
         metadata["label_selection_policy"] = MULTITIMEFRAME_LABEL_SELECTION_POLICY
     if include_backtest_policy:
         metadata["backtest_evaluation_policy"] = MULTITIMEFRAME_BACKTEST_POLICY
+    if include_research_validation_policy:
+        metadata["research_validation_policy"] = (
+            MULTITIMEFRAME_RESEARCH_VALIDATION_POLICY
+        )
     metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
     return model_path, metadata_path
 
@@ -157,6 +163,10 @@ def test_verified_mtf_artifact_loads_as_trained_runtime(tmp_path, monkeypatch):
     assert (
         metadata["backtest_evaluation_policy"]
         == MULTITIMEFRAME_BACKTEST_POLICY
+    )
+    assert (
+        metadata["research_validation_policy"]
+        == MULTITIMEFRAME_RESEARCH_VALIDATION_POLICY
     )
     assert metadata["feature_count"] == len(MULTITIMEFRAME_FEATURE_COLUMNS)
     assert metadata["approved_for_paper"] is True
@@ -220,6 +230,23 @@ def test_mtf_artifact_without_conservative_backtest_policy_fails_closed(
     model_path, metadata_path = _write_mtf_artifact(
         tmp_path,
         include_backtest_policy=False,
+    )
+    monkeypatch.setenv(MODEL_PATH_ENV, str(model_path))
+    monkeypatch.setenv(MODEL_METADATA_PATH_ENV, str(metadata_path))
+
+    model = BaselineXGBoostModel()
+    assert model.load_model() is False
+    assert model.get_model_metadata()["mode"] == "heuristic_placeholder"
+
+
+
+def test_mtf_artifact_with_reused_outer_validation_policy_fails_closed(
+    tmp_path,
+    monkeypatch,
+):
+    model_path, metadata_path = _write_mtf_artifact(
+        tmp_path,
+        include_research_validation_policy=False,
     )
     monkeypatch.setenv(MODEL_PATH_ENV, str(model_path))
     monkeypatch.setenv(MODEL_METADATA_PATH_ENV, str(metadata_path))
