@@ -178,7 +178,6 @@ def _fetch_hour(
     with httpx.Client(
         timeout=timeout_seconds,
         follow_redirects=True,
-        http2=True,
     ) as client:
         for attempt in range(max_retries + 1):
             try:
