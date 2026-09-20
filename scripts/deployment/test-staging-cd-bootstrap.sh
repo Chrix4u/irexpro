@@ -57,4 +57,13 @@ grep -Fq 'id: relevance' "$RESEARCH_WORKFLOW" ||
 grep -Fq "if: steps.relevance.outputs.run == 'true'" "$RESEARCH_WORKFLOW" ||
   fail 'The expensive six-pair step must be guarded by the relevance decision.'
 
+# When there is no successful research lineage yet, irrelevant deploys may
+# skip the heavy study but must leave the marker absent so the next relevant
+# model/training change is still forced to research.
+# shellcheck disable=SC2016
+grep -Fq 'changed_files="$(git diff --name-only "$parent_sha" "$candidate_sha")"' "$RESEARCH_WORKFLOW" ||
+  fail 'Unbaselined research relevance must inspect the candidate parent diff.'
+grep -Fq 'do NOT launch the' "$RESEARCH_WORKFLOW" ||
+  fail 'Research workflow must document the unbaselined irrelevant-deploy path.'
+
 printf 'Staging CD bootstrap and research-coordination regression tests passed.\n'
