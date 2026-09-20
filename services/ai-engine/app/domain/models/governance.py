@@ -67,5 +67,8 @@ def create_trained_model_governance(
             "validation_metrics": metadata.get("validation_metrics", {}),
             "confidence_semantics": metadata.get("confidence_semantics"),
             "label_selection_policy": metadata.get("label_selection_policy"),
+            "backtest_evaluation_policy": metadata.get(
+                "backtest_evaluation_policy"
+            ),
         },
     )
