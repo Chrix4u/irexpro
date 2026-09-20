@@ -17,7 +17,6 @@ from app.domain.training.train_final_multitimeframe import (
     _load_research_qualification,
 )
 
-
 def _split_frame(periods: int = 700) -> pd.DataFrame:
     start = datetime(2026, 1, 5, 0, 0, tzinfo=UTC)
     return pd.DataFrame(
@@ -32,7 +31,6 @@ def _split_frame(periods: int = 700) -> pd.DataFrame:
             "target": [index % 2 for index in range(periods)],
         }
     )
-
 
 def test_final_split_is_chronological_disjoint_and_purged():
     train, validation, test = _chronological_final_split(
@@ -55,14 +53,12 @@ def test_final_split_is_chronological_disjoint_and_purged():
     assert set(train["decision_time"]).isdisjoint(validation["decision_time"])
     assert set(validation["decision_time"]).isdisjoint(test["decision_time"])
 
-
 def test_final_split_rejects_too_few_periods():
     with pytest.raises(ValueError, match="At least 500 unique decision periods"):
         _chronological_final_split(
             _split_frame(periods=300),
             horizon_bars=5,
         )
-
 
 def test_final_gate_requires_all_metrics_to_pass():
     passing = {
@@ -86,7 +82,6 @@ def test_final_gate_requires_all_metrics_to_pass():
     result = _final_gate(failing)
     assert result["passed"] is False
     assert result["checks"]["balanced_accuracy"] is False
-
 
 
 def _qualification_payload(
@@ -113,7 +108,6 @@ def _qualification_payload(
         payload["backtest_evaluation_policy"] = backtest_policy
     return payload
 
-
 def test_final_packaging_accepts_only_current_label_selection_policy(tmp_path):
     summary = tmp_path / "summary.json"
     summary.write_text(
@@ -134,7 +128,6 @@ def test_final_packaging_accepts_only_current_label_selection_policy(tmp_path):
     assert cutoff is not None
     assert target_rows == 25_000
 
-
 @pytest.mark.parametrize("legacy_policy", [None, "future_profitable_rows_only_v1"])
 def test_final_packaging_rejects_legacy_label_selection_policy(
     tmp_path,
@@ -148,7 +141,6 @@ def test_final_packaging_rejects_legacy_label_selection_policy(
 
     with pytest.raises(ValueError, match="label-selection policy"):
         _load_research_qualification(summary, horizon_bars=5)
-
 
 
 @pytest.mark.parametrize(
