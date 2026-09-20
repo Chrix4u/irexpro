@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.domain.market_data.ohlcv_service import OHLCVService
-from app.domain.market_data.schemas import OHLCVCandle
 from app.domain.market_data.providers.mock_provider import MockMarketDataProvider
 from app.domain.market_data.redis_cache import OHLCVRedisCache
+from app.domain.market_data.schemas import OHLCVCandle
 from app.domain.models.multitimeframe_features import (
     MULTITIMEFRAME_FEATURE_COLUMNS,
     MULTITIMEFRAME_RUNTIME_PROFILE,
