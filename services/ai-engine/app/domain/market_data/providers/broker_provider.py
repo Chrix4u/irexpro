@@ -107,6 +107,43 @@ class BrokerMarketDataProvider(MarketDataProvider):
                     low=float(raw["low"]),
                     close=float(raw["close"]),
                     volume=float(raw.get("volume", 0)),
+                    tick_volume=(
+                        float(raw["tickVolume"])
+                        if raw.get("tickVolume") is not None
+                        else (
+                            float(raw["tick_volume"])
+                            if raw.get("tick_volume") is not None
+                            else None
+                        )
+                    ),
+                    trade_volume=(
+                        float(raw["tradeVolume"])
+                        if raw.get("tradeVolume") is not None
+                        else (
+                            float(raw["trade_volume"])
+                            if raw.get("trade_volume") is not None
+                            else None
+                        )
+                    ),
+                    spread_points=(
+                        float(raw["spreadPoints"])
+                        if raw.get("spreadPoints") is not None
+                        else (
+                            float(raw["spread_points"])
+                            if raw.get("spread_points") is not None
+                            else None
+                        )
+                    ),
+                    price_digits=(
+                        int(raw["priceDigits"])
+                        if raw.get("priceDigits") is not None
+                        else (
+                            int(raw["price_digits"])
+                            if raw.get("price_digits") is not None
+                            else None
+                        )
+                    ),
+                    broker_time=raw.get("brokerTime") or raw.get("broker_time"),
                     instrument=raw.get("instrument", instrument.upper()),
                     timeframe=raw.get("timeframe", timeframe.upper()),
                     source="broker",
