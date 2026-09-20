@@ -14,9 +14,7 @@ from xgboost import XGBClassifier
 from app.domain.models.multitimeframe_features import (
     INITIAL_FOREX_UNIVERSE,
     MULTITIMEFRAME_FEATURE_COLUMNS,
-    NORMALIZED_FEATURE_SUFFIXES,
     RUNTIME_TIMEFRAMES,
-    TIME_FEATURE_COLUMNS,
 )
 from app.domain.training.multitimeframe_corpus import validate_no_lookahead
 from app.domain.training.validation import (
