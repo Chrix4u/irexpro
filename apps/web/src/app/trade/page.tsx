@@ -121,6 +121,8 @@ function runtimeReasonLabel(reason: string | null | undefined): string {
     scheduler_integration_disabled: 'AI scheduler integration is disabled',
     model_not_approved_for_live:
       'Current AI model is not yet approved for live-money automation',
+    MarketDataError:
+      'Broker market data is stale or unavailable; this scan was skipped and no confidence was evaluated',
   };
   return labels[reason] ?? reason.replaceAll('_', ' ');
 }
@@ -743,16 +745,20 @@ export default function AiTradingPage() {
                   </div>
                   <Badge
                     variant={
-                      automationRuntime?.active && automationRuntime?.registered
-                        ? 'success'
-                        : automationRuntime?.last_decision === 'BLOCKED'
+                      automationRuntime?.last_decision === 'ERROR'
+                        ? 'warning'
+                        : automationRuntime?.active && automationRuntime?.registered
+                          ? 'success'
+                          : automationRuntime?.last_decision === 'BLOCKED'
                           ? 'warning'
                           : 'info'
                     }
                   >
-                    {automationRuntime?.active && automationRuntime?.registered
-                      ? 'SCANNING'
-                      : automationRuntime?.last_decision === 'BLOCKED'
+                    {automationRuntime?.last_decision === 'ERROR'
+                      ? 'DATA ISSUE'
+                      : automationRuntime?.active && automationRuntime?.registered
+                        ? 'SCANNING'
+                        : automationRuntime?.last_decision === 'BLOCKED'
                         ? 'BLOCKED'
                         : automationRuntime?.enabled
                           ? 'WAITING'
@@ -819,7 +825,7 @@ export default function AiTradingPage() {
                     <span>Data read</span>
                     <strong>
                       {automationRuntime?.market_data_cache_bypassed
-                        ? 'Fresh broker read per scan'
+                        ? 'Broker queried every scan'
                         : automationRuntime?.source
                           ? `${automationRuntime.source.toUpperCase()} · cache eligible`
                           : '—'}
