@@ -39,6 +39,8 @@ from app.domain.training.train_multitimeframe import (
     load_and_prepare_corpora,
 )
 
+MIN_PAPER_PROMOTION_M1_ROWS_PER_INSTRUMENT = 25_000
+
 DEFAULT_FINAL_GATE = {
     "min_balanced_accuracy": 0.52,
     "min_sharpe_ratio": 1.0,
@@ -64,9 +66,9 @@ def _load_research_qualification(
     summary_path: str | Path | None,
     *,
     horizon_bars: int,
-) -> tuple[dict[str, Any] | None, pd.Timestamp | None]:
+) -> tuple[dict[str, Any] | None, pd.Timestamp | None, int | None]:
     if summary_path is None:
-        return None, None
+        return None, None, None
 
     path = Path(summary_path)
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -93,7 +95,13 @@ def _load_research_qualification(
         if cutoff.tzinfo is None
         else cutoff.tz_convert("UTC")
     )
-    return gate, cutoff
+
+    raw_target_rows = payload.get("target_m1_rows_per_instrument")
+    if not isinstance(raw_target_rows, int) or raw_target_rows < 1:
+        raise ValueError(
+            "Qualification summary is missing valid target_m1_rows_per_instrument"
+        )
+    return gate, cutoff, raw_target_rows
 
 
 def _chronological_final_split(
@@ -237,10 +245,23 @@ def train_final_candidate(
     if not 0.5 <= confidence_threshold < 1.0:
         raise ValueError("confidence_threshold must be in [0.5, 1.0)")
 
-    research_gate, research_cutoff = _load_research_qualification(
-        qualification_summary_path,
-        horizon_bars=horizon_bars,
+    research_gate, research_cutoff, qualification_target_rows = (
+        _load_research_qualification(
+            qualification_summary_path,
+            horizon_bars=horizon_bars,
+        )
     )
+    evidence_volume_verified = bool(
+        qualification_target_rows is not None
+        and qualification_target_rows
+        >= MIN_PAPER_PROMOTION_M1_ROWS_PER_INSTRUMENT
+    )
+    if approve_paper and not evidence_volume_verified:
+        raise ValueError(
+            "Paper approval requested with insufficient research evidence volume; "
+            f"require at least {MIN_PAPER_PROMOTION_M1_ROWS_PER_INSTRUMENT} "
+            "raw M1 rows per instrument"
+        )
 
     pooled, dataset_hashes = load_and_prepare_corpora(
         datasets,
@@ -355,6 +376,13 @@ def train_final_candidate(
         "untouched_test_metrics": test_metrics,
         "final_test_gate": final_gate,
         "research_gate": research_gate,
+        "qualification_evidence": {
+            "target_m1_rows_per_instrument": qualification_target_rows,
+            "minimum_m1_rows_per_instrument": (
+                MIN_PAPER_PROMOTION_M1_ROWS_PER_INSTRUMENT
+            ),
+            "evidence_volume_verified": evidence_volume_verified,
+        },
         "validation_status": (
             "untouched_test_passed"
             if final_gate["passed"]
