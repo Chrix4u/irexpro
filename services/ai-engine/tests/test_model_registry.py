@@ -193,3 +193,26 @@ def test_legacy_mtf_artifact_without_unbiased_label_policy_fails_closed(
     model = BaselineXGBoostModel()
     assert model.load_model() is False
     assert model.get_model_metadata()["mode"] == "heuristic_placeholder"
+
+
+
+def test_registry_falls_back_to_baseline_governance_for_legacy_mtf_artifact(
+    tmp_path,
+    monkeypatch,
+):
+    model_path, metadata_path = _write_mtf_artifact(
+        tmp_path,
+        include_label_policy=False,
+    )
+    monkeypatch.setenv(MODEL_PATH_ENV, str(model_path))
+    monkeypatch.setenv(MODEL_METADATA_PATH_ENV, str(metadata_path))
+
+    registry = build_default_registry()
+    active = registry.get_active_model()
+    governance = registry.get_governance(active.get_model_version())
+
+    assert active.get_model_version() == MODEL_VERSION
+    assert active.get_model_metadata()["mode"] == "heuristic_placeholder"
+    assert governance.validation_status == "scaffold_only_not_validated"
+    assert governance.approved_for_paper is True
+    assert governance.approved_for_live is False
