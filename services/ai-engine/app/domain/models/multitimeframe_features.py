@@ -13,6 +13,7 @@ from app.domain.models.feature_engineering import compute_features
 MULTITIMEFRAME_RUNTIME_PROFILE = "multitimeframe_v1"
 MULTITIMEFRAME_LABEL_SELECTION_POLICY = "all_exact_horizon_finite_rows_v2"
 MULTITIMEFRAME_BACKTEST_POLICY = "non_overlapping_equal_weight_periods_v1"
+MULTITIMEFRAME_RESEARCH_VALIDATION_POLICY = "outer_validation_untouched_internal_early_stop_v1"
 RUNTIME_TIMEFRAMES = ("M1", "M5", "M15", "H1", "H4")
 TIMEFRAME_MINUTES = {
     "M1": 1,
