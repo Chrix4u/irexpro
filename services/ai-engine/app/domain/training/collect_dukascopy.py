@@ -337,6 +337,7 @@ def collect_dukascopy_m1_corpus(
     missing_hours = 0
     bytes_downloaded = 0
     recovered_hours = 0
+    serial_recovery_calls = 0
     market_closed_hours = 0
 
     while len(rows_by_timestamp) < target_rows and cursor >= earliest:
@@ -391,23 +392,39 @@ def collect_dukascopy_m1_corpus(
 
         # Public datafeed occasionally returns transient 5xx responses under
         # concurrency. Retry failed hours serially with a larger retry budget.
-        # Never silently skip an unresolved hour: an artificial data gap would
-        # contaminate returns, indicators, and spread-cost evaluation.
+        # A single exhausted serial pass can still coincide with a short-lived
+        # provider outage, so use a small number of bounded recovery rounds
+        # separated by cooldowns. Never silently skip an unresolved hour: an
+        # artificial data gap would contaminate indicators and return evidence.
         for failed_hour, original_error in failed_hours:
-            try:
-                _hour, rows, payload_bytes, missing = _fetch_hour(
-                    instrument=symbol,
-                    hour=failed_hour,
-                    price_digits=price_digits,
-                    timeout_seconds=max(timeout_seconds, 30.0),
-                    max_retries=max(max_retries + 2, 7),
-                    cache_dir=cache_root,
-                )
-            except Exception as recovery_error:
+            last_error: Exception = original_error
+            recovered = False
+            for recovery_round in range(3):
+                if recovery_round > 0:
+                    time.sleep(15.0 * recovery_round)
+
+                serial_recovery_calls += 1
+                try:
+                    _hour, rows, payload_bytes, missing = _fetch_hour(
+                        instrument=symbol,
+                        hour=failed_hour,
+                        price_digits=price_digits,
+                        timeout_seconds=max(timeout_seconds, 30.0),
+                        max_retries=max(max_retries + 2 + recovery_round, 7),
+                        cache_dir=cache_root,
+                    )
+                except Exception as recovery_error:
+                    last_error = recovery_error
+                    continue
+
+                recovered = True
+                break
+
+            if not recovered:
                 raise RuntimeError(
-                    "Dukascopy hour remained unavailable after serial recovery: "
+                    "Dukascopy hour remained unavailable after bounded serial recovery: "
                     f"{symbol} {failed_hour.isoformat()}"
-                ) from recovery_error
+                ) from last_error
 
             recovered_hours += 1
             bytes_downloaded += payload_bytes
@@ -461,6 +478,7 @@ def collect_dukascopy_m1_corpus(
         "hours_with_data": hours_with_data,
         "missing_hours": missing_hours,
         "recovered_hours": recovered_hours,
+        "serial_recovery_calls": serial_recovery_calls,
         "market_closed_hours_skipped": market_closed_hours,
         "bytes_downloaded": bytes_downloaded,
         "start": validated["timestamp"].iloc[0].isoformat(),
