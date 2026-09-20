@@ -316,6 +316,11 @@
   min-width: 0;
 }
 
+.profile-forgot-password-link {
+  margin-left: 0.75rem;
+  margin-top: 0;
+}
+
 .terminal-content .table-wrap,
 .terminal-content [class*='table-wrap'],
 .terminal-content table {
@@ -417,6 +422,11 @@
 
   .terminal-content .btn:not(.mobile-bottom-nav__item):not(.mobile-sheet__item) {
     max-width: 100%;
+  }
+
+  .profile-forgot-password-link {
+    margin-left: 0;
+    margin-top: 0.75rem;
   }
 
   .dashboard-content [id^='broker-connection-'] {
