@@ -70,5 +70,8 @@ def create_trained_model_governance(
             "backtest_evaluation_policy": metadata.get(
                 "backtest_evaluation_policy"
             ),
+            "research_validation_policy": metadata.get(
+                "research_validation_policy"
+            ),
         },
     )
