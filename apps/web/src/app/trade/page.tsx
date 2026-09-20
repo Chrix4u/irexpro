@@ -121,6 +121,8 @@ function runtimeReasonLabel(reason: string | null | undefined): string {
     scheduler_integration_disabled: 'AI scheduler integration is disabled',
     model_not_approved_for_live:
       'Current AI model is not yet approved for live-money automation',
+    MarketDataError:
+      'Market data is unavailable or invalid; this scan was skipped and no confidence was evaluated',
   };
   return labels[reason] ?? reason.replaceAll('_', ' ');
 }
@@ -743,16 +745,20 @@ export default function AiTradingPage() {
                   </div>
                   <Badge
                     variant={
-                      automationRuntime?.active && automationRuntime?.registered
-                        ? 'success'
-                        : automationRuntime?.last_decision === 'BLOCKED'
+                      automationRuntime?.last_decision === 'ERROR'
+                        ? 'warning'
+                        : automationRuntime?.active && automationRuntime?.registered
+                          ? 'success'
+                          : automationRuntime?.last_decision === 'BLOCKED'
                           ? 'warning'
                           : 'info'
                     }
                   >
-                    {automationRuntime?.active && automationRuntime?.registered
-                      ? 'SCANNING'
-                      : automationRuntime?.last_decision === 'BLOCKED'
+                    {automationRuntime?.last_decision === 'ERROR'
+                      ? 'DATA ISSUE'
+                      : automationRuntime?.active && automationRuntime?.registered
+                        ? 'SCANNING'
+                        : automationRuntime?.last_decision === 'BLOCKED'
                         ? 'BLOCKED'
                         : automationRuntime?.enabled
                           ? 'WAITING'
@@ -811,18 +817,24 @@ export default function AiTradingPage() {
                     <span>Market data</span>
                     <strong>
                       {automationRuntime?.last_market_data_at
-                        ? `${formatTimestamp(automationRuntime.last_market_data_at)} · ${formatAgeSeconds(automationRuntime.market_data_age_seconds)}`
-                        : 'Awaiting first broker snapshot'}
+                        ? selectedBroker?.brokerId === 'paper-broker'
+                          ? `Simulated · ${formatTimestamp(automationRuntime.last_market_data_at)}`
+                          : `${formatTimestamp(automationRuntime.last_market_data_at)} · ${formatAgeSeconds(automationRuntime.market_data_age_seconds)}`
+                        : selectedBroker?.brokerId === 'paper-broker'
+                          ? 'Awaiting simulated market snapshot'
+                          : 'Awaiting first broker snapshot'}
                     </strong>
                   </div>
                   <div>
                     <span>Data read</span>
                     <strong>
-                      {automationRuntime?.market_data_cache_bypassed
-                        ? 'Fresh broker read per scan'
-                        : automationRuntime?.source
-                          ? `${automationRuntime.source.toUpperCase()} · cache eligible`
-                          : '—'}
+                      {selectedBroker?.brokerId === 'paper-broker'
+                        ? 'Paper simulator · one heartbeat per scan'
+                        : automationRuntime?.market_data_cache_bypassed
+                          ? 'Broker queried every scan'
+                          : automationRuntime?.source
+                            ? `${automationRuntime.source.toUpperCase()} · cache eligible`
+                            : '—'}
                     </strong>
                   </div>
                   <div>

@@ -248,8 +248,11 @@ class SignalScheduler:
                 job.last_confidence_at = job.last_run_at
             except Exception as e:
                 job.last_publish_failed = True
+                job.last_run_at = datetime.now(UTC)
                 job.last_decision = "ERROR"
                 job.last_reason = type(e).__name__
+                job.last_confidence_score = None
+                job.last_confidence_at = None
                 logger.warning(
                     "Scheduled signal generation failed",
                     trading_session_id=trading_session_id,

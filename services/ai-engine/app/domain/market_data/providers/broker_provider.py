@@ -50,12 +50,15 @@ class BrokerMarketDataProvider(MarketDataProvider):
         instrument: str,
         timeframe: str,
         limit: int,
+        advance_simulation: bool = False,
     ) -> str:
         base = self._settings.nestjs_market_data_url
         params = (
             f"userId={user_id}&brokerConnectionId={broker_connection_id}"
             f"&instrument={instrument.upper()}&timeframe={timeframe.upper()}&limit={limit}"
         )
+        if advance_simulation:
+            params += "&advanceSimulation=true"
         return f"{base}?{params}"
 
     async def get_ohlcv(
@@ -65,11 +68,19 @@ class BrokerMarketDataProvider(MarketDataProvider):
         limit: int = 100,
         user_id: str | None = None,
         broker_connection_id: str | None = None,
+        advance_simulation: bool = False,
     ) -> list[OHLCVCandle]:
         if not user_id or not broker_connection_id:
             raise MarketDataError("Broker market data requires userId and brokerConnectionId")
 
-        url = self.build_request_url(user_id, broker_connection_id, instrument, timeframe, limit)
+        url = self.build_request_url(
+            user_id,
+            broker_connection_id,
+            instrument,
+            timeframe,
+            limit,
+            advance_simulation=advance_simulation,
+        )
 
         try:
             async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
@@ -92,6 +103,7 @@ class BrokerMarketDataProvider(MarketDataProvider):
 
     def _parse_response(self, data: dict, instrument: str, timeframe: str) -> list[OHLCVCandle]:
         candles: list[OHLCVCandle] = []
+        response_source = str(data.get("source") or "broker")
         for raw in data.get("candles", []):
             ts = raw["timestamp"]
             if isinstance(ts, str):
@@ -146,7 +158,7 @@ class BrokerMarketDataProvider(MarketDataProvider):
                     broker_time=raw.get("brokerTime") or raw.get("broker_time"),
                     instrument=raw.get("instrument", instrument.upper()),
                     timeframe=raw.get("timeframe", timeframe.upper()),
-                    source="broker",
+                    source=str(raw.get("source") or response_source),
                 )
             )
         return candles
