@@ -373,6 +373,24 @@ PY
             const m = JSON.parse(fs.readFileSync(process.env.METADATA_PATH, "utf8"));
             process.stdout.write(String(m.model_version || "unknown"));
           ')"
+
+          active_model="$(curl --fail --silent --show-error --max-time 10 \
+            http://127.0.0.1:8011/api/v1/models/active)"
+          ACTIVE_MODEL="$active_model" EXPECTED_MODEL_VERSION="$model_version" node -e '
+            const model = JSON.parse(process.env.ACTIVE_MODEL);
+            const expected = process.env.EXPECTED_MODEL_VERSION;
+            if (
+              model.version !== expected ||
+              model.mode !== "trained_xgboost_mtf" ||
+              model.loaded !== true ||
+              model.approved_for_paper !== true ||
+              model.approved_for_live !== false
+            ) {
+              console.error("MODEL PROMOTION FAILED: restarted runtime did not activate verified trained model");
+              process.exit(1);
+            }
+          '
+
           printf 'MODEL_PROMOTED_PAPER_UAT version=%s horizon=%sm approved_for_live=false\n' \
             "$model_version" "$selected_horizon"
           REMOTE
