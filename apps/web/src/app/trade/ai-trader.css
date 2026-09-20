@@ -215,18 +215,19 @@
 
 .ai-overview-card {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 0.45rem 0.85rem;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  align-items: start;
+  gap: 0.35rem;
   min-width: 0;
 }
 
 .ai-overview-card > .muted {
-  grid-column: 1 / -1;
+  grid-column: auto;
 }
 
 .ai-overview-card__value {
-  text-align: right;
+  text-align: left;
 }
 
 .ai-overview-card__value {
@@ -279,10 +280,10 @@
 }
 
 .ai-runtime-grid > div {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
+  display: grid;
+  align-content: start;
+  align-items: start;
+  gap: 0.35rem;
 }
 
 .ai-runtime-grid span,
@@ -296,8 +297,8 @@
 
 .ai-runtime-grid strong,
 .ai-runtime-reason strong {
-  max-width: 65%;
-  text-align: right;
+  max-width: 100%;
+  text-align: left;
   font-size: 0.88rem;
   font-weight: 650;
   line-height: 1.45;
@@ -305,10 +306,10 @@
 }
 
 .ai-runtime-reason {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
+  display: grid;
+  align-content: start;
+  align-items: start;
+  gap: 0.35rem;
 }
 
 .ai-trading-grid {
@@ -505,6 +506,32 @@
 }
 
 @media (max-width: 700px) {
+  .ai-overview-card {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.45rem 0.85rem;
+  }
+
+  .ai-overview-card > .muted {
+    grid-column: 1 / -1;
+  }
+
+  .ai-overview-card__value {
+    text-align: right;
+  }
+
+  .ai-runtime-grid > div {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+
+  .ai-runtime-grid strong {
+    max-width: 65%;
+    text-align: right;
+  }
+
   .ai-trader__hero {
     flex-direction: column;
     border-radius: 14px;
@@ -578,6 +605,7 @@
 
   .ai-runtime-reason strong {
     max-width: 62%;
+    text-align: right;
   }
 
   .ai-trade-metrics {
