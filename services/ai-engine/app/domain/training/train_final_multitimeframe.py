@@ -28,6 +28,7 @@ from app.domain.models.baseline_xgboost import (
 )
 from app.domain.models.multitimeframe_features import (
     MULTITIMEFRAME_FEATURE_COLUMNS,
+    MULTITIMEFRAME_LABEL_SELECTION_POLICY,
 )
 from app.domain.training.train_multitimeframe import (
     INITIAL_FOREX_UNIVERSE,
@@ -72,6 +73,10 @@ def _load_research_qualification(
 
     path = Path(summary_path)
     payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload.get("label_selection_policy") != MULTITIMEFRAME_LABEL_SELECTION_POLICY:
+        raise ValueError(
+            "Qualification summary uses an unsupported label-selection policy"
+        )
     block = payload.get("horizon_reports", {}).get(f"{horizon_bars}m")
     if not isinstance(block, dict):
         raise ValueError(
@@ -339,6 +344,7 @@ def train_final_candidate(
         "metadata_version": 2,
         "model_type": MULTITIMEFRAME_MODEL_TYPE,
         "runtime_feature_profile": MULTITIMEFRAME_RUNTIME_PROFILE,
+        "label_selection_policy": MULTITIMEFRAME_LABEL_SELECTION_POLICY,
         "model_version": model_version,
         "artifact_sha256": _sha256_file(output),
         "feature_columns": MULTITIMEFRAME_FEATURE_COLUMNS,
@@ -354,6 +360,7 @@ def train_final_candidate(
             "commission_bps_round_trip": commission_bps,
             "slippage_bps_round_trip": slippage_bps,
             "minimum_net_return_bps_for_label": min_net_return_bps,
+            "future_profitability_row_filtering": "prohibited",
         },
         "split": {
             "train_rows": int(len(train)),
