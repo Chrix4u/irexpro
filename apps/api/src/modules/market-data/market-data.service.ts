@@ -31,9 +31,34 @@ export class MarketDataService {
   ) {}
 
   async getInternalOhlcv(query: InternalOhlcvQueryDto): Promise<InternalOhlcvResponseDto> {
-    const { userId, brokerConnectionId, instrument, timeframe, limit, before } = query;
+    const {
+      userId,
+      brokerConnectionId,
+      instrument,
+      timeframe,
+      limit,
+      before,
+      advanceSimulation,
+    } = query;
 
     try {
+      const connection = await this.brokerService.findConnectionById(
+        brokerConnectionId,
+        userId,
+      );
+      const source = connection.brokerId === 'paper-broker' ? 'paper-broker' : 'broker';
+
+      if (source === 'paper-broker' && advanceSimulation && !before) {
+        const heartbeat = await this.brokerService.getCurrentPriceForConnection(
+          userId,
+          brokerConnectionId,
+          instrument,
+        );
+        if (!heartbeat) {
+          throw new Error('Paper simulator heartbeat could not be advanced');
+        }
+      }
+
       const rawCandles = await this.brokerService.getOhlcvForConnection(
         userId,
         brokerConnectionId,
@@ -44,7 +69,12 @@ export class MarketDataService {
       );
 
       const candles = rawCandles.map((c) =>
-        this.normalizeCandle(c, instrument.toUpperCase(), timeframe.toUpperCase()),
+        this.normalizeCandle(
+          c,
+          instrument.toUpperCase(),
+          timeframe.toUpperCase(),
+          source,
+        ),
       );
 
       await this.auditService.log({
@@ -58,13 +88,15 @@ export class MarketDataService {
           limit,
           count: candles.length,
           before: before ?? null,
+          source,
+          simulationAdvanced: source === 'paper-broker' && Boolean(advanceSimulation) && !before,
         },
       });
 
       return {
         instrument: instrument.toUpperCase(),
         timeframe: timeframe.toUpperCase(),
-        source: 'broker',
+        source,
         count: candles.length,
         candles,
       };
@@ -105,6 +137,7 @@ export class MarketDataService {
     candle: OHLCV,
     instrument: string,
     timeframe: string,
+    source: string,
   ): NormalizedOhlcvCandle {
     const ts =
       candle.timestamp instanceof Date ? candle.timestamp.toISOString() : String(candle.timestamp);
@@ -123,7 +156,7 @@ export class MarketDataService {
       priceDigits: candle.priceDigits,
       instrument,
       timeframe,
-      source: 'broker',
+      source,
     };
   }
 }
