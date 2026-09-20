@@ -8,9 +8,12 @@ on:
 permissions:
   contents: read
 
+# This workflow and Staging Deploy touch the same checkout on the VPS.
+# Share one non-cancelling lock so a deploy can never switch the staging
+# worktree while a research run is reading/training from that exact SHA.
 concurrency:
-  group: irexpro-six-pair-research
-  cancel-in-progress: true
+  group: irexpro-staging-worktree
+  cancel-in-progress: false
 
 jobs:
   research:
