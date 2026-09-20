@@ -139,6 +139,15 @@ const PAPER_SPREAD_UNITS = 10n;
 const PAPER_TICK_STEPS_UNITS = [20n, -10n];
 /** Each market tick advances simulated time by one second. */
 const PAPER_TICK_DURATION_MS = 1_000;
+const PAPER_TIMEFRAME_MS: Record<string, number> = {
+  M1: 60_000,
+  M5: 5 * 60_000,
+  M15: 15 * 60_000,
+  M30: 30 * 60_000,
+  H1: 60 * 60_000,
+  H4: 4 * 60 * 60_000,
+  D1: 24 * 60 * 60_000,
+};
 /** Fixed deterministic clock epoch (no Date.now — CI-stable). */
 const PAPER_CLOCK_BASE_EPOCH_MS = Date.UTC(2024, 0, 2, 3, 4, 5);
 const PAPER_CONTRACT_SIZE = '100000';
@@ -464,6 +473,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   private _connected = false;
   private _mode: BrokerMode = BrokerMode.DEMO;
   private _orderCounter = 0;
+  private _marketTickCounter = 0;
   private _balance = PAPER_STARTING_BALANCE;
 
   private readonly _feed: PaperPriceFeed;
@@ -786,15 +796,29 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   async getOHLCV(instrument: string, timeframe: string, count: number): Promise<OHLCV[]> {
     this.assertConnected();
     this.requireInstrument(instrument);
-    // Deterministic mock candles anchored to the simulated clock.
+
+    const normalizedTimeframe = timeframe.trim().toUpperCase();
+    const spacingMs = PAPER_TIMEFRAME_MS[normalizedTimeframe];
+    if (!spacingMs) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.INVALID_REQUEST,
+        `Unsupported paper-market timeframe: ${timeframe}`,
+      );
+    }
+
+    // Deterministic but EVOLVING candles. The market tick counter is advanced
+    // by the explicit paper heartbeat (getCurrentPrice) once per AI scan; OHLCV
+    // reads are pure snapshots so an MTF evaluation does not tick five times.
     const candles: OHLCV[] = [];
     const base = 1.1;
     const now = this._clock.now();
+    const phaseNow = this._marketTickCounter;
 
     for (let i = count - 1; i >= 0; i--) {
-      const ts = new Date(now.getTime() - i * 60 * 60 * 1000);
-      const open = String((base + Math.sin(i * 0.1) * 0.005).toFixed(5));
-      const close = String((base + Math.sin((i + 1) * 0.1) * 0.005).toFixed(5));
+      const phase = phaseNow - i;
+      const ts = new Date(now.getTime() - i * spacingMs);
+      const open = String((base + Math.sin(phase * 0.1) * 0.005).toFixed(5));
+      const close = String((base + Math.sin((phase + 1) * 0.1) * 0.005).toFixed(5));
       const high = String((Math.max(parseFloat(open), parseFloat(close)) + 0.0002).toFixed(5));
       const low = String((Math.min(parseFloat(open), parseFloat(close)) - 0.0002).toFixed(5));
       candles.push({
@@ -804,11 +828,15 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         low,
         close,
         volume: '1000',
+        tickVolume: '1000',
+        spreadPoints: PAPER_SPREAD_UNITS.toString(),
+        priceDigits: PAPER_PRICE_SCALE,
+        brokerTime: ts.toISOString(),
       });
     }
 
     this.logger.debug(
-      `PaperBrokerAdapter: returning ${count} mock candles for ${instrument} ${timeframe}`,
+      `PaperBrokerAdapter: returning ${count} evolving mock candles for ${instrument} ${normalizedTimeframe} tick=${phaseNow}`,
     );
     return candles;
   }
@@ -1286,6 +1314,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   /** Advance one deterministic tick, then evaluate positions and orders. */
   private advanceMarket(): PaperQuote {
     const quote = this._feed.tick();
+    this._marketTickCounter += 1;
     this._clock.advance(PAPER_TICK_DURATION_MS);
     this.evaluatePositions(quote);
     this.evaluateWorkingOrders(quote);
