@@ -19,6 +19,7 @@ from app.domain.models.baseline_xgboost import (
 from app.domain.models.governance import create_baseline_governance
 from app.domain.models.multitimeframe_features import (
     MULTITIMEFRAME_FEATURE_COLUMNS,
+    MULTITIMEFRAME_LABEL_SELECTION_POLICY,
     MULTITIMEFRAME_RUNTIME_PROFILE,
 )
 from app.domain.models.registry import ModelRegistry, build_default_registry
@@ -88,7 +89,12 @@ def _artifact_sha(path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _write_mtf_artifact(tmp_path, *, mutate_schema: bool = False):
+def _write_mtf_artifact(
+    tmp_path,
+    *,
+    mutate_schema: bool = False,
+    include_label_policy: bool = True,
+):
     model_path = tmp_path / "mtf-model.json"
     metadata_path = tmp_path / "mtf-model.metadata.json"
 
@@ -132,6 +138,8 @@ def _write_mtf_artifact(tmp_path, *, mutate_schema: bool = False):
         "horizon_bars": 5,
         "instruments": ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF"],
     }
+    if include_label_policy:
+        metadata["label_selection_policy"] = MULTITIMEFRAME_LABEL_SELECTION_POLICY
     metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
     return model_path, metadata_path
 
@@ -148,6 +156,10 @@ def test_verified_mtf_artifact_loads_as_trained_runtime(tmp_path, monkeypatch):
     assert metadata["loaded"] is True
     assert metadata["mode"] == "trained_xgboost_mtf"
     assert metadata["runtime_feature_profile"] == MULTITIMEFRAME_RUNTIME_PROFILE
+    assert (
+        metadata["label_selection_policy"]
+        == MULTITIMEFRAME_LABEL_SELECTION_POLICY
+    )
     assert metadata["feature_count"] == len(MULTITIMEFRAME_FEATURE_COLUMNS)
     assert metadata["approved_for_paper"] is True
     assert metadata["approved_for_live"] is False
@@ -157,6 +169,23 @@ def test_mtf_artifact_with_schema_mismatch_fails_closed(tmp_path, monkeypatch):
     model_path, metadata_path = _write_mtf_artifact(
         tmp_path,
         mutate_schema=True,
+    )
+    monkeypatch.setenv(MODEL_PATH_ENV, str(model_path))
+    monkeypatch.setenv(MODEL_METADATA_PATH_ENV, str(metadata_path))
+
+    model = BaselineXGBoostModel()
+    assert model.load_model() is False
+    assert model.get_model_metadata()["mode"] == "heuristic_placeholder"
+
+
+
+def test_legacy_mtf_artifact_without_unbiased_label_policy_fails_closed(
+    tmp_path,
+    monkeypatch,
+):
+    model_path, metadata_path = _write_mtf_artifact(
+        tmp_path,
+        include_label_policy=False,
     )
     monkeypatch.setenv(MODEL_PATH_ENV, str(model_path))
     monkeypatch.setenv(MODEL_METADATA_PATH_ENV, str(metadata_path))
