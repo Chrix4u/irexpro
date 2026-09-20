@@ -33,6 +33,11 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _source_account_fingerprint(user_id: str, broker_connection_id: str) -> str:
+    material = f"{user_id}:{broker_connection_id}".encode()
+    return hashlib.sha256(material).hexdigest()
+
+
 def _parse_candles(payload: dict[str, Any]) -> list[dict[str, Any]]:
     candles = payload.get("candles")
     if not isinstance(candles, list):
@@ -190,7 +195,10 @@ def collect_historical_corpus(
             "instrument": instrument.upper(),
             "timeframe": timeframe.upper(),
             "source": "irexpro_internal_broker_ohlcv",
-            "broker_connection_id": broker_connection_id,
+            "source_account_fingerprint": _source_account_fingerprint(
+                user_id,
+                broker_connection_id,
+            ),
             "row_count": len(validated),
             "pages_fetched": pages,
             "start": validated["timestamp"].iloc[0].isoformat(),

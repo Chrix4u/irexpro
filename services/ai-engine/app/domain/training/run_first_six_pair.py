@@ -105,6 +105,7 @@ def run_first_six_pair_study(
     user_id: str | None = None,
     broker_connection_id: str | None = None,
     target_rows: int = 250_000,
+    dukascopy_max_lookback_days: int = 365,
     horizons: tuple[int, ...] = DEFAULT_HORIZONS,
     before: datetime | None = None,
     confidence_threshold: float = 0.60,
@@ -127,6 +128,8 @@ def run_first_six_pair_study(
             )
     if target_rows < 250:
         raise ValueError("target_rows must be at least 250")
+    if dukascopy_max_lookback_days < 2:
+        raise ValueError("dukascopy_max_lookback_days must be at least 2")
     if not horizons or any(horizon < 1 for horizon in horizons):
         raise ValueError("horizons must contain positive M1 bar counts")
 
@@ -149,6 +152,7 @@ def run_first_six_pair_study(
                 target_rows=target_rows,
                 output_path=raw_path,
                 now=before,
+                max_lookback_days=dukascopy_max_lookback_days,
             )
         else:
             collection = collect_historical_corpus(
@@ -208,6 +212,9 @@ def run_first_six_pair_study(
         "instruments": list(INITIAL_FOREX_UNIVERSE),
         "horizons_minutes": list(horizons),
         "target_m1_rows_per_instrument": target_rows,
+        "dukascopy_max_lookback_days": (
+            dukascopy_max_lookback_days if normalized_source == "dukascopy" else None
+        ),
         "cost_model": {
             "historical_spread_required": True,
             "commission_bps_round_trip": commission_bps,
@@ -243,6 +250,12 @@ def main() -> None:
     parser.add_argument("--output-dir", default="research/first-six-pair-run")
     parser.add_argument("--target-rows", type=int, default=250_000)
     parser.add_argument(
+        "--dukascopy-max-lookback-days",
+        type=int,
+        default=365,
+        help="Maximum public-history lookback for Dukascopy collection",
+    )
+    parser.add_argument(
         "--horizons",
         default="1,5,10",
         help="Comma-separated M1 horizons, default: 1,5,10",
@@ -272,6 +285,7 @@ def main() -> None:
         user_id=args.user_id,
         broker_connection_id=args.broker_connection_id,
         target_rows=args.target_rows,
+        dukascopy_max_lookback_days=args.dukascopy_max_lookback_days,
         horizons=horizons,
         before=before,
         confidence_threshold=args.confidence_threshold,

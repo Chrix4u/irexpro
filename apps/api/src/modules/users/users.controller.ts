@@ -37,14 +37,16 @@ export class UsersController {
   @Header('Pragma', 'no-cache')
   @ApiOperation({ summary: 'Get current user profile' })
   async getMe(@CurrentUserId() userId: string) {
-    return this.usersService.findById(userId);
+    return this.usersService.getMyProfileView(userId);
   }
 
   /**
    * Sprint 29: update the current user's profile for onboarding.
    * Uses a proper DTO with validation (no more raw Record<string, unknown>).
    * Updates BOTH User-level fields (countryCode, timezone, preferredCurrency)
-   * AND UserProfile fields (firstName, lastName, tradingExperienceLevel).
+   * AND UserProfile identity fields (firstName, lastName, dateOfBirth).
+   * Trading experience is intentionally not user-controlled; risk policy and
+   * AI automation remain server-governed.
    * Audits ONBOARDING_PROFILE_UPDATED.
    */
   @Patch('users/me')
@@ -52,7 +54,7 @@ export class UsersController {
   @Header('Pragma', 'no-cache')
   @ApiOperation({ summary: 'Update current user profile (onboarding)' })
   async updateMe(@CurrentUserId() userId: string, @Body() dto: UpdateMyProfileDto) {
-    const updated = await this.usersService.updateMyProfile(userId, dto);
+    await this.usersService.updateMyProfile(userId, dto);
     await this.auditService.log({
       actorUserId: userId,
       action: AuditAction.ONBOARDING_PROFILE_UPDATED,
@@ -63,7 +65,7 @@ export class UsersController {
         // Do NOT log the values themselves (could contain PII)
       },
     });
-    return updated;
+    return this.usersService.getMyProfileView(userId);
   }
 
   /**
