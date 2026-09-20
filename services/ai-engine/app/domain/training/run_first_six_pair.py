@@ -258,7 +258,7 @@ def run_first_six_pair_study(
         }
 
     summary = {
-        "report_version": 1,
+        "report_version": 2,
         "study": "irexpro_initial_six_pair_multitimeframe_walkforward",
         "data_source": normalized_source,
         "instruments": list(INITIAL_FOREX_UNIVERSE),
