@@ -31,21 +31,11 @@ export class MarketDataService {
   ) {}
 
   async getInternalOhlcv(query: InternalOhlcvQueryDto): Promise<InternalOhlcvResponseDto> {
-    const {
-      userId,
-      brokerConnectionId,
-      instrument,
-      timeframe,
-      limit,
-      before,
-      advanceSimulation,
-    } = query;
+    const { userId, brokerConnectionId, instrument, timeframe, limit, before, advanceSimulation } =
+      query;
 
     try {
-      const connection = await this.brokerService.findConnectionById(
-        brokerConnectionId,
-        userId,
-      );
+      const connection = await this.brokerService.findConnectionById(brokerConnectionId, userId);
       const source = connection.brokerId === 'paper-broker' ? 'paper-broker' : 'broker';
 
       if (source === 'paper-broker' && advanceSimulation && !before) {
@@ -69,12 +59,7 @@ export class MarketDataService {
       );
 
       const candles = rawCandles.map((c) =>
-        this.normalizeCandle(
-          c,
-          instrument.toUpperCase(),
-          timeframe.toUpperCase(),
-          source,
-        ),
+        this.normalizeCandle(c, instrument.toUpperCase(), timeframe.toUpperCase(), source),
       );
 
       await this.auditService.log({
