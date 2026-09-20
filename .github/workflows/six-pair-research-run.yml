@@ -144,6 +144,23 @@ jobs:
           (async () => {
             await client.connect();
             try {
+              const diagnostics = await client.query(
+                `SELECT broker_id::text AS broker_id,
+                        account_type::text AS account_type,
+                        status::text AS status,
+                        credential_status::text AS credential_status,
+                        COUNT(*)::int AS row_count
+                   FROM broker.broker_connections
+                  WHERE deleted_at IS NULL
+                  GROUP BY broker_id, account_type, status, credential_status
+                  ORDER BY broker_id, account_type, status, credential_status`,
+              );
+              for (const row of diagnostics.rows) {
+                process.stderr.write(
+                  `broker_source_state broker=${row.broker_id} account_type=${row.account_type} status=${row.status} credential_status=${row.credential_status} count=${row.row_count}\n`,
+                );
+              }
+
               const result = await client.query(
                 `SELECT user_id::text AS user_id,
                         id::text AS connection_id,
