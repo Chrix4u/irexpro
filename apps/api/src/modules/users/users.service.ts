@@ -91,8 +91,7 @@ export class UsersService {
     if (user.profile) {
       if (dto.firstName !== undefined) user.profile.firstName = dto.firstName;
       if (dto.lastName !== undefined) user.profile.lastName = dto.lastName;
-      if (dto.tradingExperienceLevel !== undefined)
-        user.profile.tradingExperienceLevel = dto.tradingExperienceLevel;
+
 
       if (dto.dateOfBirth !== undefined) {
         if (!this.isValidDateOfBirth(dto.dateOfBirth)) {
