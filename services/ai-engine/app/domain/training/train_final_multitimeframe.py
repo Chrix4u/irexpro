@@ -341,7 +341,7 @@ def train_final_candidate(
         f"{timestamp.strftime('%Y%m%dT%H%M%SZ')}"
     )
     metadata = {
-        "metadata_version": 2,
+        "metadata_version": 3,
         "model_type": MULTITIMEFRAME_MODEL_TYPE,
         "runtime_feature_profile": MULTITIMEFRAME_RUNTIME_PROFILE,
         "label_selection_policy": MULTITIMEFRAME_LABEL_SELECTION_POLICY,
