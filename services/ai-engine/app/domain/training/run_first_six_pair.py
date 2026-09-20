@@ -10,6 +10,11 @@ from typing import Any
 
 import pandas as pd
 
+from app.domain.models.multitimeframe_features import (
+    MULTITIMEFRAME_BACKTEST_POLICY,
+    MULTITIMEFRAME_LABEL_SELECTION_POLICY,
+    MULTITIMEFRAME_RESEARCH_VALIDATION_POLICY,
+)
 from app.domain.training.collect_dukascopy import collect_dukascopy_m1_corpus
 from app.domain.training.collect_historical import collect_historical_corpus
 from app.domain.training.multitimeframe_corpus import (
@@ -171,6 +176,11 @@ def run_first_six_pair_study(
             )
     if target_rows < 250:
         raise ValueError("target_rows must be at least 250")
+    if min_net_return_bps != 0:
+        raise ValueError(
+            "min_net_return_bps must be 0 because future-profitability row "
+            "selection is prohibited"
+        )
     if not horizons or any(horizon < 1 for horizon in horizons):
         raise ValueError("horizons must contain positive M1 bar counts")
 
@@ -250,12 +260,15 @@ def run_first_six_pair_study(
         }
 
     summary = {
-        "report_version": 1,
+        "report_version": 2,
         "study": "irexpro_initial_six_pair_multitimeframe_walkforward",
         "data_source": normalized_source,
         "instruments": list(INITIAL_FOREX_UNIVERSE),
         "horizons_minutes": list(horizons),
         "target_m1_rows_per_instrument": target_rows,
+        "label_selection_policy": MULTITIMEFRAME_LABEL_SELECTION_POLICY,
+        "backtest_evaluation_policy": MULTITIMEFRAME_BACKTEST_POLICY,
+        "research_validation_policy": MULTITIMEFRAME_RESEARCH_VALIDATION_POLICY,
         "qualification_window": {
             "research_fraction": RESEARCH_QUALIFICATION_FRACTION,
             "reserved_future_fraction": 1.0 - RESEARCH_QUALIFICATION_FRACTION,
@@ -271,6 +284,7 @@ def run_first_six_pair_study(
             "commission_bps_round_trip": commission_bps,
             "slippage_bps_round_trip": slippage_bps,
             "minimum_net_return_bps_for_label": min_net_return_bps,
+            "future_profitability_row_filtering": "prohibited",
         },
         "collection_manifests": collection_manifests,
         "corpus_manifests": corpus_manifests,

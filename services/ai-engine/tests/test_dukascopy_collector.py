@@ -237,9 +237,82 @@ def test_collection_recovers_transient_hour_without_silent_gap(
     )
 
     assert result["recovered_hours"] == 1
+    assert result["serial_recovery_calls"] == 1
     assert attempts[datetime(2026, 1, 5, 10, tzinfo=UTC)] == 2
     assert len(pd.read_csv(output)) == 250
 
+
+
+def test_collection_uses_bounded_multi_round_serial_recovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    attempts: dict[datetime, int] = {}
+    sleeps: list[float] = []
+
+    def stubborn_fetch_hour(
+        *,
+        instrument: str,
+        hour: datetime,
+        price_digits: int,
+        timeout_seconds: float,
+        max_retries: int,
+        cache_dir=None,
+    ):
+        del instrument, timeout_seconds, max_retries, cache_dir
+        attempts[hour] = attempts.get(hour, 0) + 1
+
+        # Parallel attempt + first serial recovery both fail. The collector
+        # must wait for the bounded second recovery round and then continue.
+        if hour.hour == 10 and attempts[hour] < 3:
+            raise RuntimeError("synthetic sustained transient 503")
+
+        rows = []
+        for minute in range(60):
+            timestamp = hour + timedelta(minutes=minute)
+            close = 1.10 + minute * 0.000001
+            rows.append(
+                {
+                    "timestamp": timestamp.isoformat(),
+                    "open": close,
+                    "high": close + 0.00001,
+                    "low": close - 0.00001,
+                    "close": close,
+                    "volume": 10.0,
+                    "tick_volume": 10.0,
+                    "spread_points": 2.0,
+                    "price_digits": price_digits,
+                    "quote_volume": 25.0,
+                }
+            )
+        return hour, rows, 2048, False
+
+    monkeypatch.setattr(
+        "app.domain.training.collect_dukascopy._fetch_hour",
+        stubborn_fetch_hour,
+    )
+    monkeypatch.setattr(
+        "app.domain.training.collect_dukascopy.time.sleep",
+        lambda seconds: sleeps.append(float(seconds)),
+    )
+
+    output = tmp_path / "EURUSD_M1.csv"
+    result = collect_dukascopy_m1_corpus(
+        instrument="EURUSD",
+        target_rows=250,
+        output_path=output,
+        now=datetime(2026, 1, 5, 12, tzinfo=UTC),
+        max_lookback_days=3,
+        parallelism=2,
+        batch_hours=6,
+    )
+
+    failed_hour = datetime(2026, 1, 5, 10, tzinfo=UTC)
+    assert attempts[failed_hour] == 3
+    assert sleeps == [15.0]
+    assert result["recovered_hours"] == 1
+    assert result["serial_recovery_calls"] == 2
+    assert len(pd.read_csv(output)) == 250
 
 
 def test_fetch_hour_reuses_verified_raw_cache_without_network(

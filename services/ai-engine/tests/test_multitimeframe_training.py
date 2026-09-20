@@ -8,6 +8,9 @@ import pytest
 from app.domain.training.multitimeframe_corpus import build_multitimeframe_feature_corpus
 from app.domain.training.train_multitimeframe import (
     MULTITIMEFRAME_FEATURE_COLUMNS,
+    _non_overlapping_portfolio_periods,
+    _split_internal_early_stopping_tail,
+    _trade_metrics,
     prepare_instrument_corpus,
     run_pooled_walk_forward,
 )
@@ -57,6 +60,72 @@ def test_prepare_instrument_corpus_uses_real_spread_and_tick_volume():
     ).median() < 0
 
 
+def test_prepare_instrument_corpus_keeps_both_direction_losing_periods():
+    # Deliberately large spread makes many exact-horizon periods loss-making
+    # in BOTH directions. Those rows still exist at runtime and therefore must
+    # remain in training/evaluation rather than being removed by hindsight.
+    corpus = build_multitimeframe_feature_corpus(
+        _m1_fixture(spread_points=500.0)
+    )
+    prepared = prepare_instrument_corpus(
+        corpus,
+        instrument="EURUSD",
+        horizon_bars=1,
+    )
+
+    both_lose = (
+        (prepared["long_net_return"] < 0.0)
+        & (prepared["short_net_return"] < 0.0)
+    )
+    assert both_lose.any()
+
+
+def test_prepare_instrument_corpus_rejects_future_profitability_row_filter():
+    corpus = build_multitimeframe_feature_corpus(_m1_fixture())
+
+    with pytest.raises(ValueError, match="future.*profitability|future-profitability"):
+        prepare_instrument_corpus(
+            corpus,
+            instrument="EURUSD",
+            horizon_bars=5,
+            min_net_return_bps=0.1,
+        )
+
+
+def test_trading_gate_equal_weights_same_time_and_skips_overlapping_horizons():
+    start = pd.Timestamp("2026-01-05T10:00:00Z")
+    predictions = pd.DataFrame(
+        {
+            "decision_time": [
+                start,
+                start,
+                start + pd.Timedelta(minutes=1),
+                start + pd.Timedelta(minutes=5),
+            ],
+            "active_trade": [True, True, True, True],
+            "selected_net_return": [0.10, -0.02, 0.20, 0.01],
+        }
+    )
+
+    periods = _non_overlapping_portfolio_periods(
+        predictions,
+        horizon_bars=5,
+    )
+
+    assert len(periods) == 2
+    assert periods.iloc[0]["decision_time"] == start
+    assert periods.iloc[0]["signal_count"] == 2
+    assert periods.iloc[0]["portfolio_net_return"] == pytest.approx(0.04)
+    assert periods.iloc[1]["decision_time"] == start + pd.Timedelta(minutes=5)
+    assert periods.iloc[1]["portfolio_net_return"] == pytest.approx(0.01)
+
+    metrics = _trade_metrics(predictions, horizon_bars=5)
+    assert metrics["raw_active_signals"] == 4
+    assert metrics["non_overlapping_periods"] == 2
+    assert metrics["trade_or_period_count"] == 2
+    assert metrics["total_return"] == pytest.approx((1.04 * 1.01) - 1.0)
+
+
 def test_prepare_instrument_corpus_fails_closed_without_spread():
     corpus = build_multitimeframe_feature_corpus(_m1_fixture())
     corpus = corpus.drop(columns=["m1_spread_points", "m1_spread_bps"])
@@ -67,6 +136,26 @@ def test_prepare_instrument_corpus_fails_closed_without_spread():
             instrument="EURUSD",
             horizon_bars=5,
         )
+
+
+def test_internal_early_stopping_tail_is_purged_and_before_outer_validation():
+    eurusd = prepare_instrument_corpus(
+        build_multitimeframe_feature_corpus(_m1_fixture()),
+        instrument="EURUSD",
+        horizon_bars=5,
+    )
+    training_window = eurusd.iloc[:240].copy()
+    fit_frame, early_stop = _split_internal_early_stopping_tail(
+        training_window,
+        horizon_bars=5,
+    )
+
+    assert fit_frame["decision_time"].max() < early_stop["decision_time"].min()
+    gap_minutes = (
+        early_stop["decision_time"].min() - fit_frame["decision_time"].max()
+    ).total_seconds() / 60.0
+    assert gap_minutes > 5
+    assert set(fit_frame["decision_time"]).isdisjoint(early_stop["decision_time"])
 
 
 def test_pooled_walk_forward_reports_pair_breakdown(monkeypatch):
@@ -122,6 +211,13 @@ def test_pooled_walk_forward_reports_pair_breakdown(monkeypatch):
     assert set(report["by_instrument"]) == {"EURUSD", "USDJPY"}
     assert report["overall"]["active_trades"] > 0
     assert report["overall"]["average_spread_bps"] > 0
+    for fold in report["folds"]:
+        assert (
+            pd.Timestamp(fold["internal_early_stopping_end"])
+            < pd.Timestamp(fold["validation_start"])
+        )
+        assert fold["fit_rows"] > 0
+        assert fold["internal_early_stopping_rows"] > 0
 
 
 

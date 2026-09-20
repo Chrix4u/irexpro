@@ -19,7 +19,10 @@ import pandas as pd
 from app.core.logging import get_logger
 from app.domain.models.feature_engineering import FEATURE_COLUMNS
 from app.domain.models.multitimeframe_features import (
+    MULTITIMEFRAME_BACKTEST_POLICY,
     MULTITIMEFRAME_FEATURE_COLUMNS,
+    MULTITIMEFRAME_LABEL_SELECTION_POLICY,
+    MULTITIMEFRAME_RESEARCH_VALIDATION_POLICY,
     MULTITIMEFRAME_RUNTIME_PROFILE,
 )
 from app.domain.models.schemas import ModelPrediction
@@ -122,6 +125,27 @@ class BaselineXGBoostModel:
                 and runtime_feature_profile != MULTITIMEFRAME_RUNTIME_PROFILE
             ):
                 raise ValueError("MTF artifact runtime_feature_profile is unsupported")
+
+            if (
+                model_type == MULTITIMEFRAME_MODEL_TYPE
+                and metadata.get("label_selection_policy")
+                != MULTITIMEFRAME_LABEL_SELECTION_POLICY
+            ):
+                raise ValueError("MTF artifact label_selection_policy is unsupported")
+
+            if (
+                model_type == MULTITIMEFRAME_MODEL_TYPE
+                and metadata.get("backtest_evaluation_policy")
+                != MULTITIMEFRAME_BACKTEST_POLICY
+            ):
+                raise ValueError("MTF artifact backtest_evaluation_policy is unsupported")
+
+            if (
+                model_type == MULTITIMEFRAME_MODEL_TYPE
+                and metadata.get("research_validation_policy")
+                != MULTITIMEFRAME_RESEARCH_VALIDATION_POLICY
+            ):
+                raise ValueError("MTF artifact research_validation_policy is unsupported")
 
             feature_names = metadata.get("feature_columns")
             if feature_names != expected_features:
@@ -268,6 +292,15 @@ class BaselineXGBoostModel:
                 "mode": "trained_xgboost_mtf" if mtf else "trained_xgboost",
                 "model_type": self._model_type,
                 "runtime_feature_profile": self._runtime_feature_profile,
+                "label_selection_policy": self._artifact_metadata.get(
+                    "label_selection_policy"
+                ),
+                "backtest_evaluation_policy": self._artifact_metadata.get(
+                    "backtest_evaluation_policy"
+                ),
+                "research_validation_policy": self._artifact_metadata.get(
+                    "research_validation_policy"
+                ),
                 "feature_count": len(self._feature_names),
                 "approved_for_live": False,
                 "approved_for_paper": bool(
