@@ -9,13 +9,6 @@ on:
 permissions:
   contents: read
 
-# This workflow and Staging Deploy touch the same checkout on the VPS.
-# Share one non-cancelling lock so a deploy can never switch the staging
-# worktree while a research run is reading/training from that exact SHA.
-concurrency:
-  group: irexpro-staging-worktree
-  cancel-in-progress: false
-
 jobs:
   research:
     name: Run secured six-pair XGBoost pilot on staging
@@ -23,6 +16,12 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_branch == 'main')
+    # Acquire the shared VPS worktree lock only for a research job that
+    # actually passed its trigger condition. workflow_run events from failed
+    # or cancelled deploys skip without consuming/cancelling the pending slot.
+    concurrency:
+      group: irexpro-staging-worktree
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     environment:

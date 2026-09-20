@@ -8,13 +8,6 @@ on:
 permissions:
   contents: read
 
-# Staging Deploy and Six Pair Research Run share the same VPS checkout.
-# A single lock prevents git checkout/build/restart from racing an active
-# research process that requires the staging worktree to remain on its SHA.
-concurrency:
-  group: irexpro-staging-worktree
-  cancel-in-progress: false
-
 jobs:
   deploy:
     name: Deploy exact verified main SHA to staging
@@ -22,6 +15,12 @@ jobs:
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_branch == 'main' &&
       vars.STAGING_CD_ENABLED == 'true'
+    # Acquire the shared VPS worktree lock only after the deploy job's
+    # success condition is satisfied. Failed/cancelled release-gate events
+    # therefore skip without ever entering the shared concurrency queue.
+    concurrency:
+      group: irexpro-staging-worktree
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     environment:
