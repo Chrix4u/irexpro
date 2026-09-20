@@ -229,6 +229,10 @@ async def test_trained_mtf_runtime_fetches_all_timeframes_and_uses_m1_signal_tim
 
     requested = [call.kwargs["timeframe"] for call in ohlcv.get_ohlcv.await_args_list]
     assert requested == list(RUNTIME_TIMEFRAMES)
+    heartbeats = [
+        call.kwargs["advance_simulation"] for call in ohlcv.get_ohlcv.await_args_list
+    ]
+    assert heartbeats == [True, False, False, False, False]
     assert result.generated is True
     assert result.signal is not None
     assert result.signal.timeframe == "M1"

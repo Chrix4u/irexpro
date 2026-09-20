@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.core.config import Settings
+from app.core.errors import MarketDataError
 from app.domain.scheduler.schemas import SessionStartRequest
 from app.domain.scheduler.signal_scheduler import SignalScheduler
 from app.domain.signals.schemas import (
@@ -207,3 +208,29 @@ async def test_unchanged_market_revision_suppresses_duplicate_signal_publish():
     assert job.last_confidence_score is None
     assert job.model_mode == "heuristic_placeholder"
     assert job.market_data_cache_bypassed is True
+
+
+@pytest.mark.asyncio
+async def test_scan_error_clears_previous_confidence_instead_of_reusing_it():
+    settings = Settings(ai_scheduler_enabled=True, ai_signal_mode="paper")
+    scheduler = SignalScheduler(nestjs_client=AsyncMock())
+    scheduler._settings = settings
+
+    mock_generator = AsyncMock()
+    mock_generator.generate.side_effect = MarketDataError("Broker market data is stale")
+    scheduler._signal_generator = mock_generator
+
+    job = ScheduledSessionJobStub()
+    job.source = "broker"
+    job.last_confidence_score = 0.0285
+    job.last_confidence_at = object()
+    scheduler._jobs["session-1"] = job
+
+    await scheduler._run_session_job("session-1")
+
+    assert job.last_decision == "ERROR"
+    assert job.last_reason == "MarketDataError"
+    assert job.last_confidence_score is None
+    assert job.last_confidence_at is None
+    assert job.last_run_at is not None
+    assert job.last_publish_failed is True

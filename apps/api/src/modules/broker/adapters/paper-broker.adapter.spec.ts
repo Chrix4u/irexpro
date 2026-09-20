@@ -297,6 +297,33 @@ describe('PaperBrokerAdapter', () => {
     expect(typeof candles[0].open).toBe('string');
   });
 
+  it('paper OHLCV evolves after exactly one explicit market heartbeat', async () => {
+    await adapter.connect(dummyCreds);
+    const before = await adapter.getOHLCV('EURUSD', 'H1', 30);
+    await adapter.getCurrentPrice('EURUSD');
+    const after = await adapter.getOHLCV('EURUSD', 'H1', 30);
+
+    expect(after.at(-1)?.close).not.toBe(before.at(-1)?.close);
+    expect(after.at(-1)?.timestamp.getTime()).toBe(
+      (before.at(-1)?.timestamp.getTime() ?? 0) + 1_000,
+    );
+  });
+
+  it('paper OHLCV honors timeframe spacing and exposes MTF friction fields', async () => {
+    await adapter.connect(dummyCreds);
+    const m1 = await adapter.getOHLCV('EURUSD', 'M1', 3);
+    const h4 = await adapter.getOHLCV('EURUSD', 'H4', 3);
+
+    expect(m1[1]!.timestamp.getTime() - m1[0]!.timestamp.getTime()).toBe(60_000);
+    expect(h4[1]!.timestamp.getTime() - h4[0]!.timestamp.getTime()).toBe(4 * 60 * 60_000);
+    expect(m1.at(-1)).toMatchObject({
+      tickVolume: '1000',
+      spreadPoints: '10',
+      priceDigits: 5,
+      brokerTime: expect.any(String),
+    });
+  });
+
   it('getAccountBalance returns simulated balance', async () => {
     await adapter.connect(dummyCreds);
     const balance = await adapter.getAccountBalance();

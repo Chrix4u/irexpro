@@ -37,6 +37,19 @@ def test_builds_correct_url():
     assert "limit=50" in url
 
 
+def test_build_url_can_request_one_paper_simulation_heartbeat():
+    provider = BrokerMarketDataProvider(settings=TEST_SETTINGS)
+    url = provider.build_request_url(
+        user_id="user-1",
+        broker_connection_id="conn-1",
+        instrument="EURUSD",
+        timeframe="M1",
+        limit=100,
+        advance_simulation=True,
+    )
+    assert "advanceSimulation=true" in url
+
+
 def test_sends_internal_api_key_header():
     provider = BrokerMarketDataProvider(settings=TEST_SETTINGS)
     headers = provider._get_headers()
@@ -91,6 +104,51 @@ async def test_parses_successful_ohlcv_response():
     assert candles[0].spread_points == 2.0
     assert candles[0].price_digits == 5
     assert candles[0].broker_time == "2024-01-01 00:00:00.000"
+
+
+@pytest.mark.asyncio
+async def test_preserves_paper_simulator_provenance():
+    provider = BrokerMarketDataProvider(settings=TEST_SETTINGS)
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "source": "paper-broker",
+        "candles": [
+            {
+                "timestamp": "2024-01-02T03:04:06+00:00",
+                "open": "1.10000",
+                "high": "1.10100",
+                "low": "1.09900",
+                "close": "1.10050",
+                "volume": "1000",
+                "tickVolume": "1000",
+                "spreadPoints": "10",
+                "priceDigits": 5,
+                "instrument": "EURUSD",
+                "timeframe": "M1",
+                "source": "paper-broker",
+            }
+        ],
+    }
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=mock_response)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("app.domain.market_data.providers.broker_provider.httpx.AsyncClient", return_value=mock_client):
+        candles = await provider.get_ohlcv(
+            "EURUSD",
+            "M1",
+            100,
+            user_id="user-1",
+            broker_connection_id="conn-1",
+            advance_simulation=True,
+        )
+
+    assert candles[0].source == "paper-broker"
+    requested_url = mock_client.get.await_args.args[0]
+    assert "advanceSimulation=true" in requested_url
 
 
 @pytest.mark.asyncio
