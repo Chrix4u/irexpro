@@ -8,6 +8,8 @@ import pytest
 from app.domain.training.multitimeframe_corpus import build_multitimeframe_feature_corpus
 from app.domain.training.train_multitimeframe import (
     MULTITIMEFRAME_FEATURE_COLUMNS,
+    _non_overlapping_portfolio_periods,
+    _trade_metrics,
     prepare_instrument_corpus,
     run_pooled_walk_forward,
 )
@@ -87,6 +89,40 @@ def test_prepare_instrument_corpus_rejects_future_profitability_row_filter():
             horizon_bars=5,
             min_net_return_bps=0.1,
         )
+
+
+def test_trading_gate_equal_weights_same_time_and_skips_overlapping_horizons():
+    start = pd.Timestamp("2026-01-05T10:00:00Z")
+    predictions = pd.DataFrame(
+        {
+            "decision_time": [
+                start,
+                start,
+                start + pd.Timedelta(minutes=1),
+                start + pd.Timedelta(minutes=5),
+            ],
+            "active_trade": [True, True, True, True],
+            "selected_net_return": [0.10, -0.02, 0.20, 0.01],
+        }
+    )
+
+    periods = _non_overlapping_portfolio_periods(
+        predictions,
+        horizon_bars=5,
+    )
+
+    assert len(periods) == 2
+    assert periods.iloc[0]["decision_time"] == start
+    assert periods.iloc[0]["signal_count"] == 2
+    assert periods.iloc[0]["portfolio_net_return"] == pytest.approx(0.04)
+    assert periods.iloc[1]["decision_time"] == start + pd.Timedelta(minutes=5)
+    assert periods.iloc[1]["portfolio_net_return"] == pytest.approx(0.01)
+
+    metrics = _trade_metrics(predictions, horizon_bars=5)
+    assert metrics["raw_active_signals"] == 4
+    assert metrics["non_overlapping_periods"] == 2
+    assert metrics["trade_or_period_count"] == 2
+    assert metrics["total_return"] == pytest.approx((1.04 * 1.01) - 1.0)
 
 
 def test_prepare_instrument_corpus_fails_closed_without_spread():
