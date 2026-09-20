@@ -52,6 +52,35 @@ read_dotenv_value() {
   printf '%s' "${line#*=}"
 }
 
+configure_xgboost_runtime_env() {
+  local ai_env="$STAGING_ROOT/services/ai-engine/.env"
+  local model_path=""
+  local metadata_path=""
+
+  model_path="$(read_dotenv_value "$ai_env" XGBOOST_MODEL_PATH || true)"
+  metadata_path="$(read_dotenv_value "$ai_env" XGBOOST_MODEL_METADATA_PATH || true)"
+
+  if [[ -z "$model_path" && -z "$metadata_path" ]]; then
+    # Explicitly clear any older PM2 snapshot so a removed/held model cannot
+    # remain active by accident across a later staging deployment.
+    export XGBOOST_MODEL_PATH=""
+    export XGBOOST_MODEL_METADATA_PATH=""
+    return 0
+  fi
+
+  [[ -n "$model_path" && -n "$metadata_path" ]] ||
+    die "Staging XGBoost model configuration is incomplete."
+  [[ "$model_path" = /* && "$metadata_path" = /* ]] ||
+    die "Staging XGBoost model paths must be absolute."
+  [[ -f "$model_path" ]] ||
+    die "Configured staging XGBoost model artifact does not exist."
+  [[ -f "$metadata_path" ]] ||
+    die "Configured staging XGBoost metadata sidecar does not exist."
+
+  export XGBOOST_MODEL_PATH="$model_path"
+  export XGBOOST_MODEL_METADATA_PATH="$metadata_path"
+}
+
 validate_internal_api_key_alignment() {
   local api_env="$STAGING_ROOT/apps/api/.env"
   local ai_env="$STAGING_ROOT/services/ai-engine/.env"
@@ -304,6 +333,8 @@ corepack pnpm@"$PNPM_VERSION" --filter @irexpro/admin build
 STAGE="database-migrations"
 run_database_migrations
 
+STAGE="ai-model-runtime-configuration"
+configure_xgboost_runtime_env
 STAGE="restart-ai"
 pm2 restart "$AI_PM2_NAME" --update-env
 STAGE="ai-runtime-readiness"
