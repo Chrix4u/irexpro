@@ -305,6 +305,28 @@
   overflow-wrap: anywhere;
 }
 
+.ai-runtime-market-data {
+  display: grid;
+  gap: 0.18rem;
+}
+
+.ai-runtime-market-data time {
+  min-width: 0;
+  font: inherit;
+}
+
+.ai-runtime-market-data__age {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 550;
+  line-height: 1.4;
+  letter-spacing: 0;
+  text-transform: none;
+  overflow-wrap: normal;
+  word-break: normal;
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
 .ai-runtime-reason {
   display: grid;
   align-content: start;
