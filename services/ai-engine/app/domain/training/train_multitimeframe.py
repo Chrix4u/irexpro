@@ -190,10 +190,20 @@ def load_and_prepare_corpora(
     min_net_return_bps: float = 0.0,
     commission_bps: float = 0.0,
     slippage_bps: float = 0.0,
+    decision_time_before: str | pd.Timestamp | None = None,
 ) -> tuple[pd.DataFrame, dict[str, str]]:
     """Load multiple pair corpora and return one pooled chronological dataset."""
     if not datasets:
         raise ValueError("At least one instrument corpus is required")
+
+    cutoff: pd.Timestamp | None = None
+    if decision_time_before is not None:
+        cutoff = pd.Timestamp(decision_time_before)
+        cutoff = (
+            cutoff.tz_localize("UTC")
+            if cutoff.tzinfo is None
+            else cutoff.tz_convert("UTC")
+        )
 
     frames: list[pd.DataFrame] = []
     hashes: dict[str, str] = {}
@@ -208,6 +218,12 @@ def load_and_prepare_corpora(
             commission_bps=commission_bps,
             slippage_bps=slippage_bps,
         )
+        if cutoff is not None:
+            prepared = prepared.loc[prepared["decision_time"] < cutoff].copy()
+            if prepared.empty:
+                raise ValueError(
+                    f"No research samples remain before qualification cutoff for {instrument}"
+                )
         frames.append(prepared)
         hashes[instrument.upper()] = _sha256_file(path)
 
@@ -406,6 +422,7 @@ def evaluate_multi_pair_corpora(
     commission_bps: float = 0.0,
     slippage_bps: float = 0.0,
     max_splits: int = 5,
+    decision_time_before: str | pd.Timestamp | None = None,
 ) -> dict[str, Any]:
     pooled, hashes = load_and_prepare_corpora(
         datasets,
@@ -413,6 +430,7 @@ def evaluate_multi_pair_corpora(
         min_net_return_bps=min_net_return_bps,
         commission_bps=commission_bps,
         slippage_bps=slippage_bps,
+        decision_time_before=decision_time_before,
     )
     evaluation = run_pooled_walk_forward(
         pooled,
@@ -427,6 +445,11 @@ def evaluate_multi_pair_corpora(
         "feature_columns": MULTITIMEFRAME_FEATURE_COLUMNS,
         "feature_count": len(MULTITIMEFRAME_FEATURE_COLUMNS),
         "horizon_bars": horizon_bars,
+        "qualification_decision_time_before": (
+            pd.Timestamp(decision_time_before).isoformat()
+            if decision_time_before is not None
+            else None
+        ),
         "cost_model": {
             "historical_spread": "half spread at entry + half spread at exit",
             "commission_bps_round_trip": commission_bps,
