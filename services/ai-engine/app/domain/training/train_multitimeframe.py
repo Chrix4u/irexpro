@@ -186,6 +186,9 @@ def prepare_instrument_corpus(
     )
     future_close = current_close.shift(-horizon_bars)
     future_spread_price = current_spread_price.shift(-horizon_bars)
+    future_decision_time = decision_time.shift(-horizon_bars)
+    expected_horizon = pd.Timedelta(minutes=horizon_bars)
+    exact_horizon = (future_decision_time - decision_time) == expected_horizon
 
     long_entry = current_close + current_spread_price / 2.0
     long_exit = future_close - future_spread_price / 2.0
@@ -199,7 +202,8 @@ def prepare_instrument_corpus(
     best_net_return = frame[[LONG_NET_RETURN_COLUMN, SHORT_NET_RETURN_COLUMN]].max(axis=1)
     threshold = min_net_return_bps / 10_000.0
     frame = frame[
-        np.isfinite(frame[LONG_NET_RETURN_COLUMN])
+        exact_horizon
+        & np.isfinite(frame[LONG_NET_RETURN_COLUMN])
         & np.isfinite(frame[SHORT_NET_RETURN_COLUMN])
         & (best_net_return >= threshold)
     ].copy()
