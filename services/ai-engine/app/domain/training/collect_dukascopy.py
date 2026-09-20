@@ -175,28 +175,43 @@ def _fetch_hour(
         "Accept": "*/*",
     }
 
-    for attempt in range(max_retries + 1):
-        try:
-            with httpx.Client(timeout=timeout_seconds, follow_redirects=True) as client:
+    with httpx.Client(
+        timeout=timeout_seconds,
+        follow_redirects=True,
+        http2=True,
+    ) as client:
+        for attempt in range(max_retries + 1):
+            try:
                 response = client.get(url, headers=headers)
-            if response.status_code == 404:
-                return hour, [], 0, True
-            if response.status_code == 429 or response.status_code >= 500:
-                if attempt < max_retries:
-                    time.sleep(min(8.0, 0.75 * (attempt + 1)))
+                if response.status_code == 404:
+                    return hour, [], 0, True
+
+                transient = response.status_code == 429 or response.status_code >= 500
+                if transient and attempt < max_retries:
+                    delay = min(12.0, 1.0 * (2**attempt))
+                    time.sleep(delay)
                     continue
-            response.raise_for_status()
-            ticks = decode_dukascopy_ticks(
-                response.content,
-                hour_start=hour,
-                price_digits=price_digits,
-            )
-            rows = aggregate_ticks_to_m1(ticks, price_digits=price_digits)
-            return hour, rows, len(response.content), False
-        except (httpx.HTTPError, lzma.LZMAError, ValueError):
-            if attempt >= max_retries:
-                raise
-            time.sleep(min(8.0, 0.75 * (attempt + 1)))
+
+                response.raise_for_status()
+                ticks = decode_dukascopy_ticks(
+                    response.content,
+                    hour_start=hour,
+                    price_digits=price_digits,
+                )
+                rows = aggregate_ticks_to_m1(ticks, price_digits=price_digits)
+                return hour, rows, len(response.content), False
+            except httpx.HTTPStatusError as exc:
+                retryable = (
+                    exc.response.status_code == 429
+                    or exc.response.status_code >= 500
+                )
+                if not retryable or attempt >= max_retries:
+                    raise
+                time.sleep(min(12.0, 1.0 * (2**attempt)))
+            except (httpx.TransportError, lzma.LZMAError, ValueError):
+                if attempt >= max_retries:
+                    raise
+                time.sleep(min(12.0, 1.0 * (2**attempt)))
 
     raise RuntimeError("Unreachable Dukascopy fetch state")
 
@@ -208,10 +223,10 @@ def collect_dukascopy_m1_corpus(
     output_path: str | Path,
     now: datetime | None = None,
     max_lookback_days: int = 90,
-    parallelism: int = 8,
-    batch_hours: int = 48,
-    timeout_seconds: float = 20.0,
-    max_retries: int = 2,
+    parallelism: int = 3,
+    batch_hours: int = 24,
+    timeout_seconds: float = 30.0,
+    max_retries: int = 5,
 ) -> dict[str, Any]:
     """Collect latest real Dukascopy bid/ask ticks and aggregate to M1."""
     symbol = instrument.upper()
@@ -242,6 +257,7 @@ def collect_dukascopy_m1_corpus(
     hours_with_data = 0
     missing_hours = 0
     bytes_downloaded = 0
+    recovered_hours = 0
 
     while len(rows_by_timestamp) < target_rows and cursor >= earliest:
         hours: list[datetime] = []
@@ -254,8 +270,9 @@ def collect_dukascopy_m1_corpus(
         if not hours:
             break
 
+        failed_hours: list[tuple[datetime, Exception]] = []
         with ThreadPoolExecutor(max_workers=parallelism) as pool:
-            futures = [
+            futures = {
                 pool.submit(
                     _fetch_hour,
                     instrument=symbol,
@@ -263,12 +280,18 @@ def collect_dukascopy_m1_corpus(
                     price_digits=price_digits,
                     timeout_seconds=timeout_seconds,
                     max_retries=max_retries,
-                )
+                ): hour
                 for hour in hours
-            ]
+            }
             for future in as_completed(futures):
-                _hour, rows, payload_bytes, missing = future.result()
+                requested_hour = futures[future]
                 hours_requested += 1
+                try:
+                    _hour, rows, payload_bytes, missing = future.result()
+                except Exception as exc:  # recovery is serial and fail-closed below
+                    failed_hours.append((requested_hour, exc))
+                    continue
+
                 bytes_downloaded += payload_bytes
                 if missing:
                     missing_hours += 1
@@ -277,6 +300,35 @@ def collect_dukascopy_m1_corpus(
                     hours_with_data += 1
                 for row in rows:
                     rows_by_timestamp[str(row["timestamp"])] = row
+
+        # Public datafeed occasionally returns transient 5xx responses under
+        # concurrency. Retry failed hours serially with a larger retry budget.
+        # Never silently skip an unresolved hour: an artificial data gap would
+        # contaminate returns, indicators, and spread-cost evaluation.
+        for failed_hour, original_error in failed_hours:
+            try:
+                _hour, rows, payload_bytes, missing = _fetch_hour(
+                    instrument=symbol,
+                    hour=failed_hour,
+                    price_digits=price_digits,
+                    timeout_seconds=max(timeout_seconds, 30.0),
+                    max_retries=max(max_retries + 2, 7),
+                )
+            except Exception as recovery_error:
+                raise RuntimeError(
+                    "Dukascopy hour remained unavailable after serial recovery: "
+                    f"{symbol} {failed_hour.isoformat()}"
+                ) from recovery_error
+
+            recovered_hours += 1
+            bytes_downloaded += payload_bytes
+            if missing:
+                missing_hours += 1
+                continue
+            if rows:
+                hours_with_data += 1
+            for row in rows:
+                rows_by_timestamp[str(row["timestamp"])] = row
 
     if len(rows_by_timestamp) < target_rows:
         raise ValueError(
@@ -319,6 +371,7 @@ def collect_dukascopy_m1_corpus(
         "hours_requested": hours_requested,
         "hours_with_data": hours_with_data,
         "missing_hours": missing_hours,
+        "recovered_hours": recovered_hours,
         "bytes_downloaded": bytes_downloaded,
         "start": validated["timestamp"].iloc[0].isoformat(),
         "end": validated["timestamp"].iloc[-1].isoformat(),
@@ -347,7 +400,7 @@ def main() -> None:
     parser.add_argument("--target-rows", type=int, default=25000)
     parser.add_argument("--output", required=True)
     parser.add_argument("--max-lookback-days", type=int, default=90)
-    parser.add_argument("--parallelism", type=int, default=8)
+    parser.add_argument("--parallelism", type=int, default=3)
     args = parser.parse_args()
 
     result = collect_dukascopy_m1_corpus(
