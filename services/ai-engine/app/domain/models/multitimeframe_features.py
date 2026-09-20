@@ -11,6 +11,7 @@ from app.domain.market_data.schemas import OHLCVCandle
 from app.domain.models.feature_engineering import compute_features
 
 MULTITIMEFRAME_RUNTIME_PROFILE = "multitimeframe_v1"
+MULTITIMEFRAME_LABEL_SELECTION_POLICY = "all_exact_horizon_finite_rows_v2"
 RUNTIME_TIMEFRAMES = ("M1", "M5", "M15", "H1", "H4")
 TIMEFRAME_MINUTES = {
     "M1": 1,
