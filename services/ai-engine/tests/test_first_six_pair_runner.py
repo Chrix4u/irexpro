@@ -6,6 +6,9 @@ from pathlib import Path
 
 import pytest
 
+from app.domain.models.multitimeframe_features import (
+    MULTITIMEFRAME_LABEL_SELECTION_POLICY,
+)
 from app.domain.training import run_first_six_pair as runner
 
 
@@ -136,6 +139,10 @@ def test_dukascopy_source_requires_no_broker_credentials(
 
     assert collected == ["EURUSD"]
     assert result["data_source"] == "dukascopy"
+    assert (
+        result["label_selection_policy"]
+        == MULTITIMEFRAME_LABEL_SELECTION_POLICY
+    )
     assert result["collection_manifests"]["EURUSD"]["source"] == (
         "dukascopy_public_datafeed_ticks"
     )
@@ -153,4 +160,16 @@ def test_metaapi_source_remains_fail_closed_without_credentials(tmp_path: Path):
             source="metaapi",
             target_rows=250,
             horizons=(5,),
+        )
+
+
+
+def test_six_pair_runner_rejects_future_profitability_row_filter(tmp_path: Path):
+    with pytest.raises(ValueError, match="future-profitability"):
+        runner.run_first_six_pair_study(
+            output_dir=tmp_path / "research",
+            source="dukascopy",
+            target_rows=250,
+            horizons=(5,),
+            min_net_return_bps=0.1,
         )
