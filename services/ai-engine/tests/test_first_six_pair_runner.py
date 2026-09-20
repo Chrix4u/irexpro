@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from app.domain.models.multitimeframe_features import (
+    MULTITIMEFRAME_BACKTEST_POLICY,
     MULTITIMEFRAME_LABEL_SELECTION_POLICY,
 )
 from app.domain.training import run_first_six_pair as runner
@@ -142,6 +143,10 @@ def test_dukascopy_source_requires_no_broker_credentials(
     assert (
         result["label_selection_policy"]
         == MULTITIMEFRAME_LABEL_SELECTION_POLICY
+    )
+    assert (
+        result["backtest_evaluation_policy"]
+        == MULTITIMEFRAME_BACKTEST_POLICY
     )
     assert result["collection_manifests"]["EURUSD"]["source"] == (
         "dukascopy_public_datafeed_ticks"
