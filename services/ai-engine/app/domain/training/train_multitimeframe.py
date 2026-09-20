@@ -219,7 +219,12 @@ def load_and_prepare_corpora(
             slippage_bps=slippage_bps,
         )
         if cutoff is not None:
-            prepared = prepared.loc[prepared["decision_time"] < cutoff].copy()
+            # The research decision and its horizon outcome must both remain
+            # strictly before the reserved future boundary.
+            latest_research_decision = cutoff - pd.Timedelta(minutes=horizon_bars)
+            prepared = prepared.loc[
+                prepared["decision_time"] < latest_research_decision
+            ].copy()
             if prepared.empty:
                 raise ValueError(
                     f"No research samples remain before qualification cutoff for {instrument}"
