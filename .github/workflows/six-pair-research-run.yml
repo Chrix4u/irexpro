@@ -84,7 +84,7 @@ jobs:
           readonly STAGING_ROOT='/home/lightworld/webapps/irexpro-staging'
           readonly OUTPUT_ROOT="/home/lightworld/research/irexpro-six-pair/$candidate_sha"
           readonly DUKASCOPY_CACHE="/home/lightworld/research/dukascopy-raw-cache"
-          readonly TARGET_ROWS=5000
+          readonly TARGET_ROWS=25000
 
           cd "$STAGING_ROOT"
           test "$(git rev-parse --show-toplevel)" = "$STAGING_ROOT"
