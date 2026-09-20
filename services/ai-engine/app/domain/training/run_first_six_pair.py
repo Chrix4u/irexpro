@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from app.domain.training.collect_dukascopy import collect_dukascopy_m1_corpus
 from app.domain.training.collect_historical import collect_historical_corpus
 from app.domain.training.multitimeframe_corpus import (
     build_multitimeframe_corpus_from_m1_csv,
@@ -97,11 +98,12 @@ def _research_gate(report: dict[str, Any]) -> dict[str, Any]:
 
 def run_first_six_pair_study(
     *,
-    api_base_url: str,
-    internal_api_key: str,
-    user_id: str,
-    broker_connection_id: str,
     output_dir: str | Path,
+    source: str = "dukascopy",
+    api_base_url: str | None = None,
+    internal_api_key: str = "",
+    user_id: str | None = None,
+    broker_connection_id: str | None = None,
     target_rows: int = 250_000,
     horizons: tuple[int, ...] = DEFAULT_HORIZONS,
     before: datetime | None = None,
@@ -112,8 +114,17 @@ def run_first_six_pair_study(
     max_splits: int = 5,
 ) -> dict[str, Any]:
     """Collect, build and evaluate the approved initial six-pair universe."""
-    if not internal_api_key.strip():
-        raise ValueError("internal_api_key is required")
+    normalized_source = source.strip().lower()
+    if normalized_source not in {"dukascopy", "metaapi"}:
+        raise ValueError("source must be either 'dukascopy' or 'metaapi'")
+    if normalized_source == "metaapi":
+        if not internal_api_key.strip():
+            raise ValueError("internal_api_key is required for metaapi source")
+        if not api_base_url or not user_id or not broker_connection_id:
+            raise ValueError(
+                "api_base_url, user_id and broker_connection_id are required "
+                "for metaapi source"
+            )
     if target_rows < 250:
         raise ValueError("target_rows must be at least 250")
     if not horizons or any(horizon < 1 for horizon in horizons):
@@ -132,18 +143,26 @@ def run_first_six_pair_study(
 
     for instrument in INITIAL_FOREX_UNIVERSE:
         raw_path = raw_dir / f"{instrument}_M1.csv"
-        collection = collect_historical_corpus(
-            api_base_url=api_base_url,
-            internal_api_key=internal_api_key,
-            user_id=user_id,
-            broker_connection_id=broker_connection_id,
-            instrument=instrument,
-            timeframe="M1",
-            target_rows=target_rows,
-            output_path=raw_path,
-            before=before,
-            require_friction=True,
-        )
+        if normalized_source == "dukascopy":
+            collection = collect_dukascopy_m1_corpus(
+                instrument=instrument,
+                target_rows=target_rows,
+                output_path=raw_path,
+                now=before,
+            )
+        else:
+            collection = collect_historical_corpus(
+                api_base_url=str(api_base_url),
+                internal_api_key=internal_api_key,
+                user_id=str(user_id),
+                broker_connection_id=str(broker_connection_id),
+                instrument=instrument,
+                timeframe="M1",
+                target_rows=target_rows,
+                output_path=raw_path,
+                before=before,
+                require_friction=True,
+            )
         collection_manifests[instrument] = {
             key: value
             for key, value in collection.items()
@@ -185,6 +204,7 @@ def run_first_six_pair_study(
     summary = {
         "report_version": 1,
         "study": "irexpro_initial_six_pair_multitimeframe_walkforward",
+        "data_source": normalized_source,
         "instruments": list(INITIAL_FOREX_UNIVERSE),
         "horizons_minutes": list(horizons),
         "target_m1_rows_per_instrument": target_rows,
@@ -211,9 +231,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Collect and evaluate the first six-pair iRexPro XGBoost research corpus"
     )
-    parser.add_argument("--api-base-url", required=True)
-    parser.add_argument("--user-id", required=True)
-    parser.add_argument("--broker-connection-id", required=True)
+    parser.add_argument(
+        "--source",
+        choices=("dukascopy", "metaapi"),
+        default="dukascopy",
+        help="Historical corpus source. Default: dukascopy",
+    )
+    parser.add_argument("--api-base-url")
+    parser.add_argument("--user-id")
+    parser.add_argument("--broker-connection-id")
     parser.add_argument("--output-dir", default="research/first-six-pair-run")
     parser.add_argument("--target-rows", type=int, default=250_000)
     parser.add_argument(
@@ -239,11 +265,12 @@ def main() -> None:
         else None
     )
     result = run_first_six_pair_study(
+        output_dir=args.output_dir,
+        source=args.source,
         api_base_url=args.api_base_url,
         internal_api_key=internal_api_key,
         user_id=args.user_id,
         broker_connection_id=args.broker_connection_id,
-        output_dir=args.output_dir,
         target_rows=args.target_rows,
         horizons=horizons,
         before=before,
