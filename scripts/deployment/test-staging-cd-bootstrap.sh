@@ -71,8 +71,10 @@ grep -Fq 'do NOT launch the' "$RESEARCH_WORKFLOW" ||
 # preserving the exact remote exit status.
 grep -Fq 'RESEARCH_HEARTBEAT candidate=%s elapsed_seconds=%s' "$RESEARCH_WORKFLOW" ||
   fail 'Six Pair Research must emit periodic progress heartbeats.'
+# shellcheck disable=SC2016
 grep -Fq 'if wait "$research_pid"; then' "$RESEARCH_WORKFLOW" ||
   fail 'Six Pair Research must capture the remote research exit status explicitly.'
+# shellcheck disable=SC2016
 grep -Fq 'exit "$research_status"' "$RESEARCH_WORKFLOW" ||
   fail 'Six Pair Research must return the original remote research status.'
 
