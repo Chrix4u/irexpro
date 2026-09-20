@@ -92,7 +92,6 @@ export class UsersService {
       if (dto.firstName !== undefined) user.profile.firstName = dto.firstName;
       if (dto.lastName !== undefined) user.profile.lastName = dto.lastName;
 
-
       if (dto.dateOfBirth !== undefined) {
         if (!this.isValidDateOfBirth(dto.dateOfBirth)) {
           throw new BadRequestException('Date of birth must be a valid past calendar date.');
