@@ -214,19 +214,20 @@
 }
 
 .ai-overview-card {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 0.45rem 0.85rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.45rem;
   min-width: 0;
 }
 
 .ai-overview-card > .muted {
-  grid-column: 1 / -1;
+  width: 100%;
 }
 
 .ai-overview-card__value {
-  text-align: right;
+  width: 100%;
+  text-align: left;
 }
 
 .ai-overview-card__value {
