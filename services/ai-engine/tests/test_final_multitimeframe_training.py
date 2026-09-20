@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from app.domain.models.multitimeframe_features import (
+    MULTITIMEFRAME_BACKTEST_POLICY,
     MULTITIMEFRAME_LABEL_SELECTION_POLICY,
 )
 from app.domain.training.train_final_multitimeframe import (
@@ -88,7 +89,11 @@ def test_final_gate_requires_all_metrics_to_pass():
 
 
 
-def _qualification_payload(*, label_policy: str | None) -> dict:
+def _qualification_payload(
+    *,
+    label_policy: str | None,
+    backtest_policy: str | None = MULTITIMEFRAME_BACKTEST_POLICY,
+) -> dict:
     payload = {
         "target_m1_rows_per_instrument": 25_000,
         "qualification_window": {
@@ -104,6 +109,8 @@ def _qualification_payload(*, label_policy: str | None) -> dict:
     }
     if label_policy is not None:
         payload["label_selection_policy"] = label_policy
+    if backtest_policy is not None:
+        payload["backtest_evaluation_policy"] = backtest_policy
     return payload
 
 
@@ -140,4 +147,28 @@ def test_final_packaging_rejects_legacy_label_selection_policy(
     )
 
     with pytest.raises(ValueError, match="label-selection policy"):
+        _load_research_qualification(summary, horizon_bars=5)
+
+
+
+@pytest.mark.parametrize(
+    "legacy_backtest_policy",
+    [None, "serial_full_capital_active_signals_v0"],
+)
+def test_final_packaging_rejects_legacy_backtest_evaluation_policy(
+    tmp_path,
+    legacy_backtest_policy,
+):
+    summary = tmp_path / "legacy-backtest-summary.json"
+    summary.write_text(
+        json.dumps(
+            _qualification_payload(
+                label_policy=MULTITIMEFRAME_LABEL_SELECTION_POLICY,
+                backtest_policy=legacy_backtest_policy,
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="backtest-evaluation policy"):
         _load_research_qualification(summary, horizon_bars=5)
