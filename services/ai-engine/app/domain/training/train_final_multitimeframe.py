@@ -60,13 +60,13 @@ def _feature_schema_hash(feature_names: list[str]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _load_research_gate(
+def _load_research_qualification(
     summary_path: str | Path | None,
     *,
     horizon_bars: int,
-) -> dict[str, Any] | None:
+) -> tuple[dict[str, Any] | None, pd.Timestamp | None]:
     if summary_path is None:
-        return None
+        return None, None
 
     path = Path(summary_path)
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -78,7 +78,22 @@ def _load_research_gate(
     gate = block.get("research_gate")
     if not isinstance(gate, dict):
         raise ValueError("Qualification summary is missing research_gate")
-    return gate
+
+    qualification_window = payload.get("qualification_window")
+    if not isinstance(qualification_window, dict):
+        raise ValueError("Qualification summary is missing qualification_window")
+    raw_cutoff = qualification_window.get("decision_time_before")
+    if not raw_cutoff:
+        raise ValueError(
+            "Qualification summary is missing research decision-time cutoff"
+        )
+    cutoff = pd.Timestamp(raw_cutoff)
+    cutoff = (
+        cutoff.tz_localize("UTC")
+        if cutoff.tzinfo is None
+        else cutoff.tz_convert("UTC")
+    )
+    return gate, cutoff
 
 
 def _chronological_final_split(
@@ -222,7 +237,7 @@ def train_final_candidate(
     if not 0.5 <= confidence_threshold < 1.0:
         raise ValueError("confidence_threshold must be in [0.5, 1.0)")
 
-    research_gate = _load_research_gate(
+    research_gate, research_cutoff = _load_research_qualification(
         qualification_summary_path,
         horizon_bars=horizon_bars,
     )
@@ -238,6 +253,16 @@ def train_final_candidate(
         pooled,
         horizon_bars=horizon_bars,
     )
+
+    test_start = pd.Timestamp(test["decision_time"].min())
+    research_separation_verified = bool(
+        research_cutoff is not None and test_start >= research_cutoff
+    )
+    if approve_paper and not research_separation_verified:
+        raise ValueError(
+            "Paper approval requested but the untouched test overlaps or lacks "
+            "the reserved research qualification boundary"
+        )
 
     model = _build_model()
     model.fit(
@@ -270,7 +295,10 @@ def train_final_candidate(
         research_gate is not None and research_gate.get("research_gate_passed", False)
     )
     paper_approved = bool(
-        approve_paper and research_gate_passed and final_gate["passed"]
+        approve_paper
+        and research_gate_passed
+        and research_separation_verified
+        and final_gate["passed"]
     )
     if approve_paper and not paper_approved:
         raise ValueError(
@@ -317,6 +345,10 @@ def train_final_candidate(
             "test_start": test["decision_time"].min().isoformat(),
             "test_end": test["decision_time"].max().isoformat(),
             "purge_periods": horizon_bars,
+            "research_qualification_before": (
+                research_cutoff.isoformat() if research_cutoff is not None else None
+            ),
+            "research_separation_verified": research_separation_verified,
         },
         "best_iteration": int(getattr(model, "best_iteration", -1)),
         "validation_metrics": validation_metrics,
