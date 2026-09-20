@@ -27,6 +27,7 @@ from app.domain.models.baseline_xgboost import (
     MULTITIMEFRAME_RUNTIME_PROFILE,
 )
 from app.domain.models.multitimeframe_features import (
+    MULTITIMEFRAME_BACKTEST_POLICY,
     MULTITIMEFRAME_FEATURE_COLUMNS,
     MULTITIMEFRAME_LABEL_SELECTION_POLICY,
 )
@@ -76,6 +77,10 @@ def _load_research_qualification(
     if payload.get("label_selection_policy") != MULTITIMEFRAME_LABEL_SELECTION_POLICY:
         raise ValueError(
             "Qualification summary uses an unsupported label-selection policy"
+        )
+    if payload.get("backtest_evaluation_policy") != MULTITIMEFRAME_BACKTEST_POLICY:
+        raise ValueError(
+            "Qualification summary uses an unsupported backtest-evaluation policy"
         )
     block = payload.get("horizon_reports", {}).get(f"{horizon_bars}m")
     if not isinstance(block, dict):
@@ -313,8 +318,14 @@ def train_final_candidate(
         test,
         confidence_threshold=confidence_threshold,
     )
-    validation_metrics = _summarize_predictions(validation_predictions)
-    test_metrics = _summarize_predictions(test_predictions)
+    validation_metrics = _summarize_predictions(
+        validation_predictions,
+        horizon_bars=horizon_bars,
+    )
+    test_metrics = _summarize_predictions(
+        test_predictions,
+        horizon_bars=horizon_bars,
+    )
     final_gate = _final_gate(test_metrics)
 
     research_gate_passed = bool(
@@ -345,6 +356,7 @@ def train_final_candidate(
         "model_type": MULTITIMEFRAME_MODEL_TYPE,
         "runtime_feature_profile": MULTITIMEFRAME_RUNTIME_PROFILE,
         "label_selection_policy": MULTITIMEFRAME_LABEL_SELECTION_POLICY,
+        "backtest_evaluation_policy": MULTITIMEFRAME_BACKTEST_POLICY,
         "model_version": model_version,
         "artifact_sha256": _sha256_file(output),
         "feature_columns": MULTITIMEFRAME_FEATURE_COLUMNS,
