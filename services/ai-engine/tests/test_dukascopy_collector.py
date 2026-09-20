@@ -12,6 +12,7 @@ import pytest
 from app.domain.training.collect_dukascopy import (
     _fetch_hour,
     _hour_url,
+    _is_forex_market_closed_hour,
     _raw_cache_path,
     aggregate_ticks_to_m1,
     collect_dukascopy_m1_corpus,
@@ -278,3 +279,86 @@ def test_fetch_hour_reuses_verified_raw_cache_without_network(
     assert len(rows) == 1
     assert rows[0]["tick_volume"] == 2.0
     assert rows[0]["spread_points"] == 4.0
+
+
+def test_forex_weekend_calendar_tracks_new_york_dst_boundaries():
+    # Summer (EDT): weekly close/open is 21:00 UTC.
+    assert _is_forex_market_closed_hour(
+        datetime(2026, 9, 18, 21, tzinfo=UTC)
+    ) is True
+    assert _is_forex_market_closed_hour(
+        datetime(2026, 9, 20, 20, tzinfo=UTC)
+    ) is True
+    assert _is_forex_market_closed_hour(
+        datetime(2026, 9, 20, 21, tzinfo=UTC)
+    ) is False
+
+    # Winter (EST): weekly close/open is 22:00 UTC.
+    assert _is_forex_market_closed_hour(
+        datetime(2026, 1, 2, 22, tzinfo=UTC)
+    ) is True
+    assert _is_forex_market_closed_hour(
+        datetime(2026, 1, 4, 21, tzinfo=UTC)
+    ) is True
+    assert _is_forex_market_closed_hour(
+        datetime(2026, 1, 4, 22, tzinfo=UTC)
+    ) is False
+
+
+def test_collection_skips_closed_weekend_hours_without_network(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    requested: list[datetime] = []
+
+    def fake_fetch_hour(
+        *,
+        instrument: str,
+        hour: datetime,
+        price_digits: int,
+        timeout_seconds: float,
+        max_retries: int,
+        cache_dir=None,
+    ):
+        del instrument, timeout_seconds, max_retries, cache_dir
+        assert _is_forex_market_closed_hour(hour) is False
+        requested.append(hour)
+        rows = []
+        for minute in range(60):
+            timestamp = hour + timedelta(minutes=minute)
+            close = 1.10 + minute * 0.000001
+            rows.append(
+                {
+                    "timestamp": timestamp.isoformat(),
+                    "open": close,
+                    "high": close + 0.00001,
+                    "low": close - 0.00001,
+                    "close": close,
+                    "volume": 10.0,
+                    "tick_volume": 10.0,
+                    "spread_points": 2.0,
+                    "price_digits": price_digits,
+                    "quote_volume": 25.0,
+                }
+            )
+        return hour, rows, 2048, False
+
+    monkeypatch.setattr(
+        "app.domain.training.collect_dukascopy._fetch_hour",
+        fake_fetch_hour,
+    )
+
+    output = tmp_path / "EURUSD_M1.csv"
+    result = collect_dukascopy_m1_corpus(
+        instrument="EURUSD",
+        target_rows=250,
+        output_path=output,
+        now=datetime(2026, 1, 4, 18, tzinfo=UTC),
+        max_lookback_days=3,
+        parallelism=2,
+        batch_hours=24,
+    )
+
+    assert len(requested) >= 5
+    assert result["market_closed_hours_skipped"] > 0
+    assert len(pd.read_csv(output)) == 250
