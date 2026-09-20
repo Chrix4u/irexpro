@@ -10,6 +10,7 @@ import pytest
 from app.domain.models.multitimeframe_features import (
     MULTITIMEFRAME_BACKTEST_POLICY,
     MULTITIMEFRAME_LABEL_SELECTION_POLICY,
+    MULTITIMEFRAME_RESEARCH_VALIDATION_POLICY,
 )
 from app.domain.training.train_final_multitimeframe import (
     _chronological_final_split,
@@ -88,6 +89,7 @@ def _qualification_payload(
     *,
     label_policy: str | None,
     backtest_policy: str | None = MULTITIMEFRAME_BACKTEST_POLICY,
+    research_validation_policy: str | None = MULTITIMEFRAME_RESEARCH_VALIDATION_POLICY,
 ) -> dict:
     payload = {
         "target_m1_rows_per_instrument": 25_000,
@@ -106,6 +108,8 @@ def _qualification_payload(
         payload["label_selection_policy"] = label_policy
     if backtest_policy is not None:
         payload["backtest_evaluation_policy"] = backtest_policy
+    if research_validation_policy is not None:
+        payload["research_validation_policy"] = research_validation_policy
     return payload
 
 def test_final_packaging_accepts_only_current_label_selection_policy(tmp_path):
@@ -163,4 +167,28 @@ def test_final_packaging_rejects_legacy_backtest_evaluation_policy(
     )
 
     with pytest.raises(ValueError, match="backtest-evaluation policy"):
+        _load_research_qualification(summary, horizon_bars=5)
+
+
+
+@pytest.mark.parametrize(
+    "legacy_validation_policy",
+    [None, "outer_validation_used_for_early_stopping_v0"],
+)
+def test_final_packaging_rejects_reused_outer_validation_policy(
+    tmp_path,
+    legacy_validation_policy,
+):
+    summary = tmp_path / "legacy-validation-summary.json"
+    summary.write_text(
+        json.dumps(
+            _qualification_payload(
+                label_policy=MULTITIMEFRAME_LABEL_SELECTION_POLICY,
+                research_validation_policy=legacy_validation_policy,
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="research-validation policy"):
         _load_research_qualification(summary, horizon_bars=5)
