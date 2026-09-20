@@ -32,6 +32,30 @@ export class UsersService {
     return user;
   }
 
+  async getMyProfileView(userId: string) {
+    const user = await this.findById(userId);
+    return {
+      id: user.id,
+      email: user.email,
+      phone: user.phone,
+      status: user.status,
+      emailVerifiedAt: user.emailVerifiedAt,
+      phoneVerifiedAt: user.phoneVerifiedAt,
+      countryCode: user.countryCode,
+      timezone: user.timezone,
+      preferredCurrency: user.preferredCurrency,
+      mfaEnabled: user.mfaEnabled,
+      lastLoginAt: user.lastLoginAt,
+      createdAt: user.createdAt,
+      profile: {
+        firstName: user.profile?.firstName ?? null,
+        lastName: user.profile?.lastName ?? null,
+        dateOfBirth: user.profile?.dateOfBirth ?? null,
+        kycStatus: user.profile?.kycStatus ?? KycStatus.NONE,
+      },
+    };
+  }
+
   async findAll(page?: number, limit?: number): Promise<{ users: User[]; total: number }> {
     const requestedPage = this.positiveSafeIntegerOrDefault(page, 1);
     const limitNum = Math.min(this.positiveSafeIntegerOrDefault(limit, 20), 100);
@@ -91,8 +115,7 @@ export class UsersService {
     if (user.profile) {
       if (dto.firstName !== undefined) user.profile.firstName = dto.firstName;
       if (dto.lastName !== undefined) user.profile.lastName = dto.lastName;
-      if (dto.tradingExperienceLevel !== undefined)
-        user.profile.tradingExperienceLevel = dto.tradingExperienceLevel;
+
 
       if (dto.dateOfBirth !== undefined) {
         if (!this.isValidDateOfBirth(dto.dateOfBirth)) {
