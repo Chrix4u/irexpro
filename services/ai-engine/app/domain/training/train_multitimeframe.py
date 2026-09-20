@@ -285,7 +285,9 @@ def _non_overlapping_portfolio_periods(
 
     active = predictions[predictions["active_trade"]].copy()
     if active.empty:
-        return pd.DataFrame(columns=["decision_time", "portfolio_net_return", "signal_count"])
+        return pd.DataFrame(
+            columns=["decision_time", "portfolio_net_return", "signal_count"]
+        )
 
     active["decision_time"] = pd.to_datetime(
         active["decision_time"],
@@ -381,6 +383,7 @@ def _summarize_predictions(
         "average_spread_bps": float(predictions["m1_spread_bps"].mean()),
         "median_spread_bps": float(predictions["m1_spread_bps"].median()),
     }
+
 
 def run_pooled_walk_forward(
     dataset: pd.DataFrame,
