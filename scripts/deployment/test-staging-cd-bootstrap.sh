@@ -41,6 +41,21 @@ research_lock_count="$(grep -F -c 'group: irexpro-staging-worktree' "$RESEARCH_W
 [[ "$research_lock_count" -eq 1 ]] ||
   fail 'Six Pair Research must hold the shared staging-worktree concurrency lock.'
 
+# The lock must be job-level, not workflow-level. Trigger events whose job
+# condition evaluates false must never consume/cancel the shared pending slot.
+deploy_top_level_concurrency="$(grep -c '^concurrency:' "$WORKFLOW" || true)"
+research_top_level_concurrency="$(grep -c '^concurrency:' "$RESEARCH_WORKFLOW" || true)"
+deploy_job_level_concurrency="$(grep -c '^    concurrency:' "$WORKFLOW" || true)"
+research_job_level_concurrency="$(grep -c '^    concurrency:' "$RESEARCH_WORKFLOW" || true)"
+[[ "$deploy_top_level_concurrency" -eq 0 ]] ||
+  fail 'Staging Deploy concurrency must not be workflow-level.'
+[[ "$research_top_level_concurrency" -eq 0 ]] ||
+  fail 'Six Pair Research concurrency must not be workflow-level.'
+[[ "$deploy_job_level_concurrency" -eq 1 ]] ||
+  fail 'Staging Deploy must acquire the shared lock at job level.'
+[[ "$research_job_level_concurrency" -eq 1 ]] ||
+  fail 'Six Pair Research must acquire the shared lock at job level.'
+
 grep -Fq 'cancel-in-progress: false' "$WORKFLOW" ||
   fail 'Staging Deploy must never cancel an active staging-worktree owner.'
 grep -Fq 'cancel-in-progress: false' "$RESEARCH_WORKFLOW" ||
