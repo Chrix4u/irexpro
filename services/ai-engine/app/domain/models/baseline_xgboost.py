@@ -19,6 +19,7 @@ import pandas as pd
 from app.core.logging import get_logger
 from app.domain.models.feature_engineering import FEATURE_COLUMNS
 from app.domain.models.multitimeframe_features import (
+    MULTITIMEFRAME_BACKTEST_POLICY,
     MULTITIMEFRAME_FEATURE_COLUMNS,
     MULTITIMEFRAME_LABEL_SELECTION_POLICY,
     MULTITIMEFRAME_RUNTIME_PROFILE,
@@ -130,6 +131,13 @@ class BaselineXGBoostModel:
                 != MULTITIMEFRAME_LABEL_SELECTION_POLICY
             ):
                 raise ValueError("MTF artifact label_selection_policy is unsupported")
+
+            if (
+                model_type == MULTITIMEFRAME_MODEL_TYPE
+                and metadata.get("backtest_evaluation_policy")
+                != MULTITIMEFRAME_BACKTEST_POLICY
+            ):
+                raise ValueError("MTF artifact backtest_evaluation_policy is unsupported")
 
             feature_names = metadata.get("feature_columns")
             if feature_names != expected_features:
@@ -278,6 +286,9 @@ class BaselineXGBoostModel:
                 "runtime_feature_profile": self._runtime_feature_profile,
                 "label_selection_policy": self._artifact_metadata.get(
                     "label_selection_policy"
+                ),
+                "backtest_evaluation_policy": self._artifact_metadata.get(
+                    "backtest_evaluation_policy"
                 ),
                 "feature_count": len(self._feature_names),
                 "approved_for_live": False,
