@@ -793,6 +793,84 @@ async function testUnauthorizedRecoveryIsSingleFlightAndRetriesOnce() {
   );
 }
 
+
+async function testLateStaleUnauthorizedUsesAlreadyRotatedBearer() {
+  const calls = [];
+  let token = 'expired-token';
+  let recoveryCalls = 0;
+  let releaseSlowResponse;
+  const slowGate = new Promise((resolve) => {
+    releaseSlowResponse = resolve;
+  });
+
+  const fakeFetch = async (url, init) => {
+    calls.push({ url, auth: init.headers.Authorization });
+
+    if (url.endsWith('/fixture/slow') && init.headers.Authorization === 'Bearer expired-token') {
+      await slowGate;
+      return {
+        ok: false,
+        status: 401,
+        statusText: 'Unauthorized',
+        json: async () => ({ statusCode: 401, message: 'Expired' }),
+      };
+    }
+
+    if (init.headers.Authorization === 'Bearer expired-token') {
+      return {
+        ok: false,
+        status: 401,
+        statusText: 'Unauthorized',
+        json: async () => ({ statusCode: 401, message: 'Expired' }),
+      };
+    }
+
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => ({ ok: true }),
+    };
+  };
+
+  const { createApiClient } = loadApiClient(fakeFetch);
+  const client = createApiClient({
+    baseUrl: 'https://api.example.test/api/v1',
+    getAccessToken: () => token,
+    recoverUnauthorized: async () => {
+      recoveryCalls += 1;
+      token = 'fresh-token';
+      return true;
+    },
+  });
+
+  const slow = client.request('/fixture/slow');
+  const fast = client.request('/fixture/fast');
+
+  const fastResult = await fast;
+  assert.deepEqual(fastResult, { ok: true });
+  assert.equal(recoveryCalls, 1, 'the first 401 should rotate credentials once');
+
+  releaseSlowResponse();
+  const slowResult = await slow;
+
+  assert.deepEqual(slowResult, { ok: true });
+  assert.equal(
+    recoveryCalls,
+    1,
+    'a late 401 from the stale bearer must reuse the already-rotated bearer instead of refreshing again',
+  );
+  assert.deepEqual(
+    calls.map((call) => call.auth),
+    [
+      'Bearer expired-token',
+      'Bearer expired-token',
+      'Bearer fresh-token',
+      'Bearer fresh-token',
+    ],
+  );
+}
+
 async function main() {
   await testMfaSetupPasswordContract();
   console.log('api-client MFA setup contract test passed.');
@@ -826,6 +904,8 @@ async function main() {
   console.log('api-client confirmation 409-failure contract test passed.');
   await testUnauthorizedRecoveryIsSingleFlightAndRetriesOnce();
   console.log('api-client single-flight unauthorized recovery test passed.');
+  await testLateStaleUnauthorizedUsesAlreadyRotatedBearer();
+  console.log('api-client stale-401 bearer reuse test passed.');
 }
 
 main().catch((error) => {
