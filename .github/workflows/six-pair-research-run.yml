@@ -119,19 +119,37 @@ jobs:
             fi
           fi
 
+          relevant_pattern='^(services/ai-engine/app/domain/(training|models)/|services/ai-engine/(pyproject\.toml|requirements\.lock)$)'
+
           if [[ -z "$baseline_sha" ]]; then
-            printf 'true'
+            # No successful/evaluated research lineage exists yet. For an
+            # irrelevant workflow/UI/API-only deployment, do NOT launch the
+            # expensive study and do NOT advance the marker. The first later
+            # deployment that actually changes model/training inputs will
+            # still be forced to research.
+            parent_sha="$(git rev-parse "${candidate_sha}^1" 2>/dev/null || true)"
+            if [[ ! "$parent_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              printf 'true'
+              exit 0
+            fi
+
+            changed_files="$(git diff --name-only "$parent_sha" "$candidate_sha")"
+            if grep -Eq "$relevant_pattern" <<<"$changed_files"; then
+              printf 'true'
+            else
+              printf 'false'
+            fi
             exit 0
           fi
 
           changed_files="$(git diff --name-only "$baseline_sha" "$candidate_sha")"
-          if grep -Eq             '^(services/ai-engine/app/domain/(training|models)/|services/ai-engine/(pyproject\.toml|requirements\.lock)$)'             <<<"$changed_files"; then
+          if grep -Eq "$relevant_pattern" <<<"$changed_files"; then
             printf 'true'
             exit 0
           fi
 
-          # No model/training inputs changed. Carry the evaluated lineage
-          # forward atomically so future diffs span from this deployed SHA.
+          # A prior research result is already valid for these model/training
+          # inputs. Carry that evaluated lineage forward atomically.
           install -d -m 700 "$RESEARCH_ROOT"
           temp="$RESEARCH_STATE.tmp"
           printf '%s\n' "$candidate_sha" > "$temp"
