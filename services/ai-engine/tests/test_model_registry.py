@@ -10,11 +10,11 @@ from xgboost import XGBClassifier
 
 from app.core.errors import ModelNotFoundError
 from app.domain.models.baseline_xgboost import (
-    BaselineXGBoostModel,
     MODEL_METADATA_PATH_ENV,
     MODEL_PATH_ENV,
     MODEL_VERSION,
     MULTITIMEFRAME_MODEL_TYPE,
+    BaselineXGBoostModel,
 )
 from app.domain.models.governance import create_baseline_governance
 from app.domain.models.multitimeframe_features import (
