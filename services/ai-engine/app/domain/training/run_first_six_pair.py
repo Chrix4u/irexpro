@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
+
 from app.domain.training.collect_dukascopy import collect_dukascopy_m1_corpus
 from app.domain.training.collect_historical import collect_historical_corpus
 from app.domain.training.multitimeframe_corpus import (
@@ -19,6 +21,7 @@ from app.domain.training.train_multitimeframe import (
 )
 
 DEFAULT_HORIZONS = (1, 5, 10)
+RESEARCH_QUALIFICATION_FRACTION = 0.80
 DEFAULT_RESEARCH_GATE = {
     "min_balanced_accuracy": 0.52,
     "min_sharpe_ratio": 1.0,
@@ -27,6 +30,42 @@ DEFAULT_RESEARCH_GATE = {
     "min_positive_fold_fraction": 0.60,
     "min_positive_instrument_fraction": 0.67,
 }
+
+
+
+def _research_qualification_cutoff(
+    corpora: dict[str, str | Path],
+    *,
+    fraction: float = RESEARCH_QUALIFICATION_FRACTION,
+) -> pd.Timestamp:
+    """Return an exclusive time cutoff that reserves a future tail from research."""
+    if not 0.60 <= fraction <= 0.85:
+        raise ValueError("research qualification fraction must be in [0.60, 0.85]")
+    if not corpora:
+        raise ValueError("At least one corpus is required for qualification cutoff")
+
+    time_indexes: list[pd.Series] = []
+    for raw_path in corpora.values():
+        times = pd.read_csv(raw_path, usecols=["decision_time"])["decision_time"]
+        parsed = pd.to_datetime(times, utc=True, errors="coerce")
+        if parsed.isna().any():
+            raise ValueError("Corpus contains invalid decision_time values")
+        time_indexes.append(parsed)
+
+    all_times = pd.Index(
+        sorted(pd.concat(time_indexes, ignore_index=True).drop_duplicates())
+    )
+    if len(all_times) < 500:
+        raise ValueError(
+            "At least 500 unique decision periods are required to reserve "
+            "an untouched future test tail"
+        )
+
+    cutoff_index = int(len(all_times) * fraction)
+    if cutoff_index <= 250 or cutoff_index >= len(all_times):
+        raise ValueError("Invalid research qualification cutoff")
+    return pd.Timestamp(all_times[cutoff_index])
+
 
 
 def _research_gate(report: dict[str, Any]) -> dict[str, Any]:
@@ -186,6 +225,8 @@ def run_first_six_pair_study(
         corpus_manifests[instrument] = corpus
         corpora[instrument] = str(corpus_path)
 
+    qualification_cutoff = _research_qualification_cutoff(corpora)
+
     horizon_reports: dict[str, Any] = {}
     for horizon in horizons:
         report = evaluate_multi_pair_corpora(
@@ -197,6 +238,7 @@ def run_first_six_pair_study(
             commission_bps=commission_bps,
             slippage_bps=slippage_bps,
             max_splits=max_splits,
+            decision_time_before=qualification_cutoff,
         )
         horizon_reports[f"{horizon}m"] = {
             "report_path": report["report_path"],
@@ -214,6 +256,16 @@ def run_first_six_pair_study(
         "instruments": list(INITIAL_FOREX_UNIVERSE),
         "horizons_minutes": list(horizons),
         "target_m1_rows_per_instrument": target_rows,
+        "qualification_window": {
+            "research_fraction": RESEARCH_QUALIFICATION_FRACTION,
+            "reserved_future_fraction": 1.0 - RESEARCH_QUALIFICATION_FRACTION,
+            "decision_time_before": qualification_cutoff.isoformat(),
+            "semantics": (
+                "Research and horizon selection may use only decision times before "
+                "this exclusive cutoff. The final untouched-test gate must start "
+                "at or after this cutoff."
+            ),
+        },
         "cost_model": {
             "historical_spread_required": True,
             "commission_bps_round_trip": commission_bps,
