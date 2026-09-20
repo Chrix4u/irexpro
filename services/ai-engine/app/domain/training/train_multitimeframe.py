@@ -14,6 +14,7 @@ from xgboost import XGBClassifier
 from app.domain.models.multitimeframe_features import (
     INITIAL_FOREX_UNIVERSE,
     MULTITIMEFRAME_FEATURE_COLUMNS,
+    MULTITIMEFRAME_LABEL_SELECTION_POLICY,
     RUNTIME_TIMEFRAMES,
 )
 from app.domain.training.multitimeframe_corpus import validate_no_lookahead
@@ -67,13 +68,19 @@ def prepare_instrument_corpus(
     Historical spread is charged as half-spread at entry plus half-spread at
     exit. Commission/slippage are optional extra round-trip costs in bps.
     Future prices/spreads are used only for labels/evaluation, never features.
+    Every exact-horizon finite row remains eligible; future profitability must
+    never decide whether a row exists in the supervised dataset.
     """
     if instrument not in INITIAL_FOREX_UNIVERSE:
         raise ValueError(f"Unsupported initial-universe instrument: {instrument}")
     if horizon_bars < 1:
         raise ValueError("horizon_bars must be at least 1")
-    if min_net_return_bps < 0:
-        raise ValueError("min_net_return_bps cannot be negative")
+    if min_net_return_bps != 0:
+        raise ValueError(
+            "min_net_return_bps must be 0: filtering supervised rows by future "
+            "profitability is prohibited; use the inference confidence threshold "
+            "for no-trade selection"
+        )
     if commission_bps < 0 or slippage_bps < 0:
         raise ValueError("commission_bps/slippage_bps cannot be negative")
 
@@ -159,13 +166,15 @@ def prepare_instrument_corpus(
     frame[LONG_NET_RETURN_COLUMN] = (long_exit / long_entry) - 1.0 - extra_cost
     frame[SHORT_NET_RETURN_COLUMN] = (short_entry - short_exit) / short_entry - extra_cost
 
-    best_net_return = frame[[LONG_NET_RETURN_COLUMN, SHORT_NET_RETURN_COLUMN]].max(axis=1)
-    threshold = min_net_return_bps / 10_000.0
+    # Do NOT filter rows using either future directional return. Doing so
+    # would let hindsight decide which market periods the model is evaluated
+    # on and would overstate runtime performance. The binary target remains
+    # "which direction was better after friction"; confidence decides whether
+    # the runtime trades at all.
     frame = frame[
         exact_horizon
         & np.isfinite(frame[LONG_NET_RETURN_COLUMN])
         & np.isfinite(frame[SHORT_NET_RETURN_COLUMN])
-        & (best_net_return >= threshold)
     ].copy()
     frame[TARGET_COLUMN] = (
         frame[LONG_NET_RETURN_COLUMN] > frame[SHORT_NET_RETURN_COLUMN]
@@ -413,6 +422,7 @@ def run_pooled_walk_forward(
             "purge_periods": int(purge),
             "embargo_periods": int(embargo),
             "confidence_threshold": confidence_threshold,
+        "label_selection_policy": MULTITIMEFRAME_LABEL_SELECTION_POLICY,
         },
     }
 
