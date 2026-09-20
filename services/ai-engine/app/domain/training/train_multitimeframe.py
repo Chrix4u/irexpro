@@ -11,42 +11,18 @@ import numpy as np
 import pandas as pd
 from xgboost import XGBClassifier
 
-from app.domain.training.multitimeframe_corpus import (
-    ALL_TIMEFRAMES,
-    validate_no_lookahead,
+from app.domain.models.multitimeframe_features import (
+    INITIAL_FOREX_UNIVERSE,
+    MULTITIMEFRAME_FEATURE_COLUMNS,
+    NORMALIZED_FEATURE_SUFFIXES,
+    RUNTIME_TIMEFRAMES,
+    TIME_FEATURE_COLUMNS,
 )
+from app.domain.training.multitimeframe_corpus import validate_no_lookahead
 from app.domain.training.validation import (
     compute_backtest_metrics,
     compute_classification_metrics,
     purged_walk_forward_time_splits,
-)
-
-INITIAL_FOREX_UNIVERSE = (
-    "EURUSD",
-    "GBPUSD",
-    "USDJPY",
-    "AUDUSD",
-    "USDCAD",
-    "USDCHF",
-)
-
-NORMALIZED_FEATURE_SUFFIXES = (
-    "simple_return",
-    "price_vs_ma20",
-    "volatility_10",
-    "candle_body",
-    "volume_change",
-    "range_pct",
-    "ma5_vs_ma20",
-    "ma10_vs_ma20",
-    "log_tick_volume",
-)
-
-TIME_FEATURE_COLUMNS = (
-    "minute_of_day_sin",
-    "minute_of_day_cos",
-    "day_of_week_sin",
-    "day_of_week_cos",
 )
 
 TARGET_COLUMN = "target"
@@ -60,20 +36,6 @@ def _sha256_file(path: Path) -> str:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
-
-
-def multitimeframe_feature_columns() -> list[str]:
-    columns = [
-        f"{timeframe.lower()}_{suffix}"
-        for timeframe in ALL_TIMEFRAMES
-        for suffix in NORMALIZED_FEATURE_SUFFIXES
-    ]
-    columns.extend(["m1_spread_bps", *TIME_FEATURE_COLUMNS])
-    columns.extend(f"instrument_{instrument}" for instrument in INITIAL_FOREX_UNIVERSE)
-    return columns
-
-
-MULTITIMEFRAME_FEATURE_COLUMNS = multitimeframe_feature_columns()
 
 
 def _parse_corpus_dates(frame: pd.DataFrame) -> pd.DataFrame:
@@ -133,7 +95,7 @@ def prepare_instrument_corpus(
     if frame[required_friction].isna().any().any():
         raise ValueError("Corpus contains missing real-friction values")
 
-    for timeframe in ALL_TIMEFRAMES:
+    for timeframe in RUNTIME_TIMEFRAMES:
         prefix = timeframe.lower()
         required = [
             f"{prefix}_high",
