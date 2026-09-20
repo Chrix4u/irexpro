@@ -66,4 +66,14 @@ grep -Fq 'changed_files="$(git diff --name-only "$parent_sha" "$candidate_sha")"
 grep -Fq 'do NOT launch the' "$RESEARCH_WORKFLOW" ||
   fail 'Research workflow must document the unbaselined irrelevant-deploy path.'
 
+# Long SSH-backed research must emit periodic liveness evidence without
+# changing the research process result. This keeps operators informed while
+# preserving the exact remote exit status.
+grep -Fq 'RESEARCH_HEARTBEAT candidate=%s elapsed_seconds=%s' "$RESEARCH_WORKFLOW" ||
+  fail 'Six Pair Research must emit periodic progress heartbeats.'
+grep -Fq 'if wait "$research_pid"; then' "$RESEARCH_WORKFLOW" ||
+  fail 'Six Pair Research must capture the remote research exit status explicitly.'
+grep -Fq 'exit "$research_status"' "$RESEARCH_WORKFLOW" ||
+  fail 'Six Pair Research must return the original remote research status.'
+
 printf 'Staging CD bootstrap and research-coordination regression tests passed.\n'
