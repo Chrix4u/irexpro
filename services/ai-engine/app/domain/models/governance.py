@@ -66,5 +66,6 @@ def create_trained_model_governance(
             "timeframe": metadata.get("timeframe"),
             "validation_metrics": metadata.get("validation_metrics", {}),
             "confidence_semantics": metadata.get("confidence_semantics"),
+            "label_selection_policy": metadata.get("label_selection_policy"),
         },
     )
