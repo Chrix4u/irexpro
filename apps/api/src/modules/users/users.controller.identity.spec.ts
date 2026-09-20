@@ -2,7 +2,6 @@ import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
 import { OnboardingService } from './onboarding.service';
 import { UpdateMyProfileDto } from './dto/update-my-profile.dto';
-import { TradingExperienceLevel } from './entities/user-profile.entity';
 import { AuditService } from '../audit/audit.service';
 
 /**
@@ -52,7 +51,6 @@ describe('UsersController (Hotfix — UUID identity contract)', () => {
   it('updateMe passes UUID string to updateMyProfile', async () => {
     const dto: UpdateMyProfileDto = {
       firstName: 'John',
-      tradingExperienceLevel: TradingExperienceLevel.BEGINNER,
     };
     await controller.updateMe(USER_ID, dto);
     expect(usersService.updateMyProfile).toHaveBeenCalledWith(USER_ID, dto);
