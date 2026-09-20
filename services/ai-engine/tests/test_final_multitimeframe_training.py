@@ -46,8 +46,8 @@ def test_final_split_is_chronological_disjoint_and_purged():
 
     assert train_gap > 5
     assert test_gap > 5
-    assert set(train.index).isdisjoint(validation.index)
-    assert set(validation.index).isdisjoint(test.index)
+    assert set(train["decision_time"]).isdisjoint(validation["decision_time"])
+    assert set(validation["decision_time"]).isdisjoint(test["decision_time"])
 
 
 def test_final_split_rejects_too_few_periods():
