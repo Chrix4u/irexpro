@@ -179,6 +179,10 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          research_started_epoch="$(date +%s)"
+          printf 'RESEARCH_START candidate=%s started_epoch=%s\n' \
+            "$CANDIDATE_SHA" "$research_started_epoch"
+
           ssh \
             -i "$HOME/.ssh/irexpro_staging" \
             -p "$STAGING_SSH_PORT" \
@@ -186,7 +190,7 @@ jobs:
             -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
             "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
-            "bash -s -- $CANDIDATE_SHA" <<'REMOTE'
+            "bash -s -- $CANDIDATE_SHA" <<'REMOTE' &
           set -Eeuo pipefail
           umask 077
 
@@ -531,6 +535,35 @@ jobs:
           printf 'MODEL_PROMOTED_PAPER_UAT version=%s horizon=%sm approved_for_live=false\n' \
             "$model_version" "$selected_horizon"
           REMOTE
+
+          research_pid=$!
+          (
+            while kill -0 "$research_pid" 2>/dev/null; do
+              sleep 60
+              if kill -0 "$research_pid" 2>/dev/null; then
+                heartbeat_now="$(date +%s)"
+                heartbeat_elapsed=$((heartbeat_now - research_started_epoch))
+                printf 'RESEARCH_HEARTBEAT candidate=%s elapsed_seconds=%s\n' \
+                  "$CANDIDATE_SHA" "$heartbeat_elapsed"
+              fi
+            done
+          ) &
+          heartbeat_pid=$!
+
+          if wait "$research_pid"; then
+            research_status=0
+          else
+            research_status=$?
+          fi
+
+          kill "$heartbeat_pid" 2>/dev/null || true
+          wait "$heartbeat_pid" 2>/dev/null || true
+
+          research_finished_epoch="$(date +%s)"
+          research_elapsed=$((research_finished_epoch - research_started_epoch))
+          printf 'RESEARCH_PROCESS_EXIT candidate=%s status=%s elapsed_seconds=%s\n' \
+            "$CANDIDATE_SHA" "$research_status" "$research_elapsed"
+          exit "$research_status"
 
       - name: Remove ephemeral SSH material
         if: ${{ always() }}
