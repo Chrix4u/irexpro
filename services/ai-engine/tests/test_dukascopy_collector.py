@@ -10,7 +10,9 @@ import pandas as pd
 import pytest
 
 from app.domain.training.collect_dukascopy import (
+    _fetch_hour,
     _hour_url,
+    _raw_cache_path,
     aggregate_ticks_to_m1,
     collect_dukascopy_m1_corpus,
     decode_dukascopy_ticks,
@@ -120,8 +122,9 @@ def test_collection_writes_valid_real_friction_manifest(
         price_digits: int,
         timeout_seconds: float,
         max_retries: int,
+        cache_dir=None,
     ):
-        del timeout_seconds, max_retries
+        del timeout_seconds, max_retries, cache_dir
         base = 1.10 if instrument != "USDJPY" else 140.0
         rows = []
         for minute in range(60):
@@ -186,6 +189,7 @@ def test_collection_recovers_transient_hour_without_silent_gap(
         price_digits: int,
         timeout_seconds: float,
         max_retries: int,
+        cache_dir=None,
     ):
         del instrument, timeout_seconds, max_retries
         attempts[hour] = attempts.get(hour, 0) + 1
@@ -234,3 +238,43 @@ def test_collection_recovers_transient_hour_without_silent_gap(
     assert result["recovered_hours"] == 1
     assert attempts[datetime(2026, 1, 5, 10, tzinfo=UTC)] == 2
     assert len(pd.read_csv(output)) == 250
+
+
+
+def test_fetch_hour_reuses_verified_raw_cache_without_network(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    hour = datetime(2026, 1, 5, 10, tzinfo=UTC)
+    cache_root = tmp_path / "cache"
+    cache_path = _raw_cache_path(cache_root, "EURUSD", hour)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_bytes(
+        _bi5_payload(
+            [
+                (1_000, 110_005, 110_003, 1.25, 2.50),
+                (20_000, 110_009, 110_005, 1.50, 2.00),
+            ]
+        )
+    )
+
+    def forbid_network(*_args, **_kwargs):
+        raise AssertionError("network must not be used for a verified cache hit")
+
+    monkeypatch.setattr("app.domain.training.collect_dukascopy.httpx.Client", forbid_network)
+
+    returned_hour, rows, network_bytes, missing = _fetch_hour(
+        instrument="EURUSD",
+        hour=hour,
+        price_digits=5,
+        timeout_seconds=1.0,
+        max_retries=0,
+        cache_dir=cache_root,
+    )
+
+    assert returned_hour == hour
+    assert missing is False
+    assert network_bytes == 0
+    assert len(rows) == 1
+    assert rows[0]["tick_volume"] == 2.0
+    assert rows[0]["spread_points"] == 4.0

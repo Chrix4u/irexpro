@@ -104,6 +104,7 @@ def run_first_six_pair_study(
     internal_api_key: str = "",
     user_id: str | None = None,
     broker_connection_id: str | None = None,
+    dukascopy_cache_dir: str | Path | None = None,
     target_rows: int = 250_000,
     horizons: tuple[int, ...] = DEFAULT_HORIZONS,
     before: datetime | None = None,
@@ -149,6 +150,7 @@ def run_first_six_pair_study(
                 target_rows=target_rows,
                 output_path=raw_path,
                 now=before,
+                cache_dir=dukascopy_cache_dir,
             )
         else:
             collection = collect_historical_corpus(
@@ -240,6 +242,7 @@ def main() -> None:
     parser.add_argument("--api-base-url")
     parser.add_argument("--user-id")
     parser.add_argument("--broker-connection-id")
+    parser.add_argument("--dukascopy-cache-dir")
     parser.add_argument("--output-dir", default="research/first-six-pair-run")
     parser.add_argument("--target-rows", type=int, default=250_000)
     parser.add_argument(
@@ -271,6 +274,7 @@ def main() -> None:
         internal_api_key=internal_api_key,
         user_id=args.user_id,
         broker_connection_id=args.broker_connection_id,
+        dukascopy_cache_dir=args.dukascopy_cache_dir,
         target_rows=args.target_rows,
         horizons=horizons,
         before=before,
