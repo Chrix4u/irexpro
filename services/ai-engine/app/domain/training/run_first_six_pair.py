@@ -92,7 +92,11 @@ def _research_gate(report: dict[str, Any]) -> dict[str, Any]:
         "research_gate_passed": all(checks.values()),
         "approved_for_staging": False,
         "approved_for_live": False,
-        "note": "Passing this research gate requires human review before any staging promotion.",
+        "note": (
+            "Passing this research gate is necessary but not sufficient for paper/UAT "
+            "promotion; the final untouched-test gate must also pass. Live approval "
+            "remains prohibited."
+        ),
     }
 
 
@@ -220,7 +224,9 @@ def run_first_six_pair_study(
         "corpus_manifests": corpus_manifests,
         "horizon_reports": horizon_reports,
         "governance": {
-            "automatic_staging_promotion": False,
+            "paper_uat_promotion": (
+                "eligible_only_after_research_gate_and_untouched_test_gate"
+            ),
             "automatic_live_promotion": False,
         },
     }
