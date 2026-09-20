@@ -15,6 +15,9 @@ from app.domain.training.collect_historical import collect_historical_corpus
 from app.domain.training.multitimeframe_corpus import (
     build_multitimeframe_corpus_from_m1_csv,
 )
+from app.domain.models.multitimeframe_features import (
+    MULTITIMEFRAME_LABEL_SELECTION_POLICY,
+)
 from app.domain.training.train_multitimeframe import (
     INITIAL_FOREX_UNIVERSE,
     evaluate_multi_pair_corpora,
@@ -171,6 +174,11 @@ def run_first_six_pair_study(
             )
     if target_rows < 250:
         raise ValueError("target_rows must be at least 250")
+    if min_net_return_bps != 0:
+        raise ValueError(
+            "min_net_return_bps must be 0 because future-profitability row "
+            "selection is prohibited"
+        )
     if not horizons or any(horizon < 1 for horizon in horizons):
         raise ValueError("horizons must contain positive M1 bar counts")
 
@@ -256,6 +264,7 @@ def run_first_six_pair_study(
         "instruments": list(INITIAL_FOREX_UNIVERSE),
         "horizons_minutes": list(horizons),
         "target_m1_rows_per_instrument": target_rows,
+        "label_selection_policy": MULTITIMEFRAME_LABEL_SELECTION_POLICY,
         "qualification_window": {
             "research_fraction": RESEARCH_QUALIFICATION_FRACTION,
             "reserved_future_fraction": 1.0 - RESEARCH_QUALIFICATION_FRACTION,
@@ -271,6 +280,7 @@ def run_first_six_pair_study(
             "commission_bps_round_trip": commission_bps,
             "slippage_bps_round_trip": slippage_bps,
             "minimum_net_return_bps_for_label": min_net_return_bps,
+            "future_profitability_row_filtering": "prohibited",
         },
         "collection_manifests": collection_manifests,
         "corpus_manifests": corpus_manifests,
