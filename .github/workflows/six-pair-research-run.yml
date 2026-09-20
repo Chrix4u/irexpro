@@ -32,7 +32,7 @@ jobs:
       SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
 
     steps:
-      - name: Checkout exact main candidate
+      - name: Checkout exact deployed candidate
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ env.CANDIDATE_SHA }}
@@ -82,20 +82,8 @@ jobs:
           }
 
           readonly STAGING_ROOT='/home/lightworld/webapps/irexpro-staging'
-          readonly API_ENV="$STAGING_ROOT/apps/api/.env"
-          readonly AI_ENV="$STAGING_ROOT/services/ai-engine/.env"
           readonly OUTPUT_ROOT="/home/lightworld/research/irexpro-six-pair/$candidate_sha"
           readonly TARGET_ROWS=25000
-
-          read_dotenv_value() {
-            local file="$1"
-            local key="$2"
-            local line
-            [[ -f "$file" ]] || return 1
-            line="$(grep -E "^${key}=[^[:space:]]+$" "$file" | tail -n 1 || true)"
-            [[ -n "$line" ]] || return 1
-            printf '%s' "${line#*=}"
-          }
 
           cd "$STAGING_ROOT"
           test "$(git rev-parse --show-toplevel)" = "$STAGING_ROOT"
@@ -108,105 +96,6 @@ jobs:
             printf 'RESEARCH HOLD: less than 2 GiB free disk space on staging.\n' >&2
             exit 3
           fi
-
-          internal_api_key="$(read_dotenv_value "$AI_ENV" NESTJS_INTERNAL_API_KEY)" || {
-            printf 'RESEARCH HOLD: AI internal API key is missing.\n' >&2
-            exit 4
-          }
-          api_internal_key="$(read_dotenv_value "$API_ENV" NESTJS_INTERNAL_API_KEY)" || {
-            printf 'RESEARCH HOLD: API internal API key is missing.\n' >&2
-            exit 5
-          }
-          [[ "$internal_api_key" == "$api_internal_key" ]] || {
-            printf 'RESEARCH HOLD: API/AI internal API keys do not match.\n' >&2
-            exit 6
-          }
-          export NESTJS_INTERNAL_API_KEY="$internal_api_key"
-          unset api_internal_key internal_api_key
-
-          selection="$(
-            cd "$STAGING_ROOT/apps/api"
-            node <<'NODE'
-          const dotenv = require('dotenv');
-          const { Client } = require('pg');
-
-          dotenv.config({ path: '.env', quiet: true });
-
-          const client = new Client({
-            host: process.env.DB_HOST || 'localhost',
-            port: Number(process.env.DB_PORT || 5432),
-            database: process.env.DB_NAME || 'irexpro_dev',
-            user: process.env.DB_USER || 'irexpro',
-            password: process.env.DB_PASSWORD,
-            ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
-          });
-
-          (async () => {
-            await client.connect();
-            try {
-              const diagnostics = await client.query(
-                `SELECT broker_id::text AS broker_id,
-                        account_type::text AS account_type,
-                        status::text AS status,
-                        credential_status::text AS credential_status,
-                        COUNT(*)::int AS row_count
-                   FROM broker.broker_connections
-                  WHERE deleted_at IS NULL
-                  GROUP BY broker_id, account_type, status, credential_status
-                  ORDER BY broker_id, account_type, status, credential_status`,
-              );
-              for (const row of diagnostics.rows) {
-                process.stderr.write(
-                  `broker_source_state broker=${row.broker_id} account_type=${row.account_type} status=${row.status} credential_status=${row.credential_status} count=${row.row_count}\n`,
-                );
-              }
-
-              const result = await client.query(
-                `SELECT user_id::text AS user_id,
-                        id::text AS connection_id,
-                        account_type::text AS account_type
-                   FROM broker.broker_connections
-                  WHERE deleted_at IS NULL
-                    AND broker_id = 'metatrader5'
-                    AND account_type IN ('DEMO', 'LIVE')
-                    AND status = 'CONNECTED'
-                    AND credential_status IN ('CREATED', 'VERIFIED', 'ROTATED')
-                    AND encrypted_credentials IS NOT NULL
-                    AND credential_iv IS NOT NULL
-                    AND credential_tag IS NOT NULL
-                  ORDER BY updated_at DESC
-                  LIMIT 2`,
-              );
-
-              if (result.rows.length !== 1) {
-                process.stderr.write(
-                  `RESEARCH HOLD: expected exactly one eligible connected MetaTrader5 market-data account; found ${result.rows.length}.\n`,
-                );
-                process.exitCode = 12;
-                return;
-              }
-
-              process.stdout.write(
-                `${result.rows[0].user_id}|${result.rows[0].connection_id}|${result.rows[0].account_type}`,
-              );
-            } finally {
-              await client.end();
-            }
-          })().catch((error) => {
-            process.stderr.write(
-              `RESEARCH HOLD: broker selector failed (${error.name || 'Error'}).\n`,
-            );
-            process.exitCode = 13;
-          });
-          NODE
-          )"
-
-          IFS='|' read -r research_user_id research_connection_id research_account_type <<< "$selection"
-          [[ "$research_user_id" =~ ^[0-9a-fA-F-]{36}$ ]]
-          [[ "$research_connection_id" =~ ^[0-9a-fA-F-]{36}$ ]]
-          [[ "$research_account_type" == "DEMO" || "$research_account_type" == "LIVE" ]]
-          printf 'market_data_source_mode=%s\n' "$research_account_type"
-          unset selection
 
           ai_health="$(curl --fail --silent --show-error --max-time 10 http://127.0.0.1:8011/api/v1/health)"
           AI_HEALTH="$ai_health" node <<'NODE'
@@ -250,9 +139,7 @@ jobs:
           export PYTHONPATH="$PWD"
 
           "$python_bin" -m app.domain.training.run_first_six_pair \
-            --api-base-url http://127.0.0.1:3010/api/v1 \
-            --user-id "$research_user_id" \
-            --broker-connection-id "$research_connection_id" \
+            --source dukascopy \
             --output-dir "$OUTPUT_ROOT" \
             --target-rows "$TARGET_ROWS" \
             --horizons 1,5,10 \
@@ -262,8 +149,6 @@ jobs:
             --max-splits 5 \
             > "$OUTPUT_ROOT/run-result.json"
 
-          unset research_user_id research_connection_id research_account_type NESTJS_INTERNAL_API_KEY
-
           summary="$OUTPUT_ROOT/reports/six_pair_walkforward_summary.json"
           test -s "$summary"
 
@@ -271,8 +156,23 @@ jobs:
           const fs = require('fs');
           const report = JSON.parse(fs.readFileSync(process.env.SUMMARY_PATH, 'utf8'));
           console.log('SIX_PAIR_RESEARCH_COMPLETED');
+          console.log(`data_source=${report.data_source}`);
           console.log(`instruments=${report.instruments.join(',')}`);
           console.log(`target_rows_per_pair=${report.target_m1_rows_per_instrument}`);
+
+          for (const instrument of report.instruments) {
+            const manifest = report.collection_manifests[instrument];
+            console.log(
+              [
+                `corpus=${instrument}`,
+                `rows=${manifest.row_count}`,
+                `source=${manifest.source}`,
+                `spread=${manifest.spread_basis}`,
+                `sha256=${manifest.dataset_sha256}`,
+              ].join(' ')
+            );
+          }
+
           for (const horizon of ['1m', '5m', '10m']) {
             const block = report.horizon_reports[horizon];
             if (!block) continue;
@@ -284,6 +184,8 @@ jobs:
                 `horizon=${horizon}`,
                 `balanced_accuracy=${Number(c.balanced_accuracy).toFixed(6)}`,
                 `precision=${Number(c.precision).toFixed(6)}`,
+                `recall=${Number(c.recall).toFixed(6)}`,
+                `f1=${Number(c.f1).toFixed(6)}`,
                 `sharpe=${t.sharpe_ratio == null ? 'null' : Number(t.sharpe_ratio).toFixed(6)}`,
                 `profit_factor=${t.profit_factor == null ? 'null' : Number(t.profit_factor).toFixed(6)}`,
                 `max_drawdown=${Number(t.max_drawdown).toFixed(6)}`,
