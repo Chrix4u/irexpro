@@ -1,5 +1,5 @@
-import { Type } from 'class-transformer';
-import { IsISO8601, IsInt, IsOptional, IsString, IsUUID, Max, Min } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
+import { IsBoolean, IsISO8601, IsInt, IsOptional, IsString, IsUUID, Max, Min } from 'class-validator';
 
 export class InternalOhlcvQueryDto {
   @IsUUID()
@@ -23,4 +23,9 @@ export class InternalOhlcvQueryDto {
   @IsOptional()
   @IsISO8601()
   before?: string;
+
+  @IsOptional()
+  @Transform(({ value }) => value === true || value === 'true')
+  @IsBoolean()
+  advanceSimulation: boolean = false;
 }
