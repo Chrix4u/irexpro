@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 ContextSourceType = Literal[
     "CENTRAL_BANK",
@@ -16,13 +16,26 @@ ContextSourceType = Literal[
 class TrustedContextSource(BaseModel):
     """Governed source definition used before contextual evidence is accepted."""
 
-    source_id: str = Field(..., min_length=2, max_length=80, pattern=r"^[a-z0-9][a-z0-9_-]+$")
+    model_config = ConfigDict(frozen=True)
+
+    source_id: str = Field(
+        ...,
+        min_length=2,
+        max_length=80,
+        pattern=r"^[a-z0-9][a-z0-9_-]+$",
+    )
     display_name: str = Field(..., min_length=2, max_length=160)
     source_type: ContextSourceType
     currencies: set[str] = Field(..., min_length=1)
     credibility: float = Field(..., ge=0.0, le=1.0)
     enabled: bool = True
     requires_corroboration: bool = False
+    independence_group: str | None = Field(
+        default=None,
+        min_length=2,
+        max_length=80,
+        pattern=r"^[a-z0-9][a-z0-9_-]+$",
+    )
 
     @field_validator("display_name")
     @classmethod
@@ -38,6 +51,11 @@ class TrustedContextSource(BaseModel):
         if any(len(value) != 3 or not value.isalpha() for value in normalized):
             raise ValueError("currencies must contain three-letter alphabetic codes")
         return normalized
+
+    @property
+    def independence_key(self) -> str:
+        """Identity used when deciding whether corroborating sources are independent."""
+        return (self.independence_group or self.source_id).casefold()
 
 
 class TrustedContextSourceRegistry:
