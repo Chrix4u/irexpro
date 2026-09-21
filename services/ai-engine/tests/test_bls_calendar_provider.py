@@ -210,10 +210,11 @@ async def test_provider_fetches_only_fixed_official_bls_url():
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         provider = BlsOfficialCalendarProvider(client)
-        events = await provider.fetch(fetched_at=FETCHED_AT)
+        events = await provider.fetch()
 
     assert len(events) == 1
-    assert events[0].available_at == FETCHED_AT
+    assert events[0].source_id == "us_bls"
+    assert events[0].available_at.tzinfo is not None
 
 
 @pytest.mark.asyncio
@@ -257,7 +258,7 @@ async def test_provider_rejects_unexpected_content_type():
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         provider = BlsOfficialCalendarProvider(client)
         with pytest.raises(BlsCalendarProviderError, match="unexpected content type"):
-            await provider.fetch(fetched_at=FETCHED_AT)
+            await provider.fetch()
 
 
 @pytest.mark.asyncio
@@ -275,7 +276,7 @@ async def test_provider_rejects_oversized_calendar_before_parsing():
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         provider = BlsOfficialCalendarProvider(client)
         with pytest.raises(BlsCalendarProviderError, match="exceeds size limit"):
-            await provider.fetch(fetched_at=FETCHED_AT)
+            await provider.fetch()
 
 
 @pytest.mark.asyncio
@@ -293,7 +294,7 @@ async def test_provider_maps_http_failure_without_response_body():
             BlsCalendarProviderError,
             match="BLS calendar request returned HTTP 503",
         ) as exc_info:
-            await provider.fetch(fetched_at=FETCHED_AT)
+            await provider.fetch()
 
     assert "sensitive upstream" not in str(exc_info.value)
 
@@ -309,6 +310,6 @@ async def test_provider_maps_transport_failure_without_request_details():
             BlsCalendarProviderError,
             match="BLS calendar request failed",
         ) as exc_info:
-            await provider.fetch(fetched_at=FETCHED_AT)
+            await provider.fetch()
 
     assert "socket diagnostic" not in str(exc_info.value)
