@@ -212,6 +212,7 @@ describe('BrokerDemoValidationService', () => {
           useValue: {
             supportsEnvironment: jest.fn().mockReturnValue(true),
             isProductionLiveEligible: jest.fn().mockReturnValue(true),
+            getEntry: jest.fn().mockReturnValue(null),
           },
         },
         { provide: getRepositoryToken(BrokerConnection), useFactory: mockConnectionRepo },

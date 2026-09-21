@@ -88,6 +88,7 @@ describe('BrokerService — Sprint 50 authorization lifecycle', () => {
     supportsEnvironment: jest.Mock;
     isConnectable: jest.Mock;
     isProductionLiveEligible: jest.Mock;
+    getEntry: jest.Mock;
   };
   let encryption: { encrypt: jest.Mock; decrypt: jest.Mock };
   let audit: { log: jest.Mock };
@@ -123,6 +124,7 @@ describe('BrokerService — Sprint 50 authorization lifecycle', () => {
       // default true mirrors the real registry for that broker. Tests that
       // simulate an UNVERIFIED provider (e.g. oanda BETA) override this.
       isProductionLiveEligible: jest.fn().mockReturnValue(true),
+      getEntry: jest.fn().mockReturnValue(null),
     };
     encryption = {
       encrypt: jest.fn().mockReturnValue({ ciphertext: 'c1', iv: 'i1', tag: 't1', keyId: 'k1' }),
