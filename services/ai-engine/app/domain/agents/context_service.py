@@ -154,4 +154,3 @@ class AgentContextService:
             self._last_failure_at is not None
             and now - self._last_failure_at <= self._failure_retry
         )
-
