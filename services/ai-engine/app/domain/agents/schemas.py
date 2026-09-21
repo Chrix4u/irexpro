@@ -16,6 +16,39 @@ AgentEvidenceSource = Literal[
 AgentStance = Literal["BUY", "SELL", "NEUTRAL", "BLOCK"]
 AgentCouncilStatus = Literal["ALIGNED", "CONFLICT", "INSUFFICIENT", "BLOCKED"]
 
+_SENSITIVE_METADATA_KEYS = frozenset(
+    {
+        "access_token",
+        "api_key",
+        "apikey",
+        "authorization",
+        "broker_password",
+        "broker_token",
+        "client_secret",
+        "credential",
+        "credentials",
+        "password",
+        "passwd",
+        "private_key",
+        "refresh_token",
+        "secret",
+        "token",
+    }
+)
+
+
+def _contains_sensitive_metadata_key(value: Any) -> bool:
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            normalized = str(key).strip().lower().replace("-", "_")
+            if normalized in _SENSITIVE_METADATA_KEYS:
+                return True
+            if _contains_sensitive_metadata_key(nested):
+                return True
+    elif isinstance(value, (list, tuple, set)):
+        return any(_contains_sensitive_metadata_key(item) for item in value)
+    return False
+
 
 class AgentEvidence(BaseModel):
     """A concise, auditable observation produced by one specialist agent."""
@@ -37,6 +70,15 @@ class AgentEvidence(BaseModel):
     def timestamps_must_be_timezone_aware(cls, value: datetime) -> datetime:
         if value.tzinfo is None:
             raise ValueError("agent evidence timestamps must be timezone-aware")
+        return value
+
+    @field_validator("metadata")
+    @classmethod
+    def metadata_must_not_contain_credentials(
+        cls, value: dict[str, Any]
+    ) -> dict[str, Any]:
+        if _contains_sensitive_metadata_key(value):
+            raise ValueError("agent evidence metadata cannot contain credential-like keys")
         return value
 
     @model_validator(mode="after")
