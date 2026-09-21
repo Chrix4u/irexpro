@@ -62,6 +62,17 @@ The available-at contract is mandatory to prevent future-information leakage
 in historical evaluation, matching the causality discipline already used by
 the MTF corpus.
 
+Before weighting, the coordinator also applies a fail-closed acceptance layer:
+
+- wrong-instrument, stale and future-dated evidence is rejected;
+- `MACRO_NEWS` evidence must declare at least one verified source;
+- duplicate `(source, source_id)` evidence cannot be counted twice;
+- invalid coordinator thresholds are rejected instead of silently changing
+  the classification semantics.
+
+Phase B adds the stronger external source-trust registry, content/event
+deduplication and provenance validation around these foundation guarantees.
+
 ## Safety invariants
 
 - The council has execution_authority=false.
@@ -71,6 +82,7 @@ the MTF corpus.
 - No online parameter/model mutation without offline research, untouched
   evaluation, governance metadata and promotion gates.
 - Stale, future-dated, wrong-instrument or unverifiable context is rejected.
+- Duplicate evidence cannot amplify council support or opposition.
 - Missing context never fabricates confidence; it yields INSUFFICIENT.
 - A BLOCKED context result does not itself close/open trades; Risk and
   Execution remain authoritative.
@@ -81,13 +93,13 @@ the MTF corpus.
 Phase A — foundation
 - typed evidence/assessment contracts;
 - deterministic coordinator;
-- causality/freshness/credibility tests;
+- causality/freshness/credibility and duplicate-suppression tests;
 - architecture documentation.
 
 Phase B — trusted forex context
 - economic calendar ingestion;
 - central-bank / macro release ingestion;
-- source trust registry and deduplication;
+- source trust registry and event/content deduplication;
 - event proximity windows;
 - paper-only context snapshots in Decision Explorer.
 
