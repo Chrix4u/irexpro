@@ -11,8 +11,10 @@ from app.domain.training.train_multitimeframe import (
     _non_overlapping_portfolio_periods,
     _split_internal_early_stopping_tail,
     _trade_metrics,
+    evaluate_multi_pair_corpora,
     prepare_instrument_corpus,
     run_pooled_walk_forward,
+    run_pooled_walk_forward_with_predictions,
 )
 
 
@@ -219,6 +221,127 @@ def test_pooled_walk_forward_reports_pair_breakdown(monkeypatch):
         assert fold["fit_rows"] > 0
         assert fold["internal_early_stopping_rows"] > 0
 
+
+
+def test_walk_forward_can_return_exact_outer_fold_predictions(monkeypatch):
+    eurusd = prepare_instrument_corpus(
+        build_multitimeframe_feature_corpus(_m1_fixture()),
+        instrument="EURUSD",
+        horizon_bars=5,
+    )
+
+    class FakeModel:
+        best_iteration = 2
+
+        def fit(self, *_args, **_kwargs):
+            return self
+
+        def predict_proba(self, features):
+            raw = np.asarray(features["m1_simple_return"], dtype=float)
+            probability = np.where(raw >= 0, 0.68, 0.32)
+            return np.column_stack([1.0 - probability, probability])
+
+    monkeypatch.setattr(
+        "app.domain.training.train_multitimeframe._build_model",
+        lambda: FakeModel(),
+    )
+
+    report, predictions = run_pooled_walk_forward_with_predictions(
+        eurusd,
+        horizon_bars=5,
+        confidence_threshold=0.60,
+        min_train_periods=180,
+        validation_periods=60,
+        purge_periods=5,
+        embargo_periods=5,
+        max_splits=2,
+    )
+
+    assert report["fold_count"] == 2
+    assert len(predictions) == report["evaluated_rows"]
+    assert {
+        "decision_time",
+        "instrument",
+        "target",
+        "long_net_return",
+        "short_net_return",
+        "m1_spread_bps",
+        "positive_probability",
+        "predicted_long",
+        "confidence",
+        "active_trade",
+        "selected_net_return",
+        "fold",
+    }.issubset(predictions.columns)
+    assert predictions["fold"].nunique() == 2
+    assert predictions["decision_time"].is_monotonic_increasing
+    assert predictions["confidence"].between(0.5, 1.0).all()
+
+
+def test_multi_pair_evaluation_can_export_outer_fold_predictions(
+    monkeypatch,
+    tmp_path,
+):
+    pooled = pd.DataFrame(
+        {
+            "decision_time": pd.to_datetime(
+                ["2026-01-01T00:00:00Z", "2026-01-01T00:01:00Z"]
+            ),
+            "instrument": ["EURUSD", "EURUSD"],
+            "target": [1, 0],
+        }
+    )
+    exported = pd.DataFrame(
+        {
+            "decision_time": pd.to_datetime(
+                ["2026-01-01T00:10:00Z", "2026-01-01T00:11:00Z"]
+            ),
+            "instrument": ["EURUSD", "EURUSD"],
+            "target": [1, 0],
+            "long_net_return": [0.01, -0.01],
+            "short_net_return": [-0.01, 0.01],
+            "m1_spread_bps": [1.0, 1.0],
+            "positive_probability": [0.8, 0.2],
+            "predicted_long": [True, False],
+            "confidence": [0.8, 0.8],
+            "active_trade": [True, True],
+            "selected_net_return": [0.01, 0.01],
+            "fold": [1, 1],
+        }
+    )
+    evaluation = {
+        "folds": [],
+        "overall": {},
+        "by_instrument": {},
+        "fold_count": 1,
+        "evaluated_rows": 2,
+        "walk_forward": {"confidence_threshold": 0.60},
+    }
+
+    monkeypatch.setattr(
+        "app.domain.training.train_multitimeframe.load_and_prepare_corpora",
+        lambda *_args, **_kwargs: (pooled, {"EURUSD": "dataset-hash"}),
+    )
+    monkeypatch.setattr(
+        "app.domain.training.train_multitimeframe.run_pooled_walk_forward_with_predictions",
+        lambda *_args, **_kwargs: (evaluation, exported),
+    )
+
+    report_path = tmp_path / "report.json"
+    predictions_path = tmp_path / "predictions.csv"
+    report = evaluate_multi_pair_corpora(
+        {"EURUSD": tmp_path / "unused.csv"},
+        horizon_bars=5,
+        report_path=report_path,
+        predictions_path=predictions_path,
+    )
+
+    assert report["validation_predictions_path"] == str(predictions_path)
+    assert report_path.exists()
+    assert predictions_path.exists()
+    roundtrip = pd.read_csv(predictions_path)
+    assert len(roundtrip) == 2
+    assert list(roundtrip["fold"]) == [1, 1]
 
 
 def test_prepare_instrument_corpus_rejects_labels_that_cross_missing_minutes():
