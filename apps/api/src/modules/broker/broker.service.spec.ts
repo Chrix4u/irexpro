@@ -1,7 +1,12 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { Logger } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { BrokerService } from './broker.service';
 import { TradingAuthorityService } from '../execution-authority/trading-authority.service';
@@ -12,6 +17,7 @@ import { BrokerAdapterRegistry } from './adapters/broker-adapter.registry';
 import { BrokerProviderRegistryService } from './registry/broker-provider-registry.service';
 import { CredentialEncryptionService } from './services/credential-encryption.service';
 import { AuditService } from '../audit/audit.service';
+import { DomainEventType } from '../events/enums/domain-event-type.enum';
 import { BrokerOAuthTokenLifecycleService } from './services/broker-oauth-token-lifecycle.service';
 import { BrokerAccountSnapshotService } from './services/broker-account-snapshot.service';
 import {
@@ -21,6 +27,11 @@ import {
 import { BrokerConnectionServerDerived } from './broker.service';
 import { BrokerLogicalAccountConflictError } from './interfaces/broker-connection.errors';
 import { BrokerEnvironmentMismatchError } from './interfaces/broker-environment-mismatch.error';
+// Production-LIVE completion round (P13 metrics): the real in-process
+// registry registered in the testing module so the service's lazy ModuleRef
+// lookup resolves it (mirrors how MetricsModule provides it app-wide).
+import { MetricsService } from '../metrics/metrics.service';
+import { METRIC_NAMES } from '../metrics/metric-names';
 import { AuditAction } from '../../common/enums/audit-action.enum';
 import { BrokerConnectionStatus, BrokerMode } from './interfaces/broker-adapter.interface';
 import { BrokerAuthorizationStatus } from './authorization/broker-authorization-status';
@@ -152,6 +163,7 @@ const connectedConnection = (overrides: Partial<Record<string, unknown>> = {}) =
 describe('BrokerService', () => {
   let module: TestingModule;
   let service: BrokerService;
+  let metrics: MetricsService;
   let connectionRepo: ReturnType<typeof mockConnectionRepo>;
   let accountRepo: ReturnType<typeof mockAccountRepo>;
   let registry: ReturnType<typeof mockRegistry>;
@@ -211,10 +223,15 @@ describe('BrokerService', () => {
             projectToLegacyAccount: jest.fn().mockResolvedValue(undefined),
           },
         },
+        // P13 metrics: registered so the service's lazy ModuleRef seam resolves
+        // a REAL registry (exactly what MetricsModule does app-wide).
+        { provide: MetricsService, useValue: new MetricsService() },
       ],
     }).compile();
 
     service = module.get<BrokerService>(BrokerService);
+    metrics = module.get<MetricsService>(MetricsService);
+    metrics.reset();
     connectionRepo = module.get(getRepositoryToken(BrokerConnection));
     accountRepo = module.get(getRepositoryToken(BrokerAccount));
     registry = module.get(BrokerAdapterRegistry);
@@ -665,14 +682,14 @@ describe('BrokerService', () => {
       expect(refreshedCredentials.apiKey).toBeNull();
     });
 
-    // ─── Sprint 56 / Task 48-D — the connect-time demoValidated auto-write ────
-    // This is the WEAK connect-implies-validated proxy: connectBroker
-    // dual-writes demoValidated: true when a DEMO connection reaches
-    // CONNECTED. BrokerDemoValidationService (the evidence-based
-    // re-validation service) builds ON TOP of it — PASS confirms the proxy,
-    // FAIL revokes it — so its behavior is pinned here.
+    // ─── DEMO validation authority — the handshake NEVER validates ───────────
+    // connectBroker proves connectivity/credential validity ONLY: a DEMO
+    // connect settles the authorization at CONNECTED (the pre-validation
+    // state) and NEVER writes demoValidated. The BrokerDemoValidationService
+    // checklist is the sole authority for demoValidated and the
+    // CONNECTED → AUTHORIZED advance — pinned here.
 
-    it('dual-writes demoValidated: true on a successful DEMO connect (connect-implies-validated proxy)', async () => {
+    it('settles a successful DEMO connect at CONNECTED and does NOT write demoValidated (handshake ≠ validation)', async () => {
       const mockAdapter = {
         setMode: jest.fn(),
         connect: jest.fn().mockResolvedValue({
@@ -713,14 +730,16 @@ describe('BrokerService', () => {
         .map((call) => call[1])
         .find((patch) => patch.status === BrokerConnectionStatus.CONNECTED);
       expect(connectedPatch).toBeDefined();
-      // The weak proxy write rides inside the CONNECTED transition (DEMO only).
+      // DEMO validation authority: the handshake authorizes NOTHING beyond
+      // CONNECTED, and demoValidated never rides inside a connect patch.
       expect(connectedPatch).toMatchObject({
-        demoValidated: true,
+        authorizationStatus: BrokerAuthorizationStatus.CONNECTED,
         credentialStatus: 'VERIFIED',
       });
+      expect('demoValidated' in connectedPatch).toBe(false);
     });
 
-    it('does NOT write demoValidated for LIVE connections (the proxy is DEMO-only)', async () => {
+    it('never authorizes beyond CONNECTED for LIVE connections either (explicit enable-live-trading only)', async () => {
       const mockAdapter = {
         setMode: jest.fn(),
         connect: jest.fn().mockResolvedValue({
@@ -760,8 +779,12 @@ describe('BrokerService', () => {
         .map((call) => call[1])
         .find((patch) => patch.status === BrokerConnectionStatus.CONNECTED);
       expect(connectedPatch).toBeDefined();
-      // LIVE connects never touch demoValidated — evidence-based validation
-      // is a DEMO-only concept (enableLiveTrading checks the DEMO flag).
+      // LIVE connects settle at CONNECTED too — ACTIVE comes only from the
+      // explicit enable-live-trading path. demoValidated is a DEMO-only
+      // concept (enableLiveTrading checks the DEMO flag).
+      expect(connectedPatch).toMatchObject({
+        authorizationStatus: BrokerAuthorizationStatus.CONNECTED,
+      });
       expect('demoValidated' in connectedPatch).toBe(false);
     });
 
@@ -769,7 +792,7 @@ describe('BrokerService', () => {
 
     it('P0: a provider-reported environment that CONTRADICTS the declared type fails CLOSED (ERROR, no authorization advance, CRITICAL audit)', async () => {
       // A LIVE MetaApi account declared as DEMO — the exact real-money
-      // mislabeling that previously sailed to AUTHORIZED + demoValidated.
+      // mislabeling that would otherwise execute under DEMO semantics.
       const mockAdapter = {
         setMode: jest.fn(),
         connect: jest.fn().mockResolvedValue({
@@ -936,6 +959,151 @@ describe('BrokerService', () => {
     });
   });
 
+  // ─── applyDemoValidationOutcome — the DEMO validation authority write ─────
+
+  describe('applyDemoValidationOutcome()', () => {
+    /** A DEMO connection in the given authorization state. */
+    const demoConnection = (authorizationStatus: BrokerAuthorizationStatus) => ({
+      id: 'conn-1',
+      userId: 'user-1',
+      brokerId: 'metatrader5',
+      accountType: BrokerMode.DEMO,
+      status: BrokerConnectionStatus.CONNECTED,
+      authorizationStatus,
+      demoValidated: false,
+      encryptedCredentials: 'ciphertext',
+      credentialIv: 'iv',
+      credentialTag: 'tag',
+      encryptionKeyId: 'env-key-v1',
+      credentialStatus: 'VERIFIED',
+      consecutiveFailureCount: 0,
+    });
+
+    it('PASS from CONNECTED advances to AUTHORIZED atomically with demoValidated=true (guarded)', async () => {
+      connectionRepo.findOne.mockResolvedValueOnce(
+        demoConnection(BrokerAuthorizationStatus.CONNECTED),
+      );
+
+      const outcome = await service.applyDemoValidationOutcome('conn-1', 'user-1', true);
+
+      expect(outcome).toEqual({
+        previousStatus: BrokerAuthorizationStatus.CONNECTED,
+        resultingStatus: BrokerAuthorizationStatus.AUTHORIZED,
+        demoValidated: true,
+      });
+      expect(connectionRepo.update).toHaveBeenCalledWith(
+        { id: 'conn-1', authorizationStatus: BrokerAuthorizationStatus.CONNECTED },
+        {
+          demoValidated: true,
+          authorizationStatus: BrokerAuthorizationStatus.AUTHORIZED,
+          authorizedAt: expect.any(Date),
+          authorizationRevokedAt: null,
+        },
+      );
+      // The authorization change is published for realtime clients.
+      const eventBus = module.get(DomainEventBus);
+      expect(eventBus.publish).toHaveBeenCalledWith(
+        DomainEventType.BROKER_AUTHORIZATION_CHANGED,
+        'user-1',
+        expect.objectContaining({
+          connectionId: 'conn-1',
+          previousStatus: BrokerAuthorizationStatus.CONNECTED,
+          status: BrokerAuthorizationStatus.AUTHORIZED,
+        }),
+      );
+    });
+
+    it('FAIL from AUTHORIZED revokes to REVOKED atomically with demoValidated=false (guarded)', async () => {
+      connectionRepo.findOne.mockResolvedValueOnce(
+        demoConnection(BrokerAuthorizationStatus.AUTHORIZED),
+      );
+
+      const outcome = await service.applyDemoValidationOutcome('conn-1', 'user-1', false);
+
+      expect(outcome).toEqual({
+        previousStatus: BrokerAuthorizationStatus.AUTHORIZED,
+        resultingStatus: BrokerAuthorizationStatus.REVOKED,
+        demoValidated: false,
+      });
+      expect(connectionRepo.update).toHaveBeenCalledWith(
+        { id: 'conn-1', authorizationStatus: BrokerAuthorizationStatus.AUTHORIZED },
+        {
+          demoValidated: false,
+          authorizationStatus: BrokerAuthorizationStatus.REVOKED,
+          authorizationRevokedAt: expect.any(Date),
+        },
+      );
+      const eventBus = module.get(DomainEventBus);
+      expect(eventBus.publish).toHaveBeenCalledWith(
+        DomainEventType.BROKER_AUTHORIZATION_CHANGED,
+        'user-1',
+        expect.objectContaining({
+          connectionId: 'conn-1',
+          previousStatus: BrokerAuthorizationStatus.AUTHORIZED,
+          status: BrokerAuthorizationStatus.REVOKED,
+        }),
+      );
+    });
+
+    it('FAIL from CONNECTED is a boolean-only write — nothing to revoke, no event', async () => {
+      connectionRepo.findOne.mockResolvedValueOnce(
+        demoConnection(BrokerAuthorizationStatus.CONNECTED),
+      );
+
+      const outcome = await service.applyDemoValidationOutcome('conn-1', 'user-1', false);
+
+      expect(outcome.resultingStatus).toBe(BrokerAuthorizationStatus.CONNECTED);
+      expect(connectionRepo.update).toHaveBeenCalledWith('conn-1', { demoValidated: false });
+      const eventBus = module.get(DomainEventBus);
+      expect(eventBus.publish).not.toHaveBeenCalled();
+    });
+
+    it('PASS from a non-advanceable state (SUSPENDED) keeps the authoritative state — boolean-only', async () => {
+      connectionRepo.findOne.mockResolvedValueOnce(
+        demoConnection(BrokerAuthorizationStatus.SUSPENDED),
+      );
+
+      const outcome = await service.applyDemoValidationOutcome('conn-1', 'user-1', true);
+
+      // The evidence boolean lands; no authorization is granted from a state
+      // the machine does not allow.
+      expect(outcome).toEqual({
+        previousStatus: BrokerAuthorizationStatus.SUSPENDED,
+        resultingStatus: BrokerAuthorizationStatus.SUSPENDED,
+        demoValidated: true,
+      });
+      expect(connectionRepo.update).toHaveBeenCalledWith('conn-1', { demoValidated: true });
+    });
+
+    it('surfaces a concurrent state change as ConflictException (guarded write lost the race)', async () => {
+      // The read observes CONNECTED, but the persisted state moved before the
+      // guarded UPDATE — affected: 0 → Conflict, never a silent overwrite.
+      connectionRepo.findOne.mockResolvedValueOnce(
+        demoConnection(BrokerAuthorizationStatus.CONNECTED),
+      );
+      connectionRepo.update.mockResolvedValueOnce({ affected: 0 });
+      connectionRepo.findOne.mockResolvedValueOnce(
+        demoConnection(BrokerAuthorizationStatus.SUSPENDED),
+      );
+
+      await expect(service.applyDemoValidationOutcome('conn-1', 'user-1', true)).rejects.toThrow(
+        ConflictException,
+      );
+    });
+
+    it('refuses a LIVE connection with BadRequest (fail-closed backstop)', async () => {
+      connectionRepo.findOne.mockResolvedValueOnce({
+        ...demoConnection(BrokerAuthorizationStatus.CONNECTED),
+        accountType: BrokerMode.LIVE,
+      });
+
+      await expect(service.applyDemoValidationOutcome('conn-1', 'user-1', true)).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(connectionRepo.update).not.toHaveBeenCalled();
+    });
+  });
+
   // ─── healthCheck ─────────────────────────────────────────────────────────
 
   describe('healthCheck()', () => {
@@ -1095,6 +1263,27 @@ describe('BrokerService', () => {
       expect(connectionRepo.update).toHaveBeenCalled();
     });
 
+    it('P13: a health-check environment mismatch counts broker_environment_mismatches{source=health-check}', async () => {
+      jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
+      const adapter = {
+        setMode: jest.fn(),
+        connect: jest.fn().mockResolvedValue({ success: true, accountType: BrokerMode.LIVE }),
+        getAccountBalance: jest.fn(),
+      };
+      registry.getAdapter.mockReturnValue(adapter);
+      connectionRepo.findOne.mockResolvedValue(connectedConnection({ consecutiveFailureCount: 0 }));
+      connectionRepo.update.mockResolvedValue({ affected: 1 });
+
+      await expect(service.healthCheck('conn-1')).resolves.toBe(false);
+
+      const series = metrics
+        .snapshot()
+        .counters.find((s) => s.name === METRIC_NAMES.BROKER_ENVIRONMENT_MISMATCHES);
+      expect(series?.value).toBe(1);
+      expect(series?.labels).toEqual({ brokerId: 'metatrader5', source: 'health-check' });
+      jest.restoreAllMocks();
+    });
+
     it('suspended connection is rejected by hasActiveConnection()', async () => {
       // A SUSPENDED connection should not be returned as "active"
       connectionRepo.findOne.mockResolvedValue(null); // no CONNECTED connection
@@ -1245,6 +1434,34 @@ describe('BrokerService', () => {
         BrokerEnvironmentMismatchError,
       );
       expect(snapshotService.acceptSnapshot).not.toHaveBeenCalled();
+    });
+
+    it('P13: an observation-path mismatch counts broker_environment_mismatches with the detecting source label', async () => {
+      jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
+      const adapter = {
+        setMode: jest.fn(),
+        connect: jest.fn().mockResolvedValue({ success: true, accountType: BrokerMode.LIVE }),
+        getAccountBalance: jest.fn(),
+      };
+      registry.getAdapter.mockReturnValue(adapter);
+      connectionRepo.findOne.mockResolvedValue(connectedConnection());
+      connectionRepo.update.mockResolvedValue({ affected: 1 });
+
+      await expect(service.observeAccountSnapshotNow('user-1', 'conn-1')).rejects.toThrow(
+        BrokerEnvironmentMismatchError,
+      );
+
+      const series = metrics
+        .snapshot()
+        .counters.find((s) => s.name === METRIC_NAMES.BROKER_ENVIRONMENT_MISMATCHES);
+      expect(series?.value).toBe(1);
+      expect(series?.labels).toEqual({
+        brokerId: 'metatrader5',
+        source: 'on-demand-risk-evaluation',
+      });
+      // Redaction discipline: labels never carry the provider account id.
+      expect(Object.values(series?.labels ?? {})).not.toContain('12345');
+      jest.restoreAllMocks();
     });
 
     it('P0-1: a MATCHING provider environment never trips the fence (no false positive — the observation is recorded)', async () => {

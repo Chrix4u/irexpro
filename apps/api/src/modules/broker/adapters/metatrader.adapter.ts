@@ -72,9 +72,30 @@ export class MetaTraderAdapter implements IBrokerAdapter {
   readonly brokerName = 'MetaTrader 5 (via MetaAPI)';
   readonly supportsDemo = true;
 
+  /**
+   * Phase 10 canary operations: adapter implementation version for the admin
+   * live-ops overview. This adapter predates the AdapterMetadata surface and
+   * has no recorded version history, so this is a plain generation constant —
+   * NOT a semantic version. It advances with adapter contract changes only.
+   */
+  readonly adapterVersion = '1';
+
   private mode: BrokerMode = BrokerMode.DEMO;
   /** MetaAPI account UUID for the currently active user connection */
   private currentAccountId: string | null = null;
+
+  /**
+   * Terminal platform of the currently connected MetaAPI account
+   * ('mt4' | 'mt5'), observed from getAccountInformation().platform at
+   * connect time (Phase 4 — platform-honest capability declaration; the
+   * MetaApi SDK's MetatraderAccountInformation carries `platform`, documented
+   * as "Platform id (mt4 or mt5)"). null before connect()/after disconnect —
+   * the capability declaration then keeps the MT5 matrix (the adapter's
+   * registered identity is 'metatrader5'; the per-connection adapter instance
+   * the registry factory hands out observes the platform once its connection
+   * is established).
+   */
+  private currentPlatform: string | null = null;
 
   /**
    * Connection-scoped per-symbol specification cache (key
@@ -103,6 +124,15 @@ export class MetaTraderAdapter implements IBrokerAdapter {
       this.currentAccountId = credentials.accountId;
 
       const info = await conn.getAccountInformation();
+      // Phase 4 — observe the terminal platform (SDK:
+      // MetatraderAccountInformation.platform, "mt4" | "mt5") so the
+      // capability declaration can be platform-honest (MT4 terminals have
+      // no native stop-limit order type). A silent/absent platform is
+      // honestly "unknown" (null) — never guessed.
+      this.currentPlatform =
+        typeof info.platform === 'string' && info.platform.trim() !== ''
+          ? info.platform.trim().toLowerCase()
+          : null;
 
       return {
         success: true,
@@ -115,6 +145,7 @@ export class MetaTraderAdapter implements IBrokerAdapter {
       };
     } catch (err) {
       this.currentAccountId = null;
+      this.currentPlatform = null;
       throw this.mapError(err);
     }
   }
@@ -123,6 +154,7 @@ export class MetaTraderAdapter implements IBrokerAdapter {
     if (this.currentAccountId) {
       await this.metaApiClient.removeConnection(this.currentAccountId);
       this.currentAccountId = null;
+      this.currentPlatform = null;
     }
   }
 
@@ -158,10 +190,20 @@ export class MetaTraderAdapter implements IBrokerAdapter {
         accountId: String(info.login ?? this.currentAccountId),
         currency: info.currency,
         leverage: info.leverage ?? 0,
-        balance: this.toDecimalString(info.balance),
-        equity: this.toDecimalString(info.equity),
-        margin: this.toDecimalString(info.margin),
-        freeMargin: this.toDecimalString(info.freeMargin),
+        // Phase 4 money-field honesty: balance/equity/margin/freeMargin are
+        // REQUIRED money — a null/undefined/non-finite SDK value must NEVER
+        // be fabricated as '0' (a missing balance is not a zero balance).
+        // These fields are non-nullable strings on BrokerAccountInfo, so the
+        // adapter fails closed with a typed error (the OANDA sibling's
+        // requiredDecimal discipline); the certification harness
+        // 'account-state' stage then fails the run fail-closed — correct.
+        balance: this.requiredAccountMoney(info.balance, 'balance'),
+        equity: this.requiredAccountMoney(info.equity, 'equity'),
+        margin: this.requiredAccountMoney(info.margin, 'margin'),
+        freeMargin: this.requiredAccountMoney(info.freeMargin, 'freeMargin'),
+        // marginLevel stays optional-with-zero (repo convention, mirrors
+        // OANDA's optionalDecimal): MT4 accounts may legitimately not report
+        // a margin level; a zero is the documented "not reported" value.
         marginLevel: this.toDecimalString(info.marginLevel ?? 0),
       };
     } catch (err) {
@@ -174,8 +216,8 @@ export class MetaTraderAdapter implements IBrokerAdapter {
     try {
       const info = await conn.getAccountInformation();
       return {
-        balance: this.toDecimalString(info.balance),
-        equity: this.toDecimalString(info.equity),
+        balance: this.requiredAccountMoney(info.balance, 'balance'),
+        equity: this.requiredAccountMoney(info.equity, 'equity'),
         currency: info.currency,
         timestamp: new Date(),
       };
@@ -493,15 +535,31 @@ export class MetaTraderAdapter implements IBrokerAdapter {
   // ─── Order capability contract (Round 6 §7) ──────────────────────────────
 
   /**
-   * MetaTrader 5 capability matrix (the DECLARED truth — enforced
+   * MetaTrader capability matrix (the DECLARED truth — enforced
    * pre-commitment by the orchestrator + verified by the contract suite):
    * all four normalized kinds; LIMIT/STOP_LIMIT need limitPrice,
    * STOP/STOP_LIMIT need stopPrice; MARKET orders attach SL/TP at placement.
+   *
+   * Phase 4 — PLATFORM HONESTY: MT4 terminals have no native stop-limit
+   * order type (a STOP_LIMIT request dispatched to MT4 is rejected at the
+   * terminal — fail-closed, but historically this declaration advertised it
+   * unconditionally). The connected account's platform is observable through
+   * the MetaApi RPC surface (getAccountInformation().platform, "mt4"|"mt5",
+   * captured at connect), so the declaration DROPS STOP_LIMIT for a connected
+   * MT4 account. Unknown/unconnected platform keeps the MT5 matrix — the
+   * adapter's registered identity is 'metatrader5', and the per-connection
+   * adapter instance (registry isolation factory) observes the platform when
+   * its connection is established; the requirements map keeps all four kinds
+   * so the declaration stays structurally complete.
    */
   getOrderCapabilities(): OrderCapabilityDeclaration {
+    const supportedOrderKinds: OrderCapabilityDeclaration['supportedOrderKinds'] =
+      this.isConnectedToMt4()
+        ? ['MARKET', 'LIMIT', 'STOP']
+        : ['MARKET', 'LIMIT', 'STOP', 'STOP_LIMIT'];
     return {
       brokerId: this.brokerId,
-      supportedOrderKinds: ['MARKET', 'LIMIT', 'STOP', 'STOP_LIMIT'],
+      supportedOrderKinds,
       requirements: {
         MARKET: { limitPriceRequired: false, stopPriceRequired: false },
         LIMIT: { limitPriceRequired: true, stopPriceRequired: false },
@@ -595,6 +653,16 @@ export class MetaTraderAdapter implements IBrokerAdapter {
           );
         }
       } else if (kind === 'STOP_LIMIT') {
+        // Phase 4 — platform honesty (defense in depth beyond the capability
+        // declaration): a connected MT4 terminal cannot honor a stop-limit
+        // order; fail fast BEFORE any SDK call instead of letting the
+        // terminal reject it after dispatch. Never silently downgraded.
+        if (this.isConnectedToMt4()) {
+          throw new BrokerAdapterError(
+            BrokerErrorCode.INVALID_ORDER_TYPE,
+            'MT4 terminals do not support STOP_LIMIT orders (fail-closed — never silently downgraded)',
+          );
+        }
         if (limitPrice == null || stopPrice == null) {
           throw new BrokerAdapterError(
             BrokerErrorCode.INVALID_PRICE,
@@ -670,6 +738,27 @@ export class MetaTraderAdapter implements IBrokerAdapter {
     return parsed;
   }
 
+  /**
+   * Phase 4 — WORKING-PENDING-ORDER MODIFY. The target id is resolved by
+   * LOOKUP, never guessed:
+   * - present in the working order set (conn.getOrders() — the same working
+   *   set listOrders()/reconciliation read) → the SDK's pending-order
+   *   modification surface, verified against the metaapi.cloud-sdk typings:
+   *   MetaApiConnectionInstance.modifyOrder(orderId, openPrice, stopLoss,
+   *   takeProfit, options?) — openPrice is a REQUIRED positional argument on
+   *   that SDK method, so the working order's CURRENT openPrice (the
+   *   provider's own value from the lookup row) is restated; a stop-limit
+   *   order's limit price is restated through options.stopLimitPrice (SDK
+   *   ModifyOrderOptions) so ORDER_MODIFY never drops a parameter the order
+   *   already carries. MetaTrader ORDER_MODIFY KEEPS the order ticket
+   *   (contrast: OANDA's replace mints a new order id) — externalOrderId is
+   *   echoed unchanged.
+   * - an open POSITION keeps the historical conn.modifyPosition path
+   *   (unchanged behavior).
+   * - an id in NEITHER set keeps the existing fail-closed behavior: the
+   *   modifyPosition call is answered by the terminal's own rejection and
+   *   flows through mapError's certainty truth table.
+   */
   async modifyOrder(
     externalOrderId: string,
     modifications: BrokerOrderModification,
@@ -679,6 +768,42 @@ export class MetaTraderAdapter implements IBrokerAdapter {
       const sl = modifications.newStopLoss ? parseFloat(modifications.newStopLoss) : undefined;
       const tp = modifications.newTakeProfit ? parseFloat(modifications.newTakeProfit) : undefined;
 
+      // Route by lookup: is the target a WORKING PENDING ORDER?
+      const orders = await conn.getOrders();
+      const pending = (orders ?? []).find((o: any) => String(o.id) === externalOrderId);
+      if (pending) {
+        const openPrice = pending.openPrice;
+        if (typeof openPrice !== 'number' || !Number.isFinite(openPrice) || openPrice <= 0) {
+          // The SDK's modifyOrder REQUIRES the order's open price — a working
+          // order without a provable one cannot be modified honestly.
+          throw new BrokerAdapterError(
+            BrokerErrorCode.INVALID_PRICE,
+            `Working order ${externalOrderId} carries no provable openPrice — refusing to modify it blindly`,
+          );
+        }
+        // Restate a stop-limit order's limit price (SDK ModifyOrderOptions.
+        // stopLimitPrice) so the modification keeps every parameter the
+        // working order already carries.
+        const opts: { stopLimitPrice?: number } = {};
+        if (
+          typeof pending.stopLimitPrice === 'number' &&
+          Number.isFinite(pending.stopLimitPrice) &&
+          pending.stopLimitPrice > 0
+        ) {
+          opts.stopLimitPrice = pending.stopLimitPrice;
+        }
+        const result = await conn.modifyOrder(externalOrderId, openPrice, sl, tp, opts);
+        const success = result?.stringCode === MT_SUCCESS_CODE;
+        return {
+          success,
+          externalOrderId,
+          status: success ? 'FILLED' : 'FAILED',
+          brokerMessage: result?.message,
+          rawResponse: result,
+        };
+      }
+
+      // Not a working pending order → the historical open-position path.
       const result = await conn.modifyPosition(externalOrderId, sl, tp);
       const success = result?.stringCode === MT_SUCCESS_CODE;
       return {
@@ -845,9 +970,40 @@ export class MetaTraderAdapter implements IBrokerAdapter {
     }
   }
 
+  /**
+   * OPTIONAL-field decimal string ('0' when absent — the documented repo
+   * convention for genuinely optional provider fields such as an unset SL/TP
+   * or an unreported marginLevel). REQUIRED account money MUST NOT use this —
+   * see requiredAccountMoney (Phase 4 money-field honesty).
+   */
   private toDecimalString(value: number | undefined | null): string {
     if (value === undefined || value === null) return '0';
     return value.toFixed(8);
+  }
+
+  /**
+   * REQUIRED account money as a decimal string (Phase 4 money-field honesty):
+   * a null/undefined/non-number/non-finite SDK value must NEVER be fabricated
+   * as '0' — a missing balance is not a zero balance (the audit finding: the
+   * old null→'0' mapping fabricated account money while the OANDA sibling
+   * fails closed). BrokerAccountInfo's money fields are non-nullable strings,
+   * so the honest outcome is a typed fail-closed error; callers (including
+   * the certification harness 'account-state' stage) then fail closed, which
+   * is the CORRECT outcome for unprovable money.
+   */
+  private requiredAccountMoney(value: unknown, field: string): string {
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.INVALID_REQUEST,
+        `MetaAPI account information is missing a usable ${field} — refusing to fabricate account money`,
+      );
+    }
+    return value.toFixed(8);
+  }
+
+  /** True when the CONNECTED account is an MT4 terminal (Phase 4). */
+  private isConnectedToMt4(): boolean {
+    return this.currentPlatform === 'mt4';
   }
 
   private resolveAccountType(mtType: string | undefined): BrokerMode {

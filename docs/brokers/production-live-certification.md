@@ -161,22 +161,26 @@ artifact contents are never committed.
 > certification protocol. No certification harness run was executed for it,
 > no dated durable artifact exists, and `certificationRunRef` is truthfully
 > null. It is NOT a current protocol certification and must never be
-> presented as one. A genuine future operator certification run may upgrade
-> the provenance to `HARNESS_CERTIFIED` (with a run reference); nothing
-> upgrades it automatically.
+> presented as one. Under the CERTIFIED-only runtime gate
+> (`isProductionLiveEligible`) this state is **LIVE-ineligible**: LIVE
+> connection creation, enable-live, and LIVE dispatch all fail closed until a
+> genuine operator certification run upgrades the entry to `HARNESS_CERTIFIED`
+> (with a run reference); nothing upgrades it automatically. Operators follow
+> `docs/brokers/live-certification-runbook.md` (`pnpm --filter @irexpro/api
+> run cert:live -- metatrader5`).
 
 | Item | State | Evidence |
 | --- | --- | --- |
 | Adapter | `metatrader.adapter.ts` + `metaapi-client.service.ts` (per-account RPC pooling, idempotency via stable `comment`/`clientId`, full certainty truth table) | repo + adapter/order-state/margin specs |
 | Auth route | Platform `METAAPI_TOKEN`; per-user credential = encrypted MetaApi account UUID (AES-256-GCM at rest) | repo |
 | DEMO verified? | ✅ harness-attested DEMO path (`demoValidated` flow) | repo |
-| LIVE verified? | ✅ **retained production-operation attestation** — `evidenceRef: 'production operation — MetaApi bridge, live in production'`; `verifiedAt: null` (no single attestation date exists in repo history — the weakest evidence form in the program, recorded honestly) | `broker-catalog.ts` |
+| LIVE verified? | ⚠️ **legacy attestation only (LEGACY_VERIFIED — LIVE-ineligible)** — `evidenceRef: 'production operation — MetaApi bridge, live in production'`; `verifiedAt: null` (no single attestation date exists in repo history — the weakest evidence form in the program, recorded honestly). The runtime LIVE gate rejects this state; a current certification is REQUIRED for LIVE, not merely recommended | `broker-catalog.ts` |
 | Round 7 hardening | Declared-vs-observed account-environment enforcement at connect AND health check (a LIVE MetaApi account declared DEMO is an immediate fail-closed security event); per-symbol `getSymbolSpecification` metadata (the FX-hardcoded geometry is gone — unprovable symbols are omitted, never fabricated); pending-order `cancelOrder` added | `broker.service.ts`, `metatrader.adapter.ts` |
 | Account read / market data / margin | ✅ equity/balance/margin decimal strings; per-symbol specs; native margin RPC (fail-closed null) | specs |
-| Market / pending orders, modify, cancel | ✅ MARKET/LIMIT/STOP/STOP_LIMIT; position SL/TP modify; pending cancel (Round 7); working-pending-order MODIFY remains open (P2) | adapter specs |
+| Market / pending orders, modify, cancel | ✅ MARKET/LIMIT/STOP/STOP_LIMIT; position SL/TP modify; pending cancel (Round 7); working-pending-order MODIFY via `conn.modifyOrder` (production-LIVE completion round Phase 4 — routed by working-set lookup, openPrice restated from the provider row, stop-limit limit price preserved); MT4-connected accounts honestly drop STOP_LIMIT from the capability declaration and fail fast on STOP_LIMIT requests (MT4 has no native stop-limit) | adapter specs |
 | Close / partial close / close-all | ✅ | adapter specs |
 | Reconciliation / provider idempotency / timeout recovery | ✅ open+history order lookup (`synchronizing` = retry-later); stable clientOrderId; certainty truth table (timeout/5xx = MAY_HAVE_REACHED_PROVIDER — never auto-resend) | specs |
-| Operator evidence | Production-operation attestation (retained); **a Round 7 harness re-certification is recommended** to produce a dated artifact (run the MT5 live-certification spec with the gate + a real account) | this protocol |
+| Operator evidence | Production-operation attestation (retained, informational); **a Round 7 harness re-certification is REQUIRED before any LIVE use** — run the operator CLI (`cert:live -- metatrader5`, see the runbook) or the MT5 live-certification spec with the gate + a real account to produce a dated, read-back-verified artifact | this protocol |
 | Remaining limitations | getAccountInfo timestamps derive from the server clock (no provider-observed time on some surfaces); ownership = possession of the MetaApi account UUID (platform token reaches all accounts — per-user isolation is MetaApi-scoped); MT5 not yet in the shared §AN contract suite (P2 doc drift) | audits |
 
 ### OANDA (v20 REST) — catalog: BETA, production-LIVE **UNVERIFIED**
@@ -186,7 +190,7 @@ artifact contents are never committed.
 | Adapter | `oanda/oanda.adapter.ts` (v20 REST; practice/live base-URL separation owned by the adapter; account ownership validated — token must see the account id in `/v3/accounts`) |
 | Auth route | Personal access token (encrypted at rest); practice-vs-live environments provider-enforced via environment-scoped tokens |
 | DEMO verified? | ✅ credential-gated practice harness (`oanda.demo-verification.spec.ts`, env `OANDA_PRACTICE_TOKEN`) |
-| LIVE verified? | ❌ **UNVERIFIED** — fail-closed at createConnection-LIVE, enableLiveTrading, and the final dispatch boundary. Round 7 closed the remaining CODE gaps: pending-order cancel (`PUT /orders/{id}/cancel`), and the Phase-7c crash-window echo alignment (`clientExtensions.id = clientOrderId` so the provider-echo recovery can match). Remaining honest P2s: no `/v3/transactions` recon surface, local margin approximation, no ETag/`X-RequestID` provider idempotency (correctly assumed absent by the write-certainty model) |
+| LIVE verified? | ❌ **UNVERIFIED** — fail-closed at createConnection-LIVE, enableLiveTrading, and the final dispatch boundary. Round 7 closed the remaining CODE gaps: pending-order cancel (`PUT /orders/{id}/cancel`), and the Phase-7c crash-window echo alignment (`clientExtensions.id = clientOrderId` so the provider-echo recovery can match). Production-LIVE completion round (Phase 5) added pending-order modification through the official v20 replace endpoint (`PUT /accounts/{id}/orders/{orderId}` — v20 cancels the original and creates a replacement with a new order id, surfaced to callers) and enforces the documented Ghana LIVE unavailability server-side (`liveUnavailableRegions: ['GH']` + risk-gate `PROVIDER_REGION_UNAVAILABLE`). Remaining honest P2s: no `/v3/transactions` recon surface, local margin approximation, no ETag/`X-RequestID` provider idempotency (correctly assumed absent by the write-certainty model), no v20 streaming (REST polling only) |
 | LIVE certification path | Operator runs `oanda.live-certification.spec.ts` with `IREXPRO_ALLOW_LIVE_CERTIFICATION=true` + `OANDA_LIVE_CERT_TOKEN`/`OANDA_LIVE_CERT_ACCOUNT_ID` + explicit cap → evidence artifact → §4 process. **Do not mark VERIFIED without that artifact.** |
 
 ### cTrader Open API (universal engine; aliases: Pepperstone cTrader, IC Markets cTrader) — catalog: BETA, production-LIVE **UNVERIFIED** (×3)
@@ -246,3 +250,30 @@ pnpm --filter @irexpro/api exec jest src/modules/broker/verification/oanda.live-
 #    Retain the artifact; record it via the §4 process. A PASS is required
 #    before any catalog VERIFIED flip.
 ```
+
+## 8. DEMO evidence records (reconciliation round, Section 5)
+
+`BrokerDemoValidationService` now attaches a structured **DEMO evidence
+record** to every `POST /broker/connections/:id/validate-demo` response and to
+the corresponding `BROKER_DEMO_VALIDATION_PASSED/_FAILED` audit entry:
+
+| Field | Meaning |
+|---|---|
+| `evidenceVersion` | Record schema version (currently `1`). |
+| `provider` / `connectionId` / `environment` | Provider registry id, the validated connection, always `DEMO`. |
+| `validatedAt` / `source` | Observation timestamp (checklist finish) and origin (`system`). |
+| `adapterVersion` | Adapter implementation version (honestly `null` when the adapter declares none). |
+| `account` | Provider-observed account truth (`providerAccountId`, `currency`, `accountTruth: PROVIDER_OBSERVED \| UNAVAILABLE`) — never user-declared input; failures degrade honestly with a sanitized reason. |
+| `checks` / `summary` | The full sanitized checklist steps and pass/fail/skip counts. |
+| `capabilitiesVerified` | Capabilities actually VERIFIED (PASS steps only — SKIPPED/FAILED never appear). |
+| `orderLifecycleReconciliation` | Post-checklist observation that the validation's own position/orders are all closed/cancelled (`reconciled`), with honest `null` + reason when moot (`NO_VALIDATION_ARTIFACTS_PRODUCED`) or unreadable. |
+| `overall` / `demoValidated` | The checklist outcome and the evidence-consistent boolean persisted on the connection. DEMO validation authority: this checklist is the SOLE `demoValidated` write path — a connect handshake never writes it. |
+| `authorizationStatus` (response) | The authorization state the checklist evidence earned: PASS from CONNECTED advances to AUTHORIZED (the `enableLiveTrading` prerequisite); FAIL revokes a validation-granted AUTHORIZED/READY to REVOKED; anything else keeps the authoritative state. |
+| `validUntil` / `revalidationRecommendedAfter` | Expiry semantics: a validation is a point-in-time observation, stale after 180 days (revalidation recommended 30 days before). Informational — this does NOT auto-revoke the persisted boolean and is NOT a certification. |
+| `evidenceSha256` | SHA-256 over the canonical record (digest excluded) — tamper evidence for the audit-trail copy. |
+
+**Evidence-class separation (non-negotiable):** a DEMO evidence record is
+DEMO-environment evidence ONLY. It is **never** a provider LIVE certification
+and never converts into one — LIVE certification is a separate operator-run
+evidence class (§1–§7). The record deliberately carries no certification
+vocabulary whatsoever.

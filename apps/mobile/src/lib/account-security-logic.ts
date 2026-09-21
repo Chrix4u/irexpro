@@ -25,6 +25,11 @@ import type {
   UpdateMyProfileRequest,
   UserStatus,
 } from '@irexpro/types';
+import type {
+  EligibilityJurisdictionStatus,
+  EligibilityStatusView,
+  KycStatus,
+} from '@irexpro/types/eligibility';
 
 // ─── Shared constants ──────────────────────────────────────────────────────
 
@@ -1051,4 +1056,109 @@ export function validateAppealSubmission(
   }
 
   return null;
+}
+
+// ─── Identity verification (KYC) presentation ──────────────────────────────
+// Production-LIVE completion round (audit P8: "no KYC status surface"):
+// read-only presentation of the user's eligibility/KYC truth from
+// GET /users/me/eligibility (shared @irexpro/api-client eligibility module).
+// The mobile app NEVER derives KYC state locally — it renders what the
+// server reported, and says "unavailable" when the status could not be read.
+
+/** StatusPill tone for the KYC row (matches the hub's PillTone union). */
+export type KycPillTone = 'positive' | 'neutral' | 'warning' | 'danger';
+
+/** Read-only view-model for the Account hub "Identity verification (KYC)" row. */
+export interface KycStatusRowView {
+  /** False when the eligibility status could not be read (honest unavailable). */
+  available: boolean;
+  pillLabel: string;
+  pillTone: KycPillTone;
+  /** One honest line: jurisdiction status + disclosures accepted state. */
+  detail: string;
+}
+
+/** Humanized KYC status (NONE is "not submitted", never "unverified identity"). */
+export function kycStatusLabel(status: KycStatus): string {
+  switch (status) {
+    case 'APPROVED':
+      return 'Approved';
+    case 'PENDING':
+      return 'Pending review';
+    case 'REJECTED':
+      return 'Rejected';
+    case 'NONE':
+      return 'Not submitted';
+    default:
+      return 'Unknown';
+  }
+}
+
+/** Pill tone by KYC status (APPROVED=positive, PENDING=warning, REJECTED=danger). */
+export function kycStatusTone(status: KycStatus): KycPillTone {
+  switch (status) {
+    case 'APPROVED':
+      return 'positive';
+    case 'PENDING':
+      return 'warning';
+    case 'REJECTED':
+      return 'danger';
+    case 'NONE':
+      return 'neutral';
+    default:
+      return 'neutral';
+  }
+}
+
+/** Humanized jurisdiction status. */
+export function jurisdictionStatusLabel(status: EligibilityJurisdictionStatus): string {
+  switch (status) {
+    case 'ELIGIBLE':
+      return 'Eligible';
+    case 'REVIEW_REQUIRED':
+      return 'Review required';
+    case 'INELIGIBLE':
+      return 'Not eligible';
+    case 'MISSING_PROFILE':
+      return 'Country required';
+    default:
+      return 'Unknown';
+  }
+}
+
+/**
+ * Disclosures accepted state, derived from the server's own evidence arrays:
+ * total disclosures vs missing consent keys ('All accepted' or 'N of M accepted').
+ */
+export function disclosuresAcceptedSummary(status: EligibilityStatusView): string {
+  const total = status.disclosures.length;
+  const missing = status.missingConsentKeys.length;
+  if (total === 0) return 'Disclosures unavailable';
+  if (missing === 0) return 'All disclosures accepted';
+  return `${total - missing} of ${total} disclosures accepted`;
+}
+
+/**
+ * The Account hub KYC row view-model. `null` (status could not be read) is
+ * rendered as an honest "unavailable" state — never a guessed status, never a
+ * green pill. All values otherwise come verbatim from the server payload.
+ */
+export function kycStatusRowView(status: EligibilityStatusView | null): KycStatusRowView {
+  if (!status) {
+    return {
+      available: false,
+      pillLabel: 'Unavailable',
+      pillTone: 'neutral',
+      detail:
+        'Identity verification status is unavailable right now. Reopen this screen and try again.',
+    };
+  }
+  return {
+    available: true,
+    pillLabel: kycStatusLabel(status.kycStatus),
+    pillTone: kycStatusTone(status.kycStatus),
+    detail: `Jurisdiction: ${jurisdictionStatusLabel(
+      status.jurisdictionStatus,
+    )} · ${disclosuresAcceptedSummary(status)}`,
+  };
 }

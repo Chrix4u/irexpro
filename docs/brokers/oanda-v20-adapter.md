@@ -56,7 +56,9 @@ in-memory only, redacted from all errors/logs/results — §AN-5).
 | `placeOrder` | `POST /v3/accounts/{id}/orders` | see order mapping below |
 | `listOrders` | `GET /v3/accounts/{id}/orders?state=PENDING` (+ TRIGGERED) | working orders only |
 | `getOrderById` | `GET /v3/accounts/{id}/orders/{orderSpecifier}` | 404-style → null (legitimate) |
-| `modifyOrder` | `PUT /v3/accounts/{id}/trades/{tradeSpecifier}/orders` | SL/TP dependent orders |
+| `modifyOrder` (open trade) | `PUT /v3/accounts/{id}/trades/{tradeSpecifier}/orders` | SL/TP dependent orders |
+| `modifyOrder` (working pending order) | `PUT /v3/accounts/{id}/orders/{orderID}` (Phase 5 replace) | routes by working-set lookup; restates the order's current definition + modified SL/TP; v20 replace cancels the original and mints a NEW order id (surfaced as the result handle) |
+| `cancelOrder` (concrete, off `IBrokerAdapter`) | `PUT /v3/accounts/{id}/orders/{orderSpecifier}/cancel` | Round 7, Fix 3 |
 | `closeOrder` | `PUT /v3/accounts/{id}/trades/{tradeSpecifier}/close` | `units: 'ALL'` or partial |
 | `closeAllOrders` | iterate `openTrades` + close each | aggregate result |
 | `getOpenPositions` / `getPositionById` | `GET /v3/accounts/{id}/openTrades` (+ batched pricing) | unrealizedPL/financing |
@@ -81,6 +83,24 @@ in-memory only, redacted from all errors/logs/results — §AN-5).
   `TRIGGERED` → WORKING (triggered stop executing as market), `FILLED` →
   FILLED, `CANCELLED` → CANCELLED, anything unrecognized → `UNKNOWN`
   (fail-closed interpretation).
+- **Pending-order modification (Phase 5)**: `modifyOrder` routes by
+  working-set lookup — a WORKING pending order (LIMIT/STOP/MARKET_IF_TOUCHED)
+  is replaced via the official v20 replace endpoint
+  (`PUT /v3/accounts/{id}/orders/{orderID}`), restating the order's CURRENT
+  definition (instrument/units/price/timeInForce/priceBound plus any carried
+  `stopLossOnFill`/`takeProfitOnFill`) with the modified SL/TP; optional
+  fields the original order did not carry are omitted, never fabricated.
+  v20 replace CANCELS the original order and CREATES a replacement with a
+  NEW order id — the replacement id is surfaced as the result's
+  `externalOrderId` so callers (and the verification harness) retarget.
+  `clientOrderId`/`clientExtensions` are NOT part of the replace body
+  (documented limitation: the replacement order does not inherit the
+  original's `clientExtensions.id`). Dependent orders
+  (TAKE_PROFIT/STOP_LOSS/TRAILING_STOP_LOSS) and executing MARKET orders are
+  not replaceable through this surface and fail closed (`INVALID_REQUEST`).
+  An open TRADE keeps the `PUT /trades/{id}/orders` dependent-orders path.
+  An id in neither set fails closed through the provider's own 404
+  (`POSITION_NOT_FOUND`).
 
 ## Margin approximation
 
@@ -116,10 +136,27 @@ the raw payload is never persisted or logged.
 
 `ACCOUNT_READ, BALANCE_READ, POSITION_READ, ORDER_READ, HISTORY_READ,
 MARKET_DATA, REST, API_TOKEN, DEMO, LIVE, ORDER_PLACEMENT,
-ORDER_MODIFICATION, CLOSE_ALL, MARGIN_CALCULATION`.
+ORDER_MODIFICATION (open-trade SL/TP **and** working-pending-order replace —
+Phase 5), CLOSE_ALL, MARGIN_CALCULATION` — the same set the broker catalog
+declares for `oanda`. (Working-order CANCELLATION also exists as an adapter
+surface — `cancelOrder`, Round 7 Fix 3, see the endpoint table above — while
+the catalog's `BrokerCapability` enum has no ORDER_CANCELLATION member to
+declare; the additive method is discovered structurally by the verification
+harness, not through the capability list.)
 
 **NOT declared**: `MARKET_DATA_STREAMING` / `WEBSOCKET` — v20 SSE price
-streams are not implemented; the adapter is REST-polling only.
+streams remain NOT implemented; the adapter is REST-polling only (every
+price read is a `GET /pricing` poll — no persistent stream connection).
+
+**Future work — deliberately NOT claimed**:
+- **Provider-side idempotency (ETag / `X-RequestID`)**: the adapter sends no
+  `If-None-Match`/ETag caching and no v20 request-id idempotency headers; no
+  provider-side dedup is claimed (the platform's dispatch-certainty contract
+  assumes none — `clientExtensions.id` is identifier alignment, not
+  exactly-once).
+- **`/v3/transactions` reconciliation**: the transaction stream /
+  since-transaction endpoints are not wired; reconciliation reads order/trade
+  state only.
 
 ## Requirements before SUPPORTED (operator checklist)
 

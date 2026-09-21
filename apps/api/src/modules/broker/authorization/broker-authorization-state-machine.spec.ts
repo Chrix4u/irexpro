@@ -26,7 +26,10 @@ describe('BrokerAuthorizationStateMachine', () => {
   });
 
   describe('valid lifecycle paths', () => {
-    it('allows the full DEMO path: NOT_CONNECTED → CONNECTING → CONNECTED → AUTHORIZED', () => {
+    it('allows the full DEMO path: NOT_CONNECTED → CONNECTING → CONNECTED → AUTHORIZED (checklist-granted)', () => {
+      // DEMO validation authority: the handshake settles at CONNECTED
+      // (pre-validation); the BrokerDemoValidationService checklist is the
+      // sole authority for the final CONNECTED → AUTHORIZED advance.
       expect(
         BrokerAuthorizationStateMachine.canTransition(
           BrokerAuthorizationStatus.NOT_CONNECTED,
@@ -125,13 +128,16 @@ describe('BrokerAuthorizationStateMachine', () => {
       ).toBe(false);
     });
 
-    it('allows CONNECTING → AUTHORIZED (DEMO validation completes within the handshake)', () => {
+    it('rejects CONNECTING → AUTHORIZED (DEMO validation is checklist-only, never handshake-granted)', () => {
+      // DEMO validation authority: a successful handshake proves
+      // connectivity/credential validity only. The BrokerDemoValidationService
+      // checklist is the sole authority for CONNECTED → AUTHORIZED.
       expect(
         BrokerAuthorizationStateMachine.canTransition(
           BrokerAuthorizationStatus.CONNECTING,
           BrokerAuthorizationStatus.AUTHORIZED,
         ),
-      ).toBe(true);
+      ).toBe(false);
     });
 
     it('rejects DISCONNECTED → ACTIVE (must reconnect first)', () => {

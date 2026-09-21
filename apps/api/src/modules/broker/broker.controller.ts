@@ -153,27 +153,31 @@ export class BrokerController {
     await this.brokerService.deleteConnection(connectionId, userId);
   }
 
-  // ─── DEMO validation (the evidence-based write path for demoValidated) ─────
+  // ─── DEMO validation (the authoritative checklist write path) ───────────
 
   @Post(':connectionId/validate-demo')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Validate a DEMO connection through the evidence-based checklist',
+    summary: 'Validate a DEMO connection through the authoritative checklist',
     description:
       'Connects the DEMO connection and exercises the trading surface the ' +
       'broker actually implements (account info, market data, positions, a ' +
       'small market order with partial/full close and closed-trade history, a ' +
       'pending limit order with modification and cancellation where ' +
-      "supported, margin info). A PASS sets the connection's demoValidated " +
-      'flag to true — the prerequisite for enabling LIVE trading; a FAIL ' +
-      'revokes it (overriding the weak connect-implies-validated write). The ' +
-      'response carries the sanitized step-by-step evidence (no credentials); ' +
-      'the full evidence is also recorded in the audit trail.',
+      'supported, margin info). This checklist is the AUTHORITATIVE DEMO ' +
+      'validation — a connect handshake alone never validates: PASS sets ' +
+      'demoValidated=true and advances the authorization state machine ' +
+      'CONNECTED → AUTHORIZED (the prerequisite for enabling LIVE trading); ' +
+      'FAIL revokes demoValidated and any validation-granted authorization ' +
+      '(AUTHORIZED/READY → REVOKED). The response carries the sanitized ' +
+      'step-by-step evidence (no credentials); the full evidence is also ' +
+      'recorded in the audit trail.',
   })
   @ApiParam({ name: 'connectionId', description: 'Broker connection UUID (DEMO)' })
   @ApiResponse({
     status: 200,
-    description: 'Sanitized checklist result + resulting demoValidated flag',
+    description:
+      'Sanitized checklist result + resulting demoValidated flag and authorization state',
   })
   @ApiResponse({ status: 400, description: 'Connection is not a DEMO connection' })
   @ApiResponse({ status: 404, description: 'Connection not found or not owned by the user' })

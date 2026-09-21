@@ -779,6 +779,214 @@ describe('OandaAdapter (v20 REST — BETA)', () => {
     });
   });
 
+  describe('modifyOrder — pending-order replace (Phase 5, PUT /orders/{id})', () => {
+    it('replaces a WORKING PENDING ORDER through the orders endpoint with a well-formed full-definition body', async () => {
+      backend.route('PUT', '/orders/2101', () => ({
+        orderCreateTransaction: {
+          id: '2201',
+          type: 'LIMIT',
+          time: ISO_TIME,
+          instrument: 'EUR_USD',
+          units: '1000',
+        },
+        orderCancelTransaction: { id: '2199', type: 'ORDER_CANCEL', orderID: '2101' },
+      }));
+      const adapter = await freshAdapterAndScript();
+
+      const result = await adapter.modifyOrder('2101', {
+        newStopLoss: '1.09000',
+        newTakeProfit: '1.20000',
+      });
+
+      expect(result).toMatchObject({ success: true, status: 'FILLED' });
+      // v20 replace mints a REPLACEMENT order id — surfaced as the handle.
+      expect(result.externalOrderId).toBe('2201');
+      expect(result.brokerMessage).toContain('replaced');
+
+      const request = backend.requests.find(
+        (r) => r.method === 'PUT' && r.path.endsWith('/orders/2101'),
+      );
+      expect(request).toBeDefined();
+      expect(request?.baseUrl).toBe(OANDA_DEFAULT_DEMO_BASE_URL);
+      expect(request?.headers.Authorization).toBe(`Bearer ${SECRET}`);
+      // The body restates the CURRENT order definition plus the modified
+      // SL/TP — nothing fabricated, nothing the order did not carry.
+      expect(request?.body).toEqual({
+        order: {
+          type: 'LIMIT',
+          instrument: 'EUR_USD',
+          units: '1000',
+          timeInForce: 'GTC',
+          price: '1.09500',
+          stopLossOnFill: { price: '1.09000', timeInForce: 'GTC' },
+          takeProfitOnFill: { price: '1.20000', timeInForce: 'GTC' },
+        },
+      });
+      // The trade endpoint was NOT engaged for a pending order.
+      expect(
+        backend.requests.some((r) => r.method === 'PUT' && r.path.endsWith('/trades/2101/orders')),
+      ).toBe(false);
+    });
+
+    it('carries over the order’s CURRENT protective levels/priceBound unless modified (never silently dropped)', async () => {
+      backend.route('GET', /\/orders\/[^/]+$/, () => ({
+        order: v3Order({
+          stopLossOnFill: { price: '1.08000', timeInForce: 'GTC' },
+          takeProfitOnFill: { price: '1.11000' },
+          priceBound: '1.07000',
+        }),
+      }));
+      backend.route('PUT', '/orders/2101', () => ({
+        orderCreateTransaction: { id: '2202', type: 'LIMIT', time: ISO_TIME },
+      }));
+      const adapter = await freshAdapterAndScript();
+
+      const result = await adapter.modifyOrder('2101', { newTakeProfit: '1.21000' });
+      expect(result.success).toBe(true);
+
+      const request = backend.requests.find(
+        (r) => r.method === 'PUT' && r.path.endsWith('/orders/2101'),
+      );
+      expect(request?.body).toEqual({
+        order: {
+          type: 'LIMIT',
+          instrument: 'EUR_USD',
+          units: '1000',
+          timeInForce: 'GTC',
+          price: '1.09500',
+          priceBound: '1.07000',
+          stopLossOnFill: { price: '1.08000', timeInForce: 'GTC' },
+          takeProfitOnFill: { price: '1.21000', timeInForce: 'GTC' },
+        },
+      });
+    });
+
+    it('a modification can REMOVE a protective level (newStopLoss "0" omits stopLossOnFill from the replacement)', async () => {
+      backend.route('GET', /\/orders\/[^/]+$/, () => ({
+        order: v3Order({ stopLossOnFill: { price: '1.08000', timeInForce: 'GTC' } }),
+      }));
+      backend.route('PUT', '/orders/2101', () => ({
+        orderCreateTransaction: { id: '2203', type: 'LIMIT', time: ISO_TIME },
+      }));
+      const adapter = await freshAdapterAndScript();
+
+      await adapter.modifyOrder('2101', { newStopLoss: '0', newTakeProfit: '1.21000' });
+
+      const request = backend.requests.find(
+        (r) => r.method === 'PUT' && r.path.endsWith('/orders/2101'),
+      );
+      const body = request?.body as { order: { stopLossOnFill?: unknown } };
+      expect(body.order.stopLossOnFill).toBeUndefined();
+    });
+
+    it('an OPEN TRADE id (not in the working set) keeps the trades dependent-orders path', async () => {
+      const adapter = await freshAdapterAndScript();
+      const result = await adapter.modifyOrder('301', {
+        newStopLoss: '1.08500',
+        newTakeProfit: '1.21000',
+      });
+      expect(result).toMatchObject({ success: true, externalOrderId: '301', status: 'FILLED' });
+      expect(
+        backend.requests.some((r) => r.method === 'PUT' && r.path.endsWith('/trades/301/orders')),
+      ).toBe(true);
+      expect(
+        backend.requests.some((r) => r.method === 'PUT' && r.path.endsWith('/orders/301')),
+      ).toBe(false);
+    });
+
+    it('an id in NEITHER set keeps the existing fail-closed behavior (provider 404 → POSITION_NOT_FOUND)', async () => {
+      backend.route('PUT', '/trades/99999/orders', () => {
+        throw new OandaApiError(404, 'trade_not_found', 'Trade not found', 'req-nf');
+      });
+      const adapter = await freshAdapterAndScript();
+      await expect(adapter.modifyOrder('99999', { newStopLoss: '1.08500' })).rejects.toMatchObject({
+        code: BrokerErrorCode.POSITION_NOT_FOUND,
+      });
+    });
+
+    it('an order that VANISHES between routing and the fresh lookup fails closed (no replace against a dead id)', async () => {
+      backend.route('GET', /\/orders\/[^/]+$/, () => {
+        throw new OandaApiError(404, 'order_not_found', 'Order not found', 'req-gone');
+      });
+      const adapter = await freshAdapterAndScript();
+      await expect(adapter.modifyOrder('2101', { newTakeProfit: '1.21000' })).rejects.toMatchObject(
+        { code: BrokerErrorCode.POSITION_NOT_FOUND },
+      );
+      // The replace endpoint was never attempted.
+      expect(
+        backend.requests.some((r) => r.method === 'PUT' && r.path.endsWith('/orders/2101')),
+      ).toBe(false);
+    });
+
+    it('a non-replaceable working order type (dependent TAKE_PROFIT) fails closed (INVALID_REQUEST)', async () => {
+      backend.route('GET', 'state=PENDING', () => ({
+        orders: [v3Order({ id: '2150', type: 'TAKE_PROFIT' })],
+      }));
+      backend.route('GET', 'state=TRIGGERED', () => ({ orders: [] }));
+      backend.route('GET', /\/orders\/[^/]+$/, () => ({
+        order: v3Order({ id: '2150', type: 'TAKE_PROFIT' }),
+      }));
+      const adapter = await freshAdapterAndScript();
+      await expect(adapter.modifyOrder('2150', { newTakeProfit: '1.21000' })).rejects.toMatchObject(
+        {
+          code: BrokerErrorCode.INVALID_REQUEST,
+        },
+      );
+      expect(
+        backend.requests.some((r) => r.method === 'PUT' && r.path.endsWith('/orders/2150')),
+      ).toBe(false);
+    });
+
+    it('a 200 WITHOUT orderCreateTransaction.id fails closed (INVALID_REQUEST, never success)', async () => {
+      backend.route('PUT', '/orders/2101', () => ({ lastTransactionID: '2300' }));
+      const adapter = await freshAdapterAndScript();
+      await expect(adapter.modifyOrder('2101', { newTakeProfit: '1.21000' })).rejects.toMatchObject(
+        {
+          code: BrokerErrorCode.INVALID_REQUEST,
+        },
+      );
+    });
+
+    it('a replace failure maps through the shared error mapper (404 order_not_found → POSITION_NOT_FOUND)', async () => {
+      backend.route('PUT', '/orders/2101', () => {
+        throw new OandaApiError(404, 'order_not_found', 'Order not found', 'req-nf');
+      });
+      const adapter = await freshAdapterAndScript();
+      const err = (await adapter
+        .modifyOrder('2101', { newTakeProfit: '1.21000' })
+        .catch((e) => e)) as BrokerAdapterError;
+      expect(err).toBeInstanceOf(BrokerAdapterError);
+      expect(err.code).toBe(BrokerErrorCode.POSITION_NOT_FOUND);
+      expect(err.dispatchCertainty).toBe(ProviderDispatchCertainty.SENT_RESPONSE_RECEIVED);
+    });
+
+    it('a provider 400 order rejection (orderRejectTransaction) is an honest REJECTED result', async () => {
+      backend.route('PUT', '/orders/2101', () => {
+        throw new OandaApiError(400, '', 'Order rejected', 'req-rej-2', {
+          orderRejectTransaction: { id: '2100', reason: 'ORDER_NOT_PENDING' },
+        });
+      });
+      const adapter = await freshAdapterAndScript();
+      const result = await adapter.modifyOrder('2101', { newTakeProfit: '1.21000' });
+      expect(result).toMatchObject({ success: false, status: 'REJECTED' });
+      expect(result.brokerMessage).toContain('ORDER_NOT_PENDING');
+    });
+
+    it('a replace timeout maps to CONNECTION_TIMEOUT with MAY_HAVE_REACHED_PROVIDER (reconcile, never resend)', async () => {
+      // Only the replace PUT fails; the routing/listing GETs stay healthy.
+      backend.route('PUT', '/orders/2101', () => {
+        throw new Error('Request timed out');
+      });
+      const adapter = await freshAdapterAndScript();
+      const err = (await adapter
+        .modifyOrder('2101', { newTakeProfit: '1.21000' })
+        .catch((e) => e)) as BrokerAdapterError;
+      expect(err.code).toBe(BrokerErrorCode.CONNECTION_TIMEOUT);
+      expect(err.isRetryable).toBe(true);
+      expect(err.dispatchCertainty).toBe(ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER);
+    });
+  });
+
   describe('listOrders — provider order state', () => {
     it('queries BOTH state=PENDING and state=TRIGGERED and merges them', async () => {
       backend.route('GET', 'state=PENDING', () => ({ orders: [v3Order()] }));

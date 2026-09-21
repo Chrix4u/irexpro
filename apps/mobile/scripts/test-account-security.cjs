@@ -1244,6 +1244,118 @@ defineSuite('security activity timeline', (test) => {
   });
 });
 
+// ─── Suite: KYC / eligibility status presentation ──────────────────────────
+// Production-LIVE completion round (audit P8: no KYC status surface): the
+// Account hub renders the server-reported eligibility truth (GET
+// /users/me/eligibility via the shared api-client eligibility module).
+
+defineSuite('KYC / eligibility status presentation', (test) => {
+  const DISCLOSURE = (key) => ({
+    key,
+    version: '1.0.0',
+    title: `Disclosure ${key}`,
+    body: 'Fixture disclosure body.',
+    contentSha256: 'a'.repeat(64),
+    required: true,
+  });
+  const DISCLOSURE_KEYS = [
+    'AUTOMATED_TRADING_RISK',
+    'NO_PROFIT_GUARANTEE',
+    'BROKER_EXECUTION_AUTHORITY',
+    'LEGAL_ELIGIBILITY_ATTESTATION',
+  ];
+
+  function eligibilityStatus(overrides = {}) {
+    return {
+      policyVersion: '2026-01-01',
+      policyFingerprint: 'b'.repeat(64),
+      countryCode: 'GH',
+      jurisdictionStatus: 'ELIGIBLE',
+      decisionSource: 'POLICY',
+      reasonCode: 'OK',
+      reviewedAt: null,
+      ageStatus: 'ADULT',
+      kycStatus: 'NONE',
+      identityReasonCode: 'KYC_REQUIRED',
+      disclosures: DISCLOSURE_KEYS.map(DISCLOSURE),
+      consents: [],
+      missingConsentKeys: [...DISCLOSURE_KEYS],
+      canProceed: false,
+      ...overrides,
+    };
+  }
+
+  test('kycStatusLabel humanizes every KYC status (NONE is "Not submitted")', () => {
+    assert.equal(L.kycStatusLabel('NONE'), 'Not submitted');
+    assert.equal(L.kycStatusLabel('PENDING'), 'Pending review');
+    assert.equal(L.kycStatusLabel('APPROVED'), 'Approved');
+    assert.equal(L.kycStatusLabel('REJECTED'), 'Rejected');
+  });
+  test('kycStatusLabel renders unrecognized runtime values as Unknown (never a guess)', () => {
+    assert.equal(L.kycStatusLabel('MAYBE'), 'Unknown');
+    assert.equal(L.kycStatusLabel(''), 'Unknown');
+  });
+  test('kycStatusTone maps APPROVED/PENDING/REJECTED/NONE to distinct pill tones', () => {
+    assert.equal(L.kycStatusTone('APPROVED'), 'positive');
+    assert.equal(L.kycStatusTone('PENDING'), 'warning');
+    assert.equal(L.kycStatusTone('REJECTED'), 'danger');
+    assert.equal(L.kycStatusTone('NONE'), 'neutral');
+    assert.equal(L.kycStatusTone('MAYBE'), 'neutral');
+  });
+  test('jurisdictionStatusLabel humanizes every jurisdiction status', () => {
+    assert.equal(L.jurisdictionStatusLabel('ELIGIBLE'), 'Eligible');
+    assert.equal(L.jurisdictionStatusLabel('REVIEW_REQUIRED'), 'Review required');
+    assert.equal(L.jurisdictionStatusLabel('INELIGIBLE'), 'Not eligible');
+    assert.equal(L.jurisdictionStatusLabel('MISSING_PROFILE'), 'Country required');
+    assert.equal(L.jurisdictionStatusLabel('MYSTERY'), 'Unknown');
+  });
+  test('disclosuresAcceptedSummary counts server evidence (missing keys first)', () => {
+    assert.equal(L.disclosuresAcceptedSummary(eligibilityStatus()), '0 of 4 disclosures accepted');
+    assert.equal(
+      L.disclosuresAcceptedSummary(
+        eligibilityStatus({ missingConsentKeys: ['LEGAL_ELIGIBILITY_ATTESTATION'] }),
+      ),
+      '3 of 4 disclosures accepted',
+    );
+    assert.equal(
+      L.disclosuresAcceptedSummary(eligibilityStatus({ missingConsentKeys: [] })),
+      'All disclosures accepted',
+    );
+  });
+  test('kycStatusRowView renders the honest unavailable row when status is null (never green)', () => {
+    const row = L.kycStatusRowView(null);
+    assert.equal(row.available, false);
+    assert.equal(row.pillLabel, 'Unavailable');
+    assert.equal(row.pillTone, 'neutral');
+    assert.ok(row.detail.includes('unavailable'), 'detail must say unavailable');
+  });
+  test('kycStatusRowView composes jurisdiction + disclosures from the server payload', () => {
+    const row = L.kycStatusRowView(
+      eligibilityStatus({
+        kycStatus: 'PENDING',
+        jurisdictionStatus: 'REVIEW_REQUIRED',
+        missingConsentKeys: ['NO_PROFIT_GUARANTEE', 'BROKER_EXECUTION_AUTHORITY'],
+      }),
+    );
+    assert.equal(row.available, true);
+    assert.equal(row.pillLabel, 'Pending review');
+    assert.equal(row.pillTone, 'warning');
+    assert.equal(row.detail, 'Jurisdiction: Review required · 2 of 4 disclosures accepted');
+  });
+  test('kycStatusRowView shows a positive pill only for an APPROVED KYC status', () => {
+    const approved = L.kycStatusRowView(
+      eligibilityStatus({ kycStatus: 'APPROVED', missingConsentKeys: [] }),
+    );
+    assert.equal(approved.pillLabel, 'Approved');
+    assert.equal(approved.pillTone, 'positive');
+    assert.equal(approved.detail, 'Jurisdiction: Eligible · All disclosures accepted');
+
+    const rejected = L.kycStatusRowView(eligibilityStatus({ kycStatus: 'REJECTED' }));
+    assert.equal(rejected.pillLabel, 'Rejected');
+    assert.equal(rejected.pillTone, 'danger');
+  });
+});
+
 // ─── Suite: sensitive-memory/storage static regression guard ───────────────
 
 defineSuite('sensitive-memory/storage static regression guard', (test) => {

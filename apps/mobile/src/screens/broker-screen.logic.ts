@@ -16,6 +16,7 @@ import type {
 } from "@irexpro/types";
 import type { ProviderVerificationLabel } from "@irexpro/types/provider-verification";
 import { assessProviderVerification } from "@irexpro/types/provider-verification";
+import { deriveProviderCertificationState } from "@irexpro/types/broker-registry";
 
 export interface BrokerStatusPresentation {
   label: string;
@@ -83,22 +84,59 @@ export function isConnectableEntry(entry: BrokerRegistryEntry): boolean {
 }
 
 /**
- * Production-LIVE selection gate (architect Phase I / registry Phase H).
+ * Production-LIVE selection gate (architect Phase I / registry Phase H /
+ * production-LIVE completion round).
  *
  * The environment selector may offer LIVE ONLY when the server registry
- * BOTH declares the LIVE environment AND carries VERIFIED production-LIVE
- * evidence (`productionLiveVerification.status === 'VERIFIED'`). BETA and
- * UNVERIFIED providers (and entries whose verification payload is absent —
- * older cached wire data) fail closed: DEMO stays their only option.
+ * declares the LIVE environment AND the provider is CURRENTLY production-LIVE
+ * eligible — i.e. the derived certification state is CERTIFIED (a complete
+ * HARNESS_CERTIFIED record). Legacy attestation (LEGACY_VERIFIED), BETA and
+ * UNVERIFIED providers (and entries whose payload is absent — older cached
+ * wire data) all fail closed: DEMO stays their only option, because the
+ * server LIVE gates reject them anyway — the UI must never offer an action
+ * the server will refuse.
  *
  * No client-side overrides, no hard-coded broker exceptions — the server
  * registry is the single source of release-truth (Directive §AU).
  */
 export function isLiveSelectable(entry: BrokerRegistryEntry): boolean {
-  return (
-    entry.environments.includes("LIVE") &&
-    entry.productionLiveVerification?.status === "VERIFIED"
-  );
+  const certificationState =
+    entry.certificationState ??
+    deriveProviderCertificationState(entry.productionLiveVerification ?? undefined);
+  return entry.environments.includes("LIVE") && certificationState === "CERTIFIED";
+}
+
+/**
+ * Live-readiness reason lines for a registry entry (production-LIVE
+ * completion round, Phase 15): the server-computed WHY behind a disabled
+ * LIVE option — rendered BEFORE the user attempts anything. Unknown/older
+ * payloads degrade to the certification-required truth.
+ */
+export function liveReadinessReasonLines(entry: BrokerRegistryEntry): string[] {
+  const readiness = entry.liveReadiness;
+  if (!readiness) {
+    return ["LIVE requires a current provider certification"];
+  }
+  const lines: string[] = [];
+  for (const reason of readiness.blockedReasons) {
+    switch (reason) {
+      case "LIVE_UNSUPPORTED":
+        lines.push("This provider does not offer LIVE accounts");
+        break;
+      case "ADAPTER_UNAVAILABLE":
+        lines.push("Provider integration is not currently available");
+        break;
+      case "PARTNER_APPROVAL_REQUIRED":
+        lines.push("Partner approval required before LIVE is possible");
+        break;
+      case "CERTIFICATION_REQUIRED":
+        lines.push("LIVE requires a current provider certification");
+        break;
+      default:
+        lines.push("LIVE is not currently available for this provider");
+    }
+  }
+  return lines.length > 0 ? lines : ["LIVE is not currently available for this provider"];
 }
 
 /** Key capabilities surfaced as chips (keep the catalog list readable). */
@@ -145,6 +183,7 @@ export function verificationLabelForEntry(
     implementationStatus: entry.status,
     adapterAvailable: entry.adapterAvailable,
     productionLiveVerification: entry.productionLiveVerification ?? null,
+    certificationState: entry.certificationState ?? null,
   }).label;
 }
 
@@ -168,6 +207,7 @@ export function verificationLabelForConnection(
     implementationStatus: registryEntry?.status ?? null,
     adapterAvailable: registryEntry?.adapterAvailable ?? null,
     productionLiveVerification: registryEntry?.productionLiveVerification ?? null,
+    certificationState: registryEntry?.certificationState ?? null,
     accountType: connection.accountType,
     logicalAccountKey: connection.logicalAccountKey ?? null,
     authorizationStatus: connection.authorizationStatus,

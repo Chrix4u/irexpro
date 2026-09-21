@@ -59,6 +59,11 @@ import { AuditSeverity } from '../audit/entities/audit-log.entity';
 import { ConnectBrokerDto } from './dto/connect-broker.dto';
 import { DomainEventBus } from '../events/event-bus.service';
 import { DomainEventType } from '../events/enums/domain-event-type.enum';
+import { ModuleRef } from '@nestjs/core';
+// Production-LIVE completion round (P13 metrics): dependency-free in-process
+// counters (lazy ModuleRef seam — same pattern as risk.service).
+import { MetricsService } from '../metrics/metrics.service';
+import { METRIC_NAMES } from '../metrics/metric-names';
 
 /**
  * BrokerService — Core broker connection lifecycle management.
@@ -145,7 +150,26 @@ export class BrokerService {
     // observation is accepted as a monotonic snapshot and the legacy
     // broker.broker_accounts row becomes a projection of it.
     private readonly snapshotService: BrokerAccountSnapshotService,
+    /**
+     * Production-LIVE completion round (P13 metrics): lazy metrics seam —
+     * OPTIONAL trailing dependency so the ONE spec that constructs
+     * BrokerService directly (broker-authorization.pg-integration.spec.ts)
+     * keeps compiling unchanged. Resolved at CALL time via
+     * ModuleRef.get(..., { strict: false }); when absent every
+     * `this.metrics?.…` call site no-ops (see metrics.module.ts for the DI
+     * decision — observability can never break broker control flow).
+     */
+    private readonly moduleRef?: ModuleRef,
   ) {}
+
+  /** Lazy MetricsService lookup (never throws, never affects control flow). */
+  private get metrics(): MetricsService | null {
+    try {
+      return this.moduleRef?.get(MetricsService, { strict: false }) ?? null;
+    } catch {
+      return null;
+    }
+  }
 
   // ─── Read operations ──────────────────────────────────────────────────────
 
@@ -296,15 +320,24 @@ export class BrokerService {
 
     // Phase H (architect): production-LIVE eligibility fails closed —
     // implementation status (BETA) and adapter availability are NOT
-    // production-LIVE approval. LIVE connections require VERIFIED
-    // operator evidence; UNVERIFIED providers are DEMO-only.
+    // production-LIVE approval. LIVE connections require a CURRENT protocol
+    // certification (CERTIFIED); legacy attestation and UNVERIFIED providers
+    // are both DEMO-only. The message names the truthful derived state so the
+    // operator/user can distinguish "legacy evidence retained" from "never
+    // certified".
     if (
       dto.accountType === BrokerMode.LIVE &&
       !this.providerRegistry.isProductionLiveEligible(dto.brokerId)
     ) {
+      const certificationState =
+        this.providerRegistry.getEntry(dto.brokerId)?.certificationState ?? 'NOT_CERTIFIED';
       throw new ForbiddenException(
-        `Broker ${dto.brokerId} is not production-LIVE verified — ` +
-          'LIVE connections are fail-closed (BETA is DEMO-only)',
+        certificationState === 'LEGACY_VERIFIED'
+          ? `Broker ${dto.brokerId} carries only legacy production evidence ` +
+              `(LEGACY_VERIFIED) — a current certification run (CERTIFIED) is required ` +
+              'before LIVE connections. LIVE is fail-closed.'
+          : `Broker ${dto.brokerId} is not production-LIVE certified — ` +
+              'LIVE connections are fail-closed (BETA is DEMO-only)',
       );
     }
 
@@ -585,12 +618,12 @@ export class BrokerService {
       // accountType — e.g. MetaApi's info.type) must MATCH the connection's
       // DECLARED accountType. A mislabeled environment is a SECURITY event:
       // a LIVE provider account declared as DEMO would otherwise sail past
-      // the demo-authorization path (AUTHORIZED + demoValidated) and the
-      // LIVE verification gates — real money executing under DEMO semantics
-      // on the only VERIFIED real-money route. Fail-closed: ERROR transition,
-      // zero authorization advance, audited with a typed code. Adapters that
-      // only echo the requested mode never trip this gate; it bites exactly
-      // when the provider CONTRADICTS the declaration.
+      // the environment gates onto the only VERIFIED real-money route. Real
+      // money executing under DEMO semantics must never be possible.
+      // Fail-closed: ERROR transition, zero authorization advance, audited
+      // with a typed code. Adapters that only echo the requested mode never
+      // trip this gate; it bites exactly when the provider CONTRADICTS the
+      // declaration.
       const environmentMismatch = this.evaluateEnvironmentMismatch(connection, result);
       const failureError = environmentMismatch.mismatch
         ? `Environment mismatch: the provider reports a ${environmentMismatch.observed} account, ` +
@@ -675,15 +708,15 @@ export class BrokerService {
       // closed on missing currency identity.
       await this.upsertBrokerAccount(connectionId, result.currency ?? undefined);
 
-      // Successful handshake verifies the credential set (Directive §14)
-      // and advances the authorization state machine (Directive §15):
-      //   DEMO account  → AUTHORIZED (demo validation — fixes the previously
-      //                   unreachable demoValidated gate; dual-written below)
+      // Successful handshake verifies the credential set (Directive §14).
+      // DEMO VALIDATION AUTHORITY: the handshake proves connectivity and
+      // credential validity ONLY — it NEVER authorizes and NEVER writes
+      // demoValidated. A successful connect settles EVERY account type at
+      // CONNECTED (the pre-validation state):
+      //   DEMO account  → CONNECTED (the BrokerDemoValidationService checklist
+      //                   alone advances to AUTHORIZED + demoValidated on PASS)
       //   LIVE account → CONNECTED (explicit enable-live-trading still required)
-      const postConnectAuthorization =
-        connection.accountType === BrokerMode.DEMO
-          ? BrokerAuthorizationStatus.AUTHORIZED
-          : BrokerAuthorizationStatus.CONNECTED;
+      const postConnectAuthorization = BrokerAuthorizationStatus.CONNECTED;
 
       // Round 6 live-execution completion (§1b): PROVIDER ACCOUNT IDENTITY
       // DRIFT — the handshake reached a DIFFERENT provider account than the
@@ -727,8 +760,10 @@ export class BrokerService {
           )
             ? { authorizationStatus: postConnectAuthorization }
             : {}),
-          // Dual-write legacy booleans (backward compatibility)
-          ...(connection.accountType === BrokerMode.DEMO ? { demoValidated: true } : {}),
+          // DEMO VALIDATION AUTHORITY: demoValidated is intentionally NOT
+          // written here. A handshake is not evidence of a working DEMO
+          // trading surface — only the BrokerDemoValidationService checklist
+          // (or its previously persisted PASS evidence) may set it true.
         },
         'connectBroker CONNECTED transition',
       );
@@ -955,11 +990,19 @@ export class BrokerService {
 
     // Phase H (architect): production-LIVE eligibility fails closed —
     // BETA/UNVERIFIED providers can never enable LIVE trading, even with
-    // a validated DEMO connection and a LIVE account row.
+    // a validated DEMO connection and a LIVE account row. Legacy attestation
+    // (LEGACY_VERIFIED) is equally LIVE-ineligible: only a current CERTIFIED
+    // state authorizes production LIVE.
     if (!this.providerRegistry.isProductionLiveEligible(connection.brokerId)) {
+      const certificationState =
+        this.providerRegistry.getEntry(connection.brokerId)?.certificationState ?? 'NOT_CERTIFIED';
       throw new ForbiddenException(
-        `Broker ${connection.brokerId} is not production-LIVE verified — ` +
-          'LIVE trading is fail-closed (BETA is DEMO-only)',
+        certificationState === 'LEGACY_VERIFIED'
+          ? `Broker ${connection.brokerId} carries only legacy production evidence ` +
+              `(LEGACY_VERIFIED) — a current certification run (CERTIFIED) is required ` +
+              'before LIVE trading can be enabled. LIVE is fail-closed.'
+          : `Broker ${connection.brokerId} is not production-LIVE certified — ` +
+              'LIVE trading is fail-closed (BETA is DEMO-only)',
       );
     }
 
@@ -1023,6 +1066,135 @@ export class BrokerService {
       },
       severity: AuditSeverity.WARNING,
     });
+  }
+
+  // ─── DEMO validation authority (checklist = sole evidence source) ─────────
+
+  /**
+   * Apply a BrokerDemoValidationService checklist OUTCOME to the connection —
+   * the ONLY write path that may set BrokerConnection.demoValidated.
+   *
+   * DEMO VALIDATION AUTHORITY semantics:
+   *   PASS (validated = true)
+   *     - demoValidated → true (the checklist evidence is the authority)
+   *     - authorization advances CONNECTED → AUTHORIZED when the state machine
+   *       allows it (a concurrently suspended/revoked connection keeps its
+   *       authoritative state — the evidence boolean still lands honestly)
+   *     - already AUTHORIZED/READY/ACTIVE → boolean-only idempotent refresh
+   *   FAIL (validated = false)
+   *     - demoValidated → false (evidence-based revocation of any previous
+   *       PASS — including values persisted by legacy connect auto-writes)
+   *     - an authorization previously GRANTED by validation (AUTHORIZED/READY)
+   *       is revoked → REVOKED: re-validation is required to re-authorize
+   *     - CONNECTED (never validated, or post-reconnect pre-validation) keeps
+   *       its state — nothing to revoke
+   *
+   * Race safety: the persisted-state write is a guarded conditional UPDATE on
+   * the authorization status observed by this call (applyGuardedAuthorizationUpdate)
+   * — a concurrent revoke/suspend/connect surfaces as a Conflict to the caller.
+   * Ownership is checked by the caller (the validation service) before any
+   * provider interaction; the id is re-verified here for defense in depth.
+   *
+   * Returns the post-write authorization status the caller should record in
+   * its evidence/audit metadata (previous → resulting).
+   */
+  async applyDemoValidationOutcome(
+    connectionId: string,
+    userId: string,
+    validated: boolean,
+    ipAddress?: string,
+  ): Promise<{
+    previousStatus: BrokerAuthorizationStatus | null;
+    resultingStatus: BrokerAuthorizationStatus | null;
+    demoValidated: boolean;
+  }> {
+    const connection = await this.findConnectionById(connectionId, userId);
+    const previousStatus = connection.authorizationStatus ?? null;
+    if (connection.accountType !== BrokerMode.DEMO) {
+      // The validation service already refuses LIVE connections before any
+      // provider interaction; this is the fail-closed server-side backstop.
+      throw new BadRequestException('Only DEMO connections can receive a DEMO validation outcome');
+    }
+
+    let target: BrokerAuthorizationStatus | null = null;
+    if (validated) {
+      // PASS: advance CONNECTED → AUTHORIZED (the checklist is the only
+      // authority for this edge). AUTHORIZED/READY/ACTIVE keep their state
+      // (idempotent refresh). Any other state (SUSPENDED/ERROR/REVOKED/
+      // DISCONNECTED/NOT_CONNECTED) keeps the authoritative state — the
+      // evidence boolean still lands, but no authorization is granted from
+      // a state the machine does not allow.
+      if (previousStatus === BrokerAuthorizationStatus.CONNECTED) {
+        target = BrokerAuthorizationStatus.AUTHORIZED;
+      }
+    } else {
+      // FAIL: revoke an authorization that validation previously granted.
+      if (
+        previousStatus === BrokerAuthorizationStatus.AUTHORIZED ||
+        previousStatus === BrokerAuthorizationStatus.READY
+      ) {
+        target = BrokerAuthorizationStatus.REVOKED;
+      }
+    }
+
+    if (target !== null && !BrokerAuthorizationStateMachine.canTransition(previousStatus, target)) {
+      // The state machine refuses this advance (e.g. NOT_CONNECTED →
+      // AUTHORIZED after a concurrent disconnect). Fail-closed: the boolean
+      // still lands (the evidence is the authority for demoValidated), but
+      // no authorization is granted from an invalid state.
+      target = null;
+    }
+
+    if (target !== null) {
+      await this.applyGuardedAuthorizationUpdate(
+        connectionId,
+        previousStatus as BrokerAuthorizationStatus,
+        {
+          demoValidated: validated,
+          authorizationStatus: target,
+          ...(target === BrokerAuthorizationStatus.AUTHORIZED
+            ? { authorizedAt: new Date(), authorizationRevokedAt: null }
+            : {}),
+          ...(target === BrokerAuthorizationStatus.REVOKED
+            ? { authorizationRevokedAt: new Date() }
+            : {}),
+        },
+        'applyDemoValidationOutcome transition',
+      );
+    } else {
+      // Boolean-only write (idempotent PASS refresh, FAIL on a
+      // never-validated/pre-validation connection, or a refused advance).
+      await this.connectionRepo.update(connectionId, { demoValidated: validated });
+    }
+
+    if (
+      target === BrokerAuthorizationStatus.REVOKED ||
+      target === BrokerAuthorizationStatus.AUTHORIZED
+    ) {
+      // A validation-driven authorization change carries no NEW-exposure
+      // authority by itself, but publishes the realtime state change so
+      // clients observe the authoritative transition immediately.
+      this.eventBus.publish(DomainEventType.BROKER_AUTHORIZATION_CHANGED, userId, {
+        userId,
+        connectionId,
+        brokerId: connection.brokerId,
+        previousStatus,
+        status: target,
+      });
+    }
+
+    this.logger.log(
+      `DEMO validation outcome applied: connection=${connectionId} user=${userId} ` +
+        `demoValidated=${validated} authorization ${previousStatus ?? 'UNKNOWN'} → ` +
+        `${target ?? previousStatus ?? 'UNCHANGED'}` +
+        (ipAddress ? ` ip=${ipAddress}` : ''),
+    );
+
+    return {
+      previousStatus,
+      resultingStatus: target ?? previousStatus,
+      demoValidated: validated,
+    };
   }
 
   /**
@@ -1321,6 +1493,12 @@ export class BrokerService {
         connectResult.success &&
         this.evaluateEnvironmentMismatch(connection, connectResult).mismatch
       ) {
+        // P13 metrics: declared-vs-observed environment mismatch detected at
+        // the health-check fence (brokerId + detection source labels only).
+        this.metrics?.increment(METRIC_NAMES.BROKER_ENVIRONMENT_MISMATCHES, {
+          brokerId: connection.brokerId,
+          source: 'health-check',
+        });
         let mismatchSuspended = false;
         try {
           await this.applyGuardedAuthorizationUpdate(
@@ -2308,6 +2486,14 @@ export class BrokerService {
         reason: `Suspended: provider-reported environment contradicts the declared one (${source})`,
       });
     }
+    // P13 metrics: declared-vs-observed environment mismatch detected at the
+    // synchronous-observation fence (every assertConnectionEnvironment caller
+    // — state-reconciliation, on-demand risk evaluation — funnels through this
+    // single throw site; the source label names the detecting path).
+    this.metrics?.increment(METRIC_NAMES.BROKER_ENVIRONMENT_MISMATCHES, {
+      brokerId: connection.brokerId,
+      source,
+    });
     throw new BrokerEnvironmentMismatchError(connection.accountType, observed ?? 'UNKNOWN', source);
   }
 

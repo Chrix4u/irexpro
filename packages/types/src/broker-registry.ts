@@ -97,6 +97,41 @@ export interface BrokerProductionLiveVerification {
 export type ProviderCertificationState = 'NOT_CERTIFIED' | 'LEGACY_VERIFIED' | 'CERTIFIED';
 
 /**
+ * Live-readiness blocker codes (production-LIVE completion round).
+ *
+ * WHY: a user must never discover a LIVE action is impossible only by
+ * clicking it. These are the server-authoritative, user-relevant reasons a
+ * provider is not production-LIVE ready, in resolution order (the first
+ * blocker is the one to resolve first). REGION_UNAVAILABLE is deliberately
+ * NOT in this list — it is user-scoped (the user's country vs the provider's
+ * `liveUnavailableRegions`) and is enforced at the LIVE gates with the
+ * user's profile in hand.
+ */
+export type LiveReadinessBlockedReason =
+  | 'LIVE_UNSUPPORTED'
+  | 'ADAPTER_UNAVAILABLE'
+  | 'PARTNER_APPROVAL_REQUIRED'
+  | 'CERTIFICATION_REQUIRED';
+
+/**
+ * Server-computed live-readiness summary (production-LIVE completion round).
+ *
+ * `eligible` mirrors the runtime gate (registered adapter AND derived
+ * certificationState === 'CERTIFIED'). `blockedReasons` explains WHY LIVE is
+ * unavailable while it is unavailable — never a bare false.
+ */
+export interface BrokerLiveReadiness {
+  /** True only when the runtime production-LIVE gate would pass for this provider. */
+  eligible: boolean;
+  /** Ordered, user-relevant blockers (empty when eligible). */
+  blockedReasons: LiveReadinessBlockedReason[];
+  /** True when provider/partner approval is required before any real account can be reached. */
+  partnerApprovalRequired: boolean;
+  /** ISO-3166 alpha-2 codes where the provider's LIVE offering is known unavailable. */
+  liveUnavailableRegions: string[];
+}
+
+/**
  * Derive the display/runtime state (mirror of the API-side derivation).
  * A HARNESS_CERTIFIED label by itself is insufficient: CERTIFIED requires a
  * parseable verification timestamp, non-empty evidence reference, and a
@@ -147,6 +182,12 @@ export interface BrokerRegistryEntry {
    * derive it client-side via deriveProviderCertificationState when missing).
    */
   certificationState?: ProviderCertificationState;
+  /**
+   * Production-LIVE completion round: always-materialized live-readiness
+   * summary (present in current API payloads; absent on older cached
+   * payloads — treat absent as fail-closed: not eligible, reason unknown).
+   */
+  liveReadiness?: BrokerLiveReadiness;
   connectionRoutes: BrokerConnectionRoute[];
   capabilities: BrokerCapability[];
   authenticationType: BrokerAuthenticationType;

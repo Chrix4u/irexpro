@@ -557,6 +557,44 @@ export default function OnboardingBrokerPage() {
                 ? 'cTrader-family brokers connect through OAuth authorization — no API keys to paste.'
                 : 'Paper Broker requires no API credentials — just an account ID.'}
             </p>
+            {(() => {
+              // Production-LIVE completion round (Phase 2/15): the truthful
+              // certification state + server-computed LIVE blockers for the
+              // SELECTED provider — visible BEFORE any connection attempt
+              // (a user never discovers LIVE is impossible only on click).
+              if (!selectedRegistryEntry) return null;
+              const certificationState =
+                selectedRegistryEntry.certificationState ?? 'NOT_CERTIFIED';
+              const readiness = selectedRegistryEntry.liveReadiness;
+              const reasonLines: string[] = [];
+              if (readiness) {
+                for (const reason of readiness.blockedReasons) {
+                  if (reason === 'PARTNER_APPROVAL_REQUIRED') {
+                    reasonLines.push('Partner approval required before LIVE is possible');
+                  } else if (reason === 'CERTIFICATION_REQUIRED') {
+                    reasonLines.push('LIVE requires a current provider certification');
+                  } else if (reason === 'ADAPTER_UNAVAILABLE') {
+                    reasonLines.push('Provider integration is not currently available');
+                  } else if (reason === 'LIVE_UNSUPPORTED') {
+                    reasonLines.push('This provider does not offer LIVE accounts');
+                  }
+                }
+              } else if (certificationState !== 'CERTIFIED') {
+                reasonLines.push('LIVE requires a current provider certification');
+              }
+              if (certificationState === 'CERTIFIED') return null;
+              return (
+                <Alert variant="info">
+                  <span style={{ flex: 1 }}>
+                    {certificationState === 'LEGACY_VERIFIED'
+                      ? `${selectedRegistryEntry.name}: production evidence is legacy (LEGACY_VERIFIED). `
+                      : `${selectedRegistryEntry.name}: not production-LIVE certified. `}
+                    {reasonLines.length > 0 ? reasonLines.join(' · ') : ''} DEMO accounts connect
+                    normally today.
+                  </span>
+                </Alert>
+              );
+            })()}
           </div>
 
           {selectedIsOAuth ? (

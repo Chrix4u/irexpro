@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useAuth } from '@/context/auth-context';
 import {
@@ -9,9 +9,12 @@ import {
   palette,
 } from '@/components/ui';
 import { api } from '@/lib/api';
+import { eligibility } from '@/lib/eligibility';
+import type { EligibilityStatusView } from '@irexpro/types/eligibility';
 import {
   accountStatusMeta,
   deriveInitials,
+  kycStatusRowView,
 } from '@/lib/account-security-logic';
 import AccountAccessScreen from '@/screens/account/AccountAccessScreen';
 import PersonalInformationScreen from '@/screens/account/PersonalInformationScreen';
@@ -53,6 +56,28 @@ export default function AccountScreen({
 
   const [subScreen, setSubScreen] = useState<AccountSubScreen>(null);
   const [busy, setBusy] = useState<AccountBusyAction>(null);
+  // Production-LIVE completion round (audit P8: no KYC status surface): the
+  // identity card renders the server-reported KYC/jurisdiction/disclosures
+  // truth from GET /users/me/eligibility. Fail-closed: null renders an honest
+  // "unavailable" row — never a guessed status, never a green pill.
+  const [kycStatus, setKycStatus] = useState<EligibilityStatusView | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const status = await eligibility.getMyStatus();
+        if (!cancelled) setKycStatus(status);
+      } catch {
+        if (!cancelled) setKycStatus(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const kycRow = kycStatusRowView(kycStatus);
 
   function startAction(action: Exclude<AccountBusyAction, null>): boolean {
     if (busy) return false;
@@ -197,6 +222,14 @@ export default function AccountScreen({
             status={mfaEnabled ? 'Enabled' : 'Disabled'}
             tone={mfaEnabled ? 'positive' : 'neutral'}
           />
+        </View>
+
+        <View style={styles.identityRow}>
+          <View style={styles.identityRowCopy}>
+            <Text style={styles.identityRowTitle}>Identity verification (KYC)</Text>
+            <Text style={styles.identityRowValue}>{kycRow.detail}</Text>
+          </View>
+          <StatusPill status={kycRow.pillLabel} tone={kycRow.pillTone} />
         </View>
       </Card>
 

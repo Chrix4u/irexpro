@@ -20,6 +20,11 @@ import { AuditAction } from '../../../common/enums/audit-action.enum';
 import { AuditSeverity } from '../../audit/entities/audit-log.entity';
 import { BrokerMode, IBrokerAdapter } from '../../broker/interfaces/broker-adapter.interface';
 import { BrokerConnection } from '../../broker/entities/broker-connection.entity';
+import { BrokerAdapterError, BrokerErrorCode } from '../../broker/interfaces/broker-adapter.errors';
+// Production-LIVE completion round (P13 metrics): the real in-process
+// registry handed through the orchestrator's existing lazy ModuleRef seam.
+import { MetricsService } from '../../metrics/metrics.service';
+import { METRIC_GAUGE_NAMES, METRIC_NAMES } from '../../metrics/metric-names';
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -934,6 +939,113 @@ describe('ExecutionOrchestrator', () => {
       expect(captured).toHaveLength(1);
       expect(Object.values(captured[0]).every((v) => v === null)).toBe(true);
       expect(encryptionService.decrypt).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // ─── P13 metrics: provider latency + typed error/rate-limit counters ─────
+
+  describe('dispatchOrder() — P13 provider observability', () => {
+    let metricsOrchestrator: ExecutionOrchestrator;
+    let metrics: MetricsService;
+
+    beforeEach(() => {
+      metrics = new MetricsService();
+      metrics.reset();
+      // Same collaborator mocks as the main fixture; ONLY the lazy metrics
+      // seam differs — it resolves a REAL in-process registry.
+      metricsOrchestrator = new ExecutionOrchestrator(
+        orderService as unknown as OrderService,
+        brokerService as unknown as BrokerService,
+        controlService as unknown as ExecutionControlService,
+        {
+          getAdapterForConnection: jest.fn().mockReturnValue(adapter as unknown as IBrokerAdapter),
+        } as unknown as BrokerAdapterRegistry,
+        encryptionService as unknown as CredentialEncryptionService,
+        auditService as unknown as AuditService,
+        eventBus as unknown as DomainEventBus,
+        boundaryMock as unknown as FinalDispatchBoundary,
+        {
+          assertMarketSafeForDispatch: jest.fn().mockResolvedValue(undefined),
+        } as unknown as MarketSafetyGateService,
+        new AccountDispatchLeaseService(),
+        { get: () => metrics } as unknown as ModuleRef,
+      );
+    });
+
+    it('records the provider dispatch duration gauge per brokerId on success', async () => {
+      const outcome = await metricsOrchestrator.dispatchOrder(intent, connection);
+      expect(outcome.outcome).toBe('FILLED');
+
+      const gauges = metrics
+        .snapshot()
+        .gauges.filter((s) => s.name === METRIC_GAUGE_NAMES.PROVIDER_DISPATCH_DURATION_SECONDS);
+      expect(gauges).toHaveLength(1);
+      expect(gauges[0].labels).toEqual({ brokerId: 'paper-broker' });
+      expect(gauges[0].value).toBeGreaterThanOrEqual(0);
+    });
+
+    it('counts a typed RATE_LIMITED provider error under BOTH provider_errors and provider_rate_limits', async () => {
+      adapter.placeOrder.mockRejectedValueOnce(
+        new BrokerAdapterError(
+          BrokerErrorCode.RATE_LIMITED,
+          'Provider rate limit exceeded',
+          undefined,
+          true,
+        ),
+      );
+
+      const outcome = await metricsOrchestrator.dispatchOrder(intent, connection);
+      expect(outcome.outcome).toBe('UNKNOWN');
+
+      const counter = (name: string, labels: Record<string, string>) =>
+        metrics
+          .snapshot()
+          .counters.find(
+            (series) =>
+              series.name === name &&
+              Object.entries(labels).every(([key, value]) => series.labels[key] === value),
+          )?.value;
+      expect(
+        counter(METRIC_NAMES.PROVIDER_ERRORS, { brokerId: 'paper-broker', code: 'RATE_LIMITED' }),
+      ).toBe(1);
+      expect(counter(METRIC_NAMES.PROVIDER_RATE_LIMITS, { brokerId: 'paper-broker' })).toBe(1);
+      // The latency gauge is still recorded on the error path.
+      expect(
+        metrics
+          .snapshot()
+          .gauges.filter((s) => s.name === METRIC_GAUGE_NAMES.PROVIDER_DISPATCH_DURATION_SECONDS),
+      ).toHaveLength(1);
+    });
+
+    it('counts NON-rate-limit typed provider errors under provider_errors only', async () => {
+      adapter.placeOrder.mockRejectedValueOnce(
+        new BrokerAdapterError(BrokerErrorCode.BROKER_SERVER_ERROR, 'server exploded'),
+      );
+
+      const outcome = await metricsOrchestrator.dispatchOrder(intent, connection);
+      expect(outcome.outcome).toBe('UNKNOWN');
+
+      const counter = (name: string) =>
+        metrics.snapshot().counters.filter((series) => series.name === name);
+      expect(counter(METRIC_NAMES.PROVIDER_ERRORS)).toHaveLength(1);
+      expect(counter(METRIC_NAMES.PROVIDER_ERRORS)[0].labels).toEqual({
+        brokerId: 'paper-broker',
+        code: 'BROKER_SERVER_ERROR',
+      });
+      expect(counter(METRIC_NAMES.PROVIDER_RATE_LIMITS)).toEqual([]);
+    });
+
+    it('a NON-typed error never increments the provider error counters (unclassified ≠ classified)', async () => {
+      adapter.placeOrder.mockRejectedValueOnce(new Error('plain network hiccup'));
+
+      await metricsOrchestrator.dispatchOrder(intent, connection);
+
+      expect(
+        metrics.snapshot().counters.filter((s) => s.name === METRIC_NAMES.PROVIDER_ERRORS),
+      ).toEqual([]);
+      expect(
+        metrics.snapshot().counters.filter((s) => s.name === METRIC_NAMES.PROVIDER_RATE_LIMITS),
+      ).toEqual([]);
     });
   });
 });

@@ -35,7 +35,7 @@ import { FinalDispatchBoundary, FinalDispatchBlockedException } from './final-di
 // Round 7 (P1 metrics — audit R7-audit-C A6): dependency-free in-process
 // counters (lazy ModuleRef seam — see the metrics getter below).
 import { MetricsService } from '../../metrics/metrics.service';
-import { METRIC_NAMES } from '../../metrics/metric-names';
+import { METRIC_GAUGE_NAMES, METRIC_NAMES } from '../../metrics/metric-names';
 import { mapProviderOrderResponse } from './provider-response.mapper';
 import { classifyIntentOperation, isExposureIncreasingOperation } from './provider-operation-class';
 import { ProviderOperationClass } from '../interfaces/execution-authority';
@@ -555,8 +555,15 @@ export class ExecutionOrchestrator {
     }
 
     // ── Provider dispatch (retry/timeout-wrapped) ─────────────────────────
+    // P13 metrics: the dispatch-path LATENCY gauge per provider (connect +
+    // state-changing provider call, the retry/timeout wrapper included) —
+    // point-in-time last value, recorded on BOTH the success and error paths
+    // (recorded immediately at the await boundary so only provider I/O time
+    // is measured, never local result handling).
+    const dispatchStartedAtMs = Date.now();
     try {
       const result = await this.dispatchToProvider(intent, connection);
+      this.recordDispatchDuration(connection.brokerId, dispatchStartedAtMs);
       const action = mapProviderOrderResponse(result);
 
       switch (action.action) {
@@ -680,6 +687,24 @@ export class ExecutionOrchestrator {
       // is NOT permission to resend — it is an UNRESOLVED PROVIDER OUTCOME.
       // The certainty classification is persisted with the reason and
       // emitted in the sanitized audit/event evidence.
+      //
+      // P13 metrics: typed provider error classification on the dispatch
+      // path (brokerId + BrokerErrorCode labels — the adapter's normalized
+      // error mapping) and the dedicated RATE_LIMITED counter. Labels carry
+      // only the provider registry id and the typed machine code — never
+      // error messages, never identifiers.
+      if (err instanceof BrokerAdapterError) {
+        this.metrics?.increment(METRIC_NAMES.PROVIDER_ERRORS, {
+          brokerId: connection.brokerId,
+          code: err.code,
+        });
+        if (err.code === BrokerErrorCode.RATE_LIMITED) {
+          this.metrics?.increment(METRIC_NAMES.PROVIDER_RATE_LIMITS, {
+            brokerId: connection.brokerId,
+          });
+        }
+      }
+      this.recordDispatchDuration(connection.brokerId, dispatchStartedAtMs);
       const message = (err as Error).message ?? 'Unknown dispatch error';
       const certainty = this.certaintyOf(err);
       const reason = this.uncertaintyReason(message, certainty);
@@ -719,6 +744,19 @@ export class ExecutionOrchestrator {
       }
       return { outcome: 'UNKNOWN', order, orderId: order.id, reason, certainty };
     }
+  }
+
+  /**
+   * P13 metrics: record the provider dispatch-path duration (seconds) for the
+   * most recent dispatch of one provider. Never throws, never alters control
+   * flow (the lazy metrics seam no-ops when MetricsService is absent).
+   */
+  private recordDispatchDuration(brokerId: string, startedAtMs: number): void {
+    this.metrics?.setGauge(
+      METRIC_GAUGE_NAMES.PROVIDER_DISPATCH_DURATION_SECONDS,
+      (Date.now() - startedAtMs) / 1000,
+      { brokerId },
+    );
   }
 
   /** Sanitized certainty classification of a dispatch error (never UNKNOWN-certainty). */

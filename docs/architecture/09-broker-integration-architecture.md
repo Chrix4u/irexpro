@@ -382,18 +382,21 @@ must register and obtain approval for a cTrader Open API application and
 supply its OAuth client credentials; unconfigured credentials fail closed
 without ever opening a socket.
 
-### 14.3 Evidence-based DEMO validation (`validate-demo`)
+### 14.3 Evidence-based DEMO validation (`validate-demo`) — AUTHORITATIVE
 
-`POST /broker/connections/:connectionId/validate-demo` is the honest
+`POST /broker/connections/:connectionId/validate-demo` is the AUTHORITATIVE
 `demoValidated` write path: a capability-aware checklist (14 user-facing
 steps from connect through order round-trips to history) runs against the
 real adapter, with every step PASS/FAIL/SKIPPED and sanitized detail
-(credentials never recorded — `redactString` on all evidence). PASS sets
-`demoValidated`; **FAIL revokes a previously-set flag** (fail-closed — the
-`enableLiveTrading` gate re-checks at that moment). This strengthens main's
-connect-time `demoValidated` auto-write (a connect-implies-validated proxy)
-into checklist-driven validation with audit evidence, unblocking the
-DEMO-first LIVE-authorization invariant.
+(credentials never recorded — `redactString` on all evidence). A connect
+handshake proves connectivity/credential validity ONLY — it settles the
+connection at CONNECTED (pre-validation) and never writes `demoValidated`.
+The checklist alone is the validation authority: PASS sets `demoValidated`
+and advances the authorization state machine CONNECTED → AUTHORIZED (the
+prerequisite for `enableLiveTrading`); **FAIL revokes the flag and any
+validation-granted authorization** (AUTHORIZED/READY → REVOKED,
+fail-closed). Every run persists the full sanitized step evidence and a
+structured evidence record (see the service docs) in the audit trail.
 
 ### 14.4 The credential-gated provider-verification harness program
 

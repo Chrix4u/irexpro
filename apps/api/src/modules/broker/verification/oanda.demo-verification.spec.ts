@@ -24,14 +24,17 @@ import { runProviderVerificationHarness } from './provider-verification-harness'
  * limit order (10% below market), open-order listing, margin info,
  * reconciliation, reconnect, provider error path.
  *
- * EXPECTED HONEST SKIPS against the new-main adapter surface (a SKIPPED step
- * never counts against overall):
- * - pending-modify: the v20 modifyOrder surface maps open-trade SL/TP only
- *   (PUT /trades/{id}/orders) — working-order modification is not mapped, so
- *   the step skips with the typed reason;
- * - pending-cancel: cancelOrder is intentionally off the IBrokerAdapter
- *   interface and the OANDA adapter does not expose the concrete method, so
- *   the step skips (cancellation is NOT silently fabricated).
+ * WORKING-ORDER STEPS (Phase 5 truth — none is expected to skip anymore):
+ * - pending-modify: the v20 modifyOrder surface routes by LOOKUP — a working
+ *   pending order is REPLACED via PUT /v3/accounts/{id}/orders/{orderId}
+ *   (restating the order's current definition plus the modified SL/TP; the
+ *   harness retargets the REPLACEMENT order id the endpoint returns), while
+ *   an open trade keeps the PUT /trades/{id}/orders dependent-orders path;
+ * - pending-cancel: cancelOrder IS exposed (Round 7, Fix 3) as a concrete
+ *   additive method (intentionally off the IBrokerAdapter interface — the
+ *   harness narrows with 'cancelOrder' in adapter), so the step runs.
+ * (A SKIPPED step never counts against overall; skips remain honest for any
+ * step whose PRECONDITION did not pass — e.g. no working order to modify.)
  *
  * EVIDENCE: the run prints the SANITIZED evidence object (console.log) — it
  * contains only timestamps, step statuses, provider order ids, instrument

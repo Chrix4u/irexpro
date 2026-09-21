@@ -9,11 +9,15 @@ import {
  *
  * Mirrors AdminConnectionStateCounts / AdminDiscrepancyCounts /
  * AdminExecutionControlView / AdminExpiredControlsView /
- * AdminProviderRegistryEntry / AdminLiveOpsOverviewView from
+ * AdminProviderRegistryEntry / AdminLiveOpsOverviewView (plus the Phase 10
+ * canary-operations blocks: AdminDispatchOutcomes / AdminStaleSnapshotAlert /
+ * AdminEmergencyFlattenStatus / AdminKillSwitchState / AdminCanaryBound) from
  * packages/types/src/admin-live-account.ts EXACTLY: names, enums,
  * nullability, ISO date strings. (Compat nuance: control `status` and
  * `expiredControls` are optional on the shared type — older payloads may omit
- * them — while this API always emits both.)
+ * them — while this API always emits both; the Phase 10 blocks are optional +
+ * nullable on the shared type and always emitted here, with null = the
+ * block's query failed and degraded.)
  *
  * SECURITY: no credential material, no provider secrets, no audit metadata
  * blobs. Control `reason` is sanitized to plain text before mapping.
@@ -211,6 +215,101 @@ export class AdminProviderRegistryEntryDto {
   certificationState: 'NOT_CERTIFIED' | 'LEGACY_VERIFIED' | 'CERTIFIED';
 }
 
+export class AdminDispatchOutcomesDto {
+  @ApiProperty({
+    minimum: 0,
+    description: 'Orders currently in status RECONCILIATION_PENDING (provider outcome unknown).',
+  })
+  unknownResultOpenCount: number;
+
+  @ApiProperty({
+    minimum: 0,
+    description: 'Orders that reached terminal REJECTED in the last 24h (risk engine or provider).',
+  })
+  rejectedLast24h: number;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    minimum: 0,
+    description:
+      'Risk-engine rejections (pre-dispatch blocks) recorded in the last 24h. Null when not derivable.',
+  })
+  dispatchBlocksLast24h: number | null;
+}
+
+export class AdminStaleSnapshotAlertDto {
+  @ApiProperty({ format: 'uuid' })
+  connectionId: string;
+
+  @ApiProperty({ example: 'metatrader5' })
+  brokerId: string;
+
+  @ApiProperty({ enum: ['DEMO', 'LIVE'] })
+  accountType: 'DEMO' | 'LIVE';
+
+  @ApiPropertyOptional({
+    nullable: true,
+    type: String,
+    format: 'date-time',
+    description: 'Server accept time of the latest accepted snapshot (null = none accepted).',
+  })
+  lastAcceptedAt: string | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    minimum: 0,
+    description:
+      'Age of the observation instant (providerObservedAt ?? acceptedAt) in seconds; null when no snapshot exists.',
+  })
+  ageSeconds: number | null;
+}
+
+export class AdminEmergencyFlattenStatusDto {
+  @ApiPropertyOptional({
+    nullable: true,
+    type: String,
+    format: 'date-time',
+    description: 'When the most recent flatten summary audit was written (null = never recorded).',
+  })
+  lastRequestedAt: string | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    enum: ['COMPLETE', 'PARTIAL', 'UNVERIFIED'],
+    description:
+      'COMPLETE = every position closed; PARTIAL = some not closed (failed or unknown outcome); ' +
+      'UNVERIFIED = audit metadata carries no usable counts. Null = never recorded.',
+  })
+  lastOutcome: 'COMPLETE' | 'PARTIAL' | 'UNVERIFIED' | null;
+
+  @ApiPropertyOptional({ nullable: true, description: 'Sanitized human-readable summary.' })
+  description: string | null;
+}
+
+export class AdminKillSwitchStateDto {
+  @ApiProperty({
+    minimum: 0,
+    description: 'Risk profiles with killSwitchActive = true (all users — admin scope).',
+  })
+  activeUsersCount: number;
+}
+
+export class AdminCanaryBoundDto {
+  @ApiProperty({ example: 'metatrader5' })
+  brokerId: string;
+
+  @ApiProperty({
+    description: 'False when the *_LIVE_CERT_MAX_CANARY_EXPOSURE env var is absent.',
+  })
+  configured: boolean;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Configured canary exposure cap (decimal string — a numeric cap, never a secret).',
+  })
+  maxCanaryExposure: string | null;
+}
+
 export class AdminLiveOpsOverviewViewDto {
   @ApiProperty({ type: String, format: 'date-time' })
   generatedAt: string;
@@ -248,4 +347,41 @@ export class AdminLiveOpsOverviewViewDto {
     activeSessions: number;
     suspendedSessions: number;
   };
+
+  // ─── Phase 10 canary-operations blocks (optional on the wire: null = the
+  // block's query failed and degraded; NEVER fails the whole overview) ──────
+
+  @ApiPropertyOptional({
+    nullable: true,
+    type: 'object',
+    description:
+      'Adapter implementation version per brokerId (null value = adapter carries no version annotation).',
+  })
+  adapterVersions: Record<string, string | null> | null;
+
+  @ApiPropertyOptional({ nullable: true, type: AdminDispatchOutcomesDto })
+  dispatchOutcomes: AdminDispatchOutcomesDto | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    type: [AdminStaleSnapshotAlertDto],
+    description:
+      'CONNECTED connections whose last accepted account snapshot is older than the admin ' +
+      'staleness threshold (or missing on a CONNECTED LIVE connection).',
+  })
+  staleSnapshotAlerts: AdminStaleSnapshotAlertDto[] | null;
+
+  @ApiPropertyOptional({ nullable: true, type: AdminEmergencyFlattenStatusDto })
+  emergencyFlattenStatus: AdminEmergencyFlattenStatusDto | null;
+
+  @ApiPropertyOptional({ nullable: true, type: AdminKillSwitchStateDto })
+  killSwitchState: AdminKillSwitchStateDto | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    type: [AdminCanaryBoundDto],
+    description:
+      'Per certifiable provider: the operator-configured certification canary exposure cap.',
+  })
+  canaryBounds: AdminCanaryBoundDto[] | null;
 }

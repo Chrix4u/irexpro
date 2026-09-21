@@ -75,10 +75,27 @@ class SignalGenerator:
         settings = get_settings()
 
         if settings.ai_signal_mode == "live":
-            raise LiveModeNotSupportedError(
-                "Live signal mode is not supported in this sprint. "
-                "Use AI_SIGNAL_MODE=paper."
-            )
+            # LIVE requires ALL gates open (fail-closed, each named truthfully):
+            #   1. env feature gate AI_ENGINE_ALLOW_LIVE_MODEL
+            #   2. a VALID out-of-band promotion record binding the active
+            #      model_version + byte-exact verified artifact SHA-256
+            if not settings.ai_engine_allow_live_model:
+                raise LiveModeNotSupportedError(
+                    "Live signal mode is disabled: AI_ENGINE_ALLOW_LIVE_MODEL "
+                    "is not enabled for this engine. Live mode additionally "
+                    "requires a valid operator promotion record."
+                )
+
+            live_activation = self._registry.get_live_activation()
+            if not live_activation.get("activated", False):
+                reason = live_activation.get("reason") or "NO_VALID_PROMOTION_RECORD"
+                raise LiveModeNotSupportedError(
+                    "Live signal mode is disabled: the active model has no valid "
+                    "live promotion record (gate closed: "
+                    f"{reason}). Live activation requires an out-of-band operator "
+                    "promotion record matching the model_version and the verified "
+                    "artifact SHA-256 byte-exactly."
+                )
 
         # 1. Resolve active model/governance before deciding which market-data
         # feature profile is required.

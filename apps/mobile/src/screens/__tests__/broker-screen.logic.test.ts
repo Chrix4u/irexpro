@@ -7,6 +7,7 @@ import {
   credentialFields,
   isConnectableEntry,
   isLiveSelectable,
+  liveReadinessReasonLines,
   keyCapabilityChips,
   routeLabel,
   statusPresentation,
@@ -87,7 +88,10 @@ describe("isLiveSelectable (Phase I — production-LIVE release-truth)", () => {
     ).toBe(false);
   });
 
-  it("VERIFIED evidence + LIVE environment offers LIVE", () => {
+  it("legacy VERIFIED evidence does NOT offer LIVE — only a CERTIFIED provider does (Phase 2 truth fix)", () => {
+    // metatrader5's shape: raw status VERIFIED with LEGACY_ATTESTATION
+    // provenance and no harness run. The server LIVE gate rejects it, so the
+    // mobile selector must not offer it.
     expect(
       isLiveSelectable(
         entry({
@@ -95,10 +99,66 @@ describe("isLiveSelectable (Phase I — production-LIVE release-truth)", () => {
             status: "VERIFIED",
             verifiedAt: "2025-09-01T00:00:00.000Z",
             evidenceRef: "docs/brokers/provider-matrix.md",
+            certifiedVia: "LEGACY_ATTESTATION",
+            certificationRunRef: null,
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("a complete CERTIFIED (HARNESS_CERTIFIED) provider with LIVE environment offers LIVE", () => {
+    expect(
+      isLiveSelectable(
+        entry({
+          productionLiveVerification: {
+            status: "VERIFIED",
+            verifiedAt: "2026-09-01T00:00:00.000Z",
+            evidenceRef: "ops/live-certification/2026-09-01",
+            certifiedVia: "HARNESS_CERTIFIED",
+            certificationRunRef:
+              "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d@sha256:" +
+              "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
           },
         }),
       ),
     ).toBe(true);
+  });
+
+  it("an explicit server certificationState CERTIFIED offers LIVE even on older payload shapes", () => {
+    expect(
+      isLiveSelectable(
+        entry({
+          certificationState: "CERTIFIED",
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("liveReadinessReasonLines renders the server's blocked reasons before the user attempts anything", () => {
+    expect(
+      liveReadinessReasonLines(
+        entry({
+          liveReadiness: {
+            eligible: false,
+            blockedReasons: [
+              "PARTNER_APPROVAL_REQUIRED",
+              "CERTIFICATION_REQUIRED",
+            ],
+            partnerApprovalRequired: true,
+            liveUnavailableRegions: [],
+          },
+        }),
+      ),
+    ).toEqual([
+      "Partner approval required before LIVE is possible",
+      "LIVE requires a current provider certification",
+    ]);
+
+    // Older payload without liveReadiness degrades to the certification truth.
+    expect(liveReadinessReasonLines(entry({}))).toEqual([
+      "LIVE requires a current provider certification",
+    ]);
   });
 
   it("absent productionLiveVerification fails closed (older cached wire payloads)", () => {
@@ -201,13 +261,17 @@ describe("buildConnectionRequest (fail-closed validation)", () => {
     }
   });
 
-  it("allows LIVE only when the registry carries VERIFIED production evidence", () => {
+  it("allows LIVE only when the provider is CURRENTLY CERTIFIED (complete harness evidence)", () => {
     const result = buildConnectionRequest(
       entry({
         productionLiveVerification: {
           status: "VERIFIED",
-          verifiedAt: "2025-09-01T00:00:00.000Z",
-          evidenceRef: "docs/brokers/provider-matrix.md",
+          verifiedAt: "2026-09-01T00:00:00.000Z",
+          evidenceRef: "ops/live-certification/2026-09-01",
+          certifiedVia: "HARNESS_CERTIFIED",
+          certificationRunRef:
+            "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d@sha256:" +
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         },
       }),
       "LIVE",
@@ -217,6 +281,27 @@ describe("buildConnectionRequest (fail-closed validation)", () => {
     expect("error" in result).toBe(false);
     if (!("error" in result)) {
       expect(result.accountType).toBe("LIVE");
+    }
+  });
+
+  it("rejects LIVE for legacy-attested providers (LEGACY_VERIFIED is not certification)", () => {
+    const result = buildConnectionRequest(
+      entry({
+        productionLiveVerification: {
+          status: "VERIFIED",
+          verifiedAt: null,
+          evidenceRef: "production operation — MetaApi bridge",
+          certifiedVia: "LEGACY_ATTESTATION",
+          certificationRunRef: null,
+        },
+      }),
+      "LIVE",
+      "acct",
+      "tok",
+    );
+    expect("error" in result).toBe(true);
+    if ("error" in result) {
+      expect(result.error).toContain("not production-verified");
     }
   });
 
@@ -277,7 +362,7 @@ describe("verificationLabelForEntry (fixed six-label taxonomy)", () => {
     ).toBe("Production LIVE Unverified");
   });
 
-  it("a VERIFIED entry is Production LIVE Verified", () => {
+  it("a CERTIFIED entry is Production LIVE Verified", () => {
     expect(
       verificationLabelForEntry(
         entry({
@@ -285,11 +370,32 @@ describe("verificationLabelForEntry (fixed six-label taxonomy)", () => {
           productionLiveVerification: {
             status: "VERIFIED",
             verifiedAt: "2026-09-01T00:00:00.000Z",
-            evidenceRef: "OPS-123",
+            evidenceRef: "ops/live-certification/2026-09-01",
+            certifiedVia: "HARNESS_CERTIFIED",
+            certificationRunRef:
+              "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d@sha256:" +
+              "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
           },
         }),
       ),
     ).toBe("Production LIVE Verified");
+  });
+
+  it("a legacy-attested entry is Production LIVE Unverified — never a current certification (Phase 2)", () => {
+    expect(
+      verificationLabelForEntry(
+        entry({
+          status: "SUPPORTED",
+          productionLiveVerification: {
+            status: "VERIFIED",
+            verifiedAt: null,
+            evidenceRef: "production operation — MetaApi bridge",
+            certifiedVia: "LEGACY_ATTESTATION",
+            certificationRunRef: null,
+          },
+        }),
+      ),
+    ).toBe("Production LIVE Unverified");
   });
 
   it("a DEMO-only provider is DEMO only", () => {

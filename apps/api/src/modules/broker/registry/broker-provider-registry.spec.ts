@@ -168,6 +168,122 @@ describe('BrokerProviderRegistryService', () => {
       expect(service.isProductionLiveEligible('')).toBe(false);
     });
 
+    // ── Production-LIVE completion round (Phase 15): liveReadiness truth ──
+
+    describe('liveReadiness — always-materialized, never a bare false (Phase 15)', () => {
+      it('metatrader5: LEGACY_VERIFIED → CERTIFICATION_REQUIRED blocker, no partner gate', async () => {
+        const service = await buildService(['metatrader5', 'paper-broker']);
+        const mt5 = service.getCatalog().find((e) => e.id === 'metatrader5');
+
+        expect(mt5?.liveReadiness).toEqual({
+          eligible: false,
+          blockedReasons: ['CERTIFICATION_REQUIRED'],
+          partnerApprovalRequired: false,
+          liveUnavailableRegions: [],
+        });
+      });
+
+      it('paper-broker: DEMO-only environments → LIVE_UNSUPPORTED', async () => {
+        const service = await buildService(['metatrader5', 'paper-broker']);
+        const paper = service.getCatalog().find((e) => e.id === 'paper-broker');
+
+        expect(paper?.liveReadiness).toEqual({
+          eligible: false,
+          blockedReasons: ['LIVE_UNSUPPORTED'],
+          partnerApprovalRequired: false,
+          liveUnavailableRegions: [],
+        });
+      });
+
+      it('oanda: certification blocker + GH region unavailability surfaced', async () => {
+        const service = await buildService(['metatrader5', 'paper-broker', 'oanda']);
+        const oanda = service.getCatalog().find((e) => e.id === 'oanda');
+
+        expect(oanda?.liveReadiness).toEqual({
+          eligible: false,
+          blockedReasons: ['CERTIFICATION_REQUIRED'],
+          partnerApprovalRequired: false,
+          liveUnavailableRegions: ['GH'],
+        });
+      });
+
+      it('cTrader family: partner approval is the FIRST blocker, certification still required after it', async () => {
+        const service = await buildService(['ctrader']);
+        for (const id of ['ctrader', 'pepperstone-ctrader', 'icmarkets-ctrader']) {
+          const entry = service.getCatalog().find((e) => e.id === id);
+          expect(entry?.liveReadiness).toEqual({
+            eligible: false,
+            blockedReasons: ['PARTNER_APPROVAL_REQUIRED', 'CERTIFICATION_REQUIRED'],
+            partnerApprovalRequired: true,
+            liveUnavailableRegions: [],
+          });
+        }
+      });
+
+      it('an entry without a registered adapter carries ADAPTER_UNAVAILABLE before certification', async () => {
+        const service = await buildService(['metatrader5']);
+        const oanda = service.getCatalog().find((e) => e.id === 'oanda');
+
+        expect(oanda?.liveReadiness.blockedReasons).toEqual([
+          'ADAPTER_UNAVAILABLE',
+          'CERTIFICATION_REQUIRED',
+        ]);
+        expect(oanda?.liveReadiness.eligible).toBe(false);
+      });
+
+      it('eligible mirrors isProductionLiveEligible for every catalog entry (invariant)', async () => {
+        const service = await buildService(['metatrader5', 'paper-broker', 'oanda']);
+        for (const entry of service.getCatalog()) {
+          expect(entry.liveReadiness.eligible).toBe(service.isProductionLiveEligible(entry.id));
+        }
+      });
+
+      it('every catalog entry materializes the liveReadiness shape', async () => {
+        const service = await buildService(['metatrader5', 'paper-broker', 'oanda']);
+        for (const entry of service.getCatalog()) {
+          expect(entry.liveReadiness).toEqual(
+            expect.objectContaining({
+              eligible: expect.any(Boolean),
+              blockedReasons: expect.any(Array),
+              partnerApprovalRequired: expect.any(Boolean),
+              liveUnavailableRegions: expect.any(Array),
+            }),
+          );
+        }
+      });
+    });
+
+    describe('isLiveRegionAvailable — provider LIVE region truth (Phase 5)', () => {
+      it('OANDA LIVE is unavailable for GH users (documented division restriction)', async () => {
+        const service = await buildService(['metatrader5', 'paper-broker', 'oanda']);
+        expect(service.isLiveRegionAvailable('oanda', 'GH')).toBe(false);
+        expect(service.isLiveRegionAvailable('oanda', 'gh')).toBe(false);
+      });
+
+      it('OANDA LIVE is available for users outside the restricted regions', async () => {
+        const service = await buildService(['metatrader5', 'paper-broker', 'oanda']);
+        expect(service.isLiveRegionAvailable('oanda', 'US')).toBe(true);
+        expect(service.isLiveRegionAvailable('oanda', 'GB')).toBe(true);
+      });
+
+      it('providers without a known restriction are available everywhere (metatrader5)', async () => {
+        const service = await buildService(['metatrader5', 'paper-broker']);
+        expect(service.isLiveRegionAvailable('metatrader5', 'GH')).toBe(true);
+        expect(service.isLiveRegionAvailable('metatrader5', 'US')).toBe(true);
+      });
+
+      it('a null/empty country cannot be evaluated here (profile gates precede LIVE)', async () => {
+        const service = await buildService(['metatrader5', 'paper-broker', 'oanda']);
+        expect(service.isLiveRegionAvailable('oanda', null)).toBe(true);
+        expect(service.isLiveRegionAvailable('oanda', '  ')).toBe(true);
+      });
+
+      it('unknown brokers fail closed', async () => {
+        const service = await buildService(['metatrader5', 'paper-broker']);
+        expect(service.isLiveRegionAvailable('unknown-broker', 'US')).toBe(false);
+      });
+    });
+
     it('every catalog entry serializes the materialized productionLiveVerification shape', async () => {
       const service = await buildService(['metatrader5', 'paper-broker', 'oanda']);
       const catalog = service.getCatalog();
