@@ -13,6 +13,7 @@ from app.domain.models.multitimeframe_features import (
     MULTITIMEFRAME_RESEARCH_VALIDATION_POLICY,
 )
 from app.domain.training.train_final_multitimeframe import (
+    MIN_PAPER_PROMOTION_M1_ROWS_PER_INSTRUMENT,
     _chronological_final_split,
     _final_gate,
     _load_research_qualification,
@@ -112,6 +113,10 @@ def _qualification_payload(
     if research_validation_policy is not None:
         payload["research_validation_policy"] = research_validation_policy
     return payload
+
+def test_paper_promotion_evidence_minimum_is_100k_rows_per_pair():
+    assert MIN_PAPER_PROMOTION_M1_ROWS_PER_INSTRUMENT == 100_000
+
 
 def test_final_packaging_accepts_only_current_label_selection_policy(tmp_path):
     summary = tmp_path / "summary.json"
