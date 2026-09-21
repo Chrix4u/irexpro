@@ -395,9 +395,10 @@ jobs:
             --post-event-minutes 15 \
             > "$context_result" 2> "$context_error"; then
             context_report="$context_root/agent_council_overlay.json"
-            test -s "$context_report"
-
-            CONTEXT_REPORT_PATH="$context_report" node <<'NODE'
+            if [[ ! -s "$context_report" ]]; then
+              printf 'CONTEXT_RESEARCH_HOLD reason=missing_overlay_report horizon=%sm\n' \
+                "$selected_horizon"
+            elif CONTEXT_REPORT_PATH="$context_report" node <<'NODE'
           const fs = require('fs');
           const report = JSON.parse(
             fs.readFileSync(process.env.CONTEXT_REPORT_PATH, 'utf8')
@@ -447,8 +448,14 @@ jobs:
             ].join(' ')
           );
           NODE
-            rm -f "$context_error"
-            printf 'context_report_path=%s\n' "$context_report"
+            then
+              rm -f "$context_error"
+              printf 'context_report_path=%s\n' "$context_report"
+            else
+              context_status=$?
+              printf 'CONTEXT_RESEARCH_HOLD reason=overlay_report_validation_failed status=%s horizon=%sm\n' \
+                "$context_status" "$selected_horizon"
+            fi
           else
             context_status=$?
             context_message=''
