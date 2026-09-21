@@ -78,10 +78,60 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     # Volume change
     result["volume_change"] = result["volume"].pct_change()
 
-    # Fill remaining NaNs with 0 (safe — model handles sparse features)
+    # Richer causal features used by the multi-timeframe v2 model. These are
+    # computed here so offline corpus construction and runtime inference share
+    # exactly the same formulas. FEATURE_COLUMNS below intentionally remains
+    # the legacy single-timeframe contract.
+    result["momentum_3"] = result["close"].pct_change(3)
+    result["momentum_5"] = result["close"].pct_change(5)
+    result["momentum_10"] = result["close"].pct_change(10)
+    result["volatility_20"] = result["simple_return"].rolling(20, min_periods=3).std()
+    result["signed_candle_body"] = (result["close"] - result["open"]) / range_
+
+    previous_close = result["close"].shift(1)
+    true_range = pd.concat(
+        [
+            result["high"] - result["low"],
+            (result["high"] - previous_close).abs(),
+            (result["low"] - previous_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    atr_14 = true_range.rolling(14, min_periods=2).mean()
+    result["atr_pct_14"] = atr_14 / (result["close"].abs() + eps)
+
+    delta = result["close"].diff()
+    average_gain = delta.clip(lower=0.0).rolling(14, min_periods=2).mean()
+    average_loss = (-delta.clip(upper=0.0)).rolling(14, min_periods=2).mean()
+    result["rsi_14"] = average_gain / (average_gain + average_loss + eps)
+
+    rolling_low = result["low"].rolling(20, min_periods=2).min()
+    rolling_high = result["high"].rolling(20, min_periods=2).max()
+    result["close_position_20"] = (
+        2.0
+        * (result["close"] - rolling_low)
+        / (rolling_high - rolling_low + eps)
+        - 1.0
+    )
+
+    volume_mean = result["volume"].rolling(20, min_periods=3).mean()
+    volume_std = result["volume"].rolling(20, min_periods=3).std()
+    result["volume_zscore_20"] = (
+        (result["volume"] - volume_mean) / (volume_std + eps)
+    ).clip(lower=-10.0, upper=10.0)
+
+    range_pct = range_ / (result["close"].abs() + eps)
+    rolling_range = range_pct.rolling(20, min_periods=3).mean()
+    result["range_expansion_20"] = range_pct / (rolling_range + eps) - 1.0
+
+    # Fill remaining NaNs with neutral values. The legacy single-timeframe
+    # contract stays unchanged while MTF v2 consumes the extra columns below.
     feature_cols = [
         "simple_return", "ma_5", "ma_10", "ma_20",
         "price_vs_ma20", "volatility_10", "candle_body", "hl_range", "volume_change",
+        "momentum_3", "momentum_5", "momentum_10", "volatility_20",
+        "signed_candle_body", "atr_pct_14", "rsi_14", "close_position_20",
+        "volume_zscore_20", "range_expansion_20",
     ]
     result[feature_cols] = result[feature_cols].fillna(0.0)
 

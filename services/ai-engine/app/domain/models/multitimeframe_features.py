@@ -10,7 +10,7 @@ import pandas as pd
 from app.domain.market_data.schemas import OHLCVCandle
 from app.domain.models.feature_engineering import compute_features
 
-MULTITIMEFRAME_RUNTIME_PROFILE = "multitimeframe_v1"
+MULTITIMEFRAME_RUNTIME_PROFILE = "multitimeframe_v2"
 MULTITIMEFRAME_LABEL_SELECTION_POLICY = "all_exact_horizon_finite_rows_v2"
 MULTITIMEFRAME_BACKTEST_POLICY = "non_overlapping_equal_weight_periods_v1"
 MULTITIMEFRAME_RESEARCH_VALIDATION_POLICY = "outer_validation_untouched_internal_early_stop_v1"
@@ -30,6 +30,19 @@ INITIAL_FOREX_UNIVERSE = (
     "USDCAD",
     "USDCHF",
 )
+MULTITIMEFRAME_DIRECT_FEATURE_COLUMNS = (
+    "momentum_3",
+    "momentum_5",
+    "momentum_10",
+    "volatility_20",
+    "signed_candle_body",
+    "atr_pct_14",
+    "rsi_14",
+    "close_position_20",
+    "volume_zscore_20",
+    "range_expansion_20",
+)
+
 NORMALIZED_FEATURE_SUFFIXES = (
     "simple_return",
     "price_vs_ma20",
@@ -40,6 +53,7 @@ NORMALIZED_FEATURE_SUFFIXES = (
     "ma5_vs_ma20",
     "ma10_vs_ma20",
     "log_tick_volume",
+    *MULTITIMEFRAME_DIRECT_FEATURE_COLUMNS,
 )
 TIME_FEATURE_COLUMNS = (
     "minute_of_day_sin",
@@ -148,6 +162,16 @@ def _latest_timeframe_features(
         "ma5_vs_ma20": ma5 / max(abs(ma20), eps) - 1.0,
         "ma10_vs_ma20": ma10 / max(abs(ma20), eps) - 1.0,
         "log_tick_volume": float(np.log1p(tick_volume)),
+        "momentum_3": float(latest["momentum_3"]),
+        "momentum_5": float(latest["momentum_5"]),
+        "momentum_10": float(latest["momentum_10"]),
+        "volatility_20": float(latest["volatility_20"]),
+        "signed_candle_body": float(latest["signed_candle_body"]),
+        "atr_pct_14": float(latest["atr_pct_14"]),
+        "rsi_14": float(latest["rsi_14"]),
+        "close_position_20": float(latest["close_position_20"]),
+        "volume_zscore_20": float(latest["volume_zscore_20"]),
+        "range_expansion_20": float(latest["range_expansion_20"]),
     }
 
     if not np.isfinite(np.asarray(list(values.values()), dtype=float)).all():

@@ -5,9 +5,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from app.domain.models.multitimeframe_features import (
+    MULTITIMEFRAME_DIRECT_FEATURE_COLUMNS,
+    MULTITIMEFRAME_RUNTIME_PROFILE,
+)
 from app.domain.training.multitimeframe_corpus import build_multitimeframe_feature_corpus
 from app.domain.training.train_multitimeframe import (
+    ECONOMIC_SAMPLE_WEIGHT_POLICY,
     MULTITIMEFRAME_FEATURE_COLUMNS,
+    _economic_sample_weights,
     _non_overlapping_portfolio_periods,
     _split_internal_early_stopping_tail,
     _trade_metrics,
@@ -60,6 +66,41 @@ def test_prepare_instrument_corpus_uses_real_spread_and_tick_volume():
     assert (
         prepared["long_net_return"] + prepared["short_net_return"]
     ).median() < 0
+
+
+def test_mtf_v2_features_are_causal_finite_and_in_contract():
+    corpus = build_multitimeframe_feature_corpus(_m1_fixture())
+    prepared = prepare_instrument_corpus(
+        corpus,
+        instrument="EURUSD",
+        horizon_bars=5,
+    )
+
+    assert MULTITIMEFRAME_RUNTIME_PROFILE == "multitimeframe_v2"
+    for suffix in MULTITIMEFRAME_DIRECT_FEATURE_COLUMNS:
+        column = f"m1_{suffix}"
+        assert column in corpus.columns
+        assert column in MULTITIMEFRAME_FEATURE_COLUMNS
+        assert np.isfinite(prepared[column].to_numpy(dtype=float)).all()
+
+
+def test_economic_sample_weights_keep_all_rows_and_favor_positive_net_edge():
+    frame = pd.DataFrame(
+        {
+            "long_net_return": [-0.0002, 0.0001, 0.0010, -0.0003],
+            "short_net_return": [-0.0001, -0.0002, -0.0012, 0.0006],
+        }
+    )
+
+    weights = _economic_sample_weights(frame)
+
+    assert ECONOMIC_SAMPLE_WEIGHT_POLICY == "positive_net_edge_q75_scaled_v1"
+    assert len(weights) == len(frame)
+    assert np.isfinite(weights).all()
+    assert (weights > 0.0).all()
+    assert weights.max() <= 5.0
+    assert weights[0] < weights[2]
+    assert weights[0] < weights[3]
 
 
 def test_prepare_instrument_corpus_keeps_both_direction_losing_periods():
