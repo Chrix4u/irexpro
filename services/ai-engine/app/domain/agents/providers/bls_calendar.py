@@ -221,29 +221,21 @@ class BlsOfficialCalendarProvider:
     def __init__(self, client: httpx.AsyncClient | None = None) -> None:
         self._client = client
 
-    async def fetch(
-        self,
-        *,
-        fetched_at: datetime | None = None,
-    ) -> list[MacroContextEvent]:
+    async def fetch(self) -> list[MacroContextEvent]:
         """
-        Fetch the official calendar.
+        Fetch the official calendar and stamp knowledge at response receipt.
 
-        `fetched_at` is only for replaying a snapshot whose receipt timestamp
-        was already persisted. Live fetches stamp availability after the HTTP
-        response is received, never at request start.
+        Historical replay uses `parse_bls_calendar()` with the persisted
+        snapshot receipt time. The live network boundary intentionally accepts
+        no caller-supplied availability timestamp.
         """
-        replay_known_at = (
-            _aware(fetched_at, "fetched_at") if fetched_at is not None else None
-        )
-
         if self._client is not None:
             response = await self._request(self._client)
         else:
             async with httpx.AsyncClient(trust_env=False) as client:
                 response = await self._request(client)
 
-        known_at = replay_known_at or datetime.now(UTC)
+        known_at = datetime.now(UTC)
 
         content_type = response.headers.get("content-type", "")
         media_type = content_type.split(";", 1)[0].strip().lower()
