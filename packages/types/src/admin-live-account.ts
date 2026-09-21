@@ -13,11 +13,11 @@ import type {
   BrokerAuthorizationStatus,
   BrokerConnectionStatus,
   BrokerCredentialStatus,
-} from './index';
+} from "./index";
 import type {
   BrokerProductionLiveVerification,
   ProviderCertificationState,
-} from './broker-registry';
+} from "./broker-registry";
 
 // ─── Operational overview (GET /admin/live-account/overview) ────────────────
 
@@ -51,7 +51,7 @@ export interface AdminDiscrepancyCounts {
 
 export interface AdminExecutionControlView {
   id: string;
-  scope: 'GLOBAL' | 'PROVIDER' | 'USER' | 'BROKER_CONNECTION';
+  scope: "GLOBAL" | "PROVIDER" | "USER" | "BROKER_CONNECTION";
   /** Normalized display target for the scope (broker id / masked user / null). */
   scopeTarget: string | null;
   reason: string | null;
@@ -63,7 +63,7 @@ export interface AdminExecutionControlView {
    * (never blocking; reactivation replaces it). Optional for wire
    * compatibility with payloads emitted before this field existed.
    */
-  status?: 'ACTIVE' | 'EXPIRED';
+  status?: "ACTIVE" | "EXPIRED";
 }
 
 /**
@@ -100,6 +100,82 @@ export interface AdminProviderRegistryEntry {
   certificationState?: ProviderCertificationState;
 }
 
+// ─── Phase 10 canary-operations blocks (read-only, DB-derived) ──────────────
+
+/**
+ * Order-dispatch outcome counts (Phase 10 canary operations — admin
+ * observability of the dispatch pipeline's honest failure modes).
+ */
+export interface AdminDispatchOutcomes {
+  /** Orders currently in status RECONCILIATION_PENDING (provider outcome unknown). */
+  unknownResultOpenCount: number;
+  /** Orders that reached terminal REJECTED in the last 24h (risk engine or provider). */
+  rejectedLast24h: number;
+  /**
+   * Risk-engine rejections recorded in the last 24h — every RiskViolation row
+   * is a pre-dispatch block (the risk engine runs before the dispatch
+   * boundary). Optional/nullable: omitted (null) when the risk-violation
+   * count is not derivable at query time.
+   */
+  dispatchBlocksLast24h?: number | null;
+}
+
+/**
+ * A CONNECTED broker connection whose last accepted account snapshot is older
+ * than the admin staleness threshold (or missing entirely on a CONNECTED LIVE
+ * connection).
+ */
+export interface AdminStaleSnapshotAlert {
+  connectionId: string;
+  brokerId: string;
+  accountType: "DEMO" | "LIVE";
+  /** Server accept time of the latest accepted snapshot (null = none accepted). */
+  lastAcceptedAt: string | null;
+  /**
+   * Age of the observation instant (providerObservedAt ?? acceptedAt — the
+   * same semantics as the pre-trade snapshot freshness gate), in seconds.
+   * Null when no snapshot exists.
+   */
+  ageSeconds: number | null;
+}
+
+/**
+ * Most recent emergency flatten (kill-switch force-close of all open
+ * positions), derived from the audit log tail.
+ */
+export interface AdminEmergencyFlattenStatus {
+  /** When the most recent flatten summary audit was written (null = never recorded). */
+  lastRequestedAt: string | null;
+  /**
+   * Derived from the audit record's closed/target counts: COMPLETE = every
+   * position closed; PARTIAL = some not closed (failed or unknown outcome —
+   * the distinction is not separable in the summary audit); UNVERIFIED = the
+   * audit record's metadata does not carry usable counts. Null = never recorded.
+   */
+  lastOutcome: "COMPLETE" | "PARTIAL" | "UNVERIFIED" | null;
+  /** Honest human-readable summary (sanitized; null = never recorded). */
+  description: string | null;
+}
+
+/** Per-user kill-switch adoption snapshot. */
+export interface AdminKillSwitchState {
+  /** Risk profiles with killSwitchActive = true (all users — admin scope). */
+  activeUsersCount: number;
+}
+
+/**
+ * Operator-configured certification canary exposure cap for a certifiable
+ * provider (the *_LIVE_CERT_MAX_CANARY_EXPOSURE env contract consumed by the
+ * operator certification CLI). Numeric exposure cap — NOT a secret.
+ */
+export interface AdminCanaryBound {
+  brokerId: string;
+  /** False when the env var is absent (the certification CLI then refuses the run). */
+  configured: boolean;
+  /** The configured cap as a decimal string (null when not configured). */
+  maxCanaryExposure: string | null;
+}
+
 export interface AdminLiveOpsOverviewView {
   generatedAt: string;
   connections: AdminConnectionStateCounts;
@@ -116,11 +192,28 @@ export interface AdminLiveOpsOverviewView {
     activeSessions: number;
     suspendedSessions: number;
   };
+  /**
+   * Phase 10 canary operations — each block below is DB-derived/read-only and
+   * OPTIONAL + NULLABLE on the wire: older payloads omit them, and a query
+   * failure degrades the whole block to null (never fails the overview).
+   */
+  /** Adapter implementation version per brokerId (null value = adapter carries no version annotation). */
+  adapterVersions?: Record<string, string | null> | null;
+  dispatchOutcomes?: AdminDispatchOutcomes | null;
+  staleSnapshotAlerts?: AdminStaleSnapshotAlert[] | null;
+  emergencyFlattenStatus?: AdminEmergencyFlattenStatus | null;
+  killSwitchState?: AdminKillSwitchState | null;
+  canaryBounds?: AdminCanaryBound[] | null;
 }
 
 // ─── Admin connections (GET /admin/live-account/connections) ────────────────
 
-export type AdminConnectionFilter = 'ALL' | 'CONNECTED' | 'ERROR' | 'LIVE' | 'DEMO';
+export type AdminConnectionFilter =
+  | "ALL"
+  | "CONNECTED"
+  | "ERROR"
+  | "LIVE"
+  | "DEMO";
 
 export interface AdminConnectionRowView {
   id: string;
@@ -130,7 +223,7 @@ export interface AdminConnectionRowView {
   brokerName: string;
   displayName: string | null;
   maskedAccountId: string | null;
-  accountType: 'DEMO' | 'LIVE';
+  accountType: "DEMO" | "LIVE";
   connectionStatus: BrokerConnectionStatus;
   authorizationStatus: BrokerAuthorizationStatus;
   credentialStatus: BrokerCredentialStatus;
@@ -170,7 +263,12 @@ export interface AdminConnectionsPage {
 
 // ─── Admin discrepancies (GET /admin/live-account/reconciliation/discrepancies) ──
 
-export type AdminDiscrepancyFilter = 'ALL' | 'OPEN' | 'RESOLVED' | 'CRITICAL' | 'WARNING';
+export type AdminDiscrepancyFilter =
+  | "ALL"
+  | "OPEN"
+  | "RESOLVED"
+  | "CRITICAL"
+  | "WARNING";
 
 export interface AdminDiscrepancyRowView {
   id: string;
@@ -178,8 +276,8 @@ export interface AdminDiscrepancyRowView {
   brokerConnectionId: string;
   brokerId: string;
   type: string;
-  severity: 'INFO' | 'WARNING' | 'CRITICAL';
-  status: 'OPEN' | 'RESOLVED';
+  severity: "INFO" | "WARNING" | "CRITICAL";
+  status: "OPEN" | "RESOLVED";
   internalRefId: string | null;
   providerRef: string | null;
   description: string;
@@ -197,7 +295,7 @@ export interface AdminDiscrepanciesPage {
 
 // ─── Admin audit investigation (GET /admin/audit/logs) ──────────────────────
 
-export type AdminAuditSeverity = 'INFO' | 'WARNING' | 'CRITICAL';
+export type AdminAuditSeverity = "INFO" | "WARNING" | "CRITICAL";
 
 export interface AdminAuditRowView {
   id: string;

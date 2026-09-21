@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { ModuleRef } from '@nestjs/core';
 import { Repository } from 'typeorm';
 import { ExactDecimal } from '../../../common/utils/exact-decimal';
 import { Trade, TradeStatus } from '../entities/trade.entity';
@@ -11,6 +12,10 @@ import { BrokerCredentialLifecycle } from '../../broker/authorization/broker-cre
 import { AuditService } from '../../audit/audit.service';
 import { AuditAction } from '../../../common/enums/audit-action.enum';
 import { AuditSeverity } from '../../audit/entities/audit-log.entity';
+// Production-LIVE completion round (P13 metrics): dependency-free in-process
+// counters (lazy ModuleRef seam — same pattern as risk.service).
+import { MetricsService } from '../../metrics/metrics.service';
+import { METRIC_NAMES } from '../../metrics/metric-names';
 
 /**
  * Round 6 live-execution completion (§8) — per-trade protective-order
@@ -101,7 +106,22 @@ export class ProtectiveOrderReconciliationService {
     private readonly adapterRegistry: BrokerAdapterRegistry,
     private readonly encryptionService: CredentialEncryptionService,
     private readonly auditService: AuditService,
+    /**
+     * Production-LIVE completion round (P13 metrics): lazy metrics seam —
+     * OPTIONAL trailing dependency (direct spec constructions keep compiling;
+     * resolved at CALL time, no-ops when absent — see metrics.module.ts).
+     */
+    private readonly moduleRef?: ModuleRef,
   ) {}
+
+  /** Lazy MetricsService lookup (never throws, never affects control flow). */
+  private get metrics(): MetricsService | null {
+    try {
+      return this.moduleRef?.get(MetricsService, { strict: false }) ?? null;
+    } catch {
+      return null;
+    }
+  }
 
   /** Verify + repair the protective orders of every OPEN trade on ONE connection. */
   async reconcileProtectiveOrders(
@@ -214,6 +234,25 @@ export class ProtectiveOrderReconciliationService {
         })),
       },
     });
+
+    // P13 metrics: protective SL/TP drift found + repaired, and repairs that
+    // FAILED (the position is unprotected at the provider — CRITICAL). Only
+    // the two operator-actionable outcomes are counted (PROTECTED is the
+    // steady state; skips are surfaced by the audit above).
+    if (repairedCount > 0) {
+      this.metrics?.increment(
+        METRIC_NAMES.PROTECTIVE_ORDER_REPAIRS,
+        { brokerId: connection.brokerId, outcome: 'REPAIRED' },
+        repairedCount,
+      );
+    }
+    if (repairFailedCount > 0) {
+      this.metrics?.increment(
+        METRIC_NAMES.PROTECTIVE_ORDER_REPAIRS,
+        { brokerId: connection.brokerId, outcome: 'REPAIR_FAILED' },
+        repairFailedCount,
+      );
+    }
 
     return {
       checked: candidates.length,

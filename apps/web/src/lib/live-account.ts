@@ -58,6 +58,7 @@ import type {
   BrokerConnectionStatus,
   BrokerCredentialStatus,
 } from '@irexpro/types';
+import type { StopTradingSessionResponse, TradingSessionView } from '@irexpro/types/execution';
 
 // ── Runtime guard helpers ───────────────────────────────────────────────────
 
@@ -507,4 +508,185 @@ export async function loadLiveAccountActivity(
     throw new Error('Live account activity contract mismatch');
   }
   return payload;
+}
+
+// ── Per-connection reconciliation presentation (fail-closed) ────────────────
+
+/**
+ * Presentation view for a connection's reconciliation summary.
+ * `unavailable: true` is the reconciliationLoaded=false degraded state — the
+ * zero-valued counts must NEVER be rendered as "zero discrepancies" (Phase F
+ * partial-failure tri-state; fail-closed, never green when unloaded).
+ */
+export interface ReconciliationBlockView {
+  unavailable: boolean;
+  /** Human line for lastRunStatus (null run = honest "not yet reconciled"). */
+  statusLabel: string;
+  statusVariant: 'success' | 'warning' | 'error' | 'info';
+  /** Open-discrepancy counts, critical first. */
+  discrepancyLabel: string;
+  /** Server-derived inSync (only meaningful when the summary was loaded). */
+  inSync: boolean;
+  /** Raw last-run timestamp (null when no run has ever executed). */
+  lastRunAt: string | null;
+}
+
+const RECONCILIATION_STATUS_LABELS: Record<
+  NonNullable<LiveReconciliationSummary['lastRunStatus']>,
+  { label: string; variant: ReconciliationBlockView['statusVariant'] }
+> = {
+  PENDING: { label: 'Pending', variant: 'info' },
+  RUNNING: { label: 'Running now', variant: 'info' },
+  COMPLETED: { label: 'Completed', variant: 'success' },
+  COMPLETED_WITH_WARNINGS: { label: 'Completed with warnings', variant: 'warning' },
+  FAILED: { label: 'Failed', variant: 'error' },
+};
+
+/**
+ * Derive the reconciliation block presentation for one connection.
+ * Pure: every value comes from the server payload, never guessed.
+ */
+export function reconciliationBlockView(
+  connection: Pick<LiveAccountConnectionView, 'reconciliation'>,
+  reconciliationLoaded: boolean | undefined,
+): ReconciliationBlockView {
+  if (reconciliationLoaded === false) {
+    return {
+      unavailable: true,
+      statusLabel: 'Unavailable',
+      statusVariant: 'warning',
+      discrepancyLabel:
+        'Reconciliation status unavailable — the server could not read the reconciliation store.',
+      inSync: false,
+      lastRunAt: null,
+    };
+  }
+
+  const summary = connection.reconciliation;
+  const status = summary.lastRunStatus
+    ? (RECONCILIATION_STATUS_LABELS[summary.lastRunStatus] ?? {
+        label: summary.lastRunStatus,
+        variant: 'info' as const,
+      })
+    : { label: 'Not yet reconciled', variant: 'info' as const };
+
+  const discrepancyLabel =
+    summary.openDiscrepancies === 0 && summary.openCritical === 0 && summary.openWarning === 0
+      ? 'No open discrepancies'
+      : `${summary.openCritical} critical · ${summary.openWarning} warning · ${summary.openDiscrepancies} open`;
+
+  return {
+    unavailable: false,
+    statusLabel: status.label,
+    statusVariant: status.variant,
+    discrepancyLabel,
+    inSync: summary.inSync,
+    lastRunAt: summary.lastRunAt,
+  };
+}
+
+// ── Emergency stop (SAME endpoint as the trade workspace stop) ──────────────
+
+function isTradingSessionView(value: unknown): value is TradingSessionView {
+  if (!isRecord(value)) return false;
+  return (
+    isString(value.id) &&
+    isString(value.brokerConnectionId) &&
+    (value.executionMode === 'PAPER_ONLY' ||
+      value.executionMode === 'SEMI_AUTO' ||
+      value.executionMode === 'FULL_AUTO') &&
+    typeof value.authorityGeneration === 'number' &&
+    Number.isInteger(value.authorityGeneration) &&
+    value.authorityGeneration >= 1 &&
+    (value.status === 'ACTIVE' ||
+      value.status === 'PAUSED' ||
+      value.status === 'SUSPENDED_RISK_LIMIT' ||
+      value.status === 'SUSPENDED_BROKER' ||
+      value.status === 'ENDED') &&
+    isIsoDateString(value.startedAt)
+  );
+}
+
+function isStopTradingSessionResponse(value: unknown): value is StopTradingSessionResponse {
+  if (!isRecord(value) || !isRecord(value.positionCloseSummary)) return false;
+  const summary = value.positionCloseSummary;
+  return (
+    isString(value.message) &&
+    isString(value.sessionId) &&
+    (summary.state === 'COMPLETE' || summary.state === 'PARTIAL' || summary.state === 'UNKNOWN') &&
+    isNullableNonNegativeInteger(summary.targetCount) &&
+    isNonNegativeInteger(summary.closedCount) &&
+    isNullableNonNegativeInteger(summary.unresolvedCount)
+  );
+}
+
+/** Outcome of an emergency-stop attempt: stopped, or nothing was running. */
+export type EmergencyStopOutcome =
+  { outcome: 'NO_ACTIVE_SESSION' } | { outcome: 'STOPPED'; result: StopTradingSessionResponse };
+
+/**
+ * Emergency stop for the Live Account page: GET /trading/sessions/active to
+ * learn the authoritative session, then POST /trading/sessions/:id/stop — the
+ * EXACT stop-with-close-positions flow the trade workspace stop dialog uses
+ * (trade/page.tsx → api.stopTradingSession). No session id is ever guessed:
+ * when no active session is reported the outcome is NO_ACTIVE_SESSION, and a
+ * contract mismatch fails closed instead of stopping a wrong target.
+ */
+export async function emergencyStopActiveTradingSession(): Promise<EmergencyStopOutcome> {
+  const active = await api.getActiveTradingSession();
+  if (!isRecord(active) || !('session' in active)) {
+    throw new Error('Active trading session contract mismatch');
+  }
+  if (active.session === null || active.session === undefined) {
+    return { outcome: 'NO_ACTIVE_SESSION' };
+  }
+  if (!isTradingSessionView(active.session)) {
+    throw new Error('Active trading session contract mismatch');
+  }
+
+  const payload = await api.stopTradingSession(active.session.id);
+  if (!isStopTradingSessionResponse(payload)) {
+    throw new Error('Trading session stop contract mismatch');
+  }
+  return { outcome: 'STOPPED', result: payload };
+}
+
+/** Human summary for the stop-with-close-positions result (honesty parity with the trade workspace toasts). */
+export function describeEmergencyStopSummary(result: StopTradingSessionResponse): {
+  tone: 'success' | 'warning';
+  message: string;
+} {
+  const summary = result.positionCloseSummary;
+  if (summary.state === 'COMPLETE') {
+    if (summary.closedCount > 0) {
+      return {
+        tone: 'success',
+        message:
+          'AI Trading stopped. ' +
+          summary.closedCount +
+          ' AI position' +
+          (summary.closedCount === 1 ? '' : 's') +
+          ' confirmed closed.',
+      };
+    }
+    return { tone: 'success', message: 'AI Trading stopped. No AI-opened positions were open.' };
+  }
+  if (summary.state === 'PARTIAL') {
+    return {
+      tone: 'warning',
+      message:
+        'AI Trading stopped. ' +
+        summary.closedCount +
+        ' of ' +
+        (summary.targetCount ?? 'the') +
+        ' AI positions were confirmed closed; ' +
+        (summary.unresolvedCount ?? 'some') +
+        ' require follow-up.',
+    };
+  }
+  return {
+    tone: 'warning',
+    message:
+      'AI Trading stopped, but position closure could not be verified. Check Positions & Activity now.',
+  };
 }

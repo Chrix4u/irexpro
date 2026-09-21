@@ -1,5 +1,6 @@
 import { ConflictException, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { ModuleRef } from '@nestjs/core';
 import { Repository } from 'typeorm';
 import { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import { randomUUID } from 'crypto';
@@ -19,6 +20,10 @@ import {
 } from '../authorization/broker-credential-status';
 import { DecryptedBrokerCredentials } from '../interfaces/broker-adapter.interface';
 import { BrokerAdapterError, BrokerErrorCode } from '../interfaces/broker-adapter.errors';
+// Production-LIVE completion round (P13 metrics): dependency-free in-process
+// counters (lazy ModuleRef seam — same pattern as risk.service).
+import { MetricsService } from '../../metrics/metrics.service';
+import { METRIC_NAMES } from '../../metrics/metric-names';
 
 /**
  * BrokerOAuthTokenLifecycleService — OAuth credential freshness for the
@@ -192,7 +197,24 @@ export class BrokerOAuthTokenLifecycleService {
     // generation — leaf seams only, no module import cycle.
     private readonly tradingAuthorityService: TradingAuthorityService,
     private readonly grantInvalidation: GrantInvalidationService,
+    /**
+     * Production-LIVE completion round (P13 metrics): lazy metrics seam —
+     * OPTIONAL trailing dependency (the spec's TestableLifecycleService
+     * super() call keeps compiling unchanged). Resolved at CALL time via
+     * ModuleRef.get(..., { strict: false }); when absent every
+     * `this.metrics?.…` call site no-ops.
+     */
+    private readonly moduleRef?: ModuleRef,
   ) {}
+
+  /** Lazy MetricsService lookup (never throws, never affects control flow). */
+  private get metrics(): MetricsService | null {
+    try {
+      return this.moduleRef?.get(MetricsService, { strict: false }) ?? null;
+    } catch {
+      return null;
+    }
+  }
 
   /**
    * Pre-connect freshness gate. Returns the credentials the caller must use.
@@ -281,6 +303,13 @@ export class BrokerOAuthTokenLifecycleService {
         );
       }
       if (this.now() >= deadline) {
+        // P13 metrics: the bounded loser wait budget was exhausted while
+        // another holder kept the refresh lease — the retryable RATE_LIMITED
+        // outcome (terminal for THIS attempt).
+        this.metrics?.increment(METRIC_NAMES.OAUTH_TOKEN_REFRESHES, {
+          brokerId: connection.brokerId,
+          outcome: 'LEASE_FAIL',
+        });
         // Retryable, sanitized (connection id only — never token data).
         throw new BrokerAdapterError(
           BrokerErrorCode.RATE_LIMITED,
@@ -556,6 +585,13 @@ export class BrokerOAuthTokenLifecycleService {
     // advanced (automatic OAuth rotation) — prior NEW-exposure authority
     // bound to the old generation is invalidated (the final dispatch
     // boundary also fences on credentialGeneration).
+    //
+    // P13 metrics: the terminal SUCCESS outcome of this refresh (the pair was
+    // atomically persisted — brokerId label only, never token material).
+    this.metrics?.increment(METRIC_NAMES.OAUTH_TOKEN_REFRESHES, {
+      brokerId: connection.brokerId,
+      outcome: 'SUCCESS',
+    });
     await this.invalidateAuthorityAfterCredentialTransition(
       connection.userId,
       'BROKER_CREDENTIAL_ROTATED',
@@ -684,6 +720,12 @@ export class BrokerOAuthTokenLifecycleService {
     }
 
     if (affected === 1) {
+      // P13 metrics: the terminal INVALID outcome — this request owned the
+      // observed generation and the fail-closed credential rejection landed.
+      this.metrics?.increment(METRIC_NAMES.OAUTH_TOKEN_REFRESHES, {
+        brokerId: connection.brokerId,
+        outcome: 'INVALID',
+      });
       // Exactly ONE sanitized audit event for EXACTLY this generation.
       await this.auditService
         .log({

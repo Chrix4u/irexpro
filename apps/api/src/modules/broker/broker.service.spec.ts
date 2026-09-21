@@ -21,6 +21,11 @@ import {
 import { BrokerConnectionServerDerived } from './broker.service';
 import { BrokerLogicalAccountConflictError } from './interfaces/broker-connection.errors';
 import { BrokerEnvironmentMismatchError } from './interfaces/broker-environment-mismatch.error';
+// Production-LIVE completion round (P13 metrics): the real in-process
+// registry registered in the testing module so the service's lazy ModuleRef
+// lookup resolves it (mirrors how MetricsModule provides it app-wide).
+import { MetricsService } from '../metrics/metrics.service';
+import { METRIC_NAMES } from '../metrics/metric-names';
 import { AuditAction } from '../../common/enums/audit-action.enum';
 import { BrokerConnectionStatus, BrokerMode } from './interfaces/broker-adapter.interface';
 import { BrokerAuthorizationStatus } from './authorization/broker-authorization-status';
@@ -152,6 +157,7 @@ const connectedConnection = (overrides: Partial<Record<string, unknown>> = {}) =
 describe('BrokerService', () => {
   let module: TestingModule;
   let service: BrokerService;
+  let metrics: MetricsService;
   let connectionRepo: ReturnType<typeof mockConnectionRepo>;
   let accountRepo: ReturnType<typeof mockAccountRepo>;
   let registry: ReturnType<typeof mockRegistry>;
@@ -211,10 +217,15 @@ describe('BrokerService', () => {
             projectToLegacyAccount: jest.fn().mockResolvedValue(undefined),
           },
         },
+        // P13 metrics: registered so the service's lazy ModuleRef seam resolves
+        // a REAL registry (exactly what MetricsModule does app-wide).
+        { provide: MetricsService, useValue: new MetricsService() },
       ],
     }).compile();
 
     service = module.get<BrokerService>(BrokerService);
+    metrics = module.get<MetricsService>(MetricsService);
+    metrics.reset();
     connectionRepo = module.get(getRepositoryToken(BrokerConnection));
     accountRepo = module.get(getRepositoryToken(BrokerAccount));
     registry = module.get(BrokerAdapterRegistry);
@@ -1095,6 +1106,27 @@ describe('BrokerService', () => {
       expect(connectionRepo.update).toHaveBeenCalled();
     });
 
+    it('P13: a health-check environment mismatch counts broker_environment_mismatches{source=health-check}', async () => {
+      jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
+      const adapter = {
+        setMode: jest.fn(),
+        connect: jest.fn().mockResolvedValue({ success: true, accountType: BrokerMode.LIVE }),
+        getAccountBalance: jest.fn(),
+      };
+      registry.getAdapter.mockReturnValue(adapter);
+      connectionRepo.findOne.mockResolvedValue(connectedConnection({ consecutiveFailureCount: 0 }));
+      connectionRepo.update.mockResolvedValue({ affected: 1 });
+
+      await expect(service.healthCheck('conn-1')).resolves.toBe(false);
+
+      const series = metrics
+        .snapshot()
+        .counters.find((s) => s.name === METRIC_NAMES.BROKER_ENVIRONMENT_MISMATCHES);
+      expect(series?.value).toBe(1);
+      expect(series?.labels).toEqual({ brokerId: 'metatrader5', source: 'health-check' });
+      jest.restoreAllMocks();
+    });
+
     it('suspended connection is rejected by hasActiveConnection()', async () => {
       // A SUSPENDED connection should not be returned as "active"
       connectionRepo.findOne.mockResolvedValue(null); // no CONNECTED connection
@@ -1245,6 +1277,34 @@ describe('BrokerService', () => {
         BrokerEnvironmentMismatchError,
       );
       expect(snapshotService.acceptSnapshot).not.toHaveBeenCalled();
+    });
+
+    it('P13: an observation-path mismatch counts broker_environment_mismatches with the detecting source label', async () => {
+      jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
+      const adapter = {
+        setMode: jest.fn(),
+        connect: jest.fn().mockResolvedValue({ success: true, accountType: BrokerMode.LIVE }),
+        getAccountBalance: jest.fn(),
+      };
+      registry.getAdapter.mockReturnValue(adapter);
+      connectionRepo.findOne.mockResolvedValue(connectedConnection());
+      connectionRepo.update.mockResolvedValue({ affected: 1 });
+
+      await expect(service.observeAccountSnapshotNow('user-1', 'conn-1')).rejects.toThrow(
+        BrokerEnvironmentMismatchError,
+      );
+
+      const series = metrics
+        .snapshot()
+        .counters.find((s) => s.name === METRIC_NAMES.BROKER_ENVIRONMENT_MISMATCHES);
+      expect(series?.value).toBe(1);
+      expect(series?.labels).toEqual({
+        brokerId: 'metatrader5',
+        source: 'on-demand-risk-evaluation',
+      });
+      // Redaction discipline: labels never carry the provider account id.
+      expect(Object.values(series?.labels ?? {})).not.toContain('12345');
+      jest.restoreAllMocks();
     });
 
     it('P0-1: a MATCHING provider environment never trips the fence (no false positive — the observation is recorded)', async () => {

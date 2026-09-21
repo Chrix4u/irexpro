@@ -59,6 +59,11 @@ import { AuditSeverity } from '../audit/entities/audit-log.entity';
 import { ConnectBrokerDto } from './dto/connect-broker.dto';
 import { DomainEventBus } from '../events/event-bus.service';
 import { DomainEventType } from '../events/enums/domain-event-type.enum';
+import { ModuleRef } from '@nestjs/core';
+// Production-LIVE completion round (P13 metrics): dependency-free in-process
+// counters (lazy ModuleRef seam — same pattern as risk.service).
+import { MetricsService } from '../metrics/metrics.service';
+import { METRIC_NAMES } from '../metrics/metric-names';
 
 /**
  * BrokerService — Core broker connection lifecycle management.
@@ -145,7 +150,26 @@ export class BrokerService {
     // observation is accepted as a monotonic snapshot and the legacy
     // broker.broker_accounts row becomes a projection of it.
     private readonly snapshotService: BrokerAccountSnapshotService,
+    /**
+     * Production-LIVE completion round (P13 metrics): lazy metrics seam —
+     * OPTIONAL trailing dependency so the ONE spec that constructs
+     * BrokerService directly (broker-authorization.pg-integration.spec.ts)
+     * keeps compiling unchanged. Resolved at CALL time via
+     * ModuleRef.get(..., { strict: false }); when absent every
+     * `this.metrics?.…` call site no-ops (see metrics.module.ts for the DI
+     * decision — observability can never break broker control flow).
+     */
+    private readonly moduleRef?: ModuleRef,
   ) {}
+
+  /** Lazy MetricsService lookup (never throws, never affects control flow). */
+  private get metrics(): MetricsService | null {
+    try {
+      return this.moduleRef?.get(MetricsService, { strict: false }) ?? null;
+    } catch {
+      return null;
+    }
+  }
 
   // ─── Read operations ──────────────────────────────────────────────────────
 
@@ -296,15 +320,24 @@ export class BrokerService {
 
     // Phase H (architect): production-LIVE eligibility fails closed —
     // implementation status (BETA) and adapter availability are NOT
-    // production-LIVE approval. LIVE connections require VERIFIED
-    // operator evidence; UNVERIFIED providers are DEMO-only.
+    // production-LIVE approval. LIVE connections require a CURRENT protocol
+    // certification (CERTIFIED); legacy attestation and UNVERIFIED providers
+    // are both DEMO-only. The message names the truthful derived state so the
+    // operator/user can distinguish "legacy evidence retained" from "never
+    // certified".
     if (
       dto.accountType === BrokerMode.LIVE &&
       !this.providerRegistry.isProductionLiveEligible(dto.brokerId)
     ) {
+      const certificationState =
+        this.providerRegistry.getEntry(dto.brokerId)?.certificationState ?? 'NOT_CERTIFIED';
       throw new ForbiddenException(
-        `Broker ${dto.brokerId} is not production-LIVE verified — ` +
-          'LIVE connections are fail-closed (BETA is DEMO-only)',
+        certificationState === 'LEGACY_VERIFIED'
+          ? `Broker ${dto.brokerId} carries only legacy production evidence ` +
+              `(LEGACY_VERIFIED) — a current certification run (CERTIFIED) is required ` +
+              'before LIVE connections. LIVE is fail-closed.'
+          : `Broker ${dto.brokerId} is not production-LIVE certified — ` +
+              'LIVE connections are fail-closed (BETA is DEMO-only)',
       );
     }
 
@@ -955,11 +988,19 @@ export class BrokerService {
 
     // Phase H (architect): production-LIVE eligibility fails closed —
     // BETA/UNVERIFIED providers can never enable LIVE trading, even with
-    // a validated DEMO connection and a LIVE account row.
+    // a validated DEMO connection and a LIVE account row. Legacy attestation
+    // (LEGACY_VERIFIED) is equally LIVE-ineligible: only a current CERTIFIED
+    // state authorizes production LIVE.
     if (!this.providerRegistry.isProductionLiveEligible(connection.brokerId)) {
+      const certificationState =
+        this.providerRegistry.getEntry(connection.brokerId)?.certificationState ?? 'NOT_CERTIFIED';
       throw new ForbiddenException(
-        `Broker ${connection.brokerId} is not production-LIVE verified — ` +
-          'LIVE trading is fail-closed (BETA is DEMO-only)',
+        certificationState === 'LEGACY_VERIFIED'
+          ? `Broker ${connection.brokerId} carries only legacy production evidence ` +
+              `(LEGACY_VERIFIED) — a current certification run (CERTIFIED) is required ` +
+              'before LIVE trading can be enabled. LIVE is fail-closed.'
+          : `Broker ${connection.brokerId} is not production-LIVE certified — ` +
+              'LIVE trading is fail-closed (BETA is DEMO-only)',
       );
     }
 
@@ -1321,6 +1362,12 @@ export class BrokerService {
         connectResult.success &&
         this.evaluateEnvironmentMismatch(connection, connectResult).mismatch
       ) {
+        // P13 metrics: declared-vs-observed environment mismatch detected at
+        // the health-check fence (brokerId + detection source labels only).
+        this.metrics?.increment(METRIC_NAMES.BROKER_ENVIRONMENT_MISMATCHES, {
+          brokerId: connection.brokerId,
+          source: 'health-check',
+        });
         let mismatchSuspended = false;
         try {
           await this.applyGuardedAuthorizationUpdate(
@@ -2308,6 +2355,14 @@ export class BrokerService {
         reason: `Suspended: provider-reported environment contradicts the declared one (${source})`,
       });
     }
+    // P13 metrics: declared-vs-observed environment mismatch detected at the
+    // synchronous-observation fence (every assertConnectionEnvironment caller
+    // — state-reconciliation, on-demand risk evaluation — funnels through this
+    // single throw site; the source label names the detecting path).
+    this.metrics?.increment(METRIC_NAMES.BROKER_ENVIRONMENT_MISMATCHES, {
+      brokerId: connection.brokerId,
+      source,
+    });
     throw new BrokerEnvironmentMismatchError(connection.accountType, observed ?? 'UNKNOWN', source);
   }
 

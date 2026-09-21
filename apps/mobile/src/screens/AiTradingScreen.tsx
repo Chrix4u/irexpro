@@ -205,7 +205,7 @@ export default function AiTradingScreen() {
       Alert.alert(
         "AI Trading started",
         selectedBroker.accountType === "LIVE"
-          ? "AI Trading is running for this verified live account."
+          ? "AI Trading is running for this live account."
           : "AI Trading is running in paper/demo mode.",
       );
       await load();

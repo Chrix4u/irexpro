@@ -108,6 +108,7 @@ describe('BrokerService — #291 race coverage (correction round 3)', () => {
     supportsEnvironment: jest.Mock;
     isConnectable: jest.Mock;
     isProductionLiveEligible: jest.Mock;
+    getEntry: jest.Mock;
   };
   let encryption: { encrypt: jest.Mock; decrypt: jest.Mock };
   let audit: { log: jest.Mock };
@@ -134,6 +135,7 @@ describe('BrokerService — #291 race coverage (correction round 3)', () => {
       supportsEnvironment: jest.fn().mockReturnValue(true),
       isConnectable: jest.fn().mockReturnValue(true),
       isProductionLiveEligible: jest.fn().mockReturnValue(true),
+      getEntry: jest.fn().mockReturnValue(null),
     };
     encryption = {
       encrypt: jest.fn().mockReturnValue({ ciphertext: 'c1', iv: 'i1', tag: 't1', keyId: 'k1' }),

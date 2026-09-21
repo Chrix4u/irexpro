@@ -10,6 +10,10 @@ import { AuditAction } from '../../../common/enums/audit-action.enum';
 import { BrokerCredentialStatus } from '../authorization/broker-credential-status';
 import { DecryptedBrokerCredentials } from '../interfaces/broker-adapter.interface';
 import { BrokerAdapterError, BrokerErrorCode } from '../interfaces/broker-adapter.errors';
+// Production-LIVE completion round (P13 metrics): the real in-process
+// registry handed through the service's OPTIONAL trailing ModuleRef seam.
+import { MetricsService } from '../../metrics/metrics.service';
+import { METRIC_NAMES } from '../../metrics/metric-names';
 
 const TEST_ENCRYPTION_KEY = 'test-encryption-key-32-chars-ok!!';
 const ACCESS_TOKEN = 'original-access-token';
@@ -226,6 +230,10 @@ class TestableLifecycleService extends BrokerOAuthTokenLifecycleService {
     client: { refreshAccessToken: jest.Mock },
     audit: { log: jest.Mock },
     seams: { leaseMs?: number; waitBudgetMs?: number; pollIntervalMs?: number } = {},
+    // P13 metrics: the OPTIONAL trailing lazy seam (a stub ModuleRef whose
+    // lookup resolves a real in-process registry — as MetricsModule does
+    // app-wide). Omitted in every pre-existing construction (no-ops).
+    metricsRef?: { get: () => unknown },
   ) {
     super(
       repo as unknown as Repository<BrokerConnection>,
@@ -242,6 +250,7 @@ class TestableLifecycleService extends BrokerOAuthTokenLifecycleService {
           .fn()
           .mockResolvedValue({ invalidatedGrants: 0, revokedConfirmations: 0 }),
       } as unknown as import('../../execution-authority/grant-invalidation.service').GrantInvalidationService,
+      metricsRef as never,
     );
     if (seams.leaseMs !== undefined) this.leaseMs = seams.leaseMs;
     if (seams.waitBudgetMs !== undefined) this.waitBudgetMs = seams.waitBudgetMs;
@@ -746,5 +755,105 @@ describe('BrokerOAuthTokenLifecycleService (Sprint 56 correction — audit point
     expect(message).not.toContain(REFRESH_TOKEN);
     expect(message).not.toContain('SEKRIT');
     expect(message).toContain('re-authorize');
+  });
+
+  // ─── P13 metrics: OAuth refresh terminal-outcome counters ──────────────────
+
+  describe('P13 oauth_token_refreshes counters', () => {
+    let metrics: MetricsService;
+
+    const outcome = (label: string) =>
+      metrics
+        .snapshot()
+        .counters.find(
+          (series) =>
+            series.name === METRIC_NAMES.OAUTH_TOKEN_REFRESHES && series.labels.outcome === label,
+        );
+
+    beforeEach(() => {
+      metrics = new MetricsService();
+      metrics.reset();
+      service = new TestableLifecycleService(
+        repo,
+        encryption,
+        ctraderClient,
+        audit,
+        {},
+        { get: () => metrics },
+      );
+    });
+
+    it('a SUCCESSFUL rotation counts oauth_token_refreshes{outcome=SUCCESS}', async () => {
+      ctraderClient.refreshAccessToken.mockResolvedValue({
+        accessToken: NEW_ACCESS_TOKEN,
+        refreshToken: NEW_REFRESH_TOKEN,
+        expiresIn: 2_628_000,
+      });
+
+      await service.ensureFreshTokens(ctraderConnection(), credentialsWithTokens());
+
+      expect(outcome('SUCCESS')?.value).toBe(1);
+      expect(outcome('SUCCESS')?.labels).toEqual({ brokerId: 'ctrader', outcome: 'SUCCESS' });
+    });
+
+    it('a REJECTED refresh (dead refresh token) counts oauth_token_refreshes{outcome=INVALID}', async () => {
+      ctraderClient.refreshAccessToken.mockRejectedValue(
+        new BrokerAdapterError(
+          BrokerErrorCode.AUTHENTICATION_FAILED,
+          'CH_ACCESS_TOKEN_INVALID: the refresh token is dead',
+        ),
+      );
+
+      await expect(
+        service.ensureFreshTokens(ctraderConnection(), credentialsWithTokens()),
+      ).rejects.toThrow(ConflictException);
+
+      expect(outcome('INVALID')?.value).toBe(1);
+      expect(outcome('SUCCESS')).toBeUndefined();
+    });
+
+    it('an exhausted loser wait budget counts oauth_token_refreshes{outcome=LEASE_FAIL}', async () => {
+      // Another holder keeps a live lease — the bounded loser budget expires.
+      repo.setColumns(CONN_ID, {
+        credential_refresh_lease_expires_at: new Date(Date.now() + 60_000),
+        credential_refresh_lease_owner: 'external-holder-owner-token',
+      });
+      service = new TestableLifecycleService(
+        repo,
+        encryption,
+        ctraderClient,
+        audit,
+        { waitBudgetMs: 20, pollIntervalMs: 5 },
+        { get: () => metrics },
+      );
+
+      const err = await service
+        .ensureFreshTokens(ctraderConnection(), credentialsWithTokens())
+        .catch((e: unknown) => e);
+
+      expect((err as BrokerAdapterError).code).toBe(BrokerErrorCode.RATE_LIMITED);
+      expect(outcome('LEASE_FAIL')?.value).toBe(1);
+      expect(outcome('SUCCESS')).toBeUndefined();
+      expect(outcome('INVALID')).toBeUndefined();
+    });
+
+    it('a TRANSIENT refresh failure counts NOTHING (only terminal outcomes are recorded)', async () => {
+      ctraderClient.refreshAccessToken.mockRejectedValue(
+        new BrokerAdapterError(
+          BrokerErrorCode.CONNECTION_TIMEOUT,
+          'cTrader token endpoint is unreachable.',
+          undefined,
+          true,
+        ),
+      );
+
+      await expect(
+        service.ensureFreshTokens(ctraderConnection(), credentialsWithTokens()),
+      ).rejects.toMatchObject({ code: BrokerErrorCode.CONNECTION_TIMEOUT });
+
+      expect(
+        metrics.snapshot().counters.filter((s) => s.name === METRIC_NAMES.OAUTH_TOKEN_REFRESHES),
+      ).toEqual([]);
+    });
   });
 });

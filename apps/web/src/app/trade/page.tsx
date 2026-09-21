@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { UserCapitalAllocationView, TradeExecutionView } from '@irexpro/types/execution';
+import type { BrokerRegistryEntry } from '@irexpro/types';
 import type { LivePositionRowView } from '@irexpro/types/live-account';
 import type { MarketIntelligenceView } from '@irexpro/types/market-intelligence';
 import { Alert, Badge, Button, Card, DashboardShell, Input, LoadingSpinner } from '@/components/ui';
@@ -13,6 +14,7 @@ import { formatAgeSeconds } from '@/lib/duration';
 import { mapApiError } from '@/lib/error-mapping';
 import { loadLiveAccountPositions } from '@/lib/live-account';
 import { loadMarketIntelligence } from '@/lib/market-intelligence';
+import { liveStartBlockedReasons } from '@/lib/trader-session';
 import { loadTraderExecutionSnapshot, type TraderExecutionSnapshot } from '@/lib/trader-execution';
 import {
   loadTraderTerminalStatus,
@@ -222,6 +224,13 @@ export default function AiTradingPage() {
   const [activityWarning, setActivityWarning] = useState<string | null>(null);
   const [automationRuntime, setAutomationRuntime] = useState<AiAutomationRuntimeStatus | null>(null);
   const [automationRuntimeWarning, setAutomationRuntimeWarning] = useState<string | null>(null);
+  // Production-LIVE completion round (audit P15): server-authoritative broker
+  // registry for truthful Start gating on LIVE connections. Fetched ONCE on
+  // mount (catalog data, same as the onboarding broker page). null = registry
+  // unreachable → DEGRADED mode: the Start button keeps its existing behavior
+  // and the SERVER still enforces the production-LIVE gate on
+  // POST /trading/sessions/start (see liveStartBlockedReasons in trader-session.ts).
+  const [registryEntries, setRegistryEntries] = useState<BrokerRegistryEntry[] | null>(null);
 
   const initializedActivity = useRef(false);
   const seenPositionIds = useRef<Set<string>>(new Set());
@@ -243,6 +252,30 @@ export default function AiTradingPage() {
       null,
     [terminal, selectedBrokerId],
   );
+
+  // Truthful LIVE start gating (audit P15): when the selected connection is
+  // LIVE (it would start FULL_AUTO) and the server registry says the provider
+  // is not production-LIVE ready, Start is disabled BEFORE click and the
+  // server's ordered blockedReasons are shown. STOP is never disabled by this
+  // gate. Degraded (registry unavailable) → [] → existing behavior.
+  const selectedRegistryEntry = useMemo(
+    () =>
+      selectedBroker && registryEntries
+        ? (registryEntries.find((entry) => entry.id === selectedBroker.brokerId) ?? null)
+        : null,
+    [selectedBroker, registryEntries],
+  );
+  const liveStartBlockedReasonLines = useMemo(
+    () =>
+      selectedBroker
+        ? liveStartBlockedReasons({
+            accountType: selectedBroker.accountType,
+            registryEntry: selectedRegistryEntry,
+          })
+        : [],
+    [selectedBroker, selectedRegistryEntry],
+  );
+  const startBlockedByLiveGate = !automationOn && liveStartBlockedReasonLines.length > 0;
 
   const emitActivityToasts = useCallback(
     (positions: LivePositionRowView[], snapshot: TraderExecutionSnapshot) => {
@@ -392,6 +425,27 @@ export default function AiTradingPage() {
   }, [user, refreshTradingData]);
 
   useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const registry = await api.listBrokerRegistry();
+        // Fail-closed on a malformed payload: a non-array catalog degrades to
+        // the ungated (server-enforced) behavior rather than trusting garbage.
+        if (!cancelled)
+          setRegistryEntries(Array.isArray(registry?.brokers) ? registry.brokers : null);
+      } catch {
+        // Registry unreachable → degraded mode (Start keeps existing behavior;
+        // the server still enforces the production-LIVE gate on start).
+        if (!cancelled) setRegistryEntries(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
+  useEffect(() => {
     if (!pendingAutomationAction) return;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
@@ -527,7 +581,7 @@ export default function AiTradingPage() {
         });
         notify.success(
           selectedBroker.accountType === 'LIVE'
-            ? 'AI Trading started for the verified live account.'
+            ? 'AI Trading started for the live account.'
             : 'AI Trading started in paper/demo mode.',
         );
       }
@@ -675,18 +729,32 @@ export default function AiTradingPage() {
                   block
                   className="ai-automation-action"
                   aria-label={automationOn ? 'Stop AI Trading' : 'Start AI Trading'}
-                  disabled={!selectedBroker || !controlStateReady || togglingAutomation}
+                  disabled={
+                    !selectedBroker ||
+                    !controlStateReady ||
+                    togglingAutomation ||
+                    startBlockedByLiveGate
+                  }
                   onClick={requestAutomationAction}
                 >
                   {togglingAutomation
                     ? automationOn ? 'Stopping…' : 'Starting…'
                     : automationOn ? 'Stop AI Trading' : 'Start AI Trading'}
                 </Button>
-                <span className="ai-control-card__hint">
-                  {automationOn
-                    ? 'AI Trading may open and manage positions within your allocation. Stop requires confirmation and closes AI-opened positions.'
-                    : 'AI Trading cannot create new positions while stopped.'}
-                </span>
+                {startBlockedByLiveGate ? (
+                  <div className="ai-live-gate-reasons">
+                    <strong>Start is unavailable for this LIVE account.</strong>
+                    {liveStartBlockedReasonLines.map((reason) => (
+                      <span key={reason}>{reason}</span>
+                    ))}
+                  </div>
+                ) : (
+                  <span className="ai-control-card__hint">
+                    {automationOn
+                      ? 'AI Trading may open and manage positions within your allocation. Stop requires confirmation and closes AI-opened positions.'
+                      : 'AI Trading cannot create new positions while stopped.'}
+                  </span>
+                )}
               </Card>
             </section>
 
