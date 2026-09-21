@@ -1,7 +1,5 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
+import { BadRequestException, ConflictException, Injectable, Logger } from '@nestjs/common';
 import { createHash } from 'crypto';
-import { Repository } from 'typeorm';
 import { BrokerConnection } from '../entities/broker-connection.entity';
 import { BrokerService } from '../broker.service';
 import { BrokerAdapterRegistry } from '../adapters/broker-adapter.registry';
@@ -9,6 +7,7 @@ import { AuditService } from '../../audit/audit.service';
 import { AuditAction } from '../../../common/enums/audit-action.enum';
 import { AuditSeverity } from '../../audit/entities/audit-log.entity';
 import { redactSensitive } from '../../../common/utils/redact-sensitive.util';
+import { BrokerAuthorizationStatus } from '../authorization/broker-authorization-status';
 import { BrokerMode, IBrokerAdapter } from '../interfaces/broker-adapter.interface';
 import {
   DEMO_VALIDATION_STEPS,
@@ -139,22 +138,23 @@ export interface DemoValidationEvidenceRecord {
 }
 
 /**
- * BrokerDemoValidationService — the EVIDENCE-BASED write path for
- * BrokerConnection.demoValidated (Sprint 56 / Task 47-C5; re-integrated onto
- * new main as Task 48-D).
+ * BrokerDemoValidationService — the AUTHORITATIVE, checklist-driven write
+ * path for BrokerConnection.demoValidated and the ONLY path that advances a
+ * DEMO connection's authorization to AUTHORIZED (Sprint 56 / Task 47-C5;
+ * DEMO validation authority round).
  *
- * RELATIONSHIP TO THE CONNECT AUTO-WRITE (new main): BrokerService.connectBroker
- * already dual-writes `demoValidated: true` when a DEMO connection reaches
- * CONNECTED — a WEAK connect-implies-validated proxy that unblocks the
- * enableLiveTrading gate for anything that can complete a handshake. This
- * service is the STRONGER, checklist-driven re-validation on top: it
- * exercises the adapter's actual trading surface, records per-step sanitized
- * evidence, and OVERRIDES the proxy when the evidence contradicts it:
- *   PASS  → demoValidated: true (idempotent when the auto-write already set
- *           it — the proxy and the evidence now agree; fresh evidence is
- *           recorded either way);
- *   FAIL  → demoValidated: false — the evidence-based revocation that catches
- *           dead/stale connections the connect auto-write blessed.
+ * AUTHORITATIVE SEMANTICS (DEMO validation authority round): a broker
+ * handshake proves connectivity/credential validity ONLY — BrokerService.
+ * connectBroker settles every successful connect at CONNECTED (the
+ * pre-validation state) and NEVER writes demoValidated. This service's full
+ * checklist is the SOLE authority:
+ *   PASS  → demoValidated: true + authorization CONNECTED → AUTHORIZED
+ *           (guarded, state-machine-validated) + structured evidence
+ *           persisted (audit trail);
+ *   FAIL  → demoValidated: false (revoking any previously persisted PASS —
+ *           including legacy connect auto-writes) + a validation-granted
+ *           authorization (AUTHORIZED/READY) is revoked → REVOKED;
+ *           re-validation is required to re-authorize.
  *
  * SECURITY INVARIANTS:
  * 1. Ownership-checked: the connection must belong to the requesting user
@@ -165,7 +165,9 @@ export interface DemoValidationEvidenceRecord {
  * 3. Connection state transitions go through BrokerService.connectBroker
  *    (the canonical CONNECTING→CONNECTED machine with BrokerAccount upsert
  *    and BROKER_CONNECTED audit) — the checklist then exercises the adapter
- *    directly, exactly like BrokerService's market-data methods.
+ *    directly, exactly like BrokerService's market-data methods. The outcome
+ *    lands through BrokerService.applyDemoValidationOutcome (the guarded
+ *    state-machine write path) — never a raw repository write.
  * 4. Credentials are decrypted inside connectBroker only (memory-only, zeroed
  *    in its finally block); this service never touches plaintext credentials.
  * 5. Evidence is SANITIZED: step results carry statuses, provider order ids
@@ -179,16 +181,14 @@ export interface DemoValidationEvidenceRecord {
  * FULL sanitized checklist evidence therefore lives in TWO places only: the
  * API response (returned to the user so they can see exactly WHY a validation
  * failed) and the audit trail (BROKER_DEMO_VALIDATION_PASSED/_FAILED with the
- * step results in the audit log's metadata jsonb). Only the boolean persists
- * on the connection.
+ * step results in the audit log's metadata jsonb). Only the boolean (and the
+ * authorization state it earns) persists on the connection.
  */
 @Injectable()
 export class BrokerDemoValidationService {
   private readonly logger = new Logger(BrokerDemoValidationService.name);
 
   constructor(
-    @InjectRepository(BrokerConnection)
-    private readonly connectionRepo: Repository<BrokerConnection>,
     private readonly brokerService: BrokerService,
     private readonly adapterRegistry: BrokerAdapterRegistry,
     private readonly auditService: AuditService,
@@ -233,9 +233,9 @@ export class BrokerDemoValidationService {
     }
 
     // Step 1 — connect through the canonical state machine. connectBroker
-    // audits BROKER_CONNECTED/_CONNECT_FAILED itself and (new main)
-    // auto-writes demoValidated: true on a successful DEMO connect; only its
-    // OUTCOME is recorded in the validation evidence here.
+    // audits BROKER_CONNECTED/_CONNECT_FAILED itself; under DEMO validation
+    // authority it settles the connection at CONNECTED (pre-validation) and
+    // NEVER writes demoValidated — only this checklist's OUTCOME may.
     let connectStep: ProviderVerificationStep;
     try {
       await this.brokerService.connectBroker(connectionId, userId, ipAddress);
@@ -254,18 +254,17 @@ export class BrokerDemoValidationService {
       };
     }
 
-    // Re-read the persisted flag AFTER the connect step: this is the value
-    // the evidence-based decision is measured against. When connectBroker's
-    // auto-write blessed it to true, a FAILING checklist must revoke that
-    // bless — and a PASSING one simply confirms it (idempotent). When the
-    // connect itself failed, this still reflects the last persisted value
-    // (the ERROR path never touches demoValidated), so a previously
-    // validated connection whose re-validation cannot even connect is
-    // honestly revoked too.
+    // Re-read the persisted state AFTER the connect step: the observed
+    // demoValidated/authorizationStatus pair is what this run's evidence
+    // confirms (PASS) or overrides (FAIL). A previously validated connection
+    // that cannot even connect anymore is honestly revoked by the FAIL path.
     let previousDemoValidated = connection.demoValidated ?? false;
+    let previousAuthorizationStatus: BrokerAuthorizationStatus | null =
+      connection.authorizationStatus ?? null;
     try {
       const postConnect = await this.brokerService.findConnectionById(connectionId, userId);
       previousDemoValidated = postConnect.demoValidated ?? false;
+      previousAuthorizationStatus = postConnect.authorizationStatus ?? null;
     } catch {
       // Deleted mid-run or storage hiccup — keep the pre-connect observation
       // (fail-closed for the decision, evidence still recorded).
@@ -298,11 +297,37 @@ export class BrokerDemoValidationService {
       demoValidated,
     });
 
-    // Persist ONLY the boolean (see the storage decision in the class docs).
-    // Evidence-consistent write: PASS sets true (no-op when the connect
-    // auto-write already set it); FAIL revokes any blessed/stale true.
-    if (demoValidated !== previousDemoValidated) {
-      await this.connectionRepo.update(connectionId, { demoValidated });
+    // ── The AUTHORITATIVE outcome write (DEMO validation authority) ─────────
+    // The checklist evidence is the sole authority for demoValidated and the
+    // only path that advances CONNECTED → AUTHORIZED. The write is guarded on
+    // the authorization state; a concurrent revoke/suspend/connect surfaces
+    // as a Conflict — the evidence is STILL audited (with outcomeApplied:
+    // false, never silently dropped) and the conflict rethrown for an honest
+    // retry.
+    let outcomeApplied = true;
+    let outcomeConflict: ConflictException | null = null;
+    let resultingAuthorizationStatus: BrokerAuthorizationStatus | null =
+      previousAuthorizationStatus;
+    try {
+      const outcome = await this.brokerService.applyDemoValidationOutcome(
+        connectionId,
+        userId,
+        demoValidated,
+        ipAddress,
+      );
+      resultingAuthorizationStatus = outcome.resultingStatus;
+    } catch (err) {
+      if (err instanceof ConflictException) {
+        outcomeApplied = false;
+        outcomeConflict = err;
+        this.logger.warn(
+          `DEMO validation outcome write lost a concurrent state race for ` +
+            `${connectionId} — evidence recorded, outcome NOT applied: ` +
+            `${(err as Error).message}`,
+        );
+      } else {
+        throw err;
+      }
     }
 
     await this.auditService.log({
@@ -318,10 +343,15 @@ export class BrokerDemoValidationService {
         brokerId: connection.brokerId,
         accountType: connection.accountType,
         // The persisted value observed after the connect step — i.e. the
-        // value this run confirms (PASS) or overrides (FAIL). Includes the
-        // connect auto-write when it fired.
+        // value this run confirms (PASS) or overrides (FAIL).
         previousDemoValidated,
         demoValidated,
+        // The authorization transition this outcome produced (DEMO validation
+        // authority): previous → resulting, plus whether the guarded write
+        // landed (false only on a concurrent state race).
+        previousAuthorizationStatus,
+        authorizationStatus: resultingAuthorizationStatus,
+        outcomeApplied,
         overall: evidence.overall,
         summary: evidence.summary,
         // Sanitized checklist evidence (the full result — the audit trail is
@@ -340,6 +370,12 @@ export class BrokerDemoValidationService {
       severity: evidence.overall === 'PASS' ? AuditSeverity.INFO : AuditSeverity.WARNING,
     });
 
+    // The conflict (if any) surfaces AFTER the evidence audit — the caller
+    // retries, the audit trail keeps the full checklist proof either way.
+    if (outcomeConflict) {
+      throw outcomeConflict;
+    }
+
     this.logger.log(
       `DEMO validation ${evidence.overall} for connection=${connectionId} ` +
         `broker=${connection.brokerId} user=${userId} ` +
@@ -352,6 +388,8 @@ export class BrokerDemoValidationService {
       brokerId: connection.brokerId,
       accountType: BrokerMode.DEMO,
       demoValidated,
+      // The authorization state the checklist evidence earned (or kept).
+      authorizationStatus: resultingAuthorizationStatus,
       overall: evidence.overall,
       summary: evidence.summary,
       steps: evidence.steps,
@@ -518,9 +556,16 @@ export interface BrokerDemoValidationResult {
   accountType: BrokerMode.DEMO;
   /**
    * The evidence-consistent flag value (PASS ⇒ true, FAIL ⇒ false — a FAIL
-   * revokes any connect-time auto-bless, see the class docs).
+   * revokes any previously persisted PASS).
    */
   demoValidated: boolean;
+  /**
+   * The authorization state the checklist evidence earned (DEMO validation
+   * authority): PASS from CONNECTED advances to AUTHORIZED; FAIL revokes a
+   * validation-granted AUTHORIZED/READY to REVOKED; anything else keeps the
+   * authoritative state.
+   */
+  authorizationStatus: BrokerAuthorizationStatus | null;
   overall: VerificationOverallStatus;
   summary: ProviderVerificationSummary;
   steps: ProviderVerificationStep[];

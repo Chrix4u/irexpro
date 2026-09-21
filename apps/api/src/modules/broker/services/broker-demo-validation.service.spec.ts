@@ -142,7 +142,28 @@ describe('BrokerDemoValidationService', () => {
     find: jest.fn().mockResolvedValue([]),
     create: jest.fn().mockImplementation((obj) => obj),
     save: jest.fn().mockResolvedValue({}),
-    update: jest.fn().mockResolvedValue({ affected: 1 }),
+    // DEMO validation authority: REALISTIC repository semantics — update
+    // applies the patch to the in-memory connectionRecord so subsequent
+    // reads observe the write (the full lifecycle NOT_CONNECTED → CONNECTING
+    // → CONNECTED → AUTHORIZED/REVOKED flows through the spec exactly as it
+    // does against a live database). A guarded criteria carrying an expected
+    // authorizationStatus additionally fails with affected: 0 when the
+    // persisted state moved concurrently (applyGuardedAuthorizationUpdate
+    // surfaces that as a ConflictException).
+    update: jest.fn().mockImplementation(async (criteria: unknown, patch: unknown) => {
+      if (
+        criteria &&
+        typeof criteria === 'object' &&
+        'authorizationStatus' in (criteria as Record<string, unknown>)
+      ) {
+        const expected = (criteria as Record<string, unknown>).authorizationStatus;
+        if (connectionRecord.authorizationStatus !== expected) {
+          return { affected: 0 };
+        }
+      }
+      Object.assign(connectionRecord, patch);
+      return { affected: 1 };
+    }),
     softDelete: jest.fn(),
     // Round 5 (#332): createConnection commits through a transaction + outbox
     manager: {
@@ -277,37 +298,26 @@ describe('BrokerDemoValidationService', () => {
   });
 
   /**
-   * The EVIDENCE write: the single-key demoValidated patch produced by this
-   * service (connectBroker's CONNECTED transition carries demoValidated inside
-   * a multi-key patch — the new-main auto-write — and is NOT an evidence
-   * write; see autoBlessWrites).
+   * The AUTHORITATIVE outcome writes: every repository patch produced by
+   * BrokerService.applyDemoValidationOutcome (the sole demoValidated write
+   * path). A connectBroker CONNECTED transition NEVER appears here — the
+   * handshake does not validate.
    */
-  const evidenceWrites = (): Array<[unknown, Record<string, unknown>]> =>
-    connectionRepo.update.mock.calls
-      .filter((call: unknown[]) => {
-        const patch = (call[1] as Record<string, unknown>) ?? {};
-        return (
-          typeof patch === 'object' && Object.keys(patch).length === 1 && 'demoValidated' in patch
-        );
-      })
-      .map((call: unknown[]) => [call[0], call[1] as Record<string, unknown>]);
-
-  /** The new-main connectBroker DEMO dual-write (demoValidated inside the CONNECTED patch). */
-  const autoBlessWrites = (): Array<Record<string, unknown>> =>
+  const outcomeWrites = (): Array<Record<string, unknown>> =>
     connectionRepo.update.mock.calls
       .map((call: unknown[]) => call[1] as Record<string, unknown>)
-      .filter(
-        (patch) =>
-          patch &&
-          patch.status === BrokerConnectionStatus.CONNECTED &&
-          'demoValidated' in patch &&
-          patch.demoValidated === true,
-      );
+      .filter((patch) => patch && typeof patch === 'object' && 'demoValidated' in patch);
+
+  /** The connectBroker CONNECTED transition patches (must NEVER carry demoValidated). */
+  const connectConnectedPatches = (): Array<Record<string, unknown>> =>
+    connectionRepo.update.mock.calls
+      .map((call: unknown[]) => call[1] as Record<string, unknown>)
+      .filter((patch) => patch && patch.status === BrokerConnectionStatus.CONNECTED);
 
   // ─── Happy path: the paper broker checklist passes deterministically ───────
 
   describe('validateDemoConnection — paper broker happy path', () => {
-    it('runs the full checklist, writes demoValidated=true and audits PASSED', async () => {
+    it('runs the full checklist, writes demoValidated=true, advances CONNECTED → AUTHORIZED and audits PASSED', async () => {
       const result = await service.validateDemoConnection(CONN_ID, USER_ID);
 
       expect(result.overall).toBe('PASS');
@@ -324,15 +334,24 @@ describe('BrokerDemoValidationService', () => {
         skipped: 0,
       });
 
-      // The evidence write: exactly one single-key update carrying
-      // demoValidated=true (the re-read mock does not apply connectBroker's
-      // auto-write, so the service still observes the pre-connect false).
-      const writes = evidenceWrites();
+      // DEMO validation authority: the checklist outcome is the SOLE write
+      // path — exactly one outcome write, the guarded CONNECTED → AUTHORIZED
+      // advance carrying demoValidated=true atomically.
+      const writes = outcomeWrites();
       expect(writes).toHaveLength(1);
-      expect(writes[0]![0]).toBe(CONN_ID);
-      expect(writes[0]![1]).toEqual({ demoValidated: true });
+      expect(writes[0]).toMatchObject({
+        demoValidated: true,
+        authorizationStatus: BrokerAuthorizationStatus.AUTHORIZED,
+      });
+      // The realistic mock applies the write — the record reflects the
+      // earned state.
+      expect(connectionRecord.demoValidated).toBe(true);
+      expect(connectionRecord.authorizationStatus).toBe(BrokerAuthorizationStatus.AUTHORIZED);
+      // The result exposes the earned authorization state.
+      expect(result.authorizationStatus).toBe(BrokerAuthorizationStatus.AUTHORIZED);
 
-      // The audit entry: PASSED with the sanitized step evidence.
+      // The audit entry: PASSED with the sanitized step evidence + the
+      // authorization transition this outcome produced.
       const passLog = auditService.log.mock.calls.find(
         (call: unknown[]) =>
           (call[0] as Record<string, unknown>).action === AuditAction.BROKER_DEMO_VALIDATION_PASSED,
@@ -348,13 +367,16 @@ describe('BrokerDemoValidationService', () => {
       expect(metadata.overall).toBe('PASS');
       expect(metadata.demoValidated).toBe(true);
       expect(metadata.previousDemoValidated).toBe(false);
+      expect(metadata.previousAuthorizationStatus).toBe(BrokerAuthorizationStatus.CONNECTED);
+      expect(metadata.authorizationStatus).toBe(BrokerAuthorizationStatus.AUTHORIZED);
+      expect(metadata.outcomeApplied).toBe(true);
       expect(Array.isArray(metadata.steps)).toBe(true);
       expect((metadata.steps as Array<{ name: string; status: string }>).length).toBe(
         DEMO_VALIDATION_STEPS.length,
       );
     });
 
-    it('connects through the canonical BrokerService.connectBroker state machine (auto-write pinned)', async () => {
+    it('connects through the canonical BrokerService.connectBroker state machine (the handshake NEVER validates)', async () => {
       await service.validateDemoConnection(CONN_ID, USER_ID);
 
       // CONNECTING → CONNECTED transitions + BrokerAccount upsert happened.
@@ -364,11 +386,14 @@ describe('BrokerDemoValidationService', () => {
       expect(statuses).toContain(BrokerConnectionStatus.CONNECTING);
       expect(statuses).toContain(BrokerConnectionStatus.CONNECTED);
       expect(accountRepo.save).toHaveBeenCalled();
-      // New-main interplay: connectBroker's CONNECTED transition carries the
-      // DEMO dual-write demoValidated=true (the weak connect-implies-validated
-      // proxy). The service does NOT fight it — the evidence write and the
-      // proxy AGREE on a PASS.
-      expect(autoBlessWrites()).toHaveLength(1);
+      // DEMO validation authority: NO connectBroker CONNECTED patch carries
+      // demoValidated — the handshake authorizes nothing beyond CONNECTED,
+      // and the AUTHORIZED advance comes exclusively from the checklist
+      // outcome write (asserted in the sibling test).
+      for (const patch of connectConnectedPatches()) {
+        expect('demoValidated' in patch).toBe(false);
+        expect(patch.authorizationStatus).toBe(BrokerAuthorizationStatus.CONNECTED);
+      }
       // connectBroker's own audit trail is preserved alongside the validation audit.
       const connectLog = auditService.log.mock.calls.find(
         (call: unknown[]) =>
@@ -392,33 +417,24 @@ describe('BrokerDemoValidationService', () => {
     });
   });
 
-  // ─── The evidence-based override of the connect auto-bless ─────────────────
+  // ─── The evidence-based revocation of a validation-granted authorization ────
 
-  describe('validateDemoConnection — evidence overrides the connect-time auto-bless', () => {
-    it('REVOKES the auto-blessed flag when the checklist fails (evidence beats the proxy)', async () => {
+  describe('validateDemoConnection — a failing checklist revokes validation-granted authorization', () => {
+    it('REVOKES AUTHORIZED → REVOKED (guarded) and demoValidated → false when re-validation fails', async () => {
       const marker = 'AUTOBLESS_SECRET_MARKER_4a5b6c7d';
-      // connectBroker will reach CONNECTED and auto-write demoValidated=true;
-      // simulate the persisted row flipping to the blessed value exactly as
-      // the repository would after the CONNECTED transition.
-      // Prototype level: connectBroker operates on the connection-scoped
-      // adapter the registry factory produces — the spy must cover every
-      // instance, not just the metadata root.
-      const originalConnect = PaperBrokerAdapter.prototype.connect;
-      jest.spyOn(PaperBrokerAdapter.prototype, 'connect').mockImplementation(async function (
-        this: PaperBrokerAdapter,
-        credentials,
-      ) {
-        const result = await originalConnect.call(this, credentials);
-        connectionRecord = buildConnection({ demoValidated: true });
-        return result;
+      // A connection whose authorization was GRANTED by a previous PASSING
+      // checklist (AUTHORIZED + demoValidated=true, still CONNECTED). The
+      // re-run's checklist now fails — the stale evidence and the
+      // authorization it earned are both revoked.
+      connectionRecord = buildConnection({
+        demoValidated: true,
+        authorizationStatus: BrokerAuthorizationStatus.AUTHORIZED,
+        status: BrokerConnectionStatus.CONNECTED,
+        lastHealthCheckAt: new Date(),
       });
-      // ...and then the evidence contradicts the bless: the checklist fails.
-      // Round 6 live-execution completion (§1a): connectBroker now takes the
-      // initial account snapshot via getAccountInfo() too (fail-safe — the
-      // connect survives its failure). The scripted provider failure is
-      // therefore persistent: BOTH the connect-time observation and the
-      // checklist's account-info step see it — the checklist still fails and
-      // the bless is still revoked exactly as before.
+      // The checklist contradicts the persisted PASS: the account-info step
+      // sees a persistent provider failure (the connect-time snapshot
+      // observation sees it too — fail-safe, connect survives).
       jest
         .spyOn(PaperBrokerAdapter.prototype, 'getAccountInfo')
         .mockRejectedValue(
@@ -432,12 +448,18 @@ describe('BrokerDemoValidationService', () => {
 
       expect(result.overall).toBe('FAIL');
       expect(result.demoValidated).toBe(false);
-      // The revoke write: exactly one evidence write carrying false — the
-      // just-blessed true does NOT survive a failing checklist.
-      const writes = evidenceWrites();
+      // The earned authorization state is revoked in the result.
+      expect(result.authorizationStatus).toBe(BrokerAuthorizationStatus.REVOKED);
+      // The guarded revoke write: AUTHORIZED → REVOKED + demoValidated=false
+      // atomically (the realistic mock applies it).
+      const writes = outcomeWrites();
       expect(writes).toHaveLength(1);
-      expect(writes[0]![0]).toBe(CONN_ID);
-      expect(writes[0]![1]).toEqual({ demoValidated: false });
+      expect(writes[0]).toMatchObject({
+        demoValidated: false,
+        authorizationStatus: BrokerAuthorizationStatus.REVOKED,
+      });
+      expect(connectionRecord.demoValidated).toBe(false);
+      expect(connectionRecord.authorizationStatus).toBe(BrokerAuthorizationStatus.REVOKED);
       const failLog = auditService.log.mock.calls.find(
         (call: unknown[]) =>
           (call[0] as Record<string, unknown>).action === AuditAction.BROKER_DEMO_VALIDATION_FAILED,
@@ -448,9 +470,35 @@ describe('BrokerDemoValidationService', () => {
       expect(entry.metadata as Record<string, unknown>).toMatchObject({
         previousDemoValidated: true,
         demoValidated: false,
+        previousAuthorizationStatus: BrokerAuthorizationStatus.AUTHORIZED,
+        authorizationStatus: BrokerAuthorizationStatus.REVOKED,
+        outcomeApplied: true,
       });
-      // The revoked connection is the one connectBroker blessed (real write).
-      expect(autoBlessWrites()).toHaveLength(1);
+    });
+
+    it('keeps a CONNECTED (never-authorized) connection at CONNECTED on FAIL — nothing to revoke', async () => {
+      // A fresh connection post-handshake: CONNECTED, never validated. The
+      // failing checklist writes the honest boolean but revokes nothing —
+      // there is no validation-granted authorization to withdraw.
+      connectionRecord = buildConnection({
+        authorizationStatus: BrokerAuthorizationStatus.CONNECTED,
+        status: BrokerConnectionStatus.CONNECTED,
+      });
+      jest
+        .spyOn(PaperBrokerAdapter.prototype, 'getAccountInfo')
+        .mockRejectedValue(
+          new BrokerAdapterError(BrokerErrorCode.BROKER_SERVER_ERROR, 'provider exploded'),
+        );
+
+      const result = await service.validateDemoConnection(CONN_ID, USER_ID);
+
+      expect(result.overall).toBe('FAIL');
+      expect(result.demoValidated).toBe(false);
+      expect(result.authorizationStatus).toBe(BrokerAuthorizationStatus.CONNECTED);
+      // Boolean-only outcome write — no authorizationStatus key at all.
+      const writes = outcomeWrites();
+      expect(writes).toHaveLength(1);
+      expect(writes[0]).toEqual({ demoValidated: false });
     });
   });
 
@@ -481,8 +529,13 @@ describe('BrokerDemoValidationService', () => {
       expect(accountStep?.detail).toContain('BROKER_SERVER_ERROR');
       expect(accountStep?.detail).not.toContain(marker);
       expect(accountStep?.detail).toContain('apiKey=[REDACTED]');
-      // The failing run never writes demoValidated (false === observed false).
-      expect(evidenceWrites()).toHaveLength(0);
+      // The failing run writes the honest boolean-only outcome (false ===
+      // observed false — the write lands anyway: the outcome ALWAYS persists,
+      // idempotently) and authorizes NOTHING.
+      const writes = outcomeWrites();
+      expect(writes).toHaveLength(1);
+      expect(writes[0]).toEqual({ demoValidated: false });
+      expect(connectionRecord.authorizationStatus).toBe(BrokerAuthorizationStatus.CONNECTED);
 
       const failLog = auditService.log.mock.calls.find(
         (call: unknown[]) =>
@@ -523,7 +576,13 @@ describe('BrokerDemoValidationService', () => {
         failed: 1,
         skipped: DEMO_VALIDATION_STEPS.length - 1,
       });
-      expect(evidenceWrites()).toHaveLength(0);
+      // The connect-failure run persists the honest false without any
+      // authorization change (the connection sits at ERROR — nothing to
+      // advance, nothing to revoke).
+      const writes = outcomeWrites();
+      expect(writes).toHaveLength(1);
+      expect(writes[0]).toEqual({ demoValidated: false });
+      expect(connectionRecord.authorizationStatus).toBe(BrokerAuthorizationStatus.ERROR);
       // The failed connection itself is audited by connectBroker (not swallowed)
       // and its status machine recorded ERROR.
       const connectFailLog = auditService.log.mock.calls.find(
@@ -540,6 +599,9 @@ describe('BrokerDemoValidationService', () => {
     });
 
     it('REVOKES a previously validated connection when re-validation fails (evidence-consistent write)', async () => {
+      // A previously validated connection that RECONNECTED (the handshake
+      // settled it back at CONNECTED — demoValidated persists as the last
+      // checklist evidence). The re-run fails: the stale evidence is revoked.
       connectionRecord = buildConnection({ demoValidated: true });
       jest
         .spyOn(PaperBrokerAdapter.prototype, 'getCurrentPrice')
@@ -551,9 +613,9 @@ describe('BrokerDemoValidationService', () => {
 
       expect(result.overall).toBe('FAIL');
       expect(result.demoValidated).toBe(false);
-      const writes = evidenceWrites();
+      const writes = outcomeWrites();
       expect(writes).toHaveLength(1);
-      expect(writes[0]![1]).toEqual({ demoValidated: false });
+      expect(writes[0]).toEqual({ demoValidated: false });
       const failLog = auditService.log.mock.calls.find(
         (call: unknown[]) =>
           (call[0] as Record<string, unknown>).action === AuditAction.BROKER_DEMO_VALIDATION_FAILED,
@@ -577,7 +639,7 @@ describe('BrokerDemoValidationService', () => {
       await expect(service.validateDemoConnection(CONN_ID, USER_ID)).rejects.toThrow(/DEMO/);
       // No validation audit, no flag writes, no state-machine churn.
       expect(auditService.log).not.toHaveBeenCalled();
-      expect(evidenceWrites()).toHaveLength(0);
+      expect(outcomeWrites()).toHaveLength(0);
       expect(connectionRepo.update).not.toHaveBeenCalled();
     });
 
@@ -634,7 +696,12 @@ describe('BrokerDemoValidationService', () => {
       // listOrders is a REQUIRED interface member — the stub implements it
       // honestly (empty) and the step runs.
       expect(stepByName.get('order-history')?.status).toBe('PASS');
-      expect(evidenceWrites()[0]![1]).toEqual({ demoValidated: true });
+      // The PASS outcome advances the handshake-settled CONNECTED record to
+      // AUTHORIZED with demoValidated=true (the sole write path).
+      expect(outcomeWrites()[0]).toMatchObject({
+        demoValidated: true,
+        authorizationStatus: BrokerAuthorizationStatus.AUTHORIZED,
+      });
     });
   });
 

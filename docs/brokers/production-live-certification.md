@@ -267,7 +267,8 @@ the corresponding `BROKER_DEMO_VALIDATION_PASSED/_FAILED` audit entry:
 | `checks` / `summary` | The full sanitized checklist steps and pass/fail/skip counts. |
 | `capabilitiesVerified` | Capabilities actually VERIFIED (PASS steps only — SKIPPED/FAILED never appear). |
 | `orderLifecycleReconciliation` | Post-checklist observation that the validation's own position/orders are all closed/cancelled (`reconciled`), with honest `null` + reason when moot (`NO_VALIDATION_ARTIFACTS_PRODUCED`) or unreadable. |
-| `overall` / `demoValidated` | The checklist outcome and the evidence-consistent boolean persisted on the connection. |
+| `overall` / `demoValidated` | The checklist outcome and the evidence-consistent boolean persisted on the connection. DEMO validation authority: this checklist is the SOLE `demoValidated` write path — a connect handshake never writes it. |
+| `authorizationStatus` (response) | The authorization state the checklist evidence earned: PASS from CONNECTED advances to AUTHORIZED (the `enableLiveTrading` prerequisite); FAIL revokes a validation-granted AUTHORIZED/READY to REVOKED; anything else keeps the authoritative state. |
 | `validUntil` / `revalidationRecommendedAfter` | Expiry semantics: a validation is a point-in-time observation, stale after 180 days (revalidation recommended 30 days before). Informational — this does NOT auto-revoke the persisted boolean and is NOT a certification. |
 | `evidenceSha256` | SHA-256 over the canonical record (digest excluded) — tamper evidence for the audit-trail copy. |
 

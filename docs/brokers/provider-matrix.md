@@ -114,10 +114,12 @@ tests never produce DEMO-VERIFIED or LIVE-VERIFIED evidence**:
    sanitized evidence (timestamps, step results, provider order ids — never
    credentials) in this matrix. Per connection,
    `POST /broker/connections/:id/validate-demo` runs the capability-aware
-   checklist and sets `demoValidated` (a FAIL **revokes** a stale pass —
-   fail-closed). This strengthens main's connect-time auto-write of
-   `demoValidated` (a weak connect-implies-validated proxy) into
-   checklist-driven validation with audit evidence.
+   checklist and is the AUTHORITATIVE `demoValidated` write path (a FAIL
+   **revokes** a stale pass and any validation-granted authorization —
+   fail-closed). A connect handshake proves connectivity/credential validity
+   ONLY: it settles the connection at CONNECTED (pre-validation) and never
+   writes `demoValidated`; the checklist alone advances CONNECTED →
+   AUTHORIZED with audit evidence.
 3. **PRODUCTION LIVE VERIFIED** — operator-attested LIVE-environment evidence,
    recorded as `productionLiveVerification: { status: 'VERIFIED', verifiedAt,
    evidenceRef }` in `BROKER_CATALOG`. The only change that flips the field.
@@ -129,7 +131,7 @@ tests never produce DEMO-VERIFIED or LIVE-VERIFIED evidence**:
 | Catalog status (SUPPORTED / BETA / …) | Code change in `BROKER_CATALOG` + registered adapter + passing contract suite — never the reverse of evidence |
 | `productionLiveVerification` UNVERIFIED → VERIFIED | Operator edits `BROKER_CATALOG` with attested `verifiedAt` + `evidenceRef` (doc/ticket reference — never secrets). Tests never flip it. |
 | `certifiedVia` (Round 7.1) | `LEGACY_ATTESTATION` records historical verification predating the certification protocol; `HARNESS_CERTIFIED` is set ONLY after a genuine operator certification run produced a durable, read-back-verified evidence artifact (`certificationRunRef = runId@sha256:<hash>`). Nothing upgrades automatically — a passing harness run alone flips NOTHING. |
-| `demoValidated` (per connection) | `validate-demo` PASS sets it; FAIL revokes it; a successful DEMO connect auto-writes it (weak proxy, re-validated by the checklist) |
+| `demoValidated` (per connection) | `validate-demo` PASS sets it (guarded CONNECTED → AUTHORIZED advance); FAIL revokes it + any validation-granted authorization (AUTHORIZED/READY → REVOKED). A connect handshake NEVER writes it. |
 | LIVE connection creation / `enableLiveTrading` | Server-side fail-closed gates (below) — no UI override |
 
 ### Production-LIVE verification (registry semantics)
