@@ -40,7 +40,7 @@ class AgentEvidence(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def validate_availability_order(self) -> "AgentEvidence":
+    def validate_availability_order(self) -> AgentEvidence:
         if self.available_at < self.observed_at:
             raise ValueError("available_at cannot precede observed_at")
         return self
