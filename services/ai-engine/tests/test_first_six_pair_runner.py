@@ -80,6 +80,7 @@ def test_dukascopy_source_requires_no_broker_credentials(
     monkeypatch.setattr(runner, "INITIAL_FOREX_UNIVERSE", ("EURUSD",))
 
     collected: list[str] = []
+    observed_lookbacks: list[int] = []
 
     def fake_collect(
         *,
@@ -88,9 +89,11 @@ def test_dukascopy_source_requires_no_broker_credentials(
         output_path,
         now=None,
         cache_dir=None,
+        max_lookback_days=90,
     ):
         del target_rows, now, cache_dir
         collected.append(instrument)
+        observed_lookbacks.append(max_lookback_days)
         Path(output_path).write_text(
             "timestamp,open,high,low,close,volume,tick_volume,spread_points,price_digits\n",
             encoding="utf-8",
@@ -135,11 +138,13 @@ def test_dukascopy_source_requires_no_broker_credentials(
     result = runner.run_first_six_pair_study(
         output_dir=tmp_path / "research",
         source="dukascopy",
+        dukascopy_max_lookback_days=180,
         target_rows=250,
         horizons=(5,),
     )
 
     assert collected == ["EURUSD"]
+    assert observed_lookbacks == [180]
     assert result["data_source"] == "dukascopy"
     assert (
         result["label_selection_policy"]
@@ -161,6 +166,17 @@ def test_dukascopy_source_requires_no_broker_credentials(
     assert result["qualification_window"]["decision_time_before"] == (
         qualification_cutoff.isoformat()
     )
+
+
+def test_six_pair_runner_rejects_invalid_dukascopy_lookback(tmp_path: Path):
+    with pytest.raises(ValueError, match="dukascopy_max_lookback_days"):
+        runner.run_first_six_pair_study(
+            output_dir=tmp_path / "research",
+            source="dukascopy",
+            dukascopy_max_lookback_days=1,
+            target_rows=250,
+            horizons=(5,),
+        )
 
 
 def test_metaapi_source_remains_fail_closed_without_credentials(tmp_path: Path):
