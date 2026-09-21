@@ -46,15 +46,26 @@ jobs:
           persist-credentials: false
 
       - name: Verify exact current main
+        id: current
         shell: bash
         run: |
           set -Eeuo pipefail
           [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
           git fetch --quiet --no-tags origin main
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-          test "$(git rev-parse origin/main)" = "$CANDIDATE_SHA"
+
+          current_main_sha="$(git rev-parse origin/main)"
+          if [[ "$current_main_sha" != "$CANDIDATE_SHA" ]]; then
+            printf 'current=false\n' >> "$GITHUB_OUTPUT"
+            printf 'RESEARCH_SKIPPED reason=deployed_candidate_superseded candidate=%s current_main=%s\n' \
+              "$CANDIDATE_SHA" "$current_main_sha"
+            exit 0
+          fi
+
+          printf 'current=true\n' >> "$GITHUB_OUTPUT"
 
       - name: Configure pinned SSH identity
+        if: steps.current.outputs.current == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -68,6 +79,7 @@ jobs:
           chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
 
       - name: Determine whether model research is required
+        if: steps.current.outputs.current == 'true'
         id: relevance
         shell: bash
         run: |
