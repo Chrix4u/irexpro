@@ -112,10 +112,12 @@ grep -Fq 'export IREXPRO_RESEARCH_PROGRESS=1' "$RESEARCH_WORKFLOW" ||
   fail 'Six Pair Research must enable detailed stage/fold progress telemetry.'
 grep -Fq 'export IREXPRO_XGB_N_JOBS=4' "$RESEARCH_WORKFLOW" ||
   fail 'Six Pair Research must request bounded XGBoost CPU parallelism.'
+# shellcheck disable=SC2016
 grep -Fq 'export IREXPRO_RESEARCH_CANDIDATE_SHA="$candidate_sha"' "$RESEARCH_WORKFLOW" ||
   fail 'Six Pair Research must bind resume checkpoints to the exact candidate SHA.'
 grep -Fq -- '--resume' "$RESEARCH_WORKFLOW" ||
   fail 'Six Pair Research must enable verified same-candidate checkpoint resume.'
+# shellcheck disable=SC2016
 if grep -Fq 'rm -rf "$OUTPUT_ROOT"' "$RESEARCH_WORKFLOW"; then
   fail 'Six Pair Research must not delete same-candidate checkpoints before a retry.'
 fi
