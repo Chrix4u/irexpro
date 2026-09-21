@@ -39,8 +39,14 @@ async def generate_signal(request: SignalGenerationRequest) -> SignalGenerationR
     Use /signals/publish-to-api to submit to the NestJS pipeline.
     """
     settings = get_settings()
-    if settings.ai_signal_mode == "live":
-        raise HTTPException(status_code=403, detail="Live signal mode is not supported in this sprint")
+    if settings.ai_signal_mode == "live" and not settings.ai_engine_allow_live_model:
+        # Env feature gate closed — no live path is possible for this engine.
+        # (When the gate is open, SignalGenerator enforces the promotion-record
+        # gate and raises a truthful LiveModeNotSupportedError → 403 below.)
+        raise HTTPException(
+            status_code=403,
+            detail="Live signal mode is disabled: AI_ENGINE_ALLOW_LIVE_MODEL is not enabled",
+        )
 
     generator = get_signal_generator()
     try:
@@ -78,8 +84,11 @@ async def generate_and_publish_signal(request: PublishSignalRequest) -> PublishS
     This endpoint does NOT execute trades directly.
     """
     settings = get_settings()
-    if settings.ai_signal_mode == "live":
-        raise HTTPException(status_code=403, detail="Live signal mode is not supported")
+    if settings.ai_signal_mode == "live" and not settings.ai_engine_allow_live_model:
+        raise HTTPException(
+            status_code=403,
+            detail="Live signal mode is disabled: AI_ENGINE_ALLOW_LIVE_MODEL is not enabled",
+        )
 
     generator = get_signal_generator()
     try:
@@ -90,6 +99,8 @@ async def generate_and_publish_signal(request: PublishSignalRequest) -> PublishS
             instrument=request.instrument,
             timeframe=request.timeframe,
         )
+    except LiveModeNotSupportedError as e:
+        raise HTTPException(status_code=403, detail=str(e))
     except SignalGenerationError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
