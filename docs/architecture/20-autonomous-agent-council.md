@@ -84,7 +84,7 @@ deduplication and provenance validation around these foundation guarantees.
   evaluation, governance metadata and promotion gates.
 - Stale, future-dated, wrong-instrument or unverifiable context is rejected.
 - The explicit quant signal cannot be reintroduced as context to amplify its own vote.\n- Duplicate evidence cannot amplify council support or opposition.
-- Missing context never fabricates confidence; it yields INSUFFICIENT.
+- Missing context never fabricates confidence; it yields INSUFFICIENT.\n- Equal directional support/opposition is CONFLICT with neutral consensus, never ALIGNED.
 - A BLOCKED context result does not itself close/open trades; Risk and
   Execution remain authoritative.
 - Store concise evidence and rationale, not hidden model chain-of-thought.
