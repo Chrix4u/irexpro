@@ -72,14 +72,12 @@ grep -Fq 'id: relevance' "$RESEARCH_WORKFLOW" ||
 grep -Fq "if: steps.relevance.outputs.run == 'true'" "$RESEARCH_WORKFLOW" ||
   fail 'The expensive six-pair step must be guarded by the relevance decision.'
 
-# When there is no successful research lineage yet, irrelevant deploys may
-# skip the heavy study but must leave the marker absent so the next relevant
-# model/training change is still forced to research.
-# shellcheck disable=SC2016
-grep -Fq 'changed_files="$(git diff --name-only "$parent_sha" "$candidate_sha")"' "$RESEARCH_WORKFLOW" ||
-  fail 'Unbaselined research relevance must inspect the candidate parent diff.'
-grep -Fq 'do NOT launch the' "$RESEARCH_WORKFLOW" ||
-  fail 'Research workflow must document the unbaselined irrelevant-deploy path.'
+# Without a successful/evaluated lineage, research must fail safe and retry.
+# An unrelated later deploy must not hide a failed/timed-out model study.
+grep -Fq 'No successful/evaluated research lineage exists yet. Fail safe:' "$RESEARCH_WORKFLOW" ||
+  fail 'Research workflow must document fail-safe retry for an unresolved lineage.'
+grep -Fq 'Retry until a research' "$RESEARCH_WORKFLOW" ||
+  fail 'Research workflow must retain unresolved-lineage retry semantics.'
 
 # Long SSH-backed research must emit periodic liveness evidence without
 # changing the research process result. This keeps operators informed while
