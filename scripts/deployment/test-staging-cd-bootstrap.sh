@@ -63,6 +63,16 @@ grep -Fq 'cancel-in-progress: true' "$WORKFLOW" ||
 grep -Fq 'cancel-in-progress: false' "$RESEARCH_WORKFLOW" ||
   fail 'Six Pair Research must never cancel an active staging-worktree owner.'
 
+# A successful staging deploy can finish after main has already advanced.
+# That stale workflow_run event is expected and must skip cleanly instead of
+# creating a red research failure for a candidate that is no longer promotable.
+grep -Fq 'id: current' "$RESEARCH_WORKFLOW" ||
+  fail 'Six Pair Research must expose an exact-main current-candidate decision.'
+grep -Fq 'RESEARCH_SKIPPED reason=deployed_candidate_superseded' "$RESEARCH_WORKFLOW" ||
+  fail 'Six Pair Research must report superseded deploy triggers as a clean skip.'
+grep -Fq "if: steps.current.outputs.current == 'true'" "$RESEARCH_WORKFLOW" ||
+  fail 'Six Pair Research must not configure remote research after a stale-trigger skip.'
+
 # Expensive research is lineage-aware: irrelevant deploys skip retraining, while
 # operators retain an explicit manual rerun path.
 grep -Fq 'workflow_dispatch:' "$RESEARCH_WORKFLOW" ||
