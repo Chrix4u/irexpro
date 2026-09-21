@@ -265,6 +265,15 @@ def test_resume_reuses_verified_pair_and_horizon_checkpoints(
         del datasets, kwargs
         calls["evaluate"] += 1
         report = _fake_evaluation(report_path)
+        report_path = Path(report_path)
+        report_path.write_text(
+            runner.json.dumps(
+                {key: value for key, value in report.items() if key != "report_path"},
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
         predictions = Path(predictions_path)
         predictions.parent.mkdir(parents=True, exist_ok=True)
         predictions.write_text(
