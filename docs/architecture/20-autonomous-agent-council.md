@@ -84,8 +84,9 @@ external network calls and does not grant context any execution authority.
 
 Implemented in this phase:
 
-- Explicit source-trust registry with source type, currency coverage,
-  credibility, enable/disable state, and optional corroboration requirement.
+- Explicit source-trust registry with source type, immutable currency coverage,
+  credibility, enable/disable state, optional corroboration requirement, and
+  independence groups so aliases of one upstream source cannot fake corroboration.
 - Default primary-source coverage for the currencies used by the six-major-pair
   research universe.
 - Provider-normalized macro event contract with separate `observed_at`,
@@ -94,12 +95,18 @@ Implemented in this phase:
   calendar observations do not amplify a council vote.
 - Causal historical filtering: an event is invisible before its recorded
   `available_at`.
-- Deterministic high-impact event proximity windows that produce fresh advisory
-  `BLOCK` evidence only when the event is relevant to the traded pair.
-- Corroboration enforcement for source classes configured to require multiple
-  independent trusted observations.
+- Revision-aware replay: for each provider event id, only the latest revision
+  known at the evaluation time is eligible. Later downgrades, reschedules, and
+  cancellations supersede earlier observations without leaking future updates.
+- Same-timestamp conflicting revisions fail closed instead of depending on
+  input ordering.
+- Deterministic, bounded high-impact event proximity windows that produce fresh
+  advisory `BLOCK` evidence only when the event is relevant to the traded pair.
+- Corroboration enforcement counts independent provenance groups rather than
+  raw source aliases.
 - Fresh derived evidence at each evaluation time so a calendar item learned
-  earlier does not become artificially stale while its event-risk window is active.
+  earlier does not become artificially stale while its event-risk window is active,
+  while original source observation/availability timestamps remain in audit metadata.
 
 Still separate from this phase:
 
