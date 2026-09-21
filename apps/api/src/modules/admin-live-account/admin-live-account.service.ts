@@ -1,13 +1,25 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { FindOptionsWhere, In, MoreThanOrEqual, Repository } from 'typeorm';
 import { BrokerAccount } from '../broker/entities/broker-account.entity';
 import { BrokerConnection } from '../broker/entities/broker-connection.entity';
+import { BrokerAccountSnapshot } from '../broker/entities/broker-account-snapshot.entity';
 import { BrokerService } from '../broker/broker.service';
 import { BrokerAuthorizationStatus } from '../broker/authorization/broker-authorization-status';
-import { BrokerConnectionStatus, BrokerMode } from '../broker/interfaces/broker-adapter.interface';
+import {
+  AdapterMetadata,
+  BrokerConnectionStatus,
+  BrokerMode,
+} from '../broker/interfaces/broker-adapter.interface';
+import { BrokerAdapterRegistry } from '../broker/adapters/broker-adapter.registry';
 import { BrokerProviderRegistryService } from '../broker/registry/broker-provider-registry.service';
 import { TradingSession, TradingSessionStatus } from '../execution/entities/trading-session.entity';
+import { Order } from '../execution/orders/order.entity';
+import { OrderStatus } from '../execution/orders/order.enums';
+import { RiskProfile } from '../risk/entities/risk-profile.entity';
+import { RiskViolation } from '../risk/entities/risk-violation.entity';
+import { AuditAction } from '../../common/enums/audit-action.enum';
 import {
   ExecutionControlScope,
   ExecutionControlStatus,
@@ -29,12 +41,17 @@ import {
   AdminDiscrepancyFilter,
 } from './dto/admin-live-account.enums';
 import {
+  AdminCanaryBoundDto,
   AdminDiscrepancyCountsDto,
+  AdminDispatchOutcomesDto,
+  AdminEmergencyFlattenStatusDto,
   AdminExecutionControlViewDto,
   AdminExpiredControlsViewDto,
+  AdminKillSwitchStateDto,
   AdminLiveOpsOverviewViewDto,
   AdminProviderRegistryEntryDto,
   AdminConnectionStateCountsDto,
+  AdminStaleSnapshotAlertDto,
 } from './dto/admin-live-account-overview-response.dto';
 import {
   AdminConnectionsPageDto,
@@ -69,6 +86,41 @@ export const ADMIN_UNKNOWN_BROKER_ID = 'unknown';
 export const ADMIN_AUDIT_ACTOR_FILTER_MAX_LENGTH = 64;
 /** Audit investigation resourceType filter is truncated to this bound (resource names stay readable). */
 export const ADMIN_AUDIT_RESOURCE_FILTER_MAX_LENGTH = 100;
+
+/**
+ * Phase 10 canary operations — ADMIN staleness-alert threshold for accepted
+ * account snapshots (120s). Deliberately LOOSER than the pre-trade
+ * NEW_EXPOSURE_SNAPSHOT_MAX_AGE_MS gate (30s, BrokerAccountSnapshotService):
+ * this is observability, not enforcement — the enforcement gate stays where
+ * it is and is never re-implemented here.
+ */
+export const ADMIN_STALE_SNAPSHOT_THRESHOLD_MS = 120_000;
+
+/**
+ * Phase 10 canary operations — bounded audit tail scanned for the most
+ * recent emergency-flatten summary row (RISK_KILL_SWITCH_ACTIVATED with
+ * metadata.emergencyFlatten = true; risk-service activations without the
+ * flatten metadata are skipped).
+ */
+export const ADMIN_EMERGENCY_FLATTEN_AUDIT_SCAN_ROWS = 50;
+
+/**
+ * Phase 10 canary operations — certifiable providers and the env key that
+ * carries the operator's certification canary exposure cap. Mirrors the
+ * operator CLI contract (apps/api/scripts/run-live-certification.ts): the
+ * cTrader family aliases share the family cap env; paper-broker is
+ * DEMO-only and refused by the CLI, so it is NOT certifiable.
+ */
+export const ADMIN_CERTIFICATION_CANARY_EXPOSURE_ENV_KEYS: readonly {
+  brokerId: string;
+  envKey: string;
+}[] = [
+  { brokerId: 'metatrader5', envKey: 'METAAPI_LIVE_CERT_MAX_CANARY_EXPOSURE' },
+  { brokerId: 'oanda', envKey: 'OANDA_LIVE_CERT_MAX_CANARY_EXPOSURE' },
+  { brokerId: 'ctrader', envKey: 'CTRADER_LIVE_CERT_MAX_CANARY_EXPOSURE' },
+  { brokerId: 'pepperstone-ctrader', envKey: 'CTRADER_LIVE_CERT_MAX_CANARY_EXPOSURE' },
+  { brokerId: 'icmarkets-ctrader', envKey: 'CTRADER_LIVE_CERT_MAX_CANARY_EXPOSURE' },
+];
 
 /** Alphanumeric runs of 16+ chars are treated as key/token material (Directive §40). */
 const SECRET_LIKE_RUN = /[A-Za-z0-9]{16,}/g;
@@ -197,9 +249,19 @@ export class AdminLiveAccountService {
     private readonly discrepancyRepo: Repository<ReconciliationDiscrepancy>,
     @InjectRepository(AuditLog)
     private readonly auditRepo: Repository<AuditLog>,
+    @InjectRepository(Order)
+    private readonly orderRepo: Repository<Order>,
+    @InjectRepository(RiskProfile)
+    private readonly riskProfileRepo: Repository<RiskProfile>,
+    @InjectRepository(RiskViolation)
+    private readonly riskViolationRepo: Repository<RiskViolation>,
+    @InjectRepository(BrokerAccountSnapshot)
+    private readonly snapshotRepo: Repository<BrokerAccountSnapshot>,
     private readonly executionControlService: ExecutionControlService,
     private readonly providerRegistry: BrokerProviderRegistryService,
     private readonly brokerService: BrokerService,
+    private readonly adapterRegistry: BrokerAdapterRegistry,
+    private readonly configService: ConfigService,
   ) {}
 
   // ─── GET /admin/live-account/overview ─────────────────────────────────────
@@ -215,6 +277,13 @@ export class AdminLiveAccountService {
       expiredControls,
       activeSessions,
       suspendedSessions,
+      // Phase 10 canary-operations blocks — each failure-tolerant (a failing
+      // optional panel degrades to null, never fails the whole overview).
+      adapterVersions,
+      dispatchOutcomes,
+      emergencyFlattenStatus,
+      killSwitchState,
+      canaryBounds,
     ] = await Promise.all([
       this.connectionRepo.find(),
       this.discrepancyRepo.find({
@@ -237,7 +306,16 @@ export class AdminLiveAccountService {
           ]),
         },
       }),
+      this.loadAdapterVersions(),
+      this.loadDispatchOutcomes(cutoff),
+      this.loadEmergencyFlattenStatus(),
+      this.loadKillSwitchState(),
+      this.loadCanaryBounds(),
     ]);
+
+    // Stale-snapshot alerts derive from the JUST-LOADED connection inventory
+    // (no second connection query) — therefore sequenced after the load.
+    const staleSnapshotAlerts = await this.loadStaleSnapshotAlerts(connections, now);
 
     const severityCounts = new Map<ReconciliationDiscrepancySeverity, number>();
     for (const discrepancy of openDiscrepancies) {
@@ -263,6 +341,12 @@ export class AdminLiveAccountService {
         activeSessions,
         suspendedSessions,
       },
+      adapterVersions,
+      dispatchOutcomes,
+      staleSnapshotAlerts,
+      emergencyFlattenStatus,
+      killSwitchState,
+      canaryBounds,
     };
   }
 
@@ -416,6 +500,230 @@ export class AdminLiveAccountService {
       limit: safeLimit,
       offset: safeOffset,
     };
+  }
+
+  // ─── Phase 10 canary-operations helpers (failure-tolerant) ────────────────
+
+  /**
+   * Failure-tolerance wrapper: a failing optional panel degrades to null
+   * instead of failing the whole overview (same discipline as the
+   * isExecutable fail-closed catch).
+   */
+  private async optionalPanel<T>(load: () => Promise<T> | T): Promise<T | null> {
+    try {
+      return await load();
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Adapter implementation version per brokerId, read from the metadata-only
+   * ROOT adapters (BrokerAdapterRegistry — never an isolated mutable session
+   * context). Adapters that carry no version annotation are reported as null;
+   * registered aliases (e.g. pepperstone-ctrader) resolve to their canonical
+   * provider's version. No adapter internals beyond the version string.
+   */
+  private async loadAdapterVersions(): Promise<Record<string, string | null> | null> {
+    return this.optionalPanel(() => {
+      const versions: Record<string, string | null> = {};
+      for (const brokerId of this.adapterRegistry.getSupportedBrokerIds()) {
+        const adapter = this.adapterRegistry.getAdapter(brokerId);
+        const version = (adapter as Partial<AdapterMetadata>).adapterVersion;
+        versions[brokerId] = typeof version === 'string' && version.trim() !== '' ? version : null;
+      }
+      return versions;
+    });
+  }
+
+  /**
+   * Order-dispatch outcome counts (all users — admin scope):
+   * - unknownResultOpenCount: trading.orders with status RECONCILIATION_PENDING
+   *   (the dispatch outcome is unknown — reconciliation owns convergence);
+   * - rejectedLast24h: orders that reached terminal REJECTED with
+   *   finalizedAt in the last 24h (risk engine or provider rejection);
+   * - dispatchBlocksLast24h: RiskViolation rows recorded in the last 24h —
+   *   every row is a pre-dispatch block (the risk engine runs before the
+   *   dispatch boundary). This third count degrades ALONE to null.
+   */
+  private async loadDispatchOutcomes(cutoff: Date): Promise<AdminDispatchOutcomesDto | null> {
+    return this.optionalPanel(async () => {
+      const [unknownResultOpenCount, rejectedLast24h] = await Promise.all([
+        this.orderRepo.count({ where: { status: OrderStatus.RECONCILIATION_PENDING } }),
+        this.orderRepo.count({
+          where: { status: OrderStatus.REJECTED, finalizedAt: MoreThanOrEqual(cutoff) },
+        }),
+      ]);
+      const dispatchBlocksLast24h = await this.optionalPanel(() =>
+        this.riskViolationRepo.count({ where: { evaluatedAt: MoreThanOrEqual(cutoff) } }),
+      );
+      return { unknownResultOpenCount, rejectedLast24h, dispatchBlocksLast24h };
+    });
+  }
+
+  /**
+   * Stale-snapshot alerts over the ALREADY-LOADED connection inventory:
+   * CONNECTED connections whose latest ACCEPTED snapshot (read-only repository
+   * query, ordered by generation — the same ordering discipline as
+   * BrokerAccountSnapshotService.readLatestAcceptedSnapshot; that service is
+   * never modified) has an observation instant (providerObservedAt ??
+   * acceptedAt) older than ADMIN_STALE_SNAPSHOT_THRESHOLD_MS, plus CONNECTED
+   * LIVE connections with NO accepted snapshot at all. A missing snapshot on
+   * a CONNECTED DEMO connection is not alert-worthy (LIVE is the
+   * exposure-authoritative case).
+   */
+  private async loadStaleSnapshotAlerts(
+    connections: BrokerConnection[],
+    now: Date,
+  ): Promise<AdminStaleSnapshotAlertDto[] | null> {
+    return this.optionalPanel(async () => {
+      const connected = connections.filter(
+        (connection) => connection.status === BrokerConnectionStatus.CONNECTED,
+      );
+      if (connected.length === 0) return [];
+
+      const latestSnapshots = await Promise.all(
+        connected.map((connection) =>
+          this.snapshotRepo.findOne({
+            where: { connectionId: connection.id },
+            order: { generation: 'DESC' },
+            select: ['connectionId', 'generation', 'acceptedAt', 'providerObservedAt'],
+          }),
+        ),
+      );
+
+      const alerts: AdminStaleSnapshotAlertDto[] = [];
+      for (let index = 0; index < connected.length; index += 1) {
+        const connection = connected[index];
+        const snapshot = latestSnapshots[index];
+
+        if (!snapshot) {
+          if (connection.accountType === BrokerMode.LIVE) {
+            alerts.push({
+              connectionId: connection.id,
+              brokerId: connection.brokerId,
+              accountType: connection.accountType,
+              lastAcceptedAt: null,
+              ageSeconds: null,
+            });
+          }
+          continue;
+        }
+
+        // Observation instant (provider time where reported, else server
+        // accept time) — the same freshness semantics as the pre-trade gate.
+        const observedAt = snapshot.providerObservedAt ?? snapshot.acceptedAt ?? null;
+        if (!observedAt) continue; // malformed row — never fabricate staleness
+
+        const ageMs = now.getTime() - observedAt.getTime();
+        if (ageMs > ADMIN_STALE_SNAPSHOT_THRESHOLD_MS) {
+          alerts.push({
+            connectionId: connection.id,
+            brokerId: connection.brokerId,
+            accountType: connection.accountType,
+            lastAcceptedAt: snapshot.acceptedAt ? snapshot.acceptedAt.toISOString() : null,
+            ageSeconds: Math.max(0, Math.floor(ageMs / 1000)),
+          });
+        }
+      }
+      return alerts;
+    });
+  }
+
+  /**
+   * Most recent emergency flatten, from the audit log tail: the newest
+   * RISK_KILL_SWITCH_ACTIVATED row whose metadata carries
+   * emergencyFlatten = true (the summary audit ExecutionService writes after
+   * a kill-switch force-close — risk-service activation audits WITHOUT that
+   * marker are skipped). Outcome derivation from the recorded counts:
+   * COMPLETE (all target positions closed) / PARTIAL (some not closed — a
+   * failed close and an unknown-outcome close are NOT separable in the
+   * summary audit, and are never claimed to be) / UNVERIFIED (metadata
+   * without usable counts). No raw audit metadata blob ever leaves this
+   * method — only the derived fields + a sanitized description.
+   */
+  private async loadEmergencyFlattenStatus(): Promise<AdminEmergencyFlattenStatusDto | null> {
+    return this.optionalPanel(async () => {
+      const rows = await this.auditRepo.find({
+        where: { action: AuditAction.RISK_KILL_SWITCH_ACTIVATED },
+        order: { createdAt: 'DESC' },
+        take: ADMIN_EMERGENCY_FLATTEN_AUDIT_SCAN_ROWS,
+      });
+      const latest = rows.find(
+        (row) =>
+          typeof row.metadata === 'object' &&
+          row.metadata !== null &&
+          (row.metadata as Record<string, unknown>).emergencyFlatten === true,
+      );
+      if (!latest) {
+        return { lastRequestedAt: null, lastOutcome: null, description: null };
+      }
+
+      const metadata = latest.metadata as Record<string, unknown>;
+      const targetCount = Number(metadata.targetCount);
+      const closedCount = Number(metadata.closedCount);
+      const countsUsable =
+        Number.isFinite(targetCount) &&
+        Number.isFinite(closedCount) &&
+        targetCount > 0 &&
+        closedCount >= 0;
+
+      let lastOutcome: AdminEmergencyFlattenStatusDto['lastOutcome'] = 'UNVERIFIED';
+      if (countsUsable) {
+        lastOutcome = closedCount >= targetCount ? 'COMPLETE' : 'PARTIAL';
+      }
+
+      let description: string | null;
+      if (!countsUsable) {
+        description = 'Emergency flatten recorded — outcome counts unavailable in the audit record';
+      } else {
+        const closeReason =
+          typeof metadata.closeReason === 'string' && metadata.closeReason.trim() !== ''
+            ? ` (reason: ${metadata.closeReason.trim()})`
+            : '';
+        description =
+          `Emergency flatten closed ${closedCount} of ${targetCount} open position(s)` +
+          `${closeReason} — not-closed outcomes are failed or unknown-result closes`;
+      }
+
+      return {
+        lastRequestedAt: latest.createdAt ? latest.createdAt.toISOString() : null,
+        lastOutcome,
+        description: sanitizeAdminText(description, ADMIN_DESCRIPTION_MAX_LENGTH),
+      };
+    });
+  }
+
+  /** Risk profiles with killSwitchActive = true (all users — admin scope). */
+  private async loadKillSwitchState(): Promise<AdminKillSwitchStateDto | null> {
+    return this.optionalPanel(async () => ({
+      activeUsersCount: await this.riskProfileRepo.count({
+        where: { killSwitchActive: true },
+      }),
+    }));
+  }
+
+  /**
+   * Certification canary exposure caps per certifiable provider, from the
+   * config service (the *_LIVE_CERT_MAX_CANARY_EXPOSURE env contract —
+   * ConfigService falls back to process.env for keys not in the factory
+   * configuration). Numeric exposure caps, NOT secrets: safe to expose to
+   * admins. configured = false when the env var is absent (the operator CLI
+   * then refuses the certification run).
+   */
+  private async loadCanaryBounds(): Promise<AdminCanaryBoundDto[] | null> {
+    return this.optionalPanel(() =>
+      ADMIN_CERTIFICATION_CANARY_EXPOSURE_ENV_KEYS.map(({ brokerId, envKey }) => {
+        const raw = this.configService.get<string>(envKey);
+        const trimmed = typeof raw === 'string' ? raw.trim() : '';
+        const configured = trimmed !== '';
+        return {
+          brokerId,
+          configured,
+          maxCanaryExposure: configured ? trimmed : null,
+        };
+      }),
+    );
   }
 
   // ─── Private helpers ──────────────────────────────────────────────────────

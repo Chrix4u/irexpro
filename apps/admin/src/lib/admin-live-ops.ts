@@ -8,16 +8,21 @@ import type {
   AdminAuditPage,
   AdminAuditRowView,
   AdminAuditSeverity,
+  AdminCanaryBound,
   AdminConnectionFilter,
   AdminConnectionRowView,
   AdminConnectionsPage,
   AdminDiscrepanciesPage,
   AdminDiscrepancyFilter,
   AdminDiscrepancyRowView,
+  AdminDispatchOutcomes,
+  AdminEmergencyFlattenStatus,
   AdminExecutionControlView,
   AdminExpiredControlsView,
+  AdminKillSwitchState,
   AdminLiveOpsOverviewView,
   AdminProviderRegistryEntry,
+  AdminStaleSnapshotAlert,
 } from '@irexpro/types/admin-live-account';
 import { api } from '@/lib/api';
 
@@ -38,16 +43,21 @@ export type {
   AdminAuditPage,
   AdminAuditRowView,
   AdminAuditSeverity,
+  AdminCanaryBound,
   AdminConnectionFilter,
   AdminConnectionRowView,
   AdminConnectionsPage,
   AdminDiscrepanciesPage,
   AdminDiscrepancyFilter,
   AdminDiscrepancyRowView,
+  AdminDispatchOutcomes,
+  AdminEmergencyFlattenStatus,
   AdminExecutionControlView,
   AdminExpiredControlsView,
+  AdminKillSwitchState,
   AdminLiveOpsOverviewView,
   AdminProviderRegistryEntry,
+  AdminStaleSnapshotAlert,
 } from '@irexpro/types/admin-live-account';
 
 /** GET /admin/audit/logs severity filter (ALL + the two elevated severities). */
@@ -314,7 +324,28 @@ function isLiveOpsOverviewView(value: unknown): value is AdminLiveOpsOverviewVie
     value.providers.every(isProviderRegistryEntry) &&
     isRecord(value.automation) &&
     isNonNegativeInteger(value.automation.activeSessions) &&
-    isNonNegativeInteger(value.automation.suspendedSessions)
+    isNonNegativeInteger(value.automation.suspendedSessions) &&
+    // Phase 10 canary-operations blocks (wire compat): accepted absent or
+    // null (degraded panel), validated whenever a payload is present.
+    (value.adapterVersions === undefined ||
+      value.adapterVersions === null ||
+      isAdapterVersions(value.adapterVersions)) &&
+    (value.dispatchOutcomes === undefined ||
+      value.dispatchOutcomes === null ||
+      isDispatchOutcomes(value.dispatchOutcomes)) &&
+    (value.staleSnapshotAlerts === undefined ||
+      value.staleSnapshotAlerts === null ||
+      (Array.isArray(value.staleSnapshotAlerts) &&
+        value.staleSnapshotAlerts.every(isStaleSnapshotAlert))) &&
+    (value.emergencyFlattenStatus === undefined ||
+      value.emergencyFlattenStatus === null ||
+      isEmergencyFlattenStatus(value.emergencyFlattenStatus)) &&
+    (value.killSwitchState === undefined ||
+      value.killSwitchState === null ||
+      isKillSwitchState(value.killSwitchState)) &&
+    (value.canaryBounds === undefined ||
+      value.canaryBounds === null ||
+      (Array.isArray(value.canaryBounds) && value.canaryBounds.every(isCanaryBound)))
   );
 }
 
@@ -414,6 +445,62 @@ function isAuditPage(value: unknown): value is AdminAuditPage {
     isNonNegativeInteger(value.total) &&
     isNonNegativeInteger(value.limit) &&
     isNonNegativeInteger(value.offset)
+  );
+}
+
+// ── Phase 10 canary-operations guards (fail-closed) ─────────────────────────
+
+/** Adapter version map: every value is a string or null (never undefined/guessed). */
+function isAdapterVersions(value: unknown): value is Record<string, string | null> {
+  if (!isRecord(value)) return false;
+  return Object.values(value).every(isNullableString);
+}
+
+function isDispatchOutcomes(value: unknown): value is AdminDispatchOutcomes {
+  if (!isRecord(value)) return false;
+  return (
+    isNonNegativeInteger(value.unknownResultOpenCount) &&
+    isNonNegativeInteger(value.rejectedLast24h) &&
+    (value.dispatchBlocksLast24h === undefined ||
+      value.dispatchBlocksLast24h === null ||
+      isNonNegativeInteger(value.dispatchBlocksLast24h))
+  );
+}
+
+function isStaleSnapshotAlert(value: unknown): value is AdminStaleSnapshotAlert {
+  if (!isRecord(value)) return false;
+  return (
+    isString(value.connectionId) &&
+    isString(value.brokerId) &&
+    isAccountType(value.accountType) &&
+    isNullableString(value.lastAcceptedAt) &&
+    (value.ageSeconds === null || isNonNegativeInteger(value.ageSeconds))
+  );
+}
+
+function isEmergencyFlattenStatus(value: unknown): value is AdminEmergencyFlattenStatus {
+  if (!isRecord(value)) return false;
+  return (
+    isNullableString(value.lastRequestedAt) &&
+    (value.lastOutcome === null ||
+      value.lastOutcome === 'COMPLETE' ||
+      value.lastOutcome === 'PARTIAL' ||
+      value.lastOutcome === 'UNVERIFIED') &&
+    isNullableString(value.description)
+  );
+}
+
+function isKillSwitchState(value: unknown): value is AdminKillSwitchState {
+  if (!isRecord(value)) return false;
+  return isNonNegativeInteger(value.activeUsersCount);
+}
+
+function isCanaryBound(value: unknown): value is AdminCanaryBound {
+  if (!isRecord(value)) return false;
+  return (
+    isString(value.brokerId) &&
+    typeof value.configured === 'boolean' &&
+    (value.maxCanaryExposure === null || isString(value.maxCanaryExposure))
   );
 }
 
@@ -558,6 +645,22 @@ export function formatAdminDate(iso: string | null): string {
   const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
   const dd = String(d.getUTCDate()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd}`;
+}
+
+/**
+ * Format a snapshot age in seconds for display (e.g. `3m 20s`); null renders
+ * as an em dash (no snapshot exists). Formatting only — the staleness
+ * threshold itself is derived server-side.
+ */
+export function formatAdminAgeSeconds(seconds: number | null): string {
+  if (seconds === null || !Number.isFinite(seconds) || seconds < 0) return '—';
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  if (minutes < 60) return rest === 0 ? `${minutes}m` : `${minutes}m ${rest}s`;
+  const hours = Math.floor(minutes / 60);
+  const restMinutes = minutes % 60;
+  return restMinutes === 0 ? `${hours}h` : `${hours}h ${restMinutes}m`;
 }
 
 /**
