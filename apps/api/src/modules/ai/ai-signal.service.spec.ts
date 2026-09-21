@@ -28,7 +28,7 @@ describe('AiSignalService', () => {
   let module: TestingModule;
   let service: AiSignalService;
   let orchestrator: jest.Mocked<Partial<StrategyOrchestratorService>>;
-  let auditService: jest.Mocked<Partial<AuditService>>;
+  let auditService: jest.Mocked<Pick<AuditService, 'log'>>;
   let eventBus: jest.Mocked<Partial<DomainEventBus>>;
 
   beforeEach(async () => {
