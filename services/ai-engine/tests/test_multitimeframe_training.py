@@ -1,6 +1,8 @@
 """Tests for friction-aware pooled multi-timeframe XGBoost preparation/evaluation."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -16,9 +18,11 @@ from app.domain.training.train_multitimeframe import (
     MULTITIMEFRAME_FEATURE_COLUMNS,
     _class_balance_sample_weights,
     _economic_sample_weights,
+    _load_fold_checkpoint,
     _non_overlapping_portfolio_periods,
     _split_internal_early_stopping_tail,
     _trade_metrics,
+    _write_fold_checkpoint,
     _xgboost_n_jobs,
     evaluate_multi_pair_corpora,
     prepare_instrument_corpus,
@@ -455,3 +459,78 @@ def test_prepare_instrument_corpus_rejects_labels_that_cross_missing_minutes():
     assert not prepared["decision_time"].isin(invalid_window).any()
     assert pd.Timestamp("2026-01-01T07:54:00Z") in set(prepared["decision_time"])
     assert pd.Timestamp("2026-01-01T08:01:00Z") in set(prepared["decision_time"])
+
+
+
+def test_fold_checkpoint_round_trip_and_tamper_rejection(tmp_path: Path):
+    checkpoint_dir = tmp_path / "folds"
+    expected = {
+        "fold": 1,
+        "train_rows": 10,
+        "fit_rows": 8,
+        "internal_early_stopping_rows": 2,
+        "validation_rows": 1,
+        "train_start": "2026-01-01T00:00:00+00:00",
+        "train_end": "2026-01-01T00:09:00+00:00",
+        "internal_early_stopping_start": "2026-01-01T00:08:00+00:00",
+        "internal_early_stopping_end": "2026-01-01T00:09:00+00:00",
+        "validation_start": "2026-01-01T00:10:00+00:00",
+        "validation_end": "2026-01-01T00:10:00+00:00",
+    }
+    predictions = pd.DataFrame(
+        {
+            "decision_time": [pd.Timestamp("2026-01-01T00:10:00Z")],
+            "instrument": ["EURUSD"],
+            "target": [1],
+            "long_net_return": [0.001],
+            "short_net_return": [-0.001],
+            "m1_spread_bps": [0.8],
+            "positive_probability": [0.7],
+            "predicted_long": [True],
+            "confidence": [0.7],
+            "active_trade": [True],
+            "selected_net_return": [0.001],
+            "fold": [1],
+        }
+    )
+    fold_report = {
+        **expected,
+        "best_iteration": 12,
+        "aggregate": {"trading": {"total_return": 0.001}},
+        "by_instrument": {},
+    }
+
+    _write_fold_checkpoint(
+        checkpoint_dir,
+        fold_index=1,
+        fingerprint="fingerprint",
+        expected=expected,
+        fold_report=fold_report,
+        predictions=predictions,
+    )
+    loaded = _load_fold_checkpoint(
+        checkpoint_dir,
+        fold_index=1,
+        fingerprint="fingerprint",
+        expected=expected,
+    )
+    assert loaded is not None
+    loaded_report, loaded_predictions = loaded
+    assert loaded_report["best_iteration"] == 12
+    assert len(loaded_predictions) == 1
+    assert bool(loaded_predictions.iloc[0]["active_trade"]) is True
+
+    predictions_path = checkpoint_dir / "fold-01.csv"
+    predictions_path.write_text(
+        predictions_path.read_text(encoding="utf-8") + "\nTAMPERED",
+        encoding="utf-8",
+    )
+    assert (
+        _load_fold_checkpoint(
+            checkpoint_dir,
+            fold_index=1,
+            fingerprint="fingerprint",
+            expected=expected,
+        )
+        is None
+    )

@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import shutil
 import sys
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +32,127 @@ from app.domain.training.train_multitimeframe import (
 DEFAULT_HORIZONS = (1, 5, 10)
 RESEARCH_QUALIFICATION_FRACTION = 0.80
 RESEARCH_PROGRESS_ENV = "IREXPRO_RESEARCH_PROGRESS"
+RESEARCH_CANDIDATE_SHA_ENV = "IREXPRO_RESEARCH_CANDIDATE_SHA"
+RESUME_STATE_VERSION = 1
+
+
+def _stable_hash(payload: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _write_json_atomic(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(payload, indent=2, sort_keys=True, default=str),
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
+def _read_json(path: Path) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _bootstrap_collection_hour(bootstrap_dir: Path | None) -> datetime | None:
+    if bootstrap_dir is None or not bootstrap_dir.is_dir():
+        return None
+    observed: list[datetime] = []
+    for instrument in INITIAL_FOREX_UNIVERSE:
+        manifest_path = (
+            bootstrap_dir / "raw" / f"{instrument}_M1.manifest.json"
+        )
+        manifest = _read_json(manifest_path) if manifest_path.is_file() else None
+        collected_at = manifest.get("collected_at") if manifest else None
+        if not isinstance(collected_at, str):
+            continue
+        try:
+            timestamp = datetime.fromisoformat(collected_at.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=UTC)
+        observed.append(timestamp.astimezone(UTC))
+    if not observed:
+        return None
+    earliest = min(observed)
+    return earliest
+
+
+def _validated_bootstrap_pair(
+    bootstrap_dir: Path,
+    *,
+    instrument: str,
+    target_rows: int,
+    effective_before: datetime,
+) -> tuple[Path, Path, dict[str, Any], dict[str, Any]] | None:
+    raw_path = bootstrap_dir / "raw" / f"{instrument}_M1.csv"
+    raw_manifest_path = raw_path.with_suffix(".manifest.json")
+    corpus_path = bootstrap_dir / "corpora" / f"{instrument}_MTF.csv"
+    corpus_manifest_path = corpus_path.with_suffix(".manifest.json")
+    if not all(
+        path.is_file()
+        for path in (
+            raw_path,
+            raw_manifest_path,
+            corpus_path,
+            corpus_manifest_path,
+        )
+    ):
+        return None
+
+    raw_manifest = _read_json(raw_manifest_path)
+    corpus_manifest = _read_json(corpus_manifest_path)
+    if raw_manifest is None or corpus_manifest is None:
+        return None
+
+    try:
+        collected_at = datetime.fromisoformat(
+            str(raw_manifest["collected_at"]).replace("Z", "+00:00")
+        )
+        if collected_at.tzinfo is None:
+            collected_at = collected_at.replace(tzinfo=UTC)
+        collected_at = collected_at.astimezone(UTC)
+    except (KeyError, ValueError):
+        return None
+
+    if collected_at.replace(minute=0, second=0, microsecond=0) != (
+        effective_before.astimezone(UTC).replace(minute=0, second=0, microsecond=0)
+    ):
+        return None
+
+    raw_sha256 = _sha256_file(raw_path)
+    corpus_sha256 = _sha256_file(corpus_path)
+    if (
+        raw_manifest.get("instrument") != instrument
+        or raw_manifest.get("source") != "dukascopy_public_datafeed_ticks"
+        or int(raw_manifest.get("row_count", 0)) != target_rows
+        or raw_manifest.get("friction_data_complete") is not True
+        or raw_manifest.get("dataset_sha256") != raw_sha256
+        or corpus_manifest.get("instrument") != instrument
+        or corpus_manifest.get("friction_data_complete") is not True
+        or corpus_manifest.get("lookahead_validation") != "passed"
+        or corpus_manifest.get("raw_m1_sha256") != raw_sha256
+        or corpus_manifest.get("dataset_sha256") != corpus_sha256
+        or int(corpus_manifest.get("row_count", 0)) <= 0
+    ):
+        return None
+
+    return raw_path, corpus_path, raw_manifest, corpus_manifest
 
 
 def _research_progress(message: str) -> None:
@@ -173,6 +296,8 @@ def run_first_six_pair_study(
     slippage_bps: float = 0.0,
     min_net_return_bps: float = 0.0,
     max_splits: int = 5,
+    resume: bool = False,
+    bootstrap_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Collect, build and evaluate the approved initial six-pair universe."""
     normalized_source = source.strip().lower()
@@ -202,17 +327,175 @@ def run_first_six_pair_study(
     raw_dir = root / "raw"
     corpus_dir = root / "corpora"
     report_dir = root / "reports"
+    checkpoint_dir = root / "checkpoints"
     for directory in (raw_dir, corpus_dir, report_dir):
         directory.mkdir(parents=True, exist_ok=True)
+    if resume:
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+    candidate_sha = os.getenv(RESEARCH_CANDIDATE_SHA_ENV, "").strip() or None
+    bootstrap_root = Path(bootstrap_dir) if bootstrap_dir is not None else None
+    bootstrap_before = (
+        _bootstrap_collection_hour(bootstrap_root)
+        if resume and before is None
+        else None
+    )
+    requested_before = before.isoformat() if before is not None else None
+    resume_config = {
+        "state_version": RESUME_STATE_VERSION,
+        "candidate_sha": candidate_sha,
+        "source": normalized_source,
+        "dukascopy_max_lookback_days": dukascopy_max_lookback_days,
+        "target_rows": target_rows,
+        "horizons": list(horizons),
+        "requested_before": requested_before,
+        "confidence_threshold": confidence_threshold,
+        "commission_bps": commission_bps,
+        "slippage_bps": slippage_bps,
+        "min_net_return_bps": min_net_return_bps,
+        "max_splits": max_splits,
+        "instruments": list(INITIAL_FOREX_UNIVERSE),
+    }
+    resume_fingerprint = _stable_hash(resume_config)
+    state_path = checkpoint_dir / "study-state.json"
+    effective_before = before
+
+    if resume:
+        existing_state = _read_json(state_path) if state_path.is_file() else None
+        if existing_state is not None:
+            if existing_state.get("resume_fingerprint") != resume_fingerprint:
+                raise ValueError(
+                    "Existing research checkpoint is incompatible with the current "
+                    "candidate/configuration; refusing to mix research states"
+                )
+            stored_before = existing_state.get("effective_before")
+            if not isinstance(stored_before, str) or not stored_before:
+                raise ValueError("Existing research checkpoint is missing effective_before")
+            effective_before = datetime.fromisoformat(
+                stored_before.replace("Z", "+00:00")
+            )
+            _research_progress(
+                "stage=resume status=loaded "
+                f"candidate={candidate_sha or 'unknown'} "
+                f"effective_before={effective_before.isoformat()}"
+            )
+        else:
+            effective_before = before or bootstrap_before or datetime.now(UTC)
+            _write_json_atomic(
+                state_path,
+                {
+                    "state_version": RESUME_STATE_VERSION,
+                    "resume_fingerprint": resume_fingerprint,
+                    "candidate_sha": candidate_sha,
+                    "effective_before": effective_before.isoformat(),
+                    "study_complete": False,
+                },
+            )
+            _research_progress(
+                "stage=resume status=initialized "
+                f"candidate={candidate_sha or 'unknown'} "
+                f"effective_before={effective_before.isoformat()}"
+            )
 
     corpora: dict[str, str] = {}
     collection_manifests: dict[str, dict[str, Any]] = {}
     corpus_manifests: dict[str, dict[str, Any]] = {}
+    corpus_file_hashes: dict[str, str] = {}
     study_started = time.monotonic()
 
     for instrument in INITIAL_FOREX_UNIVERSE:
         instrument_started = time.monotonic()
         raw_path = raw_dir / f"{instrument}_M1.csv"
+        corpus_path = corpus_dir / f"{instrument}_MTF.csv"
+        pair_checkpoint_path = checkpoint_dir / "pairs" / f"{instrument}.json"
+
+        if resume and pair_checkpoint_path.is_file():
+            pair_checkpoint = _read_json(pair_checkpoint_path)
+            if (
+                pair_checkpoint is not None
+                and pair_checkpoint.get("resume_fingerprint") == resume_fingerprint
+                and raw_path.is_file()
+                and corpus_path.is_file()
+                and pair_checkpoint.get("raw_sha256") == _sha256_file(raw_path)
+                and pair_checkpoint.get("corpus_sha256") == _sha256_file(corpus_path)
+                and isinstance(pair_checkpoint.get("collection_manifest"), dict)
+                and isinstance(pair_checkpoint.get("corpus_manifest"), dict)
+            ):
+                collection = dict(pair_checkpoint["collection_manifest"])
+                corpus = dict(pair_checkpoint["corpus_manifest"])
+                if not corpus.get("friction_data_complete"):
+                    raise ValueError(
+                        f"{instrument} resumed MTF corpus lost friction metadata"
+                    )
+                collection_manifests[instrument] = collection
+                corpus_manifests[instrument] = corpus
+                corpora[instrument] = str(corpus_path)
+                corpus_file_hashes[instrument] = str(
+                    pair_checkpoint["corpus_sha256"]
+                )
+                _research_progress(
+                    f"stage=pair instrument={instrument} status=resumed "
+                    f"rows={collection.get('row_count', 'unknown')}"
+                )
+                continue
+
+        if (
+            resume
+            and normalized_source == "dukascopy"
+            and bootstrap_root is not None
+            and effective_before is not None
+        ):
+            bootstrapped = _validated_bootstrap_pair(
+                bootstrap_root,
+                instrument=instrument,
+                target_rows=target_rows,
+                effective_before=effective_before,
+            )
+            if bootstrapped is not None:
+                (
+                    bootstrap_raw,
+                    bootstrap_corpus,
+                    collection,
+                    corpus,
+                ) = bootstrapped
+                raw_path.parent.mkdir(parents=True, exist_ok=True)
+                corpus_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(bootstrap_raw, raw_path)
+                shutil.copy2(
+                    bootstrap_raw.with_suffix(".manifest.json"),
+                    raw_path.with_suffix(".manifest.json"),
+                )
+                shutil.copy2(bootstrap_corpus, corpus_path)
+                shutil.copy2(
+                    bootstrap_corpus.with_suffix(".manifest.json"),
+                    corpus_path.with_suffix(".manifest.json"),
+                )
+                collection_manifests[instrument] = dict(collection)
+                corpus_manifests[instrument] = dict(corpus)
+                corpora[instrument] = str(corpus_path)
+                raw_sha256 = _sha256_file(raw_path)
+                corpus_sha256 = _sha256_file(corpus_path)
+                corpus_file_hashes[instrument] = corpus_sha256
+                _write_json_atomic(
+                    pair_checkpoint_path,
+                    {
+                        "checkpoint_version": 1,
+                        "resume_fingerprint": resume_fingerprint,
+                        "instrument": instrument,
+                        "raw_sha256": raw_sha256,
+                        "corpus_sha256": corpus_sha256,
+                        "collection_manifest": collection_manifests[instrument],
+                        "corpus_manifest": corpus_manifests[instrument],
+                        "bootstrap_source": str(bootstrap_root),
+                    },
+                )
+                _research_progress(
+                    f"stage=pair instrument={instrument} status=bootstrapped "
+                    f"rows={collection.get('row_count', 'unknown')} "
+                    f"source={bootstrap_root}"
+                )
+                continue
+
         _research_progress(
             f"stage=collect instrument={instrument} status=started "
             f"source={normalized_source} target_rows={target_rows}"
@@ -222,7 +505,7 @@ def run_first_six_pair_study(
                 instrument=instrument,
                 target_rows=target_rows,
                 output_path=raw_path,
-                now=before,
+                now=effective_before,
                 cache_dir=dukascopy_cache_dir,
                 max_lookback_days=dukascopy_max_lookback_days,
             )
@@ -236,7 +519,7 @@ def run_first_six_pair_study(
                 timeframe="M1",
                 target_rows=target_rows,
                 output_path=raw_path,
-                before=before,
+                before=effective_before,
                 require_friction=True,
             )
         collection_manifests[instrument] = {
@@ -263,7 +546,6 @@ def run_first_six_pair_study(
             f"stage=mtf_build instrument={instrument} status=started "
             "timeframes=M1,M5,M15,H1,H4"
         )
-        corpus_path = corpus_dir / f"{instrument}_MTF.csv"
         corpus = build_multitimeframe_corpus_from_m1_csv(
             m1_path=raw_path,
             output_path=corpus_path,
@@ -273,6 +555,22 @@ def run_first_six_pair_study(
             raise ValueError(f"{instrument} MTF corpus lost friction metadata")
         corpus_manifests[instrument] = corpus
         corpora[instrument] = str(corpus_path)
+        raw_sha256 = _sha256_file(raw_path)
+        corpus_sha256 = _sha256_file(corpus_path)
+        corpus_file_hashes[instrument] = corpus_sha256
+        if resume:
+            _write_json_atomic(
+                pair_checkpoint_path,
+                {
+                    "checkpoint_version": 1,
+                    "resume_fingerprint": resume_fingerprint,
+                    "instrument": instrument,
+                    "raw_sha256": raw_sha256,
+                    "corpus_sha256": corpus_sha256,
+                    "collection_manifest": collection_manifests[instrument],
+                    "corpus_manifest": corpus_manifests[instrument],
+                },
+            )
         _research_progress(
             " ".join(
                 [
@@ -290,24 +588,83 @@ def run_first_six_pair_study(
     horizon_reports: dict[str, Any] = {}
     for horizon in horizons:
         horizon_started = time.monotonic()
-        _research_progress(
-            f"stage=horizon horizon={horizon}m status=started "
-            f"max_splits={max_splits}"
+        report_path = report_dir / f"six_pair_walkforward_{horizon}m.json"
+        predictions_path = (
+            report_dir / f"six_pair_walkforward_{horizon}m_predictions.csv"
         )
-        report = evaluate_multi_pair_corpora(
-            corpora,
-            horizon_bars=horizon,
-            report_path=report_dir / f"six_pair_walkforward_{horizon}m.json",
-            confidence_threshold=confidence_threshold,
-            min_net_return_bps=min_net_return_bps,
-            commission_bps=commission_bps,
-            slippage_bps=slippage_bps,
-            max_splits=max_splits,
-            decision_time_before=qualification_cutoff,
-            predictions_path=(
-                report_dir / f"six_pair_walkforward_{horizon}m_predictions.csv"
-            ),
+        horizon_checkpoint_path = (
+            checkpoint_dir / "horizons" / f"{horizon}m.json"
         )
+        horizon_fingerprint = _stable_hash(
+            {
+                "resume_fingerprint": resume_fingerprint,
+                "horizon": horizon,
+                "qualification_cutoff": qualification_cutoff.isoformat(),
+                "corpus_sha256": corpus_file_hashes,
+            }
+        )
+
+        report = None
+        if (
+            resume
+            and horizon_checkpoint_path.is_file()
+            and report_path.is_file()
+            and predictions_path.is_file()
+        ):
+            horizon_checkpoint = _read_json(horizon_checkpoint_path)
+            if (
+                horizon_checkpoint is not None
+                and horizon_checkpoint.get("horizon_fingerprint")
+                == horizon_fingerprint
+                and horizon_checkpoint.get("report_sha256")
+                == _sha256_file(report_path)
+                and horizon_checkpoint.get("predictions_sha256")
+                == _sha256_file(predictions_path)
+            ):
+                loaded_report = _read_json(report_path)
+                if loaded_report is not None:
+                    report = {
+                        **loaded_report,
+                        "report_path": str(report_path),
+                    }
+                    _research_progress(
+                        f"stage=horizon horizon={horizon}m status=resumed "
+                        f"folds={report.get('fold_count', 'unknown')}"
+                    )
+
+        if report is None:
+            _research_progress(
+                f"stage=horizon horizon={horizon}m status=started "
+                f"max_splits={max_splits}"
+            )
+            report = evaluate_multi_pair_corpora(
+                corpora,
+                horizon_bars=horizon,
+                report_path=report_path,
+                confidence_threshold=confidence_threshold,
+                min_net_return_bps=min_net_return_bps,
+                commission_bps=commission_bps,
+                slippage_bps=slippage_bps,
+                max_splits=max_splits,
+                decision_time_before=qualification_cutoff,
+                predictions_path=predictions_path,
+                checkpoint_dir=(
+                    checkpoint_dir / "folds" / f"{horizon}m"
+                    if resume
+                    else None
+                ),
+            )
+            if resume:
+                _write_json_atomic(
+                    horizon_checkpoint_path,
+                    {
+                        "checkpoint_version": 1,
+                        "horizon_fingerprint": horizon_fingerprint,
+                        "report_sha256": _sha256_file(report_path),
+                        "predictions_sha256": _sha256_file(predictions_path),
+                    },
+                )
+
         research_gate = _research_gate(report)
         horizon_reports[f"{horizon}m"] = {
             "report_path": report["report_path"],
@@ -372,7 +729,21 @@ def run_first_six_pair_study(
         },
     }
     summary_path = report_dir / "six_pair_walkforward_summary.json"
-    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+    _write_json_atomic(summary_path, summary)
+    if resume:
+        _write_json_atomic(
+            state_path,
+            {
+                "state_version": RESUME_STATE_VERSION,
+                "resume_fingerprint": resume_fingerprint,
+                "candidate_sha": candidate_sha,
+                "effective_before": effective_before.isoformat()
+                if effective_before is not None
+                else None,
+                "study_complete": True,
+                "summary_sha256": _sha256_file(summary_path),
+            },
+        )
     _research_progress(
         f"stage=study status=completed elapsed_seconds={time.monotonic() - study_started:.1f}"
     )
@@ -407,6 +778,15 @@ def main() -> None:
     parser.add_argument("--slippage-bps", type=float, default=0.0)
     parser.add_argument("--min-net-return-bps", type=float, default=0.0)
     parser.add_argument("--max-splits", type=int, default=5)
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Reuse verified same-candidate pair, horizon, and fold checkpoints",
+    )
+    parser.add_argument(
+        "--bootstrap-dir",
+        help="Optional ancestor research directory for validated pair import",
+    )
     args = parser.parse_args()
 
     internal_api_key = os.getenv("NESTJS_INTERNAL_API_KEY", "")
@@ -435,6 +815,8 @@ def main() -> None:
         slippage_bps=args.slippage_bps,
         min_net_return_bps=args.min_net_return_bps,
         max_splits=args.max_splits,
+        resume=args.resume,
+        bootstrap_dir=args.bootstrap_dir,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
 
