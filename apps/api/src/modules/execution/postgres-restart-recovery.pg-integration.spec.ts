@@ -242,7 +242,7 @@ describe('PostgreSQL restart/kill recovery drill (Phase 11)', () => {
     await insert();
 
     const rows = (await queryWithRestartRetry(
-      `SELECT count(*)::int AS n, max(quantity)::text AS qty FROM trading.drill_orders WHERE idempotency_key = 'idem-retry-1'`,
+      `SELECT count(*)::int AS n, round(max(quantity)::numeric, 2)::text AS qty FROM trading.drill_orders WHERE idempotency_key = 'idem-retry-1'`,
     )) as { n: number; qty: string }[];
     expect(rows[0].n).toBe(1);
     expect(rows[0].qty).toBe('0.02');
@@ -258,14 +258,21 @@ describe('PostgreSQL restart/kill recovery drill (Phase 11)', () => {
 
     // RETURNING makes the affected count deterministically observable across
     // drivers — the CAS-consume shape of the final dispatch boundary.
-    const consume = () =>
-      queryWithRestartRetry(
+    // TypeORM's postgres driver returns [rows, rowCount] for UPDATE…RETURNING
+    // (vs. bare rows for SELECT) — unwrap the tuple shape defensively.
+    const consume = async (): Promise<{ id: string }[]> => {
+      const result = (await queryWithRestartRetry(
         `UPDATE trading.drill_grants
             SET status = 'CONSUMED', consumed_at = now()
           WHERE signal_id = $1 AND status = 'ACTIVE'
           RETURNING id`,
         [signalId],
-      ) as Promise<{ id: string }[]>;
+      )) as unknown;
+      if (Array.isArray(result) && Array.isArray(result[0])) {
+        return result[0] as { id: string }[];
+      }
+      return (result as { id: string }[]) ?? [];
+    };
 
     const first = await consume();
     expect(first).toHaveLength(1);
