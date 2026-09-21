@@ -269,6 +269,8 @@ async def test_unchanged_market_revision_suppresses_duplicate_signal_publish():
     scheduler._signal_generator = mock_generator
     job = ScheduledSessionJobStub()
     job.market_data_revisions["EURUSD"] = "same-market-revision"
+    job.last_confidence_score = 0.0285
+    job.last_confidence_at = object()
     scheduler._jobs["session-1"] = job
 
     await scheduler._run_session_job("session-1")
@@ -277,6 +279,7 @@ async def test_unchanged_market_revision_suppresses_duplicate_signal_publish():
     assert job.last_decision == "NO_NEW_MARKET_DATA"
     assert job.last_reason == "market_data_unchanged"
     assert job.last_confidence_score is None
+    assert job.last_confidence_at is None
     assert job.model_mode == "heuristic_placeholder"
     assert job.market_data_cache_bypassed is True
 
