@@ -45,7 +45,7 @@ def _contains_sensitive_metadata_key(value: Any) -> bool:
                 return True
             if _contains_sensitive_metadata_key(nested):
                 return True
-    elif isinstance(value, (list, tuple, set)):
+    elif isinstance(value, list | tuple | set):
         return any(_contains_sensitive_metadata_key(item) for item in value)
     return False
 
