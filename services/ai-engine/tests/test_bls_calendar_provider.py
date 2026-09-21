@@ -164,7 +164,7 @@ def test_folded_summary_is_unfolded_before_policy_matching():
                 "BEGIN:VEVENT",
                 "UID:folded@bls.gov",
                 "DTSTART:20260911T083000",
-                "SUMMARY:Consumer Price Index for",
+                "SUMMARY:Consumer Price Index for ",
                 " August 2026",
                 "STATUS:CONFIRMED",
                 "END:VEVENT",
