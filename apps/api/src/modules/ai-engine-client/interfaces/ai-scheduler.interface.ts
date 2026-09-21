@@ -1,3 +1,4 @@
+import { BrokerMode } from '../../broker/interfaces/broker-adapter.interface';
 import { ExecutionMode } from '../../execution/interfaces/execution-authority';
 
 export interface AiSchedulerSessionStartPayload {
@@ -8,6 +9,12 @@ export interface AiSchedulerSessionStartPayload {
   timeframe: string;
   intervalSeconds?: number;
   source: 'broker' | 'mock';
+  /**
+   * Exact environment of the bound broker connection. FULL_AUTO on DEMO is
+   * still demo execution; LIVE remains blocked by the paper-approved AI
+   * scheduler until a separately live-approved model path exists.
+   */
+  accountType: BrokerMode;
   /**
    * The session's durable execution mode (Round 5, #298) — NOT a hardcoded
    * 'paper' literal. The AI engine still only generates paper-mode signals; the
