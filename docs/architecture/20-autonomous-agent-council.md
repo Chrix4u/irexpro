@@ -1,6 +1,6 @@
 # Autonomous Agent Council — Context Intelligence
 
-Status: Phase A merged; Phase B trusted-context foundation in progress (paper/UAT only)
+Status: Phase A/B foundation implemented; Phase C historical context evaluation in progress (research only)
 
 ## Why
 
@@ -185,13 +185,43 @@ It remains observational. Context fusion into paper/UAT eligibility requires a
 separate historical available-at evaluation against the quant-only baseline
 before any policy is allowed to affect trading decisions.
 
+## Phase C.1 causal historical overlay evaluation
+
+The first fusion experiment is deliberately narrower than a production policy.
+It compares the existing quant-only out-of-sample validation stream with a
+candidate policy that suppresses new entries during verified high-impact macro
+event windows.
+
+Research rules:
+
+- The evaluator consumes outer-fold walk-forward XGBoost predictions, never
+  training-set predictions.
+- Each context replay runs at the prediction row's exact `decision_time`.
+- Provider revisions with `available_at > decision_time` are invisible, and a
+  later reschedule/cancellation cannot rewrite an earlier historical decision.
+- Context does not change the predicted direction, probability/confidence,
+  selected directional return, position size, or any Risk/Execution rule.
+- The initial policy candidate can only turn an already-active quant entry into
+  a no-trade when council status is `BLOCKED`.
+- Quant-inactive rows remain inactive and are not promoted by context.
+- Performance is reported side-by-side using the same friction-aware,
+  non-overlapping portfolio-period metric policy as the quant baseline.
+- Diagnostics explicitly count blocked winners and blocked losers so a veto
+  policy cannot be declared useful merely because it reduces trade count.
+- The report is marked research-only and is never sufficient by itself for
+  paper/UAT, staging, or live promotion.
+
+The walk-forward training utility can optionally export its exact outer-fold
+validation predictions to CSV for this overlay. This keeps context research
+separate from model fitting and preserves the existing model report contract.
+
 Still separate from this phase:
 
+- Historical trusted-source collection/archival at production scale.
 - Other external calendar, central-bank, statistics, or news-source adapters.
 - Directional interpretation of released macro values or news text.
-- Persistence and replay of historical context snapshots.
-- Decision Explorer API/UI projection of council context.
-- Any use of council context as a paper/UAT eligibility policy.
+- Context as an XGBoost feature.
+- Any runtime use of council context as a paper/UAT eligibility policy.
 - Any live-trading authority.
 
 ## Safety invariants
@@ -230,8 +260,12 @@ Still separate from this phase:
 - paper-only context snapshots in Decision Explorer.
 
 ### Phase C — context fusion evaluation
-- build historical available-at context corpus;
-- test context as features/veto signals without leaking future information;
+- export exact outer-fold validation predictions from the existing purged,
+  embargoed walk-forward pipeline;
+- replay historical trusted context strictly by `available_at`;
+- compare the initial macro-block overlay with the quant-only baseline;
+- next, build production-scale historical context archives and test additional
+  context features/veto candidates without leaking future information;
 - measure incremental Sharpe, precision, drawdown, turnover, and calibration
   versus the quant-only baseline;
 - promote only if untouched evaluation improves without weakening risk gates.

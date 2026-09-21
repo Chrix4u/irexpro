@@ -213,6 +213,37 @@ Stability must also be reviewed across:
 A staging candidate must have zero leakage violations and must not be promoted
 on classification accuracy alone.
 
+### Agent Council historical overlay research
+
+The six-pair walk-forward study can now export the exact outer-fold validation
+predictions for each horizon. These are the only quantitative predictions that
+may be used for contextual overlay research.
+
+A standalone research evaluator can then replay a normalized historical macro
+event archive against those predictions:
+
+```powershell
+python -m app.domain.training.agent_context_evaluation \
+  --predictions research/first-six-pair-run/reports/six_pair_walkforward_5m_predictions.csv \
+  --events research/context/historical_macro_events.jsonl \
+  --horizon-bars 5 \
+  --pre-event-minutes 30 \
+  --post-event-minutes 15 \
+  --report research/context/agent_council_overlay_5m.json \
+  --annotated-predictions research/context/agent_council_overlay_5m_rows.csv
+```
+
+Historical event inputs must be provider-normalized records with
+`observed_at`, `available_at`, and `scheduled_for`. At each validation
+decision, the evaluator ignores any provider revision that was not yet
+available. The initial candidate policy only suppresses an already-active quant
+entry when verified high-impact context yields `BLOCKED`.
+
+The evaluator does **not** change direction, confidence, selected directional
+return, position size, Risk Engine behavior, or execution. Its report remains
+research-only and explicitly compares blocked winners and blocked losers before
+any paper/UAT policy can be considered.
+
 ---
 
 ## Runtime model artifacts

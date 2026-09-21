@@ -431,7 +431,7 @@ def _summarize_predictions(
     }
 
 
-def run_pooled_walk_forward(
+def _run_pooled_walk_forward_core(
     dataset: pd.DataFrame,
     *,
     horizon_bars: int,
@@ -441,8 +441,8 @@ def run_pooled_walk_forward(
     purge_periods: int | None = None,
     embargo_periods: int | None = None,
     max_splits: int = 5,
-) -> dict[str, Any]:
-    """Run expanding pooled walk-forward evaluation and return detailed metrics."""
+) -> tuple[dict[str, Any], pd.DataFrame]:
+    """Run expanding pooled walk-forward evaluation and retain validation predictions."""
     if not 0.5 <= confidence_threshold < 1.0:
         raise ValueError("confidence_threshold must be in [0.5, 1.0)")
     if dataset[TARGET_COLUMN].nunique() < 2:
@@ -547,7 +547,7 @@ def run_pooled_walk_forward(
         instrument: _summarize_predictions(group, horizon_bars=horizon_bars)
         for instrument, group in all_predictions.groupby("instrument", sort=True)
     }
-    return {
+    report = {
         "folds": fold_reports,
         "overall": _summarize_predictions(all_predictions, horizon_bars=horizon_bars),
         "by_instrument": overall_by_instrument,
@@ -562,6 +562,56 @@ def run_pooled_walk_forward(
             "confidence_threshold": confidence_threshold,
         },
     }
+    return report, all_predictions.copy()
+
+
+def run_pooled_walk_forward(
+    dataset: pd.DataFrame,
+    *,
+    horizon_bars: int,
+    confidence_threshold: float = 0.60,
+    min_train_periods: int | None = None,
+    validation_periods: int | None = None,
+    purge_periods: int | None = None,
+    embargo_periods: int | None = None,
+    max_splits: int = 5,
+) -> dict[str, Any]:
+    """Run expanding pooled walk-forward evaluation and return detailed metrics."""
+    report, _ = _run_pooled_walk_forward_core(
+        dataset,
+        horizon_bars=horizon_bars,
+        confidence_threshold=confidence_threshold,
+        min_train_periods=min_train_periods,
+        validation_periods=validation_periods,
+        purge_periods=purge_periods,
+        embargo_periods=embargo_periods,
+        max_splits=max_splits,
+    )
+    return report
+
+
+def run_pooled_walk_forward_with_predictions(
+    dataset: pd.DataFrame,
+    *,
+    horizon_bars: int,
+    confidence_threshold: float = 0.60,
+    min_train_periods: int | None = None,
+    validation_periods: int | None = None,
+    purge_periods: int | None = None,
+    embargo_periods: int | None = None,
+    max_splits: int = 5,
+) -> tuple[dict[str, Any], pd.DataFrame]:
+    """Return metrics plus causal outer-fold predictions for research overlays."""
+    return _run_pooled_walk_forward_core(
+        dataset,
+        horizon_bars=horizon_bars,
+        confidence_threshold=confidence_threshold,
+        min_train_periods=min_train_periods,
+        validation_periods=validation_periods,
+        purge_periods=purge_periods,
+        embargo_periods=embargo_periods,
+        max_splits=max_splits,
+    )
 
 
 def evaluate_multi_pair_corpora(
@@ -575,6 +625,7 @@ def evaluate_multi_pair_corpora(
     slippage_bps: float = 0.0,
     max_splits: int = 5,
     decision_time_before: str | pd.Timestamp | None = None,
+    predictions_path: str | Path | None = None,
 ) -> dict[str, Any]:
     pooled, hashes = load_and_prepare_corpora(
         datasets,
@@ -584,12 +635,18 @@ def evaluate_multi_pair_corpora(
         slippage_bps=slippage_bps,
         decision_time_before=decision_time_before,
     )
-    evaluation = run_pooled_walk_forward(
+    evaluation, predictions = run_pooled_walk_forward_with_predictions(
         pooled,
         horizon_bars=horizon_bars,
         confidence_threshold=confidence_threshold,
         max_splits=max_splits,
     )
+    exported_predictions_path: str | None = None
+    if predictions_path is not None:
+        predictions_output = Path(predictions_path)
+        predictions_output.parent.mkdir(parents=True, exist_ok=True)
+        predictions.to_csv(predictions_output, index=False)
+        exported_predictions_path = str(predictions_output)
     report: dict[str, Any] = {
         "report_version": 2,
         "model_type": "pooled_multitimeframe_xgboost_research",
@@ -618,6 +675,7 @@ def evaluate_multi_pair_corpora(
             "approved_for_live": False,
             "purpose": "research walk-forward evaluation only",
         },
+        "validation_predictions_path": exported_predictions_path,
         **evaluation,
     }
 
@@ -657,6 +715,10 @@ def main() -> None:
     parser.add_argument("--slippage-bps", type=float, default=0.0)
     parser.add_argument("--max-splits", type=int, default=5)
     parser.add_argument("--report", required=True)
+    parser.add_argument(
+        "--predictions",
+        help="Optional CSV path for causal outer-fold validation predictions",
+    )
     args = parser.parse_args()
 
     report = evaluate_multi_pair_corpora(
@@ -668,6 +730,7 @@ def main() -> None:
         commission_bps=args.commission_bps,
         slippage_bps=args.slippage_bps,
         max_splits=args.max_splits,
+        predictions_path=args.predictions,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
 

@@ -249,9 +249,13 @@ def run_first_six_pair_study(
             slippage_bps=slippage_bps,
             max_splits=max_splits,
             decision_time_before=qualification_cutoff,
+            predictions_path=(
+                report_dir / f"six_pair_walkforward_{horizon}m_predictions.csv"
+            ),
         )
         horizon_reports[f"{horizon}m"] = {
             "report_path": report["report_path"],
+            "validation_predictions_path": report.get("validation_predictions_path"),
             "overall": report["overall"],
             "by_instrument": report["by_instrument"],
             "fold_count": report["fold_count"],
