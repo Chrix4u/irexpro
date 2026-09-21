@@ -64,7 +64,7 @@ the MTF corpus.
 
 Before weighting, the coordinator also applies a fail-closed acceptance layer:
 
-- wrong-instrument, stale and future-dated evidence is rejected;
+- `QUANT` evidence is rejected by the context list because the quant signal is already supplied explicitly; this prevents model self-reinforcement;\n- wrong-instrument, stale and future-dated evidence is rejected;
 - `MACRO_NEWS` evidence must declare at least one verified source;
 - duplicate `(source, source_id)` evidence cannot be counted twice, including case/whitespace variants;
 - credential-like keys are recursively rejected from evidence metadata;
@@ -83,7 +83,7 @@ deduplication and provenance validation around these foundation guarantees.
 - No online parameter/model mutation without offline research, untouched
   evaluation, governance metadata and promotion gates.
 - Stale, future-dated, wrong-instrument or unverifiable context is rejected.
-- Duplicate evidence cannot amplify council support or opposition.
+- The explicit quant signal cannot be reintroduced as context to amplify its own vote.\n- Duplicate evidence cannot amplify council support or opposition.
 - Missing context never fabricates confidence; it yields INSUFFICIENT.
 - A BLOCKED context result does not itself close/open trades; Risk and
   Execution remain authoritative.
