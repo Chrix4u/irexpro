@@ -4,6 +4,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +34,29 @@ LONG_NET_RETURN_COLUMN = "long_net_return"
 SHORT_NET_RETURN_COLUMN = "short_net_return"
 CLASS_BALANCE_SAMPLE_WEIGHT_POLICY = "sqrt_inverse_frequency_normalized_v1"
 ECONOMIC_SAMPLE_WEIGHT_POLICY = "class_balanced_positive_net_edge_q75_capped_v2"
+RESEARCH_PROGRESS_ENV = "IREXPRO_RESEARCH_PROGRESS"
+XGBOOST_N_JOBS_ENV = "IREXPRO_XGB_N_JOBS"
+MAX_XGBOOST_N_JOBS = 4
+
+
+def _research_progress(message: str) -> None:
+    enabled = os.getenv(RESEARCH_PROGRESS_ENV, "").strip().lower()
+    if enabled in {"1", "true", "yes", "on"}:
+        print(f"RESEARCH_PROGRESS {message}", file=sys.stderr, flush=True)
+
+
+def _xgboost_n_jobs() -> int:
+    raw = os.getenv(XGBOOST_N_JOBS_ENV, "").strip()
+    if not raw:
+        return 1
+    try:
+        requested = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{XGBOOST_N_JOBS_ENV} must be an integer") from exc
+    if requested < 1:
+        raise ValueError(f"{XGBOOST_N_JOBS_ENV} must be at least 1")
+    available = max(1, os.cpu_count() or 1)
+    return min(requested, MAX_XGBOOST_N_JOBS, available)
 
 
 def _sha256_file(path: Path) -> str:
@@ -263,7 +289,7 @@ def _build_model() -> XGBClassifier:
         reg_alpha=0.05,
         reg_lambda=1.2,
         random_state=42,
-        n_jobs=1,
+        n_jobs=_xgboost_n_jobs(),
         tree_method="hist",
         early_stopping_rounds=50,
     )
@@ -542,6 +568,21 @@ def _run_pooled_walk_forward_core(
             train,
             horizon_bars=horizon_bars,
         )
+        fold_started = time.monotonic()
+        _research_progress(
+            " ".join(
+                [
+                    "stage=walk_forward",
+                    f"horizon={horizon_bars}m",
+                    f"fold={fold_index}/{len(splits)}",
+                    "status=started",
+                    f"fit_rows={len(fit_train)}",
+                    f"early_stop_rows={len(early_stop_frame)}",
+                    f"validation_rows={len(validation_frame)}",
+                    f"xgb_n_jobs={_xgboost_n_jobs()}",
+                ]
+            )
+        )
         model = _build_model()
         model.fit(
             fit_train[MULTITIMEFRAME_FEATURE_COLUMNS],
@@ -562,6 +603,18 @@ def _run_pooled_walk_forward_core(
         probabilities = model.predict_proba(
             validation_frame[MULTITIMEFRAME_FEATURE_COLUMNS]
         )[:, 1]
+        _research_progress(
+            " ".join(
+                [
+                    "stage=walk_forward",
+                    f"horizon={horizon_bars}m",
+                    f"fold={fold_index}/{len(splits)}",
+                    "status=completed",
+                    f"elapsed_seconds={time.monotonic() - fold_started:.1f}",
+                    f"best_iteration={getattr(model, 'best_iteration', 'unknown')}",
+                ]
+            )
+        )
         predictions = validation_frame[
             [
                 "decision_time",
