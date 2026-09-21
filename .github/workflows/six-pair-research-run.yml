@@ -286,15 +286,18 @@ jobs:
             exit 15
           }
 
-          rm -rf "$OUTPUT_ROOT"
+          # Keep same-candidate checkpoints across retries/timeouts. OUTPUT_ROOT is
+          # already namespaced by exact candidate SHA; the Python runner validates
+          # every checkpoint against candidate/config/data fingerprints before reuse.
           install -d -m 700 "$OUTPUT_ROOT" "$DUKASCOPY_CACHE"
 
           cd "$STAGING_ROOT/services/ai-engine"
           export PYTHONPATH="$PWD"
           export IREXPRO_RESEARCH_PROGRESS=1
           export IREXPRO_XGB_N_JOBS=4
-          printf 'RESEARCH_CONFIGURATION xgb_n_jobs=%s progress=%s timeout_minutes=420\n' \
-            "$IREXPRO_XGB_N_JOBS" "$IREXPRO_RESEARCH_PROGRESS"
+          export IREXPRO_RESEARCH_CANDIDATE_SHA="$candidate_sha"
+          printf 'RESEARCH_CONFIGURATION xgb_n_jobs=%s progress=%s timeout_minutes=420 resume=true candidate=%s\n' \
+            "$IREXPRO_XGB_N_JOBS" "$IREXPRO_RESEARCH_PROGRESS" "$candidate_sha"
 
           "$python_bin" -m app.domain.training.run_first_six_pair \
             --source dukascopy \
@@ -307,7 +310,9 @@ jobs:
             --commission-bps 0 \
             --slippage-bps 0 \
             --max-splits 5 \
-            > "$OUTPUT_ROOT/run-result.json"
+            --resume \
+            > "$OUTPUT_ROOT/run-result.json.tmp"
+          mv "$OUTPUT_ROOT/run-result.json.tmp" "$OUTPUT_ROOT/run-result.json"
 
           summary="$OUTPUT_ROOT/reports/six_pair_walkforward_summary.json"
           test -s "$summary"
