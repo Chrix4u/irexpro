@@ -16,7 +16,7 @@ import { ExecutionMode } from '../execution/interfaces/execution-authority';
 import { BrokerConnectionRequiredException } from '../execution/execution-session.resolution';
 import { AllowedTradingMode } from '../risk/entities/risk-profile.entity';
 import { BrokerAccountSnapshotService } from '../broker/services/broker-account-snapshot.service';
-import { BrokerConnectionStatus } from '../broker/interfaces/broker-adapter.interface';
+import { BrokerConnectionStatus, BrokerMode } from '../broker/interfaces/broker-adapter.interface';
 import { TradeCloseReason, TradeStatus } from '../execution/entities/trade.entity';
 
 /**
