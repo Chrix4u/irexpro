@@ -32,8 +32,10 @@ if grep -Fq 'bash scripts/deployment/deploy-staging.sh "$candidate_sha"' "$WORKF
   fail 'Staging CD must not assume the currently deployed checkout already contains deploy-staging.sh.'
 fi
 
-# Staging deploy and model research share one mutable VPS checkout. They must
-# never run concurrently or cancel the active checkout owner.
+# Staging deploy and model research share one mutable VPS checkout and must
+# never run concurrently. A newer verified main deploy may preempt research
+# bound to an older SHA because that research is no longer promotion-eligible.
+# Research itself must not cancel an active checkout owner.
 deploy_lock_count="$(grep -F -c 'group: irexpro-staging-worktree' "$WORKFLOW" || true)"
 research_lock_count="$(grep -F -c 'group: irexpro-staging-worktree' "$RESEARCH_WORKFLOW" || true)"
 [[ "$deploy_lock_count" -eq 1 ]] ||
@@ -56,8 +58,8 @@ research_job_level_concurrency="$(grep -c '^    concurrency:' "$RESEARCH_WORKFLO
 [[ "$research_job_level_concurrency" -eq 1 ]] ||
   fail 'Six Pair Research must acquire the shared lock at job level.'
 
-grep -Fq 'cancel-in-progress: false' "$WORKFLOW" ||
-  fail 'Staging Deploy must never cancel an active staging-worktree owner.'
+grep -Fq 'cancel-in-progress: true' "$WORKFLOW" ||
+  fail 'Staging Deploy must preempt stale work when a newer verified main SHA is ready.'
 grep -Fq 'cancel-in-progress: false' "$RESEARCH_WORKFLOW" ||
   fail 'Six Pair Research must never cancel an active staging-worktree owner.'
 

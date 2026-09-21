@@ -18,9 +18,14 @@ jobs:
     # Acquire the shared VPS worktree lock only after the deploy job's
     # success condition is satisfied. Failed/cancelled release-gate events
     # therefore skip without ever entering the shared concurrency queue.
+    #
+    # A newer verified main deploy takes priority over older research holding
+    # this same checkout. Research promotion is exact-main-bound, so once main
+    # advances that older research is stale by definition and must not delay
+    # deployment of the current authorized SHA.
     concurrency:
       group: irexpro-staging-worktree
-      cancel-in-progress: false
+      cancel-in-progress: true
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     environment:
