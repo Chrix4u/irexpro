@@ -149,6 +149,41 @@ This adapter remains advisory context infrastructure. It does not call the
 broker, change the quant model, lower a risk threshold, or grant context
 execution authority.
 
+## Phase B.3 persisted decision context
+
+The Agent Council context is now recorded with generated signal candidates as a
+strict browser-safe snapshot and projected through the existing Decision
+Explorer audit path.
+
+Rules in this phase:
+
+- Context is captured only after the quantitative model has independently met
+  its existing confidence threshold. It does not change that confidence score,
+  SL/TP, volume, eligibility, Risk Engine inputs, or execution behavior.
+- The BLS context source is cached for five minutes to avoid a network request
+  on every market scan. Failed refreshes are throttled for one minute.
+- Official-source failure degrades to `sourceState=UNAVAILABLE` and
+  `status=INSUFFICIENT`; it must never fabricate a blocking or directional
+  opinion.
+- Pairs outside the currently implemented USD source coverage are explicitly
+  `NOT_APPLICABLE` rather than pretending context is available.
+- The cross-service snapshot is versioned, capped to ten concise accepted
+  evidence records, timezone-aware, and permanently declares
+  `advisoryOnly=true` and `executionAuthority=false`.
+- NestJS validates the nested snapshot at the internal API boundary, sanitizes
+  it again before audit persistence, and excludes raw provider metadata,
+  credentials, opaque model metadata, and hidden reasoning.
+- Decision Explorer independently revalidates persisted context before sending
+  it to the browser. Malformed historical context is projected as null, never
+  partially trusted.
+- The browser displays council status, source availability, consensus,
+  disagreement, evidence counts, and concise accepted evidence summaries.
+
+This is the context-memory/evidence layer of the trading-agent architecture.
+It remains observational. Context fusion into paper/UAT eligibility requires a
+separate historical available-at evaluation against the quant-only baseline
+before any policy is allowed to affect trading decisions.
+
 Still separate from this phase:
 
 - Other external calendar, central-bank, statistics, or news-source adapters.
