@@ -49,10 +49,14 @@ import { GrantInvalidationService } from '../execution-authority/grant-invalidat
 import { DailyRiskPeriodService } from '../execution/services/daily-risk-period.service';
 import { BrokerAccountSnapshotService } from '../broker/services/broker-account-snapshot.service';
 import { SnapshotNotFreshError } from '../broker/services/broker-account-snapshot.service';
+// Production-LIVE completion round (Phase 9): continuous user-eligibility +
+// provider region gates for LIVE new exposure.
+import { EligibilityService } from '../users/eligibility.service';
+import { BrokerProviderRegistryService } from '../broker/registry/broker-provider-registry.service';
 // Round 7 (P1 metrics — audit R7-audit-C A6): dependency-free in-process
 // counters (lazy ModuleRef seam — see the metrics getter below).
 import { MetricsService } from '../metrics/metrics.service';
-import { METRIC_NAMES } from '../metrics/metric-names';
+import { METRIC_NAMES, METRIC_GAUGE_NAMES } from '../metrics/metric-names';
 
 /** Default pip size for standard 5-digit pairs (EURUSD, GBPUSD, etc.) */
 const DEFAULT_PIP_SIZE = '0.0001';
@@ -141,6 +145,14 @@ export class RiskService {
     private readonly dailyRiskPeriod: DailyRiskPeriodService,
     private readonly grantInvalidation: GrantInvalidationService,
     private readonly brokerAccountSnapshotService: BrokerAccountSnapshotService,
+    // ── Production-LIVE completion round (Phase 9): continuous LIVE gates ──
+    // EligibilityService (UsersModule — acyclic leaf import) re-checks user
+    // status/KYC/jurisdiction/disclosures on EVERY LIVE new-exposure
+    // evaluation; the registry enforces provider LIVE region availability
+    // for the user's country. Both are plain dependencies (no cycle:
+    // UsersModule imports only forFeature + Audit + ExecutionAuthority).
+    private readonly eligibilityService: EligibilityService,
+    private readonly providerRegistry: BrokerProviderRegistryService,
     /** Reserved lazy-resolution seam for cycle-prone execution-side
      * collaborators (resolved at CALL time, never in the constructor). */
     private readonly moduleRef: ModuleRef,
@@ -422,6 +434,45 @@ export class RiskService {
       );
     }
     appliedRules.push('LIVE_AUTHORIZATION:OK');
+
+    // 1e. Continuous LIVE user-eligibility + region gate (production-LIVE
+    // completion round, Phase 9): eligibility is enforced at session start,
+    // but a revocation AFTER start (KYC decision, jurisdiction change,
+    // disclosure policy, account suspension) must also block the NEXT LIVE
+    // new-exposure grant — the authority-generation bump these mutations
+    // perform only kills grants already in flight. The provider's LIVE
+    // offering must additionally be available in the user's jurisdiction.
+    // DEMO/PAPER connections keep the existing behavior (not real money).
+    if (connection.accountType === BrokerMode.LIVE) {
+      const eligibility =
+        await this.eligibilityService.assertUserEligibleForLiveNewExposure(userId);
+      if (!eligibility.eligible) {
+        appliedRules.push('USER_LIVE_ELIGIBILITY:REVOKED');
+        return this.rejectAndRecord(
+          userId,
+          trade,
+          RiskRejectionCode.USER_LIVE_ELIGIBILITY_REVOKED,
+          `LIVE new exposure requires current user eligibility — ${eligibility.reasonCode}: ${eligibility.detail}`,
+          contextSnapshot as RiskContextSnapshot,
+          evaluatedAt,
+        );
+      }
+      if (
+        !this.providerRegistry.isLiveRegionAvailable(connection.brokerId, eligibility.countryCode)
+      ) {
+        appliedRules.push('LIVE_REGION:UNAVAILABLE');
+        return this.rejectAndRecord(
+          userId,
+          trade,
+          RiskRejectionCode.PROVIDER_REGION_UNAVAILABLE,
+          `Provider ${connection.brokerId} LIVE offering is unavailable in the user's region ` +
+            `(${eligibility.countryCode ?? 'unknown'}) — LIVE new exposure is fail-closed`,
+          contextSnapshot as RiskContextSnapshot,
+          evaluatedAt,
+        );
+      }
+      appliedRules.push('USER_LIVE_ELIGIBILITY:OK');
+    }
 
     // ── Step 2: Load broker account state (fail-closed, typed) ─────────────
     // Round 5 (#296/#313): a failed/absent/unparseable account read REJECTS —
@@ -1919,6 +1970,23 @@ export class RiskService {
 
       return row;
     });
+
+    // Production-LIVE completion round (P13 metrics): kill-switch active
+    // gauge — the count of users whose kill switch is currently ACTIVE,
+    // re-counted at the ONLY mutation site right after the commit. Fail-open:
+    // a failed count query omits/keeps-stale the gauge and NEVER affects the
+    // toggle (MetricsService itself never throws). In-process registry —
+    // absent until the first toggle after a process restart.
+    try {
+      const activeKillSwitches = await this.profileRepo.count({
+        where: { killSwitchActive: true },
+      });
+      this.metrics?.setGauge(METRIC_GAUGE_NAMES.KILL_SWITCHES_ACTIVE, activeKillSwitches);
+    } catch (err) {
+      this.logger.warn(
+        `Kill-switch active gauge omitted (profile count query failed): ${(err as Error).message}`,
+      );
+    }
 
     // Audits follow the durable write (failure never rolls back authority).
     await this.auditService.log({
