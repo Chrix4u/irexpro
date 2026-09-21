@@ -1,15 +1,16 @@
 """Tests for SignalScheduler."""
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.api.v1.routes.scheduler import start_session_scheduler
+from app.api.v1.routes.scheduler import session_scheduler_status, start_session_scheduler
 from app.core.config import Settings
 from app.core.errors import MarketDataError
-from app.domain.scheduler.schemas import SessionStartRequest
-from app.domain.scheduler.signal_scheduler import SignalScheduler
+from app.domain.scheduler.schemas import SessionStartRequest, SessionStatusRequest
+from app.domain.scheduler.signal_scheduler import ScheduledSessionJob, SignalScheduler
 from app.domain.signals.schemas import (
     AiSignalCandidate,
     SignalEvaluationTelemetry,
@@ -70,6 +71,32 @@ async def test_scheduler_route_blocks_live_environment_for_paper_approved_model(
     assert response.registered is False
     assert response.message == "Current AI model is not approved for live automation"
     scheduler.register_session.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_status_reports_the_trained_multitimeframe_runtime_stack():
+    scheduler = MagicMock()
+    scheduler.is_enabled = True
+    job = ScheduledSessionJob(
+        trading_session_id="session-mtf",
+        user_id="user-1",
+        broker_connection_id="conn-demo",
+        instruments=["EURUSD"],
+        timeframe="H1",
+        source="broker",
+        interval_seconds=60,
+        last_run_at=datetime.now(UTC),
+    )
+    job.model_loaded = True
+    job.model_mode = "trained_xgboost_mtf"
+    scheduler.get_session_job.return_value = job
+
+    response = await session_scheduler_status(
+        SessionStatusRequest(tradingSessionId="session-mtf"),
+        scheduler,
+    )
+
+    assert response.timeframe == "M1 · M5 · M15 · H1 · H4"
 
 
 def test_scheduler_disabled_by_default():
