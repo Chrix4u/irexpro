@@ -122,8 +122,9 @@ Provider rules:
   disables redirects, uses a bounded timeout, requires `text/calendar`, and
   enforces both declared and actual response-size ceilings.
 - A live event becomes available to iRexPro only after the HTTP response is
-  received. A caller may supply `fetched_at` only when replaying a snapshot
-  whose receipt timestamp was already persisted.
+  received. The live provider accepts no caller-supplied availability timestamp.
+  Historical replay supplies a persisted snapshot receipt time only to the pure
+  calendar parser, never to the network fetch boundary.
 - Current BLS calendar data must never be backfilled with an earlier
   `available_at`; historical evaluation must replay persisted snapshots.
 - BLS release times are normalized from U.S. Eastern time, including daylight
