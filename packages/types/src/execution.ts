@@ -117,7 +117,7 @@ export interface BrokerExecutionEnvironment {
  */
 export function startExecutionModeForBroker(
   connection: BrokerExecutionEnvironment,
-): ExecutionMode {
+): 'PAPER_ONLY' | 'FULL_AUTO' {
   return connection.brokerId === 'paper-broker' ? 'PAPER_ONLY' : 'FULL_AUTO';
 }
 
