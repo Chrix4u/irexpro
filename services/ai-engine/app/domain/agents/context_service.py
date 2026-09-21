@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+from math import isfinite
 
 from app.core.logging import get_logger
 from app.domain.agents.context_sources import (
@@ -43,16 +44,25 @@ class AgentContextService:
         registry: TrustedContextSourceRegistry | None = None,
         refresh_seconds: int = 300,
         failure_retry_seconds: int = 60,
+        fetch_timeout_seconds: float = 3.0,
     ) -> None:
         if refresh_seconds <= 0:
             raise ValueError("refresh_seconds must be greater than 0")
         if failure_retry_seconds <= 0:
             raise ValueError("failure_retry_seconds must be greater than 0")
+        if (
+            not isfinite(fetch_timeout_seconds)
+            or not 0 < fetch_timeout_seconds <= 5
+        ):
+            raise ValueError(
+                "fetch_timeout_seconds must be finite, greater than 0, and at most 5"
+            )
 
         self._bls = bls_provider or BlsOfficialCalendarProvider()
         self._registry = registry or default_trusted_source_registry()
         self._refresh_interval = timedelta(seconds=refresh_seconds)
         self._failure_retry = timedelta(seconds=failure_retry_seconds)
+        self._fetch_timeout_seconds = fetch_timeout_seconds
         self._lock = asyncio.Lock()
         self._cached_events: list[MacroContextEvent] = []
         self._cache_refreshed_at: datetime | None = None
@@ -119,8 +129,11 @@ class AgentContextService:
                 return [], "UNAVAILABLE"
 
             try:
-                events = await self._bls.fetch()
-            except BlsCalendarProviderError:
+                events = await asyncio.wait_for(
+                    self._bls.fetch(),
+                    timeout=self._fetch_timeout_seconds,
+                )
+            except (BlsCalendarProviderError, TimeoutError):
                 self._last_failure_at = datetime.now(UTC)
                 logger.warning("Official BLS context source unavailable")
                 return [], "UNAVAILABLE"
