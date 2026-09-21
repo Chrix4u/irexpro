@@ -27,10 +27,10 @@ def assess_agent_context(
         raise ValueError("quant_confidence must be between 0 and 1")
     if max_age_seconds < 0:
         raise ValueError("max_age_seconds cannot be negative")
-    if minimum_context_weight < 0:
-        raise ValueError("minimum_context_weight cannot be negative")
-    if not 0.0 <= block_weight_threshold <= 1.0:
-        raise ValueError("block_weight_threshold must be between 0 and 1")
+    if minimum_context_weight <= 0:
+        raise ValueError("minimum_context_weight must be greater than 0")
+    if not 0.0 < block_weight_threshold <= 1.0:
+        raise ValueError("block_weight_threshold must be greater than 0 and at most 1")
 
     instrument_code = instrument.strip().upper()
     if not instrument_code:
