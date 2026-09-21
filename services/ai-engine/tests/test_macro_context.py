@@ -27,6 +27,7 @@ def event(
     event_family: str = "POLICY_RATE_DECISION",
     currency: str = "EUR",
     impact: str = "HIGH",
+    status: str = "SCHEDULED",
     scheduled_for: datetime = NOW + timedelta(minutes=10),
     observed_at: datetime = NOW - timedelta(days=1),
     available_at: datetime = NOW - timedelta(days=1),
@@ -38,6 +39,7 @@ def event(
         title="Policy rate decision",
         currency=currency,
         impact=impact,
+        status=status,
         observed_at=observed_at,
         available_at=available_at,
         scheduled_for=scheduled_for,
@@ -80,8 +82,11 @@ def test_high_impact_event_window_creates_advisory_block_context():
     assert item.instrument == "EURUSD"
     assert item.stance == "BLOCK"
     assert item.verified_sources == 1
-    assert item.execution_authority if hasattr(item, "execution_authority") else True
     assert item.metadata["minutesToEvent"] == pytest.approx(10.0)
+    assert item.metadata["sourceEventId"] == "event-1"
+    assert item.metadata["sourceAvailableAt"] == (
+        NOW - timedelta(days=1)
+    ).isoformat()
 
     assessment = assess_agent_context(
         instrument="EURUSD",
@@ -116,6 +121,97 @@ def test_future_available_event_is_not_visible_to_historical_evaluation():
     assert evidence == []
 
 
+def test_future_revision_does_not_hide_current_known_high_event():
+    known = event(
+        source_event_id="revision-1",
+        impact="HIGH",
+        available_at=NOW - timedelta(hours=1),
+    )
+    future_revision = event(
+        source_event_id="revision-1",
+        impact="MEDIUM",
+        observed_at=NOW,
+        available_at=NOW + timedelta(seconds=1),
+    )
+
+    evidence = build_high_impact_event_evidence(
+        events=[known, future_revision],
+        registry=default_trusted_source_registry(),
+        instrument="EURUSD",
+        evaluated_at=NOW,
+    )
+
+    assert len(evidence) == 1
+
+
+def test_latest_known_revision_can_downgrade_event_and_remove_block():
+    high = event(
+        source_event_id="revision-2",
+        impact="HIGH",
+        available_at=NOW - timedelta(hours=2),
+    )
+    downgraded = event(
+        source_event_id="revision-2",
+        impact="MEDIUM",
+        observed_at=NOW - timedelta(minutes=5),
+        available_at=NOW - timedelta(minutes=5),
+    )
+
+    evidence = build_high_impact_event_evidence(
+        events=[high, downgraded],
+        registry=default_trusted_source_registry(),
+        instrument="EURUSD",
+        evaluated_at=NOW,
+    )
+
+    assert evidence == []
+
+
+def test_latest_known_reschedule_replaces_old_event_window():
+    old_schedule = event(
+        source_event_id="revision-3",
+        scheduled_for=NOW + timedelta(minutes=5),
+        available_at=NOW - timedelta(hours=2),
+    )
+    rescheduled = event(
+        source_event_id="revision-3",
+        scheduled_for=NOW + timedelta(hours=2),
+        observed_at=NOW - timedelta(minutes=2),
+        available_at=NOW - timedelta(minutes=2),
+    )
+
+    evidence = build_high_impact_event_evidence(
+        events=[old_schedule, rescheduled],
+        registry=default_trusted_source_registry(),
+        instrument="EURUSD",
+        evaluated_at=NOW,
+    )
+
+    assert evidence == []
+
+
+def test_latest_known_cancellation_removes_event():
+    scheduled = event(
+        source_event_id="revision-4",
+        available_at=NOW - timedelta(hours=2),
+    )
+    cancelled = event(
+        source_event_id="revision-4",
+        status="CANCELLED",
+        observed_at=NOW - timedelta(minutes=3),
+        available_at=NOW - timedelta(minutes=3),
+    )
+
+    evidence = build_high_impact_event_evidence(
+        events=[scheduled, cancelled],
+        registry=default_trusted_source_registry(),
+        instrument="EURUSD",
+        evaluated_at=NOW,
+    )
+
+    assert evidence == []
+
+
 def test_event_outside_configured_window_does_not_block():
     outside = event(scheduled_for=NOW + timedelta(minutes=31))
 
@@ -128,6 +224,18 @@ def test_event_outside_configured_window_does_not_block():
     )
 
     assert evidence == []
+
+
+@pytest.mark.parametrize("window", [-1, 1441, float("inf"), float("nan")])
+def test_event_window_configuration_is_bounded(window):
+    with pytest.raises(ValueError, match="must be finite and between"):
+        build_high_impact_event_evidence(
+            events=[],
+            registry=default_trusted_source_registry(),
+            instrument="EURUSD",
+            evaluated_at=NOW,
+            pre_event_minutes=window,
+        )
 
 
 def test_medium_impact_and_untrusted_sources_are_excluded():
@@ -191,6 +299,43 @@ def test_cross_source_event_dedup_counts_only_distinct_trusted_sources():
         "calendar_backup",
         "calendar_primary",
     ]
+
+
+def test_same_independence_group_does_not_satisfy_corroboration():
+    registry = TrustedContextSourceRegistry(
+        [
+            TrustedContextSource(
+                source_id="calendar_alias_a",
+                display_name="Calendar Alias A",
+                source_type="ECONOMIC_CALENDAR",
+                currencies={"EUR"},
+                credibility=0.90,
+                requires_corroboration=True,
+                independence_group="shared_vendor",
+            ),
+            TrustedContextSource(
+                source_id="calendar_alias_b",
+                display_name="Calendar Alias B",
+                source_type="ECONOMIC_CALENDAR",
+                currencies={"EUR"},
+                credibility=0.95,
+                requires_corroboration=True,
+                independence_group="shared_vendor",
+            ),
+        ]
+    )
+
+    evidence = build_high_impact_event_evidence(
+        events=[
+            event(source_id="calendar_alias_a", source_event_id="a-1"),
+            event(source_id="calendar_alias_b", source_event_id="b-1"),
+        ],
+        registry=registry,
+        instrument="EURUSD",
+        evaluated_at=NOW,
+    )
+
+    assert evidence == []
 
 
 def test_source_requiring_corroboration_cannot_block_by_itself():
