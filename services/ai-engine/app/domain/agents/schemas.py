@@ -1,6 +1,7 @@
 """Typed contracts for iRexPro's advisory autonomous-agent council."""
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from typing import Any, Literal
 
@@ -18,30 +19,39 @@ AgentCouncilStatus = Literal["ALIGNED", "CONFLICT", "INSUFFICIENT", "BLOCKED"]
 
 _SENSITIVE_METADATA_KEYS = frozenset(
     {
-        "access_token",
         "api_key",
         "apikey",
         "authorization",
-        "broker_password",
-        "broker_token",
-        "client_secret",
+        "private_key",
+    }
+)
+_SENSITIVE_METADATA_SEGMENTS = frozenset(
+    {
         "credential",
         "credentials",
-        "password",
         "passwd",
-        "private_key",
-        "refresh_token",
+        "password",
         "secret",
         "token",
     }
 )
 
 
+def _normalize_metadata_key(key: Any) -> str:
+    raw = str(key).strip().replace("-", "_").replace(" ", "_")
+    snake = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", raw)
+    return re.sub(r"_+", "_", snake).lower()
+
+
 def _contains_sensitive_metadata_key(value: Any) -> bool:
     if isinstance(value, dict):
         for key, nested in value.items():
-            normalized = str(key).strip().lower().replace("-", "_")
-            if normalized in _SENSITIVE_METADATA_KEYS:
+            normalized = _normalize_metadata_key(key)
+            segments = frozenset(part for part in normalized.split("_") if part)
+            if (
+                normalized in _SENSITIVE_METADATA_KEYS
+                or bool(segments & _SENSITIVE_METADATA_SEGMENTS)
+            ):
                 return True
             if _contains_sensitive_metadata_key(nested):
                 return True
@@ -65,10 +75,17 @@ class AgentEvidence(BaseModel):
     verified_sources: int = Field(default=0, ge=0, le=100)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("source_id", "instrument", "summary")
+    @classmethod
+    def text_fields_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("agent evidence text fields cannot be blank")
+        return value
+
     @field_validator("observed_at", "available_at")
     @classmethod
     def timestamps_must_be_timezone_aware(cls, value: datetime) -> datetime:
-        if value.tzinfo is None:
+        if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("agent evidence timestamps must be timezone-aware")
         return value
 
@@ -108,6 +125,6 @@ class AgentCouncilAssessment(BaseModel):
     @field_validator("generated_at")
     @classmethod
     def generated_at_must_be_timezone_aware(cls, value: datetime) -> datetime:
-        if value.tzinfo is None:
+        if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("generated_at must be timezone-aware")
         return value
