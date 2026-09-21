@@ -121,7 +121,7 @@ jobs:
             fi
           fi
 
-          relevant_pattern='^(services/ai-engine/app/domain/(training|models)/|services/ai-engine/(pyproject\.toml|requirements\.lock)$)'
+          relevant_pattern='^(services/ai-engine/app/domain/(training|models|agents/(providers|macro_context|context_sources|coordinator))/|services/ai-engine/(pyproject\.toml|requirements\.lock)$)'
 
           if [[ -z "$baseline_sha" ]]; then
             # No successful/evaluated research lineage exists yet. Fail safe:
@@ -153,7 +153,7 @@ jobs:
           case "$decision" in
             true)
               printf 'run=true\n' >> "$GITHUB_OUTPUT"
-              printf 'RESEARCH_REQUIRED reason=model_or_training_inputs_changed\n'
+              printf 'RESEARCH_REQUIRED reason=model_training_or_context_inputs_changed\n'
               ;;
             false)
               printf 'run=false\n' >> "$GITHUB_OUTPUT"
@@ -373,6 +373,99 @@ jobs:
             exit 16
           }
           printf 'selected_horizon=%sm\n' "$selected_horizon"
+
+          # Evaluate the advisory Agent Council overlay on the exact outer-fold
+          # predictions for the selected research horizon. This is observational
+          # evidence only and cannot alter model selection, paper approval,
+          # risk limits, or broker execution.
+          context_predictions="$OUTPUT_ROOT/reports/six_pair_walkforward_${selected_horizon}m_predictions.csv"
+          context_root="$OUTPUT_ROOT/context/h$selected_horizon"
+          context_result="$context_root/context-run-result.json"
+          context_error="$context_root/context-error.log"
+          install -d -m 700 "$context_root"
+
+          if [[ ! -s "$context_predictions" ]]; then
+            printf 'CONTEXT_RESEARCH_HOLD reason=missing_outer_fold_predictions horizon=%sm\n' \
+              "$selected_horizon"
+          elif "$python_bin" -m app.domain.training.run_bls_context_overlay_study \
+            --predictions "$context_predictions" \
+            --horizon-bars "$selected_horizon" \
+            --output-dir "$context_root" \
+            --pre-event-minutes 30 \
+            --post-event-minutes 15 \
+            > "$context_result" 2> "$context_error"; then
+            context_report="$context_root/agent_council_overlay.json"
+            if [[ ! -s "$context_report" ]]; then
+              printf 'CONTEXT_RESEARCH_HOLD reason=missing_overlay_report horizon=%sm\n' \
+                "$selected_horizon"
+            elif CONTEXT_REPORT_PATH="$context_report" node <<'NODE'
+          const fs = require('fs');
+          const report = JSON.parse(
+            fs.readFileSync(process.env.CONTEXT_REPORT_PATH, 'utf8')
+          );
+          const quant = report.overall?.quant_only || {};
+          const candidate = report.overall?.context_block_candidate || {};
+          const classification = report.overall?.classification_on_active_signals || {};
+          const archive = report.historical_context_archive || {};
+          const blocked = report.blocked_signal_diagnostics || {};
+          const value = (input, digits = 6) =>
+            input == null || !Number.isFinite(Number(input))
+              ? 'null'
+              : Number(input).toFixed(digits);
+
+          console.log('AGENT_CONTEXT_OVERLAY_COMPLETED');
+          console.log(
+            [
+              `horizon=${report.horizon_bars}m`,
+              `archive_months=${archive.month_count ?? 0}`,
+              `archive_events=${archive.event_count ?? 0}`,
+              `retrospective_excluded=${archive.skipped_retrospective_rows ?? 0}`,
+              `blocked_signals=${blocked.blocked_signals ?? 0}`,
+              `blocked_winners=${blocked.blocked_positive_outcomes ?? 0}`,
+              `blocked_losers=${blocked.blocked_negative_outcomes ?? 0}`,
+            ].join(' ')
+          );
+          console.log(
+            [
+              'quant_only',
+              `signals=${quant.raw_active_signals ?? 0}`,
+              `sharpe=${value(quant.sharpe_ratio)}`,
+              `max_drawdown=${value(quant.max_drawdown)}`,
+              `precision=${value(classification.quant_only?.precision)}`,
+              `brier=${value(classification.quant_only?.brier_score)}`,
+            ].join(' ')
+          );
+          console.log(
+            [
+              'context_candidate',
+              `signals=${candidate.raw_active_signals ?? 0}`,
+              `sharpe=${value(candidate.sharpe_ratio)}`,
+              `max_drawdown=${value(candidate.max_drawdown)}`,
+              `precision=${value(classification.context_block_candidate?.precision)}`,
+              `brier=${value(classification.context_block_candidate?.brier_score)}`,
+              'approved_for_paper_uat=false',
+              'approved_for_live=false',
+            ].join(' ')
+          );
+          NODE
+            then
+              rm -f "$context_error"
+              printf 'context_report_path=%s\n' "$context_report"
+            else
+              context_status=$?
+              printf 'CONTEXT_RESEARCH_HOLD reason=overlay_report_validation_failed status=%s horizon=%sm\n' \
+                "$context_status" "$selected_horizon"
+            fi
+          else
+            context_status=$?
+            context_message=''
+            if [[ -s "$context_error" ]]; then
+              context_message="$(head -n 1 "$context_error" | tr '\r\n' ' ' | cut -c1-240)"
+            fi
+            printf 'CONTEXT_RESEARCH_HOLD reason=archive_or_overlay_failed status=%s message=%s\n' \
+              "$context_status" "$context_message"
+          fi
+
 
           readonly MODEL_ROOT="/home/lightworld/research/irexpro-models/$candidate_sha/h$selected_horizon"
           readonly MODEL_PATH="$MODEL_ROOT/model.json"

@@ -254,6 +254,33 @@ official modification timestamp. It does not reconstruct intermediate page
 states that are no longer published. Special reschedule/cancellation histories
 therefore require explicit official revision sources rather than inference.
 
+## Phase C.3 secured six-pair context evaluation
+
+The existing secured six-pair staging research workflow now evaluates the
+Agent Council overlay after quantitative research has selected one horizon.
+
+Workflow rules:
+
+- The context study consumes the selected horizon's exact outer-fold validation
+  prediction CSV produced by Phase C.1.
+- The study derives only the BLS calendar months intersecting those historical
+  decision timestamps, including the configured pre/post event window.
+- It collects the Phase C.2 official archive, runs the same causal overlay
+  evaluator, and persists the archive, manifest, report, and annotated rows
+  under that candidate's research output directory.
+- Logs show quant-only versus context-candidate signal count, Sharpe, maximum
+  drawdown, precision, Brier score, blocked winners/losers, archive event count,
+  and retrospective exclusions.
+- Context evidence is evaluated **after** the research horizon has already been
+  selected. It cannot influence horizon selection.
+- Context metrics do not feed the final XGBoost trainer or untouched-test gate.
+- A context archive/evaluation failure emits `CONTEXT_RESEARCH_HOLD` but does
+  not alter the existing quant-model promotion outcome. This avoids granting an
+  advisory source authority over the current model-governance path.
+- Research relevance now includes the governed Agent Council provider/context
+  modules so future context-engine changes cannot silently bypass evaluation.
+- Paper/UAT and live approval for the context veto remain false.
+
 Still separate from this phase:
 
 - Official revised-release-history ingestion for exceptional reschedules and

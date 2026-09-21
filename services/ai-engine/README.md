@@ -264,6 +264,28 @@ return, position size, Risk Engine behavior, or execution. Its report remains
 research-only and explicitly compares blocked winners and blocked losers before
 any paper/UAT policy can be considered.
 
+For one existing walk-forward prediction file, the collector + evaluator can be
+run as one reproducible research command:
+
+```powershell
+python -m app.domain.training.run_bls_context_overlay_study \
+  --predictions research/first-six-pair-run/reports/six_pair_walkforward_5m_predictions.csv \
+  --horizon-bars 5 \
+  --output-dir research/context/h5 \
+  --pre-event-minutes 30 \
+  --post-event-minutes 15
+```
+
+The secured `Six Pair Research Run` uses this orchestration automatically on
+the horizon selected by quant-only research. It persists the BLS archive,
+manifest, overlay report, and annotated prediction rows with the candidate
+research output and logs side-by-side quant/context metrics. The context result
+is observational only: it does not participate in horizon selection, final
+XGBoost fitting, untouched-test approval, paper promotion, or live promotion.
+If official context collection/evaluation cannot be completed, the workflow
+emits `CONTEXT_RESEARCH_HOLD` and leaves the existing quant governance path
+unchanged.
+
 ---
 
 ## Runtime model artifacts
