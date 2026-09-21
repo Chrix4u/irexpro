@@ -116,6 +116,32 @@ def test_future_stale_and_other_instrument_evidence_are_rejected_causally():
     assert result.evidence_used == []
 
 
+def test_quant_evidence_cannot_double_count_the_explicit_quant_signal():
+    quant_evidence = AgentEvidence(
+        source="QUANT",
+        source_id="same-model-signal",
+        instrument="EURUSD",
+        stance="BUY",
+        confidence=1.0,
+        credibility=1.0,
+        observed_at=NOW,
+        available_at=NOW,
+        summary="Duplicate representation of the explicit quant signal.",
+    )
+    result = assess_agent_context(
+        instrument="EURUSD",
+        quant_direction="BUY",
+        quant_confidence=0.95,
+        evidence=[quant_evidence],
+        evaluated_at=NOW,
+    )
+
+    assert result.status == "INSUFFICIENT"
+    assert result.weighted_support == 0
+    assert result.evidence_used == []
+    assert result.rejected_source_ids == ["same-model-signal"]
+
+
 def test_unverified_macro_context_is_rejected_fail_closed():
     result = assess_agent_context(
         instrument="EURUSD",
