@@ -108,9 +108,50 @@ Implemented in this phase:
   earlier does not become artificially stale while its event-risk window is active,
   while original source observation/availability timestamps remain in audit metadata.
 
+## Phase B.2 official BLS release-calendar adapter
+
+The first concrete provider adapter reads the U.S. Bureau of Labor Statistics
+official iCalendar release schedule from a fixed code-owned URL. It is an
+ingestion boundary only; it does not change signal eligibility or execution.
+
+Provider rules:
+
+- The adapter uses the fixed official BLS calendar URL and accepts no
+  user-supplied endpoint.
+- The production-owned HTTP client ignores environment proxy configuration,
+  disables redirects, uses a bounded timeout, requires `text/calendar`, and
+  enforces both declared and actual response-size ceilings.
+- A live event becomes available to iRexPro only after the HTTP response is
+  received. The live provider accepts no caller-supplied availability timestamp.
+  Historical replay supplies a persisted snapshot receipt time only to the pure
+  calendar parser, never to the network fetch boundary.
+- Current BLS calendar data must never be backfilled with an earlier
+  `available_at`; historical evaluation must replay persisted snapshots.
+- BLS release times are normalized from U.S. Eastern time, including daylight
+  saving transitions, into UTC.
+- Calendar UID values are hashed into stable source-event identities so later
+  reschedules and cancellations can supersede earlier snapshots without
+  storing provider identifiers as council ids.
+- HTTP and parsing failures are sanitized; response bodies and transport
+  diagnostics are not surfaced in provider errors.
+
+Impact policy is iRexPro governance, not a BLS-provided trading classification.
+The initial reviewed mapping is:
+
+- Consumer Price Index: `HIGH`
+- Employment Situation: `HIGH`
+- Producer Price Index: `MEDIUM`
+- Job Openings and Labor Turnover: `MEDIUM`
+- Employment Cost Index: `MEDIUM`
+- Other BLS releases: ignored until explicitly classified and reviewed
+
+This adapter remains advisory context infrastructure. It does not call the
+broker, change the quant model, lower a risk threshold, or grant context
+execution authority.
+
 Still separate from this phase:
 
-- HTTP/API adapters for external calendar, central-bank, statistics, or news sources.
+- Other external calendar, central-bank, statistics, or news-source adapters.
 - Directional interpretation of released macro values or news text.
 - Persistence and replay of historical context snapshots.
 - Decision Explorer API/UI projection of council context.
@@ -145,7 +186,8 @@ Still separate from this phase:
 
 ### Phase B — trusted forex context
 - trusted source and macro-event primitives;
-- economic calendar adapters;
+- official BLS economic-calendar adapter;
+- additional economic calendar adapters;
 - central-bank / macro release adapters;
 - source trust registry and event/content deduplication;
 - event proximity windows;
