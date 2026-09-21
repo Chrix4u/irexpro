@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import sys
 import time
 from datetime import UTC, datetime
@@ -65,6 +66,93 @@ def _read_json(path: Path) -> dict[str, Any] | None:
     except Exception:
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def _bootstrap_collection_hour(bootstrap_dir: Path | None) -> datetime | None:
+    if bootstrap_dir is None or not bootstrap_dir.is_dir():
+        return None
+    observed: list[datetime] = []
+    for instrument in INITIAL_FOREX_UNIVERSE:
+        manifest_path = (
+            bootstrap_dir / "raw" / f"{instrument}_M1.manifest.json"
+        )
+        manifest = _read_json(manifest_path) if manifest_path.is_file() else None
+        collected_at = manifest.get("collected_at") if manifest else None
+        if not isinstance(collected_at, str):
+            continue
+        try:
+            timestamp = datetime.fromisoformat(collected_at.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=UTC)
+        observed.append(timestamp.astimezone(UTC))
+    if not observed:
+        return None
+    earliest = min(observed)
+    return earliest
+
+
+def _validated_bootstrap_pair(
+    bootstrap_dir: Path,
+    *,
+    instrument: str,
+    target_rows: int,
+    effective_before: datetime,
+) -> tuple[Path, Path, dict[str, Any], dict[str, Any]] | None:
+    raw_path = bootstrap_dir / "raw" / f"{instrument}_M1.csv"
+    raw_manifest_path = raw_path.with_suffix(".manifest.json")
+    corpus_path = bootstrap_dir / "corpora" / f"{instrument}_MTF.csv"
+    corpus_manifest_path = corpus_path.with_suffix(".manifest.json")
+    if not all(
+        path.is_file()
+        for path in (
+            raw_path,
+            raw_manifest_path,
+            corpus_path,
+            corpus_manifest_path,
+        )
+    ):
+        return None
+
+    raw_manifest = _read_json(raw_manifest_path)
+    corpus_manifest = _read_json(corpus_manifest_path)
+    if raw_manifest is None or corpus_manifest is None:
+        return None
+
+    try:
+        collected_at = datetime.fromisoformat(
+            str(raw_manifest["collected_at"]).replace("Z", "+00:00")
+        )
+        if collected_at.tzinfo is None:
+            collected_at = collected_at.replace(tzinfo=UTC)
+        collected_at = collected_at.astimezone(UTC)
+    except (KeyError, ValueError):
+        return None
+
+    if collected_at.replace(minute=0, second=0, microsecond=0) != (
+        effective_before.astimezone(UTC).replace(minute=0, second=0, microsecond=0)
+    ):
+        return None
+
+    raw_sha256 = _sha256_file(raw_path)
+    corpus_sha256 = _sha256_file(corpus_path)
+    if (
+        raw_manifest.get("instrument") != instrument
+        or raw_manifest.get("source") != "dukascopy_public_datafeed_ticks"
+        or int(raw_manifest.get("row_count", 0)) != target_rows
+        or raw_manifest.get("friction_data_complete") is not True
+        or raw_manifest.get("dataset_sha256") != raw_sha256
+        or corpus_manifest.get("instrument") != instrument
+        or corpus_manifest.get("friction_data_complete") is not True
+        or corpus_manifest.get("lookahead_validation") != "passed"
+        or corpus_manifest.get("raw_m1_sha256") != raw_sha256
+        or corpus_manifest.get("dataset_sha256") != corpus_sha256
+        or int(corpus_manifest.get("row_count", 0)) <= 0
+    ):
+        return None
+
+    return raw_path, corpus_path, raw_manifest, corpus_manifest
 
 
 def _research_progress(message: str) -> None:
@@ -209,6 +297,7 @@ def run_first_six_pair_study(
     min_net_return_bps: float = 0.0,
     max_splits: int = 5,
     resume: bool = False,
+    bootstrap_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Collect, build and evaluate the approved initial six-pair universe."""
     normalized_source = source.strip().lower()
@@ -245,6 +334,12 @@ def run_first_six_pair_study(
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     candidate_sha = os.getenv(RESEARCH_CANDIDATE_SHA_ENV, "").strip() or None
+    bootstrap_root = Path(bootstrap_dir) if bootstrap_dir is not None else None
+    bootstrap_before = (
+        _bootstrap_collection_hour(bootstrap_root)
+        if resume and before is None
+        else None
+    )
     requested_before = before.isoformat() if before is not None else None
     resume_config = {
         "state_version": RESUME_STATE_VERSION,
@@ -285,7 +380,7 @@ def run_first_six_pair_study(
                 f"effective_before={effective_before.isoformat()}"
             )
         else:
-            effective_before = before or datetime.now(UTC)
+            effective_before = before or bootstrap_before or datetime.now(UTC)
             _write_json_atomic(
                 state_path,
                 {
@@ -341,6 +436,63 @@ def run_first_six_pair_study(
                 _research_progress(
                     f"stage=pair instrument={instrument} status=resumed "
                     f"rows={collection.get('row_count', 'unknown')}"
+                )
+                continue
+
+        if (
+            resume
+            and normalized_source == "dukascopy"
+            and bootstrap_root is not None
+            and effective_before is not None
+        ):
+            bootstrapped = _validated_bootstrap_pair(
+                bootstrap_root,
+                instrument=instrument,
+                target_rows=target_rows,
+                effective_before=effective_before,
+            )
+            if bootstrapped is not None:
+                (
+                    bootstrap_raw,
+                    bootstrap_corpus,
+                    collection,
+                    corpus,
+                ) = bootstrapped
+                raw_path.parent.mkdir(parents=True, exist_ok=True)
+                corpus_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(bootstrap_raw, raw_path)
+                shutil.copy2(
+                    bootstrap_raw.with_suffix(".manifest.json"),
+                    raw_path.with_suffix(".manifest.json"),
+                )
+                shutil.copy2(bootstrap_corpus, corpus_path)
+                shutil.copy2(
+                    bootstrap_corpus.with_suffix(".manifest.json"),
+                    corpus_path.with_suffix(".manifest.json"),
+                )
+                collection_manifests[instrument] = dict(collection)
+                corpus_manifests[instrument] = dict(corpus)
+                corpora[instrument] = str(corpus_path)
+                raw_sha256 = _sha256_file(raw_path)
+                corpus_sha256 = _sha256_file(corpus_path)
+                corpus_file_hashes[instrument] = corpus_sha256
+                _write_json_atomic(
+                    pair_checkpoint_path,
+                    {
+                        "checkpoint_version": 1,
+                        "resume_fingerprint": resume_fingerprint,
+                        "instrument": instrument,
+                        "raw_sha256": raw_sha256,
+                        "corpus_sha256": corpus_sha256,
+                        "collection_manifest": collection_manifests[instrument],
+                        "corpus_manifest": corpus_manifests[instrument],
+                        "bootstrap_source": str(bootstrap_root),
+                    },
+                )
+                _research_progress(
+                    f"stage=pair instrument={instrument} status=bootstrapped "
+                    f"rows={collection.get('row_count', 'unknown')} "
+                    f"source={bootstrap_root}"
                 )
                 continue
 
@@ -631,6 +783,10 @@ def main() -> None:
         action="store_true",
         help="Reuse verified same-candidate pair, horizon, and fold checkpoints",
     )
+    parser.add_argument(
+        "--bootstrap-dir",
+        help="Optional ancestor research directory for validated pair import",
+    )
     args = parser.parse_args()
 
     internal_api_key = os.getenv("NESTJS_INTERNAL_API_KEY", "")
@@ -660,6 +816,7 @@ def main() -> None:
         min_net_return_bps=args.min_net_return_bps,
         max_splits=args.max_splits,
         resume=args.resume,
+        bootstrap_dir=args.bootstrap_dir,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
 
