@@ -46,7 +46,7 @@ from app.domain.training.train_multitimeframe import (
     load_and_prepare_corpora,
 )
 
-MIN_PAPER_PROMOTION_M1_ROWS_PER_INSTRUMENT = 25_000
+MIN_PAPER_PROMOTION_M1_ROWS_PER_INSTRUMENT = 100_000
 
 DEFAULT_FINAL_GATE = {
     "min_balanced_accuracy": 0.52,
