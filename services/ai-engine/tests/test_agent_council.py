@@ -174,24 +174,24 @@ def test_evidence_metadata_rejects_credential_like_keys(metadata):
 
 
 def test_invalid_coordinator_thresholds_fail_closed():
-    with pytest.raises(ValueError, match="minimum_context_weight cannot be negative"):
+    with pytest.raises(ValueError, match="minimum_context_weight must be greater than 0"):
         assess_agent_context(
             instrument="EURUSD",
             quant_direction="BUY",
             quant_confidence=0.70,
             evidence=[],
             evaluated_at=NOW,
-            minimum_context_weight=-0.01,
+            minimum_context_weight=0,
         )
 
-    with pytest.raises(ValueError, match="block_weight_threshold must be between 0 and 1"):
+    with pytest.raises(\n        ValueError,\n        match="block_weight_threshold must be greater than 0 and at most 1",\n    ):
         assess_agent_context(
             instrument="EURUSD",
             quant_direction="BUY",
             quant_confidence=0.70,
             evidence=[],
             evaluated_at=NOW,
-            block_weight_threshold=1.01,
+            block_weight_threshold=0,
         )
 
 
