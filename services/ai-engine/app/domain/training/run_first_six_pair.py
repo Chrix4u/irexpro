@@ -153,6 +153,7 @@ def run_first_six_pair_study(
     user_id: str | None = None,
     broker_connection_id: str | None = None,
     dukascopy_cache_dir: str | Path | None = None,
+    dukascopy_max_lookback_days: int = 90,
     target_rows: int = 250_000,
     horizons: tuple[int, ...] = DEFAULT_HORIZONS,
     before: datetime | None = None,
@@ -176,6 +177,8 @@ def run_first_six_pair_study(
             )
     if target_rows < 250:
         raise ValueError("target_rows must be at least 250")
+    if dukascopy_max_lookback_days < 2:
+        raise ValueError("dukascopy_max_lookback_days must be at least 2")
     if min_net_return_bps != 0:
         raise ValueError(
             "min_net_return_bps must be 0 because future-profitability row "
@@ -204,6 +207,7 @@ def run_first_six_pair_study(
                 output_path=raw_path,
                 now=before,
                 cache_dir=dukascopy_cache_dir,
+                max_lookback_days=dukascopy_max_lookback_days,
             )
         else:
             collection = collect_historical_corpus(
@@ -270,6 +274,9 @@ def run_first_six_pair_study(
         "instruments": list(INITIAL_FOREX_UNIVERSE),
         "horizons_minutes": list(horizons),
         "target_m1_rows_per_instrument": target_rows,
+        "dukascopy_max_lookback_days": (
+            dukascopy_max_lookback_days if normalized_source == "dukascopy" else None
+        ),
         "label_selection_policy": MULTITIMEFRAME_LABEL_SELECTION_POLICY,
         "backtest_evaluation_policy": MULTITIMEFRAME_BACKTEST_POLICY,
         "research_validation_policy": MULTITIMEFRAME_RESEARCH_VALIDATION_POLICY,
@@ -319,6 +326,7 @@ def main() -> None:
     parser.add_argument("--user-id")
     parser.add_argument("--broker-connection-id")
     parser.add_argument("--dukascopy-cache-dir")
+    parser.add_argument("--dukascopy-max-lookback-days", type=int, default=90)
     parser.add_argument("--output-dir", default="research/first-six-pair-run")
     parser.add_argument("--target-rows", type=int, default=250_000)
     parser.add_argument(
@@ -351,6 +359,7 @@ def main() -> None:
         user_id=args.user_id,
         broker_connection_id=args.broker_connection_id,
         dukascopy_cache_dir=args.dukascopy_cache_dir,
+        dukascopy_max_lookback_days=args.dukascopy_max_lookback_days,
         target_rows=args.target_rows,
         horizons=horizons,
         before=before,
