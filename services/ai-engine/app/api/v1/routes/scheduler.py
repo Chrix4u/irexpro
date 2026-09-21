@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.core.config import get_settings
 from app.core.security import validate_internal_api_key
+from app.domain.models.multitimeframe_features import RUNTIME_TIMEFRAMES
 from app.domain.scheduler.schemas import (
     SessionSchedulerResponse,
     SessionSchedulerStatusResponse,
@@ -128,13 +129,17 @@ async def session_scheduler_status(
             (datetime.now(UTC) - market_data_at).total_seconds(),
         )
 
+    reported_timeframe = job.timeframe
+    if job.model_loaded and job.model_mode == "trained_xgboost_mtf":
+        reported_timeframe = " · ".join(RUNTIME_TIMEFRAMES)
+
     return SessionSchedulerStatusResponse(
         enabled=scheduler.is_enabled,
         registered=True,
         trading_session_id=job.trading_session_id,
         active=job.active,
         instruments=job.instruments,
-        timeframe=job.timeframe,
+        timeframe=reported_timeframe,
         interval_seconds=job.interval_seconds,
         source=job.source,
         last_run_at=job.last_run_at.isoformat() if job.last_run_at else None,
