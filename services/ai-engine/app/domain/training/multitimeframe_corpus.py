@@ -18,6 +18,9 @@ import numpy as np
 import pandas as pd
 
 from app.domain.models.feature_engineering import FEATURE_COLUMNS, compute_features
+from app.domain.models.multitimeframe_features import (
+    MULTITIMEFRAME_DIRECT_FEATURE_COLUMNS,
+)
 from app.domain.training.dataset_builder import REQUIRED_OHLCV_COLUMNS, load_ohlcv_csv
 
 TIMEFRAME_MINUTES = {
@@ -191,7 +194,7 @@ def _timeframe_feature_frame(m1_frame: pd.DataFrame, timeframe: str) -> pd.DataF
             result[f"{prefix}_{field}"] = pd.to_numeric(
                 bars[field], errors="coerce"
             ).astype(float)
-    for feature_name in FEATURE_COLUMNS:
+    for feature_name in (*FEATURE_COLUMNS, *MULTITIMEFRAME_DIRECT_FEATURE_COLUMNS):
         result[f"{prefix}_{feature_name}"] = featured[feature_name].astype(float)
     return result
 
