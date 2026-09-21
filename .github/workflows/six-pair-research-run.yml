@@ -313,6 +313,13 @@ jobs:
             const c = block.overall.classification;
             const t = block.overall.trading;
             const g = block.research_gate;
+            const o = g.observed || {};
+            const checks = g.checks || {};
+            const fmt = (value) =>
+              value == null || !Number.isFinite(Number(value))
+                ? 'null'
+                : Number(value).toFixed(6);
+            const pass = (name) => checks[name] === true ? 'PASS' : 'HOLD';
             console.log(
               [
                 `horizon=${horizon}`,
@@ -324,6 +331,9 @@ jobs:
                 `profit_factor=${t.profit_factor == null ? 'null' : Number(t.profit_factor).toFixed(6)}`,
                 `max_drawdown=${Number(t.max_drawdown).toFixed(6)}`,
                 `trades=${t.trade_or_period_count}`,
+                `positive_fold_fraction=${fmt(o.positive_fold_fraction)}`,
+                `positive_instrument_fraction=${fmt(o.positive_instrument_fraction)}`,
+                `gate_checks=ba:${pass('balanced_accuracy')},sharpe:${pass('sharpe_ratio')},pf:${pass('profit_factor')},dd:${pass('max_drawdown')},folds:${pass('positive_fold_fraction')},pairs:${pass('positive_instrument_fraction')}`,
                 `gate=${g.research_gate_passed ? 'PASS' : 'HOLD'}`,
               ].join(' ')
             );

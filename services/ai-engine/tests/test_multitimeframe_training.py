@@ -11,8 +11,10 @@ from app.domain.models.multitimeframe_features import (
 )
 from app.domain.training.multitimeframe_corpus import build_multitimeframe_feature_corpus
 from app.domain.training.train_multitimeframe import (
+    CLASS_BALANCE_SAMPLE_WEIGHT_POLICY,
     ECONOMIC_SAMPLE_WEIGHT_POLICY,
     MULTITIMEFRAME_FEATURE_COLUMNS,
+    _class_balance_sample_weights,
     _economic_sample_weights,
     _non_overlapping_portfolio_periods,
     _split_internal_early_stopping_tail,
@@ -84,23 +86,46 @@ def test_mtf_v2_features_are_causal_finite_and_in_contract():
         assert np.isfinite(prepared[column].to_numpy(dtype=float)).all()
 
 
-def test_economic_sample_weights_keep_all_rows_and_favor_positive_net_edge():
+def test_class_balance_weights_favor_minority_without_extreme_scaling():
     frame = pd.DataFrame(
         {
-            "long_net_return": [-0.0002, 0.0001, 0.0010, -0.0003],
-            "short_net_return": [-0.0001, -0.0002, -0.0012, 0.0006],
+            "target": [0, 0, 0, 0, 1, 1],
+        }
+    )
+
+    weights = _class_balance_sample_weights(frame)
+
+    assert CLASS_BALANCE_SAMPLE_WEIGHT_POLICY == "sqrt_inverse_frequency_normalized_v1"
+    assert len(weights) == len(frame)
+    assert np.isfinite(weights).all()
+    assert (weights > 0.0).all()
+    assert weights[4] > weights[0]
+    assert weights.min() >= 0.5
+    assert weights.max() <= 2.0
+    assert weights.mean() == pytest.approx(1.0)
+
+
+def test_economic_sample_weights_keep_all_rows_balance_classes_and_favor_net_edge():
+    frame = pd.DataFrame(
+        {
+            "target": [0, 0, 1, 1],
+            "long_net_return": [-0.0002, 0.0010, -0.0003, 0.0006],
+            "short_net_return": [-0.0001, -0.0012, -0.0002, -0.0008],
         }
     )
 
     weights = _economic_sample_weights(frame)
 
-    assert ECONOMIC_SAMPLE_WEIGHT_POLICY == "positive_net_edge_q75_scaled_v1"
+    assert (
+        ECONOMIC_SAMPLE_WEIGHT_POLICY
+        == "class_balanced_positive_net_edge_q75_capped_v2"
+    )
     assert len(weights) == len(frame)
     assert np.isfinite(weights).all()
     assert (weights > 0.0).all()
-    assert weights.max() <= 5.0
-    assert weights[0] < weights[2]
-    assert weights[0] < weights[3]
+    assert weights.max() <= 4.0
+    assert weights[1] > weights[0]
+    assert weights[3] > weights[2]
 
 
 def test_prepare_instrument_corpus_keeps_both_direction_losing_periods():

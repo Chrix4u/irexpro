@@ -33,12 +33,14 @@ from app.domain.models.multitimeframe_features import (
     MULTITIMEFRAME_RESEARCH_VALIDATION_POLICY,
 )
 from app.domain.training.train_multitimeframe import (
+    CLASS_BALANCE_SAMPLE_WEIGHT_POLICY,
     ECONOMIC_SAMPLE_WEIGHT_POLICY,
     INITIAL_FOREX_UNIVERSE,
     LONG_NET_RETURN_COLUMN,
     SHORT_NET_RETURN_COLUMN,
     TARGET_COLUMN,
     _build_model,
+    _class_balance_sample_weights,
     _economic_sample_weights,
     _summarize_predictions,
     load_and_prepare_corpora,
@@ -316,6 +318,9 @@ def train_final_candidate(
                 validation[TARGET_COLUMN].astype(int),
             )
         ],
+        sample_weight_eval_set=[
+            _class_balance_sample_weights(validation)
+        ],
         verbose=False,
     )
 
@@ -380,6 +385,7 @@ def train_final_candidate(
         "horizon_bars": horizon_bars,
         "confidence_threshold": confidence_threshold,
         "training_sample_weight_policy": ECONOMIC_SAMPLE_WEIGHT_POLICY,
+        "validation_sample_weight_policy": CLASS_BALANCE_SAMPLE_WEIGHT_POLICY,
         "cost_model": {
             "historical_spread": "half spread at entry + half spread at exit",
             "commission_bps_round_trip": commission_bps,
