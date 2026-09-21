@@ -103,6 +103,24 @@ export const EXECUTION_MODES: readonly ExecutionMode[] = [
   'FULL_AUTO',
 ];
 
+/** Minimal broker identity needed to choose the requested session mode. */
+export interface BrokerExecutionEnvironment {
+  brokerId: string;
+  accountType: 'DEMO' | 'LIVE';
+}
+
+/**
+ * Choose automatic execution mode from broker identity, not DEMO/LIVE alone.
+ * `paper-broker` is the internal simulator and stays PAPER_ONLY. Real-provider
+ * DEMO accounts use FULL_AUTO against the provider's demo environment; LIVE
+ * accounts still remain subject to every server-side production-LIVE gate.
+ */
+export function startExecutionModeForBroker(
+  connection: BrokerExecutionEnvironment,
+): ExecutionMode {
+  return connection.brokerId === 'paper-broker' ? 'PAPER_ONLY' : 'FULL_AUTO';
+}
+
 /**
  * Frontend-safe view of the authoritative trading session.
  *
