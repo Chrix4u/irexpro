@@ -205,6 +205,8 @@ jobs:
             exit 20
           }
 
+          persist_research_state=true
+
           mark_research_evaluated() {
             install -d -m 700 "$RESEARCH_ROOT"
             local temp="$RESEARCH_STATE.tmp"
@@ -216,7 +218,7 @@ jobs:
           mark_on_exit() {
             local status=$?
             trap - EXIT
-            if (( status == 0 )); then
+            if (( status == 0 )) && [[ "$persist_research_state" == true ]]; then
               if ! mark_research_evaluated; then
                 printf 'RESEARCH WARNING: could not persist evaluated SHA marker; a future deploy will research again.\n' >&2
               fi
@@ -393,6 +395,18 @@ jobs:
           }
           printf 'selected_horizon=%sm\n' "$selected_horizon"
 
+          # Long research runs may outlive the main SHA they started from.
+          # Never promote a trained artifact after main has moved; force the
+          # next exact-main deployment to research again instead.
+          git fetch --quiet --no-tags origin main
+          current_main_sha="$(git rev-parse origin/main)"
+          if [[ "$current_main_sha" != "$candidate_sha" ]]; then
+            persist_research_state=false
+            printf 'MODEL_PROMOTION_HOLD reason=candidate_superseded candidate=%s current_main=%s\n' \
+              "$candidate_sha" "$current_main_sha"
+            exit 0
+          fi
+
           # Evaluate the advisory Agent Council overlay on the exact outer-fold
           # predictions for the selected research horizon. This is observational
           # evidence only and cannot alter model selection, paper approval,
@@ -526,6 +540,17 @@ jobs:
           rm -f "$TRAIN_ERROR"
           test -s "$MODEL_PATH"
           test -s "$METADATA_PATH"
+
+          # Re-check immediately before any staging runtime mutation. Main may
+          # have moved while final training and the untouched-test gate ran.
+          git fetch --quiet --no-tags origin main
+          current_main_sha="$(git rev-parse origin/main)"
+          if [[ "$current_main_sha" != "$candidate_sha" ]]; then
+            persist_research_state=false
+            printf 'MODEL_PROMOTION_HOLD reason=candidate_superseded_before_activation candidate=%s current_main=%s\n' \
+              "$candidate_sha" "$current_main_sha"
+            exit 0
+          fi
 
           # Load the exact candidate through the production loader before changing
           # the staging process. This re-verifies artifact SHA, feature schema,
