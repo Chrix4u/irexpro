@@ -219,8 +219,28 @@ The six-pair walk-forward study can now export the exact outer-fold validation
 predictions for each horizon. These are the only quantitative predictions that
 may be used for contextual overlay research.
 
-A standalone research evaluator can then replay a normalized historical macro
-event archive against those predictions:
+Build the first real causal context archive from official BLS monthly release
+schedule pages:
+
+```powershell
+python -m app.domain.training.collect_bls_historical_context \
+  --start-year 2024 \
+  --start-month 1 \
+  --end-year 2026 \
+  --end-month 9 \
+  --output research/context/bls_historical_events.jsonl
+```
+
+The collector uses only fixed official BLS monthly list-view URLs. Each page's
+official `Last Modified Date` is interpreted conservatively as end-of-day U.S.
+Eastern time because no modification clock time is published. Governed releases
+at or before that timestamp are excluded as retrospective; they are not allowed
+to masquerade as pre-event knowledge. A SHA-256 manifest records every page URL,
+payload hash, availability timestamp, included event count, and retrospective
+exclusions.
+
+A standalone research evaluator can then replay that normalized historical macro
+event archive against the outer-fold predictions:
 
 ```powershell
 python -m app.domain.training.agent_context_evaluation \
