@@ -1,10 +1,11 @@
 """Tests for SignalScheduler."""
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from app.api.v1.routes.scheduler import start_session_scheduler
 from app.core.config import Settings
 from app.core.errors import MarketDataError
 from app.domain.scheduler.schemas import SessionStartRequest
@@ -24,8 +25,51 @@ def make_start_request(session_id: str = "session-1") -> SessionStartRequest:
         instruments=["EURUSD"],
         timeframe="H1",
         source="mock",
+        accountType="DEMO",
         mode="paper",
     )
+
+
+@pytest.mark.asyncio
+async def test_scheduler_route_allows_full_auto_for_demo_provider_environment():
+    scheduler = MagicMock()
+    scheduler.register_session.return_value = True
+    request = SessionStartRequest(
+        userId="user-1",
+        tradingSessionId="demo-session",
+        brokerConnectionId="conn-demo",
+        instruments=["EURUSD"],
+        timeframe="H1",
+        source="broker",
+        accountType="DEMO",
+        mode="FULL_AUTO",
+    )
+
+    response = await start_session_scheduler(request, scheduler)
+
+    assert response.registered is True
+    scheduler.register_session.assert_called_once_with(request)
+
+
+@pytest.mark.asyncio
+async def test_scheduler_route_blocks_live_environment_for_paper_approved_model():
+    scheduler = MagicMock()
+    request = SessionStartRequest(
+        userId="user-1",
+        tradingSessionId="live-session",
+        brokerConnectionId="conn-live",
+        instruments=["EURUSD"],
+        timeframe="H1",
+        source="broker",
+        accountType="LIVE",
+        mode="FULL_AUTO",
+    )
+
+    response = await start_session_scheduler(request, scheduler)
+
+    assert response.registered is False
+    assert response.message == "Current AI model is not approved for live automation"
+    scheduler.register_session.assert_not_called()
 
 
 def test_scheduler_disabled_by_default():
