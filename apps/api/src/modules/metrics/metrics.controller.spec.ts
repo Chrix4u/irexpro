@@ -13,6 +13,10 @@ import { InternalApiKeyGuard } from '../../common/guards/internal-api-key.guard'
 import { IS_PUBLIC_KEY } from '../../common/constants/roles.constants';
 import { Trade, TradeStatus } from '../execution/entities/trade.entity';
 import { TradingSession } from '../execution/entities/trading-session.entity';
+import { BrokerAccountSnapshot } from '../broker/entities/broker-account-snapshot.entity';
+import { BrokerConnection } from '../broker/entities/broker-connection.entity';
+import { Order } from '../execution/orders/order.entity';
+import { ReconciliationRun } from '../execution/reconciliation/entities/reconciliation-run.entity';
 
 const VALID_KEY = 'test-internal-key-12345678901234';
 
@@ -31,6 +35,32 @@ const tradeRepoWithRows = (rows: Array<{ status: string; count: string }>) =>
 const sessionRepoWithCount = (count: number) =>
   ({ count: jest.fn().mockResolvedValue(count) }) as unknown as Repository<TradingSession>;
 
+/** Grouped-count query-builder mock for the broker-connections gauge. */
+const connectionRepoWithRows = (rows: Array<{ authorizationStatus: string; count: string }>) =>
+  ({
+    createQueryBuilder: jest.fn().mockReturnValue({
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      groupBy: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue(rows),
+    }),
+  }) as unknown as Repository<BrokerConnection>;
+
+/** Raw-query mock for the snapshot-staleness gauge (DISTINCT ON latest row). */
+const snapshotRepoWithRows = (
+  rows: Array<{ connection_id: string; observed_at: string | Date | null }>,
+) => ({ query: jest.fn().mockResolvedValue(rows) }) as unknown as Repository<BrokerAccountSnapshot>;
+
+/** Raw-query mock for the reconciliation-age gauge (MAX(completed_at)). */
+const runRepoWithLastCompleted = (lastCompletedAt: string | Date | null) =>
+  ({
+    query: jest.fn().mockResolvedValue([{ last_completed_at: lastCompletedAt }]),
+  }) as unknown as Repository<ReconciliationRun>;
+
+/** Count mock for the reconciliation-pending-orders gauge. */
+const orderRepoWithCount = (count: number) =>
+  ({ count: jest.fn().mockResolvedValue(count) }) as unknown as Repository<Order>;
+
 describe('MetricsController — internal /metrics scrape endpoint', () => {
   let module: TestingModule;
   let controller: MetricsController;
@@ -39,6 +69,10 @@ describe('MetricsController — internal /metrics scrape endpoint', () => {
   const buildModule = async (overrides?: {
     sessionRepo?: Repository<TradingSession>;
     tradeRepo?: Repository<Trade>;
+    connectionRepo?: Repository<BrokerConnection>;
+    snapshotRepo?: Repository<BrokerAccountSnapshot>;
+    runRepo?: Repository<ReconciliationRun>;
+    orderRepo?: Repository<Order>;
   }): Promise<void> => {
     // ConfigModule.forRoot({ isGlobal: true }) mirrors exactly how AppModule
     // mounts MetricsModule — the InternalApiKeyGuard's ConfigService must
@@ -51,6 +85,14 @@ describe('MetricsController — internal /metrics scrape endpoint', () => {
       .useValue(overrides?.sessionRepo ?? sessionRepoWithCount(3))
       .overrideProvider(getRepositoryToken(Trade))
       .useValue(overrides?.tradeRepo ?? tradeRepoWithRows([]))
+      .overrideProvider(getRepositoryToken(BrokerConnection))
+      .useValue(overrides?.connectionRepo ?? connectionRepoWithRows([]))
+      .overrideProvider(getRepositoryToken(BrokerAccountSnapshot))
+      .useValue(overrides?.snapshotRepo ?? snapshotRepoWithRows([]))
+      .overrideProvider(getRepositoryToken(ReconciliationRun))
+      .useValue(overrides?.runRepo ?? runRepoWithLastCompleted(null))
+      .overrideProvider(getRepositoryToken(Order))
+      .useValue(overrides?.orderRepo ?? orderRepoWithCount(0))
       .compile();
 
     controller = module.get<MetricsController>(MetricsController);
@@ -216,6 +258,138 @@ describe('MetricsController — internal /metrics scrape endpoint', () => {
       const text = await controller.getMetrics();
       expect(text).not.toContain(`${METRIC_GAUGE_NAMES.LIVE_SESSIONS_ACTIVE} 3`);
       expect(text).not.toContain(`# TYPE ${METRIC_GAUGE_NAMES.LIVE_SESSIONS_ACTIVE} gauge`);
+    });
+
+    it('renders irexpro_broker_connections grouped by authorizationStatus with explicit zeros', async () => {
+      await buildModule({
+        connectionRepo: connectionRepoWithRows([
+          { authorizationStatus: 'ACTIVE', count: '2' },
+          { authorizationStatus: 'SUSPENDED', count: '1' },
+        ]),
+      });
+      const text = await controller.getMetrics();
+      expect(text).toContain(
+        `# TYPE ${METRIC_GAUGE_NAMES.BROKER_CONNECTIONS_BY_AUTHORIZATION} gauge`,
+      );
+      expect(text).toContain(
+        `${METRIC_GAUGE_NAMES.BROKER_CONNECTIONS_BY_AUTHORIZATION}{authorizationStatus="ACTIVE"} 2`,
+      );
+      expect(text).toContain(
+        `${METRIC_GAUGE_NAMES.BROKER_CONNECTIONS_BY_AUTHORIZATION}{authorizationStatus="SUSPENDED"} 1`,
+      );
+      // Every enum status materializes — an absent status is an explicit 0.
+      expect(text).toContain(
+        `${METRIC_GAUGE_NAMES.BROKER_CONNECTIONS_BY_AUTHORIZATION}{authorizationStatus="REVOKED"} 0`,
+      );
+      expect(text).toContain(
+        `${METRIC_GAUGE_NAMES.BROKER_CONNECTIONS_BY_AUTHORIZATION}{authorizationStatus="NOT_CONNECTED"} 0`,
+      );
+    });
+
+    it('renders per-connection snapshot staleness in seconds from the latest observation instant', async () => {
+      const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+      try {
+        await buildModule({
+          snapshotRepo: snapshotRepoWithRows([
+            {
+              connection_id: 'conn-1',
+              observed_at: new Date(1_700_000_000_000 - 30_000).toISOString(),
+            },
+            {
+              connection_id: 'conn-2',
+              observed_at: new Date(1_700_000_000_000 - 5_000).toISOString(),
+            },
+          ]),
+        });
+        const text = await controller.getMetrics();
+        expect(text).toContain(
+          `# TYPE ${METRIC_GAUGE_NAMES.BROKER_SNAPSHOT_STALENESS_SECONDS} gauge`,
+        );
+        expect(text).toContain(
+          `${METRIC_GAUGE_NAMES.BROKER_SNAPSHOT_STALENESS_SECONDS}{connectionId="conn-1"} 30`,
+        );
+        expect(text).toContain(
+          `${METRIC_GAUGE_NAMES.BROKER_SNAPSHOT_STALENESS_SECONDS}{connectionId="conn-2"} 5`,
+        );
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it('clamps negative snapshot staleness to zero (provider clock slightly ahead)', async () => {
+      const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+      try {
+        await buildModule({
+          snapshotRepo: snapshotRepoWithRows([
+            {
+              connection_id: 'conn-future',
+              observed_at: new Date(1_700_000_000_500).toISOString(),
+            },
+          ]),
+        });
+        const text = await controller.getMetrics();
+        expect(text).toContain(
+          `${METRIC_GAUGE_NAMES.BROKER_SNAPSHOT_STALENESS_SECONDS}{connectionId="conn-future"} 0`,
+        );
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it('renders the reconciliation last-cycle age from MAX(completed_at)', async () => {
+      const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+      try {
+        await buildModule({
+          runRepo: runRepoWithLastCompleted(new Date(1_700_000_000_000 - 90_000)),
+        });
+        const text = await controller.getMetrics();
+        expect(text).toContain(
+          `# TYPE ${METRIC_GAUGE_NAMES.RECONCILIATION_LAST_CYCLE_AGE_SECONDS} gauge`,
+        );
+        expect(text).toContain(`${METRIC_GAUGE_NAMES.RECONCILIATION_LAST_CYCLE_AGE_SECONDS} 90`);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it('OMITS the reconciliation age gauge when no run ever completed (honest absence)', async () => {
+      await buildModule({ runRepo: runRepoWithLastCompleted(null) });
+      const text = await controller.getMetrics();
+      expect(text).not.toContain(METRIC_GAUGE_NAMES.RECONCILIATION_LAST_CYCLE_AGE_SECONDS);
+    });
+
+    it('renders the reconciliation-pending (orphaned/uncertain) order count', async () => {
+      await buildModule({ orderRepo: orderRepoWithCount(4) });
+      const text = await controller.getMetrics();
+      expect(text).toContain(`# TYPE ${METRIC_GAUGE_NAMES.RECONCILIATION_PENDING_ORDERS} gauge`);
+      expect(text).toContain(`${METRIC_GAUGE_NAMES.RECONCILIATION_PENDING_ORDERS} 4`);
+    });
+
+    it('OMITS each new gauge independently when its backing query fails (fail-open)', async () => {
+      await buildModule({
+        connectionRepo: {
+          createQueryBuilder: jest.fn(() => {
+            throw new Error('db down');
+          }),
+        } as unknown as Repository<BrokerConnection>,
+        snapshotRepo: {
+          query: jest.fn().mockRejectedValue(new Error('db down')),
+        } as unknown as Repository<BrokerAccountSnapshot>,
+        runRepo: {
+          query: jest.fn().mockRejectedValue(new Error('db down')),
+        } as unknown as Repository<ReconciliationRun>,
+        orderRepo: {
+          count: jest.fn().mockRejectedValue(new Error('db down')),
+        } as unknown as Repository<Order>,
+      });
+      const text = await controller.getMetrics();
+      // The scrape itself never 500s and the OTHER gauges still render.
+      expect(text).toEqual(expect.any(String));
+      expect(text).toContain(`${METRIC_GAUGE_NAMES.LIVE_SESSIONS_ACTIVE} 3`);
+      expect(text).not.toContain(METRIC_GAUGE_NAMES.BROKER_CONNECTIONS_BY_AUTHORIZATION);
+      expect(text).not.toContain(METRIC_GAUGE_NAMES.BROKER_SNAPSHOT_STALENESS_SECONDS);
+      expect(text).not.toContain(METRIC_GAUGE_NAMES.RECONCILIATION_LAST_CYCLE_AGE_SECONDS);
+      expect(text).not.toContain(METRIC_GAUGE_NAMES.RECONCILIATION_PENDING_ORDERS);
     });
   });
 
