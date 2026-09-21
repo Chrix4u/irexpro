@@ -23,7 +23,10 @@ jobs:
       group: irexpro-staging-worktree
       cancel-in-progress: false
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    # Six-pair collection + MTF build + three walk-forward horizons can
+    # legitimately exceed three hours when Dukascopy transient recovery is
+    # exercised. Keep a finite ceiling, but leave enough room to finish.
+    timeout-minutes: 300
     environment:
       name: staging
 
