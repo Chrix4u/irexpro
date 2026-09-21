@@ -53,6 +53,7 @@ def test_default_registry_covers_all_six_pair_currencies_with_official_sources()
         sources = registry.list_enabled_for_currency(currency)
         assert sources
         assert all(source.credibility == 1.0 for source in sources)
+        assert all(isinstance(source.currencies, frozenset) for source in sources)
 
 
 def test_registry_rejects_duplicate_source_ids_case_insensitively():
@@ -142,6 +143,30 @@ def test_future_revision_does_not_hide_current_known_high_event():
     )
 
     assert len(evidence) == 1
+
+
+def test_conflicting_same_timestamp_revisions_fail_closed():
+    high = event(
+        source_event_id="revision-conflict",
+        impact="HIGH",
+        observed_at=NOW - timedelta(minutes=5),
+        available_at=NOW - timedelta(minutes=5),
+    )
+    conflicting = event(
+        source_event_id="revision-conflict",
+        impact="MEDIUM",
+        observed_at=NOW - timedelta(minutes=5),
+        available_at=NOW - timedelta(minutes=5),
+    )
+
+    evidence = build_high_impact_event_evidence(
+        events=[high, conflicting],
+        registry=default_trusted_source_registry(),
+        instrument="EURUSD",
+        evaluated_at=NOW,
+    )
+
+    assert evidence == []
 
 
 def test_latest_known_revision_can_downgrade_event_and_remove_block():
