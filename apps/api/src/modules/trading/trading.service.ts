@@ -249,6 +249,7 @@ export class TradingService {
             instruments,
             timeframe: 'H1',
             source: 'broker',
+            accountType: connection.accountType,
             mode: session.executionMode,
           })
           .catch((err: Error) =>
