@@ -963,6 +963,7 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
           userId: 'user-1',
           tradingSessionId: 'session-1',
           brokerConnectionId: 'conn-1',
+          accountType: BrokerMode.DEMO,
           mode: ExecutionMode.PAPER_ONLY,
           instruments: ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF'],
         }),
@@ -1016,10 +1017,35 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       expect(status.instruments).toEqual(['EURUSD']);
     });
 
-    it('reports live automation blocked by model governance', async () => {
+    it('keeps DEMO FULL_AUTO automation on the scheduler path', async () => {
       executionService.findSessionById.mockResolvedValue(
         mockSession({ executionMode: ExecutionMode.FULL_AUTO }),
       );
+      brokerService.findConnectionsByIds.mockResolvedValue([
+        buildHealthyConnection({
+          brokerId: 'metatrader5',
+          accountType: BrokerMode.DEMO,
+          liveTradingEnabled: false,
+        }),
+      ]);
+
+      const status = await service.getAutomationRuntimeStatus('user-1', 'session-1');
+
+      expect(status.registered).toBe(true);
+      expect(aiEngineClient.getSessionStatus).toHaveBeenCalledWith('session-1');
+    });
+
+    it('reports LIVE automation blocked by model governance', async () => {
+      executionService.findSessionById.mockResolvedValue(
+        mockSession({ executionMode: ExecutionMode.FULL_AUTO }),
+      );
+      brokerService.findConnectionsByIds.mockResolvedValue([
+        buildHealthyConnection({
+          brokerId: 'metatrader5',
+          accountType: BrokerMode.LIVE,
+          liveTradingEnabled: true,
+        }),
+      ]);
 
       const status = await service.getAutomationRuntimeStatus('user-1', 'session-1');
 
