@@ -184,7 +184,10 @@ def test_invalid_coordinator_thresholds_fail_closed():
             minimum_context_weight=0,
         )
 
-    with pytest.raises(\n        ValueError,\n        match="block_weight_threshold must be greater than 0 and at most 1",\n    ):
+    with pytest.raises(
+        ValueError,
+        match="block_weight_threshold must be greater than 0 and at most 1",
+    ):
         assess_agent_context(
             instrument="EURUSD",
             quant_direction="BUY",
