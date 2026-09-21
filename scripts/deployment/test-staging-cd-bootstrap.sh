@@ -127,6 +127,7 @@ grep -Fq 'bootstrap_unsafe_pattern=' "$RESEARCH_WORKFLOW" ||
   fail 'Six Pair Research must guard ancestor bootstrap against data/corpus semantic changes.'
 grep -Fq 'git rev-list --first-parent --max-count=20' "$RESEARCH_WORKFLOW" ||
   fail 'Six Pair Research must search bounded first-parent ancestry for resumable pair evidence.'
+# shellcheck disable=SC2016
 grep -Fq -- '--bootstrap-dir "$bootstrap_root"' "$RESEARCH_WORKFLOW" ||
   fail 'Six Pair Research must pass the validated ancestor bootstrap directory to the runner.'
 
