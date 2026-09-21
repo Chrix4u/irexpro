@@ -1,5 +1,4 @@
 """Tests for the advisory autonomous Agent Council."""
-
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
@@ -7,7 +6,6 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from app.domain.agents import AgentEvidence, assess_agent_context
-
 
 NOW = datetime(2026, 9, 21, 0, 0, tzinfo=UTC)
 
