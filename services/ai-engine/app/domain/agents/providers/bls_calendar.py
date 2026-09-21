@@ -226,12 +226,24 @@ class BlsOfficialCalendarProvider:
         *,
         fetched_at: datetime | None = None,
     ) -> list[MacroContextEvent]:
-        known_at = _aware(fetched_at or datetime.now(UTC), "fetched_at")
+        """
+        Fetch the official calendar.
+
+        `fetched_at` is only for replaying a snapshot whose receipt timestamp
+        was already persisted. Live fetches stamp availability after the HTTP
+        response is received, never at request start.
+        """
+        replay_known_at = (
+            _aware(fetched_at, "fetched_at") if fetched_at is not None else None
+        )
+
         if self._client is not None:
             response = await self._request(self._client)
         else:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(trust_env=False) as client:
                 response = await self._request(client)
+
+        known_at = replay_known_at or datetime.now(UTC)
 
         content_type = response.headers.get("content-type", "")
         media_type = content_type.split(";", 1)[0].strip().lower()
