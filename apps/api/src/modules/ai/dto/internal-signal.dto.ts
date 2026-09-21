@@ -8,8 +8,103 @@ import {
   Min,
   IsDateString,
   IsObject,
+  IsArray,
+  ArrayMaxSize,
+  IsInt,
+  ValidateNested,
+  Equals,
+  MaxLength,
+  MinLength,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
+
+class InternalAgentContextEvidenceDto {
+  @IsEnum(['QUANT', 'MACRO_NEWS', 'REGIME', 'RISK', 'REFLECTION'])
+  source: 'QUANT' | 'MACRO_NEWS' | 'REGIME' | 'RISK' | 'REFLECTION';
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(160)
+  sourceId: string;
+
+  @IsEnum(['BUY', 'SELL', 'NEUTRAL', 'BLOCK'])
+  stance: 'BUY' | 'SELL' | 'NEUTRAL' | 'BLOCK';
+
+  @IsNumber()
+  @Min(0)
+  @Max(1)
+  confidence: number;
+
+  @IsNumber()
+  @Min(0)
+  @Max(1)
+  credibility: number;
+
+  @IsInt()
+  @Min(0)
+  @Max(100)
+  verifiedSources: number;
+
+  @IsDateString()
+  availableAt: string;
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(500)
+  summary: string;
+}
+
+class InternalAgentContextDto {
+  @Equals('agent-council-v1')
+  version: 'agent-council-v1';
+
+  @IsEnum(['ALIGNED', 'CONFLICT', 'INSUFFICIENT', 'BLOCKED'])
+  status: 'ALIGNED' | 'CONFLICT' | 'INSUFFICIENT' | 'BLOCKED';
+
+  @IsEnum(['BUY', 'SELL', 'NEUTRAL'])
+  consensusDirection: 'BUY' | 'SELL' | 'NEUTRAL';
+
+  @IsNumber()
+  @Min(0)
+  weightedSupport: number;
+
+  @IsNumber()
+  @Min(0)
+  weightedOpposition: number;
+
+  @IsNumber()
+  @Min(0)
+  @Max(1)
+  disagreementScore: number;
+
+  @IsInt()
+  @Min(0)
+  @Max(100)
+  evidenceCount: number;
+
+  @IsInt()
+  @Min(0)
+  rejectedCount: number;
+
+  @IsArray()
+  @ArrayMaxSize(10)
+  @ValidateNested({ each: true })
+  @Type(() => InternalAgentContextEvidenceDto)
+  evidence: InternalAgentContextEvidenceDto[];
+
+  @IsEnum(['AVAILABLE', 'UNAVAILABLE', 'NOT_APPLICABLE'])
+  sourceState: 'AVAILABLE' | 'UNAVAILABLE' | 'NOT_APPLICABLE';
+
+  @IsDateString()
+  evaluatedAt: string;
+
+  @Equals(true)
+  advisoryOnly: true;
+
+  @Equals(false)
+  executionAuthority: false;
+}
 
 /**
  * InternalSignalDto — Request body for the Python AI Engine → NestJS internal signal endpoint.
@@ -107,6 +202,14 @@ export class InternalSignalDto {
   @ApiProperty({ description: 'AI model version string', example: 'baseline-xgboost-v0.1.0' })
   @IsString()
   modelVersion: string;
+
+  @ApiPropertyOptional({
+    description: 'Advisory Agent Council snapshot. Never grants execution authority.',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => InternalAgentContextDto)
+  agentContext?: InternalAgentContextDto | null;
 
   @ApiPropertyOptional({ description: 'Explainability + audit metadata (no secrets)' })
   @IsOptional()

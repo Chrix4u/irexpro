@@ -27,7 +27,11 @@ def get_signal_generator(registry: ModelRegistry | None = None) -> SignalGenerat
     reg = registry or app_state["registry"]
     cache = OHLCVRedisCache(redis_client=app_state.get("redis"))
     ohlcv_svc = OHLCVService(cache=cache)
-    return SignalGenerator(ohlcv_service=ohlcv_svc, model_registry=reg)
+    return SignalGenerator(
+        ohlcv_service=ohlcv_svc,
+        model_registry=reg,
+        agent_context_service=app_state.get("agent_context_service"),
+    )
 
 
 @router.post("/signals/generate", response_model=SignalGenerationResponse, tags=["Signals"])

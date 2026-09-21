@@ -33,6 +33,15 @@ function outcomeVariant(outcome: AiDecisionOutcome): 'success' | 'error' | 'warn
   return 'info';
 }
 
+function contextVariant(
+  status: NonNullable<AiDecisionSummaryView['agentContext']>['status'],
+): 'success' | 'error' | 'warning' | 'info' {
+  if (status === 'ALIGNED') return 'success';
+  if (status === 'BLOCKED') return 'error';
+  if (status === 'CONFLICT') return 'warning';
+  return 'info';
+}
+
 function decisionTitle(decision: AiDecisionSummaryView): string {
   const instrument = decision.evidence.instrument ?? 'Instrument unavailable';
   const direction = decision.evidence.direction ? ` · ${decision.evidence.direction}` : '';
@@ -232,6 +241,94 @@ export default function AiDecisionExplorerPage() {
                           </div>
                         </div>
 
+                        <div className="mt-4">
+                          <span className="text-sm muted">Agent Council context</span>
+                          {decision.agentContext ? (
+                            <div
+                              className="mt-2"
+                              style={{
+                                border: '1px solid var(--border-subtle)',
+                                borderRadius: 'var(--radius-md)',
+                                padding: 'var(--space-3)',
+                              }}
+                            >
+                              <div
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: 'var(--space-2)',
+                                  flexWrap: 'wrap',
+                                }}
+                              >
+                                <Badge variant={contextVariant(decision.agentContext.status)}>
+                                  {formatEnumLabel(decision.agentContext.status)}
+                                </Badge>
+                                <span className="text-sm muted">
+                                  Source {formatEnumLabel(decision.agentContext.sourceState)}
+                                </span>
+                                <span className="text-sm muted">
+                                  Evaluated {formatTimestamp(decision.agentContext.evaluatedAt)}
+                                </span>
+                              </div>
+                              <div
+                                className="mt-3"
+                                style={{
+                                  display: 'grid',
+                                  gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                                  gap: 'var(--space-3)',
+                                }}
+                              >
+                                <div>
+                                  <span className="text-sm muted">Consensus</span>
+                                  <div>{formatEnumLabel(decision.agentContext.consensusDirection)}</div>
+                                </div>
+                                <div>
+                                  <span className="text-sm muted">Disagreement</span>
+                                  <div>{formatScore(decision.agentContext.disagreementScore)}</div>
+                                </div>
+                                <div>
+                                  <span className="text-sm muted">Evidence used</span>
+                                  <div>{decision.agentContext.evidenceCount}</div>
+                                </div>
+                                <div>
+                                  <span className="text-sm muted">Rejected evidence</span>
+                                  <div>{decision.agentContext.rejectedCount}</div>
+                                </div>
+                              </div>
+                              {decision.agentContext.evidence.length > 0 && (
+                                <ul
+                                  className="mt-3"
+                                  style={{
+                                    display: 'grid',
+                                    gap: 'var(--space-2)',
+                                    marginBottom: 0,
+                                    paddingLeft: '1.25rem',
+                                  }}
+                                >
+                                  {decision.agentContext.evidence.map((item) => (
+                                    <li key={item.sourceId}>
+                                      <strong>{formatEnumLabel(item.stance)}</strong>
+                                      {' · '}
+                                      {item.summary}
+                                      <span className="text-sm muted">
+                                        {' '}
+                                        · {item.verifiedSources} verified source
+                                        {item.verifiedSources === 1 ? '' : 's'}
+                                      </span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
+                              <p className="text-sm muted mt-3" style={{ marginBottom: 0 }}>
+                                Advisory evidence only. The Risk Engine and Execution Engine remain
+                                authoritative.
+                              </p>
+                            </div>
+                          ) : (
+                            <p className="text-sm muted mt-1">Not recorded for this decision.</p>
+                          )}
+                        </div>
+
                         <div
                           className="mt-4"
                           style={{
@@ -325,7 +422,7 @@ export default function AiDecisionExplorerPage() {
 
             <div className="mt-4">
               <Alert variant="info">
-                This page is an evidence viewer, not a model-thought viewer. Opaque AI metadata, chain-of-thought, raw risk context, credentials, financial calculations, and internal error payloads are intentionally excluded.
+                This page is an evidence viewer, not a model-thought viewer. Agent Council context contains only concise accepted evidence and explicit consensus state. Opaque AI metadata, chain-of-thought, provider metadata, raw risk context, credentials, financial calculations, and internal error payloads are intentionally excluded.
               </Alert>
             </div>
           </>

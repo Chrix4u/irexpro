@@ -14,6 +14,42 @@
  *
  * See: docs/architecture/10-ai-trading-architecture.md
  */
+export type AiAgentContextStatus = 'ALIGNED' | 'CONFLICT' | 'INSUFFICIENT' | 'BLOCKED';
+export type AiAgentContextSourceState = 'AVAILABLE' | 'UNAVAILABLE' | 'NOT_APPLICABLE';
+
+export interface AiAgentContextEvidence {
+  source: 'QUANT' | 'MACRO_NEWS' | 'REGIME' | 'RISK' | 'REFLECTION';
+  sourceId: string;
+  stance: 'BUY' | 'SELL' | 'NEUTRAL' | 'BLOCK';
+  confidence: number;
+  credibility: number;
+  verifiedSources: number;
+  availableAt: string;
+  summary: string;
+}
+
+/**
+ * Browser-safe advisory context captured by the AI engine.
+ *
+ * This object is evidence only. It cannot carry broker credentials, raw
+ * provider metadata, position sizing, execution commands, or model reasoning.
+ */
+export interface AiAgentContextSnapshot {
+  version: 'agent-council-v1';
+  status: AiAgentContextStatus;
+  consensusDirection: 'BUY' | 'SELL' | 'NEUTRAL';
+  weightedSupport: number;
+  weightedOpposition: number;
+  disagreementScore: number;
+  evidenceCount: number;
+  rejectedCount: number;
+  evidence: AiAgentContextEvidence[];
+  sourceState: AiAgentContextSourceState;
+  evaluatedAt: string;
+  advisoryOnly: true;
+  executionAuthority: false;
+}
+
 export interface AiSignalCandidate {
   /** Unique signal ID (UUID, provided by AI service) */
   signalId: string;
@@ -68,6 +104,9 @@ export interface AiSignalCandidate {
 
   /** AI model version that generated the signal */
   modelVersion: string;
+
+  /** Advisory Agent Council snapshot; never execution authority. */
+  agentContext?: AiAgentContextSnapshot | null;
 
   /** Optional opaque metadata for audit/debugging */
   metadata?: Record<string, unknown>;

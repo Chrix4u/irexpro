@@ -15,6 +15,33 @@ export type AiDecisionStageStatus =
   | 'SUCCEEDED'
   | 'FAILED';
 
+export interface AiDecisionAgentContextEvidenceView {
+  source: 'QUANT' | 'MACRO_NEWS' | 'REGIME' | 'RISK' | 'REFLECTION';
+  sourceId: string;
+  stance: 'BUY' | 'SELL' | 'NEUTRAL' | 'BLOCK';
+  confidence: number;
+  credibility: number;
+  verifiedSources: number;
+  availableAt: string;
+  summary: string;
+}
+
+export interface AiDecisionAgentContextView {
+  version: 'agent-council-v1';
+  status: 'ALIGNED' | 'CONFLICT' | 'INSUFFICIENT' | 'BLOCKED';
+  consensusDirection: 'BUY' | 'SELL' | 'NEUTRAL';
+  weightedSupport: number;
+  weightedOpposition: number;
+  disagreementScore: number;
+  evidenceCount: number;
+  rejectedCount: number;
+  evidence: AiDecisionAgentContextEvidenceView[];
+  sourceState: 'AVAILABLE' | 'UNAVAILABLE' | 'NOT_APPLICABLE';
+  evaluatedAt: string;
+  advisoryOnly: true;
+  executionAuthority: false;
+}
+
 export interface AiDecisionEvidenceView {
   instrument: string | null;
   direction: 'BUY' | 'SELL' | null;
@@ -48,6 +75,7 @@ export interface AiDecisionSummaryView {
   outcome: AiDecisionOutcome;
   receivedAt: string;
   evidence: AiDecisionEvidenceView;
+  agentContext: AiDecisionAgentContextView | null;
   risk: {
     decision: 'APPROVED' | 'REJECTED' | 'UNKNOWN';
     rejectionCode: string | null;
@@ -61,7 +89,7 @@ export interface AiDecisionSummaryView {
  * Browser-safe AI decision evidence.
  *
  * This contract intentionally excludes opaque model metadata, raw riskContext,
- * chain-of-thought, credentials, idempotency keys, prices, P&L, and internal
+ * chain-of-thought, provider metadata, credentials, idempotency keys, prices, P&L, and internal
  * error payloads. Missing historical evidence is represented explicitly by
  * null/UNKNOWN rather than inferred in the browser.
  */

@@ -47,6 +47,37 @@ def _to_nestjs_payload(candidate: AiSignalCandidate) -> dict:
         "volatilityScore": candidate.volatility_score,
         "generatedAt": candidate.generated_at.isoformat(),
         "modelVersion": candidate.model_version,
+        "agentContext": (
+            {
+                "version": candidate.agent_context.version,
+                "status": candidate.agent_context.status,
+                "consensusDirection": candidate.agent_context.consensus_direction,
+                "weightedSupport": candidate.agent_context.weighted_support,
+                "weightedOpposition": candidate.agent_context.weighted_opposition,
+                "disagreementScore": candidate.agent_context.disagreement_score,
+                "evidenceCount": candidate.agent_context.evidence_count,
+                "rejectedCount": candidate.agent_context.rejected_count,
+                "evidence": [
+                    {
+                        "source": item.source,
+                        "sourceId": item.source_id,
+                        "stance": item.stance,
+                        "confidence": item.confidence,
+                        "credibility": item.credibility,
+                        "verifiedSources": item.verified_sources,
+                        "availableAt": item.available_at.isoformat(),
+                        "summary": item.summary,
+                    }
+                    for item in candidate.agent_context.evidence
+                ],
+                "sourceState": candidate.agent_context.source_state,
+                "evaluatedAt": candidate.agent_context.evaluated_at.isoformat(),
+                "advisoryOnly": candidate.agent_context.advisory_only,
+                "executionAuthority": candidate.agent_context.execution_authority,
+            }
+            if candidate.agent_context is not None
+            else None
+        ),
         "metadata": candidate.metadata,
     }
 

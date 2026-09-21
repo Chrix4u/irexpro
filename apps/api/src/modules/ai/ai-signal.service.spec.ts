@@ -28,7 +28,7 @@ describe('AiSignalService', () => {
   let module: TestingModule;
   let service: AiSignalService;
   let orchestrator: jest.Mocked<Partial<StrategyOrchestratorService>>;
-  let auditService: jest.Mocked<Partial<AuditService>>;
+  let auditService: jest.Mocked<Pick<AuditService, 'log'>>;
   let eventBus: jest.Mocked<Partial<DomainEventBus>>;
 
   beforeEach(async () => {
@@ -140,6 +140,92 @@ describe('AiSignalService', () => {
       expect(auditService.log).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'AI_SIGNAL_RECEIVED', actorUserId: 'user-1' }),
       );
+    });
+
+    it('persists only the whitelisted advisory agent-context projection', async () => {
+      await service.receiveSignal(
+        validCandidate({
+          agentContext: {
+            version: 'agent-council-v1',
+            status: 'BLOCKED',
+            consensusDirection: 'NEUTRAL',
+            weightedSupport: 0,
+            weightedOpposition: 0,
+            disagreementScore: 0,
+            evidenceCount: 1,
+            rejectedCount: 0,
+            evidence: [
+              {
+                source: 'MACRO_NEWS',
+                sourceId: 'macro-event:abc',
+                stance: 'BLOCK',
+                confidence: 1,
+                credibility: 1,
+                verifiedSources: 1,
+                availableAt: '2026-09-21T02:00:00.000Z',
+                summary: 'High-impact USD CPI event is within the configured risk window.',
+                providerMetadata: 'must-not-persist',
+              } as never,
+            ],
+            sourceState: 'AVAILABLE',
+            evaluatedAt: '2026-09-21T02:00:05.000Z',
+            advisoryOnly: true,
+            executionAuthority: false,
+            hiddenReasoning: 'must-not-persist',
+          } as never,
+        }),
+      );
+
+      const receipt = auditService.log.mock.calls
+        .map(([entry]) => entry)
+        .find((entry) => entry.action === 'AI_SIGNAL_RECEIVED');
+      expect(receipt?.metadata).toMatchObject({
+        agentContext: {
+          version: 'agent-council-v1',
+          status: 'BLOCKED',
+          consensusDirection: 'NEUTRAL',
+          advisoryOnly: true,
+          executionAuthority: false,
+          evidence: [
+            expect.objectContaining({
+              source: 'MACRO_NEWS',
+              stance: 'BLOCK',
+            }),
+          ],
+        },
+      });
+      const serialized = JSON.stringify(receipt?.metadata);
+      expect(serialized).not.toContain('providerMetadata');
+      expect(serialized).not.toContain('hiddenReasoning');
+      expect(serialized).not.toContain('must-not-persist');
+    });
+
+    it('drops agent context that attempts to claim execution authority', async () => {
+      await service.receiveSignal(
+        validCandidate({
+          agentContext: {
+            version: 'agent-council-v1',
+            status: 'INSUFFICIENT',
+            consensusDirection: 'NEUTRAL',
+            weightedSupport: 0,
+            weightedOpposition: 0,
+            disagreementScore: 0,
+            evidenceCount: 0,
+            rejectedCount: 0,
+            evidence: [],
+            sourceState: 'AVAILABLE',
+            evaluatedAt: '2026-09-21T02:00:05.000Z',
+            advisoryOnly: true,
+            executionAuthority: true,
+          } as never,
+        }),
+      );
+
+      const receipt = auditService.log.mock.calls
+        .map(([entry]) => entry)
+        .find((entry) => entry.action === 'AI_SIGNAL_RECEIVED');
+      expect(receipt?.metadata).not.toHaveProperty('agentContext');
+      expect(orchestrator.processSignal).toHaveBeenCalled();
     });
 
     it('publishes AI_SIGNAL_RECEIVED event', async () => {

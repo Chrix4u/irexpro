@@ -155,6 +155,7 @@ export class AiController {
       volatilityScore: dto.volatilityScore,
       generatedAt: dto.generatedAt ? new Date(dto.generatedAt) : new Date(),
       modelVersion: dto.modelVersion,
+      agentContext: dto.agentContext ?? null,
       metadata: { ...dto.metadata, source: 'python-ai-engine' },
     };
 

@@ -7,6 +7,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.core.errors import NestJsIntegrationError
+from app.domain.agents.snapshot import (
+    AgentContextEvidenceSnapshot,
+    AgentContextSnapshot,
+)
 from app.domain.signals.schemas import AiSignalCandidate
 from app.integrations.nestjs_client import INTERNAL_API_KEY_HEADER, NestJsClient, _to_nestjs_payload
 
@@ -40,6 +44,43 @@ def test_to_nestjs_payload_uses_camel_case():
     assert "suggestedTakeProfit" in payload
     assert "modelVersion" in payload
     assert "generatedAt" in payload
+
+
+def test_to_nestjs_payload_projects_agent_context_without_provider_metadata():
+    candidate = make_candidate()
+    candidate.agent_context = AgentContextSnapshot(
+        status="BLOCKED",
+        consensus_direction="NEUTRAL",
+        weighted_support=0.0,
+        weighted_opposition=0.0,
+        disagreement_score=0.0,
+        evidence_count=1,
+        rejected_count=0,
+        evidence=[
+            AgentContextEvidenceSnapshot(
+                source="MACRO_NEWS",
+                source_id="macro-event:abc",
+                stance="BLOCK",
+                confidence=1.0,
+                credibility=1.0,
+                verified_sources=1,
+                available_at=datetime.now(UTC),
+                summary="High-impact USD CPI event is within the configured risk window.",
+            )
+        ],
+        source_state="AVAILABLE",
+        evaluated_at=datetime.now(UTC),
+    )
+
+    payload = _to_nestjs_payload(candidate)
+    context = payload["agentContext"]
+
+    assert context["status"] == "BLOCKED"
+    assert context["consensusDirection"] == "NEUTRAL"
+    assert context["advisoryOnly"] is True
+    assert context["executionAuthority"] is False
+    assert context["evidence"][0]["source"] == "MACRO_NEWS"
+    assert "metadata" not in context["evidence"][0]
 
 
 def test_to_nestjs_payload_no_secrets():

@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.routes import backtests, health, market_data, models, scheduler, signals
 from app.core.config import get_settings
 from app.core.logging import configure_logging, get_logger
+from app.domain.agents.context_service import AgentContextService
 from app.domain.models.registry import build_default_registry
 from app.domain.scheduler.signal_scheduler import SignalScheduler
 from app.integrations.redis_client import close_redis_client, get_redis_client
@@ -43,6 +44,9 @@ async def lifespan(app: FastAPI):
 
     # Attempt Redis connection (non-fatal)
     app_state["redis"] = await get_redis_client()
+
+    # Initialise advisory Agent Council context service.
+    app_state["agent_context_service"] = AgentContextService()
 
     # Initialise scheduler (disabled by default)
     app_state["scheduler"] = SignalScheduler()

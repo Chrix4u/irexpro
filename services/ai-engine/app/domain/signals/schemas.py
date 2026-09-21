@@ -17,6 +17,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.domain.agents.snapshot import AgentContextSnapshot
+
 
 class AiSignalCandidate(BaseModel):
     """Signal candidate produced by the AI engine. Never executed directly."""
@@ -45,6 +47,10 @@ class AiSignalCandidate(BaseModel):
         description="Must be timezone-aware",
     )
     model_version: str = Field(..., description="AI model version string")
+    agent_context: AgentContextSnapshot | None = Field(
+        default=None,
+        description="Advisory Agent Council snapshot; never execution authority",
+    )
     metadata: dict[str, Any] = Field(default_factory=dict, description="Opaque audit metadata")
 
     @field_validator("generated_at")

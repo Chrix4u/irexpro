@@ -19,6 +19,7 @@ from app.core.config import get_settings
 from app.core.errors import LiveModeNotSupportedError, SignalGenerationError
 from app.core.logging import get_logger
 from app.core.security import sanitize_metadata
+from app.domain.agents.context_service import AgentContextService
 from app.domain.market_data.ohlcv_service import MarketDataSource, OHLCVService
 from app.domain.market_data.schemas import OHLCVCandle
 from app.domain.models.feature_engineering import candles_to_dataframe, extract_latest_features
@@ -46,9 +47,15 @@ class SignalGenerator:
     Enforces the confidence threshold gate before producing any signal.
     """
 
-    def __init__(self, ohlcv_service: OHLCVService, model_registry: ModelRegistry) -> None:
+    def __init__(
+        self,
+        ohlcv_service: OHLCVService,
+        model_registry: ModelRegistry,
+        agent_context_service: AgentContextService | None = None,
+    ) -> None:
         self._ohlcv = ohlcv_service
         self._registry = model_registry
+        self._agent_context_service = agent_context_service
 
     async def generate(
         self,
@@ -259,7 +266,25 @@ class SignalGenerator:
             prediction.explainability, features, instrument, signal_timeframe
         )
 
-        # 8. Construct candidate
+        # 8. Capture advisory Agent Council context. It is persisted for
+        # Decision Explorer evidence only and does not alter this signal's
+        # eligibility, confidence, SL/TP, volume, Risk Engine, or execution path.
+        agent_context = None
+        if self._agent_context_service is not None:
+            try:
+                agent_context = await self._agent_context_service.snapshot_for(
+                    instrument=instrument,
+                    quant_direction=prediction.direction,
+                    quant_confidence=prediction.confidence_score,
+                )
+            except Exception as exc:  # advisory context must not become execution authority
+                logger.warning(
+                    "Agent context snapshot unavailable",
+                    instrument=instrument,
+                    error_type=type(exc).__name__,
+                )
+
+        # 9. Construct candidate
         metadata = sanitize_metadata({
             **explainability,
             "raw_scores": prediction.raw_scores,
@@ -292,6 +317,7 @@ class SignalGenerator:
             volatility_score=min(volatility * 100, 1.0),
             generated_at=datetime.now(UTC),
             model_version=prediction.model_version,
+            agent_context=agent_context,
             metadata=metadata,
         )
 

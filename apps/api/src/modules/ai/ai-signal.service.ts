@@ -12,6 +12,131 @@ import { AiSignalCandidate } from './interfaces/ai-signal-candidate.interface';
 import { StrategyResult } from '../strategy/interfaces/strategy.interface';
 import { AiExitResult, AiExitSignal } from '../strategy/interfaces/ai-exit-signal.interface';
 
+const AGENT_CONTEXT_STATUSES = new Set(['ALIGNED', 'CONFLICT', 'INSUFFICIENT', 'BLOCKED']);
+const AGENT_CONTEXT_DIRECTIONS = new Set(['BUY', 'SELL', 'NEUTRAL']);
+const AGENT_CONTEXT_SOURCE_STATES = new Set(['AVAILABLE', 'UNAVAILABLE', 'NOT_APPLICABLE']);
+const AGENT_CONTEXT_SOURCES = new Set(['QUANT', 'MACRO_NEWS', 'REGIME', 'RISK', 'REFLECTION']);
+const AGENT_CONTEXT_STANCES = new Set(['BUY', 'SELL', 'NEUTRAL', 'BLOCK']);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function finiteNumber(value: unknown, min = 0, max = Number.POSITIVE_INFINITY): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max
+    ? value
+    : null;
+}
+
+function boundedInteger(value: unknown, min: number, max = Number.MAX_SAFE_INTEGER): number | null {
+  return Number.isInteger(value) && typeof value === 'number' && value >= min && value <= max
+    ? value
+    : null;
+}
+
+function isoString(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 && !Number.isNaN(Date.parse(value))
+    ? value
+    : null;
+}
+
+function sanitizeAgentContext(value: unknown): Record<string, unknown> | null {
+  if (!isRecord(value)) return null;
+  if (
+    value.version !== 'agent-council-v1' ||
+    typeof value.status !== 'string' ||
+    !AGENT_CONTEXT_STATUSES.has(value.status) ||
+    typeof value.consensusDirection !== 'string' ||
+    !AGENT_CONTEXT_DIRECTIONS.has(value.consensusDirection) ||
+    typeof value.sourceState !== 'string' ||
+    !AGENT_CONTEXT_SOURCE_STATES.has(value.sourceState) ||
+    value.advisoryOnly !== true ||
+    value.executionAuthority !== false
+  ) {
+    return null;
+  }
+
+  const weightedSupport = finiteNumber(value.weightedSupport);
+  const weightedOpposition = finiteNumber(value.weightedOpposition);
+  const disagreementScore = finiteNumber(value.disagreementScore, 0, 1);
+  const evidenceCount = boundedInteger(value.evidenceCount, 0, 100);
+  const rejectedCount = boundedInteger(value.rejectedCount, 0);
+  const evaluatedAt = isoString(value.evaluatedAt);
+  if (
+    weightedSupport === null ||
+    weightedOpposition === null ||
+    disagreementScore === null ||
+    evidenceCount === null ||
+    rejectedCount === null ||
+    evaluatedAt === null ||
+    !Array.isArray(value.evidence) ||
+    value.evidence.length > 10
+  ) {
+    return null;
+  }
+
+  const evidence: Record<string, unknown>[] = [];
+  for (const raw of value.evidence) {
+    if (!isRecord(raw)) return null;
+    const confidence = finiteNumber(raw.confidence, 0, 1);
+    const credibility = finiteNumber(raw.credibility, 0, 1);
+    const verifiedSources = boundedInteger(raw.verifiedSources, 0, 100);
+    const availableAt = isoString(raw.availableAt);
+    if (
+      typeof raw.source !== 'string' ||
+      !AGENT_CONTEXT_SOURCES.has(raw.source) ||
+      typeof raw.sourceId !== 'string' ||
+      raw.sourceId.length < 1 ||
+      raw.sourceId.length > 160 ||
+      typeof raw.stance !== 'string' ||
+      !AGENT_CONTEXT_STANCES.has(raw.stance) ||
+      confidence === null ||
+      credibility === null ||
+      verifiedSources === null ||
+      availableAt === null ||
+      typeof raw.summary !== 'string' ||
+      raw.summary.length < 1 ||
+      raw.summary.length > 500
+    ) {
+      return null;
+    }
+
+    evidence.push({
+      source: raw.source,
+      sourceId: raw.sourceId,
+      stance: raw.stance,
+      confidence,
+      credibility,
+      verifiedSources,
+      availableAt,
+      summary: raw.summary,
+    });
+  }
+
+  if (
+    value.sourceState !== 'AVAILABLE' &&
+    (value.status !== 'INSUFFICIENT' || evidenceCount !== 0 || evidence.length !== 0)
+  ) {
+    return null;
+  }
+
+  return {
+    version: 'agent-council-v1',
+    status: value.status,
+    consensusDirection: value.consensusDirection,
+    weightedSupport,
+    weightedOpposition,
+    disagreementScore,
+    evidenceCount,
+    rejectedCount,
+    evidence,
+    sourceState: value.sourceState,
+    evaluatedAt,
+    advisoryOnly: true,
+    executionAuthority: false,
+  };
+}
+
 /**
  * AiSignalService — Safe signal intake service for the AI Signal Engine.
  *
@@ -161,6 +286,13 @@ export class AiSignalService {
    * Opaque candidate.metadata is intentionally excluded from the audit record.
    */
   private buildSafeEvidence(candidate: AiSignalCandidate): Record<string, unknown> {
+    const agentContext = sanitizeAgentContext(candidate.agentContext);
+    if (candidate.agentContext && !agentContext) {
+      this.logger.warn(
+        `Signal ${candidate.signalId} supplied invalid advisory agent context; ignored`,
+      );
+    }
+
     return {
       instrument: candidate.instrument,
       direction: candidate.direction,
@@ -174,6 +306,7 @@ export class AiSignalService {
       ...(typeof candidate.volatilityScore === 'number'
         ? { volatilityScore: candidate.volatilityScore }
         : {}),
+      ...(agentContext ? { agentContext } : {}),
     };
   }
 }

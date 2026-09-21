@@ -1,5 +1,6 @@
 import { createAiDecisionExplorerApi } from '@irexpro/api-client/ai-decision-explorer';
 import type {
+  AiDecisionAgentContextView,
   AiDecisionExplorerView,
   AiDecisionOutcome,
   AiDecisionStage,
@@ -72,6 +73,114 @@ function isNullableScore(value: unknown): value is number | null {
   return value === null || (typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1);
 }
 
+const AGENT_CONTEXT_STATUSES = new Set(['ALIGNED', 'CONFLICT', 'INSUFFICIENT', 'BLOCKED']);
+const AGENT_CONTEXT_DIRECTIONS = new Set(['BUY', 'SELL', 'NEUTRAL']);
+const AGENT_CONTEXT_SOURCE_STATES = new Set(['AVAILABLE', 'UNAVAILABLE', 'NOT_APPLICABLE']);
+const AGENT_CONTEXT_SOURCES = new Set(['QUANT', 'MACRO_NEWS', 'REGIME', 'RISK', 'REFLECTION']);
+const AGENT_CONTEXT_STANCES = new Set(['BUY', 'SELL', 'NEUTRAL', 'BLOCK']);
+
+function isAgentContext(value: unknown): value is AiDecisionAgentContextView {
+  if (!isRecord(value)) return false;
+  if (
+    !hasExactKeys(value, [
+      'version',
+      'status',
+      'consensusDirection',
+      'weightedSupport',
+      'weightedOpposition',
+      'disagreementScore',
+      'evidenceCount',
+      'rejectedCount',
+      'evidence',
+      'sourceState',
+      'evaluatedAt',
+      'advisoryOnly',
+      'executionAuthority',
+    ])
+  ) {
+    return false;
+  }
+
+  if (
+    value.version !== 'agent-council-v1' ||
+    typeof value.status !== 'string' ||
+    !AGENT_CONTEXT_STATUSES.has(value.status) ||
+    typeof value.consensusDirection !== 'string' ||
+    !AGENT_CONTEXT_DIRECTIONS.has(value.consensusDirection) ||
+    typeof value.sourceState !== 'string' ||
+    !AGENT_CONTEXT_SOURCE_STATES.has(value.sourceState) ||
+    value.advisoryOnly !== true ||
+    value.executionAuthority !== false ||
+    typeof value.weightedSupport !== 'number' ||
+    !Number.isFinite(value.weightedSupport) ||
+    value.weightedSupport < 0 ||
+    typeof value.weightedOpposition !== 'number' ||
+    !Number.isFinite(value.weightedOpposition) ||
+    value.weightedOpposition < 0 ||
+    typeof value.disagreementScore !== 'number' ||
+    !Number.isFinite(value.disagreementScore) ||
+    value.disagreementScore < 0 ||
+    value.disagreementScore > 1 ||
+    typeof value.evidenceCount !== 'number' ||
+    !Number.isInteger(value.evidenceCount) ||
+    value.evidenceCount < 0 ||
+    value.evidenceCount > 100 ||
+    typeof value.rejectedCount !== 'number' ||
+    !Number.isInteger(value.rejectedCount) ||
+    value.rejectedCount < 0 ||
+    !isIsoString(value.evaluatedAt) ||
+    !Array.isArray(value.evidence) ||
+    value.evidence.length > 10
+  ) {
+    return false;
+  }
+
+  const evidenceValid = value.evidence.every((item) => {
+    if (!isRecord(item)) return false;
+    return (
+      hasExactKeys(item, [
+        'source',
+        'sourceId',
+        'stance',
+        'confidence',
+        'credibility',
+        'verifiedSources',
+        'availableAt',
+        'summary',
+      ]) &&
+      typeof item.source === 'string' &&
+      AGENT_CONTEXT_SOURCES.has(item.source) &&
+      typeof item.sourceId === 'string' &&
+      item.sourceId.length > 0 &&
+      item.sourceId.length <= 160 &&
+      typeof item.stance === 'string' &&
+      AGENT_CONTEXT_STANCES.has(item.stance) &&
+      typeof item.confidence === 'number' &&
+      Number.isFinite(item.confidence) &&
+      item.confidence >= 0 &&
+      item.confidence <= 1 &&
+      typeof item.credibility === 'number' &&
+      Number.isFinite(item.credibility) &&
+      item.credibility >= 0 &&
+      item.credibility <= 1 &&
+      typeof item.verifiedSources === 'number' &&
+      Number.isInteger(item.verifiedSources) &&
+      item.verifiedSources >= 0 &&
+      item.verifiedSources <= 100 &&
+      isIsoString(item.availableAt) &&
+      typeof item.summary === 'string' &&
+      item.summary.length > 0 &&
+      item.summary.length <= 500
+    );
+  });
+  if (!evidenceValid) return false;
+
+  return !(
+    value.sourceState !== 'AVAILABLE' &&
+    (value.status !== 'INSUFFICIENT' || value.evidenceCount !== 0 || value.evidence.length !== 0)
+  );
+}
+
 function isTimelineEntry(value: unknown): value is AiDecisionTimelineEntryView {
   if (!isRecord(value)) return false;
   if (!hasExactKeys(value, ['stage', 'status', 'code', 'message', 'at'])) return false;
@@ -110,6 +219,7 @@ function isDecision(value: unknown): value is AiDecisionSummaryView {
       'outcome',
       'receivedAt',
       'evidence',
+      'agentContext',
       'risk',
       'execution',
       'timeline',
@@ -165,6 +275,7 @@ function isDecision(value: unknown): value is AiDecisionSummaryView {
     return false;
   }
 
+  if (!(value.agentContext === null || isAgentContext(value.agentContext))) return false;
   if (!(value.execution === null || isTrade(value.execution))) return false;
   return Array.isArray(value.timeline) && value.timeline.every(isTimelineEntry);
 }

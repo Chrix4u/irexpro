@@ -10,6 +10,33 @@ export type AiDecisionStage = 'SIGNAL' | 'ELIGIBILITY' | 'RISK' | 'EXECUTION';
 
 export type AiDecisionStageStatus = 'RECEIVED' | 'APPROVED' | 'REJECTED' | 'SUCCEEDED' | 'FAILED';
 
+export interface AiDecisionAgentContextEvidenceDto {
+  source: 'QUANT' | 'MACRO_NEWS' | 'REGIME' | 'RISK' | 'REFLECTION';
+  sourceId: string;
+  stance: 'BUY' | 'SELL' | 'NEUTRAL' | 'BLOCK';
+  confidence: number;
+  credibility: number;
+  verifiedSources: number;
+  availableAt: string;
+  summary: string;
+}
+
+export interface AiDecisionAgentContextDto {
+  version: 'agent-council-v1';
+  status: 'ALIGNED' | 'CONFLICT' | 'INSUFFICIENT' | 'BLOCKED';
+  consensusDirection: 'BUY' | 'SELL' | 'NEUTRAL';
+  weightedSupport: number;
+  weightedOpposition: number;
+  disagreementScore: number;
+  evidenceCount: number;
+  rejectedCount: number;
+  evidence: AiDecisionAgentContextEvidenceDto[];
+  sourceState: 'AVAILABLE' | 'UNAVAILABLE' | 'NOT_APPLICABLE';
+  evaluatedAt: string;
+  advisoryOnly: true;
+  executionAuthority: false;
+}
+
 export interface AiDecisionEvidenceDto {
   instrument: string | null;
   direction: 'BUY' | 'SELL' | null;
@@ -43,6 +70,7 @@ export interface AiDecisionSummaryDto {
   outcome: AiDecisionOutcome;
   receivedAt: string;
   evidence: AiDecisionEvidenceDto;
+  agentContext: AiDecisionAgentContextDto | null;
   risk: {
     decision: 'APPROVED' | 'REJECTED' | 'UNKNOWN';
     rejectionCode: string | null;

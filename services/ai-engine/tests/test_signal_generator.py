@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from app.domain.agents.snapshot import AgentContextSnapshot
 from app.domain.market_data.ohlcv_service import OHLCVService
 from app.domain.market_data.providers.mock_provider import MockMarketDataProvider
 from app.domain.market_data.redis_cache import OHLCVRedisCache
@@ -121,6 +122,67 @@ async def test_signal_generator_creates_valid_candidate_for_high_confidence():
     assert result.signal.suggested_stop_loss > 0
     assert result.signal.suggested_take_profit > 0
     assert result.signal.generated_at.tzinfo is not None
+
+
+@pytest.mark.asyncio
+async def test_signal_generator_attaches_advisory_agent_context_when_available():
+    gen = make_generator()
+
+    mock_model = MagicMock()
+    mock_model.get_model_version.return_value = "baseline-xgboost-v0.1.0"
+    mock_model.get_model_metadata.return_value = {
+        "version": "baseline-xgboost-v0.1.0",
+        "loaded": False,
+        "mode": "heuristic_placeholder",
+    }
+    mock_model.predict_signal.return_value = ModelPrediction(
+        direction="BUY",
+        confidence_score=0.80,
+        model_version="baseline-xgboost-v0.1.0",
+        features_used=["price_vs_ma20"],
+        raw_scores={"price_vs_ma20": 0.005},
+        explainability={"method": "mock"},
+    )
+
+    registry = MagicMock()
+    registry.get_active_model.return_value = mock_model
+    governance = MagicMock()
+    governance.approved_for_paper = True
+    registry.get_governance.return_value = governance
+    gen._registry = registry
+
+    snapshot = AgentContextSnapshot(
+        status="INSUFFICIENT",
+        consensus_direction="NEUTRAL",
+        weighted_support=0.0,
+        weighted_opposition=0.0,
+        disagreement_score=0.0,
+        evidence_count=0,
+        rejected_count=0,
+        evidence=[],
+        source_state="AVAILABLE",
+        evaluated_at=datetime.now(UTC),
+    )
+    context_service = MagicMock()
+    context_service.snapshot_for = AsyncMock(return_value=snapshot)
+    gen._agent_context_service = context_service
+
+    result = await gen.generate(
+        user_id="u1",
+        trading_session_id="s1",
+        broker_connection_id="c1",
+        instrument="EURUSD",
+        timeframe="H1",
+    )
+
+    assert result.generated is True
+    assert result.signal is not None
+    assert result.signal.agent_context == snapshot
+    context_service.snapshot_for.assert_awaited_once_with(
+        instrument="EURUSD",
+        quant_direction="BUY",
+        quant_confidence=0.80,
+    )
 
 
 @pytest.mark.asyncio
