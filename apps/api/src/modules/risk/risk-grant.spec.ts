@@ -421,6 +421,14 @@ describe('RiskGrant issuance + exact-decimal boundaries (Round 5, 50-b)', () => 
       dailyRiskPeriod as never,
       {} as never,
       {} as never,
+      // Production-LIVE completion round (Phase 9): continuous LIVE gates
+      // (mocks — this suite exercises the PAPER grant contract).
+      {
+        assertUserEligibleForLiveNewExposure: jest
+          .fn()
+          .mockResolvedValue({ eligible: true, countryCode: 'US' }),
+      } as never,
+      { isLiveRegionAvailable: jest.fn().mockReturnValue(true) } as never,
       { get: jest.fn() } as never,
     );
   });

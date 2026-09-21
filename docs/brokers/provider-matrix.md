@@ -49,11 +49,11 @@ follows (nothing was lost, only re-expressed):
 | Sprint 56 status | Merged vocabulary |
 | --- | --- |
 | IMPLEMENTED (paper) | SUPPORTED — DEMO-only by design; production-LIVE verification not applicable |
-| IMPLEMENTED (MetaTrader, LIVE retained) | SUPPORTED + production-LIVE **VERIFIED** (retained production route) |
+| IMPLEMENTED (MetaTrader, LIVE retained) | SUPPORTED + production-LIVE evidence **LEGACY** (`LEGACY_VERIFIED` — LIVE fail-closed until certified under the current gate) |
 | IMPLEMENTED (OANDA) | BETA + production-LIVE UNVERIFIED |
 | IMPLEMENTED, partner-blocked (cTrader + aliases) | BETA + production-LIVE UNVERIFIED + **partner-approval blocker** (see per-broker record) |
 | DEMO VERIFIED | Evidence level, not a status: harness-attested DEMO evidence recorded in this matrix + `demoValidated` on the connection |
-| PRODUCTION LIVE VERIFIED | `productionLiveVerification.status = VERIFIED` (operator-attested evidence) |
+| PRODUCTION LIVE VERIFIED | Derived `certificationState = CERTIFIED` — a complete current `HARNESS_CERTIFIED` record (raw `status: VERIFIED` alone renders as LEGACY_VERIFIED and is LIVE-ineligible) |
 | PARTNER APPROVAL REQUIRED | `PARTNER_APPROVAL_REQUIRED` catalog status, or the partner-approval blocker on a BETA entry |
 | RESEARCH REQUIRED | RESEARCH_REQUIRED (doc-level; catalog `NOT_STARTED` once an entry exists) |
 | UNSUPPORTED | UNAVAILABLE — the unsupported-with-reasons set below |
@@ -62,7 +62,7 @@ follows (nothing was lost, only re-expressed):
 
 | Broker / Platform | Connection route | Adapter in repo | Demo | Live | Auth model | Status | Test coverage |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| MetaTrader 4/5 (via MetaApi) | METATRADER | `metatrader.adapter.ts` | ✅ | ✅ | API token (`METAAPI_TOKEN`) | **SUPPORTED** — production-LIVE **VERIFIED** (`evidenceRef: production operation — MetaApi bridge, live in production`) | Adapter, margin, order-state, schema specs + shared contract suite + error-redaction tests |
+| MetaTrader 4/5 (via MetaApi) | METATRADER | `metatrader.adapter.ts` | ✅ | ❌ fail-closed until certified | API token (`METAAPI_TOKEN`) | **SUPPORTED** — production-LIVE evidence is **LEGACY** (`LEGACY_VERIFIED`, `evidenceRef: production operation — MetaApi bridge, live in production`): real history, but LIVE is fail-closed under the CERTIFIED-only runtime gate until a genuine operator certification run (`docs/brokers/live-certification-runbook.md`) | Adapter, margin, order-state, schema specs + shared contract suite + error-redaction tests |
 | iRexPro Paper Broker | PAPER | `paper-broker.adapter.ts` | ✅ | ❌ (by design) | Session (internal) | **SUPPORTED** | Paper adapter + contract suite + always-on verification harness |
 | OANDA (v20 REST) | NATIVE_API | `oanda/oanda.adapter.ts` (Sprint 51 PR-7) | ✅ | ❌ fail-closed | Personal access token (encrypted at rest) | **BETA** — production-LIVE **UNVERIFIED** | Shared contract suite + 107 unit/contract tests; live verification pending (see `oanda-v20-adapter.md`) |
 | cTrader Open API (universal engine) | CTRADER | `adapters/ctrader/` (Sprint 56) | ✅ | ❌ fail-closed | OAuth 2.0 (operator app + user token) | **BETA** — production-LIVE **UNVERIFIED**, **partner-approval-blocked** for real accounts | cTrader suite: message-types, client protocol, adapter mapping, fake-transport + shared contract suite (150 tests at Sprint 56 implementation) |
@@ -135,15 +135,32 @@ tests never produce DEMO-VERIFIED or LIVE-VERIFIED evidence**:
 ### Production-LIVE verification (registry semantics)
 
 `BrokerProviderRegistryService.isProductionLiveEligible(id)` is true only
-when the entry is in the catalog, has a registered adapter, and carries
-`productionLiveVerification.status === 'VERIFIED'`. Otherwise:
+when the entry is in the catalog, has a registered adapter, and its derived
+`certificationState` is **`CERTIFIED`** — i.e. `productionLiveVerification`
+carries a complete current `HARNESS_CERTIFIED` record (valid `verifiedAt`,
+sanitized `evidenceRef`, and `certificationRunRef` matching
+`<uuid>@sha256:<64-hex>`). A raw `status: 'VERIFIED'` flag alone is NOT
+sufficient — legacy attestation (`LEGACY_VERIFIED`) is informational and
+remains LIVE-ineligible. Otherwise:
 
-- `createConnection` with `accountType: LIVE` — `ForbiddenException`
-  *"Broker X is not production-LIVE verified — LIVE connections are
-  fail-closed (BETA is DEMO-only)"*
-- `enableLiveTrading` — `ForbiddenException` *"… LIVE trading is fail-closed
-  (BETA is DEMO-only)"* (also requires a `demoValidated` DEMO connection,
-  CONNECTED state, and explicit LIVE environment support).
+- `createConnection` with `accountType: LIVE` — `ForbiddenException` naming
+  the truthful derived state (a `LEGACY_VERIFIED` broker gets *"carries only
+  legacy production evidence (LEGACY_VERIFIED) — a current certification run
+  (CERTIFIED) is required"*; a `NOT_CERTIFIED` broker gets *"not
+  production-LIVE certified — LIVE connections are fail-closed (BETA is
+  DEMO-only)"*)
+- `enableLiveTrading` — the same fail-closed gate (also requires a
+  `demoValidated` DEMO connection, CONNECTED state, and explicit LIVE
+  environment support).
+
+**Production-LIVE completion round:** every registry entry additionally
+materializes a `liveReadiness` summary (`eligible`, ordered `blockedReasons`
+— `LIVE_UNSUPPORTED` / `ADAPTER_UNAVAILABLE` / `PARTNER_APPROVAL_REQUIRED` /
+`CERTIFICATION_REQUIRED` — plus `partnerApprovalRequired` and
+`liveUnavailableRegions`), and `isLiveRegionAvailable(brokerId, country)`
+enforces provider LIVE region availability at the risk pipeline's LIVE gate
+(`PROVIDER_REGION_UNAVAILABLE`). Users see WHY LIVE is unavailable before
+they attempt it — never a bare false and never only on click.
 
 `isConnectable` is unchanged (adapter presence): a BETA provider remains
 connectable for **DEMO** use — the two facts are rendered distinctly by UI
@@ -164,16 +181,18 @@ entry carries a derived `certificationState` plus the raw provenance fields:
 NOT catalog states — they are RUN-level outcomes carried by the harness
 evidence (`LiveCertificationEvidence.certificationResult`). The catalog
 records only completed certifications; a pending or persistence-failed run
-flips nothing. Legacy attestation is never silently upgraded (and never
-silently revoked — eligibility semantics are unchanged); UI/API render the
-provenance distinctly so an operator can never mistake a legacy attestation
-for a current protocol certification.
+flips nothing. Legacy attestation is never silently upgraded and never
+silently revoked; under the Round-7.1 runtime rule a `LEGACY_VERIFIED`
+provider is **LIVE-ineligible until re-certified** (the eligibility
+semantics are STRICTER than the pre-Round-7.1 "raw VERIFIED passes" rule —
+deliberately). UI/API render the provenance distinctly so an operator can
+never mistake a legacy attestation for a current protocol certification.
 
 Current evidence state:
 
 | Broker | `productionLiveVerification` | Effect |
 | --- | --- | --- |
-| metatrader5 | `VERIFIED` + `certifiedVia: LEGACY_ATTESTATION` (→ `LEGACY_VERIFIED`), `verifiedAt: null`, `evidenceRef: "production operation — MetaApi bridge, live in production"` — historical production-operation evidence, NOT a Round-7 protocol certification; no `certificationRunRef` exists | LIVE allowed (all other gates still apply; a future genuine certification run may upgrade provenance to `HARNESS_CERTIFIED`) |
+| metatrader5 | `VERIFIED` + `certifiedVia: LEGACY_ATTESTATION` (→ `LEGACY_VERIFIED`), `verifiedAt: null`, `evidenceRef: "production operation — MetaApi bridge, live in production"` — historical production-operation evidence, NOT a Round-7 protocol certification; no `certificationRunRef` exists | **LIVE fail-closed** under the CERTIFIED-only runtime gate: LIVE connections + enable-live are rejected until a genuine operator certification run upgrades the entry to `HARNESS_CERTIFIED` (see `docs/brokers/live-certification-runbook.md`); DEMO connectable |
 | oanda | `UNVERIFIED` | LIVE connections + enable-live fail closed; DEMO connectable |
 | paper-broker | not set (materialized `UNVERIFIED`) — LIVE unsupported by design (DEMO-only environments array) | LIVE already rejected by the environment gate |
 | ctrader, pepperstone-ctrader, icmarkets-ctrader | `UNVERIFIED` — additionally partner-approval-blocked (below) | DEMO connectable once OAuth app credentials are supplied; LIVE fail-closed |
@@ -217,7 +236,7 @@ LIVE OANDA connection can be created or enabled — fail closed, by code.
 
 ## Per-broker records
 
-### MetaTrader 4/5 via MetaApi (`metatrader5`) — **SUPPORTED** · production-LIVE **VERIFIED**
+### MetaTrader 4/5 via MetaApi (`metatrader5`) — **SUPPORTED** · production-LIVE evidence **LEGACY** (`LEGACY_VERIFIED` — LIVE fail-closed until certified)
 
 | Field | Value |
 | --- | --- |
@@ -226,13 +245,13 @@ LIVE OANDA connection can be created or enabled — fail closed, by code.
 | Official API | [MetaApi cloud SDK](https://metaapi.cloud) (platform token + per-user account UUID) |
 | Auth model | API_TOKEN — platform-level `METAAPI_TOKEN`; user-level account UUID in AES-256-GCM-encrypted credentials |
 | DEMO support | ✅ (account-type detection `type.includes('DEMO')`) |
-| LIVE support | ✅ — production-LIVE **VERIFIED**: the retained production route (live-proven in production via the MetaApi bridge). This is an operator-evidenced retention, not a harness-attested verification — the harness path exists for a formal run. |
+| LIVE support | Environment supported, but **LIVE is fail-closed** under the CERTIFIED-only runtime gate: the retained evidence is LEGACY attestation (`LEGACY_VERIFIED`), not a harness-certified run. A genuine operator certification run (`docs/brokers/live-certification-runbook.md`) is REQUIRED before any LIVE use. |
 | Ghana eligibility | Broker-specific (each MT broker's own onboarding); MT itself imposes no regional constraint |
 | Automated trading | Per broker + account (MT EAs/algo trading allowed by brokers generally) |
 | Partner approval | MetaApi subscription (existing) |
-| Capabilities | As declared in `BROKER_CATALOG`: account/balance/position/order/history reads, market data + streaming, DEMO/LIVE, order placement/modification, close-all, margin calculation. Current implementation is market-order focused — no pending LIMIT/STOP order placement yet. |
+| Capabilities | As declared in `BROKER_CATALOG`: account/balance/position/order/history reads, market data, DEMO/LIVE, order placement/modification, close-all, margin calculation. Orders: MARKET/LIMIT/STOP/STOP_LIMIT placement (Sprint 50), pending cancel (Round 7), working-pending-order MODIFY + platform-honest MT4 capability narrowing (production-LIVE completion round Phase 4). Money fields fail closed on missing provider values (never fabricated zeros). |
 | Test evidence | Adapter + margin + order-state + connection/schema specs; shared §AN contract suite; Sprint 56 error-redaction hardening (provider errors pass through `redactString` — credential markers never leak) |
-| Remaining blockers | None for current scope; pending-order placement types are future adapter work |
+| Remaining blockers | LIVE use blocked on the certification run (LEGACY evidence is LIVE-ineligible); no other adapter blockers |
 
 ### iRexPro Paper Broker (`paper-broker`) — **SUPPORTED** · DEMO only
 
@@ -263,7 +282,7 @@ LIVE OANDA connection can be created or enabled — fail closed, by code.
 | Auth model | `Authorization: Bearer <personal access token>` (user-level, from the fxTrade account portal; stored AES-256-GCM-encrypted) |
 | DEMO support | ✅ `api-fxpractice.oanda.com` (practice token) |
 | LIVE support | `api-fxtrade.oanda.com` exists but LIVE is **fail-closed** (`productionLiveVerification: UNVERIFIED`). Directive: OANDA stays UNVERIFIED until genuine provider verification evidence exists — passing unit/contract tests NEVER flips this. |
-| Ghana eligibility | ⚠️ **Compliance flag**: OANDA's region selector (read live) does not list Ghana; African countries route to OANDA Global Markets Ltd (BVI, FSC SIBA/L/20/1130) — and v20 API accounts are documented as unavailable to the Global Markets/TMS divisions. Ghana-resident OANDA LIVE onboarding is effectively unavailable; practice tokens remain usable for development. Do not promise OANDA LIVE to Ghana-based users. |
+| Ghana eligibility | ⚠️ **Compliance flag**: OANDA's region selector (read live) does not list Ghana; African countries route to OANDA Global Markets Ltd (BVI, FSC SIBA/L/20/1130) — and v20 API accounts are documented as unavailable to the Global Markets/TMS divisions. Ghana-resident OANDA LIVE onboarding is effectively unavailable; practice tokens remain usable for development. Do not promise OANDA LIVE to Ghana-based users. **Enforced server-side** since the production-LIVE completion round: the OANDA catalog entry carries `liveReadiness.liveUnavailableRegions: ['GH']`, surfaced to clients via the registry, and the risk pipeline's LIVE gate rejects GH-based LIVE new exposure with `PROVIDER_REGION_UNAVAILABLE` (fail-closed). |
 | Automated trading | ✅ (API by design; 120 req/s per IP documented) |
 | Partner approval | none (personal token from the account portal) |
 | Capabilities | As declared in `BROKER_CATALOG` (account/balance/position/order/history reads, market data, REST, API_TOKEN, DEMO/LIVE, order placement/modification, close-all, margin calculation). Honest omissions: no `MARKET_DATA_STREAMING` (REST polling; v20 SSE streams documented but unused), no stop-limit order type (v20 retail FX spot has none — guard fails closed). `clientExtensions.id` carries the idempotency key (duplicate rejection mapped to `DUPLICATE_ORDER`); the local `idempotency_key` + advisory lock stays authoritative. |
@@ -310,7 +329,8 @@ LIVE OANDA connection can be created or enabled — fail closed, by code.
 | Execution authority (correction round 5 — #295/#298/#301/#361) | TradingSession is the authoritative execution target (executionMode + authorityGeneration persisted; one ACTIVE session per user enforced by partial unique; exact-connection binding — no latest-active discovery anywhere). RiskService issues a durable, immutable, short-TTL, single-use RiskGrant binding signal digest + session generation + mode + exact connection + provider identity/verification fingerprint + risk-profile version + control revisions + exact order payload digest. The FINAL DISPATCH BOUNDARY re-verifies every fact from CURRENT durable state immediately before a NEW-exposure provider call and consumes the grant atomically — exactly one dispatch winner; zero provider calls on any drift (session ended, mode changed, connection suspended, credential rotation, kill switch, verification downgrade, grant consumed by a replica). |
 | Risk correctness (correction round 5 — #296/#313/#316/#317/#330/#331) | ExactDecimal (fixed-scale BigInt, strict fail-closed parse, exact comparisons, conservative UP/DOWN division) replaces binary floats in all safety-critical math; risk engine has zero :SKIPPED continuations (query failures reject RISK_ENGINE_QUERY_FAILED); daily loss uses the session opening balance; drawdown uses a monotonically CAS-maintained peak equity; maxTradeRiskPercent (risk-at-stop) and maxLeverageAllowed (effective order leverage) enforced; MARKET SL/TP validated against fresh connection-scoped quotes (BUY ask / SELL bid); LOW_LIQUIDITY rejected per profile; unknown regimes fail closed. |
 | Durable linking + lifecycle safety (correction round 5 — #332/#302/#314/#315/#303) | OAuth connection linking is idempotent by server-computed logical account key (cTrader aliases canonicalize to one technology; per-user partial unique at INSERT; post-commit audit/event work rides a durable outbox — an audit failure can never make a committed connection look uncommitted; retries ADOPT the existing connection). Signals carry durable (userId, signalId) identity with digest conflict detection + freshness/skew gates. Trade transitions are expected-state CAS (late provider responses never regress reconciled terminal truth). RECONCILIATION_PENDING retains exposure reservation until definitively resolved. Kill switch blocks NEW/INCREASE exposure only — close/cancel/reconcile/risk-reducing remain available. |
-| Remaining blockers | 1) Open API application approval + operator-supplied OAuth app credentials; 2) DEMO verification run with a real user token; 3) LIVE verification evidence before LIVE is selectable; 4) GitHub Actions restore + exact-head CI/security matrix (ZERO runs on `64aaa96` — CI truth) |
+| Remaining blockers | 1) Open API application approval + operator-supplied OAuth app credentials; 2) DEMO verification run with a real user token; 3) LIVE verification evidence before LIVE is selectable |
+| OAuth provider-shape honesty (production-LIVE completion round, Phase 6) | (a) **No provider-side token revocation**: Spotware's Open API exposes no revocation endpoint — refresh tokens are non-expiring until the user re-authorizes. Platform disconnect is therefore the security boundary (authorization REVOKED + trading-authority generation bump + credential ciphertext zeroed + sessions/leases released, all fail-closed server-side); the provider token itself remains live at Spotware until re-auth — an operator running the platform must treat cTrader credential rotations accordingly. (b) **`client_secret` in the token-endpoint query string**: this is Spotware's documented GET endpoint shape, not a platform choice — any intermediary proxy (nginx/VPS) in front of outbound traffic must exclude token-endpoint URLs from access logging. (c) **No PKCE / no `state` parameter** in the provider flow — correlation is implemented through operator-registered callback slots + durable single-use flow rows (documented above), never through client-side state. All three are provider-shape constraints recorded honestly; none weakens the platform-side fail-closed discipline. |
 
 ### Pepperstone via cTrader (`pepperstone-ctrader`) — **BETA** (universal engine alias)
 
@@ -414,6 +434,35 @@ Corrections landed on `feat/broker-completion` after the architect's review
 | Paper broker | n/a (internal simulator) |
 
 ---
+
+## Additional broker program — classification (production-LIVE completion round, Phase 7)
+
+Directive Phase 7 classification of the additional-broker candidates, using
+the five-label vocabulary. HONESTY RULE: no adapter or catalog entry exists
+for any of these providers; a provider with no legitimate programmatic route
+stays UNAVAILABLE; nothing is implemented to inflate the broker count.
+Current official-API research for each candidate lives in the per-broker
+records below (research dates + source log at the bottom of this file) and
+MUST be re-verified against the provider's current official docs before any
+implementation (Directive §AA).
+
+| Provider | Classification | Basis (honest) |
+| --- | --- | --- |
+| MetaTrader via MetaApi (`metatrader5`) | **SUPPORTED** (adapter exists) + **CERTIFICATION_REQUIRED** for LIVE | Full adapter, contract-tested; LIVE evidence LEGACY → fail-closed until the operator certification run |
+| iRexPro Paper Broker | **SUPPORTED** (DEMO-only by design) | Internal simulation adapter |
+| OANDA v20 | **BETA** (adapter exists) + **CERTIFICATION_REQUIRED** + region-blocked for GH LIVE | Adapter implemented + contract-tested; practice-path operator verification still pending; LIVE fail-closed |
+| cTrader (`ctrader`) | **BETA** (adapter exists) + **PARTNER_APPROVAL_REQUIRED** (Spotware app approval) | Adapter implemented + contract-tested; real-account use blocked on partner approval before certification can even run |
+| Pepperstone (`pepperstone-ctrader`) | **BETA** + **PARTNER_APPROVAL_REQUIRED** (Spotware + Pepperstone broker-side) | Shares the universal engine; identity-scoped certification REQUIRED separately — one broker's certification never authorizes another |
+| IC Markets (`icmarkets-ctrader`) | **BETA** + **PARTNER_APPROVAL_REQUIRED** (Spotware + IC Markets broker-side) | Same universal engine, separate identity-scoped evidence required |
+| Deriv | **RESEARCH_REQUIRED** | Top additional candidate (Ghana first-party verified) — no adapter; current official API research required before build |
+| IG | **RESEARCH_REQUIRED** | No adapter; session-token API model researched; Ghana availability flagged in research notes |
+| Saxo OpenAPI | **RESEARCH_REQUIRED** | No adapter; OAuth2 model researched |
+| Interactive Brokers | **RESEARCH_REQUIRED** | No adapter; Client-Portal/TWS/FIX gateway model researched — documented poor fit for unattended server-side operation |
+| FXCM | **RESEARCH_REQUIRED** | No adapter; SDK/FIX model researched |
+| FP Markets | **RESEARCH_REQUIRED** | No adapter; cTrader/MetaTrader routes could reuse existing engines after research + partner approval |
+| Dukascopy | **RESEARCH_REQUIRED** | No adapter; research record below |
+| LMAX Global | **RESEARCH_REQUIRED** | No adapter; professional-tier constraints researched |
+| Unsupported/excluded set | **UNAVAILABLE** | Providers with no legitimate programmatic route or conflicting ToS — see the excluded set below; they stay unavailable, no fake adapters |
 
 ## Researched-only brokers (no adapter, no catalog entry — RESEARCH_REQUIRED)
 
@@ -533,8 +582,11 @@ updated to match the evidence (never the reverse).
    implementation)~~ ✅ implemented this sprint — real-account use blocked on
    partner approval (operator-supplied OAuth app credentials), verification
    pending
-6. MetaTrader remains the supported production-LIVE route (VERIFIED —
-   retained production route)
+6. MetaTrader is the retained production route whose LIVE evidence is
+   LEGACY (`LEGACY_VERIFIED`) — LIVE is fail-closed under the CERTIFIED-only
+   gate until the operator completes a genuine certification run
+   (`docs/brokers/live-certification-runbook.md`); it remains the first
+   certification candidate
 7. Next candidates: **Deriv** (top research pick, Ghana first-party
    verified), then IG / Saxo / IBKR per the research records above
 

@@ -1,5 +1,9 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { BrokerAccountSnapshot } from '../broker/entities/broker-account-snapshot.entity';
+import { BrokerConnection } from '../broker/entities/broker-connection.entity';
+import { Order } from '../execution/orders/order.entity';
+import { ReconciliationRun } from '../execution/reconciliation/entities/reconciliation-run.entity';
 import { Trade } from '../execution/entities/trade.entity';
 import { TradingSession } from '../execution/entities/trading-session.entity';
 import { MetricsController } from './metrics.controller';
@@ -9,10 +13,19 @@ import { MetricsService } from './metrics.service';
  * Round 7 (P1 metrics — audit R7-audit-C finding A6): the dependency-free,
  * in-process metrics pipeline (counters + gauges + /metrics exposition).
  *
- * PURE LEAF MODULE — imports nothing but the TypeOrm repository registration
- * for the two on-scrape DB-backed gauges (TradingSession/Trade entities are
- * leaf entity files; no service, no module imports → no import cycle with
+ * PURE LEAF MODULE — imports nothing but the TypeOrm repository
+ * registrations for the on-scrape DB-backed gauges (TradingSession, Trade,
+ * BrokerConnection, BrokerAccountSnapshot, ReconciliationRun and Order are
+ * LEAF ENTITY FILES — no service, no module imports → no import cycle with
  * ANY consumer).
+ *
+ * On-scrape gauge inventory (all computed by MetricsController, fail-open):
+ *  - irexpro_live_sessions_active (TradingSession)
+ *  - irexpro_open_trades (Trade)
+ *  - irexpro_broker_connections (BrokerConnection, authorizationStatus)
+ *  - irexpro_broker_snapshot_staleness_seconds (BrokerAccountSnapshot)
+ *  - irexpro_reconciliation_last_cycle_age_seconds (ReconciliationRun)
+ *  - irexpro_reconciliation_pending_orders (Order)
  *
  * DI DECISION (how instrumented services reach MetricsService):
  *  Consumer services (strategy-orchestrator, risk, risk-grant,
@@ -35,7 +48,16 @@ import { MetricsService } from './metrics.service';
  *      Metrics can never break trading control flow.
  */
 @Module({
-  imports: [TypeOrmModule.forFeature([TradingSession, Trade])],
+  imports: [
+    TypeOrmModule.forFeature([
+      TradingSession,
+      Trade,
+      BrokerConnection,
+      BrokerAccountSnapshot,
+      ReconciliationRun,
+      Order,
+    ]),
+  ],
   controllers: [MetricsController],
   providers: [MetricsService],
   exports: [MetricsService],

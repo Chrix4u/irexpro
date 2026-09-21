@@ -172,6 +172,7 @@ describe('BrokerService authorization transitions — real PostgreSQL concurrenc
       isConnectable: jest.fn().mockReturnValue(true),
       // Phase H: these fixtures are metatrader5 (the VERIFIED provider).
       isProductionLiveEligible: jest.fn().mockReturnValue(true),
+      getEntry: jest.fn().mockReturnValue(null),
     } as unknown as BrokerProviderRegistryService;
     const encryption = {
       decrypt: jest.fn().mockReturnValue({ accountId: 'acc-1' }),

@@ -5,6 +5,7 @@ import {
   BrokerConnectionRoute,
   BrokerDefinition,
   deriveProviderCertificationState,
+  LiveReadinessBlockedReason,
   ProviderCertificationState,
 } from './broker-definition';
 import { BrokerCapability } from './broker-capability.enum';
@@ -41,6 +42,19 @@ export interface BrokerRegistryEntry {
   };
   /** Top-level derived certification state for web/admin/mobile consumers. */
   certificationState: ProviderCertificationState;
+  /**
+   * Production-LIVE completion round (Phase 15): always-materialized
+   * live-readiness summary — `eligible` mirrors the runtime gate and
+   * `blockedReasons` explains WHY LIVE is unavailable while it is
+   * unavailable (never a bare false; a user never discovers impossibility
+   * only on click).
+   */
+  liveReadiness: {
+    eligible: boolean;
+    blockedReasons: LiveReadinessBlockedReason[];
+    partnerApprovalRequired: boolean;
+    liveUnavailableRegions: string[];
+  };
   connectionRoutes: BrokerConnectionRoute[];
   capabilities: BrokerCapability[];
   authenticationType: BrokerDefinition['authenticationType'];
@@ -82,6 +96,24 @@ export class BrokerProviderRegistryService {
 
       const certificationState = deriveProviderCertificationState(entry.productionLiveVerification);
 
+      const liveEnvironmentSupported = entry.environments.includes('LIVE');
+      const blockedReasons: LiveReadinessBlockedReason[] = [];
+      if (!liveEnvironmentSupported) {
+        blockedReasons.push('LIVE_UNSUPPORTED');
+      } else {
+        if (!adapterAvailable) {
+          blockedReasons.push('ADAPTER_UNAVAILABLE');
+        }
+        if (entry.liveReadiness?.partnerApprovalRequired === true) {
+          blockedReasons.push('PARTNER_APPROVAL_REQUIRED');
+        }
+        if (certificationState !== 'CERTIFIED') {
+          blockedReasons.push('CERTIFICATION_REQUIRED');
+        }
+      }
+      const liveEligible =
+        liveEnvironmentSupported && adapterAvailable && certificationState === 'CERTIFIED';
+
       return {
         id: entry.id,
         name: entry.name,
@@ -96,6 +128,12 @@ export class BrokerProviderRegistryService {
           certificationState,
         },
         certificationState,
+        liveReadiness: {
+          eligible: liveEligible,
+          blockedReasons,
+          partnerApprovalRequired: entry.liveReadiness?.partnerApprovalRequired === true,
+          liveUnavailableRegions: [...(entry.liveReadiness?.liveUnavailableRegions ?? [])],
+        },
         connectionRoutes: [...entry.connectionRoutes],
         capabilities: [...entry.capabilities],
         authenticationType: entry.authenticationType,
@@ -131,6 +169,22 @@ export class BrokerProviderRegistryService {
   isProductionLiveEligible(brokerId: string): boolean {
     const entry = this.getEntry(brokerId);
     return entry !== null && entry.adapterAvailable && entry.certificationState === 'CERTIFIED';
+  }
+
+  /**
+   * Production-LIVE completion round (Phase 5/9): region availability for a
+   * SPECIFIC user. Fails closed for a blocked country; a null/unknown country
+   * cannot be evaluated here and is left to the profile-completeness gates
+   * that always precede LIVE exposure (a user without a country cannot
+   * complete onboarding). Unknown brokers fail closed (no LIVE region claim).
+   */
+  isLiveRegionAvailable(brokerId: string, countryCode: string | null): boolean {
+    const entry = this.getEntry(brokerId);
+    if (entry === null) return false;
+    if (!countryCode) return true;
+    const normalized = countryCode.trim().toUpperCase();
+    if (!normalized) return true;
+    return !entry.liveReadiness.liveUnavailableRegions.includes(normalized);
   }
 
   /** Capability query (Directive §M) — never guess from broker name. */
