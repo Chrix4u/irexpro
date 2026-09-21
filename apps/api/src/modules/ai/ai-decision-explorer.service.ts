@@ -5,6 +5,7 @@ import { AuditService } from '../audit/audit.service';
 import { Trade } from '../execution/entities/trade.entity';
 import { ExecutionReadService } from '../execution/execution-read.service';
 import {
+  AiDecisionAgentContextDto,
   AiDecisionExplorerResponseDto,
   AiDecisionOutcome,
   AiDecisionStageStatus,
@@ -20,6 +21,136 @@ function metadataString(log: AuditLog, key: string): string | null {
 function metadataNumber(log: AuditLog, key: string): number | null {
   const value = log.metadata?.[key];
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function finiteNumber(value: unknown, min = 0, max = Number.POSITIVE_INFINITY): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max
+    ? value
+    : null;
+}
+
+function integerNumber(value: unknown, min = 0, max = Number.MAX_SAFE_INTEGER): number | null {
+  return typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= min &&
+    value <= max
+    ? value
+    : null;
+}
+
+function isoString(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 && !Number.isNaN(Date.parse(value))
+    ? value
+    : null;
+}
+
+function metadataAgentContext(log: AuditLog): AiDecisionAgentContextDto | null {
+  const raw = log.metadata?.agentContext;
+  if (!isRecord(raw)) return null;
+
+  const statuses = new Set(['ALIGNED', 'CONFLICT', 'INSUFFICIENT', 'BLOCKED']);
+  const directions = new Set(['BUY', 'SELL', 'NEUTRAL']);
+  const sourceStates = new Set(['AVAILABLE', 'UNAVAILABLE', 'NOT_APPLICABLE']);
+  const sources = new Set(['QUANT', 'MACRO_NEWS', 'REGIME', 'RISK', 'REFLECTION']);
+  const stances = new Set(['BUY', 'SELL', 'NEUTRAL', 'BLOCK']);
+
+  if (
+    raw.version !== 'agent-council-v1' ||
+    typeof raw.status !== 'string' ||
+    !statuses.has(raw.status) ||
+    typeof raw.consensusDirection !== 'string' ||
+    !directions.has(raw.consensusDirection) ||
+    typeof raw.sourceState !== 'string' ||
+    !sourceStates.has(raw.sourceState) ||
+    raw.advisoryOnly !== true ||
+    raw.executionAuthority !== false
+  ) {
+    return null;
+  }
+
+  const weightedSupport = finiteNumber(raw.weightedSupport);
+  const weightedOpposition = finiteNumber(raw.weightedOpposition);
+  const disagreementScore = finiteNumber(raw.disagreementScore, 0, 1);
+  const evidenceCount = integerNumber(raw.evidenceCount, 0, 100);
+  const rejectedCount = integerNumber(raw.rejectedCount);
+  const evaluatedAt = isoString(raw.evaluatedAt);
+  if (
+    weightedSupport === null ||
+    weightedOpposition === null ||
+    disagreementScore === null ||
+    evidenceCount === null ||
+    rejectedCount === null ||
+    evaluatedAt === null ||
+    !Array.isArray(raw.evidence) ||
+    raw.evidence.length > 10
+  ) {
+    return null;
+  }
+
+  const evidence: AiDecisionAgentContextDto['evidence'] = [];
+  for (const item of raw.evidence) {
+    if (!isRecord(item)) return null;
+    const confidence = finiteNumber(item.confidence, 0, 1);
+    const credibility = finiteNumber(item.credibility, 0, 1);
+    const verifiedSources = integerNumber(item.verifiedSources, 0, 100);
+    const availableAt = isoString(item.availableAt);
+    if (
+      typeof item.source !== 'string' ||
+      !sources.has(item.source) ||
+      typeof item.sourceId !== 'string' ||
+      item.sourceId.length < 1 ||
+      item.sourceId.length > 160 ||
+      typeof item.stance !== 'string' ||
+      !stances.has(item.stance) ||
+      confidence === null ||
+      credibility === null ||
+      verifiedSources === null ||
+      availableAt === null ||
+      typeof item.summary !== 'string' ||
+      item.summary.length < 1 ||
+      item.summary.length > 500
+    ) {
+      return null;
+    }
+
+    evidence.push({
+      source: item.source as AiDecisionAgentContextDto['evidence'][number]['source'],
+      sourceId: item.sourceId,
+      stance: item.stance as AiDecisionAgentContextDto['evidence'][number]['stance'],
+      confidence,
+      credibility,
+      verifiedSources,
+      availableAt,
+      summary: item.summary,
+    });
+  }
+
+  if (
+    raw.sourceState !== 'AVAILABLE' &&
+    (raw.status !== 'INSUFFICIENT' || evidenceCount !== 0 || evidence.length !== 0)
+  ) {
+    return null;
+  }
+
+  return {
+    version: 'agent-council-v1',
+    status: raw.status as AiDecisionAgentContextDto['status'],
+    consensusDirection: raw.consensusDirection as AiDecisionAgentContextDto['consensusDirection'],
+    weightedSupport,
+    weightedOpposition,
+    disagreementScore,
+    evidenceCount,
+    rejectedCount,
+    evidence,
+    sourceState: raw.sourceState as AiDecisionAgentContextDto['sourceState'],
+    evaluatedAt,
+    advisoryOnly: true,
+    executionAuthority: false,
+  };
 }
 
 function metadataDirection(log: AuditLog): 'BUY' | 'SELL' | null {
@@ -140,6 +271,7 @@ export class AiDecisionExplorerService {
         volatilityScore: metadataNumber(receipt, 'volatilityScore'),
         generatedAt: metadataString(receipt, 'generatedAt'),
       },
+      agentContext: metadataAgentContext(receipt),
       risk: {
         decision: riskDecision,
         rejectionCode,
