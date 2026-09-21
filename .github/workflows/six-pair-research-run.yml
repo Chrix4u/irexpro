@@ -23,10 +23,10 @@ jobs:
       group: irexpro-staging-worktree
       cancel-in-progress: false
     runs-on: ubuntu-24.04
-    # Six-pair collection + MTF build + three walk-forward horizons can
-    # legitimately exceed three hours when Dukascopy transient recovery is
-    # exercised. Keep a finite ceiling, but leave enough room to finish.
-    timeout-minutes: 300
+    # The first 100k-row-per-pair run reached the previous five-hour ceiling.
+    # Keep a finite seven-hour safeguard while bounded XGBoost parallelism and
+    # live stage/fold telemetry reduce and expose the actual research cost.
+    timeout-minutes: 420
     environment:
       name: staging
 
@@ -291,6 +291,10 @@ jobs:
 
           cd "$STAGING_ROOT/services/ai-engine"
           export PYTHONPATH="$PWD"
+          export IREXPRO_RESEARCH_PROGRESS=1
+          export IREXPRO_XGB_N_JOBS=4
+          printf 'RESEARCH_CONFIGURATION xgb_n_jobs=%s progress=%s timeout_minutes=420\n' \
+            "$IREXPRO_XGB_N_JOBS" "$IREXPRO_RESEARCH_PROGRESS"
 
           "$python_bin" -m app.domain.training.run_first_six_pair \
             --source dukascopy \
