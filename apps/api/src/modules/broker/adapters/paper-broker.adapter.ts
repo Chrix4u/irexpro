@@ -470,6 +470,14 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   readonly brokerName = 'Paper Trading Broker (Simulated — PAPER_ONLY)';
   readonly supportsDemo = true;
 
+  /**
+   * Phase 10 canary operations: adapter implementation version for the admin
+   * live-ops overview. This adapter predates the AdapterMetadata surface and
+   * has no recorded version history, so this is a plain generation constant —
+   * NOT a semantic version. It advances with adapter contract changes only.
+   */
+  readonly adapterVersion = '1';
+
   private _connected = false;
   private _mode: BrokerMode = BrokerMode.DEMO;
   private _orderCounter = 0;

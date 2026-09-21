@@ -627,4 +627,95 @@ describe('Round 7.1 (P0-5): boot-time immediate recovery sweep (producer wiring)
     // Queue identity sanity.
     expect(TRADE_RECONCILIATION_QUEUE).toBe('trade-reconciliation');
   });
+
+  // ── Production-LIVE completion round (Phase 11): Redis-outage drill ─────
+  // A scheduling failure must never strand the process without a
+  // reconciliation schedule: the producer self-heals with bounded backoff
+  // and re-establishes the schedule + an immediate catch-up sweep as soon
+  // as the queue layer returns.
+
+  describe('Redis outage → self-healing reschedule (Phase 11 drill)', () => {
+    const buildQueue = (addImpl: jest.Mock) => ({
+      getRepeatableJobs: jest.fn().mockResolvedValue([]),
+      removeRepeatableByKey: jest.fn().mockResolvedValue(undefined),
+      add: addImpl,
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('a scheduling failure at boot does NOT throw and arms a bounded retry', async () => {
+      const { TradeReconciliationProducer } = await import('../jobs/trade-reconciliation.producer');
+      jest.useFakeTimers();
+      const add = jest.fn().mockRejectedValue(new Error('Redis connection refused'));
+      const producer = new TradeReconciliationProducer(buildQueue(add) as never);
+
+      // Must resolve (the process survives the outage) — fail-open for the
+      // process, fail-closed for the schedule.
+      await expect(producer.onModuleInit()).resolves.toBeUndefined();
+      expect(add).toHaveBeenCalledTimes(1);
+
+      // The first retry is armed at the 15s backoff — nothing scheduled yet.
+      await jest.advanceTimersByTimeAsync(14_999);
+      expect(add).toHaveBeenCalledTimes(1);
+      await jest.advanceTimersByTimeAsync(1);
+      expect(add).toHaveBeenCalledTimes(2);
+    });
+
+    it('once Redis returns, the retry re-establishes the schedule AND enqueues an immediate catch-up sweep', async () => {
+      const { TradeReconciliationProducer } = await import('../jobs/trade-reconciliation.producer');
+      jest.useFakeTimers();
+      let down = true;
+      const add = jest.fn().mockImplementation(async () => {
+        if (down) throw new Error('Redis connection refused');
+        return {};
+      });
+      const producer = new TradeReconciliationProducer(buildQueue(add) as never);
+      await producer.onModuleInit(); // fails at the FIRST add (the repeatable)
+
+      // Redis recovers before the first retry fires.
+      down = false;
+      await jest.advanceTimersByTimeAsync(15_000);
+
+      // Initial attempt: 1 failed add. Successful retry: the repeatable
+      // schedule + the immediate catch-up recovery sweep.
+      const calls = add.mock.calls;
+      expect(calls.length).toBe(3);
+      expect(calls[1][2]).toMatchObject({ repeat: { every: expect.any(Number) } });
+      expect(calls[2][1]).toMatchObject({ immediateRecovery: true });
+      expect(calls[2][2]).toBeUndefined(); // immediate sweep carries no repeat options
+    });
+
+    it('the backoff is bounded (never grows past the reconciliation interval)', async () => {
+      const { TradeReconciliationProducer } = await import('../jobs/trade-reconciliation.producer');
+      jest.useFakeTimers();
+      const add = jest.fn().mockRejectedValue(new Error('Redis still down'));
+      const producer = new TradeReconciliationProducer(buildQueue(add) as never);
+      await producer.onModuleInit();
+
+      // Four consecutive failures: retries at ~15s, then +30s, then +60s, +60s.
+      await jest.advanceTimersByTimeAsync(15_000);
+      await jest.advanceTimersByTimeAsync(30_000);
+      await jest.advanceTimersByTimeAsync(60_000);
+      await jest.advanceTimersByTimeAsync(60_000);
+
+      // 1 initial + 4 retries — and the timer never keeps the loop alive on destroy.
+      expect(add.mock.calls.length).toBeGreaterThanOrEqual(5);
+      expect(() => producer.onModuleDestroy()).not.toThrow();
+    });
+
+    it('onModuleDestroy clears the pending retry (no zombie rescheduling after shutdown)', async () => {
+      const { TradeReconciliationProducer } = await import('../jobs/trade-reconciliation.producer');
+      jest.useFakeTimers();
+      const add = jest.fn().mockRejectedValue(new Error('Redis down'));
+      const producer = new TradeReconciliationProducer(buildQueue(add) as never);
+      await producer.onModuleInit();
+
+      producer.onModuleDestroy();
+      await jest.advanceTimersByTimeAsync(120_000);
+      // Only the initial attempt ever ran — the retry was cancelled.
+      expect(add).toHaveBeenCalledTimes(1);
+    });
+  });
 });

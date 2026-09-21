@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { ModuleRef } from '@nestjs/core';
 import { In, Repository } from 'typeorm';
 import { BrokerConnection } from '../../broker/entities/broker-connection.entity';
 import { BrokerAccount } from '../../broker/entities/broker-account.entity';
@@ -34,6 +35,10 @@ import { ReconciliationDiscrepancyType, ReconciliationRunStatus } from './reconc
 import { ReconciliationPersistenceService } from './reconciliation-persistence.service';
 import { ReconciliationResolutionService } from './reconciliation-resolution.service';
 import { ProviderDispatchCertainty } from '../../broker/interfaces/provider-dispatch-certainty';
+// Production-LIVE completion round (P13 metrics): dependency-free in-process
+// counters (lazy ModuleRef seam — same pattern as risk.service).
+import { MetricsService } from '../../metrics/metrics.service';
+import { METRIC_NAMES } from '../../metrics/metric-names';
 
 /** Public outcome of one reconciliation run (job aggregation + specs). */
 export interface ReconciliationRunOutcome {
@@ -166,7 +171,22 @@ export class StateReconciliationService {
     @InjectRepository(RiskGrant)
     private readonly riskGrantRepo: Repository<RiskGrant>,
     private readonly allocationService: AllocationService,
+    /**
+     * Production-LIVE completion round (P13 metrics): lazy metrics seam —
+     * OPTIONAL trailing dependency (direct spec constructions keep compiling;
+     * resolved at CALL time, no-ops when absent — see metrics.module.ts).
+     */
+    private readonly moduleRef?: ModuleRef,
   ) {}
+
+  /** Lazy MetricsService lookup (never throws, never affects control flow). */
+  private get metrics(): MetricsService | null {
+    try {
+      return this.moduleRef?.get(MetricsService, { strict: false }) ?? null;
+    } catch {
+      return null;
+    }
+  }
 
   async runForConnection(connection: BrokerConnection): Promise<ReconciliationRunOutcome> {
     const run = await this.persistence.createRun({
@@ -745,6 +765,31 @@ export class StateReconciliationService {
         discrepanciesOpen: openCount,
         completedAt: new Date().toISOString(),
       });
+
+      // P13 metrics: the position/order-mismatch counters for THIS completed
+      // run (brokerId label — never account/user identifiers). A FAILED run
+      // honestly reports nothing here: it never reached the comparison.
+      if (candidates.length > 0) {
+        this.metrics?.increment(
+          METRIC_NAMES.RECONCILIATION_DISCREPANCIES,
+          { brokerId: connection.brokerId, outcome: 'DETECTED' },
+          candidates.length,
+        );
+      }
+      if (persisted.inserted > 0) {
+        this.metrics?.increment(
+          METRIC_NAMES.RECONCILIATION_DISCREPANCIES,
+          { brokerId: connection.brokerId, outcome: 'NEW' },
+          persisted.inserted,
+        );
+      }
+      if (autoResolvedCount > 0) {
+        this.metrics?.increment(
+          METRIC_NAMES.RECONCILIATION_DISCREPANCIES,
+          { brokerId: connection.brokerId, outcome: 'AUTO_RESOLVED' },
+          autoResolvedCount,
+        );
+      }
 
       return {
         runId: run.id,
