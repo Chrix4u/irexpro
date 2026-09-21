@@ -41,6 +41,9 @@ def assess_agent_context(
     seen_evidence: set[tuple[str, str]] = set()
 
     for item in evidence:
+        if item.source == "QUANT":
+            rejected.append(item.source_id)
+            continue
         if item.instrument.strip().upper() != instrument_code:
             rejected.append(item.source_id)
             continue
