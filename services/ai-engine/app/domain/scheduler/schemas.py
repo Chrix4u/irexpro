@@ -14,6 +14,7 @@ class SessionStartRequest(BaseModel):
     timeframe: str = "H1"
     interval_seconds: int | None = Field(default=None, alias="intervalSeconds")
     source: Literal["broker", "mock"] = "broker"
+    account_type: Literal["DEMO", "LIVE"] = Field(..., alias="accountType")
     # Round 5 (session authority): the NestJS API forwards the TradingSession's
     # durable executionMode. "paper" is kept for backward compatibility with
     # older API versions. Scheduled signal generation itself stays paper-only —
