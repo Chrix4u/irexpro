@@ -373,7 +373,7 @@ jobs:
             exit 16
           }
           printf 'selected_horizon=%sm\n' "$selected_horizon"
- 
+
           # Evaluate the advisory Agent Council overlay on the exact outer-fold
           # predictions for the selected research horizon. This is observational
           # evidence only and cannot alter model selection, paper approval,
