@@ -103,10 +103,14 @@ grep -Fq 'if wait "$research_pid"; then' "$RESEARCH_WORKFLOW" ||
 grep -Fq 'exit "$research_status"' "$RESEARCH_WORKFLOW" ||
   fail 'Six Pair Research must return the original remote research status.'
 
-# The corrected six-pair workload may spend substantial time in bounded
-# provider recovery and walk-forward evaluation. Preserve a finite but
-# realistic ceiling so a healthy study is not killed at the old 180-minute cap.
-grep -Fq 'timeout-minutes: 300' "$RESEARCH_WORKFLOW" ||
-  fail 'Six Pair Research must retain the five-hour bounded timeout.'
+# The first 100k-row-per-pair run hit the old five-hour ceiling. Preserve a
+# finite seven-hour safeguard while bounded CPU parallelism and detailed
+# progress telemetry make the next run faster and diagnosable.
+grep -Fq 'timeout-minutes: 420' "$RESEARCH_WORKFLOW" ||
+  fail 'Six Pair Research must retain the seven-hour bounded timeout.'
+grep -Fq 'export IREXPRO_RESEARCH_PROGRESS=1' "$RESEARCH_WORKFLOW" ||
+  fail 'Six Pair Research must enable detailed stage/fold progress telemetry.'
+grep -Fq 'export IREXPRO_XGB_N_JOBS=4' "$RESEARCH_WORKFLOW" ||
+  fail 'Six Pair Research must request bounded XGBoost CPU parallelism.'
 
 printf 'Staging CD bootstrap and research-coordination regression tests passed.\n'

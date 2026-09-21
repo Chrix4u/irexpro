@@ -76,8 +76,10 @@ def _fake_evaluation(report_path: str | Path) -> dict:
 def test_dukascopy_source_requires_no_broker_credentials(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ):
     monkeypatch.setattr(runner, "INITIAL_FOREX_UNIVERSE", ("EURUSD",))
+    monkeypatch.setenv("IREXPRO_RESEARCH_PROGRESS", "1")
 
     collected: list[str] = []
     observed_lookbacks: list[int] = []
@@ -166,6 +168,13 @@ def test_dukascopy_source_requires_no_broker_credentials(
     assert result["qualification_window"]["decision_time_before"] == (
         qualification_cutoff.isoformat()
     )
+
+    progress = capsys.readouterr().err
+    assert "RESEARCH_PROGRESS stage=collect instrument=EURUSD status=started" in progress
+    assert "RESEARCH_PROGRESS stage=collect instrument=EURUSD status=completed" in progress
+    assert "RESEARCH_PROGRESS stage=mtf_build instrument=EURUSD status=completed" in progress
+    assert "RESEARCH_PROGRESS stage=horizon horizon=5m status=completed" in progress
+    assert "RESEARCH_PROGRESS stage=study status=completed" in progress
 
 
 def test_six_pair_runner_rejects_invalid_dukascopy_lookback(tmp_path: Path):

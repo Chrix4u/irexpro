@@ -19,6 +19,7 @@ from app.domain.training.train_multitimeframe import (
     _non_overlapping_portfolio_periods,
     _split_internal_early_stopping_tail,
     _trade_metrics,
+    _xgboost_n_jobs,
     evaluate_multi_pair_corpora,
     prepare_instrument_corpus,
     run_pooled_walk_forward,
@@ -48,6 +49,27 @@ def _m1_fixture(periods: int = 14 * 60, spread_points: float = 12.0) -> pd.DataF
             "price_digits": 5,
         }
     )
+
+
+def test_xgboost_research_workers_are_configurable_and_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.delenv("IREXPRO_XGB_N_JOBS", raising=False)
+    assert _xgboost_n_jobs() == 1
+
+    monkeypatch.setattr(
+        "app.domain.training.train_multitimeframe.os.cpu_count",
+        lambda: 8,
+    )
+    monkeypatch.setenv("IREXPRO_XGB_N_JOBS", "4")
+    assert _xgboost_n_jobs() == 4
+
+    monkeypatch.setenv("IREXPRO_XGB_N_JOBS", "99")
+    assert _xgboost_n_jobs() == 4
+
+    monkeypatch.setenv("IREXPRO_XGB_N_JOBS", "0")
+    with pytest.raises(ValueError, match="at least 1"):
+        _xgboost_n_jobs()
 
 
 def test_prepare_instrument_corpus_uses_real_spread_and_tick_volume():
