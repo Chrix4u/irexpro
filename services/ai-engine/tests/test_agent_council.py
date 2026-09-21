@@ -132,18 +132,45 @@ def test_unverified_macro_context_is_rejected_fail_closed():
 
 def test_duplicate_evidence_identity_cannot_amplify_context_weight():
     duplicated = evidence("same-release", "BUY")
+    duplicate_variant = duplicated.model_copy(update={"source_id": " SAME-RELEASE "})
     result = assess_agent_context(
         instrument="EURUSD",
         quant_direction="BUY",
         quant_confidence=0.70,
-        evidence=[duplicated, duplicated.model_copy()],
+        evidence=[duplicated, duplicate_variant],
         evaluated_at=NOW,
     )
 
     assert result.status == "ALIGNED"
     assert result.weighted_support == pytest.approx(0.72)
     assert len(result.evidence_used) == 1
-    assert result.rejected_source_ids == ["same-release"]
+    assert result.rejected_source_ids == [" SAME-RELEASE "]
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"access_token": "redacted"},
+        {"nested": {"broker-password": "redacted"}},
+    ],
+)
+def test_evidence_metadata_rejects_credential_like_keys(metadata):
+    with pytest.raises(
+        ValueError,
+        match="agent evidence metadata cannot contain credential-like keys",
+    ):
+        AgentEvidence(
+            source="REGIME",
+            source_id="regime-1",
+            instrument="EURUSD",
+            stance="NEUTRAL",
+            confidence=0.8,
+            credibility=0.9,
+            observed_at=NOW,
+            available_at=NOW,
+            summary="Deterministic regime context.",
+            metadata=metadata,
+        )
 
 
 def test_invalid_coordinator_thresholds_fail_closed():
