@@ -19,7 +19,11 @@ from app.domain.agents.providers.bls_calendar import (
     BlsCalendarProviderError,
     BlsOfficialCalendarProvider,
 )
-from app.domain.agents.snapshot import AgentContextSnapshot, build_agent_context_snapshot
+from app.domain.agents.snapshot import (
+    AgentContextSnapshot,
+    AgentContextSourceState,
+    build_agent_context_snapshot,
+)
 
 logger = get_logger(__name__)
 
@@ -100,7 +104,7 @@ class AgentContextService:
 
     async def _current_bls_events(
         self,
-    ) -> tuple[list[MacroContextEvent], LiteralSourceState]:
+    ) -> tuple[list[MacroContextEvent], AgentContextSourceState]:
         now = datetime.now(UTC)
         if self._cache_is_fresh(now):
             return list(self._cached_events), "AVAILABLE"
@@ -138,5 +142,3 @@ class AgentContextService:
             and now - self._last_failure_at <= self._failure_retry
         )
 
-
-LiteralSourceState = Literal["AVAILABLE", "UNAVAILABLE"]
