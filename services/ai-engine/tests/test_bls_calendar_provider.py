@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 import httpx
 import pytest
 
+from app.domain.agents.providers import bls_calendar
 from app.domain.agents.providers.bls_calendar import (
     BLS_CALENDAR_URL,
     BlsCalendarProviderError,
@@ -174,7 +175,7 @@ def test_folded_summary_is_unfolded_before_policy_matching():
     events = parse_bls_calendar(payload, fetched_at=FETCHED_AT)
 
     assert len(events) == 1
-    assert events[0].title == "Consumer Price Index forAugust 2026"
+    assert events[0].title == "Consumer Price Index for August 2026"
 
 
 def test_malformed_governed_release_fails_closed():
@@ -213,6 +214,35 @@ async def test_provider_fetches_only_fixed_official_bls_url():
 
     assert len(events) == 1
     assert events[0].available_at == FETCHED_AT
+
+
+@pytest.mark.asyncio
+async def test_live_fetch_stamps_availability_after_response_receipt(monkeypatch):
+    payload = calendar(vevent())
+    response_received = {"value": False}
+    receipt_time = datetime(2026, 9, 1, 12, 0, 5, tzinfo=UTC)
+
+    class ReceiptDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            assert response_received["value"] is True
+            return receipt_time
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        response_received["value"] = True
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/calendar"},
+            content=payload.encode("utf-8"),
+        )
+
+    monkeypatch.setattr(bls_calendar, "datetime", ReceiptDateTime)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = BlsOfficialCalendarProvider(client)
+        events = await provider.fetch()
+
+    assert events[0].available_at == receipt_time
+    assert events[0].observed_at == receipt_time
 
 
 @pytest.mark.asyncio
