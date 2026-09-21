@@ -26,7 +26,7 @@ class TrustedContextSource(BaseModel):
     )
     display_name: str = Field(..., min_length=2, max_length=160)
     source_type: ContextSourceType
-    currencies: set[str] = Field(..., min_length=1)
+    currencies: frozenset[str] = Field(..., min_length=1)
     credibility: float = Field(..., ge=0.0, le=1.0)
     enabled: bool = True
     requires_corroboration: bool = False
