@@ -107,13 +107,22 @@ describe("AI Trading mobile logic", () => {
     ).toBe(false);
   });
 
-  it("maps demo accounts to paper and live accounts to full auto", () => {
-    expect(startExecutionModeFor(broker({ accountType: "DEMO" }))).toBe(
-      "PAPER_ONLY",
-    );
-    expect(startExecutionModeFor(broker({ accountType: "LIVE" }))).toBe(
-      "FULL_AUTO",
-    );
+  it("keeps only the internal paper broker in PAPER_ONLY mode", () => {
+    expect(
+      startExecutionModeFor(
+        broker({ brokerId: "paper-broker", accountType: "DEMO" }),
+      ),
+    ).toBe("PAPER_ONLY");
+    expect(
+      startExecutionModeFor(
+        broker({ brokerId: "metatrader5", accountType: "DEMO" }),
+      ),
+    ).toBe("FULL_AUTO");
+    expect(
+      startExecutionModeFor(
+        broker({ brokerId: "metatrader5", accountType: "LIVE" }),
+      ),
+    ).toBe("FULL_AUTO");
   });
 
   it("never claims unresolved stop closures are complete", () => {
