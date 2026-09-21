@@ -69,6 +69,23 @@ def test_conflicting_context_is_explicit_instead_of_overriding_quant():
     assert result.execution_authority is False
 
 
+def test_equal_support_and_opposition_is_conflict_not_alignment():
+    result = assess_agent_context(
+        instrument="EURUSD",
+        quant_direction="BUY",
+        quant_confidence=0.75,
+        evidence=[
+            evidence("equal-bull", "BUY", confidence=0.8, credibility=0.8),
+            evidence("equal-bear", "SELL", confidence=0.8, credibility=0.8),
+        ],
+        evaluated_at=NOW,
+    )
+
+    assert result.status == "CONFLICT"
+    assert result.consensus_direction == "NEUTRAL"
+    assert result.disagreement_score == pytest.approx(0.5)
+
+
 def test_credible_block_context_marks_assessment_blocked_but_remains_advisory():
     result = assess_agent_context(
         instrument="GBPUSD",
@@ -177,6 +194,9 @@ def test_duplicate_evidence_identity_cannot_amplify_context_weight():
     "metadata",
     [
         {"access_token": "redacted"},
+        {"accessToken": "redacted"},
+        {"clientSecret": "redacted"},
+        {"apiKey": "redacted"},
         {"nested": {"broker-password": "redacted"}},
     ],
 )
@@ -200,7 +220,10 @@ def test_evidence_metadata_rejects_credential_like_keys(metadata):
 
 
 def test_invalid_coordinator_thresholds_fail_closed():
-    with pytest.raises(ValueError, match="minimum_context_weight must be greater than 0"):
+    with pytest.raises(
+        ValueError,
+        match="minimum_context_weight must be finite and greater than 0",
+    ):
         assess_agent_context(
             instrument="EURUSD",
             quant_direction="BUY",
@@ -212,7 +235,7 @@ def test_invalid_coordinator_thresholds_fail_closed():
 
     with pytest.raises(
         ValueError,
-        match="block_weight_threshold must be greater than 0 and at most 1",
+        match="block_weight_threshold must be finite, greater than 0, and at most 1",
     ):
         assess_agent_context(
             instrument="EURUSD",
@@ -221,6 +244,47 @@ def test_invalid_coordinator_thresholds_fail_closed():
             evidence=[],
             evaluated_at=NOW,
             block_weight_threshold=0,
+        )
+
+    with pytest.raises(
+        ValueError,
+        match="max_age_seconds must be finite and non-negative",
+    ):
+        assess_agent_context(
+            instrument="EURUSD",
+            quant_direction="BUY",
+            quant_confidence=0.70,
+            evidence=[],
+            evaluated_at=NOW,
+            max_age_seconds=float("nan"),
+        )
+
+    with pytest.raises(
+        ValueError,
+        match="minimum_context_weight must be finite and greater than 0",
+    ):
+        assess_agent_context(
+            instrument="EURUSD",
+            quant_direction="BUY",
+            quant_confidence=0.70,
+            evidence=[],
+            evaluated_at=NOW,
+            minimum_context_weight=float("nan"),
+        )
+
+
+def test_evidence_rejects_blank_identity_fields():
+    with pytest.raises(ValueError, match="agent evidence text fields cannot be blank"):
+        AgentEvidence(
+            source="REGIME",
+            source_id="   ",
+            instrument="EURUSD",
+            stance="NEUTRAL",
+            confidence=0.5,
+            credibility=0.8,
+            observed_at=NOW,
+            available_at=NOW,
+            summary="Valid summary.",
         )
 
 
