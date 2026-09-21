@@ -46,8 +46,8 @@ class TrustedContextSource(BaseModel):
 
     @field_validator("currencies")
     @classmethod
-    def normalize_currencies(cls, values: set[str]) -> set[str]:
-        normalized = {value.strip().upper() for value in values}
+    def normalize_currencies(cls, values: frozenset[str]) -> frozenset[str]:
+        normalized = frozenset(value.strip().upper() for value in values)
         if any(len(value) != 3 or not value.isalpha() for value in normalized):
             raise ValueError("currencies must contain three-letter alphabetic codes")
         return normalized
