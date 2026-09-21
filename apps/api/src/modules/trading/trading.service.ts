@@ -302,10 +302,7 @@ export class TradingService {
       const [connection] = await this.brokerService.findConnectionsByIds([
         session.brokerConnectionId,
       ]);
-      if (
-        connection?.accountType === BrokerMode.LIVE &&
-        !connection.liveTradingEnabled
-      ) {
+      if (connection?.accountType === BrokerMode.LIVE && !connection.liveTradingEnabled) {
         throw new ForbiddenException(
           'Live trading is not enabled on the session broker connection. ' +
             'Enable live trading explicitly before requesting FULL_AUTO mode.',
