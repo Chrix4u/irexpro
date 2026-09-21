@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from app.domain.agents.macro_context import MacroContextEvent
-from app.domain.agents.providers.bls_calendar import _release_policy
+from app.domain.agents.providers.bls_calendar import classify_bls_release
 
 BLS_HISTORICAL_SCHEDULE_URL_TEMPLATE = (
     "https://www.bls.gov/schedule/{year:04d}/{month:02d}_sched_list.htm"
@@ -211,7 +211,7 @@ def parse_bls_historical_schedule(
         if not date_text or not time_text or not release_text:
             continue
 
-        policy = _release_policy(release_text)
+        policy = classify_bls_release(release_text)
         if policy is None:
             continue
         governed_rows += 1
