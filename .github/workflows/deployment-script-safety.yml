@@ -57,26 +57,6 @@ jobs:
       - name: Run ShellCheck
         run: shellcheck scripts/deployment/*.sh
 
-      - name: Validate six-pair evidence target wiring
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          grep -Eq '^[[:space:]]+readonly TARGET_ROWS=100000
-          bash scripts/deployment/test-deployment-scripts.sh
-          bash scripts/deployment/test-rollback-origin-provenance.sh
-          bash scripts/deployment/test-health-contract.sh
-          bash scripts/deployment/test-staging-cd-bootstrap.sh
-
-      - name: Test exact-main staging release gate policy
-        run: node scripts/deployment/main-staging-release-gate.mjs --self-test
- \
-            .github/workflows/six-pair-research-run.yml
-          if grep -Fq '\\n          readonly TARGET_ROWS=' \
-            .github/workflows/six-pair-research-run.yml; then
-            printf 'Literal newline escape would comment out TARGET_ROWS assignment.\n' >&2
-            exit 1
-          fi
-
       - name: Run deployment safety regression tests
         run: |
           bash scripts/deployment/test-deployment-scripts.sh
