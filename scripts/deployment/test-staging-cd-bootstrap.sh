@@ -123,5 +123,11 @@ if grep -Fq 'rm -rf "$OUTPUT_ROOT"' "$RESEARCH_WORKFLOW"; then
 fi
 grep -Fq 'run-result.json.tmp' "$RESEARCH_WORKFLOW" ||
   fail 'Six Pair Research must write the top-level result atomically.'
+grep -Fq 'bootstrap_unsafe_pattern=' "$RESEARCH_WORKFLOW" ||
+  fail 'Six Pair Research must guard ancestor bootstrap against data/corpus semantic changes.'
+grep -Fq 'git rev-list --first-parent --max-count=20' "$RESEARCH_WORKFLOW" ||
+  fail 'Six Pair Research must search bounded first-parent ancestry for resumable pair evidence.'
+grep -Fq -- '--bootstrap-dir "$bootstrap_root"' "$RESEARCH_WORKFLOW" ||
+  fail 'Six Pair Research must pass the validated ancestor bootstrap directory to the runner.'
 
 printf 'Staging CD bootstrap and research-coordination regression tests passed.\n'
