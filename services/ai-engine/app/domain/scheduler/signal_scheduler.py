@@ -216,6 +216,11 @@ class SignalScheduler:
                     if previous_revision == telemetry.market_data_revision:
                         job.last_decision = "NO_NEW_MARKET_DATA"
                         job.last_reason = "market_data_unchanged"
+                        # This cycle performed no new model evaluation. Never
+                        # present the previous scan's confidence as if it were
+                        # current evidence for an unchanged market revision.
+                        job.last_confidence_score = None
+                        job.last_confidence_at = None
                         logger.debug(
                             "Market data revision unchanged — duplicate signal opportunity suppressed",
                             trading_session_id=trading_session_id,
