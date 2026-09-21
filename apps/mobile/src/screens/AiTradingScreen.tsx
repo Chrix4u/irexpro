@@ -204,9 +204,11 @@ export default function AiTradingScreen() {
       });
       Alert.alert(
         "AI Trading started",
-        selectedBroker.accountType === "LIVE"
-          ? "AI Trading is running for this verified live account."
-          : "AI Trading is running in paper/demo mode.",
+        selectedBroker.brokerId === "paper-broker"
+          ? "AI Trading is running in the internal paper simulator."
+          : selectedBroker.accountType === "DEMO"
+            ? "AI Trading is running against this broker\'s DEMO environment. No live funds are used."
+            : "AI Trading is running for this verified live account.",
       );
       await load();
     } catch (requestError) {

@@ -1,5 +1,6 @@
 import { ConfigService } from '@nestjs/config';
 import { AiEngineClient } from './ai-engine-client.service';
+import { BrokerMode } from '../broker/interfaces/broker-adapter.interface';
 import { ExecutionMode } from '../execution/interfaces/execution-authority';
 
 describe('AiEngineClient', () => {
@@ -49,6 +50,7 @@ describe('AiEngineClient', () => {
       instruments: ['EURUSD'],
       timeframe: 'H1',
       source: 'broker',
+      accountType: BrokerMode.DEMO,
       mode: ExecutionMode.PAPER_ONLY,
     });
 
@@ -133,6 +135,7 @@ describe('AiEngineClient', () => {
       instruments: ['EURUSD'],
       timeframe: 'H1',
       source: 'broker',
+      accountType: BrokerMode.DEMO,
       mode: ExecutionMode.PAPER_ONLY,
     });
 

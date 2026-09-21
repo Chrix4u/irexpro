@@ -159,11 +159,16 @@ export class TradingService {
     // execution engine snapshots and enforces its conservative limits.
     const riskProfile = await this.riskService.getOrCreateProfile(userId);
 
-    // ── Gate 4: Live trading requires explicit broker enablement ─────────────
-    // FULL_AUTO does NOT automatically enable live broker execution. The user
-    // must separately enable live trading on the broker connection (a distinct
-    // explicit action with its own audit trail).
-    if (executionMode === ExecutionMode.FULL_AUTO && !connection.liveTradingEnabled) {
+    // ── Gate 4: LIVE FULL_AUTO requires explicit broker enablement ──────────
+    // FULL_AUTO describes automatic provider execution; it does not imply a
+    // LIVE environment. Real-provider DEMO accounts may use FULL_AUTO inside
+    // the broker's demo environment. Only a LIVE connection additionally
+    // requires the separate audited liveTradingEnabled authorization.
+    if (
+      executionMode === ExecutionMode.FULL_AUTO &&
+      connection.accountType === BrokerMode.LIVE &&
+      !connection.liveTradingEnabled
+    ) {
       throw new ForbiddenException(
         'Live trading is not enabled on this broker connection. ' +
           'Enable live trading explicitly before requesting FULL_AUTO mode.',
@@ -244,6 +249,7 @@ export class TradingService {
             instruments,
             timeframe: 'H1',
             source: 'broker',
+            accountType: connection.accountType,
             mode: session.executionMode,
           })
           .catch((err: Error) =>
@@ -289,13 +295,14 @@ export class TradingService {
     // remain enforced by the server for every new-exposure decision.
     await this.riskService.getOrCreateProfile(userId);
 
-    // Gate: FULL_AUTO requires explicit live enablement on the session's
-    // EXACT bound connection (never re-discovered).
+    // Gate: a LIVE connection entering FULL_AUTO requires explicit live
+    // enablement on the session's EXACT bound connection (never re-discovered).
+    // DEMO provider connections may use FULL_AUTO without enabling LIVE funds.
     if (newMode === ExecutionMode.FULL_AUTO) {
       const [connection] = await this.brokerService.findConnectionsByIds([
         session.brokerConnectionId,
       ]);
-      if (!connection?.liveTradingEnabled) {
+      if (connection?.accountType === BrokerMode.LIVE && !connection.liveTradingEnabled) {
         throw new ForbiddenException(
           'Live trading is not enabled on the session broker connection. ' +
             'Enable live trading explicitly before requesting FULL_AUTO mode.',
@@ -447,7 +454,41 @@ export class TradingService {
       throw new NotFoundException(`Trading session ${sessionId} not found`);
     }
 
-    if (session.executionMode !== ExecutionMode.PAPER_ONLY) {
+    const [connection] = await this.brokerService.findConnectionsByIds([
+      session.brokerConnectionId,
+    ]);
+    if (!connection) {
+      return {
+        enabled: this.aiEngineClient.isSchedulerIntegrationEnabled(),
+        registered: false,
+        trading_session_id: sessionId,
+        active: false,
+        instruments: [],
+        timeframe: null,
+        interval_seconds: null,
+        source: null,
+        last_run_at: null,
+        next_run_at: null,
+        last_decision: 'BLOCKED',
+        last_reason: 'broker_connection_unavailable',
+        last_confidence_score: null,
+        last_confidence_at: null,
+        confidence_threshold: null,
+        model_version: null,
+        model_mode: null,
+        model_loaded: null,
+        last_market_data_at: null,
+        market_data_age_seconds: null,
+        market_data_cache_bypassed: false,
+        last_publish_failed: false,
+      };
+    }
+
+    // Model approval is about the bound broker ENVIRONMENT, not whether the
+    // session is automatic. A provider DEMO account may use FULL_AUTO safely
+    // inside the provider sandbox; LIVE stays blocked until a separately
+    // live-approved model path exists.
+    if (connection.accountType === BrokerMode.LIVE) {
       return {
         enabled: this.aiEngineClient.isSchedulerIntegrationEnabled(),
         registered: false,
@@ -500,7 +541,8 @@ export class TradingService {
         instruments,
         timeframe: 'H1',
         source: 'broker',
-        mode: ExecutionMode.PAPER_ONLY,
+        accountType: connection.accountType,
+        mode: session.executionMode,
       });
       return this.aiEngineClient.getSessionStatus(sessionId);
     }

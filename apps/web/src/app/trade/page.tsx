@@ -2,7 +2,11 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { UserCapitalAllocationView, TradeExecutionView } from '@irexpro/types/execution';
+import {
+  startExecutionModeForBroker,
+  type UserCapitalAllocationView,
+  type TradeExecutionView,
+} from '@irexpro/types/execution';
 import type { LivePositionRowView } from '@irexpro/types/live-account';
 import type { MarketIntelligenceView } from '@irexpro/types/market-intelligence';
 import { Alert, Badge, Button, Card, DashboardShell, Input, LoadingSpinner } from '@/components/ui';
@@ -520,15 +524,17 @@ export default function AiTradingPage() {
           setPendingAutomationAction(null);
           return;
         }
-        const executionMode = selectedBroker.accountType === 'LIVE' ? 'FULL_AUTO' : 'PAPER_ONLY';
+        const executionMode = startExecutionModeForBroker(selectedBroker);
         await api.startTradingSession({
           brokerConnectionId: selectedBroker.id,
           executionMode,
         });
         notify.success(
-          selectedBroker.accountType === 'LIVE'
-            ? 'AI Trading started for the verified live account.'
-            : 'AI Trading started in paper/demo mode.',
+          selectedBroker.brokerId === 'paper-broker'
+            ? 'AI Trading started in the internal paper simulator.'
+            : selectedBroker.accountType === 'DEMO'
+              ? "AI Trading started against this broker's DEMO environment. No live funds are used."
+              : 'AI Trading started for the verified live account.',
         );
       }
 

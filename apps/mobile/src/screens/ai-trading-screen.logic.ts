@@ -1,8 +1,9 @@
 import type { BrokerConnectionView } from "@irexpro/types";
-import type {
-  AiStopPositionCloseState,
-  StopTradingSessionResponse,
-  TradingSessionView,
+import {
+  startExecutionModeForBroker,
+  type AiStopPositionCloseState,
+  type StopTradingSessionResponse,
+  type TradingSessionView,
 } from "@irexpro/types/execution";
 
 export type AutomationStopPresentation = {
@@ -29,7 +30,7 @@ export function isBrokerExecutionReady(
 export function startExecutionModeFor(
   connection: BrokerConnectionView,
 ): "PAPER_ONLY" | "FULL_AUTO" {
-  return connection.accountType === "LIVE" ? "FULL_AUTO" : "PAPER_ONLY";
+  return startExecutionModeForBroker(connection);
 }
 
 /**
