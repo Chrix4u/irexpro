@@ -215,10 +215,50 @@ The walk-forward training utility can optionally export its exact outer-fold
 validation predictions to CSV for this overlay. This keeps context research
 separate from model fitting and preserves the existing model report contract.
 
+## Phase C.2 official BLS historical schedule archive
+
+The first real historical context archive uses the official BLS prior-year
+monthly list-view schedules as a conservative research source.
+
+Archive rules:
+
+- Monthly URLs are code-owned BLS URLs of the form
+  `/schedule/YYYY/MM_sched_list.htm`; callers cannot supply arbitrary endpoints.
+- The historical parser reuses the same reviewed BLS release classifier as the
+  live iCalendar provider, preventing event-family/impact drift between runtime
+  and research.
+- Release dates/times are interpreted in `America/New_York` and normalized to
+  UTC with daylight-saving transitions preserved.
+- The official page `Last Modified Date` is the source-availability boundary.
+  Because BLS exposes a date but no modification clock time, iRexPro
+  conservatively interprets it as **end-of-day Eastern**.
+- A governed release scheduled at or before that conservative availability
+  timestamp is excluded from the causal archive. Such a page can describe what
+  happened, but cannot prove the schedule was known before the event.
+- Historical source-event identity excludes the scheduled date/time so the same
+  release can keep one identity across a later reschedule.
+- Network fetching remains bounded, fixed-domain, no-redirect, size-limited,
+  and fail-closed on malformed content.
+- The collector writes provider-normalized JSONL accepted directly by the
+  Phase C.1 overlay evaluator plus a SHA-256 manifest with per-page source URL,
+  official availability timestamp, payload hash, governed-row count, and
+  retrospective exclusions.
+- The collector preserves multiple revisions of one release identity rather
+  than collapsing them; the existing `available_at` replay logic determines
+  which revision was knowable at each historical decision.
+- The archive remains research-only and grants no paper/UAT, staging, or live
+  authority.
+
+A current archived BLS page can prove only the schedule represented by its
+official modification timestamp. It does not reconstruct intermediate page
+states that are no longer published. Special reschedule/cancellation histories
+therefore require explicit official revision sources rather than inference.
+
 Still separate from this phase:
 
-- Historical trusted-source collection/archival at production scale.
-- Other external calendar, central-bank, statistics, or news-source adapters.
+- Official revised-release-history ingestion for exceptional reschedules and
+  cancellations that cannot be reconstructed from one monthly page snapshot.
+- Additional external calendar, central-bank, statistics, or news-source archives.
 - Directional interpretation of released macro values or news text.
 - Context as an XGBoost feature.
 - Any runtime use of council context as a paper/UAT eligibility policy.
