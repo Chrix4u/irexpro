@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from math import isfinite
 
 from app.domain.agents.schemas import AgentCouncilAssessment, AgentEvidence
 
@@ -19,18 +20,23 @@ def assess_agent_context(
 ) -> AgentCouncilAssessment:
     """Synthesize causal context without creating an execution action."""
     now = evaluated_at or datetime.now(UTC)
-    if now.tzinfo is None:
+    if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("evaluated_at must be timezone-aware")
     if quant_direction not in {"BUY", "SELL"}:
         raise ValueError("quant_direction must be BUY or SELL")
-    if not 0.0 <= quant_confidence <= 1.0:
-        raise ValueError("quant_confidence must be between 0 and 1")
-    if max_age_seconds < 0:
-        raise ValueError("max_age_seconds cannot be negative")
-    if minimum_context_weight <= 0:
-        raise ValueError("minimum_context_weight must be greater than 0")
-    if not 0.0 < block_weight_threshold <= 1.0:
-        raise ValueError("block_weight_threshold must be greater than 0 and at most 1")
+    if not isfinite(quant_confidence) or not 0.0 <= quant_confidence <= 1.0:
+        raise ValueError("quant_confidence must be finite and between 0 and 1")
+    if not isfinite(max_age_seconds) or max_age_seconds < 0:
+        raise ValueError("max_age_seconds must be finite and non-negative")
+    if not isfinite(minimum_context_weight) or minimum_context_weight <= 0:
+        raise ValueError("minimum_context_weight must be finite and greater than 0")
+    if (
+        not isfinite(block_weight_threshold)
+        or not 0.0 < block_weight_threshold <= 1.0
+    ):
+        raise ValueError(
+            "block_weight_threshold must be finite, greater than 0, and at most 1"
+        )
 
     instrument_code = instrument.strip().upper()
     if not instrument_code:
@@ -89,9 +95,13 @@ def assess_agent_context(
     elif directional_weight < minimum_context_weight:
         status = "INSUFFICIENT"
         consensus = "NEUTRAL"
-    elif opposition > support:
+    elif opposition >= support:
         status = "CONFLICT"
-        consensus = "SELL" if quant_direction == "BUY" else "BUY"
+        consensus = (
+            "NEUTRAL"
+            if opposition == support
+            else ("SELL" if quant_direction == "BUY" else "BUY")
+        )
     else:
         status = "ALIGNED"
         consensus = quant_direction
