@@ -18,6 +18,7 @@ def evidence(
     credibility: float = 0.9,
     available_at: datetime = NOW,
     instrument: str = "EURUSD",
+    verified_sources: int = 2,
 ) -> AgentEvidence:
     return AgentEvidence(
         source="MACRO_NEWS",
@@ -29,7 +30,7 @@ def evidence(
         observed_at=available_at - timedelta(seconds=5),
         available_at=available_at,
         summary=f"{source_id} concise verified context",
-        verified_sources=2,
+        verified_sources=verified_sources,
     )
 
 
@@ -113,6 +114,58 @@ def test_future_stale_and_other_instrument_evidence_are_rejected_causally():
     assert result.status == "INSUFFICIENT"
     assert set(result.rejected_source_ids) == {"future", "stale", "other-pair"}
     assert result.evidence_used == []
+
+
+def test_unverified_macro_context_is_rejected_fail_closed():
+    result = assess_agent_context(
+        instrument="EURUSD",
+        quant_direction="BUY",
+        quant_confidence=0.70,
+        evidence=[evidence("unverified-news", "BUY", verified_sources=0)],
+        evaluated_at=NOW,
+    )
+
+    assert result.status == "INSUFFICIENT"
+    assert result.evidence_used == []
+    assert result.rejected_source_ids == ["unverified-news"]
+
+
+def test_duplicate_evidence_identity_cannot_amplify_context_weight():
+    duplicated = evidence("same-release", "BUY")
+    result = assess_agent_context(
+        instrument="EURUSD",
+        quant_direction="BUY",
+        quant_confidence=0.70,
+        evidence=[duplicated, duplicated.model_copy()],
+        evaluated_at=NOW,
+    )
+
+    assert result.status == "ALIGNED"
+    assert result.weighted_support == pytest.approx(0.72)
+    assert len(result.evidence_used) == 1
+    assert result.rejected_source_ids == ["same-release"]
+
+
+def test_invalid_coordinator_thresholds_fail_closed():
+    with pytest.raises(ValueError, match="minimum_context_weight cannot be negative"):
+        assess_agent_context(
+            instrument="EURUSD",
+            quant_direction="BUY",
+            quant_confidence=0.70,
+            evidence=[],
+            evaluated_at=NOW,
+            minimum_context_weight=-0.01,
+        )
+
+    with pytest.raises(ValueError, match="block_weight_threshold must be between 0 and 1"):
+        assess_agent_context(
+            instrument="EURUSD",
+            quant_direction="BUY",
+            quant_confidence=0.70,
+            evidence=[],
+            evaluated_at=NOW,
+            block_weight_threshold=1.01,
+        )
 
 
 def test_evidence_rejects_noncausal_availability_order():
