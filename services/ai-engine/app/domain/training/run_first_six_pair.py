@@ -4,6 +4,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -27,6 +29,15 @@ from app.domain.training.train_multitimeframe import (
 
 DEFAULT_HORIZONS = (1, 5, 10)
 RESEARCH_QUALIFICATION_FRACTION = 0.80
+RESEARCH_PROGRESS_ENV = "IREXPRO_RESEARCH_PROGRESS"
+
+
+def _research_progress(message: str) -> None:
+    enabled = os.getenv(RESEARCH_PROGRESS_ENV, "").strip().lower()
+    if enabled in {"1", "true", "yes", "on"}:
+        print(f"RESEARCH_PROGRESS {message}", file=sys.stderr, flush=True)
+
+
 DEFAULT_RESEARCH_GATE = {
     "min_balanced_accuracy": 0.52,
     "min_sharpe_ratio": 1.0,
@@ -197,9 +208,15 @@ def run_first_six_pair_study(
     corpora: dict[str, str] = {}
     collection_manifests: dict[str, dict[str, Any]] = {}
     corpus_manifests: dict[str, dict[str, Any]] = {}
+    study_started = time.monotonic()
 
     for instrument in INITIAL_FOREX_UNIVERSE:
+        instrument_started = time.monotonic()
         raw_path = raw_dir / f"{instrument}_M1.csv"
+        _research_progress(
+            f"stage=collect instrument={instrument} status=started "
+            f"source={normalized_source} target_rows={target_rows}"
+        )
         if normalized_source == "dukascopy":
             collection = collect_dukascopy_m1_corpus(
                 instrument=instrument,
@@ -227,7 +244,25 @@ def run_first_six_pair_study(
             for key, value in collection.items()
             if key not in {"broker_connection_id"}
         }
+        _research_progress(
+            " ".join(
+                [
+                    "stage=collect",
+                    f"instrument={instrument}",
+                    "status=completed",
+                    f"rows={collection.get('row_count', 'unknown')}",
+                    f"hours_requested={collection.get('hours_requested', 'unknown')}",
+                    f"bytes_downloaded={collection.get('bytes_downloaded', 'unknown')}",
+                    f"elapsed_seconds={time.monotonic() - instrument_started:.1f}",
+                ]
+            )
+        )
 
+        corpus_started = time.monotonic()
+        _research_progress(
+            f"stage=mtf_build instrument={instrument} status=started "
+            "timeframes=M1,M5,M15,H1,H4"
+        )
         corpus_path = corpus_dir / f"{instrument}_MTF.csv"
         corpus = build_multitimeframe_corpus_from_m1_csv(
             m1_path=raw_path,
@@ -238,11 +273,27 @@ def run_first_six_pair_study(
             raise ValueError(f"{instrument} MTF corpus lost friction metadata")
         corpus_manifests[instrument] = corpus
         corpora[instrument] = str(corpus_path)
+        _research_progress(
+            " ".join(
+                [
+                    "stage=mtf_build",
+                    f"instrument={instrument}",
+                    "status=completed",
+                    f"rows={corpus.get('row_count', 'unknown')}",
+                    f"elapsed_seconds={time.monotonic() - corpus_started:.1f}",
+                ]
+            )
+        )
 
     qualification_cutoff = _research_qualification_cutoff(corpora)
 
     horizon_reports: dict[str, Any] = {}
     for horizon in horizons:
+        horizon_started = time.monotonic()
+        _research_progress(
+            f"stage=horizon horizon={horizon}m status=started "
+            f"max_splits={max_splits}"
+        )
         report = evaluate_multi_pair_corpora(
             corpora,
             horizon_bars=horizon,
@@ -257,6 +308,7 @@ def run_first_six_pair_study(
                 report_dir / f"six_pair_walkforward_{horizon}m_predictions.csv"
             ),
         )
+        research_gate = _research_gate(report)
         horizon_reports[f"{horizon}m"] = {
             "report_path": report["report_path"],
             "validation_predictions_path": report.get("validation_predictions_path"),
@@ -264,8 +316,20 @@ def run_first_six_pair_study(
             "by_instrument": report["by_instrument"],
             "fold_count": report["fold_count"],
             "walk_forward": report["walk_forward"],
-            "research_gate": _research_gate(report),
+            "research_gate": research_gate,
         }
+        _research_progress(
+            " ".join(
+                [
+                    "stage=horizon",
+                    f"horizon={horizon}m",
+                    "status=completed",
+                    f"folds={report['fold_count']}",
+                    f"gate={'PASS' if research_gate['research_gate_passed'] else 'HOLD'}",
+                    f"elapsed_seconds={time.monotonic() - horizon_started:.1f}",
+                ]
+            )
+        )
 
     summary = {
         "report_version": 2,
@@ -309,6 +373,9 @@ def run_first_six_pair_study(
     }
     summary_path = report_dir / "six_pair_walkforward_summary.json"
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+    _research_progress(
+        f"stage=study status=completed elapsed_seconds={time.monotonic() - study_started:.1f}"
+    )
     return {**summary, "summary_path": str(summary_path)}
 
 
