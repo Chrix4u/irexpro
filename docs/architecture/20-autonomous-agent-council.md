@@ -161,7 +161,8 @@ Rules in this phase:
   its existing confidence threshold. It does not change that confidence score,
   SL/TP, volume, eligibility, Risk Engine inputs, or execution behavior.
 - The BLS context source is cached for five minutes to avoid a network request
-  on every market scan. Failed refreshes are throttled for one minute.
+  on every market scan. Failed refreshes are throttled for one minute, and any
+  advisory refresh gets at most three seconds before degrading to `UNAVAILABLE`.
 - Official-source failure degrades to `sourceState=UNAVAILABLE` and
   `status=INSUFFICIENT`; it must never fabricate a blocking or directional
   opinion.
