@@ -55,7 +55,7 @@ def assess_agent_context(
             rejected.append(item.source_id)
             continue
 
-        evidence_key = (item.source, item.source_id)
+        evidence_key = (item.source, item.source_id.strip().casefold())
         if evidence_key in seen_evidence:
             rejected.append(item.source_id)
             continue
