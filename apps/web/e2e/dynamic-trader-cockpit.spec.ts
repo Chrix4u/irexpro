@@ -282,6 +282,39 @@ test.describe('AI Trader novice workflow', () => {
   });
 
 
+  test('stacks every position metric on its own desktop row', async ({ page }) => {
+    await gotoAiTrader(page);
+
+    const viewport = page.viewportSize();
+    expect(viewport).not.toBeNull();
+    if (!viewport || viewport.width <= 700) {
+      test.skip();
+      return;
+    }
+
+    const metrics = page.locator('.ai-trade-metrics').first();
+    await expect(metrics).toBeVisible();
+
+    const rows = metrics.locator(':scope > div');
+    await expect(rows).toHaveCount(4);
+
+    const boxes = await Promise.all(
+      Array.from({ length: 4 }, (_, index) => rows.nth(index).boundingBox()),
+    );
+    for (let index = 1; index < boxes.length; index += 1) {
+      expect(boxes[index]).not.toBeNull();
+      expect(boxes[index - 1]).not.toBeNull();
+      expect(boxes[index]!.y).toBeGreaterThan(boxes[index - 1]!.y);
+      expect(Math.abs(boxes[index]!.x - boxes[index - 1]!.x)).toBeLessThan(1);
+    }
+
+    await assertNoHorizontalOverflow(page);
+    assertNoConsoleErrors(page);
+    assertNoFailedRequests(page);
+    assertNoExternalRequests(page);
+  });
+
+
   test('accepts the active-session envelope during rolling deployments', async ({ page }) => {
     await gotoAiTrader(page, { sessionEnvelope: true });
 
