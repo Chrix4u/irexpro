@@ -457,7 +457,41 @@ export class TradingService {
       throw new NotFoundException(`Trading session ${sessionId} not found`);
     }
 
-    if (session.executionMode !== ExecutionMode.PAPER_ONLY) {
+    const [connection] = await this.brokerService.findConnectionsByIds([
+      session.brokerConnectionId,
+    ]);
+    if (!connection) {
+      return {
+        enabled: this.aiEngineClient.isSchedulerIntegrationEnabled(),
+        registered: false,
+        trading_session_id: sessionId,
+        active: false,
+        instruments: [],
+        timeframe: null,
+        interval_seconds: null,
+        source: null,
+        last_run_at: null,
+        next_run_at: null,
+        last_decision: 'BLOCKED',
+        last_reason: 'broker_connection_unavailable',
+        last_confidence_score: null,
+        last_confidence_at: null,
+        confidence_threshold: null,
+        model_version: null,
+        model_mode: null,
+        model_loaded: null,
+        last_market_data_at: null,
+        market_data_age_seconds: null,
+        market_data_cache_bypassed: false,
+        last_publish_failed: false,
+      };
+    }
+
+    // Model approval is about the bound broker ENVIRONMENT, not whether the
+    // session is automatic. A provider DEMO account may use FULL_AUTO safely
+    // inside the provider sandbox; LIVE stays blocked until a separately
+    // live-approved model path exists.
+    if (connection.accountType === BrokerMode.LIVE) {
       return {
         enabled: this.aiEngineClient.isSchedulerIntegrationEnabled(),
         registered: false,
@@ -510,7 +544,8 @@ export class TradingService {
         instruments,
         timeframe: 'H1',
         source: 'broker',
-        mode: ExecutionMode.PAPER_ONLY,
+        accountType: connection.accountType,
+        mode: session.executionMode,
       });
       return this.aiEngineClient.getSessionStatus(sessionId);
     }
