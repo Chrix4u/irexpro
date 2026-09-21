@@ -46,6 +46,9 @@ from app.domain.training.train_multitimeframe import (
     load_and_prepare_corpora,
 )
 
+# Paper/UAT qualification must be based on the same multi-month evidence
+# volume used by the secured six-pair workflow. This is an evidence floor,
+# not a profitability or execution threshold.
 MIN_PAPER_PROMOTION_M1_ROWS_PER_INSTRUMENT = 100_000
 
 DEFAULT_FINAL_GATE = {
