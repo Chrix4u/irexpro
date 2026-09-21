@@ -196,7 +196,13 @@ jobs:
           readonly OUTPUT_ROOT="$RESEARCH_ROOT/$candidate_sha"
           readonly RESEARCH_STATE="$RESEARCH_ROOT/last-research-sha"
           readonly DUKASCOPY_CACHE="/home/lightworld/research/dukascopy-raw-cache"
-          # Use a multi-month M1 corpus per pair so M5/M15/H1/H4 context sees\n          # materially different market regimes instead of only a few weeks.\n          readonly TARGET_ROWS=100000
+          # Use a multi-month M1 corpus per pair so M5/M15/H1/H4 context sees
+          # materially different market regimes instead of only a few weeks.
+          readonly TARGET_ROWS=100000
+          [[ "$TARGET_ROWS" =~ ^[0-9]+$ ]] && (( TARGET_ROWS >= 100000 )) || {
+            printf 'RESEARCH HOLD: invalid evidence target rows: %s\n' "$TARGET_ROWS" >&2
+            exit 20
+          }
 
           mark_research_evaluated() {
             install -d -m 700 "$RESEARCH_ROOT"
