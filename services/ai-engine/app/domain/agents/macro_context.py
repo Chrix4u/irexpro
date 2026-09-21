@@ -5,14 +5,20 @@ import hashlib
 import re
 from collections import defaultdict
 from datetime import UTC, datetime
+from math import isfinite
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.domain.agents.context_sources import TrustedContextSourceRegistry
+from app.domain.agents.context_sources import (
+    TrustedContextSource,
+    TrustedContextSourceRegistry,
+)
 from app.domain.agents.schemas import AgentEvidence
 
 MacroImpact = Literal["LOW", "MEDIUM", "HIGH"]
+MacroEventStatus = Literal["SCHEDULED", "CANCELLED"]
+_MAX_EVENT_WINDOW_MINUTES = 24 * 60
 
 
 def _aware(value: datetime, field_name: str) -> datetime:
@@ -23,6 +29,23 @@ def _aware(value: datetime, field_name: str) -> datetime:
 
 def _canonical_text(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", value.strip().lower()).strip("_")
+
+
+def _canonical_identity(value: str) -> str:
+    return value.strip().casefold()
+
+
+def _validate_event_window(value: int | float, field_name: str) -> None:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int | float)
+        or not isfinite(value)
+        or not 0 <= value <= _MAX_EVENT_WINDOW_MINUTES
+    ):
+        raise ValueError(
+            f"{field_name} must be finite and between 0 and "
+            f"{_MAX_EVENT_WINDOW_MINUTES} minutes"
+        )
 
 
 def normalize_fx_instrument(instrument: str) -> str:
@@ -36,6 +59,8 @@ def normalize_fx_instrument(instrument: str) -> str:
 class MacroContextEvent(BaseModel):
     """Provider-normalized macro/calendar event with causal availability."""
 
+    model_config = ConfigDict(frozen=True)
+
     source_id: str = Field(..., min_length=2, max_length=80)
     source_event_id: str = Field(..., min_length=1, max_length=160)
     event_family: str = Field(
@@ -47,6 +72,7 @@ class MacroContextEvent(BaseModel):
     title: str = Field(..., min_length=2, max_length=240)
     currency: str = Field(..., min_length=3, max_length=3)
     impact: MacroImpact
+    status: MacroEventStatus = "SCHEDULED"
     observed_at: datetime
     available_at: datetime
     scheduled_for: datetime
@@ -77,6 +103,13 @@ class MacroContextEvent(BaseModel):
             raise ValueError("available_at cannot precede observed_at")
         return self
 
+    def revision_key(self) -> tuple[str, str]:
+        """Stable provider-event identity used to resolve historical revisions."""
+        return (
+            _canonical_identity(self.source_id),
+            _canonical_identity(self.source_event_id),
+        )
+
     def fingerprint(self) -> str:
         """Cross-source event identity independent of provider-specific IDs."""
         scheduled_utc = self.scheduled_for.astimezone(UTC).replace(
@@ -93,6 +126,28 @@ class MacroContextEvent(BaseModel):
         return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
+def _latest_known_revisions(
+    events: list[MacroContextEvent],
+    evaluated_at: datetime,
+) -> list[MacroContextEvent]:
+    """Resolve each source event to the latest revision known at evaluated_at."""
+    latest: dict[tuple[str, str], MacroContextEvent] = {}
+    for event in events:
+        if event.available_at > evaluated_at:
+            continue
+        key = event.revision_key()
+        current = latest.get(key)
+        if current is None or (
+            event.available_at,
+            event.observed_at,
+        ) > (
+            current.available_at,
+            current.observed_at,
+        ):
+            latest[key] = event
+    return list(latest.values())
+
+
 def build_high_impact_event_evidence(
     *,
     events: list[MacroContextEvent],
@@ -105,60 +160,91 @@ def build_high_impact_event_evidence(
     """
     Derive fresh advisory BLOCK evidence from already-known high-impact events.
 
-    The event schedule must have been available by evaluated_at. The returned
-    evidence is generated at evaluated_at so a calendar item learned days ago
-    does not become artificially stale while its event window is active.
+    Revisions are resolved causally before impact/window filtering. The returned
+    evidence is generated at evaluated_at, while original source timestamps are
+    retained in metadata for audit and historical replay.
     """
     now = _aware(evaluated_at, "evaluated_at")
-    if pre_event_minutes < 0 or post_event_minutes < 0:
-        raise ValueError("event window minutes cannot be negative")
+    _validate_event_window(pre_event_minutes, "pre_event_minutes")
+    _validate_event_window(post_event_minutes, "post_event_minutes")
 
     pair = normalize_fx_instrument(instrument)
     relevant_currencies = {pair[:3], pair[3:]}
 
-    grouped: dict[str, list[tuple[MacroContextEvent, float, bool]]] = defaultdict(list)
-    for event in events:
-        if event.currency not in relevant_currencies or event.impact != "HIGH":
+    grouped: dict[
+        str,
+        list[tuple[MacroContextEvent, TrustedContextSource]],
+    ] = defaultdict(list)
+
+    for event in _latest_known_revisions(events, now):
+        if event.status != "SCHEDULED":
             continue
-        if event.available_at > now:
+        if event.currency not in relevant_currencies or event.impact != "HIGH":
             continue
 
         source = registry.enabled_for_currency(event.source_id, event.currency)
         if source is None:
             continue
 
-        grouped[event.fingerprint()].append(
-            (event, source.credibility, source.requires_corroboration)
-        )
+        grouped[event.fingerprint()].append((event, source))
 
     evidence: list[AgentEvidence] = []
     for fingerprint, observations in grouped.items():
-        by_source: dict[str, tuple[MacroContextEvent, float, bool]] = {}
+        by_source: dict[
+            str,
+            tuple[MacroContextEvent, TrustedContextSource],
+        ] = {}
         for observation in observations:
-            event = observation[0]
-            key = event.source_id.strip().casefold()
+            event, _ = observation
+            key = _canonical_identity(event.source_id)
             current = by_source.get(key)
-            if current is None or event.available_at < current[0].available_at:
+            if current is None or (
+                event.available_at,
+                event.observed_at,
+            ) > (
+                current[0].available_at,
+                current[0].observed_at,
+            ):
                 by_source[key] = observation
 
         verified = list(by_source.values())
         if not verified:
             continue
 
-        representative = min(
-            (item[0] for item in verified),
-            key=lambda item: (item.available_at, item.source_id.casefold()),
+        by_independence_group: dict[
+            str,
+            tuple[MacroContextEvent, TrustedContextSource],
+        ] = {}
+        for observation in verified:
+            _, source = observation
+            current = by_independence_group.get(source.independence_key)
+            if current is None or source.credibility > current[1].credibility:
+                by_independence_group[source.independence_key] = observation
+
+        independent = list(by_independence_group.values())
+        requires_corroboration = any(
+            source.requires_corroboration for _, source in verified
         )
-        requires_corroboration = all(item[2] for item in verified)
-        if requires_corroboration and len(verified) < 2:
+        if requires_corroboration and len(independent) < 2:
             continue
+
+        representative, _ = max(
+            verified,
+            key=lambda item: (
+                item[0].available_at,
+                item[0].observed_at,
+                item[1].credibility,
+                item[0].source_id.casefold(),
+            ),
+        )
 
         minutes_to_event = (representative.scheduled_for - now).total_seconds() / 60.0
         if minutes_to_event > pre_event_minutes or minutes_to_event < -post_event_minutes:
             continue
 
-        strongest_credibility = max(item[1] for item in verified)
-        source_ids = sorted(item[0].source_id for item in verified)
+        strongest_credibility = max(source.credibility for _, source in independent)
+        source_ids = sorted(event.source_id for event, _ in verified)
+        independence_groups = sorted(source.independence_key for _, source in independent)
 
         evidence.append(
             AgentEvidence(
@@ -175,14 +261,18 @@ def build_high_impact_event_evidence(
                     f"{representative.event_family} event is within the configured "
                     "risk window."
                 ),
-                verified_sources=len(verified),
+                verified_sources=len(independent),
                 metadata={
                     "eventFingerprint": fingerprint,
                     "eventFamily": representative.event_family,
                     "impact": representative.impact,
                     "scheduledFor": representative.scheduled_for.astimezone(UTC).isoformat(),
                     "minutesToEvent": round(minutes_to_event, 3),
+                    "sourceObservedAt": representative.observed_at.astimezone(UTC).isoformat(),
+                    "sourceAvailableAt": representative.available_at.astimezone(UTC).isoformat(),
+                    "sourceEventId": representative.source_event_id,
                     "verifiedSourceIds": source_ids,
+                    "independenceGroups": independence_groups,
                 },
             )
         )
