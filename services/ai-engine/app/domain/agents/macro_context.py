@@ -130,22 +130,30 @@ def _latest_known_revisions(
     events: list[MacroContextEvent],
     evaluated_at: datetime,
 ) -> list[MacroContextEvent]:
-    """Resolve each source event to the latest revision known at evaluated_at."""
+    """Resolve each source event to one deterministic latest-known revision."""
     latest: dict[tuple[str, str], MacroContextEvent] = {}
+    conflicted: set[tuple[str, str]] = set()
+
     for event in events:
         if event.available_at > evaluated_at:
             continue
+
         key = event.revision_key()
         current = latest.get(key)
-        if current is None or (
-            event.available_at,
-            event.observed_at,
-        ) > (
-            current.available_at,
-            current.observed_at,
-        ):
+        if current is None:
             latest[key] = event
-    return list(latest.values())
+            continue
+
+        event_clock = (event.available_at, event.observed_at)
+        current_clock = (current.available_at, current.observed_at)
+
+        if event_clock > current_clock:
+            latest[key] = event
+            conflicted.discard(key)
+        elif event_clock == current_clock and event != current:
+            conflicted.add(key)
+
+    return [event for key, event in latest.items() if key not in conflicted]
 
 
 def build_high_impact_event_evidence(
