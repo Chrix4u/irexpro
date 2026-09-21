@@ -199,6 +199,7 @@ jobs:
           # Use a multi-month M1 corpus per pair so M5/M15/H1/H4 context sees
           # materially different market regimes instead of only a few weeks.
           readonly TARGET_ROWS=100000
+          readonly DUKASCOPY_LOOKBACK_DAYS=180
           [[ "$TARGET_ROWS" =~ ^[0-9]+$ ]] && (( TARGET_ROWS >= 100000 )) || {
             printf 'RESEARCH HOLD: invalid evidence target rows: %s\n' "$TARGET_ROWS" >&2
             exit 20
@@ -280,6 +281,7 @@ jobs:
           "$python_bin" -m app.domain.training.run_first_six_pair \
             --source dukascopy \
             --dukascopy-cache-dir "$DUKASCOPY_CACHE" \
+            --dukascopy-max-lookback-days "$DUKASCOPY_LOOKBACK_DAYS" \
             --output-dir "$OUTPUT_ROOT" \
             --target-rows "$TARGET_ROWS" \
             --horizons 1,5,10 \
@@ -299,6 +301,7 @@ jobs:
           console.log(`data_source=${report.data_source}`);
           console.log(`instruments=${report.instruments.join(',')}`);
           console.log(`target_rows_per_pair=${report.target_m1_rows_per_instrument}`);
+          console.log(`dukascopy_max_lookback_days=${report.dukascopy_max_lookback_days}`);
 
           for (const instrument of report.instruments) {
             const manifest = report.collection_manifests[instrument];
