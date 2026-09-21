@@ -66,7 +66,8 @@ Before weighting, the coordinator also applies a fail-closed acceptance layer:
 
 - wrong-instrument, stale and future-dated evidence is rejected;
 - `MACRO_NEWS` evidence must declare at least one verified source;
-- duplicate `(source, source_id)` evidence cannot be counted twice;
+- duplicate `(source, source_id)` evidence cannot be counted twice, including case/whitespace variants;
+- credential-like keys are recursively rejected from evidence metadata;
 - invalid coordinator thresholds are rejected instead of silently changing
   the classification semantics.
 
@@ -76,7 +77,7 @@ deduplication and provenance validation around these foundation guarantees.
 ## Safety invariants
 
 - The council has execution_authority=false.
-- Context evidence cannot contain broker credentials.
+- Context evidence cannot contain broker credentials; credential-like metadata keys are rejected at schema validation.
 - No direct LLM-to-broker path.
 - No self-generated code may execute in the trading runtime.
 - No online parameter/model mutation without offline research, untouched
