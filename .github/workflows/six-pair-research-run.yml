@@ -665,18 +665,44 @@ jobs:
           REMOTE
 
           research_pid=$!
+          superseded_marker="$RUNNER_TEMP/irexpro-research-superseded"
+          rm -f "$superseded_marker"
+
           (
             while kill -0 "$research_pid" 2>/dev/null; do
               sleep 60
-              if kill -0 "$research_pid" 2>/dev/null; then
-                heartbeat_now="$(date +%s)"
-                heartbeat_elapsed=$((heartbeat_now - research_started_epoch))
-                printf 'RESEARCH_HEARTBEAT candidate=%s elapsed_seconds=%s\n' \
-                  "$CANDIDATE_SHA" "$heartbeat_elapsed"
+              if ! kill -0 "$research_pid" 2>/dev/null; then
+                break
+              fi
+
+              heartbeat_now="$(date +%s)"
+              heartbeat_elapsed=$((heartbeat_now - research_started_epoch))
+              printf 'RESEARCH_HEARTBEAT candidate=%s elapsed_seconds=%s\n' \
+                "$CANDIDATE_SHA" "$heartbeat_elapsed"
+
+              # A model/training commit can move main while this expensive
+              # research job is still collecting data or evaluating folds.
+              # Release the shared staging-worktree lock promptly instead of
+              # making newer exact-main deploys wait for obsolete research.
+              if ! git fetch --quiet --no-tags origin main; then
+                printf 'RESEARCH_WATCHDOG_WARNING candidate=%s reason=main_fetch_failed\n' \
+                  "$CANDIDATE_SHA" >&2
+                continue
+              fi
+
+              current_main_sha="$(git rev-parse origin/main)"
+              if [[ "$current_main_sha" != "$CANDIDATE_SHA" ]]; then
+                printf 'RESEARCH_ABORT reason=candidate_superseded candidate=%s current_main=%s\n' \
+                  "$CANDIDATE_SHA" "$current_main_sha"
+                : > "$superseded_marker"
+                kill -TERM "$research_pid" 2>/dev/null || true
+                sleep 5
+                kill -KILL "$research_pid" 2>/dev/null || true
+                break
               fi
             done
           ) &
-          heartbeat_pid=$!
+          watchdog_pid=$!
 
           if wait "$research_pid"; then
             research_status=0
@@ -684,11 +710,19 @@ jobs:
             research_status=$?
           fi
 
-          kill "$heartbeat_pid" 2>/dev/null || true
-          wait "$heartbeat_pid" 2>/dev/null || true
+          kill "$watchdog_pid" 2>/dev/null || true
+          wait "$watchdog_pid" 2>/dev/null || true
 
           research_finished_epoch="$(date +%s)"
           research_elapsed=$((research_finished_epoch - research_started_epoch))
+
+          if [[ -f "$superseded_marker" ]]; then
+            rm -f "$superseded_marker"
+            printf 'RESEARCH_PROCESS_EXIT candidate=%s status=0 elapsed_seconds=%s reason=candidate_superseded\n' \
+              "$CANDIDATE_SHA" "$research_elapsed"
+            exit 0
+          fi
+
           printf 'RESEARCH_PROCESS_EXIT candidate=%s status=%s elapsed_seconds=%s\n' \
             "$CANDIDATE_SHA" "$research_status" "$research_elapsed"
           exit "$research_status"
