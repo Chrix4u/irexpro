@@ -34,10 +34,7 @@ function finiteNumber(value: unknown, min = 0, max = Number.POSITIVE_INFINITY): 
 }
 
 function integerNumber(value: unknown, min = 0, max = Number.MAX_SAFE_INTEGER): number | null {
-  return typeof value === 'number' &&
-    Number.isInteger(value) &&
-    value >= min &&
-    value <= max
+  return typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max
     ? value
     : null;
 }
