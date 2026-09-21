@@ -50,7 +50,12 @@ async def start_session_scheduler(
     """
     settings = get_settings()
 
-    if request.mode not in ("paper", "PAPER_ONLY"):
+    # Execution mode and broker environment are separate authority axes.
+    # FULL_AUTO on a DEMO connection is automatic execution inside the broker's
+    # sandbox. The current AI loader is paper-approved only, so any LIVE-bound
+    # session remains unregistered until a separately live-approved model path
+    # exists. This keeps real broker DEMO UAT working without weakening LIVE.
+    if request.account_type == "LIVE":
         return SessionSchedulerResponse(
             registered=False,
             trading_session_id=request.trading_session_id,
