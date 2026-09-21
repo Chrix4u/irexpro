@@ -291,6 +291,500 @@ jobs:
           # every checkpoint against candidate/config/data fingerprints before reuse.
           install -d -m 700 "$OUTPUT_ROOT" "$DUKASCOPY_CACHE"
 
+          # Salvage completed raw/MTF pair outputs from the nearest first-parent
+          # ancestor only when the data/corpus construction code is unchanged.
+          # This lets a resumable implementation reuse a timed-out predecessor
+          # without mixing incompatible feature/data semantics.
+          bootstrap_root=''
+          bootstrap_sha=''
+          readonly bootstrap_unsafe_pattern='^(services/ai-engine/app/domain/training/(collect_dukascopy\.py|multitimeframe_corpus\.py|dataset_builder\.py)|services/ai-engine/app/domain/models/(feature_engineering\.py|multitimeframe_features\.py)|services/ai-engine/(pyproject\.toml|requirements\.lock))
+          export PYTHONPATH="$PWD"
+          export IREXPRO_RESEARCH_PROGRESS=1
+          export IREXPRO_XGB_N_JOBS=4
+          export IREXPRO_RESEARCH_CANDIDATE_SHA="$candidate_sha"
+          printf 'RESEARCH_CONFIGURATION xgb_n_jobs=%s progress=%s timeout_minutes=420 resume=true candidate=%s bootstrap_sha=%s\n' \
+            "$IREXPRO_XGB_N_JOBS" "$IREXPRO_RESEARCH_PROGRESS" "$candidate_sha" \
+            "${bootstrap_sha:-none}"
+
+          "$python_bin" -m app.domain.training.run_first_six_pair \
+            --source dukascopy \
+            --dukascopy-cache-dir "$DUKASCOPY_CACHE" \
+            --dukascopy-max-lookback-days "$DUKASCOPY_LOOKBACK_DAYS" \
+            --output-dir "$OUTPUT_ROOT" \
+            --target-rows "$TARGET_ROWS" \
+            --horizons 1,5,10 \
+            --confidence-threshold 0.60 \
+            --commission-bps 0 \
+            --slippage-bps 0 \
+            --max-splits 5 \
+            --resume \
+            "${bootstrap_args[@]}" \
+            > "$OUTPUT_ROOT/run-result.json.tmp"
+          mv "$OUTPUT_ROOT/run-result.json.tmp" "$OUTPUT_ROOT/run-result.json"
+
+          summary="$OUTPUT_ROOT/reports/six_pair_walkforward_summary.json"
+          test -s "$summary"
+
+          SUMMARY_PATH="$summary" node <<'NODE'
+          const fs = require('fs');
+          const report = JSON.parse(fs.readFileSync(process.env.SUMMARY_PATH, 'utf8'));
+          console.log('SIX_PAIR_RESEARCH_COMPLETED');
+          console.log(`data_source=${report.data_source}`);
+          console.log(`instruments=${report.instruments.join(',')}`);
+          console.log(`target_rows_per_pair=${report.target_m1_rows_per_instrument}`);
+          console.log(`dukascopy_max_lookback_days=${report.dukascopy_max_lookback_days}`);
+
+          for (const instrument of report.instruments) {
+            const manifest = report.collection_manifests[instrument];
+            console.log(
+              [
+                `corpus=${instrument}`,
+                `rows=${manifest.row_count}`,
+                `source=${manifest.source}`,
+                `spread=${manifest.spread_basis}`,
+                `sha256=${manifest.dataset_sha256}`,
+              ].join(' ')
+            );
+          }
+
+          for (const horizon of ['1m', '5m', '10m']) {
+            const block = report.horizon_reports[horizon];
+            if (!block) continue;
+            const c = block.overall.classification;
+            const t = block.overall.trading;
+            const g = block.research_gate;
+            const o = g.observed || {};
+            const checks = g.checks || {};
+            const fmt = (value) =>
+              value == null || !Number.isFinite(Number(value))
+                ? 'null'
+                : Number(value).toFixed(6);
+            const pass = (name) => checks[name] === true ? 'PASS' : 'HOLD';
+            console.log(
+              [
+                `horizon=${horizon}`,
+                `balanced_accuracy=${Number(c.balanced_accuracy).toFixed(6)}`,
+                `precision=${Number(c.precision).toFixed(6)}`,
+                `recall=${Number(c.recall).toFixed(6)}`,
+                `f1=${Number(c.f1).toFixed(6)}`,
+                `sharpe=${t.sharpe_ratio == null ? 'null' : Number(t.sharpe_ratio).toFixed(6)}`,
+                `profit_factor=${t.profit_factor == null ? 'null' : Number(t.profit_factor).toFixed(6)}`,
+                `max_drawdown=${Number(t.max_drawdown).toFixed(6)}`,
+                `trades=${t.trade_or_period_count}`,
+                `positive_fold_fraction=${fmt(o.positive_fold_fraction)}`,
+                `positive_instrument_fraction=${fmt(o.positive_instrument_fraction)}`,
+                `gate_checks=ba:${pass('balanced_accuracy')},sharpe:${pass('sharpe_ratio')},pf:${pass('profit_factor')},dd:${pass('max_drawdown')},folds:${pass('positive_fold_fraction')},pairs:${pass('positive_instrument_fraction')}`,
+                `gate=${g.research_gate_passed ? 'PASS' : 'HOLD'}`,
+              ].join(' ')
+            );
+          }
+          NODE
+
+          printf 'report_path=%s\n' "$summary"
+
+          # Select exactly one horizon using research evidence only. The untouched
+          # test set is deliberately NOT used for horizon selection; it remains a
+          # final gate for the pre-selected candidate.
+          selected_horizon="$(SUMMARY_PATH="$summary" node <<'NODE'
+          const fs = require('fs');
+          const report = JSON.parse(fs.readFileSync(process.env.SUMMARY_PATH, 'utf8'));
+          const candidates = [];
+          for (const horizon of report.horizons_minutes || []) {
+            const block = report.horizon_reports?.[String(horizon) + 'm'];
+            if (!block?.research_gate?.research_gate_passed) continue;
+            const classification = block.overall?.classification || {};
+            const trading = block.overall?.trading || {};
+            const sharpe = Number(trading.sharpe_ratio);
+            const balanced = Number(classification.balanced_accuracy);
+            const drawdown = Number(trading.max_drawdown);
+            candidates.push({
+              horizon: Number(horizon),
+              sharpe: Number.isFinite(sharpe) ? sharpe : -Infinity,
+              balanced: Number.isFinite(balanced) ? balanced : -Infinity,
+              drawdown: Number.isFinite(drawdown) ? drawdown : Infinity,
+            });
+          }
+          candidates.sort((a, b) =>
+            (b.sharpe - a.sharpe) ||
+            (b.balanced - a.balanced) ||
+            (a.drawdown - b.drawdown) ||
+            (a.horizon - b.horizon)
+          );
+          if (candidates.length > 0) process.stdout.write(String(candidates[0].horizon));
+          NODE
+          )"
+
+          if [[ -z "$selected_horizon" ]]; then
+            printf 'MODEL_PROMOTION_HOLD reason=no_research_horizon_passed\n'
+            exit 0
+          fi
+          [[ "$selected_horizon" =~ ^(1|5|10)$ ]] || {
+            printf 'MODEL_PROMOTION_HOLD reason=invalid_selected_horizon\n' >&2
+            exit 16
+          }
+          printf 'selected_horizon=%sm\n' "$selected_horizon"
+
+          # Long research runs may outlive the main SHA they started from.
+          # Never promote a trained artifact after main has moved; force the
+          # next exact-main deployment to research again instead.
+          git fetch --quiet --no-tags origin main
+          current_main_sha="$(git rev-parse origin/main)"
+          if [[ "$current_main_sha" != "$candidate_sha" ]]; then
+            persist_research_state=false
+            printf 'MODEL_PROMOTION_HOLD reason=candidate_superseded candidate=%s current_main=%s\n' \
+              "$candidate_sha" "$current_main_sha"
+            exit 0
+          fi
+
+          # Evaluate the advisory Agent Council overlay on the exact outer-fold
+          # predictions for the selected research horizon. This is observational
+          # evidence only and cannot alter model selection, paper approval,
+          # risk limits, or broker execution.
+          context_predictions="$OUTPUT_ROOT/reports/six_pair_walkforward_${selected_horizon}m_predictions.csv"
+          context_root="$OUTPUT_ROOT/context/h$selected_horizon"
+          context_result="$context_root/context-run-result.json"
+          context_error="$context_root/context-error.log"
+          install -d -m 700 "$context_root"
+
+          if [[ ! -s "$context_predictions" ]]; then
+            printf 'CONTEXT_RESEARCH_HOLD reason=missing_outer_fold_predictions horizon=%sm\n' \
+              "$selected_horizon"
+          elif "$python_bin" -m app.domain.training.run_bls_context_overlay_study \
+            --predictions "$context_predictions" \
+            --horizon-bars "$selected_horizon" \
+            --output-dir "$context_root" \
+            --pre-event-minutes 30 \
+            --post-event-minutes 15 \
+            > "$context_result" 2> "$context_error"; then
+            context_report="$context_root/agent_council_overlay.json"
+            if [[ ! -s "$context_report" ]]; then
+              printf 'CONTEXT_RESEARCH_HOLD reason=missing_overlay_report horizon=%sm\n' \
+                "$selected_horizon"
+            elif CONTEXT_REPORT_PATH="$context_report" node <<'NODE'
+          const fs = require('fs');
+          const report = JSON.parse(
+            fs.readFileSync(process.env.CONTEXT_REPORT_PATH, 'utf8')
+          );
+          const quant = report.overall?.quant_only || {};
+          const candidate = report.overall?.context_block_candidate || {};
+          const classification = report.overall?.classification_on_active_signals || {};
+          const archive = report.historical_context_archive || {};
+          const blocked = report.blocked_signal_diagnostics || {};
+          const value = (input, digits = 6) =>
+            input == null || !Number.isFinite(Number(input))
+              ? 'null'
+              : Number(input).toFixed(digits);
+
+          console.log('AGENT_CONTEXT_OVERLAY_COMPLETED');
+          console.log(
+            [
+              `horizon=${report.horizon_bars}m`,
+              `archive_months=${archive.month_count ?? 0}`,
+              `archive_events=${archive.event_count ?? 0}`,
+              `retrospective_excluded=${archive.skipped_retrospective_rows ?? 0}`,
+              `blocked_signals=${blocked.blocked_signals ?? 0}`,
+              `blocked_winners=${blocked.blocked_positive_outcomes ?? 0}`,
+              `blocked_losers=${blocked.blocked_negative_outcomes ?? 0}`,
+            ].join(' ')
+          );
+          console.log(
+            [
+              'quant_only',
+              `signals=${quant.raw_active_signals ?? 0}`,
+              `sharpe=${value(quant.sharpe_ratio)}`,
+              `max_drawdown=${value(quant.max_drawdown)}`,
+              `precision=${value(classification.quant_only?.precision)}`,
+              `brier=${value(classification.quant_only?.brier_score)}`,
+            ].join(' ')
+          );
+          console.log(
+            [
+              'context_candidate',
+              `signals=${candidate.raw_active_signals ?? 0}`,
+              `sharpe=${value(candidate.sharpe_ratio)}`,
+              `max_drawdown=${value(candidate.max_drawdown)}`,
+              `precision=${value(classification.context_block_candidate?.precision)}`,
+              `brier=${value(classification.context_block_candidate?.brier_score)}`,
+              'approved_for_paper_uat=false',
+              'approved_for_live=false',
+            ].join(' ')
+          );
+          NODE
+            then
+              rm -f "$context_error"
+              printf 'context_report_path=%s\n' "$context_report"
+            else
+              context_status=$?
+              printf 'CONTEXT_RESEARCH_HOLD reason=overlay_report_validation_failed status=%s horizon=%sm\n' \
+                "$context_status" "$selected_horizon"
+            fi
+          else
+            context_status=$?
+            context_message=''
+            if [[ -s "$context_error" ]]; then
+              context_message="$(head -n 1 "$context_error" | tr '\r\n' ' ' | cut -c1-240)"
+            fi
+            printf 'CONTEXT_RESEARCH_HOLD reason=archive_or_overlay_failed status=%s message=%s\n' \
+              "$context_status" "$context_message"
+          fi
+
+
+          readonly MODEL_ROOT="/home/lightworld/research/irexpro-models/$candidate_sha/h$selected_horizon"
+          readonly MODEL_PATH="$MODEL_ROOT/model.json"
+          readonly METADATA_PATH="$MODEL_ROOT/model.metadata.json"
+          readonly TRAIN_RESULT="$MODEL_ROOT/train-result.json"
+          readonly TRAIN_ERROR="$MODEL_ROOT/train-error.log"
+          rm -rf "$MODEL_ROOT"
+          install -d -m 700 "$MODEL_ROOT"
+
+          if "$python_bin" -m app.domain.training.train_final_multitimeframe \
+            --dataset "EURUSD=$OUTPUT_ROOT/corpora/EURUSD_MTF.csv" \
+            --dataset "GBPUSD=$OUTPUT_ROOT/corpora/GBPUSD_MTF.csv" \
+            --dataset "USDJPY=$OUTPUT_ROOT/corpora/USDJPY_MTF.csv" \
+            --dataset "AUDUSD=$OUTPUT_ROOT/corpora/AUDUSD_MTF.csv" \
+            --dataset "USDCAD=$OUTPUT_ROOT/corpora/USDCAD_MTF.csv" \
+            --dataset "USDCHF=$OUTPUT_ROOT/corpora/USDCHF_MTF.csv" \
+            --horizon-bars "$selected_horizon" \
+            --output-model "$MODEL_PATH" \
+            --qualification-summary "$summary" \
+            --confidence-threshold 0.60 \
+            --commission-bps 0 \
+            --slippage-bps 0 \
+            --approve-paper \
+            > "$TRAIN_RESULT" 2> "$TRAIN_ERROR"; then
+            :
+          else
+            training_status=$?
+            if grep -Fq \
+              'Paper approval requested but research and/or untouched-test gate did not pass' \
+              "$TRAIN_ERROR"; then
+              printf 'MODEL_PROMOTION_HOLD reason=untouched_test_gate_failed horizon=%sm\n' \
+                "$selected_horizon"
+              rm -f "$TRAIN_ERROR"
+              exit 0
+            fi
+            cat "$TRAIN_ERROR" >&2
+            exit "$training_status"
+          fi
+          rm -f "$TRAIN_ERROR"
+          test -s "$MODEL_PATH"
+          test -s "$METADATA_PATH"
+
+          # Re-check immediately before any staging runtime mutation. Main may
+          # have moved while final training and the untouched-test gate ran.
+          git fetch --quiet --no-tags origin main
+          current_main_sha="$(git rev-parse origin/main)"
+          if [[ "$current_main_sha" != "$candidate_sha" ]]; then
+            persist_research_state=false
+            printf 'MODEL_PROMOTION_HOLD reason=candidate_superseded_before_activation candidate=%s current_main=%s\n' \
+              "$candidate_sha" "$current_main_sha"
+            exit 0
+          fi
+
+          # Load the exact candidate through the production loader before changing
+          # the staging process. This re-verifies artifact SHA, feature schema,
+          # runtime profile and paper/live governance.
+          XGBOOST_MODEL_PATH="$MODEL_PATH" \
+          XGBOOST_MODEL_METADATA_PATH="$METADATA_PATH" \
+          "$python_bin" - <<'PY'
+          from app.domain.models.baseline_xgboost import BaselineXGBoostModel
+
+          model = BaselineXGBoostModel()
+          if not model.load_model():
+              raise SystemExit("MODEL PROMOTION HOLD: verified loader rejected artifact")
+          metadata = model.get_model_metadata()
+          if metadata.get("mode") != "trained_xgboost_mtf":
+              raise SystemExit("MODEL PROMOTION HOLD: model is not trained MTF XGBoost")
+          if metadata.get("approved_for_paper") is not True:
+              raise SystemExit("MODEL PROMOTION HOLD: artifact is not paper approved")
+          if metadata.get("approved_for_live") is not False:
+              raise SystemExit("MODEL PROMOTION HOLD: live approval must remain false")
+          print(f"MODEL_ARTIFACT_VERIFIED version={metadata.get('version')}")
+          PY
+
+          # Persist only the two non-secret model paths in the ignored staging .env
+          # and atomically replace the file. deploy-staging.sh reloads these values
+          # on every later restart, preventing silent heuristic regression.
+          AI_ENV_PATH="$STAGING_ROOT/services/ai-engine/.env" \
+          PROMOTED_MODEL_PATH="$MODEL_PATH" \
+          PROMOTED_METADATA_PATH="$METADATA_PATH" \
+          "$python_bin" - <<'PY'
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["AI_ENV_PATH"])
+          if not path.is_file():
+              raise SystemExit("MODEL PROMOTION HOLD: staging AI .env is missing")
+          updates = {
+              "XGBOOST_MODEL_PATH": os.environ["PROMOTED_MODEL_PATH"],
+              "XGBOOST_MODEL_METADATA_PATH": os.environ["PROMOTED_METADATA_PATH"],
+          }
+          lines = path.read_text(encoding="utf-8").splitlines()
+          seen = set()
+          output = []
+          for line in lines:
+              replaced = False
+              for key, value in updates.items():
+                  if line.startswith(f"{key}="):
+                      output.append(f"{key}={value}")
+                      seen.add(key)
+                      replaced = True
+                      break
+              if not replaced:
+                  output.append(line)
+          for key, value in updates.items():
+              if key not in seen:
+                  output.append(f"{key}={value}")
+          temp = path.with_name(f"{path.name}.model-promotion.tmp")
+          temp.write_text("\n".join(output) + "\n", encoding="utf-8")
+          temp.chmod(path.stat().st_mode & 0o777)
+          os.replace(temp, path)
+          PY
+
+          export XGBOOST_MODEL_PATH="$MODEL_PATH"
+          export XGBOOST_MODEL_METADATA_PATH="$METADATA_PATH"
+          pm2 restart irexpro-ai-staging --update-env >/dev/null
+
+          runtime_ready=false
+          for attempt in {1..30}; do
+            if ai_health="$(curl --fail --silent --show-error --max-time 10 \
+              http://127.0.0.1:8011/api/v1/health 2>/dev/null)"; then
+              if AI_HEALTH="$ai_health" node -e '
+                const p = JSON.parse(process.env.AI_HEALTH);
+                const paper = [p.signal_mode, p.execution_mode, p.mode, p.paper_mode, p.paperMode]
+                  .some((v) => v === true || ["paper", "paper-only"].includes(String(v).toLowerCase()));
+                if (!paper || p.scheduler_enabled !== true) process.exit(1);
+              '; then
+                runtime_ready=true
+                break
+              fi
+            fi
+            sleep 2
+          done
+          [[ "$runtime_ready" == true ]] || {
+            printf 'MODEL PROMOTION FAILED: AI runtime did not recover in paper mode.\n' >&2
+            exit 18
+          }
+
+          model_version="$(METADATA_PATH="$METADATA_PATH" node -e '
+            const fs = require("fs");
+            const m = JSON.parse(fs.readFileSync(process.env.METADATA_PATH, "utf8"));
+            process.stdout.write(String(m.model_version || "unknown"));
+          ')"
+
+          active_model="$(curl --fail --silent --show-error --max-time 10 \
+            http://127.0.0.1:8011/api/v1/models/active)"
+          ACTIVE_MODEL="$active_model" EXPECTED_MODEL_VERSION="$model_version" node -e '
+            const model = JSON.parse(process.env.ACTIVE_MODEL);
+            const expected = process.env.EXPECTED_MODEL_VERSION;
+            if (
+              model.version !== expected ||
+              model.mode !== "trained_xgboost_mtf" ||
+              model.loaded !== true ||
+              model.approved_for_paper !== true ||
+              model.approved_for_live !== false
+            ) {
+              console.error("MODEL PROMOTION FAILED: restarted runtime did not activate verified trained model");
+              process.exit(1);
+            }
+          '
+
+          printf 'MODEL_PROMOTED_PAPER_UAT version=%s horizon=%sm approved_for_live=false\n' \
+            "$model_version" "$selected_horizon"
+          REMOTE
+
+          research_pid=$!
+          superseded_marker="$RUNNER_TEMP/irexpro-research-superseded"
+          rm -f "$superseded_marker"
+
+          (
+            while kill -0 "$research_pid" 2>/dev/null; do
+              sleep 60
+              if ! kill -0 "$research_pid" 2>/dev/null; then
+                break
+              fi
+
+              heartbeat_now="$(date +%s)"
+              heartbeat_elapsed=$((heartbeat_now - research_started_epoch))
+              printf 'RESEARCH_HEARTBEAT candidate=%s elapsed_seconds=%s\n' \
+                "$CANDIDATE_SHA" "$heartbeat_elapsed"
+
+              # A model/training commit can move main while this expensive
+              # research job is still collecting data or evaluating folds.
+              # Release the shared staging-worktree lock promptly instead of
+              # making newer exact-main deploys wait for obsolete research.
+              if ! git fetch --quiet --no-tags origin main; then
+                printf 'RESEARCH_WATCHDOG_WARNING candidate=%s reason=main_fetch_failed\n' \
+                  "$CANDIDATE_SHA" >&2
+                continue
+              fi
+
+              current_main_sha="$(git rev-parse origin/main)"
+              if [[ "$current_main_sha" != "$CANDIDATE_SHA" ]]; then
+                printf 'RESEARCH_ABORT reason=candidate_superseded candidate=%s current_main=%s\n' \
+                  "$CANDIDATE_SHA" "$current_main_sha"
+                : > "$superseded_marker"
+                kill -TERM "$research_pid" 2>/dev/null || true
+                sleep 5
+                kill -KILL "$research_pid" 2>/dev/null || true
+                break
+              fi
+            done
+          ) &
+          watchdog_pid=$!
+
+          if wait "$research_pid"; then
+            research_status=0
+          else
+            research_status=$?
+          fi
+
+          kill "$watchdog_pid" 2>/dev/null || true
+          wait "$watchdog_pid" 2>/dev/null || true
+
+          research_finished_epoch="$(date +%s)"
+          research_elapsed=$((research_finished_epoch - research_started_epoch))
+
+          if [[ -f "$superseded_marker" ]]; then
+            rm -f "$superseded_marker"
+            printf 'RESEARCH_PROCESS_EXIT candidate=%s status=0 elapsed_seconds=%s reason=candidate_superseded\n' \
+              "$CANDIDATE_SHA" "$research_elapsed"
+            exit 0
+          fi
+
+          printf 'RESEARCH_PROCESS_EXIT candidate=%s status=%s elapsed_seconds=%s\n' \
+            "$CANDIDATE_SHA" "$research_status" "$research_elapsed"
+          exit "$research_status"
+
+      - name: Remove ephemeral SSH material
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+          while IFS= read -r ancestor_sha; do
+            [[ "$ancestor_sha" == "$candidate_sha" ]] && continue
+            ancestor_root="$RESEARCH_ROOT/$ancestor_sha"
+            if compgen -G "$ancestor_root/corpora/*_MTF.manifest.json" >/dev/null &&
+               compgen -G "$ancestor_root/raw/*_M1.manifest.json" >/dev/null; then
+              ancestor_changes="$(git diff --name-only "$ancestor_sha" "$candidate_sha")"
+              if ! grep -Eq "$bootstrap_unsafe_pattern" <<<"$ancestor_changes"; then
+                bootstrap_root="$ancestor_root"
+                bootstrap_sha="$ancestor_sha"
+                break
+              fi
+            fi
+          done < <(git rev-list --first-parent --max-count=20 "$candidate_sha")
+
+          bootstrap_args=()
+          if [[ -n "$bootstrap_root" ]]; then
+            bootstrap_args=(--bootstrap-dir "$bootstrap_root")
+            printf 'RESEARCH_BOOTSTRAP source_sha=%s source_root=%s\n' \
+              "$bootstrap_sha" "$bootstrap_root"
+          else
+            printf 'RESEARCH_BOOTSTRAP source_sha=none source_root=none\n'
+          fi
+
           cd "$STAGING_ROOT/services/ai-engine"
           export PYTHONPATH="$PWD"
           export IREXPRO_RESEARCH_PROGRESS=1
