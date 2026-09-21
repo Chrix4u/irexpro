@@ -297,7 +297,31 @@ jobs:
           # without mixing incompatible feature/data semantics.
           bootstrap_root=''
           bootstrap_sha=''
-          readonly bootstrap_unsafe_pattern='^(services/ai-engine/app/domain/training/(collect_dukascopy\.py|multitimeframe_corpus\.py|dataset_builder\.py)|services/ai-engine/app/domain/models/(feature_engineering\.py|multitimeframe_features\.py)|services/ai-engine/(pyproject\.toml|requirements\.lock))
+          readonly bootstrap_unsafe_pattern='^(services/ai-engine/app/domain/training/(collect_dukascopy\.py|multitimeframe_corpus\.py|dataset_builder\.py)|services/ai-engine/app/domain/models/(feature_engineering\.py|multitimeframe_features\.py)|services/ai-engine/(pyproject\.toml|requirements\.lock))$'
+          while IFS= read -r ancestor_sha; do
+            [[ "$ancestor_sha" == "$candidate_sha" ]] && continue
+            ancestor_root="$RESEARCH_ROOT/$ancestor_sha"
+            if compgen -G "$ancestor_root/corpora/*_MTF.manifest.json" >/dev/null &&
+               compgen -G "$ancestor_root/raw/*_M1.manifest.json" >/dev/null; then
+              ancestor_changes="$(git diff --name-only "$ancestor_sha" "$candidate_sha")"
+              if ! grep -Eq "$bootstrap_unsafe_pattern" <<<"$ancestor_changes"; then
+                bootstrap_root="$ancestor_root"
+                bootstrap_sha="$ancestor_sha"
+                break
+              fi
+            fi
+          done < <(git rev-list --first-parent --max-count=20 "$candidate_sha")
+
+          bootstrap_args=()
+          if [[ -n "$bootstrap_root" ]]; then
+            bootstrap_args=(--bootstrap-dir "$bootstrap_root")
+            printf 'RESEARCH_BOOTSTRAP source_sha=%s source_root=%s\n' \
+              "$bootstrap_sha" "$bootstrap_root"
+          else
+            printf 'RESEARCH_BOOTSTRAP source_sha=none source_root=none\n'
+          fi
+
+          cd "$STAGING_ROOT/services/ai-engine"
           export PYTHONPATH="$PWD"
           export IREXPRO_RESEARCH_PROGRESS=1
           export IREXPRO_XGB_N_JOBS=4
