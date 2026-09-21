@@ -59,6 +59,7 @@ function buildHealthyConnection(overrides: Record<string, unknown> = {}) {
     brokerId: 'paper-broker',
     brokerName: 'Paper Trading Broker',
     status: BrokerConnectionStatus.CONNECTED,
+    accountType: BrokerMode.DEMO,
     lastHealthCheckAt: new Date(),
     consecutiveFailureCount: 0,
     liveTradingEnabled: false,
@@ -583,9 +584,29 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       expect(session.id).toBe('session-1');
     });
 
-    it('rejects FULL_AUTO when live trading is not enabled on broker connection', async () => {
+    it('allows FULL_AUTO for a real-provider DEMO account without enabling LIVE funds', async () => {
       brokerService.findConnectionById.mockResolvedValue(
-        buildHealthyConnection({ liveTradingEnabled: false }),
+        buildHealthyConnection({
+          brokerId: 'metatrader5',
+          accountType: BrokerMode.DEMO,
+          liveTradingEnabled: false,
+        }),
+      );
+      const session = await service.startTradingSession(
+        'user-1',
+        'conn-1',
+        ExecutionMode.FULL_AUTO,
+      );
+      expect(session.id).toBe('session-1');
+    });
+
+    it('rejects FULL_AUTO for a LIVE connection when live trading is not enabled', async () => {
+      brokerService.findConnectionById.mockResolvedValue(
+        buildHealthyConnection({
+          brokerId: 'metatrader5',
+          accountType: BrokerMode.LIVE,
+          liveTradingEnabled: false,
+        }),
       );
       await expect(
         service.startTradingSession('user-1', 'conn-1', ExecutionMode.FULL_AUTO),
@@ -593,9 +614,16 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       expect(executionService.startSession).not.toHaveBeenCalled();
     });
 
-    it('allows FULL_AUTO when the exact broker connection is live-enabled', async () => {
+    it('allows FULL_AUTO when the exact LIVE broker connection is live-enabled', async () => {
       brokerService.findConnectionById.mockResolvedValue(
-        buildHealthyConnection({ liveTradingEnabled: true }),
+        buildHealthyConnection({
+          brokerId: 'metatrader5',
+          accountType: BrokerMode.LIVE,
+          liveTradingEnabled: true,
+        }),
+      );
+      brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure.mockResolvedValue(
+        buildAcceptedSnapshot({ currency: 'USD', balance: '50000.00', equity: '50100.00' }),
       );
       const session = await service.startTradingSession(
         'user-1',
@@ -716,7 +744,7 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       );
     });
 
-    it('rejects FULL_AUTO when live trading is not enabled on the session connection', async () => {
+    it('allows FULL_AUTO mode changes for DEMO provider connections without LIVE enablement', async () => {
       riskService.getOrCreateProfile.mockResolvedValue({
         id: 'profile-1',
         userId: 'user-1',
@@ -724,7 +752,33 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
         riskAcknowledgementAccepted: true,
       } as never);
       brokerService.findConnectionsByIds.mockResolvedValue([
-        buildHealthyConnection({ liveTradingEnabled: false }),
+        buildHealthyConnection({
+          brokerId: 'metatrader5',
+          accountType: BrokerMode.DEMO,
+          liveTradingEnabled: false,
+        }),
+      ]);
+      await service.changeExecutionMode('user-1', 'session-1', ExecutionMode.FULL_AUTO);
+      expect(executionService.changeExecutionMode).toHaveBeenCalledWith(
+        'user-1',
+        'session-1',
+        ExecutionMode.FULL_AUTO,
+      );
+    });
+
+    it('rejects FULL_AUTO mode changes for LIVE connections without live enablement', async () => {
+      riskService.getOrCreateProfile.mockResolvedValue({
+        id: 'profile-1',
+        userId: 'user-1',
+        allowedTradingModes: AllowedTradingMode.FULL_AUTO,
+        riskAcknowledgementAccepted: true,
+      } as never);
+      brokerService.findConnectionsByIds.mockResolvedValue([
+        buildHealthyConnection({
+          brokerId: 'metatrader5',
+          accountType: BrokerMode.LIVE,
+          liveTradingEnabled: false,
+        }),
       ]);
       await expect(
         service.changeExecutionMode('user-1', 'session-1', ExecutionMode.FULL_AUTO),
@@ -732,7 +786,7 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       expect(executionService.changeExecutionMode).not.toHaveBeenCalled();
     });
 
-    it('allows FULL_AUTO when live trading is enabled on the session connection', async () => {
+    it('allows FULL_AUTO when live trading is enabled on the LIVE session connection', async () => {
       riskService.getOrCreateProfile.mockResolvedValue({
         id: 'profile-1',
         userId: 'user-1',
@@ -740,7 +794,11 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
         riskAcknowledgementAccepted: true,
       } as never);
       brokerService.findConnectionsByIds.mockResolvedValue([
-        buildHealthyConnection({ liveTradingEnabled: true }),
+        buildHealthyConnection({
+          brokerId: 'metatrader5',
+          accountType: BrokerMode.LIVE,
+          liveTradingEnabled: true,
+        }),
       ]);
       await service.changeExecutionMode('user-1', 'session-1', ExecutionMode.FULL_AUTO);
       expect(executionService.changeExecutionMode).toHaveBeenCalledWith(
