@@ -65,7 +65,7 @@ describe('InternalSignalDto agent context', () => {
     payload.agentContext.evidence[0] = {
       ...payload.agentContext.evidence[0],
       rawProviderPayload: 'must-not-cross-boundary',
-    } as typeof payload.agentContext.evidence[0];
+    } as (typeof payload.agentContext.evidence)[0];
 
     const errors = await validatePayload(payload);
 
