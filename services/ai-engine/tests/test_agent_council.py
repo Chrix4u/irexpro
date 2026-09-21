@@ -2,8 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from app.domain.agents.coordinator import assess_agent_context
-from app.domain.agents.schemas import AgentEvidence
+from app.domain.agents import AgentEvidence, assess_agent_context
 
 
 NOW = datetime(2026, 9, 21, 0, 0, tzinfo=UTC)
