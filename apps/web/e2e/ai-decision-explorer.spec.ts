@@ -27,6 +27,32 @@ const safeSnapshot = {
         volatilityScore: 0.42,
         generatedAt: '2026-08-28T22:19:58.000Z',
       },
+      agentContext: {
+        version: 'agent-council-v1',
+        status: 'BLOCKED',
+        consensusDirection: 'NEUTRAL',
+        weightedSupport: 0,
+        weightedOpposition: 0,
+        disagreementScore: 0,
+        evidenceCount: 1,
+        rejectedCount: 0,
+        evidence: [
+          {
+            source: 'MACRO_NEWS',
+            sourceId: 'macro-event:bls-cpi',
+            stance: 'BLOCK',
+            confidence: 1,
+            credibility: 1,
+            verifiedSources: 1,
+            availableAt: '2026-08-28T22:19:50.000Z',
+            summary: 'High-impact USD CPI event is within the configured risk window.',
+          },
+        ],
+        sourceState: 'AVAILABLE',
+        evaluatedAt: '2026-08-28T22:19:59.000Z',
+        advisoryOnly: true,
+        executionAuthority: false,
+      },
       risk: {
         decision: 'APPROVED',
         rejectionCode: null,
@@ -78,6 +104,7 @@ const safeSnapshot = {
         volatilityScore: 0.31,
         generatedAt: '2026-08-28T22:09:59.000Z',
       },
+      agentContext: null,
       risk: {
         decision: 'REJECTED',
         rejectionCode: 'MAX_CONCURRENT_TRADES',
@@ -131,6 +158,13 @@ test.describe('AI Decision Explorer', () => {
     await expect(page.getByText('82%', { exact: true })).toBeVisible();
     await expect(page.getByText('TREND_H1', { exact: true })).toBeVisible();
     await expect(page.getByText('Execution Succeeded', { exact: true })).toBeVisible();
+    await expect(page.getByText('Agent Council context', { exact: true }).first()).toBeVisible();
+    await expect(page.getByText('Blocked', { exact: true }).first()).toBeVisible();
+    await expect(
+      page.getByText('High-impact USD CPI event is within the configured risk window.', {
+        exact: false,
+      }),
+    ).toBeVisible();
     await expect(
       page.getByText('Max Concurrent Trades — Open trade limit reached', { exact: true }).first(),
     ).toBeVisible();
