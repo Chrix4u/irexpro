@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
+import { createHash } from 'crypto';
 import { DataSource } from 'typeorm';
 import { BrokerConnection } from '../entities/broker-connection.entity';
 import { BrokerAccount } from '../entities/broker-account.entity';
@@ -13,6 +14,7 @@ import { BrokerProviderRegistryService } from '../registry/broker-provider-regis
 import { PaperBrokerAdapter } from '../adapters/paper-broker.adapter';
 import { CredentialEncryptionService } from './credential-encryption.service';
 import { BrokerDemoValidationService } from './broker-demo-validation.service';
+import { DEMO_EVIDENCE_RECORD_VERSION } from './broker-demo-validation.service';
 import { BrokerOAuthTokenLifecycleService } from './broker-oauth-token-lifecycle.service';
 import { BrokerAccountSnapshotService } from './broker-account-snapshot.service';
 import { BrokerLinkOutboxService } from './broker-link-outbox.service';
@@ -47,6 +49,19 @@ import {
 import type { OrderCapabilityDeclaration } from '../interfaces/order-capability';
 import { BrokerAdapterError, BrokerErrorCode } from '../interfaces/broker-adapter.errors';
 import { DEMO_VALIDATION_STEPS } from '../verification/provider-verification-harness';
+
+/**
+ * Canonical-JSON mirror of the service's digest input (sorted keys, no
+ * whitespace) — used to recompute and pin the evidence digest in specs.
+ */
+function canonicalSpecJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalSpecJson).join(',')}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, v]) => v !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalSpecJson(v)}`).join(',')}}`;
+}
 
 /**
  * BrokerDemoValidationService — the evidence-based write path for
@@ -650,6 +665,235 @@ describe('BrokerDemoValidationService', () => {
     expect(result.demoValidated).toBe(false);
     expect(result.steps[0]?.status).toBe('FAIL');
     expect(result.steps[0]?.detail).toContain('credentials');
+  });
+
+  // ─── DEMO evidence record (reconciliation round, Section 5) ────────────────
+
+  describe('evidenceRecord — structure and truth (paper-broker happy path)', () => {
+    it('carries provider, environment, adapter version, account truth and source', async () => {
+      const result = await service.validateDemoConnection(CONN_ID, USER_ID);
+
+      const record = result.evidenceRecord;
+      expect(record.evidenceVersion).toBe(DEMO_EVIDENCE_RECORD_VERSION);
+      expect(record.provider).toBe('paper-broker');
+      expect(record.connectionId).toBe(CONN_ID);
+      expect(record.environment).toBe(BrokerMode.DEMO);
+      expect(record.source).toBe('system');
+      // The real PaperBrokerAdapter declares adapterVersion '1' (Phase 10).
+      expect(record.adapterVersion).toBe('1');
+      // Account truth is PROVIDER-OBSERVED (paper-account-001 / USD) — never
+      // user-declared input.
+      expect(record.account.accountTruth).toBe('PROVIDER_OBSERVED');
+      expect(record.account.providerAccountId).toBe('paper-account-001');
+      expect(record.account.currency).toBe('USD');
+    });
+
+    it('carries the full sanitized checks + summary and derives capabilitiesVerified from PASS steps only', async () => {
+      const result = await service.validateDemoConnection(CONN_ID, USER_ID);
+
+      const record = result.evidenceRecord;
+      expect(record.checks).toHaveLength(DEMO_VALIDATION_STEPS.length);
+      expect(record.checks.every((step) => step.status === 'PASS')).toBe(true);
+      expect(record.summary).toEqual(result.summary);
+      // Every PASS step maps to exactly one verified capability, in order.
+      expect(record.capabilitiesVerified).toContain('MARKET_ORDER_FILL');
+      expect(record.capabilitiesVerified).toContain('PENDING_ORDER_PLACE');
+      expect(record.capabilitiesVerified).toContain('PENDING_ORDER_MODIFY');
+      expect(record.capabilitiesVerified).toContain('PENDING_ORDER_CANCEL');
+      expect(record.capabilitiesVerified).toContain('FULL_CLOSE');
+      expect(record.capabilitiesVerified).toContain('PARTIAL_CLOSE');
+      // No FAILED/SKIPPED-derived capability can appear on a PASS run.
+      expect(record.capabilitiesVerified.every((c) => typeof c === 'string')).toBe(true);
+    });
+
+    it('records the order-lifecycle reconciliation: the validation artifacts are all closed/cancelled', async () => {
+      const result = await service.validateDemoConnection(CONN_ID, USER_ID);
+
+      const recon = result.evidenceRecord.orderLifecycleReconciliation;
+      // The validation opened paper-order-000001 (closed by full-close) and
+      // placed paper-order-000002 (cancelled) — none remains open/working.
+      expect(recon.reconciled).toBe(true);
+      expect(recon.openPositionCount).toBe(0);
+      expect(recon.workingOrderCount).toBe(0);
+    });
+
+    it('carries expiry semantics: validUntil = validatedAt + 180d, revalidation 30d before', async () => {
+      const result = await service.validateDemoConnection(CONN_ID, USER_ID);
+
+      const record = result.evidenceRecord;
+      expect(record.validatedAt).toBe(result.finishedAt);
+      const validUntil = new Date(record.validUntil).getTime();
+      const validatedAt = new Date(record.validatedAt).getTime();
+      const recommended = new Date(record.revalidationRecommendedAfter).getTime();
+      // 180 days (±1s tolerance for the ISO round trip).
+      expect(validUntil - validatedAt).toBeGreaterThanOrEqual(180 * 86_399_000);
+      expect(validUntil - validatedAt).toBeLessThanOrEqual(180 * 86_401_000);
+      // Recommended exactly 30 days before expiry.
+      expect(validUntil - recommended).toBeGreaterThanOrEqual(29 * 86_399_000);
+      expect(validUntil - recommended).toBeLessThanOrEqual(30 * 86_401_000);
+    });
+
+    it('digests the canonical record and changes when any content changes', async () => {
+      const first = await service.validateDemoConnection(CONN_ID, USER_ID);
+
+      expect(first.evidenceRecord.evidenceSha256).toMatch(/^[0-9a-f]{64}$/);
+      // The digest is a pure function of the record content: recomputing it
+      // over the same content (digest field excluded) reproduces it exactly,
+      // and any content change produces a different digest.
+      const record = first.evidenceRecord;
+      const { evidenceSha256, ...content } = record;
+      const recomputed = createHash('sha256')
+        .update(canonicalSpecJson(content), 'utf8')
+        .digest('hex');
+      expect(recomputed).toBe(evidenceSha256);
+      const tamperedContent = {
+        ...content,
+        checks: content.checks.map((step, index) =>
+          index === 0 ? { ...step, status: 'FAIL' as const } : step,
+        ),
+      };
+      const tamperedDigest = createHash('sha256')
+        .update(canonicalSpecJson(tamperedContent), 'utf8')
+        .digest('hex');
+      expect(tamperedDigest).not.toBe(evidenceSha256);
+    });
+
+    it('never claims LIVE certification: no certification fields exist on the DEMO record', async () => {
+      const result = await service.validateDemoConnection(CONN_ID, USER_ID);
+
+      const record = result.evidenceRecord as unknown as Record<string, unknown>;
+      // The DEMO record is a separate evidence class: it carries NO
+      // certification vocabulary whatsoever.
+      for (const key of Object.keys(record)) {
+        expect(String(key).toLowerCase()).not.toContain('certif');
+      }
+      expect(record.environment).toBe(BrokerMode.DEMO);
+    });
+
+    it('persists the full record in the audit metadata (redacted path)', async () => {
+      await service.validateDemoConnection(CONN_ID, USER_ID);
+
+      const passLog = auditService.log.mock.calls.find(
+        (call: unknown[]) =>
+          (call[0] as Record<string, unknown>).action === AuditAction.BROKER_DEMO_VALIDATION_PASSED,
+      );
+      expect(passLog).toBeDefined();
+      const metadata = (passLog![0] as Record<string, unknown>).metadata as Record<string, unknown>;
+      const audited = metadata.evidenceRecord as Record<string, unknown>;
+      expect(audited).toBeDefined();
+      expect(audited.evidenceVersion).toBe(DEMO_EVIDENCE_RECORD_VERSION);
+      expect(audited.provider).toBe('paper-broker');
+      expect(audited.evidenceSha256).toMatch(/^[0-9a-f]{64}$/);
+      // No credential marker anywhere in the audited record.
+      expect(JSON.stringify(audited)).not.toContain('PAPER_KEY_MARKER');
+    });
+  });
+
+  describe('evidenceRecord — honest degradation', () => {
+    it('records account truth UNAVAILABLE with a sanitized reason when the post-checklist account read fails', async () => {
+      // Discriminator: the checklist's trade-history step is the ONLY caller
+      // of getClosedTrades; the record's account read happens strictly AFTER
+      // the whole checklist. Fail getAccountInfo only once trade history has
+      // been read — the connect-time verification and the checklist's own
+      // account-info step still pass.
+      const scoped = registry.getAdapterForConnection(CONN_ID, 'paper-broker') as unknown as {
+        getAccountInfo: () => Promise<BrokerAccountInfo>;
+        getClosedTrades: () => Promise<BrokerClosedTrade[]>;
+      };
+      const originalAccount = scoped.getAccountInfo.bind(scoped);
+      const originalClosed = scoped.getClosedTrades.bind(scoped);
+      let checklistTradeHistoryRead = false;
+      scoped.getClosedTrades = async (...args: Parameters<typeof originalClosed>) => {
+        const trades = await originalClosed(...args);
+        checklistTradeHistoryRead = true;
+        return trades;
+      };
+      scoped.getAccountInfo = async () => {
+        if (checklistTradeHistoryRead) {
+          // Credential-shaped fragment: the redaction pass must strip it
+          // from the recorded reason (password|secret|token|key|credential
+          // key-value patterns are replaced with [REDACTED]).
+          throw new Error('account read failed: apiKey=PAPER_KEY_MARKER_c3d4e5f6');
+        }
+        return originalAccount();
+      };
+
+      const result = await service.validateDemoConnection(CONN_ID, USER_ID);
+
+      expect(result.overall).toBe('PASS');
+      const account = result.evidenceRecord.account;
+      expect(account.accountTruth).toBe('UNAVAILABLE');
+      expect(account.providerAccountId).toBeNull();
+      expect(account.currency).toBeNull();
+      // Sanitized: the credential-shaped fragment is redacted ([REDACTED])
+      // by the same one-line redaction pass the harness applies to step
+      // details — the marker never reaches the record or the audit copy.
+      expect(account.reason).toContain('[REDACTED]');
+      expect(JSON.stringify(result.evidenceRecord)).not.toContain('PAPER_KEY_MARKER');
+    });
+
+    it('records reconciliation as observed-but-unreconciled when a validation artifact stays open', async () => {
+      const scoped = registry.getAdapterForConnection(CONN_ID, 'paper-broker') as {
+        getOpenPositions: () => Promise<BrokerPosition[]>;
+      };
+      const original = scoped.getOpenPositions.bind(scoped);
+      let calls = 0;
+      scoped.getOpenPositions = async () => {
+        calls += 1;
+        // First call = harness positions-snapshot step; later call = the
+        // record's reconciliation read — report the validation position as
+        // STILL OPEN (an honest unreconciled observation).
+        if (calls >= 2) {
+          const positions = await original();
+          return [
+            ...positions,
+            {
+              externalOrderId: 'paper-order-000001',
+              instrument: 'EURUSD',
+              direction: 'BUY',
+              lotSize: '0.01',
+              openPrice: '1.10025',
+              currentPrice: '1.10025',
+              stopLoss: '0',
+              takeProfit: '0',
+              unrealisedPnl: '0',
+              openedAt: new Date(0),
+              commission: '0',
+              swap: '0',
+            } satisfies BrokerPosition,
+          ];
+        }
+        return original();
+      };
+
+      const result = await service.validateDemoConnection(CONN_ID, USER_ID);
+
+      expect(result.overall).toBe('PASS');
+      const recon = result.evidenceRecord.orderLifecycleReconciliation;
+      expect(recon.reconciled).toBe(false);
+      expect(recon.openPositionCount).toBe(1);
+    });
+
+    it('records NO_VALIDATION_ARTIFACTS_PRODUCED (reconciled=null) when the checklist failed before any order', async () => {
+      connectionRecord = buildConnection({
+        encryptedCredentials: null,
+        credentialIv: null,
+        credentialTag: null,
+      });
+
+      const result = await service.validateDemoConnection(CONN_ID, USER_ID);
+
+      expect(result.overall).toBe('FAIL');
+      const record = result.evidenceRecord;
+      expect(record.demoValidated).toBe(false);
+      expect(record.overall).toBe('FAIL');
+      // Early failure: no artifacts → the reconciliation observation is moot.
+      expect(record.orderLifecycleReconciliation.reconciled).toBeNull();
+      expect(record.orderLifecycleReconciliation.reason).toBe('NO_VALIDATION_ARTIFACTS_PRODUCED');
+      // Capabilities verified are only the steps that PASSED (just none on
+      // the connect-fail cascade — every later step SKIPPED).
+      expect(record.capabilitiesVerified).toEqual([]);
+    });
   });
 });
 

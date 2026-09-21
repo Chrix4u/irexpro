@@ -250,3 +250,29 @@ pnpm --filter @irexpro/api exec jest src/modules/broker/verification/oanda.live-
 #    Retain the artifact; record it via the §4 process. A PASS is required
 #    before any catalog VERIFIED flip.
 ```
+
+## 8. DEMO evidence records (reconciliation round, Section 5)
+
+`BrokerDemoValidationService` now attaches a structured **DEMO evidence
+record** to every `POST /broker/connections/:id/validate-demo` response and to
+the corresponding `BROKER_DEMO_VALIDATION_PASSED/_FAILED` audit entry:
+
+| Field | Meaning |
+|---|---|
+| `evidenceVersion` | Record schema version (currently `1`). |
+| `provider` / `connectionId` / `environment` | Provider registry id, the validated connection, always `DEMO`. |
+| `validatedAt` / `source` | Observation timestamp (checklist finish) and origin (`system`). |
+| `adapterVersion` | Adapter implementation version (honestly `null` when the adapter declares none). |
+| `account` | Provider-observed account truth (`providerAccountId`, `currency`, `accountTruth: PROVIDER_OBSERVED \| UNAVAILABLE`) — never user-declared input; failures degrade honestly with a sanitized reason. |
+| `checks` / `summary` | The full sanitized checklist steps and pass/fail/skip counts. |
+| `capabilitiesVerified` | Capabilities actually VERIFIED (PASS steps only — SKIPPED/FAILED never appear). |
+| `orderLifecycleReconciliation` | Post-checklist observation that the validation's own position/orders are all closed/cancelled (`reconciled`), with honest `null` + reason when moot (`NO_VALIDATION_ARTIFACTS_PRODUCED`) or unreadable. |
+| `overall` / `demoValidated` | The checklist outcome and the evidence-consistent boolean persisted on the connection. |
+| `validUntil` / `revalidationRecommendedAfter` | Expiry semantics: a validation is a point-in-time observation, stale after 180 days (revalidation recommended 30 days before). Informational — this does NOT auto-revoke the persisted boolean and is NOT a certification. |
+| `evidenceSha256` | SHA-256 over the canonical record (digest excluded) — tamper evidence for the audit-trail copy. |
+
+**Evidence-class separation (non-negotiable):** a DEMO evidence record is
+DEMO-environment evidence ONLY. It is **never** a provider LIVE certification
+and never converts into one — LIVE certification is a separate operator-run
+evidence class (§1–§7). The record deliberately carries no certification
+vocabulary whatsoever.
