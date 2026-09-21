@@ -1,6 +1,7 @@
 import type {
   BrokerConnectionView,
   BrokerRegistryEntry,
+  LiveReadinessBlockedReason,
 } from '@irexpro/types';
 import type {
   ExecutionConfirmationFailure,
@@ -13,6 +14,7 @@ import {
   type ExecutionMode,
 } from '@irexpro/types/execution';
 import { assessProviderVerification } from '@irexpro/types/provider-verification';
+import { deriveProviderCertificationState } from '@irexpro/types';
 import { ApiClientError } from '@irexpro/api-client';
 import { api } from '@/lib/api';
 
@@ -270,6 +272,77 @@ export function executionBlockedReasons(facts: ExecutionAuthorityFacts): string[
   return reasons;
 }
 
+// ── Truthful LIVE start gating (production-LIVE completion round) ───────────
+
+/**
+ * The four canonical human reason lines (identical wording to the onboarding
+ * broker page so a user meets the SAME explanation everywhere LIVE is blocked).
+ */
+const LIVE_READINESS_REASON_LINES: Record<LiveReadinessBlockedReason, string> = {
+  LIVE_UNSUPPORTED: 'This provider does not offer LIVE accounts',
+  ADAPTER_UNAVAILABLE: 'Provider integration is not currently available',
+  PARTNER_APPROVAL_REQUIRED: 'Partner approval required before LIVE is possible',
+  CERTIFICATION_REQUIRED: 'LIVE requires a current provider certification',
+};
+
+/** Server-reported facts the LIVE start gate may consume. */
+export interface LiveStartGateFacts {
+  /** The connection the user would start automation on. */
+  accountType: 'DEMO' | 'LIVE';
+  /**
+   * The registry entry for the selected connection's provider, or null when
+   * the registry could not be loaded (degraded mode).
+   */
+  registryEntry: BrokerRegistryEntry | null;
+}
+
+/**
+ * Truthful Start-button gating for LIVE accounts (audit P15): when the
+ * selected connection is LIVE (and would therefore start FULL_AUTO) and the
+ * server registry reports the provider as not production-LIVE ready, the
+ * Start button must be disabled BEFORE click and the server's ordered
+ * blockedReasons rendered as human lines — a user never discovers LIVE is
+ * impossible only by clicking Start.
+ *
+ * DEGRADED MODE (registry unreachable / no matching entry): returns [] — the
+ * button keeps its existing behavior because the server STILL enforces the
+ * production-LIVE gate on POST /trading/sessions/start. This is a UI
+ * truthfulness aid, never the enforcement point.
+ *
+ * Region availability is deliberately NOT gated here: it is user-scoped (the
+ * user's country vs the provider's liveUnavailableRegions) and enforced
+ * server-side at the LIVE gates with the user's profile in hand.
+ */
+export function liveStartBlockedReasons(facts: LiveStartGateFacts): string[] {
+  // Paper/DEMO starts never take the production-LIVE path.
+  if (facts.accountType !== 'LIVE') return [];
+  // Degraded mode: no registry truth available client-side → existing
+  // behavior (server still enforces).
+  if (!facts.registryEntry) return [];
+
+  const readiness = facts.registryEntry.liveReadiness;
+  if (readiness) {
+    if (readiness.eligible) return [];
+    // Server-ordered blockers (resolution order) mapped to the canonical
+    // human lines; an eligible=false entry with no reasons is still blocked —
+    // never rendered as available.
+    const lines = readiness.blockedReasons
+      .map((reason) => LIVE_READINESS_REASON_LINES[reason])
+      .filter((line): line is string => typeof line === 'string');
+    return lines.length > 0 ? lines : ['LIVE is not currently available for this provider'];
+  }
+
+  // Older cached payloads without liveReadiness: fail-closed on the derived
+  // certification state (LEGACY_VERIFIED never counts as a current protocol
+  // certification — mirrors deriveProviderCertificationState semantics).
+  const certificationState =
+    facts.registryEntry.certificationState ??
+    deriveProviderCertificationState(facts.registryEntry.productionLiveVerification);
+  return certificationState === 'CERTIFIED'
+    ? []
+    : ['LIVE requires a current provider certification'];
+}
+
 // ── Provider verification label (fixed taxonomy) ────────────────────────────
 
 /**
@@ -301,6 +374,10 @@ export function connectionVerificationLabel(
     implementationStatus: registryEntry?.status ?? null,
     adapterAvailable: registryEntry?.adapterAvailable ?? null,
     productionLiveVerification: registryEntry?.productionLiveVerification ?? null,
+    // Production-LIVE completion round (Phase 2): the server-derived
+    // certification state is authoritative — legacy attestation (MT5 today)
+    // never renders as a current protocol certification.
+    certificationState: registryEntry?.certificationState ?? null,
     accountType: connection.accountType,
     logicalAccountKey: connection.logicalAccountKey ?? null,
     authorizationStatus: connection.authorizationStatus ?? null,

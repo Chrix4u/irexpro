@@ -2,6 +2,7 @@
  * LiveAccountScreen logic tests (Directive §J — §36 banner + §38 alerts).
  */
 import type {
+  LiveAccountConnectionView,
   LiveAccountEnvironment,
   LiveAccountOverviewView,
 } from "@irexpro/types";
@@ -10,7 +11,9 @@ import {
   aiExitActivityRows,
   alertSeverityColor,
   environmentBanner,
+  marginTiles,
   pnlSignClass,
+  reconciliationSummary,
   sortAlerts,
   summaryTiles,
 } from "../live-account-screen.logic";
@@ -311,5 +314,181 @@ describe("sessionAuthorityPresentation (authoritative session state)", () => {
     expect(sessionStatusLabel("ENDED")).toBe("Ended");
     expect(sessionStatusLabel("PAUSED")).toBe("Paused");
     expect(sessionStatusLabel("SUSPENDED_BROKER")).toBe("Suspended — broker");
+  });
+});
+
+describe("marginTiles (broker financial summary — never fabricated)", () => {
+  const overviewWith = (financial: unknown): LiveAccountOverviewView =>
+    ({
+      generatedAt: "2026-09-01T12:00:00.000Z",
+      connections: [
+        {
+          id: "bconn-1",
+          reconciliation: {
+            lastRunAt: null,
+            lastRunStatus: null,
+            openDiscrepancies: 0,
+            openCritical: 0,
+            openWarning: 0,
+            inSync: true,
+          },
+          financial,
+        },
+      ],
+      automation: {
+        status: "IDLE",
+        sessionId: null,
+        sessionConnectionId: null,
+        killSwitchActive: false,
+        killSwitchReason: null,
+        startedAt: null,
+        endedAt: null,
+      },
+      executionHealth: {
+        openPositions: 0,
+        workingOrders: 0,
+        reconciliationPending: 0,
+        rejectedLast24h: 0,
+        filledLast24h: 0,
+      },
+      alerts: [],
+      environment: "UNKNOWN",
+      hasConnections: true,
+    }) as unknown as LiveAccountOverviewView;
+
+  it("exposes margin / freeMargin / marginLevel from the primary connection", () => {
+    const tiles = marginTiles(
+      overviewWith({
+        currency: "USD",
+        balance: "10432.50",
+        equity: "10501.23",
+        margin: "412.00",
+        freeMargin: "10089.23",
+        marginLevel: "2551.26",
+        openPositionsCount: 3,
+        syncedAt: "2026-09-01T11:58:00.000Z",
+      }),
+    );
+
+    expect(tiles.available).toBe(true);
+    expect(tiles.currency).toBe("USD");
+    expect(tiles.margin).toBe("412.00");
+    expect(tiles.freeMargin).toBe("10089.23");
+    expect(tiles.marginLevel).toBe("2551.26");
+  });
+
+  it("renders honest em-dashes when no financial snapshot exists (never a zero)", () => {
+    const tiles = marginTiles(overviewWith(null));
+
+    expect(tiles.available).toBe(false);
+    expect(tiles.margin).toBe("—");
+    expect(tiles.freeMargin).toBe("—");
+    expect(tiles.marginLevel).toBeNull();
+  });
+
+  it("keeps a null marginLevel null (no margin in use is not a fabricated level)", () => {
+    const tiles = marginTiles(
+      overviewWith({
+        currency: "EUR",
+        balance: "1000.00",
+        equity: "1000.00",
+        margin: "0.00",
+        freeMargin: "1000.00",
+        marginLevel: null,
+        openPositionsCount: 0,
+        syncedAt: null,
+      }),
+    );
+
+    expect(tiles.available).toBe(true);
+    expect(tiles.marginLevel).toBeNull();
+  });
+});
+
+describe("reconciliationSummary (fail-closed per-connection truth)", () => {
+  const connection = (reconciliation: unknown) =>
+    ({ reconciliation }) as Pick<LiveAccountConnectionView, "reconciliation">;
+
+  it("renders the degraded unavailable state when reconciliationLoaded is false", () => {
+    const view = reconciliationSummary(
+      connection({
+        lastRunAt: "2026-09-01T12:00:00.000Z",
+        lastRunStatus: "COMPLETED",
+        openDiscrepancies: 0,
+        openCritical: 0,
+        openWarning: 0,
+        inSync: true,
+      }),
+      false,
+    );
+
+    expect(view.unavailable).toBe(true);
+    // Zero-valued counts must NEVER be presented as "no open discrepancies".
+    expect(view.discrepancyLabel).not.toContain("No open discrepancies");
+    expect(view.discrepancyLabel).toContain("unavailable");
+    expect(view.statusLabel).toBe("Unavailable");
+    expect(view.inSync).toBe(false);
+  });
+
+  it("labels every lastRunStatus humanly with a matching tone", () => {
+    const cases: Array<
+      [LiveAccountConnectionView["reconciliation"]["lastRunStatus"], string, string]
+    > = [
+      ["COMPLETED", "Completed", "good"],
+      ["COMPLETED_WITH_WARNINGS", "Completed with warnings", "warn"],
+      ["FAILED", "Failed", "bad"],
+      ["RUNNING", "Running now", "neutral"],
+      ["PENDING", "Pending", "neutral"],
+    ];
+    for (const [status, label, tone] of cases) {
+      const view = reconciliationSummary(
+        connection({
+          lastRunAt: "2026-09-01T12:00:00.000Z",
+          lastRunStatus: status,
+          openDiscrepancies: 0,
+          openCritical: 0,
+          openWarning: 0,
+          inSync: true,
+        }),
+        true,
+      );
+      expect(view.statusLabel).toBe(label);
+      expect(view.tone).toBe(tone);
+    }
+  });
+
+  it("reports a never-run connection honestly (never 'in sync' history)", () => {
+    const view = reconciliationSummary(
+      connection({
+        lastRunAt: null,
+        lastRunStatus: null,
+        openDiscrepancies: 0,
+        openCritical: 0,
+        openWarning: 0,
+        inSync: true,
+      }),
+      undefined,
+    );
+
+    expect(view.statusLabel).toBe("Not yet reconciled");
+    expect(view.lastRunLabel).toBe("Never run");
+  });
+
+  it("orders open discrepancy counts critical-first", () => {
+    const view = reconciliationSummary(
+      connection({
+        lastRunAt: "2026-09-01T12:00:00.000Z",
+        lastRunStatus: "FAILED",
+        openDiscrepancies: 5,
+        openCritical: 2,
+        openWarning: 3,
+        inSync: false,
+      }),
+      true,
+    );
+
+    expect(view.discrepancyLabel).toBe("2 critical · 3 warning · 5 open");
+    expect(view.inSync).toBe(false);
+    expect(view.tone).toBe("bad");
   });
 });

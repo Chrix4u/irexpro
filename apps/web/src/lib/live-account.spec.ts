@@ -2,11 +2,15 @@ import type {
   LiveAccountOrdersPage,
   LiveAccountOverviewView,
   LiveOrderRowView,
+  LiveReconciliationSummary,
 } from '@irexpro/types/live-account';
 import {
+  describeEmergencyStopSummary,
+  emergencyStopActiveTradingSession,
   loadLiveAccountOrders,
   loadLiveAccountOverview,
   loadLiveAccountPositions,
+  reconciliationBlockView,
 } from './live-account';
 
 /**
@@ -19,17 +23,27 @@ import {
  *   could not be established) and must validate — it is never coerced.
  * - The overview connection view ships NO full `accountId` (masked only).
  * - `reconciliationLoaded: false` (partial-failure tri-state) validates.
+ *
+ * Production-LIVE completion round additions:
+ * - the reconciliation presentation is fail-closed (reconciliationLoaded
+ *   false NEVER renders as zero discrepancies / in sync);
+ * - the emergency stop reuses the trade workspace stop endpoint and fails
+ *   closed on contract mismatches.
  */
 
 jest.mock('@/lib/api', () => ({
   api: {
     request: jest.fn(),
+    getActiveTradingSession: jest.fn(),
+    stopTradingSession: jest.fn(),
   },
 }));
 
 import { api } from '@/lib/api';
 
 const requestMock = api.request as jest.Mock;
+const getActiveSessionMock = api.getActiveTradingSession as jest.Mock;
+const stopSessionMock = api.stopTradingSession as jest.Mock;
 
 const UNKNOWN_ENVIRONMENT_OVERVIEW = {
   generatedAt: '2026-09-01T12:00:00.000Z',
@@ -206,6 +220,11 @@ describe('loadLiveAccountPositions runtime guards', () => {
           lotSize: '0.1000',
           requestedEntryPrice: '1.10000000',
           fillPrice: null,
+          accountCurrency: 'USD',
+          currentPrice: null,
+          unrealisedPnl: null,
+          commission: null,
+          swap: null,
           stopLoss: '1.09500000',
           takeProfit: '1.11000000',
           trailingStopPips: null,
@@ -339,5 +358,226 @@ describe('loadLiveAccountOrders runtime guards', () => {
     await expect(loadLiveAccountOrders('ALL', 50, 0)).rejects.toThrow(
       'Live account orders contract mismatch',
     );
+  });
+});
+
+describe('reconciliationBlockView (fail-closed presentation)', () => {
+  const connection = (reconciliation: LiveReconciliationSummary) => ({
+    reconciliation,
+  });
+
+  it('renders the degraded unavailable state when reconciliationLoaded is false (never green)', () => {
+    const view = reconciliationBlockView(
+      connection({
+        lastRunAt: '2026-09-01T12:00:00.000Z',
+        lastRunStatus: 'COMPLETED',
+        openDiscrepancies: 0,
+        openCritical: 0,
+        openWarning: 0,
+        inSync: true,
+      }),
+      false,
+    );
+
+    expect(view.unavailable).toBe(true);
+    // The zero-valued counts must NEVER be presented as "zero discrepancies".
+    expect(view.discrepancyLabel).not.toContain('No open discrepancies');
+    expect(view.discrepancyLabel).toContain('unavailable');
+    expect(view.statusLabel).toBe('Unavailable');
+    expect(view.statusVariant).not.toBe('success');
+  });
+
+  it('labels every lastRunStatus humanly with the matching variant', () => {
+    const cases: Array<[LiveReconciliationSummary['lastRunStatus'], string, string]> = [
+      ['COMPLETED', 'Completed', 'success'],
+      ['COMPLETED_WITH_WARNINGS', 'Completed with warnings', 'warning'],
+      ['FAILED', 'Failed', 'error'],
+      ['RUNNING', 'Running now', 'info'],
+      ['PENDING', 'Pending', 'info'],
+    ];
+    for (const [status, label, variant] of cases) {
+      const view = reconciliationBlockView(
+        connection({
+          lastRunAt: '2026-09-01T12:00:00.000Z',
+          lastRunStatus: status,
+          openDiscrepancies: 0,
+          openCritical: 0,
+          openWarning: 0,
+          inSync: true,
+        }),
+        true,
+      );
+      expect(view.statusLabel).toBe(label);
+      expect(view.statusVariant).toBe(variant);
+    }
+  });
+
+  it('reports a never-run connection honestly instead of claiming in-sync history', () => {
+    const view = reconciliationBlockView(
+      connection({
+        lastRunAt: null,
+        lastRunStatus: null,
+        openDiscrepancies: 0,
+        openCritical: 0,
+        openWarning: 0,
+        inSync: true,
+      }),
+      undefined,
+    );
+
+    expect(view.statusLabel).toBe('Not yet reconciled');
+    expect(view.lastRunAt).toBeNull();
+  });
+
+  it('orders open discrepancy counts critical-first', () => {
+    const view = reconciliationBlockView(
+      connection({
+        lastRunAt: '2026-09-01T12:00:00.000Z',
+        lastRunStatus: 'COMPLETED_WITH_WARNINGS',
+        openDiscrepancies: 5,
+        openCritical: 2,
+        openWarning: 3,
+        inSync: false,
+      }),
+      true,
+    );
+
+    expect(view.discrepancyLabel).toBe('2 critical · 3 warning · 5 open');
+    expect(view.inSync).toBe(false);
+    expect(view.lastRunAt).toBe('2026-09-01T12:00:00.000Z');
+  });
+
+  it('says no open discrepancies only when the loaded counts are all zero', () => {
+    const view = reconciliationBlockView(
+      connection({
+        lastRunAt: '2026-09-01T12:00:00.000Z',
+        lastRunStatus: 'COMPLETED',
+        openDiscrepancies: 0,
+        openCritical: 0,
+        openWarning: 0,
+        inSync: true,
+      }),
+      true,
+    );
+
+    expect(view.discrepancyLabel).toBe('No open discrepancies');
+    expect(view.inSync).toBe(true);
+  });
+});
+
+describe('emergencyStopActiveTradingSession (same endpoint as the trade workspace)', () => {
+  const SESSION = {
+    id: 'sess_11111111-1111-4111-8111-111111111112',
+    brokerConnectionId: 'bconn_11111111-1111-4111-8111-111111111111',
+    executionMode: 'FULL_AUTO',
+    authorityGeneration: 2,
+    status: 'ACTIVE',
+    startedAt: '2026-09-01T11:00:00.000Z',
+  };
+
+  const STOP_RESPONSE = {
+    message: 'stopped',
+    sessionId: SESSION.id,
+    positionCloseSummary: {
+      state: 'COMPLETE',
+      targetCount: 1,
+      closedCount: 1,
+      unresolvedCount: 0,
+    },
+  };
+
+  beforeEach(() => {
+    getActiveSessionMock.mockReset();
+    stopSessionMock.mockReset();
+  });
+
+  it('reads the authoritative active session, then stops it with close-positions semantics', async () => {
+    getActiveSessionMock.mockResolvedValue({ session: SESSION });
+    stopSessionMock.mockResolvedValue(STOP_RESPONSE);
+
+    const outcome = await emergencyStopActiveTradingSession();
+
+    expect(getActiveSessionMock).toHaveBeenCalledTimes(1);
+    expect(stopSessionMock).toHaveBeenCalledWith(SESSION.id);
+    expect(outcome).toEqual({ outcome: 'STOPPED', result: STOP_RESPONSE });
+  });
+
+  it('reports NO_ACTIVE_SESSION without calling stop when nothing is running', async () => {
+    getActiveSessionMock.mockResolvedValue({ session: null });
+
+    const outcome = await emergencyStopActiveTradingSession();
+
+    expect(stopSessionMock).not.toHaveBeenCalled();
+    expect(outcome).toEqual({ outcome: 'NO_ACTIVE_SESSION' });
+  });
+
+  it('fails closed when the active-session envelope is malformed (never stops a guessed id)', async () => {
+    getActiveSessionMock.mockResolvedValue({ nope: true });
+
+    await expect(emergencyStopActiveTradingSession()).rejects.toThrow(
+      'Active trading session contract mismatch',
+    );
+    expect(stopSessionMock).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the stop response does not match the close-summary contract', async () => {
+    getActiveSessionMock.mockResolvedValue({ session: SESSION });
+    stopSessionMock.mockResolvedValue({
+      message: 'stopped',
+      sessionId: SESSION.id,
+      positionCloseSummary: { state: 'MAYBE', closedCount: 0 },
+    });
+
+    await expect(emergencyStopActiveTradingSession()).rejects.toThrow(
+      'Trading session stop contract mismatch',
+    );
+  });
+});
+
+describe('describeEmergencyStopSummary (honest COMPLETE/PARTIAL/UNVERIFIED copy)', () => {
+  it('reports confirmed closures without inventing counts', () => {
+    expect(
+      describeEmergencyStopSummary({
+        message: 'stopped',
+        sessionId: 's1',
+        positionCloseSummary: {
+          state: 'COMPLETE',
+          targetCount: 2,
+          closedCount: 2,
+          unresolvedCount: 0,
+        },
+      }),
+    ).toEqual({ tone: 'success', message: 'AI Trading stopped. 2 AI positions confirmed closed.' });
+  });
+
+  it('never claims a PARTIAL stop is complete', () => {
+    const summary = describeEmergencyStopSummary({
+      message: 'stopped',
+      sessionId: 's1',
+      positionCloseSummary: {
+        state: 'PARTIAL',
+        targetCount: 3,
+        closedCount: 1,
+        unresolvedCount: 2,
+      },
+    });
+    expect(summary.tone).toBe('warning');
+    expect(summary.message).toContain('1 of 3');
+    expect(summary.message).toContain('2 require follow-up');
+  });
+
+  it('says closure could not be verified for the UNKNOWN state', () => {
+    const summary = describeEmergencyStopSummary({
+      message: 'stopped',
+      sessionId: 's1',
+      positionCloseSummary: {
+        state: 'UNKNOWN',
+        targetCount: null,
+        closedCount: 0,
+        unresolvedCount: null,
+      },
+    });
+    expect(summary.tone).toBe('warning');
+    expect(summary.message).toContain('could not be verified');
   });
 });
