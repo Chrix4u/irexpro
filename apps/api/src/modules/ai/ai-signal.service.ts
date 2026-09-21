@@ -288,7 +288,9 @@ export class AiSignalService {
   private buildSafeEvidence(candidate: AiSignalCandidate): Record<string, unknown> {
     const agentContext = sanitizeAgentContext(candidate.agentContext);
     if (candidate.agentContext && !agentContext) {
-      this.logger.warn(`Signal ${candidate.signalId} supplied invalid advisory agent context; ignored`);
+      this.logger.warn(
+        `Signal ${candidate.signalId} supplied invalid advisory agent context; ignored`,
+      );
     }
 
     return {
