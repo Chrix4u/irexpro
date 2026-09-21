@@ -67,6 +67,112 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _atomic_write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(content, encoding="utf-8")
+    temporary.replace(path)
+
+
+def _fold_checkpoint_paths(
+    checkpoint_dir: Path,
+    fold_index: int,
+) -> tuple[Path, Path]:
+    stem = checkpoint_dir / f"fold-{fold_index:02d}"
+    return stem.with_suffix(".json"), stem.with_suffix(".csv")
+
+
+def _load_fold_checkpoint(
+    checkpoint_dir: Path,
+    *,
+    fold_index: int,
+    fingerprint: str,
+    expected: dict[str, Any],
+) -> tuple[dict[str, Any], pd.DataFrame] | None:
+    metadata_path, predictions_path = _fold_checkpoint_paths(
+        checkpoint_dir,
+        fold_index,
+    )
+    if not metadata_path.is_file() or not predictions_path.is_file():
+        return None
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        if metadata.get("fingerprint") != fingerprint:
+            return None
+        if metadata.get("expected") != expected:
+            return None
+        if metadata.get("predictions_sha256") != _sha256_file(predictions_path):
+            return None
+        predictions = pd.read_csv(predictions_path)
+        if len(predictions) != int(expected["validation_rows"]):
+            return None
+        required = {
+            "decision_time",
+            "instrument",
+            TARGET_COLUMN,
+            LONG_NET_RETURN_COLUMN,
+            SHORT_NET_RETURN_COLUMN,
+            "m1_spread_bps",
+            "positive_probability",
+            "predicted_long",
+            "confidence",
+            "active_trade",
+            "selected_net_return",
+            "fold",
+        }
+        if not required.issubset(predictions.columns):
+            return None
+        predictions["decision_time"] = pd.to_datetime(
+            predictions["decision_time"],
+            utc=True,
+            errors="raise",
+        )
+        for column in ("predicted_long", "active_trade"):
+            if predictions[column].dtype == object:
+                predictions[column] = predictions[column].map(
+                    {"True": True, "False": False, True: True, False: False}
+                )
+            if predictions[column].isna().any():
+                return None
+            predictions[column] = predictions[column].astype(bool)
+        fold_report = metadata.get("fold_report")
+        if not isinstance(fold_report, dict):
+            return None
+        return fold_report, predictions
+    except Exception:
+        return None
+
+
+def _write_fold_checkpoint(
+    checkpoint_dir: Path,
+    *,
+    fold_index: int,
+    fingerprint: str,
+    expected: dict[str, Any],
+    fold_report: dict[str, Any],
+    predictions: pd.DataFrame,
+) -> None:
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    metadata_path, predictions_path = _fold_checkpoint_paths(
+        checkpoint_dir,
+        fold_index,
+    )
+    predictions_tmp = predictions_path.with_suffix(".csv.tmp")
+    predictions.to_csv(predictions_tmp, index=False)
+    predictions_tmp.replace(predictions_path)
+    payload = {
+        "checkpoint_version": 1,
+        "fingerprint": fingerprint,
+        "expected": expected,
+        "predictions_sha256": _sha256_file(predictions_path),
+        "fold_report": fold_report,
+    }
+    _atomic_write_text(
+        metadata_path,
+        json.dumps(payload, indent=2, sort_keys=True),
+    )
+
+
 def _parse_corpus_dates(frame: pd.DataFrame) -> pd.DataFrame:
     result = frame.copy()
     date_columns = [
@@ -532,6 +638,8 @@ def _run_pooled_walk_forward_core(
     purge_periods: int | None = None,
     embargo_periods: int | None = None,
     max_splits: int = 5,
+    checkpoint_dir: str | Path | None = None,
+    checkpoint_fingerprint: str | None = None,
 ) -> tuple[dict[str, Any], pd.DataFrame]:
     """Run expanding pooled walk-forward evaluation and retain validation predictions."""
     if not 0.5 <= confidence_threshold < 1.0:
@@ -568,6 +676,49 @@ def _run_pooled_walk_forward_core(
             train,
             horizon_bars=horizon_bars,
         )
+        expected_checkpoint = {
+            "fold": fold_index,
+            "train_rows": int(len(train)),
+            "fit_rows": int(len(fit_train)),
+            "internal_early_stopping_rows": int(len(early_stop_frame)),
+            "validation_rows": int(len(validation_frame)),
+            "train_start": train["decision_time"].min().isoformat(),
+            "train_end": train["decision_time"].max().isoformat(),
+            "internal_early_stopping_start": early_stop_frame[
+                "decision_time"
+            ].min().isoformat(),
+            "internal_early_stopping_end": early_stop_frame[
+                "decision_time"
+            ].max().isoformat(),
+            "validation_start": validation_frame["decision_time"].min().isoformat(),
+            "validation_end": validation_frame["decision_time"].max().isoformat(),
+        }
+
+        checkpoint = None
+        if checkpoint_dir is not None and checkpoint_fingerprint:
+            checkpoint = _load_fold_checkpoint(
+                Path(checkpoint_dir),
+                fold_index=fold_index,
+                fingerprint=checkpoint_fingerprint,
+                expected=expected_checkpoint,
+            )
+        if checkpoint is not None:
+            fold_report, predictions = checkpoint
+            fold_reports.append(fold_report)
+            prediction_frames.append(predictions)
+            _research_progress(
+                " ".join(
+                    [
+                        "stage=walk_forward",
+                        f"horizon={horizon_bars}m",
+                        f"fold={fold_index}/{len(splits)}",
+                        "status=resumed",
+                        f"validation_rows={len(predictions)}",
+                    ]
+                )
+            )
+            continue
+
         fold_started = time.monotonic()
         _research_progress(
             " ".join(
@@ -603,18 +754,6 @@ def _run_pooled_walk_forward_core(
         probabilities = model.predict_proba(
             validation_frame[MULTITIMEFRAME_FEATURE_COLUMNS]
         )[:, 1]
-        _research_progress(
-            " ".join(
-                [
-                    "stage=walk_forward",
-                    f"horizon={horizon_bars}m",
-                    f"fold={fold_index}/{len(splits)}",
-                    "status=completed",
-                    f"elapsed_seconds={time.monotonic() - fold_started:.1f}",
-                    f"best_iteration={getattr(model, 'best_iteration', 'unknown')}",
-                ]
-            )
-        )
         predictions = validation_frame[
             [
                 "decision_time",
@@ -635,33 +774,41 @@ def _run_pooled_walk_forward_core(
             predictions[SHORT_NET_RETURN_COLUMN],
         )
         predictions["fold"] = fold_index
-        prediction_frames.append(predictions)
 
         by_instrument = {
             instrument: _summarize_predictions(group, horizon_bars=horizon_bars)
             for instrument, group in predictions.groupby("instrument", sort=True)
         }
-        fold_reports.append(
-            {
-                "fold": fold_index,
-                "train_rows": int(len(train)),
-                "fit_rows": int(len(fit_train)),
-                "internal_early_stopping_rows": int(len(early_stop_frame)),
-                "validation_rows": int(len(validation_frame)),
-                "train_start": train["decision_time"].min().isoformat(),
-                "train_end": train["decision_time"].max().isoformat(),
-                "internal_early_stopping_start": early_stop_frame[
-                    "decision_time"
-                ].min().isoformat(),
-                "internal_early_stopping_end": early_stop_frame[
-                    "decision_time"
-                ].max().isoformat(),
-                "validation_start": validation_frame["decision_time"].min().isoformat(),
-                "validation_end": validation_frame["decision_time"].max().isoformat(),
-                "best_iteration": int(getattr(model, "best_iteration", -1)),
-                "aggregate": _summarize_predictions(predictions, horizon_bars=horizon_bars),
-                "by_instrument": by_instrument,
-            }
+        fold_report = {
+            **expected_checkpoint,
+            "best_iteration": int(getattr(model, "best_iteration", -1)),
+            "aggregate": _summarize_predictions(predictions, horizon_bars=horizon_bars),
+            "by_instrument": by_instrument,
+        }
+        fold_reports.append(fold_report)
+        prediction_frames.append(predictions)
+
+        if checkpoint_dir is not None and checkpoint_fingerprint:
+            _write_fold_checkpoint(
+                Path(checkpoint_dir),
+                fold_index=fold_index,
+                fingerprint=checkpoint_fingerprint,
+                expected=expected_checkpoint,
+                fold_report=fold_report,
+                predictions=predictions,
+            )
+
+        _research_progress(
+            " ".join(
+                [
+                    "stage=walk_forward",
+                    f"horizon={horizon_bars}m",
+                    f"fold={fold_index}/{len(splits)}",
+                    "status=completed",
+                    f"elapsed_seconds={time.monotonic() - fold_started:.1f}",
+                    f"best_iteration={getattr(model, 'best_iteration', 'unknown')}",
+                ]
+            )
         )
 
     all_predictions = pd.concat(prediction_frames, ignore_index=True)
@@ -724,6 +871,8 @@ def run_pooled_walk_forward_with_predictions(
     purge_periods: int | None = None,
     embargo_periods: int | None = None,
     max_splits: int = 5,
+    checkpoint_dir: str | Path | None = None,
+    checkpoint_fingerprint: str | None = None,
 ) -> tuple[dict[str, Any], pd.DataFrame]:
     """Return metrics plus causal outer-fold predictions for research overlays."""
     return _run_pooled_walk_forward_core(
@@ -735,6 +884,8 @@ def run_pooled_walk_forward_with_predictions(
         purge_periods=purge_periods,
         embargo_periods=embargo_periods,
         max_splits=max_splits,
+        checkpoint_dir=checkpoint_dir,
+        checkpoint_fingerprint=checkpoint_fingerprint,
     )
 
 
@@ -750,6 +901,7 @@ def evaluate_multi_pair_corpora(
     max_splits: int = 5,
     decision_time_before: str | pd.Timestamp | None = None,
     predictions_path: str | Path | None = None,
+    checkpoint_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     pooled, hashes = load_and_prepare_corpora(
         datasets,
@@ -759,11 +911,38 @@ def evaluate_multi_pair_corpora(
         slippage_bps=slippage_bps,
         decision_time_before=decision_time_before,
     )
+    model_params = _build_model().get_params()
+    model_params.pop("n_jobs", None)
+    checkpoint_payload = {
+        "checkpoint_version": 1,
+        "dataset_sha256": hashes,
+        "horizon_bars": horizon_bars,
+        "confidence_threshold": confidence_threshold,
+        "min_net_return_bps": min_net_return_bps,
+        "commission_bps": commission_bps,
+        "slippage_bps": slippage_bps,
+        "max_splits": max_splits,
+        "decision_time_before": (
+            pd.Timestamp(decision_time_before).isoformat()
+            if decision_time_before is not None
+            else None
+        ),
+        "feature_columns": MULTITIMEFRAME_FEATURE_COLUMNS,
+        "model_params": model_params,
+        "label_selection_policy": MULTITIMEFRAME_LABEL_SELECTION_POLICY,
+        "backtest_evaluation_policy": MULTITIMEFRAME_BACKTEST_POLICY,
+        "research_validation_policy": MULTITIMEFRAME_RESEARCH_VALIDATION_POLICY,
+    }
+    checkpoint_fingerprint = hashlib.sha256(
+        json.dumps(checkpoint_payload, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
     evaluation, predictions = run_pooled_walk_forward_with_predictions(
         pooled,
         horizon_bars=horizon_bars,
         confidence_threshold=confidence_threshold,
         max_splits=max_splits,
+        checkpoint_dir=checkpoint_dir,
+        checkpoint_fingerprint=checkpoint_fingerprint,
     )
     exported_predictions_path: str | None = None
     if predictions_path is not None:
@@ -793,6 +972,7 @@ def evaluate_multi_pair_corpora(
             "minimum_net_return_bps_for_label": min_net_return_bps,
         },
         "dataset_sha256": hashes,
+        "checkpoint_fingerprint": checkpoint_fingerprint,
         "governance": {
             "lookahead_allowed": False,
             "approved_for_staging": False,
