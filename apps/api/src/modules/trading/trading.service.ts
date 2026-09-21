@@ -159,11 +159,16 @@ export class TradingService {
     // execution engine snapshots and enforces its conservative limits.
     const riskProfile = await this.riskService.getOrCreateProfile(userId);
 
-    // ── Gate 4: Live trading requires explicit broker enablement ─────────────
-    // FULL_AUTO does NOT automatically enable live broker execution. The user
-    // must separately enable live trading on the broker connection (a distinct
-    // explicit action with its own audit trail).
-    if (executionMode === ExecutionMode.FULL_AUTO && !connection.liveTradingEnabled) {
+    // ── Gate 4: LIVE FULL_AUTO requires explicit broker enablement ──────────
+    // FULL_AUTO describes automatic provider execution; it does not imply a
+    // LIVE environment. Real-provider DEMO accounts may use FULL_AUTO inside
+    // the broker's demo environment. Only a LIVE connection additionally
+    // requires the separate audited liveTradingEnabled authorization.
+    if (
+      executionMode === ExecutionMode.FULL_AUTO &&
+      connection.accountType === BrokerMode.LIVE &&
+      !connection.liveTradingEnabled
+    ) {
       throw new ForbiddenException(
         'Live trading is not enabled on this broker connection. ' +
           'Enable live trading explicitly before requesting FULL_AUTO mode.',
@@ -289,13 +294,17 @@ export class TradingService {
     // remain enforced by the server for every new-exposure decision.
     await this.riskService.getOrCreateProfile(userId);
 
-    // Gate: FULL_AUTO requires explicit live enablement on the session's
-    // EXACT bound connection (never re-discovered).
+    // Gate: a LIVE connection entering FULL_AUTO requires explicit live
+    // enablement on the session's EXACT bound connection (never re-discovered).
+    // DEMO provider connections may use FULL_AUTO without enabling LIVE funds.
     if (newMode === ExecutionMode.FULL_AUTO) {
       const [connection] = await this.brokerService.findConnectionsByIds([
         session.brokerConnectionId,
       ]);
-      if (!connection?.liveTradingEnabled) {
+      if (
+        connection?.accountType === BrokerMode.LIVE &&
+        !connection.liveTradingEnabled
+      ) {
         throw new ForbiddenException(
           'Live trading is not enabled on the session broker connection. ' +
             'Enable live trading explicitly before requesting FULL_AUTO mode.',
