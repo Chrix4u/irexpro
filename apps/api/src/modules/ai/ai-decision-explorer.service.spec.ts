@@ -77,6 +77,32 @@ describe('AiDecisionExplorerService', () => {
         marketRegime: 'trending',
         volatilityScore: 0.42,
         generatedAt: '2026-08-28T22:00:00.000Z',
+        agentContext: {
+          version: 'agent-council-v1',
+          status: 'BLOCKED',
+          consensusDirection: 'NEUTRAL',
+          weightedSupport: 0,
+          weightedOpposition: 0,
+          disagreementScore: 0,
+          evidenceCount: 1,
+          rejectedCount: 0,
+          evidence: [
+            {
+              source: 'MACRO_NEWS',
+              sourceId: 'macro-event:abc',
+              stance: 'BLOCK',
+              confidence: 1,
+              credibility: 1,
+              verifiedSources: 1,
+              availableAt: '2026-08-28T21:59:59.000Z',
+              summary: 'High-impact USD CPI event is within the configured risk window.',
+            },
+          ],
+          sourceState: 'AVAILABLE',
+          evaluatedAt: '2026-08-28T22:00:00.500Z',
+          advisoryOnly: true,
+          executionAuthority: false,
+        },
       },
       '2026-08-28T22:00:01.000Z',
     );
@@ -114,6 +140,19 @@ describe('AiDecisionExplorerService', () => {
         confidenceScore: 0.82,
         strategyCode: 'TREND_H1',
         modelVersion: 'ensemble-v2.3',
+      },
+      agentContext: {
+        status: 'BLOCKED',
+        consensusDirection: 'NEUTRAL',
+        sourceState: 'AVAILABLE',
+        advisoryOnly: true,
+        executionAuthority: false,
+        evidence: [
+          expect.objectContaining({
+            source: 'MACRO_NEWS',
+            stance: 'BLOCK',
+          }),
+        ],
       },
       risk: {
         decision: 'APPROVED',
@@ -156,6 +195,44 @@ describe('AiDecisionExplorerService', () => {
 
     expect(result.decisions[0].outcome).toBe('EXECUTION_SUCCEEDED');
     expect(result.decisions[0].risk.decision).toBe('UNKNOWN');
+  });
+
+  it('fails closed on malformed persisted agent context', async () => {
+    const received = auditLog(
+      AuditAction.AI_SIGNAL_RECEIVED,
+      'AiSignal',
+      signalId,
+      {
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        agentContext: {
+          version: 'agent-council-v1',
+          status: 'BLOCKED',
+          consensusDirection: 'NEUTRAL',
+          weightedSupport: 0,
+          weightedOpposition: 0,
+          disagreementScore: 0,
+          evidenceCount: 1,
+          rejectedCount: 0,
+          evidence: [],
+          sourceState: 'UNAVAILABLE',
+          evaluatedAt: '2026-08-28T22:00:00.000Z',
+          advisoryOnly: true,
+          executionAuthority: false,
+          secret: 'must-never-project',
+        },
+      },
+      '2026-08-28T22:00:01.000Z',
+    );
+
+    auditService.listRecentAiSignalReceipts.mockResolvedValue([received]);
+    auditService.listAiSignalLifecycle.mockResolvedValue([received]);
+    executionReadService.listBySignalIds.mockResolvedValue([]);
+
+    const result = await service.getRecentDecisions('user-1');
+
+    expect(result.decisions[0].agentContext).toBeNull();
+    expect(JSON.stringify(result)).not.toContain('must-never-project');
   });
 
   it('never projects raw execution error metadata into the browser timeline', async () => {
