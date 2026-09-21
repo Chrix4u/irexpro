@@ -93,4 +93,10 @@ grep -Fq 'if wait "$research_pid"; then' "$RESEARCH_WORKFLOW" ||
 grep -Fq 'exit "$research_status"' "$RESEARCH_WORKFLOW" ||
   fail 'Six Pair Research must return the original remote research status.'
 
+# The corrected six-pair workload may spend substantial time in bounded
+# provider recovery and walk-forward evaluation. Preserve a finite but
+# realistic ceiling so a healthy study is not killed at the old 180-minute cap.
+grep -Fq 'timeout-minutes: 300' "$RESEARCH_WORKFLOW" ||
+  fail 'Six Pair Research must retain the five-hour bounded timeout.'
+
 printf 'Staging CD bootstrap and research-coordination regression tests passed.\n'
