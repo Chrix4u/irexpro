@@ -95,6 +95,11 @@ def test_high_impact_event_window_creates_advisory_block_context():
     assert assessment.execution_authority is False
 
 
+def test_event_family_rejects_noncanonical_identity():
+    with pytest.raises(ValueError):
+        event(event_family="!! malformed !!")
+
+
 def test_future_available_event_is_not_visible_to_historical_evaluation():
     future = event(
         observed_at=NOW - timedelta(minutes=1),
