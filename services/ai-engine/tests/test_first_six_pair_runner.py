@@ -356,3 +356,155 @@ def test_resume_rejects_incompatible_candidate_checkpoint(
             horizons=(5,),
             resume=True,
         )
+
+
+
+def test_resume_bootstraps_verified_ancestor_pair_without_recollection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(runner, "INITIAL_FOREX_UNIVERSE", ("EURUSD",))
+    monkeypatch.setenv("IREXPRO_RESEARCH_CANDIDATE_SHA", "c" * 40)
+
+    bootstrap = tmp_path / "ancestor"
+    raw_path = bootstrap / "raw" / "EURUSD_M1.csv"
+    corpus_path = bootstrap / "corpora" / "EURUSD_MTF.csv"
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    corpus_path.parent.mkdir(parents=True, exist_ok=True)
+    raw_path.write_text("timestamp\n2026-01-01T11:59:00Z\n", encoding="utf-8")
+    corpus_path.write_text(
+        "decision_time\n2026-01-01T12:00:00Z\n",
+        encoding="utf-8",
+    )
+    raw_sha = runner._sha256_file(raw_path)
+    corpus_sha = runner._sha256_file(corpus_path)
+    runner._write_json_atomic(
+        raw_path.with_suffix(".manifest.json"),
+        {
+            "manifest_version": 1,
+            "instrument": "EURUSD",
+            "source": "dukascopy_public_datafeed_ticks",
+            "row_count": 250,
+            "friction_data_complete": True,
+            "dataset_sha256": raw_sha,
+            "collected_at": "2026-01-01T12:10:00+00:00",
+        },
+    )
+    runner._write_json_atomic(
+        corpus_path.with_suffix(".manifest.json"),
+        {
+            "manifest_version": 1,
+            "instrument": "EURUSD",
+            "row_count": 200,
+            "friction_data_complete": True,
+            "lookahead_validation": "passed",
+            "raw_m1_sha256": raw_sha,
+            "dataset_sha256": corpus_sha,
+        },
+    )
+
+    monkeypatch.setattr(
+        runner,
+        "collect_dukascopy_m1_corpus",
+        lambda **kwargs: pytest.fail("valid ancestor pair must not be recollected"),
+    )
+    monkeypatch.setattr(
+        runner,
+        "build_multitimeframe_corpus_from_m1_csv",
+        lambda **kwargs: pytest.fail("valid ancestor corpus must not be rebuilt"),
+    )
+    qualification_cutoff = datetime(2026, 1, 1, 11, 0, tzinfo=UTC)
+    monkeypatch.setattr(
+        runner,
+        "_research_qualification_cutoff",
+        lambda corpora: qualification_cutoff,
+    )
+
+    def fake_evaluate(datasets, *, report_path, predictions_path=None, **kwargs):
+        del datasets, kwargs
+        report = _fake_evaluation(report_path)
+        report_path = Path(report_path)
+        report_path.write_text(
+            runner.json.dumps(
+                {key: value for key, value in report.items() if key != "report_path"},
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        predictions = Path(predictions_path)
+        predictions.parent.mkdir(parents=True, exist_ok=True)
+        predictions.write_text("prediction\n1\n", encoding="utf-8")
+        return {
+            **report,
+            "validation_predictions_path": str(predictions),
+        }
+
+    monkeypatch.setattr(runner, "evaluate_multi_pair_corpora", fake_evaluate)
+
+    output = tmp_path / "candidate"
+    result = runner.run_first_six_pair_study(
+        output_dir=output,
+        source="dukascopy",
+        target_rows=250,
+        horizons=(5,),
+        resume=True,
+        bootstrap_dir=bootstrap,
+    )
+
+    assert result["collection_manifests"]["EURUSD"]["dataset_sha256"] == raw_sha
+    assert result["corpus_manifests"]["EURUSD"]["dataset_sha256"] == corpus_sha
+    assert runner._sha256_file(output / "raw" / "EURUSD_M1.csv") == raw_sha
+    assert runner._sha256_file(output / "corpora" / "EURUSD_MTF.csv") == corpus_sha
+    checkpoint = runner._read_json(
+        output / "checkpoints" / "pairs" / "EURUSD.json"
+    )
+    assert checkpoint is not None
+    assert checkpoint["bootstrap_source"] == str(bootstrap)
+    state = runner._read_json(output / "checkpoints" / "study-state.json")
+    assert state is not None
+    assert state["effective_before"].startswith("2026-01-01T12:10:00")
+
+
+def test_bootstrap_pair_rejects_different_collection_hour(tmp_path: Path):
+    bootstrap = tmp_path / "ancestor"
+    raw_path = bootstrap / "raw" / "EURUSD_M1.csv"
+    corpus_path = bootstrap / "corpora" / "EURUSD_MTF.csv"
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    corpus_path.parent.mkdir(parents=True, exist_ok=True)
+    raw_path.write_text("raw", encoding="utf-8")
+    corpus_path.write_text("corpus", encoding="utf-8")
+    raw_sha = runner._sha256_file(raw_path)
+    corpus_sha = runner._sha256_file(corpus_path)
+    runner._write_json_atomic(
+        raw_path.with_suffix(".manifest.json"),
+        {
+            "instrument": "EURUSD",
+            "source": "dukascopy_public_datafeed_ticks",
+            "row_count": 250,
+            "friction_data_complete": True,
+            "dataset_sha256": raw_sha,
+            "collected_at": "2026-01-01T12:10:00+00:00",
+        },
+    )
+    runner._write_json_atomic(
+        corpus_path.with_suffix(".manifest.json"),
+        {
+            "instrument": "EURUSD",
+            "row_count": 200,
+            "friction_data_complete": True,
+            "lookahead_validation": "passed",
+            "raw_m1_sha256": raw_sha,
+            "dataset_sha256": corpus_sha,
+        },
+    )
+
+    assert (
+        runner._validated_bootstrap_pair(
+            bootstrap,
+            instrument="EURUSD",
+            target_rows=250,
+            effective_before=datetime(2026, 1, 1, 13, 5, tzinfo=UTC),
+        )
+        is None
+    )
