@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.domain.agents.schemas import (
     AgentCouncilAssessment,
@@ -28,6 +28,13 @@ class AgentContextEvidenceSnapshot(BaseModel):
     available_at: datetime
     summary: str = Field(..., min_length=1, max_length=500)
 
+    @field_validator("available_at")
+    @classmethod
+    def available_at_must_be_timezone_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("agent context evidence available_at must be timezone-aware")
+        return value
+
 
 class AgentContextSnapshot(BaseModel):
     """Read-only context recorded with a quantitative signal candidate."""
@@ -45,6 +52,24 @@ class AgentContextSnapshot(BaseModel):
     evaluated_at: datetime
     advisory_only: Literal[True] = True
     execution_authority: Literal[False] = False
+
+    @field_validator("evaluated_at")
+    @classmethod
+    def evaluated_at_must_be_timezone_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("agent context evaluated_at must be timezone-aware")
+        return value
+
+    @model_validator(mode="after")
+    def validate_source_state_consistency(self) -> AgentContextSnapshot:
+        if self.evidence_count < len(self.evidence):
+            raise ValueError("evidence_count cannot be less than projected evidence length")
+        if self.source_state != "AVAILABLE":
+            if self.status != "INSUFFICIENT":
+                raise ValueError("unavailable context must have INSUFFICIENT status")
+            if self.evidence_count != 0 or self.evidence:
+                raise ValueError("unavailable context cannot contain accepted evidence")
+        return self
 
 
 def build_agent_context_snapshot(
