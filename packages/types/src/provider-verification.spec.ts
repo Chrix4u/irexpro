@@ -41,7 +41,7 @@ describe('assessProviderVerification label taxonomy', () => {
     expect(assessment.identityProductionLiveEligibility).toBe('Ineligible');
   });
 
-  it('a VERIFIED provider with a LIVE identity is Production LIVE Verified and identity-eligible', () => {
+  it('a CURRENTLY CERTIFIED provider with a LIVE identity is Production LIVE Verified and identity-eligible', () => {
     const assessment = assessProviderVerification({
       environments: ['DEMO', 'LIVE'],
       implementationStatus: 'SUPPORTED',
@@ -50,6 +50,10 @@ describe('assessProviderVerification label taxonomy', () => {
         status: 'VERIFIED',
         verifiedAt: '2026-09-01T00:00:00.000Z',
         evidenceRef: 'OPS-123',
+        certifiedVia: 'HARNESS_CERTIFIED',
+        certificationRunRef:
+          'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d@sha256:' +
+          '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
       },
       accountType: 'LIVE',
       logicalAccountKey: 'ctrader:1234567',
@@ -62,6 +66,83 @@ describe('assessProviderVerification label taxonomy', () => {
     expect(assessment.identityProductionLiveEligibility).toBe('LIVE-capable');
     expect(assessment.connectionExecutability).toBe('LIVE-capable');
     expect(assessment.hasConnectionIdentity).toBe(true);
+    expect(assessment.certificationState).toBe('CERTIFIED');
+  });
+
+  it('LEGACY attestation evidence is NEVER presented as a current certification (Phase 2 truth fix)', () => {
+    // metatrader5's catalog shape: raw status VERIFIED with provenance
+    // LEGACY_ATTESTATION and no harness run — real history, but the runtime
+    // LIVE gate rejects it, so the label must not claim verified/LIVE-capable.
+    const legacy = assessProviderVerification({
+      environments: ['DEMO', 'LIVE'],
+      implementationStatus: 'SUPPORTED',
+      adapterAvailable: true,
+      productionLiveVerification: {
+        status: 'VERIFIED',
+        verifiedAt: null,
+        evidenceRef: 'production operation — MetaApi bridge, live in production',
+        certifiedVia: 'LEGACY_ATTESTATION',
+        certificationRunRef: null,
+      },
+      accountType: 'LIVE',
+      authorizationStatus: 'ACTIVE',
+      executable: true,
+    });
+
+    expect(legacy.certificationState).toBe('LEGACY_VERIFIED');
+    expect(legacy.label).toBe('Production LIVE Unverified');
+    expect(legacy.verificationStatus).toBe('Production LIVE Unverified');
+    expect(legacy.identityProductionLiveEligibility).toBe('Ineligible');
+    // Executability is a separate fact: an ACTIVE LIVE connection still
+    // reports its granted authority — the label never claims certification.
+    expect(legacy.connectionExecutability).toBe('LIVE-capable');
+  });
+
+  it('raw VERIFIED evidence without provenance derives LEGACY_VERIFIED (never CERTIFIED) — fail-closed derivation', () => {
+    const assessment = assessProviderVerification({
+      environments: ['DEMO', 'LIVE'],
+      implementationStatus: 'SUPPORTED',
+      adapterAvailable: true,
+      // Older payload shape: no certifiedVia / certificationRunRef fields.
+      productionLiveVerification: {
+        status: 'VERIFIED',
+        verifiedAt: '2026-09-01T00:00:00.000Z',
+        evidenceRef: 'OPS-123',
+      },
+      accountType: 'LIVE',
+    });
+
+    expect(assessment.certificationState).toBe('LEGACY_VERIFIED');
+    expect(assessment.label).toBe('Production LIVE Unverified');
+    expect(assessment.identityProductionLiveEligibility).toBe('Ineligible');
+  });
+
+  it('an explicit server-provided certificationState is authoritative (CERTIFIED)', () => {
+    const assessment = assessProviderVerification({
+      environments: ['DEMO', 'LIVE'],
+      implementationStatus: 'SUPPORTED',
+      adapterAvailable: true,
+      certificationState: 'CERTIFIED',
+      accountType: 'LIVE',
+    });
+
+    expect(assessment.certificationState).toBe('CERTIFIED');
+    expect(assessment.label).toBe('Production LIVE Verified');
+    expect(assessment.identityProductionLiveEligibility).toBe('LIVE-capable');
+  });
+
+  it('an explicit server-provided certificationState is authoritative (NOT_CERTIFIED overrides raw VERIFIED)', () => {
+    const assessment = assessProviderVerification({
+      environments: ['DEMO', 'LIVE'],
+      implementationStatus: 'SUPPORTED',
+      adapterAvailable: true,
+      productionLiveVerification: { status: 'VERIFIED', verifiedAt: null, evidenceRef: 'x' },
+      certificationState: 'NOT_CERTIFIED',
+      accountType: 'LIVE',
+    });
+
+    expect(assessment.certificationState).toBe('NOT_CERTIFIED');
+    expect(assessment.label).toBe('Production LIVE Unverified');
   });
 
   it('a DEMO-typed connection identity is DEMO only regardless of provider capability', () => {
@@ -140,16 +221,12 @@ describe('assessProviderVerification label taxonomy', () => {
     expect(degraded.connectionExecutability).toBe('execution disabled');
   });
 
-  it('a connection that cannot execute reports execution disabled even when verified', () => {
+  it('a connection that cannot execute reports execution disabled even when certified', () => {
     const assessment = assessProviderVerification({
       environments: ['DEMO', 'LIVE'],
       implementationStatus: 'SUPPORTED',
       adapterAvailable: true,
-      productionLiveVerification: {
-        status: 'VERIFIED',
-        verifiedAt: '2026-09-01T00:00:00.000Z',
-        evidenceRef: 'OPS-123',
-      },
+      certificationState: 'CERTIFIED',
       accountType: 'LIVE',
       executable: false,
       authorizationStatus: 'SUSPENDED',

@@ -179,9 +179,17 @@ interface V3Order {
   state?: string;
   type?: string;
   price?: string;
+  /** Optional price bound carried by some LIMIT/STOP/MARKET_IF_TOUCHED orders. */
+  priceBound?: string;
   timeInForce?: string;
   createTime?: string;
   clientExtensions?: { id?: string };
+  /**
+   * Dependent-order definitions a pending order carries (Phase 5 — carried
+   * over verbatim by the pending-order replace path unless modified).
+   */
+  stopLossOnFill?: { price?: string; timeInForce?: string };
+  takeProfitOnFill?: { price?: string; timeInForce?: string };
 }
 
 interface V3OrdersListResponse {
@@ -190,6 +198,47 @@ interface V3OrdersListResponse {
 
 interface V3SingleOrderResponse {
   order?: V3Order;
+}
+
+/**
+ * v20 "replace order" request (PUT /v3/accounts/{accountID}/orders/{orderID})
+ * — the body must restate the order's FULL definition; optional fields the
+ * original order did not carry are omitted (never fabricated).
+ */
+interface V3OrderReplaceRequest {
+  order: {
+    type: 'LIMIT' | 'STOP' | 'MARKET_IF_TOUCHED';
+    instrument: string;
+    units: string;
+    timeInForce: string;
+    price?: string;
+    priceBound?: string;
+    stopLossOnFill?: { price: string; timeInForce: 'GTC' };
+    takeProfitOnFill?: { price: string; timeInForce: 'GTC' };
+  };
+}
+
+/**
+ * v20 "replace order" response: the replacement order's create transaction
+ * (v20 replace CANCELS the original order and CREATES a replacement — a NEW
+ * order id, surfaced as BrokerOrderResult.externalOrderId so callers/harness
+ * retarget) plus the cancellation transaction of the replaced order.
+ */
+interface V3OrderReplaceResponse {
+  orderCreateTransaction?: {
+    id: string;
+    type?: string;
+    time?: string;
+    instrument?: string;
+    units?: string;
+  };
+  orderCancelTransaction?: {
+    id: string;
+    type?: string;
+    orderID?: string;
+    time?: string;
+    reason?: string;
+  };
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -748,10 +797,27 @@ export class OandaAdapter implements IBrokerAdapter, AdapterMetadata {
   }
 
   /**
-   * SL/TP modification on the open TRADE: replaces the trade's dependent
-   * orders via PUT /v3/accounts/{id}/trades/{tradeSpecifier}/orders.
-   * externalOrderId here is the TRADE id. Trailing-stop-only modification
-   * is NOT mapped by this adapter and fails closed (INVALID_REQUEST).
+   * SL/TP modification, routed by LOOKUP (Phase 5 — pending-order replace):
+   *
+   * - WORKING PENDING ORDER (present in the listOrders() working set —
+   *   state=PENDING plus TRIGGERED) → the official v20 replace endpoint
+   *   PUT /v3/accounts/{accountID}/orders/{orderID}. The replace body must
+   *   restate the order's FULL definition, so the CURRENT parameters are
+   *   re-fetched first (getOrderById) and echoed back with the modified
+   *   SL/TP; optional fields the original order did not carry are omitted
+   *   (never fabricated). v20 replace CANCELS the original order and CREATES
+   *   a replacement (new order id — surfaced as externalOrderId so callers
+   *   and the harness retarget; the provider-verification harness's
+   *   pending-modify step already does). clientOrderId/clientExtensions are
+   *   NOT part of the replace body (documented limitation: the replacement
+   *   order does not inherit the original's clientExtensions.id).
+   * - OPEN TRADE → the historical dependent-orders path
+   *   (PUT /v3/accounts/{id}/trades/{tradeSpecifier}/orders) — unchanged.
+   * - an id in NEITHER set → the existing fail-closed behavior: the trade
+   *   PUT is answered by the provider's own 404 (POSITION_NOT_FOUND).
+   *
+   * Trailing-stop-only modification is NOT mapped by this adapter and fails
+   * closed (INVALID_REQUEST).
    */
   async modifyOrder(
     externalOrderId: string,
@@ -764,7 +830,23 @@ export class OandaAdapter implements IBrokerAdapter, AdapterMetadata {
         'OANDA v20 adapter does not map trailing-stop modifications (fail-closed — use stopLoss/takeProfit only)',
       );
     }
+    if (modifications.newStopLoss === undefined && modifications.newTakeProfit === undefined) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.INVALID_REQUEST,
+        'OANDA modifyOrder requires newStopLoss and/or newTakeProfit',
+      );
+    }
     try {
+      // Route by lookup (never guess): a working pending order is REPLACED
+      // through the orders endpoint; everything else keeps the trade path.
+      const workingOrders = await this.listOrders();
+      if (workingOrders.some((order) => order.providerOrderId === externalOrderId)) {
+        // NOTE: await — a bare `return` of the rejected promise would skip
+        // this try/catch (the async return-promise adoption happens after
+        // the try block) and leak unmapped transport errors.
+        return await this.replacePendingOrder(externalOrderId, modifications);
+      }
+
       const body: {
         stopLoss?: { price: string; timeInForce: 'GTC' };
         takeProfit?: { price: string; timeInForce: 'GTC' };
@@ -798,6 +880,147 @@ export class OandaAdapter implements IBrokerAdapter, AdapterMetadata {
     } catch (err) {
       throw this.mapError(err);
     }
+  }
+
+  /**
+   * Replace a WORKING pending order through the official v20 replace surface
+   * (PUT /v3/accounts/{accountID}/orders/{orderID} — Phase 5). The CURRENT
+   * order definition is re-fetched (getOrderById) so the replace body
+   * restates every parameter the order carries — only LIMIT / STOP /
+   * MARKET_IF_TOUCHED working orders share that body shape; dependent orders
+   * (TAKE_PROFIT/STOP_LOSS/TRAILING_STOP_LOSS) and executing MARKET orders
+   * are NOT replaceable through this surface and fail closed.
+   *
+   * Outcome discipline (same as placeOrder/cancelOrder):
+   * - 2xx WITH orderCreateTransaction.id → success FILLED; the provider's
+   *   replacement order id is surfaced (v20 mints a NEW id on replace);
+   * - 400 WITH orderRejectTransaction → honest REJECTED result (the provider
+   *   answered — never a throw-that-looks-like-an-outage);
+   * - 2xx WITHOUT orderCreateTransaction.id → INVALID_REQUEST fail-closed
+   *   (a malformed answer is NEVER success — Directive §AN #7 spirit).
+   */
+  private async replacePendingOrder(
+    externalOrderId: string,
+    modifications: BrokerOrderModification,
+  ): Promise<BrokerOrderResult> {
+    const { accountId, token } = this.requireConnection();
+    // Re-fetch the CURRENT order state: the replace body must restate the
+    // order's full definition — never fabricate a field, never drop one the
+    // order carries.
+    const current = await this.getOrderById(externalOrderId);
+    if (!current || current.status !== 'WORKING') {
+      // The order was working when routed but is gone/no longer pending in
+      // the fresh single-order read (filled, cancelled or raced) — honest
+      // fail-closed, never a replace attempt against a dead order id.
+      throw new BrokerAdapterError(
+        BrokerErrorCode.POSITION_NOT_FOUND,
+        `OANDA order "${externalOrderId}" is no longer a working (pending) order`,
+      );
+    }
+    if (current.raw === undefined || current.raw === null || typeof current.raw !== 'object') {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.INVALID_REQUEST,
+        'OANDA order-replace lookup lost the provider order payload — outcome cannot be recorded',
+      );
+    }
+    const order = current.raw as V3Order;
+
+    const type = String(order.type ?? '');
+    if (type !== 'LIMIT' && type !== 'STOP' && type !== 'MARKET_IF_TOUCHED') {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.INVALID_REQUEST,
+        `OANDA v20 replace does not map order type "${type}" (fail-closed — only ` +
+          'LIMIT/STOP/MARKET_IF_TOUCHED working orders are replaceable through this surface)',
+      );
+    }
+    if (typeof order.timeInForce !== 'string' || order.timeInForce.trim() === '') {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.INVALID_REQUEST,
+        'OANDA working order is missing timeInForce — refusing to fabricate the replacement definition',
+      );
+    }
+    if (typeof order.instrument !== 'string' || order.instrument.trim() === '') {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.INVALID_REQUEST,
+        'OANDA working order is missing instrument — refusing to fabricate the replacement definition',
+      );
+    }
+
+    const body: V3OrderReplaceRequest = {
+      order: {
+        type,
+        instrument: order.instrument,
+        units: this.requiredDecimal(order.units, 'order.units'),
+        timeInForce: order.timeInForce,
+        price: this.requiredDecimal(order.price, 'order.price'),
+      },
+    };
+    // priceBound: carried over only when the original order carries one.
+    if (order.priceBound !== undefined && order.priceBound !== null && order.priceBound !== '') {
+      body.order.priceBound = this.requiredDecimal(order.priceBound, 'order.priceBound');
+    }
+
+    // Protective levels: carry over the order's CURRENT definitions; a
+    // provided modification overrides (a '0'/empty value REMOVES the level).
+    const carriedStopLoss = this.carriedStopOnFill(order.stopLossOnFill, 'order.stopLossOnFill');
+    const carriedTakeProfit = this.carriedStopOnFill(
+      order.takeProfitOnFill,
+      'order.takeProfitOnFill',
+    );
+    const stopLoss =
+      modifications.newStopLoss !== undefined
+        ? this.dependentOrderPrice(modifications.newStopLoss)
+        : carriedStopLoss;
+    const takeProfit =
+      modifications.newTakeProfit !== undefined
+        ? this.dependentOrderPrice(modifications.newTakeProfit)
+        : carriedTakeProfit;
+    if (stopLoss !== null) body.order.stopLossOnFill = { price: stopLoss, timeInForce: 'GTC' };
+    if (takeProfit !== null) {
+      body.order.takeProfitOnFill = { price: takeProfit, timeInForce: 'GTC' };
+    }
+
+    let response: V3OrderReplaceResponse;
+    try {
+      response = await this.request<V3OrderReplaceResponse>(
+        'PUT',
+        `/v3/accounts/${this.enc(accountId)}/orders/${this.enc(externalOrderId)}`,
+        token,
+        body,
+      );
+    } catch (err) {
+      if (err instanceof OandaApiError && err.status === 400 && isOandaOrderRejection(err.body)) {
+        // Provider refused the replacement (definitive answer — e.g. the
+        // order state changed server-side) — honest REJECTED, never an
+        // outage-looking throw.
+        const reason = oandaOrderRejectReason(err.body) ?? 'unknown rejection reason';
+        return {
+          success: false,
+          status: 'REJECTED',
+          brokerMessage: `OANDA order replace rejected: ${reason}`,
+          rawResponse: err.body,
+        };
+      }
+      throw err;
+    }
+
+    const replace = response.orderCreateTransaction;
+    if (!replace?.id) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.INVALID_REQUEST,
+        'OANDA order-replace response missing orderCreateTransaction.id — outcome cannot be recorded',
+      );
+    }
+    return {
+      success: true,
+      // v20 replace cancels the original order and CREATES a replacement —
+      // the provider's replacement id is the handle for every subsequent
+      // operation (the harness retargets its pending-order id on this).
+      externalOrderId: String(replace.id),
+      status: 'FILLED',
+      brokerMessage: 'OANDA pending order replaced (SL/TP updated)',
+      rawResponse: response,
+    };
   }
 
   async closeOrder(externalOrderId: string, lotSize?: string): Promise<BrokerOrderResult> {
@@ -1518,6 +1741,20 @@ export class OandaAdapter implements IBrokerAdapter, AdapterMetadata {
     if (text === '' || text === '0' || text === '0.0' || text === '0.00') return null;
     if (!DECIMAL_PATTERN.test(text)) return null;
     return text;
+  }
+
+  /**
+   * A pending order's EXISTING dependent-order (on-fill) definition, carried
+   * over verbatim by the replace path (Phase 5). null when the order carries
+   * none; a carried definition WITHOUT a provable price fails closed (the
+   * replacement must never silently drop a protective level the order has).
+   */
+  private carriedStopOnFill(
+    onFill: { price?: string; timeInForce?: string } | undefined,
+    field: string,
+  ): string | null {
+    if (onFill === undefined || onFill === null) return null;
+    return this.requiredDecimal(onFill.price, `${field}.price`);
   }
 
   private parseDate(value: string | undefined, field: string): Date {

@@ -1,3 +1,4 @@
+import type { BrokerRegistryEntry } from '@irexpro/types';
 import type { ExecutionConfirmationView } from '@irexpro/types/execution';
 import {
   changeSessionExecutionMode,
@@ -5,6 +6,7 @@ import {
   connectionVerificationLabel,
   executionBlockedReasons,
   formatExpiryCountdown,
+  liveStartBlockedReasons,
   loadPendingExecutionConfirmations,
 } from './trader-session';
 
@@ -297,5 +299,147 @@ describe('connectionVerificationLabel', () => {
     );
 
     expect(assessment.label).toBe('DEMO only');
+  });
+});
+
+describe('liveStartBlockedReasons (truthful LIVE Start gating — audit P15)', () => {
+  const registryEntry = (
+    overrides: Partial<
+      Pick<
+        BrokerRegistryEntry,
+        'liveReadiness' | 'certificationState' | 'productionLiveVerification'
+      >
+    > = {},
+  ): BrokerRegistryEntry => ({
+    id: 'metatrader5',
+    name: 'MetaTrader 5',
+    description: '',
+    status: 'SUPPORTED',
+    connectionRoutes: ['METATRADER'],
+    capabilities: ['DEMO', 'LIVE'],
+    authenticationType: 'SESSION_AUTH',
+    environments: ['DEMO', 'LIVE'],
+    regions: [],
+    adapterAvailable: true,
+    ...overrides,
+  });
+
+  it('never gates a DEMO (paper) start', () => {
+    expect(
+      liveStartBlockedReasons({
+        accountType: 'DEMO',
+        registryEntry: registryEntry({
+          liveReadiness: {
+            eligible: false,
+            blockedReasons: ['CERTIFICATION_REQUIRED'],
+            partnerApprovalRequired: false,
+            liveUnavailableRegions: [],
+          },
+        }),
+      }),
+    ).toEqual([]);
+  });
+
+  it('returns no reasons when the registry reports the provider LIVE-ready', () => {
+    expect(
+      liveStartBlockedReasons({
+        accountType: 'LIVE',
+        registryEntry: registryEntry({
+          certificationState: 'CERTIFIED',
+          liveReadiness: {
+            eligible: true,
+            blockedReasons: [],
+            partnerApprovalRequired: false,
+            liveUnavailableRegions: [],
+          },
+        }),
+      }),
+    ).toEqual([]);
+  });
+
+  it('maps every server blocker code to the canonical human line, in server order', () => {
+    const reasons = liveStartBlockedReasons({
+      accountType: 'LIVE',
+      registryEntry: registryEntry({
+        liveReadiness: {
+          eligible: false,
+          blockedReasons: [
+            'PARTNER_APPROVAL_REQUIRED',
+            'CERTIFICATION_REQUIRED',
+            'ADAPTER_UNAVAILABLE',
+            'LIVE_UNSUPPORTED',
+          ],
+          partnerApprovalRequired: true,
+          liveUnavailableRegions: [],
+        },
+      }),
+    });
+
+    expect(reasons).toEqual([
+      'Partner approval required before LIVE is possible',
+      'LIVE requires a current provider certification',
+      'Provider integration is not currently available',
+      'This provider does not offer LIVE accounts',
+    ]);
+  });
+
+  it('still blocks (honest fallback line) when the server sends eligible=false with no reasons', () => {
+    const reasons = liveStartBlockedReasons({
+      accountType: 'LIVE',
+      registryEntry: registryEntry({
+        liveReadiness: {
+          eligible: false,
+          blockedReasons: [],
+          partnerApprovalRequired: false,
+          liveUnavailableRegions: [],
+        },
+      }),
+    });
+
+    expect(reasons).toEqual(['LIVE is not currently available for this provider']);
+  });
+
+  it('degrades to the existing behavior when the registry is unavailable (server still enforces)', () => {
+    expect(liveStartBlockedReasons({ accountType: 'LIVE', registryEntry: null })).toEqual([]);
+  });
+
+  it('falls back to the certification state for older payloads without liveReadiness', () => {
+    expect(
+      liveStartBlockedReasons({
+        accountType: 'LIVE',
+        registryEntry: registryEntry({ certificationState: 'NOT_CERTIFIED' }),
+      }),
+    ).toEqual(['LIVE requires a current provider certification']);
+
+    // LEGACY_VERIFIED is NOT a current protocol certification — LIVE stays blocked.
+    expect(
+      liveStartBlockedReasons({
+        accountType: 'LIVE',
+        registryEntry: registryEntry({ certificationState: 'LEGACY_VERIFIED' }),
+      }),
+    ).toEqual(['LIVE requires a current provider certification']);
+
+    expect(
+      liveStartBlockedReasons({
+        accountType: 'LIVE',
+        registryEntry: registryEntry({ certificationState: 'CERTIFIED' }),
+      }),
+    ).toEqual([]);
+  });
+
+  it('derives the certification fallback from the verification record when certificationState is absent', () => {
+    expect(
+      liveStartBlockedReasons({
+        accountType: 'LIVE',
+        registryEntry: registryEntry({
+          productionLiveVerification: {
+            status: 'VERIFIED',
+            verifiedAt: '2026-01-01T00:00:00.000Z',
+            evidenceRef: 'doc/ref-1',
+            certifiedVia: 'LEGACY_ATTESTATION',
+          },
+        }),
+      }),
+    ).toEqual(['LIVE requires a current provider certification']);
   });
 });

@@ -117,6 +117,13 @@ export enum RiskRejectionCode {
   EXECUTION_CONTROL_ACTIVE = 'EXECUTION_CONTROL_ACTIVE',
   LIVE_AUTHORIZATION_REQUIRED = 'LIVE_AUTHORIZATION_REQUIRED',
 
+  // Production-LIVE completion round (Phase 9) — continuous eligibility +
+  // provider region availability for LIVE new exposure. A revocation (KYC,
+  // jurisdiction, disclosures, account status) after session start must
+  // block the NEXT LIVE grant, not only in-flight ones.
+  USER_LIVE_ELIGIBILITY_REVOKED = 'USER_LIVE_ELIGIBILITY_REVOKED',
+  PROVIDER_REGION_UNAVAILABLE = 'PROVIDER_REGION_UNAVAILABLE',
+
   // Account-level limits
   DAILY_LOSS_LIMIT_REACHED = 'DAILY_LOSS_LIMIT_REACHED',
   MAX_DRAWDOWN_REACHED = 'MAX_DRAWDOWN_REACHED',

@@ -1,11 +1,16 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { ModuleRef } from '@nestjs/core';
 import {
   AiSchedulerSessionRegistration,
   AiSchedulerSessionStartPayload,
   AiSchedulerSessionStatus,
   AiSchedulerSessionStopPayload,
 } from './interfaces/ai-scheduler.interface';
+// Production-LIVE completion round (P13 metrics): dependency-free in-process
+// info gauge (lazy ModuleRef seam — same pattern as risk.service).
+import { MetricsService } from '../metrics/metrics.service';
+import { METRIC_GAUGE_NAMES } from '../metrics/metric-names';
 
 const INTERNAL_API_KEY_HEADER = 'x-irexpro-internal-api-key';
 const REQUEST_TIMEOUT_MS = 5000;
@@ -22,7 +27,26 @@ const REQUEST_TIMEOUT_MS = 5000;
 export class AiEngineClient {
   private readonly logger = new Logger(AiEngineClient.name);
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(
+    private readonly configService: ConfigService,
+    /**
+     * Production-LIVE completion round (P13 metrics): lazy metrics seam —
+     * OPTIONAL trailing dependency (direct spec constructions keep
+     * compiling). Resolved at CALL time via ModuleRef.get(...,
+     * { strict: false }); when absent every `this.metrics?…` call site
+     * no-ops — metrics can never break session coordination.
+     */
+    private readonly moduleRef?: ModuleRef,
+  ) {}
+
+  /** Lazy MetricsService lookup (never throws, never affects control flow). */
+  private get metrics(): MetricsService | null {
+    try {
+      return this.moduleRef?.get(MetricsService, { strict: false }) ?? null;
+    } catch {
+      return null;
+    }
+  }
 
   isSchedulerIntegrationEnabled(): boolean {
     return this.configService.get<boolean>('aiEngine.schedulerEnabled', false);
@@ -83,7 +107,27 @@ export class AiEngineClient {
     }
 
     const url = `${this.getBaseUrl()}/scheduler/sessions/status`;
-    return this.post<AiSchedulerSessionStatus>(url, { tradingSessionId }, tradingSessionId);
+    const status = await this.post<AiSchedulerSessionStatus>(
+      url,
+      { tradingSessionId },
+      tradingSessionId,
+    );
+
+    // Production-LIVE completion round (P13 metrics): the AI engine's active
+    // model version/mode as an info-style gauge. This instruments the
+    // EXISTING status-refresh path — the client deliberately makes NO network
+    // call per /metrics scrape (the gauge is absent until the first session
+    // status read after a process restart, and goes absent with the process).
+    // removeGauge-then-set drops stale label series when the engine promotes
+    // or rolls back a model. Missing values collapse to '_' via the metrics
+    // label sanitizer — an honest "unknown", never a fabricated version.
+    this.metrics?.removeGauge(METRIC_GAUGE_NAMES.AI_MODEL_INFO);
+    this.metrics?.setGauge(METRIC_GAUGE_NAMES.AI_MODEL_INFO, 1, {
+      model_version: status.model_version ?? 'unknown',
+      model_mode: status.model_mode ?? 'unknown',
+    });
+
+    return status;
   }
 
   private async post<T>(url: string, body: Record<string, unknown>, sessionId: string): Promise<T> {

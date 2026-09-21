@@ -1,10 +1,15 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Injectable, Logger } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { Job } from 'bullmq';
 import { BrokerConnection } from '../../broker/entities/broker-connection.entity';
 import { StateReconciliationService } from '../reconciliation/state-reconciliation.service';
 import { ReconciliationRunOutcome } from '../reconciliation/state-reconciliation.service';
 import { ExecutionService } from '../execution.service';
+// Production-LIVE completion round (P13 metrics): dependency-free in-process
+// counters (lazy ModuleRef seam — same pattern as risk.service).
+import { MetricsService } from '../../metrics/metrics.service';
+import { METRIC_NAMES } from '../../metrics/metric-names';
 // Round 6 live-execution completion (§8): the protective-order loop runs
 // after every per-connection state sweep.
 import {
@@ -55,8 +60,24 @@ export class TradeReconciliationJob extends WorkerHost {
     // Explicit user Stop AI Trading continuation: after provider truth has
     // been reconciled, flatten any late fill tied to a durably marked session.
     private readonly executionService: ExecutionService,
+    /**
+     * Production-LIVE completion round (P13 metrics): lazy metrics seam —
+     * OPTIONAL trailing dependency (specs keep compiling; the ModuleRef
+     * lookup resolves the app-wide MetricsService singleton at CALL time and
+     * no-ops when absent — see metrics.module.ts for the DI decision).
+     */
+    private readonly moduleRef?: ModuleRef,
   ) {
     super();
+  }
+
+  /** Lazy MetricsService lookup (never throws, never affects control flow). */
+  private get metrics(): MetricsService | null {
+    try {
+      return this.moduleRef?.get(MetricsService, { strict: false }) ?? null;
+    } catch {
+      return null;
+    }
   }
 
   async process(job: Job): Promise<{
@@ -76,6 +97,9 @@ export class TradeReconciliationJob extends WorkerHost {
       await this.stateReconciliation.findReconcilableConnections();
 
     if (connections.length === 0) {
+      // P13 metrics: a tick that found nothing to reconcile is still a
+      // COMPLETED cycle (sweep liveness proof — the age gauge backs it).
+      this.metrics?.increment(METRIC_NAMES.RECONCILIATION_CYCLES);
       return {
         connectionsReconciled: 0,
         discrepanciesDetected: 0,
@@ -157,6 +181,10 @@ export class TradeReconciliationJob extends WorkerHost {
         `checked, ${protectiveOrdersRepaired} repaired, ${protectiveRepairsFailed} ` +
         `repair failures`,
     );
+
+    // P13 metrics: one completed worker cycle (per-connection discrepancy
+    // counts live in the state-reconciliation service's own counters).
+    this.metrics?.increment(METRIC_NAMES.RECONCILIATION_CYCLES);
 
     return {
       connectionsReconciled: connections.length,

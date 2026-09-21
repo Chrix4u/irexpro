@@ -1,3 +1,4 @@
+import { ConfigService } from '@nestjs/config';
 import { Repository } from 'typeorm';
 import { BrokerAccount } from '../broker/entities/broker-account.entity';
 import { BrokerConnection } from '../broker/entities/broker-connection.entity';
@@ -6,6 +7,7 @@ import { BrokerConnectionStatus, BrokerMode } from '../broker/interfaces/broker-
 import { BrokerAuthorizationStatus } from '../broker/authorization/broker-authorization-status';
 import { BrokerCredentialStatus } from '../broker/authorization/broker-credential-status';
 import { BrokerProviderRegistryService } from '../broker/registry/broker-provider-registry.service';
+import { BrokerAdapterRegistry } from '../broker/adapters/broker-adapter.registry';
 import { TradingSession, TradingSessionStatus } from '../execution/entities/trading-session.entity';
 import {
   ExecutionControlScope,
@@ -22,14 +24,22 @@ import {
   ReconciliationDiscrepancyStatus,
   ReconciliationDiscrepancyType,
 } from '../execution/reconciliation/reconciliation.enums';
+import { Order } from '../execution/orders/order.entity';
+import { OrderStatus } from '../execution/orders/order.enums';
+import { RiskProfile } from '../risk/entities/risk-profile.entity';
+import { RiskViolation } from '../risk/entities/risk-violation.entity';
+import { BrokerAccountSnapshot } from '../broker/entities/broker-account-snapshot.entity';
+import { AuditAction } from '../../common/enums/audit-action.enum';
 import { AuditLog, AuditSeverity } from '../audit/entities/audit-log.entity';
 import {
   ADMIN_AUDIT_ACTOR_FILTER_MAX_LENGTH,
   ADMIN_AUDIT_RESOURCE_FILTER_MAX_LENGTH,
   ADMIN_DESCRIPTION_MAX_LENGTH,
+  ADMIN_EMERGENCY_FLATTEN_AUDIT_SCAN_ROWS,
   ADMIN_ERROR_MESSAGE_MAX_LENGTH,
   ADMIN_EXPIRED_CONTROLS_MAX_ROWS,
   ADMIN_RESOLVED_WINDOW_MS,
+  ADMIN_STALE_SNAPSHOT_THRESHOLD_MS,
   ADMIN_UNKNOWN_BROKER_ID,
   AdminLiveAccountService,
   boundAdminAuditFilter,
@@ -50,7 +60,10 @@ import { deriveDiscrepancyDescription } from './dto/admin-discrepancies-response
 import { deriveAdminAuditSeverity } from './dto/admin-audit-response.dto';
 
 /**
- * AdminLiveAccountService — Sprint 50 PR-6 unit specs (Directive §51).
+ * AdminLiveAccountService — Sprint 50 PR-6 unit specs (Directive §51) + Phase 10
+ * canary-operations blocks (adapter versions, dispatch outcomes, stale
+ * snapshot alerts, emergency flatten status, kill switch count, certification
+ * canary bounds — incl. the null-degradation contract for every new block).
  *
  * Covers: overview bucket correctness (connection + authorization + environment
  * matrices), discrepancy counts incl. the resolvedLast24h window, active-control
@@ -92,12 +105,18 @@ describe('AdminLiveAccountService', () => {
   let runRepo: { find: jest.Mock };
   let discrepancyRepo: { find: jest.Mock; count: jest.Mock };
   let auditRepo: { find: jest.Mock; count: jest.Mock };
+  let orderRepo: { count: jest.Mock };
+  let riskProfileRepo: { count: jest.Mock };
+  let riskViolationRepo: { count: jest.Mock };
+  let snapshotRepo: { findOne: jest.Mock };
   let executionControlService: {
     listActiveControls: jest.Mock;
     listControlsIncludingExpired: jest.Mock;
   };
   let providerRegistry: { getCatalog: jest.Mock };
   let brokerService: { isConnectionExecutable: jest.Mock };
+  let adapterRegistry: { getSupportedBrokerIds: jest.Mock; getAdapter: jest.Mock };
+  let configService: { get: jest.Mock };
 
   const connection = (overrides: Partial<BrokerConnection> = {}): BrokerConnection =>
     ({
@@ -225,12 +244,21 @@ describe('AdminLiveAccountService', () => {
       count: jest.fn().mockResolvedValue(0),
     };
     auditRepo = { find: jest.fn().mockResolvedValue([]), count: jest.fn().mockResolvedValue(0) };
+    orderRepo = { count: jest.fn().mockResolvedValue(0) };
+    riskProfileRepo = { count: jest.fn().mockResolvedValue(0) };
+    riskViolationRepo = { count: jest.fn().mockResolvedValue(0) };
+    snapshotRepo = { findOne: jest.fn().mockResolvedValue(null) };
     executionControlService = {
       listActiveControls: jest.fn().mockResolvedValue([]),
       listControlsIncludingExpired: jest.fn().mockResolvedValue([]),
     };
     providerRegistry = { getCatalog: jest.fn().mockReturnValue([]) };
     brokerService = { isConnectionExecutable: jest.fn().mockReturnValue(true) };
+    adapterRegistry = {
+      getSupportedBrokerIds: jest.fn().mockReturnValue([]),
+      getAdapter: jest.fn(),
+    };
+    configService = { get: jest.fn().mockReturnValue(undefined) };
 
     service = new AdminLiveAccountService(
       connectionRepo as unknown as Repository<BrokerConnection>,
@@ -239,9 +267,15 @@ describe('AdminLiveAccountService', () => {
       runRepo as unknown as Repository<ReconciliationRun>,
       discrepancyRepo as unknown as Repository<ReconciliationDiscrepancy>,
       auditRepo as unknown as Repository<AuditLog>,
+      orderRepo as unknown as Repository<Order>,
+      riskProfileRepo as unknown as Repository<RiskProfile>,
+      riskViolationRepo as unknown as Repository<RiskViolation>,
+      snapshotRepo as unknown as Repository<BrokerAccountSnapshot>,
       executionControlService as unknown as ExecutionControlService,
       providerRegistry as unknown as BrokerProviderRegistryService,
       brokerService as unknown as BrokerService,
+      adapterRegistry as unknown as BrokerAdapterRegistry,
+      configService as unknown as ConfigService,
     );
   });
 
@@ -762,6 +796,476 @@ describe('AdminLiveAccountService', () => {
     });
   });
 
+  // ─── Phase 10 canary-operations blocks (overview) ─────────────────────────
+
+  describe('overview — adapter versions (Phase 10)', () => {
+    it('maps adapterVersion per registered brokerId from the metadata-only root adapters', async () => {
+      adapterRegistry.getSupportedBrokerIds.mockReturnValue([
+        'metatrader5',
+        'paper-broker',
+        'oanda',
+        'ctrader',
+      ]);
+      adapterRegistry.getAdapter.mockImplementation((brokerId: string) => {
+        if (brokerId === 'metatrader5') return { brokerId, adapterVersion: '1' };
+        if (brokerId === 'oanda') return { brokerId, adapterVersion: '1.0.0' };
+        // No version annotation at all.
+        if (brokerId === 'paper-broker') return { brokerId };
+        return { brokerId, adapterVersion: '' }; // blank → null (never guessed)
+      });
+
+      const overview = await service.getOverview(NOW);
+
+      expect(overview.adapterVersions).toEqual({
+        metatrader5: '1',
+        'paper-broker': null,
+        oanda: '1.0.0',
+        ctrader: null,
+      });
+    });
+
+    it('resolves registered aliases to the canonical provider version', async () => {
+      adapterRegistry.getSupportedBrokerIds.mockReturnValue([
+        'ctrader',
+        'pepperstone-ctrader',
+        'icmarkets-ctrader',
+      ]);
+      const canonical = { brokerId: 'ctrader', adapterVersion: '1.0.0' };
+      adapterRegistry.getAdapter.mockReturnValue(canonical);
+
+      const overview = await service.getOverview(NOW);
+
+      expect(overview.adapterVersions).toEqual({
+        ctrader: '1.0.0',
+        'pepperstone-ctrader': '1.0.0',
+        'icmarkets-ctrader': '1.0.0',
+      });
+    });
+
+    it('degrades to null when the adapter registry throws (panel failure never fails the overview)', async () => {
+      adapterRegistry.getSupportedBrokerIds.mockImplementation(() => {
+        throw new Error('registry unavailable');
+      });
+
+      const overview = await service.getOverview(NOW);
+
+      expect(overview.adapterVersions).toBeNull();
+      // The rest of the overview still resolved.
+      expect(overview.generatedAt).toBe(NOW.toISOString());
+    });
+  });
+
+  describe('overview — dispatch outcomes (Phase 10)', () => {
+    it('counts RECONCILIATION_PENDING orders and 24h-finalized REJECTED orders (admin scope — no user filter)', async () => {
+      orderRepo.count
+        .mockResolvedValueOnce(3) // RECONCILIATION_PENDING
+        .mockResolvedValueOnce(7); // REJECTED in window
+      riskViolationRepo.count.mockResolvedValue(11);
+
+      const overview = await service.getOverview(NOW);
+
+      expect(overview.dispatchOutcomes).toEqual({
+        unknownResultOpenCount: 3,
+        rejectedLast24h: 7,
+        dispatchBlocksLast24h: 11,
+      });
+      expect(orderRepo.count.mock.calls[0][0]).toEqual({
+        where: { status: OrderStatus.RECONCILIATION_PENDING },
+      });
+      const rejectedWhere = orderRepo.count.mock.calls[1][0].where;
+      expect(rejectedWhere.status).toBe(OrderStatus.REJECTED);
+      expectMoreThanOrEqualDate(
+        rejectedWhere.finalizedAt,
+        new Date(NOW.getTime() - ADMIN_RESOLVED_WINDOW_MS),
+      );
+      const blocksWhere = riskViolationRepo.count.mock.calls[0][0].where;
+      expectMoreThanOrEqualDate(
+        blocksWhere.evaluatedAt,
+        new Date(NOW.getTime() - ADMIN_RESOLVED_WINDOW_MS),
+      );
+    });
+
+    it('degrades ONLY the risk-violation count to null when that query fails', async () => {
+      orderRepo.count.mockResolvedValue(0);
+      riskViolationRepo.count.mockRejectedValue(new Error('risk violations table missing'));
+
+      const overview = await service.getOverview(NOW);
+
+      expect(overview.dispatchOutcomes).toEqual({
+        unknownResultOpenCount: 0,
+        rejectedLast24h: 0,
+        dispatchBlocksLast24h: null,
+      });
+    });
+
+    it('degrades the whole block to null when the order-domain queries fail', async () => {
+      orderRepo.count.mockRejectedValue(new Error('orders table unavailable'));
+
+      const overview = await service.getOverview(NOW);
+
+      expect(overview.dispatchOutcomes).toBeNull();
+    });
+  });
+
+  describe('overview — stale snapshot alerts (Phase 10)', () => {
+    const snapshot = (overrides: Partial<BrokerAccountSnapshot> = {}): BrokerAccountSnapshot =>
+      ({
+        connectionId: 'conn-1',
+        generation: 4,
+        providerObservedAt: null,
+        acceptedAt: new Date('2026-01-15T11:59:30.000Z'),
+        ...overrides,
+      }) as BrokerAccountSnapshot;
+
+    it('alerts CONNECTED connections whose latest accepted snapshot is older than the 120s threshold', async () => {
+      connectionRepo.find.mockResolvedValue([
+        connection({
+          id: 'c-live-stale',
+          brokerId: 'metatrader5',
+          accountType: BrokerMode.LIVE,
+          status: BrokerConnectionStatus.CONNECTED,
+        }),
+        connection({
+          id: 'c-demo-stale',
+          brokerId: 'paper-broker',
+          accountType: BrokerMode.DEMO,
+          status: BrokerConnectionStatus.CONNECTED,
+        }),
+      ]);
+      // NOW = 12:00:00 — first connection's latest snapshot: 11:57:00 (180s,
+      // stale); second connection's: 11:59:30 (30s — below the 120s threshold).
+      snapshotRepo.findOne
+        .mockResolvedValueOnce(
+          snapshot({
+            connectionId: 'c-live-stale',
+            acceptedAt: new Date('2026-01-15T11:57:00.000Z'),
+          }),
+        )
+        .mockResolvedValueOnce(
+          snapshot({
+            connectionId: 'c-demo-stale',
+            acceptedAt: new Date('2026-01-15T11:59:30.000Z'),
+          }),
+        );
+
+      const overview = await service.getOverview(NOW);
+
+      expect(overview.staleSnapshotAlerts).toEqual([
+        {
+          connectionId: 'c-live-stale',
+          brokerId: 'metatrader5',
+          accountType: 'LIVE',
+          lastAcceptedAt: '2026-01-15T11:57:00.000Z',
+          ageSeconds: 180,
+        },
+      ]);
+      // Latest-snapshot lookup follows the generation ordering discipline.
+      expect(snapshotRepo.findOne).toHaveBeenCalledWith({
+        where: { connectionId: 'c-live-stale' },
+        order: { generation: 'DESC' },
+        select: ['connectionId', 'generation', 'acceptedAt', 'providerObservedAt'],
+      });
+    });
+
+    it('uses the provider observation instant when reported (same semantics as the pre-trade gate)', async () => {
+      connectionRepo.find.mockResolvedValue([
+        connection({
+          id: 'c-live',
+          accountType: BrokerMode.LIVE,
+          status: BrokerConnectionStatus.CONNECTED,
+        }),
+      ]);
+      // acceptedAt is fresh, but the provider observed it 5 minutes ago.
+      snapshotRepo.findOne.mockResolvedValue(
+        snapshot({
+          connectionId: 'c-live',
+          acceptedAt: new Date('2026-01-15T11:59:50.000Z'),
+          providerObservedAt: new Date('2026-01-15T11:55:00.000Z'),
+        }),
+      );
+
+      const overview = await service.getOverview(NOW);
+
+      expect(overview.staleSnapshotAlerts).toEqual([
+        {
+          connectionId: 'c-live',
+          brokerId: 'metatrader5',
+          accountType: 'LIVE',
+          lastAcceptedAt: '2026-01-15T11:59:50.000Z',
+          ageSeconds: 300,
+        },
+      ]);
+    });
+
+    it('alerts CONNECTED LIVE connections with NO accepted snapshot; a missing snapshot on CONNECTED DEMO is not alert-worthy', async () => {
+      connectionRepo.find.mockResolvedValue([
+        connection({
+          id: 'c-live-missing',
+          accountType: BrokerMode.LIVE,
+          status: BrokerConnectionStatus.CONNECTED,
+        }),
+        connection({
+          id: 'c-demo-missing',
+          accountType: BrokerMode.DEMO,
+          status: BrokerConnectionStatus.CONNECTED,
+        }),
+      ]);
+      snapshotRepo.findOne.mockResolvedValue(null);
+
+      const overview = await service.getOverview(NOW);
+
+      expect(overview.staleSnapshotAlerts).toEqual([
+        {
+          connectionId: 'c-live-missing',
+          brokerId: 'metatrader5',
+          accountType: 'LIVE',
+          lastAcceptedAt: null,
+          ageSeconds: null,
+        },
+      ]);
+    });
+
+    it('never alerts non-connected connections (a stale snapshot on a DISCONNECTED connection is expected)', async () => {
+      connectionRepo.find.mockResolvedValue([
+        connection({
+          id: 'c-disconnected',
+          accountType: BrokerMode.LIVE,
+          status: BrokerConnectionStatus.DISCONNECTED,
+        }),
+        connection({
+          id: 'c-error',
+          accountType: BrokerMode.LIVE,
+          status: BrokerConnectionStatus.ERROR,
+        }),
+      ]);
+
+      const overview = await service.getOverview(NOW);
+
+      expect(overview.staleSnapshotAlerts).toEqual([]);
+      expect(snapshotRepo.findOne).not.toHaveBeenCalled();
+    });
+
+    it('pins the admin staleness threshold at 120s (observability — the 30s pre-trade gate is separate enforcement)', () => {
+      expect(ADMIN_STALE_SNAPSHOT_THRESHOLD_MS).toBe(120_000);
+    });
+
+    it('degrades to null when the snapshot repository fails', async () => {
+      connectionRepo.find.mockResolvedValue([
+        connection({ status: BrokerConnectionStatus.CONNECTED }),
+      ]);
+      snapshotRepo.findOne.mockRejectedValue(new Error('snapshots table unavailable'));
+
+      const overview = await service.getOverview(NOW);
+
+      expect(overview.staleSnapshotAlerts).toBeNull();
+    });
+  });
+
+  describe('overview — emergency flatten status (Phase 10)', () => {
+    const flattenAudit = (
+      overrides: Partial<AuditLog> & { metadata?: Record<string, unknown> } = {},
+    ): AuditLog =>
+      auditLog({
+        id: 'audit-flatten',
+        action: AuditAction.RISK_KILL_SWITCH_ACTIVATED,
+        createdAt: new Date('2026-01-15T11:00:00.000Z'),
+        metadata: {
+          emergencyFlatten: true,
+          closeReason: 'KILL_SWITCH_FORCE_CLOSE',
+          targetCount: 3,
+          closedCount: 3,
+          failedCount: 0,
+          trades: [{ tradeId: 't-1', closed: true }],
+        },
+        ...overrides,
+      });
+
+    it('derives COMPLETE when every target position closed, with an honest sanitized description', async () => {
+      auditRepo.find.mockResolvedValue([flattenAudit()]);
+
+      const overview = await service.getOverview(NOW);
+
+      expect(overview.emergencyFlattenStatus).toEqual({
+        lastRequestedAt: '2026-01-15T11:00:00.000Z',
+        lastOutcome: 'COMPLETE',
+        description:
+          'Emergency flatten closed 3 of 3 open position(s) (reason: KILL_SWITCH_FORCE_CLOSE) ' +
+          '— not-closed outcomes are failed or unknown-result closes',
+      });
+    });
+
+    it('derives PARTIAL when some positions were not closed', async () => {
+      auditRepo.find.mockResolvedValue([
+        flattenAudit({ metadata: { emergencyFlatten: true, targetCount: 3, closedCount: 2 } }),
+      ]);
+
+      const overview = await service.getOverview(NOW);
+
+      expect(overview.emergencyFlattenStatus?.lastOutcome).toBe('PARTIAL');
+      expect(overview.emergencyFlattenStatus?.description).toContain('closed 2 of 3');
+    });
+
+    it('derives UNVERIFIED when the audit record carries no usable counts', async () => {
+      auditRepo.find.mockResolvedValue([flattenAudit({ metadata: { emergencyFlatten: true } })]);
+
+      const overview = await service.getOverview(NOW);
+
+      expect(overview.emergencyFlattenStatus?.lastOutcome).toBe('UNVERIFIED');
+      expect(overview.emergencyFlattenStatus?.description).toContain('outcome counts unavailable');
+    });
+
+    it('scans only the bounded audit tail for the RISK_KILL_SWITCH_ACTIVATED action', async () => {
+      auditRepo.find.mockResolvedValue([]);
+
+      await service.getOverview(NOW);
+
+      expect(auditRepo.find).toHaveBeenCalledWith({
+        where: { action: AuditAction.RISK_KILL_SWITCH_ACTIVATED },
+        order: { createdAt: 'DESC' },
+        take: ADMIN_EMERGENCY_FLATTEN_AUDIT_SCAN_ROWS,
+      });
+    });
+
+    it('skips risk-service kill-switch activations WITHOUT the flatten marker (newest flatten row wins)', async () => {
+      auditRepo.find.mockResolvedValue([
+        // Newest row: the risk-service activation audit (no flatten summary).
+        auditLog({
+          id: 'audit-recent-activation',
+          action: AuditAction.RISK_KILL_SWITCH_ACTIVATED,
+          createdAt: new Date('2026-01-15T11:30:00.000Z'),
+          metadata: { active: true, reason: 'manual pause' },
+        }),
+        // Older row: the actual flatten summary audit.
+        flattenAudit({ createdAt: new Date('2026-01-15T11:00:00.000Z') }),
+      ]);
+
+      const overview = await service.getOverview(NOW);
+
+      expect(overview.emergencyFlattenStatus?.lastRequestedAt).toBe('2026-01-15T11:00:00.000Z');
+      expect(overview.emergencyFlattenStatus?.lastOutcome).toBe('COMPLETE');
+    });
+
+    it('reports the never-recorded state (all nulls) when no flatten audit exists', async () => {
+      auditRepo.find.mockResolvedValue([
+        auditLog({
+          action: AuditAction.RISK_KILL_SWITCH_ACTIVATED,
+          metadata: { active: true, reason: 'no positions open' },
+        }),
+      ]);
+
+      const overview = await service.getOverview(NOW);
+
+      expect(overview.emergencyFlattenStatus).toEqual({
+        lastRequestedAt: null,
+        lastOutcome: null,
+        description: null,
+      });
+    });
+
+    it('degrades to null when the audit query fails', async () => {
+      auditRepo.find.mockRejectedValue(new Error('audit store unavailable'));
+
+      const overview = await service.getOverview(NOW);
+
+      expect(overview.emergencyFlattenStatus).toBeNull();
+    });
+
+    it('never leaks the raw audit metadata blob into the overview payload', async () => {
+      auditRepo.find.mockResolvedValue([
+        flattenAudit({
+          metadata: {
+            emergencyFlatten: true,
+            closeReason: 'KILL_SWITCH_FORCE_CLOSE',
+            targetCount: 1,
+            closedCount: 1,
+            trades: [{ tradeId: 'trade-with-long-secret-like-id-0000000000000000', closed: true }],
+          },
+        }),
+      ]);
+
+      const overview = await service.getOverview(NOW);
+      const serialized = JSON.stringify(overview);
+
+      expect(serialized).not.toContain('trades');
+      expect(serialized).not.toContain('trade-with-long-secret-like-id');
+      // The derived block carries ONLY the three view fields — none of the
+      // raw audit metadata keys ride along.
+      expect(serialized).not.toContain('targetCount');
+      expect(serialized).not.toContain('closedCount');
+      expect(serialized).not.toContain('failedCount');
+    });
+  });
+
+  describe('overview — kill switch state (Phase 10)', () => {
+    it('counts risk profiles with killSwitchActive = true (all users)', async () => {
+      riskProfileRepo.count.mockResolvedValue(4);
+
+      const overview = await service.getOverview(NOW);
+
+      expect(overview.killSwitchState).toEqual({ activeUsersCount: 4 });
+      expect(riskProfileRepo.count).toHaveBeenCalledWith({ where: { killSwitchActive: true } });
+    });
+
+    it('degrades to null when the risk-profile query fails', async () => {
+      riskProfileRepo.count.mockRejectedValue(new Error('risk profiles unavailable'));
+
+      const overview = await service.getOverview(NOW);
+
+      expect(overview.killSwitchState).toBeNull();
+    });
+  });
+
+  describe('overview — certification canary bounds (Phase 10)', () => {
+    it('maps each certifiable provider to its configured exposure cap env value', async () => {
+      configService.get.mockImplementation((key: string) => {
+        if (key === 'METAAPI_LIVE_CERT_MAX_CANARY_EXPOSURE') return '25';
+        if (key === 'CTRADER_LIVE_CERT_MAX_CANARY_EXPOSURE') return ' 40 ';
+        return undefined; // OANDA absent → not configured
+      });
+
+      const overview = await service.getOverview(NOW);
+
+      expect(overview.canaryBounds).toEqual([
+        { brokerId: 'metatrader5', configured: true, maxCanaryExposure: '25' },
+        { brokerId: 'oanda', configured: false, maxCanaryExposure: null },
+        { brokerId: 'ctrader', configured: true, maxCanaryExposure: '40' },
+        {
+          brokerId: 'pepperstone-ctrader',
+          configured: true,
+          maxCanaryExposure: '40',
+        },
+        {
+          brokerId: 'icmarkets-ctrader',
+          configured: true,
+          maxCanaryExposure: '40',
+        },
+      ]);
+      expect(configService.get).toHaveBeenCalledWith('METAAPI_LIVE_CERT_MAX_CANARY_EXPOSURE');
+      expect(configService.get).toHaveBeenCalledWith('OANDA_LIVE_CERT_MAX_CANARY_EXPOSURE');
+      expect(configService.get).toHaveBeenCalledWith('CTRADER_LIVE_CERT_MAX_CANARY_EXPOSURE');
+    });
+
+    it('reports not-configured for every provider when the env vars are absent', async () => {
+      const overview = await service.getOverview(NOW);
+
+      expect(overview.canaryBounds).toHaveLength(5);
+      for (const bound of overview.canaryBounds ?? []) {
+        expect(bound.configured).toBe(false);
+        expect(bound.maxCanaryExposure).toBeNull();
+      }
+    });
+
+    it('degrades to null when the config service throws', async () => {
+      configService.get.mockImplementation(() => {
+        throw new Error('config unavailable');
+      });
+
+      const overview = await service.getOverview(NOW);
+
+      expect(overview.canaryBounds).toBeNull();
+    });
+  });
+
   describe('overview — output redaction', () => {
     it('never serializes credential material into the overview payload', async () => {
       connectionRepo.find.mockResolvedValue([connection()]);
@@ -781,8 +1285,6 @@ describe('AdminLiveAccountService', () => {
       expect(overview.generatedAt).toBe(NOW.toISOString());
     });
   });
-
-  // ─── GET /admin/live-account/connections ──────────────────────────────────
 
   describe('connections — filter matrix', () => {
     const expectWhere = async (

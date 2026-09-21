@@ -1,4 +1,4 @@
-"""Model registry endpoints."""
+"""Model registry endpoints (read-only surface — no mutation endpoints)."""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
@@ -16,7 +16,11 @@ def get_registry() -> ModelRegistry:
 @router.get("/models/active", tags=["Models"])
 async def get_active_model(registry: ModelRegistry = Depends(get_registry)) -> dict:
     model = registry.get_active_model()
-    return model.get_model_metadata()
+    metadata = model.get_model_metadata()
+    # Live-activation truth is derived per request (promotion records are
+    # re-validated) and is exposed read-only alongside the model metadata.
+    metadata["live_activation"] = registry.get_live_activation()
+    return metadata
 
 
 @router.get("/models", tags=["Models"])

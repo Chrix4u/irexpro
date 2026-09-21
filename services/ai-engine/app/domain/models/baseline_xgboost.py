@@ -29,6 +29,11 @@ from app.domain.models.schemas import ModelPrediction
 
 logger = get_logger(__name__)
 
+# Live-activation integrity reasons surfaced by verify_artifact_integrity().
+INTEGRITY_NO_VERIFIED_ARTIFACT = "NO_VERIFIED_ARTIFACT"
+INTEGRITY_ARTIFACT_FILE_MISSING = "ARTIFACT_FILE_MISSING"
+INTEGRITY_ARTIFACT_SHA_MISMATCH = "ARTIFACT_SHA_MISMATCH"
+
 MODEL_VERSION = "baseline-xgboost-v0.1.0"
 MODEL_PATH_ENV = "XGBOOST_MODEL_PATH"
 MODEL_METADATA_PATH_ENV = "XGBOOST_MODEL_METADATA_PATH"
@@ -67,6 +72,8 @@ class BaselineXGBoostModel:
         self._artifact_metadata: dict[str, Any] = {}
         self._model_type = SINGLE_TIMEFRAME_MODEL_TYPE
         self._runtime_feature_profile = "single_timeframe_v1"
+        self._artifact_path: Path | None = None
+        self._verified_artifact_sha256: str | None = None
 
     def load_model(self) -> bool:
         """
@@ -174,6 +181,8 @@ class BaselineXGBoostModel:
             self._artifact_metadata = metadata
             self._model_type = model_type
             self._runtime_feature_profile = runtime_feature_profile
+            self._artifact_path = model_path
+            self._verified_artifact_sha256 = actual_sha
 
             logger.info(
                 "Verified trained XGBoost model loaded",
@@ -195,6 +204,8 @@ class BaselineXGBoostModel:
             self._artifact_metadata = {}
             self._model_type = SINGLE_TIMEFRAME_MODEL_TYPE
             self._runtime_feature_profile = "single_timeframe_v1"
+            self._artifact_path = None
+            self._verified_artifact_sha256 = None
             return False
 
     def predict_signal(self, features: dict[str, float]) -> ModelPrediction:
@@ -278,6 +289,54 @@ class BaselineXGBoostModel:
 
     def is_trained_model_loaded(self) -> bool:
         return self._model_loaded
+
+    def get_artifact_path(self) -> Path | None:
+        """Path of the verified trained artifact file (None for the scaffold)."""
+        return self._artifact_path
+
+    def verify_artifact_integrity(self) -> dict[str, Any]:
+        """
+        Re-verify the trained artifact bytes on every call.
+
+        Live activation binds to a byte-exact artifact. This recomputes the
+        SHA-256 of the artifact file (not a cached value) so that replacing,
+        deleting or mutating the file after load is detected immediately.
+
+        Returns {verified: bool, artifact_sha256: str | None, reason: str | None}:
+        - NO_VERIFIED_ARTIFACT — heuristic scaffold (no trained artifact loaded)
+        - ARTIFACT_FILE_MISSING — the artifact file disappeared after load
+        - ARTIFACT_SHA_MISMATCH — artifact bytes changed after load
+        """
+        if not self._model_loaded or self._artifact_path is None:
+            return {
+                "verified": False,
+                "artifact_sha256": None,
+                "reason": INTEGRITY_NO_VERIFIED_ARTIFACT,
+            }
+
+        if not self._artifact_path.is_file():
+            return {
+                "verified": False,
+                "artifact_sha256": None,
+                "reason": INTEGRITY_ARTIFACT_FILE_MISSING,
+            }
+
+        current_sha = _sha256_file(self._artifact_path)
+        if (
+            self._verified_artifact_sha256 is None
+            or current_sha != self._verified_artifact_sha256
+        ):
+            return {
+                "verified": False,
+                "artifact_sha256": current_sha,
+                "reason": INTEGRITY_ARTIFACT_SHA_MISMATCH,
+            }
+
+        return {
+            "verified": True,
+            "artifact_sha256": current_sha,
+            "reason": None,
+        }
 
     def get_artifact_metadata(self) -> dict[str, Any]:
         return dict(self._artifact_metadata)

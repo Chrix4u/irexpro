@@ -680,4 +680,103 @@ describe('EligibilityService', () => {
     expect(queue.every((item) => /^[a-f0-9]{64}$/.test(item.policyFingerprint))).toBe(true);
     expect(JSON.stringify(queue)).not.toMatch(/passwordHash|brokerConnectionId|providerAccountId/);
   });
+
+  // ── Production-LIVE completion round (Phase 9): the continuous LIVE gate ──
+
+  describe('assertUserEligibleForLiveNewExposure (Phase 9 continuous LIVE gate)', () => {
+    const acceptAllDisclosures = async () => {
+      const status = await service.getStatus(user.id);
+      await service.acceptDisclosures(user.id, acceptanceRequest(status));
+    };
+
+    it('returns eligible with the country code for a fully eligible ACTIVE user', async () => {
+      await acceptAllDisclosures();
+
+      const result = await service.assertUserEligibleForLiveNewExposure(user.id);
+
+      expect(result).toEqual({ eligible: true, countryCode: 'GH' });
+    });
+
+    it('fails closed with USER_NOT_FOUND when the user row is absent', async () => {
+      userRepo.findOne.mockResolvedValue(null);
+
+      await expect(service.assertUserEligibleForLiveNewExposure('ghost')).resolves.toEqual({
+        eligible: false,
+        reasonCode: 'USER_NOT_FOUND',
+        detail: expect.any(String),
+        countryCode: null,
+      });
+    });
+
+    it('fails closed with ACCOUNT_<status> when the user is no longer ACTIVE (post-session suspension)', async () => {
+      await acceptAllDisclosures();
+      userRepo.findOne.mockResolvedValue({ ...user, status: UserStatus.SUSPENDED });
+
+      const result = await service.assertUserEligibleForLiveNewExposure(user.id);
+
+      expect(result).toEqual({
+        eligible: false,
+        reasonCode: 'ACCOUNT_SUSPENDED',
+        detail: expect.stringContaining('SUSPENDED'),
+        countryCode: 'GH',
+      });
+    });
+
+    it('fails closed with the failing policy dimension while disclosures are outstanding', async () => {
+      // consentRows starts empty → canProceed false with DISCLOSURES_OUTSTANDING.
+      const result = await service.assertUserEligibleForLiveNewExposure(user.id);
+
+      expect(result).toEqual({
+        eligible: false,
+        reasonCode: 'DISCLOSURES_OUTSTANDING',
+        detail: expect.any(String),
+        countryCode: 'GH',
+      });
+    });
+
+    it('fails closed with KYC_<status> when KYC is no longer APPROVED', async () => {
+      await acceptAllDisclosures();
+      // The immutable review evidence decides KYC status (resolveKycStatus):
+      // a REJECTED review supersedes the seeded APPROVED one.
+      kycReviewRepo.findOne.mockResolvedValue({
+        ...kycReviewRows[0],
+        decision: KycReviewDecision.REJECTED,
+      });
+      userRepo.findOne.mockResolvedValue({
+        ...user,
+        profile: { ...user.profile, kycStatus: KycStatus.REJECTED, kycApprovedAt: null },
+      });
+
+      const result = await service.assertUserEligibleForLiveNewExposure(user.id);
+
+      expect(result).toEqual({
+        eligible: false,
+        reasonCode: 'KYC_REJECTED',
+        detail: expect.any(String),
+        countryCode: 'GH',
+      });
+    });
+
+    it('fails closed with JURISDICTION_<status> when the country becomes blocked', async () => {
+      await acceptAllDisclosures();
+      config.ELIGIBILITY_ALLOWED_COUNTRY_CODES = 'GB';
+      config.ELIGIBILITY_BLOCKED_COUNTRY_CODES = 'GH,XX';
+
+      const result = await service.assertUserEligibleForLiveNewExposure(user.id);
+
+      expect(result).toEqual({
+        eligible: false,
+        reasonCode: 'JURISDICTION_INELIGIBLE',
+        detail: expect.any(String),
+        countryCode: 'GH',
+      });
+    });
+
+    it('never throws for policy outcomes (structured result for the typed risk rejection)', async () => {
+      userRepo.findOne.mockResolvedValue({ ...user, status: UserStatus.SUSPENDED });
+      await expect(service.assertUserEligibleForLiveNewExposure(user.id)).resolves.toEqual(
+        expect.objectContaining({ eligible: false }),
+      );
+    });
+  });
 });

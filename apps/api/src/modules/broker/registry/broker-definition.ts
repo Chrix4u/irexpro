@@ -94,6 +94,33 @@ export interface BrokerProductionLiveVerification {
  */
 export type ProviderCertificationState = 'NOT_CERTIFIED' | 'LEGACY_VERIFIED' | 'CERTIFIED';
 
+/**
+ * Production-LIVE completion round (Phase 15): user-relevant, ordered reasons
+ * a provider is not production-LIVE ready. Rendered BEFORE a LIVE action is
+ * attempted — a user must never discover impossibility on click.
+ * REGION_UNAVAILABLE is user-scoped and enforced at the LIVE gates with the
+ * user's profile country in hand (see isLiveRegionAvailable).
+ */
+export type LiveReadinessBlockedReason =
+  | 'LIVE_UNSUPPORTED'
+  | 'ADAPTER_UNAVAILABLE'
+  | 'PARTNER_APPROVAL_REQUIRED'
+  | 'CERTIFICATION_REQUIRED';
+
+/**
+ * Static, operator-maintained live-readiness facts on a catalog entry.
+ * These describe the PROVIDER-side blockers only — certification state and
+ * adapter availability are runtime-derived and never stored here.
+ */
+export interface BrokerLiveReadinessFacts {
+  /** True when provider/partner approval is required before ANY real account can be reached. */
+  partnerApprovalRequired: boolean;
+  /** Secret-free note naming the partner gate (UI display only). */
+  partnerApprovalNote?: string;
+  /** ISO-3166 alpha-2 codes where the provider's LIVE offering is known unavailable. */
+  liveUnavailableRegions: string[];
+}
+
 /** Derive the truthful, fail-closed state from catalog verification evidence. */
 export function deriveProviderCertificationState(
   verification: BrokerProductionLiveVerification | undefined,
@@ -150,4 +177,10 @@ export interface BrokerDefinition {
   environments: ('DEMO' | 'LIVE')[];
   /** Regions with known eligibility; empty = global/unverified. */
   regions: string[];
+  /**
+   * Production-LIVE completion round: static provider-side live-readiness
+   * facts (partner gates, region unavailability). Optional — absent means no
+   * known partner gate or regional restriction.
+   */
+  liveReadiness?: BrokerLiveReadinessFacts;
 }

@@ -55,6 +55,11 @@ import {
 import { ReconciliationRunStatus } from '../reconciliation/reconciliation.enums';
 import { BrokerConnection } from '../../broker/entities/broker-connection.entity';
 import { ExecutionService } from '../execution.service';
+// Production-LIVE completion round (P13 metrics): the real in-process
+// registry registered in the testing module so the job's lazy ModuleRef
+// lookup resolves it (mirrors how MetricsModule provides it app-wide).
+import { MetricsService } from '../../metrics/metrics.service';
+import { METRIC_NAMES } from '../../metrics/metric-names';
 
 const makeConnection = (id: string): BrokerConnection =>
   ({ id, userId: `user-${id}`, brokerId: 'paper-broker' }) as unknown as BrokerConnection;
@@ -96,6 +101,7 @@ describe('TradeReconciliationJob', () => {
   };
   let protectiveOrderReconciliation: { reconcileProtectiveOrders: jest.Mock };
   let executionService: { closeStopRequestedAiPositions: jest.Mock };
+  let metrics: MetricsService;
 
   beforeEach(async () => {
     stateReconciliation = {
@@ -118,10 +124,15 @@ describe('TradeReconciliationJob', () => {
           useValue: protectiveOrderReconciliation,
         },
         { provide: ExecutionService, useValue: executionService },
+        // P13 metrics: registered so the job's lazy ModuleRef seam resolves a
+        // REAL registry (exactly what MetricsModule does app-wide).
+        { provide: MetricsService, useValue: new MetricsService() },
       ],
     }).compile();
     module.useLogger(false);
     job = module.get(TradeReconciliationJob);
+    metrics = module.get(MetricsService);
+    metrics.reset();
     Logger.overrideLogger(false);
   });
 
@@ -292,5 +303,56 @@ describe('TradeReconciliationJob', () => {
     const result = await job.process(fakeJob);
     expect(result.protectiveOrdersChecked).toBe(1);
     expect(protectiveOrderReconciliation.reconcileProtectiveOrders).toHaveBeenCalledTimes(2);
+  });
+
+  // ─── P13 metrics: reconciliation cycle instrumentation ────────────────────
+
+  it('P13: counts ONE reconciliation_cycles increment per completed cycle (with connections)', async () => {
+    stateReconciliation.findReconcilableConnections.mockResolvedValue([
+      makeConnection('conn-1'),
+      makeConnection('conn-2'),
+    ]);
+    stateReconciliation.runForConnection.mockResolvedValue(makeOutcome('conn-1'));
+
+    await job.process(fakeJob);
+
+    const cycles = metrics
+      .snapshot()
+      .counters.find((series) => series.name === METRIC_NAMES.RECONCILIATION_CYCLES);
+    expect(cycles?.value).toBe(1);
+    expect(cycles?.labels).toEqual({});
+  });
+
+  it('P13: a no-connections tick is still a completed cycle (sweep liveness)', async () => {
+    stateReconciliation.findReconcilableConnections.mockResolvedValue([]);
+
+    await job.process(fakeJob);
+
+    const cycles = metrics
+      .snapshot()
+      .counters.find((series) => series.name === METRIC_NAMES.RECONCILIATION_CYCLES);
+    expect(cycles?.value).toBe(1);
+  });
+
+  it('P13: cycles accumulate across successive jobs and per-run discrepancies are NOT double-counted here', async () => {
+    stateReconciliation.findReconcilableConnections.mockResolvedValue([makeConnection('conn-1')]);
+    stateReconciliation.runForConnection.mockResolvedValue(
+      makeOutcome('conn-1', { discrepanciesDetected: 2, discrepanciesNew: 1 }),
+    );
+
+    await job.process(fakeJob);
+    await job.process(fakeJob);
+
+    const cycles = metrics
+      .snapshot()
+      .counters.find((series) => series.name === METRIC_NAMES.RECONCILIATION_CYCLES);
+    expect(cycles?.value).toBe(2);
+    // The job never increments the discrepancy counter — the per-run
+    // instrumentation lives in StateReconciliationService itself.
+    expect(
+      metrics
+        .snapshot()
+        .counters.find((series) => series.name === METRIC_NAMES.RECONCILIATION_DISCREPANCIES),
+    ).toBeUndefined();
   });
 });

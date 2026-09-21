@@ -26,6 +26,7 @@ import type {
   BrokerAvailabilityStatus,
   BrokerProductionLiveVerification,
 } from './broker-registry';
+import { deriveProviderCertificationState } from './broker-registry';
 
 /** The fixed provider verification label vocabulary (render verbatim). */
 export type ProviderVerificationLabel =
@@ -58,6 +59,14 @@ export interface ProviderVerificationAssessmentInput {
   authorizationStatus?: BrokerAuthorizationStatus | null;
   /** Server-computed fail-closed execution gate. */
   executable?: boolean | null;
+  /**
+   * Derived certification state (production-LIVE completion round). When the
+   * server payload carries it, it is authoritative; when absent it is
+   * derived fail-closed from the raw verification evidence via the same
+   * rules the API applies. Legacy attestation evidence therefore NEVER
+   * renders as a current protocol certification.
+   */
+  certificationState?: import('./broker-registry').ProviderCertificationState | null;
 }
 
 /** The six distinguished facts, each rendered from the fixed taxonomy. */
@@ -85,6 +94,13 @@ export interface ProviderVerificationAssessment {
   label: ProviderVerificationLabel;
   /** True when a concrete connection identity was assessed. */
   hasConnectionIdentity: boolean;
+  /**
+   * The derived certification state used for this assessment
+   * (production-LIVE completion round): 'NOT_CERTIFIED' | 'LEGACY_VERIFIED' |
+   * 'CERTIFIED'. Renderers that need the three-state certification truth
+   * (Directive Phase 2) consume THIS field, not the six-label vocabulary.
+   */
+  certificationState: import('./broker-registry').ProviderCertificationState;
 }
 
 /** Implementation statuses that count as implemented (adapter-backed). */
@@ -104,9 +120,13 @@ const IMPLEMENTED_STATUSES: readonly BrokerAvailabilityStatus[] = [
  * - 'LIVE-capable'   — capability ONLY: the protocol/environment (or, for
  *                      executability, the granted authority) supports LIVE;
  *                      it is NOT an approval or verification claim.
- * - 'Production LIVE Verified'   — operator-attested verification VERIFIED.
- * - 'Production LIVE Unverified' — verification absent/UNVERIFIED: LIVE
- *                      execution fails closed server-side (BETA ≠ LIVE).
+ * - 'Production LIVE Verified'   — CURRENT protocol certification (derived
+ *                      certificationState === 'CERTIFIED'). Legacy
+ *                      attestation (LEGACY_VERIFIED) NEVER renders as this
+ *                      label — the runtime LIVE gate rejects it.
+ * - 'Production LIVE Unverified' — verification absent/UNVERIFIED, or legacy
+ *                      only: LIVE execution fails closed server-side
+ *                      (BETA ≠ LIVE; legacy ≠ certified).
  * - 'execution disabled' — the current BrokerConnection cannot execute
  *                      (fail-closed gate or non-ACTIVE authorization).
  */
@@ -115,6 +135,17 @@ export function assessProviderVerification(
 ): ProviderVerificationAssessment {
   const environmentsLive =
     input.environments?.includes('LIVE') === true || input.accountType === 'LIVE';
+
+  // Production-LIVE completion round: the certification TRUTH is the derived
+  // state, never the raw `status === 'VERIFIED'` flag. Legacy attestation
+  // evidence (LEGACY_VERIFIED) is real history but is NOT a current protocol
+  // certification — the runtime LIVE gate rejects it, so the label must not
+  // present it as verified/LIVE-capable. Absent state input derives
+  // fail-closed from the raw evidence via the shared mirror derivation.
+  const certificationState =
+    input.certificationState ??
+    deriveProviderCertificationState(input.productionLiveVerification ?? undefined);
+  const protocolCertified = certificationState === 'CERTIFIED';
 
   const environmentCapability: ProviderVerificationAssessment['environmentCapability'] =
     environmentsLive ? 'LIVE-capable' : 'DEMO only';
@@ -132,12 +163,13 @@ export function assessProviderVerification(
   const verificationStatus: ProviderVerificationAssessment['verificationStatus'] =
     !environmentsLive
       ? 'Ineligible'
-      : input.productionLiveVerification?.status === 'VERIFIED'
+      : protocolCertified
         ? 'Production LIVE Verified'
         : 'Production LIVE Unverified';
 
   // (e) Identity-specific production-LIVE eligibility: only a LIVE-typed
-  // identity on a verified, LIVE-capable provider is eligible. DEMO
+  // identity on a currently CERTIFIED, LIVE-capable provider is eligible.
+  // LEGACY_VERIFIED is NOT eligible (the runtime gate rejects it) and DEMO
   // identities can never be production-LIVE eligible; absent identity facts
   // fail closed to Ineligible.
   const hasConnectionIdentity =
@@ -147,8 +179,7 @@ export function assessProviderVerification(
       ? 'Ineligible'
       : input.accountType === 'DEMO'
         ? 'DEMO only'
-        : environmentsLive &&
-            input.productionLiveVerification?.status === 'VERIFIED'
+        : environmentsLive && protocolCertified
           ? 'LIVE-capable'
           : 'Ineligible';
 
@@ -173,7 +204,7 @@ export function assessProviderVerification(
     label = 'Ineligible';
   } else if (input.adapterAvailable === false) {
     label = 'Ineligible';
-  } else if (input.productionLiveVerification?.status === 'VERIFIED') {
+  } else if (protocolCertified) {
     label = 'Production LIVE Verified';
   } else {
     label = 'Production LIVE Unverified';
@@ -188,5 +219,6 @@ export function assessProviderVerification(
     connectionExecutability,
     label,
     hasConnectionIdentity,
+    certificationState,
   };
 }
