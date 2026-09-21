@@ -185,7 +185,8 @@ Still separate from this phase:
 
 ### Phase B — trusted forex context
 - trusted source and macro-event primitives;
-- official BLS economic-calendar adapter;\n- additional economic calendar adapters;
+- official BLS economic-calendar adapter;
+- additional economic calendar adapters;
 - central-bank / macro release adapters;
 - source trust registry and event/content deduplication;
 - event proximity windows;
