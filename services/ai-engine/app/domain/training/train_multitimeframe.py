@@ -29,7 +29,8 @@ from app.domain.training.validation import (
 TARGET_COLUMN = "target"
 LONG_NET_RETURN_COLUMN = "long_net_return"
 SHORT_NET_RETURN_COLUMN = "short_net_return"
-ECONOMIC_SAMPLE_WEIGHT_POLICY = "positive_net_edge_q75_scaled_v1"
+CLASS_BALANCE_SAMPLE_WEIGHT_POLICY = "sqrt_inverse_frequency_normalized_v1"
+ECONOMIC_SAMPLE_WEIGHT_POLICY = "class_balanced_positive_net_edge_q75_capped_v2"
 
 
 def _sha256_file(path: Path) -> str:
@@ -268,15 +269,47 @@ def _build_model() -> XGBClassifier:
     )
 
 
+def _class_balance_sample_weights(frame: pd.DataFrame) -> np.ndarray:
+    """
+    Return moderate inverse-frequency weights for the two directional classes.
+
+    Balanced accuracy is a promotion gate, so the learner and its inner
+    early-stopping monitor must not let a modest class skew dominate model
+    selection. Square-root inverse-frequency weighting corrects the skew
+    without the instability of full inverse-frequency weights. The weights
+    are computed only from labels inside the current training/validation
+    partition and never from an outer fold.
+    """
+    target = pd.to_numeric(frame[TARGET_COLUMN], errors="coerce").to_numpy(dtype=float)
+    if not np.isfinite(target).all():
+        raise ValueError("Class-balance weights require finite targets")
+    if not np.isin(target, [0.0, 1.0]).all():
+        raise ValueError("Class-balance weights require binary directional targets")
+
+    labels = target.astype(int)
+    counts = np.bincount(labels, minlength=2).astype(float)
+    if (counts <= 0.0).any():
+        raise ValueError("Class-balance weights require both directional classes")
+
+    total = float(len(labels))
+    per_class = np.sqrt(total / (2.0 * counts))
+    weights = per_class[labels]
+    weights = np.clip(weights, 0.5, 2.0)
+    return (weights / float(weights.mean())).astype(float)
+
+
 def _economic_sample_weights(frame: pd.DataFrame) -> np.ndarray:
     """
-    Weight training rows by positive net edge without filtering any samples.
+    Combine class balance with a moderated positive-net-edge training weight.
 
-    Future net returns are already legitimate supervised targets inside the
-    training split. They are never exposed as runtime features and never used
-    to remove or select outer-validation rows. Rows where neither direction
-    clears friction retain a non-zero floor weight; economically meaningful
-    moves receive more influence with a capped robust scale.
+    Future net returns are legitimate supervised outcomes only inside the
+    current training partition. They are never runtime features, never used
+    to remove rows, and never used to weight the outer validation fold.
+
+    The v1 policy allowed a 10x economic-weight ratio (0.5..5.0), which could
+    improve sparse trading economics while weakening directional balanced
+    accuracy. V2 narrows the economic range, multiplies it by moderate
+    class-balance weights, normalizes the result, and caps extremes.
     """
     best_net = np.maximum(
         pd.to_numeric(frame[LONG_NET_RETURN_COLUMN], errors="coerce").to_numpy(dtype=float),
@@ -292,8 +325,12 @@ def _economic_sample_weights(frame: pd.DataFrame) -> np.ndarray:
     else:
         scale = max(float(np.quantile(positive, 0.75)), 0.10)
 
-    weights = 0.5 + np.clip(positive_edge_bps / scale, 0.0, 4.5)
-    return weights.astype(float)
+    # Moderate economics: 0.75..2.50 instead of the v1 0.50..5.00 range.
+    economic = 0.75 + np.clip(positive_edge_bps / scale, 0.0, 1.75)
+    combined = economic * _class_balance_sample_weights(frame)
+    combined = combined / float(combined.mean())
+    combined = np.clip(combined, 0.25, 4.0)
+    return combined.astype(float)
 
 
 def _split_internal_early_stopping_tail(
@@ -516,6 +553,9 @@ def _run_pooled_walk_forward_core(
                     early_stop_frame[TARGET_COLUMN].astype(int),
                 )
             ],
+            sample_weight_eval_set=[
+                _class_balance_sample_weights(early_stop_frame)
+            ],
             verbose=False,
         )
 
@@ -590,6 +630,7 @@ def _run_pooled_walk_forward_core(
             "embargo_periods": int(embargo),
             "confidence_threshold": confidence_threshold,
             "training_sample_weight_policy": ECONOMIC_SAMPLE_WEIGHT_POLICY,
+            "validation_sample_weight_policy": CLASS_BALANCE_SAMPLE_WEIGHT_POLICY,
         },
     }
     return report, all_predictions.copy()
