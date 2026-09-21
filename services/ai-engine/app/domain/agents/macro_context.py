@@ -38,7 +38,7 @@ class MacroContextEvent(BaseModel):
 
     source_id: str = Field(..., min_length=2, max_length=80)
     source_event_id: str = Field(..., min_length=1, max_length=160)
-    event_family: str = Field(..., min_length=2, max_length=80)
+    event_family: str = Field(\n        ...,\n        min_length=2,\n        max_length=80,\n        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$",\n    )
     title: str = Field(..., min_length=2, max_length=240)
     currency: str = Field(..., min_length=3, max_length=3)
     impact: MacroImpact
