@@ -353,7 +353,18 @@ function printRunSummary(evidence: LiveCertificationEvidence): void {
   console.log(`certificationResult : ${evidence.certificationResult}`);
   console.log(`evidenceState       : ${evidence.evidenceState}`);
   if (evidence.artifactPath) {
-    console.log(`artifactPath        : ${evidence.artifactPath}`);
+    // CodeQL-safe pointer (Round 7.1 discipline: the console is NEVER an
+    // evidence surface and env-derived values — the operator evidence
+    // DIRECTORY comes from IREXPRO_LIVE_CERT_EVIDENCE_DIR — are never
+    // printed). Print only the canonical file NAME reconstructed from the
+    // untainted run record fields; the operator knows their own directory.
+    console.log(
+      `artifact            : ${liveCertificationArtifactFileName(
+        evidence.brokerId,
+        evidence.runId,
+        new Date(evidence.finishedAt),
+      )} (in the operator evidence directory — IREXPRO_LIVE_CERT_EVIDENCE_DIR)`,
+    );
   }
   console.log(`evidenceSha256      : ${evidence.evidenceSha256}`);
   console.log(

@@ -47,6 +47,12 @@ describe('PostgreSQL restart/kill recovery drill (Phase 11)', () => {
     dataSource = new DataSource({
       ...baseOptions,
       applicationName: MAIN_APP_NAME,
+      // A SMALL pool keeps the drill deterministic: a full pool kill poisons
+      // at most `max` idle connections, each of which fails exactly one
+      // subsequent acquire before the pool replaces it (the bounded retry
+      // helper below absorbs that — exactly how a resilient client behaves
+      // after a database restart).
+      extra: { max: 2, min: 0 },
     } as typeof baseOptions & { applicationName: string });
     await dataSource.initialize();
 
@@ -114,6 +120,34 @@ describe('PostgreSQL restart/kill recovery drill (Phase 11)', () => {
     return result.filter((r: { terminated: boolean }) => r.terminated).length;
   };
 
+  /**
+   * Bounded retry for queries run after a pool kill — the recovery-semantics
+   * half of the drill. A killed pooled connection fails exactly ONE
+   * subsequent acquire before the pool evicts+replaces it; a resilient
+   * client (the platform's own reconnecting behavior) retries transparently.
+   * Non-connection errors are never retried.
+   */
+  const isConnectionLoss = (err: unknown): boolean =>
+    /terminat|unexpected|closed|reset|refused|connection/i.test(
+      String((err as Error)?.message ?? ''),
+    );
+
+  const RETRY_DELAYS_MS = [25, 50, 100, 200, 400, 800];
+
+  const queryWithRestartRetry = async (sql: string, parameters?: unknown[]): Promise<unknown[]> => {
+    let lastErr: unknown;
+    for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+      try {
+        return (await dataSource.query(sql, parameters)) as unknown[];
+      } catch (err) {
+        lastErr = err;
+        if (!isConnectionLoss(err) || attempt === RETRY_DELAYS_MS.length) throw err;
+        await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[attempt]));
+      }
+    }
+    throw lastErr;
+  };
+
   it('durability: committed truth survives a full pool kill exactly (nothing lost, nothing duplicated)', async () => {
     const userId = '11111111-2222-4222-8222-333333333331';
     await dataSource.query(
@@ -128,19 +162,33 @@ describe('PostgreSQL restart/kill recovery drill (Phase 11)', () => {
 
     await killMainPoolBackends();
 
-    // After reconnection (the pool re-establishes transparently), the
+    // After reconnection (the pool re-establishes; the retry helper absorbs
+    // the poisoned-acquire failures a real client retries through), the
     // committed row count is EXACTLY the pre-kill count.
-    const after = await dataSource.query(
+    const after = (await queryWithRestartRetry(
       `SELECT count(*)::int AS n FROM trading.drill_orders WHERE idempotency_key = 'idem-durable-1'`,
-    );
+    )) as { n: number }[];
     expect(after[0].n).toBe(1);
   });
 
   it('atomicity: a backend killed MID-TRANSACTION rolls back the entire transaction (no half-committed exposure)', async () => {
     const userId = '11111111-2222-4222-8222-333333333332';
-    const queryRunner = dataSource.createQueryRunner();
-    await queryRunner.connect();
-    await queryRunner.startTransaction();
+    // Acquire a HEALTHY runner (a previous test's pool kill may have left
+    // poisoned idle connections — retried here exactly like a resilient
+    // client reconnecting after a database restart).
+    let queryRunner = dataSource.createQueryRunner();
+    for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+      try {
+        await queryRunner.connect();
+        await queryRunner.startTransaction();
+        break;
+      } catch (err) {
+        await queryRunner.release().catch(() => undefined);
+        if (!isConnectionLoss(err) || attempt === RETRY_DELAYS_MS.length) throw err;
+        await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[attempt]));
+        queryRunner = dataSource.createQueryRunner();
+      }
+    }
 
     // Write inside the open transaction (NOT yet committed).
     await queryRunner.query(
@@ -171,16 +219,16 @@ describe('PostgreSQL restart/kill recovery drill (Phase 11)', () => {
 
     // After recovery, the mid-flight row is GONE — full rollback; no
     // half-committed exposure exists anywhere in the table.
-    const rows = await dataSource.query(
+    const rows = (await queryWithRestartRetry(
       `SELECT count(*)::int AS n FROM trading.drill_orders WHERE idempotency_key = 'idem-tx-kill-1'`,
-    );
+    )) as { n: number }[];
     expect(rows[0].n).toBe(0);
   });
 
   it('exactly-once across recovery: an idempotent retry after a pool kill creates NO duplicate exposure', async () => {
     const userId = '11111111-2222-4222-8222-333333333333';
-    const insert = async () =>
-      dataSource.query(
+    const insert = () =>
+      queryWithRestartRetry(
         `INSERT INTO trading.drill_orders (user_id, client_order_id, idempotency_key, status, quantity)
          VALUES ($1, 'drill-retry-1', 'idem-retry-1', 'DISPATCH_COMMITTED', 0.02)
          ON CONFLICT (idempotency_key) DO NOTHING`,
@@ -193,9 +241,9 @@ describe('PostgreSQL restart/kill recovery drill (Phase 11)', () => {
     await insert();
     await insert();
 
-    const rows = await dataSource.query(
+    const rows = (await queryWithRestartRetry(
       `SELECT count(*)::int AS n, max(quantity)::text AS qty FROM trading.drill_orders WHERE idempotency_key = 'idem-retry-1'`,
-    );
+    )) as { n: number; qty: string }[];
     expect(rows[0].n).toBe(1);
     expect(rows[0].qty).toBe('0.02');
   });
@@ -203,21 +251,21 @@ describe('PostgreSQL restart/kill recovery drill (Phase 11)', () => {
   it('grant CAS consume across recovery: a retried consume after a pool kill consumes EXACTLY once', async () => {
     const userId = '11111111-2222-4222-8222-333333333334';
     const signalId = '44444444-4444-4444-8444-444444444441';
-    await dataSource.query(
+    await queryWithRestartRetry(
       `INSERT INTO trading.drill_grants (user_id, signal_id, status) VALUES ($1, $2, 'ACTIVE')`,
       [userId, signalId],
     );
 
     // RETURNING makes the affected count deterministically observable across
     // drivers — the CAS-consume shape of the final dispatch boundary.
-    const consume = async () =>
-      dataSource.query(
+    const consume = () =>
+      queryWithRestartRetry(
         `UPDATE trading.drill_grants
             SET status = 'CONSUMED', consumed_at = now()
           WHERE signal_id = $1 AND status = 'ACTIVE'
           RETURNING id`,
         [signalId],
-      );
+      ) as Promise<{ id: string }[]>;
 
     const first = await consume();
     expect(first).toHaveLength(1);
@@ -228,10 +276,10 @@ describe('PostgreSQL restart/kill recovery drill (Phase 11)', () => {
     const retry = await consume();
     expect(retry).toHaveLength(0);
 
-    const final = await dataSource.query(
+    const final = (await queryWithRestartRetry(
       `SELECT status, count(*)::int AS n FROM trading.drill_grants WHERE signal_id = $1 GROUP BY status`,
       [signalId],
-    );
+    )) as { status: string; n: number }[];
     expect(final).toHaveLength(1);
     expect(final[0].status).toBe('CONSUMED');
     expect(final[0].n).toBe(1);
