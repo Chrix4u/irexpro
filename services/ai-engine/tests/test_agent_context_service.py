@@ -148,7 +148,7 @@ async def test_non_usd_pair_is_not_applicable_and_does_not_fetch_bls():
 
 
 @pytest.mark.parametrize(
-    ("refresh_seconds", "failure_retry_seconds", "message"),
+    ("refresh_seconds", "failure_retry_seconds", "fetch_timeout_seconds", "message"),
     [
         (0, 60, 3.0, "refresh_seconds must be greater than 0"),
         (300, 0, 3.0, "failure_retry_seconds must be greater than 0"),
