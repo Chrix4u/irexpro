@@ -264,7 +264,7 @@ describe('MetricsService — in-process counter/gauge registry', () => {
       expect(Object.values(METRIC_NAMES)).toEqual(expect.arrayContaining(required));
     });
 
-    it('exposes unique snake_case names plus the two DB-backed gauges', () => {
+    it('exposes unique snake_case names plus the DB-backed / last-value gauges', () => {
       const names = Object.values(METRIC_NAMES);
       expect(new Set(names).size).toBe(names.length);
       for (const name of names) {
@@ -273,6 +273,14 @@ describe('MetricsService — in-process counter/gauge registry', () => {
       expect(Object.values(METRIC_GAUGE_NAMES)).toEqual([
         'irexpro_live_sessions_active',
         'irexpro_open_trades',
+        'irexpro_broker_health_last_success_epoch_seconds',
+        'irexpro_provider_dispatch_duration_seconds',
+        'irexpro_kill_switches_active',
+        'irexpro_broker_connections',
+        'irexpro_broker_snapshot_staleness_seconds',
+        'irexpro_reconciliation_last_cycle_age_seconds',
+        'irexpro_reconciliation_pending_orders',
+        'irexpro_ai_model_info',
       ]);
     });
   });

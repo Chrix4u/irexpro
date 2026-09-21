@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     ai_min_confidence_score: float = 0.60
     ai_signal_mode: Literal["paper", "sandbox", "live"] = "paper"
     ai_allow_mock_market_data: bool = False
+    # LIVE activation feature gate (default OFF). Live signal mode requires
+    # ALL of: ai_signal_mode == "live" AND this env gate (AI_ENGINE_ALLOW_
+    # LIVE_MODEL=true) AND a valid out-of-band promotion record matching the
+    # active model's verified artifact bytes. See app/domain/models/promotion.py.
+    ai_engine_allow_live_model: bool = False
 
     # ─── Scheduler ────────────────────────────────────────────────────────
     ai_scheduler_enabled: bool = False

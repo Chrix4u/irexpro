@@ -15,8 +15,9 @@ import {
  * STATUS HONESTY (Directive §AB): every entry's status MUST match actual
  * implementation evidence in this repository:
  * - metatrader5  → SUPPORTED (full IBrokerAdapter via MetaApi, tested;
- *   production-LIVE VERIFIED — live-proven in production via the MetaApi
- *   bridge)
+ *   production-LIVE evidence is LEGACY (LEGACY_VERIFIED) — under the
+ *   current runtime gate it is NOT production-LIVE eligible until a genuine
+ *   operator certification run upgrades it to HARNESS_CERTIFIED)
  * - paper-broker → SUPPORTED (deterministic simulation adapter, tested; cannot go LIVE)
  * - OANDA        → BETA (Sprint 51 PR-7: full v20 REST adapter implemented +
  *   shared §AN contract suite + unit specs; NOT yet live-verified against a
@@ -38,7 +39,8 @@ import {
  * separate `productionLiveVerification` field records operator-attested
  * LIVE evidence; absent/UNVERIFIED fails closed (LIVE connections and
  * enable-live are rejected — BETA is DEMO-only). Only metatrader5 carries
- * VERIFIED evidence today.
+ * VERIFIED evidence today, and it is LEGACY (LEGACY_VERIFIED — LIVE-ineligible
+ * under the current CERTIFIED-only runtime gate).
  */
 
 /**
@@ -104,6 +106,10 @@ export const BROKER_CATALOG: readonly BrokerDefinition[] = [
     authenticationType: 'API_TOKEN',
     environments: ['DEMO', 'LIVE'],
     regions: [],
+    liveReadiness: {
+      partnerApprovalRequired: false,
+      liveUnavailableRegions: [],
+    },
   },
   {
     id: 'paper-broker',
@@ -169,6 +175,16 @@ export const BROKER_CATALOG: readonly BrokerDefinition[] = [
     authenticationType: 'API_TOKEN',
     environments: ['DEMO', 'LIVE'],
     regions: [],
+    // Production-LIVE completion round (Phase 5): OANDA's v20 API offering
+    // is documented as unavailable to the divisions serving Ghana-based
+    // clients (docs/brokers/provider-matrix.md § OANDA region note). LIVE is
+    // region-blocked for GH users — enforced server-side at the LIVE gates
+    // (createConnection/enableLiveTrading/risk Step 1e) and surfaced to
+    // clients via liveReadiness.liveUnavailableRegions.
+    liveReadiness: {
+      partnerApprovalRequired: false,
+      liveUnavailableRegions: ['GH'],
+    },
   },
   {
     id: 'ctrader',
@@ -211,6 +227,13 @@ export const BROKER_CATALOG: readonly BrokerDefinition[] = [
     authenticationType: 'OAUTH',
     environments: ['DEMO', 'LIVE'],
     regions: [],
+    liveReadiness: {
+      partnerApprovalRequired: true,
+      partnerApprovalNote:
+        'Spotware Open API application approval (CTRADER_CLIENT_ID/SECRET) is ' +
+        'required before any real cTrader account can be reached',
+      liveUnavailableRegions: [],
+    },
   },
   {
     id: 'pepperstone-ctrader',
@@ -246,6 +269,13 @@ export const BROKER_CATALOG: readonly BrokerDefinition[] = [
     authenticationType: 'OAUTH',
     environments: ['DEMO', 'LIVE'],
     regions: [],
+    liveReadiness: {
+      partnerApprovalRequired: true,
+      partnerApprovalNote:
+        'Spotware Open API application approval plus Pepperstone broker-side ' +
+        'approval are required before any real Pepperstone account can be reached',
+      liveUnavailableRegions: [],
+    },
   },
   {
     id: 'icmarkets-ctrader',
@@ -281,6 +311,13 @@ export const BROKER_CATALOG: readonly BrokerDefinition[] = [
     authenticationType: 'OAUTH',
     environments: ['DEMO', 'LIVE'],
     regions: [],
+    liveReadiness: {
+      partnerApprovalRequired: true,
+      partnerApprovalNote:
+        'Spotware Open API application approval plus IC Markets broker-side ' +
+        'approval are required before any real IC Markets account can be reached',
+      liveUnavailableRegions: [],
+    },
   },
 ];
 

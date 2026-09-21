@@ -9,6 +9,7 @@
 import type {
   LiveAccountAlertSeverity,
   LiveAccountAlertView,
+  LiveAccountConnectionView,
   LiveAccountEnvironment,
   LiveAccountOverviewView,
   LiveActivityRowView,
@@ -130,6 +131,123 @@ export function summaryTiles(
 }
 
 
+
+// ── Margin tiles + per-connection reconciliation (production-LIVE
+//    completion round — audit P8: no margin display, no per-connection recon
+//    summary) ──────────────────────────────────────────────────────────────
+
+export interface MarginTilesView {
+  /** False when no synchronized broker financial snapshot exists (honest empties). */
+  available: boolean;
+  currency: string | null;
+  balance: string;
+  equity: string;
+  margin: string;
+  freeMargin: string;
+  /** Equity-to-margin ratio — null when no margin is in use (never fabricated). */
+  marginLevel: string | null;
+}
+
+/**
+ * Margin presentation for the primary connection's financial summary.
+ * All monetary values remain decimal STRINGS (never parsed to floats); a
+ * missing financial snapshot renders honest em-dashes, never a zero.
+ */
+export function marginTiles(overview: LiveAccountOverviewView): MarginTilesView {
+  const financial = overview.connections[0]?.financial ?? null;
+  if (!financial) {
+    return {
+      available: false,
+      currency: null,
+      balance: "—",
+      equity: "—",
+      margin: "—",
+      freeMargin: "—",
+      marginLevel: null,
+    };
+  }
+  return {
+    available: true,
+    currency: financial.currency,
+    balance: financial.balance,
+    equity: financial.equity,
+    margin: financial.margin,
+    freeMargin: financial.freeMargin,
+    marginLevel: financial.marginLevel,
+  };
+}
+
+export type ReconciliationTone = "good" | "warn" | "bad" | "neutral";
+
+export interface ReconciliationSummaryView {
+  /** True when reconciliationLoaded === false — the degraded fail-closed state. */
+  unavailable: boolean;
+  statusLabel: string;
+  tone: ReconciliationTone;
+  /** Open-discrepancy counts, critical first. */
+  discrepancyLabel: string;
+  /** Server-derived inSync (only meaningful when the summary was loaded). */
+  inSync: boolean;
+  lastRunLabel: string;
+}
+
+const RECONCILIATION_STATUS_PRESENTATION: Record<
+  NonNullable<LiveAccountConnectionView["reconciliation"]["lastRunStatus"]>,
+  { label: string; tone: ReconciliationTone }
+> = {
+  PENDING: { label: "Pending", tone: "neutral" },
+  RUNNING: { label: "Running now", tone: "neutral" },
+  COMPLETED: { label: "Completed", tone: "good" },
+  COMPLETED_WITH_WARNINGS: { label: "Completed with warnings", tone: "warn" },
+  FAILED: { label: "Failed", tone: "bad" },
+};
+
+/**
+ * Per-connection reconciliation presentation (fail-closed): when the server
+ * could not read the reconciliation store (reconciliationLoaded === false),
+ * the zero-valued counts must NEVER be rendered as "zero discrepancies" or an
+ * in-sync state — the surface says "unavailable" instead.
+ */
+export function reconciliationSummary(
+  connection: Pick<LiveAccountConnectionView, "reconciliation">,
+  reconciliationLoaded: boolean | undefined,
+): ReconciliationSummaryView {
+  if (reconciliationLoaded === false) {
+    return {
+      unavailable: true,
+      statusLabel: "Unavailable",
+      tone: "warn",
+      discrepancyLabel:
+        "Reconciliation status unavailable — the server could not read the reconciliation store.",
+      inSync: false,
+      lastRunLabel: "Last run unknown",
+    };
+  }
+
+  const summary = connection.reconciliation;
+  const status = summary.lastRunStatus
+    ? (RECONCILIATION_STATUS_PRESENTATION[summary.lastRunStatus] ?? {
+        label: summary.lastRunStatus,
+        tone: "neutral" as ReconciliationTone,
+      })
+    : { label: "Not yet reconciled", tone: "neutral" as ReconciliationTone };
+
+  const discrepancyLabel =
+    summary.openDiscrepancies === 0 && summary.openCritical === 0 && summary.openWarning === 0
+      ? "No open discrepancies"
+      : `${summary.openCritical} critical · ${summary.openWarning} warning · ${summary.openDiscrepancies} open`;
+
+  return {
+    unavailable: false,
+    statusLabel: status.label,
+    tone: status.tone,
+    discrepancyLabel,
+    inSync: summary.inSync,
+    lastRunLabel: summary.lastRunAt
+      ? `Last run ${new Date(summary.lastRunAt).toLocaleString()}`
+      : "Never run",
+  };
+}
 
 // ── Activity / AI exit monitoring ───────────────────────────────────────────
 

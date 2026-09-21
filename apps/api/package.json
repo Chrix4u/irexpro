@@ -22,7 +22,9 @@
     "migration:revert": "pnpm typeorm migration:revert -d src/database/data-source.ts",
     "migration:show": "pnpm typeorm migration:show -d src/database/data-source.ts",
     "seed": "ts-node -r tsconfig-paths/register src/database/seeds/run-seeds.ts",
-    "seed:admin": "ts-node -r tsconfig-paths/register scripts/bootstrap-admin.ts"
+    "seed:admin": "ts-node -r tsconfig-paths/register scripts/bootstrap-admin.ts",
+    "cert:live": "ts-node -r tsconfig-paths/register scripts/run-live-certification.ts",
+    "cert:verify-transition": "ts-node -r tsconfig-paths/register scripts/verify-live-certification-catalog-transition.ts"
   },
   "dependencies": {
     "@nestjs/bullmq": "^11.0.4",

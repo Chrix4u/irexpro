@@ -20,6 +20,10 @@ import { MetaTraderAdapter } from './metatrader.adapter';
 import { MetaApiClientService } from '../services/metaapi-client.service';
 import { BrokerMode } from '../interfaces/broker-adapter.interface';
 import { BrokerAdapterError, BrokerErrorCode } from '../interfaces/broker-adapter.errors';
+import {
+  assertOrderWithinCapabilities,
+  OrderCapabilityError,
+} from '../interfaces/order-capability';
 import { ProviderDispatchCertainty } from '../interfaces/provider-dispatch-certainty';
 
 // ─── MetaAPI SDK mock ─────────────────────────────────────────────────────────
@@ -57,6 +61,29 @@ const mockConnection = {
     },
   ]),
   getPosition: jest.fn().mockResolvedValue(null),
+  // Phase 4 (working-pending-order MODIFY) — the RPC working-order set
+  // (MetatraderOrder rows) and the SDK's pending-order modification
+  // primitive modifyOrder(orderId, openPrice, stopLoss, takeProfit, options).
+  getOrders: jest.fn().mockResolvedValue([
+    {
+      id: 'pending-limit-buy-1',
+      type: 'ORDER_TYPE_BUY_LIMIT',
+      state: 'ORDER_STATE_PLACED',
+      symbol: 'EURUSD',
+      openPrice: 1.081,
+      stopLoss: 1.075,
+      takeProfit: 1.09,
+      volume: 0.1,
+      currentVolume: 0.1,
+      time: new Date('2026-01-01T09:00:00Z'),
+    },
+  ]),
+  modifyOrder: jest.fn().mockResolvedValue({
+    stringCode: 'TRADE_RETCODE_DONE',
+    numericCode: 10009,
+    orderId: 'pending-limit-buy-1',
+    message: 'Request completed',
+  }),
   getSymbols: jest.fn().mockResolvedValue(['EURUSD', 'GBPUSD', 'USDJPY']),
   // Round 7 Fix 1 — per-symbol specification source (MetatraderSymbolSpecification).
   // Unknown symbols resolve null (the "specification not provable" case).
@@ -845,9 +872,10 @@ describe('MetaTraderAdapter', () => {
     });
   });
 
-  describe('modifyOrder()', () => {
-    it('modifies stop loss and take profit', async () => {
-      await adapter.connect(testCredentials);
+  describe('modifyOrder() — routing by lookup (Phase 4: working-pending-order MODIFY)', () => {
+    beforeEach(async () => await adapter.connect(testCredentials));
+
+    it('modifies stop loss and take profit of an OPEN POSITION (existing modifyPosition path)', async () => {
       const result = await adapter.modifyOrder('pos-1', {
         newStopLoss: '1.07500',
         newTakeProfit: '1.09500',
@@ -855,6 +883,271 @@ describe('MetaTraderAdapter', () => {
 
       expect(result.success).toBe(true);
       expect(mockConnection.modifyPosition).toHaveBeenCalledWith('pos-1', 1.075, 1.095);
+      expect(mockConnection.modifyOrder).not.toHaveBeenCalled();
+    });
+
+    it('routes a WORKING PENDING ORDER to the SDK order-modify surface (current openPrice restated)', async () => {
+      const result = await adapter.modifyOrder('pending-limit-buy-1', {
+        newStopLoss: '1.07000',
+        newTakeProfit: '1.09500',
+      });
+
+      expect(result).toMatchObject({
+        success: true,
+        externalOrderId: 'pending-limit-buy-1',
+        status: 'FILLED',
+      });
+      // SDK surface: modifyOrder(orderId, openPrice, stopLoss, takeProfit, options)
+      expect(mockConnection.modifyOrder).toHaveBeenCalledWith(
+        'pending-limit-buy-1',
+        1.081,
+        1.07,
+        1.095,
+        {},
+      );
+      expect(mockConnection.modifyPosition).not.toHaveBeenCalled();
+    });
+
+    it('restates a stop-limit working order’s limit price through options.stopLimitPrice', async () => {
+      mockConnection.getOrders.mockResolvedValueOnce([
+        {
+          id: 'pending-stop-limit-buy-1',
+          type: 'ORDER_TYPE_BUY_STOP_LIMIT',
+          state: 'ORDER_STATE_PLACED',
+          symbol: 'EURUSD',
+          openPrice: 1.086,
+          stopLimitPrice: 1.0865,
+          volume: 0.1,
+          currentVolume: 0.1,
+          time: new Date('2026-01-01T09:00:00Z'),
+        },
+      ]);
+
+      await adapter.modifyOrder('pending-stop-limit-buy-1', { newStopLoss: '1.08000' });
+
+      expect(mockConnection.modifyOrder).toHaveBeenCalledWith(
+        'pending-stop-limit-buy-1',
+        1.086,
+        1.08,
+        undefined,
+        { stopLimitPrice: 1.0865 },
+      );
+    });
+
+    it('a working order without a provable openPrice fails closed (INVALID_PRICE, no SDK modify call)', async () => {
+      mockConnection.getOrders.mockResolvedValueOnce([
+        {
+          id: 'pending-bad-price',
+          type: 'ORDER_TYPE_BUY_LIMIT',
+          state: 'ORDER_STATE_PLACED',
+          symbol: 'EURUSD',
+          openPrice: null,
+          volume: 0.1,
+          currentVolume: 0.1,
+        },
+      ]);
+
+      await expect(
+        adapter.modifyOrder('pending-bad-price', { newTakeProfit: '1.09500' }),
+      ).rejects.toMatchObject({ code: BrokerErrorCode.INVALID_PRICE });
+      expect(mockConnection.modifyOrder).not.toHaveBeenCalled();
+      expect(mockConnection.modifyPosition).not.toHaveBeenCalled();
+    });
+
+    it('an id in NEITHER the working set NOR the positions keeps the existing fail-closed terminal rejection', async () => {
+      mockConnection.modifyPosition.mockRejectedValueOnce(new Error('Position not found'));
+      const err = (await adapter
+        .modifyOrder('unknown-ticket', { newStopLoss: '1.07000' })
+        .catch((e) => e)) as BrokerAdapterError;
+
+      expect(err).toBeInstanceOf(BrokerAdapterError);
+      expect(err.code).toBe(BrokerErrorCode.POSITION_NOT_FOUND);
+      // The order-modify surface was NOT engaged for an unknown id — the
+      // terminal answered the position-modify attempt, exactly the
+      // pre-Phase-4 behavior.
+      expect(mockConnection.modifyOrder).not.toHaveBeenCalled();
+    });
+
+    it('a non-DONE terminal answer on the order-modify path reports FAILED (never success)', async () => {
+      mockConnection.modifyOrder.mockResolvedValueOnce({
+        stringCode: 'TRADE_RETCODE_INVALID',
+        numericCode: 10013,
+        message: 'Invalid request',
+      });
+
+      const result = await adapter.modifyOrder('pending-limit-buy-1', {
+        newTakeProfit: '1.09500',
+      });
+
+      expect(result).toMatchObject({ success: false, status: 'FAILED' });
+    });
+  });
+
+  describe('getOrderCapabilities() — platform honesty (Phase 4: MT4 vs MT5)', () => {
+    const accountInfoWith = (platform: string | undefined): Record<string, unknown> => ({
+      login: '123456',
+      type: 'ACCOUNT_TRADE_MODE_DEMO',
+      currency: 'USD',
+      leverage: 100,
+      balance: 10000.5,
+      equity: 10050.25,
+      margin: 200.0,
+      freeMargin: 9850.25,
+      marginLevel: 5025.12,
+      ...(platform === undefined ? {} : { platform }),
+    });
+
+    it('an UNCONNECTED adapter declares the full MT5 matrix (the registered identity)', () => {
+      const caps = adapter.getOrderCapabilities();
+      expect([...caps.supportedOrderKinds].sort()).toEqual([
+        'LIMIT',
+        'MARKET',
+        'STOP',
+        'STOP_LIMIT',
+      ]);
+    });
+
+    it('an MT5-connected account keeps all four kinds', async () => {
+      (mockConnection.getAccountInformation as jest.Mock).mockResolvedValueOnce(
+        accountInfoWith('mt5'),
+      );
+      await adapter.connect(testCredentials);
+      expect(adapter.getOrderCapabilities().supportedOrderKinds).toContain('STOP_LIMIT');
+    });
+
+    it('an MT4-connected account DROPS STOP_LIMIT and the shared capability gate enforces it', async () => {
+      (mockConnection.getAccountInformation as jest.Mock).mockResolvedValueOnce(
+        accountInfoWith('MT4'),
+      );
+      await adapter.connect(testCredentials);
+
+      const caps = adapter.getOrderCapabilities();
+      expect(caps.supportedOrderKinds).toEqual(['MARKET', 'LIMIT', 'STOP']);
+      expect(caps.supportedOrderKinds).not.toContain('STOP_LIMIT');
+      // The declared gap is ENFORCED pre-commitment by the orchestrator's
+      // shared seam — a STOP_LIMIT request fails closed with zero calls.
+      expect(() =>
+        assertOrderWithinCapabilities(
+          { orderKind: 'STOP_LIMIT', limitPrice: '1.08', stopPrice: '1.09' },
+          caps,
+        ),
+      ).toThrow(OrderCapabilityError);
+      // MT4 keeps the other three kinds.
+      for (const kind of ['MARKET', 'LIMIT', 'STOP'] as const) {
+        expect(() =>
+          assertOrderWithinCapabilities(
+            kind === 'LIMIT'
+              ? { orderKind: kind, limitPrice: '1.08' }
+              : kind === 'STOP'
+                ? { orderKind: kind, stopPrice: '1.09' }
+                : { orderKind: kind },
+            caps,
+          ),
+        ).not.toThrow();
+      }
+    });
+
+    it('a SILENT provider (no platform field) keeps the default matrix — never guessed', async () => {
+      (mockConnection.getAccountInformation as jest.Mock).mockResolvedValueOnce(
+        accountInfoWith(undefined),
+      );
+      await adapter.connect(testCredentials);
+      expect(adapter.getOrderCapabilities().supportedOrderKinds).toContain('STOP_LIMIT');
+    });
+
+    it('disconnect clears the platform observation (back to the default matrix)', async () => {
+      (mockConnection.getAccountInformation as jest.Mock).mockResolvedValueOnce(
+        accountInfoWith('mt4'),
+      );
+      await adapter.connect(testCredentials);
+      expect(adapter.getOrderCapabilities().supportedOrderKinds).not.toContain('STOP_LIMIT');
+      await adapter.disconnect();
+      expect(adapter.getOrderCapabilities().supportedOrderKinds).toContain('STOP_LIMIT');
+    });
+
+    it('placeOrder fails STOP_LIMIT fast on MT4 (INVALID_ORDER_TYPE, zero SDK calls)', async () => {
+      (mockConnection.getAccountInformation as jest.Mock).mockResolvedValueOnce(
+        accountInfoWith('mt4'),
+      );
+      await adapter.connect(testCredentials);
+
+      await expect(
+        adapter.placeOrder({
+          idempotencyKey: 'idem-mt4-sl',
+          instrument: 'EURUSD',
+          direction: 'BUY',
+          lotSize: '0.1',
+          stopLoss: '1.08000',
+          takeProfit: '1.09000',
+          orderKind: 'STOP_LIMIT',
+          stopPrice: '1.08600',
+          limitPrice: '1.08650',
+        }),
+      ).rejects.toMatchObject({ code: BrokerErrorCode.INVALID_ORDER_TYPE });
+      expect(mockConnection.createStopLimitBuyOrder).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getAccountInfo()/getAccountBalance() — money-field honesty (Phase 4)', () => {
+    beforeEach(async () => await adapter.connect(testCredentials));
+
+    const accountInfoWith = (overrides: Record<string, unknown>): Record<string, unknown> => ({
+      login: '123456',
+      type: 'ACCOUNT_TRADE_MODE_DEMO',
+      currency: 'USD',
+      leverage: 100,
+      balance: 10000.5,
+      equity: 10050.25,
+      margin: 200.0,
+      freeMargin: 9850.25,
+      marginLevel: 5025.12,
+      ...overrides,
+    });
+
+    it('a NULL balance FAILS CLOSED (typed error — never a fabricated zero balance)', async () => {
+      (mockConnection.getAccountInformation as jest.Mock).mockResolvedValueOnce(
+        accountInfoWith({ balance: null }),
+      );
+      const err = (await adapter.getAccountInfo().catch((e) => e)) as BrokerAdapterError;
+      expect(err).toBeInstanceOf(BrokerAdapterError);
+      expect(err.code).toBe(BrokerErrorCode.INVALID_REQUEST);
+      expect(err.message).toContain('balance');
+    });
+
+    it('an ABSENT equity FAILS CLOSED (a missing equity is not a zero equity)', async () => {
+      (mockConnection.getAccountInformation as jest.Mock).mockResolvedValueOnce(
+        accountInfoWith({ equity: undefined }),
+      );
+      await expect(adapter.getAccountInfo()).rejects.toMatchObject({
+        code: BrokerErrorCode.INVALID_REQUEST,
+      });
+    });
+
+    it('a non-finite margin FAILS CLOSED (NaN money is not money)', async () => {
+      (mockConnection.getAccountInformation as jest.Mock).mockResolvedValueOnce(
+        accountInfoWith({ margin: Number.NaN }),
+      );
+      await expect(adapter.getAccountInfo()).rejects.toMatchObject({
+        code: BrokerErrorCode.INVALID_REQUEST,
+      });
+    });
+
+    it('getAccountBalance also fails closed on missing money (never a fabricated zero)', async () => {
+      (mockConnection.getAccountInformation as jest.Mock).mockResolvedValueOnce(
+        accountInfoWith({ equity: null }),
+      );
+      await expect(adapter.getAccountBalance()).rejects.toMatchObject({
+        code: BrokerErrorCode.INVALID_REQUEST,
+      });
+    });
+
+    it('marginLevel stays optional-with-zero (repo convention for unreported optional fields)', async () => {
+      (mockConnection.getAccountInformation as jest.Mock).mockResolvedValueOnce(
+        accountInfoWith({ marginLevel: undefined }),
+      );
+      const info = await adapter.getAccountInfo();
+      expect(info.marginLevel).toBe('0.00000000');
+      expect(info.balance).toBe('10000.50000000');
     });
   });
 

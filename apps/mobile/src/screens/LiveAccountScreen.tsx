@@ -38,6 +38,8 @@ import {
   aiExitActivityRows,
   alertSeverityColor,
   environmentBanner,
+  marginTiles,
+  reconciliationSummary,
   sessionAuthorityPresentation,
   sortAlerts,
   summaryTiles,
@@ -165,6 +167,15 @@ export default function LiveAccountScreen() {
   const sessionAuthority = sessionAuthorityPresentation(session);
   const exitActivity = aiExitActivityRows(activity?.activity ?? []).slice(0, 8);
   const recentActivity = (activity?.activity ?? []).slice(0, 10);
+  // Production-LIVE completion round (audit P8): margin tiles + per-connection
+  // reconciliation summary from the SAME overview payload the web renders.
+  const margin = overview ? marginTiles(overview) : null;
+  const reconciliations = overview
+    ? overview.connections.map((connection) => ({
+        connection,
+        view: reconciliationSummary(connection, overview.reconciliationLoaded),
+      }))
+    : [];
 
   return (
     <ScrollView
@@ -333,6 +344,94 @@ export default function LiveAccountScreen() {
             <Text style={styles.tileLabel}>Critical</Text>
           </View>
         </View>
+      ) : null}
+
+      {margin ? (
+        <>
+          <Text style={styles.sectionTitle}>Account margin</Text>
+          <View style={styles.tileGrid}>
+            <View
+              style={styles.tile}
+              accessibilityLabel={
+                margin.available
+                  ? `Margin ${margin.margin} ${margin.currency ?? ""}`.trim()
+                  : "Margin unavailable"
+              }
+            >
+              <Text style={styles.moneyValue}>
+                {margin.available
+                  ? `${margin.margin}${margin.currency ? ` ${margin.currency}` : ""}`
+                  : "—"}
+              </Text>
+              <Text style={styles.tileLabel}>Margin</Text>
+            </View>
+            <View
+              style={styles.tile}
+              accessibilityLabel={
+                margin.available
+                  ? `Free margin ${margin.freeMargin} ${margin.currency ?? ""}`.trim()
+                  : "Free margin unavailable"
+              }
+            >
+              <Text style={styles.moneyValue}>
+                {margin.available
+                  ? `${margin.freeMargin}${margin.currency ? ` ${margin.currency}` : ""}`
+                  : "—"}
+              </Text>
+              <Text style={styles.tileLabel}>Free margin</Text>
+            </View>
+            <View
+              style={styles.tile}
+              accessibilityLabel={
+                margin.available && margin.marginLevel !== null
+                  ? `Margin level ${margin.marginLevel} percent`
+                  : "Margin level not available"
+              }
+            >
+              <Text style={styles.moneyValue}>
+                {margin.available && margin.marginLevel !== null ? `${margin.marginLevel}%` : "—"}
+              </Text>
+              <Text style={styles.tileLabel}>Margin level</Text>
+            </View>
+          </View>
+        </>
+      ) : null}
+
+      {reconciliations.length > 0 ? (
+        <>
+          <Text style={styles.sectionTitle}>Reconciliation</Text>
+          {reconciliations.map(({ connection, view }) => (
+            <View
+              key={connection.id}
+              style={styles.card}
+              accessibilityLabel={`Reconciliation for ${connection.displayName || connection.brokerName}: ${view.statusLabel}`}
+            >
+              <View style={styles.rowBetween}>
+                <Text style={styles.cardTitle}>
+                  {connection.displayName || connection.brokerName}
+                </Text>
+                <Text
+                  style={[
+                    styles.reconStatus,
+                    {
+                      color: view.unavailable ? "#b45309" : view.inSync ? "#047857" : "#be123c",
+                    },
+                  ]}
+                >
+                  {view.unavailable
+                    ? "Status unavailable"
+                    : view.inSync
+                      ? "In sync"
+                      : "Discrepancies open"}
+                </Text>
+              </View>
+              <Text style={styles.muted}>
+                Last run status: {view.statusLabel} · {view.lastRunLabel}
+              </Text>
+              <Text style={styles.mutedSmall}>{view.discrepancyLabel}</Text>
+            </View>
+          ))}
+        </>
       ) : null}
 
       {alerts.length > 0 ? (
@@ -630,6 +729,13 @@ const styles = StyleSheet.create({
   tileLabel: { fontSize: 11, color: "#64748b" },
   tileWarn: { color: "#b45309" },
   tileDanger: { color: "#be123c" },
+  moneyValue: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#0f172a",
+    fontVariant: ["tabular-nums"],
+  },
+  reconStatus: { fontSize: 11, fontWeight: "800" },
   sectionTitle: {
     fontSize: 16,
     fontWeight: "600",

@@ -1,0 +1,12 @@
+# AI engine local artifacts
+# Operator-authored LIVE promotion records are OUT-OF-BAND governance
+# artifacts and must NEVER be committed. Training code must never write
+# this directory (see app/domain/models/promotion.py).
+var/model-promotions/*
+!var/model-promotions/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
