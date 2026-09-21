@@ -1,6 +1,7 @@
 """Tests for cached advisory Agent Council context snapshots."""
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
@@ -105,6 +106,31 @@ async def test_bls_failure_degrades_to_unavailable_without_fabricating_context()
 
 
 @pytest.mark.asyncio
+async def test_bls_refresh_timeout_degrades_to_unavailable_without_blocking_signal_context():
+    provider = AsyncMock()
+
+    async def slow_fetch():
+        await asyncio.sleep(0.1)
+        return [high_impact_event()]
+
+    provider.fetch.side_effect = slow_fetch
+    service = AgentContextService(
+        bls_provider=provider,
+        fetch_timeout_seconds=0.01,
+    )
+
+    snapshot = await service.snapshot_for(
+        instrument="EURUSD",
+        quant_direction="BUY",
+        quant_confidence=0.80,
+    )
+
+    assert snapshot.status == "INSUFFICIENT"
+    assert snapshot.source_state == "UNAVAILABLE"
+    assert snapshot.evidence_count == 0
+
+
+@pytest.mark.asyncio
 async def test_non_usd_pair_is_not_applicable_and_does_not_fetch_bls():
     provider = AsyncMock()
     service = AgentContextService(bls_provider=provider)
@@ -124,13 +150,16 @@ async def test_non_usd_pair_is_not_applicable_and_does_not_fetch_bls():
 @pytest.mark.parametrize(
     ("refresh_seconds", "failure_retry_seconds", "message"),
     [
-        (0, 60, "refresh_seconds must be greater than 0"),
-        (300, 0, "failure_retry_seconds must be greater than 0"),
+        (0, 60, 3.0, "refresh_seconds must be greater than 0"),
+        (300, 0, 3.0, "failure_retry_seconds must be greater than 0"),
+        (300, 60, 0, "fetch_timeout_seconds must be finite"),
+        (300, 60, 5.01, "fetch_timeout_seconds must be finite"),
     ],
 )
-def test_context_service_rejects_nonpositive_cache_windows(
+def test_context_service_rejects_invalid_timing_configuration(
     refresh_seconds,
     failure_retry_seconds,
+    fetch_timeout_seconds,
     message,
 ):
     with pytest.raises(ValueError, match=message):
@@ -138,4 +167,5 @@ def test_context_service_rejects_nonpositive_cache_windows(
             bls_provider=AsyncMock(),
             refresh_seconds=refresh_seconds,
             failure_retry_seconds=failure_retry_seconds,
+            fetch_timeout_seconds=fetch_timeout_seconds,
         )
