@@ -115,7 +115,8 @@ def _parse_datetime(value: str, params: dict[str, str]) -> datetime:
     return parsed.replace(tzinfo=timezone).astimezone(UTC)
 
 
-def _release_policy(summary: str) -> tuple[str, MacroImpact] | None:
+def classify_bls_release(summary: str) -> tuple[str, MacroImpact] | None:
+    """Return the reviewed iRexPro event-family/impact mapping for a BLS title."""
     normalized = " ".join(summary.casefold().split())
     for prefix, event_family, impact in _RELEASE_POLICIES:
         if normalized.startswith(prefix):
@@ -137,7 +138,7 @@ def _event_from_properties(
     if not summary_entries:
         raise BlsCalendarProviderError("BLS VEVENT is missing SUMMARY")
     summary = _decode_ical_text(summary_entries[0][1])
-    policy = _release_policy(summary)
+    policy = classify_bls_release(summary)
     if policy is None:
         return None
 
