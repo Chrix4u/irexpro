@@ -29,6 +29,7 @@ from app.domain.training.validation import (
 TARGET_COLUMN = "target"
 LONG_NET_RETURN_COLUMN = "long_net_return"
 SHORT_NET_RETURN_COLUMN = "short_net_return"
+ECONOMIC_SAMPLE_WEIGHT_POLICY = "positive_net_edge_q75_scaled_v1"
 
 
 def _sha256_file(path: Path) -> str:
@@ -267,6 +268,33 @@ def _build_model() -> XGBClassifier:
     )
 
 
+def _economic_sample_weights(frame: pd.DataFrame) -> np.ndarray:
+    """
+    Weight training rows by positive net edge without filtering any samples.
+
+    Future net returns are already legitimate supervised targets inside the
+    training split. They are never exposed as runtime features and never used
+    to remove or select outer-validation rows. Rows where neither direction
+    clears friction retain a non-zero floor weight; economically meaningful
+    moves receive more influence with a capped robust scale.
+    """
+    best_net = np.maximum(
+        pd.to_numeric(frame[LONG_NET_RETURN_COLUMN], errors="coerce").to_numpy(dtype=float),
+        pd.to_numeric(frame[SHORT_NET_RETURN_COLUMN], errors="coerce").to_numpy(dtype=float),
+    )
+    if not np.isfinite(best_net).all():
+        raise ValueError("Training sample weights require finite net returns")
+
+    positive_edge_bps = np.maximum(best_net * 10_000.0, 0.0)
+    positive = positive_edge_bps[positive_edge_bps > 0.0]
+    if len(positive) == 0:
+        scale = 1.0
+    else:
+        scale = max(float(np.quantile(positive, 0.75)), 0.10)
+
+    weights = 0.5 + np.clip(positive_edge_bps / scale, 0.0, 4.5)
+    return weights.astype(float)
+
 
 def _split_internal_early_stopping_tail(
     training_window: pd.DataFrame,
@@ -481,6 +509,7 @@ def _run_pooled_walk_forward_core(
         model.fit(
             fit_train[MULTITIMEFRAME_FEATURE_COLUMNS],
             fit_train[TARGET_COLUMN].astype(int),
+            sample_weight=_economic_sample_weights(fit_train),
             eval_set=[
                 (
                     early_stop_frame[MULTITIMEFRAME_FEATURE_COLUMNS],
@@ -560,6 +589,7 @@ def _run_pooled_walk_forward_core(
             "purge_periods": int(purge),
             "embargo_periods": int(embargo),
             "confidence_threshold": confidence_threshold,
+            "training_sample_weight_policy": ECONOMIC_SAMPLE_WEIGHT_POLICY,
         },
     }
     return report, all_predictions.copy()
