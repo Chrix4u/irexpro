@@ -13,6 +13,7 @@ from app.domain.models.multitimeframe_features import (
     MULTITIMEFRAME_RESEARCH_VALIDATION_POLICY,
 )
 from app.domain.training.train_final_multitimeframe import (
+    MIN_PAPER_PROMOTION_M1_ROWS_PER_INSTRUMENT,
     _chronological_final_split,
     _final_gate,
     _load_research_qualification,
@@ -93,7 +94,7 @@ def _qualification_payload(
     research_validation_policy: str | None = MULTITIMEFRAME_RESEARCH_VALIDATION_POLICY,
 ) -> dict:
     payload = {
-        "target_m1_rows_per_instrument": 25_000,
+        "target_m1_rows_per_instrument": 100_000,
         "qualification_window": {
             "decision_time_before": "2026-01-20T00:00:00+00:00",
         },
@@ -113,6 +114,10 @@ def _qualification_payload(
         payload["research_validation_policy"] = research_validation_policy
     return payload
 
+def test_paper_promotion_evidence_minimum_is_100k_rows_per_pair():
+    assert MIN_PAPER_PROMOTION_M1_ROWS_PER_INSTRUMENT == 100_000
+
+
 def test_final_packaging_accepts_only_current_label_selection_policy(tmp_path):
     summary = tmp_path / "summary.json"
     summary.write_text(
@@ -131,7 +136,7 @@ def test_final_packaging_accepts_only_current_label_selection_policy(tmp_path):
 
     assert gate is not None and gate["research_gate_passed"] is True
     assert cutoff is not None
-    assert target_rows == 25_000
+    assert target_rows == 100_000
 
 @pytest.mark.parametrize("legacy_policy", [None, "future_profitable_rows_only_v1"])
 def test_final_packaging_rejects_legacy_label_selection_policy(
