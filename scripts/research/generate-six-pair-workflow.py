@@ -349,6 +349,146 @@ def horizon_job(horizon: str, previous_job: str) -> str:
 {WATCHDOG_RUN}{SSH_REMOVE}"""
 
 
+def qualification_job(horizon: str, previous_job: str) -> str:
+    """Run the bounded nested qualification matrix on the research-only 80%."""
+    template = """  qualification-__HORIZON__m:
+    name: Model qualification stage __HORIZON__m
+    needs: [validate, __PREVIOUS_JOB__]
+    if: needs.validate.outputs.run == 'true'
+    concurrency:
+      group: irexpro-staging-worktree
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    # Nested calibration/search is intentionally isolated per horizon so the
+    # VPS stays bounded and a retry never needs to repeat other horizons.
+    timeout-minutes: 330
+    environment:
+      name: staging
+
+    steps:
+__CHECKOUT____SSH_CONFIG__
+      - name: Run leakage-safe qualification stage __HORIZON__m
+        if: steps.current.outputs.current == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          research_started_epoch="$(date +%s)"
+          printf 'RESEARCH_STAGE_START stage=qualification horizon=__HORIZON__m candidate=%s started_epoch=%s\n' \
+            "$CANDIDATE_SHA" "$research_started_epoch"
+
+          ssh \
+            -i "$HOME/.ssh/irexpro_staging" \
+            -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            "bash -s -- $CANDIDATE_SHA" <<'REMOTE' &
+__STAGE_PROLOGUE__          export IREXPRO_XGB_N_JOBS=2
+
+          cutoff_result="$OUTPUT_ROOT/checkpoints/stages/horizon-10m.result.json"
+          test -s "$cutoff_result"
+          qualification_cutoff="$(
+            RESULT_PATH="$cutoff_result" node -e '
+              const fs = require("fs");
+              const payload = JSON.parse(fs.readFileSync(process.env.RESULT_PATH, "utf8"));
+              const cutoff = payload.qualification_decision_time_before;
+              if (!cutoff) process.exit(1);
+              process.stdout.write(String(cutoff));
+            '
+          )"
+          test -n "$qualification_cutoff"
+
+          qualification_report="$OUTPUT_ROOT/reports/model_qualification___HORIZON__m.json"
+          stage_result="$OUTPUT_ROOT/checkpoints/stages/qualification-__HORIZON__m.result.json"
+          install -d -m 700 "$OUTPUT_ROOT/reports" "$OUTPUT_ROOT/checkpoints/stages"
+
+          reusable=false
+          if [[ -s "$qualification_report" ]]; then
+            if REPORT_PATH="$qualification_report" EXPECTED_CUTOFF="$qualification_cutoff" node <<'NODE'
+          const fs = require('fs');
+          const report = JSON.parse(fs.readFileSync(process.env.REPORT_PATH, 'utf8'));
+          if (report.report_version !== 1) process.exit(1);
+          if (Number(report.horizon_bars) !== Number('__HORIZON__')) process.exit(1);
+          if (Number(report.confidence_floor) < 0.60) process.exit(1);
+          if (report.untouched_final_test_used !== false) process.exit(1);
+          if (report.outer_validation_used_for_tuning !== false) process.exit(1);
+          if (String(report.qualification_decision_time_before) !== String(process.env.EXPECTED_CUTOFF)) process.exit(1);
+          NODE
+            then
+              reusable=true
+            fi
+          fi
+
+          if [[ "$reusable" == true ]]; then
+            printf 'QUALIFICATION_RESUME horizon=__HORIZON__m source=verified_report\n'
+          else
+            rm -f "$qualification_report" "$stage_result"
+            "$python_bin" -m app.domain.training.model_qualification \
+              --dataset "EURUSD=$OUTPUT_ROOT/corpora/EURUSD_MTF.csv" \
+              --dataset "GBPUSD=$OUTPUT_ROOT/corpora/GBPUSD_MTF.csv" \
+              --dataset "USDJPY=$OUTPUT_ROOT/corpora/USDJPY_MTF.csv" \
+              --dataset "AUDUSD=$OUTPUT_ROOT/corpora/AUDUSD_MTF.csv" \
+              --dataset "USDCAD=$OUTPUT_ROOT/corpora/USDCAD_MTF.csv" \
+              --dataset "USDCHF=$OUTPUT_ROOT/corpora/USDCHF_MTF.csv" \
+              --horizon-bars __HORIZON__ \
+              --decision-time-before "$qualification_cutoff" \
+              --report "$qualification_report" \
+              --max-splits 5 \
+              --confidence-floor 0.60 \
+              > "$stage_result.tmp"
+            mv "$stage_result.tmp" "$stage_result"
+          fi
+
+          test -s "$qualification_report"
+          REPORT_PATH="$qualification_report" node <<'NODE'
+          const fs = require('fs');
+          const report = JSON.parse(fs.readFileSync(process.env.REPORT_PATH, 'utf8'));
+          console.log('MODEL_QUALIFICATION_COMPLETED horizon=' + report.horizon_bars + 'm');
+          for (const row of report.candidate_comparison_table || []) {
+            const experiment = report.experiments?.[row.experiment] || {};
+            const comparison = experiment.comparison_to_baseline || {};
+            console.log([
+              'QUALIFICATION_RESULT',
+              'horizon=' + report.horizon_bars + 'm',
+              'experiment=' + row.experiment,
+              'balanced_accuracy=' + Number(row.balanced_accuracy).toFixed(6),
+              'sharpe=' + (row.sharpe_ratio == null ? 'null' : Number(row.sharpe_ratio).toFixed(6)),
+              'profit_factor=' + (row.profit_factor == null ? 'null' : Number(row.profit_factor).toFixed(6)),
+              'max_drawdown=' + Number(row.max_drawdown).toFixed(6),
+              'positive_fold_fraction=' + Number(row.positive_fold_fraction).toFixed(6),
+              'positive_instrument_fraction=' + Number(row.positive_instrument_fraction).toFixed(6),
+              'confidence_coverage=' + Number(row.confidence_coverage).toFixed(6),
+              'brier=' + Number(row.brier_score).toFixed(6),
+              'gate=' + (row.research_gate_passed ? 'PASS' : 'HOLD'),
+              'follow_up=' + (comparison.interesting_for_follow_up ? 'YES' : 'NO'),
+            ].join(' '));
+          }
+          const passing = (report.candidate_comparison_table || []).filter((row) => row.research_gate_passed);
+          if (passing.length) {
+            console.log('QUALIFICATION_RESEARCH_GATE_PASS horizon=' + report.horizon_bars + 'm experiments=' + passing.map((row) => row.experiment).join(','));
+          } else {
+            console.log('QUALIFICATION_RESEARCH_GATE_HOLD horizon=' + report.horizon_bars + 'm reason=no_experiment_passed');
+          }
+          console.log('QUALIFICATION_GOVERNANCE untouched_final_test_used=' + report.untouched_final_test_used + ' outer_validation_used_for_tuning=' + report.outer_validation_used_for_tuning);
+          NODE
+
+          printf 'RESEARCH_STAGE_COMPLETE stage=qualification horizon=__HORIZON__m report=%s\n' \
+            "$qualification_report"
+          REMOTE
+
+__WATCHDOG_RUN____SSH_REMOVE__"""
+    return (
+        template.replace("__HORIZON__", horizon)
+        .replace("__PREVIOUS_JOB__", previous_job)
+        .replace("__CHECKOUT__", CHECKOUT)
+        .replace("__SSH_CONFIG__", SSH_CONFIG)
+        .replace("__STAGE_PROLOGUE__", STAGE_PROLOGUE)
+        .replace("__WATCHDOG_RUN__", WATCHDOG_RUN)
+        .replace("__SSH_REMOVE__", SSH_REMOVE)
+    )
+
+
 VALIDATE_JOB = f"""  validate:
     name: Validate candidate and initialize frozen research state
     if: >-
@@ -426,7 +566,7 @@ VALIDATE_JOB = f"""  validate:
             fi
           fi
 
-          relevant_pattern='^(services/ai-engine/app/domain/(training|models|agents/(providers|macro_context|context_sources|coordinator))/|services/ai-engine/(pyproject\\.toml|requirements\\.lock)$)'
+          relevant_pattern='^(\\.github/workflows/six-pair-research-run\\.yml|scripts/research/generate-six-pair-workflow\\.py|services/ai-engine/app/domain/(training|models|agents/(providers|macro_context|context_sources|coordinator))/|services/ai-engine/(pyproject\\.toml|requirements\\.lock)$)'
 
           if [[ -z "$baseline_sha" ]]; then
             # No successful/evaluated research lineage exists yet. Fail safe:
@@ -560,7 +700,7 @@ VALIDATE_JOB = f"""  validate:
 
 SELECT_JOB = f"""  select-horizon:
     name: Summarize study and select research horizon
-    needs: [validate, horizon-{HORIZONS[-1]}m]
+    needs: [validate, qualification-{HORIZONS[-1]}m]
     if: needs.validate.outputs.run == 'true'
     concurrency:
       group: irexpro-staging-worktree
@@ -1241,6 +1381,10 @@ jobs:
         parts.append(horizon_job(horizon, previous_job))
         parts.append("\n")
         previous_job = f"horizon-{horizon}m"
+    for horizon in HORIZONS:
+        parts.append(qualification_job(horizon, previous_job))
+        parts.append("\n")
+        previous_job = f"qualification-{horizon}m"
     parts.append(SELECT_JOB)
     parts.append("\n")
     parts.append(FINAL_JOB)
