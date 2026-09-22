@@ -929,6 +929,19 @@ def run_nested_qualification_experiments(
                     "decision_threshold": decision_threshold,
                     "candidate_reports": [],
                 }
+            elif len(experiment.variants) == 1 and not experiment.tune_decision_threshold:
+                # A predeclared single calibration strategy has nothing to select.
+                # Fitting an extra inner model would add cost without adding
+                # scientific information. Calibration is still fitted only on
+                # the refit's inner calibration window before outer evaluation.
+                variant = experiment.variants[0]
+                decision_threshold = 0.50
+                selection = {
+                    "policy": "fixed_candidate_inner_calibration_only",
+                    "selected_variant": variant.name,
+                    "decision_threshold": decision_threshold,
+                    "candidate_reports": [],
+                }
             else:
                 variant, decision_threshold, candidate_reports = (
                     _select_variant_inside_outer_training(
