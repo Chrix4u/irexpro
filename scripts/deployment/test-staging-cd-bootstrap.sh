@@ -193,6 +193,7 @@ grep -Fq "if: steps.relevance.outputs.run == 'true'" "$RESEARCH_WORKFLOW" ||
 init_stage_bypass_count="$(grep -F -c 'export IREXPRO_INIT_STAGE=1' "$RESEARCH_WORKFLOW" || true)"
 [[ "$init_stage_bypass_count" -eq 1 ]] ||
   fail 'Exactly one research init stage must be allowed to create the orchestration plan.'
+# shellcheck disable=SC2016
 grep -Fq 'if [[ "${IREXPRO_INIT_STAGE:-0}" != "1" ]]; then' "$RESEARCH_WORKFLOW" ||
   fail 'The shared staged prologue must exempt only the init stage from the pre-existing-plan check.'
 plan_holds="$(grep -F -c 'staged execution requires the orchestration plan' "$RESEARCH_WORKFLOW" || true)"
