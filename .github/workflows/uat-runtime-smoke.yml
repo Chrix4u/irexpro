@@ -5,6 +5,11 @@ on:
     workflows: ['Six Pair Research Run']
     types: [completed]
   workflow_dispatch:
+    inputs:
+      research_run_id:
+        description: 'Optional Six Pair Research Run ID whose promotion outcome must be verified'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -29,17 +34,26 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          RESEARCH_RUN_ID: ${{ github.event.workflow_run.id }}
+          RESEARCH_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || inputs.research_run_id }}
         run: |
           set -Eeuo pipefail
 
-          if [[ "$GITHUB_EVENT_NAME" != "workflow_run" ]]; then
+          if [[ -z "${RESEARCH_RUN_ID:-}" ]]; then
+            if [[ "$GITHUB_EVENT_NAME" == "workflow_run" ]]; then
+              printf 'promoted=false\n' >> "$GITHUB_OUTPUT"
+              printf 'PAPER_UAT_HOLD reason=missing_research_run_id\n'
+              exit 0
+            fi
             printf 'promoted=not_applicable\n' >> "$GITHUB_OUTPUT"
             printf 'UAT_SMOKE_MODE trigger=%s promotion_check=not_applicable\n' "$GITHUB_EVENT_NAME"
             exit 0
           fi
 
-          [[ "$RESEARCH_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$RESEARCH_RUN_ID" =~ ^[0-9]+$ ]] || {
+            printf 'promoted=false\n' >> "$GITHUB_OUTPUT"
+            printf 'PAPER_UAT_HOLD reason=invalid_research_run_id value=%s\n' "$RESEARCH_RUN_ID"
+            exit 0
+          }
           archive="$(mktemp)"
           logs_dir="$(mktemp -d)"
           trap 'rm -f "$archive"; rm -rf "$logs_dir"' EXIT
@@ -137,12 +151,12 @@ jobs:
           PROMOTED: ${{ steps.promotion.outputs.promoted }}
         run: |
           set -Eeuo pipefail
-          if [[ "$GITHUB_EVENT_NAME" == "workflow_run" && "$PROMOTED" != "true" ]]; then
-            printf 'PAPER_UAT_HOLD research_completed_without_paper_promotion\n'
-            exit 0
+          if [[ "$PROMOTED" == "false" ]]; then
+            printf 'PAPER_UAT_HOLD research_completed_without_paper_promotion\n' >&2
+            exit 1
           fi
           if [[ "$PROMOTED" == "true" ]]; then
-            printf 'PAPER_UAT_RUNTIME_SMOKE_PASS promotion_verified=true\n'
+            printf 'PAPER_UAT_RUNTIME_SMOKE_PASS promotion_verified=true research_run_id=%s\n' "${RESEARCH_RUN_ID:-unknown}"
           else
             printf 'UAT_RUNTIME_SMOKE_PASS promotion_verified=not_applicable\n'
           fi
