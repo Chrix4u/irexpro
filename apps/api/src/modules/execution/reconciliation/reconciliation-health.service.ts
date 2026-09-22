@@ -8,7 +8,13 @@ import {
   ReconciliationDiscrepancyType,
   ReconciliationRunStatus,
 } from './reconciliation.enums';
-import { RECONCILIATION_INTERVAL_MS } from '../jobs/trade-reconciliation.job';
+// NOTE: deliberately NOT imported from trade-reconciliation.job.ts — that
+// would create a require cycle (job → execution.service →
+// final-dispatch-boundary → this service → job) which corrupts emitted
+// design:paramtypes and breaks the DI graph bootstrap. The value mirrors
+// the job's RECONCILIATION_INTERVAL_MS (60s reconciliation cadence); the
+// dedicated spec asserts the derived default policy so drift is caught.
+const RECONCILIATION_INTERVAL_MS = 60_000;
 
 /**
  * October UAT hardening (WS2) — typed reconciliation-health decision for the
