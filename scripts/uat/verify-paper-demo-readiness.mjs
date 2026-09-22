@@ -307,11 +307,26 @@ try {
     const instruments = Array.isArray(runtime.instruments)
       ? runtime.instruments.map((item) => String(item).toUpperCase())
       : [];
-    const missingPairs = SIX_PAIRS.filter((pair) => !instruments.includes(pair));
-    if (missingPairs.length > 0) {
-      hold('SIX_PAIR_RUNTIME_INCOMPLETE', `missing=${missingPairs.join(',')}`);
+
+    if (MODE === 'DEMO') {
+      const missingPairs = SIX_PAIRS.filter((pair) => !instruments.includes(pair));
+      if (missingPairs.length > 0) {
+        hold('SIX_PAIR_RUNTIME_INCOMPLETE', `missing=${missingPairs.join(',')}`);
+      }
+      pass('SIX_PAIR_RUNTIME_READY', instruments.join(','));
+    } else {
+      if (!instruments.includes('EURUSD')) {
+        hold(
+          'PAPER_SIMULATION_INSTRUMENT_MISSING',
+          `deterministic paper broker must expose EURUSD; got=${instruments.join(',') || 'none'}`,
+        );
+      }
+      info(
+        'PAPER_MARKET_DATA_SCOPE',
+        'Internal paper broker is deterministic simulated market data; use real-provider DEMO for real-time six-pair performance.',
+      );
+      pass('PAPER_RUNTIME_READY', instruments.join(','));
     }
-    pass('SIX_PAIR_RUNTIME_READY', instruments.join(','));
 
     info(
       'RUNTIME_SIGNAL_STATE',
