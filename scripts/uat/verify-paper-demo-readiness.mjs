@@ -145,7 +145,10 @@ function selectConnection(connections) {
 
 function unwrapSession(payload) {
   if (!payload) return null;
-  return payload.session ?? payload;
+  if (Object.prototype.hasOwnProperty.call(payload, 'session')) {
+    return payload.session;
+  }
+  return payload;
 }
 
 async function waitForAutomationStatus(sessionId) {
@@ -202,10 +205,13 @@ try {
   if (connection.status !== 'CONNECTED') {
     hold('BROKER_NOT_CONNECTED', `connection=${connection.id} status=${connection.status}`);
   }
-  if (MODE === 'DEMO' && connection.accountType !== 'DEMO') {
+  if (
+    MODE === 'DEMO' &&
+    (connection.accountType !== 'DEMO' || connection.brokerId === 'paper-broker')
+  ) {
     hold(
       'BROKER_ENVIRONMENT_MISMATCH',
-      `DEMO UAT requires accountType=DEMO, got ${connection.accountType}`,
+      `DEMO UAT requires a real-provider DEMO connection, got broker=${connection.brokerId} accountType=${connection.accountType}`,
     );
   }
   if (MODE === 'PAPER' && connection.brokerId !== 'paper-broker') {
