@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from app.domain.models.multitimeframe_features import (
+    CROSS_TIMEFRAME_FEATURE_COLUMNS,
     MULTITIMEFRAME_DIRECT_FEATURE_COLUMNS,
     MULTITIMEFRAME_RUNTIME_PROFILE,
 )
@@ -135,7 +136,7 @@ def test_compact_research_frame_preserves_model_and_evaluation_values():
         pd.testing.assert_series_equal(compact[column], prepared[column])
 
 
-def test_mtf_v2_features_are_causal_finite_and_in_contract():
+def test_mtf_v3_features_are_causal_finite_and_in_contract():
     corpus = build_multitimeframe_feature_corpus(_m1_fixture())
     prepared = prepare_instrument_corpus(
         corpus,
@@ -143,12 +144,17 @@ def test_mtf_v2_features_are_causal_finite_and_in_contract():
         horizon_bars=5,
     )
 
-    assert MULTITIMEFRAME_RUNTIME_PROFILE == "multitimeframe_v2"
+    assert MULTITIMEFRAME_RUNTIME_PROFILE == "multitimeframe_v3"
     for suffix in MULTITIMEFRAME_DIRECT_FEATURE_COLUMNS:
         column = f"m1_{suffix}"
         assert column in corpus.columns
         assert column in MULTITIMEFRAME_FEATURE_COLUMNS
         assert np.isfinite(prepared[column].to_numpy(dtype=float)).all()
+
+    for column in CROSS_TIMEFRAME_FEATURE_COLUMNS:
+        assert column in MULTITIMEFRAME_FEATURE_COLUMNS
+        assert np.isfinite(prepared[column].to_numpy(dtype=float)).all()
+        assert prepared[column].between(-1.0, 1.0).all()
 
 
 def test_class_balance_weights_favor_minority_without_extreme_scaling():
