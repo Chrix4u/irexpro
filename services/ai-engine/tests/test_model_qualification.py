@@ -401,6 +401,35 @@ def test_two_stage_trade_requires_opportunity_and_direction_confidence():
     assert set(predictions["actionable_label_policy"]) == {ACTIONABLE_LABEL_POLICY}
 
 
+def test_two_stage_summary_uses_joint_not_direction_only_coverage():
+    source = _research_dataset(periods=3, instruments=("EURUSD",))
+    source = _ensure_actionable_target(source)
+    predictions = _two_stage_prediction_frame(
+        source,
+        direction_probabilities=np.array([0.70, 0.70, 0.55]),
+        opportunity_probabilities=np.array([0.70, 0.55, 0.90]),
+        confidence_floor=0.60,
+        fold=1,
+        experiment=TWO_STAGE_EXPERIMENT_NAME,
+        variant=ModelVariant(name="actionable_v2_direction"),
+    )
+
+    summary = qualification._summarize_predictions(
+        predictions,
+        horizon_bars=1,
+        confidence_threshold=0.60,
+    )
+
+    assert summary["diagnostics"]["confidence_coverage"]["count"] == 1
+    assert summary["diagnostics"]["confidence_coverage"]["fraction"] == pytest.approx(
+        1.0 / 3.0
+    )
+    assert (
+        summary["diagnostics"]["direction_only_confidence_coverage"]["fraction"]
+        == pytest.approx(2.0 / 3.0)
+    )
+
+
 def test_feature_experiments_never_invent_non_runtime_features():
     full = _feature_columns("all")
     volume_ablated = _feature_columns("drop_volume")
