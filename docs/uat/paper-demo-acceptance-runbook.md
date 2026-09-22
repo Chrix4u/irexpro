@@ -5,8 +5,13 @@
 This runbook defines the first controlled UAT sequence after the six-pair XGBoost
 research pipeline reaches a decision. It is intentionally limited to:
 
-1. internal PAPER execution; and
-2. real-provider DEMO execution using virtual broker funds.
+1. internal PAPER execution using iRexPro's deterministic simulator; and
+2. real-provider DEMO execution using real market/provider APIs with virtual broker funds.
+
+The distinction is important: the built-in Paper Broker is intentionally deterministic,
+uses a fixed simulated clock/price walk, and currently exposes EURUSD only. PAPER proves
+the execution/risk/reconciliation pipeline; **DEMO is the first real-time market-performance
+test of the six-pair trained model**.
 
 It does **not** authorize LIVE / real-money trading.
 
@@ -163,13 +168,8 @@ Verify the AI Trading screen reports:
 - model: Trained MTF XGBoost;
 - model loaded: true;
 - a non-baseline model version;
-- all six pairs:
-  - EURUSD
-  - GBPUSD
-  - USDJPY
-  - AUDUSD
-  - USDCAD
-  - USDCHF
+- the trained MTF model identity is visible;
+- PAPER scheduler instruments reflect the deterministic paper broker (currently EURUSD);
 - multi-timeframe runtime context;
 - scan interval is visible;
 - confidence threshold is visible;
@@ -180,12 +180,12 @@ Record screenshots or exported evidence.
 
 ### 5.2 Confidence behavior
 
-Observe several market scans.
+Observe several simulated market scans.
 
 Pass only if:
 
 - confidence is sourced from the trained model;
-- confidence can change between materially different market inputs;
+- confidence can change between materially different simulated market inputs;
 - unchanged market data does not fabricate a new confidence value;
 - `NO TRADE` below threshold is explained truthfully;
 - confidence is never presented as guaranteed profit probability.
@@ -268,8 +268,8 @@ PAPER UAT may be declared functionally passed only when:
 - automated runtime smoke passes;
 - authenticated readiness probe passes with trained-model requirement enabled;
 - model identity is trained MTF XGBoost;
-- six-pair scheduler state is correct;
-- confidence is dynamic and truthful;
+- the deterministic PAPER scheduler is healthy for the paper-broker instrument scope;
+- confidence is dynamic and truthful for the simulated inputs;
 - Start/Stop works;
 - at least one full paper trade lifecycle is evidenced, unless market/risk
   conditions legitimately produce no qualifying entry during the agreed
@@ -279,9 +279,12 @@ PAPER UAT may be declared functionally passed only when:
 - no critical security, tenant-isolation, risk, reconciliation, or execution
   defect remains open.
 
-If natural market conditions yield no entry, do not reduce the confidence/risk
-threshold simply to manufacture a trade. Use the evidence to distinguish
+If the deterministic PAPER feed yields no qualifying entry, do not reduce the
+confidence/risk threshold simply to manufacture a trade. Use the evidence to distinguish
 "model chose not to trade" from "pipeline failed to trade."
+
+Do not use PAPER P&L as evidence of real-world market performance. The Paper Broker's
+prices, clock, fills, and EURUSD-only instrument scope are deliberately simulated.
 
 ---
 
@@ -316,7 +319,9 @@ export IREXPRO_UAT_BEARER_TOKEN='<short-lived token>'
 node scripts/uat/verify-paper-demo-readiness.mjs
 ```
 
-Read-only must pass first.
+Read-only must pass first. For real-time six-pair performance UAT, the selected provider
+must expose all six configured majors (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF);
+the readiness probe fails closed if any are missing.
 
 For a controlled DEMO session:
 
@@ -338,7 +343,7 @@ Verify with actual provider APIs and virtual broker funds:
 
 - account/environment truth;
 - balance/equity;
-- market-data flow;
+- real provider market-data flow for all six configured majors;
 - trained-model runtime identity;
 - AI decisions;
 - order submission;
