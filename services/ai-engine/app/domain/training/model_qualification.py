@@ -35,6 +35,9 @@ from app.domain.training.validation import (
 )
 
 CONFIDENCE_FLOOR = 0.60
+ACTIONABLE_TARGET_COLUMN = "actionable_target"
+ACTIONABLE_LABEL_POLICY = "best_direction_net_return_after_friction_gt_zero_v1"
+TWO_STAGE_EXPERIMENT_NAME = "actionable_two_stage"
 QUALIFICATION_CHECKPOINT_VERSION = 1
 QUALIFICATION_CHECKPOINT_POLICY = "experiment_outer_fold_atomic_v1"
 DECISION_THRESHOLD_GRID = (0.45, 0.475, 0.50, 0.525, 0.55)
@@ -57,6 +60,7 @@ STRUCTURE_GLOBAL_FEATURES = (
 ExperimentCalibration = Literal["none", "platt", "isotonic"]
 SampleWeightPolicy = Literal["economic", "class_balance"]
 FeaturePolicy = Literal["all", "drop_volume", "drop_structure"]
+ExperimentMode = Literal["directional", "two_stage_actionable"]
 
 
 @dataclass(frozen=True)
@@ -76,6 +80,7 @@ class QualificationExperiment:
     name: str
     variants: tuple[ModelVariant, ...]
     tune_decision_threshold: bool = False
+    mode: ExperimentMode = "directional"
 
 
 @dataclass
@@ -124,6 +129,7 @@ def _experiment_matrix_payload(
         {
             "name": experiment.name,
             "tune_decision_threshold": experiment.tune_decision_threshold,
+            "mode": experiment.mode,
             "variants": [
                 {
                     "name": variant.name,
@@ -156,6 +162,7 @@ def _qualification_checkpoint_fingerprint(
         "confidence_floor": float(confidence_floor),
         "max_splits": int(max_splits),
         "feature_columns": list(MULTITIMEFRAME_FEATURE_COLUMNS),
+        "actionable_label_policy": ACTIONABLE_LABEL_POLICY,
         "experiments": _experiment_matrix_payload(experiments),
     }
     encoded = json.dumps(
@@ -371,6 +378,11 @@ def default_experiments() -> tuple[QualificationExperiment, ...]:
         QualificationExperiment(
             name="structure_feature_ablation",
             variants=(structure_ablation,),
+        ),
+        QualificationExperiment(
+            name=TWO_STAGE_EXPERIMENT_NAME,
+            variants=(ModelVariant(name="actionable_v2_direction"),),
+            mode="two_stage_actionable",
         ),
     )
 
