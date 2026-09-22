@@ -309,6 +309,50 @@ def test_nested_locked_baseline_reproduces_legacy_walk_forward_metrics(monkeypat
 
 
 
+def test_qualification_checkpoints_resume_without_refitting(monkeypatch, tmp_path):
+    dataset = _research_dataset(periods=500, instruments=("EURUSD",))
+    fit_calls = 0
+
+    def fake_fit(*_args, **_kwargs):
+        nonlocal fit_calls
+        fit_calls += 1
+        return (
+            _FakeModel(),
+            qualification._CalibrationModel(method="none"),
+            list(MULTITIMEFRAME_FEATURE_COLUMNS),
+        )
+
+    monkeypatch.setattr(qualification, "_fit_selected_for_outer", fake_fit)
+
+    kwargs = {
+        "horizon_bars": 5,
+        "confidence_floor": 0.60,
+        "max_splits": 2,
+        "min_train_periods": 300,
+        "validation_periods": 100,
+        "min_inner_periods": 30,
+        "experiments": default_experiments()[:1],
+        "checkpoint_dir": tmp_path / "qualification-checkpoints",
+        "checkpoint_fingerprint": "stable-fingerprint",
+    }
+
+    first = run_nested_qualification_experiments(dataset, **kwargs)
+    first_fit_calls = fit_calls
+    assert first_fit_calls > 0
+
+    second = run_nested_qualification_experiments(dataset, **kwargs)
+    assert fit_calls == first_fit_calls
+    assert (
+        second["candidate_comparison_table"]
+        == first["candidate_comparison_table"]
+    )
+
+    incompatible = dict(kwargs)
+    incompatible["checkpoint_fingerprint"] = "different-fingerprint"
+    run_nested_qualification_experiments(dataset, **incompatible)
+    assert fit_calls > first_fit_calls
+
+
 def test_feature_experiments_never_invent_non_runtime_features():
     full = _feature_columns("all")
     volume_ablated = _feature_columns("drop_volume")
