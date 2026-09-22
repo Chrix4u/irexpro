@@ -100,6 +100,10 @@ STAGE_PROLOGUE = """          set -Eeuo pipefail
             printf 'RESEARCH HOLD: AI Python virtual environment was not found.\\n' >&2
             exit 15
           }
+          "$python_bin" -c 'import pyarrow' || {
+            printf 'RESEARCH HOLD: AI Python runtime is missing locked pyarrow support.\\n' >&2
+            exit 24
+          }
 
           # WS8: every post-init stage verifies the same candidate identity
           # that the validate/init stage froze into the orchestration plan.
@@ -237,11 +241,12 @@ STUDY_CONSTANTS_REMOTE = """          readonly TARGET_ROWS=100000
 """
 
 
-def pair_job(instrument: str) -> str:
+def pair_job(instrument: str, previous_job: str | None = None) -> str:
     job_id = f"pair-{instrument.lower()}"
+    needs = "validate" if previous_job is None else f"validate, {previous_job}"
     return f"""  {job_id}:
     name: Pair stage {instrument}
-    needs: [validate]
+    needs: [{needs}]
     if: needs.validate.outputs.run == 'true'
     # Every VPS-touching stage holds the shared staging-worktree lock. A
     # pending stage is never allowed to cancel an active owner.
@@ -291,12 +296,11 @@ def pair_job(instrument: str) -> str:
 {WATCHDOG_RUN}{SSH_REMOVE}"""
 
 
-def horizon_job(horizon: str) -> str:
+def horizon_job(horizon: str, previous_job: str) -> str:
     job_id = f"horizon-{horizon}m"
-    pair_needs = ", ".join(f"pair-{p.lower()}" for p in PAIRS)
     return f"""  {job_id}:
     name: Horizon stage {horizon}m
-    needs: [{pair_needs}]
+    needs: [validate, {previous_job}]
     if: needs.validate.outputs.run == 'true'
     concurrency:
       group: irexpro-staging-worktree
@@ -556,7 +560,7 @@ VALIDATE_JOB = f"""  validate:
 
 SELECT_JOB = f"""  select-horizon:
     name: Summarize study and select research horizon
-    needs: [{", ".join(f"horizon-{h}m" for h in HORIZONS)}]
+    needs: [validate, horizon-{HORIZONS[-1]}m]
     if: needs.validate.outputs.run == 'true'
     concurrency:
       group: irexpro-staging-worktree
@@ -1226,12 +1230,17 @@ jobs:
 """
 
     parts = [header, VALIDATE_JOB, "\n"]
+    previous_job: str | None = None
     for pair in PAIRS:
-        parts.append(pair_job(pair))
+        parts.append(pair_job(pair, previous_job))
         parts.append("\n")
+        previous_job = f"pair-{pair.lower()}"
+    if previous_job is None:
+        raise ValueError("At least one pair stage is required")
     for horizon in HORIZONS:
-        parts.append(horizon_job(horizon))
+        parts.append(horizon_job(horizon, previous_job))
         parts.append("\n")
+        previous_job = f"horizon-{horizon}m"
     parts.append(SELECT_JOB)
     parts.append("\n")
     parts.append(FINAL_JOB)
