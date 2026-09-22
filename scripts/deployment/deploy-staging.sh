@@ -81,6 +81,41 @@ configure_xgboost_runtime_env() {
   export XGBOOST_MODEL_METADATA_PATH="$metadata_path"
 }
 
+resolve_ai_python() {
+  local ai_root="$STAGING_ROOT/services/ai-engine"
+  local candidate
+  for candidate in \
+    "$ai_root/.venv/bin/python" \
+    "$ai_root/venv/bin/python"; do
+    if [[ -x "$candidate" ]]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+sync_ai_python_dependencies() {
+  local ai_root="$STAGING_ROOT/services/ai-engine"
+  local requirements_lock="$ai_root/requirements.lock"
+  local python_bin
+
+  python_bin="$(resolve_ai_python)" ||
+    die "AI engine Python virtual environment was not found."
+  [[ -f "$requirements_lock" ]] ||
+    die "AI engine locked Python requirements are missing."
+
+  "$python_bin" -m pip install \
+    --disable-pip-version-check \
+    --require-hashes \
+    -r "$requirements_lock"
+
+  # Research Resilience V2 materializes verified daily Parquet chunks. Fail
+  # deployment before any process restart if the deployed runtime cannot load
+  # the required Parquet engine from the locked environment.
+  "$python_bin" -c 'import pyarrow'
+}
+
 validate_internal_api_key_alignment() {
   local api_env="$STAGING_ROOT/apps/api/.env"
   local ai_env="$STAGING_ROOT/services/ai-engine/.env"
@@ -318,6 +353,9 @@ package_manager="$(node -p "require('./package.json').packageManager || ''")"
 
 STAGE="dependency-install"
 corepack pnpm@"$PNPM_VERSION" install --frozen-lockfile
+
+STAGE="ai-python-dependency-install"
+sync_ai_python_dependencies
 
 STAGE="build-api"
 corepack pnpm@"$PNPM_VERSION" --filter @irexpro/api build
