@@ -519,6 +519,43 @@ def _refit_windows(
     )
 
 
+def _ensure_actionable_target(frame: pd.DataFrame) -> pd.DataFrame:
+    """Attach the research-only opportunity label without removing any rows."""
+    result = frame.copy()
+    long_net = pd.to_numeric(result[LONG_NET_RETURN_COLUMN], errors="coerce")
+    short_net = pd.to_numeric(result[SHORT_NET_RETURN_COLUMN], errors="coerce")
+    if not np.isfinite(long_net.to_numpy(dtype=float)).all():
+        raise ValueError("actionable labels require finite long net returns")
+    if not np.isfinite(short_net.to_numpy(dtype=float)).all():
+        raise ValueError("actionable labels require finite short net returns")
+    best_net = np.maximum(
+        long_net.to_numpy(dtype=float),
+        short_net.to_numpy(dtype=float),
+    )
+    result[ACTIONABLE_TARGET_COLUMN] = (best_net > 0.0).astype(int)
+    return result
+
+
+def _binary_class_balance_weights(
+    frame: pd.DataFrame,
+    *,
+    target_column: str,
+) -> np.ndarray:
+    target = pd.to_numeric(frame[target_column], errors="coerce").to_numpy(dtype=float)
+    if not np.isfinite(target).all():
+        raise ValueError(f"{target_column} class-balance weights require finite targets")
+    if not np.isin(target, [0.0, 1.0]).all():
+        raise ValueError(f"{target_column} must be binary")
+    labels = target.astype(int)
+    counts = np.bincount(labels, minlength=2).astype(float)
+    if (counts <= 0.0).any():
+        raise ValueError(f"{target_column} requires both classes")
+    total = float(len(labels))
+    per_class = np.sqrt(total / (2.0 * counts))
+    weights = np.clip(per_class[labels], 0.5, 2.0)
+    return (weights / float(weights.mean())).astype(float)
+
+
 def _sample_weights(frame: pd.DataFrame, policy: SampleWeightPolicy) -> np.ndarray:
     if policy == "economic":
         return _economic_sample_weights(frame)
@@ -535,6 +572,49 @@ def _model_for_variant(variant: ModelVariant) -> XGBClassifier:
     return XGBClassifier(**params)
 
 
+def _fit_binary_variant(
+    variant: ModelVariant,
+    *,
+    fit: pd.DataFrame,
+    early_stop: pd.DataFrame,
+    feature_columns: list[str],
+    target_column: str,
+    sample_weight_policy: SampleWeightPolicy,
+) -> XGBClassifier:
+    if fit[target_column].nunique() < 2:
+        raise ValueError(f"fit data contains one {target_column} class")
+    if early_stop[target_column].nunique() < 2:
+        raise ValueError(f"early-stop data contains one {target_column} class")
+
+    model = _model_for_variant(variant)
+    if target_column == TARGET_COLUMN:
+        fit_weights = _sample_weights(fit, sample_weight_policy)
+        early_weights = _class_balance_sample_weights(early_stop)
+    else:
+        fit_weights = _binary_class_balance_weights(
+            fit,
+            target_column=target_column,
+        )
+        early_weights = _binary_class_balance_weights(
+            early_stop,
+            target_column=target_column,
+        )
+    model.fit(
+        fit[feature_columns],
+        fit[target_column].astype(int),
+        sample_weight=fit_weights,
+        eval_set=[
+            (
+                early_stop[feature_columns],
+                early_stop[target_column].astype(int),
+            )
+        ],
+        sample_weight_eval_set=[early_weights],
+        verbose=False,
+    )
+    return model
+
+
 def _fit_variant(
     variant: ModelVariant,
     *,
@@ -542,21 +622,14 @@ def _fit_variant(
     early_stop: pd.DataFrame,
     feature_columns: list[str],
 ) -> XGBClassifier:
-    model = _model_for_variant(variant)
-    model.fit(
-        fit[feature_columns],
-        fit[TARGET_COLUMN].astype(int),
-        sample_weight=_sample_weights(fit, variant.sample_weight_policy),
-        eval_set=[
-            (
-                early_stop[feature_columns],
-                early_stop[TARGET_COLUMN].astype(int),
-            )
-        ],
-        sample_weight_eval_set=[_class_balance_sample_weights(early_stop)],
-        verbose=False,
+    return _fit_binary_variant(
+        variant,
+        fit=fit,
+        early_stop=early_stop,
+        feature_columns=feature_columns,
+        target_column=TARGET_COLUMN,
+        sample_weight_policy=variant.sample_weight_policy,
     )
-    return model
 
 
 def _probabilities(
@@ -862,6 +935,53 @@ def _select_variant_inside_outer_training(
         item for item in experiment.variants if item.name == selected["variant"]
     )
     return variant, float(selected["decision_threshold"]), candidate_reports
+
+
+def _fit_two_stage_for_outer(
+    training_window: pd.DataFrame,
+    *,
+    variant: ModelVariant,
+    horizon_bars: int,
+) -> tuple[XGBClassifier, XGBClassifier, list[str], dict[str, int]]:
+    """Fit opportunity on all rows and direction only on actionable training rows."""
+    feature_columns = _feature_columns(variant.feature_policy)
+    fit, early = _split_internal_early_stopping_tail(
+        training_window,
+        horizon_bars=horizon_bars,
+    )
+    opportunity_variant = ModelVariant(
+        name="actionable_v2_opportunity",
+        parameter_overrides=variant.parameter_overrides,
+        sample_weight_policy="class_balance",
+        calibration="none",
+        feature_policy=variant.feature_policy,
+    )
+    opportunity_model = _fit_binary_variant(
+        opportunity_variant,
+        fit=fit,
+        early_stop=early,
+        feature_columns=feature_columns,
+        target_column=ACTIONABLE_TARGET_COLUMN,
+        sample_weight_policy="class_balance",
+    )
+
+    directional_fit = fit.loc[fit[ACTIONABLE_TARGET_COLUMN] == 1].copy()
+    directional_early = early.loc[early[ACTIONABLE_TARGET_COLUMN] == 1].copy()
+    direction_model = _fit_binary_variant(
+        variant,
+        fit=directional_fit,
+        early_stop=directional_early,
+        feature_columns=feature_columns,
+        target_column=TARGET_COLUMN,
+        sample_weight_policy=variant.sample_weight_policy,
+    )
+    counts = {
+        "fit_rows": int(len(fit)),
+        "early_stop_rows": int(len(early)),
+        "actionable_fit_rows": int(len(directional_fit)),
+        "actionable_early_stop_rows": int(len(directional_early)),
+    }
+    return direction_model, opportunity_model, feature_columns, counts
 
 
 def _fit_selected_for_outer(
