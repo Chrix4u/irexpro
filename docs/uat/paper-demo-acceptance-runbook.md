@@ -75,6 +75,19 @@ handoff:
 The smoke workflow is necessary but not sufficient: it does not impersonate a
 real user and it does not place a trade.
 
+### Current #55 cycle
+
+PR #144 must remain unmerged while research run #55 protects exact-main candidate
+`7bca997bd90452d3e80581130d9a43d5f8da318b`. Therefore this current run cannot
+auto-trigger the new workflow. After the research decision and approved merge/reconciliation,
+manually dispatch **UAT Runtime Smoke** with:
+
+`research_run_id = 35656766587`
+
+That binds the smoke evidence to the exact research logs and fails the readiness job if
+the run contains `MODEL_PROMOTION_HOLD` instead of `MODEL_PROMOTED_PAPER_UAT`.
+Future research runs will trigger automatically once the workflow is on `main`.
+
 ---
 
 ## 4. Authenticated UAT readiness probe
