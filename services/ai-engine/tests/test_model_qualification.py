@@ -506,3 +506,23 @@ def test_fixed_single_calibration_strategy_skips_redundant_inner_model_selection
     assert selection["policy"] == "fixed_candidate_inner_calibration_only"
     assert selection["selected_variant"] == "platt_only"
     assert selection["decision_threshold"] == pytest.approx(0.50)
+
+    comparison = report["candidate_comparison_table"]
+    assert [row["experiment"] for row in comparison] == ["baseline", "platt_only"]
+    required_metrics = {
+        "balanced_accuracy",
+        "sharpe_ratio",
+        "profit_factor",
+        "max_drawdown",
+        "positive_fold_fraction",
+        "positive_instrument_fraction",
+        "trade_or_period_count",
+        "confidence_coverage",
+        "brier_score",
+        "calibration_methods",
+        "model_variants",
+        "research_gate_passed",
+    }
+    assert required_metrics.issubset(comparison[0])
+    assert comparison[0]["calibration_methods"] == ["none"]
+    assert comparison[1]["calibration_methods"] == ["platt"]
