@@ -124,6 +124,34 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     rolling_range = range_pct.rolling(20, min_periods=3).mean()
     result["range_expansion_20"] = range_pct / (rolling_range + eps) - 1.0
 
+    # Causal market-structure features for the MTF v3 research contract.
+    # The breakout reference explicitly excludes the current candle via shift(1),
+    # so the current close is compared only with a range that was already known.
+    prior_high_20 = result["high"].shift(1).rolling(20, min_periods=5).max()
+    prior_low_20 = result["low"].shift(1).rolling(20, min_periods=5).min()
+    breakout_strength = pd.Series(0.0, index=result.index, dtype=float)
+    breakout_up = result["close"] > prior_high_20
+    breakout_down = result["close"] < prior_low_20
+    breakout_strength.loc[breakout_up] = (
+        (result.loc[breakout_up, "close"] - prior_high_20.loc[breakout_up])
+        / (atr_14.loc[breakout_up] + eps)
+    )
+    breakout_strength.loc[breakout_down] = (
+        (result.loc[breakout_down, "close"] - prior_low_20.loc[breakout_down])
+        / (atr_14.loc[breakout_down] + eps)
+    )
+    result["breakout_strength_20"] = breakout_strength.clip(lower=-10.0, upper=10.0)
+
+    short_range = range_pct.rolling(5, min_periods=3).mean()
+    long_range = range_pct.rolling(20, min_periods=5).mean()
+    result["range_compression_5_20"] = (
+        short_range / (long_range + eps) - 1.0
+    ).clip(lower=-10.0, upper=10.0)
+
+    result["momentum_acceleration_3_10"] = (
+        result["momentum_3"] / 3.0 - result["momentum_10"] / 10.0
+    ).clip(lower=-1.0, upper=1.0)
+
     # Fill remaining NaNs with neutral values. The legacy single-timeframe
     # contract stays unchanged while MTF v2 consumes the extra columns below.
     feature_cols = [
@@ -131,7 +159,8 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
         "price_vs_ma20", "volatility_10", "candle_body", "hl_range", "volume_change",
         "momentum_3", "momentum_5", "momentum_10", "volatility_20",
         "signed_candle_body", "atr_pct_14", "rsi_14", "close_position_20",
-        "volume_zscore_20", "range_expansion_20",
+        "volume_zscore_20", "range_expansion_20", "breakout_strength_20",
+        "range_compression_5_20", "momentum_acceleration_3_10",
     ]
     result[feature_cols] = result[feature_cols].fillna(0.0)
 
