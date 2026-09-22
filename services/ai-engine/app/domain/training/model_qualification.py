@@ -1610,63 +1610,111 @@ def run_nested_qualification_experiments(
                     folds_by_experiment[experiment.name].append(resumed_report)
                     continue
 
-            if experiment.name == "baseline":
-                variant = experiment.variants[0]
-                decision_threshold = 0.50
-                selection = {
-                    "policy": "locked_baseline_no_outer_or_inner_tuning",
-                    "selected_variant": variant.name,
-                    "decision_threshold": decision_threshold,
-                    "candidate_reports": [],
-                }
-            elif len(experiment.variants) == 1 and not experiment.tune_decision_threshold:
-                # A predeclared single calibration strategy has nothing to select.
-                # Fitting an extra inner model would add cost without adding
-                # scientific information. Calibration is still fitted only on
-                # the refit's inner calibration window before outer evaluation.
-                variant = experiment.variants[0]
-                decision_threshold = 0.50
-                selection = {
-                    "policy": "fixed_candidate_inner_calibration_only",
-                    "selected_variant": variant.name,
-                    "decision_threshold": decision_threshold,
-                    "candidate_reports": [],
-                }
-            else:
-                variant, decision_threshold, candidate_reports = (
-                    _select_variant_inside_outer_training(
-                        outer_train,
-                        experiment=experiment,
-                        horizon_bars=horizon_bars,
-                        confidence_floor=confidence_floor,
-                        min_inner_periods=min_inner_periods,
+            opportunity_model: XGBClassifier | None = None
+            if experiment.mode == "two_stage_actionable":
+                if len(experiment.variants) != 1 or experiment.tune_decision_threshold:
+                    raise ValueError(
+                        "two-stage actionable research must remain a fixed bounded candidate"
                     )
+                variant = experiment.variants[0]
+                decision_threshold = 0.50
+                (
+                    model,
+                    opportunity_model,
+                    feature_columns,
+                    training_counts,
+                ) = _fit_two_stage_for_outer(
+                    outer_train,
+                    variant=variant,
+                    horizon_bars=horizon_bars,
+                )
+                direction_probabilities = _probabilities(
+                    model,
+                    outer_validation,
+                    feature_columns,
+                )
+                opportunity_probabilities = _probabilities(
+                    opportunity_model,
+                    outer_validation,
+                    feature_columns,
+                )
+                predictions = _two_stage_prediction_frame(
+                    outer_validation,
+                    direction_probabilities=direction_probabilities,
+                    opportunity_probabilities=opportunity_probabilities,
+                    confidence_floor=confidence_floor,
+                    fold=fold_index,
+                    experiment=experiment.name,
+                    variant=variant,
                 )
                 selection = {
-                    "policy": "nested_inner_selection_only",
+                    "policy": "fixed_two_stage_actionable_v2_no_outer_tuning",
                     "selected_variant": variant.name,
                     "decision_threshold": decision_threshold,
-                    "candidate_reports": candidate_reports,
+                    "opportunity_threshold": confidence_floor,
+                    "actionable_label_policy": ACTIONABLE_LABEL_POLICY,
+                    "candidate_reports": [],
+                    "training_counts": training_counts,
                 }
+            else:
+                if experiment.name == "baseline":
+                    variant = experiment.variants[0]
+                    decision_threshold = 0.50
+                    selection = {
+                        "policy": "locked_baseline_no_outer_or_inner_tuning",
+                        "selected_variant": variant.name,
+                        "decision_threshold": decision_threshold,
+                        "candidate_reports": [],
+                    }
+                elif len(experiment.variants) == 1 and not experiment.tune_decision_threshold:
+                    # A predeclared single calibration strategy has nothing to select.
+                    # Fitting an extra inner model would add cost without adding
+                    # scientific information. Calibration is still fitted only on
+                    # the refit's inner calibration window before outer evaluation.
+                    variant = experiment.variants[0]
+                    decision_threshold = 0.50
+                    selection = {
+                        "policy": "fixed_candidate_inner_calibration_only",
+                        "selected_variant": variant.name,
+                        "decision_threshold": decision_threshold,
+                        "candidate_reports": [],
+                    }
+                else:
+                    variant, decision_threshold, candidate_reports = (
+                        _select_variant_inside_outer_training(
+                            outer_train,
+                            experiment=experiment,
+                            horizon_bars=horizon_bars,
+                            confidence_floor=confidence_floor,
+                            min_inner_periods=min_inner_periods,
+                        )
+                    )
+                    selection = {
+                        "policy": "nested_inner_selection_only",
+                        "selected_variant": variant.name,
+                        "decision_threshold": decision_threshold,
+                        "candidate_reports": candidate_reports,
+                    }
 
-            model, calibrator, feature_columns = _fit_selected_for_outer(
-                outer_train,
-                variant=variant,
-                horizon_bars=horizon_bars,
-                min_inner_periods=min_inner_periods,
-            )
-            raw = _probabilities(model, outer_validation, feature_columns)
-            calibrated = _apply_calibrator(calibrator, raw)
-            predictions = _prediction_frame(
-                outer_validation,
-                raw_probabilities=raw,
-                calibrated_probabilities=calibrated,
-                decision_threshold=decision_threshold,
-                confidence_floor=confidence_floor,
-                fold=fold_index,
-                experiment=experiment.name,
-                variant=variant,
-            )
+                model, calibrator, feature_columns = _fit_selected_for_outer(
+                    outer_train,
+                    variant=variant,
+                    horizon_bars=horizon_bars,
+                    min_inner_periods=min_inner_periods,
+                )
+                raw = _probabilities(model, outer_validation, feature_columns)
+                calibrated = _apply_calibrator(calibrator, raw)
+                predictions = _prediction_frame(
+                    outer_validation,
+                    raw_probabilities=raw,
+                    calibrated_probabilities=calibrated,
+                    decision_threshold=decision_threshold,
+                    confidence_floor=confidence_floor,
+                    fold=fold_index,
+                    experiment=experiment.name,
+                    variant=variant,
+                )
+
             report = _fold_report(
                 predictions,
                 horizon_bars=horizon_bars,
@@ -1675,6 +1723,7 @@ def run_nested_qualification_experiments(
                 model=model,
                 feature_columns=feature_columns,
                 selection=selection,
+                opportunity_model=opportunity_model,
             )
             report.update(
                 {
@@ -1697,6 +1746,8 @@ def run_nested_qualification_experiments(
                     predictions=predictions,
                     fold_report=report,
                 )
+            if opportunity_model is not None:
+                del opportunity_model
             del model
             gc.collect()
         del outer_train, outer_validation
