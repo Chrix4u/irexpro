@@ -17,6 +17,7 @@ from app.domain.training.train_multitimeframe import (
     ECONOMIC_SAMPLE_WEIGHT_POLICY,
     MULTITIMEFRAME_FEATURE_COLUMNS,
     _class_balance_sample_weights,
+    _compact_research_frame,
     _economic_sample_weights,
     _load_fold_checkpoint,
     _non_overlapping_portfolio_periods,
@@ -94,6 +95,44 @@ def test_prepare_instrument_corpus_uses_real_spread_and_tick_volume():
     assert (
         prepared["long_net_return"] + prepared["short_net_return"]
     ).median() < 0
+
+
+def test_compact_research_frame_preserves_model_and_evaluation_values():
+    corpus = build_multitimeframe_feature_corpus(_m1_fixture())
+    prepared = prepare_instrument_corpus(
+        corpus,
+        instrument="EURUSD",
+        horizon_bars=5,
+    )
+    prepared = prepared.copy()
+    prepared["unused_audit_column"] = "drop-me"
+
+    compact = _compact_research_frame(prepared)
+
+    assert "unused_audit_column" not in compact.columns
+    required = {
+        "decision_time",
+        "instrument",
+        "target",
+        "long_net_return",
+        "short_net_return",
+        "m1_spread_bps",
+        *MULTITIMEFRAME_FEATURE_COLUMNS,
+    }
+    assert set(compact.columns) == required
+    pd.testing.assert_frame_equal(
+        compact[list(MULTITIMEFRAME_FEATURE_COLUMNS)],
+        prepared[list(MULTITIMEFRAME_FEATURE_COLUMNS)],
+    )
+    for column in (
+        "decision_time",
+        "instrument",
+        "target",
+        "long_net_return",
+        "short_net_return",
+        "m1_spread_bps",
+    ):
+        pd.testing.assert_series_equal(compact[column], prepared[column])
 
 
 def test_mtf_v2_features_are_causal_finite_and_in_contract():
