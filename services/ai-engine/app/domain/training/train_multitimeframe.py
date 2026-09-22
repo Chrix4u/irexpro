@@ -723,20 +723,13 @@ def _summarize_predictions(
     predictions: pd.DataFrame,
     *,
     horizon_bars: int,
+    confidence_threshold: float = 0.60,
 ) -> dict[str, Any]:
     classification = compute_classification_metrics(
         predictions[TARGET_COLUMN].to_numpy(dtype=int),
         predictions["positive_probability"].to_numpy(dtype=float),
     )
     trading = _trade_metrics(predictions, horizon_bars=horizon_bars)
-    confidence_threshold = 0.60
-    if "active_trade" in predictions.columns and "confidence" in predictions.columns:
-        active_confidence = predictions.loc[predictions["active_trade"], "confidence"]
-        if not active_confidence.empty:
-            confidence_threshold = max(
-                0.60,
-                float(active_confidence.min()),
-            )
     diagnostics = diagnose_directional_predictions(
         predictions,
         confidence_threshold=confidence_threshold,
@@ -936,7 +929,11 @@ def _run_pooled_walk_forward_core(
         predictions["fold"] = fold_index
 
         by_instrument = {
-            instrument: _summarize_predictions(group, horizon_bars=horizon_bars)
+            instrument: _summarize_predictions(
+                group,
+                horizon_bars=horizon_bars,
+                confidence_threshold=confidence_threshold,
+            )
             for instrument, group in predictions.groupby("instrument", sort=True)
         }
         fold_report = {
@@ -946,7 +943,11 @@ def _run_pooled_walk_forward_core(
                 model,
                 MULTITIMEFRAME_FEATURE_COLUMNS,
             ),
-            "aggregate": _summarize_predictions(predictions, horizon_bars=horizon_bars),
+            "aggregate": _summarize_predictions(
+                predictions,
+                horizon_bars=horizon_bars,
+                confidence_threshold=confidence_threshold,
+            ),
             "by_instrument": by_instrument,
         }
         fold_reports.append(fold_report)
@@ -979,12 +980,20 @@ def _run_pooled_walk_forward_core(
 
     all_predictions = pd.concat(prediction_frames, ignore_index=True)
     overall_by_instrument = {
-        instrument: _summarize_predictions(group, horizon_bars=horizon_bars)
+        instrument: _summarize_predictions(
+                group,
+                horizon_bars=horizon_bars,
+                confidence_threshold=confidence_threshold,
+            )
         for instrument, group in all_predictions.groupby("instrument", sort=True)
     }
     report = {
         "folds": fold_reports,
-        "overall": _summarize_predictions(all_predictions, horizon_bars=horizon_bars),
+        "overall": _summarize_predictions(
+            all_predictions,
+            horizon_bars=horizon_bars,
+            confidence_threshold=confidence_threshold,
+        ),
         "by_instrument": overall_by_instrument,
         "fold_count": len(fold_reports),
         "evaluated_rows": int(len(all_predictions)),
