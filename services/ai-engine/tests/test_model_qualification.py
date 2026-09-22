@@ -231,12 +231,10 @@ def test_outer_validation_is_never_passed_to_inner_selection_or_refit(monkeypatc
         pd.Timestamp(fold["validation_start"])
         for fold in report["experiments"]["baseline"]["folds"]
     ]
-    assert training_windows
-    assert all(
-        train_end < min(validation_starts)
-        or any(train_end < start for start in validation_starts)
-        for _, train_end in training_windows
-    )
+    assert len(training_windows) == len(validation_starts) * 3
+    for fold_index, validation_start in enumerate(validation_starts):
+        fold_training_windows = training_windows[fold_index * 3 : (fold_index + 1) * 3]
+        assert all(train_end < validation_start for _, train_end in fold_training_windows)
     for experiment in report["experiments"].values():
         for fold in experiment["folds"]:
             assert pd.Timestamp(fold["train_end"]) < pd.Timestamp(
