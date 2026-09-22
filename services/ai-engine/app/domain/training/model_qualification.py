@@ -42,9 +42,18 @@ VOLUME_FEATURE_SUFFIXES = (
     "log_tick_volume",
     "volume_zscore_20",
 )
+STRUCTURE_FEATURE_SUFFIXES = (
+    "breakout_strength_20",
+    "range_compression_5_20",
+    "momentum_acceleration_3_10",
+)
+STRUCTURE_GLOBAL_FEATURES = (
+    "trend_alignment_score",
+    "momentum_alignment_score",
+)
 ExperimentCalibration = Literal["none", "platt", "isotonic"]
 SampleWeightPolicy = Literal["economic", "class_balance"]
-FeaturePolicy = Literal["all", "drop_volume"]
+FeaturePolicy = Literal["all", "drop_volume", "drop_structure"]
 
 
 @dataclass(frozen=True)
@@ -131,6 +140,10 @@ def default_experiments() -> tuple[QualificationExperiment, ...]:
         calibration="platt",
         feature_policy="drop_volume",
     )
+    structure_ablation = ModelVariant(
+        name="drop_v3_structure_features",
+        feature_policy="drop_structure",
+    )
     return (
         QualificationExperiment(name="baseline", variants=(baseline,)),
         QualificationExperiment(name="platt_calibration", variants=(platt,)),
@@ -150,19 +163,33 @@ def default_experiments() -> tuple[QualificationExperiment, ...]:
             variants=(volume_ablation,),
             tune_decision_threshold=True,
         ),
+        QualificationExperiment(
+            name="structure_feature_ablation",
+            variants=(structure_ablation,),
+        ),
     )
 
 
 def _feature_columns(policy: FeaturePolicy) -> list[str]:
     if policy == "all":
         return list(MULTITIMEFRAME_FEATURE_COLUMNS)
-    if policy != "drop_volume":
+    if policy == "drop_volume":
+        columns = [
+            column
+            for column in MULTITIMEFRAME_FEATURE_COLUMNS
+            if not any(column.endswith(suffix) for suffix in VOLUME_FEATURE_SUFFIXES)
+        ]
+    elif policy == "drop_structure":
+        columns = [
+            column
+            for column in MULTITIMEFRAME_FEATURE_COLUMNS
+            if column not in STRUCTURE_GLOBAL_FEATURES
+            and not any(
+                column.endswith(suffix) for suffix in STRUCTURE_FEATURE_SUFFIXES
+            )
+        ]
+    else:
         raise ValueError(f"Unsupported feature policy: {policy}")
-    columns = [
-        column
-        for column in MULTITIMEFRAME_FEATURE_COLUMNS
-        if not any(column.endswith(suffix) for suffix in VOLUME_FEATURE_SUFFIXES)
-    ]
     if not columns:
         raise ValueError("Feature ablation removed every model feature")
     return columns
