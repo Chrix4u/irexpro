@@ -101,7 +101,7 @@ def test_nested_windows_are_chronological_disjoint_and_purged():
         windows.calibration,
         windows.selection,
     ]
-    for earlier, later in zip(ordered, ordered[1:], strict=True):
+    for earlier, later in zip(ordered, ordered[1:]):
         assert earlier["decision_time"].max() < later["decision_time"].min()
         gap = (
             later["decision_time"].min() - earlier["decision_time"].max()
