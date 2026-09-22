@@ -292,6 +292,12 @@ prices, clock, fills, and EURUSD-only instrument scope are deliberately simulate
 
 Before DEMO UAT, prepare at least one supported provider practice account.
 
+For the first real-time UAT cycle, prefer **MetaTrader 5 via MetaApi** because it is
+the most mature provider adapter in the current repository and supports provider-backed
+historical candles across M1/M5/M15/H1/H4. The exact connected account must still prove
+that EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD and USDCHF are present with valid broker
+symbol specifications; do not assume every broker account exposes identical symbol names.
+
 Preferred evidence should include:
 
 - provider/broker;
