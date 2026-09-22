@@ -188,11 +188,20 @@ grep -Fq 'id: relevance' "$RESEARCH_WORKFLOW" ||
 grep -Fq "if: steps.relevance.outputs.run == 'true'" "$RESEARCH_WORKFLOW" ||
   fail 'The expensive research stages must be guarded by the relevance decision.'
 
-# 6. Candidate integrity: every stage verifies the orchestration plan that the
-#    validate stage froze for the exact candidate SHA.
-plan_holds="$(grep -F -c 'orchestration plan' "$RESEARCH_WORKFLOW" || true)"
+# 6. Candidate integrity: the init stage is allowed to create the plan, while
+#    every post-init stage must verify the exact candidate-bound plan before work.
+init_stage_bypass_count="$(grep -F -c 'export IREXPRO_INIT_STAGE=1' "$RESEARCH_WORKFLOW" || true)"
+[[ "$init_stage_bypass_count" -eq 1 ]] ||
+  fail 'Exactly one research init stage must be allowed to create the orchestration plan.'
+# shellcheck disable=SC2016
+grep -Fq 'if [[ "${IREXPRO_INIT_STAGE:-0}" != "1" ]]; then' "$RESEARCH_WORKFLOW" ||
+  fail 'The shared staged prologue must exempt only the init stage from the pre-existing-plan check.'
+plan_holds="$(grep -F -c 'staged execution requires the orchestration plan' "$RESEARCH_WORKFLOW" || true)"
 [[ "$plan_holds" -ge 6 ]] ||
-  fail 'Every stage must fail closed when the orchestration plan is missing or bound to another candidate.'
+  fail 'Every post-init stage must fail closed when the orchestration plan is missing.'
+plan_mismatches="$(grep -F -c 'orchestration plan candidate mismatch' "$RESEARCH_WORKFLOW" || true)"
+[[ "$plan_mismatches" -ge 6 ]] ||
+  fail 'Every post-init stage must reject an orchestration plan bound to another candidate.'
 
 # 7. Expensive research is lineage-aware: irrelevant deploys skip retraining,
 #    while operators retain an explicit manual rerun path.

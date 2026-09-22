@@ -101,39 +101,43 @@ STAGE_PROLOGUE = """          set -Eeuo pipefail
             exit 15
           }
 
-          # WS8: every stage verifies the same candidate identity that the
-          # validate stage froze into the orchestration plan before doing
-          # any work. The runner additionally re-verifies the study
-          # fingerprint against the persisted study state.
+          # WS8: every post-init stage verifies the same candidate identity
+          # that the validate/init stage froze into the orchestration plan.
+          # The init stage is the sole exception because its purpose is to
+          # create that plan. The runner still verifies the persisted study
+          # fingerprint before any later stage consumes state.
           readonly PLAN_PATH="$OUTPUT_ROOT/checkpoints/orchestration-plan.json"
-          test -s "$PLAN_PATH" || {
-            printf 'RESEARCH HOLD: staged execution requires the orchestration plan.\\n' >&2
-            exit 21
-          }
-          plan_candidate="$(PLAN_PATH="$PLAN_PATH" node -e '
-            const fs = require("fs");
-            const plan = JSON.parse(fs.readFileSync(process.env.PLAN_PATH, "utf8"));
-            if (plan.plan_version !== 1) process.exit(1);
-            process.stdout.write(String(plan.candidate_sha || ""));
-          ')" || {
-            printf 'RESEARCH HOLD: orchestration plan is unreadable.\\n' >&2
-            exit 22
-          }
-          test "$plan_candidate" = "$candidate_sha" || {
-            printf 'RESEARCH HOLD: orchestration plan candidate mismatch plan=%s candidate=%s\\n' \\
-              "$plan_candidate" "$candidate_sha" >&2
-            exit 23
-          }
-
-          bootstrap_root="$(PLAN_PATH="$PLAN_PATH" node -e '
-            const fs = require("fs");
-            const plan = JSON.parse(fs.readFileSync(process.env.PLAN_PATH, "utf8"));
-            const bootstrap = plan.bootstrap_dir;
-            process.stdout.write(bootstrap && bootstrap !== "None" ? String(bootstrap) : "");
-          ')"
+          bootstrap_root=''
           bootstrap_args=()
-          if [[ -n "$bootstrap_root" ]]; then
-            bootstrap_args=(--bootstrap-dir "$bootstrap_root")
+          if [[ "${IREXPRO_INIT_STAGE:-0}" != "1" ]]; then
+            test -s "$PLAN_PATH" || {
+              printf 'RESEARCH HOLD: staged execution requires the orchestration plan.\\n' >&2
+              exit 21
+            }
+            plan_candidate="$(PLAN_PATH="$PLAN_PATH" node -e '
+              const fs = require("fs");
+              const plan = JSON.parse(fs.readFileSync(process.env.PLAN_PATH, "utf8"));
+              if (plan.plan_version !== 1) process.exit(1);
+              process.stdout.write(String(plan.candidate_sha || ""));
+            ')" || {
+              printf 'RESEARCH HOLD: orchestration plan is unreadable.\\n' >&2
+              exit 22
+            }
+            test "$plan_candidate" = "$candidate_sha" || {
+              printf 'RESEARCH HOLD: orchestration plan candidate mismatch plan=%s candidate=%s\\n' \\
+                "$plan_candidate" "$candidate_sha" >&2
+              exit 23
+            }
+
+            bootstrap_root="$(PLAN_PATH="$PLAN_PATH" node -e '
+              const fs = require("fs");
+              const plan = JSON.parse(fs.readFileSync(process.env.PLAN_PATH, "utf8"));
+              const bootstrap = plan.bootstrap_dir;
+              process.stdout.write(bootstrap && bootstrap !== "None" ? String(bootstrap) : "");
+            ')"
+            if [[ -n "$bootstrap_root" ]]; then
+              bootstrap_args=(--bootstrap-dir "$bootstrap_root")
+            fi
           fi
 
           cd "$STAGING_ROOT/services/ai-engine"
@@ -477,6 +481,7 @@ VALIDATE_JOB = f"""  validate:
             -o StrictHostKeyChecking=yes \\
             "$STAGING_SSH_USER@$STAGING_SSH_HOST" \\
             "bash -s -- $CANDIDATE_SHA" <<'REMOTE'
+          export IREXPRO_INIT_STAGE=1
 {STAGE_PROLOGUE}
 {STUDY_CONSTANTS_REMOTE}
           ai_health="$(curl --fail --silent --show-error --max-time 10 http://127.0.0.1:8011/api/v1/health)"
