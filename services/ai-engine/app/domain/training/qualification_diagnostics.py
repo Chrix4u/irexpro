@@ -74,10 +74,13 @@ def diagnose_directional_predictions(
     predictions: pd.DataFrame,
     *,
     confidence_threshold: float = 0.60,
+    decision_threshold: float = 0.50,
 ) -> dict[str, Any]:
     """Return classification/calibration diagnostics without changing decisions."""
     if not 0.60 <= confidence_threshold < 1.0:
         raise ValueError("qualification confidence threshold must remain >= 0.60 and < 1.0")
+    if not 0.40 <= decision_threshold <= 0.60:
+        raise ValueError("diagnostic decision threshold must remain in [0.40, 0.60]")
     required = {"target", "positive_probability"}
     missing = sorted(required.difference(predictions.columns))
     if missing:
@@ -96,7 +99,7 @@ def diagnose_directional_predictions(
 
     y = y_true.astype(int)
     probabilities = np.clip(probabilities, 1e-7, 1.0 - 1e-7)
-    predicted = (probabilities >= 0.5).astype(int)
+    predicted = (probabilities >= decision_threshold).astype(int)
     confidence = np.maximum(probabilities, 1.0 - probabilities)
     active = confidence >= confidence_threshold
 
@@ -105,7 +108,11 @@ def diagnose_directional_predictions(
     specificity = float(tn / (tn + fp)) if (tn + fp) else 0.0
     true_long_fraction = float(y.mean())
     predicted_long_fraction = float(predicted.mean())
-    classification = compute_classification_metrics(y, probabilities)
+    classification = compute_classification_metrics(
+        y,
+        probabilities,
+        threshold=decision_threshold,
+    )
 
     high_conf_long = int(((predicted == 1) & active).sum())
     high_conf_short = int(((predicted == 0) & active).sum())
@@ -141,6 +148,7 @@ def diagnose_directional_predictions(
         "brier_score": classification["brier_score"],
         "probability_quantiles": _quantile_report(probabilities),
         "confidence_quantiles": _quantile_report(confidence),
+        "decision_threshold": decision_threshold,
         "confidence_threshold": confidence_threshold,
         "confidence_coverage": {
             "count": int(active.sum()),
