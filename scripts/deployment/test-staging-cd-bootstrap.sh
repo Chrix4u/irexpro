@@ -7,6 +7,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 readonly REPO_ROOT
 WORKFLOW="$REPO_ROOT/.github/workflows/staging-deploy.yml"
 RESEARCH_WORKFLOW="$REPO_ROOT/.github/workflows/six-pair-research-run.yml"
+DEPLOY_SCRIPT="$REPO_ROOT/scripts/deployment/deploy-staging.sh"
 
 fail() {
   printf 'TEST FAILURE: %s\n' "$1" >&2
@@ -52,6 +53,17 @@ deploy_job_level_concurrency="$(grep -c '^    concurrency:' "$WORKFLOW" || true)
 grep -Fq 'cancel-in-progress: true' "$WORKFLOW" ||
   fail 'Staging Deploy must preempt stale work when a newer verified main SHA is ready.'
 
+# The candidate deployment must synchronize the locked AI Python runtime before
+# restarting the AI process. RRv2 daily Parquet materialization requires pyarrow.
+grep -Fq 'sync_ai_python_dependencies' "$DEPLOY_SCRIPT" ||
+  fail 'Staging deploy must synchronize locked AI Python dependencies.'
+grep -Fq -- '--require-hashes' "$DEPLOY_SCRIPT" ||
+  fail 'Staging AI Python dependency install must enforce lock hashes.'
+grep -Fq 'requirements.lock' "$DEPLOY_SCRIPT" ||
+  fail 'Staging AI Python dependency install must use requirements.lock.'
+grep -Fq 'import pyarrow' "$DEPLOY_SCRIPT" ||
+  fail 'Staging deploy must verify pyarrow before restarting AI.'
+
 # ---------------------------------------------------------------------------
 # Research Resilience V2 architecture invariants.
 #
@@ -81,6 +93,10 @@ lock_count="$(grep -F -c 'group: irexpro-staging-worktree' "$RESEARCH_WORKFLOW" 
 research_cancel_false="$(grep -F -c 'cancel-in-progress: false' "$RESEARCH_WORKFLOW" || true)"
 [[ "$research_cancel_false" -eq "$vps_job_count" ]] ||
   fail 'Every Six Pair Research stage job must use cancel-in-progress: false.'
+
+pyarrow_preflight_count="$(grep -F -c 'AI Python runtime is missing locked pyarrow support' "$RESEARCH_WORKFLOW" || true)"
+[[ "$pyarrow_preflight_count" -eq "$vps_job_count" ]] ||
+  fail 'Every VPS research stage must fail fast when locked pyarrow support is missing.'
 
 # 2. No job may rely on surviving the GitHub-hosted six-hour ceiling, and the
 #    monolithic >6h timeout is prohibited.
