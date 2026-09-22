@@ -173,6 +173,23 @@ def test_locked_research_gates_are_exactly_preserved():
     }
 
 
+def test_qualification_entrypoint_requires_research_cutoff_before_loading_data(tmp_path):
+    with pytest.raises(ValueError, match="decision_time_before is required"):
+        qualification.evaluate_qualification_corpora(
+            {"EURUSD": tmp_path / "never-read.csv"},
+            horizon_bars=10,
+            decision_time_before=None,
+            report_path=tmp_path / "report.json",
+        )
+
+
+def test_all_feature_policy_preserves_canonical_training_runtime_contract():
+    assert qualification._feature_columns("all") == list(MULTITIMEFRAME_FEATURE_COLUMNS)
+    ablated = qualification._feature_columns("drop_volume")
+    assert set(ablated).issubset(MULTITIMEFRAME_FEATURE_COLUMNS)
+    assert len(ablated) < len(MULTITIMEFRAME_FEATURE_COLUMNS)
+
+
 def test_outer_validation_is_never_passed_to_inner_selection_or_refit(monkeypatch):
     dataset = _research_dataset()
     candidate = ModelVariant(name="candidate", calibration="none")
