@@ -8,16 +8,21 @@ import pytest
 from app.domain.models.multitimeframe_features import MULTITIMEFRAME_FEATURE_COLUMNS
 from app.domain.training import model_qualification as qualification
 from app.domain.training.model_qualification import (
+    ACTIONABLE_LABEL_POLICY,
+    ACTIONABLE_TARGET_COLUMN,
     CONFIDENCE_FLOOR,
+    TWO_STAGE_EXPERIMENT_NAME,
     ModelVariant,
     QualificationExperiment,
     _apply_calibrator,
+    _ensure_actionable_target,
     _feature_columns,
     _fit_calibrator,
     _locked_gate_snapshot,
     _nested_windows,
     _prediction_frame,
     _select_decision_threshold,
+    _two_stage_prediction_frame,
     default_experiments,
     evaluate_qualification_corpora,
     run_nested_qualification_experiments,
@@ -84,9 +89,13 @@ def test_default_experiment_matrix_is_bounded_and_keeps_locked_baseline():
     assert baseline.sample_weight_policy == "economic"
     assert baseline.calibration == "none"
     assert baseline.feature_policy == "all"
-    assert sum(len(experiment.variants) for experiment in experiments) == 9
-    assert experiments[-1].name == "structure_feature_ablation"
+    assert sum(len(experiment.variants) for experiment in experiments) == 10
+    assert experiments[-2].name == "structure_feature_ablation"
+    assert experiments[-1].name == TWO_STAGE_EXPERIMENT_NAME
+    assert experiments[-1].mode == "two_stage_actionable"
+    assert experiments[-1].tune_decision_threshold is False
     assert CONFIDENCE_FLOOR == 0.60
+    assert ACTIONABLE_LABEL_POLICY.endswith("_v1")
 
 
 def test_nested_windows_are_chronological_disjoint_and_purged():
@@ -351,6 +360,45 @@ def test_qualification_checkpoints_resume_without_refitting(monkeypatch, tmp_pat
     incompatible["checkpoint_fingerprint"] = "different-fingerprint"
     run_nested_qualification_experiments(dataset, **incompatible)
     assert fit_calls > first_fit_calls
+
+
+def test_actionable_target_keeps_every_row_and_requires_positive_net_edge():
+    frame = pd.DataFrame(
+        {
+            "long_net_return": [0.0010, -0.0004, -0.0002, 0.0],
+            "short_net_return": [-0.0012, -0.0001, 0.0003, 0.0],
+        }
+    )
+
+    labeled = _ensure_actionable_target(frame)
+
+    assert len(labeled) == len(frame)
+    assert labeled[ACTIONABLE_TARGET_COLUMN].tolist() == [1, 0, 1, 0]
+    assert ACTIONABLE_TARGET_COLUMN not in frame.columns
+
+
+def test_two_stage_trade_requires_opportunity_and_direction_confidence():
+    source = _research_dataset(periods=3, instruments=("EURUSD",))
+    source = _ensure_actionable_target(source)
+
+    predictions = _two_stage_prediction_frame(
+        source,
+        direction_probabilities=np.array([0.70, 0.70, 0.55]),
+        opportunity_probabilities=np.array([0.70, 0.55, 0.90]),
+        confidence_floor=0.60,
+        fold=1,
+        experiment=TWO_STAGE_EXPERIMENT_NAME,
+        variant=ModelVariant(name="actionable_v2_direction"),
+    )
+
+    assert predictions["active_trade"].tolist() == [True, False, False]
+    assert predictions["predicted_opportunity"].tolist() == [True, False, True]
+    assert np.allclose(
+        predictions["confidence"].to_numpy(dtype=float),
+        np.array([0.70, 0.55, 0.55]),
+    )
+    assert len(predictions) == len(source)
+    assert set(predictions["actionable_label_policy"]) == {ACTIONABLE_LABEL_POLICY}
 
 
 def test_feature_experiments_never_invent_non_runtime_features():
