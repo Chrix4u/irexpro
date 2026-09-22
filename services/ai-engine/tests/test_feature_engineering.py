@@ -39,6 +39,18 @@ async def test_feature_engineering_no_future_leakage():
             f"row 19 changed from {v20} to {v21} when row 20 was added"
         )
 
+    for col in (
+        "breakout_strength_20",
+        "range_compression_5_20",
+        "momentum_acceleration_3_10",
+    ):
+        v20 = feat_20.iloc[19][col]
+        v21 = feat_21.iloc[19][col]
+        assert abs(v20 - v21) < 1e-9, (
+            f"Lookahead detected in MTF v3 feature '{col}': "
+            f"row 19 changed from {v20} to {v21} when row 20 was added"
+        )
+
 
 @pytest.mark.asyncio
 async def test_feature_columns_all_present():
