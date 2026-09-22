@@ -81,6 +81,25 @@ configure_xgboost_runtime_env() {
   export XGBOOST_MODEL_METADATA_PATH="$metadata_path"
 }
 
+sync_ai_python_dependencies() {
+  local ai_root="$STAGING_ROOT/services/ai-engine"
+  local ai_python="$ai_root/.venv/bin/python"
+  local ai_lock="$ai_root/requirements.lock"
+
+  [[ -x "$ai_python" ]] ||
+    die "AI engine Python virtualenv is missing or not executable."
+  [[ -f "$ai_lock" ]] ||
+    die "AI engine locked requirements file is missing."
+
+  "$ai_python" -m pip install \
+    --disable-pip-version-check \
+    --no-input \
+    --require-hashes \
+    -r "$ai_lock"
+  "$ai_python" -m pip check
+  "$ai_python" -c 'import pyarrow'
+}
+
 validate_internal_api_key_alignment() {
   local api_env="$STAGING_ROOT/apps/api/.env"
   local ai_env="$STAGING_ROOT/services/ai-engine/.env"
@@ -325,6 +344,14 @@ STAGE="build-web"
 corepack pnpm@"$PNPM_VERSION" --filter @irexpro/web build
 STAGE="build-admin"
 corepack pnpm@"$PNPM_VERSION" --filter @irexpro/admin build
+
+# The AI engine has an independent, hash-locked Python runtime. Keep its
+# existing virtualenv synchronized to the exact candidate before migrations or
+# any PM2 restart. A dependency failure therefore leaves the running release
+# untouched and prevents research-only additions (for example parquet support)
+# from drifting away from the deployed source tree.
+STAGE="ai-python-dependencies"
+sync_ai_python_dependencies
 
 # Keep the staging database schema on the same immutable release as the API.
 # Migrations run only after every application build succeeds and before ANY
