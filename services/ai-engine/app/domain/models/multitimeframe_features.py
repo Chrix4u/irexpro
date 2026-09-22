@@ -10,7 +10,7 @@ import pandas as pd
 from app.domain.market_data.schemas import OHLCVCandle
 from app.domain.models.feature_engineering import compute_features
 
-MULTITIMEFRAME_RUNTIME_PROFILE = "multitimeframe_v2"
+MULTITIMEFRAME_RUNTIME_PROFILE = "multitimeframe_v3"
 MULTITIMEFRAME_LABEL_SELECTION_POLICY = "all_exact_horizon_finite_rows_v2"
 MULTITIMEFRAME_BACKTEST_POLICY = "non_overlapping_equal_weight_periods_v1"
 MULTITIMEFRAME_RESEARCH_VALIDATION_POLICY = "outer_validation_untouched_internal_early_stop_v1"
@@ -41,6 +41,9 @@ MULTITIMEFRAME_DIRECT_FEATURE_COLUMNS = (
     "close_position_20",
     "volume_zscore_20",
     "range_expansion_20",
+    "breakout_strength_20",
+    "range_compression_5_20",
+    "momentum_acceleration_3_10",
 )
 
 NORMALIZED_FEATURE_SUFFIXES = (
@@ -61,6 +64,10 @@ TIME_FEATURE_COLUMNS = (
     "day_of_week_sin",
     "day_of_week_cos",
 )
+CROSS_TIMEFRAME_FEATURE_COLUMNS = (
+    "trend_alignment_score",
+    "momentum_alignment_score",
+)
 
 
 def multitimeframe_feature_columns() -> list[str]:
@@ -69,7 +76,9 @@ def multitimeframe_feature_columns() -> list[str]:
         for timeframe in RUNTIME_TIMEFRAMES
         for suffix in NORMALIZED_FEATURE_SUFFIXES
     ]
-    columns.extend(["m1_spread_bps", *TIME_FEATURE_COLUMNS])
+    columns.extend(
+        ["m1_spread_bps", *TIME_FEATURE_COLUMNS, *CROSS_TIMEFRAME_FEATURE_COLUMNS]
+    )
     columns.extend(f"instrument_{instrument}" for instrument in INITIAL_FOREX_UNIVERSE)
     return columns
 
@@ -172,6 +181,9 @@ def _latest_timeframe_features(
         "close_position_20": float(latest["close_position_20"]),
         "volume_zscore_20": float(latest["volume_zscore_20"]),
         "range_expansion_20": float(latest["range_expansion_20"]),
+        "breakout_strength_20": float(latest["breakout_strength_20"]),
+        "range_compression_5_20": float(latest["range_compression_5_20"]),
+        "momentum_acceleration_3_10": float(latest["momentum_acceleration_3_10"]),
     }
 
     if not np.isfinite(np.asarray(list(values.values()), dtype=float)).all():
@@ -258,6 +270,17 @@ def build_multitimeframe_runtime_features(
     features["day_of_week_cos"] = float(
         np.cos(2.0 * np.pi * day_of_week / 7.0)
     )
+
+    trend_signs = [
+        np.sign(features[f"{timeframe.lower()}_price_vs_ma20"])
+        for timeframe in RUNTIME_TIMEFRAMES
+    ]
+    momentum_signs = [
+        np.sign(features[f"{timeframe.lower()}_momentum_5"])
+        for timeframe in RUNTIME_TIMEFRAMES
+    ]
+    features["trend_alignment_score"] = float(np.mean(trend_signs))
+    features["momentum_alignment_score"] = float(np.mean(momentum_signs))
 
     for candidate in INITIAL_FOREX_UNIVERSE:
         features[f"instrument_{candidate}"] = 1.0 if candidate == symbol else 0.0
