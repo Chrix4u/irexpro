@@ -25,6 +25,7 @@ from app.domain.training.model_qualification import (
 from app.domain.training.train_multitimeframe import (
     run_pooled_walk_forward_with_predictions,
 )
+from app.domain.training.validation import compute_classification_metrics
 
 
 class _FakeModel:
@@ -387,3 +388,47 @@ def test_nested_runner_rejects_lower_confidence_floor_before_model_fit():
             validation_periods=100,
             experiments=default_experiments()[:1],
         )
+
+
+
+def test_compressed_directional_fixture_separates_boundary_bias_from_confidence():
+    labels = np.array([0] * 100 + [1] * 100, dtype=int)
+    raw = np.array([0.52] * 100 + [0.58] * 100, dtype=float)
+
+    baseline = compute_classification_metrics(
+        labels,
+        raw,
+        threshold=0.50,
+    )
+    selected_threshold, selected = _select_decision_threshold(labels, raw)
+    calibrator = _fit_calibrator(
+        "platt",
+        probabilities=raw,
+        labels=labels,
+    )
+    calibrated = _apply_calibrator(calibrator, raw)
+
+    raw_coverage = float((np.maximum(raw, 1.0 - raw) >= 0.60).mean())
+    calibrated_coverage = float(
+        (np.maximum(calibrated, 1.0 - calibrated) >= 0.60).mean()
+    )
+    calibrated_metrics = compute_classification_metrics(
+        labels,
+        calibrated,
+        threshold=0.50,
+    )
+
+    assert baseline["balanced_accuracy"] == pytest.approx(0.50)
+    assert baseline["precision"] == pytest.approx(0.50)
+    assert baseline["recall"] == pytest.approx(1.00)
+    assert baseline["f1"] == pytest.approx(2.0 / 3.0)
+    assert baseline["brier_score"] == pytest.approx(0.2234)
+    assert raw_coverage == pytest.approx(0.0)
+
+    assert selected_threshold == pytest.approx(0.525)
+    assert selected["balanced_accuracy"] == pytest.approx(1.0)
+    assert calibrated_metrics["balanced_accuracy"] == pytest.approx(1.0)
+    assert calibrated_metrics["brier_score"] < 0.10
+    assert calibrated_metrics["brier_score"] < baseline["brier_score"]
+    assert calibrated_coverage == pytest.approx(1.0)
+    assert CONFIDENCE_FLOOR == 0.60
