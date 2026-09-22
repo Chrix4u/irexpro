@@ -463,6 +463,36 @@ __STAGE_PROLOGUE__          export IREXPRO_XGB_N_JOBS=2
               'gate=' + (row.research_gate_passed ? 'PASS' : 'HOLD'),
               'follow_up=' + (comparison.interesting_for_follow_up ? 'YES' : 'NO'),
             ].join(' '));
+            const architecture = experiment.pooled_architecture_diagnostic || {};
+            console.log([
+              'QUALIFICATION_ARCHITECTURE',
+              'horizon=' + report.horizon_bars + 'm',
+              'experiment=' + row.experiment,
+              'heterogeneity=' + Boolean(architecture.material_pair_heterogeneity),
+              'balanced_accuracy_range=' + Number(architecture.balanced_accuracy_range || 0).toFixed(6),
+              'predicted_long_range=' + Number(architecture.predicted_long_fraction_range || 0).toFixed(6),
+              'confidence_coverage_range=' + Number(architecture.confidence_coverage_range || 0).toFixed(6),
+              'normalization_follow_up=' + Boolean(architecture.stronger_instrument_normalization_research_warranted),
+              'mixture_follow_up=' + Boolean(architecture.future_mixture_of_experts_research_warranted),
+            ].join(' '));
+
+            const gains = new Map();
+            for (const fold of experiment.folds || []) {
+              for (const item of fold.feature_importance_gain || []) {
+                const feature = String(item.feature || '');
+                if (!feature) continue;
+                gains.set(feature, (gains.get(feature) || 0) + Number(item.normalized_gain || 0));
+              }
+            }
+            const topFeatures = [...gains.entries()]
+              .sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0]))
+              .slice(0, 8)
+              .map(([feature, gain]) => feature + ':' + gain.toFixed(6))
+              .join(',');
+            console.log(
+              'QUALIFICATION_TOP_FEATURES horizon=' + report.horizon_bars +
+              'm experiment=' + row.experiment + ' features=' + (topFeatures || 'none')
+            );
           }
           const passing = (report.candidate_comparison_table || []).filter((row) => row.research_gate_passed);
           if (passing.length) {
@@ -477,7 +507,31 @@ __STAGE_PROLOGUE__          export IREXPRO_XGB_N_JOBS=2
             "$qualification_report"
           REMOTE
 
-__WATCHDOG_RUN____SSH_REMOVE__"""
+__WATCHDOG_RUN__
+      - name: Collect qualification evidence __HORIZON__m
+        if: steps.current.outputs.current == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          scp \
+            -i "$HOME/.ssh/irexpro_staging" \
+            -P "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST:/home/lightworld/research/irexpro-six-pair/$CANDIDATE_SHA/reports/model_qualification___HORIZON__m.json" \
+            "$RUNNER_TEMP/model_qualification___HORIZON__m.json"
+
+      - name: Upload qualification evidence __HORIZON__m
+        if: steps.current.outputs.current == 'true'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: model-qualification-__HORIZON__m-${{ env.CANDIDATE_SHA }}
+          path: ${{ runner.temp }}/model_qualification___HORIZON__m.json
+          if-no-files-found: error
+          retention-days: 30
+
+__SSH_REMOVE__"""
     return (
         template.replace("__HORIZON__", horizon)
         .replace("__PREVIOUS_JOB__", previous_job)

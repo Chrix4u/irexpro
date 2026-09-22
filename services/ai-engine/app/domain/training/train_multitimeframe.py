@@ -16,6 +16,7 @@ import pandas as pd
 from xgboost import XGBClassifier
 
 from app.domain.models.multitimeframe_features import (
+    CROSS_TIMEFRAME_FEATURE_COLUMNS,
     INITIAL_FOREX_UNIVERSE,
     MULTITIMEFRAME_BACKTEST_POLICY,
     MULTITIMEFRAME_FEATURE_COLUMNS,
@@ -285,6 +286,20 @@ def prepare_instrument_corpus(
     day_of_week = decision_time.dt.dayofweek
     frame["day_of_week_sin"] = np.sin(2.0 * np.pi * day_of_week / 7.0)
     frame["day_of_week_cos"] = np.cos(2.0 * np.pi * day_of_week / 7.0)
+
+    trend_columns = [
+        f"{timeframe.lower()}_price_vs_ma20" for timeframe in RUNTIME_TIMEFRAMES
+    ]
+    momentum_columns = [
+        f"{timeframe.lower()}_momentum_5" for timeframe in RUNTIME_TIMEFRAMES
+    ]
+    frame["trend_alignment_score"] = np.sign(frame[trend_columns]).mean(axis=1)
+    frame["momentum_alignment_score"] = np.sign(frame[momentum_columns]).mean(axis=1)
+    if set(CROSS_TIMEFRAME_FEATURE_COLUMNS) != {
+        "trend_alignment_score",
+        "momentum_alignment_score",
+    }:
+        raise ValueError("Cross-timeframe training/runtime feature contract diverged")
 
     for candidate in INITIAL_FOREX_UNIVERSE:
         frame[f"instrument_{candidate}"] = 1.0 if candidate == instrument else 0.0

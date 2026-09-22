@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import numpy as np
 import pytest
 
 from app.domain.market_data.schemas import OHLCVCandle
@@ -86,6 +87,14 @@ def test_runtime_mtf_features_match_canonical_schema_and_anchor_to_m1_close():
     assert bundle.features["instrument_EURUSD"] == 1.0
     assert bundle.features["instrument_GBPUSD"] == 0.0
     assert bundle.features["m1_spread_bps"] > 0
+    assert bundle.features["trend_alignment_score"] == pytest.approx(1.0)
+    assert bundle.features["momentum_alignment_score"] == pytest.approx(1.0)
+    for column in (
+        "m1_breakout_strength_20",
+        "m1_range_compression_5_20",
+        "m1_momentum_acceleration_3_10",
+    ):
+        assert np.isfinite(bundle.features[column])
 
 
 def test_runtime_mtf_features_ignore_forming_higher_timeframe_bar():
