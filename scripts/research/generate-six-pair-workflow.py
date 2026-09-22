@@ -453,6 +453,7 @@ __STAGE_PROLOGUE__          export IREXPRO_XGB_N_JOBS=2
               'horizon=' + report.horizon_bars + 'm',
               'experiment=' + row.experiment,
               'balanced_accuracy=' + Number(row.balanced_accuracy).toFixed(6),
+              'opportunity_balanced_accuracy=' + (row.opportunity_balanced_accuracy == null ? 'null' : Number(row.opportunity_balanced_accuracy).toFixed(6)),
               'sharpe=' + (row.sharpe_ratio == null ? 'null' : Number(row.sharpe_ratio).toFixed(6)),
               'profit_factor=' + (row.profit_factor == null ? 'null' : Number(row.profit_factor).toFixed(6)),
               'max_drawdown=' + Number(row.max_drawdown).toFixed(6),
@@ -493,6 +494,29 @@ __STAGE_PROLOGUE__          export IREXPRO_XGB_N_JOBS=2
               'QUALIFICATION_TOP_FEATURES horizon=' + report.horizon_bars +
               'm experiment=' + row.experiment + ' features=' + (topFeatures || 'none')
             );
+
+            const opportunityGains = new Map();
+            for (const fold of experiment.folds || []) {
+              for (const item of fold.opportunity_feature_importance_gain || []) {
+                const feature = String(item.feature || '');
+                if (!feature) continue;
+                opportunityGains.set(
+                  feature,
+                  (opportunityGains.get(feature) || 0) + Number(item.normalized_gain || 0)
+                );
+              }
+            }
+            const opportunityTopFeatures = [...opportunityGains.entries()]
+              .sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0]))
+              .slice(0, 8)
+              .map(([feature, gain]) => feature + ':' + gain.toFixed(6))
+              .join(',');
+            if (opportunityTopFeatures) {
+              console.log(
+                'QUALIFICATION_OPPORTUNITY_TOP_FEATURES horizon=' + report.horizon_bars +
+                'm experiment=' + row.experiment + ' features=' + opportunityTopFeatures
+              );
+            }
           }
           const passing = (report.candidate_comparison_table || []).filter((row) => row.research_gate_passed);
           if (passing.length) {

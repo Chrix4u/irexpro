@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import gc
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,7 +16,11 @@ from sklearn.linear_model import LogisticRegression
 from xgboost import XGBClassifier
 
 from app.domain.models.multitimeframe_features import MULTITIMEFRAME_FEATURE_COLUMNS
-from app.domain.training.qualification_diagnostics import feature_gain_diagnostics
+from app.domain.training import train_multitimeframe as mtf_training
+from app.domain.training.qualification_diagnostics import (
+    evidence_sufficiency_warnings,
+    feature_gain_diagnostics,
+)
 from app.domain.training.train_multitimeframe import (
     LONG_NET_RETURN_COLUMN,
     QUALIFICATION_REGIME_COLUMNS,
@@ -25,7 +30,6 @@ from app.domain.training.train_multitimeframe import (
     _class_balance_sample_weights,
     _economic_sample_weights,
     _split_internal_early_stopping_tail,
-    _summarize_predictions,
     load_and_prepare_corpora,
 )
 from app.domain.training.validation import (
@@ -34,6 +38,11 @@ from app.domain.training.validation import (
 )
 
 CONFIDENCE_FLOOR = 0.60
+ACTIONABLE_TARGET_COLUMN = "actionable_target"
+ACTIONABLE_LABEL_POLICY = "best_direction_net_return_after_friction_gt_zero_v1"
+TWO_STAGE_EXPERIMENT_NAME = "actionable_two_stage"
+QUALIFICATION_CHECKPOINT_VERSION = 1
+QUALIFICATION_CHECKPOINT_POLICY = "experiment_outer_fold_atomic_v1"
 DECISION_THRESHOLD_GRID = (0.45, 0.475, 0.50, 0.525, 0.55)
 MIN_ISOTONIC_ROWS = 500
 MIN_ISOTONIC_CLASS_ROWS = 100
@@ -54,6 +63,7 @@ STRUCTURE_GLOBAL_FEATURES = (
 ExperimentCalibration = Literal["none", "platt", "isotonic"]
 SampleWeightPolicy = Literal["economic", "class_balance"]
 FeaturePolicy = Literal["all", "drop_volume", "drop_structure"]
+ExperimentMode = Literal["directional", "two_stage_actionable"]
 
 
 @dataclass(frozen=True)
@@ -73,6 +83,7 @@ class QualificationExperiment:
     name: str
     variants: tuple[ModelVariant, ...]
     tune_decision_threshold: bool = False
+    mode: ExperimentMode = "directional"
 
 
 @dataclass
@@ -94,6 +105,210 @@ class _RefitWindows:
     fit: pd.DataFrame
     early_stop: pd.DataFrame
     calibration: pd.DataFrame
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(payload, indent=2, sort_keys=True, default=str),
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
+def _experiment_matrix_payload(
+    experiments: tuple[QualificationExperiment, ...],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "name": experiment.name,
+            "tune_decision_threshold": experiment.tune_decision_threshold,
+            "mode": experiment.mode,
+            "variants": [
+                {
+                    "name": variant.name,
+                    "parameter_overrides": list(variant.parameter_overrides),
+                    "sample_weight_policy": variant.sample_weight_policy,
+                    "calibration": variant.calibration,
+                    "feature_policy": variant.feature_policy,
+                }
+                for variant in experiment.variants
+            ],
+        }
+        for experiment in experiments
+    ]
+
+
+def _qualification_checkpoint_fingerprint(
+    *,
+    dataset_sha256: dict[str, str],
+    decision_time_before: str | pd.Timestamp,
+    horizon_bars: int,
+    confidence_floor: float,
+    max_splits: int,
+    experiments: tuple[QualificationExperiment, ...],
+) -> str:
+    payload = {
+        "policy": QUALIFICATION_CHECKPOINT_POLICY,
+        "dataset_sha256": dict(sorted(dataset_sha256.items())),
+        "decision_time_before": pd.Timestamp(decision_time_before).isoformat(),
+        "horizon_bars": int(horizon_bars),
+        "confidence_floor": float(confidence_floor),
+        "max_splits": int(max_splits),
+        "feature_columns": list(MULTITIMEFRAME_FEATURE_COLUMNS),
+        "actionable_label_policy": ACTIONABLE_LABEL_POLICY,
+        "experiments": _experiment_matrix_payload(experiments),
+    }
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _qualification_checkpoint_paths(
+    checkpoint_dir: Path,
+    *,
+    experiment_name: str,
+    fold_index: int,
+) -> tuple[Path, Path]:
+    safe_name = "".join(
+        character if character.isalnum() or character in {"-", "_"} else "_"
+        for character in experiment_name
+    )
+    stem = checkpoint_dir / f"fold-{fold_index:02d}-{safe_name}"
+    return stem.with_suffix(".json"), stem.with_suffix(".csv")
+
+
+def _qualification_checkpoint_expected(
+    outer_train: pd.DataFrame,
+    outer_validation: pd.DataFrame,
+) -> dict[str, Any]:
+    return {
+        "train_start": outer_train["decision_time"].min().isoformat(),
+        "train_end": outer_train["decision_time"].max().isoformat(),
+        "validation_start": outer_validation["decision_time"].min().isoformat(),
+        "validation_end": outer_validation["decision_time"].max().isoformat(),
+        "validation_rows": int(len(outer_validation)),
+    }
+
+
+def _load_qualification_checkpoint(
+    checkpoint_dir: Path,
+    *,
+    fingerprint: str,
+    experiment_name: str,
+    fold_index: int,
+    expected: dict[str, Any],
+) -> tuple[pd.DataFrame, dict[str, Any]] | None:
+    metadata_path, predictions_path = _qualification_checkpoint_paths(
+        checkpoint_dir,
+        experiment_name=experiment_name,
+        fold_index=fold_index,
+    )
+    if not metadata_path.is_file() or not predictions_path.is_file():
+        return None
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        if metadata.get("checkpoint_version") != QUALIFICATION_CHECKPOINT_VERSION:
+            return None
+        if metadata.get("fingerprint") != fingerprint:
+            return None
+        if metadata.get("experiment") != experiment_name:
+            return None
+        if int(metadata.get("fold", -1)) != int(fold_index):
+            return None
+        if metadata.get("expected") != expected:
+            return None
+        if metadata.get("predictions_sha256") != _sha256_file(predictions_path):
+            return None
+        report = metadata.get("fold_report")
+        if not isinstance(report, dict):
+            return None
+
+        predictions = pd.read_csv(predictions_path)
+        if len(predictions) != int(expected["validation_rows"]):
+            return None
+        required = {
+            "decision_time",
+            "instrument",
+            TARGET_COLUMN,
+            LONG_NET_RETURN_COLUMN,
+            SHORT_NET_RETURN_COLUMN,
+            "positive_probability",
+            "predicted_long",
+            "confidence",
+            "active_trade",
+            "selected_net_return",
+            "fold",
+            "experiment",
+            "model_variant",
+            "calibration_method",
+            "decision_threshold",
+        }
+        if not required.issubset(predictions.columns):
+            return None
+        predictions["decision_time"] = pd.to_datetime(
+            predictions["decision_time"],
+            utc=True,
+            errors="raise",
+        )
+        for column in ("predicted_long", "active_trade"):
+            if predictions[column].dtype == object:
+                predictions[column] = predictions[column].map(
+                    {"True": True, "False": False, True: True, False: False}
+                )
+            if predictions[column].isna().any():
+                return None
+            predictions[column] = predictions[column].astype(bool)
+        return predictions, report
+    except Exception:
+        return None
+
+
+def _write_qualification_checkpoint(
+    checkpoint_dir: Path,
+    *,
+    fingerprint: str,
+    experiment_name: str,
+    fold_index: int,
+    expected: dict[str, Any],
+    predictions: pd.DataFrame,
+    fold_report: dict[str, Any],
+) -> None:
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    metadata_path, predictions_path = _qualification_checkpoint_paths(
+        checkpoint_dir,
+        experiment_name=experiment_name,
+        fold_index=fold_index,
+    )
+    predictions_tmp = predictions_path.with_suffix(".csv.tmp")
+    predictions.to_csv(predictions_tmp, index=False)
+    predictions_tmp.replace(predictions_path)
+    _atomic_write_json(
+        metadata_path,
+        {
+            "checkpoint_version": QUALIFICATION_CHECKPOINT_VERSION,
+            "policy": QUALIFICATION_CHECKPOINT_POLICY,
+            "fingerprint": fingerprint,
+            "experiment": experiment_name,
+            "fold": int(fold_index),
+            "expected": expected,
+            "predictions_sha256": _sha256_file(predictions_path),
+            "fold_report": fold_report,
+        },
+    )
 
 
 def default_experiments() -> tuple[QualificationExperiment, ...]:
@@ -166,6 +381,11 @@ def default_experiments() -> tuple[QualificationExperiment, ...]:
         QualificationExperiment(
             name="structure_feature_ablation",
             variants=(structure_ablation,),
+        ),
+        QualificationExperiment(
+            name=TWO_STAGE_EXPERIMENT_NAME,
+            variants=(ModelVariant(name="actionable_v2_direction"),),
+            mode="two_stage_actionable",
         ),
     )
 
@@ -302,6 +522,43 @@ def _refit_windows(
     )
 
 
+def _ensure_actionable_target(frame: pd.DataFrame) -> pd.DataFrame:
+    """Attach the research-only opportunity label without removing any rows."""
+    result = frame.copy()
+    long_net = pd.to_numeric(result[LONG_NET_RETURN_COLUMN], errors="coerce")
+    short_net = pd.to_numeric(result[SHORT_NET_RETURN_COLUMN], errors="coerce")
+    if not np.isfinite(long_net.to_numpy(dtype=float)).all():
+        raise ValueError("actionable labels require finite long net returns")
+    if not np.isfinite(short_net.to_numpy(dtype=float)).all():
+        raise ValueError("actionable labels require finite short net returns")
+    best_net = np.maximum(
+        long_net.to_numpy(dtype=float),
+        short_net.to_numpy(dtype=float),
+    )
+    result[ACTIONABLE_TARGET_COLUMN] = (best_net > 0.0).astype(int)
+    return result
+
+
+def _binary_class_balance_weights(
+    frame: pd.DataFrame,
+    *,
+    target_column: str,
+) -> np.ndarray:
+    target = pd.to_numeric(frame[target_column], errors="coerce").to_numpy(dtype=float)
+    if not np.isfinite(target).all():
+        raise ValueError(f"{target_column} class-balance weights require finite targets")
+    if not np.isin(target, [0.0, 1.0]).all():
+        raise ValueError(f"{target_column} must be binary")
+    labels = target.astype(int)
+    counts = np.bincount(labels, minlength=2).astype(float)
+    if (counts <= 0.0).any():
+        raise ValueError(f"{target_column} requires both classes")
+    total = float(len(labels))
+    per_class = np.sqrt(total / (2.0 * counts))
+    weights = np.clip(per_class[labels], 0.5, 2.0)
+    return (weights / float(weights.mean())).astype(float)
+
+
 def _sample_weights(frame: pd.DataFrame, policy: SampleWeightPolicy) -> np.ndarray:
     if policy == "economic":
         return _economic_sample_weights(frame)
@@ -318,6 +575,49 @@ def _model_for_variant(variant: ModelVariant) -> XGBClassifier:
     return XGBClassifier(**params)
 
 
+def _fit_binary_variant(
+    variant: ModelVariant,
+    *,
+    fit: pd.DataFrame,
+    early_stop: pd.DataFrame,
+    feature_columns: list[str],
+    target_column: str,
+    sample_weight_policy: SampleWeightPolicy,
+) -> XGBClassifier:
+    if fit[target_column].nunique() < 2:
+        raise ValueError(f"fit data contains one {target_column} class")
+    if early_stop[target_column].nunique() < 2:
+        raise ValueError(f"early-stop data contains one {target_column} class")
+
+    model = _model_for_variant(variant)
+    if target_column == TARGET_COLUMN:
+        fit_weights = _sample_weights(fit, sample_weight_policy)
+        early_weights = _class_balance_sample_weights(early_stop)
+    else:
+        fit_weights = _binary_class_balance_weights(
+            fit,
+            target_column=target_column,
+        )
+        early_weights = _binary_class_balance_weights(
+            early_stop,
+            target_column=target_column,
+        )
+    model.fit(
+        fit[feature_columns],
+        fit[target_column].astype(int),
+        sample_weight=fit_weights,
+        eval_set=[
+            (
+                early_stop[feature_columns],
+                early_stop[target_column].astype(int),
+            )
+        ],
+        sample_weight_eval_set=[early_weights],
+        verbose=False,
+    )
+    return model
+
+
 def _fit_variant(
     variant: ModelVariant,
     *,
@@ -325,21 +625,14 @@ def _fit_variant(
     early_stop: pd.DataFrame,
     feature_columns: list[str],
 ) -> XGBClassifier:
-    model = _model_for_variant(variant)
-    model.fit(
-        fit[feature_columns],
-        fit[TARGET_COLUMN].astype(int),
-        sample_weight=_sample_weights(fit, variant.sample_weight_policy),
-        eval_set=[
-            (
-                early_stop[feature_columns],
-                early_stop[TARGET_COLUMN].astype(int),
-            )
-        ],
-        sample_weight_eval_set=[_class_balance_sample_weights(early_stop)],
-        verbose=False,
+    return _fit_binary_variant(
+        variant,
+        fit=fit,
+        early_stop=early_stop,
+        feature_columns=feature_columns,
+        target_column=TARGET_COLUMN,
+        sample_weight_policy=variant.sample_weight_policy,
     )
-    return model
 
 
 def _probabilities(
@@ -473,6 +766,131 @@ def _prediction_frame(
     predictions["decision_threshold"] = decision_threshold
     predictions["confidence_floor"] = confidence_floor
     return predictions
+
+
+def _two_stage_prediction_frame(
+    source: pd.DataFrame,
+    *,
+    direction_probabilities: np.ndarray,
+    opportunity_probabilities: np.ndarray,
+    confidence_floor: float,
+    fold: int,
+    experiment: str,
+    variant: ModelVariant,
+) -> pd.DataFrame:
+    if confidence_floor < CONFIDENCE_FLOOR:
+        raise ValueError("confidence floor must not be lowered below 0.60")
+    columns = [
+        "decision_time",
+        "instrument",
+        TARGET_COLUMN,
+        ACTIONABLE_TARGET_COLUMN,
+        LONG_NET_RETURN_COLUMN,
+        SHORT_NET_RETURN_COLUMN,
+        "m1_spread_bps",
+    ]
+    columns.extend(
+        column for column in QUALIFICATION_REGIME_COLUMNS if column in source.columns
+    )
+    predictions = source[columns].copy()
+    direction_probabilities = np.clip(
+        np.asarray(direction_probabilities, dtype=float),
+        1e-7,
+        1.0 - 1e-7,
+    )
+    opportunity_probabilities = np.clip(
+        np.asarray(opportunity_probabilities, dtype=float),
+        1e-7,
+        1.0 - 1e-7,
+    )
+    predictions["raw_positive_probability"] = direction_probabilities
+    predictions["positive_probability"] = direction_probabilities
+    predictions["predicted_long"] = direction_probabilities >= 0.50
+    predictions["direction_confidence"] = np.maximum(
+        direction_probabilities,
+        1.0 - direction_probabilities,
+    )
+    predictions["opportunity_probability"] = opportunity_probabilities
+    predictions["predicted_opportunity"] = (
+        opportunity_probabilities >= confidence_floor
+    )
+    predictions["confidence"] = np.minimum(
+        predictions["direction_confidence"],
+        predictions["opportunity_probability"],
+    )
+    predictions["active_trade"] = (
+        predictions["predicted_opportunity"]
+        & (predictions["direction_confidence"] >= confidence_floor)
+    )
+    predictions["selected_net_return"] = np.where(
+        predictions["predicted_long"],
+        predictions[LONG_NET_RETURN_COLUMN],
+        predictions[SHORT_NET_RETURN_COLUMN],
+    )
+    predictions["fold"] = fold
+    predictions["experiment"] = experiment
+    predictions["model_variant"] = variant.name
+    predictions["calibration_method"] = "none"
+    predictions["decision_threshold"] = 0.50
+    predictions["confidence_floor"] = confidence_floor
+    predictions["actionable_label_policy"] = ACTIONABLE_LABEL_POLICY
+    return predictions
+
+
+def _opportunity_classification(
+    predictions: pd.DataFrame,
+    *,
+    confidence_floor: float,
+) -> dict[str, float | int | None] | None:
+    required = {
+        ACTIONABLE_TARGET_COLUMN,
+        "opportunity_probability",
+    }
+    if not required.issubset(predictions.columns):
+        return None
+    return compute_classification_metrics(
+        predictions[ACTIONABLE_TARGET_COLUMN].to_numpy(dtype=int),
+        predictions["opportunity_probability"].to_numpy(dtype=float),
+        threshold=confidence_floor,
+    )
+
+
+def _summarize_predictions(
+    predictions: pd.DataFrame,
+    *,
+    horizon_bars: int,
+    confidence_threshold: float = CONFIDENCE_FLOOR,
+    decision_threshold: float = 0.50,
+) -> dict[str, Any]:
+    """Preserve directional metrics while using true joint coverage for two-stage rows."""
+    summary = mtf_training._summarize_predictions(
+        predictions,
+        horizon_bars=horizon_bars,
+        confidence_threshold=confidence_threshold,
+        decision_threshold=decision_threshold,
+    )
+    if "opportunity_probability" not in predictions.columns:
+        return summary
+
+    direction_coverage = dict(summary["diagnostics"]["confidence_coverage"])
+    active_count = int(predictions["active_trade"].sum())
+    joint_fraction = float(active_count / len(predictions)) if len(predictions) else 0.0
+    summary["diagnostics"]["direction_only_confidence_coverage"] = direction_coverage
+    summary["diagnostics"]["confidence_coverage"] = {
+        "count": active_count,
+        "fraction": joint_fraction,
+        "policy": "opportunity_probability_and_direction_confidence_gte_floor",
+    }
+    summary["evidence_sufficiency_warnings"] = evidence_sufficiency_warnings(
+        trade_or_period_count=int(summary["trading"]["trade_or_period_count"]),
+        sharpe_ratio=(
+            float(summary["trading"]["sharpe_ratio"])
+            if summary["trading"]["sharpe_ratio"] is not None
+            else None
+        ),
+        confidence_coverage=joint_fraction,
+    )
+    return summary
 
 
 def _instrument_positive_fraction(
@@ -647,6 +1065,53 @@ def _select_variant_inside_outer_training(
     return variant, float(selected["decision_threshold"]), candidate_reports
 
 
+def _fit_two_stage_for_outer(
+    training_window: pd.DataFrame,
+    *,
+    variant: ModelVariant,
+    horizon_bars: int,
+) -> tuple[XGBClassifier, XGBClassifier, list[str], dict[str, int]]:
+    """Fit opportunity on all rows and direction only on actionable training rows."""
+    feature_columns = _feature_columns(variant.feature_policy)
+    fit, early = _split_internal_early_stopping_tail(
+        training_window,
+        horizon_bars=horizon_bars,
+    )
+    opportunity_variant = ModelVariant(
+        name="actionable_v2_opportunity",
+        parameter_overrides=variant.parameter_overrides,
+        sample_weight_policy="class_balance",
+        calibration="none",
+        feature_policy=variant.feature_policy,
+    )
+    opportunity_model = _fit_binary_variant(
+        opportunity_variant,
+        fit=fit,
+        early_stop=early,
+        feature_columns=feature_columns,
+        target_column=ACTIONABLE_TARGET_COLUMN,
+        sample_weight_policy="class_balance",
+    )
+
+    directional_fit = fit.loc[fit[ACTIONABLE_TARGET_COLUMN] == 1].copy()
+    directional_early = early.loc[early[ACTIONABLE_TARGET_COLUMN] == 1].copy()
+    direction_model = _fit_binary_variant(
+        variant,
+        fit=directional_fit,
+        early_stop=directional_early,
+        feature_columns=feature_columns,
+        target_column=TARGET_COLUMN,
+        sample_weight_policy=variant.sample_weight_policy,
+    )
+    counts = {
+        "fit_rows": int(len(fit)),
+        "early_stop_rows": int(len(early)),
+        "actionable_fit_rows": int(len(directional_fit)),
+        "actionable_early_stop_rows": int(len(directional_early)),
+    }
+    return direction_model, opportunity_model, feature_columns, counts
+
+
 def _fit_selected_for_outer(
     training_window: pd.DataFrame,
     *,
@@ -703,6 +1168,7 @@ def _fold_report(
     model: XGBClassifier,
     feature_columns: list[str],
     selection: dict[str, Any],
+    opportunity_model: XGBClassifier | None = None,
 ) -> dict[str, Any]:
     by_instrument = {
         instrument: _summarize_predictions(
@@ -713,7 +1179,7 @@ def _fold_report(
         )
         for instrument, group in predictions.groupby("instrument", sort=True)
     }
-    return {
+    report = {
         "aggregate": _summarize_predictions(
             predictions,
             horizon_bars=horizon_bars,
@@ -727,6 +1193,18 @@ def _fold_report(
         ),
         "selection": selection,
     }
+    opportunity = _opportunity_classification(
+        predictions,
+        confidence_floor=confidence_floor,
+    )
+    if opportunity is not None:
+        report["opportunity_classification"] = opportunity
+    if opportunity_model is not None:
+        report["opportunity_feature_importance_gain"] = feature_gain_diagnostics(
+            opportunity_model,
+            feature_columns,
+        )
+    return report
 
 
 def _locked_gate_snapshot() -> dict[str, float]:
@@ -740,6 +1218,7 @@ def _qualification_gate_from_aggregate(
     overall: dict[str, Any],
     fold_reports: list[dict[str, Any]],
     by_instrument: dict[str, Any],
+    opportunity_classification: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     thresholds = _locked_gate_snapshot()
     positive_folds = sum(
@@ -781,6 +1260,14 @@ def _qualification_gate_from_aggregate(
         "positive_instrument_fraction": instrument_fraction
         >= thresholds["min_positive_instrument_fraction"],
     }
+    if opportunity_classification is not None:
+        opportunity_balanced = float(
+            opportunity_classification["balanced_accuracy"]
+        )
+        observed["opportunity_balanced_accuracy"] = opportunity_balanced
+        checks["opportunity_balanced_accuracy"] = (
+            opportunity_balanced >= thresholds["min_balanced_accuracy"]
+        )
     return {
         "thresholds": thresholds,
         "observed": observed,
@@ -895,14 +1382,20 @@ def _aggregate_experiment(
         )
         for instrument, group in predictions.groupby("instrument", sort=True)
     }
+    opportunity_classification = _opportunity_classification(
+        predictions,
+        confidence_floor=confidence_floor,
+    )
     gate = _qualification_gate_from_aggregate(
         overall=overall,
         fold_reports=fold_reports,
         by_instrument=by_instrument,
+        opportunity_classification=opportunity_classification,
     )
     return {
         "experiment": name,
         "overall": overall,
+        "opportunity_classification": opportunity_classification,
         "by_instrument": by_instrument,
         "pooled_architecture_diagnostic": _pooled_architecture_diagnostic(
             by_instrument
@@ -936,6 +1429,11 @@ def _candidate_comparison_table(
             {
                 "experiment": name,
                 "balanced_accuracy": float(classification["balanced_accuracy"]),
+                "opportunity_balanced_accuracy": (
+                    float(report["opportunity_classification"]["balanced_accuracy"])
+                    if report.get("opportunity_classification") is not None
+                    else None
+                ),
                 "sharpe_ratio": (
                     float(trading["sharpe_ratio"])
                     if trading["sharpe_ratio"] is not None
@@ -1082,6 +1580,8 @@ def run_nested_qualification_experiments(
     validation_periods: int | None = None,
     min_inner_periods: int = 50,
     experiments: tuple[QualificationExperiment, ...] | None = None,
+    checkpoint_dir: str | Path | None = None,
+    checkpoint_fingerprint: str | None = None,
 ) -> dict[str, Any]:
     """Evaluate fixed experiment strategies with nested selection and untouched outer folds."""
     if confidence_floor < CONFIDENCE_FLOOR:
@@ -1090,8 +1590,19 @@ def run_nested_qualification_experiments(
         raise ValueError("qualification dataset must contain both directional classes")
     if experiments is None:
         experiments = default_experiments()
+    if any(experiment.mode == "two_stage_actionable" for experiment in experiments):
+        dataset = _ensure_actionable_target(dataset)
+        if dataset[ACTIONABLE_TARGET_COLUMN].nunique() < 2:
+            raise ValueError(
+                "qualification dataset must contain actionable and no-trade classes"
+            )
     if not experiments or experiments[0].name != "baseline":
         raise ValueError("experiment matrix must start with the locked baseline")
+    if (checkpoint_dir is None) != (checkpoint_fingerprint is None):
+        raise ValueError(
+            "checkpoint_dir and checkpoint_fingerprint must be provided together"
+        )
+    checkpoint_root = Path(checkpoint_dir) if checkpoint_dir is not None else None
 
     unique_periods = int(dataset["decision_time"].nunique())
     min_train = min_train_periods or max(250, int(unique_periods * 0.60))
@@ -1120,63 +1631,131 @@ def run_nested_qualification_experiments(
     ):
         completed_outer_folds += 1
         for experiment in experiments:
-            if experiment.name == "baseline":
-                variant = experiment.variants[0]
-                decision_threshold = 0.50
-                selection = {
-                    "policy": "locked_baseline_no_outer_or_inner_tuning",
-                    "selected_variant": variant.name,
-                    "decision_threshold": decision_threshold,
-                    "candidate_reports": [],
-                }
-            elif len(experiment.variants) == 1 and not experiment.tune_decision_threshold:
-                # A predeclared single calibration strategy has nothing to select.
-                # Fitting an extra inner model would add cost without adding
-                # scientific information. Calibration is still fitted only on
-                # the refit's inner calibration window before outer evaluation.
-                variant = experiment.variants[0]
-                decision_threshold = 0.50
-                selection = {
-                    "policy": "fixed_candidate_inner_calibration_only",
-                    "selected_variant": variant.name,
-                    "decision_threshold": decision_threshold,
-                    "candidate_reports": [],
-                }
-            else:
-                variant, decision_threshold, candidate_reports = (
-                    _select_variant_inside_outer_training(
-                        outer_train,
-                        experiment=experiment,
-                        horizon_bars=horizon_bars,
-                        confidence_floor=confidence_floor,
-                        min_inner_periods=min_inner_periods,
+            expected_checkpoint = _qualification_checkpoint_expected(
+                outer_train,
+                outer_validation,
+            )
+            if checkpoint_root is not None and checkpoint_fingerprint is not None:
+                resumed = _load_qualification_checkpoint(
+                    checkpoint_root,
+                    fingerprint=checkpoint_fingerprint,
+                    experiment_name=experiment.name,
+                    fold_index=fold_index,
+                    expected=expected_checkpoint,
+                )
+                if resumed is not None:
+                    resumed_predictions, resumed_report = resumed
+                    predictions_by_experiment[experiment.name].append(
+                        resumed_predictions
                     )
+                    folds_by_experiment[experiment.name].append(resumed_report)
+                    continue
+
+            opportunity_model: XGBClassifier | None = None
+            if experiment.mode == "two_stage_actionable":
+                if len(experiment.variants) != 1 or experiment.tune_decision_threshold:
+                    raise ValueError(
+                        "two-stage actionable research must remain a fixed bounded candidate"
+                    )
+                variant = experiment.variants[0]
+                decision_threshold = 0.50
+                (
+                    model,
+                    opportunity_model,
+                    feature_columns,
+                    training_counts,
+                ) = _fit_two_stage_for_outer(
+                    outer_train,
+                    variant=variant,
+                    horizon_bars=horizon_bars,
+                )
+                direction_probabilities = _probabilities(
+                    model,
+                    outer_validation,
+                    feature_columns,
+                )
+                opportunity_probabilities = _probabilities(
+                    opportunity_model,
+                    outer_validation,
+                    feature_columns,
+                )
+                predictions = _two_stage_prediction_frame(
+                    outer_validation,
+                    direction_probabilities=direction_probabilities,
+                    opportunity_probabilities=opportunity_probabilities,
+                    confidence_floor=confidence_floor,
+                    fold=fold_index,
+                    experiment=experiment.name,
+                    variant=variant,
                 )
                 selection = {
-                    "policy": "nested_inner_selection_only",
+                    "policy": "fixed_two_stage_actionable_v2_no_outer_tuning",
                     "selected_variant": variant.name,
                     "decision_threshold": decision_threshold,
-                    "candidate_reports": candidate_reports,
+                    "opportunity_threshold": confidence_floor,
+                    "actionable_label_policy": ACTIONABLE_LABEL_POLICY,
+                    "candidate_reports": [],
+                    "training_counts": training_counts,
                 }
+            else:
+                if experiment.name == "baseline":
+                    variant = experiment.variants[0]
+                    decision_threshold = 0.50
+                    selection = {
+                        "policy": "locked_baseline_no_outer_or_inner_tuning",
+                        "selected_variant": variant.name,
+                        "decision_threshold": decision_threshold,
+                        "candidate_reports": [],
+                    }
+                elif len(experiment.variants) == 1 and not experiment.tune_decision_threshold:
+                    # A predeclared single calibration strategy has nothing to select.
+                    # Fitting an extra inner model would add cost without adding
+                    # scientific information. Calibration is still fitted only on
+                    # the refit's inner calibration window before outer evaluation.
+                    variant = experiment.variants[0]
+                    decision_threshold = 0.50
+                    selection = {
+                        "policy": "fixed_candidate_inner_calibration_only",
+                        "selected_variant": variant.name,
+                        "decision_threshold": decision_threshold,
+                        "candidate_reports": [],
+                    }
+                else:
+                    variant, decision_threshold, candidate_reports = (
+                        _select_variant_inside_outer_training(
+                            outer_train,
+                            experiment=experiment,
+                            horizon_bars=horizon_bars,
+                            confidence_floor=confidence_floor,
+                            min_inner_periods=min_inner_periods,
+                        )
+                    )
+                    selection = {
+                        "policy": "nested_inner_selection_only",
+                        "selected_variant": variant.name,
+                        "decision_threshold": decision_threshold,
+                        "candidate_reports": candidate_reports,
+                    }
 
-            model, calibrator, feature_columns = _fit_selected_for_outer(
-                outer_train,
-                variant=variant,
-                horizon_bars=horizon_bars,
-                min_inner_periods=min_inner_periods,
-            )
-            raw = _probabilities(model, outer_validation, feature_columns)
-            calibrated = _apply_calibrator(calibrator, raw)
-            predictions = _prediction_frame(
-                outer_validation,
-                raw_probabilities=raw,
-                calibrated_probabilities=calibrated,
-                decision_threshold=decision_threshold,
-                confidence_floor=confidence_floor,
-                fold=fold_index,
-                experiment=experiment.name,
-                variant=variant,
-            )
+                model, calibrator, feature_columns = _fit_selected_for_outer(
+                    outer_train,
+                    variant=variant,
+                    horizon_bars=horizon_bars,
+                    min_inner_periods=min_inner_periods,
+                )
+                raw = _probabilities(model, outer_validation, feature_columns)
+                calibrated = _apply_calibrator(calibrator, raw)
+                predictions = _prediction_frame(
+                    outer_validation,
+                    raw_probabilities=raw,
+                    calibrated_probabilities=calibrated,
+                    decision_threshold=decision_threshold,
+                    confidence_floor=confidence_floor,
+                    fold=fold_index,
+                    experiment=experiment.name,
+                    variant=variant,
+                )
+
             report = _fold_report(
                 predictions,
                 horizon_bars=horizon_bars,
@@ -1185,6 +1764,7 @@ def run_nested_qualification_experiments(
                 model=model,
                 feature_columns=feature_columns,
                 selection=selection,
+                opportunity_model=opportunity_model,
             )
             report.update(
                 {
@@ -1197,6 +1777,18 @@ def run_nested_qualification_experiments(
             )
             predictions_by_experiment[experiment.name].append(predictions)
             folds_by_experiment[experiment.name].append(report)
+            if checkpoint_root is not None and checkpoint_fingerprint is not None:
+                _write_qualification_checkpoint(
+                    checkpoint_root,
+                    fingerprint=checkpoint_fingerprint,
+                    experiment_name=experiment.name,
+                    fold_index=fold_index,
+                    expected=expected_checkpoint,
+                    predictions=predictions,
+                    fold_report=report,
+                )
+            if opportunity_model is not None:
+                del opportunity_model
             del model
             gc.collect()
         del outer_train, outer_validation
@@ -1233,6 +1825,7 @@ def run_nested_qualification_experiments(
         "purpose": "model_qualification_research_only",
         "horizon_bars": horizon_bars,
         "confidence_floor": confidence_floor,
+        "actionable_label_policy": ACTIONABLE_LABEL_POLICY,
         "untouched_final_test_used": False,
         "outer_validation_used_for_tuning": False,
         "experiment_count": len(experiments),
@@ -1266,17 +1859,33 @@ def evaluate_qualification_corpora(
         horizon_bars=horizon_bars,
         decision_time_before=decision_time_before,
     )
+    pooled = _ensure_actionable_target(pooled)
+    experiments = default_experiments()
+    checkpoint_fingerprint = _qualification_checkpoint_fingerprint(
+        dataset_sha256=hashes,
+        decision_time_before=decision_time_before,
+        horizon_bars=horizon_bars,
+        confidence_floor=confidence_floor,
+        max_splits=max_splits,
+        experiments=experiments,
+    )
+    output = Path(report_path)
+    checkpoint_dir = output.parent / f"{output.stem}.checkpoints"
     report = run_nested_qualification_experiments(
         pooled,
         horizon_bars=horizon_bars,
         confidence_floor=confidence_floor,
         max_splits=max_splits,
+        experiments=experiments,
+        checkpoint_dir=checkpoint_dir,
+        checkpoint_fingerprint=checkpoint_fingerprint,
     )
     report["dataset_sha256"] = hashes
+    report["qualification_checkpoint_policy"] = QUALIFICATION_CHECKPOINT_POLICY
+    report["qualification_checkpoint_fingerprint"] = checkpoint_fingerprint
     report["qualification_decision_time_before"] = pd.Timestamp(
         decision_time_before
     ).isoformat()
-    output = Path(report_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_suffix(output.suffix + ".tmp")
     temporary.write_text(
