@@ -94,9 +94,12 @@ research_cancel_false="$(grep -F -c 'cancel-in-progress: false' "$RESEARCH_WORKF
 [[ "$research_cancel_false" -eq "$vps_job_count" ]] ||
   fail 'Every Six Pair Research stage job must use cancel-in-progress: false.'
 
+python_runtime_preflight_count="$(grep -F -c 'AI Python virtual environment was not found.' "$RESEARCH_WORKFLOW" || true)"
 pyarrow_preflight_count="$(grep -F -c 'AI Python runtime is missing locked pyarrow support' "$RESEARCH_WORKFLOW" || true)"
-[[ "$pyarrow_preflight_count" -eq "$vps_job_count" ]] ||
-  fail 'Every VPS research stage must fail fast when locked pyarrow support is missing.'
+[[ "$python_runtime_preflight_count" -ge 12 ]] ||
+  fail 'Expected the shared AI Python runtime preflight in every Python-backed research stage.'
+[[ "$pyarrow_preflight_count" -eq "$python_runtime_preflight_count" ]] ||
+  fail 'Every Python-backed research stage must fail fast when locked pyarrow support is missing.'
 
 # 2. No job may rely on surviving the GitHub-hosted six-hour ceiling, and the
 #    monolithic >6h timeout is prohibited.
