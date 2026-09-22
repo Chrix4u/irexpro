@@ -764,6 +764,77 @@ def _qualification_gate_from_aggregate(
     }
 
 
+def _pooled_architecture_diagnostic(
+    by_instrument: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Describe pair heterogeneity without changing model selection or promotion."""
+    if not by_instrument:
+        return {
+            "status": "insufficient_instrument_evidence",
+            "instrument_count": 0,
+            "diagnostic_only": True,
+        }
+
+    balanced = [
+        float(report["classification"]["balanced_accuracy"])
+        for report in by_instrument.values()
+    ]
+    predicted_long = [
+        float(report["diagnostics"]["directional_bias"]["predicted_long_fraction"])
+        for report in by_instrument.values()
+    ]
+    confidence_coverage = [
+        float(report["diagnostics"]["confidence_coverage"]["fraction"])
+        for report in by_instrument.values()
+    ]
+    positive_count = sum(
+        1
+        for report in by_instrument.values()
+        if float(report["trading"]["total_return"]) > 0.0
+    )
+    instrument_count = len(by_instrument)
+    positive_fraction = float(positive_count / instrument_count)
+    balanced_range = float(max(balanced) - min(balanced))
+    predicted_long_range = float(max(predicted_long) - min(predicted_long))
+    coverage_range = float(max(confidence_coverage) - min(confidence_coverage))
+
+    # These are research-review heuristics, not promotion gates. They merely
+    # surface cross-pair heterogeneity that would make a pooled result fragile.
+    material_pair_heterogeneity = (
+        balanced_range >= 0.05
+        or predicted_long_range >= 0.20
+        or coverage_range >= 0.20
+    )
+    normalization_follow_up = material_pair_heterogeneity
+    mixture_of_experts_follow_up = bool(
+        material_pair_heterogeneity
+        and positive_fraction < _locked_gate_snapshot()["min_positive_instrument_fraction"]
+    )
+    status = (
+        "pooled_architecture_remains_reasonable_for_research"
+        if not material_pair_heterogeneity
+        else "pooled_architecture_requires_pair_heterogeneity_follow_up"
+    )
+
+    return {
+        "status": status,
+        "instrument_count": instrument_count,
+        "positive_instrument_fraction": positive_fraction,
+        "balanced_accuracy_range": balanced_range,
+        "predicted_long_fraction_range": predicted_long_range,
+        "confidence_coverage_range": coverage_range,
+        "material_pair_heterogeneity": material_pair_heterogeneity,
+        "stronger_instrument_normalization_research_warranted": normalization_follow_up,
+        "future_mixture_of_experts_research_warranted": mixture_of_experts_follow_up,
+        "diagnostic_only": True,
+        "note": (
+            "This assessment is descriptive research evidence only. It does not "
+            "remove weak instruments, alter the pooled runtime model, or change "
+            "any research/final-test promotion gate."
+        ),
+    }
+
+
 def _aggregate_experiment(
     *,
     name: str,
@@ -806,6 +877,9 @@ def _aggregate_experiment(
         "experiment": name,
         "overall": overall,
         "by_instrument": by_instrument,
+        "pooled_architecture_diagnostic": _pooled_architecture_diagnostic(
+            by_instrument
+        ),
         "folds": fold_reports,
         "fold_count": len(fold_reports),
         "evaluated_rows": int(len(predictions)),
