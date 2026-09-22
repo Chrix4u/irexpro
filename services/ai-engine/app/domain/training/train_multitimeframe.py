@@ -724,15 +724,18 @@ def _summarize_predictions(
     *,
     horizon_bars: int,
     confidence_threshold: float = 0.60,
+    decision_threshold: float = 0.50,
 ) -> dict[str, Any]:
     classification = compute_classification_metrics(
         predictions[TARGET_COLUMN].to_numpy(dtype=int),
         predictions["positive_probability"].to_numpy(dtype=float),
+        threshold=decision_threshold,
     )
     trading = _trade_metrics(predictions, horizon_bars=horizon_bars)
     diagnostics = diagnose_directional_predictions(
         predictions,
         confidence_threshold=confidence_threshold,
+        decision_threshold=decision_threshold,
     )
     evidence_warnings = evidence_sufficiency_warnings(
         trade_or_period_count=int(trading["trade_or_period_count"]),
