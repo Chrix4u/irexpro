@@ -1,3 +1,23 @@
+# Six Pair Research Run — Research Resilience V2 (bounded, resumable stages).
+#
+# GitHub-hosted jobs have a hard six-hour execution ceiling. The previous
+# single-job design required one runner to stay alive through six-pair
+# collection, MTF construction, three horizon evaluations, horizon selection,
+# untouched-test final training, and paper promotion. This workflow splits
+# that work into bounded, independently resumable stages:
+#
+#   validate -> pair EURUSD -> ... -> pair USDCHF
+#            -> horizon 1m -> horizon 5m -> horizon 10m
+#            -> summarize/select -> final model -> paper promotion -> cleanup
+#
+# Each expensive stage consumes persisted verified state (the frozen study
+# cutoff, per-pair checkpoints, daily materialized M1 chunks, per-horizon and
+# per-fold checkpoints) and can be cancelled and re-run without corrupting
+# completed stages. A failed or cancelled stage never deletes verified
+# previous stage outputs; the next dispatch resumes exactly where it stopped.
+#
+# No single job depends on surviving more than the six-hour ceiling, and no
+# job uses a timeout above 360 minutes.
 name: Six Pair Research Run
 
 on:
@@ -9,34 +29,34 @@ on:
 permissions:
   contents: read
 
+env:
+  CANDIDATE_SHA: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.workflow_run.head_sha }}
+  STAGING_SSH_HOST: vps.lightworldtech.com
+  STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
+  STAGING_SSH_USER: ${{ vars.STAGING_SSH_USER }}
+  SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+  SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+
 jobs:
-  research:
-    name: Run secured six-pair XGBoost pilot on staging
+  validate:
+    name: Validate candidate and initialize frozen research state
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_branch == 'main')
-    # Acquire the shared VPS worktree lock only for a research job that
+    # Acquire the shared VPS worktree lock only for a research run that
     # actually passed its trigger condition. workflow_run events from failed
     # or cancelled deploys skip without consuming/cancelling the pending slot.
     concurrency:
       group: irexpro-staging-worktree
       cancel-in-progress: false
     runs-on: ubuntu-24.04
-    # The first 100k-row-per-pair run reached the previous five-hour ceiling.
-    # Keep a finite seven-hour safeguard while bounded XGBoost parallelism and
-    # live stage/fold telemetry reduce and expose the actual research cost.
-    timeout-minutes: 420
+    timeout-minutes: 20
     environment:
       name: staging
 
-    env:
-      CANDIDATE_SHA: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.workflow_run.head_sha }}
-      STAGING_SSH_HOST: vps.lightworldtech.com
-      STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
-      STAGING_SSH_USER: ${{ vars.STAGING_SSH_USER }}
-      SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
-      SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+    outputs:
+      run: ${{ steps.relevance.outputs.run }}
 
     steps:
       - name: Checkout exact deployed candidate
@@ -63,7 +83,6 @@ jobs:
           fi
 
           printf 'current=true\n' >> "$GITHUB_OUTPUT"
-
       - name: Configure pinned SSH identity
         if: steps.current.outputs.current == 'true'
         shell: bash
@@ -177,14 +196,12 @@ jobs:
               ;;
           esac
 
-      - name: Run real-data six-pair pilot
+      - name: Initialize frozen research state and stage plan
         if: steps.relevance.outputs.run == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
-          research_started_epoch="$(date +%s)"
-          printf 'RESEARCH_START candidate=%s started_epoch=%s\n' \
-            "$CANDIDATE_SHA" "$research_started_epoch"
+          printf 'RESEARCH_INIT candidate=%s\n' "$CANDIDATE_SHA"
 
           ssh \
             -i "$HOME/.ssh/irexpro_staging" \
@@ -193,7 +210,7 @@ jobs:
             -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
             "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
-            "bash -s -- $CANDIDATE_SHA" <<'REMOTE' &
+            "bash -s -- $CANDIDATE_SHA" <<'REMOTE'
           set -Eeuo pipefail
           umask 077
 
@@ -206,38 +223,7 @@ jobs:
           readonly STAGING_ROOT='/home/lightworld/webapps/irexpro-staging'
           readonly RESEARCH_ROOT='/home/lightworld/research/irexpro-six-pair'
           readonly OUTPUT_ROOT="$RESEARCH_ROOT/$candidate_sha"
-          readonly RESEARCH_STATE="$RESEARCH_ROOT/last-research-sha"
           readonly DUKASCOPY_CACHE="/home/lightworld/research/dukascopy-raw-cache"
-          # Use a multi-month M1 corpus per pair so M5/M15/H1/H4 context sees
-          # materially different market regimes instead of only a few weeks.
-          readonly TARGET_ROWS=100000
-          readonly DUKASCOPY_LOOKBACK_DAYS=180
-          [[ "$TARGET_ROWS" =~ ^[0-9]+$ ]] && (( TARGET_ROWS >= 100000 )) || {
-            printf 'RESEARCH HOLD: invalid evidence target rows: %s\n' "$TARGET_ROWS" >&2
-            exit 20
-          }
-
-          persist_research_state=true
-
-          mark_research_evaluated() {
-            install -d -m 700 "$RESEARCH_ROOT"
-            local temp="$RESEARCH_STATE.tmp"
-            printf '%s\n' "$candidate_sha" > "$temp"
-            chmod 600 "$temp"
-            mv -f "$temp" "$RESEARCH_STATE"
-          }
-
-          mark_on_exit() {
-            local status=$?
-            trap - EXIT
-            if (( status == 0 )) && [[ "$persist_research_state" == true ]]; then
-              if ! mark_research_evaluated; then
-                printf 'RESEARCH WARNING: could not persist evaluated SHA marker; a future deploy will research again.\n' >&2
-              fi
-            fi
-            exit "$status"
-          }
-          trap mark_on_exit EXIT
 
           cd "$STAGING_ROOT"
           test "$(git rev-parse --show-toplevel)" = "$STAGING_ROOT"
@@ -250,6 +236,67 @@ jobs:
             printf 'RESEARCH HOLD: less than 2 GiB free disk space on staging.\n' >&2
             exit 3
           fi
+
+          python_bin=''
+          for candidate in \
+            "$STAGING_ROOT/services/ai-engine/.venv/bin/python" \
+            "$STAGING_ROOT/services/ai-engine/venv/bin/python"; do
+            if [[ -x "$candidate" ]]; then
+              python_bin="$candidate"
+              break
+            fi
+          done
+          [[ -n "$python_bin" ]] || {
+            printf 'RESEARCH HOLD: AI Python virtual environment was not found.\n' >&2
+            exit 15
+          }
+
+          # WS8: every stage verifies the same candidate identity that the
+          # validate stage froze into the orchestration plan before doing
+          # any work. The runner additionally re-verifies the study
+          # fingerprint against the persisted study state.
+          readonly PLAN_PATH="$OUTPUT_ROOT/checkpoints/orchestration-plan.json"
+          test -s "$PLAN_PATH" || {
+            printf 'RESEARCH HOLD: staged execution requires the orchestration plan.\n' >&2
+            exit 21
+          }
+          plan_candidate="$(PLAN_PATH="$PLAN_PATH" node -e '
+            const fs = require("fs");
+            const plan = JSON.parse(fs.readFileSync(process.env.PLAN_PATH, "utf8"));
+            if (plan.plan_version !== 1) process.exit(1);
+            process.stdout.write(String(plan.candidate_sha || ""));
+          ')" || {
+            printf 'RESEARCH HOLD: orchestration plan is unreadable.\n' >&2
+            exit 22
+          }
+          test "$plan_candidate" = "$candidate_sha" || {
+            printf 'RESEARCH HOLD: orchestration plan candidate mismatch plan=%s candidate=%s\n' \
+              "$plan_candidate" "$candidate_sha" >&2
+            exit 23
+          }
+
+          bootstrap_root="$(PLAN_PATH="$PLAN_PATH" node -e '
+            const fs = require("fs");
+            const plan = JSON.parse(fs.readFileSync(process.env.PLAN_PATH, "utf8"));
+            const bootstrap = plan.bootstrap_dir;
+            process.stdout.write(bootstrap && bootstrap !== "None" ? String(bootstrap) : "");
+          ')"
+          bootstrap_args=()
+          if [[ -n "$bootstrap_root" ]]; then
+            bootstrap_args=(--bootstrap-dir "$bootstrap_root")
+          fi
+
+          cd "$STAGING_ROOT/services/ai-engine"
+          export PYTHONPATH="$PWD"
+          export IREXPRO_RESEARCH_PROGRESS=1
+          export IREXPRO_RESEARCH_CANDIDATE_SHA="$candidate_sha"
+
+          readonly TARGET_ROWS=100000
+          readonly DUKASCOPY_LOOKBACK_DAYS=180
+          [[ "$TARGET_ROWS" =~ ^[0-9]+$ ]] && (( TARGET_ROWS >= 100000 )) || {
+            printf 'RESEARCH HOLD: invalid evidence target rows: %s\n' "$TARGET_ROWS" >&2
+            exit 20
+          }
 
           ai_health="$(curl --fail --silent --show-error --max-time 10 http://127.0.0.1:8011/api/v1/health)"
           AI_HEALTH="$ai_health" node <<'NODE'
@@ -272,20 +319,6 @@ jobs:
           NODE
           unset ai_health
 
-          python_bin=''
-          for candidate in \
-            "$STAGING_ROOT/services/ai-engine/.venv/bin/python" \
-            "$STAGING_ROOT/services/ai-engine/venv/bin/python"; do
-            if [[ -x "$candidate" ]]; then
-              python_bin="$candidate"
-              break
-            fi
-          done
-          [[ -n "$python_bin" ]] || {
-            printf 'RESEARCH HOLD: AI Python virtual environment was not found.\n' >&2
-            exit 15
-          }
-
           # Keep same-candidate checkpoints across retries/timeouts. OUTPUT_ROOT is
           # already namespaced by exact candidate SHA; the Python runner validates
           # every checkpoint against candidate/config/data fingerprints before reuse.
@@ -297,7 +330,7 @@ jobs:
           # without mixing incompatible feature/data semantics.
           bootstrap_root=''
           bootstrap_sha=''
-          readonly bootstrap_unsafe_pattern='^(services/ai-engine/app/domain/training/(collect_dukascopy\.py|multitimeframe_corpus\.py|dataset_builder\.py)|services/ai-engine/app/domain/models/(feature_engineering\.py|multitimeframe_features\.py)|services/ai-engine/(pyproject\.toml|requirements\.lock))$'
+          readonly bootstrap_unsafe_pattern='^(services/ai-engine/app/domain/training/(collect_dukascopy\.py|multitimeframe_corpus\.py|dataset_builder\.py)|services/ai-engine/app/domain/models/(feature_engineering\.py|multitimeframe_features\.py)|services/ai-engine/(pyproject\.toml|requirements\.lock)$)'
           while IFS= read -r ancestor_sha; do
             [[ "$ancestor_sha" == "$candidate_sha" ]] && continue
             ancestor_root="$RESEARCH_ROOT/$ancestor_sha"
@@ -321,16 +354,10 @@ jobs:
             printf 'RESEARCH_BOOTSTRAP source_sha=none source_root=none\n'
           fi
 
-          cd "$STAGING_ROOT/services/ai-engine"
-          export PYTHONPATH="$PWD"
-          export IREXPRO_RESEARCH_PROGRESS=1
-          export IREXPRO_XGB_N_JOBS=2
-          export IREXPRO_RESEARCH_CANDIDATE_SHA="$candidate_sha"
-          printf 'RESEARCH_CONFIGURATION xgb_n_jobs=%s progress=%s timeout_minutes=420 resume=true candidate=%s bootstrap_sha=%s recovery=run55_exit137\n' \
-            "$IREXPRO_XGB_N_JOBS" "$IREXPRO_RESEARCH_PROGRESS" "$candidate_sha" \
-            "${bootstrap_sha:-none}"
-
+          # Freeze the study cutoff (effective_before) and the candidate-bound
+          # orchestration plan that every later stage must verify against.
           "$python_bin" -m app.domain.training.run_first_six_pair \
+            --stage init \
             --source dukascopy \
             --dukascopy-cache-dir "$DUKASCOPY_CACHE" \
             --dukascopy-max-lookback-days "$DUKASCOPY_LOOKBACK_DAYS" \
@@ -343,6 +370,2450 @@ jobs:
             --max-splits 5 \
             --resume \
             "${bootstrap_args[@]}" \
+            > /dev/null
+
+          printf 'RESEARCH_PLAN_INITIALIZED candidate=%s plan=%s\n' \
+            "$candidate_sha" "$PLAN_PATH"
+          REMOTE
+
+      - name: Remove ephemeral SSH material
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+  pair-eurusd:
+    name: Pair stage EURUSD
+    needs: [validate]
+    if: needs.validate.outputs.run == 'true'
+    # Every VPS-touching stage holds the shared staging-worktree lock. A
+    # pending stage is never allowed to cancel an active owner.
+    concurrency:
+      group: irexpro-staging-worktree
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    # Bounded well under the GitHub-hosted six-hour job ceiling. A cancelled
+    # or failed stage resumes from verified per-day materialized chunks and
+    # the pair checkpoint; it never reprocesses completed work.
+    timeout-minutes: 300
+    environment:
+      name: staging
+
+    steps:
+      - name: Checkout exact deployed candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+
+      - name: Verify exact current main
+        id: current
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --quiet --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+          current_main_sha="$(git rev-parse origin/main)"
+          if [[ "$current_main_sha" != "$CANDIDATE_SHA" ]]; then
+            printf 'current=false\n' >> "$GITHUB_OUTPUT"
+            printf 'RESEARCH_SKIPPED reason=deployed_candidate_superseded candidate=%s current_main=%s\n' \
+              "$CANDIDATE_SHA" "$current_main_sha"
+            exit 0
+          fi
+
+          printf 'current=true\n' >> "$GITHUB_OUTPUT"
+      - name: Configure pinned SSH identity
+        if: steps.current.outputs.current == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$STAGING_SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Run pair stage EURUSD
+        if: steps.current.outputs.current == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          research_started_epoch="$(date +%s)"
+          printf 'RESEARCH_STAGE_START stage=pair instrument=EURUSD candidate=%s started_epoch=%s\n' \
+            "$CANDIDATE_SHA" "$research_started_epoch"
+
+          ssh \
+            -i "$HOME/.ssh/irexpro_staging" \
+            -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            "bash -s -- $CANDIDATE_SHA" <<'REMOTE' &
+          set -Eeuo pipefail
+          umask 077
+
+          candidate_sha="$1"
+          [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            printf 'RESEARCH HOLD: invalid candidate SHA.\n' >&2
+            exit 2
+          }
+
+          readonly STAGING_ROOT='/home/lightworld/webapps/irexpro-staging'
+          readonly RESEARCH_ROOT='/home/lightworld/research/irexpro-six-pair'
+          readonly OUTPUT_ROOT="$RESEARCH_ROOT/$candidate_sha"
+          readonly DUKASCOPY_CACHE="/home/lightworld/research/dukascopy-raw-cache"
+
+          cd "$STAGING_ROOT"
+          test "$(git rev-parse --show-toplevel)" = "$STAGING_ROOT"
+          test "$(git rev-parse HEAD)" = "$candidate_sha"
+          test -z "$(git status --porcelain)"
+
+          available_kb="$(df -Pk "$STAGING_ROOT" | awk 'NR==2 {print $4}')"
+          [[ "$available_kb" =~ ^[0-9]+$ ]]
+          if (( available_kb < 2097152 )); then
+            printf 'RESEARCH HOLD: less than 2 GiB free disk space on staging.\n' >&2
+            exit 3
+          fi
+
+          python_bin=''
+          for candidate in \
+            "$STAGING_ROOT/services/ai-engine/.venv/bin/python" \
+            "$STAGING_ROOT/services/ai-engine/venv/bin/python"; do
+            if [[ -x "$candidate" ]]; then
+              python_bin="$candidate"
+              break
+            fi
+          done
+          [[ -n "$python_bin" ]] || {
+            printf 'RESEARCH HOLD: AI Python virtual environment was not found.\n' >&2
+            exit 15
+          }
+
+          # WS8: every stage verifies the same candidate identity that the
+          # validate stage froze into the orchestration plan before doing
+          # any work. The runner additionally re-verifies the study
+          # fingerprint against the persisted study state.
+          readonly PLAN_PATH="$OUTPUT_ROOT/checkpoints/orchestration-plan.json"
+          test -s "$PLAN_PATH" || {
+            printf 'RESEARCH HOLD: staged execution requires the orchestration plan.\n' >&2
+            exit 21
+          }
+          plan_candidate="$(PLAN_PATH="$PLAN_PATH" node -e '
+            const fs = require("fs");
+            const plan = JSON.parse(fs.readFileSync(process.env.PLAN_PATH, "utf8"));
+            if (plan.plan_version !== 1) process.exit(1);
+            process.stdout.write(String(plan.candidate_sha || ""));
+          ')" || {
+            printf 'RESEARCH HOLD: orchestration plan is unreadable.\n' >&2
+            exit 22
+          }
+          test "$plan_candidate" = "$candidate_sha" || {
+            printf 'RESEARCH HOLD: orchestration plan candidate mismatch plan=%s candidate=%s\n' \
+              "$plan_candidate" "$candidate_sha" >&2
+            exit 23
+          }
+
+          bootstrap_root="$(PLAN_PATH="$PLAN_PATH" node -e '
+            const fs = require("fs");
+            const plan = JSON.parse(fs.readFileSync(process.env.PLAN_PATH, "utf8"));
+            const bootstrap = plan.bootstrap_dir;
+            process.stdout.write(bootstrap && bootstrap !== "None" ? String(bootstrap) : "");
+          ')"
+          bootstrap_args=()
+          if [[ -n "$bootstrap_root" ]]; then
+            bootstrap_args=(--bootstrap-dir "$bootstrap_root")
+          fi
+
+          cd "$STAGING_ROOT/services/ai-engine"
+          export PYTHONPATH="$PWD"
+          export IREXPRO_RESEARCH_PROGRESS=1
+          export IREXPRO_RESEARCH_CANDIDATE_SHA="$candidate_sha"
+
+          readonly TARGET_ROWS=100000
+          readonly DUKASCOPY_LOOKBACK_DAYS=180
+          [[ "$TARGET_ROWS" =~ ^[0-9]+$ ]] && (( TARGET_ROWS >= 100000 )) || {
+            printf 'RESEARCH HOLD: invalid evidence target rows: %s\n' "$TARGET_ROWS" >&2
+            exit 20
+          }
+
+          stage_result="$OUTPUT_ROOT/checkpoints/stages/pair-EURUSD.result.json"
+          install -d -m 700 "$OUTPUT_ROOT/checkpoints/stages"
+          "$python_bin" -m app.domain.training.run_first_six_pair \
+            --stage pairs \
+            --stage-instruments EURUSD \
+            --source dukascopy \
+            --dukascopy-cache-dir "$DUKASCOPY_CACHE" \
+            --dukascopy-max-lookback-days "$DUKASCOPY_LOOKBACK_DAYS" \
+            --output-dir "$OUTPUT_ROOT" \
+            --target-rows "$TARGET_ROWS" \
+            --horizons 1,5,10 \
+            --confidence-threshold 0.60 \
+            --commission-bps 0 \
+            --slippage-bps 0 \
+            --max-splits 5 \
+            --resume \
+            "${bootstrap_args[@]}" \
+            > "$stage_result.tmp"
+          mv "$stage_result.tmp" "$stage_result"
+          printf 'RESEARCH_STAGE_COMPLETE stage=pair instrument=EURUSD\n'
+          REMOTE
+
+          research_pid=$!
+          superseded_marker="$RUNNER_TEMP/irexpro-research-superseded"
+          rm -f "$superseded_marker"
+
+          (
+            while kill -0 "$research_pid" 2>/dev/null; do
+              sleep 60
+              if ! kill -0 "$research_pid" 2>/dev/null; then
+                break
+              fi
+
+              heartbeat_now="$(date +%s)"
+              heartbeat_elapsed=$((heartbeat_now - research_started_epoch))
+              printf 'RESEARCH_HEARTBEAT candidate=%s elapsed_seconds=%s\n' \
+                "$CANDIDATE_SHA" "$heartbeat_elapsed"
+
+              # A model/training commit can move main while this bounded
+              # stage is still collecting data or evaluating folds. Abort the
+              # stage early so newer exact-main work does not wait on
+              # obsolete research; the remaining stages skip cleanly and a
+              # future run resumes from the persisted verified state.
+              if ! git fetch --quiet --no-tags origin main; then
+                printf 'RESEARCH_WATCHDOG_WARNING candidate=%s reason=main_fetch_failed\n' \
+                  "$CANDIDATE_SHA" >&2
+                continue
+              fi
+
+              current_main_sha="$(git rev-parse origin/main)"
+              if [[ "$current_main_sha" != "$CANDIDATE_SHA" ]]; then
+                printf 'RESEARCH_ABORT reason=candidate_superseded candidate=%s current_main=%s\n' \
+                  "$CANDIDATE_SHA" "$current_main_sha"
+                : > "$superseded_marker"
+                kill -TERM "$research_pid" 2>/dev/null || true
+                sleep 5
+                kill -KILL "$research_pid" 2>/dev/null || true
+                break
+              fi
+            done
+          ) &
+          watchdog_pid=$!
+
+          if wait "$research_pid"; then
+            research_status=0
+          else
+            research_status=$?
+          fi
+
+          kill "$watchdog_pid" 2>/dev/null || true
+          wait "$watchdog_pid" 2>/dev/null || true
+
+          research_finished_epoch="$(date +%s)"
+          research_elapsed=$((research_finished_epoch - research_started_epoch))
+
+          if [[ -f "$superseded_marker" ]]; then
+            rm -f "$superseded_marker"
+            printf 'RESEARCH_PROCESS_EXIT candidate=%s status=0 elapsed_seconds=%s reason=candidate_superseded\n' \
+              "$CANDIDATE_SHA" "$research_elapsed"
+            exit 0
+          fi
+
+          printf 'RESEARCH_PROCESS_EXIT candidate=%s status=%s elapsed_seconds=%s\n' \
+            "$CANDIDATE_SHA" "$research_status" "$research_elapsed"
+          exit "$research_status"
+      - name: Remove ephemeral SSH material
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+  pair-gbpusd:
+    name: Pair stage GBPUSD
+    needs: [validate]
+    if: needs.validate.outputs.run == 'true'
+    # Every VPS-touching stage holds the shared staging-worktree lock. A
+    # pending stage is never allowed to cancel an active owner.
+    concurrency:
+      group: irexpro-staging-worktree
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    # Bounded well under the GitHub-hosted six-hour job ceiling. A cancelled
+    # or failed stage resumes from verified per-day materialized chunks and
+    # the pair checkpoint; it never reprocesses completed work.
+    timeout-minutes: 300
+    environment:
+      name: staging
+
+    steps:
+      - name: Checkout exact deployed candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+
+      - name: Verify exact current main
+        id: current
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --quiet --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+          current_main_sha="$(git rev-parse origin/main)"
+          if [[ "$current_main_sha" != "$CANDIDATE_SHA" ]]; then
+            printf 'current=false\n' >> "$GITHUB_OUTPUT"
+            printf 'RESEARCH_SKIPPED reason=deployed_candidate_superseded candidate=%s current_main=%s\n' \
+              "$CANDIDATE_SHA" "$current_main_sha"
+            exit 0
+          fi
+
+          printf 'current=true\n' >> "$GITHUB_OUTPUT"
+      - name: Configure pinned SSH identity
+        if: steps.current.outputs.current == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$STAGING_SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Run pair stage GBPUSD
+        if: steps.current.outputs.current == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          research_started_epoch="$(date +%s)"
+          printf 'RESEARCH_STAGE_START stage=pair instrument=GBPUSD candidate=%s started_epoch=%s\n' \
+            "$CANDIDATE_SHA" "$research_started_epoch"
+
+          ssh \
+            -i "$HOME/.ssh/irexpro_staging" \
+            -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            "bash -s -- $CANDIDATE_SHA" <<'REMOTE' &
+          set -Eeuo pipefail
+          umask 077
+
+          candidate_sha="$1"
+          [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            printf 'RESEARCH HOLD: invalid candidate SHA.\n' >&2
+            exit 2
+          }
+
+          readonly STAGING_ROOT='/home/lightworld/webapps/irexpro-staging'
+          readonly RESEARCH_ROOT='/home/lightworld/research/irexpro-six-pair'
+          readonly OUTPUT_ROOT="$RESEARCH_ROOT/$candidate_sha"
+          readonly DUKASCOPY_CACHE="/home/lightworld/research/dukascopy-raw-cache"
+
+          cd "$STAGING_ROOT"
+          test "$(git rev-parse --show-toplevel)" = "$STAGING_ROOT"
+          test "$(git rev-parse HEAD)" = "$candidate_sha"
+          test -z "$(git status --porcelain)"
+
+          available_kb="$(df -Pk "$STAGING_ROOT" | awk 'NR==2 {print $4}')"
+          [[ "$available_kb" =~ ^[0-9]+$ ]]
+          if (( available_kb < 2097152 )); then
+            printf 'RESEARCH HOLD: less than 2 GiB free disk space on staging.\n' >&2
+            exit 3
+          fi
+
+          python_bin=''
+          for candidate in \
+            "$STAGING_ROOT/services/ai-engine/.venv/bin/python" \
+            "$STAGING_ROOT/services/ai-engine/venv/bin/python"; do
+            if [[ -x "$candidate" ]]; then
+              python_bin="$candidate"
+              break
+            fi
+          done
+          [[ -n "$python_bin" ]] || {
+            printf 'RESEARCH HOLD: AI Python virtual environment was not found.\n' >&2
+            exit 15
+          }
+
+          # WS8: every stage verifies the same candidate identity that the
+          # validate stage froze into the orchestration plan before doing
+          # any work. The runner additionally re-verifies the study
+          # fingerprint against the persisted study state.
+          readonly PLAN_PATH="$OUTPUT_ROOT/checkpoints/orchestration-plan.json"
+          test -s "$PLAN_PATH" || {
+            printf 'RESEARCH HOLD: staged execution requires the orchestration plan.\n' >&2
+            exit 21
+          }
+          plan_candidate="$(PLAN_PATH="$PLAN_PATH" node -e '
+            const fs = require("fs");
+            const plan = JSON.parse(fs.readFileSync(process.env.PLAN_PATH, "utf8"));
+            if (plan.plan_version !== 1) process.exit(1);
+            process.stdout.write(String(plan.candidate_sha || ""));
+          ')" || {
+            printf 'RESEARCH HOLD: orchestration plan is unreadable.\n' >&2
+            exit 22
+          }
+          test "$plan_candidate" = "$candidate_sha" || {
+            printf 'RESEARCH HOLD: orchestration plan candidate mismatch plan=%s candidate=%s\n' \
+              "$plan_candidate" "$candidate_sha" >&2
+            exit 23
+          }
+
+          bootstrap_root="$(PLAN_PATH="$PLAN_PATH" node -e '
+            const fs = require("fs");
+            const plan = JSON.parse(fs.readFileSync(process.env.PLAN_PATH, "utf8"));
+            const bootstrap = plan.bootstrap_dir;
+            process.stdout.write(bootstrap && bootstrap !== "None" ? String(bootstrap) : "");
+          ')"
+          bootstrap_args=()
+          if [[ -n "$bootstrap_root" ]]; then
+            bootstrap_args=(--bootstrap-dir "$bootstrap_root")
+          fi
+
+          cd "$STAGING_ROOT/services/ai-engine"
+          export PYTHONPATH="$PWD"
+          export IREXPRO_RESEARCH_PROGRESS=1
+          export IREXPRO_RESEARCH_CANDIDATE_SHA="$candidate_sha"
+
+          readonly TARGET_ROWS=100000
+          readonly DUKASCOPY_LOOKBACK_DAYS=180
+          [[ "$TARGET_ROWS" =~ ^[0-9]+$ ]] && (( TARGET_ROWS >= 100000 )) || {
+            printf 'RESEARCH HOLD: invalid evidence target rows: %s\n' "$TARGET_ROWS" >&2
+            exit 20
+          }
+
+          stage_result="$OUTPUT_ROOT/checkpoints/stages/pair-GBPUSD.result.json"
+          install -d -m 700 "$OUTPUT_ROOT/checkpoints/stages"
+          "$python_bin" -m app.domain.training.run_first_six_pair \
+            --stage pairs \
+            --stage-instruments GBPUSD \
+            --source dukascopy \
+            --dukascopy-cache-dir "$DUKASCOPY_CACHE" \
+            --dukascopy-max-lookback-days "$DUKASCOPY_LOOKBACK_DAYS" \
+            --output-dir "$OUTPUT_ROOT" \
+            --target-rows "$TARGET_ROWS" \
+            --horizons 1,5,10 \
+            --confidence-threshold 0.60 \
+            --commission-bps 0 \
+            --slippage-bps 0 \
+            --max-splits 5 \
+            --resume \
+            "${bootstrap_args[@]}" \
+            > "$stage_result.tmp"
+          mv "$stage_result.tmp" "$stage_result"
+          printf 'RESEARCH_STAGE_COMPLETE stage=pair instrument=GBPUSD\n'
+          REMOTE
+
+          research_pid=$!
+          superseded_marker="$RUNNER_TEMP/irexpro-research-superseded"
+          rm -f "$superseded_marker"
+
+          (
+            while kill -0 "$research_pid" 2>/dev/null; do
+              sleep 60
+              if ! kill -0 "$research_pid" 2>/dev/null; then
+                break
+              fi
+
+              heartbeat_now="$(date +%s)"
+              heartbeat_elapsed=$((heartbeat_now - research_started_epoch))
+              printf 'RESEARCH_HEARTBEAT candidate=%s elapsed_seconds=%s\n' \
+                "$CANDIDATE_SHA" "$heartbeat_elapsed"
+
+              # A model/training commit can move main while this bounded
+              # stage is still collecting data or evaluating folds. Abort the
+              # stage early so newer exact-main work does not wait on
+              # obsolete research; the remaining stages skip cleanly and a
+              # future run resumes from the persisted verified state.
+              if ! git fetch --quiet --no-tags origin main; then
+                printf 'RESEARCH_WATCHDOG_WARNING candidate=%s reason=main_fetch_failed\n' \
+                  "$CANDIDATE_SHA" >&2
+                continue
+              fi
+
+              current_main_sha="$(git rev-parse origin/main)"
+              if [[ "$current_main_sha" != "$CANDIDATE_SHA" ]]; then
+                printf 'RESEARCH_ABORT reason=candidate_superseded candidate=%s current_main=%s\n' \
+                  "$CANDIDATE_SHA" "$current_main_sha"
+                : > "$superseded_marker"
+                kill -TERM "$research_pid" 2>/dev/null || true
+                sleep 5
+                kill -KILL "$research_pid" 2>/dev/null || true
+                break
+              fi
+            done
+          ) &
+          watchdog_pid=$!
+
+          if wait "$research_pid"; then
+            research_status=0
+          else
+            research_status=$?
+          fi
+
+          kill "$watchdog_pid" 2>/dev/null || true
+          wait "$watchdog_pid" 2>/dev/null || true
+
+          research_finished_epoch="$(date +%s)"
+          research_elapsed=$((research_finished_epoch - research_started_epoch))
+
+          if [[ -f "$superseded_marker" ]]; then
+            rm -f "$superseded_marker"
+            printf 'RESEARCH_PROCESS_EXIT candidate=%s status=0 elapsed_seconds=%s reason=candidate_superseded\n' \
+              "$CANDIDATE_SHA" "$research_elapsed"
+            exit 0
+          fi
+
+          printf 'RESEARCH_PROCESS_EXIT candidate=%s status=%s elapsed_seconds=%s\n' \
+            "$CANDIDATE_SHA" "$research_status" "$research_elapsed"
+          exit "$research_status"
+      - name: Remove ephemeral SSH material
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+  pair-usdjpy:
+    name: Pair stage USDJPY
+    needs: [validate]
+    if: needs.validate.outputs.run == 'true'
+    # Every VPS-touching stage holds the shared staging-worktree lock. A
+    # pending stage is never allowed to cancel an active owner.
+    concurrency:
+      group: irexpro-staging-worktree
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    # Bounded well under the GitHub-hosted six-hour job ceiling. A cancelled
+    # or failed stage resumes from verified per-day materialized chunks and
+    # the pair checkpoint; it never reprocesses completed work.
+    timeout-minutes: 300
+    environment:
+      name: staging
+
+    steps:
+      - name: Checkout exact deployed candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+
+      - name: Verify exact current main
+        id: current
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --quiet --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+          current_main_sha="$(git rev-parse origin/main)"
+          if [[ "$current_main_sha" != "$CANDIDATE_SHA" ]]; then
+            printf 'current=false\n' >> "$GITHUB_OUTPUT"
+            printf 'RESEARCH_SKIPPED reason=deployed_candidate_superseded candidate=%s current_main=%s\n' \
+              "$CANDIDATE_SHA" "$current_main_sha"
+            exit 0
+          fi
+
+          printf 'current=true\n' >> "$GITHUB_OUTPUT"
+      - name: Configure pinned SSH identity
+        if: steps.current.outputs.current == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$STAGING_SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Run pair stage USDJPY
+        if: steps.current.outputs.current == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          research_started_epoch="$(date +%s)"
+          printf 'RESEARCH_STAGE_START stage=pair instrument=USDJPY candidate=%s started_epoch=%s\n' \
+            "$CANDIDATE_SHA" "$research_started_epoch"
+
+          ssh \
+            -i "$HOME/.ssh/irexpro_staging" \
+            -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            "bash -s -- $CANDIDATE_SHA" <<'REMOTE' &
+          set -Eeuo pipefail
+          umask 077
+
+          candidate_sha="$1"
+          [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            printf 'RESEARCH HOLD: invalid candidate SHA.\n' >&2
+            exit 2
+          }
+
+          readonly STAGING_ROOT='/home/lightworld/webapps/irexpro-staging'
+          readonly RESEARCH_ROOT='/home/lightworld/research/irexpro-six-pair'
+          readonly OUTPUT_ROOT="$RESEARCH_ROOT/$candidate_sha"
+          readonly DUKASCOPY_CACHE="/home/lightworld/research/dukascopy-raw-cache"
+
+          cd "$STAGING_ROOT"
+          test "$(git rev-parse --show-toplevel)" = "$STAGING_ROOT"
+          test "$(git rev-parse HEAD)" = "$candidate_sha"
+          test -z "$(git status --porcelain)"
+
+          available_kb="$(df -Pk "$STAGING_ROOT" | awk 'NR==2 {print $4}')"
+          [[ "$available_kb" =~ ^[0-9]+$ ]]
+          if (( available_kb < 2097152 )); then
+            printf 'RESEARCH HOLD: less than 2 GiB free disk space on staging.\n' >&2
+            exit 3
+          fi
+
+          python_bin=''
+          for candidate in \
+            "$STAGING_ROOT/services/ai-engine/.venv/bin/python" \
+            "$STAGING_ROOT/services/ai-engine/venv/bin/python"; do
+            if [[ -x "$candidate" ]]; then
+              python_bin="$candidate"
+              break
+            fi
+          done
+          [[ -n "$python_bin" ]] || {
+            printf 'RESEARCH HOLD: AI Python virtual environment was not found.\n' >&2
+            exit 15
+          }
+
+          # WS8: every stage verifies the same candidate identity that the
+          # validate stage froze into the orchestration plan before doing
+          # any work. The runner additionally re-verifies the study
+          # fingerprint against the persisted study state.
+          readonly PLAN_PATH="$OUTPUT_ROOT/checkpoints/orchestration-plan.json"
+          test -s "$PLAN_PATH" || {
+            printf 'RESEARCH HOLD: staged execution requires the orchestration plan.\n' >&2
+            exit 21
+          }
+          plan_candidate="$(PLAN_PATH="$PLAN_PATH" node -e '
+            const fs = require("fs");
+            const plan = JSON.parse(fs.readFileSync(process.env.PLAN_PATH, "utf8"));
+            if (plan.plan_version !== 1) process.exit(1);
+            process.stdout.write(String(plan.candidate_sha || ""));
+          ')" || {
+            printf 'RESEARCH HOLD: orchestration plan is unreadable.\n' >&2
+            exit 22
+          }
+          test "$plan_candidate" = "$candidate_sha" || {
+            printf 'RESEARCH HOLD: orchestration plan candidate mismatch plan=%s candidate=%s\n' \
+              "$plan_candidate" "$candidate_sha" >&2
+            exit 23
+          }
+
+          bootstrap_root="$(PLAN_PATH="$PLAN_PATH" node -e '
+            const fs = require("fs");
+            const plan = JSON.parse(fs.readFileSync(process.env.PLAN_PATH, "utf8"));
+            const bootstrap = plan.bootstrap_dir;
+            process.stdout.write(bootstrap && bootstrap !== "None" ? String(bootstrap) : "");
+          ')"
+          bootstrap_args=()
+          if [[ -n "$bootstrap_root" ]]; then
+            bootstrap_args=(--bootstrap-dir "$bootstrap_root")
+          fi
+
+          cd "$STAGING_ROOT/services/ai-engine"
+          export PYTHONPATH="$PWD"
+          export IREXPRO_RESEARCH_PROGRESS=1
+          export IREXPRO_RESEARCH_CANDIDATE_SHA="$candidate_sha"
+
+          readonly TARGET_ROWS=100000
+          readonly DUKASCOPY_LOOKBACK_DAYS=180
+          [[ "$TARGET_ROWS" =~ ^[0-9]+$ ]] && (( TARGET_ROWS >= 100000 )) || {
+            printf 'RESEARCH HOLD: invalid evidence target rows: %s\n' "$TARGET_ROWS" >&2
+            exit 20
+          }
+
+          stage_result="$OUTPUT_ROOT/checkpoints/stages/pair-USDJPY.result.json"
+          install -d -m 700 "$OUTPUT_ROOT/checkpoints/stages"
+          "$python_bin" -m app.domain.training.run_first_six_pair \
+            --stage pairs \
+            --stage-instruments USDJPY \
+            --source dukascopy \
+            --dukascopy-cache-dir "$DUKASCOPY_CACHE" \
+            --dukascopy-max-lookback-days "$DUKASCOPY_LOOKBACK_DAYS" \
+            --output-dir "$OUTPUT_ROOT" \
+            --target-rows "$TARGET_ROWS" \
+            --horizons 1,5,10 \
+            --confidence-threshold 0.60 \
+            --commission-bps 0 \
+            --slippage-bps 0 \
+            --max-splits 5 \
+            --resume \
+            "${bootstrap_args[@]}" \
+            > "$stage_result.tmp"
+          mv "$stage_result.tmp" "$stage_result"
+          printf 'RESEARCH_STAGE_COMPLETE stage=pair instrument=USDJPY\n'
+          REMOTE
+
+          research_pid=$!
+          superseded_marker="$RUNNER_TEMP/irexpro-research-superseded"
+          rm -f "$superseded_marker"
+
+          (
+            while kill -0 "$research_pid" 2>/dev/null; do
+              sleep 60
+              if ! kill -0 "$research_pid" 2>/dev/null; then
+                break
+              fi
+
+              heartbeat_now="$(date +%s)"
+              heartbeat_elapsed=$((heartbeat_now - research_started_epoch))
+              printf 'RESEARCH_HEARTBEAT candidate=%s elapsed_seconds=%s\n' \
+                "$CANDIDATE_SHA" "$heartbeat_elapsed"
+
+              # A model/training commit can move main while this bounded
+              # stage is still collecting data or evaluating folds. Abort the
+              # stage early so newer exact-main work does not wait on
+              # obsolete research; the remaining stages skip cleanly and a
+              # future run resumes from the persisted verified state.
+              if ! git fetch --quiet --no-tags origin main; then
+                printf 'RESEARCH_WATCHDOG_WARNING candidate=%s reason=main_fetch_failed\n' \
+                  "$CANDIDATE_SHA" >&2
+                continue
+              fi
+
+              current_main_sha="$(git rev-parse origin/main)"
+              if [[ "$current_main_sha" != "$CANDIDATE_SHA" ]]; then
+                printf 'RESEARCH_ABORT reason=candidate_superseded candidate=%s current_main=%s\n' \
+                  "$CANDIDATE_SHA" "$current_main_sha"
+                : > "$superseded_marker"
+                kill -TERM "$research_pid" 2>/dev/null || true
+                sleep 5
+                kill -KILL "$research_pid" 2>/dev/null || true
+                break
+              fi
+            done
+          ) &
+          watchdog_pid=$!
+
+          if wait "$research_pid"; then
+            research_status=0
+          else
+            research_status=$?
+          fi
+
+          kill "$watchdog_pid" 2>/dev/null || true
+          wait "$watchdog_pid" 2>/dev/null || true
+
+          research_finished_epoch="$(date +%s)"
+          research_elapsed=$((research_finished_epoch - research_started_epoch))
+
+          if [[ -f "$superseded_marker" ]]; then
+            rm -f "$superseded_marker"
+            printf 'RESEARCH_PROCESS_EXIT candidate=%s status=0 elapsed_seconds=%s reason=candidate_superseded\n' \
+              "$CANDIDATE_SHA" "$research_elapsed"
+            exit 0
+          fi
+
+          printf 'RESEARCH_PROCESS_EXIT candidate=%s status=%s elapsed_seconds=%s\n' \
+            "$CANDIDATE_SHA" "$research_status" "$research_elapsed"
+          exit "$research_status"
+      - name: Remove ephemeral SSH material
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+  pair-audusd:
+    name: Pair stage AUDUSD
+    needs: [validate]
+    if: needs.validate.outputs.run == 'true'
+    # Every VPS-touching stage holds the shared staging-worktree lock. A
+    # pending stage is never allowed to cancel an active owner.
+    concurrency:
+      group: irexpro-staging-worktree
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    # Bounded well under the GitHub-hosted six-hour job ceiling. A cancelled
+    # or failed stage resumes from verified per-day materialized chunks and
+    # the pair checkpoint; it never reprocesses completed work.
+    timeout-minutes: 300
+    environment:
+      name: staging
+
+    steps:
+      - name: Checkout exact deployed candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+
+      - name: Verify exact current main
+        id: current
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --quiet --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+          current_main_sha="$(git rev-parse origin/main)"
+          if [[ "$current_main_sha" != "$CANDIDATE_SHA" ]]; then
+            printf 'current=false\n' >> "$GITHUB_OUTPUT"
+            printf 'RESEARCH_SKIPPED reason=deployed_candidate_superseded candidate=%s current_main=%s\n' \
+              "$CANDIDATE_SHA" "$current_main_sha"
+            exit 0
+          fi
+
+          printf 'current=true\n' >> "$GITHUB_OUTPUT"
+      - name: Configure pinned SSH identity
+        if: steps.current.outputs.current == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$STAGING_SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Run pair stage AUDUSD
+        if: steps.current.outputs.current == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          research_started_epoch="$(date +%s)"
+          printf 'RESEARCH_STAGE_START stage=pair instrument=AUDUSD candidate=%s started_epoch=%s\n' \
+            "$CANDIDATE_SHA" "$research_started_epoch"
+
+          ssh \
+            -i "$HOME/.ssh/irexpro_staging" \
+            -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            "bash -s -- $CANDIDATE_SHA" <<'REMOTE' &
+          set -Eeuo pipefail
+          umask 077
+
+          candidate_sha="$1"
+          [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            printf 'RESEARCH HOLD: invalid candidate SHA.\n' >&2
+            exit 2
+          }
+
+          readonly STAGING_ROOT='/home/lightworld/webapps/irexpro-staging'
+          readonly RESEARCH_ROOT='/home/lightworld/research/irexpro-six-pair'
+          readonly OUTPUT_ROOT="$RESEARCH_ROOT/$candidate_sha"
+          readonly DUKASCOPY_CACHE="/home/lightworld/research/dukascopy-raw-cache"
+
+          cd "$STAGING_ROOT"
+          test "$(git rev-parse --show-toplevel)" = "$STAGING_ROOT"
+          test "$(git rev-parse HEAD)" = "$candidate_sha"
+          test -z "$(git status --porcelain)"
+
+          available_kb="$(df -Pk "$STAGING_ROOT" | awk 'NR==2 {print $4}')"
+          [[ "$available_kb" =~ ^[0-9]+$ ]]
+          if (( available_kb < 2097152 )); then
+            printf 'RESEARCH HOLD: less than 2 GiB free disk space on staging.\n' >&2
+            exit 3
+          fi
+
+          python_bin=''
+          for candidate in \
+            "$STAGING_ROOT/services/ai-engine/.venv/bin/python" \
+            "$STAGING_ROOT/services/ai-engine/venv/bin/python"; do
+            if [[ -x "$candidate" ]]; then
+              python_bin="$candidate"
+              break
+            fi
+          done
+          [[ -n "$python_bin" ]] || {
+            printf 'RESEARCH HOLD: AI Python virtual environment was not found.\n' >&2
+            exit 15
+          }
+
+          # WS8: every stage verifies the same candidate identity that the
+          # validate stage froze into the orchestration plan before doing
+          # any work. The runner additionally re-verifies the study
+          # fingerprint against the persisted study state.
+          readonly PLAN_PATH="$OUTPUT_ROOT/checkpoints/orchestration-plan.json"
+          test -s "$PLAN_PATH" || {
+            printf 'RESEARCH HOLD: staged execution requires the orchestration plan.\n' >&2
+            exit 21
+          }
+          plan_candidate="$(PLAN_PATH="$PLAN_PATH" node -e '
+            const fs = require("fs");
+            const plan = JSON.parse(fs.readFileSync(process.env.PLAN_PATH, "utf8"));
+            if (plan.plan_version !== 1) process.exit(1);
+            process.stdout.write(String(plan.candidate_sha || ""));
+          ')" || {
+            printf 'RESEARCH HOLD: orchestration plan is unreadable.\n' >&2
+            exit 22
+          }
+          test "$plan_candidate" = "$candidate_sha" || {
+            printf 'RESEARCH HOLD: orchestration plan candidate mismatch plan=%s candidate=%s\n' \
+              "$plan_candidate" "$candidate_sha" >&2
+            exit 23
+          }
+
+          bootstrap_root="$(PLAN_PATH="$PLAN_PATH" node -e '
+            const fs = require("fs");
+            const plan = JSON.parse(fs.readFileSync(process.env.PLAN_PATH, "utf8"));
+            const bootstrap = plan.bootstrap_dir;
+            process.stdout.write(bootstrap && bootstrap !== "None" ? String(bootstrap) : "");
+          ')"
+          bootstrap_args=()
+          if [[ -n "$bootstrap_root" ]]; then
+            bootstrap_args=(--bootstrap-dir "$bootstrap_root")
+          fi
+
+          cd "$STAGING_ROOT/services/ai-engine"
+          export PYTHONPATH="$PWD"
+          export IREXPRO_RESEARCH_PROGRESS=1
+          export IREXPRO_RESEARCH_CANDIDATE_SHA="$candidate_sha"
+
+          readonly TARGET_ROWS=100000
+          readonly DUKASCOPY_LOOKBACK_DAYS=180
+          [[ "$TARGET_ROWS" =~ ^[0-9]+$ ]] && (( TARGET_ROWS >= 100000 )) || {
+            printf 'RESEARCH HOLD: invalid evidence target rows: %s\n' "$TARGET_ROWS" >&2
+            exit 20
+          }
+
+          stage_result="$OUTPUT_ROOT/checkpoints/stages/pair-AUDUSD.result.json"
+          install -d -m 700 "$OUTPUT_ROOT/checkpoints/stages"
+          "$python_bin" -m app.domain.training.run_first_six_pair \
+            --stage pairs \
+            --stage-instruments AUDUSD \
+            --source dukascopy \
+            --dukascopy-cache-dir "$DUKASCOPY_CACHE" \
+            --dukascopy-max-lookback-days "$DUKASCOPY_LOOKBACK_DAYS" \
+            --output-dir "$OUTPUT_ROOT" \
+            --target-rows "$TARGET_ROWS" \
+            --horizons 1,5,10 \
+            --confidence-threshold 0.60 \
+            --commission-bps 0 \
+            --slippage-bps 0 \
+            --max-splits 5 \
+            --resume \
+            "${bootstrap_args[@]}" \
+            > "$stage_result.tmp"
+          mv "$stage_result.tmp" "$stage_result"
+          printf 'RESEARCH_STAGE_COMPLETE stage=pair instrument=AUDUSD\n'
+          REMOTE
+
+          research_pid=$!
+          superseded_marker="$RUNNER_TEMP/irexpro-research-superseded"
+          rm -f "$superseded_marker"
+
+          (
+            while kill -0 "$research_pid" 2>/dev/null; do
+              sleep 60
+              if ! kill -0 "$research_pid" 2>/dev/null; then
+                break
+              fi
+
+              heartbeat_now="$(date +%s)"
+              heartbeat_elapsed=$((heartbeat_now - research_started_epoch))
+              printf 'RESEARCH_HEARTBEAT candidate=%s elapsed_seconds=%s\n' \
+                "$CANDIDATE_SHA" "$heartbeat_elapsed"
+
+              # A model/training commit can move main while this bounded
+              # stage is still collecting data or evaluating folds. Abort the
+              # stage early so newer exact-main work does not wait on
+              # obsolete research; the remaining stages skip cleanly and a
+              # future run resumes from the persisted verified state.
+              if ! git fetch --quiet --no-tags origin main; then
+                printf 'RESEARCH_WATCHDOG_WARNING candidate=%s reason=main_fetch_failed\n' \
+                  "$CANDIDATE_SHA" >&2
+                continue
+              fi
+
+              current_main_sha="$(git rev-parse origin/main)"
+              if [[ "$current_main_sha" != "$CANDIDATE_SHA" ]]; then
+                printf 'RESEARCH_ABORT reason=candidate_superseded candidate=%s current_main=%s\n' \
+                  "$CANDIDATE_SHA" "$current_main_sha"
+                : > "$superseded_marker"
+                kill -TERM "$research_pid" 2>/dev/null || true
+                sleep 5
+                kill -KILL "$research_pid" 2>/dev/null || true
+                break
+              fi
+            done
+          ) &
+          watchdog_pid=$!
+
+          if wait "$research_pid"; then
+            research_status=0
+          else
+            research_status=$?
+          fi
+
+          kill "$watchdog_pid" 2>/dev/null || true
+          wait "$watchdog_pid" 2>/dev/null || true
+
+          research_finished_epoch="$(date +%s)"
+          research_elapsed=$((research_finished_epoch - research_started_epoch))
+
+          if [[ -f "$superseded_marker" ]]; then
+            rm -f "$superseded_marker"
+            printf 'RESEARCH_PROCESS_EXIT candidate=%s status=0 elapsed_seconds=%s reason=candidate_superseded\n' \
+              "$CANDIDATE_SHA" "$research_elapsed"
+            exit 0
+          fi
+
+          printf 'RESEARCH_PROCESS_EXIT candidate=%s status=%s elapsed_seconds=%s\n' \
+            "$CANDIDATE_SHA" "$research_status" "$research_elapsed"
+          exit "$research_status"
+      - name: Remove ephemeral SSH material
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+  pair-usdcad:
+    name: Pair stage USDCAD
+    needs: [validate]
+    if: needs.validate.outputs.run == 'true'
+    # Every VPS-touching stage holds the shared staging-worktree lock. A
+    # pending stage is never allowed to cancel an active owner.
+    concurrency:
+      group: irexpro-staging-worktree
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    # Bounded well under the GitHub-hosted six-hour job ceiling. A cancelled
+    # or failed stage resumes from verified per-day materialized chunks and
+    # the pair checkpoint; it never reprocesses completed work.
+    timeout-minutes: 300
+    environment:
+      name: staging
+
+    steps:
+      - name: Checkout exact deployed candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+
+      - name: Verify exact current main
+        id: current
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --quiet --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+          current_main_sha="$(git rev-parse origin/main)"
+          if [[ "$current_main_sha" != "$CANDIDATE_SHA" ]]; then
+            printf 'current=false\n' >> "$GITHUB_OUTPUT"
+            printf 'RESEARCH_SKIPPED reason=deployed_candidate_superseded candidate=%s current_main=%s\n' \
+              "$CANDIDATE_SHA" "$current_main_sha"
+            exit 0
+          fi
+
+          printf 'current=true\n' >> "$GITHUB_OUTPUT"
+      - name: Configure pinned SSH identity
+        if: steps.current.outputs.current == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$STAGING_SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Run pair stage USDCAD
+        if: steps.current.outputs.current == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          research_started_epoch="$(date +%s)"
+          printf 'RESEARCH_STAGE_START stage=pair instrument=USDCAD candidate=%s started_epoch=%s\n' \
+            "$CANDIDATE_SHA" "$research_started_epoch"
+
+          ssh \
+            -i "$HOME/.ssh/irexpro_staging" \
+            -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            "bash -s -- $CANDIDATE_SHA" <<'REMOTE' &
+          set -Eeuo pipefail
+          umask 077
+
+          candidate_sha="$1"
+          [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            printf 'RESEARCH HOLD: invalid candidate SHA.\n' >&2
+            exit 2
+          }
+
+          readonly STAGING_ROOT='/home/lightworld/webapps/irexpro-staging'
+          readonly RESEARCH_ROOT='/home/lightworld/research/irexpro-six-pair'
+          readonly OUTPUT_ROOT="$RESEARCH_ROOT/$candidate_sha"
+          readonly DUKASCOPY_CACHE="/home/lightworld/research/dukascopy-raw-cache"
+
+          cd "$STAGING_ROOT"
+          test "$(git rev-parse --show-toplevel)" = "$STAGING_ROOT"
+          test "$(git rev-parse HEAD)" = "$candidate_sha"
+          test -z "$(git status --porcelain)"
+
+          available_kb="$(df -Pk "$STAGING_ROOT" | awk 'NR==2 {print $4}')"
+          [[ "$available_kb" =~ ^[0-9]+$ ]]
+          if (( available_kb < 2097152 )); then
+            printf 'RESEARCH HOLD: less than 2 GiB free disk space on staging.\n' >&2
+            exit 3
+          fi
+
+          python_bin=''
+          for candidate in \
+            "$STAGING_ROOT/services/ai-engine/.venv/bin/python" \
+            "$STAGING_ROOT/services/ai-engine/venv/bin/python"; do
+            if [[ -x "$candidate" ]]; then
+              python_bin="$candidate"
+              break
+            fi
+          done
+          [[ -n "$python_bin" ]] || {
+            printf 'RESEARCH HOLD: AI Python virtual environment was not found.\n' >&2
+            exit 15
+          }
+
+          # WS8: every stage verifies the same candidate identity that the
+          # validate stage froze into the orchestration plan before doing
+          # any work. The runner additionally re-verifies the study
+          # fingerprint against the persisted study state.
+          readonly PLAN_PATH="$OUTPUT_ROOT/checkpoints/orchestration-plan.json"
+          test -s "$PLAN_PATH" || {
+            printf 'RESEARCH HOLD: staged execution requires the orchestration plan.\n' >&2
+            exit 21
+          }
+          plan_candidate="$(PLAN_PATH="$PLAN_PATH" node -e '
+            const fs = require("fs");
+            const plan = JSON.parse(fs.readFileSync(process.env.PLAN_PATH, "utf8"));
+            if (plan.plan_version !== 1) process.exit(1);
+            process.stdout.write(String(plan.candidate_sha || ""));
+          ')" || {
+            printf 'RESEARCH HOLD: orchestration plan is unreadable.\n' >&2
+            exit 22
+          }
+          test "$plan_candidate" = "$candidate_sha" || {
+            printf 'RESEARCH HOLD: orchestration plan candidate mismatch plan=%s candidate=%s\n' \
+              "$plan_candidate" "$candidate_sha" >&2
+            exit 23
+          }
+
+          bootstrap_root="$(PLAN_PATH="$PLAN_PATH" node -e '
+            const fs = require("fs");
+            const plan = JSON.parse(fs.readFileSync(process.env.PLAN_PATH, "utf8"));
+            const bootstrap = plan.bootstrap_dir;
+            process.stdout.write(bootstrap && bootstrap !== "None" ? String(bootstrap) : "");
+          ')"
+          bootstrap_args=()
+          if [[ -n "$bootstrap_root" ]]; then
+            bootstrap_args=(--bootstrap-dir "$bootstrap_root")
+          fi
+
+          cd "$STAGING_ROOT/services/ai-engine"
+          export PYTHONPATH="$PWD"
+          export IREXPRO_RESEARCH_PROGRESS=1
+          export IREXPRO_RESEARCH_CANDIDATE_SHA="$candidate_sha"
+
+          readonly TARGET_ROWS=100000
+          readonly DUKASCOPY_LOOKBACK_DAYS=180
+          [[ "$TARGET_ROWS" =~ ^[0-9]+$ ]] && (( TARGET_ROWS >= 100000 )) || {
+            printf 'RESEARCH HOLD: invalid evidence target rows: %s\n' "$TARGET_ROWS" >&2
+            exit 20
+          }
+
+          stage_result="$OUTPUT_ROOT/checkpoints/stages/pair-USDCAD.result.json"
+          install -d -m 700 "$OUTPUT_ROOT/checkpoints/stages"
+          "$python_bin" -m app.domain.training.run_first_six_pair \
+            --stage pairs \
+            --stage-instruments USDCAD \
+            --source dukascopy \
+            --dukascopy-cache-dir "$DUKASCOPY_CACHE" \
+            --dukascopy-max-lookback-days "$DUKASCOPY_LOOKBACK_DAYS" \
+            --output-dir "$OUTPUT_ROOT" \
+            --target-rows "$TARGET_ROWS" \
+            --horizons 1,5,10 \
+            --confidence-threshold 0.60 \
+            --commission-bps 0 \
+            --slippage-bps 0 \
+            --max-splits 5 \
+            --resume \
+            "${bootstrap_args[@]}" \
+            > "$stage_result.tmp"
+          mv "$stage_result.tmp" "$stage_result"
+          printf 'RESEARCH_STAGE_COMPLETE stage=pair instrument=USDCAD\n'
+          REMOTE
+
+          research_pid=$!
+          superseded_marker="$RUNNER_TEMP/irexpro-research-superseded"
+          rm -f "$superseded_marker"
+
+          (
+            while kill -0 "$research_pid" 2>/dev/null; do
+              sleep 60
+              if ! kill -0 "$research_pid" 2>/dev/null; then
+                break
+              fi
+
+              heartbeat_now="$(date +%s)"
+              heartbeat_elapsed=$((heartbeat_now - research_started_epoch))
+              printf 'RESEARCH_HEARTBEAT candidate=%s elapsed_seconds=%s\n' \
+                "$CANDIDATE_SHA" "$heartbeat_elapsed"
+
+              # A model/training commit can move main while this bounded
+              # stage is still collecting data or evaluating folds. Abort the
+              # stage early so newer exact-main work does not wait on
+              # obsolete research; the remaining stages skip cleanly and a
+              # future run resumes from the persisted verified state.
+              if ! git fetch --quiet --no-tags origin main; then
+                printf 'RESEARCH_WATCHDOG_WARNING candidate=%s reason=main_fetch_failed\n' \
+                  "$CANDIDATE_SHA" >&2
+                continue
+              fi
+
+              current_main_sha="$(git rev-parse origin/main)"
+              if [[ "$current_main_sha" != "$CANDIDATE_SHA" ]]; then
+                printf 'RESEARCH_ABORT reason=candidate_superseded candidate=%s current_main=%s\n' \
+                  "$CANDIDATE_SHA" "$current_main_sha"
+                : > "$superseded_marker"
+                kill -TERM "$research_pid" 2>/dev/null || true
+                sleep 5
+                kill -KILL "$research_pid" 2>/dev/null || true
+                break
+              fi
+            done
+          ) &
+          watchdog_pid=$!
+
+          if wait "$research_pid"; then
+            research_status=0
+          else
+            research_status=$?
+          fi
+
+          kill "$watchdog_pid" 2>/dev/null || true
+          wait "$watchdog_pid" 2>/dev/null || true
+
+          research_finished_epoch="$(date +%s)"
+          research_elapsed=$((research_finished_epoch - research_started_epoch))
+
+          if [[ -f "$superseded_marker" ]]; then
+            rm -f "$superseded_marker"
+            printf 'RESEARCH_PROCESS_EXIT candidate=%s status=0 elapsed_seconds=%s reason=candidate_superseded\n' \
+              "$CANDIDATE_SHA" "$research_elapsed"
+            exit 0
+          fi
+
+          printf 'RESEARCH_PROCESS_EXIT candidate=%s status=%s elapsed_seconds=%s\n' \
+            "$CANDIDATE_SHA" "$research_status" "$research_elapsed"
+          exit "$research_status"
+      - name: Remove ephemeral SSH material
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+  pair-usdchf:
+    name: Pair stage USDCHF
+    needs: [validate]
+    if: needs.validate.outputs.run == 'true'
+    # Every VPS-touching stage holds the shared staging-worktree lock. A
+    # pending stage is never allowed to cancel an active owner.
+    concurrency:
+      group: irexpro-staging-worktree
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    # Bounded well under the GitHub-hosted six-hour job ceiling. A cancelled
+    # or failed stage resumes from verified per-day materialized chunks and
+    # the pair checkpoint; it never reprocesses completed work.
+    timeout-minutes: 300
+    environment:
+      name: staging
+
+    steps:
+      - name: Checkout exact deployed candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+
+      - name: Verify exact current main
+        id: current
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --quiet --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+          current_main_sha="$(git rev-parse origin/main)"
+          if [[ "$current_main_sha" != "$CANDIDATE_SHA" ]]; then
+            printf 'current=false\n' >> "$GITHUB_OUTPUT"
+            printf 'RESEARCH_SKIPPED reason=deployed_candidate_superseded candidate=%s current_main=%s\n' \
+              "$CANDIDATE_SHA" "$current_main_sha"
+            exit 0
+          fi
+
+          printf 'current=true\n' >> "$GITHUB_OUTPUT"
+      - name: Configure pinned SSH identity
+        if: steps.current.outputs.current == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$STAGING_SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Run pair stage USDCHF
+        if: steps.current.outputs.current == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          research_started_epoch="$(date +%s)"
+          printf 'RESEARCH_STAGE_START stage=pair instrument=USDCHF candidate=%s started_epoch=%s\n' \
+            "$CANDIDATE_SHA" "$research_started_epoch"
+
+          ssh \
+            -i "$HOME/.ssh/irexpro_staging" \
+            -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            "bash -s -- $CANDIDATE_SHA" <<'REMOTE' &
+          set -Eeuo pipefail
+          umask 077
+
+          candidate_sha="$1"
+          [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            printf 'RESEARCH HOLD: invalid candidate SHA.\n' >&2
+            exit 2
+          }
+
+          readonly STAGING_ROOT='/home/lightworld/webapps/irexpro-staging'
+          readonly RESEARCH_ROOT='/home/lightworld/research/irexpro-six-pair'
+          readonly OUTPUT_ROOT="$RESEARCH_ROOT/$candidate_sha"
+          readonly DUKASCOPY_CACHE="/home/lightworld/research/dukascopy-raw-cache"
+
+          cd "$STAGING_ROOT"
+          test "$(git rev-parse --show-toplevel)" = "$STAGING_ROOT"
+          test "$(git rev-parse HEAD)" = "$candidate_sha"
+          test -z "$(git status --porcelain)"
+
+          available_kb="$(df -Pk "$STAGING_ROOT" | awk 'NR==2 {print $4}')"
+          [[ "$available_kb" =~ ^[0-9]+$ ]]
+          if (( available_kb < 2097152 )); then
+            printf 'RESEARCH HOLD: less than 2 GiB free disk space on staging.\n' >&2
+            exit 3
+          fi
+
+          python_bin=''
+          for candidate in \
+            "$STAGING_ROOT/services/ai-engine/.venv/bin/python" \
+            "$STAGING_ROOT/services/ai-engine/venv/bin/python"; do
+            if [[ -x "$candidate" ]]; then
+              python_bin="$candidate"
+              break
+            fi
+          done
+          [[ -n "$python_bin" ]] || {
+            printf 'RESEARCH HOLD: AI Python virtual environment was not found.\n' >&2
+            exit 15
+          }
+
+          # WS8: every stage verifies the same candidate identity that the
+          # validate stage froze into the orchestration plan before doing
+          # any work. The runner additionally re-verifies the study
+          # fingerprint against the persisted study state.
+          readonly PLAN_PATH="$OUTPUT_ROOT/checkpoints/orchestration-plan.json"
+          test -s "$PLAN_PATH" || {
+            printf 'RESEARCH HOLD: staged execution requires the orchestration plan.\n' >&2
+            exit 21
+          }
+          plan_candidate="$(PLAN_PATH="$PLAN_PATH" node -e '
+            const fs = require("fs");
+            const plan = JSON.parse(fs.readFileSync(process.env.PLAN_PATH, "utf8"));
+            if (plan.plan_version !== 1) process.exit(1);
+            process.stdout.write(String(plan.candidate_sha || ""));
+          ')" || {
+            printf 'RESEARCH HOLD: orchestration plan is unreadable.\n' >&2
+            exit 22
+          }
+          test "$plan_candidate" = "$candidate_sha" || {
+            printf 'RESEARCH HOLD: orchestration plan candidate mismatch plan=%s candidate=%s\n' \
+              "$plan_candidate" "$candidate_sha" >&2
+            exit 23
+          }
+
+          bootstrap_root="$(PLAN_PATH="$PLAN_PATH" node -e '
+            const fs = require("fs");
+            const plan = JSON.parse(fs.readFileSync(process.env.PLAN_PATH, "utf8"));
+            const bootstrap = plan.bootstrap_dir;
+            process.stdout.write(bootstrap && bootstrap !== "None" ? String(bootstrap) : "");
+          ')"
+          bootstrap_args=()
+          if [[ -n "$bootstrap_root" ]]; then
+            bootstrap_args=(--bootstrap-dir "$bootstrap_root")
+          fi
+
+          cd "$STAGING_ROOT/services/ai-engine"
+          export PYTHONPATH="$PWD"
+          export IREXPRO_RESEARCH_PROGRESS=1
+          export IREXPRO_RESEARCH_CANDIDATE_SHA="$candidate_sha"
+
+          readonly TARGET_ROWS=100000
+          readonly DUKASCOPY_LOOKBACK_DAYS=180
+          [[ "$TARGET_ROWS" =~ ^[0-9]+$ ]] && (( TARGET_ROWS >= 100000 )) || {
+            printf 'RESEARCH HOLD: invalid evidence target rows: %s\n' "$TARGET_ROWS" >&2
+            exit 20
+          }
+
+          stage_result="$OUTPUT_ROOT/checkpoints/stages/pair-USDCHF.result.json"
+          install -d -m 700 "$OUTPUT_ROOT/checkpoints/stages"
+          "$python_bin" -m app.domain.training.run_first_six_pair \
+            --stage pairs \
+            --stage-instruments USDCHF \
+            --source dukascopy \
+            --dukascopy-cache-dir "$DUKASCOPY_CACHE" \
+            --dukascopy-max-lookback-days "$DUKASCOPY_LOOKBACK_DAYS" \
+            --output-dir "$OUTPUT_ROOT" \
+            --target-rows "$TARGET_ROWS" \
+            --horizons 1,5,10 \
+            --confidence-threshold 0.60 \
+            --commission-bps 0 \
+            --slippage-bps 0 \
+            --max-splits 5 \
+            --resume \
+            "${bootstrap_args[@]}" \
+            > "$stage_result.tmp"
+          mv "$stage_result.tmp" "$stage_result"
+          printf 'RESEARCH_STAGE_COMPLETE stage=pair instrument=USDCHF\n'
+          REMOTE
+
+          research_pid=$!
+          superseded_marker="$RUNNER_TEMP/irexpro-research-superseded"
+          rm -f "$superseded_marker"
+
+          (
+            while kill -0 "$research_pid" 2>/dev/null; do
+              sleep 60
+              if ! kill -0 "$research_pid" 2>/dev/null; then
+                break
+              fi
+
+              heartbeat_now="$(date +%s)"
+              heartbeat_elapsed=$((heartbeat_now - research_started_epoch))
+              printf 'RESEARCH_HEARTBEAT candidate=%s elapsed_seconds=%s\n' \
+                "$CANDIDATE_SHA" "$heartbeat_elapsed"
+
+              # A model/training commit can move main while this bounded
+              # stage is still collecting data or evaluating folds. Abort the
+              # stage early so newer exact-main work does not wait on
+              # obsolete research; the remaining stages skip cleanly and a
+              # future run resumes from the persisted verified state.
+              if ! git fetch --quiet --no-tags origin main; then
+                printf 'RESEARCH_WATCHDOG_WARNING candidate=%s reason=main_fetch_failed\n' \
+                  "$CANDIDATE_SHA" >&2
+                continue
+              fi
+
+              current_main_sha="$(git rev-parse origin/main)"
+              if [[ "$current_main_sha" != "$CANDIDATE_SHA" ]]; then
+                printf 'RESEARCH_ABORT reason=candidate_superseded candidate=%s current_main=%s\n' \
+                  "$CANDIDATE_SHA" "$current_main_sha"
+                : > "$superseded_marker"
+                kill -TERM "$research_pid" 2>/dev/null || true
+                sleep 5
+                kill -KILL "$research_pid" 2>/dev/null || true
+                break
+              fi
+            done
+          ) &
+          watchdog_pid=$!
+
+          if wait "$research_pid"; then
+            research_status=0
+          else
+            research_status=$?
+          fi
+
+          kill "$watchdog_pid" 2>/dev/null || true
+          wait "$watchdog_pid" 2>/dev/null || true
+
+          research_finished_epoch="$(date +%s)"
+          research_elapsed=$((research_finished_epoch - research_started_epoch))
+
+          if [[ -f "$superseded_marker" ]]; then
+            rm -f "$superseded_marker"
+            printf 'RESEARCH_PROCESS_EXIT candidate=%s status=0 elapsed_seconds=%s reason=candidate_superseded\n' \
+              "$CANDIDATE_SHA" "$research_elapsed"
+            exit 0
+          fi
+
+          printf 'RESEARCH_PROCESS_EXIT candidate=%s status=%s elapsed_seconds=%s\n' \
+            "$CANDIDATE_SHA" "$research_status" "$research_elapsed"
+          exit "$research_status"
+      - name: Remove ephemeral SSH material
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+  horizon-1m:
+    name: Horizon stage 1m
+    needs: [pair-eurusd, pair-gbpusd, pair-usdjpy, pair-audusd, pair-usdcad, pair-usdchf]
+    if: needs.validate.outputs.run == 'true'
+    concurrency:
+      group: irexpro-staging-worktree
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    # One bounded horizon per job. Fold checkpoints make even this stage
+    # independently resumable if it is cancelled mid-evaluation.
+    timeout-minutes: 240
+    environment:
+      name: staging
+
+    steps:
+      - name: Checkout exact deployed candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+
+      - name: Verify exact current main
+        id: current
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --quiet --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+          current_main_sha="$(git rev-parse origin/main)"
+          if [[ "$current_main_sha" != "$CANDIDATE_SHA" ]]; then
+            printf 'current=false\n' >> "$GITHUB_OUTPUT"
+            printf 'RESEARCH_SKIPPED reason=deployed_candidate_superseded candidate=%s current_main=%s\n' \
+              "$CANDIDATE_SHA" "$current_main_sha"
+            exit 0
+          fi
+
+          printf 'current=true\n' >> "$GITHUB_OUTPUT"
+      - name: Configure pinned SSH identity
+        if: steps.current.outputs.current == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$STAGING_SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Run horizon stage 1m
+        if: steps.current.outputs.current == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          research_started_epoch="$(date +%s)"
+          printf 'RESEARCH_STAGE_START stage=horizon horizon=1m candidate=%s started_epoch=%s\n' \
+            "$CANDIDATE_SHA" "$research_started_epoch"
+
+          ssh \
+            -i "$HOME/.ssh/irexpro_staging" \
+            -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            "bash -s -- $CANDIDATE_SHA" <<'REMOTE' &
+          set -Eeuo pipefail
+          umask 077
+
+          candidate_sha="$1"
+          [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            printf 'RESEARCH HOLD: invalid candidate SHA.\n' >&2
+            exit 2
+          }
+
+          readonly STAGING_ROOT='/home/lightworld/webapps/irexpro-staging'
+          readonly RESEARCH_ROOT='/home/lightworld/research/irexpro-six-pair'
+          readonly OUTPUT_ROOT="$RESEARCH_ROOT/$candidate_sha"
+          readonly DUKASCOPY_CACHE="/home/lightworld/research/dukascopy-raw-cache"
+
+          cd "$STAGING_ROOT"
+          test "$(git rev-parse --show-toplevel)" = "$STAGING_ROOT"
+          test "$(git rev-parse HEAD)" = "$candidate_sha"
+          test -z "$(git status --porcelain)"
+
+          available_kb="$(df -Pk "$STAGING_ROOT" | awk 'NR==2 {print $4}')"
+          [[ "$available_kb" =~ ^[0-9]+$ ]]
+          if (( available_kb < 2097152 )); then
+            printf 'RESEARCH HOLD: less than 2 GiB free disk space on staging.\n' >&2
+            exit 3
+          fi
+
+          python_bin=''
+          for candidate in \
+            "$STAGING_ROOT/services/ai-engine/.venv/bin/python" \
+            "$STAGING_ROOT/services/ai-engine/venv/bin/python"; do
+            if [[ -x "$candidate" ]]; then
+              python_bin="$candidate"
+              break
+            fi
+          done
+          [[ -n "$python_bin" ]] || {
+            printf 'RESEARCH HOLD: AI Python virtual environment was not found.\n' >&2
+            exit 15
+          }
+
+          # WS8: every stage verifies the same candidate identity that the
+          # validate stage froze into the orchestration plan before doing
+          # any work. The runner additionally re-verifies the study
+          # fingerprint against the persisted study state.
+          readonly PLAN_PATH="$OUTPUT_ROOT/checkpoints/orchestration-plan.json"
+          test -s "$PLAN_PATH" || {
+            printf 'RESEARCH HOLD: staged execution requires the orchestration plan.\n' >&2
+            exit 21
+          }
+          plan_candidate="$(PLAN_PATH="$PLAN_PATH" node -e '
+            const fs = require("fs");
+            const plan = JSON.parse(fs.readFileSync(process.env.PLAN_PATH, "utf8"));
+            if (plan.plan_version !== 1) process.exit(1);
+            process.stdout.write(String(plan.candidate_sha || ""));
+          ')" || {
+            printf 'RESEARCH HOLD: orchestration plan is unreadable.\n' >&2
+            exit 22
+          }
+          test "$plan_candidate" = "$candidate_sha" || {
+            printf 'RESEARCH HOLD: orchestration plan candidate mismatch plan=%s candidate=%s\n' \
+              "$plan_candidate" "$candidate_sha" >&2
+            exit 23
+          }
+
+          bootstrap_root="$(PLAN_PATH="$PLAN_PATH" node -e '
+            const fs = require("fs");
+            const plan = JSON.parse(fs.readFileSync(process.env.PLAN_PATH, "utf8"));
+            const bootstrap = plan.bootstrap_dir;
+            process.stdout.write(bootstrap && bootstrap !== "None" ? String(bootstrap) : "");
+          ')"
+          bootstrap_args=()
+          if [[ -n "$bootstrap_root" ]]; then
+            bootstrap_args=(--bootstrap-dir "$bootstrap_root")
+          fi
+
+          cd "$STAGING_ROOT/services/ai-engine"
+          export PYTHONPATH="$PWD"
+          export IREXPRO_RESEARCH_PROGRESS=1
+          export IREXPRO_RESEARCH_CANDIDATE_SHA="$candidate_sha"
+          export IREXPRO_XGB_N_JOBS=2
+          printf 'RESEARCH_CONFIGURATION xgb_n_jobs=%s progress=%s resume=true candidate=%s stage=horizon horizon=1m recovery=run55_exit137\n' \
+            "$IREXPRO_XGB_N_JOBS" "$IREXPRO_RESEARCH_PROGRESS" "$candidate_sha"
+
+          readonly TARGET_ROWS=100000
+          readonly DUKASCOPY_LOOKBACK_DAYS=180
+          [[ "$TARGET_ROWS" =~ ^[0-9]+$ ]] && (( TARGET_ROWS >= 100000 )) || {
+            printf 'RESEARCH HOLD: invalid evidence target rows: %s\n' "$TARGET_ROWS" >&2
+            exit 20
+          }
+
+          stage_result="$OUTPUT_ROOT/checkpoints/stages/horizon-1m.result.json"
+          install -d -m 700 "$OUTPUT_ROOT/checkpoints/stages"
+          "$python_bin" -m app.domain.training.run_first_six_pair \
+            --stage horizons \
+            --stage-horizons 1 \
+            --source dukascopy \
+            --dukascopy-cache-dir "$DUKASCOPY_CACHE" \
+            --dukascopy-max-lookback-days "$DUKASCOPY_LOOKBACK_DAYS" \
+            --output-dir "$OUTPUT_ROOT" \
+            --target-rows "$TARGET_ROWS" \
+            --horizons 1,5,10 \
+            --confidence-threshold 0.60 \
+            --commission-bps 0 \
+            --slippage-bps 0 \
+            --max-splits 5 \
+            --resume \
+            > "$stage_result.tmp"
+          mv "$stage_result.tmp" "$stage_result"
+          printf 'RESEARCH_STAGE_COMPLETE stage=horizon horizon=1m\n'
+          REMOTE
+
+          research_pid=$!
+          superseded_marker="$RUNNER_TEMP/irexpro-research-superseded"
+          rm -f "$superseded_marker"
+
+          (
+            while kill -0 "$research_pid" 2>/dev/null; do
+              sleep 60
+              if ! kill -0 "$research_pid" 2>/dev/null; then
+                break
+              fi
+
+              heartbeat_now="$(date +%s)"
+              heartbeat_elapsed=$((heartbeat_now - research_started_epoch))
+              printf 'RESEARCH_HEARTBEAT candidate=%s elapsed_seconds=%s\n' \
+                "$CANDIDATE_SHA" "$heartbeat_elapsed"
+
+              # A model/training commit can move main while this bounded
+              # stage is still collecting data or evaluating folds. Abort the
+              # stage early so newer exact-main work does not wait on
+              # obsolete research; the remaining stages skip cleanly and a
+              # future run resumes from the persisted verified state.
+              if ! git fetch --quiet --no-tags origin main; then
+                printf 'RESEARCH_WATCHDOG_WARNING candidate=%s reason=main_fetch_failed\n' \
+                  "$CANDIDATE_SHA" >&2
+                continue
+              fi
+
+              current_main_sha="$(git rev-parse origin/main)"
+              if [[ "$current_main_sha" != "$CANDIDATE_SHA" ]]; then
+                printf 'RESEARCH_ABORT reason=candidate_superseded candidate=%s current_main=%s\n' \
+                  "$CANDIDATE_SHA" "$current_main_sha"
+                : > "$superseded_marker"
+                kill -TERM "$research_pid" 2>/dev/null || true
+                sleep 5
+                kill -KILL "$research_pid" 2>/dev/null || true
+                break
+              fi
+            done
+          ) &
+          watchdog_pid=$!
+
+          if wait "$research_pid"; then
+            research_status=0
+          else
+            research_status=$?
+          fi
+
+          kill "$watchdog_pid" 2>/dev/null || true
+          wait "$watchdog_pid" 2>/dev/null || true
+
+          research_finished_epoch="$(date +%s)"
+          research_elapsed=$((research_finished_epoch - research_started_epoch))
+
+          if [[ -f "$superseded_marker" ]]; then
+            rm -f "$superseded_marker"
+            printf 'RESEARCH_PROCESS_EXIT candidate=%s status=0 elapsed_seconds=%s reason=candidate_superseded\n' \
+              "$CANDIDATE_SHA" "$research_elapsed"
+            exit 0
+          fi
+
+          printf 'RESEARCH_PROCESS_EXIT candidate=%s status=%s elapsed_seconds=%s\n' \
+            "$CANDIDATE_SHA" "$research_status" "$research_elapsed"
+          exit "$research_status"
+      - name: Remove ephemeral SSH material
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+  horizon-5m:
+    name: Horizon stage 5m
+    needs: [pair-eurusd, pair-gbpusd, pair-usdjpy, pair-audusd, pair-usdcad, pair-usdchf]
+    if: needs.validate.outputs.run == 'true'
+    concurrency:
+      group: irexpro-staging-worktree
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    # One bounded horizon per job. Fold checkpoints make even this stage
+    # independently resumable if it is cancelled mid-evaluation.
+    timeout-minutes: 240
+    environment:
+      name: staging
+
+    steps:
+      - name: Checkout exact deployed candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+
+      - name: Verify exact current main
+        id: current
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --quiet --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+          current_main_sha="$(git rev-parse origin/main)"
+          if [[ "$current_main_sha" != "$CANDIDATE_SHA" ]]; then
+            printf 'current=false\n' >> "$GITHUB_OUTPUT"
+            printf 'RESEARCH_SKIPPED reason=deployed_candidate_superseded candidate=%s current_main=%s\n' \
+              "$CANDIDATE_SHA" "$current_main_sha"
+            exit 0
+          fi
+
+          printf 'current=true\n' >> "$GITHUB_OUTPUT"
+      - name: Configure pinned SSH identity
+        if: steps.current.outputs.current == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$STAGING_SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Run horizon stage 5m
+        if: steps.current.outputs.current == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          research_started_epoch="$(date +%s)"
+          printf 'RESEARCH_STAGE_START stage=horizon horizon=5m candidate=%s started_epoch=%s\n' \
+            "$CANDIDATE_SHA" "$research_started_epoch"
+
+          ssh \
+            -i "$HOME/.ssh/irexpro_staging" \
+            -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            "bash -s -- $CANDIDATE_SHA" <<'REMOTE' &
+          set -Eeuo pipefail
+          umask 077
+
+          candidate_sha="$1"
+          [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            printf 'RESEARCH HOLD: invalid candidate SHA.\n' >&2
+            exit 2
+          }
+
+          readonly STAGING_ROOT='/home/lightworld/webapps/irexpro-staging'
+          readonly RESEARCH_ROOT='/home/lightworld/research/irexpro-six-pair'
+          readonly OUTPUT_ROOT="$RESEARCH_ROOT/$candidate_sha"
+          readonly DUKASCOPY_CACHE="/home/lightworld/research/dukascopy-raw-cache"
+
+          cd "$STAGING_ROOT"
+          test "$(git rev-parse --show-toplevel)" = "$STAGING_ROOT"
+          test "$(git rev-parse HEAD)" = "$candidate_sha"
+          test -z "$(git status --porcelain)"
+
+          available_kb="$(df -Pk "$STAGING_ROOT" | awk 'NR==2 {print $4}')"
+          [[ "$available_kb" =~ ^[0-9]+$ ]]
+          if (( available_kb < 2097152 )); then
+            printf 'RESEARCH HOLD: less than 2 GiB free disk space on staging.\n' >&2
+            exit 3
+          fi
+
+          python_bin=''
+          for candidate in \
+            "$STAGING_ROOT/services/ai-engine/.venv/bin/python" \
+            "$STAGING_ROOT/services/ai-engine/venv/bin/python"; do
+            if [[ -x "$candidate" ]]; then
+              python_bin="$candidate"
+              break
+            fi
+          done
+          [[ -n "$python_bin" ]] || {
+            printf 'RESEARCH HOLD: AI Python virtual environment was not found.\n' >&2
+            exit 15
+          }
+
+          # WS8: every stage verifies the same candidate identity that the
+          # validate stage froze into the orchestration plan before doing
+          # any work. The runner additionally re-verifies the study
+          # fingerprint against the persisted study state.
+          readonly PLAN_PATH="$OUTPUT_ROOT/checkpoints/orchestration-plan.json"
+          test -s "$PLAN_PATH" || {
+            printf 'RESEARCH HOLD: staged execution requires the orchestration plan.\n' >&2
+            exit 21
+          }
+          plan_candidate="$(PLAN_PATH="$PLAN_PATH" node -e '
+            const fs = require("fs");
+            const plan = JSON.parse(fs.readFileSync(process.env.PLAN_PATH, "utf8"));
+            if (plan.plan_version !== 1) process.exit(1);
+            process.stdout.write(String(plan.candidate_sha || ""));
+          ')" || {
+            printf 'RESEARCH HOLD: orchestration plan is unreadable.\n' >&2
+            exit 22
+          }
+          test "$plan_candidate" = "$candidate_sha" || {
+            printf 'RESEARCH HOLD: orchestration plan candidate mismatch plan=%s candidate=%s\n' \
+              "$plan_candidate" "$candidate_sha" >&2
+            exit 23
+          }
+
+          bootstrap_root="$(PLAN_PATH="$PLAN_PATH" node -e '
+            const fs = require("fs");
+            const plan = JSON.parse(fs.readFileSync(process.env.PLAN_PATH, "utf8"));
+            const bootstrap = plan.bootstrap_dir;
+            process.stdout.write(bootstrap && bootstrap !== "None" ? String(bootstrap) : "");
+          ')"
+          bootstrap_args=()
+          if [[ -n "$bootstrap_root" ]]; then
+            bootstrap_args=(--bootstrap-dir "$bootstrap_root")
+          fi
+
+          cd "$STAGING_ROOT/services/ai-engine"
+          export PYTHONPATH="$PWD"
+          export IREXPRO_RESEARCH_PROGRESS=1
+          export IREXPRO_RESEARCH_CANDIDATE_SHA="$candidate_sha"
+          export IREXPRO_XGB_N_JOBS=2
+          printf 'RESEARCH_CONFIGURATION xgb_n_jobs=%s progress=%s resume=true candidate=%s stage=horizon horizon=5m recovery=run55_exit137\n' \
+            "$IREXPRO_XGB_N_JOBS" "$IREXPRO_RESEARCH_PROGRESS" "$candidate_sha"
+
+          readonly TARGET_ROWS=100000
+          readonly DUKASCOPY_LOOKBACK_DAYS=180
+          [[ "$TARGET_ROWS" =~ ^[0-9]+$ ]] && (( TARGET_ROWS >= 100000 )) || {
+            printf 'RESEARCH HOLD: invalid evidence target rows: %s\n' "$TARGET_ROWS" >&2
+            exit 20
+          }
+
+          stage_result="$OUTPUT_ROOT/checkpoints/stages/horizon-5m.result.json"
+          install -d -m 700 "$OUTPUT_ROOT/checkpoints/stages"
+          "$python_bin" -m app.domain.training.run_first_six_pair \
+            --stage horizons \
+            --stage-horizons 5 \
+            --source dukascopy \
+            --dukascopy-cache-dir "$DUKASCOPY_CACHE" \
+            --dukascopy-max-lookback-days "$DUKASCOPY_LOOKBACK_DAYS" \
+            --output-dir "$OUTPUT_ROOT" \
+            --target-rows "$TARGET_ROWS" \
+            --horizons 1,5,10 \
+            --confidence-threshold 0.60 \
+            --commission-bps 0 \
+            --slippage-bps 0 \
+            --max-splits 5 \
+            --resume \
+            > "$stage_result.tmp"
+          mv "$stage_result.tmp" "$stage_result"
+          printf 'RESEARCH_STAGE_COMPLETE stage=horizon horizon=5m\n'
+          REMOTE
+
+          research_pid=$!
+          superseded_marker="$RUNNER_TEMP/irexpro-research-superseded"
+          rm -f "$superseded_marker"
+
+          (
+            while kill -0 "$research_pid" 2>/dev/null; do
+              sleep 60
+              if ! kill -0 "$research_pid" 2>/dev/null; then
+                break
+              fi
+
+              heartbeat_now="$(date +%s)"
+              heartbeat_elapsed=$((heartbeat_now - research_started_epoch))
+              printf 'RESEARCH_HEARTBEAT candidate=%s elapsed_seconds=%s\n' \
+                "$CANDIDATE_SHA" "$heartbeat_elapsed"
+
+              # A model/training commit can move main while this bounded
+              # stage is still collecting data or evaluating folds. Abort the
+              # stage early so newer exact-main work does not wait on
+              # obsolete research; the remaining stages skip cleanly and a
+              # future run resumes from the persisted verified state.
+              if ! git fetch --quiet --no-tags origin main; then
+                printf 'RESEARCH_WATCHDOG_WARNING candidate=%s reason=main_fetch_failed\n' \
+                  "$CANDIDATE_SHA" >&2
+                continue
+              fi
+
+              current_main_sha="$(git rev-parse origin/main)"
+              if [[ "$current_main_sha" != "$CANDIDATE_SHA" ]]; then
+                printf 'RESEARCH_ABORT reason=candidate_superseded candidate=%s current_main=%s\n' \
+                  "$CANDIDATE_SHA" "$current_main_sha"
+                : > "$superseded_marker"
+                kill -TERM "$research_pid" 2>/dev/null || true
+                sleep 5
+                kill -KILL "$research_pid" 2>/dev/null || true
+                break
+              fi
+            done
+          ) &
+          watchdog_pid=$!
+
+          if wait "$research_pid"; then
+            research_status=0
+          else
+            research_status=$?
+          fi
+
+          kill "$watchdog_pid" 2>/dev/null || true
+          wait "$watchdog_pid" 2>/dev/null || true
+
+          research_finished_epoch="$(date +%s)"
+          research_elapsed=$((research_finished_epoch - research_started_epoch))
+
+          if [[ -f "$superseded_marker" ]]; then
+            rm -f "$superseded_marker"
+            printf 'RESEARCH_PROCESS_EXIT candidate=%s status=0 elapsed_seconds=%s reason=candidate_superseded\n' \
+              "$CANDIDATE_SHA" "$research_elapsed"
+            exit 0
+          fi
+
+          printf 'RESEARCH_PROCESS_EXIT candidate=%s status=%s elapsed_seconds=%s\n' \
+            "$CANDIDATE_SHA" "$research_status" "$research_elapsed"
+          exit "$research_status"
+      - name: Remove ephemeral SSH material
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+  horizon-10m:
+    name: Horizon stage 10m
+    needs: [pair-eurusd, pair-gbpusd, pair-usdjpy, pair-audusd, pair-usdcad, pair-usdchf]
+    if: needs.validate.outputs.run == 'true'
+    concurrency:
+      group: irexpro-staging-worktree
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    # One bounded horizon per job. Fold checkpoints make even this stage
+    # independently resumable if it is cancelled mid-evaluation.
+    timeout-minutes: 240
+    environment:
+      name: staging
+
+    steps:
+      - name: Checkout exact deployed candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+
+      - name: Verify exact current main
+        id: current
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --quiet --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+          current_main_sha="$(git rev-parse origin/main)"
+          if [[ "$current_main_sha" != "$CANDIDATE_SHA" ]]; then
+            printf 'current=false\n' >> "$GITHUB_OUTPUT"
+            printf 'RESEARCH_SKIPPED reason=deployed_candidate_superseded candidate=%s current_main=%s\n' \
+              "$CANDIDATE_SHA" "$current_main_sha"
+            exit 0
+          fi
+
+          printf 'current=true\n' >> "$GITHUB_OUTPUT"
+      - name: Configure pinned SSH identity
+        if: steps.current.outputs.current == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$STAGING_SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Run horizon stage 10m
+        if: steps.current.outputs.current == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          research_started_epoch="$(date +%s)"
+          printf 'RESEARCH_STAGE_START stage=horizon horizon=10m candidate=%s started_epoch=%s\n' \
+            "$CANDIDATE_SHA" "$research_started_epoch"
+
+          ssh \
+            -i "$HOME/.ssh/irexpro_staging" \
+            -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            "bash -s -- $CANDIDATE_SHA" <<'REMOTE' &
+          set -Eeuo pipefail
+          umask 077
+
+          candidate_sha="$1"
+          [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            printf 'RESEARCH HOLD: invalid candidate SHA.\n' >&2
+            exit 2
+          }
+
+          readonly STAGING_ROOT='/home/lightworld/webapps/irexpro-staging'
+          readonly RESEARCH_ROOT='/home/lightworld/research/irexpro-six-pair'
+          readonly OUTPUT_ROOT="$RESEARCH_ROOT/$candidate_sha"
+          readonly DUKASCOPY_CACHE="/home/lightworld/research/dukascopy-raw-cache"
+
+          cd "$STAGING_ROOT"
+          test "$(git rev-parse --show-toplevel)" = "$STAGING_ROOT"
+          test "$(git rev-parse HEAD)" = "$candidate_sha"
+          test -z "$(git status --porcelain)"
+
+          available_kb="$(df -Pk "$STAGING_ROOT" | awk 'NR==2 {print $4}')"
+          [[ "$available_kb" =~ ^[0-9]+$ ]]
+          if (( available_kb < 2097152 )); then
+            printf 'RESEARCH HOLD: less than 2 GiB free disk space on staging.\n' >&2
+            exit 3
+          fi
+
+          python_bin=''
+          for candidate in \
+            "$STAGING_ROOT/services/ai-engine/.venv/bin/python" \
+            "$STAGING_ROOT/services/ai-engine/venv/bin/python"; do
+            if [[ -x "$candidate" ]]; then
+              python_bin="$candidate"
+              break
+            fi
+          done
+          [[ -n "$python_bin" ]] || {
+            printf 'RESEARCH HOLD: AI Python virtual environment was not found.\n' >&2
+            exit 15
+          }
+
+          # WS8: every stage verifies the same candidate identity that the
+          # validate stage froze into the orchestration plan before doing
+          # any work. The runner additionally re-verifies the study
+          # fingerprint against the persisted study state.
+          readonly PLAN_PATH="$OUTPUT_ROOT/checkpoints/orchestration-plan.json"
+          test -s "$PLAN_PATH" || {
+            printf 'RESEARCH HOLD: staged execution requires the orchestration plan.\n' >&2
+            exit 21
+          }
+          plan_candidate="$(PLAN_PATH="$PLAN_PATH" node -e '
+            const fs = require("fs");
+            const plan = JSON.parse(fs.readFileSync(process.env.PLAN_PATH, "utf8"));
+            if (plan.plan_version !== 1) process.exit(1);
+            process.stdout.write(String(plan.candidate_sha || ""));
+          ')" || {
+            printf 'RESEARCH HOLD: orchestration plan is unreadable.\n' >&2
+            exit 22
+          }
+          test "$plan_candidate" = "$candidate_sha" || {
+            printf 'RESEARCH HOLD: orchestration plan candidate mismatch plan=%s candidate=%s\n' \
+              "$plan_candidate" "$candidate_sha" >&2
+            exit 23
+          }
+
+          bootstrap_root="$(PLAN_PATH="$PLAN_PATH" node -e '
+            const fs = require("fs");
+            const plan = JSON.parse(fs.readFileSync(process.env.PLAN_PATH, "utf8"));
+            const bootstrap = plan.bootstrap_dir;
+            process.stdout.write(bootstrap && bootstrap !== "None" ? String(bootstrap) : "");
+          ')"
+          bootstrap_args=()
+          if [[ -n "$bootstrap_root" ]]; then
+            bootstrap_args=(--bootstrap-dir "$bootstrap_root")
+          fi
+
+          cd "$STAGING_ROOT/services/ai-engine"
+          export PYTHONPATH="$PWD"
+          export IREXPRO_RESEARCH_PROGRESS=1
+          export IREXPRO_RESEARCH_CANDIDATE_SHA="$candidate_sha"
+          export IREXPRO_XGB_N_JOBS=2
+          printf 'RESEARCH_CONFIGURATION xgb_n_jobs=%s progress=%s resume=true candidate=%s stage=horizon horizon=10m recovery=run55_exit137\n' \
+            "$IREXPRO_XGB_N_JOBS" "$IREXPRO_RESEARCH_PROGRESS" "$candidate_sha"
+
+          readonly TARGET_ROWS=100000
+          readonly DUKASCOPY_LOOKBACK_DAYS=180
+          [[ "$TARGET_ROWS" =~ ^[0-9]+$ ]] && (( TARGET_ROWS >= 100000 )) || {
+            printf 'RESEARCH HOLD: invalid evidence target rows: %s\n' "$TARGET_ROWS" >&2
+            exit 20
+          }
+
+          stage_result="$OUTPUT_ROOT/checkpoints/stages/horizon-10m.result.json"
+          install -d -m 700 "$OUTPUT_ROOT/checkpoints/stages"
+          "$python_bin" -m app.domain.training.run_first_six_pair \
+            --stage horizons \
+            --stage-horizons 10 \
+            --source dukascopy \
+            --dukascopy-cache-dir "$DUKASCOPY_CACHE" \
+            --dukascopy-max-lookback-days "$DUKASCOPY_LOOKBACK_DAYS" \
+            --output-dir "$OUTPUT_ROOT" \
+            --target-rows "$TARGET_ROWS" \
+            --horizons 1,5,10 \
+            --confidence-threshold 0.60 \
+            --commission-bps 0 \
+            --slippage-bps 0 \
+            --max-splits 5 \
+            --resume \
+            > "$stage_result.tmp"
+          mv "$stage_result.tmp" "$stage_result"
+          printf 'RESEARCH_STAGE_COMPLETE stage=horizon horizon=10m\n'
+          REMOTE
+
+          research_pid=$!
+          superseded_marker="$RUNNER_TEMP/irexpro-research-superseded"
+          rm -f "$superseded_marker"
+
+          (
+            while kill -0 "$research_pid" 2>/dev/null; do
+              sleep 60
+              if ! kill -0 "$research_pid" 2>/dev/null; then
+                break
+              fi
+
+              heartbeat_now="$(date +%s)"
+              heartbeat_elapsed=$((heartbeat_now - research_started_epoch))
+              printf 'RESEARCH_HEARTBEAT candidate=%s elapsed_seconds=%s\n' \
+                "$CANDIDATE_SHA" "$heartbeat_elapsed"
+
+              # A model/training commit can move main while this bounded
+              # stage is still collecting data or evaluating folds. Abort the
+              # stage early so newer exact-main work does not wait on
+              # obsolete research; the remaining stages skip cleanly and a
+              # future run resumes from the persisted verified state.
+              if ! git fetch --quiet --no-tags origin main; then
+                printf 'RESEARCH_WATCHDOG_WARNING candidate=%s reason=main_fetch_failed\n' \
+                  "$CANDIDATE_SHA" >&2
+                continue
+              fi
+
+              current_main_sha="$(git rev-parse origin/main)"
+              if [[ "$current_main_sha" != "$CANDIDATE_SHA" ]]; then
+                printf 'RESEARCH_ABORT reason=candidate_superseded candidate=%s current_main=%s\n' \
+                  "$CANDIDATE_SHA" "$current_main_sha"
+                : > "$superseded_marker"
+                kill -TERM "$research_pid" 2>/dev/null || true
+                sleep 5
+                kill -KILL "$research_pid" 2>/dev/null || true
+                break
+              fi
+            done
+          ) &
+          watchdog_pid=$!
+
+          if wait "$research_pid"; then
+            research_status=0
+          else
+            research_status=$?
+          fi
+
+          kill "$watchdog_pid" 2>/dev/null || true
+          wait "$watchdog_pid" 2>/dev/null || true
+
+          research_finished_epoch="$(date +%s)"
+          research_elapsed=$((research_finished_epoch - research_started_epoch))
+
+          if [[ -f "$superseded_marker" ]]; then
+            rm -f "$superseded_marker"
+            printf 'RESEARCH_PROCESS_EXIT candidate=%s status=0 elapsed_seconds=%s reason=candidate_superseded\n' \
+              "$CANDIDATE_SHA" "$research_elapsed"
+            exit 0
+          fi
+
+          printf 'RESEARCH_PROCESS_EXIT candidate=%s status=%s elapsed_seconds=%s\n' \
+            "$CANDIDATE_SHA" "$research_status" "$research_elapsed"
+          exit "$research_status"
+      - name: Remove ephemeral SSH material
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+  select-horizon:
+    name: Summarize study and select research horizon
+    needs: [horizon-1m, horizon-5m, horizon-10m]
+    if: needs.validate.outputs.run == 'true'
+    concurrency:
+      group: irexpro-staging-worktree
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    environment:
+      name: staging
+
+    outputs:
+      selected: ${{ steps.selection.outputs.selected }}
+
+    steps:
+      - name: Checkout exact deployed candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+
+      - name: Verify exact current main
+        id: current
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --quiet --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+          current_main_sha="$(git rev-parse origin/main)"
+          if [[ "$current_main_sha" != "$CANDIDATE_SHA" ]]; then
+            printf 'current=false\n' >> "$GITHUB_OUTPUT"
+            printf 'RESEARCH_SKIPPED reason=deployed_candidate_superseded candidate=%s current_main=%s\n' \
+              "$CANDIDATE_SHA" "$current_main_sha"
+            exit 0
+          fi
+
+          printf 'current=true\n' >> "$GITHUB_OUTPUT"
+      - name: Configure pinned SSH identity
+        if: steps.current.outputs.current == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$STAGING_SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Summarize study and select horizon
+        if: steps.current.outputs.current == 'true'
+        id: selection
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          research_started_epoch="$(date +%s)"
+          printf 'RESEARCH_STAGE_START stage=summarize candidate=%s started_epoch=%s\n' \
+            "$CANDIDATE_SHA" "$research_started_epoch"
+
+          remote_log="$RUNNER_TEMP/select-horizon-remote.log"
+          if ssh \
+            -i "$HOME/.ssh/irexpro_staging" \
+            -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            "bash -s -- $CANDIDATE_SHA" <<'REMOTE' 2>&1 | tee "$remote_log"
+          set -Eeuo pipefail
+          umask 077
+
+          candidate_sha="$1"
+          [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            printf 'RESEARCH HOLD: invalid candidate SHA.\n' >&2
+            exit 2
+          }
+
+          readonly STAGING_ROOT='/home/lightworld/webapps/irexpro-staging'
+          readonly RESEARCH_ROOT='/home/lightworld/research/irexpro-six-pair'
+          readonly OUTPUT_ROOT="$RESEARCH_ROOT/$candidate_sha"
+          readonly DUKASCOPY_CACHE="/home/lightworld/research/dukascopy-raw-cache"
+
+          cd "$STAGING_ROOT"
+          test "$(git rev-parse --show-toplevel)" = "$STAGING_ROOT"
+          test "$(git rev-parse HEAD)" = "$candidate_sha"
+          test -z "$(git status --porcelain)"
+
+          available_kb="$(df -Pk "$STAGING_ROOT" | awk 'NR==2 {print $4}')"
+          [[ "$available_kb" =~ ^[0-9]+$ ]]
+          if (( available_kb < 2097152 )); then
+            printf 'RESEARCH HOLD: less than 2 GiB free disk space on staging.\n' >&2
+            exit 3
+          fi
+
+          python_bin=''
+          for candidate in \
+            "$STAGING_ROOT/services/ai-engine/.venv/bin/python" \
+            "$STAGING_ROOT/services/ai-engine/venv/bin/python"; do
+            if [[ -x "$candidate" ]]; then
+              python_bin="$candidate"
+              break
+            fi
+          done
+          [[ -n "$python_bin" ]] || {
+            printf 'RESEARCH HOLD: AI Python virtual environment was not found.\n' >&2
+            exit 15
+          }
+
+          # WS8: every stage verifies the same candidate identity that the
+          # validate stage froze into the orchestration plan before doing
+          # any work. The runner additionally re-verifies the study
+          # fingerprint against the persisted study state.
+          readonly PLAN_PATH="$OUTPUT_ROOT/checkpoints/orchestration-plan.json"
+          test -s "$PLAN_PATH" || {
+            printf 'RESEARCH HOLD: staged execution requires the orchestration plan.\n' >&2
+            exit 21
+          }
+          plan_candidate="$(PLAN_PATH="$PLAN_PATH" node -e '
+            const fs = require("fs");
+            const plan = JSON.parse(fs.readFileSync(process.env.PLAN_PATH, "utf8"));
+            if (plan.plan_version !== 1) process.exit(1);
+            process.stdout.write(String(plan.candidate_sha || ""));
+          ')" || {
+            printf 'RESEARCH HOLD: orchestration plan is unreadable.\n' >&2
+            exit 22
+          }
+          test "$plan_candidate" = "$candidate_sha" || {
+            printf 'RESEARCH HOLD: orchestration plan candidate mismatch plan=%s candidate=%s\n' \
+              "$plan_candidate" "$candidate_sha" >&2
+            exit 23
+          }
+
+          bootstrap_root="$(PLAN_PATH="$PLAN_PATH" node -e '
+            const fs = require("fs");
+            const plan = JSON.parse(fs.readFileSync(process.env.PLAN_PATH, "utf8"));
+            const bootstrap = plan.bootstrap_dir;
+            process.stdout.write(bootstrap && bootstrap !== "None" ? String(bootstrap) : "");
+          ')"
+          bootstrap_args=()
+          if [[ -n "$bootstrap_root" ]]; then
+            bootstrap_args=(--bootstrap-dir "$bootstrap_root")
+          fi
+
+          cd "$STAGING_ROOT/services/ai-engine"
+          export PYTHONPATH="$PWD"
+          export IREXPRO_RESEARCH_PROGRESS=1
+          export IREXPRO_RESEARCH_CANDIDATE_SHA="$candidate_sha"
+          export IREXPRO_XGB_N_JOBS=2
+          printf 'RESEARCH_CONFIGURATION xgb_n_jobs=%s progress=%s resume=true candidate=%s stage=summarize recovery=run55_exit137\n' \
+            "$IREXPRO_XGB_N_JOBS" "$IREXPRO_RESEARCH_PROGRESS" "$candidate_sha"
+
+          readonly TARGET_ROWS=100000
+          readonly DUKASCOPY_LOOKBACK_DAYS=180
+          [[ "$TARGET_ROWS" =~ ^[0-9]+$ ]] && (( TARGET_ROWS >= 100000 )) || {
+            printf 'RESEARCH HOLD: invalid evidence target rows: %s\n' "$TARGET_ROWS" >&2
+            exit 20
+          }
+
+          "$python_bin" -m app.domain.training.run_first_six_pair \
+            --stage summarize \
+            --source dukascopy \
+            --dukascopy-cache-dir "$DUKASCOPY_CACHE" \
+            --dukascopy-max-lookback-days "$DUKASCOPY_LOOKBACK_DAYS" \
+            --output-dir "$OUTPUT_ROOT" \
+            --target-rows "$TARGET_ROWS" \
+            --horizons 1,5,10 \
+            --confidence-threshold 0.60 \
+            --commission-bps 0 \
+            --slippage-bps 0 \
+            --max-splits 5 \
+            --resume \
             > "$OUTPUT_ROOT/run-result.json.tmp"
           mv "$OUTPUT_ROOT/run-result.json.tmp" "$OUTPUT_ROOT/run-result.json"
 
@@ -367,6 +2838,10 @@ jobs:
                 `source=${manifest.source}`,
                 `spread=${manifest.spread_basis}`,
                 `sha256=${manifest.dataset_sha256}`,
+                `chunk_hits=${manifest.m1_chunk_hits ?? 0}`,
+                `chunks_built=${manifest.m1_chunks_built ?? 0}`,
+                `decode_hours_avoided=${manifest.decode_hours_avoided ?? 0}`,
+                `raw_cache_hits=${manifest.raw_cache_hits ?? 0}`,
               ].join(' ')
             );
           }
@@ -438,7 +2913,19 @@ jobs:
           NODE
           )"
 
+          mark_research_evaluated() {
+            install -d -m 700 "$RESEARCH_ROOT"
+            local marker_temp="$RESEARCH_ROOT/last-research-sha.tmp"
+            printf '%s\n' "$candidate_sha" > "$marker_temp"
+            chmod 600 "$marker_temp"
+            mv -f "$marker_temp" "$RESEARCH_ROOT/last-research-sha"
+          }
+
           if [[ -z "$selected_horizon" ]]; then
+            # The study completed and every horizon was evaluated; persist the
+            # evaluated-SHA lineage marker so unrelated deploys do not retry a
+            # study whose evidence was already produced.
+            mark_research_evaluated
             printf 'MODEL_PROMOTION_HOLD reason=no_research_horizon_passed\n'
             exit 0
           fi
@@ -446,7 +2933,7 @@ jobs:
             printf 'MODEL_PROMOTION_HOLD reason=invalid_selected_horizon\n' >&2
             exit 16
           }
-          printf 'selected_horizon=%sm\n' "$selected_horizon"
+          printf 'SELECTED_HORIZON horizon=%sm\n' "$selected_horizon"
 
           # Long research runs may outlive the main SHA they started from.
           # Never promote a trained artifact after main has moved; force the
@@ -454,7 +2941,6 @@ jobs:
           git fetch --quiet --no-tags origin main
           current_main_sha="$(git rev-parse origin/main)"
           if [[ "$current_main_sha" != "$candidate_sha" ]]; then
-            persist_research_state=false
             printf 'MODEL_PROMOTION_HOLD reason=candidate_superseded candidate=%s current_main=%s\n' \
               "$candidate_sha" "$current_main_sha"
             exit 0
@@ -551,7 +3037,202 @@ jobs:
             printf 'CONTEXT_RESEARCH_HOLD reason=archive_or_overlay_failed status=%s message=%s\n' \
               "$context_status" "$context_message"
           fi
+          REMOTE
+          then
+            remote_status=0
+          else
+            remote_status=$?
+          fi
 
+          printf 'RESEARCH_STAGE_EXIT stage=summarize status=%s elapsed_seconds=%s\n' \
+            "$remote_status" "$(( $(date +%s) - research_started_epoch ))"
+
+          selected_horizon=''
+          if grep -Eq '^SELECTED_HORIZON horizon=(1|5|10)m$' "$remote_log"; then
+            selected_horizon="$(grep -E '^SELECTED_HORIZON horizon=' "$remote_log" | tail -n 1 | grep -Eo '(1|5|10)' | tail -n 1)"
+          fi
+          printf 'selected=%s\n' "$selected_horizon" >> "$GITHUB_OUTPUT"
+
+          exit "$remote_status"
+
+      - name: Remove ephemeral SSH material
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+  final-model:
+    name: Untouched-test final model
+    needs: [validate, select-horizon]
+    if: >-
+      needs.validate.outputs.run == 'true' &&
+      needs.select-horizon.outputs.selected != ''
+    concurrency:
+      group: irexpro-staging-worktree
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    environment:
+      name: staging
+
+    outputs:
+      promote: ${{ steps.training.outputs.promote }}
+      horizon: ${{ steps.training.outputs.horizon }}
+
+    steps:
+      - name: Checkout exact deployed candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+
+      - name: Verify exact current main
+        id: current
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --quiet --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+          current_main_sha="$(git rev-parse origin/main)"
+          if [[ "$current_main_sha" != "$CANDIDATE_SHA" ]]; then
+            printf 'current=false\n' >> "$GITHUB_OUTPUT"
+            printf 'RESEARCH_SKIPPED reason=deployed_candidate_superseded candidate=%s current_main=%s\n' \
+              "$CANDIDATE_SHA" "$current_main_sha"
+            exit 0
+          fi
+
+          printf 'current=true\n' >> "$GITHUB_OUTPUT"
+      - name: Configure pinned SSH identity
+        if: steps.current.outputs.current == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$STAGING_SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Train and verify final model on the untouched test tail
+        if: steps.current.outputs.current == 'true'
+        id: training
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          selected_horizon="${ needs.select-horizon.outputs.selected }"
+          [[ "$selected_horizon" =~ ^(1|5|10)$ ]] || {
+            printf 'MODEL_PROMOTION_HOLD reason=invalid_selected_horizon\n' >&2
+            exit 16
+          }
+          printf 'horizon=%s\n' "$selected_horizon" >> "$GITHUB_OUTPUT"
+          printf 'promote=false\n' >> "$GITHUB_OUTPUT"
+
+          research_started_epoch="$(date +%s)"
+          printf 'RESEARCH_STAGE_START stage=final_model horizon=%sm candidate=%s started_epoch=%s\n' \
+            "$selected_horizon" "$CANDIDATE_SHA" "$research_started_epoch"
+
+          remote_log="$RUNNER_TEMP/final-model-remote.log"
+          ssh \
+            -i "$HOME/.ssh/irexpro_staging" \
+            -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            "bash -s -- $CANDIDATE_SHA $selected_horizon" <<'REMOTE' > "$remote_log" 2>&1 &
+          set -Eeuo pipefail
+          umask 077
+
+          candidate_sha="$1"
+          [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            printf 'RESEARCH HOLD: invalid candidate SHA.\n' >&2
+            exit 2
+          }
+
+          readonly STAGING_ROOT='/home/lightworld/webapps/irexpro-staging'
+          readonly RESEARCH_ROOT='/home/lightworld/research/irexpro-six-pair'
+          readonly OUTPUT_ROOT="$RESEARCH_ROOT/$candidate_sha"
+          readonly DUKASCOPY_CACHE="/home/lightworld/research/dukascopy-raw-cache"
+
+          cd "$STAGING_ROOT"
+          test "$(git rev-parse --show-toplevel)" = "$STAGING_ROOT"
+          test "$(git rev-parse HEAD)" = "$candidate_sha"
+          test -z "$(git status --porcelain)"
+
+          available_kb="$(df -Pk "$STAGING_ROOT" | awk 'NR==2 {print $4}')"
+          [[ "$available_kb" =~ ^[0-9]+$ ]]
+          if (( available_kb < 2097152 )); then
+            printf 'RESEARCH HOLD: less than 2 GiB free disk space on staging.\n' >&2
+            exit 3
+          fi
+
+          python_bin=''
+          for candidate in \
+            "$STAGING_ROOT/services/ai-engine/.venv/bin/python" \
+            "$STAGING_ROOT/services/ai-engine/venv/bin/python"; do
+            if [[ -x "$candidate" ]]; then
+              python_bin="$candidate"
+              break
+            fi
+          done
+          [[ -n "$python_bin" ]] || {
+            printf 'RESEARCH HOLD: AI Python virtual environment was not found.\n' >&2
+            exit 15
+          }
+
+          # WS8: every stage verifies the same candidate identity that the
+          # validate stage froze into the orchestration plan before doing
+          # any work. The runner additionally re-verifies the study
+          # fingerprint against the persisted study state.
+          readonly PLAN_PATH="$OUTPUT_ROOT/checkpoints/orchestration-plan.json"
+          test -s "$PLAN_PATH" || {
+            printf 'RESEARCH HOLD: staged execution requires the orchestration plan.\n' >&2
+            exit 21
+          }
+          plan_candidate="$(PLAN_PATH="$PLAN_PATH" node -e '
+            const fs = require("fs");
+            const plan = JSON.parse(fs.readFileSync(process.env.PLAN_PATH, "utf8"));
+            if (plan.plan_version !== 1) process.exit(1);
+            process.stdout.write(String(plan.candidate_sha || ""));
+          ')" || {
+            printf 'RESEARCH HOLD: orchestration plan is unreadable.\n' >&2
+            exit 22
+          }
+          test "$plan_candidate" = "$candidate_sha" || {
+            printf 'RESEARCH HOLD: orchestration plan candidate mismatch plan=%s candidate=%s\n' \
+              "$plan_candidate" "$candidate_sha" >&2
+            exit 23
+          }
+
+          bootstrap_root="$(PLAN_PATH="$PLAN_PATH" node -e '
+            const fs = require("fs");
+            const plan = JSON.parse(fs.readFileSync(process.env.PLAN_PATH, "utf8"));
+            const bootstrap = plan.bootstrap_dir;
+            process.stdout.write(bootstrap && bootstrap !== "None" ? String(bootstrap) : "");
+          ')"
+          bootstrap_args=()
+          if [[ -n "$bootstrap_root" ]]; then
+            bootstrap_args=(--bootstrap-dir "$bootstrap_root")
+          fi
+
+          cd "$STAGING_ROOT/services/ai-engine"
+          export PYTHONPATH="$PWD"
+          export IREXPRO_RESEARCH_PROGRESS=1
+          export IREXPRO_RESEARCH_CANDIDATE_SHA="$candidate_sha"
+          export IREXPRO_XGB_N_JOBS=2
+
+          selected_horizon="$2"
+          [[ "$selected_horizon" =~ ^(1|5|10)$ ]] || {
+            printf 'MODEL_PROMOTION_HOLD reason=invalid_selected_horizon\n' >&2
+            exit 16
+          }
+          printf 'RESEARCH_CONFIGURATION xgb_n_jobs=%s progress=%s resume=true candidate=%s stage=final_model horizon=%sm recovery=run55_exit137\n' \
+            "$IREXPRO_XGB_N_JOBS" "$IREXPRO_RESEARCH_PROGRESS" "$candidate_sha" "$selected_horizon"
 
           readonly MODEL_ROOT="/home/lightworld/research/irexpro-models/$candidate_sha/h$selected_horizon"
           readonly MODEL_PATH="$MODEL_ROOT/model.json"
@@ -570,7 +3251,7 @@ jobs:
             --dataset "USDCHF=$OUTPUT_ROOT/corpora/USDCHF_MTF.csv" \
             --horizon-bars "$selected_horizon" \
             --output-model "$MODEL_PATH" \
-            --qualification-summary "$summary" \
+            --qualification-summary "$OUTPUT_ROOT/reports/six_pair_walkforward_summary.json" \
             --confidence-threshold 0.60 \
             --commission-bps 0 \
             --slippage-bps 0 \
@@ -594,17 +3275,6 @@ jobs:
           test -s "$MODEL_PATH"
           test -s "$METADATA_PATH"
 
-          # Re-check immediately before any staging runtime mutation. Main may
-          # have moved while final training and the untouched-test gate ran.
-          git fetch --quiet --no-tags origin main
-          current_main_sha="$(git rev-parse origin/main)"
-          if [[ "$current_main_sha" != "$candidate_sha" ]]; then
-            persist_research_state=false
-            printf 'MODEL_PROMOTION_HOLD reason=candidate_superseded_before_activation candidate=%s current_main=%s\n' \
-              "$candidate_sha" "$current_main_sha"
-            exit 0
-          fi
-
           # Load the exact candidate through the production loader before changing
           # the staging process. This re-verifies artifact SHA, feature schema,
           # runtime profile and paper/live governance.
@@ -623,8 +3293,214 @@ jobs:
               raise SystemExit("MODEL PROMOTION HOLD: artifact is not paper approved")
           if metadata.get("approved_for_live") is not False:
               raise SystemExit("MODEL PROMOTION HOLD: live approval must remain false")
-          print(f"MODEL_ARTIFACT_VERIFIED version={metadata.get('version')}")
+          print("MODEL_ARTIFACT_VERIFIED")
           PY
+          REMOTE
+
+          research_pid=$!
+          superseded_marker="$RUNNER_TEMP/irexpro-research-superseded"
+          rm -f "$superseded_marker"
+
+          (
+            while kill -0 "$research_pid" 2>/dev/null; do
+              sleep 60
+              if ! kill -0 "$research_pid" 2>/dev/null; then
+                break
+              fi
+
+              heartbeat_now="$(date +%s)"
+              heartbeat_elapsed=$((heartbeat_now - research_started_epoch))
+              printf 'RESEARCH_HEARTBEAT candidate=%s elapsed_seconds=%s\n' \
+                "$CANDIDATE_SHA" "$heartbeat_elapsed"
+
+              # A model/training commit can move main while this bounded
+              # stage is still collecting data or evaluating folds. Abort the
+              # stage early so newer exact-main work does not wait on
+              # obsolete research; the remaining stages skip cleanly and a
+              # future run resumes from the persisted verified state.
+              if ! git fetch --quiet --no-tags origin main; then
+                printf 'RESEARCH_WATCHDOG_WARNING candidate=%s reason=main_fetch_failed\n' \
+                  "$CANDIDATE_SHA" >&2
+                continue
+              fi
+
+              current_main_sha="$(git rev-parse origin/main)"
+              if [[ "$current_main_sha" != "$CANDIDATE_SHA" ]]; then
+                printf 'RESEARCH_ABORT reason=candidate_superseded candidate=%s current_main=%s\n' \
+                  "$CANDIDATE_SHA" "$current_main_sha"
+                : > "$superseded_marker"
+                kill -TERM "$research_pid" 2>/dev/null || true
+                sleep 5
+                kill -KILL "$research_pid" 2>/dev/null || true
+                break
+              fi
+            done
+          ) &
+          watchdog_pid=$!
+
+          if wait "$research_pid"; then
+            research_status=0
+          else
+            research_status=$?
+          fi
+
+          kill "$watchdog_pid" 2>/dev/null || true
+          wait "$watchdog_pid" 2>/dev/null || true
+
+          research_finished_epoch="$(date +%s)"
+          research_elapsed=$((research_finished_epoch - research_started_epoch))
+
+          if [[ -f "$superseded_marker" ]]; then
+            rm -f "$superseded_marker"
+            printf 'RESEARCH_PROCESS_EXIT candidate=%s status=0 elapsed_seconds=%s reason=candidate_superseded\n' \
+              "$CANDIDATE_SHA" "$research_elapsed"
+            exit 0
+          fi
+
+          printf 'RESEARCH_PROCESS_EXIT candidate=%s status=%s elapsed_seconds=%s\n' \
+            "$CANDIDATE_SHA" "$research_status" "$research_elapsed"
+          exit "$research_status"
+
+          cat "$remote_log"
+
+          if grep -Fq 'MODEL_ARTIFACT_VERIFIED' "$remote_log"; then
+            printf 'promote=true\n' >> "$GITHUB_OUTPUT"
+            printf 'RESEARCH_STAGE_COMPLETE stage=final_model horizon=%sm\n' "$selected_horizon"
+            exit 0
+          fi
+
+          # Exit 0 with a hold (untouched-test gate or superseded candidate)
+          # is a valid, complete outcome; only promote on verified artifacts.
+          printf 'RESEARCH_STAGE_HOLD stage=final_model horizon=%sm\n' "$selected_horizon"
+          exit 0
+      - name: Remove ephemeral SSH material
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+  paper-promotion:
+    name: PAPER UAT promotion and runtime verification
+    needs: [validate, final-model]
+    if: >-
+      needs.validate.outputs.run == 'true' &&
+      needs.final-model.outputs.promote == 'true'
+    concurrency:
+      group: irexpro-staging-worktree
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment:
+      name: staging
+
+    steps:
+      - name: Checkout exact deployed candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+
+      - name: Verify exact current main
+        id: current
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --quiet --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+          current_main_sha="$(git rev-parse origin/main)"
+          if [[ "$current_main_sha" != "$CANDIDATE_SHA" ]]; then
+            printf 'current=false\n' >> "$GITHUB_OUTPUT"
+            printf 'RESEARCH_SKIPPED reason=deployed_candidate_superseded candidate=%s current_main=%s\n' \
+              "$CANDIDATE_SHA" "$current_main_sha"
+            exit 0
+          fi
+
+          printf 'current=true\n' >> "$GITHUB_OUTPUT"
+      - name: Configure pinned SSH identity
+        if: steps.current.outputs.current == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$STAGING_SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Activate verified paper model on staging runtime
+        if: steps.current.outputs.current == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          selected_horizon="${ needs.final-model.outputs.horizon }"
+          [[ "$selected_horizon" =~ ^(1|5|10)$ ]] || {
+            printf 'MODEL_PROMOTION_HOLD reason=invalid_selected_horizon\n' >&2
+            exit 16
+          }
+
+          ssh \
+            -i "$HOME/.ssh/irexpro_staging" \
+            -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            "bash -s -- $CANDIDATE_SHA $selected_horizon" <<'REMOTE'
+          set -Eeuo pipefail
+          umask 077
+
+          candidate_sha="$1"
+          selected_horizon="$2"
+          [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            printf 'RESEARCH HOLD: invalid candidate SHA.\n' >&2
+            exit 2
+          }
+          [[ "$selected_horizon" =~ ^(1|5|10)$ ]] || {
+            printf 'MODEL_PROMOTION_HOLD reason=invalid_selected_horizon\n' >&2
+            exit 16
+          }
+
+          readonly STAGING_ROOT='/home/lightworld/webapps/irexpro-staging'
+          readonly RESEARCH_ROOT='/home/lightworld/research/irexpro-six-pair'
+
+          cd "$STAGING_ROOT"
+          test "$(git rev-parse --show-toplevel)" = "$STAGING_ROOT"
+          test "$(git rev-parse HEAD)" = "$candidate_sha"
+
+          python_bin=''
+          for candidate in \
+            "$STAGING_ROOT/services/ai-engine/.venv/bin/python" \
+            "$STAGING_ROOT/services/ai-engine/venv/bin/python"; do
+            if [[ -x "$candidate" ]]; then
+              python_bin="$candidate"
+              break
+            fi
+          done
+          [[ -n "$python_bin" ]] || {
+            printf 'RESEARCH HOLD: AI Python virtual environment was not found.\n' >&2
+            exit 15
+          }
+
+          # Re-check immediately before any staging runtime mutation. Main may
+          # have moved while final training and the untouched-test gate ran.
+          git fetch --quiet --no-tags origin main
+          current_main_sha="$(git rev-parse origin/main)"
+          if [[ "$current_main_sha" != "$candidate_sha" ]]; then
+            printf 'MODEL_PROMOTION_HOLD reason=candidate_superseded_before_activation candidate=%s current_main=%s\n' \
+              "$candidate_sha" "$current_main_sha"
+            exit 0
+          fi
+
+          readonly MODEL_ROOT="/home/lightworld/research/irexpro-models/$candidate_sha/h$selected_horizon"
+          readonly MODEL_PATH="$MODEL_ROOT/model.json"
+          readonly METADATA_PATH="$MODEL_ROOT/model.metadata.json"
+          test -s "$MODEL_PATH"
+          test -s "$METADATA_PATH"
 
           # Persist only the two non-secret model paths in the ignored staging .env
           # and atomically replace the file. deploy-staging.sh reloads these values
@@ -713,73 +3589,33 @@ jobs:
             }
           '
 
+          # The full staged study (collection, evaluation, untouched test, and
+          # paper activation) completed for this exact candidate: persist the
+          # evaluated-SHA lineage marker atomically.
+          install -d -m 700 "$RESEARCH_ROOT"
+          marker_temp="$RESEARCH_ROOT/last-research-sha.tmp"
+          printf '%s\n' "$candidate_sha" > "$marker_temp"
+          chmod 600 "$marker_temp"
+          mv -f "$marker_temp" "$RESEARCH_ROOT/last-research-sha"
+
           printf 'MODEL_PROMOTED_PAPER_UAT version=%s horizon=%sm approved_for_live=false\n' \
             "$model_version" "$selected_horizon"
           REMOTE
 
-          research_pid=$!
-          superseded_marker="$RUNNER_TEMP/irexpro-research-superseded"
-          rm -f "$superseded_marker"
+      - name: Remove ephemeral SSH material
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
 
-          (
-            while kill -0 "$research_pid" 2>/dev/null; do
-              sleep 60
-              if ! kill -0 "$research_pid" 2>/dev/null; then
-                break
-              fi
+  cleanup:
+    name: Remove ephemeral runner material
+    needs: [paper-promotion]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
 
-              heartbeat_now="$(date +%s)"
-              heartbeat_elapsed=$((heartbeat_now - research_started_epoch))
-              printf 'RESEARCH_HEARTBEAT candidate=%s elapsed_seconds=%s\n' \
-                "$CANDIDATE_SHA" "$heartbeat_elapsed"
-
-              # A model/training commit can move main while this expensive
-              # research job is still collecting data or evaluating folds.
-              # Release the shared staging-worktree lock promptly instead of
-              # making newer exact-main deploys wait for obsolete research.
-              if ! git fetch --quiet --no-tags origin main; then
-                printf 'RESEARCH_WATCHDOG_WARNING candidate=%s reason=main_fetch_failed\n' \
-                  "$CANDIDATE_SHA" >&2
-                continue
-              fi
-
-              current_main_sha="$(git rev-parse origin/main)"
-              if [[ "$current_main_sha" != "$CANDIDATE_SHA" ]]; then
-                printf 'RESEARCH_ABORT reason=candidate_superseded candidate=%s current_main=%s\n' \
-                  "$CANDIDATE_SHA" "$current_main_sha"
-                : > "$superseded_marker"
-                kill -TERM "$research_pid" 2>/dev/null || true
-                sleep 5
-                kill -KILL "$research_pid" 2>/dev/null || true
-                break
-              fi
-            done
-          ) &
-          watchdog_pid=$!
-
-          if wait "$research_pid"; then
-            research_status=0
-          else
-            research_status=$?
-          fi
-
-          kill "$watchdog_pid" 2>/dev/null || true
-          wait "$watchdog_pid" 2>/dev/null || true
-
-          research_finished_epoch="$(date +%s)"
-          research_elapsed=$((research_finished_epoch - research_started_epoch))
-
-          if [[ -f "$superseded_marker" ]]; then
-            rm -f "$superseded_marker"
-            printf 'RESEARCH_PROCESS_EXIT candidate=%s status=0 elapsed_seconds=%s reason=candidate_superseded\n' \
-              "$CANDIDATE_SHA" "$research_elapsed"
-            exit 0
-          fi
-
-          printf 'RESEARCH_PROCESS_EXIT candidate=%s status=%s elapsed_seconds=%s\n' \
-            "$CANDIDATE_SHA" "$research_status" "$research_elapsed"
-          exit "$research_status"
-
+    steps:
       - name: Remove ephemeral SSH material
         if: ${{ always() }}
         shell: bash

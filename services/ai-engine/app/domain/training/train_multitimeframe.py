@@ -1060,7 +1060,11 @@ def evaluate_multi_pair_corpora(
     if predictions_path is not None:
         predictions_output = Path(predictions_path)
         predictions_output.parent.mkdir(parents=True, exist_ok=True)
-        predictions.to_csv(predictions_output, index=False)
+        predictions_tmp = predictions_output.with_suffix(
+            predictions_output.suffix + ".tmp"
+        )
+        predictions.to_csv(predictions_tmp, index=False)
+        predictions_tmp.replace(predictions_output)
         exported_predictions_path = str(predictions_output)
     report: dict[str, Any] = {
         "report_version": 2,
@@ -1097,7 +1101,11 @@ def evaluate_multi_pair_corpora(
 
     output = Path(report_path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+    report_tmp = output.with_suffix(output.suffix + ".tmp")
+    report_tmp.write_text(
+        json.dumps(report, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    report_tmp.replace(output)
     return {**report, "report_path": str(output)}
 
 

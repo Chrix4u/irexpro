@@ -279,7 +279,11 @@ def build_multitimeframe_corpus_from_m1_csv(
 
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    corpus.to_csv(output, index=False)
+    # Atomic replacement: an interrupted build must never leave a corpus a
+    # future stage could mistake for complete.
+    corpus_tmp = output.with_suffix(output.suffix + ".tmp")
+    corpus.to_csv(corpus_tmp, index=False)
+    corpus_tmp.replace(output)
 
     friction_columns = [
         "m1_spread_points",
@@ -318,7 +322,11 @@ def build_multitimeframe_corpus_from_m1_csv(
         "dataset_sha256": _sha256_file(output),
     }
     manifest_path = output.with_suffix(".manifest.json")
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    manifest_tmp = manifest_path.with_suffix(manifest_path.suffix + ".tmp")
+    manifest_tmp.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    manifest_tmp.replace(manifest_path)
     return {
         **manifest,
         "dataset_path": str(output),

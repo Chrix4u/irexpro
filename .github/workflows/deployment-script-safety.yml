@@ -59,6 +59,8 @@ jobs:
 
       - name: Run deployment safety regression tests
         run: |
+          python3 -c "import yaml" 2>/dev/null || \
+            python3 -m pip install --disable-pip-version-check pyyaml
           bash scripts/deployment/test-deployment-scripts.sh
           bash scripts/deployment/test-rollback-origin-provenance.sh
           bash scripts/deployment/test-health-contract.sh

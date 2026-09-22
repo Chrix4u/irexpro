@@ -124,8 +124,9 @@ def test_collection_writes_valid_real_friction_manifest(
         timeout_seconds: float,
         max_retries: int,
         cache_dir=None,
+        telemetry=None,
     ):
-        del timeout_seconds, max_retries, cache_dir
+        del timeout_seconds, max_retries, cache_dir, telemetry
         base = 1.10 if instrument != "USDJPY" else 140.0
         rows = []
         for minute in range(60):
@@ -191,8 +192,9 @@ def test_collection_recovers_transient_hour_without_silent_gap(
         timeout_seconds: float,
         max_retries: int,
         cache_dir=None,
+        telemetry=None,
     ):
-        del instrument, timeout_seconds, max_retries
+        del instrument, timeout_seconds, max_retries, telemetry
         attempts[hour] = attempts.get(hour, 0) + 1
 
         # Fail one hour during the parallel pass. The collector must retry it
@@ -258,8 +260,9 @@ def test_collection_uses_bounded_multi_round_serial_recovery(
         timeout_seconds: float,
         max_retries: int,
         cache_dir=None,
+        telemetry=None,
     ):
-        del instrument, timeout_seconds, max_retries, cache_dir
+        del instrument, timeout_seconds, max_retries, cache_dir, telemetry
         attempts[hour] = attempts.get(hour, 0) + 1
 
         # Parallel attempt + first serial recovery both fail. The collector
@@ -392,8 +395,9 @@ def test_collection_skips_closed_weekend_hours_without_network(
         timeout_seconds: float,
         max_retries: int,
         cache_dir=None,
+        telemetry=None,
     ):
-        del instrument, timeout_seconds, max_retries, cache_dir
+        del instrument, timeout_seconds, max_retries, cache_dir, telemetry
         assert _is_forex_market_closed_hour(hour) is False
         requested.append(hour)
         rows = []
