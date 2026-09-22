@@ -644,7 +644,7 @@ jobs:
 
   pair-gbpusd:
     name: Pair stage GBPUSD
-    needs: [validate]
+    needs: [validate, pair-eurusd]
     if: needs.validate.outputs.run == 'true'
     # Every VPS-touching stage holds the shared staging-worktree lock. A
     # pending stage is never allowed to cancel an active owner.
@@ -899,7 +899,7 @@ jobs:
 
   pair-usdjpy:
     name: Pair stage USDJPY
-    needs: [validate]
+    needs: [validate, pair-gbpusd]
     if: needs.validate.outputs.run == 'true'
     # Every VPS-touching stage holds the shared staging-worktree lock. A
     # pending stage is never allowed to cancel an active owner.
@@ -1154,7 +1154,7 @@ jobs:
 
   pair-audusd:
     name: Pair stage AUDUSD
-    needs: [validate]
+    needs: [validate, pair-usdjpy]
     if: needs.validate.outputs.run == 'true'
     # Every VPS-touching stage holds the shared staging-worktree lock. A
     # pending stage is never allowed to cancel an active owner.
@@ -1409,7 +1409,7 @@ jobs:
 
   pair-usdcad:
     name: Pair stage USDCAD
-    needs: [validate]
+    needs: [validate, pair-audusd]
     if: needs.validate.outputs.run == 'true'
     # Every VPS-touching stage holds the shared staging-worktree lock. A
     # pending stage is never allowed to cancel an active owner.
@@ -1664,7 +1664,7 @@ jobs:
 
   pair-usdchf:
     name: Pair stage USDCHF
-    needs: [validate]
+    needs: [validate, pair-usdcad]
     if: needs.validate.outputs.run == 'true'
     # Every VPS-touching stage holds the shared staging-worktree lock. A
     # pending stage is never allowed to cancel an active owner.
@@ -1919,7 +1919,7 @@ jobs:
 
   horizon-1m:
     name: Horizon stage 1m
-    needs: [pair-eurusd, pair-gbpusd, pair-usdjpy, pair-audusd, pair-usdcad, pair-usdchf]
+    needs: [validate, pair-usdchf]
     if: needs.validate.outputs.run == 'true'
     concurrency:
       group: irexpro-staging-worktree
@@ -2173,7 +2173,7 @@ jobs:
 
   horizon-5m:
     name: Horizon stage 5m
-    needs: [pair-eurusd, pair-gbpusd, pair-usdjpy, pair-audusd, pair-usdcad, pair-usdchf]
+    needs: [validate, horizon-1m]
     if: needs.validate.outputs.run == 'true'
     concurrency:
       group: irexpro-staging-worktree
@@ -2427,7 +2427,7 @@ jobs:
 
   horizon-10m:
     name: Horizon stage 10m
-    needs: [pair-eurusd, pair-gbpusd, pair-usdjpy, pair-audusd, pair-usdcad, pair-usdchf]
+    needs: [validate, horizon-5m]
     if: needs.validate.outputs.run == 'true'
     concurrency:
       group: irexpro-staging-worktree
@@ -2681,7 +2681,7 @@ jobs:
 
   select-horizon:
     name: Summarize study and select research horizon
-    needs: [horizon-1m, horizon-5m, horizon-10m]
+    needs: [validate, horizon-10m]
     if: needs.validate.outputs.run == 'true'
     concurrency:
       group: irexpro-staging-worktree
