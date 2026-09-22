@@ -815,6 +815,10 @@ def _aggregate_experiment(
     }
 
 
+def _metric_or_negative_infinity(value: Any) -> float:
+    return float(value) if value is not None else float("-inf")
+
+
 def _broad_improvement_flag(
     baseline: dict[str, Any],
     candidate: dict[str, Any],
@@ -837,10 +841,10 @@ def _broad_improvement_flag(
         base_gate["positive_instrument_fraction"]
     )
     economics_not_both_worse = not (
-        (cand_trade["sharpe_ratio"] or float("-inf"))
-        < (base_trade["sharpe_ratio"] or float("-inf"))
-        and (cand_trade["profit_factor"] or float("-inf"))
-        < (base_trade["profit_factor"] or float("-inf"))
+        _metric_or_negative_infinity(cand_trade["sharpe_ratio"])
+        < _metric_or_negative_infinity(base_trade["sharpe_ratio"])
+        and _metric_or_negative_infinity(cand_trade["profit_factor"])
+        < _metric_or_negative_infinity(base_trade["profit_factor"])
     )
     very_small_warning = "very_small_non_overlapping_trade_sample" in set(
         candidate["overall"].get("evidence_sufficiency_warnings", [])
@@ -892,19 +896,15 @@ def run_nested_qualification_experiments(
     unique_periods = int(dataset["decision_time"].nunique())
     min_train = min_train_periods or max(250, int(unique_periods * 0.60))
     validation = validation_periods or max(100, int(unique_periods * 0.07))
-    outer_splits = list(
-        iter_purged_walk_forward_time_splits(
-            dataset,
-            time_column="decision_time",
-            min_train_periods=min_train,
-            validation_periods=validation,
-            purge_periods=horizon_bars,
-            embargo_periods=horizon_bars,
-            max_splits=max_splits,
-        )
+    outer_splits = iter_purged_walk_forward_time_splits(
+        dataset,
+        time_column="decision_time",
+        min_train_periods=min_train,
+        validation_periods=validation,
+        purge_periods=horizon_bars,
+        embargo_periods=horizon_bars,
+        max_splits=max_splits,
     )
-    if not outer_splits:
-        raise ValueError("qualification dataset produced no outer walk-forward folds")
 
     predictions_by_experiment: dict[str, list[pd.DataFrame]] = {
         experiment.name: [] for experiment in experiments
@@ -913,10 +913,12 @@ def run_nested_qualification_experiments(
         experiment.name: [] for experiment in experiments
     }
 
+    completed_outer_folds = 0
     for fold_index, (outer_train, outer_validation) in enumerate(
         outer_splits,
         start=1,
     ):
+        completed_outer_folds += 1
         for experiment in experiments:
             if experiment.name == "baseline":
                 variant = experiment.variants[0]
@@ -984,6 +986,11 @@ def run_nested_qualification_experiments(
             folds_by_experiment[experiment.name].append(report)
             del model
             gc.collect()
+        del outer_train, outer_validation
+        gc.collect()
+
+    if completed_outer_folds == 0:
+        raise ValueError("qualification dataset produced no outer walk-forward folds")
 
     aggregates = {
         experiment.name: _aggregate_experiment(
