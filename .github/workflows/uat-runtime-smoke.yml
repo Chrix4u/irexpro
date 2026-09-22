@@ -149,6 +149,7 @@ jobs:
         shell: bash
         env:
           PROMOTED: ${{ steps.promotion.outputs.promoted }}
+          RESEARCH_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || inputs.research_run_id }}
         run: |
           set -Eeuo pipefail
           if [[ "$PROMOTED" == "false" ]]; then
