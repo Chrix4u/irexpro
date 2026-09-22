@@ -99,7 +99,7 @@ def purged_walk_forward_splits(
 
 
 
-def purged_walk_forward_time_splits(
+def iter_purged_walk_forward_time_splits(
     df: pd.DataFrame,
     *,
     time_column: str,
@@ -108,13 +108,14 @@ def purged_walk_forward_time_splits(
     purge_periods: int,
     embargo_periods: int = 0,
     max_splits: int | None = None,
-) -> list[tuple[pd.DataFrame, pd.DataFrame]]:
+):
     """
-    Expanding walk-forward splits based on unique decision timestamps.
+    Yield expanding walk-forward splits one fold at a time.
 
-    This variant is intended for pooled multi-instrument datasets where several
-    instruments share the same minute. Purge/embargo counts therefore operate
-    on unique timestamps, not physical dataframe row counts.
+    This is semantically identical to purged_walk_forward_time_splits but avoids
+    retaining every expanding train/validation DataFrame copy simultaneously.
+    That is important for pooled multi-instrument research where each fold can
+    contain hundreds of thousands of rows.
     """
     if time_column not in df.columns:
         raise ValueError(f"Missing time column: {time_column}")
@@ -135,29 +136,67 @@ def purged_walk_forward_time_splits(
 
     unique_times = pd.Index(times.drop_duplicates().sort_values())
     validation_start = min_train_periods + purge_periods
-    splits: list[tuple[pd.DataFrame, pd.DataFrame]] = []
+    yielded = 0
 
     while validation_start + validation_periods <= len(unique_times):
         train_end = validation_start - purge_periods
-        train_times = unique_times[:train_end]
-        validation_times = unique_times[
-            validation_start : validation_start + validation_periods
+        train_last = unique_times[train_end - 1]
+        validation_first = unique_times[validation_start]
+        validation_last = unique_times[
+            validation_start + validation_periods - 1
         ]
 
-        train = df.loc[times.isin(train_times)].copy()
-        validation = df.loc[times.isin(validation_times)].copy()
+        # unique_times is sorted and contains every timestamp represented by
+        # the pooled frame. Boundary comparisons therefore select the exact
+        # same timestamp sets as the previous isin(train_times/validation_times)
+        # implementation while avoiding two large temporary Index objects.
+        train = df.loc[times <= train_last].copy()
+        validation = df.loc[
+            (times >= validation_first) & (times <= validation_last)
+        ].copy()
         if train.empty or validation.empty:
             break
 
-        splits.append((train, validation))
-        if max_splits is not None and len(splits) >= max_splits:
+        yield train, validation
+        yielded += 1
+        if max_splits is not None and yielded >= max_splits:
             break
 
         validation_start += validation_periods + embargo_periods
 
-    if not splits:
-        raise ValueError("Dataset is too small for requested time-based walk-forward configuration")
-    return splits
+    if yielded == 0:
+        raise ValueError(
+            "Dataset is too small for requested time-based walk-forward configuration"
+        )
+
+
+def purged_walk_forward_time_splits(
+    df: pd.DataFrame,
+    *,
+    time_column: str,
+    min_train_periods: int,
+    validation_periods: int,
+    purge_periods: int,
+    embargo_periods: int = 0,
+    max_splits: int | None = None,
+) -> list[tuple[pd.DataFrame, pd.DataFrame]]:
+    """
+    Return expanding walk-forward splits based on unique decision timestamps.
+
+    Compatibility wrapper around the lazy iterator. Existing callers that need
+    a materialized list keep the same API and exact fold boundaries.
+    """
+    return list(
+        iter_purged_walk_forward_time_splits(
+            df,
+            time_column=time_column,
+            min_train_periods=min_train_periods,
+            validation_periods=validation_periods,
+            purge_periods=purge_periods,
+            embargo_periods=embargo_periods,
+            max_splits=max_splits,
+        )
+    )
 
 def compute_classification_metrics(
     y_true: pd.Series | np.ndarray,
