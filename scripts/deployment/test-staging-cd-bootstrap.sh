@@ -96,8 +96,8 @@ research_cancel_false="$(grep -F -c 'cancel-in-progress: false' "$RESEARCH_WORKF
 
 pyarrow_preflight_count="$(grep -F -c 'AI Python runtime is missing locked pyarrow support' "$RESEARCH_WORKFLOW" || true)"
 plan_bound_stage_count="$(grep -F -c 'orchestration plan candidate mismatch' "$RESEARCH_WORKFLOW" || true)"
-[[ "$plan_bound_stage_count" -eq 12 ]] ||
-  fail 'Expected exactly 12 post-init plan-bound research stages.'
+[[ "$plan_bound_stage_count" -eq 15 ]] ||
+  fail 'Expected exactly 15 plan-bound research stages after adding three qualification stages.'
 [[ "$pyarrow_preflight_count" -eq "$plan_bound_stage_count" ]] ||
   fail 'Every post-init plan-bound research stage must fail fast when locked pyarrow support is missing.'
 
@@ -139,6 +139,21 @@ grep -Fq -- '--stage init' "$RESEARCH_WORKFLOW" ||
   fail 'Missing the init stage that freezes the study cutoff and orchestration plan.'
 grep -Fq -- '--stage summarize' "$RESEARCH_WORKFLOW" ||
   fail 'Missing the summarize stage that assembles the final study summary.'
+qualification_calls="$(grep -F -c 'app.domain.training.model_qualification' "$RESEARCH_WORKFLOW" || true)"
+[[ "$qualification_calls" -eq 3 ]] ||
+  fail "Expected exactly three bounded model-qualification stages (found $qualification_calls)."
+for horizon in 1 5 10; do
+  grep -Fq "qualification-${horizon}m:" "$RESEARCH_WORKFLOW" ||
+    fail "Missing dedicated model-qualification stage for ${horizon}m."
+  grep -Fq "model_qualification_${horizon}m.json" "$RESEARCH_WORKFLOW" ||
+    fail "Missing durable model-qualification report for ${horizon}m."
+done
+grep -Fq -- '--decision-time-before "$qualification_cutoff"' "$RESEARCH_WORKFLOW" ||
+  fail 'Qualification stages must enforce the research-only decision-time cutoff.'
+grep -Fq 'untouched_final_test_used !== false' "$RESEARCH_WORKFLOW" ||
+  fail 'Qualification resume validation must reject reports that touched the final test tail.'
+grep -Fq 'outer_validation_used_for_tuning !== false' "$RESEARCH_WORKFLOW" ||
+  fail 'Qualification resume validation must reject reports with outer-validation tuning.'
 monolithic_calls="$(python3 - "$RESEARCH_WORKFLOW" <<'PY'
 import sys
 
@@ -169,6 +184,7 @@ problems = []
 pairs = [f"pair-{p.lower()}" for p in
          ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF"]]
 horizons = [f"horizon-{h}m" for h in [1, 5, 10]]
+qualifications = [f"qualification-{h}m" for h in [1, 5, 10]]
 
 expected_pair_needs = {
     pairs[0]: ["validate"],
@@ -192,8 +208,19 @@ for horizon, expected in expected_horizon_needs.items():
     if jobs.get(horizon, {}).get("if") != "needs.validate.outputs.run == 'true'":
         problems.append(f"{horizon} must be gated on the relevance decision")
 
-if jobs.get("select-horizon", {}).get("needs") != ["validate", horizons[-1]]:
-    problems.append("select-horizon must need validate and the final horizon stage")
+expected_qualification_needs = {
+    qualifications[0]: ["validate", horizons[-1]],
+    qualifications[1]: ["validate", qualifications[0]],
+    qualifications[2]: ["validate", qualifications[1]],
+}
+for qualification, expected in expected_qualification_needs.items():
+    if jobs.get(qualification, {}).get("needs") != expected:
+        problems.append(f"{qualification} must need exactly {expected}")
+    if jobs.get(qualification, {}).get("if") != "needs.validate.outputs.run == 'true'":
+        problems.append(f"{qualification} must be gated on the relevance decision")
+
+if jobs.get("select-horizon", {}).get("needs") != ["validate", qualifications[-1]]:
+    problems.append("select-horizon must need validate and the final qualification stage")
 if "select-horizon" not in (jobs.get("final-model", {}).get("needs") or []):
     problems.append("final-model must need select-horizon")
 if "final-model" not in (jobs.get("paper-promotion", {}).get("needs") or []):
@@ -330,5 +357,17 @@ PY
 )"
 [[ "$cleanup_body" -eq 1 ]] ||
   fail "The research cleanup job must only remove ephemeral SSH material (found $cleanup_body lines)."
+
+# 13. The checked-in research workflow must be exactly reproducible from its
+#     authoring generator so future edits cannot silently drift between the two.
+generated_root="$(mktemp -d)"
+trap 'rm -rf "$generated_root"' EXIT
+mkdir -p "$generated_root/.github/workflows"
+(
+  cd "$generated_root"
+  python3 "$REPO_ROOT/scripts/research/generate-six-pair-workflow.py" >/dev/null
+)
+cmp -s "$generated_root/.github/workflows/six-pair-research-run.yml" "$RESEARCH_WORKFLOW" ||
+  fail 'Committed Six Pair Research workflow differs from generate-six-pair-workflow.py output.'
 
 printf 'Staging CD bootstrap and research-coordination regression tests passed.\n'
