@@ -12,12 +12,14 @@ from app.domain.training.model_qualification import (
     ModelVariant,
     QualificationExperiment,
     _apply_calibrator,
+    _feature_columns,
     _fit_calibrator,
     _locked_gate_snapshot,
     _nested_windows,
     _prediction_frame,
     _select_decision_threshold,
     default_experiments,
+    evaluate_qualification_corpora,
     run_nested_qualification_experiments,
 )
 from app.domain.training.train_multitimeframe import (
@@ -281,3 +283,107 @@ def test_nested_locked_baseline_reproduces_legacy_walk_forward_metrics(monkeypat
     assert baseline["overall"]["classification"] == legacy["overall"]["classification"]
     assert baseline["overall"]["trading"] == legacy["overall"]["trading"]
     assert baseline["fold_count"] == legacy["fold_count"]
+
+
+
+def test_feature_experiments_never_invent_non_runtime_features():
+    full = _feature_columns("all")
+    ablated = _feature_columns("drop_volume")
+
+    assert full == list(MULTITIMEFRAME_FEATURE_COLUMNS)
+    assert set(ablated).issubset(MULTITIMEFRAME_FEATURE_COLUMNS)
+    assert set(qualification.QUALIFICATION_REGIME_COLUMNS).issubset(
+        MULTITIMEFRAME_FEATURE_COLUMNS
+    )
+    assert len(ablated) < len(full)
+    assert all(
+        not any(
+            column.endswith(suffix)
+            for suffix in qualification.VOLUME_FEATURE_SUFFIXES
+        )
+        for column in ablated
+    )
+
+
+def test_calibration_fit_receives_only_inner_calibration_labels(monkeypatch):
+    dataset = _research_dataset(periods=500, instruments=("EURUSD",))
+    windows = _nested_windows(
+        dataset,
+        horizon_bars=5,
+        min_inner_periods=30,
+    )
+    observed_labels: list[np.ndarray] = []
+    original_fit_calibrator = qualification._fit_calibrator
+
+    monkeypatch.setattr(
+        qualification,
+        "_fit_variant",
+        lambda *_args, **_kwargs: _FakeModel(),
+    )
+
+    def capture_calibrator(method, *, probabilities, labels):
+        observed_labels.append(np.asarray(labels, dtype=int).copy())
+        return original_fit_calibrator(
+            method,
+            probabilities=probabilities,
+            labels=labels,
+        )
+
+    monkeypatch.setattr(
+        qualification,
+        "_fit_calibrator",
+        capture_calibrator,
+    )
+
+    experiment = QualificationExperiment(
+        name="platt_probe",
+        variants=(
+            ModelVariant(
+                name="platt_probe",
+                calibration="platt",
+            ),
+        ),
+        tune_decision_threshold=True,
+    )
+    qualification._select_variant_inside_outer_training(
+        dataset,
+        experiment=experiment,
+        horizon_bars=5,
+        confidence_floor=0.60,
+        min_inner_periods=30,
+    )
+
+    assert len(observed_labels) == 1
+    np.testing.assert_array_equal(
+        observed_labels[0],
+        windows.calibration["target"].to_numpy(dtype=int),
+    )
+    assert windows.calibration["decision_time"].max() < windows.selection[
+        "decision_time"
+    ].min()
+
+
+def test_qualification_corpora_requires_cutoff_before_loading_any_final_tail(tmp_path):
+    with pytest.raises(
+        ValueError,
+        match="untouched final 20% is excluded",
+    ):
+        evaluate_qualification_corpora(
+            {"EURUSD": tmp_path / "does-not-need-to-exist.csv"},
+            horizon_bars=10,
+            decision_time_before=None,
+            report_path=tmp_path / "report.json",
+        )
+
+
+def test_nested_runner_rejects_lower_confidence_floor_before_model_fit():
+    with pytest.raises(ValueError, match="must not be lowered below 0.60"):
+        run_nested_qualification_experiments(
+            _research_dataset(periods=500, instruments=("EURUSD",)),
+            horizon_bars=5,
+            confidence_floor=0.599,
+            max_splits=1,
+            min_train_periods=300,
+            validation_periods=100,
+            experiments=default_experiments()[:1],
+        )
