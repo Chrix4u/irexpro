@@ -351,7 +351,7 @@ def horizon_job(horizon: str, previous_job: str) -> str:
 
 def qualification_job(horizon: str, previous_job: str) -> str:
     """Run the bounded nested qualification matrix on the research-only 80%."""
-    template = """  qualification-__HORIZON__m:
+    template = r"""  qualification-__HORIZON__m:
     name: Model qualification stage __HORIZON__m
     needs: [validate, __PREVIOUS_JOB__]
     if: needs.validate.outputs.run == 'true'
