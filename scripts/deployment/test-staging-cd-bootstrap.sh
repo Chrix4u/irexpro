@@ -96,8 +96,8 @@ research_cancel_false="$(grep -F -c 'cancel-in-progress: false' "$RESEARCH_WORKF
 
 pyarrow_preflight_count="$(grep -F -c 'AI Python runtime is missing locked pyarrow support' "$RESEARCH_WORKFLOW" || true)"
 plan_bound_stage_count="$(grep -F -c 'orchestration plan candidate mismatch' "$RESEARCH_WORKFLOW" || true)"
-[[ "$plan_bound_stage_count" -eq 12 ]] ||
-  fail 'Expected exactly 12 post-init plan-bound research stages.'
+[[ "$plan_bound_stage_count" -eq 15 ]] ||
+  fail 'Expected exactly 15 plan-bound research stages after adding three qualification stages.'
 [[ "$pyarrow_preflight_count" -eq "$plan_bound_stage_count" ]] ||
   fail 'Every post-init plan-bound research stage must fail fast when locked pyarrow support is missing.'
 
@@ -139,6 +139,22 @@ grep -Fq -- '--stage init' "$RESEARCH_WORKFLOW" ||
   fail 'Missing the init stage that freezes the study cutoff and orchestration plan.'
 grep -Fq -- '--stage summarize' "$RESEARCH_WORKFLOW" ||
   fail 'Missing the summarize stage that assembles the final study summary.'
+qualification_calls="$(grep -F -c 'app.domain.training.model_qualification' "$RESEARCH_WORKFLOW" || true)"
+[[ "$qualification_calls" -eq 3 ]] ||
+  fail "Expected exactly three bounded model-qualification stages (found $qualification_calls)."
+for horizon in 1 5 10; do
+  grep -Fq "qualification-${horizon}m:" "$RESEARCH_WORKFLOW" ||
+    fail "Missing dedicated model-qualification stage for ${horizon}m."
+  grep -Fq "model_qualification_${horizon}m.json" "$RESEARCH_WORKFLOW" ||
+    fail "Missing durable model-qualification report for ${horizon}m."
+done
+# shellcheck disable=SC2016
+grep -Fq -- '--decision-time-before "$qualification_cutoff"' "$RESEARCH_WORKFLOW" ||
+  fail 'Qualification stages must enforce the research-only decision-time cutoff.'
+grep -Fq 'untouched_final_test_used !== false' "$RESEARCH_WORKFLOW" ||
+  fail 'Qualification resume validation must reject reports that touched the final test tail.'
+grep -Fq 'outer_validation_used_for_tuning !== false' "$RESEARCH_WORKFLOW" ||
+  fail 'Qualification resume validation must reject reports with outer-validation tuning.'
 monolithic_calls="$(python3 - "$RESEARCH_WORKFLOW" <<'PY'
 import sys
 
@@ -169,6 +185,7 @@ problems = []
 pairs = [f"pair-{p.lower()}" for p in
          ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF"]]
 horizons = [f"horizon-{h}m" for h in [1, 5, 10]]
+qualifications = [f"qualification-{h}m" for h in [1, 5, 10]]
 
 expected_pair_needs = {
     pairs[0]: ["validate"],
@@ -192,8 +209,19 @@ for horizon, expected in expected_horizon_needs.items():
     if jobs.get(horizon, {}).get("if") != "needs.validate.outputs.run == 'true'":
         problems.append(f"{horizon} must be gated on the relevance decision")
 
-if jobs.get("select-horizon", {}).get("needs") != ["validate", horizons[-1]]:
-    problems.append("select-horizon must need validate and the final horizon stage")
+expected_qualification_needs = {
+    qualifications[0]: ["validate", horizons[-1]],
+    qualifications[1]: ["validate", qualifications[0]],
+    qualifications[2]: ["validate", qualifications[1]],
+}
+for qualification, expected in expected_qualification_needs.items():
+    if jobs.get(qualification, {}).get("needs") != expected:
+        problems.append(f"{qualification} must need exactly {expected}")
+    if jobs.get(qualification, {}).get("if") != "needs.validate.outputs.run == 'true'":
+        problems.append(f"{qualification} must be gated on the relevance decision")
+
+if jobs.get("select-horizon", {}).get("needs") != ["validate", qualifications[-1]]:
+    problems.append("select-horizon must need validate and the final qualification stage")
 if "select-horizon" not in (jobs.get("final-model", {}).get("needs") or []):
     problems.append("final-model must need select-horizon")
 if "final-model" not in (jobs.get("paper-promotion", {}).get("needs") or []):
@@ -330,5 +358,56 @@ PY
 )"
 [[ "$cleanup_body" -eq 1 ]] ||
   fail "The research cleanup job must only remove ephemeral SSH material (found $cleanup_body lines)."
+
+# 13. The authoring generator must reproduce the same executable stage graph
+#     and qualification contract. Textual comments/formatting may differ, but
+#     executable job IDs, dependencies, timeouts and qualification invocations
+#     must not drift.
+generated_root="$(mktemp -d)"
+trap 'rm -rf "$generated_root"' EXIT
+mkdir -p "$generated_root/.github/workflows"
+(
+  cd "$generated_root"
+  python3 "$REPO_ROOT/scripts/research/generate-six-pair-workflow.py" >/dev/null
+)
+generated_workflow="$generated_root/.github/workflows/six-pair-research-run.yml"
+python3 - "$RESEARCH_WORKFLOW" "$generated_workflow" <<'PY'
+import sys
+import yaml
+
+committed_path, generated_path = sys.argv[1:3]
+with open(committed_path, encoding="utf-8") as handle:
+    committed = yaml.safe_load(handle)
+with open(generated_path, encoding="utf-8") as handle:
+    generated = yaml.safe_load(handle)
+
+committed_jobs = committed.get("jobs") or {}
+generated_jobs = generated.get("jobs") or {}
+if set(committed_jobs) != set(generated_jobs):
+    raise SystemExit(
+        "generator job IDs differ from committed workflow: "
+        f"committed={sorted(committed_jobs)} generated={sorted(generated_jobs)}"
+    )
+
+for job_id in sorted(committed_jobs):
+    for key in ("needs", "if", "timeout-minutes", "concurrency"):
+        if committed_jobs[job_id].get(key) != generated_jobs[job_id].get(key):
+            raise SystemExit(
+                f"generator drift for {job_id}.{key}: "
+                f"committed={committed_jobs[job_id].get(key)!r} "
+                f"generated={generated_jobs[job_id].get(key)!r}"
+            )
+
+committed_text = open(committed_path, encoding="utf-8").read()
+generated_text = open(generated_path, encoding="utf-8").read()
+for text, label in ((committed_text, "committed"), (generated_text, "generated")):
+    if text.count("app.domain.training.model_qualification") != 3:
+        raise SystemExit(f"{label} workflow must invoke model qualification exactly three times")
+    if text.count('--decision-time-before "$qualification_cutoff"') != 3:
+        raise SystemExit(f"{label} workflow must bind every qualification stage to the research cutoff")
+    for horizon in ("1", "5", "10"):
+        if f"model_qualification_{horizon}m.json" not in text:
+            raise SystemExit(f"{label} workflow is missing {horizon}m qualification report")
+PY
 
 printf 'Staging CD bootstrap and research-coordination regression tests passed.\n'
