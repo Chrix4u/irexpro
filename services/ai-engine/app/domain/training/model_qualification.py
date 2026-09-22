@@ -16,7 +16,10 @@ from sklearn.linear_model import LogisticRegression
 from xgboost import XGBClassifier
 
 from app.domain.models.multitimeframe_features import MULTITIMEFRAME_FEATURE_COLUMNS
-from app.domain.training.qualification_diagnostics import feature_gain_diagnostics
+from app.domain.training.qualification_diagnostics import (
+    evidence_sufficiency_warnings,
+    feature_gain_diagnostics,
+)
 from app.domain.training.train_multitimeframe import (
     LONG_NET_RETURN_COLUMN,
     QUALIFICATION_REGIME_COLUMNS,
@@ -26,7 +29,7 @@ from app.domain.training.train_multitimeframe import (
     _class_balance_sample_weights,
     _economic_sample_weights,
     _split_internal_early_stopping_tail,
-    _summarize_predictions,
+    _summarize_predictions as _summarize_directional_predictions,
     load_and_prepare_corpora,
 )
 from app.domain.training.validation import (
@@ -850,6 +853,44 @@ def _opportunity_classification(
         predictions["opportunity_probability"].to_numpy(dtype=float),
         threshold=confidence_floor,
     )
+
+
+def _summarize_predictions(
+    predictions: pd.DataFrame,
+    *,
+    horizon_bars: int,
+    confidence_threshold: float = CONFIDENCE_FLOOR,
+    decision_threshold: float = 0.50,
+) -> dict[str, Any]:
+    """Preserve directional metrics while using true joint coverage for two-stage rows."""
+    summary = _summarize_directional_predictions(
+        predictions,
+        horizon_bars=horizon_bars,
+        confidence_threshold=confidence_threshold,
+        decision_threshold=decision_threshold,
+    )
+    if "opportunity_probability" not in predictions.columns:
+        return summary
+
+    direction_coverage = dict(summary["diagnostics"]["confidence_coverage"])
+    active_count = int(predictions["active_trade"].sum())
+    joint_fraction = float(active_count / len(predictions)) if len(predictions) else 0.0
+    summary["diagnostics"]["direction_only_confidence_coverage"] = direction_coverage
+    summary["diagnostics"]["confidence_coverage"] = {
+        "count": active_count,
+        "fraction": joint_fraction,
+        "policy": "opportunity_probability_and_direction_confidence_gte_floor",
+    }
+    summary["evidence_sufficiency_warnings"] = evidence_sufficiency_warnings(
+        trade_or_period_count=int(summary["trading"]["trade_or_period_count"]),
+        sharpe_ratio=(
+            float(summary["trading"]["sharpe_ratio"])
+            if summary["trading"]["sharpe_ratio"] is not None
+            else None
+        ),
+        confidence_coverage=joint_fraction,
+    )
+    return summary
 
 
 def _instrument_positive_fraction(
