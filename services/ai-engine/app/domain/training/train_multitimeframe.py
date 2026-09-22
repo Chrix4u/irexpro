@@ -32,7 +32,6 @@ from app.domain.training.qualification_diagnostics import (
 )
 from app.domain.training.validation import (
     compute_backtest_metrics,
-    compute_classification_metrics,
     iter_purged_walk_forward_time_splits,
 )
 
@@ -726,17 +725,27 @@ def _summarize_predictions(
     confidence_threshold: float = 0.60,
     decision_threshold: float = 0.50,
 ) -> dict[str, Any]:
-    classification = compute_classification_metrics(
-        predictions[TARGET_COLUMN].to_numpy(dtype=int),
-        predictions["positive_probability"].to_numpy(dtype=float),
-        threshold=decision_threshold,
-    )
-    trading = _trade_metrics(predictions, horizon_bars=horizon_bars)
     diagnostics = diagnose_directional_predictions(
         predictions,
         confidence_threshold=confidence_threshold,
         decision_threshold=decision_threshold,
     )
+    classification = {
+        key: diagnostics[key]
+        for key in (
+            "accuracy",
+            "balanced_accuracy",
+            "precision",
+            "recall",
+            "f1",
+            "roc_auc",
+            "log_loss",
+            "brier_score",
+            "sample_count",
+            "positive_rate",
+        )
+    }
+    trading = _trade_metrics(predictions, horizon_bars=horizon_bars)
     evidence_warnings = evidence_sufficiency_warnings(
         trade_or_period_count=int(trading["trade_or_period_count"]),
         sharpe_ratio=(
