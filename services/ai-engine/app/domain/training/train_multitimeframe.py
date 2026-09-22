@@ -24,9 +24,14 @@ from app.domain.models.multitimeframe_features import (
     RUNTIME_TIMEFRAMES,
 )
 from app.domain.training.multitimeframe_corpus import validate_no_lookahead
+from app.domain.training.qualification_diagnostics import (
+    causal_regime_diagnostics,
+    diagnose_directional_predictions,
+    evidence_sufficiency_warnings,
+    feature_gain_diagnostics,
+)
 from app.domain.training.validation import (
     compute_backtest_metrics,
-    compute_classification_metrics,
     iter_purged_walk_forward_time_splits,
 )
 
@@ -38,6 +43,7 @@ ECONOMIC_SAMPLE_WEIGHT_POLICY = "class_balanced_positive_net_edge_q75_capped_v2"
 RESEARCH_PROGRESS_ENV = "IREXPRO_RESEARCH_PROGRESS"
 XGBOOST_N_JOBS_ENV = "IREXPRO_XGB_N_JOBS"
 MAX_XGBOOST_N_JOBS = 4
+QUALIFICATION_REGIME_COLUMNS = ("m1_volatility_20", "h1_rsi_14")
 
 
 def _research_progress(message: str) -> None:
@@ -680,6 +686,10 @@ def _trade_metrics(
             "sharpe_ratio": None,
             "sortino_ratio": None,
             "max_drawdown": 0.0,
+            "average_winner": None,
+            "average_loser": None,
+            "gross_profit": 0.0,
+            "gross_loss": 0.0,
         }
 
     start = periods["decision_time"].min()
@@ -689,15 +699,22 @@ def _trade_metrics(
         1.0 / 365.25,
     )
     periods_per_year = max(float(len(periods)) / span_years, 1.0)
+    period_returns = periods["portfolio_net_return"].to_numpy(dtype=float)
     metrics = compute_backtest_metrics(
-        periods["portfolio_net_return"].to_numpy(dtype=float),
+        period_returns,
         annualization_factor=periods_per_year,
     )
+    winners = period_returns[period_returns > 0.0]
+    losers = period_returns[period_returns < 0.0]
     return {
         **metrics,
         "raw_active_signals": raw_active_signals,
         "non_overlapping_periods": int(len(periods)),
         "backtest_evaluation_policy": MULTITIMEFRAME_BACKTEST_POLICY,
+        "average_winner": float(winners.mean()) if len(winners) else None,
+        "average_loser": float(losers.mean()) if len(losers) else None,
+        "gross_profit": float(winners.sum()) if len(winners) else 0.0,
+        "gross_loss": float(-losers.sum()) if len(losers) else 0.0,
     }
 
 
@@ -705,14 +722,48 @@ def _summarize_predictions(
     predictions: pd.DataFrame,
     *,
     horizon_bars: int,
+    confidence_threshold: float = 0.60,
+    decision_threshold: float = 0.50,
 ) -> dict[str, Any]:
-    classification = compute_classification_metrics(
-        predictions[TARGET_COLUMN].to_numpy(dtype=int),
-        predictions["positive_probability"].to_numpy(dtype=float),
+    diagnostics = diagnose_directional_predictions(
+        predictions,
+        confidence_threshold=confidence_threshold,
+        decision_threshold=decision_threshold,
+    )
+    classification = {
+        key: diagnostics[key]
+        for key in (
+            "accuracy",
+            "balanced_accuracy",
+            "precision",
+            "recall",
+            "f1",
+            "roc_auc",
+            "log_loss",
+            "brier_score",
+            "sample_count",
+            "positive_rate",
+        )
+    }
+    trading = _trade_metrics(predictions, horizon_bars=horizon_bars)
+    evidence_warnings = evidence_sufficiency_warnings(
+        trade_or_period_count=int(trading["trade_or_period_count"]),
+        sharpe_ratio=(
+            float(trading["sharpe_ratio"])
+            if trading["sharpe_ratio"] is not None
+            else None
+        ),
+        confidence_coverage=float(diagnostics["confidence_coverage"]["fraction"]),
     )
     return {
         "classification": classification,
-        "trading": _trade_metrics(predictions, horizon_bars=horizon_bars),
+        "trading": trading,
+        "diagnostics": diagnostics,
+        "causal_regime_diagnostics": causal_regime_diagnostics(
+            predictions,
+            confidence_threshold=confidence_threshold,
+        ),
+        "evidence_sufficiency_warnings": evidence_warnings,
         "rows": int(len(predictions)),
         "active_trades": int(predictions["active_trade"].sum()),
         "average_spread_bps": float(predictions["m1_spread_bps"].mean()),
@@ -864,16 +915,20 @@ def _run_pooled_walk_forward_core(
         probabilities = model.predict_proba(
             validation_frame[MULTITIMEFRAME_FEATURE_COLUMNS]
         )[:, 1]
-        predictions = validation_frame[
-            [
-                "decision_time",
-                "instrument",
-                TARGET_COLUMN,
-                LONG_NET_RETURN_COLUMN,
-                SHORT_NET_RETURN_COLUMN,
-                "m1_spread_bps",
-            ]
-        ].copy()
+        prediction_columns = [
+            "decision_time",
+            "instrument",
+            TARGET_COLUMN,
+            LONG_NET_RETURN_COLUMN,
+            SHORT_NET_RETURN_COLUMN,
+            "m1_spread_bps",
+        ]
+        prediction_columns.extend(
+            column
+            for column in QUALIFICATION_REGIME_COLUMNS
+            if column in validation_frame.columns
+        )
+        predictions = validation_frame[prediction_columns].copy()
         predictions["positive_probability"] = probabilities
         predictions["predicted_long"] = probabilities >= 0.5
         predictions["confidence"] = np.maximum(probabilities, 1.0 - probabilities)
@@ -886,13 +941,25 @@ def _run_pooled_walk_forward_core(
         predictions["fold"] = fold_index
 
         by_instrument = {
-            instrument: _summarize_predictions(group, horizon_bars=horizon_bars)
+            instrument: _summarize_predictions(
+                group,
+                horizon_bars=horizon_bars,
+                confidence_threshold=confidence_threshold,
+            )
             for instrument, group in predictions.groupby("instrument", sort=True)
         }
         fold_report = {
             **expected_checkpoint,
             "best_iteration": int(getattr(model, "best_iteration", -1)),
-            "aggregate": _summarize_predictions(predictions, horizon_bars=horizon_bars),
+            "feature_importance_gain": feature_gain_diagnostics(
+                model,
+                MULTITIMEFRAME_FEATURE_COLUMNS,
+            ),
+            "aggregate": _summarize_predictions(
+                predictions,
+                horizon_bars=horizon_bars,
+                confidence_threshold=confidence_threshold,
+            ),
             "by_instrument": by_instrument,
         }
         fold_reports.append(fold_report)
@@ -925,12 +992,20 @@ def _run_pooled_walk_forward_core(
 
     all_predictions = pd.concat(prediction_frames, ignore_index=True)
     overall_by_instrument = {
-        instrument: _summarize_predictions(group, horizon_bars=horizon_bars)
+        instrument: _summarize_predictions(
+            group,
+            horizon_bars=horizon_bars,
+            confidence_threshold=confidence_threshold,
+        )
         for instrument, group in all_predictions.groupby("instrument", sort=True)
     }
     report = {
         "folds": fold_reports,
-        "overall": _summarize_predictions(all_predictions, horizon_bars=horizon_bars),
+        "overall": _summarize_predictions(
+            all_predictions,
+            horizon_bars=horizon_bars,
+            confidence_threshold=confidence_threshold,
+        ),
         "by_instrument": overall_by_instrument,
         "fold_count": len(fold_reports),
         "evaluated_rows": int(len(all_predictions)),
