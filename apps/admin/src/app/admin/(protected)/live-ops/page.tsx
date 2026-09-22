@@ -15,6 +15,7 @@ import type { ProviderVerificationLabel } from '@irexpro/types/provider-verifica
 import {
   ADMIN_DISCREPANCY_PAGE_SIZE,
   ADMIN_TABLE_PAGE_SIZE,
+  formatAdminAgeSeconds,
   formatAdminTimestamp,
   loadAdminConnections,
   loadAdminDiscrepancies,
@@ -25,6 +26,7 @@ import {
   type AdminDiscrepancyRowView,
   type AdminExecutionControlView,
   type AdminLiveOpsOverviewView,
+  type AdminStaleSnapshotAlert,
 } from '@/lib/admin-live-ops';
 
 /**
@@ -160,7 +162,9 @@ function ProviderCapabilities({ capabilities }: { capabilities: string[] }) {
  * (c) adapter availability, (d) verification status — each rendered from
  * the fixed taxonomy so an UNVERIFIED BETA provider is never "Live".
  * Identity eligibility (e) and current executability (f) are per-connection
- * facts and live in the connection authority table below.
+ * facts and live in the connection authority table below. Phase 10 canary
+ * operations adds the adapter implementation version column (from the
+ * overview's adapterVersions map — '—' when unreported).
  */
 /**
  * Round 7.1 (P0-3) — truthful certification-state cell. Legacy attestation
@@ -212,9 +216,11 @@ function CertificationStateCell({
 function ProviderMatrixRow({
   provider,
   registryEntry,
+  adapterVersion,
 }: {
   provider: NonNullable<AdminLiveOpsOverviewView['providers'][number]>;
   registryEntry: BrokerRegistryEntry | null;
+  adapterVersion: string | null | undefined;
 }) {
   const assessment = assessProviderVerification({
     // The overview's own environment facts stay usable when the registry join
@@ -275,6 +281,11 @@ function ProviderMatrixRow({
           }
           verification={registryEntry?.productionLiveVerification ?? null}
         />
+      </td>
+      {/* Phase 10 canary operations — adapter implementation version ('—'
+          when the adapter reports no version annotation). */}
+      <td>
+        <span className="admin-table__cell-mono">{adapterVersion ?? '—'}</span>
       </td>
       <td>
         <ProviderCapabilities capabilities={provider.capabilities} />
@@ -340,6 +351,33 @@ function ConnectionAuthorityRow({
           Live-trading flag (compatibility mirror): {row.liveTradingEnabled ? 'enabled' : 'not enabled'}
         </div>
       </td>
+    </tr>
+  );
+}
+
+/**
+ * Phase 10 canary operations — stale-snapshot alert row (read-only list).
+ */
+function StaleSnapshotRow({ alert }: { alert: AdminStaleSnapshotAlert }) {
+  return (
+    <tr>
+      <td className="admin-table__cell-mono break-long">{alert.connectionId}</td>
+      <td className="admin-table__cell-mono">{alert.brokerId}</td>
+      <td>
+        <Badge variant={alert.accountType === 'LIVE' ? 'warning' : 'info'}>
+          {alert.accountType}
+        </Badge>
+      </td>
+      <td>
+        {alert.lastAcceptedAt ? (
+          <time dateTime={alert.lastAcceptedAt}>
+            {formatAdminTimestamp(alert.lastAcceptedAt)}
+          </time>
+        ) : (
+          <span className="admin-table__cell-muted">Never accepted</span>
+        )}
+      </td>
+      <td className="admin-table__cell-mono">{formatAdminAgeSeconds(alert.ageSeconds)}</td>
     </tr>
   );
 }
@@ -509,6 +547,13 @@ export default function AdminLiveOpsPage() {
   const expiredControls = overview?.expiredControls ?? null;
   const providers = overview?.providers ?? [];
   const automation = overview?.automation ?? null;
+  // Phase 10 canary-operations blocks (null = panel degraded server-side).
+  const adapterVersions = overview?.adapterVersions ?? null;
+  const dispatchOutcomes = overview?.dispatchOutcomes ?? null;
+  const staleSnapshotAlerts = overview?.staleSnapshotAlerts ?? null;
+  const emergencyFlattenStatus = overview?.emergencyFlattenStatus ?? null;
+  const killSwitchState = overview?.killSwitchState ?? null;
+  const canaryBounds = overview?.canaryBounds ?? null;
 
   const discStart = discTotal === 0 ? 0 : discOffset + 1;
   const discEnd = Math.min(discOffset + discRows.length, discTotal);
@@ -627,6 +672,85 @@ export default function AdminLiveOpsPage() {
         )}
       </Card>
 
+      {/* Phase 10 canary operations — order-dispatch outcome counts */}
+      <Card title="Dispatch outcomes">
+        {loadingOverview ? (
+          <p className="muted">Loading dispatch outcomes…</p>
+        ) : dispatchOutcomes ? (
+          <div className="stat-grid">
+            <StatTile
+              label="Unknown-result (open)"
+              value={dispatchOutcomes.unknownResultOpenCount}
+              variant={
+                dispatchOutcomes.unknownResultOpenCount > 0 ? 'error' : undefined
+              }
+            />
+            <StatTile
+              label="Rejected last 24h"
+              value={dispatchOutcomes.rejectedLast24h}
+              variant={dispatchOutcomes.rejectedLast24h > 0 ? 'warning' : undefined}
+            />
+            {dispatchOutcomes.dispatchBlocksLast24h !== null &&
+              dispatchOutcomes.dispatchBlocksLast24h !== undefined && (
+                <StatTile
+                  label="Risk blocks last 24h"
+                  value={dispatchOutcomes.dispatchBlocksLast24h}
+                  variant={
+                    dispatchOutcomes.dispatchBlocksLast24h > 0 ? 'warning' : undefined
+                  }
+                />
+              )}
+          </div>
+        ) : (
+          <p className="muted">Dispatch outcome counts unavailable.</p>
+        )}
+        <p className="muted text-sm">
+          Unknown-result orders are RECONCILIATION_PENDING — the provider outcome is not yet
+          known and reconciliation owns convergence.
+        </p>
+      </Card>
+
+      {/* Phase 10 canary operations — stale account-snapshot alerts */}
+      <Card
+        title={`Stale account snapshots (${staleSnapshotAlerts?.length ?? 0})`}
+      >
+        {loadingOverview ? (
+          <p className="muted">Loading snapshot staleness…</p>
+        ) : staleSnapshotAlerts === null ? (
+          <p className="muted">Snapshot staleness unavailable.</p>
+        ) : staleSnapshotAlerts.length === 0 ? (
+          <EmptyState
+            icon="✓"
+            title="No stale account snapshots"
+            description="Every connected connection's snapshot is within the staleness threshold."
+          />
+        ) : (
+          <div className="admin-table-scroll">
+            <table className="admin-table" aria-label="Stale account snapshots">
+              <thead>
+                <tr>
+                  <th scope="col">Connection</th>
+                  <th scope="col">Broker</th>
+                  <th scope="col">Account type</th>
+                  <th scope="col">Last accepted</th>
+                  <th scope="col">Age</th>
+                </tr>
+              </thead>
+              <tbody>
+                {staleSnapshotAlerts.map((alert) => (
+                  <StaleSnapshotRow key={alert.connectionId} alert={alert} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <p className="muted text-sm">
+          Alerts cover connected connections whose last accepted snapshot is older than 120s
+          (or missing on a connected LIVE account). The pre-trade freshness gate is stricter and
+          unchanged.
+        </p>
+      </Card>
+
       {/* §39 — active emergency execution controls */}
       <Card title={`Active execution controls (${activeControls.length})`}>
         {loadingOverview ? (
@@ -664,6 +788,60 @@ export default function AdminLiveOpsPage() {
         </Card>
       )}
 
+      {/* Phase 10 canary operations — per-user kill-switch adoption tile */}
+      <Card title="Kill switch">
+        {loadingOverview ? (
+          <p className="muted">Loading kill-switch state…</p>
+        ) : killSwitchState ? (
+          <div className="stat-grid">
+            <StatTile
+              label="Users with kill switch active"
+              value={killSwitchState.activeUsersCount}
+              variant={killSwitchState.activeUsersCount > 0 ? 'warning' : undefined}
+            />
+          </div>
+        ) : (
+          <p className="muted">Kill-switch state unavailable.</p>
+        )}
+        <p className="muted text-sm">
+          Per-user emergency stop: every signal for an affected user is rejected before dispatch.
+          Read-only visibility — toggling stays in the risk APIs.
+        </p>
+      </Card>
+
+      {/* Phase 10 canary operations — most recent emergency flatten status */}
+      <Card title="Emergency flatten">
+        {loadingOverview ? (
+          <p className="muted">Loading emergency flatten status…</p>
+        ) : emergencyFlattenStatus === null ? (
+          <p className="muted">Emergency flatten status unavailable.</p>
+        ) : emergencyFlattenStatus.lastRequestedAt === null ? (
+          <p className="muted">No emergency flatten recorded.</p>
+        ) : (
+          <div>
+            <p>
+              <Badge
+                variant={
+                  emergencyFlattenStatus.lastOutcome === 'COMPLETE'
+                    ? 'success'
+                    : emergencyFlattenStatus.lastOutcome === 'PARTIAL'
+                      ? 'warning'
+                      : 'info'
+                }
+              >
+                {emergencyFlattenStatus.lastOutcome ?? 'UNKNOWN'}
+              </Badge>{' '}
+              <time dateTime={emergencyFlattenStatus.lastRequestedAt}>
+                {formatAdminTimestamp(emergencyFlattenStatus.lastRequestedAt)}
+              </time>
+            </p>
+            {emergencyFlattenStatus.description && (
+              <p className="muted text-sm">{emergencyFlattenStatus.description}</p>
+            )}
+          </div>
+        )}
+      </Card>
+
       {/* §39 — provider capability matrix (Sprint 56 round 5: (a)–(d) separated) */}
       <Card title={`Provider capability matrix (${providers.length})`}>
         <p className="muted text-sm" style={{ marginTop: 0 }}>
@@ -691,6 +869,7 @@ export default function AdminLiveOpsPage() {
                   <th scope="col">Adapter</th>
                   <th scope="col">Production-LIVE verification</th>
                   <th scope="col">Certification (Round 7.1)</th>
+                  <th scope="col">Adapter version</th>
                   <th scope="col">Capabilities</th>
                 </tr>
               </thead>
@@ -702,7 +881,47 @@ export default function AdminLiveOpsPage() {
                     registryEntry={
                       providerRegistry?.find((entry) => entry.id === provider.brokerId) ?? null
                     }
+                    adapterVersion={adapterVersions?.[provider.brokerId] ?? null}
                   />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      {/* Phase 10 canary operations — certification canary exposure caps */}
+      <Card title="Certification canary bounds">
+        <p className="muted text-sm" style={{ marginTop: 0 }}>
+          Operator-configured maximum canary exposure per certifiable provider (the
+          *_LIVE_CERT_MAX_CANARY_EXPOSURE operator env contract). The cap is an operator
+          decision — never AI-derived. Read-only display.
+        </p>
+        {loadingOverview ? (
+          <p className="muted">Loading canary bounds…</p>
+        ) : canaryBounds === null ? (
+          <p className="muted">Canary bounds unavailable.</p>
+        ) : (
+          <div className="admin-table-scroll">
+            <table className="admin-table" aria-label="Certification canary bounds">
+              <thead>
+                <tr>
+                  <th scope="col">Provider</th>
+                  <th scope="col">Max canary exposure</th>
+                </tr>
+              </thead>
+              <tbody>
+                {canaryBounds.map((bound) => (
+                  <tr key={bound.brokerId}>
+                    <td className="admin-table__cell-strong">{bound.brokerId}</td>
+                    <td>
+                      {bound.configured ? (
+                        <span className="admin-table__cell-mono">{bound.maxCanaryExposure}</span>
+                      ) : (
+                        <span className="admin-table__cell-muted">not configured</span>
+                      )}
+                    </td>
+                  </tr>
                 ))}
               </tbody>
             </table>

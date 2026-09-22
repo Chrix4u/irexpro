@@ -24,6 +24,9 @@ import { SharedControlRevisionService } from '../execution-authority/shared-cont
 import { GrantInvalidationService } from '../execution-authority/grant-invalidation.service';
 import { DailyRiskPeriodService } from '../execution/services/daily-risk-period.service';
 import { BrokerAccountSnapshotService } from '../broker/services/broker-account-snapshot.service';
+// Production-LIVE completion round (Phase 9): continuous LIVE gate mocks.
+import { EligibilityService } from '../users/eligibility.service';
+import { BrokerProviderRegistryService } from '../broker/registry/broker-provider-registry.service';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -244,6 +247,20 @@ describe('RiskService — Sprint 32 Production Hardening', () => {
           },
         },
         { provide: BrokerAccountSnapshotService, useValue: {} },
+        // Production-LIVE completion round (Phase 9): continuous LIVE gate mocks
+        // (default eligible/unrestricted — this suite is PAPER-path only).
+        {
+          provide: EligibilityService,
+          useValue: {
+            assertUserEligibleForLiveNewExposure: jest
+              .fn()
+              .mockResolvedValue({ eligible: true, countryCode: 'US' }),
+          },
+        },
+        {
+          provide: BrokerProviderRegistryService,
+          useValue: { isLiveRegionAvailable: jest.fn().mockReturnValue(true) },
+        },
         { provide: ModuleRef, useValue: { get: jest.fn() } },
       ],
     }).compile();

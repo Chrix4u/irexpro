@@ -29,6 +29,28 @@ import {
   BrokerAccountSnapshotService,
   SnapshotNotFreshError,
 } from '../broker/services/broker-account-snapshot.service';
+// Production-LIVE completion round (Phase 9): continuous LIVE gate mocks.
+import { EligibilityService } from '../users/eligibility.service';
+import { BrokerProviderRegistryService } from '../broker/registry/broker-provider-registry.service';
+// October UAT hardening (WS2/WS3): the LIVE new-exposure hard gates.
+import {
+  ReconciliationHealthService,
+  ReconciliationHealthBlockedException,
+  ReconciliationHealthReasonCode,
+} from '../execution/reconciliation/reconciliation-health.service';
+import {
+  ReconciliationDiscrepancyType,
+  ReconciliationRunStatus,
+} from '../execution/reconciliation/reconciliation.enums';
+import {
+  LiveModelApprovalGateService,
+  LiveModelGateReasonCode,
+  LiveModelNotApprovedError,
+} from '../ai-engine-client/live-model-approval.gate';
+// Production-LIVE completion round (P13 metrics): the real in-process registry
+// handed through the service's existing lazy ModuleRef seam.
+import { MetricsService } from '../metrics/metrics.service';
+import { METRIC_GAUGE_NAMES } from '../metrics/metric-names';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -113,6 +135,9 @@ const mockProfileRepo = () => {
     create: jest.fn().mockImplementation((obj) => ({ ...defaultProfile(), ...obj })),
     save: jest.fn().mockImplementation(async (obj) => obj),
     find: jest.fn().mockResolvedValue([]),
+    // P13 metrics: toggleKillSwitch re-counts ACTIVE kill switches after the
+    // commit for the irexpro_kill_switches_active gauge.
+    count: jest.fn().mockResolvedValue(0),
     // Round 6 (#15): bumpProfileRevisionAndAuthority runs the monotonic
     // revision CAS through the repository query builder.
     createQueryBuilder: jest.fn().mockReturnValue({
@@ -245,10 +270,19 @@ describe('RiskService', () => {
   // default so LIVE-path tests flow to their OWN typed downstream failures;
   // per-test overrides replace the implementations).
   let brokerAccountSnapshotService: { resolveFreshSnapshotForNewExposure: jest.Mock };
+  // Production-LIVE completion round (Phase 9): continuous LIVE gate mocks.
+  // Default = eligible/unrestricted; LIVE-path specs override per-test.
+  let eligibilityService: { assertUserEligibleForLiveNewExposure: jest.Mock };
+  let providerRegistry: { isLiveRegionAvailable: jest.Mock };
   let dailyRiskPeriod: {
     resolveDailyRiskPeriod: jest.Mock;
     getTodayRealisedLossExact: jest.Mock;
   };
+  // October UAT hardening (WS2/WS3): LIVE hard-gate mocks. Default =
+  // healthy/approved so LIVE-path specs flow to their OWN typed downstream
+  // assertions; the dedicated gate specs below override per-test.
+  let reconciliationHealth: { assertHealthyForLiveNewExposure: jest.Mock };
+  let liveModelApproval: { assertApprovedForLiveNewExposure: jest.Mock };
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -277,6 +311,36 @@ describe('RiskService', () => {
     dailyRiskPeriod = {
       resolveDailyRiskPeriod: jest.fn().mockResolvedValue({ id: 'period-1' }),
       getTodayRealisedLossExact: jest.fn().mockResolvedValue({ total: '0', complete: true }),
+    };
+    eligibilityService = {
+      assertUserEligibleForLiveNewExposure: jest
+        .fn()
+        .mockResolvedValue({ eligible: true, countryCode: 'US' }),
+    };
+    reconciliationHealth = {
+      assertHealthyForLiveNewExposure: jest.fn().mockResolvedValue({
+        healthy: true,
+        reasonCode: null,
+        detail: 'Reconciliation truth is current and divergence-free.',
+        evidence: {},
+      }),
+    };
+    liveModelApproval = {
+      assertApprovedForLiveNewExposure: jest.fn().mockResolvedValue({
+        approved: true,
+        reasonCode: null,
+        detail: 'The exact active AI model holds a valid LIVE promotion record.',
+        model: {
+          version: 'xgb-mtf-1.0.0',
+          mode: 'trained_xgboost_mtf',
+          artifactSha256: 'a'.repeat(64),
+          approvedForPaper: true,
+        },
+        promotionRecord: { recordId: 'r-1', approvedBy: 'op', activatedAt: null },
+      }),
+    };
+    providerRegistry = {
+      isLiveRegionAvailable: jest.fn().mockReturnValue(true),
     };
 
     module = await Test.createTestingModule({
@@ -324,7 +388,25 @@ describe('RiskService', () => {
           },
         },
         { provide: BrokerAccountSnapshotService, useValue: brokerAccountSnapshotService },
-        { provide: ModuleRef, useValue: { get: jest.fn() } },
+        // Production-LIVE completion round (Phase 9): continuous LIVE gates.
+        // PAPER-only suite default: the LIVE-path specs below that need these
+        // seams provide their own behavior via the shared mock objects.
+        { provide: EligibilityService, useValue: eligibilityService },
+        { provide: BrokerProviderRegistryService, useValue: providerRegistry },
+        {
+          provide: ModuleRef,
+          // October UAT hardening (WS2/WS3): token-aware lookup so the lazy
+          // LIVE-gate seams resolve the shared healthy/approved mocks (the
+          // metrics seam keeps returning undefined → no-op, as before). A real
+          // jest.fn so the P13 metrics specs can still mockReturnValue().
+          useValue: {
+            get: jest.fn((token: unknown) => {
+              if (token === ReconciliationHealthService) return reconciliationHealth;
+              if (token === LiveModelApprovalGateService) return liveModelApproval;
+              return undefined;
+            }),
+          },
+        },
         {
           provide: DomainEventBus,
           useValue: { publish: jest.fn(), subscribe: jest.fn().mockReturnValue(() => {}) },
@@ -714,6 +796,346 @@ describe('RiskService', () => {
       expect(auditService.log).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'EXECUTION_CONTROL_BLOCKED' }),
       );
+    });
+  });
+
+  // ─── Step 1e: continuous LIVE user-eligibility + region gate ────────────
+  // Production-LIVE completion round (Phase 9): a revocation AFTER session
+  // start (KYC, jurisdiction, disclosures, account status) must block the
+  // NEXT LIVE new-exposure grant, and the provider's LIVE offering must be
+  // available in the user's region.
+
+  describe('Step 1e — continuous LIVE user-eligibility + region gate (Phase 9)', () => {
+    const liveSetup = () => {
+      brokerService.findConnectionById.mockResolvedValue(
+        defaultConnection({ accountType: 'LIVE' }),
+      );
+      sessionRepo.findOne.mockResolvedValue(
+        defaultSession({ executionMode: ExecutionMode.FULL_AUTO }),
+      );
+      sessionResolution.resolveActiveSessionAuthority.mockResolvedValue({
+        sessionId: 'session-1',
+        sessionGeneration: 1,
+        executionMode: ExecutionMode.FULL_AUTO,
+        brokerConnectionId: 'conn-1',
+      });
+    };
+
+    it('REJECTS LIVE new exposure with USER_LIVE_ELIGIBILITY_REVOKED when eligibility was revoked after session start', async () => {
+      liveSetup();
+      eligibilityService.assertUserEligibleForLiveNewExposure.mockResolvedValue({
+        eligible: false,
+        reasonCode: 'KYC_REJECTED',
+        detail:
+          'LIVE new exposure requires current eligibility (jurisdiction, age, KYC, disclosures)',
+        countryCode: 'US',
+      });
+
+      const result = await service.validateProposedTrade(
+        'user-1',
+        validTrade({ executionMode: ExecutionMode.FULL_AUTO } as Partial<ProposedTrade>),
+      );
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.USER_LIVE_ELIGIBILITY_REVOKED);
+        expect(result.rejectionReason).toContain('KYC_REJECTED');
+      }
+      // The eligibility check runs for the trading user, exactly once.
+      expect(eligibilityService.assertUserEligibleForLiveNewExposure).toHaveBeenCalledTimes(1);
+      expect(eligibilityService.assertUserEligibleForLiveNewExposure).toHaveBeenCalledWith(
+        'user-1',
+      );
+    });
+
+    it('REJECTS LIVE new exposure with USER_LIVE_ELIGIBILITY_REVOKED when the account is no longer ACTIVE', async () => {
+      liveSetup();
+      eligibilityService.assertUserEligibleForLiveNewExposure.mockResolvedValue({
+        eligible: false,
+        reasonCode: 'ACCOUNT_SUSPENDED',
+        detail: 'user status is SUSPENDED — LIVE new exposure requires an ACTIVE account',
+        countryCode: 'US',
+      });
+
+      const result = await service.validateProposedTrade(
+        'user-1',
+        validTrade({ executionMode: ExecutionMode.FULL_AUTO } as Partial<ProposedTrade>),
+      );
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.USER_LIVE_ELIGIBILITY_REVOKED);
+      }
+    });
+
+    it('REJECTS LIVE new exposure with PROVIDER_REGION_UNAVAILABLE when the provider LIVE offering is region-blocked', async () => {
+      liveSetup();
+      eligibilityService.assertUserEligibleForLiveNewExposure.mockResolvedValue({
+        eligible: true,
+        countryCode: 'GH',
+      });
+      providerRegistry.isLiveRegionAvailable.mockReturnValue(false);
+
+      const result = await service.validateProposedTrade(
+        'user-1',
+        validTrade({ executionMode: ExecutionMode.FULL_AUTO } as Partial<ProposedTrade>),
+      );
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.PROVIDER_REGION_UNAVAILABLE);
+      }
+      // Region is evaluated for the connection's broker against the user's country.
+      expect(providerRegistry.isLiveRegionAvailable).toHaveBeenCalledWith('metatrader5', 'GH');
+    });
+
+    it('does NOT consult eligibility for DEMO/PAPER exposure (not real money)', async () => {
+      const result = await service.validateProposedTrade('user-1', validTrade());
+
+      expect(result.decision).toBe('APPROVED');
+      expect(eligibilityService.assertUserEligibleForLiveNewExposure).not.toHaveBeenCalled();
+      expect(providerRegistry.isLiveRegionAvailable).not.toHaveBeenCalled();
+    });
+
+    it('an eligible LIVE user in an available region proceeds past the gate', async () => {
+      liveSetup();
+      eligibilityService.assertUserEligibleForLiveNewExposure.mockResolvedValue({
+        eligible: true,
+        countryCode: 'US',
+      });
+      providerRegistry.isLiveRegionAvailable.mockReturnValue(true);
+      brokerService.getBrokerAccountState.mockResolvedValue({
+        balance: '10000.00',
+        equity: '10050.00',
+        freeMargin: '9800.00',
+        currency: 'USD',
+      });
+      brokerAccountSnapshotService.resolveFreshSnapshotForNewExposure.mockResolvedValue({
+        id: 'snap-1',
+        generation: 1,
+        currency: 'USD',
+        balance: '10000.00',
+        equity: '10050.00',
+        providerObservedAt: new Date(),
+        acceptedAt: new Date(),
+      });
+
+      const result = await service.validateProposedTrade(
+        'user-1',
+        validTrade({ executionMode: ExecutionMode.FULL_AUTO } as Partial<ProposedTrade>),
+      );
+
+      // Passes Step 1e (may still fail on later LIVE-specific steps with the
+      // default mocks — assert it is NOT the Step 1e codes).
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).not.toBe(RiskRejectionCode.USER_LIVE_ELIGIBILITY_REVOKED);
+        expect(result.rejectionCode).not.toBe(RiskRejectionCode.PROVIDER_REGION_UNAVAILABLE);
+      }
+      expect(eligibilityService.assertUserEligibleForLiveNewExposure).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // ─── October UAT hardening (WS2/WS3): LIVE new-exposure hard gates ──────
+
+  describe('Steps 1f/1g — LIVE reconciliation-health + exact-model approval hard gates (WS2/WS3)', () => {
+    const liveSetup = () => {
+      brokerService.findConnectionById.mockResolvedValue(
+        defaultConnection({ accountType: 'LIVE' }),
+      );
+      sessionRepo.findOne.mockResolvedValue(
+        defaultSession({ executionMode: ExecutionMode.FULL_AUTO }),
+      );
+      sessionResolution.resolveActiveSessionAuthority.mockResolvedValue({
+        sessionId: 'session-1',
+        sessionGeneration: 1,
+        executionMode: ExecutionMode.FULL_AUTO,
+        brokerConnectionId: 'conn-1',
+      });
+      eligibilityService.assertUserEligibleForLiveNewExposure.mockResolvedValue({
+        eligible: true,
+        countryCode: 'US',
+      });
+      providerRegistry.isLiveRegionAvailable.mockReturnValue(true);
+    };
+
+    it('REJECTS LIVE new exposure with LIVE_RECONCILIATION_HEALTH_BLOCKED when reconciliation truth is stale', async () => {
+      liveSetup();
+      reconciliationHealth.assertHealthyForLiveNewExposure.mockRejectedValue(
+        new ReconciliationHealthBlockedException({
+          healthy: false,
+          reasonCode: ReconciliationHealthReasonCode.RECONCILIATION_STALE,
+          detail: 'The most recent successful reconciliation is 600s old (policy allows 300s).',
+          evidence: {
+            latestRunId: 'run-1',
+            latestRunStatus: ReconciliationRunStatus.COMPLETED,
+            latestSuccessfulRunCompletedAt: '2026-09-21T11:50:00.000Z',
+            latestSuccessfulRunAgeMs: 600_000,
+            openDiscrepanciesByType: {},
+          },
+        }),
+      );
+
+      const result = await service.validateProposedTrade(
+        'user-1',
+        validTrade({ executionMode: ExecutionMode.FULL_AUTO } as Partial<ProposedTrade>),
+      );
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.LIVE_RECONCILIATION_HEALTH_BLOCKED);
+        expect(result.rejectionReason).toContain('RECONCILIATION_STALE');
+      }
+      // The gate runs BEFORE the model gate (deterministic step order 1f→1g).
+      expect(liveModelApproval.assertApprovedForLiveNewExposure).not.toHaveBeenCalled();
+    });
+
+    it('REJECTS LIVE new exposure with LIVE_RECONCILIATION_HEALTH_BLOCKED on unresolved protective divergence', async () => {
+      liveSetup();
+      reconciliationHealth.assertHealthyForLiveNewExposure.mockRejectedValue(
+        new ReconciliationHealthBlockedException({
+          healthy: false,
+          reasonCode: ReconciliationHealthReasonCode.PROTECTIVE_ORDER_DIVERGENCE,
+          detail: '2 open position(s) have unverified or unrestorable protective orders (SL/TP).',
+          evidence: {
+            latestRunId: 'run-1',
+            latestRunStatus: ReconciliationRunStatus.COMPLETED,
+            latestSuccessfulRunCompletedAt: new Date().toISOString(),
+            latestSuccessfulRunAgeMs: 5_000,
+            openDiscrepanciesByType: {
+              [ReconciliationDiscrepancyType.PROTECTIVE_ORDER_DIVERGENCE]: 2,
+            },
+          },
+        }),
+      );
+
+      const result = await service.validateProposedTrade(
+        'user-1',
+        validTrade({ executionMode: ExecutionMode.FULL_AUTO } as Partial<ProposedTrade>),
+      );
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.LIVE_RECONCILIATION_HEALTH_BLOCKED);
+        expect(result.rejectionReason).toContain('PROTECTIVE_ORDER_DIVERGENCE');
+      }
+    });
+
+    it('REJECTS LIVE new exposure with LIVE_MODEL_NOT_APPROVED when the exact active model lacks a LIVE promotion record', async () => {
+      liveSetup();
+      reconciliationHealth.assertHealthyForLiveNewExposure.mockResolvedValue({
+        healthy: true,
+        reasonCode: null,
+        detail: 'healthy',
+        evidence: {},
+      });
+      liveModelApproval.assertApprovedForLiveNewExposure.mockRejectedValue(
+        new LiveModelNotApprovedError({
+          approved: false,
+          reasonCode: LiveModelGateReasonCode.MODEL_LIVE_APPROVAL_MISSING,
+          detail:
+            'The active AI model has not received LIVE approval (no valid promotion record binds its exact artifact).',
+          model: {
+            version: 'xgb-mtf-1',
+            mode: 'trained_xgboost_mtf',
+            artifactSha256: 'a',
+            approvedForPaper: true,
+          },
+          promotionRecord: null,
+        }),
+      );
+
+      const result = await service.validateProposedTrade(
+        'user-1',
+        validTrade({ executionMode: ExecutionMode.FULL_AUTO } as Partial<ProposedTrade>),
+      );
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.LIVE_MODEL_NOT_APPROVED);
+        expect(result.rejectionReason).toContain('MODEL_LIVE_APPROVAL_MISSING');
+      }
+    });
+
+    it('REJECTS LIVE new exposure with LIVE_MODEL_NOT_APPROVED when the engine live env is disabled', async () => {
+      liveSetup();
+      reconciliationHealth.assertHealthyForLiveNewExposure.mockResolvedValue({
+        healthy: true,
+        reasonCode: null,
+        detail: 'healthy',
+        evidence: {},
+      });
+      liveModelApproval.assertApprovedForLiveNewExposure.mockRejectedValue(
+        new LiveModelNotApprovedError({
+          approved: false,
+          reasonCode: LiveModelGateReasonCode.LIVE_MODEL_ENV_DISABLED,
+          detail: 'The AI engine\u2019s live signal mode is not enabled.',
+          model: {
+            version: 'xgb-mtf-1',
+            mode: 'trained_xgboost_mtf',
+            artifactSha256: 'a',
+            approvedForPaper: true,
+          },
+          promotionRecord: null,
+        }),
+      );
+
+      const result = await service.validateProposedTrade(
+        'user-1',
+        validTrade({ executionMode: ExecutionMode.FULL_AUTO } as Partial<ProposedTrade>),
+      );
+
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.LIVE_MODEL_NOT_APPROVED);
+        expect(result.rejectionReason).toContain('LIVE_MODEL_ENV_DISABLED');
+      }
+    });
+
+    it('fails CLOSED when the reconciliation-health authority is unresolvable (never a skip)', async () => {
+      liveSetup();
+      const moduleRefStub = module.get(ModuleRef) as unknown as { get: jest.Mock };
+      const originalImpl = moduleRefStub.get.getMockImplementation();
+      moduleRefStub.get.mockImplementation((token: unknown) =>
+        token === ReconciliationHealthService ? undefined : originalImpl?.(token),
+      );
+
+      try {
+        const result = await service.validateProposedTrade(
+          'user-1',
+          validTrade({ executionMode: ExecutionMode.FULL_AUTO } as Partial<ProposedTrade>),
+        );
+        expect(result.decision).toBe('REJECTED');
+        if (result.decision === 'REJECTED') {
+          expect(result.rejectionCode).toBe(RiskRejectionCode.LIVE_RECONCILIATION_HEALTH_BLOCKED);
+          expect(result.rejectionReason).toContain('unavailable');
+        }
+      } finally {
+        moduleRefStub.get.mockImplementation(originalImpl);
+      }
+    });
+
+    it('DEMO/PAPER evaluations NEVER invoke the LIVE hard gates', async () => {
+      // default connection is DEMO
+      sessionRepo.findOne.mockResolvedValue(
+        defaultSession({ executionMode: ExecutionMode.PAPER_ONLY }),
+      );
+      sessionResolution.resolveActiveSessionAuthority.mockResolvedValue({
+        sessionId: 'session-1',
+        sessionGeneration: 1,
+        executionMode: ExecutionMode.PAPER_ONLY,
+        brokerConnectionId: 'conn-1',
+      });
+      brokerService.getBrokerAccountState.mockResolvedValue({
+        balance: '10000.00',
+        equity: '10050.00',
+        freeMargin: '9800.00',
+        currency: 'USD',
+      });
+
+      const result = await service.validateProposedTrade('user-1', validTrade());
+
+      expect(result.decision).toBe('APPROVED');
+      expect(reconciliationHealth.assertHealthyForLiveNewExposure).not.toHaveBeenCalled();
+      expect(liveModelApproval.assertApprovedForLiveNewExposure).not.toHaveBeenCalled();
     });
   });
 
@@ -1499,6 +1921,45 @@ describe('RiskService', () => {
       expect(profileRepo.save).toHaveBeenCalledWith(
         expect.objectContaining({ killSwitchActive: true }),
       );
+    });
+
+    // ─── P13 metrics: the kill-switch active gauge ─────────────────────
+
+    it('P13: after a toggle the kill-switch active gauge carries the re-counted ACTIVE total', async () => {
+      const metrics = new MetricsService();
+      metrics.reset();
+      // The lazy ModuleRef seam: point the spec stub's lookup at a REAL
+      // in-process registry (as MetricsModule does app-wide).
+      const moduleRefStub = module.get(ModuleRef) as unknown as { get: jest.Mock };
+      moduleRefStub.get.mockReturnValue(metrics);
+      profileRepo.count.mockResolvedValue(3);
+
+      await service.toggleKillSwitch('user-1', true, 'Manual pause');
+
+      const gauge = metrics
+        .snapshot()
+        .gauges.find((s) => s.name === METRIC_GAUGE_NAMES.KILL_SWITCHES_ACTIVE);
+      expect(gauge?.value).toBe(3);
+      expect(profileRepo.count).toHaveBeenCalledWith({ where: { killSwitchActive: true } });
+      moduleRefStub.get.mockReset();
+    });
+
+    it('P13: a failed count query omits/keeps-absent the gauge and NEVER breaks the toggle', async () => {
+      const metrics = new MetricsService();
+      metrics.reset();
+      const moduleRefStub = module.get(ModuleRef) as unknown as { get: jest.Mock };
+      moduleRefStub.get.mockReturnValue(metrics);
+      profileRepo.count.mockRejectedValue(new Error('db down'));
+      jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
+
+      const profile = await service.toggleKillSwitch('user-1', true);
+
+      expect(profile.killSwitchActive).toBe(true); // the toggle stands
+      expect(
+        metrics.snapshot().gauges.filter((s) => s.name === METRIC_GAUGE_NAMES.KILL_SWITCHES_ACTIVE),
+      ).toEqual([]); // no fabricated gauge value
+      moduleRefStub.get.mockReset();
+      jest.restoreAllMocks();
     });
   });
 

@@ -83,6 +83,26 @@
   line-height: 1.45;
 }
 
+/* Production-LIVE completion round (audit P15): server-reported reasons a LIVE
+   Start is blocked — rendered instead of the normal hint while the gate is
+   closed. Warning-toned, one line per server reason. */
+.ai-live-gate-reasons {
+  margin-top: auto;
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: 10px;
+  background: rgba(245, 158, 11, 0.08);
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.ai-live-gate-reasons strong {
+  color: #f59e0b;
+}
+
 .ai-control-card__meta {
   display: flex;
   align-items: center;
@@ -395,6 +415,22 @@
 .ai-position-card__foot {
   color: var(--text-muted);
   font-size: 0.78rem;
+}
+
+/* Per-position manual close (October UAT hardening, WS1) */
+.ai-position-card__actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.close-position-note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  text-align: right;
 }
 
 .ai-trade-metrics {

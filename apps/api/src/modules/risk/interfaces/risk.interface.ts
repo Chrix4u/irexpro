@@ -117,6 +117,21 @@ export enum RiskRejectionCode {
   EXECUTION_CONTROL_ACTIVE = 'EXECUTION_CONTROL_ACTIVE',
   LIVE_AUTHORIZATION_REQUIRED = 'LIVE_AUTHORIZATION_REQUIRED',
 
+  // Production-LIVE completion round (Phase 9) — continuous eligibility +
+  // provider region availability for LIVE new exposure. A revocation (KYC,
+  // jurisdiction, disclosures, account status) after session start must
+  // block the NEXT LIVE grant, not only in-flight ones.
+  USER_LIVE_ELIGIBILITY_REVOKED = 'USER_LIVE_ELIGIBILITY_REVOKED',
+  PROVIDER_REGION_UNAVAILABLE = 'PROVIDER_REGION_UNAVAILABLE',
+
+  // October UAT hardening (WS2/WS3) — LIVE new-exposure hard gates:
+  // reconciliation health must be establishable and divergence-free, and the
+  // EXACT active AI model must hold a valid LIVE promotion record. The typed
+  // sub-reason (RECONCILIATION_*/MODEL_*/LIVE_MODEL_ENV_*) travels in the
+  // rejection message and the recorded violation metadata.
+  LIVE_RECONCILIATION_HEALTH_BLOCKED = 'LIVE_RECONCILIATION_HEALTH_BLOCKED',
+  LIVE_MODEL_NOT_APPROVED = 'LIVE_MODEL_NOT_APPROVED',
+
   // Account-level limits
   DAILY_LOSS_LIMIT_REACHED = 'DAILY_LOSS_LIMIT_REACHED',
   MAX_DRAWDOWN_REACHED = 'MAX_DRAWDOWN_REACHED',

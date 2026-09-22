@@ -21,10 +21,16 @@ import { GrantInvalidationService } from '../execution-authority/grant-invalidat
  * BrokerService specialization for the built-in paper simulator.
  *
  * Real broker connections retain the base ACTIVE-only execution gate. The
- * built-in paper-broker is intentionally different: a successful DEMO
- * handshake settles at AUTHORIZED and that connection is the simulator itself.
- * PAPER_ONLY execution may therefore use AUTHORIZED/READY/ACTIVE only for the
- * paper-broker DEMO identity. No LIVE or real-broker authorization is widened.
+ * built-in paper-broker is intentionally different: the connection IS the
+ * simulator itself — a successful DEMO handshake (which settles the
+ * connection at CONNECTED, the pre-validation state) is all the "trading
+ * surface" a simulation needs. PAPER_ONLY execution may therefore use
+ * CONNECTED/AUTHORIZED/READY/ACTIVE only for the paper-broker DEMO identity
+ * (CONNECTED covers connect-then-simulate; AUTHORIZED/READY/ACTIVE cover
+ * connections that additionally passed the DEMO validation checklist).
+ * No LIVE or real-broker authorization is widened: for every other broker
+ * the DEMO validation checklist remains the sole CONNECTED → AUTHORIZED
+ * authority, and real-broker execution stays ACTIVE-only.
  */
 @Injectable()
 export class ExecutionAwareBrokerService extends BrokerService {
@@ -63,6 +69,7 @@ export class ExecutionAwareBrokerService extends BrokerService {
   override isConnectionExecutable(connection: BrokerConnection): boolean {
     if (connection.brokerId === 'paper-broker' && connection.accountType === BrokerMode.DEMO) {
       return (
+        connection.authorizationStatus === BrokerAuthorizationStatus.CONNECTED ||
         connection.authorizationStatus === BrokerAuthorizationStatus.AUTHORIZED ||
         connection.authorizationStatus === BrokerAuthorizationStatus.READY ||
         connection.authorizationStatus === BrokerAuthorizationStatus.ACTIVE

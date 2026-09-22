@@ -9,6 +9,7 @@ import { AllocationService } from '../execution/services/allocation.service';
 import { AuditService } from '../audit/audit.service';
 import { DomainEventBus } from '../events/event-bus.service';
 import { AiEngineClient } from '../ai-engine-client/ai-engine-client.service';
+import { LiveModelApprovalGateService } from '../ai-engine-client/live-model-approval.gate';
 import { OnboardingService } from '../users/onboarding.service';
 import { AllowedTradingMode } from '../risk/entities/risk-profile.entity';
 import { TradingSession, TradingSessionStatus } from '../execution/entities/trading-session.entity';
@@ -153,6 +154,20 @@ describe('TradingService — Sprint 32 Snapshot Immutability', () => {
           useValue: {
             notifySessionStarted: jest.fn().mockResolvedValue(undefined),
             notifySessionStopped: jest.fn().mockResolvedValue(undefined),
+          },
+        },
+        // October UAT hardening (WS3): the exact-model gate mock (never
+        // reached — these specs use DEMO connections).
+        {
+          provide: LiveModelApprovalGateService,
+          useValue: {
+            evaluateActiveModelLiveApproval: jest.fn().mockResolvedValue({
+              approved: false,
+              reasonCode: 'MODEL_LIVE_APPROVAL_MISSING',
+              detail: 'not approved',
+              model: { version: null, mode: null, artifactSha256: null, approvedForPaper: null },
+              promotionRecord: null,
+            }),
           },
         },
         {

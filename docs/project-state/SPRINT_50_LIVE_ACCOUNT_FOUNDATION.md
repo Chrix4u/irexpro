@@ -39,7 +39,10 @@ Now:
   action).
 - A successful **DEMO handshake now completes demo validation**
   (`CONNECTING → AUTHORIZED` + `demoValidated=true` dual-write), fixing the
-  unreachable gate.
+  unreachable gate. *(Superseded by the DEMO validation authority round: the
+  handshake now settles every successful connect at CONNECTED and never
+  writes `demoValidated` — the `validate-demo` checklist is the sole
+  validation authority; see docs/brokers/provider-matrix.md.)*
 - Legacy booleans dual-written for backward compatibility; the state machine
   is authoritative.
 - New endpoints: `POST :id/revoke-authorization` (→ REVOKED, fail-closes

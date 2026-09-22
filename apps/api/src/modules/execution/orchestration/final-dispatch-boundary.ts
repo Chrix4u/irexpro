@@ -19,6 +19,18 @@ import { ExecutionControlService } from '../../execution-control/execution-contr
 import { AuditService } from '../../audit/audit.service';
 import { AuditAction } from '../../../common/enums/audit-action.enum';
 import { AuditSeverity } from '../../audit/entities/audit-log.entity';
+// October UAT hardening (WS2/WS3): the LIVE new-exposure hard gates —
+// reconciliation health + exact-model LIVE approval (re-verified at the
+// boundary so a grant issued moments earlier can never survive a gate that
+// flipped between grant and dispatch).
+import {
+  ReconciliationHealthService,
+  ReconciliationHealthBlockedException,
+} from '../reconciliation/reconciliation-health.service';
+import {
+  LiveModelApprovalGateService,
+  LiveModelNotApprovedError,
+} from '../../ai-engine-client/live-model-approval.gate';
 import { RiskGrant } from '../entities/risk-grant.entity';
 import { TradingSession, TradingSessionStatus } from '../entities/trading-session.entity';
 import { ExecutionConfirmation } from '../entities/execution-confirmation.entity';
@@ -75,6 +87,8 @@ export type FinalDispatchBlockedReason =
   | 'CONNECTION_CREDENTIAL_GENERATION_CHANGED'
   | 'PAPER_ONLY_REFUSES_NON_PAPER_CONNECTION'
   | 'LIVE_VERIFICATION_UNVERIFIED'
+  | 'LIVE_RECONCILIATION_UNPROVEN'
+  | 'LIVE_MODEL_NOT_APPROVED'
   | 'PROVIDER_IDENTITY_CHANGED'
   | 'PROVIDER_VERIFICATION_DOWNGRADED'
   | 'EXECUTION_CONTROL_BLOCKED'
@@ -245,6 +259,14 @@ export class FinalDispatchBoundary {
     // imports it plainly — NO new forwardRef anywhere).
     private readonly tradingAuthorityService: TradingAuthorityService,
     private readonly sharedControlRevisions: SharedControlRevisionService,
+    // ── October UAT hardening (WS2/WS3): LIVE new-exposure hard gates ──────
+    // OPTIONAL trailing dependencies so direct spec constructions keep
+    // compiling. ABSENT → the LIVE gates fail CLOSED below (an unresolvable
+    // decision authority is NOT a skip — real-money exposure requires the
+    // reconciliation-health and exact-model-approval truths to be provable).
+    // The production module ALWAYS provides both.
+    private readonly reconciliationHealth?: ReconciliationHealthService,
+    private readonly liveModelApproval?: LiveModelApprovalGateService,
   ) {}
 
   /**
@@ -937,6 +959,67 @@ export class FinalDispatchBoundary {
         });
       }
       verificationFingerprint = verification.fingerprint;
+    }
+
+    // ── 6b. LIVE NEW exposure: reconciliation-health hard gate (WS2) ───────
+    // Re-verified HERE (not only at grant time): a grant issued moments
+    // earlier can never survive reconciliation truth going stale/failed or a
+    // divergence opening between grant and dispatch. Risk-REDUCING closes are
+    // never gated (exposureIncreasing only). An absent decision authority
+    // fails CLOSED — never a skip.
+    if (exposureIncreasing && connection.accountType === 'LIVE') {
+      if (!this.reconciliationHealth) {
+        throw await this.blocked(input, operationClass, 'LIVE_RECONCILIATION_UNPROVEN', {
+          brokerConnectionId: connection.id,
+          message:
+            'LIVE NEW exposure requires a reconciliation-health decision at the dispatch boundary — ' +
+            'the decision authority is unavailable (fail-closed).',
+        });
+      }
+      try {
+        await this.reconciliationHealth.assertHealthyForLiveNewExposure(connection.id);
+      } catch (err) {
+        if (err instanceof ReconciliationHealthBlockedException) {
+          throw await this.blocked(input, operationClass, 'LIVE_RECONCILIATION_UNPROVEN', {
+            brokerConnectionId: connection.id,
+            reasonCode: err.decision.reasonCode,
+            detail: err.decision.detail,
+            evidence: err.decision.evidence,
+            message: `LIVE NEW exposure blocked — ${err.decision.reasonCode}: ${err.decision.detail}`,
+          });
+        }
+        throw err;
+      }
+    }
+
+    // ── 6c. LIVE NEW exposure: exact-model LIVE approval hard gate (WS3) ───
+    // The EXACT model active in the AI runtime must hold a valid LIVE
+    // promotion record with the engine live environment enabled — re-verified
+    // at the boundary so a model swap or record withdrawal between grant and
+    // dispatch can never dispatch on the old approval.
+    if (exposureIncreasing && connection.accountType === 'LIVE') {
+      if (!this.liveModelApproval) {
+        throw await this.blocked(input, operationClass, 'LIVE_MODEL_NOT_APPROVED', {
+          brokerConnectionId: connection.id,
+          message:
+            'LIVE NEW exposure requires exact-model LIVE approval at the dispatch boundary — ' +
+            'the model approval gate is unavailable (fail-closed).',
+        });
+      }
+      try {
+        await this.liveModelApproval.assertApprovedForLiveNewExposure();
+      } catch (err) {
+        if (err instanceof LiveModelNotApprovedError) {
+          throw await this.blocked(input, operationClass, 'LIVE_MODEL_NOT_APPROVED', {
+            brokerConnectionId: connection.id,
+            reasonCode: err.decision.reasonCode,
+            detail: err.decision.detail,
+            modelVersion: err.decision.model.version,
+            message: `LIVE NEW exposure blocked — ${err.decision.reasonCode}: ${err.decision.detail}`,
+          });
+        }
+        throw err;
+      }
     }
 
     // ── 7. Kill-switch / execution-control CURRENT state (operation-aware) ─

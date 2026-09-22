@@ -163,6 +163,72 @@ export class EligibilityService {
     return this.buildStatus(user);
   }
 
+  /**
+   * Production-LIVE completion round (Phase 9): CONTINUOUS user-eligibility
+   * gate for LIVE new exposure.
+   *
+   * Eligibility (user status, KYC, jurisdiction, disclosures) is enforced at
+   * session start via OnboardingService.canStartTrading — but a revocation
+   * AFTER a session started must also block the NEXT LIVE new-exposure grant,
+   * not just in-flight grants (which die at the commit fence through the
+   * authority-generation bump these mutations already perform). The risk
+   * pipeline calls this on every LIVE new-exposure evaluation; DEMO/PAPER
+   * exposure is unaffected (not real money).
+   *
+   * Never throws for policy outcomes — a structured ineligible result lets
+   * the caller record a typed risk rejection with the machine-readable
+   * reason code. `countryCode` is returned alongside so the caller can also
+   * enforce provider LIVE region availability for this user.
+   */
+  async assertUserEligibleForLiveNewExposure(userId: string): Promise<
+    | { eligible: true; countryCode: string | null }
+    | {
+        eligible: false;
+        reasonCode: string;
+        detail: string;
+        countryCode: string | null;
+      }
+  > {
+    const user = await this.userRepo.findOne({ where: { id: userId }, relations: ['profile'] });
+    if (!user) {
+      return {
+        eligible: false,
+        reasonCode: 'USER_NOT_FOUND',
+        detail: 'user row absent — cannot authorize LIVE new exposure',
+        countryCode: null,
+      };
+    }
+    if (user.status !== UserStatus.ACTIVE) {
+      return {
+        eligible: false,
+        reasonCode: `ACCOUNT_${user.status}`,
+        detail: `user status is ${user.status} — LIVE new exposure requires an ACTIVE account`,
+        countryCode: user.countryCode ?? null,
+      };
+    }
+    const status = await this.buildStatus(user);
+    if (!status.canProceed) {
+      const reasonCode =
+        status.jurisdictionStatus !== 'ELIGIBLE'
+          ? `JURISDICTION_${status.jurisdictionStatus}`
+          : status.ageStatus !== 'ADULT'
+            ? `AGE_${status.ageStatus}`
+            : status.kycStatus !== KycStatus.APPROVED
+              ? `KYC_${status.kycStatus}`
+              : status.missingConsentKeys.length > 0
+                ? 'DISCLOSURES_OUTSTANDING'
+                : 'ELIGIBILITY_INCOMPLETE';
+      return {
+        eligible: false,
+        reasonCode,
+        detail:
+          'LIVE new exposure requires current eligibility (jurisdiction, age, KYC, disclosures)',
+        countryCode: status.countryCode,
+      };
+    }
+    return { eligible: true, countryCode: status.countryCode };
+  }
+
   async acceptDisclosures(
     userId: string,
     dto: AcceptEligibilityDisclosuresDto,

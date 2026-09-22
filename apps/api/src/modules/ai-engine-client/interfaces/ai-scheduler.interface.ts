@@ -56,4 +56,46 @@ export interface AiSchedulerSessionRegistration {
   registered: boolean;
   trading_session_id: string;
   message: string;
+  /**
+   * October UAT hardening (WS3): the exact typed refusal reason for LIVE-bound
+   * session registration (e.g. 'LIVE_MODEL_ENV_DISABLED',
+   * 'NO_VALID_PROMOTION_RECORD', 'MODEL_NOT_REGISTERED',
+   * 'ARTIFACT_SHA_MISMATCH'). Absent/null on success or for older payloads.
+   */
+  reason?: string | null;
+}
+
+/**
+ * GET /models/active — the ACTIVE model truth from the AI runtime
+ * (re-validated per call on the engine side). `live_activation` is the
+ * fail-closed promotion-record evaluation for the EXACT active artifact;
+ * `live_signal_mode_enabled` is the engine-side environment/config LIVE
+ * authorization. Never cached: every read re-fetches current truth.
+ */
+export interface AiActiveModelStatus {
+  /** Active model version identifier (engine-reported). */
+  version: string | null;
+  /** Engine model mode (e.g. 'trained_xgboost_mtf', 'heuristic_placeholder'). */
+  mode: string | null;
+  /** Whether the engine reports a model loaded in the runtime. */
+  loaded: boolean | null;
+  /** Byte-exact artifact identity — the promotion record binds THIS value. */
+  artifact_sha256: string | null;
+  /** Paper approval of the active artifact (independent evidence class). */
+  approved_for_paper: boolean | null;
+  /** Always false from the engine's trained-model governance. */
+  approved_for_live: boolean | null;
+  /** The fail-closed live-activation evaluation for the exact active model. */
+  live_activation: {
+    activated: boolean;
+    record_id: string | null;
+    model_version: string | null;
+    artifact_sha256: string | null;
+    promoted_by: string | null;
+    approved_by: string | null;
+    activated_at: string | null;
+    reason: string | null;
+  } | null;
+  /** Engine-side environment/config LIVE authorization (env gate). */
+  live_signal_mode_enabled: boolean | null;
 }

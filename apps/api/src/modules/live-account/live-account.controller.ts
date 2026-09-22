@@ -9,6 +9,7 @@ import {
 } from './live-account.service';
 import { LiveOrderStatusFilter } from './dto/live-account.enums';
 import { LiveAccountOverviewResponseDto } from './dto/live-account-overview-response.dto';
+import { LiveReadinessResponseDto } from './dto/live-account-readiness-response.dto';
 import { LiveAccountOrdersPageDto } from './dto/live-account-orders-response.dto';
 import { LiveAccountPositionsViewDto } from './dto/live-account-positions-response.dto';
 import { LiveAccountActivityPageDto } from './dto/live-account-activity-response.dto';
@@ -38,6 +39,21 @@ export class LiveAccountController {
   @ApiResponse({ status: 200, type: LiveAccountOverviewResponseDto })
   async getOverview(@CurrentUserId() userId: string): Promise<LiveAccountOverviewResponseDto> {
     return this.liveAccountService.getOverview(userId);
+  }
+
+  @Get('readiness')
+  @ApiOperation({
+    summary:
+      'The six separated trading-readiness states (PAPER READY, DEMO VERIFIED, BROKER LIVE CERTIFIED, MODEL PAPER APPROVED, MODEL LIVE APPROVED, LIVE TRADING ENABLED) with plain-language LIVE blockers',
+    description:
+      'October UAT hardening (WS5). Every state carries its own evidence class and never ' +
+      "inherits another's: a DEMO validation is never a broker LIVE certification; a certified " +
+      'broker never implies the active model is LIVE-approved; a LIVE-approved model never ' +
+      'implies the broker is certified.',
+  })
+  @ApiResponse({ status: 200, type: LiveReadinessResponseDto })
+  async getReadiness(@CurrentUserId() userId: string): Promise<LiveReadinessResponseDto> {
+    return this.liveAccountService.getReadinessView(userId);
   }
 
   @Get('orders')

@@ -4,6 +4,7 @@ import type {
   LiveAccountOverviewView,
   LiveAccountPositionsView,
   LiveOrderStatusFilter,
+  LiveReadinessView,
 } from '@irexpro/types/live-account';
 import type { ApiClient } from './index';
 
@@ -16,6 +17,8 @@ export interface LiveAccountApi {
   ): Promise<LiveAccountOrdersPage>;
   getPositions(): Promise<LiveAccountPositionsView>;
   getActivity(limit?: number, offset?: number): Promise<LiveAccountActivityPage>;
+  /** GET /live-account/readiness — the six separated readiness states. */
+  getReadiness(): Promise<LiveReadinessView>;
 }
 
 /**
@@ -44,6 +47,8 @@ export function createLiveAccountApi(
     },
 
     getPositions: () => client.request<LiveAccountPositionsView>('/live-account/positions'),
+
+    getReadiness: () => client.request<LiveReadinessView>('/live-account/readiness'),
 
     getActivity: (limit = 50, offset = 0) => {
       const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 100);

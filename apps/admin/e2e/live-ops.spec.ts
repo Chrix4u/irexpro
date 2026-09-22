@@ -136,6 +136,57 @@ const overviewFixture: AdminLiveOpsOverviewView = {
     },
   ],
   automation: { activeSessions: 3, suspendedSessions: 1 },
+  // ── Phase 10 canary-operations blocks ─────────────────────────────────────
+  adapterVersions: {
+    metatrader5: "1",
+    "paper-broker": "1",
+    oanda: "1.0.0",
+  },
+  dispatchOutcomes: {
+    unknownResultOpenCount: 2,
+    rejectedLast24h: 5,
+    dispatchBlocksLast24h: 9,
+  },
+  staleSnapshotAlerts: [
+    {
+      connectionId: "conn_00000000-0000-0000-0000-000000000071",
+      brokerId: "metatrader5",
+      accountType: "LIVE",
+      lastAcceptedAt: "2025-07-15T09:10:00.000Z",
+      ageSeconds: 1200,
+    },
+    {
+      connectionId: "conn_00000000-0000-0000-0000-000000000072",
+      brokerId: "oanda",
+      accountType: "LIVE",
+      lastAcceptedAt: null,
+      ageSeconds: null,
+    },
+  ],
+  emergencyFlattenStatus: {
+    lastRequestedAt: "2025-07-15T08:45:00.000Z",
+    lastOutcome: "PARTIAL",
+    description:
+      "Emergency flatten closed 1 of 2 open position(s) " +
+      "(reason: KILL_SWITCH_FORCE_CLOSE) — not-closed outcomes are failed " +
+      "or unknown-result closes",
+  },
+  killSwitchState: { activeUsersCount: 3 },
+  canaryBounds: [
+    { brokerId: "metatrader5", configured: true, maxCanaryExposure: "25" },
+    { brokerId: "oanda", configured: false, maxCanaryExposure: null },
+    { brokerId: "ctrader", configured: true, maxCanaryExposure: "40" },
+    {
+      brokerId: "pepperstone-ctrader",
+      configured: false,
+      maxCanaryExposure: null,
+    },
+    {
+      brokerId: "icmarkets-ctrader",
+      configured: false,
+      maxCanaryExposure: null,
+    },
+  ],
 };
 
 // ── Connections fixture (30 rows → exercises 25-row pagination) ─────────────
@@ -653,6 +704,103 @@ test.describe("Admin Live Ops overview page", () => {
       .getByRole("button", { name: "Previous discrepancy page" })
       .click();
     await expect(page.getByText(/Showing 1–10 of 12/)).toBeVisible();
+  });
+
+  // ── Phase 10 canary-operations panels ─────────────────────────────────────
+
+  test("dispatch outcome tiles render counts with critical styling on unknown results", async ({
+    page,
+  }) => {
+    await gotoLiveOpsPage(page, "/admin/live-ops", /^live ops$/i);
+
+    await expect(statValue(page, "Unknown-result \\(open\\)")).toHaveText("2");
+    await expect(statValue(page, "Rejected last 24h")).toHaveText("5");
+    await expect(statValue(page, "Risk blocks last 24h")).toHaveText("9");
+
+    // Non-zero unknown-result count → error (critical) accent on the tile.
+    await expect(
+      page.locator(".stat-card--error .stat-card__label", {
+        hasText: /^Unknown-result \(open\)$/,
+      }),
+    ).toBeVisible();
+  });
+
+  test("stale snapshot alerts list renders both stale and never-accepted rows", async ({
+    page,
+  }) => {
+    await gotoLiveOpsPage(page, "/admin/live-ops", /^live ops$/i);
+
+    const alerts = page.locator('table[aria-label="Stale account snapshots"]');
+    await expect(alerts.locator("tbody tr")).toHaveCount(2);
+    await expect(alerts).toContainText(
+      "conn_00000000-0000-0000-0000-000000000071",
+    );
+    await expect(alerts).toContainText(
+      "conn_00000000-0000-0000-0000-000000000072",
+    );
+    // 1200s renders as a human age; a missing snapshot renders "Never accepted".
+    await expect(alerts).toContainText("20m");
+    await expect(alerts).toContainText("Never accepted");
+  });
+
+  test("kill switch tile renders the active-user count with warning styling", async ({
+    page,
+  }) => {
+    await gotoLiveOpsPage(page, "/admin/live-ops", /^live ops$/i);
+
+    await expect(statValue(page, "Users with kill switch active")).toHaveText(
+      "3",
+    );
+    await expect(
+      page.locator(".stat-card--warning .stat-card__label", {
+        hasText: /^Users with kill switch active$/,
+      }),
+    ).toBeVisible();
+  });
+
+  test("emergency flatten status line renders outcome badge, timestamp and description", async ({
+    page,
+  }) => {
+    await gotoLiveOpsPage(page, "/admin/live-ops", /^live ops$/i);
+
+    await expect(page.getByText("PARTIAL")).toBeVisible();
+    await expect(page.getByText(/2025-07-15 08:45 UTC/)).toBeVisible();
+    await expect(page.getByText(/closed 1 of 2 open position/)).toBeVisible();
+  });
+
+  test("provider matrix carries the adapter version column", async ({
+    page,
+  }) => {
+    await gotoLiveOpsPage(page, "/admin/live-ops", /^live ops$/i);
+
+    const registry = page.locator(
+      'table[aria-label="Provider capability matrix"]',
+    );
+    await expect(
+      registry.locator("thead th", { hasText: "Adapter version" }),
+    ).toHaveText("Adapter version");
+    const mt5Row = registry.locator("tbody tr").first();
+    await expect(mt5Row).toContainText("MetaTrader 5");
+    await expect(mt5Row.locator("td").nth(6)).toHaveText("1");
+    const oandaRow = registry.locator("tbody tr").nth(2);
+    await expect(oandaRow.locator("td").nth(6)).toHaveText("1.0.0");
+  });
+
+  test("certification canary bounds panel lists per-provider caps or not-configured", async ({
+    page,
+  }) => {
+    await gotoLiveOpsPage(page, "/admin/live-ops", /^live ops$/i);
+
+    const bounds = page.locator(
+      'table[aria-label="Certification canary bounds"]',
+    );
+    await expect(bounds.locator("tbody tr")).toHaveCount(5);
+    const mt5Bound = bounds.locator("tbody tr").first();
+    await expect(mt5Bound).toContainText("metatrader5");
+    await expect(mt5Bound).toContainText("25");
+    const oandaBound = bounds.locator("tbody tr").nth(1);
+    await expect(oandaBound).toContainText("oanda");
+    await expect(oandaBound).toContainText("not configured");
   });
 
   test("refresh button refetches the overview", async ({ page }) => {

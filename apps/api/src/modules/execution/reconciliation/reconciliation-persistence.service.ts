@@ -296,4 +296,101 @@ export class ReconciliationPersistenceService {
       .getCount();
     return rows;
   }
+
+  // ─── Protective-order divergence (October UAT hardening — WS2) ────────────
+
+  /**
+   * Upsert ONE OPEN PROTECTIVE_ORDER_DIVERGENCE row for a trade whose
+   * provider-side SL/TP could not be verified/repaired this cycle.
+   *
+   * Same OPEN-row dedup semantics as state-sweep discrepancies (re-detection
+   * refreshes last_seen_at/details; the partial unique index keeps one OPEN
+   * row per (connection, type, trade, provider ref)). NOT bound to a state
+   * sweep run — the protective loop runs after each sweep but owns its own
+   * divergence rows (run_id NULL is legitimate lineage here).
+   */
+  async upsertProtectiveDivergence(input: {
+    userId: string;
+    brokerConnectionId: string;
+    tradeId: string;
+    externalOrderId: string | null;
+    outcome: 'REPAIR_FAILED' | 'INTERNAL_UNPROVABLE';
+    detail: string;
+  }): Promise<void> {
+    const lockKey = this.connectionLockKey(input.brokerConnectionId);
+    await this.dataSource.transaction(async (manager) => {
+      await manager.query('SELECT pg_advisory_xact_lock($1)', [lockKey]);
+      await manager.query(
+        `INSERT INTO reconciliation.discrepancies
+           (user_id, broker_connection_id, run_id, discrepancy_type, severity,
+            status, internal_ref_type, internal_ref_id, client_order_id,
+            provider_ref, details, first_detected_at, last_seen_at)
+         VALUES ($1, $2, NULL, 'PROTECTIVE_ORDER_DIVERGENCE', 'CRITICAL',
+                 'OPEN', 'TRADE', $3, NULL, $4, $5, $6, $6)
+         ON CONFLICT
+           (broker_connection_id, discrepancy_type,
+            COALESCE(internal_ref_id, ''), COALESCE(provider_ref, ''))
+           WHERE status = 'OPEN'
+         DO UPDATE SET
+           last_seen_at = EXCLUDED.last_seen_at,
+           details = EXCLUDED.details,
+           updated_at = now()`,
+        [
+          input.userId,
+          input.brokerConnectionId,
+          input.tradeId,
+          input.externalOrderId,
+          JSON.stringify({ outcome: input.outcome, detail: input.detail.slice(0, 500) }),
+          new Date(),
+        ],
+      );
+    });
+  }
+
+  /**
+   * Guarded resolution of OPEN protective-order divergences for trades whose
+   * protective levels are now verified/restored (or whose trade left the OPEN
+   * state — protective orders of a closed position are moot). Only OPEN rows
+   * flip; duplicate resolutions no-op.
+   */
+  async resolveProtectiveDivergences(
+    brokerConnectionId: string,
+    refs: Array<{ tradeId: string; resolution: string }>,
+  ): Promise<void> {
+    if (refs.length === 0) return;
+    const lockKey = this.connectionLockKey(brokerConnectionId);
+    await this.dataSource.transaction(async (manager) => {
+      await manager.query('SELECT pg_advisory_xact_lock($1)', [lockKey]);
+      for (const ref of refs) {
+        await manager.query(
+          `UPDATE reconciliation.discrepancies
+           SET status = 'RESOLVED',
+               resolved_at = now(),
+               resolution = $3,
+               resolved_by = 'AUTO',
+               updated_at = now()
+           WHERE broker_connection_id = $1
+             AND discrepancy_type = 'PROTECTIVE_ORDER_DIVERGENCE'
+             AND COALESCE(internal_ref_id, '') = COALESCE($2, '')
+             AND status = 'OPEN'`,
+          [brokerConnectionId, ref.tradeId, ref.resolution.slice(0, 500)],
+        );
+      }
+    });
+  }
+
+  /**
+   * List OPEN protective-order divergences for a connection (the protective
+   * loop resolves rows whose trades are no longer OPEN).
+   */
+  async listOpenProtectiveDivergenceTradeIds(brokerConnectionId: string): Promise<string[]> {
+    const rows = await this.discrepancyRepo
+      .createQueryBuilder('d')
+      .select('d.internalRefId', 'tradeId')
+      .where('d.brokerConnectionId = :connectionId', { connectionId: brokerConnectionId })
+      .andWhere('d.status = :status', { status: ReconciliationDiscrepancyStatus.OPEN })
+      .andWhere('d.type = :type', { type: 'PROTECTIVE_ORDER_DIVERGENCE' })
+      .getRawMany<{ tradeId: string | null }>();
+    return rows.map((r) => r.tradeId).filter((id): id is string => id !== null);
+  }
 }

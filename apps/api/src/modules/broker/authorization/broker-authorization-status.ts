@@ -13,10 +13,16 @@
  *                        link never established (or explicitly reset).
  *   CONNECTING           A connect attempt is in flight (transient).
  *   CONNECTED            Broker link established and verified (handshake OK).
+ *                        For DEMO connections this is the PRE-VALIDATION
+ *                        state: the handshake proves connectivity and
+ *                        credential validity only — the BrokerDemoValidation
+ *                        checklist is the sole authority that advances to
+ *                        AUTHORIZED.
  *   VERIFYING            Connection re-verification in flight (health check).
  *   AUTHORIZATION_REQUIRED User must explicitly grant automation authorization.
- *   AUTHORIZED           User authorization granted (demo path: validated demo
- *                        connection; live path: enable-live-trading approved).
+ *   AUTHORIZED           User authorization granted (demo path: the DEMO
+ *                        validation checklist PASSED; live path:
+ *                        enable-live-trading approved).
  *   READY                Authorized + healthy + environment verified.
  *   ACTIVE               Automation (AI trading) may execute against this
  *                        connection right now. The ONLY state where execution
@@ -67,9 +73,10 @@ const ALLOWED_TRANSITIONS: Readonly<
   ],
   [BrokerAuthorizationStatus.CONNECTING]: [
     BrokerAuthorizationStatus.CONNECTED,
-    // DEMO validation completes within the handshake: the adapter confirms the
-    // account is a DEMO account, which is exactly the demo-validation gate.
-    BrokerAuthorizationStatus.AUTHORIZED,
+    // NOTE (DEMO validation authority): CONNECTING → AUTHORIZED is deliberately
+    // NOT allowed. A successful handshake proves connectivity/credential
+    // validity only; the BrokerDemoValidationService checklist is the sole
+    // path that advances a DEMO connection CONNECTED → AUTHORIZED.
     BrokerAuthorizationStatus.ERROR,
     BrokerAuthorizationStatus.NOT_CONNECTED,
     BrokerAuthorizationStatus.DISCONNECTED,

@@ -9,9 +9,10 @@
  * decimal strings (never floats). Realtime: live/stale indicator + event
  * driven refresh via RealtimeProvider (M10).
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -28,9 +29,11 @@ import type {
   LiveOrderRowView,
   LiveOrderStatusFilter,
   LivePositionRowView,
+  LiveReadinessView,
 } from "@irexpro/types";
 import type { TradingSessionView } from "@irexpro/types/execution";
 import { api } from "../lib/api";
+import { execution } from "../lib/execution";
 import { liveAccount } from "../lib/live-account";
 import { useRealtime } from "../context/realtime-context";
 import {
@@ -38,6 +41,12 @@ import {
   aiExitActivityRows,
   alertSeverityColor,
   environmentBanner,
+  manualCloseConfirmationMessage,
+  manualClosePresentation,
+  marginTiles,
+  readinessBlockerRows,
+  readinessDisplayRows,
+  reconciliationSummary,
   sessionAuthorityPresentation,
   sortAlerts,
   summaryTiles,
@@ -58,6 +67,20 @@ export default function LiveAccountScreen() {
   // (the legacy live-trading flag is never shown as current state).
   const [session, setSession] = useState<TradingSessionView | null>(null);
   const [sessionUnavailable, setSessionUnavailable] = useState(false);
+  // ── Trading readiness (October UAT hardening — WS5) ──
+  // Six SEPARATED operating states from GET /live-account/readiness. Fails
+  // CLOSED but independently: a readiness outage never breaks the dashboard
+  // and the section says so honestly — states are never fabricated locally.
+  const [readiness, setReadiness] = useState<LiveReadinessView | null>(null);
+  const [readinessUnavailable, setReadinessUnavailable] = useState(false);
+  // ── Manual per-position close (October UAT hardening — WS1) ──
+  // Per-position pending state: the Set drives the disabled "Closing…"
+  // button; the ref is the synchronous duplicate-tap guard (state updates
+  // are async, the ref check is not).
+  const closingTradeIdsRef = useRef<Set<string>>(new Set());
+  const [closingTradeIds, setClosingTradeIds] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -96,6 +119,33 @@ export default function LiveAccountScreen() {
           setSessionUnavailable(true);
         }
       })();
+      // Readiness also fails CLOSED but independently (WS5): the dashboard
+      // renders normally when the readiness endpoint is unreachable, and the
+      // readiness card says so honestly (no inferred states).
+      const loadReadiness = (async () => {
+        try {
+          const payload = await liveAccount.getReadiness();
+          const payloadOk =
+            !!payload &&
+            typeof payload === "object" &&
+            !!payload.paper &&
+            !!payload.demo &&
+            !!payload.brokerLiveCertified &&
+            !!payload.model &&
+            !!payload.liveTradingEnabled &&
+            Array.isArray(payload.liveBlockers);
+          if (payloadOk) {
+            setReadiness(payload);
+            setReadinessUnavailable(false);
+          } else {
+            setReadiness(null);
+            setReadinessUnavailable(true);
+          }
+        } catch (err) {
+          setReadiness(null);
+          setReadinessUnavailable(true);
+        }
+      })();
       try {
         const [ov, pos, ord, act] = await Promise.all([
           liveAccount.getOverview(),
@@ -103,6 +153,7 @@ export default function LiveAccountScreen() {
           liveAccount.getOrders(filter),
           liveAccount.getActivity(30, 0),
           loadSession,
+          loadReadiness,
         ]);
         setOverview(ov);
         setPositions(pos);
@@ -150,6 +201,61 @@ export default function LiveAccountScreen() {
     [load],
   );
 
+  // ── Manual per-position close (October UAT hardening — WS1) ──
+  // Closes ONE position through the server execution domain (the SAME
+  // domain as AI exits / Stop flatten / kill switch). Start/Stop AI Trading
+  // semantics are untouched — this never pauses or stops a session.
+  const closePosition = useCallback(
+    async (position: LivePositionRowView) => {
+      const tradeId = position.id;
+      // Synchronous duplicate-tap guard: one in-flight close per position.
+      if (closingTradeIdsRef.current.has(tradeId)) return;
+      closingTradeIdsRef.current.add(tradeId);
+      setClosingTradeIds(new Set(closingTradeIdsRef.current));
+      try {
+        const response = await execution.closePosition(tradeId);
+        const presentation = manualClosePresentation(
+          response.outcome,
+          response.message,
+          response.providerErrorClass,
+        );
+        Alert.alert(presentation.title, presentation.message);
+      } catch (err) {
+        Alert.alert(
+          "Close failed",
+          err instanceof Error
+            ? err.message
+            : "The close request failed. The position state is unchanged — check the Positions list.",
+        );
+      } finally {
+        closingTradeIdsRef.current.delete(tradeId);
+        setClosingTradeIds(new Set(closingTradeIdsRef.current));
+        // Refresh after ANY outcome — the Positions list stays the
+        // authoritative open-state surface.
+        void load();
+      }
+    },
+    [load],
+  );
+
+  const confirmClosePosition = useCallback(
+    (position: LivePositionRowView) => {
+      Alert.alert(
+        "Close position",
+        manualCloseConfirmationMessage(position),
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Close position",
+            style: "destructive",
+            onPress: () => void closePosition(position),
+          },
+        ],
+      );
+    },
+    [closePosition],
+  );
+
   if (loading) {
     return (
       <View style={styles.center}>
@@ -165,6 +271,18 @@ export default function LiveAccountScreen() {
   const sessionAuthority = sessionAuthorityPresentation(session);
   const exitActivity = aiExitActivityRows(activity?.activity ?? []).slice(0, 8);
   const recentActivity = (activity?.activity ?? []).slice(0, 10);
+  // Production-LIVE completion round (audit P8): margin tiles + per-connection
+  // reconciliation summary from the SAME overview payload the web renders.
+  const margin = overview ? marginTiles(overview) : null;
+  const reconciliations = overview
+    ? overview.connections.map((connection) => ({
+        connection,
+        view: reconciliationSummary(connection, overview.reconciliationLoaded),
+      }))
+    : [];
+  // WS5 — the six separated readiness rows + verbatim server blockers.
+  const readinessRows = readiness ? readinessDisplayRows(readiness) : [];
+  const blockerRows = readiness ? readinessBlockerRows(readiness) : [];
 
   return (
     <ScrollView
@@ -270,6 +388,64 @@ export default function LiveAccountScreen() {
         )}
       </View>
 
+      {/* Trading readiness (October UAT hardening — WS5) — six SEPARATED
+          status rows, never a bare "Verified". Each row carries its OWN
+          truth: a DEMO validation never renders as LIVE-ready, a certified
+          broker never implies the model is approved. Fails closed and
+          independently — an outage renders an honest unavailable row, never
+          fabricated states. */}
+      <View style={styles.card} accessibilityLabel="Trading readiness">
+        <Text style={styles.cardTitle}>Trading readiness</Text>
+        {readinessUnavailable || !readiness ? (
+          <Text style={styles.muted}>
+            Readiness unavailable from the server — trading states are not
+            inferred locally. Pull to refresh.
+          </Text>
+        ) : (
+          <View style={styles.readinessList}>
+            {readinessRows.map((row) => (
+              <View
+                key={row.key}
+                style={styles.readinessRow}
+                accessibilityLabel={`${row.label}: ${row.statusText}`}
+              >
+                <View style={styles.readinessRowCopy}>
+                  <Text style={styles.readinessLabel}>{row.label}</Text>
+                  {row.detail ? (
+                    <Text style={styles.mutedSmall}>{row.detail}</Text>
+                  ) : null}
+                </View>
+                <Text
+                  style={[
+                    styles.readinessStatus,
+                    { color: row.met ? "#047857" : "#64748b" },
+                  ]}
+                >
+                  {row.statusText}
+                </Text>
+              </View>
+            ))}
+          </View>
+        )}
+      </View>
+
+      {/* Real-money trading blockers — server messages VERBATIM, one plain
+          row each, only when the server reports blockers. */}
+      {blockerRows.length > 0 ? (
+        <>
+          <Text style={styles.sectionTitle}>Real-money trading blockers</Text>
+          {blockerRows.map((blocker, index) => (
+            <View
+              key={`${blocker.reasonCode}:${index}`}
+              style={styles.blockerCard}
+              accessibilityLabel={`Real-money trading blocker: ${blocker.message}`}
+            >
+              <Text style={styles.blockerMessage}>{blocker.message}</Text>
+            </View>
+          ))}
+        </>
+      ) : null}
+
       {error ? (
         <View
           style={styles.errorCard}
@@ -333,6 +509,94 @@ export default function LiveAccountScreen() {
             <Text style={styles.tileLabel}>Critical</Text>
           </View>
         </View>
+      ) : null}
+
+      {margin ? (
+        <>
+          <Text style={styles.sectionTitle}>Account margin</Text>
+          <View style={styles.tileGrid}>
+            <View
+              style={styles.tile}
+              accessibilityLabel={
+                margin.available
+                  ? `Margin ${margin.margin} ${margin.currency ?? ""}`.trim()
+                  : "Margin unavailable"
+              }
+            >
+              <Text style={styles.moneyValue}>
+                {margin.available
+                  ? `${margin.margin}${margin.currency ? ` ${margin.currency}` : ""}`
+                  : "—"}
+              </Text>
+              <Text style={styles.tileLabel}>Margin</Text>
+            </View>
+            <View
+              style={styles.tile}
+              accessibilityLabel={
+                margin.available
+                  ? `Free margin ${margin.freeMargin} ${margin.currency ?? ""}`.trim()
+                  : "Free margin unavailable"
+              }
+            >
+              <Text style={styles.moneyValue}>
+                {margin.available
+                  ? `${margin.freeMargin}${margin.currency ? ` ${margin.currency}` : ""}`
+                  : "—"}
+              </Text>
+              <Text style={styles.tileLabel}>Free margin</Text>
+            </View>
+            <View
+              style={styles.tile}
+              accessibilityLabel={
+                margin.available && margin.marginLevel !== null
+                  ? `Margin level ${margin.marginLevel} percent`
+                  : "Margin level not available"
+              }
+            >
+              <Text style={styles.moneyValue}>
+                {margin.available && margin.marginLevel !== null ? `${margin.marginLevel}%` : "—"}
+              </Text>
+              <Text style={styles.tileLabel}>Margin level</Text>
+            </View>
+          </View>
+        </>
+      ) : null}
+
+      {reconciliations.length > 0 ? (
+        <>
+          <Text style={styles.sectionTitle}>Reconciliation</Text>
+          {reconciliations.map(({ connection, view }) => (
+            <View
+              key={connection.id}
+              style={styles.card}
+              accessibilityLabel={`Reconciliation for ${connection.displayName || connection.brokerName}: ${view.statusLabel}`}
+            >
+              <View style={styles.rowBetween}>
+                <Text style={styles.cardTitle}>
+                  {connection.displayName || connection.brokerName}
+                </Text>
+                <Text
+                  style={[
+                    styles.reconStatus,
+                    {
+                      color: view.unavailable ? "#b45309" : view.inSync ? "#047857" : "#be123c",
+                    },
+                  ]}
+                >
+                  {view.unavailable
+                    ? "Status unavailable"
+                    : view.inSync
+                      ? "In sync"
+                      : "Discrepancies open"}
+                </Text>
+              </View>
+              <Text style={styles.muted}>
+                Last run status: {view.statusLabel} · {view.lastRunLabel}
+              </Text>
+              <Text style={styles.mutedSmall}>{view.discrepancyLabel}</Text>
+            </View>
+          ))}
+        </>
       ) : null}
 
       {alerts.length > 0 ? (
@@ -471,6 +735,37 @@ export default function LiveAccountScreen() {
             {position.brokerName ? (
               <Text style={styles.mutedSmall}>{position.brokerName}</Text>
             ) : null}
+            {/* Manual per-position close (October UAT hardening — WS1).
+                Only an OPEN position can be closed; a position pending
+                reconciliation honestly reports the close as unavailable —
+                reconciliation owns its final state. */}
+            {position.status === "OPEN" ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Close ${position.instrument} ${position.direction} position, ${position.lotSize} lots`}
+                accessibilityState={{ disabled: closingTradeIds.has(position.id) }}
+                disabled={closingTradeIds.has(position.id)}
+                style={({ pressed }) => [
+                  styles.closePositionButton,
+                  closingTradeIds.has(position.id) &&
+                    styles.closePositionButtonDisabled,
+                  pressed &&
+                    !closingTradeIds.has(position.id) &&
+                    styles.closePositionButtonPressed,
+                ]}
+                onPress={() => confirmClosePosition(position)}
+              >
+                <Text style={styles.closePositionButtonText}>
+                  {closingTradeIds.has(position.id)
+                    ? "Closing…"
+                    : "Close position"}
+                </Text>
+              </Pressable>
+            ) : (
+              <Text style={styles.closeUnavailableText}>
+                Close unavailable — reconciling
+              </Text>
+            )}
           </View>
         ))
       ) : (
@@ -630,6 +925,13 @@ const styles = StyleSheet.create({
   tileLabel: { fontSize: 11, color: "#64748b" },
   tileWarn: { color: "#b45309" },
   tileDanger: { color: "#be123c" },
+  moneyValue: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#0f172a",
+    fontVariant: ["tabular-nums"],
+  },
+  reconStatus: { fontSize: 11, fontWeight: "800" },
   sectionTitle: {
     fontSize: 16,
     fontWeight: "600",
@@ -764,4 +1066,51 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   retryButtonText: { color: "#b91c1c", fontWeight: "600", fontSize: 13 },
+  // ── Manual per-position close (October UAT hardening — WS1) ──
+  // Danger treatment mirrors the screen's destructive retry button.
+  closePositionButton: {
+    alignSelf: "flex-start",
+    backgroundColor: "#fee2e2",
+    borderColor: "#fecdd3",
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginTop: 4,
+  },
+  closePositionButtonPressed: { backgroundColor: "#fecdd3" },
+  closePositionButtonDisabled: { opacity: 0.6 },
+  closePositionButtonText: {
+    color: "#b91c1c",
+    fontWeight: "600",
+    fontSize: 13,
+  },
+  closeUnavailableText: { color: "#94a3b8", fontSize: 11 },
+  // ── Trading readiness (October UAT hardening — WS5) ──
+  readinessList: { gap: 10 },
+  readinessRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+  },
+  readinessRowCopy: { flex: 1, gap: 2 },
+  readinessLabel: { color: "#334155", fontSize: 13, fontWeight: "600" },
+  readinessStatus: {
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 0.3,
+    textAlign: "right",
+  },
+  blockerCard: {
+    backgroundColor: "#fffbeb",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#fde68a",
+    borderLeftWidth: 4,
+    borderLeftColor: "#f59e0b",
+    padding: 12,
+    marginBottom: 8,
+  },
+  blockerMessage: { color: "#78350f", fontSize: 12, lineHeight: 17 },
 });

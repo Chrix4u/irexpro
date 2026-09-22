@@ -20,6 +20,11 @@ import { ReconciliationPersistenceService } from './reconciliation-persistence.s
 import { ReconciliationResolutionService } from './reconciliation-resolution.service';
 import { ReconciliationDiscrepancyType, ReconciliationRunStatus } from './reconciliation.enums';
 import { AuditAction } from '../../../common/enums/audit-action.enum';
+// Production-LIVE completion round (P13 metrics): the real in-process
+// registry registered in the testing module so the service's lazy ModuleRef
+// lookup resolves it (mirrors how MetricsModule provides it app-wide).
+import { MetricsService } from '../../metrics/metrics.service';
+import { METRIC_NAMES } from '../../metrics/metric-names';
 
 const TRADE_REPO = getRepositoryToken(Trade);
 const ORDER_REPO = getRepositoryToken(Order);
@@ -190,6 +195,7 @@ describe('StateReconciliationService — Phase E: credential lifecycle + securit
 
 describe('StateReconciliationService', () => {
   let service: StateReconciliationService;
+  let metrics: MetricsService;
   let tradeRepo: { find: jest.Mock; createQueryBuilder: jest.Mock };
   let orderRepo: { find: jest.Mock; createQueryBuilder: jest.Mock };
   let accountRepo: { findOne: jest.Mock; createQueryBuilder: jest.Mock };
@@ -322,10 +328,15 @@ describe('StateReconciliationService', () => {
         },
         { provide: AuditService, useValue: auditService },
         { provide: DomainEventBus, useValue: eventBus },
+        // P13 metrics: registered so the service's lazy ModuleRef seam resolves
+        // a REAL registry (exactly what MetricsModule does app-wide).
+        { provide: MetricsService, useValue: new MetricsService() },
       ],
     }).compile();
 
     service = module.get(StateReconciliationService);
+    metrics = module.get(MetricsService);
+    metrics.reset();
   });
 
   describe('runForConnection — clean state', () => {
@@ -638,6 +649,89 @@ describe('StateReconciliationService', () => {
       const result = await service.findReconcilableConnections();
       expect(result).toEqual([]);
       expect(brokerService.findConnectionsByIds).not.toHaveBeenCalled();
+    });
+  });
+
+  // ─── P13 metrics: per-run discrepancy instrumentation ─────────────────────
+
+  describe('runForConnection — P13 metrics (reconciliation discrepancies)', () => {
+    const counter = (labels: Record<string, string>) =>
+      metrics
+        .snapshot()
+        .counters.find(
+          (series) =>
+            series.name === METRIC_NAMES.RECONCILIATION_DISCREPANCIES &&
+            Object.entries(labels).every(([key, value]) => series.labels[key] === value),
+        )?.value;
+
+    it('counts DETECTED / NEW / AUTO_RESOLVED discrepancies for a completed run (brokerId label only)', async () => {
+      // Internal OPEN trade whose provider position is GONE → the comparator
+      // flags it; persistence reports 2 NEW rows and converges 2 rows.
+      tradeRepo.find.mockResolvedValue([openTrade()]);
+      adapter.getOpenPositions.mockResolvedValue([]);
+      adapter.getPositionById.mockResolvedValue(null);
+      adapter.getClosedTrades.mockResolvedValue([]);
+      persistence.persistDiscrepancies.mockResolvedValue({
+        inserted: 2,
+        refreshed: 0,
+        newRows: [],
+      });
+      persistence.resolveDiscrepanciesByRef.mockResolvedValue([{ id: 'd-1' }, { id: 'd-2' }]);
+
+      const outcome = await service.runForConnection(connection());
+
+      expect(outcome.discrepanciesDetected).toBeGreaterThan(0);
+      expect(counter({ brokerId: 'paper-broker', outcome: 'DETECTED' })).toBe(
+        outcome.discrepanciesDetected,
+      );
+      expect(counter({ brokerId: 'paper-broker', outcome: 'NEW' })).toBe(2);
+      expect(counter({ brokerId: 'paper-broker', outcome: 'AUTO_RESOLVED' })).toBe(2);
+      // Redaction discipline: no label ever carries the provider account id.
+      for (const series of metrics.snapshot().counters) {
+        expect(Object.values(series.labels)).not.toContain('paper-account-001');
+      }
+    });
+
+    it('a CLEAN run records no discrepancy series at all (zero increments are honest)', async () => {
+      tradeRepo.find.mockResolvedValue([openTrade()]);
+      adapter.getOpenPositions.mockResolvedValue([
+        {
+          externalOrderId: 'pos-1',
+          instrument: 'EURUSD',
+          direction: 'BUY',
+          lotSize: '1.0000',
+          openPrice: '1.10000',
+          currentPrice: '1.10500',
+          stopLoss: '0',
+          takeProfit: '0',
+          unrealisedPnl: '0.00',
+          openedAt: new Date(),
+          commission: '0.00',
+          swap: '0.00',
+        },
+      ]);
+      adapter.getPositionById.mockResolvedValue({ externalOrderId: 'pos-1' });
+
+      await service.runForConnection(connection());
+
+      expect(
+        metrics
+          .snapshot()
+          .counters.filter((s) => s.name === METRIC_NAMES.RECONCILIATION_DISCREPANCIES),
+      ).toEqual([]);
+    });
+
+    it('a FAILED run never counts discrepancies (it never reached the comparison)', async () => {
+      adapter.listOrders.mockRejectedValue(new Error('provider down'));
+
+      const outcome = await service.runForConnection(connection());
+
+      expect(outcome.status).toBe(ReconciliationRunStatus.FAILED);
+      expect(
+        metrics
+          .snapshot()
+          .counters.filter((s) => s.name === METRIC_NAMES.RECONCILIATION_DISCREPANCIES),
+      ).toEqual([]);
     });
   });
 });

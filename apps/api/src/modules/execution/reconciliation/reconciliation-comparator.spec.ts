@@ -487,7 +487,14 @@ describe('compareStates', () => {
     const out = compareStates(internal, provider, now);
     const found = new Set(typesOf(out));
 
-    expect(found).toEqual(new Set(RECONCILIATION_DISCREPANCY_TYPES));
+    // October UAT hardening (WS2): PROTECTIVE_ORDER_DIVERGENCE is owned by
+    // the PROTECTIVE loop (per-trade SL/TP verify/repair), not the state
+    // comparator — the exhaustive check covers every comparator-producible
+    // category (the protective class has its own dedicated spec).
+    const comparatorProducible = RECONCILIATION_DISCREPANCY_TYPES.filter(
+      (t) => t !== 'PROTECTIVE_ORDER_DIVERGENCE',
+    );
+    expect(found).toEqual(new Set(comparatorProducible));
   });
 
   it('deduplicates candidates that two detectors flag for the same record', () => {

@@ -53,15 +53,36 @@ async def start_session_scheduler(
 
     # Execution mode and broker environment are separate authority axes.
     # FULL_AUTO on a DEMO connection is automatic execution inside the broker's
-    # sandbox. The current AI loader is paper-approved only, so any LIVE-bound
-    # session remains unregistered until a separately live-approved model path
-    # exists. This keeps real broker DEMO UAT working without weakening LIVE.
+    # sandbox. October UAT hardening (WS3): a LIVE-bound session is registered
+    # ONLY when the EXACT active model has a valid LIVE promotion record AND
+    # the engine-side live environment/config authorization is enabled. Every
+    # refusal carries the exact typed reason — never a blanket message.
     if request.account_type == "LIVE":
-        return SessionSchedulerResponse(
-            registered=False,
-            trading_session_id=request.trading_session_id,
-            message="Current AI model is not approved for live automation",
-        )
+        if not (settings.ai_signal_mode == "live" and settings.ai_engine_allow_live_model):
+            return SessionSchedulerResponse(
+                registered=False,
+                trading_session_id=request.trading_session_id,
+                message="Live signal mode is disabled for this AI engine",
+                reason="LIVE_MODEL_ENV_DISABLED",
+            )
+
+        from app.main import app_state
+
+        registry = app_state["registry"]
+        activation = registry.get_live_activation()
+        if not activation.get("activated", False):
+            engine_reason = str(activation.get("reason") or "NO_VALID_PROMOTION_RECORD")
+            return SessionSchedulerResponse(
+                registered=False,
+                trading_session_id=request.trading_session_id,
+                message="Current AI model is not approved for live automation",
+                reason=engine_reason,
+            )
+
+        # The exact active model (version + recomputed artifact SHA-256) has a
+        # valid LIVE promotion record and the env gate is open — fall through
+        # to normal registration. Broker LIVE certification, risk gates and
+        # the final dispatch boundary remain independent NestJS-side gates.
 
     if request.source == "mock" and settings.is_production and not settings.ai_allow_mock_market_data:
         raise HTTPException(status_code=403, detail="Mock source is blocked in production")

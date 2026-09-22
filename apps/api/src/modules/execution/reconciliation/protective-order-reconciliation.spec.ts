@@ -9,6 +9,14 @@ import { BrokerConnection } from '../../broker/entities/broker-connection.entity
 import { BrokerPosition } from '../../broker/interfaces/broker-adapter.interface';
 import { BrokerCredentialStatus } from '../../broker/authorization/broker-credential-status';
 import { Repository } from 'typeorm';
+import { Logger } from '@nestjs/common';
+// Production-LIVE completion round (P13 metrics): the real in-process
+// registry handed to the service's OPTIONAL trailing ModuleRef seam (a plain
+// stub whose get() resolves it — mirroring the app-wide MetricsModule).
+import { MetricsService } from '../../metrics/metrics.service';
+import { ReconciliationPersistenceService } from './reconciliation-persistence.service';
+import { METRIC_NAMES } from '../../metrics/metric-names';
+import type { ModuleRef } from '@nestjs/core';
 
 /** Minimal Trade-repository stub: a plain in-memory `rows` array. */
 class TradeRepositoryStub {
@@ -93,6 +101,7 @@ const position = (
 
 describe('ProtectiveOrderReconciliationService — the §8 protective-order loop', () => {
   let service: ProtectiveOrderReconciliationService;
+  let metrics: MetricsService;
   let tradeRepo: TradeRepositoryStub;
   let adapter: {
     setMode: jest.Mock;
@@ -103,6 +112,13 @@ describe('ProtectiveOrderReconciliationService — the §8 protective-order loop
   let adapterRegistry: { getAdapterForConnection: jest.Mock };
   let encryptionService: { decrypt: jest.Mock };
   let auditService: { log: jest.Mock };
+  // October UAT hardening (WS2): the protective-divergence persistence stub —
+  // records upserts/resolutions so divergence tests assert first-class rows.
+  let persistence: {
+    upsertProtectiveDivergence: jest.Mock;
+    resolveProtectiveDivergences: jest.Mock;
+    listOpenProtectiveDivergenceTradeIds: jest.Mock;
+  };
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -118,12 +134,27 @@ describe('ProtectiveOrderReconciliationService — the §8 protective-order loop
       decrypt: jest.fn().mockReturnValue({ accountId: 'acc-1' }),
     };
     auditService = { log: jest.fn().mockResolvedValue(undefined) };
+    persistence = {
+      upsertProtectiveDivergence: jest.fn().mockResolvedValue(undefined),
+      resolveProtectiveDivergences: jest.fn().mockResolvedValue(undefined),
+      listOpenProtectiveDivergenceTradeIds: jest.fn().mockResolvedValue([]),
+    };
+    metrics = new MetricsService();
+    metrics.reset();
 
     service = new ProtectiveOrderReconciliationService(
       tradeRepo as unknown as Repository<Trade>,
       adapterRegistry as never,
       encryptionService as never,
       auditService as unknown as AuditService,
+      // October UAT hardening (WS2): the optional persistence seam — a stub
+      // whose upsert/resolve/list calls are recorded for divergence tests
+      // (undefined in suites that exercise the audit-only floor).
+      persistence as unknown as ReconciliationPersistenceService,
+      // P13 metrics: the optional trailing lazy seam — a stub ModuleRef whose
+      // lookup resolves the real in-process registry (as MetricsModule does
+      // app-wide); omitted entirely in the no-ops test below.
+      { get: () => metrics } as unknown as ModuleRef,
     );
   });
 
@@ -347,5 +378,173 @@ describe('ProtectiveOrderReconciliationService — the §8 protective-order loop
 
   it('tolerance constant is the documented 0.05%', () => {
     expect(PROTECTIVE_LEVEL_TOLERANCE_RATIO).toBe('0.0005');
+  });
+
+  // ─── P13 metrics: protective-order repair instrumentation ─────────────────
+
+  it('P13: counts REPAIRED and REPAIR_FAILED outcomes (brokerId label)', async () => {
+    tradeRepo.rows = [openTrade('trade-1'), openTrade('trade-2')];
+    // trade-1: provider SL missing → REPAIRED; trade-2: provider TP missing
+    // and modifyOrder throws → REPAIR_FAILED.
+    adapter.getOpenPositions.mockResolvedValue([
+      position('ext-trade-1', { stopLoss: '0' }),
+      position('ext-trade-2', { takeProfit: '0' }),
+    ]);
+    adapter.modifyOrder.mockImplementationOnce(() => Promise.resolve({ success: true }));
+    adapter.modifyOrder.mockImplementationOnce(() => Promise.reject(new Error('modify refused')));
+
+    const outcome = await service.reconcileProtectiveOrders(connection());
+
+    expect(outcome.repairedCount).toBe(1);
+    expect(outcome.repairFailedCount).toBe(1);
+
+    const counter = (labels: Record<string, string>) =>
+      metrics
+        .snapshot()
+        .counters.find(
+          (series) =>
+            series.name === METRIC_NAMES.PROTECTIVE_ORDER_REPAIRS &&
+            Object.entries(labels).every(([key, value]) => series.labels[key] === value),
+        )?.value;
+    expect(counter({ brokerId: 'paper-broker', outcome: 'REPAIRED' })).toBe(1);
+    expect(counter({ brokerId: 'paper-broker', outcome: 'REPAIR_FAILED' })).toBe(1);
+  });
+
+  it('P13: a fully PROTECTED sweep records no repair series (steady state is silent)', async () => {
+    tradeRepo.rows = [openTrade('trade-1')];
+    adapter.getOpenPositions.mockResolvedValue([position('ext-trade-1')]);
+
+    await service.reconcileProtectiveOrders(connection());
+
+    expect(
+      metrics.snapshot().counters.filter((s) => s.name === METRIC_NAMES.PROTECTIVE_ORDER_REPAIRS),
+    ).toEqual([]);
+  });
+
+  it('P13: without the optional ModuleRef the loop still runs and records nothing', async () => {
+    // Direct construction WITHOUT the trailing seam — every metrics call site
+    // no-ops (the lazy getter returns null).
+    const bareService = new ProtectiveOrderReconciliationService(
+      tradeRepo as unknown as Repository<Trade>,
+      adapterRegistry as never,
+      encryptionService as never,
+      auditService as unknown as AuditService,
+    );
+    tradeRepo.rows = [openTrade('trade-1')];
+    adapter.getOpenPositions.mockResolvedValue([position('ext-trade-1', { stopLoss: '0' })]);
+
+    const outcome = await bareService.reconcileProtectiveOrders(connection());
+
+    expect(outcome.repairedCount).toBe(1);
+    expect(
+      metrics.snapshot().counters.filter((s) => s.name === METRIC_NAMES.PROTECTIVE_ORDER_REPAIRS),
+    ).toEqual([]);
+  });
+
+  // ─── October UAT hardening (WS2): protective-divergence persistence ──────
+
+  it('WS2: a REPAIR_FAILED outcome persists an OPEN PROTECTIVE_ORDER_DIVERGENCE discrepancy', async () => {
+    tradeRepo.rows = [openTrade('trade-1')];
+    adapter.getOpenPositions.mockResolvedValue([
+      position('ext-trade-1', { stopLoss: '0', takeProfit: '1.09500' }),
+    ]);
+    adapter.modifyOrder.mockResolvedValue({ success: false });
+
+    await service.reconcileProtectiveOrders(connection());
+
+    expect(persistence.upsertProtectiveDivergence).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tradeId: 'trade-1',
+        externalOrderId: 'ext-trade-1',
+        outcome: 'REPAIR_FAILED',
+      }),
+    );
+  });
+
+  it('WS2: an INTERNAL_UNPROVABLE outcome persists a protective divergence too', async () => {
+    tradeRepo.rows = [openTrade('trade-1', { stopLoss: '0' })];
+    adapter.getOpenPositions.mockResolvedValue([position('ext-trade-1')]);
+
+    await service.reconcileProtectiveOrders(connection());
+
+    expect(persistence.upsertProtectiveDivergence).toHaveBeenCalledWith(
+      expect.objectContaining({ tradeId: 'trade-1', outcome: 'INTERNAL_UNPROVABLE' }),
+    );
+  });
+
+  it('WS2: a PROTECTED/REPAIRED trade resolves its OPEN protective divergence', async () => {
+    tradeRepo.rows = [openTrade('trade-1')];
+    adapter.getOpenPositions.mockResolvedValue([
+      position('ext-trade-1', { stopLoss: '1.07500', takeProfit: '1.09500' }),
+    ]);
+
+    await service.reconcileProtectiveOrders(connection());
+
+    expect(persistence.resolveProtectiveDivergences).toHaveBeenCalledWith(
+      CONN,
+      expect.arrayContaining([
+        expect.objectContaining({
+          tradeId: 'trade-1',
+          resolution: expect.stringContaining('protective orders verified'),
+        }),
+      ]),
+    );
+  });
+
+  it('WS2: trades that left the OPEN state resolve their stale protective divergences', async () => {
+    tradeRepo.rows = []; // no OPEN trades anymore
+    adapter.getOpenPositions.mockResolvedValue([]);
+    persistence.listOpenProtectiveDivergenceTradeIds.mockResolvedValue(['trade-gone']);
+
+    await service.reconcileProtectiveOrders(connection());
+
+    expect(persistence.resolveProtectiveDivergences).toHaveBeenCalledWith(
+      CONN,
+      expect.arrayContaining([
+        expect.objectContaining({
+          tradeId: 'trade-gone',
+          resolution: expect.stringContaining('no longer OPEN'),
+        }),
+      ]),
+    );
+  });
+
+  it('WS2: a persistence failure NEVER breaks the protective loop (audit stays the floor)', async () => {
+    tradeRepo.rows = [openTrade('trade-1')];
+    adapter.getOpenPositions.mockResolvedValue([
+      position('ext-trade-1', { stopLoss: '0', takeProfit: '1.09500' }),
+    ]);
+    adapter.modifyOrder.mockResolvedValue({ success: false });
+    persistence.upsertProtectiveDivergence.mockRejectedValueOnce(new Error('db down'));
+    const errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+
+    const outcome = await service.reconcileProtectiveOrders(connection());
+
+    expect(outcome).toMatchObject({ status: 'FAILED', repairFailedCount: 1 });
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('persistence failed'));
+    errorSpy.mockRestore();
+  });
+
+  it('WS2: without the optional persistence seam the loop still runs (audit-only floor)', async () => {
+    const bareService = new ProtectiveOrderReconciliationService(
+      tradeRepo as unknown as Repository<Trade>,
+      adapterRegistry as never,
+      encryptionService as never,
+      auditService as unknown as AuditService,
+      undefined,
+      { get: () => metrics } as unknown as ModuleRef,
+    );
+    tradeRepo.rows = [openTrade('trade-1')];
+    adapter.getOpenPositions.mockResolvedValue([
+      position('ext-trade-1', { stopLoss: '0', takeProfit: '1.09500' }),
+    ]);
+    adapter.modifyOrder.mockResolvedValue({ success: false });
+
+    const outcome = await bareService.reconcileProtectiveOrders(connection());
+
+    expect(outcome).toMatchObject({ status: 'FAILED', repairFailedCount: 1 });
+    expect(auditService.log).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'CRITICAL' }),
+    );
   });
 });

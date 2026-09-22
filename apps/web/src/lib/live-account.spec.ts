@@ -2,11 +2,18 @@ import type {
   LiveAccountOrdersPage,
   LiveAccountOverviewView,
   LiveOrderRowView,
+  LiveReadinessView,
+  LiveReconciliationSummary,
 } from '@irexpro/types/live-account';
 import {
+  describeEmergencyStopSummary,
+  emergencyStopActiveTradingSession,
   loadLiveAccountOrders,
   loadLiveAccountOverview,
   loadLiveAccountPositions,
+  loadLiveAccountReadiness,
+  reconciliationBlockView,
+  tradingReadinessPanelView,
 } from './live-account';
 
 /**
@@ -19,17 +26,32 @@ import {
  *   could not be established) and must validate — it is never coerced.
  * - The overview connection view ships NO full `accountId` (masked only).
  * - `reconciliationLoaded: false` (partial-failure tri-state) validates.
+ *
+ * Production-LIVE completion round additions:
+ * - the reconciliation presentation is fail-closed (reconciliationLoaded
+ *   false NEVER renders as zero discrepancies / in sync);
+ * - the emergency stop reuses the trade workspace stop endpoint and fails
+ *   closed on contract mismatches.
+ *
+ * October UAT hardening additions (WS5):
+ * - the readiness read fails closed on contract mismatches;
+ * - the six separated badge states never inherit each other's evidence and
+ *   the blocker copy is passed through verbatim from the server.
  */
 
 jest.mock('@/lib/api', () => ({
   api: {
     request: jest.fn(),
+    getActiveTradingSession: jest.fn(),
+    stopTradingSession: jest.fn(),
   },
 }));
 
 import { api } from '@/lib/api';
 
 const requestMock = api.request as jest.Mock;
+const getActiveSessionMock = api.getActiveTradingSession as jest.Mock;
+const stopSessionMock = api.stopTradingSession as jest.Mock;
 
 const UNKNOWN_ENVIRONMENT_OVERVIEW = {
   generatedAt: '2026-09-01T12:00:00.000Z',
@@ -206,6 +228,11 @@ describe('loadLiveAccountPositions runtime guards', () => {
           lotSize: '0.1000',
           requestedEntryPrice: '1.10000000',
           fillPrice: null,
+          accountCurrency: 'USD',
+          currentPrice: null,
+          unrealisedPnl: null,
+          commission: null,
+          swap: null,
           stopLoss: '1.09500000',
           takeProfit: '1.11000000',
           trailingStopPips: null,
@@ -339,5 +366,447 @@ describe('loadLiveAccountOrders runtime guards', () => {
     await expect(loadLiveAccountOrders('ALL', 50, 0)).rejects.toThrow(
       'Live account orders contract mismatch',
     );
+  });
+});
+
+describe('reconciliationBlockView (fail-closed presentation)', () => {
+  const connection = (reconciliation: LiveReconciliationSummary) => ({
+    reconciliation,
+  });
+
+  it('renders the degraded unavailable state when reconciliationLoaded is false (never green)', () => {
+    const view = reconciliationBlockView(
+      connection({
+        lastRunAt: '2026-09-01T12:00:00.000Z',
+        lastRunStatus: 'COMPLETED',
+        openDiscrepancies: 0,
+        openCritical: 0,
+        openWarning: 0,
+        inSync: true,
+      }),
+      false,
+    );
+
+    expect(view.unavailable).toBe(true);
+    // The zero-valued counts must NEVER be presented as "zero discrepancies".
+    expect(view.discrepancyLabel).not.toContain('No open discrepancies');
+    expect(view.discrepancyLabel).toContain('unavailable');
+    expect(view.statusLabel).toBe('Unavailable');
+    expect(view.statusVariant).not.toBe('success');
+  });
+
+  it('labels every lastRunStatus humanly with the matching variant', () => {
+    const cases: Array<[LiveReconciliationSummary['lastRunStatus'], string, string]> = [
+      ['COMPLETED', 'Completed', 'success'],
+      ['COMPLETED_WITH_WARNINGS', 'Completed with warnings', 'warning'],
+      ['FAILED', 'Failed', 'error'],
+      ['RUNNING', 'Running now', 'info'],
+      ['PENDING', 'Pending', 'info'],
+    ];
+    for (const [status, label, variant] of cases) {
+      const view = reconciliationBlockView(
+        connection({
+          lastRunAt: '2026-09-01T12:00:00.000Z',
+          lastRunStatus: status,
+          openDiscrepancies: 0,
+          openCritical: 0,
+          openWarning: 0,
+          inSync: true,
+        }),
+        true,
+      );
+      expect(view.statusLabel).toBe(label);
+      expect(view.statusVariant).toBe(variant);
+    }
+  });
+
+  it('reports a never-run connection honestly instead of claiming in-sync history', () => {
+    const view = reconciliationBlockView(
+      connection({
+        lastRunAt: null,
+        lastRunStatus: null,
+        openDiscrepancies: 0,
+        openCritical: 0,
+        openWarning: 0,
+        inSync: true,
+      }),
+      undefined,
+    );
+
+    expect(view.statusLabel).toBe('Not yet reconciled');
+    expect(view.lastRunAt).toBeNull();
+  });
+
+  it('orders open discrepancy counts critical-first', () => {
+    const view = reconciliationBlockView(
+      connection({
+        lastRunAt: '2026-09-01T12:00:00.000Z',
+        lastRunStatus: 'COMPLETED_WITH_WARNINGS',
+        openDiscrepancies: 5,
+        openCritical: 2,
+        openWarning: 3,
+        inSync: false,
+      }),
+      true,
+    );
+
+    expect(view.discrepancyLabel).toBe('2 critical · 3 warning · 5 open');
+    expect(view.inSync).toBe(false);
+    expect(view.lastRunAt).toBe('2026-09-01T12:00:00.000Z');
+  });
+
+  it('says no open discrepancies only when the loaded counts are all zero', () => {
+    const view = reconciliationBlockView(
+      connection({
+        lastRunAt: '2026-09-01T12:00:00.000Z',
+        lastRunStatus: 'COMPLETED',
+        openDiscrepancies: 0,
+        openCritical: 0,
+        openWarning: 0,
+        inSync: true,
+      }),
+      true,
+    );
+
+    expect(view.discrepancyLabel).toBe('No open discrepancies');
+    expect(view.inSync).toBe(true);
+  });
+});
+
+describe('emergencyStopActiveTradingSession (same endpoint as the trade workspace)', () => {
+  const SESSION = {
+    id: 'sess_11111111-1111-4111-8111-111111111112',
+    brokerConnectionId: 'bconn_11111111-1111-4111-8111-111111111111',
+    executionMode: 'FULL_AUTO',
+    authorityGeneration: 2,
+    status: 'ACTIVE',
+    startedAt: '2026-09-01T11:00:00.000Z',
+  };
+
+  const STOP_RESPONSE = {
+    message: 'stopped',
+    sessionId: SESSION.id,
+    positionCloseSummary: {
+      state: 'COMPLETE',
+      targetCount: 1,
+      closedCount: 1,
+      unresolvedCount: 0,
+    },
+  };
+
+  beforeEach(() => {
+    getActiveSessionMock.mockReset();
+    stopSessionMock.mockReset();
+  });
+
+  it('reads the authoritative active session, then stops it with close-positions semantics', async () => {
+    getActiveSessionMock.mockResolvedValue({ session: SESSION });
+    stopSessionMock.mockResolvedValue(STOP_RESPONSE);
+
+    const outcome = await emergencyStopActiveTradingSession();
+
+    expect(getActiveSessionMock).toHaveBeenCalledTimes(1);
+    expect(stopSessionMock).toHaveBeenCalledWith(SESSION.id);
+    expect(outcome).toEqual({ outcome: 'STOPPED', result: STOP_RESPONSE });
+  });
+
+  it('reports NO_ACTIVE_SESSION without calling stop when nothing is running', async () => {
+    getActiveSessionMock.mockResolvedValue({ session: null });
+
+    const outcome = await emergencyStopActiveTradingSession();
+
+    expect(stopSessionMock).not.toHaveBeenCalled();
+    expect(outcome).toEqual({ outcome: 'NO_ACTIVE_SESSION' });
+  });
+
+  it('fails closed when the active-session envelope is malformed (never stops a guessed id)', async () => {
+    getActiveSessionMock.mockResolvedValue({ nope: true });
+
+    await expect(emergencyStopActiveTradingSession()).rejects.toThrow(
+      'Active trading session contract mismatch',
+    );
+    expect(stopSessionMock).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the stop response does not match the close-summary contract', async () => {
+    getActiveSessionMock.mockResolvedValue({ session: SESSION });
+    stopSessionMock.mockResolvedValue({
+      message: 'stopped',
+      sessionId: SESSION.id,
+      positionCloseSummary: { state: 'MAYBE', closedCount: 0 },
+    });
+
+    await expect(emergencyStopActiveTradingSession()).rejects.toThrow(
+      'Trading session stop contract mismatch',
+    );
+  });
+});
+
+describe('describeEmergencyStopSummary (honest COMPLETE/PARTIAL/UNVERIFIED copy)', () => {
+  it('reports confirmed closures without inventing counts', () => {
+    expect(
+      describeEmergencyStopSummary({
+        message: 'stopped',
+        sessionId: 's1',
+        positionCloseSummary: {
+          state: 'COMPLETE',
+          targetCount: 2,
+          closedCount: 2,
+          unresolvedCount: 0,
+        },
+      }),
+    ).toEqual({ tone: 'success', message: 'AI Trading stopped. 2 AI positions confirmed closed.' });
+  });
+
+  it('never claims a PARTIAL stop is complete', () => {
+    const summary = describeEmergencyStopSummary({
+      message: 'stopped',
+      sessionId: 's1',
+      positionCloseSummary: {
+        state: 'PARTIAL',
+        targetCount: 3,
+        closedCount: 1,
+        unresolvedCount: 2,
+      },
+    });
+    expect(summary.tone).toBe('warning');
+    expect(summary.message).toContain('1 of 3');
+    expect(summary.message).toContain('2 require follow-up');
+  });
+
+  it('says closure could not be verified for the UNKNOWN state', () => {
+    const summary = describeEmergencyStopSummary({
+      message: 'stopped',
+      sessionId: 's1',
+      positionCloseSummary: {
+        state: 'UNKNOWN',
+        targetCount: null,
+        closedCount: 0,
+        unresolvedCount: null,
+      },
+    });
+    expect(summary.tone).toBe('warning');
+    expect(summary.message).toContain('could not be verified');
+  });
+});
+
+// ── Trading readiness (October UAT hardening, WS5) ──────────────────────────
+
+const readinessView = (overrides: Partial<LiveReadinessView> = {}): LiveReadinessView => ({
+  generatedAt: '2026-10-01T12:00:00.000Z',
+  paper: { ready: true },
+  demo: { verified: false },
+  brokerLiveCertified: { certified: false, certifiedProviders: [] },
+  model: {
+    activeModelVersion: 'mtf-xgboost-v1',
+    paperApproved: true,
+    liveApproved: false,
+    liveActivationReason: 'No LIVE promotion record for the active model.',
+  },
+  liveTradingEnabled: { enabled: false },
+  liveBlockers: [
+    {
+      reasonCode: 'BROKER_NOT_LIVE_CERTIFIED',
+      message: 'No broker has completed production-LIVE certification.',
+    },
+  ],
+  ...overrides,
+});
+
+describe('loadLiveAccountReadiness runtime guards (WS5, fail-closed)', () => {
+  beforeEach(() => {
+    requestMock.mockReset();
+  });
+
+  it('fetches GET /live-account/readiness through the api client and validates the payload', async () => {
+    requestMock.mockResolvedValue(readinessView());
+
+    const view = await loadLiveAccountReadiness();
+
+    expect(requestMock).toHaveBeenCalledWith('/live-account/readiness');
+    expect(view.paper.ready).toBe(true);
+    expect(view.liveBlockers[0].reasonCode).toBe('BROKER_NOT_LIVE_CERTIFIED');
+  });
+
+  it('accepts paperApproved null (model status unknown) and certified provider ids', async () => {
+    requestMock.mockResolvedValue(
+      readinessView({
+        model: {
+          activeModelVersion: null,
+          paperApproved: null,
+          liveApproved: false,
+          liveActivationReason: null,
+        },
+        brokerLiveCertified: { certified: true, certifiedProviders: ['mt5'] },
+      }),
+    );
+
+    const view = await loadLiveAccountReadiness();
+
+    expect(view.model.paperApproved).toBeNull();
+    expect(view.brokerLiveCertified.certifiedProviders).toEqual(['mt5']);
+  });
+
+  it('rejects a non-boolean demo.verified (states are never fabricated)', async () => {
+    requestMock.mockResolvedValue(
+      readinessView({ demo: { verified: 'yes' as unknown as boolean } }),
+    );
+
+    await expect(loadLiveAccountReadiness()).rejects.toThrow(
+      'Live account readiness contract mismatch',
+    );
+  });
+
+  it('rejects a non-tri-state model.paperApproved', async () => {
+    requestMock.mockResolvedValue(
+      readinessView({
+        model: {
+          activeModelVersion: 'v1',
+          paperApproved: 'approved' as unknown as boolean,
+          liveApproved: false,
+          liveActivationReason: null,
+        },
+      }),
+    );
+
+    await expect(loadLiveAccountReadiness()).rejects.toThrow(
+      'Live account readiness contract mismatch',
+    );
+  });
+
+  it('rejects a blocker without a server message', async () => {
+    requestMock.mockResolvedValue(
+      readinessView({
+        liveBlockers: [
+          { reasonCode: 'X' } as unknown as LiveReadinessView['liveBlockers'][number],
+        ],
+      }),
+    );
+
+    await expect(loadLiveAccountReadiness()).rejects.toThrow(
+      'Live account readiness contract mismatch',
+    );
+  });
+});
+
+describe('tradingReadinessPanelView (six SEPARATED badge states + blocker copy)', () => {
+  const ALL_READY = readinessView({
+    paper: { ready: true },
+    demo: { verified: true },
+    brokerLiveCertified: { certified: true, certifiedProviders: ['mt5'] },
+    model: {
+      activeModelVersion: 'v1',
+      paperApproved: true,
+      liveApproved: true,
+      liveActivationReason: null,
+    },
+    liveTradingEnabled: { enabled: true },
+    liveBlockers: [],
+  });
+
+  it('labels every satisfied state positively, in a stable order', () => {
+    const view = tradingReadinessPanelView(ALL_READY);
+
+    expect(view.badges.map((badge) => [badge.key, badge.label, badge.met])).toEqual([
+      ['paper', 'PAPER READY', true],
+      ['demo', 'DEMO VERIFIED', true],
+      ['broker-live-certified', 'BROKER LIVE CERTIFIED', true],
+      ['model-paper-approved', 'MODEL PAPER APPROVED', true],
+      ['model-live-approved', 'MODEL LIVE APPROVED', true],
+      ['live-trading-enabled', 'LIVE TRADING ENABLED', true],
+    ]);
+  });
+
+  it('labels every unsatisfied state with its own explicit NOT label (never a bare "Verified")', () => {
+    const view = tradingReadinessPanelView(
+      readinessView({
+        paper: { ready: false },
+        demo: { verified: false },
+        brokerLiveCertified: { certified: false, certifiedProviders: [] },
+        model: {
+          activeModelVersion: 'v1',
+          paperApproved: false,
+          liveApproved: false,
+          liveActivationReason: null,
+        },
+        liveTradingEnabled: { enabled: false },
+      }),
+    );
+
+    expect(view.badges.map((badge) => [badge.label, badge.met])).toEqual([
+      ['PAPER NOT READY', false],
+      ['DEMO NOT VALIDATED', false],
+      ['BROKER NOT LIVE CERTIFIED', false],
+      ['MODEL NOT PAPER APPROVED', false],
+      ['MODEL NOT LIVE APPROVED', false],
+      ['LIVE TRADING NOT ENABLED', false],
+    ]);
+  });
+
+  it('renders MODEL STATUS UNKNOWN (muted) when the model approval is unknown', () => {
+    const view = tradingReadinessPanelView(
+      readinessView({
+        model: {
+          activeModelVersion: null,
+          paperApproved: null,
+          liveApproved: false,
+          liveActivationReason: null,
+        },
+      }),
+    );
+
+    const modelPaper = view.badges.find((badge) => badge.key === 'model-paper-approved');
+    expect(modelPaper?.label).toBe('MODEL STATUS UNKNOWN');
+    expect(modelPaper?.met).toBe(false);
+  });
+
+  it('never lets a DEMO validation render as a LIVE-ready state (separated evidence)', () => {
+    const view = tradingReadinessPanelView(readinessView({ demo: { verified: true } }));
+
+    const demo = view.badges.find((badge) => badge.key === 'demo');
+    const broker = view.badges.find((badge) => badge.key === 'broker-live-certified');
+    expect(demo?.met).toBe(true);
+    expect(demo?.label).toBe('DEMO VERIFIED');
+    expect(demo?.label).not.toContain('LIVE');
+    expect(broker?.met).toBe(false);
+    expect(broker?.label).toBe('BROKER NOT LIVE CERTIFIED');
+  });
+
+  it('a certified broker never implies the model is live-approved', () => {
+    const view = tradingReadinessPanelView(
+      readinessView({
+        brokerLiveCertified: { certified: true, certifiedProviders: ['mt5'] },
+      }),
+    );
+
+    expect(view.badges.find((badge) => badge.key === 'broker-live-certified')?.met).toBe(true);
+    expect(view.badges.find((badge) => badge.key === 'model-live-approved')?.met).toBe(false);
+    expect(view.badges.find((badge) => badge.key === 'live-trading-enabled')?.met).toBe(false);
+  });
+
+  it('passes blocker copy through verbatim from the server (never invented)', () => {
+    const blockers = [
+      {
+        reasonCode: 'BROKER_NOT_LIVE_CERTIFIED',
+        message: 'No broker has completed production-LIVE certification.',
+      },
+      {
+        reasonCode: 'MODEL_NOT_LIVE_APPROVED',
+        message: 'The active model has not received LIVE approval.',
+      },
+    ];
+
+    const view = tradingReadinessPanelView(readinessView({ liveBlockers: blockers }));
+
+    expect(view.blockers).toEqual([
+      { key: 'BROKER_NOT_LIVE_CERTIFIED', message: blockers[0].message },
+      { key: 'MODEL_NOT_LIVE_APPROVED', message: blockers[1].message },
+    ]);
+  });
+
+  it('returns no blockers when the server reports none', () => {
+    const view = tradingReadinessPanelView(readinessView({ liveBlockers: [] }));
+
+    expect(view.blockers).toEqual([]);
   });
 });

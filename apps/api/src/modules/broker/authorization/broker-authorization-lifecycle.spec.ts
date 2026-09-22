@@ -88,6 +88,7 @@ describe('BrokerService — Sprint 50 authorization lifecycle', () => {
     supportsEnvironment: jest.Mock;
     isConnectable: jest.Mock;
     isProductionLiveEligible: jest.Mock;
+    getEntry: jest.Mock;
   };
   let encryption: { encrypt: jest.Mock; decrypt: jest.Mock };
   let audit: { log: jest.Mock };
@@ -123,6 +124,7 @@ describe('BrokerService — Sprint 50 authorization lifecycle', () => {
       // default true mirrors the real registry for that broker. Tests that
       // simulate an UNVERIFIED provider (e.g. oanda BETA) override this.
       isProductionLiveEligible: jest.fn().mockReturnValue(true),
+      getEntry: jest.fn().mockReturnValue(null),
     };
     encryption = {
       encrypt: jest.fn().mockReturnValue({ ciphertext: 'c1', iv: 'i1', tag: 't1', keyId: 'k1' }),
@@ -203,7 +205,12 @@ describe('BrokerService — Sprint 50 authorization lifecycle', () => {
   });
 
   describe('connectBroker() — state machine + credential advancement', () => {
-    it('DEMO connect success → AUTHORIZED + demoValidated dual-write + VERIFIED credentials', async () => {
+    it('DEMO connect success → CONNECTED (pre-validation) + VERIFIED credentials — the handshake NEVER validates', async () => {
+      // DEMO validation authority: a successful handshake proves
+      // connectivity/credential validity only. The connection settles at
+      // CONNECTED; demoValidated is NOT written and the authorization does
+      // NOT advance — the BrokerDemoValidationService checklist is the sole
+      // authority for CONNECTED → AUTHORIZED + demoValidated.
       connectionRepo.findOne
         .mockResolvedValueOnce(baseConnection({ accountType: BrokerMode.DEMO }))
         .mockResolvedValue(baseConnection());
@@ -221,9 +228,9 @@ describe('BrokerService — Sprint 50 authorization lifecycle', () => {
         (c) => c[1].status === BrokerConnectionStatus.CONNECTED,
       );
       expect(updateCall).toBeDefined();
-      expect(updateCall![1].authorizationStatus).toBe(BrokerAuthorizationStatus.AUTHORIZED);
+      expect(updateCall![1].authorizationStatus).toBe(BrokerAuthorizationStatus.CONNECTED);
       expect(updateCall![1].credentialStatus).toBe(BrokerCredentialStatus.VERIFIED);
-      expect(updateCall![1].demoValidated).toBe(true);
+      expect(updateCall![1].demoValidated).toBeUndefined();
     });
 
     it('LIVE connect success → CONNECTED (NOT ACTIVE — explicit authorization still required)', async () => {

@@ -18,6 +18,11 @@ import { ExecutionModule } from '../execution/execution.module';
 import { ExecutionControlModule } from '../execution-control/execution-control.module';
 import { ExecutionAuthorityModule } from '../execution-authority/execution-authority.module';
 import { DailyRiskPeriodModule } from '../execution/daily-risk-period.module';
+// Production-LIVE completion round (Phase 9): EligibilityService for the
+// continuous LIVE user-eligibility gate (Step 1e). UsersModule is an acyclic
+// leaf here (it imports only forFeature + AuditModule + ExecutionAuthorityModule
+// + ThrottlerModule) — no cycle is introduced.
+import { UsersModule } from '../users/users.module';
 
 /**
  * RiskModule — Non-bypassable pre-trade validation gateway.
@@ -62,6 +67,8 @@ import { DailyRiskPeriodModule } from '../execution/daily-risk-period.module';
     // EXACTLY as committed (no provider-level forwardRef is stacked on it).
     ExecutionAuthorityModule,
     DailyRiskPeriodModule,
+    // Production-LIVE completion round (Phase 9): continuous eligibility gate.
+    UsersModule,
     forwardRef(() => ExecutionModule),
   ],
   controllers: [RiskController, RiskIntelligenceController],
