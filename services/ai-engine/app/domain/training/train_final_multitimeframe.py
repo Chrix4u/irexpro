@@ -363,7 +363,11 @@ def train_final_candidate(
 
     output = Path(output_model_path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    model.save_model(str(output))
+    # Atomic model artifact replacement: save to a temporary file first so
+    # an interrupted training never leaves a partial model.json.
+    model_tmp = output.with_suffix(output.suffix + ".tmp")
+    model.save_model(str(model_tmp))
+    model_tmp.replace(output)
 
     timestamp = datetime.now(UTC)
     model_version = (
@@ -440,10 +444,12 @@ def train_final_candidate(
     }
 
     metadata_path = output.with_suffix(".metadata.json")
-    metadata_path.write_text(
+    metadata_tmp = metadata_path.with_suffix(metadata_path.suffix + ".tmp")
+    metadata_tmp.write_text(
         json.dumps(metadata, indent=2, sort_keys=True),
         encoding="utf-8",
     )
+    metadata_tmp.replace(metadata_path)
     return {
         **metadata,
         "model_path": str(output),

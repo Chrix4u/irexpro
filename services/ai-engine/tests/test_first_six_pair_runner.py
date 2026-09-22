@@ -92,8 +92,9 @@ def test_dukascopy_source_requires_no_broker_credentials(
         now=None,
         cache_dir=None,
         max_lookback_days=90,
+        progress=None,
     ):
-        del target_rows, now, cache_dir
+        del target_rows, now, cache_dir, progress
         collected.append(instrument)
         observed_lookbacks.append(max_lookback_days)
         Path(output_path).write_text(
@@ -232,8 +233,9 @@ def test_resume_reuses_verified_pair_and_horizon_checkpoints(
         now=None,
         cache_dir=None,
         max_lookback_days=90,
+        progress=None,
     ):
-        del target_rows, cache_dir, max_lookback_days
+        del target_rows, cache_dir, max_lookback_days, progress
         calls["collect"] += 1
         observed_before.append(now)
         frame = "timestamp,open,high,low,close,volume,tick_volume,spread_points,price_digits\n"
