@@ -636,3 +636,73 @@ def test_broad_improvement_rejects_material_drawdown_regression():
     assert result["material_drawdown_rejection"] is True
     assert result["pair_concentration_rejection"] is False
     assert result["fold_concentration_rejection"] is False
+
+
+def _instrument_summary(
+    *,
+    balanced_accuracy: float,
+    predicted_long_fraction: float,
+    confidence_coverage: float,
+    total_return: float,
+) -> dict[str, object]:
+    return {
+        "classification": {"balanced_accuracy": balanced_accuracy},
+        "diagnostics": {
+            "directional_bias": {
+                "predicted_long_fraction": predicted_long_fraction,
+            },
+            "confidence_coverage": {"fraction": confidence_coverage},
+        },
+        "trading": {"total_return": total_return},
+    }
+
+
+def test_pooled_architecture_diagnostic_flags_material_pair_heterogeneity():
+    by_instrument = {
+        "EURUSD": _instrument_summary(
+            balanced_accuracy=0.56,
+            predicted_long_fraction=0.70,
+            confidence_coverage=0.30,
+            total_return=0.01,
+        ),
+        "GBPUSD": _instrument_summary(
+            balanced_accuracy=0.49,
+            predicted_long_fraction=0.42,
+            confidence_coverage=0.05,
+            total_return=-0.01,
+        ),
+        "USDJPY": _instrument_summary(
+            balanced_accuracy=0.51,
+            predicted_long_fraction=0.55,
+            confidence_coverage=0.10,
+            total_return=-0.01,
+        ),
+    }
+
+    report = qualification._pooled_architecture_diagnostic(by_instrument)
+
+    assert report["material_pair_heterogeneity"] is True
+    assert report["stronger_instrument_normalization_research_warranted"] is True
+    assert report["future_mixture_of_experts_research_warranted"] is True
+    assert report["diagnostic_only"] is True
+
+
+def test_pooled_architecture_diagnostic_keeps_homogeneous_pairs_as_research_plausible():
+    by_instrument = {
+        symbol: _instrument_summary(
+            balanced_accuracy=0.53 + (index * 0.002),
+            predicted_long_fraction=0.51 + (index * 0.005),
+            confidence_coverage=0.15 + (index * 0.005),
+            total_return=0.01,
+        )
+        for index, symbol in enumerate(
+            ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF"]
+        )
+    }
+
+    report = qualification._pooled_architecture_diagnostic(by_instrument)
+
+    assert report["status"] == "pooled_architecture_remains_reasonable_for_research"
+    assert report["material_pair_heterogeneity"] is False
+    assert report["stronger_instrument_normalization_research_warranted"] is False
+    assert report["future_mixture_of_experts_research_warranted"] is False
