@@ -100,6 +100,10 @@ STAGE_PROLOGUE = """          set -Eeuo pipefail
             printf 'RESEARCH HOLD: AI Python virtual environment was not found.\\n' >&2
             exit 15
           }
+          "$python_bin" -c 'import pyarrow' || {
+            printf 'RESEARCH HOLD: AI Python runtime is missing locked pyarrow support.\\n' >&2
+            exit 24
+          }
 
           # WS8: every post-init stage verifies the same candidate identity
           # that the validate/init stage froze into the orchestration plan.
