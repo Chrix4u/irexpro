@@ -110,7 +110,8 @@ grep -Fq 'timeout-minutes: 420' "$RESEARCH_WORKFLOW" ||
   fail 'Six Pair Research must retain the seven-hour bounded timeout.'
 grep -Fq 'export IREXPRO_RESEARCH_PROGRESS=1' "$RESEARCH_WORKFLOW" ||
   fail 'Six Pair Research must enable detailed stage/fold progress telemetry.'
-grep -Eq '^ *export IREXPRO_XGB_N_JOBS=[1-4]
+grep -Eq 'export IREXPRO_XGB_N_JOBS=[1-4]' "$RESEARCH_WORKFLOW" ||
+  fail 'Six Pair Research must request bounded XGBoost CPU parallelism.'
 # shellcheck disable=SC2016
 grep -Fq 'export IREXPRO_RESEARCH_CANDIDATE_SHA="$candidate_sha"' "$RESEARCH_WORKFLOW" ||
   fail 'Six Pair Research must bind resume checkpoints to the exact candidate SHA.'
