@@ -16,6 +16,7 @@ from sklearn.linear_model import LogisticRegression
 from xgboost import XGBClassifier
 
 from app.domain.models.multitimeframe_features import MULTITIMEFRAME_FEATURE_COLUMNS
+from app.domain.training import train_multitimeframe as mtf_training
 from app.domain.training.qualification_diagnostics import (
     evidence_sufficiency_warnings,
     feature_gain_diagnostics,
@@ -29,7 +30,6 @@ from app.domain.training.train_multitimeframe import (
     _class_balance_sample_weights,
     _economic_sample_weights,
     _split_internal_early_stopping_tail,
-    _summarize_predictions as _summarize_directional_predictions,
     load_and_prepare_corpora,
 )
 from app.domain.training.validation import (
@@ -863,7 +863,7 @@ def _summarize_predictions(
     decision_threshold: float = 0.50,
 ) -> dict[str, Any]:
     """Preserve directional metrics while using true joint coverage for two-stage rows."""
-    summary = _summarize_directional_predictions(
+    summary = mtf_training._summarize_predictions(
         predictions,
         horizon_bars=horizon_bars,
         confidence_threshold=confidence_threshold,
