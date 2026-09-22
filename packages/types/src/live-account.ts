@@ -312,3 +312,116 @@ export interface LiveAccountActivityPage {
   limit: number;
   offset: number;
 }
+
+// ─── Trading readiness truth (October UAT hardening — WS5) ──────────────────
+//
+// Six SEPARATED operating states. The evidence class always matters:
+// a DEMO validation is never a broker LIVE certification; a certified broker
+// never implies the active AI model is LIVE-approved; a LIVE-approved model
+// never implies the broker is certified. Each state below carries its own
+// truth and NEVER inherits another's evidence.
+
+/**
+ * One plain-language blocker for real-money (LIVE) AI trading.
+ * `reasonCode` is the machine classification; `message` is derived from
+ * server-provided truth — never invented client-side.
+ */
+export interface LiveReadinessBlocker {
+  reasonCode: string;
+  message: string;
+}
+
+/** PAPER readiness — the internal simulator path (never customer money). */
+export interface PaperReadinessView {
+  /** A paper-broker connection exists and is executable (server-verified). */
+  ready: boolean;
+}
+
+/** DEMO verification truth — the authoritative checklist, never a handshake. */
+export interface DemoReadinessView {
+  /** At least one real-broker DEMO connection passed the DEMO validation checklist. */
+  verified: boolean;
+}
+
+/**
+ * Broker LIVE certification truth — provider-backed certification evidence
+ * ONLY. `LEGACY_VERIFIED`/`UNVERIFIED`/`BETA` providers are NOT certified.
+ */
+export interface BrokerLiveCertificationView {
+  /** Any provider currently CERTIFIED for production-LIVE trading. */
+  certified: boolean;
+  /** Certified provider ids (display only; empty when none). */
+  certifiedProviders: string[];
+}
+
+/**
+ * AI model approval truth — for the EXACT model active in the AI runtime.
+ * Paper approval and LIVE approval are independent evidence classes.
+ */
+export interface ModelApprovalReadinessView {
+  /** Active model version, or null when the runtime reports no active model. */
+  activeModelVersion: string | null;
+  /** True only when the active model is paper-approved (server-verified). */
+  paperApproved: boolean | null;
+  /** True only when the EXACT active model has a valid LIVE promotion record. */
+  liveApproved: boolean;
+  /** Honest not-approved reason from the runtime (display only). */
+  liveActivationReason: string | null;
+}
+
+/** LIVE enablement truth — explicit operator authorization, per connection. */
+export interface LiveEnablementView {
+  /** Any LIVE connection with liveTradingEnabled=true (explicitly enabled). */
+  enabled: boolean;
+}
+
+/**
+ * GET /live-account/readiness — the separated readiness truth for the
+ * October client-testing milestone. `liveBlockers` is the ordered,
+ * plain-language list of everything still blocking real-money AI trading
+ * (empty only when every LIVE gate is genuinely satisfied).
+ */
+export interface LiveReadinessView {
+  generatedAt: string;
+  paper: PaperReadinessView;
+  demo: DemoReadinessView;
+  brokerLiveCertified: BrokerLiveCertificationView;
+  model: ModelApprovalReadinessView;
+  liveTradingEnabled: LiveEnablementView;
+  liveBlockers: LiveReadinessBlocker[];
+}
+
+/**
+ * Derive plain-language LIVE blocker copy from the readiness truth.
+ *
+ * Each message states its OWN evidence class — a missing model approval is
+ * never described as a broker problem and vice versa. Presentation helper
+ * only: the SERVER readiness payload remains the enforcement truth.
+ */
+export function describeLiveReadinessBlockers(readiness: {
+  paper: { ready: boolean };
+  demo: { verified: boolean };
+  brokerLiveCertified: { certified: boolean };
+  model: { liveApproved: boolean; activeModelVersion: string | null };
+  liveTradingEnabled: { enabled: boolean };
+}): string[] {
+  const messages: string[] = [];
+  if (!readiness.brokerLiveCertified.certified) {
+    messages.push(
+      'Real-money trading is unavailable because no broker has completed production-LIVE certification.',
+    );
+  }
+  if (!readiness.model.liveApproved) {
+    messages.push(
+      readiness.model.activeModelVersion
+        ? `Real-money AI trading is unavailable because the active AI model (${readiness.model.activeModelVersion}) has not received LIVE approval.`
+        : 'Real-money AI trading is unavailable because no trained AI model is active in the runtime.',
+    );
+  }
+  if (!readiness.liveTradingEnabled.enabled) {
+    messages.push(
+      'Real-money trading requires explicit LIVE enablement on a certified broker connection — none is enabled.',
+    );
+  }
+  return messages;
+}

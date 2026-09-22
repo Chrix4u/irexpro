@@ -38,6 +38,41 @@ import {
   OandaTransport,
 } from './oanda.transport';
 import { toCanonicalSymbol, toProviderSymbol } from './oanda.symbol-mapper';
+import type { BrokerEnvironmentTruth } from '../../interfaces/broker-adapter.interface';
+
+// ─── Environment truth (October UAT hardening — WS4) ──────────────────────
+
+/**
+ * OANDA v20 has NO account-environment field — the strongest environment
+ * fact the adapter can establish is the ENVIRONMENT-SCOPED ENDPOINT it
+ * addresses (practice vs trade hosts; OANDA tokens are additionally
+ * environment-scoped provider-side, so a practice token cannot authorize
+ * against the trade host). This resolver classifies the configured base URL
+ * hostname deterministically:
+ *
+ * - api-fxpractice.oanda.com  → DEMO  (CONFIG_AND_ENDPOINT_VERIFIED)
+ * - api-fxtrade.oanda.com     → LIVE  (CONFIG_AND_ENDPOINT_VERIFIED)
+ * - anything else (proxy/custom test endpoint) → UNVERIFIED (environment
+ *   null — honest unknown; LIVE eligibility stays fail-closed on it).
+ *
+ * The adapter NEVER claims PROVIDER_OBSERVED for OANDA — the provider does
+ * not return an environment field on the surfaces this adapter uses.
+ */
+export function resolveOandaEndpointEnvironment(baseUrl: string): BrokerEnvironmentTruth {
+  let hostname = '';
+  try {
+    hostname = new URL(baseUrl).hostname.toLowerCase();
+  } catch {
+    return { environment: null, source: 'UNVERIFIED' };
+  }
+  if (hostname === 'api-fxpractice.oanda.com') {
+    return { environment: BrokerMode.DEMO, source: 'CONFIG_AND_ENDPOINT_VERIFIED' };
+  }
+  if (hostname === 'api-fxtrade.oanda.com') {
+    return { environment: BrokerMode.LIVE, source: 'CONFIG_AND_ENDPOINT_VERIFIED' };
+  }
+  return { environment: null, source: 'UNVERIFIED' };
+}
 
 // ─── v20 REST response shapes (decimals arrive as provider strings) ───────────
 
@@ -338,6 +373,44 @@ export class OandaAdapter implements IBrokerAdapter, AdapterMetadata {
     return this.mode === BrokerMode.DEMO ? this.demoBaseUrl : this.liveBaseUrl;
   }
 
+  /**
+   * October UAT hardening (WS4): the environment truth for the CURRENT
+   * mode's base URL, with enforcement semantics:
+   *
+   * - Determinable endpoint (official practice/trade host) → the observed
+   *   accountType IS the endpoint-derived environment; a contradiction with
+   *   the DECLARED mode is a connect-time ENVIRONMENT_MISMATCH failure (the
+   *   strongest, earliest fence — a practice credential can never be
+   *   interpreted as LIVE merely because a client request said LIVE).
+   * - UNVERIFIED endpoint (custom host):
+   *   * DEMO declared → proceeds with the honest UNVERIFIED label (virtual
+   *     funds — no real-money risk).
+   *   * LIVE declared → FAILS CLOSED (LIVE environment truth cannot be
+   *     established from the endpoint — LIVE eligibility requires proof).
+   */
+  private enforceEnvironmentTruth(): BrokerEnvironmentTruth {
+    const truth = resolveOandaEndpointEnvironment(this.baseUrl);
+    if (truth.source === 'CONFIG_AND_ENDPOINT_VERIFIED' && truth.environment !== this.mode) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.ENVIRONMENT_MISMATCH,
+        `OANDA ${this.mode} mode addresses the ${
+          truth.environment === BrokerMode.LIVE ? 'live (fxtrade)' : 'practice (fxpractice)'
+        } endpoint — the declared environment and the endpoint-scoped environment contradict each other (fail-closed)`,
+        'endpoint-derived environment contradicts the declared mode',
+        false,
+      );
+    }
+    if (truth.source === 'UNVERIFIED' && this.mode === BrokerMode.LIVE) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.ENVIRONMENT_MISMATCH,
+        'OANDA LIVE mode requires a verifiable environment-scoped endpoint (api-fxtrade.oanda.com) — the configured base URL cannot attest a LIVE environment (fail-closed)',
+        'custom endpoint cannot establish LIVE environment truth',
+        false,
+      );
+    }
+    return truth;
+  }
+
   // ─── Connection lifecycle ──────────────────────────────────────────────────
 
   async connect(credentials: DecryptedBrokerCredentials): Promise<BrokerConnectionResult> {
@@ -348,6 +421,10 @@ export class OandaAdapter implements IBrokerAdapter, AdapterMetadata {
         'OANDA connect requires credentials.apiKey (personal access token) and credentials.accountId',
       );
     }
+    // October UAT hardening (WS4): fail-closed BEFORE any provider call when
+    // the declared mode contradicts the environment-scoped endpoint (or the
+    // endpoint cannot attest a declared LIVE environment).
+    const environmentTruth = this.enforceEnvironmentTruth();
     try {
       // 1. Discover the accounts this token can reach and verify ours is there.
       const accounts = await this.request<V3AccountsResponse>(
@@ -380,9 +457,14 @@ export class OandaAdapter implements IBrokerAdapter, AdapterMetadata {
       return {
         success: true,
         accountId: credentials.accountId,
-        accountType: this.mode,
+        // WS4: when the endpoint attests the environment, the OBSERVED type is
+        // the endpoint-derived environment (never a mode echo); on an
+        // UNVERIFIED custom endpoint (DEMO only — LIVE fails above) the
+        // declared mode stands, honestly labeled via environmentTruth.
+        accountType: environmentTruth.environment ?? this.mode,
         currency: summary.account.currency,
         serverTime: new Date(),
+        environmentTruth,
       };
     } catch (err) {
       this.connected = false;
@@ -412,6 +494,9 @@ export class OandaAdapter implements IBrokerAdapter, AdapterMetadata {
           'OANDA testConnection requires credentials.apiKey',
         );
       }
+      // WS4: same fail-closed endpoint enforcement as connect (the test
+      // surface must never green-light a mislabeled environment).
+      const environmentTruth = this.enforceEnvironmentTruth();
       const accounts = await this.request<V3AccountsResponse>(
         'GET',
         '/v3/accounts',
@@ -429,8 +514,9 @@ export class OandaAdapter implements IBrokerAdapter, AdapterMetadata {
       return {
         success: true,
         accountId: found.id,
-        accountType: this.mode,
+        accountType: environmentTruth.environment ?? this.mode,
         currency: found.currency,
+        environmentTruth,
       };
     } catch (err) {
       const mapped = this.mapError(err);

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
+from app.core.config import get_settings
 from app.domain.models.registry import ModelRegistry
 
 router = APIRouter()
@@ -20,6 +21,16 @@ async def get_active_model(registry: ModelRegistry = Depends(get_registry)) -> d
     # Live-activation truth is derived per request (promotion records are
     # re-validated) and is exposed read-only alongside the model metadata.
     metadata["live_activation"] = registry.get_live_activation()
+    # October UAT hardening (WS3): the engine-side environment/config LIVE
+    # authorization, reported honestly. True ONLY when the engine is both
+    # configured for live signal mode AND the AI_ENGINE_ALLOW_LIVE_MODEL env
+    # gate is open. A closed gate means no live path exists for this engine,
+    # regardless of promotion records — the NestJS LIVE model gate consumes
+    # this flag fail-closed.
+    settings = get_settings()
+    metadata["live_signal_mode_enabled"] = (
+        settings.ai_signal_mode == "live" and settings.ai_engine_allow_live_model
+    )
     return metadata
 
 

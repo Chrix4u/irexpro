@@ -128,6 +128,11 @@ export enum AuditAction {
   TRADE_CLOSED = 'TRADE_CLOSED',
   TRADE_REJECTED = 'TRADE_REJECTED',
   TRADE_RECONCILED = 'TRADE_RECONCILED',
+  // October UAT hardening (WS1): the authenticated user explicitly requested
+  // the manual close of ONE open position. Metadata carries the actor,
+  // broker connection, trade id, request timestamp, final outcome and the
+  // sanitized provider error class — never credentials or raw payloads.
+  TRADE_MANUAL_CLOSE_REQUESTED = 'TRADE_MANUAL_CLOSE_REQUESTED',
   // Sprint 32: idempotency — a duplicate trade intent was suppressed
   TRADE_DUPLICATE_SUPPRESSED = 'TRADE_DUPLICATE_SUPPRESSED',
 

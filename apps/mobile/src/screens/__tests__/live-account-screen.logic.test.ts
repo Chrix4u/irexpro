@@ -492,3 +492,311 @@ describe("reconciliationSummary (fail-closed per-connection truth)", () => {
     expect(view.tone).toBe("bad");
   });
 });
+
+// ── October UAT hardening — WS1: manual single-position close ───────────────
+
+import type { ManualPositionCloseOutcome } from "@irexpro/types/execution";
+import type { LiveReadinessView } from "@irexpro/types";
+import {
+  manualCloseConfirmationMessage,
+  manualClosePresentation,
+  readinessBlockerRows,
+  readinessDisplayRows,
+} from "../live-account-screen.logic";
+
+describe("manualClosePresentation (WS1 — honest outcome mapping)", () => {
+  it("CLOSED renders as success with the server message", () => {
+    const presentation = manualClosePresentation(
+      "CLOSED",
+      "Close confirmed at 1.2345.",
+    );
+
+    expect(presentation.tone).toBe("success");
+    expect(presentation.title).toBe("Position closed");
+    expect(presentation.message).toContain("Close confirmed at 1.2345.");
+  });
+
+  it("ALREADY_CLOSED is an idempotent retry, never a fresh close claim", () => {
+    const presentation = manualClosePresentation(
+      "ALREADY_CLOSED",
+      "The position was already closed.",
+    );
+
+    expect(presentation.tone).toBe("info");
+    expect(presentation.title).toBe("Already closed");
+    expect(presentation.message).toContain("already closed");
+  });
+
+  it("CLOSE_IN_PROGRESS reports the in-flight close honestly", () => {
+    const presentation = manualClosePresentation(
+      "CLOSE_IN_PROGRESS",
+      "Another close attempt is already in flight.",
+    );
+
+    expect(presentation.tone).toBe("info");
+    expect(presentation.title).toBe("Close already in flight");
+    expect(presentation.message).toContain("already in flight");
+  });
+
+  it("RECONCILIATION_REQUIRED explains reconciliation ownership (never a fabricated close)", () => {
+    const presentation = manualClosePresentation(
+      "RECONCILIATION_REQUIRED",
+      "The provider outcome is unresolved.",
+    );
+
+    expect(presentation.tone).toBe("warning");
+    expect(presentation.title).toBe("Provider confirmation pending");
+    expect(presentation.message).toContain(
+      "Provider confirmation pending — reconciliation will resolve the final state",
+    );
+    expect(presentation.message).toContain(
+      "The provider outcome is unresolved.",
+    );
+  });
+
+  it("PROVIDER_REFUSED is an error that keeps the server message and sanitized error class", () => {
+    const presentation = manualClosePresentation(
+      "PROVIDER_REFUSED",
+      "The broker refused the close request.",
+      "MARKET_CLOSED",
+    );
+
+    expect(presentation.tone).toBe("error");
+    expect(presentation.title).toBe("Close refused");
+    expect(presentation.message).toContain(
+      "The broker refused the close request.",
+    );
+    expect(presentation.message).toContain("MARKET_CLOSED");
+  });
+
+  it("fails closed on an unrecognized runtime outcome (never a success claim)", () => {
+    // A contract-violating runtime value bypasses the TS union — the mapping
+    // must never render it as any of the positive outcomes.
+    const presentation = manualClosePresentation(
+      "MYSTERY" as ManualPositionCloseOutcome,
+      "strange body",
+    );
+
+    expect(presentation.tone).toBe("error");
+    expect(presentation.title).not.toBe("Position closed");
+    expect(presentation.title).not.toBe("Already closed");
+    expect(presentation.message).toContain("unrecognized");
+  });
+
+  it("keeps every outcome honest when the server message is empty", () => {
+    const closed = manualClosePresentation("CLOSED", "  ");
+    expect(closed.tone).toBe("success");
+    expect(closed.message.length).toBeGreaterThan(0);
+    expect(closed.message).toContain("Positions list");
+  });
+});
+
+describe("manualCloseConfirmationMessage (WS1 — scoped confirmation copy)", () => {
+  it("identifies the exact position and states the AI Trading scope boundary", () => {
+    const message = manualCloseConfirmationMessage({
+      instrument: "EURUSD",
+      direction: "BUY",
+      lotSize: "0.50",
+    });
+
+    expect(message).toContain("EURUSD BUY");
+    expect(message).toContain("0.50 lots");
+    expect(message).toContain(
+      "This closes only this position. AI Trading and other positions are not affected.",
+    );
+  });
+});
+
+// ── October UAT hardening — WS5: separated trading readiness states ─────────
+
+const readinessView = (
+  overrides: Partial<LiveReadinessView> = {},
+): LiveReadinessView => ({
+  generatedAt: "2026-10-01T12:00:00.000Z",
+  paper: { ready: false },
+  demo: { verified: false },
+  brokerLiveCertified: { certified: false, certifiedProviders: [] },
+  model: {
+    activeModelVersion: null,
+    paperApproved: null,
+    liveApproved: false,
+    liveActivationReason: null,
+  },
+  liveTradingEnabled: { enabled: false },
+  liveBlockers: [],
+  ...overrides,
+});
+
+describe("readinessDisplayRows (WS5 — six separated states)", () => {
+  it("renders all six positive states when every gate is genuinely satisfied", () => {
+    const rows = readinessDisplayRows(
+      readinessView({
+        paper: { ready: true },
+        demo: { verified: true },
+        brokerLiveCertified: {
+          certified: true,
+          certifiedProviders: ["icmarkets"],
+        },
+        model: {
+          activeModelVersion: "m-2026.10",
+          paperApproved: true,
+          liveApproved: true,
+          liveActivationReason: null,
+        },
+        liveTradingEnabled: { enabled: true },
+      }),
+    );
+
+    expect(rows.map((row) => row.statusText)).toEqual([
+      "PAPER READY",
+      "DEMO VERIFIED",
+      "BROKER LIVE CERTIFIED",
+      "MODEL PAPER APPROVED",
+      "MODEL LIVE APPROVED",
+      "LIVE TRADING ENABLED",
+    ]);
+    expect(rows.every((row) => row.met)).toBe(true);
+  });
+
+  it("renders the six negative states from an all-blocked view — never a bare 'Verified'", () => {
+    const rows = readinessDisplayRows(readinessView());
+
+    expect(rows.map((row) => row.statusText)).toEqual([
+      "PAPER NOT READY",
+      "DEMO NOT VALIDATED",
+      "BROKER NOT LIVE CERTIFIED",
+      "MODEL STATUS UNKNOWN",
+      "MODEL NOT LIVE APPROVED",
+      "LIVE TRADING NOT ENABLED",
+    ]);
+    expect(rows.every((row) => row.met)).toBe(false);
+    for (const row of rows) {
+      expect(row.statusText).not.toBe("Verified");
+      expect(row.statusText.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("a null paperApproved renders MODEL STATUS UNKNOWN (honest, never approved)", () => {
+    const rows = readinessDisplayRows(
+      readinessView({
+        model: {
+          activeModelVersion: "m-1",
+          paperApproved: null,
+          liveApproved: false,
+          liveActivationReason: "not promoted",
+        },
+      }),
+    );
+    const paperRow = rows.find((row) => row.key === "modelPaperApproved");
+
+    expect(paperRow?.statusText).toBe("MODEL STATUS UNKNOWN");
+    expect(paperRow?.met).toBe(false);
+  });
+
+  it("an explicit paperApproved=false renders MODEL NOT PAPER APPROVED", () => {
+    const rows = readinessDisplayRows(
+      readinessView({
+        model: {
+          activeModelVersion: "m-1",
+          paperApproved: false,
+          liveApproved: false,
+          liveActivationReason: null,
+        },
+      }),
+    );
+    const paperRow = rows.find((row) => row.key === "modelPaperApproved");
+
+    expect(paperRow?.statusText).toBe("MODEL NOT PAPER APPROVED");
+    expect(paperRow?.met).toBe(false);
+  });
+
+  it("a DEMO verification NEVER renders as broker LIVE certification", () => {
+    const rows = readinessDisplayRows(
+      readinessView({ demo: { verified: true } }),
+    );
+    const brokerRow = rows.find((row) => row.key === "brokerLiveCertified");
+
+    expect(brokerRow?.statusText).toBe("BROKER NOT LIVE CERTIFIED");
+    expect(brokerRow?.met).toBe(false);
+  });
+
+  it("a certified broker NEVER implies the active model is LIVE-approved", () => {
+    const rows = readinessDisplayRows(
+      readinessView({
+        brokerLiveCertified: {
+          certified: true,
+          certifiedProviders: ["icmarkets"],
+        },
+      }),
+    );
+    const modelRow = rows.find((row) => row.key === "modelLiveApproved");
+
+    expect(modelRow?.statusText).toBe("MODEL NOT LIVE APPROVED");
+    expect(modelRow?.met).toBe(false);
+  });
+
+  it("passes server-provided details through verbatim (model, providers, activation reason)", () => {
+    const rows = readinessDisplayRows(
+      readinessView({
+        brokerLiveCertified: {
+          certified: true,
+          certifiedProviders: ["icmarkets", "pepperstone"],
+        },
+        model: {
+          activeModelVersion: "v7",
+          paperApproved: true,
+          liveApproved: false,
+          liveActivationReason: "No LIVE promotion record for v7.",
+        },
+      }),
+    );
+
+    expect(
+      rows.find((row) => row.key === "modelPaperApproved")?.detail,
+    ).toBe("Active model: v7");
+    expect(rows.find((row) => row.key === "modelLiveApproved")?.detail).toBe(
+      "No LIVE promotion record for v7.",
+    );
+    expect(
+      rows.find((row) => row.key === "brokerLiveCertified")?.detail,
+    ).toBe("Certified providers: icmarkets, pepperstone");
+  });
+});
+
+describe("readinessBlockerRows (WS5 — verbatim server blocker passthrough)", () => {
+  it("passes blocker messages through verbatim in server order", () => {
+    const blockers = readinessBlockerRows(
+      readinessView({
+        liveBlockers: [
+          {
+            reasonCode: "NO_CERTIFIED_BROKER",
+            message:
+              "Real-money trading is unavailable because no broker has completed production-LIVE certification.",
+          },
+          {
+            reasonCode: "MODEL_NOT_LIVE_APPROVED",
+            message:
+              "Real-money AI trading is unavailable because the active AI model (v7) has not received LIVE approval.",
+          },
+        ],
+      }),
+    );
+
+    expect(blockers).toEqual([
+      {
+        reasonCode: "NO_CERTIFIED_BROKER",
+        message:
+          "Real-money trading is unavailable because no broker has completed production-LIVE certification.",
+      },
+      {
+        reasonCode: "MODEL_NOT_LIVE_APPROVED",
+        message:
+          "Real-money AI trading is unavailable because the active AI model (v7) has not received LIVE approval.",
+      },
+    ]);
+  });
+
+  it("returns an empty list when the server reports no blockers", () => {
+    expect(readinessBlockerRows(readinessView())).toEqual([]);
+  });
+});

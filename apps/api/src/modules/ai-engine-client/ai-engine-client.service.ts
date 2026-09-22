@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ModuleRef } from '@nestjs/core';
 import {
+  AiActiveModelStatus,
   AiSchedulerSessionRegistration,
   AiSchedulerSessionStartPayload,
   AiSchedulerSessionStatus,
@@ -76,6 +77,93 @@ export class AiEngineClient {
 
     const url = `${this.getBaseUrl()}/scheduler/sessions/stop`;
     return this.post<AiSchedulerSessionRegistration>(url, { ...payload }, payload.tradingSessionId);
+  }
+
+  /**
+   * October UAT hardening (WS3): the ACTIVE model truth from the AI runtime —
+   * exact identity (version + artifact SHA-256), paper/live approval states
+   * and the engine-side live env gate. Read-through (never cached): the
+   * engine re-validates the promotion records on every call.
+   *
+   * Throws when the engine is unreachable or the payload is malformed — the
+   * LIVE model-approval gate treats that as fail-closed (truth cannot be
+   * established).
+   */
+  async getActiveModelStatus(): Promise<AiActiveModelStatus> {
+    const url = `${this.getBaseUrl()}/models/active`;
+    const apiKey = this.getInternalApiKey();
+    if (!apiKey) {
+      throw new Error('AI engine internal API key is not configured');
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          [INTERNAL_API_KEY_HEADER]: apiKey,
+        },
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        this.logger.warn(`AI engine active-model read failed status=${response.status}`);
+        throw new Error(`AI engine returned HTTP ${response.status}`);
+      }
+      const payload = (await response.json()) as Record<string, unknown>;
+      return this.coerceActiveModelStatus(payload);
+    } catch (err) {
+      this.logger.warn(`AI engine active-model read error: ${(err as Error).message}`);
+      throw err;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  /**
+   * Defensive narrowing of the engine payload — an unexpected shape collapses
+   * to honest nulls (never a fabricated identity/approval).
+   */
+  private coerceActiveModelStatus(payload: Record<string, unknown>): AiActiveModelStatus {
+    const activation = payload.live_activation;
+    const isActivation =
+      typeof activation === 'object' && activation !== null
+        ? (activation as Record<string, unknown>)
+        : null;
+    return {
+      version: typeof payload.version === 'string' ? payload.version : null,
+      mode: typeof payload.mode === 'string' ? payload.mode : null,
+      loaded: typeof payload.loaded === 'boolean' ? payload.loaded : null,
+      artifact_sha256: typeof payload.artifact_sha256 === 'string' ? payload.artifact_sha256 : null,
+      approved_for_paper:
+        typeof payload.approved_for_paper === 'boolean' ? payload.approved_for_paper : null,
+      approved_for_live:
+        typeof payload.approved_for_live === 'boolean' ? payload.approved_for_live : null,
+      live_activation: isActivation
+        ? {
+            activated: isActivation.activated === true,
+            record_id: typeof isActivation.record_id === 'string' ? isActivation.record_id : null,
+            model_version:
+              typeof isActivation.model_version === 'string' ? isActivation.model_version : null,
+            artifact_sha256:
+              typeof isActivation.artifact_sha256 === 'string'
+                ? isActivation.artifact_sha256
+                : null,
+            promoted_by:
+              typeof isActivation.promoted_by === 'string' ? isActivation.promoted_by : null,
+            approved_by:
+              typeof isActivation.approved_by === 'string' ? isActivation.approved_by : null,
+            activated_at:
+              typeof isActivation.activated_at === 'string' ? isActivation.activated_at : null,
+            reason: typeof isActivation.reason === 'string' ? isActivation.reason : null,
+          }
+        : null,
+      live_signal_mode_enabled:
+        typeof payload.live_signal_mode_enabled === 'boolean'
+          ? payload.live_signal_mode_enabled
+          : null,
+    };
   }
 
   async getSessionStatus(tradingSessionId: string): Promise<AiSchedulerSessionStatus> {

@@ -52,10 +52,8 @@ async def test_scheduler_route_allows_full_auto_for_demo_provider_environment():
     scheduler.register_session.assert_called_once_with(request)
 
 
-@pytest.mark.asyncio
-async def test_scheduler_route_blocks_live_environment_for_paper_approved_model():
-    scheduler = MagicMock()
-    request = SessionStartRequest(
+def _live_request() -> SessionStartRequest:
+    return SessionStartRequest(
         userId="user-1",
         tradingSessionId="live-session",
         brokerConnectionId="conn-live",
@@ -66,11 +64,122 @@ async def test_scheduler_route_blocks_live_environment_for_paper_approved_model(
         mode="FULL_AUTO",
     )
 
-    response = await start_session_scheduler(request, scheduler)
+
+def _settings_with(live_mode: bool, allow_live_model: bool) -> MagicMock:
+    settings = MagicMock()
+    settings.ai_signal_mode = "live" if live_mode else "paper"
+    settings.ai_engine_allow_live_model = allow_live_model
+    settings.is_production = False
+    settings.ai_allow_mock_market_data = True
+    return settings
+
+
+@pytest.mark.asyncio
+async def test_scheduler_route_blocks_live_when_engine_env_gate_is_closed(monkeypatch):
+    """October UAT hardening (WS3): the default deployment (paper mode) refuses
+    LIVE registration with the exact LIVE_MODEL_ENV_DISABLED reason."""
+    scheduler = MagicMock()
+    monkeypatch.setattr(
+        "app.api.v1.routes.scheduler.get_settings",
+        lambda: _settings_with(live_mode=False, allow_live_model=False),
+    )
+
+    response = await start_session_scheduler(_live_request(), scheduler)
 
     assert response.registered is False
+    assert response.reason == "LIVE_MODEL_ENV_DISABLED"
+    assert response.message == "Live signal mode is disabled for this AI engine"
+    scheduler.register_session.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_route_blocks_live_when_env_open_but_model_not_live_approved(
+    monkeypatch,
+):
+    """WS3: env gate open + no valid promotion record → the engine's exact
+    typed refusal reason travels to the caller (never a blanket message)."""
+    scheduler = MagicMock()
+    monkeypatch.setattr(
+        "app.api.v1.routes.scheduler.get_settings",
+        lambda: _settings_with(live_mode=True, allow_live_model=True),
+    )
+
+    class _Registry:
+        def get_live_activation(self):
+            return {"activated": False, "reason": "NO_VALID_PROMOTION_RECORD"}
+
+    from app.main import app_state
+
+    original = app_state.get("registry")
+    app_state["registry"] = _Registry()
+    try:
+        response = await start_session_scheduler(_live_request(), scheduler)
+    finally:
+        app_state["registry"] = original
+
+    assert response.registered is False
+    assert response.reason == "NO_VALID_PROMOTION_RECORD"
     assert response.message == "Current AI model is not approved for live automation"
     scheduler.register_session.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_route_blocks_live_on_artifact_sha_mismatch(monkeypatch):
+    """WS3: an integrity failure surfaces the engine's exact reason."""
+    scheduler = MagicMock()
+    monkeypatch.setattr(
+        "app.api.v1.routes.scheduler.get_settings",
+        lambda: _settings_with(live_mode=True, allow_live_model=True),
+    )
+
+    class _Registry:
+        def get_live_activation(self):
+            return {"activated": False, "reason": "ARTIFACT_SHA_MISMATCH"}
+
+    from app.main import app_state
+
+    original = app_state.get("registry")
+    app_state["registry"] = _Registry()
+    try:
+        response = await start_session_scheduler(_live_request(), scheduler)
+    finally:
+        app_state["registry"] = original
+
+    assert response.registered is False
+    assert response.reason == "ARTIFACT_SHA_MISMATCH"
+
+
+@pytest.mark.asyncio
+async def test_scheduler_route_registers_live_when_exact_model_is_live_approved(
+    monkeypatch,
+):
+    """WS3: env gate open + the EXACT active model holds a valid promotion
+    record → the session registers (broker certification / risk gates remain
+    independent NestJS-side gates)."""
+    scheduler = MagicMock()
+    scheduler.register_session.return_value = True
+    monkeypatch.setattr(
+        "app.api.v1.routes.scheduler.get_settings",
+        lambda: _settings_with(live_mode=True, allow_live_model=True),
+    )
+
+    class _Registry:
+        def get_live_activation(self):
+            return {"activated": True, "reason": None}
+
+    from app.main import app_state
+
+    original = app_state.get("registry")
+    app_state["registry"] = _Registry()
+    try:
+        request = _live_request()
+        response = await start_session_scheduler(request, scheduler)
+    finally:
+        app_state["registry"] = original
+
+    assert response.registered is True
+    assert response.reason is None
+    scheduler.register_session.assert_called_once_with(request)
 
 
 @pytest.mark.asyncio
@@ -308,3 +417,100 @@ async def test_scan_error_clears_previous_confidence_instead_of_reusing_it():
     assert job.last_confidence_at is None
     assert job.last_run_at is not None
     assert job.last_publish_failed is True
+
+
+# ─── October UAT hardening (WS3): /models/active live env truth ─────────────
+
+
+@pytest.mark.asyncio
+async def test_models_active_reports_live_signal_mode_env_gate(monkeypatch):
+    """WS3: /models/active exposes the engine-side environment/config LIVE
+    authorization honestly (true ONLY when live mode + env gate are BOTH on)."""
+    from app.api.v1.routes import models as models_route
+
+    class _Model:
+        def get_model_metadata(self):
+            return {
+                "version": "xgb-mtf-1",
+                "mode": "trained_xgboost_mtf",
+                "loaded": True,
+                "artifact_sha256": "a" * 64,
+                "approved_for_paper": True,
+                "approved_for_live": False,
+            }
+
+    class _Registry:
+        def get_active_model(self):
+            return _Model()
+
+        def get_live_activation(self):
+            return {"activated": False, "reason": "NO_VALID_PROMOTION_RECORD"}
+
+    monkeypatch.setattr(models_route, "get_registry", lambda: _Registry())
+    monkeypatch.setattr(
+        models_route,
+        "get_settings",
+        lambda: _settings_with(live_mode=False, allow_live_model=False),
+    )
+
+    payload = await models_route.get_active_model(_Registry())
+
+    assert payload["live_activation"]["activated"] is False
+    assert payload["live_signal_mode_enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_models_active_reports_env_gate_open(monkeypatch):
+    from app.api.v1.routes import models as models_route
+
+    class _Model:
+        def get_model_metadata(self):
+            return {"version": "xgb-mtf-1", "loaded": True}
+
+    class _Registry:
+        def get_active_model(self):
+            return _Model()
+
+        def get_live_activation(self):
+            return {"activated": True, "reason": None}
+
+    monkeypatch.setattr(models_route, "get_registry", lambda: _Registry())
+    monkeypatch.setattr(
+        models_route,
+        "get_settings",
+        lambda: _settings_with(live_mode=True, allow_live_model=True),
+    )
+
+    payload = await models_route.get_active_model(_Registry())
+
+    assert payload["live_activation"]["activated"] is True
+    assert payload["live_signal_mode_enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_models_active_env_gate_open_requires_both_mode_and_env(monkeypatch):
+    """Live MODE alone (env gate closed) is NOT an enabled live path."""
+    from app.api.v1.routes import models as models_route
+
+    class _Model:
+        def get_model_metadata(self):
+            return {"version": "xgb-mtf-1", "loaded": True}
+
+    class _Registry:
+        def get_active_model(self):
+            return _Model()
+
+        def get_live_activation(self):
+            return {"activated": True, "reason": None}
+
+    monkeypatch.setattr(models_route, "get_registry", lambda: _Registry())
+    # ai_signal_mode = 'live' BUT AI_ENGINE_ALLOW_LIVE_MODEL closed.
+    monkeypatch.setattr(
+        models_route,
+        "get_settings",
+        lambda: _settings_with(live_mode=True, allow_live_model=False),
+    )
+
+    payload = await models_route.get_active_model(_Registry())
+
+    assert payload["live_signal_mode_enabled"] is False

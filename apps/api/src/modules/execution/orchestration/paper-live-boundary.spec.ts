@@ -1,6 +1,19 @@
 import { Logger } from '@nestjs/common';
 import { DataSource, Repository } from 'typeorm';
 import { FinalDispatchBoundary, FinalDispatchBlockedException } from './final-dispatch-boundary';
+// October UAT hardening (WS2/WS3): the LIVE new-exposure hard-gate mocks —
+// healthy/approved by default so the AUTHORIZED LIVE path still reaches its
+// own assertions; the boundary's own gate suite covers the blocked paths.
+import {
+  ReconciliationHealthService,
+  ReconciliationHealthBlockedException,
+  ReconciliationHealthReasonCode,
+} from '../reconciliation/reconciliation-health.service';
+import {
+  LiveModelApprovalGateService,
+  LiveModelGateReasonCode,
+  LiveModelNotApprovedError,
+} from '../../ai-engine-client/live-model-approval.gate';
 import { RiskGrant } from '../entities/risk-grant.entity';
 import { TradingSession, TradingSessionStatus } from '../entities/trading-session.entity';
 import { ExecutionConfirmation } from '../entities/execution-confirmation.entity';
@@ -115,7 +128,7 @@ describe('FinalDispatchBoundary — the §15 Paper→LIVE boundary matrix', () =
   let providerRegistry: { isProductionLiveEligible: jest.Mock };
   let auditService: { log: jest.Mock };
 
-  const build = () =>
+  const build = (gateOverrides?: { reconciliationHealth?: unknown; liveModelApproval?: unknown }) =>
     new FinalDispatchBoundary(
       riskGrantRepo as unknown as Repository<RiskGrant>,
       sessionRepo as unknown as Repository<TradingSession>,
@@ -130,6 +143,29 @@ describe('FinalDispatchBoundary — the §15 Paper→LIVE boundary matrix', () =
       {} as DataSource,
       {} as TradingAuthorityService,
       {} as SharedControlRevisionService,
+      // `in` checks distinguish "explicitly absent" (fail-closed test) from
+      // "not provided" (healthy default).
+      (gateOverrides && 'reconciliationHealth' in gateOverrides
+        ? gateOverrides.reconciliationHealth
+        : {
+            assertHealthyForLiveNewExposure: jest.fn().mockResolvedValue({
+              healthy: true,
+              reasonCode: null,
+              detail: 'healthy',
+              evidence: {},
+            }),
+          }) as unknown as ReconciliationHealthService,
+      (gateOverrides && 'liveModelApproval' in gateOverrides
+        ? gateOverrides.liveModelApproval
+        : {
+            assertApprovedForLiveNewExposure: jest.fn().mockResolvedValue({
+              approved: true,
+              reasonCode: null,
+              detail: 'approved',
+              model: { version: 'm-1', mode: null, artifactSha256: null, approvedForPaper: true },
+              promotionRecord: null,
+            }),
+          }) as unknown as LiveModelApprovalGateService,
     );
 
   const authorize = (input?: { grantId?: string; operationClass?: ProviderOperationClass }) =>
@@ -230,6 +266,130 @@ describe('FinalDispatchBoundary — the §15 Paper→LIVE boundary matrix', () =
 
     const authorization = await authorize();
     expect(authorization.context.providerVerificationFingerprint).toBeTruthy();
+  });
+
+  // ─── October UAT hardening (WS2/WS3): LIVE hard gates at the boundary ──
+
+  it('LIVE NEW exposure is blocked with LIVE_RECONCILIATION_UNPROVEN when reconciliation truth is stale', async () => {
+    riskGrantRepo.findOne.mockResolvedValue(
+      grant({ executionMode: ExecutionMode.FULL_AUTO, providerVerificationFingerprint: null }),
+    );
+    sessionRepo.findOne.mockResolvedValue(session({ executionMode: ExecutionMode.FULL_AUTO }));
+    brokerService.findConnectionsByIds.mockResolvedValue([
+      connection({ brokerId: 'metatrader5', accountType: BrokerMode.LIVE }),
+    ]);
+    providerRegistry.isProductionLiveEligible.mockReturnValue(true);
+    const blocked = new ReconciliationHealthBlockedException({
+      healthy: false,
+      reasonCode: ReconciliationHealthReasonCode.RECONCILIATION_STALE,
+      detail: 'The most recent successful reconciliation is 600s old.',
+      evidence: {
+        latestRunId: 'run-1',
+        latestRunStatus: null,
+        latestSuccessfulRunCompletedAt: null,
+        latestSuccessfulRunAgeMs: 600_000,
+        openDiscrepanciesByType: {},
+      },
+    });
+    boundary = build({
+      reconciliationHealth: {
+        assertHealthyForLiveNewExposure: jest.fn().mockRejectedValue(blocked),
+      },
+    });
+
+    await expect(authorize()).rejects.toMatchObject({
+      code: 'LIVE_RECONCILIATION_UNPROVEN',
+      response: expect.objectContaining({
+        reasonCode: ReconciliationHealthReasonCode.RECONCILIATION_STALE,
+      }),
+    });
+  });
+
+  it('LIVE NEW exposure is blocked with LIVE_MODEL_NOT_APPROVED when the exact model lacks a promotion record', async () => {
+    riskGrantRepo.findOne.mockResolvedValue(
+      grant({ executionMode: ExecutionMode.FULL_AUTO, providerVerificationFingerprint: null }),
+    );
+    sessionRepo.findOne.mockResolvedValue(session({ executionMode: ExecutionMode.FULL_AUTO }));
+    brokerService.findConnectionsByIds.mockResolvedValue([
+      connection({ brokerId: 'metatrader5', accountType: BrokerMode.LIVE }),
+    ]);
+    providerRegistry.isProductionLiveEligible.mockReturnValue(true);
+    boundary = build({
+      liveModelApproval: {
+        assertApprovedForLiveNewExposure: jest.fn().mockRejectedValue(
+          new LiveModelNotApprovedError({
+            approved: false,
+            reasonCode: LiveModelGateReasonCode.MODEL_LIVE_APPROVAL_MISSING,
+            detail: 'The active AI model has not received LIVE approval.',
+            model: { version: 'm-1', mode: null, artifactSha256: null, approvedForPaper: true },
+            promotionRecord: null,
+          }),
+        ),
+      },
+    });
+
+    await expect(authorize()).rejects.toMatchObject({
+      code: 'LIVE_MODEL_NOT_APPROVED',
+      response: expect.objectContaining({
+        reasonCode: LiveModelGateReasonCode.MODEL_LIVE_APPROVAL_MISSING,
+      }),
+    });
+  });
+
+  it('LIVE NEW exposure fails CLOSED when the gate authorities are absent (never a skip)', async () => {
+    riskGrantRepo.findOne.mockResolvedValue(
+      grant({ executionMode: ExecutionMode.FULL_AUTO, providerVerificationFingerprint: null }),
+    );
+    sessionRepo.findOne.mockResolvedValue(session({ executionMode: ExecutionMode.FULL_AUTO }));
+    brokerService.findConnectionsByIds.mockResolvedValue([
+      connection({ brokerId: 'metatrader5', accountType: BrokerMode.LIVE }),
+    ]);
+    providerRegistry.isProductionLiveEligible.mockReturnValue(true);
+    boundary = build({
+      reconciliationHealth: undefined,
+      liveModelApproval: undefined,
+    });
+
+    await expect(authorize()).rejects.toMatchObject({
+      code: 'LIVE_RECONCILIATION_UNPROVEN',
+    });
+  });
+
+  it('DEMO NEW exposure is NOT gated by the LIVE reconciliation/model gates', async () => {
+    // DEMO connection on FULL_AUTO — the gates must not even be consulted.
+    const healthGate = {
+      assertHealthyForLiveNewExposure: jest.fn().mockResolvedValue({
+        healthy: true,
+        reasonCode: null,
+        detail: 'healthy',
+        evidence: {},
+      }),
+    };
+    const modelGate = {
+      assertApprovedForLiveNewExposure: jest.fn().mockResolvedValue({
+        approved: true,
+        reasonCode: null,
+        detail: 'approved',
+        model: { version: 'm-1', mode: null, artifactSha256: null, approvedForPaper: true },
+        promotionRecord: null,
+      }),
+    };
+    boundary = build({
+      reconciliationHealth: healthGate,
+      liveModelApproval: modelGate,
+    });
+    riskGrantRepo.findOne.mockResolvedValue(
+      grant({ executionMode: ExecutionMode.FULL_AUTO, providerVerificationFingerprint: null }),
+    );
+    sessionRepo.findOne.mockResolvedValue(session({ executionMode: ExecutionMode.FULL_AUTO }));
+    brokerService.findConnectionsByIds.mockResolvedValue([
+      connection({ brokerId: 'metatrader5', accountType: BrokerMode.DEMO }),
+    ]);
+
+    const authorization = await authorize();
+    expect(authorization.context.providerVerificationFingerprint).toBeDefined();
+    expect(healthGate.assertHealthyForLiveNewExposure).not.toHaveBeenCalled();
+    expect(modelGate.assertApprovedForLiveNewExposure).not.toHaveBeenCalled();
   });
 
   it('grant-observed provider identity drift → PROVIDER_IDENTITY_CHANGED (relink fence)', async () => {

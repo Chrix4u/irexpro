@@ -14,6 +14,13 @@ import { AuditService } from '../audit/audit.service';
 import { DomainEventBus } from '../events/event-bus.service';
 import { DomainEventType } from '../events/enums/domain-event-type.enum';
 import { AiEngineClient } from '../ai-engine-client/ai-engine-client.service';
+// October UAT hardening (WS3): the exact-model LIVE-approval gate powers the
+// LIVE automation status (exact typed blocker reasons + active model identity).
+import {
+  LiveModelApprovalGateService,
+  LiveModelGateReasonCode,
+  liveModelGateReasonToRuntimeReason,
+} from '../ai-engine-client/live-model-approval.gate';
 import { AuditAction } from '../../common/enums/audit-action.enum';
 import { AuditSeverity } from '../audit/entities/audit-log.entity';
 import { TradingSession, TradingSessionStatus } from '../execution/entities/trading-session.entity';
@@ -101,6 +108,7 @@ export class TradingService {
     private readonly auditService: AuditService,
     private readonly eventBus: DomainEventBus,
     private readonly aiEngineClient: AiEngineClient,
+    private readonly liveModelApproval: LiveModelApprovalGateService,
     // Round 6 (§6/#297/#312): the durable account-snapshot authority the
     // session's opening financial state binds to (fail-closed — never `?? '0'`).
     private readonly brokerAccountSnapshotService: BrokerAccountSnapshotService,
@@ -486,9 +494,22 @@ export class TradingService {
 
     // Model approval is about the bound broker ENVIRONMENT, not whether the
     // session is automatic. A provider DEMO account may use FULL_AUTO safely
-    // inside the provider sandbox; LIVE stays blocked until a separately
-    // live-approved model path exists.
+    // inside the provider sandbox. October UAT hardening (WS3): the LIVE
+    // status consults the EXACT active model's LIVE-approval truth instead of
+    // a blanket block — the runtime reports the exact typed reason (e.g.
+    // model_live_approval_missing / live_model_env_disabled /
+    // model_artifact_mismatch) plus the active model identity, and stays
+    // BLOCKED unless the exact active model genuinely holds a valid LIVE
+    // promotion record with the engine live environment enabled.
     if (connection.accountType === BrokerMode.LIVE) {
+      const modelDecision = await this.liveModelApproval
+        .evaluateActiveModelLiveApproval()
+        .catch(() => null);
+      const runtimeReason = modelDecision
+        ? modelDecision.approved
+          ? null
+          : liveModelGateReasonToRuntimeReason(modelDecision.reasonCode as LiveModelGateReasonCode)
+        : 'model_runtime_unavailable';
       return {
         enabled: this.aiEngineClient.isSchedulerIntegrationEnabled(),
         registered: false,
@@ -501,12 +522,12 @@ export class TradingService {
         last_run_at: null,
         next_run_at: null,
         last_decision: 'BLOCKED',
-        last_reason: 'model_not_approved_for_live',
+        last_reason: runtimeReason ?? 'model_not_approved_for_live',
         last_confidence_score: null,
         last_confidence_at: null,
         confidence_threshold: null,
-        model_version: null,
-        model_mode: null,
+        model_version: modelDecision?.model.version ?? null,
+        model_mode: modelDecision?.model.mode ?? null,
         model_loaded: null,
         last_market_data_at: null,
         market_data_age_seconds: null,

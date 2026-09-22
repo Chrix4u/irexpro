@@ -50,6 +50,24 @@ import {
   LiveAccountActivityPageDto,
   toLiveActivityRowView,
 } from './dto/live-account-activity-response.dto';
+// October UAT hardening (WS5): the six separated readiness states.
+import {
+  BrokerLiveCertificationDto,
+  DemoReadinessDto,
+  LiveEnablementDto,
+  LiveReadinessBlockerDto,
+  LiveReadinessResponseDto,
+  ModelApprovalReadinessDto,
+  PaperReadinessDto,
+} from './dto/live-account-readiness-response.dto';
+// WS3: the exact-model LIVE-approval gate powers the model readiness truth.
+import {
+  LiveModelApprovalGateService,
+  LiveModelGateReasonCode,
+  liveModelGateReasonToRuntimeReason,
+} from '../ai-engine-client/live-model-approval.gate';
+// Broker registry — production-LIVE certification truth (CERTIFIED only).
+import { BrokerProviderRegistryService } from '../broker/registry/broker-provider-registry.service';
 
 // ─── Public constants (Directive-tuned thresholds) ──────────────────────────
 
@@ -198,6 +216,9 @@ export class LiveAccountService {
     @InjectRepository(RiskProfile)
     private readonly riskProfileRepo: Repository<RiskProfile>,
     private readonly brokerService: BrokerService,
+    // October UAT hardening (WS5): readiness truth sources.
+    private readonly providerRegistry: BrokerProviderRegistryService,
+    private readonly liveModelApproval: LiveModelApprovalGateService,
   ) {}
 
   // ─── GET /live-account/overview ───────────────────────────────────────────
@@ -263,6 +284,132 @@ export class LiveAccountService {
       environment: this.deriveEnvironment(connections),
       hasConnections: connections.length > 0,
       reconciliationLoaded: reconciliationRows.loaded && runLookupsLoaded,
+    };
+  }
+
+  // ─── GET /live-account/readiness (October UAT hardening — WS5) ───────────
+
+  /**
+   * The six SEPARATED trading-readiness states for the October client-testing
+   * milestone:
+   *
+   *   PAPER READY · DEMO VERIFIED · BROKER LIVE CERTIFIED ·
+   *   MODEL PAPER APPROVED · MODEL LIVE APPROVED · LIVE TRADING ENABLED
+   *
+   * Every state carries its OWN evidence class and never inherits another's:
+   * a checklist-validated DEMO connection (the authoritative DEMO evidence)
+   * is never a LIVE certification; the registry's CERTIFIED-only catalog is
+   * the broker certification truth; the exact-model gate is the model
+   * approval truth; explicit liveTradingEnabled is the enablement truth.
+   * `liveBlockers` states, in plain language, exactly WHY real-money AI
+   * trading is unavailable while it is unavailable.
+   */
+  async getReadinessView(userId: string): Promise<LiveReadinessResponseDto> {
+    const connections = await this.connectionRepo.find({ where: { userId } });
+
+    // PAPER: the internal simulator connection, executable through the same
+    // fail-closed gate the risk pipeline uses.
+    const paper: PaperReadinessDto = {
+      ready: connections.some(
+        (connection) =>
+          connection.brokerId === 'paper-broker' &&
+          this.brokerService.isConnectionExecutable(connection),
+      ),
+    };
+
+    // DEMO: a REAL-broker DEMO connection validated by the authoritative
+    // checklist (demoValidated is written ONLY by BrokerDemoValidationService
+    // — a handshake never sets it).
+    const demo: DemoReadinessDto = {
+      verified: connections.some(
+        (connection) =>
+          connection.accountType === BrokerMode.DEMO &&
+          connection.brokerId !== 'paper-broker' &&
+          connection.demoValidated === true,
+      ),
+    };
+
+    // BROKER LIVE CERTIFIED: provider-backed certification evidence ONLY
+    // (LEGACY_VERIFIED / UNVERIFIED / BETA are NOT certified).
+    const certifiedProviders = this.providerRegistry
+      .getCatalog()
+      .filter((entry) => entry.certificationState === 'CERTIFIED')
+      .map((entry) => entry.id);
+    const brokerLiveCertified: BrokerLiveCertificationDto = {
+      certified: certifiedProviders.length > 0,
+      certifiedProviders,
+    };
+
+    // MODEL: the EXACT active model's approval truth (fail-closed — an
+    // unreachable runtime reports honest unknowns, never a fabricated pass).
+    let model: ModelApprovalReadinessDto;
+    let modelGateReason: string | null = null;
+    try {
+      const decision = await this.liveModelApproval.evaluateActiveModelLiveApproval();
+      model = {
+        activeModelVersion: decision.model.version,
+        paperApproved: decision.model.approvedForPaper,
+        liveApproved: decision.approved,
+        liveActivationReason: decision.approved
+          ? null
+          : liveModelGateReasonToRuntimeReason(decision.reasonCode as LiveModelGateReasonCode),
+      };
+      modelGateReason = decision.approved ? null : decision.reasonCode;
+    } catch {
+      model = {
+        activeModelVersion: null,
+        paperApproved: null,
+        liveApproved: false,
+        liveActivationReason: 'model_runtime_unavailable',
+      };
+      modelGateReason = 'MODEL_RUNTIME_UNAVAILABLE';
+    }
+
+    // LIVE ENABLEMENT: explicit operator authorization on a LIVE connection.
+    const liveTradingEnabled: LiveEnablementDto = {
+      enabled: connections.some(
+        (connection) =>
+          connection.accountType === BrokerMode.LIVE && connection.liveTradingEnabled === true,
+      ),
+    };
+
+    // Ordered plain-language LIVE blockers — each message states its OWN
+    // evidence class (a missing model approval is never described as a
+    // broker problem and vice versa).
+    const liveBlockers: LiveReadinessBlockerDto[] = [];
+    if (!brokerLiveCertified.certified) {
+      liveBlockers.push({
+        reasonCode: 'BROKER_NOT_LIVE_CERTIFIED',
+        message:
+          'Real-money trading is unavailable because no broker has completed production-LIVE certification.',
+      });
+    }
+    if (!model.liveApproved) {
+      liveBlockers.push({
+        reasonCode: modelGateReason ?? 'MODEL_LIVE_APPROVAL_MISSING',
+        message: model.activeModelVersion
+          ? `Real-money AI trading is unavailable because the active AI model (${model.activeModelVersion}) has not received LIVE approval.`
+          : model.liveActivationReason === 'model_runtime_unavailable'
+            ? 'Real-money AI trading status is unavailable because the AI runtime could not be reached — it stays blocked until the model truth can be verified.'
+            : 'Real-money AI trading is unavailable because no trained AI model is active in the runtime.',
+      });
+    }
+    if (!liveTradingEnabled.enabled) {
+      liveBlockers.push({
+        reasonCode: 'LIVE_NOT_EXPLICITLY_ENABLED',
+        message:
+          'Real-money trading requires explicit LIVE enablement on a certified broker connection — none is enabled.',
+      });
+    }
+
+    return {
+      generatedAt: new Date().toISOString(),
+      paper,
+      demo,
+      brokerLiveCertified,
+      model,
+      liveTradingEnabled,
+      liveBlockers,
     };
   }
 

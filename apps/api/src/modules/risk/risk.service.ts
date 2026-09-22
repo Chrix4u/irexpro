@@ -57,6 +57,19 @@ import { BrokerProviderRegistryService } from '../broker/registry/broker-provide
 // counters (lazy ModuleRef seam — see the metrics getter below).
 import { MetricsService } from '../metrics/metrics.service';
 import { METRIC_NAMES, METRIC_GAUGE_NAMES } from '../metrics/metric-names';
+// October UAT hardening (WS2/WS3): the LIVE new-exposure hard gates —
+// reconciliation health + exact-model LIVE approval. Both are resolved
+// through the existing lazy ModuleRef seam (cycle-prone execution-side /
+// global-module collaborators; direct constructor injection would demand new
+// mocks in every suite constructing this service).
+import {
+  ReconciliationHealthService,
+  ReconciliationHealthBlockedException,
+} from '../execution/reconciliation/reconciliation-health.service';
+import {
+  LiveModelApprovalGateService,
+  LiveModelNotApprovedError,
+} from '../ai-engine-client/live-model-approval.gate';
 
 /** Default pip size for standard 5-digit pairs (EURUSD, GBPUSD, etc.) */
 const DEFAULT_PIP_SIZE = '0.0001';
@@ -172,6 +185,35 @@ export class RiskService {
   private get metrics(): MetricsService | null {
     try {
       return this.moduleRef.get(MetricsService, { strict: false });
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * October UAT hardening (WS2): lazy reconciliation-health seam. Resolved at
+   * CALL time (ExecutionModule provider — the forwardRef cycle with
+   * RiskModule forbids direct constructor injection). In isolated test
+   * contexts the lookup fails → null → the LIVE gate fails CLOSED (truth
+   * cannot be established) — never a silent skip.
+   */
+  private get reconciliationHealth(): ReconciliationHealthService | null {
+    try {
+      return this.moduleRef.get(ReconciliationHealthService, { strict: false });
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * October UAT hardening (WS3): lazy exact-model LIVE-approval seam (global
+   * AiEngineClientModule provider). Same fail-closed contract as the
+   * reconciliation seam: unresolvable → LIVE new exposure is rejected with
+   * MODEL_RUNTIME_UNAVAILABLE semantics.
+   */
+  private get liveModelApproval(): LiveModelApprovalGateService | null {
+    try {
+      return this.moduleRef.get(LiveModelApprovalGateService, { strict: false });
     } catch {
       return null;
     }
@@ -472,6 +514,93 @@ export class RiskService {
         );
       }
       appliedRules.push('USER_LIVE_ELIGIBILITY:OK');
+    }
+
+    // 1f. LIVE reconciliation-health hard gate (October UAT hardening — WS2):
+    // real-money new exposure requires ESTABLISHED, current, divergence-free
+    // reconciliation truth. The persisted runs + OPEN discrepancies decide —
+    // typed reason codes (RECONCILIATION_STALE / RECONCILIATION_FAILED /
+    // UNRESOLVED_POSITION_DIVERGENCE / UNRESOLVED_ORDER_DIVERGENCE /
+    // PROTECTIVE_ORDER_DIVERGENCE / ACCOUNT_STATE_UNAVAILABLE) travel in the
+    // rejection message. PAPER/DEMO are deliberately NOT gated (the simulator
+    // and the broker demo sandbox keep their existing semantics).
+    if (connection.accountType === BrokerMode.LIVE) {
+      const healthService = this.reconciliationHealth;
+      if (!healthService) {
+        // Fail-closed: the decision authority is unavailable — truth cannot
+        // be established, so LIVE new exposure is rejected (never skipped).
+        appliedRules.push('LIVE_RECONCILIATION_HEALTH:UNAVAILABLE');
+        return this.rejectAndRecord(
+          userId,
+          trade,
+          RiskRejectionCode.LIVE_RECONCILIATION_HEALTH_BLOCKED,
+          'LIVE new exposure requires a reconciliation-health decision, but the reconciliation health service is unavailable — rejecting (fail-closed)',
+          contextSnapshot as RiskContextSnapshot,
+          evaluatedAt,
+        );
+      }
+      try {
+        await healthService.assertHealthyForLiveNewExposure(connection.id);
+        appliedRules.push('LIVE_RECONCILIATION_HEALTH:OK');
+      } catch (err) {
+        if (err instanceof ReconciliationHealthBlockedException) {
+          appliedRules.push(`LIVE_RECONCILIATION_HEALTH:${err.decision.reasonCode}`);
+          return this.rejectAndRecord(
+            userId,
+            trade,
+            RiskRejectionCode.LIVE_RECONCILIATION_HEALTH_BLOCKED,
+            `LIVE new exposure blocked — ${err.decision.reasonCode}: ${err.decision.detail}`,
+            contextSnapshot as RiskContextSnapshot,
+            evaluatedAt,
+            { reconciliationHealth: err.decision.evidence },
+          );
+        }
+        throw err;
+      }
+    }
+
+    // 1g. LIVE exact-model approval hard gate (October UAT hardening — WS3):
+    // real-money new exposure requires the EXACT model active in the AI
+    // runtime to hold a valid LIVE promotion record, with the engine-side
+    // live environment enabled. Research qualification, PAPER approval and
+    // broker LIVE certification remain independent evidence classes — none
+    // of them satisfies this gate.
+    if (connection.accountType === BrokerMode.LIVE) {
+      const modelGate = this.liveModelApproval;
+      if (!modelGate) {
+        appliedRules.push('LIVE_MODEL_APPROVAL:UNAVAILABLE');
+        return this.rejectAndRecord(
+          userId,
+          trade,
+          RiskRejectionCode.LIVE_MODEL_NOT_APPROVED,
+          'LIVE new exposure requires exact-model LIVE approval, but the model approval gate is unavailable — rejecting (fail-closed)',
+          contextSnapshot as RiskContextSnapshot,
+          evaluatedAt,
+        );
+      }
+      try {
+        await modelGate.assertApprovedForLiveNewExposure();
+        appliedRules.push('LIVE_MODEL_APPROVAL:OK');
+      } catch (err) {
+        if (err instanceof LiveModelNotApprovedError) {
+          appliedRules.push(`LIVE_MODEL_APPROVAL:${err.decision.reasonCode}`);
+          return this.rejectAndRecord(
+            userId,
+            trade,
+            RiskRejectionCode.LIVE_MODEL_NOT_APPROVED,
+            `LIVE new exposure blocked — ${err.decision.reasonCode}: ${err.decision.detail}`,
+            contextSnapshot as RiskContextSnapshot,
+            evaluatedAt,
+            {
+              modelGate: {
+                modelVersion: err.decision.model.version,
+                reasonCode: err.decision.reasonCode,
+              },
+            },
+          );
+        }
+        throw err;
+      }
     }
 
     // ── Step 2: Load broker account state (fail-closed, typed) ─────────────
@@ -2273,6 +2402,10 @@ export class RiskService {
     reason: string,
     context: RiskContextSnapshot,
     evaluatedAt: Date,
+    /** October UAT hardening (WS2/WS3): extra typed evidence for the new
+     *  LIVE hard gates (reconciliation-health snapshot / model-gate reason) —
+     *  persisted onto the recorded violation for auditability. */
+    extraEvidence?: Record<string, unknown>,
   ): Promise<RiskRejectionResult> {
     const decision: RiskRejectionResult = {
       decision:
@@ -2298,7 +2431,10 @@ export class RiskService {
           signalId: trade.signalId,
           rejectionCode: code,
           rejectionReason: reason,
-          riskContext: context as unknown as Record<string, unknown>,
+          riskContext: {
+            ...(context as unknown as Record<string, unknown>),
+            ...(extraEvidence ?? {}),
+          },
         }),
       )
       .catch((err) =>

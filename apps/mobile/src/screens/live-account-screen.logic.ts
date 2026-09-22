@@ -13,8 +13,13 @@ import type {
   LiveAccountEnvironment,
   LiveAccountOverviewView,
   LiveActivityRowView,
+  LivePositionRowView,
+  LiveReadinessView,
 } from "@irexpro/types";
-import type { TradingSessionView } from "@irexpro/types/execution";
+import type {
+  ManualPositionCloseOutcome,
+  TradingSessionView,
+} from "@irexpro/types/execution";
 
 export interface EnvironmentBannerStyle {
   label: string;
@@ -433,4 +438,251 @@ export function sessionAuthorityPresentation(
     executionBlocked: session.status !== "ACTIVE",
     blockedReasons,
   };
+}
+
+// ── Manual single-position close (October UAT hardening — WS1) ──────────────
+//
+// The Close button on each OPEN position card posts to
+// /execution/positions/:tradeId/close — the SAME server execution domain as
+// AI exits, Stop flatten, and the kill switch. The SERVER classifies the
+// attempt honestly; this mapping only renders that classification. It never
+// infers a close the server did not confirm, and Start/Stop AI Trading
+// semantics are untouched by a per-position close.
+
+export type ManualCloseTone = "success" | "info" | "warning" | "error";
+
+export interface ManualClosePresentation {
+  /** Alert title. */
+  title: string;
+  /** Body — the SERVER message verbatim (never invented copy). */
+  message: string;
+  /** Presentation tone for testing / future in-app surfaces. */
+  tone: ManualCloseTone;
+}
+
+interface ManualCloseOutcomeCopy {
+  title: string;
+  tone: ManualCloseTone;
+  /** Fixed honest explanation prepended when the outcome needs one. */
+  detail: string | null;
+}
+
+const MANUAL_CLOSE_OUTCOMES: Record<
+  ManualPositionCloseOutcome,
+  ManualCloseOutcomeCopy
+> = {
+  CLOSED: {
+    title: "Position closed",
+    tone: "success",
+    detail: null,
+  },
+  ALREADY_CLOSED: {
+    title: "Already closed",
+    tone: "info",
+    detail: null,
+  },
+  CLOSE_IN_PROGRESS: {
+    title: "Close already in flight",
+    tone: "info",
+    detail: null,
+  },
+  RECONCILIATION_REQUIRED: {
+    title: "Provider confirmation pending",
+    tone: "warning",
+    detail:
+      "Provider confirmation pending — reconciliation will resolve the final state.",
+  },
+  PROVIDER_REFUSED: {
+    title: "Close refused",
+    tone: "error",
+    detail: null,
+  },
+};
+
+/**
+ * Outcome → presentation mapping for ONE manual close attempt (pure).
+ *
+ * The provider-refused branch appends the SANITIZED provider error class
+ * (server-classified; never credentials or raw provider payloads).
+ *
+ * Fail-closed: an UNRECOGNIZED runtime outcome (contract violation) renders
+ * as an honest unknown-state error — never as a closed/success claim —
+ * because the client must never present an unproven close. The Positions
+ * list remains the authoritative open-state surface.
+ */
+export function manualClosePresentation(
+  outcome: ManualPositionCloseOutcome,
+  serverMessage: string,
+  providerErrorClass: string | null = null,
+): ManualClosePresentation {
+  const copy = MANUAL_CLOSE_OUTCOMES[outcome];
+  if (!copy) {
+    return {
+      title: "Close result unknown",
+      tone: "error",
+      message:
+        "The server returned an unrecognized close result. The position was not changed locally — check the Positions list for the authoritative state.",
+    };
+  }
+
+  const parts: string[] = [];
+  if (copy.detail) parts.push(copy.detail);
+  const message = serverMessage.trim();
+  if (message.length > 0) parts.push(message);
+  if (
+    copy.tone === "error" &&
+    providerErrorClass &&
+    providerErrorClass.trim().length > 0
+  ) {
+    parts.push(`Provider error class: ${providerErrorClass.trim()}`);
+  }
+
+  return {
+    title: copy.title,
+    tone: copy.tone,
+    message:
+      parts.length > 0
+        ? parts.join("\n\n")
+        : "The server did not return a message. Check the Positions list for the authoritative state.",
+  };
+}
+
+/**
+ * Confirmation-dialog copy for closing ONE position (pure). Identifies the
+ * exact position (symbol/direction/lots) and states the scope boundary:
+ * a manual close is per-position and never touches AI Trading or other
+ * positions.
+ */
+export function manualCloseConfirmationMessage(
+  position: Pick<
+    LivePositionRowView,
+    "instrument" | "direction" | "lotSize"
+  >,
+): string {
+  return (
+    `${position.instrument} ${position.direction} · ${position.lotSize} lots\n\n` +
+    "This closes only this position. AI Trading and other positions are not affected."
+  );
+}
+
+// ── Trading readiness states (October UAT hardening — WS5) ──────────────────
+//
+// Six SEPARATED operating states, each carrying its OWN truth: a DEMO
+// validation is never a broker LIVE certification; a certified broker never
+// implies the active AI model is approved; a LIVE-approved model never
+// implies the broker is certified. These rows are presentation only — the
+// SERVER readiness payload remains the enforcement truth.
+
+export interface ReadinessDisplayRow {
+  key:
+    | "paper"
+    | "demo"
+    | "brokerLiveCertified"
+    | "modelPaperApproved"
+    | "modelLiveApproved"
+    | "liveTradingEnabled";
+  /** Category label (row left side). */
+  label: string;
+  /** Unambiguous status text — NEVER a bare "Verified". */
+  statusText: string;
+  /** True only when this exact state is positively met (green). */
+  met: boolean;
+  /** Honest detail from the server payload (never inferred locally). */
+  detail: string | null;
+}
+
+/**
+ * Derive the six separated readiness display rows (pure). Null model states
+ * render as UNKNOWN — the runtime honestly reported it could not determine
+ * approval, which is never rendered as approved.
+ */
+export function readinessDisplayRows(
+  readiness: LiveReadinessView,
+): ReadinessDisplayRow[] {
+  const modelDetail = readiness.model.activeModelVersion
+    ? `Active model: ${readiness.model.activeModelVersion}`
+    : "No active model in the AI runtime";
+  const certifiedProviders =
+    readiness.brokerLiveCertified.certifiedProviders;
+  return [
+    {
+      key: "paper",
+      label: "Paper trading",
+      statusText: readiness.paper.ready
+        ? "PAPER READY"
+        : "PAPER NOT READY",
+      met: readiness.paper.ready,
+      detail: null,
+    },
+    {
+      key: "demo",
+      label: "Demo verification",
+      statusText: readiness.demo.verified
+        ? "DEMO VERIFIED"
+        : "DEMO NOT VALIDATED",
+      met: readiness.demo.verified,
+      detail: null,
+    },
+    {
+      key: "brokerLiveCertified",
+      label: "Broker LIVE certification",
+      statusText: readiness.brokerLiveCertified.certified
+        ? "BROKER LIVE CERTIFIED"
+        : "BROKER NOT LIVE CERTIFIED",
+      met: readiness.brokerLiveCertified.certified,
+      detail:
+        certifiedProviders.length > 0
+          ? `Certified providers: ${certifiedProviders.join(", ")}`
+          : null,
+    },
+    {
+      key: "modelPaperApproved",
+      label: "AI model — paper approval",
+      statusText:
+        readiness.model.paperApproved === null
+          ? "MODEL STATUS UNKNOWN"
+          : readiness.model.paperApproved
+            ? "MODEL PAPER APPROVED"
+            : "MODEL NOT PAPER APPROVED",
+      met: readiness.model.paperApproved === true,
+      detail: modelDetail,
+    },
+    {
+      key: "modelLiveApproved",
+      label: "AI model — LIVE approval",
+      statusText: readiness.model.liveApproved
+        ? "MODEL LIVE APPROVED"
+        : "MODEL NOT LIVE APPROVED",
+      met: readiness.model.liveApproved,
+      detail: readiness.model.liveActivationReason ?? modelDetail,
+    },
+    {
+      key: "liveTradingEnabled",
+      label: "Live trading enablement",
+      statusText: readiness.liveTradingEnabled.enabled
+        ? "LIVE TRADING ENABLED"
+        : "LIVE TRADING NOT ENABLED",
+      met: readiness.liveTradingEnabled.enabled,
+      detail: null,
+    },
+  ];
+}
+
+export interface ReadinessBlockerRow {
+  reasonCode: string;
+  /** Server message VERBATIM — the client never invents blocker copy. */
+  message: string;
+}
+
+/**
+ * Real-money trading blockers in server order, verbatim (pure passthrough).
+ * Empty only when every LIVE gate is genuinely satisfied.
+ */
+export function readinessBlockerRows(
+  readiness: LiveReadinessView,
+): ReadinessBlockerRow[] {
+  return readiness.liveBlockers.map((blocker) => ({
+    reasonCode: blocker.reasonCode,
+    message: blocker.message,
+  }));
 }

@@ -791,6 +791,9 @@ export class BrokerService {
           accountId: result.accountId,
           accountType: result.accountType,
           currency: result.currency,
+          // October UAT hardening (WS4): the adapter's honest environment
+          // truth source (absent for adapters that do not attest one).
+          environmentTruth: result.environmentTruth ?? null,
         },
       });
 

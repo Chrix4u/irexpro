@@ -38,6 +38,13 @@ import { ReconciliationPersistenceService } from './reconciliation/reconciliatio
 import { ReconciliationResolutionService } from './reconciliation/reconciliation-resolution.service';
 import { ReconciliationRun } from './reconciliation/entities/reconciliation-run.entity';
 import { ReconciliationDiscrepancy } from './reconciliation/entities/reconciliation-discrepancy.entity';
+// October UAT hardening (WS2): the typed reconciliation-health decision the
+// LIVE new-exposure gates enforce (risk pipeline + final dispatch boundary).
+import {
+  DEFAULT_RECONCILIATION_HEALTH_POLICY,
+  RECONCILIATION_HEALTH_POLICY,
+  ReconciliationHealthService,
+} from './reconciliation/reconciliation-health.service';
 import { BrokerAccount } from '../broker/entities/broker-account.entity';
 import { RiskModule } from '../risk/risk.module';
 import { BrokerModule } from '../broker/broker.module';
@@ -164,6 +171,13 @@ import { ProtectiveOrderReconciliationService } from './reconciliation/protectiv
     StateReconciliationService,
     ReconciliationPersistenceService,
     ReconciliationResolutionService,
+    // October UAT hardening (WS2): typed reconciliation-health decision for
+    // the LIVE new-exposure hard gate (fail-closed, explicit policy).
+    {
+      provide: RECONCILIATION_HEALTH_POLICY,
+      useValue: DEFAULT_RECONCILIATION_HEALTH_POLICY,
+    },
+    ReconciliationHealthService,
     // Round 6 §8: the protective-order reconciliation loop runs after every
     // per-connection state sweep (same sequential adapter model).
     ProtectiveOrderReconciliationService,
@@ -190,6 +204,10 @@ import { ProtectiveOrderReconciliationService } from './reconciliation/protectiv
     TradeLifecycleCasService,
     ExecutionReadService,
     OrderService,
+    // October UAT hardening (WS2): the risk pipeline (across the RiskModule
+    // import cycle) enforces the LIVE reconciliation-health gate through
+    // this exported service.
+    ReconciliationHealthService,
   ],
 })
 export class ExecutionModule {}

@@ -417,6 +417,22 @@
   font-size: 0.78rem;
 }
 
+/* Per-position manual close (October UAT hardening, WS1) */
+.ai-position-card__actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.close-position-note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  text-align: right;
+}
+
 .ai-trade-metrics {
   display: grid;
   grid-template-columns: minmax(0, 1fr);

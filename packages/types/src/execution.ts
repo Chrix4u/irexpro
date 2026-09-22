@@ -220,6 +220,63 @@ export interface ExecutionConfirmationView {
   orderPayloadDigest: string;
 }
 
+// ─── Manual single-position close (October UAT hardening) ───────────────────
+//
+// The user-facing close of ONE open position. The server routes the close
+// through the exact same execution domain as AI exits / Stop flatten / kill
+// switch (orchestrator gates, exactly-once close-attempt ids, CAS lifecycle
+// transitions, reconciliation for unknown provider outcomes) — a manual close
+// is never a direct adapter call.
+
+/**
+ * Honest terminal classification of ONE manual close attempt.
+ *
+ * - `CLOSED` — provider confirmed the close; the position is closed.
+ * - `ALREADY_CLOSED` — the position was already closed (idempotent retry).
+ * - `CLOSE_IN_PROGRESS` — another close attempt for this position is in
+ *   flight (AI exit, Stop flatten, kill switch, or an earlier manual close
+ *   won the idempotency race); its dispatch is already closing the position.
+ * - `RECONCILIATION_REQUIRED` — the provider outcome is unresolved (timeout /
+ *   unknown / reconciliation-owned state). The server never fabricates a
+ *   close; the reconciliation loop owns convergence.
+ * - `PROVIDER_REFUSED` — the provider definitively refused the close; the
+ *   position REMAINS OPEN (fail-closed).
+ */
+export type ManualPositionCloseOutcome =
+  | 'CLOSED'
+  | 'ALREADY_CLOSED'
+  | 'CLOSE_IN_PROGRESS'
+  | 'RECONCILIATION_REQUIRED'
+  | 'PROVIDER_REFUSED';
+
+/**
+ * POST /execution/positions/:tradeId/close → 200 typed outcome.
+ *
+ * `position` is the refreshed post-attempt trade view (never fabricated:
+ * CLOSED only when the server proved it). `providerErrorClass` is the
+ * sanitized provider error classification when the provider refused — it
+ * never carries credentials, tokens, or raw provider payloads.
+ */
+export interface ManualPositionCloseResponseView {
+  outcome: ManualPositionCloseOutcome;
+  /** Human-readable copy derived from the SERVER message (never invented). */
+  message: string;
+  position: TradeExecutionView | null;
+  /** Sanitized provider error class (e.g. 'MARKET_CLOSED') — null when n/a. */
+  providerErrorClass: string | null;
+}
+
+/** Runtime guard for a serialized manual-close outcome value. */
+export function isManualCloseOutcome(value: unknown): value is ManualPositionCloseOutcome {
+  return (
+    value === 'CLOSED' ||
+    value === 'ALREADY_CLOSED' ||
+    value === 'CLOSE_IN_PROGRESS' ||
+    value === 'RECONCILIATION_REQUIRED' ||
+    value === 'PROVIDER_REFUSED'
+  );
+}
+
 /** GET /execution/confirmations/pending → `{ confirmations }`. */
 export interface PendingExecutionConfirmationsResponse {
   confirmations: ExecutionConfirmationView[];

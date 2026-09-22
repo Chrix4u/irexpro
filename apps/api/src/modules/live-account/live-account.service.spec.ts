@@ -84,6 +84,8 @@ describe('LiveAccountService', () => {
   let auditRepo: { find: jest.Mock; count: jest.Mock };
   let riskProfileRepo: { findOne: jest.Mock };
   let brokerService: { isConnectionExecutable: jest.Mock };
+  let providerRegistry: { getCatalog: jest.Mock };
+  let liveModelApproval: { evaluateActiveModelLiveApproval: jest.Mock };
 
   const connection = (overrides: Partial<BrokerConnection> = {}): BrokerConnection =>
     ({
@@ -302,6 +304,16 @@ describe('LiveAccountService', () => {
     auditRepo = { find: jest.fn().mockResolvedValue([]), count: jest.fn().mockResolvedValue(0) };
     riskProfileRepo = { findOne: jest.fn().mockResolvedValue(null) };
     brokerService = { isConnectionExecutable: jest.fn().mockReturnValue(true) };
+    providerRegistry = { getCatalog: jest.fn().mockReturnValue([]) };
+    liveModelApproval = {
+      evaluateActiveModelLiveApproval: jest.fn().mockResolvedValue({
+        approved: false,
+        reasonCode: 'MODEL_LIVE_APPROVAL_MISSING',
+        detail: 'no valid promotion record',
+        model: { version: null, mode: null, artifactSha256: null, approvedForPaper: null },
+        promotionRecord: null,
+      }),
+    };
 
     service = new LiveAccountService(
       connectionRepo as unknown as Repository<BrokerConnection>,
@@ -314,6 +326,8 @@ describe('LiveAccountService', () => {
       auditRepo as unknown as Repository<AuditLog>,
       riskProfileRepo as unknown as Repository<RiskProfile>,
       brokerService as unknown as BrokerService,
+      providerRegistry as unknown as never,
+      liveModelApproval as unknown as never,
     );
   });
 
@@ -1452,6 +1466,169 @@ describe('LiveAccountService', () => {
       expect(view.lastErrorMessage).toBeNull();
       expect(view.createdAt).toBe('2026-01-01T00:00:00.000Z');
       expect(view.updatedAt).toBe('2026-01-15T11:55:00.000Z');
+    });
+  });
+
+  // ─── October UAT hardening (WS5): the separated readiness view ───────────
+
+  describe('getReadinessView — the six separated readiness states (WS5)', () => {
+    it('reports PAPER READY from an executable paper-broker connection', async () => {
+      connectionRepo.find.mockResolvedValue([
+        connection({ id: 'paper-1', brokerId: 'paper-broker', accountType: BrokerMode.DEMO }),
+      ]);
+      brokerService.isConnectionExecutable.mockReturnValue(true);
+
+      const view = await service.getReadinessView(USER_ID);
+
+      expect(view.paper.ready).toBe(true);
+    });
+
+    it('PAPER NOT READY when the paper-broker connection is not executable (fail-closed gate)', async () => {
+      connectionRepo.find.mockResolvedValue([
+        connection({ id: 'paper-1', brokerId: 'paper-broker' }),
+      ]);
+      brokerService.isConnectionExecutable.mockReturnValue(false);
+
+      const view = await service.getReadinessView(USER_ID);
+
+      expect(view.paper.ready).toBe(false);
+    });
+
+    it('reports DEMO VERIFIED only from a checklist-validated REAL-broker DEMO connection', async () => {
+      connectionRepo.find.mockResolvedValue([
+        connection({ id: 'paper-1', brokerId: 'paper-broker', demoValidated: true }),
+      ]);
+
+      const view = await service.getReadinessView(USER_ID);
+
+      // The paper simulator is never the DEMO-verified evidence.
+      expect(view.demo.verified).toBe(false);
+    });
+
+    it('DEMO VERIFIED when a real-broker DEMO connection carries demoValidated=true', async () => {
+      connectionRepo.find.mockResolvedValue([connection({ demoValidated: true })]);
+
+      const view = await service.getReadinessView(USER_ID);
+
+      expect(view.demo.verified).toBe(true);
+    });
+
+    it('a handshake-only DEMO connection (demoValidated=false) is NOT DEMO VERIFIED', async () => {
+      connectionRepo.find.mockResolvedValue([connection({ demoValidated: false })]);
+
+      const view = await service.getReadinessView(USER_ID);
+
+      expect(view.demo.verified).toBe(false);
+    });
+
+    it('BROKER LIVE CERTIFIED mirrors the registry CERTIFIED-only catalog', async () => {
+      providerRegistry.getCatalog.mockReturnValue([
+        { id: 'metatrader5', certificationState: 'LEGACY_VERIFIED' },
+        { id: 'ctrader', certificationState: 'UNVERIFIED' },
+      ]);
+
+      const view = await service.getReadinessView(USER_ID);
+
+      // LEGACY_VERIFIED / UNVERIFIED are NOT certified.
+      expect(view.brokerLiveCertified.certified).toBe(false);
+      expect(view.brokerLiveCertified.certifiedProviders).toEqual([]);
+    });
+
+    it('a CERTIFIED provider appears in the certified list', async () => {
+      providerRegistry.getCatalog.mockReturnValue([
+        { id: 'metatrader5', certificationState: 'CERTIFIED' },
+      ]);
+
+      const view = await service.getReadinessView(USER_ID);
+
+      expect(view.brokerLiveCertified.certified).toBe(true);
+      expect(view.brokerLiveCertified.certifiedProviders).toEqual(['metatrader5']);
+    });
+
+    it('MODEL LIVE APPROVED / PAPER APPROVED come from the exact-model gate (independent evidence)', async () => {
+      liveModelApproval.evaluateActiveModelLiveApproval.mockResolvedValue({
+        approved: false,
+        reasonCode: 'MODEL_LIVE_APPROVAL_MISSING',
+        detail: 'no valid promotion record',
+        model: {
+          version: 'xgb-mtf-1',
+          mode: 'trained_xgboost_mtf',
+          artifactSha256: 'a',
+          approvedForPaper: true,
+        },
+        promotionRecord: null,
+      });
+
+      const view = await service.getReadinessView(USER_ID);
+
+      // Paper approval true + LIVE approval false — NEVER conflated.
+      expect(view.model.paperApproved).toBe(true);
+      expect(view.model.liveApproved).toBe(false);
+      expect(view.model.activeModelVersion).toBe('xgb-mtf-1');
+      expect(view.model.liveActivationReason).toBe('model_live_approval_missing');
+    });
+
+    it('an unreachable AI runtime reports honest unknowns, never a fabricated pass', async () => {
+      liveModelApproval.evaluateActiveModelLiveApproval.mockRejectedValue(
+        new Error('ECONNREFUSED'),
+      );
+
+      const view = await service.getReadinessView(USER_ID);
+
+      expect(view.model.activeModelVersion).toBeNull();
+      expect(view.model.paperApproved).toBeNull();
+      expect(view.model.liveApproved).toBe(false);
+      expect(view.model.liveActivationReason).toBe('model_runtime_unavailable');
+    });
+
+    it('LIVE TRADING ENABLED requires an explicitly enabled LIVE connection', async () => {
+      connectionRepo.find.mockResolvedValue([
+        connection({ accountType: BrokerMode.LIVE, liveTradingEnabled: false }),
+      ]);
+
+      const view = await service.getReadinessView(USER_ID);
+
+      expect(view.liveTradingEnabled.enabled).toBe(false);
+    });
+
+    it('liveBlockers states each blocker in its own evidence class, in order', async () => {
+      providerRegistry.getCatalog.mockReturnValue([]);
+      liveModelApproval.evaluateActiveModelLiveApproval.mockResolvedValue({
+        approved: false,
+        reasonCode: 'MODEL_LIVE_APPROVAL_MISSING',
+        detail: 'no valid promotion record',
+        model: { version: 'xgb-mtf-1', mode: null, artifactSha256: 'a', approvedForPaper: true },
+        promotionRecord: null,
+      });
+      connectionRepo.find.mockResolvedValue([]);
+
+      const view = await service.getReadinessView(USER_ID);
+
+      expect(view.liveBlockers.map((b) => b.reasonCode)).toEqual([
+        'BROKER_NOT_LIVE_CERTIFIED',
+        'MODEL_LIVE_APPROVAL_MISSING',
+        'LIVE_NOT_EXPLICITLY_ENABLED',
+      ]);
+      expect(view.liveBlockers[1].message).toContain('xgb-mtf-1');
+      expect(view.liveBlockers[1].message).toContain('has not received LIVE approval');
+    });
+
+    it('a DEMO-validated account never yields LIVE-ready blockers cleared (states stay separate)', async () => {
+      connectionRepo.find.mockResolvedValue([connection({ demoValidated: true })]);
+      providerRegistry.getCatalog.mockReturnValue([]);
+      liveModelApproval.evaluateActiveModelLiveApproval.mockResolvedValue({
+        approved: false,
+        reasonCode: 'MODEL_LIVE_APPROVAL_MISSING',
+        detail: 'no valid promotion record',
+        model: { version: null, mode: null, artifactSha256: null, approvedForPaper: null },
+        promotionRecord: null,
+      });
+
+      const view = await service.getReadinessView(USER_ID);
+
+      // DEMO verified but LIVE still fully blocked with exact reasons.
+      expect(view.demo.verified).toBe(true);
+      expect(view.liveBlockers.length).toBe(3);
     });
   });
 });

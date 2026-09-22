@@ -65,3 +65,8 @@ class SessionSchedulerResponse(BaseModel):
     registered: bool
     trading_session_id: str
     message: str
+    # October UAT hardening (WS3): the exact typed reason for a refusal
+    # (e.g. LIVE_MODEL_ENV_DISABLED / NO_VALID_PROMOTION_RECORD /
+    # MODEL_NOT_REGISTERED / ARTIFACT_SHA_MISMATCH). Optional for wire
+    # compatibility with older payloads; absent on success.
+    reason: str | None = None

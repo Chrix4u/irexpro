@@ -195,6 +195,32 @@ export interface DecryptedBrokerCredentials {
 
 // ─── Connection types ────────────────────────────────────────────────────────
 
+/**
+ * How the adapter-derived account-environment truth was established
+ * (October UAT hardening — WS4).
+ *
+ * - PROVIDER_OBSERVED: the provider's API explicitly reports the account
+ *   environment (MetaTrader account type, cTrader isLive in account
+ *   discovery). The strongest fact.
+ * - CONFIG_AND_ENDPOINT_VERIFIED: the environment follows deterministically
+ *   from the provider's environment-scoped endpoint the adapter addresses
+ *   (e.g. OANDA api-fxpractice vs api-fxtrade base URLs). The adapter NEVER
+ *   claims the provider returned an environment field it did not return.
+ * - UNVERIFIED: the endpoint cannot attest the environment (custom base
+ *   URL). Honest unknown — LIVE eligibility stays fail-closed on it.
+ */
+export type BrokerEnvironmentTruthSource =
+  | 'PROVIDER_OBSERVED'
+  | 'CONFIG_AND_ENDPOINT_VERIFIED'
+  | 'UNVERIFIED';
+
+/** Adapter-derived environment truth with an explicit, honest source label. */
+export interface BrokerEnvironmentTruth {
+  /** The attested environment; null when the source is UNVERIFIED. */
+  environment: BrokerMode | null;
+  source: BrokerEnvironmentTruthSource;
+}
+
 export interface BrokerConnectionResult {
   success: boolean;
   accountId: string;
@@ -204,6 +230,14 @@ export interface BrokerConnectionResult {
   currency: string | null;
   serverTime: Date;
   error?: string;
+  /**
+   * October UAT hardening (WS4): the adapter-derived environment truth with
+   * its honest source label. Optional for wire compatibility — absent means
+   * the adapter did not attest an environment beyond the declared mode
+   * (legacy adapters keep their existing provider-derived accountType
+   * semantics unchanged).
+   */
+  environmentTruth?: BrokerEnvironmentTruth;
 }
 
 export interface BrokerConnectionTestResult {
@@ -213,6 +247,8 @@ export interface BrokerConnectionTestResult {
   currency?: string;
   errorCode?: string;
   errorMessage?: string;
+  /** October UAT hardening (WS4) — see BrokerConnectionResult.environmentTruth. */
+  environmentTruth?: BrokerEnvironmentTruth;
 }
 
 // ─── Account types ────────────────────────────────────────────────────────────

@@ -9,9 +9,12 @@ import type {
   LiveAccountOverviewView,
   LiveAccountPositionsView,
   LivePositionRowView,
+  LiveReadinessView,
 } from '@irexpro/types/live-account';
-import { Alert, Badge, Button, Card, DashboardShell, LoadingSpinner } from '@/components/ui';
+import { ClosePositionButton } from '@/components/trading/ClosePositionButton';
+import { ReadinessBadges } from '@/components/trading/ReadinessBadges';
 import { ConfirmDialog } from '@/components/notifications/ConfirmDialog';
+import { Alert, Badge, Button, Card, DashboardShell, LoadingSpinner } from '@/components/ui';
 import { useAuth } from '@/context/auth-context';
 import { useNotification } from '@/hooks/useNotification';
 import { mapApiError } from '@/lib/error-mapping';
@@ -22,8 +25,13 @@ import {
   loadLiveAccountOrders,
   loadLiveAccountOverview,
   loadLiveAccountPositions,
+  loadLiveAccountReadiness,
   reconciliationBlockView,
 } from '@/lib/live-account';
+import {
+  useManualPositionClose,
+  type ManualPositionCloseController,
+} from '@/lib/manual-position-close';
 import './trading-activity.css';
 
 function formatTimestamp(value: string | null | undefined): string {
@@ -83,7 +91,13 @@ function pnlVariant(value: string | null): 'success' | 'error' | 'info' {
   return value.startsWith('-') ? 'error' : 'success';
 }
 
-function PositionTile({ position }: { position: LivePositionRowView }) {
+function PositionTile({
+  position,
+  closeController,
+}: {
+  position: LivePositionRowView;
+  closeController: ManualPositionCloseController;
+}) {
   return (
     <article className="activity-position">
       <div className="activity-position__top">
@@ -107,6 +121,9 @@ function PositionTile({ position }: { position: LivePositionRowView }) {
         <span>{position.brokerName ?? 'Broker'}</span>
         <span>{formatTimestamp(position.openedAt ?? position.createdAt)}</span>
       </div>
+      <div className="activity-position__actions">
+        <ClosePositionButton position={position} controller={closeController} />
+      </div>
     </article>
   );
 }
@@ -118,6 +135,10 @@ export default function TradingActivityPage() {
   const [positions, setPositions] = useState<LiveAccountPositionsView | null>(null);
   const [orders, setOrders] = useState<LiveAccountOrdersPage | null>(null);
   const [activity, setActivity] = useState<LiveAccountActivityPage | null>(null);
+  // Trading readiness (October UAT hardening, WS5): null = not loaded (or the
+  // read failed — see readinessUnavailable). States are NEVER fabricated.
+  const [readiness, setReadiness] = useState<LiveReadinessView | null>(null);
+  const [readinessUnavailable, setReadinessUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -130,16 +151,32 @@ export default function TradingActivityPage() {
     else setRefreshing(true);
     setError(null);
     try {
-      const [nextOverview, nextPositions, nextOrders, nextActivity] = await Promise.all([
+      // Readiness is independently degradable: a failed read (transport or
+      // contract mismatch) collapses to null so the panel hides behind an
+      // honest "unavailable" note — it never takes the dashboard down and
+      // never renders invented states.
+      const [
+        nextOverview,
+        nextPositions,
+        nextOrders,
+        nextActivity,
+        nextReadiness,
+      ] = await Promise.all([
         loadLiveAccountOverview(),
         loadLiveAccountPositions(),
         loadLiveAccountOrders('ALL', 16, 0),
         loadLiveAccountActivity(16, 0),
+        loadLiveAccountReadiness().then(
+          (value) => value,
+          () => null,
+        ),
       ]);
       setOverview(nextOverview);
       setPositions(nextPositions);
       setOrders(nextOrders);
       setActivity(nextActivity);
+      setReadiness(nextReadiness);
+      setReadinessUnavailable(nextReadiness === null);
     } catch (requestError) {
       const message = mapApiError(requestError).message;
       setError(message);
@@ -188,6 +225,15 @@ export default function TradingActivityPage() {
       setEmergencyStopping(false);
     }
   }, [notify, refresh]);
+
+  // Per-position manual close (October UAT hardening, WS1-WEB): one shared
+  // controller for every position tile — pending state, one confirmation
+  // dialog, honest outcome toasts and an immediate refresh after ANY
+  // completed attempt. The Emergency Stop flow above is untouched.
+  const manualPositionClose = useManualPositionClose({
+    notify,
+    onSettled: () => refresh(false),
+  });
 
   const primaryConnection = overview?.connections[0] ?? null;
   const financial = primaryConnection?.financial ?? null;
@@ -354,6 +400,14 @@ export default function TradingActivityPage() {
               </section>
             ) : null}
 
+            {readiness ? (
+              <ReadinessBadges readiness={readiness} />
+            ) : readinessUnavailable ? (
+              <p className="readiness-unavailable muted" role="note">
+                Trading readiness unavailable.
+              </p>
+            ) : null}
+
             <section className="activity-section" aria-labelledby="reconciliation-title">
               <div className="activity-section__head">
                 <div>
@@ -431,7 +485,11 @@ export default function TradingActivityPage() {
                 ) : (
                   <div className="activity-position-grid">
                     {activePositions.map((position) => (
-                      <PositionTile key={position.id} position={position} />
+                      <PositionTile
+                        key={position.id}
+                        position={position}
+                        closeController={manualPositionClose}
+                      />
                     ))}
                   </div>
                 )}

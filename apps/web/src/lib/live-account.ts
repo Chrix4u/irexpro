@@ -1,3 +1,4 @@
+import { createLiveAccountApi } from '@irexpro/api-client/live-account';
 import { api } from '@/lib/api';
 
 /**
@@ -32,6 +33,8 @@ export type {
   LiveOrderRowView,
   LiveOrderStatusFilter,
   LivePositionRowView,
+  LiveReadinessBlocker,
+  LiveReadinessView,
   LiveReconciliationSummary,
 } from '@irexpro/types/live-account';
 
@@ -50,6 +53,8 @@ import type {
   LiveOrderRowView,
   LiveOrderStatusFilter,
   LivePositionRowView,
+  LiveReadinessBlocker,
+  LiveReadinessView,
   LiveReconciliationSummary,
 } from '@irexpro/types/live-account';
 
@@ -688,5 +693,140 @@ export function describeEmergencyStopSummary(result: StopTradingSessionResponse)
     tone: 'warning',
     message:
       'AI Trading stopped, but position closure could not be verified. Check Positions & Activity now.',
+  };
+}
+
+// ── Trading readiness truth (October UAT hardening, WS5) ────────────────────
+
+function isLiveReadinessBlocker(value: unknown): value is LiveReadinessBlocker {
+  return (
+    isRecord(value) &&
+    isString(value.reasonCode) &&
+    isString(value.message)
+  );
+}
+
+function isLiveReadinessView(value: unknown): value is LiveReadinessView {
+  if (!isRecord(value)) return false;
+  return (
+    isIsoDateString(value.generatedAt) &&
+    isRecord(value.paper) &&
+    typeof value.paper.ready === 'boolean' &&
+    isRecord(value.demo) &&
+    typeof value.demo.verified === 'boolean' &&
+    isRecord(value.brokerLiveCertified) &&
+    typeof value.brokerLiveCertified.certified === 'boolean' &&
+    Array.isArray(value.brokerLiveCertified.certifiedProviders) &&
+    value.brokerLiveCertified.certifiedProviders.every(isString) &&
+    isRecord(value.model) &&
+    isNullableString(value.model.activeModelVersion) &&
+    (value.model.paperApproved === null || typeof value.model.paperApproved === 'boolean') &&
+    typeof value.model.liveApproved === 'boolean' &&
+    isNullableString(value.model.liveActivationReason) &&
+    isRecord(value.liveTradingEnabled) &&
+    typeof value.liveTradingEnabled.enabled === 'boolean' &&
+    Array.isArray(value.liveBlockers) &&
+    value.liveBlockers.every(isLiveReadinessBlocker)
+  );
+}
+
+const liveAccountApi = createLiveAccountApi(api);
+
+/**
+ * GET /live-account/readiness — the six SEPARATED readiness states, fetched
+ * via the shared live-account api client and validated fail-closed before the
+ * page trusts it. A failure (transport or contract mismatch) throws; the page
+ * hides the panel behind an honest "unavailable" note and NEVER fabricates
+ * readiness states client-side.
+ */
+export async function loadLiveAccountReadiness(): Promise<LiveReadinessView> {
+  const payload: unknown = await liveAccountApi.getReadiness();
+  if (!isLiveReadinessView(payload)) {
+    throw new Error('Live account readiness contract mismatch');
+  }
+  return payload;
+}
+
+/**
+ * One separated readiness badge. `met: true` renders the positive label with
+ * success styling; `met: false` renders the explicit NOT/UNKNOWN label muted.
+ * Labels are always unambiguous — never a bare "Verified".
+ */
+export interface ReadinessBadgeView {
+  /** Stable key for list rendering (one per separated state). */
+  key: string;
+  label: string;
+  met: boolean;
+}
+
+/** One plain-language real-money blocker, verbatim from the server payload. */
+export interface ReadinessBlockerView {
+  /** The server's machine reasonCode (stable list key). */
+  key: string;
+  /** Server-provided message — never invented or reworded client-side. */
+  message: string;
+}
+
+export interface TradingReadinessPanelView {
+  badges: ReadinessBadgeView[];
+  blockers: ReadinessBlockerView[];
+}
+
+/**
+ * Derive the six separated badge states + blocker copy from the readiness
+ * truth. Pure: every label is derived from its OWN state's evidence class —
+ * a DEMO validation never renders as broker-LIVE certification, a certified
+ * broker never implies the active model is approved, and a model approval
+ * never implies LIVE trading is enabled. Each state carries its own truth.
+ */
+export function tradingReadinessPanelView(readiness: LiveReadinessView): TradingReadinessPanelView {
+  return {
+    badges: [
+      {
+        key: 'paper',
+        label: readiness.paper.ready ? 'PAPER READY' : 'PAPER NOT READY',
+        met: readiness.paper.ready,
+      },
+      {
+        key: 'demo',
+        label: readiness.demo.verified ? 'DEMO VERIFIED' : 'DEMO NOT VALIDATED',
+        met: readiness.demo.verified,
+      },
+      {
+        key: 'broker-live-certified',
+        label: readiness.brokerLiveCertified.certified
+          ? 'BROKER LIVE CERTIFIED'
+          : 'BROKER NOT LIVE CERTIFIED',
+        met: readiness.brokerLiveCertified.certified,
+      },
+      {
+        key: 'model-paper-approved',
+        label:
+          readiness.model.paperApproved === true
+            ? 'MODEL PAPER APPROVED'
+            : readiness.model.paperApproved === false
+              ? 'MODEL NOT PAPER APPROVED'
+              : 'MODEL STATUS UNKNOWN',
+        met: readiness.model.paperApproved === true,
+      },
+      {
+        key: 'model-live-approved',
+        label: readiness.model.liveApproved
+          ? 'MODEL LIVE APPROVED'
+          : 'MODEL NOT LIVE APPROVED',
+        met: readiness.model.liveApproved,
+      },
+      {
+        key: 'live-trading-enabled',
+        label: readiness.liveTradingEnabled.enabled
+          ? 'LIVE TRADING ENABLED'
+          : 'LIVE TRADING NOT ENABLED',
+        met: readiness.liveTradingEnabled.enabled,
+      },
+    ],
+    blockers: readiness.liveBlockers.map((blocker) => ({
+      key: blocker.reasonCode,
+      message: blocker.message,
+    })),
   };
 }

@@ -47,6 +47,12 @@ import { ExecutionIntent } from './orchestration/execution-intent.interface';
 import { TradeIntentNotUsableError, TradeIntentService } from './services/trade-intent.service';
 import { MarketSafetyError } from './orchestration/market-safety-gate.service';
 import { EmergencyFlattenProducer } from './jobs/emergency-flatten.producer';
+import {
+  ManualPositionCloseOutcome,
+  ManualPositionCloseResponseDto,
+  sanitizeProviderErrorClass,
+  toManualClosePositionView,
+} from './dto/manual-position-close-response.dto';
 
 /** Invalidation reason stamped on RiskGrants when the session authority
  *  generation advances (mode change / end / suspension — issue #298). */
@@ -1094,6 +1100,153 @@ export class ExecutionService {
     });
 
     return results;
+  }
+
+  // ─── Manual single-position close (October UAT hardening — WS1) ─────────
+
+  /**
+   * Close ONE open position at the authenticated user's explicit request.
+   *
+   * This is the user-facing surface over the SAME closeTrade() engine the AI
+   * exit / Stop flatten / kill switch use — orchestrator pre-dispatch gates,
+   * exactly-once close-attempt ids, CAS lifecycle transitions and
+   * reconciliation for unknown provider outcomes all apply unchanged. A
+   * manual close is NEVER a direct adapter call.
+   *
+   * OWNERSHIP: the trade is looked up scoped to the requesting user
+   * (cross-tenant access is a 403, not a data leak) and the broker
+   * connection is re-owned via findConnectionById inside closeTrade.
+   *
+   * HONEST OUTCOMES (never a fabricated success):
+   * - CLOSED              — provider confirmed; the trade is terminal CLOSED.
+   * - ALREADY_CLOSED      — idempotent retry against a closed position.
+   * - CLOSE_IN_PROGRESS   — a concurrent close (AI exit / Stop flatten /
+   *                         kill switch / earlier manual click) won the
+   *                         idempotency race; its dispatch already closes.
+   * - RECONCILIATION_REQUIRED — provider outcome unresolved (timeout /
+   *                         unknown) or the position is already
+   *                         reconciliation-held; convergence is owned by the
+   *                         reconciliation loop, never guessed here.
+   * - PROVIDER_REFUSED    — provider definitively refused; the position
+   *                         REMAINS OPEN (fail-closed).
+   *
+   * AUDIT: every attempt writes TRADE_MANUAL_CLOSE_REQUESTED with the actor,
+   * broker connection, trade id, request timestamp, final outcome and the
+   * sanitized provider error class (credentials/tokens never appear).
+   */
+  async closeOpenPositionManually(
+    tradeId: string,
+    userId: string,
+  ): Promise<ManualPositionCloseResponseDto> {
+    const requestedAt = new Date();
+    const trade = await this.tradeRepo.findOne({ where: { id: tradeId, userId } });
+    if (!trade) {
+      // NotFound for the user's OWN scope first; a foreign trade id is
+      // indistinguishable from a missing one (no existence oracle).
+      throw new NotFoundException(`Position ${tradeId} not found`);
+    }
+
+    const finish = async (
+      outcome: ManualPositionCloseOutcome,
+      message: string,
+      options: {
+        severity?: AuditSeverity;
+        providerErrorClass?: string | null;
+      } = {},
+    ): Promise<ManualPositionCloseResponseDto> => {
+      const refreshed = await this.tradeRepo.findOne({ where: { id: trade.id, userId } });
+      await this.auditService.log({
+        actorUserId: userId,
+        action: AuditAction.TRADE_MANUAL_CLOSE_REQUESTED,
+        resourceType: 'Trade',
+        resourceId: trade.id,
+        severity: options.severity ?? AuditSeverity.INFO,
+        metadata: {
+          requestedAt: requestedAt.toISOString(),
+          brokerConnectionId: trade.brokerConnectionId,
+          instrument: trade.instrument,
+          outcome,
+          finalStatus: (refreshed ?? trade).status,
+          providerErrorClass: options.providerErrorClass ?? null,
+        },
+      });
+      return {
+        outcome,
+        message,
+        position: refreshed ? toManualClosePositionView(refreshed) : null,
+        providerErrorClass: options.providerErrorClass ?? null,
+      };
+    };
+
+    // Idempotent retry against an already-closed position — a safe, honest
+    // no-op (never an error the UI must treat as a failure).
+    if (trade.status === TradeStatus.CLOSED) {
+      return finish('ALREADY_CLOSED', 'This position is already closed.');
+    }
+
+    // Non-openable states: reconciliation owns convergence; PENDING has
+    // nothing to close yet; terminal REJECTED/CANCELLED never opened.
+    if (trade.status === TradeStatus.RECONCILIATION_PENDING) {
+      return finish(
+        'RECONCILIATION_REQUIRED',
+        'This position\u2019s state is being reconciled with the broker — the reconciliation loop owns its convergence. Check Positions & Activity for the resolved state.',
+        { severity: AuditSeverity.WARNING },
+      );
+    }
+    if (trade.status !== TradeStatus.OPEN) {
+      throw new ConflictException(
+        `Position ${tradeId} is ${trade.status} — only OPEN positions can be closed`,
+      );
+    }
+
+    try {
+      const closed = await this.closeTrade(trade.id, userId, TradeCloseReason.MANUAL_CLOSE);
+      if (closed.status === TradeStatus.CLOSED) {
+        return finish(
+          'CLOSED',
+          `Position closed${closed.exitPrice ? ` at ${closed.exitPrice}` : ''}.`,
+        );
+      }
+      if (closed.status === TradeStatus.RECONCILIATION_PENDING) {
+        return finish(
+          'RECONCILIATION_REQUIRED',
+          'The broker did not confirm the close before the request ended — provider confirmation is pending and reconciliation will resolve the final state.',
+          { severity: AuditSeverity.WARNING },
+        );
+      }
+      // closeTrade returned the trade still OPEN without throwing: the
+      // DUPLICATE idempotency path — a concurrent close is already in flight.
+      return finish(
+        'CLOSE_IN_PROGRESS',
+        'A close request for this position is already in flight — its result will appear in Positions & Activity.',
+      );
+    } catch (err) {
+      if (err instanceof ConflictException) {
+        // Provider definitively refused — the position remains OPEN.
+        return finish('PROVIDER_REFUSED', err.message, {
+          severity: AuditSeverity.WARNING,
+          providerErrorClass: sanitizeProviderErrorClass(err.message),
+        });
+      }
+      // Ownership/connection failures (Forbidden) and unexpected errors
+      // propagate — the audit trail still records the failed attempt.
+      await this.auditService.log({
+        actorUserId: userId,
+        action: AuditAction.TRADE_MANUAL_CLOSE_REQUESTED,
+        resourceType: 'Trade',
+        resourceId: trade.id,
+        severity: AuditSeverity.WARNING,
+        metadata: {
+          requestedAt: requestedAt.toISOString(),
+          brokerConnectionId: trade.brokerConnectionId,
+          instrument: trade.instrument,
+          outcome: 'FAILED',
+          finalStatus: trade.status,
+          errorClass: err instanceof Error ? err.constructor.name : 'UNKNOWN',
+        },
+      });
+      throw err;
+    }
   }
 
   /**

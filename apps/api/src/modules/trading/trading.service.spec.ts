@@ -9,6 +9,7 @@ import { AllocationService } from '../execution/services/allocation.service';
 import { AuditService } from '../audit/audit.service';
 import { DomainEventBus } from '../events/event-bus.service';
 import { AiEngineClient } from '../ai-engine-client/ai-engine-client.service';
+import { LiveModelApprovalGateService } from '../ai-engine-client/live-model-approval.gate';
 import { OnboardingService } from '../users/onboarding.service';
 import { TradingNotReadyException } from '../../common/exceptions/trading-not-ready.exception';
 import { TradingSession, TradingSessionStatus } from '../execution/entities/trading-session.entity';
@@ -223,6 +224,21 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
         { provide: AuditService, useValue: auditService },
         { provide: DomainEventBus, useValue: eventBus },
         { provide: AiEngineClient, useValue: aiEngineClient },
+        // October UAT hardening (WS3): the exact-model LIVE-approval gate —
+        // default = not approved with the typed reason (LIVE runtime status
+        // specs override per-test).
+        {
+          provide: LiveModelApprovalGateService,
+          useValue: {
+            evaluateActiveModelLiveApproval: jest.fn().mockResolvedValue({
+              approved: false,
+              reasonCode: 'MODEL_LIVE_APPROVAL_MISSING',
+              detail: 'The active AI model has not received LIVE approval.',
+              model: { version: null, mode: null, artifactSha256: null, approvedForPaper: null },
+              promotionRecord: null,
+            }),
+          },
+        },
         { provide: OnboardingService, useValue: onboardingService },
         { provide: BrokerAccountSnapshotService, useValue: brokerAccountSnapshotService },
       ],
@@ -1051,7 +1067,10 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
 
       expect(status.registered).toBe(false);
       expect(status.last_decision).toBe('BLOCKED');
-      expect(status.last_reason).toBe('model_not_approved_for_live');
+      // October UAT hardening (WS3): the exact typed reason replaces the old
+      // blanket 'model_not_approved_for_live' (default gate mock reports
+      // MODEL_LIVE_APPROVAL_MISSING for the exact active model).
+      expect(status.last_reason).toBe('model_live_approval_missing');
       expect(aiEngineClient.getSessionStatus).not.toHaveBeenCalled();
     });
   });

@@ -362,7 +362,7 @@ describe('OandaAdapter (v20 REST — BETA)', () => {
       const config = {
         get: (key: string): string | undefined => {
           if (key === 'OANDA_API_BASE_DEMO') return 'https://demo-override.example';
-          if (key === 'OANDA_API_BASE_LIVE') return 'https://live-override.example';
+          if (key === 'OANDA_API_BASE_LIVE') return OANDA_DEFAULT_LIVE_BASE_URL;
           return undefined;
         },
       } as unknown as ConfigService;
@@ -379,9 +379,24 @@ describe('OandaAdapter (v20 REST — BETA)', () => {
       liveAdapter.setMode(BrokerMode.LIVE);
       await liveAdapter.connect(credentials);
       await liveAdapter.getAccountInfo();
-      expect(backend.requests.every((r) => r.baseUrl === 'https://live-override.example')).toBe(
+      expect(backend.requests.every((r) => r.baseUrl === OANDA_DEFAULT_LIVE_BASE_URL)).toBe(
         true,
       );
+    });
+
+    it('October UAT hardening (WS4): a CUSTOM LIVE base URL fails closed — custom endpoints cannot attest a LIVE environment', async () => {
+      const config = {
+        get: (key: string): string | undefined => {
+          if (key === 'OANDA_API_BASE_LIVE') return 'https://live-override.example';
+          return undefined;
+        },
+      } as unknown as ConfigService;
+      const liveAdapter = new OandaAdapter(config, backend as OandaTransport);
+      liveAdapter.setMode(BrokerMode.LIVE);
+
+      await expect(liveAdapter.connect(credentials)).rejects.toMatchObject({
+        code: BrokerErrorCode.ENVIRONMENT_MISMATCH,
+      });
     });
   });
 

@@ -1,13 +1,13 @@
 /**
  * Reconciliation enums — Sprint 50 PR-4 (Directive PHASE G + §25).
  *
- * The discrepancy taxonomy is EXACTLY the directive's list — every category
- * the directive names must be detectable and persisted:
+ * The discrepancy taxonomy covers every directive §25 detection category plus
+ * the October UAT hardening (WS2) protective-order divergence class:
  *
  *   missing internal order / unknown provider order / missing provider order /
  *   unknown provider position / stale order state / position closed
  *   externally / duplicate provider ID / unresolved execution result /
- *   account-state mismatch
+ *   account-state mismatch / protective-order divergence
  */
 
 /** Discrepancy type — one entry per directive §25 detection category. */
@@ -30,9 +30,21 @@ export enum ReconciliationDiscrepancyType {
   UNRESOLVED_EXECUTION_RESULT = 'UNRESOLVED_EXECUTION_RESULT',
   /** Internal account snapshot diverges from the provider's account info. */
   ACCOUNT_STATE_MISMATCH = 'ACCOUNT_STATE_MISMATCH',
+  /**
+   * October UAT hardening (WS2): the provider-side protective orders (SL/TP)
+   * of an OPEN trade are missing/deviated AND the protective reconciliation
+   * loop could not repair them (REPAIR_FAILED / INTERNAL_UNPROVABLE). The
+   * position is unprotected at the provider — an operator-actionable
+   * divergence that must block LIVE new exposure until resolved.
+   *
+   * Resolved automatically when a later protective cycle observes the trade
+   * PROTECTED/REPAIRED, or when the trade leaves the OPEN state.
+   */
+  PROTECTIVE_ORDER_DIVERGENCE = 'PROTECTIVE_ORDER_DIVERGENCE',
 }
 
-/** All directive §25 categories — used for exhaustiveness assertions. */
+/** All directive §25 categories + the WS2 protective class — used for
+ *  exhaustiveness assertions. */
 export const RECONCILIATION_DISCREPANCY_TYPES: readonly ReconciliationDiscrepancyType[] =
   Object.freeze([
     ReconciliationDiscrepancyType.MISSING_INTERNAL_ORDER,
@@ -44,6 +56,7 @@ export const RECONCILIATION_DISCREPANCY_TYPES: readonly ReconciliationDiscrepanc
     ReconciliationDiscrepancyType.DUPLICATE_PROVIDER_ID,
     ReconciliationDiscrepancyType.UNRESOLVED_EXECUTION_RESULT,
     ReconciliationDiscrepancyType.ACCOUNT_STATE_MISMATCH,
+    ReconciliationDiscrepancyType.PROTECTIVE_ORDER_DIVERGENCE,
   ]);
 
 export enum ReconciliationDiscrepancySeverity {

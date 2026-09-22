@@ -10,6 +10,7 @@ import {
 import type { BrokerRegistryEntry } from '@irexpro/types';
 import type { LivePositionRowView } from '@irexpro/types/live-account';
 import type { MarketIntelligenceView } from '@irexpro/types/market-intelligence';
+import { ClosePositionButton } from '@/components/trading/ClosePositionButton';
 import { Alert, Badge, Button, Card, DashboardShell, Input, LoadingSpinner } from '@/components/ui';
 import { useAuth } from '@/context/auth-context';
 import { useNotification } from '@/hooks/useNotification';
@@ -17,6 +18,10 @@ import { api } from '@/lib/api';
 import { formatAgeSeconds } from '@/lib/duration';
 import { mapApiError } from '@/lib/error-mapping';
 import { loadLiveAccountPositions } from '@/lib/live-account';
+import {
+  useManualPositionClose,
+  type ManualPositionCloseController,
+} from '@/lib/manual-position-close';
 import { loadMarketIntelligence } from '@/lib/market-intelligence';
 import { liveStartBlockedReasons } from '@/lib/trader-session';
 import { loadTraderExecutionSnapshot, type TraderExecutionSnapshot } from '@/lib/trader-execution';
@@ -147,7 +152,13 @@ function modelModeLabel(mode: string | null | undefined): string {
   return mode.replaceAll('_', ' ');
 }
 
-function PositionCard({ position }: { position: LivePositionRowView }) {
+function PositionCard({
+  position,
+  closeController,
+}: {
+  position: LivePositionRowView;
+  closeController: ManualPositionCloseController;
+}) {
   return (
     <article className="ai-position-card">
       <div className="ai-position-card__head">
@@ -170,6 +181,9 @@ function PositionCard({ position }: { position: LivePositionRowView }) {
       <div className="ai-position-card__foot">
         <span>{position.brokerName ?? 'Broker'}</span>
         <span>{formatTimestamp(position.openedAt ?? position.createdAt)}</span>
+      </div>
+      <div className="ai-position-card__actions">
+        <ClosePositionButton position={position} controller={closeController} />
       </div>
     </article>
   );
@@ -427,6 +441,15 @@ export default function AiTradingPage() {
     }, 8000);
     return () => window.clearInterval(timer);
   }, [user, refreshTradingData]);
+
+  // Per-position manual close (October UAT hardening, WS1-WEB): one shared
+  // controller for every position card — pending state, one confirmation
+  // dialog, honest outcome toasts and an immediate refresh after ANY
+  // completed attempt. Start/Stop AI Trading semantics are untouched above.
+  const manualPositionClose = useManualPositionClose({
+    notify,
+    onSettled: () => refreshTradingData(false),
+  });
 
   useEffect(() => {
     if (!user) return;
@@ -971,7 +994,11 @@ export default function AiTradingPage() {
                 ) : (
                   <div className="ai-position-grid">
                     {livePositions.map((position) => (
-                      <PositionCard key={position.id} position={position} />
+                      <PositionCard
+                        key={position.id}
+                        position={position}
+                        closeController={manualPositionClose}
+                      />
                     ))}
                   </div>
                 )}
