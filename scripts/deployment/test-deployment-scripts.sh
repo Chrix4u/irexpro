@@ -56,9 +56,10 @@ make_fixture() {
   mkdir -p "$(dirname "$remote")" "$repo/scripts/deployment" "$repo/apps/api" "$repo/services/ai-engine"
   git init --quiet --bare --initial-branch=main "$remote"
   git -C "$repo" init --quiet --initial-branch=main
-  printf '/apps/api/.env\n/services/ai-engine/.env\n' >> "$repo/.git/info/exclude"
+  printf '/apps/api/.env\n/services/ai-engine/.env\n/services/ai-engine/.venv/\n' >> "$repo/.git/info/exclude"
   printf 'NESTJS_INTERNAL_API_KEY=%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' > "$repo/apps/api/.env"
   printf 'NESTJS_INTERNAL_API_KEY=%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' > "$repo/services/ai-engine/.env"
+  printf '# fixture locked Python requirements\n' > "$repo/services/ai-engine/requirements.lock"
   git -C "$repo" config user.email 'ci@example.invalid'
   git -C "$repo" config user.name 'Deployment Safety CI'
 
@@ -94,6 +95,19 @@ make_command_shims() {
   COMMAND_LOG="$root/commands.log"
   mkdir -p "$FAKE_BIN"
   : > "$COMMAND_LOG"
+
+  mkdir -p "$FIXTURE_REPO/services/ai-engine/.venv/bin"
+  cat > "$FIXTURE_REPO/services/ai-engine/.venv/bin/python" <<'SHIM'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+printf 'ai-python %s\n' "$*" >> "$COMMAND_LOG"
+if [[ "${FAKE_AI_PYTHON_INSTALL_FAILURE:-0}" == '1' && "$*" == *'-m pip install'* ]]; then
+  printf 'simulated AI Python dependency install failure\n' >&2
+  exit 44
+fi
+exit 0
+SHIM
+  chmod 700 "$FIXTURE_REPO/services/ai-engine/.venv/bin/python"
 
   cat > "$FAKE_BIN/node" <<'SHIM'
 #!/usr/bin/env bash
@@ -314,6 +328,18 @@ if grep -q '@irexpro/web build' "$COMMAND_LOG"; then
   fail 'Web build must not continue after an API build failure.'
 fi
 
+make_fixture 'ai-python-dependency-failure'
+git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
+expect_failure 'failed_stage=ai-python-dependencies' run_deploy "$FIXTURE_CANDIDATE_SHA" FAKE_AI_PYTHON_INSTALL_FAILURE=1
+grep -Fq 'ai-python -m pip install --disable-pip-version-check --no-input --require-hashes -r ' "$COMMAND_LOG" ||
+  fail 'AI Python dependency sync must install from the hash-locked requirements file.'
+if grep -q '@irexpro/api migration:run' "$COMMAND_LOG"; then
+  fail 'Database migration must not run after AI Python dependency sync failure.'
+fi
+if grep -q '^pm2 ' "$COMMAND_LOG"; then
+  fail 'Runtime mutation occurred even though AI Python dependency sync failed.'
+fi
+
 make_fixture 'migration-failure'
 git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
 expect_failure 'failed_stage=database-migrations' run_deploy "$FIXTURE_CANDIDATE_SHA" FAKE_MIGRATION_FAILURE=1
@@ -437,6 +463,10 @@ deploy_output="$(run_deploy "$FIXTURE_CANDIDATE_SHA")"
 grep -q '@irexpro/api build' "$COMMAND_LOG" || fail 'API build missing.'
 grep -q '@irexpro/web build' "$COMMAND_LOG" || fail 'Web build missing.'
 grep -q '@irexpro/admin build' "$COMMAND_LOG" || fail 'Admin build missing.'
+grep -Fq 'ai-python -m pip install --disable-pip-version-check --no-input --require-hashes -r ' "$COMMAND_LOG" ||
+  fail 'Locked AI Python dependency install missing.'
+grep -Fq 'ai-python -m pip check' "$COMMAND_LOG" || fail 'AI Python dependency consistency check missing.'
+grep -Fq 'ai-python -c import pyarrow' "$COMMAND_LOG" || fail 'PyArrow runtime import verification missing.'
 grep -q '@irexpro/api migration:run' "$COMMAND_LOG" || fail 'Database migration missing.'
 grep -q '^pm2 restart irexpro-ai-staging ' "$COMMAND_LOG" || fail 'AI engine restart missing.'
 
