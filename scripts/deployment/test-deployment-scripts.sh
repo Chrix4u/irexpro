@@ -53,7 +53,7 @@ make_fixture() {
   local remote="$root/remotes/Chrix4u/irexpro.git"
   local repo="$root/repo"
 
-  mkdir -p "$(dirname "$remote")" "$repo/scripts/deployment" "$repo/apps/api" "$repo/services/ai-engine"
+  mkdir -p "$(dirname "$remote")" "$repo/scripts/deployment" "$repo/apps/api" "$repo/services/ai-engine/.venv/bin"
   git init --quiet --bare --initial-branch=main "$remote"
   git -C "$repo" init --quiet --initial-branch=main
   printf '/apps/api/.env\n/services/ai-engine/.env\n' >> "$repo/.git/info/exclude"
@@ -64,6 +64,18 @@ make_fixture() {
 
   cp "$SCRIPT_DIR/deploy-staging.sh" "$repo/scripts/deployment/deploy-staging.sh"
   cp "$SCRIPT_DIR/rollback-staging.sh" "$repo/scripts/deployment/rollback-staging.sh"
+  cat > "$repo/services/ai-engine/.venv/bin/python" <<'SHIM'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+printf 'python %s\n' "$*" >> "$COMMAND_LOG"
+if [[ "${FAKE_PYARROW_FAILURE:-0}" == '1' && "$*" == *'import pyarrow'* ]]; then
+  printf 'simulated pyarrow import failure\n' >&2
+  exit 44
+fi
+exit 0
+SHIM
+  chmod 700 "$repo/services/ai-engine/.venv/bin/python"
+  printf '# fixture requirements lock\n' > "$repo/services/ai-engine/requirements.lock"
   printf '{"packageManager":"%s"}\n' "$ROOT_PACKAGE_MANAGER" > "$repo/package.json"
   printf 'prior\n' > "$repo/release-marker.txt"
   git -C "$repo" add .
@@ -301,6 +313,15 @@ printf 'NESTJS_INTERNAL_API_KEY=%s\n' 'dev_internal_key_change_me' > "$FIXTURE_R
 printf 'NESTJS_INTERNAL_API_KEY=%s\n' 'dev_internal_key_change_me' > "$FIXTURE_REPO/services/ai-engine/.env"
 expect_failure 'failed_stage=internal-api-key-preflight' run_deploy "$FIXTURE_CANDIDATE_SHA"
 [[ ! -s "$COMMAND_LOG" ]] || fail 'Development internal-key placeholder must fail before install/build/restart commands.'
+
+make_fixture 'pyarrow-runtime-failure'
+git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
+expect_failure 'failed_stage=ai-python-dependency-install' run_deploy "$FIXTURE_CANDIDATE_SHA" FAKE_PYARROW_FAILURE=1
+grep -q '^python -m pip install ' "$COMMAND_LOG" ||
+  fail 'AI Python locked dependency install was not attempted.'
+if grep -q '^pm2 ' "$COMMAND_LOG"; then
+  fail 'Runtime mutation occurred even though the AI Python runtime preflight failed.'
+fi
 
 make_fixture 'build-failure'
 git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
