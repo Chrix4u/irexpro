@@ -1177,6 +1177,7 @@ def _qualification_gate_from_aggregate(
     overall: dict[str, Any],
     fold_reports: list[dict[str, Any]],
     by_instrument: dict[str, Any],
+    opportunity_classification: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     thresholds = _locked_gate_snapshot()
     positive_folds = sum(
@@ -1218,6 +1219,14 @@ def _qualification_gate_from_aggregate(
         "positive_instrument_fraction": instrument_fraction
         >= thresholds["min_positive_instrument_fraction"],
     }
+    if opportunity_classification is not None:
+        opportunity_balanced = float(
+            opportunity_classification["balanced_accuracy"]
+        )
+        observed["opportunity_balanced_accuracy"] = opportunity_balanced
+        checks["opportunity_balanced_accuracy"] = (
+            opportunity_balanced >= thresholds["min_balanced_accuracy"]
+        )
     return {
         "thresholds": thresholds,
         "observed": observed,
@@ -1332,14 +1341,20 @@ def _aggregate_experiment(
         )
         for instrument, group in predictions.groupby("instrument", sort=True)
     }
+    opportunity_classification = _opportunity_classification(
+        predictions,
+        confidence_floor=confidence_floor,
+    )
     gate = _qualification_gate_from_aggregate(
         overall=overall,
         fold_reports=fold_reports,
         by_instrument=by_instrument,
+        opportunity_classification=opportunity_classification,
     )
     return {
         "experiment": name,
         "overall": overall,
+        "opportunity_classification": opportunity_classification,
         "by_instrument": by_instrument,
         "pooled_architecture_diagnostic": _pooled_architecture_diagnostic(
             by_instrument
@@ -1373,6 +1388,11 @@ def _candidate_comparison_table(
             {
                 "experiment": name,
                 "balanced_accuracy": float(classification["balanced_accuracy"]),
+                "opportunity_balanced_accuracy": (
+                    float(report["opportunity_classification"]["balanced_accuracy"])
+                    if report.get("opportunity_classification") is not None
+                    else None
+                ),
                 "sharpe_ratio": (
                     float(trading["sharpe_ratio"])
                     if trading["sharpe_ratio"] is not None
@@ -1529,6 +1549,12 @@ def run_nested_qualification_experiments(
         raise ValueError("qualification dataset must contain both directional classes")
     if experiments is None:
         experiments = default_experiments()
+    if any(experiment.mode == "two_stage_actionable" for experiment in experiments):
+        dataset = _ensure_actionable_target(dataset)
+        if dataset[ACTIONABLE_TARGET_COLUMN].nunique() < 2:
+            raise ValueError(
+                "qualification dataset must contain actionable and no-trade classes"
+            )
     if not experiments or experiments[0].name != "baseline":
         raise ValueError("experiment matrix must start with the locked baseline")
     if (checkpoint_dir is None) != (checkpoint_fingerprint is None):
@@ -1707,6 +1733,7 @@ def run_nested_qualification_experiments(
         "purpose": "model_qualification_research_only",
         "horizon_bars": horizon_bars,
         "confidence_floor": confidence_floor,
+        "actionable_label_policy": ACTIONABLE_LABEL_POLICY,
         "untouched_final_test_used": False,
         "outer_validation_used_for_tuning": False,
         "experiment_count": len(experiments),
@@ -1740,6 +1767,7 @@ def evaluate_qualification_corpora(
         horizon_bars=horizon_bars,
         decision_time_before=decision_time_before,
     )
+    pooled = _ensure_actionable_target(pooled)
     experiments = default_experiments()
     checkpoint_fingerprint = _qualification_checkpoint_fingerprint(
         dataset_sha256=hashes,
