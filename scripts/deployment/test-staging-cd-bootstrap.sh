@@ -148,6 +148,7 @@ for horizon in 1 5 10; do
   grep -Fq "model_qualification_${horizon}m.json" "$RESEARCH_WORKFLOW" ||
     fail "Missing durable model-qualification report for ${horizon}m."
 done
+# shellcheck disable=SC2016
 grep -Fq -- '--decision-time-before "$qualification_cutoff"' "$RESEARCH_WORKFLOW" ||
   fail 'Qualification stages must enforce the research-only decision-time cutoff.'
 grep -Fq 'untouched_final_test_used !== false' "$RESEARCH_WORKFLOW" ||
