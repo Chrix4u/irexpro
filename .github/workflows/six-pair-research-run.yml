@@ -2728,8 +2728,8 @@ jobs:
       group: irexpro-staging-worktree
       cancel-in-progress: false
     runs-on: ubuntu-24.04
-    # One bounded horizon per job. Fold checkpoints make even this stage
-    # independently resumable if it is cancelled mid-evaluation.
+    # Nested calibration/search is intentionally isolated per horizon so the
+    # VPS stays bounded and a retry never needs to repeat other horizons.
     timeout-minutes: 330
     environment:
       name: staging
@@ -3047,8 +3047,8 @@ jobs:
       group: irexpro-staging-worktree
       cancel-in-progress: false
     runs-on: ubuntu-24.04
-    # One bounded horizon per job. Fold checkpoints make even this stage
-    # independently resumable if it is cancelled mid-evaluation.
+    # Nested calibration/search is intentionally isolated per horizon so the
+    # VPS stays bounded and a retry never needs to repeat other horizons.
     timeout-minutes: 330
     environment:
       name: staging
@@ -3366,8 +3366,8 @@ jobs:
       group: irexpro-staging-worktree
       cancel-in-progress: false
     runs-on: ubuntu-24.04
-    # One bounded horizon per job. Fold checkpoints make even this stage
-    # independently resumable if it is cancelled mid-evaluation.
+    # Nested calibration/search is intentionally isolated per horizon so the
+    # VPS stays bounded and a retry never needs to repeat other horizons.
     timeout-minutes: 330
     environment:
       name: staging
