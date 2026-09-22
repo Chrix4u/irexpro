@@ -26,7 +26,8 @@
 - Selected horizon:
 - Runtime feature/timeframe profile:
 - Confidence threshold:
-- Six-pair universe verified: yes / no
+- Market-data scope: deterministic PAPER / real-provider DEMO
+- Six-pair universe verified (DEMO only; N/A for deterministic PAPER): yes / no / N/A
 - Pairs missing, if any:
 
 ## User / risk evidence
@@ -143,8 +144,8 @@ For each observed accepted signal/trade:
 
 ## Exit decision
 
-- PAPER UAT: PASS / HOLD / NOT RUN
-- DEMO UAT: PASS / HOLD / NOT RUN
+- PAPER pipeline UAT: PASS / HOLD / NOT RUN
+- DEMO real-time performance UAT: PASS / HOLD / NOT RUN
 - Reason:
 - Next action:
 - Reviewer:
