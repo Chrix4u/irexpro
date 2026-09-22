@@ -993,10 +993,10 @@ def _run_pooled_walk_forward_core(
     all_predictions = pd.concat(prediction_frames, ignore_index=True)
     overall_by_instrument = {
         instrument: _summarize_predictions(
-                group,
-                horizon_bars=horizon_bars,
-                confidence_threshold=confidence_threshold,
-            )
+            group,
+            horizon_bars=horizon_bars,
+            confidence_threshold=confidence_threshold,
+        )
         for instrument, group in all_predictions.groupby("instrument", sort=True)
     }
     report = {
