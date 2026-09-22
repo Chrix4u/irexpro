@@ -2956,6 +2956,36 @@ jobs:
               'gate=' + (row.research_gate_passed ? 'PASS' : 'HOLD'),
               'follow_up=' + (comparison.interesting_for_follow_up ? 'YES' : 'NO'),
             ].join(' '));
+            const architecture = experiment.pooled_architecture_diagnostic || {};
+            console.log([
+              'QUALIFICATION_ARCHITECTURE',
+              'horizon=' + report.horizon_bars + 'm',
+              'experiment=' + row.experiment,
+              'heterogeneity=' + Boolean(architecture.material_pair_heterogeneity),
+              'balanced_accuracy_range=' + Number(architecture.balanced_accuracy_range || 0).toFixed(6),
+              'predicted_long_range=' + Number(architecture.predicted_long_fraction_range || 0).toFixed(6),
+              'confidence_coverage_range=' + Number(architecture.confidence_coverage_range || 0).toFixed(6),
+              'normalization_follow_up=' + Boolean(architecture.stronger_instrument_normalization_research_warranted),
+              'mixture_follow_up=' + Boolean(architecture.future_mixture_of_experts_research_warranted),
+            ].join(' '));
+
+            const gains = new Map();
+            for (const fold of experiment.folds || []) {
+              for (const item of fold.feature_importance_gain || []) {
+                const feature = String(item.feature || '');
+                if (!feature) continue;
+                gains.set(feature, (gains.get(feature) || 0) + Number(item.normalized_gain || 0));
+              }
+            }
+            const topFeatures = [...gains.entries()]
+              .sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0]))
+              .slice(0, 8)
+              .map(([feature, gain]) => feature + ':' + gain.toFixed(6))
+              .join(',');
+            console.log(
+              'QUALIFICATION_TOP_FEATURES horizon=' + report.horizon_bars +
+              'm experiment=' + row.experiment + ' features=' + (topFeatures || 'none')
+            );
           }
           const passing = (report.candidate_comparison_table || []).filter((row) => row.research_gate_passed);
           if (passing.length) {
@@ -3033,6 +3063,29 @@ jobs:
           printf 'RESEARCH_PROCESS_EXIT candidate=%s status=%s elapsed_seconds=%s\n' \
             "$CANDIDATE_SHA" "$research_status" "$research_elapsed"
           exit "$research_status"
+      - name: Collect qualification evidence 1m
+        if: steps.current.outputs.current == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          scp \
+            -i "$HOME/.ssh/irexpro_staging" \
+            -P "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST:/home/lightworld/research/irexpro-six-pair/$CANDIDATE_SHA/reports/model_qualification_1m.json" \
+            "$RUNNER_TEMP/model_qualification_1m.json"
+
+      - name: Upload qualification evidence 1m
+        if: steps.current.outputs.current == 'true'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: model-qualification-1m-${{ env.CANDIDATE_SHA }}
+          path: ${{ runner.temp }}/model_qualification_1m.json
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Remove ephemeral SSH material
         if: ${{ always() }}
         shell: bash
@@ -3275,6 +3328,36 @@ jobs:
               'gate=' + (row.research_gate_passed ? 'PASS' : 'HOLD'),
               'follow_up=' + (comparison.interesting_for_follow_up ? 'YES' : 'NO'),
             ].join(' '));
+            const architecture = experiment.pooled_architecture_diagnostic || {};
+            console.log([
+              'QUALIFICATION_ARCHITECTURE',
+              'horizon=' + report.horizon_bars + 'm',
+              'experiment=' + row.experiment,
+              'heterogeneity=' + Boolean(architecture.material_pair_heterogeneity),
+              'balanced_accuracy_range=' + Number(architecture.balanced_accuracy_range || 0).toFixed(6),
+              'predicted_long_range=' + Number(architecture.predicted_long_fraction_range || 0).toFixed(6),
+              'confidence_coverage_range=' + Number(architecture.confidence_coverage_range || 0).toFixed(6),
+              'normalization_follow_up=' + Boolean(architecture.stronger_instrument_normalization_research_warranted),
+              'mixture_follow_up=' + Boolean(architecture.future_mixture_of_experts_research_warranted),
+            ].join(' '));
+
+            const gains = new Map();
+            for (const fold of experiment.folds || []) {
+              for (const item of fold.feature_importance_gain || []) {
+                const feature = String(item.feature || '');
+                if (!feature) continue;
+                gains.set(feature, (gains.get(feature) || 0) + Number(item.normalized_gain || 0));
+              }
+            }
+            const topFeatures = [...gains.entries()]
+              .sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0]))
+              .slice(0, 8)
+              .map(([feature, gain]) => feature + ':' + gain.toFixed(6))
+              .join(',');
+            console.log(
+              'QUALIFICATION_TOP_FEATURES horizon=' + report.horizon_bars +
+              'm experiment=' + row.experiment + ' features=' + (topFeatures || 'none')
+            );
           }
           const passing = (report.candidate_comparison_table || []).filter((row) => row.research_gate_passed);
           if (passing.length) {
@@ -3352,6 +3435,29 @@ jobs:
           printf 'RESEARCH_PROCESS_EXIT candidate=%s status=%s elapsed_seconds=%s\n' \
             "$CANDIDATE_SHA" "$research_status" "$research_elapsed"
           exit "$research_status"
+      - name: Collect qualification evidence 5m
+        if: steps.current.outputs.current == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          scp \
+            -i "$HOME/.ssh/irexpro_staging" \
+            -P "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST:/home/lightworld/research/irexpro-six-pair/$CANDIDATE_SHA/reports/model_qualification_5m.json" \
+            "$RUNNER_TEMP/model_qualification_5m.json"
+
+      - name: Upload qualification evidence 5m
+        if: steps.current.outputs.current == 'true'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: model-qualification-5m-${{ env.CANDIDATE_SHA }}
+          path: ${{ runner.temp }}/model_qualification_5m.json
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Remove ephemeral SSH material
         if: ${{ always() }}
         shell: bash
@@ -3594,6 +3700,36 @@ jobs:
               'gate=' + (row.research_gate_passed ? 'PASS' : 'HOLD'),
               'follow_up=' + (comparison.interesting_for_follow_up ? 'YES' : 'NO'),
             ].join(' '));
+            const architecture = experiment.pooled_architecture_diagnostic || {};
+            console.log([
+              'QUALIFICATION_ARCHITECTURE',
+              'horizon=' + report.horizon_bars + 'm',
+              'experiment=' + row.experiment,
+              'heterogeneity=' + Boolean(architecture.material_pair_heterogeneity),
+              'balanced_accuracy_range=' + Number(architecture.balanced_accuracy_range || 0).toFixed(6),
+              'predicted_long_range=' + Number(architecture.predicted_long_fraction_range || 0).toFixed(6),
+              'confidence_coverage_range=' + Number(architecture.confidence_coverage_range || 0).toFixed(6),
+              'normalization_follow_up=' + Boolean(architecture.stronger_instrument_normalization_research_warranted),
+              'mixture_follow_up=' + Boolean(architecture.future_mixture_of_experts_research_warranted),
+            ].join(' '));
+
+            const gains = new Map();
+            for (const fold of experiment.folds || []) {
+              for (const item of fold.feature_importance_gain || []) {
+                const feature = String(item.feature || '');
+                if (!feature) continue;
+                gains.set(feature, (gains.get(feature) || 0) + Number(item.normalized_gain || 0));
+              }
+            }
+            const topFeatures = [...gains.entries()]
+              .sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0]))
+              .slice(0, 8)
+              .map(([feature, gain]) => feature + ':' + gain.toFixed(6))
+              .join(',');
+            console.log(
+              'QUALIFICATION_TOP_FEATURES horizon=' + report.horizon_bars +
+              'm experiment=' + row.experiment + ' features=' + (topFeatures || 'none')
+            );
           }
           const passing = (report.candidate_comparison_table || []).filter((row) => row.research_gate_passed);
           if (passing.length) {
@@ -3671,6 +3807,29 @@ jobs:
           printf 'RESEARCH_PROCESS_EXIT candidate=%s status=%s elapsed_seconds=%s\n' \
             "$CANDIDATE_SHA" "$research_status" "$research_elapsed"
           exit "$research_status"
+      - name: Collect qualification evidence 10m
+        if: steps.current.outputs.current == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          scp \
+            -i "$HOME/.ssh/irexpro_staging" \
+            -P "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST:/home/lightworld/research/irexpro-six-pair/$CANDIDATE_SHA/reports/model_qualification_10m.json" \
+            "$RUNNER_TEMP/model_qualification_10m.json"
+
+      - name: Upload qualification evidence 10m
+        if: steps.current.outputs.current == 'true'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: model-qualification-10m-${{ env.CANDIDATE_SHA }}
+          path: ${{ runner.temp }}/model_qualification_10m.json
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Remove ephemeral SSH material
         if: ${{ always() }}
         shell: bash
