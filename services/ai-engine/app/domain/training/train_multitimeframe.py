@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import hashlib
 import json
 import os
@@ -797,6 +798,10 @@ def _run_pooled_walk_forward_core(
             "validation_end": validation_frame["decision_time"].max().isoformat(),
         }
 
+        # fit_train + early_stop_frame now contain the only training rows needed
+        # below. Release the larger outer-train copy before model allocation.
+        del train
+
         checkpoint = None
         if checkpoint_dir is not None and checkpoint_fingerprint:
             checkpoint = _load_fold_checkpoint(
@@ -820,6 +825,8 @@ def _run_pooled_walk_forward_core(
                     ]
                 )
             )
+            del validation_frame, fit_train, early_stop_frame
+            gc.collect()
             continue
 
         fold_started = time.monotonic()
@@ -913,6 +920,8 @@ def _run_pooled_walk_forward_core(
                 ]
             )
         )
+        del model, validation_frame, fit_train, early_stop_frame
+        gc.collect()
 
     all_predictions = pd.concat(prediction_frames, ignore_index=True)
     overall_by_instrument = {
