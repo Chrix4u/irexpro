@@ -2722,7 +2722,7 @@ jobs:
 
   qualification-1m:
     name: Model qualification stage 1m
-    needs: [validate, qualification-10m]
+    needs: [validate, horizon-10m]
     if: needs.validate.outputs.run == 'true'
     concurrency:
       group: irexpro-staging-worktree
@@ -2779,7 +2779,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           research_started_epoch="$(date +%s)"
-          printf 'RESEARCH_STAGE_START stage=horizon horizon=10m candidate=%s started_epoch=%s\n' \
+          printf 'RESEARCH_STAGE_START stage=qualification horizon=1m candidate=%s started_epoch=%s\n' \
             "$CANDIDATE_SHA" "$research_started_epoch"
 
           ssh \
@@ -3098,7 +3098,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           research_started_epoch="$(date +%s)"
-          printf 'RESEARCH_STAGE_START stage=horizon horizon=10m candidate=%s started_epoch=%s\n' \
+          printf 'RESEARCH_STAGE_START stage=qualification horizon=5m candidate=%s started_epoch=%s\n' \
             "$CANDIDATE_SHA" "$research_started_epoch"
 
           ssh \
@@ -3417,7 +3417,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           research_started_epoch="$(date +%s)"
-          printf 'RESEARCH_STAGE_START stage=horizon horizon=10m candidate=%s started_epoch=%s\n' \
+          printf 'RESEARCH_STAGE_START stage=qualification horizon=10m candidate=%s started_epoch=%s\n' \
             "$CANDIDATE_SHA" "$research_started_epoch"
 
           ssh \
@@ -3679,7 +3679,7 @@ jobs:
 
   select-horizon:
     name: Summarize study and select research horizon
-    needs: [validate, horizon-10m]
+    needs: [validate, qualification-10m]
     if: needs.validate.outputs.run == 'true'
     concurrency:
       group: irexpro-staging-worktree
