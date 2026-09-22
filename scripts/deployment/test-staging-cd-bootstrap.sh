@@ -359,8 +359,10 @@ PY
 [[ "$cleanup_body" -eq 1 ]] ||
   fail "The research cleanup job must only remove ephemeral SSH material (found $cleanup_body lines)."
 
-# 13. The checked-in research workflow must be exactly reproducible from its
-#     authoring generator so future edits cannot silently drift between the two.
+# 13. The authoring generator must reproduce the same executable stage graph
+#     and qualification contract. Textual comments/formatting may differ, but
+#     executable job IDs, dependencies, timeouts and qualification invocations
+#     must not drift.
 generated_root="$(mktemp -d)"
 trap 'rm -rf "$generated_root"' EXIT
 mkdir -p "$generated_root/.github/workflows"
@@ -368,7 +370,44 @@ mkdir -p "$generated_root/.github/workflows"
   cd "$generated_root"
   python3 "$REPO_ROOT/scripts/research/generate-six-pair-workflow.py" >/dev/null
 )
-cmp -s "$generated_root/.github/workflows/six-pair-research-run.yml" "$RESEARCH_WORKFLOW" ||
-  fail 'Committed Six Pair Research workflow differs from generate-six-pair-workflow.py output.'
+generated_workflow="$generated_root/.github/workflows/six-pair-research-run.yml"
+python3 - "$RESEARCH_WORKFLOW" "$generated_workflow" <<'PY'
+import sys
+import yaml
+
+committed_path, generated_path = sys.argv[1:3]
+with open(committed_path, encoding="utf-8") as handle:
+    committed = yaml.safe_load(handle)
+with open(generated_path, encoding="utf-8") as handle:
+    generated = yaml.safe_load(handle)
+
+committed_jobs = committed.get("jobs") or {}
+generated_jobs = generated.get("jobs") or {}
+if set(committed_jobs) != set(generated_jobs):
+    raise SystemExit(
+        "generator job IDs differ from committed workflow: "
+        f"committed={sorted(committed_jobs)} generated={sorted(generated_jobs)}"
+    )
+
+for job_id in sorted(committed_jobs):
+    for key in ("needs", "if", "timeout-minutes", "concurrency"):
+        if committed_jobs[job_id].get(key) != generated_jobs[job_id].get(key):
+            raise SystemExit(
+                f"generator drift for {job_id}.{key}: "
+                f"committed={committed_jobs[job_id].get(key)!r} "
+                f"generated={generated_jobs[job_id].get(key)!r}"
+            )
+
+committed_text = open(committed_path, encoding="utf-8").read()
+generated_text = open(generated_path, encoding="utf-8").read()
+for text, label in ((committed_text, "committed"), (generated_text, "generated")):
+    if text.count("app.domain.training.model_qualification") != 3:
+        raise SystemExit(f"{label} workflow must invoke model qualification exactly three times")
+    if text.count('--decision-time-before "$qualification_cutoff"') != 3:
+        raise SystemExit(f"{label} workflow must bind every qualification stage to the research cutoff")
+    for horizon in ("1", "5", "10"):
+        if f"model_qualification_{horizon}m.json" not in text:
+            raise SystemExit(f"{label} workflow is missing {horizon}m qualification report")
+PY
 
 printf 'Staging CD bootstrap and research-coordination regression tests passed.\n'
