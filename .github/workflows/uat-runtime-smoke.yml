@@ -1,32 +1,94 @@
 name: UAT Runtime Smoke
 
 on:
-  push:
-    branches:
-      - 'fix/uat-ai-trading-core-read-retry'
-    paths:
-      - '.github/workflows/uat-runtime-smoke.yml'
+  workflow_run:
+    workflows: ['Six Pair Research Run']
+    types: [completed]
   workflow_dispatch:
+    inputs:
+      research_run_id:
+        description: 'Optional Six Pair Research Run ID whose promotion outcome must be verified'
+        required: false
+        type: string
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   probe:
-    name: Probe live UAT web/API routing
+    name: Verify PAPER UAT runtime handoff
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
       APP_ORIGIN: https://irexpro.lightworldtech.com
       API_BASE: https://irexpro.lightworldtech.com/api/v1
+
     steps:
+      - name: Classify research promotion outcome
+        id: promotion
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || inputs.research_run_id }}
+        run: |
+          set -Eeuo pipefail
+
+          if [[ -z "${RESEARCH_RUN_ID:-}" ]]; then
+            if [[ "$GITHUB_EVENT_NAME" == "workflow_run" ]]; then
+              printf 'promoted=false\n' >> "$GITHUB_OUTPUT"
+              printf 'PAPER_UAT_HOLD reason=missing_research_run_id\n'
+              exit 0
+            fi
+            printf 'promoted=not_applicable\n' >> "$GITHUB_OUTPUT"
+            printf 'UAT_SMOKE_MODE trigger=%s promotion_check=not_applicable\n' "$GITHUB_EVENT_NAME"
+            exit 0
+          fi
+
+          [[ "$RESEARCH_RUN_ID" =~ ^[0-9]+$ ]] || {
+            printf 'promoted=false\n' >> "$GITHUB_OUTPUT"
+            printf 'PAPER_UAT_HOLD reason=invalid_research_run_id value=%s\n' "$RESEARCH_RUN_ID"
+            exit 0
+          }
+          archive="$(mktemp)"
+          logs_dir="$(mktemp -d)"
+          trap 'rm -f "$archive"; rm -rf "$logs_dir"' EXIT
+
+          curl --fail --silent --show-error --location \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$RESEARCH_RUN_ID/logs" \
+            --output "$archive"
+
+          unzip -qq "$archive" -d "$logs_dir"
+
+          if grep -Rqs -- 'MODEL_PROMOTED_PAPER_UAT' "$logs_dir"; then
+            printf 'promoted=true\n' >> "$GITHUB_OUTPUT"
+            printf 'PAPER_UAT_PROMOTION_VERIFIED research_run_id=%s\n' "$RESEARCH_RUN_ID"
+            exit 0
+          fi
+
+          printf 'promoted=false\n' >> "$GITHUB_OUTPUT"
+          if grep -Rhs -- 'MODEL_PROMOTION_HOLD' "$logs_dir" | tail -n 1; then
+            :
+          else
+            printf 'PAPER_UAT_HOLD reason=no_model_promotion_marker research_run_id=%s\n' "$RESEARCH_RUN_ID"
+          fi
+
       - name: Verify public web and health endpoints
         shell: bash
         run: |
           set -Eeuo pipefail
           curl --fail --silent --show-error --location --max-time 15 --output /dev/null "$APP_ORIGIN/login"
+
           live_payload="$(curl --fail --silent --show-error --max-time 15 "$API_BASE/health/live")"
           ready_payload="$(curl --fail --silent --show-error --max-time 15 "$API_BASE/health/ready")"
+
           LIVE_PAYLOAD="$live_payload" READY_PAYLOAD="$ready_payload" node --input-type=module <<'NODE'
           const live = JSON.parse(process.env.LIVE_PAYLOAD);
           const ready = JSON.parse(process.env.READY_PAYLOAD);
@@ -34,25 +96,31 @@ jobs:
           if (ready.status !== 'ready') throw new Error('health/ready did not report ready');
           NODE
 
-      - name: Verify protected AI Trading routes are reachable
+      - name: Verify protected trading routes are reachable
         shell: bash
         run: |
           set -Eeuo pipefail
           probe_protected() {
             local path="$1"
+            local body
             local code
-            code="$(curl --silent --show-error --output /tmp/uat-body --write-out '%{http_code}' --max-time 15 "$API_BASE/$path")"
+            body="$(mktemp)"
+            code="$(curl --silent --show-error --output "$body" --write-out '%{http_code}' --max-time 15 "$API_BASE/$path")"
             if [[ "$code" != "401" ]]; then
               printf 'Expected 401 from protected route %s, got %s\n' "$path" "$code" >&2
-              cat /tmp/uat-body >&2 || true
+              cat "$body" >&2 || true
+              rm -f "$body"
               exit 1
             fi
+            rm -f "$body"
           }
+
           probe_protected 'risk/status'
           probe_protected 'trading/sessions/active'
           probe_protected 'broker/connections'
+          probe_protected 'live-account/overview'
 
-      - name: Verify browser preflight contract for AI Trading routes
+      - name: Verify browser preflight contract for trading routes
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -60,13 +128,36 @@ jobs:
             local path="$1"
             local headers
             headers="$(mktemp)"
-            curl --silent --show-error --output /dev/null --dump-header "$headers" --request OPTIONS --max-time 15               --header "Origin: $APP_ORIGIN"               --header 'Access-Control-Request-Method: GET'               --header 'Access-Control-Request-Headers: authorization,content-type'               "$API_BASE/$path"
+            curl --silent --show-error --output /dev/null --dump-header "$headers" --request OPTIONS --max-time 15 \
+              --header "Origin: $APP_ORIGIN" \
+              --header 'Access-Control-Request-Method: GET' \
+              --header 'Access-Control-Request-Headers: authorization,content-type' \
+              "$API_BASE/$path"
             grep -qi '^access-control-allow-origin: https://irexpro\.lightworldtech\.com' "$headers"
             grep -qi '^access-control-allow-credentials: true' "$headers"
             grep -qi '^access-control-allow-methods:.*GET' "$headers"
             grep -qi '^access-control-allow-headers:.*Authorization' "$headers"
             rm -f "$headers"
           }
+
           probe_preflight 'risk/status'
           probe_preflight 'trading/sessions/active'
           probe_preflight 'broker/connections'
+          probe_preflight 'live-account/overview'
+
+      - name: Report PAPER UAT handoff status
+        shell: bash
+        env:
+          PROMOTED: ${{ steps.promotion.outputs.promoted }}
+          RESEARCH_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || inputs.research_run_id }}
+        run: |
+          set -Eeuo pipefail
+          if [[ "$PROMOTED" == "false" ]]; then
+            printf 'PAPER_UAT_HOLD research_completed_without_paper_promotion\n' >&2
+            exit 1
+          fi
+          if [[ "$PROMOTED" == "true" ]]; then
+            printf 'PAPER_UAT_RUNTIME_SMOKE_PASS promotion_verified=true research_run_id=%s\n' "${RESEARCH_RUN_ID:-unknown}"
+          else
+            printf 'UAT_RUNTIME_SMOKE_PASS promotion_verified=not_applicable\n'
+          fi
