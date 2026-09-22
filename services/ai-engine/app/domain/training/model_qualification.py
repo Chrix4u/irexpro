@@ -869,6 +869,14 @@ def _metric_or_negative_infinity(value: Any) -> float:
     return float(value) if value is not None else float("-inf")
 
 
+def _positive_return_concentration(values: list[float]) -> float | None:
+    positive = [max(float(value), 0.0) for value in values]
+    total = float(sum(positive))
+    if total <= 0.0:
+        return None
+    return float(max(positive) / total)
+
+
 def _broad_improvement_flag(
     baseline: dict[str, Any],
     candidate: dict[str, Any],
@@ -896,16 +904,51 @@ def _broad_improvement_flag(
         and _metric_or_negative_infinity(cand_trade["profit_factor"])
         < _metric_or_negative_infinity(base_trade["profit_factor"])
     )
-    very_small_warning = "very_small_non_overlapping_trade_sample" in set(
+    evidence_warnings = set(
         candidate["overall"].get("evidence_sufficiency_warnings", [])
     )
+    small_sample_rejection = bool(
+        {
+            "very_small_non_overlapping_trade_sample",
+            "high_sharpe_with_small_trade_sample",
+        }
+        & evidence_warnings
+    )
+
+    pair_profit_concentration = _positive_return_concentration(
+        [
+            float(report["trading"]["total_return"])
+            for report in candidate["by_instrument"].values()
+        ]
+    )
+    fold_profit_concentration = _positive_return_concentration(
+        [
+            float(report["aggregate"]["trading"]["total_return"])
+            for report in candidate["folds"]
+        ]
+    )
+    pair_concentration_rejection = bool(
+        pair_profit_concentration is not None and pair_profit_concentration > 0.50
+    )
+    fold_concentration_rejection = bool(
+        fold_profit_concentration is not None and fold_profit_concentration > 0.50
+    )
+
+    base_drawdown = float(base_trade["max_drawdown"])
+    candidate_drawdown = float(cand_trade["max_drawdown"])
+    material_drawdown_limit = max(base_drawdown + 0.005, base_drawdown * 1.25)
+    material_drawdown_rejection = candidate_drawdown > material_drawdown_limit
+
     interesting = (
         balanced_uplift >= 0.002
         and brier_delta <= 0.002
         and fold_not_worse
         and instrument_not_worse
         and economics_not_both_worse
-        and not very_small_warning
+        and not small_sample_rejection
+        and not pair_concentration_rejection
+        and not fold_concentration_rejection
+        and not material_drawdown_rejection
     )
     return {
         "interesting_for_follow_up": interesting,
@@ -914,7 +957,13 @@ def _broad_improvement_flag(
         "positive_fold_fraction_not_worse": fold_not_worse,
         "positive_instrument_fraction_not_worse": instrument_not_worse,
         "economics_not_both_worse": economics_not_both_worse,
-        "small_sample_rejection": very_small_warning,
+        "small_sample_rejection": small_sample_rejection,
+        "pair_positive_profit_concentration": pair_profit_concentration,
+        "fold_positive_profit_concentration": fold_profit_concentration,
+        "pair_concentration_rejection": pair_concentration_rejection,
+        "fold_concentration_rejection": fold_concentration_rejection,
+        "material_drawdown_limit": material_drawdown_limit,
+        "material_drawdown_rejection": material_drawdown_rejection,
         "note": (
             "Research comparison only; this flag is not a promotion gate and cannot "
             "override the immutable research or untouched-test gates."
