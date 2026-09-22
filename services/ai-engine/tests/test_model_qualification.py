@@ -526,3 +526,113 @@ def test_fixed_single_calibration_strategy_skips_redundant_inner_model_selection
     assert required_metrics.issubset(comparison[0])
     assert comparison[0]["calibration_methods"] == ["none"]
     assert comparison[1]["calibration_methods"] == ["platt"]
+
+
+def _comparison_fixture(
+    *,
+    balanced_accuracy: float,
+    brier_score: float,
+    sharpe_ratio: float,
+    profit_factor: float,
+    max_drawdown: float,
+    positive_fold_fraction: float,
+    positive_instrument_fraction: float,
+    pair_returns: list[float],
+    fold_returns: list[float],
+    warnings: list[str] | None = None,
+) -> dict[str, object]:
+    return {
+        "overall": {
+            "classification": {
+                "balanced_accuracy": balanced_accuracy,
+                "brier_score": brier_score,
+            },
+            "trading": {
+                "sharpe_ratio": sharpe_ratio,
+                "profit_factor": profit_factor,
+                "max_drawdown": max_drawdown,
+            },
+            "evidence_sufficiency_warnings": warnings or [],
+        },
+        "research_gate": {
+            "observed": {
+                "positive_fold_fraction": positive_fold_fraction,
+                "positive_instrument_fraction": positive_instrument_fraction,
+            }
+        },
+        "by_instrument": {
+            f"PAIR{index}": {"trading": {"total_return": value}}
+            for index, value in enumerate(pair_returns, start=1)
+        },
+        "folds": [
+            {"aggregate": {"trading": {"total_return": value}}}
+            for value in fold_returns
+        ],
+    }
+
+
+def test_broad_improvement_rejects_profit_concentration_and_fragile_high_sharpe():
+    baseline = _comparison_fixture(
+        balanced_accuracy=0.505,
+        brier_score=0.250,
+        sharpe_ratio=0.5,
+        profit_factor=1.0,
+        max_drawdown=0.02,
+        positive_fold_fraction=0.20,
+        positive_instrument_fraction=0.33,
+        pair_returns=[0.01, 0.01, 0.01, 0.0, 0.0, 0.0],
+        fold_returns=[0.01, 0.01, 0.01, 0.0, 0.0],
+    )
+    candidate = _comparison_fixture(
+        balanced_accuracy=0.525,
+        brier_score=0.249,
+        sharpe_ratio=2.2,
+        profit_factor=1.3,
+        max_drawdown=0.021,
+        positive_fold_fraction=0.60,
+        positive_instrument_fraction=0.67,
+        pair_returns=[0.10, 0.01, 0.01, 0.01, 0.01, 0.01],
+        fold_returns=[0.10, 0.01, 0.01, 0.01, 0.01],
+        warnings=["high_sharpe_with_small_trade_sample"],
+    )
+
+    result = qualification._broad_improvement_flag(baseline, candidate)
+
+    assert result["interesting_for_follow_up"] is False
+    assert result["small_sample_rejection"] is True
+    assert result["pair_concentration_rejection"] is True
+    assert result["fold_concentration_rejection"] is True
+    assert result["pair_positive_profit_concentration"] > 0.50
+    assert result["fold_positive_profit_concentration"] > 0.50
+
+
+def test_broad_improvement_rejects_material_drawdown_regression():
+    baseline = _comparison_fixture(
+        balanced_accuracy=0.505,
+        brier_score=0.250,
+        sharpe_ratio=0.5,
+        profit_factor=1.0,
+        max_drawdown=0.02,
+        positive_fold_fraction=0.20,
+        positive_instrument_fraction=0.33,
+        pair_returns=[0.01] * 6,
+        fold_returns=[0.01] * 5,
+    )
+    candidate = _comparison_fixture(
+        balanced_accuracy=0.525,
+        brier_score=0.249,
+        sharpe_ratio=1.2,
+        profit_factor=1.2,
+        max_drawdown=0.031,
+        positive_fold_fraction=0.60,
+        positive_instrument_fraction=0.67,
+        pair_returns=[0.01] * 6,
+        fold_returns=[0.01] * 5,
+    )
+
+    result = qualification._broad_improvement_flag(baseline, candidate)
+
+    assert result["interesting_for_follow_up"] is False
+    assert result["material_drawdown_rejection"] is True
+    assert result["pair_concentration_rejection"] is False
+    assert result["fold_concentration_rejection"] is False
