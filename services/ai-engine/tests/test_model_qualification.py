@@ -198,7 +198,11 @@ def test_outer_validation_is_never_passed_to_inner_selection_or_refit(monkeypatc
             name="baseline",
             variants=(ModelVariant(name="baseline_locked"),),
         ),
-        QualificationExperiment(name="candidate", variants=(candidate,)),
+        QualificationExperiment(
+            name="candidate",
+            variants=(candidate,),
+            tune_decision_threshold=True,
+        ),
     )
     training_windows: list[tuple[pd.Timestamp, pd.Timestamp]] = []
 
@@ -449,3 +453,56 @@ def test_compressed_directional_fixture_separates_boundary_bias_from_confidence(
     assert calibrated_metrics["brier_score"] < baseline["brier_score"]
     assert calibrated_coverage == pytest.approx(1.0)
     assert CONFIDENCE_FLOOR == 0.60
+
+
+
+def test_fixed_single_calibration_strategy_skips_redundant_inner_model_selection(
+    monkeypatch,
+):
+    dataset = _research_dataset()
+    platt = ModelVariant(name="platt_only", calibration="platt")
+    experiments = (
+        QualificationExperiment(
+            name="baseline",
+            variants=(ModelVariant(name="baseline_locked"),),
+        ),
+        QualificationExperiment(
+            name="platt_only",
+            variants=(platt,),
+            tune_decision_threshold=False,
+        ),
+    )
+
+    def forbidden_selector(*_args, **_kwargs):
+        raise AssertionError("fixed one-variant calibration should not run candidate selection")
+
+    monkeypatch.setattr(
+        qualification,
+        "_select_variant_inside_outer_training",
+        forbidden_selector,
+    )
+    monkeypatch.setattr(
+        qualification,
+        "_fit_selected_for_outer",
+        lambda *_args, **_kwargs: (
+            _FakeModel(),
+            qualification._CalibrationModel(method="none"),
+            ["m1_simple_return"],
+        ),
+    )
+
+    report = run_nested_qualification_experiments(
+        dataset,
+        horizon_bars=5,
+        confidence_floor=0.60,
+        max_splits=1,
+        min_train_periods=300,
+        validation_periods=100,
+        min_inner_periods=30,
+        experiments=experiments,
+    )
+
+    selection = report["experiments"]["platt_only"]["folds"][0]["selection"]
+    assert selection["policy"] == "fixed_candidate_inner_calibration_only"
+    assert selection["selected_variant"] == "platt_only"
+    assert selection["decision_threshold"] == pytest.approx(0.50)
