@@ -812,7 +812,57 @@ def _aggregate_experiment(
         "research_gate": gate,
         "decision_thresholds": recorded_thresholds,
         "confidence_floor": confidence_floor,
+        "calibration_methods": sorted(
+            str(value) for value in predictions["calibration_method"].drop_duplicates()
+        ),
+        "model_variants": sorted(
+            str(value) for value in predictions["model_variant"].drop_duplicates()
+        ),
     }
+
+
+def _candidate_comparison_table(
+    aggregates: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return one deterministic Baseline-vs-experiment metric row per strategy."""
+    rows: list[dict[str, Any]] = []
+    for name, report in aggregates.items():
+        overall = report["overall"]
+        classification = overall["classification"]
+        trading = overall["trading"]
+        observed = report["research_gate"]["observed"]
+        rows.append(
+            {
+                "experiment": name,
+                "balanced_accuracy": float(classification["balanced_accuracy"]),
+                "sharpe_ratio": (
+                    float(trading["sharpe_ratio"])
+                    if trading["sharpe_ratio"] is not None
+                    else None
+                ),
+                "profit_factor": (
+                    float(trading["profit_factor"])
+                    if trading["profit_factor"] is not None
+                    else None
+                ),
+                "max_drawdown": float(trading["max_drawdown"]),
+                "positive_fold_fraction": float(observed["positive_fold_fraction"]),
+                "positive_instrument_fraction": float(
+                    observed["positive_instrument_fraction"]
+                ),
+                "trade_or_period_count": int(trading["trade_or_period_count"]),
+                "confidence_coverage": float(
+                    overall["diagnostics"]["confidence_coverage"]["fraction"]
+                ),
+                "brier_score": float(classification["brier_score"]),
+                "calibration_methods": list(report["calibration_methods"]),
+                "model_variants": list(report["model_variants"]),
+                "research_gate_passed": bool(
+                    report["research_gate"]["research_gate_passed"]
+                ),
+            }
+        )
+    return rows
 
 
 def _metric_or_negative_infinity(value: Any) -> float:
@@ -1037,6 +1087,7 @@ def run_nested_qualification_experiments(
         "outer_validation_used_for_tuning": False,
         "experiment_count": len(experiments),
         "experiments": aggregates,
+        "candidate_comparison_table": _candidate_comparison_table(aggregates),
         "governance": {
             "research_gates_lowered": False,
             "confidence_floor_lowered_below_0_60": False,
