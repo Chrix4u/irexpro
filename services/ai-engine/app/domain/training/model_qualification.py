@@ -765,6 +765,93 @@ def _prediction_frame(
     return predictions
 
 
+def _two_stage_prediction_frame(
+    source: pd.DataFrame,
+    *,
+    direction_probabilities: np.ndarray,
+    opportunity_probabilities: np.ndarray,
+    confidence_floor: float,
+    fold: int,
+    experiment: str,
+    variant: ModelVariant,
+) -> pd.DataFrame:
+    if confidence_floor < CONFIDENCE_FLOOR:
+        raise ValueError("confidence floor must not be lowered below 0.60")
+    columns = [
+        "decision_time",
+        "instrument",
+        TARGET_COLUMN,
+        ACTIONABLE_TARGET_COLUMN,
+        LONG_NET_RETURN_COLUMN,
+        SHORT_NET_RETURN_COLUMN,
+        "m1_spread_bps",
+    ]
+    columns.extend(
+        column for column in QUALIFICATION_REGIME_COLUMNS if column in source.columns
+    )
+    predictions = source[columns].copy()
+    direction_probabilities = np.clip(
+        np.asarray(direction_probabilities, dtype=float),
+        1e-7,
+        1.0 - 1e-7,
+    )
+    opportunity_probabilities = np.clip(
+        np.asarray(opportunity_probabilities, dtype=float),
+        1e-7,
+        1.0 - 1e-7,
+    )
+    predictions["raw_positive_probability"] = direction_probabilities
+    predictions["positive_probability"] = direction_probabilities
+    predictions["predicted_long"] = direction_probabilities >= 0.50
+    predictions["direction_confidence"] = np.maximum(
+        direction_probabilities,
+        1.0 - direction_probabilities,
+    )
+    predictions["opportunity_probability"] = opportunity_probabilities
+    predictions["predicted_opportunity"] = (
+        opportunity_probabilities >= confidence_floor
+    )
+    predictions["confidence"] = np.minimum(
+        predictions["direction_confidence"],
+        predictions["opportunity_probability"],
+    )
+    predictions["active_trade"] = (
+        predictions["predicted_opportunity"]
+        & (predictions["direction_confidence"] >= confidence_floor)
+    )
+    predictions["selected_net_return"] = np.where(
+        predictions["predicted_long"],
+        predictions[LONG_NET_RETURN_COLUMN],
+        predictions[SHORT_NET_RETURN_COLUMN],
+    )
+    predictions["fold"] = fold
+    predictions["experiment"] = experiment
+    predictions["model_variant"] = variant.name
+    predictions["calibration_method"] = "none"
+    predictions["decision_threshold"] = 0.50
+    predictions["confidence_floor"] = confidence_floor
+    predictions["actionable_label_policy"] = ACTIONABLE_LABEL_POLICY
+    return predictions
+
+
+def _opportunity_classification(
+    predictions: pd.DataFrame,
+    *,
+    confidence_floor: float,
+) -> dict[str, float | int | None] | None:
+    required = {
+        ACTIONABLE_TARGET_COLUMN,
+        "opportunity_probability",
+    }
+    if not required.issubset(predictions.columns):
+        return None
+    return compute_classification_metrics(
+        predictions[ACTIONABLE_TARGET_COLUMN].to_numpy(dtype=int),
+        predictions["opportunity_probability"].to_numpy(dtype=float),
+        threshold=confidence_floor,
+    )
+
+
 def _instrument_positive_fraction(
     predictions: pd.DataFrame,
     *,
@@ -1040,6 +1127,7 @@ def _fold_report(
     model: XGBClassifier,
     feature_columns: list[str],
     selection: dict[str, Any],
+    opportunity_model: XGBClassifier | None = None,
 ) -> dict[str, Any]:
     by_instrument = {
         instrument: _summarize_predictions(
@@ -1050,7 +1138,7 @@ def _fold_report(
         )
         for instrument, group in predictions.groupby("instrument", sort=True)
     }
-    return {
+    report = {
         "aggregate": _summarize_predictions(
             predictions,
             horizon_bars=horizon_bars,
@@ -1064,6 +1152,18 @@ def _fold_report(
         ),
         "selection": selection,
     }
+    opportunity = _opportunity_classification(
+        predictions,
+        confidence_floor=confidence_floor,
+    )
+    if opportunity is not None:
+        report["opportunity_classification"] = opportunity
+    if opportunity_model is not None:
+        report["opportunity_feature_importance_gain"] = feature_gain_diagnostics(
+            opportunity_model,
+            feature_columns,
+        )
+    return report
 
 
 def _locked_gate_snapshot() -> dict[str, float]:
