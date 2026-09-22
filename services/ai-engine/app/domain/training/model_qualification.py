@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import gc
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +35,8 @@ from app.domain.training.validation import (
 )
 
 CONFIDENCE_FLOOR = 0.60
+QUALIFICATION_CHECKPOINT_VERSION = 1
+QUALIFICATION_CHECKPOINT_POLICY = "experiment_outer_fold_atomic_v1"
 DECISION_THRESHOLD_GRID = (0.45, 0.475, 0.50, 0.525, 0.55)
 MIN_ISOTONIC_ROWS = 500
 MIN_ISOTONIC_CLASS_ROWS = 100
@@ -94,6 +97,208 @@ class _RefitWindows:
     fit: pd.DataFrame
     early_stop: pd.DataFrame
     calibration: pd.DataFrame
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(payload, indent=2, sort_keys=True, default=str),
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
+def _experiment_matrix_payload(
+    experiments: tuple[QualificationExperiment, ...],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "name": experiment.name,
+            "tune_decision_threshold": experiment.tune_decision_threshold,
+            "variants": [
+                {
+                    "name": variant.name,
+                    "parameter_overrides": list(variant.parameter_overrides),
+                    "sample_weight_policy": variant.sample_weight_policy,
+                    "calibration": variant.calibration,
+                    "feature_policy": variant.feature_policy,
+                }
+                for variant in experiment.variants
+            ],
+        }
+        for experiment in experiments
+    ]
+
+
+def _qualification_checkpoint_fingerprint(
+    *,
+    dataset_sha256: dict[str, str],
+    decision_time_before: str | pd.Timestamp,
+    horizon_bars: int,
+    confidence_floor: float,
+    max_splits: int,
+    experiments: tuple[QualificationExperiment, ...],
+) -> str:
+    payload = {
+        "policy": QUALIFICATION_CHECKPOINT_POLICY,
+        "dataset_sha256": dict(sorted(dataset_sha256.items())),
+        "decision_time_before": pd.Timestamp(decision_time_before).isoformat(),
+        "horizon_bars": int(horizon_bars),
+        "confidence_floor": float(confidence_floor),
+        "max_splits": int(max_splits),
+        "feature_columns": list(MULTITIMEFRAME_FEATURE_COLUMNS),
+        "experiments": _experiment_matrix_payload(experiments),
+    }
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _qualification_checkpoint_paths(
+    checkpoint_dir: Path,
+    *,
+    experiment_name: str,
+    fold_index: int,
+) -> tuple[Path, Path]:
+    safe_name = "".join(
+        character if character.isalnum() or character in {"-", "_"} else "_"
+        for character in experiment_name
+    )
+    stem = checkpoint_dir / f"fold-{fold_index:02d}-{safe_name}"
+    return stem.with_suffix(".json"), stem.with_suffix(".csv")
+
+
+def _qualification_checkpoint_expected(
+    outer_train: pd.DataFrame,
+    outer_validation: pd.DataFrame,
+) -> dict[str, Any]:
+    return {
+        "train_start": outer_train["decision_time"].min().isoformat(),
+        "train_end": outer_train["decision_time"].max().isoformat(),
+        "validation_start": outer_validation["decision_time"].min().isoformat(),
+        "validation_end": outer_validation["decision_time"].max().isoformat(),
+        "validation_rows": int(len(outer_validation)),
+    }
+
+
+def _load_qualification_checkpoint(
+    checkpoint_dir: Path,
+    *,
+    fingerprint: str,
+    experiment_name: str,
+    fold_index: int,
+    expected: dict[str, Any],
+) -> tuple[pd.DataFrame, dict[str, Any]] | None:
+    metadata_path, predictions_path = _qualification_checkpoint_paths(
+        checkpoint_dir,
+        experiment_name=experiment_name,
+        fold_index=fold_index,
+    )
+    if not metadata_path.is_file() or not predictions_path.is_file():
+        return None
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        if metadata.get("checkpoint_version") != QUALIFICATION_CHECKPOINT_VERSION:
+            return None
+        if metadata.get("fingerprint") != fingerprint:
+            return None
+        if metadata.get("experiment") != experiment_name:
+            return None
+        if int(metadata.get("fold", -1)) != int(fold_index):
+            return None
+        if metadata.get("expected") != expected:
+            return None
+        if metadata.get("predictions_sha256") != _sha256_file(predictions_path):
+            return None
+        report = metadata.get("fold_report")
+        if not isinstance(report, dict):
+            return None
+
+        predictions = pd.read_csv(predictions_path)
+        if len(predictions) != int(expected["validation_rows"]):
+            return None
+        required = {
+            "decision_time",
+            "instrument",
+            TARGET_COLUMN,
+            LONG_NET_RETURN_COLUMN,
+            SHORT_NET_RETURN_COLUMN,
+            "positive_probability",
+            "predicted_long",
+            "confidence",
+            "active_trade",
+            "selected_net_return",
+            "fold",
+            "experiment",
+            "model_variant",
+            "calibration_method",
+            "decision_threshold",
+        }
+        if not required.issubset(predictions.columns):
+            return None
+        predictions["decision_time"] = pd.to_datetime(
+            predictions["decision_time"],
+            utc=True,
+            errors="raise",
+        )
+        for column in ("predicted_long", "active_trade"):
+            if predictions[column].dtype == object:
+                predictions[column] = predictions[column].map(
+                    {"True": True, "False": False, True: True, False: False}
+                )
+            if predictions[column].isna().any():
+                return None
+            predictions[column] = predictions[column].astype(bool)
+        return predictions, report
+    except Exception:
+        return None
+
+
+def _write_qualification_checkpoint(
+    checkpoint_dir: Path,
+    *,
+    fingerprint: str,
+    experiment_name: str,
+    fold_index: int,
+    expected: dict[str, Any],
+    predictions: pd.DataFrame,
+    fold_report: dict[str, Any],
+) -> None:
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    metadata_path, predictions_path = _qualification_checkpoint_paths(
+        checkpoint_dir,
+        experiment_name=experiment_name,
+        fold_index=fold_index,
+    )
+    predictions_tmp = predictions_path.with_suffix(".csv.tmp")
+    predictions.to_csv(predictions_tmp, index=False)
+    predictions_tmp.replace(predictions_path)
+    _atomic_write_json(
+        metadata_path,
+        {
+            "checkpoint_version": QUALIFICATION_CHECKPOINT_VERSION,
+            "policy": QUALIFICATION_CHECKPOINT_POLICY,
+            "fingerprint": fingerprint,
+            "experiment": experiment_name,
+            "fold": int(fold_index),
+            "expected": expected,
+            "predictions_sha256": _sha256_file(predictions_path),
+            "fold_report": fold_report,
+        },
+    )
 
 
 def default_experiments() -> tuple[QualificationExperiment, ...]:
@@ -1082,6 +1287,8 @@ def run_nested_qualification_experiments(
     validation_periods: int | None = None,
     min_inner_periods: int = 50,
     experiments: tuple[QualificationExperiment, ...] | None = None,
+    checkpoint_dir: str | Path | None = None,
+    checkpoint_fingerprint: str | None = None,
 ) -> dict[str, Any]:
     """Evaluate fixed experiment strategies with nested selection and untouched outer folds."""
     if confidence_floor < CONFIDENCE_FLOOR:
@@ -1092,6 +1299,11 @@ def run_nested_qualification_experiments(
         experiments = default_experiments()
     if not experiments or experiments[0].name != "baseline":
         raise ValueError("experiment matrix must start with the locked baseline")
+    if (checkpoint_dir is None) != (checkpoint_fingerprint is None):
+        raise ValueError(
+            "checkpoint_dir and checkpoint_fingerprint must be provided together"
+        )
+    checkpoint_root = Path(checkpoint_dir) if checkpoint_dir is not None else None
 
     unique_periods = int(dataset["decision_time"].nunique())
     min_train = min_train_periods or max(250, int(unique_periods * 0.60))
@@ -1120,6 +1332,26 @@ def run_nested_qualification_experiments(
     ):
         completed_outer_folds += 1
         for experiment in experiments:
+            expected_checkpoint = _qualification_checkpoint_expected(
+                outer_train,
+                outer_validation,
+            )
+            if checkpoint_root is not None and checkpoint_fingerprint is not None:
+                resumed = _load_qualification_checkpoint(
+                    checkpoint_root,
+                    fingerprint=checkpoint_fingerprint,
+                    experiment_name=experiment.name,
+                    fold_index=fold_index,
+                    expected=expected_checkpoint,
+                )
+                if resumed is not None:
+                    resumed_predictions, resumed_report = resumed
+                    predictions_by_experiment[experiment.name].append(
+                        resumed_predictions
+                    )
+                    folds_by_experiment[experiment.name].append(resumed_report)
+                    continue
+
             if experiment.name == "baseline":
                 variant = experiment.variants[0]
                 decision_threshold = 0.50
@@ -1197,6 +1429,16 @@ def run_nested_qualification_experiments(
             )
             predictions_by_experiment[experiment.name].append(predictions)
             folds_by_experiment[experiment.name].append(report)
+            if checkpoint_root is not None and checkpoint_fingerprint is not None:
+                _write_qualification_checkpoint(
+                    checkpoint_root,
+                    fingerprint=checkpoint_fingerprint,
+                    experiment_name=experiment.name,
+                    fold_index=fold_index,
+                    expected=expected_checkpoint,
+                    predictions=predictions,
+                    fold_report=report,
+                )
             del model
             gc.collect()
         del outer_train, outer_validation
@@ -1266,17 +1508,32 @@ def evaluate_qualification_corpora(
         horizon_bars=horizon_bars,
         decision_time_before=decision_time_before,
     )
+    experiments = default_experiments()
+    checkpoint_fingerprint = _qualification_checkpoint_fingerprint(
+        dataset_sha256=hashes,
+        decision_time_before=decision_time_before,
+        horizon_bars=horizon_bars,
+        confidence_floor=confidence_floor,
+        max_splits=max_splits,
+        experiments=experiments,
+    )
+    output = Path(report_path)
+    checkpoint_dir = output.parent / f"{output.stem}.checkpoints"
     report = run_nested_qualification_experiments(
         pooled,
         horizon_bars=horizon_bars,
         confidence_floor=confidence_floor,
         max_splits=max_splits,
+        experiments=experiments,
+        checkpoint_dir=checkpoint_dir,
+        checkpoint_fingerprint=checkpoint_fingerprint,
     )
     report["dataset_sha256"] = hashes
+    report["qualification_checkpoint_policy"] = QUALIFICATION_CHECKPOINT_POLICY
+    report["qualification_checkpoint_fingerprint"] = checkpoint_fingerprint
     report["qualification_decision_time_before"] = pd.Timestamp(
         decision_time_before
     ).isoformat()
-    output = Path(report_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_suffix(output.suffix + ".tmp")
     temporary.write_text(
