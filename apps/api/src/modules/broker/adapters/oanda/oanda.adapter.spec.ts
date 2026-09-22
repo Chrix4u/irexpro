@@ -379,9 +379,7 @@ describe('OandaAdapter (v20 REST — BETA)', () => {
       liveAdapter.setMode(BrokerMode.LIVE);
       await liveAdapter.connect(credentials);
       await liveAdapter.getAccountInfo();
-      expect(backend.requests.every((r) => r.baseUrl === OANDA_DEFAULT_LIVE_BASE_URL)).toBe(
-        true,
-      );
+      expect(backend.requests.every((r) => r.baseUrl === OANDA_DEFAULT_LIVE_BASE_URL)).toBe(true);
     });
 
     it('October UAT hardening (WS4): a CUSTOM LIVE base URL fails closed — custom endpoints cannot attest a LIVE environment', async () => {
