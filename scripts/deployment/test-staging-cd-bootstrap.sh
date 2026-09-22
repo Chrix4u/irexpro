@@ -202,6 +202,13 @@ plan_holds="$(grep -F -c 'staged execution requires the orchestration plan' "$RE
 plan_mismatches="$(grep -F -c 'orchestration plan candidate mismatch' "$RESEARCH_WORKFLOW" || true)"
 [[ "$plan_mismatches" -ge 6 ]] ||
   fail 'Every post-init stage must reject an orchestration plan bound to another candidate.'
+safe_plan_env_count="$(grep -F -c "IREXPRO_PLAN_PATH=\"\$PLAN_PATH\" node -e" "$RESEARCH_WORKFLOW" || true)"
+[[ "$safe_plan_env_count" -ge 12 ]] ||
+  fail 'Post-init plan readers must pass the readonly plan path through a distinct environment variable.'
+if grep -Fq "plan_candidate=\"\$(PLAN_PATH=\"\$PLAN_PATH\" node -e" "$RESEARCH_WORKFLOW" ||
+   grep -Fq "bootstrap_root=\"\$(PLAN_PATH=\"\$PLAN_PATH\" node -e" "$RESEARCH_WORKFLOW"; then
+  fail 'A readonly PLAN_PATH must never be reused as a command-prefix environment assignment.'
+fi
 
 # 7. Expensive research is lineage-aware: irrelevant deploys skip retraining,
 #    while operators retain an explicit manual rerun path.

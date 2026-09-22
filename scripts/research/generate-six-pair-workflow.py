@@ -114,9 +114,9 @@ STAGE_PROLOGUE = """          set -Eeuo pipefail
               printf 'RESEARCH HOLD: staged execution requires the orchestration plan.\\n' >&2
               exit 21
             }
-            plan_candidate="$(PLAN_PATH="$PLAN_PATH" node -e '
+            plan_candidate="$(IREXPRO_PLAN_PATH="$PLAN_PATH" node -e '
               const fs = require("fs");
-              const plan = JSON.parse(fs.readFileSync(process.env.PLAN_PATH, "utf8"));
+              const plan = JSON.parse(fs.readFileSync(process.env.IREXPRO_PLAN_PATH, "utf8"));
               if (plan.plan_version !== 1) process.exit(1);
               process.stdout.write(String(plan.candidate_sha || ""));
             ')" || {
@@ -129,9 +129,9 @@ STAGE_PROLOGUE = """          set -Eeuo pipefail
               exit 23
             }
 
-            bootstrap_root="$(PLAN_PATH="$PLAN_PATH" node -e '
+            bootstrap_root="$(IREXPRO_PLAN_PATH="$PLAN_PATH" node -e '
               const fs = require("fs");
-              const plan = JSON.parse(fs.readFileSync(process.env.PLAN_PATH, "utf8"));
+              const plan = JSON.parse(fs.readFileSync(process.env.IREXPRO_PLAN_PATH, "utf8"));
               const bootstrap = plan.bootstrap_dir;
               process.stdout.write(bootstrap && bootstrap !== "None" ? String(bootstrap) : "");
             ')"
