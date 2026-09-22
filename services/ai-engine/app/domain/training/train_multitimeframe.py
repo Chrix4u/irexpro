@@ -26,7 +26,7 @@ from app.domain.training.multitimeframe_corpus import validate_no_lookahead
 from app.domain.training.validation import (
     compute_backtest_metrics,
     compute_classification_metrics,
-    purged_walk_forward_time_splits,
+    iter_purged_walk_forward_time_splits,
 )
 
 TARGET_COLUMN = "target"
@@ -328,6 +328,68 @@ def prepare_instrument_corpus(
     return frame.sort_values("decision_time").reset_index(drop=True)
 
 
+def _research_source_columns() -> set[str]:
+    """
+    Return only columns needed to validate causality and build model inputs.
+
+    The persisted MTF corpus contains additional raw/intermediate columns that
+    are useful for audit/debugging but are not consumed by supervised training.
+    Avoid loading them into the six-pair pooled research process.
+    """
+    columns: set[str] = {
+        "decision_time",
+        "m1_close",
+        "m1_spread_points",
+        "m1_spread_bps",
+        "m1_price_digits",
+        "m1_tick_volume",
+        *MULTITIMEFRAME_FEATURE_COLUMNS,
+    }
+    for timeframe in RUNTIME_TIMEFRAMES:
+        prefix = timeframe.lower()
+        columns.update(
+            {
+                f"{prefix}_available_at",
+                f"{prefix}_source_bar_open",
+                f"{prefix}_high",
+                f"{prefix}_low",
+                f"{prefix}_close",
+                f"{prefix}_ma_5",
+                f"{prefix}_ma_10",
+                f"{prefix}_ma_20",
+                f"{prefix}_tick_volume",
+            }
+        )
+    return columns
+
+
+def _compact_research_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """
+    Drop columns no longer needed after causality/friction validation.
+
+    Values and dtypes of retained model/evaluation columns are left untouched,
+    so this is a memory-layout optimization rather than a research-semantics
+    change.
+    """
+    retained = list(
+        dict.fromkeys(
+            [
+                "decision_time",
+                "instrument",
+                TARGET_COLUMN,
+                LONG_NET_RETURN_COLUMN,
+                SHORT_NET_RETURN_COLUMN,
+                "m1_spread_bps",
+                *MULTITIMEFRAME_FEATURE_COLUMNS,
+            ]
+        )
+    )
+    missing = [column for column in retained if column not in frame.columns]
+    if missing:
+        raise ValueError(f"Prepared research frame missing required columns: {missing}")
+    return frame.loc[:, retained].copy()
+
+
 def load_and_prepare_corpora(
     datasets: dict[str, str | Path],
     *,
@@ -350,11 +412,15 @@ def load_and_prepare_corpora(
             else cutoff.tz_convert("UTC")
         )
 
+    source_columns = _research_source_columns()
     frames: list[pd.DataFrame] = []
     hashes: dict[str, str] = {}
     for instrument, raw_path in datasets.items():
         path = Path(raw_path)
-        frame = pd.read_csv(path)
+        frame = pd.read_csv(
+            path,
+            usecols=lambda column: column in source_columns,
+        )
         prepared = prepare_instrument_corpus(
             frame,
             instrument=instrument.upper(),
@@ -374,11 +440,36 @@ def load_and_prepare_corpora(
                 raise ValueError(
                     f"No research samples remain before qualification cutoff for {instrument}"
                 )
+
+        prepared = _compact_research_frame(prepared)
+        _research_progress(
+            " ".join(
+                [
+                    "stage=dataset_prepare",
+                    f"instrument={instrument.upper()}",
+                    f"rows={len(prepared)}",
+                    f"columns={len(prepared.columns)}",
+                    f"memory_mib={prepared.memory_usage(deep=True).sum() / (1024 * 1024):.1f}",
+                ]
+            )
+        )
         frames.append(prepared)
         hashes[instrument.upper()] = _sha256_file(path)
 
     pooled = pd.concat(frames, ignore_index=True)
+    del frames
     pooled = pooled.sort_values(["decision_time", "instrument"]).reset_index(drop=True)
+    _research_progress(
+        " ".join(
+            [
+                "stage=dataset_prepare",
+                "instrument=POOLED",
+                f"rows={len(pooled)}",
+                f"columns={len(pooled.columns)}",
+                f"memory_mib={pooled.memory_usage(deep=True).sum() / (1024 * 1024):.1f}",
+            ]
+        )
+    )
     return pooled, hashes
 
 
@@ -653,7 +744,22 @@ def _run_pooled_walk_forward_core(
     purge = horizon_bars if purge_periods is None else purge_periods
     embargo = horizon_bars if embargo_periods is None else embargo_periods
 
-    splits = purged_walk_forward_time_splits(
+    validation_start = min_train + purge
+    split_count = 0
+    while validation_start + validation <= unique_periods:
+        split_count += 1
+        if max_splits is not None and split_count >= max_splits:
+            break
+        validation_start += validation + embargo
+    if split_count == 0:
+        raise ValueError(
+            "Dataset is too small for requested time-based walk-forward configuration"
+        )
+
+    fold_reports: list[dict[str, Any]] = []
+    prediction_frames: list[pd.DataFrame] = []
+
+    splits = iter_purged_walk_forward_time_splits(
         dataset,
         time_column="decision_time",
         min_train_periods=min_train,
@@ -662,9 +768,6 @@ def _run_pooled_walk_forward_core(
         embargo_periods=embargo,
         max_splits=max_splits,
     )
-
-    fold_reports: list[dict[str, Any]] = []
-    prediction_frames: list[pd.DataFrame] = []
 
     for fold_index, (train, validation_frame) in enumerate(splits, start=1):
         if train[TARGET_COLUMN].nunique() < 2:
@@ -711,7 +814,7 @@ def _run_pooled_walk_forward_core(
                     [
                         "stage=walk_forward",
                         f"horizon={horizon_bars}m",
-                        f"fold={fold_index}/{len(splits)}",
+                        f"fold={fold_index}/{split_count}",
                         "status=resumed",
                         f"validation_rows={len(predictions)}",
                     ]
@@ -725,7 +828,7 @@ def _run_pooled_walk_forward_core(
                 [
                     "stage=walk_forward",
                     f"horizon={horizon_bars}m",
-                    f"fold={fold_index}/{len(splits)}",
+                    f"fold={fold_index}/{split_count}",
                     "status=started",
                     f"fit_rows={len(fit_train)}",
                     f"early_stop_rows={len(early_stop_frame)}",
@@ -803,7 +906,7 @@ def _run_pooled_walk_forward_core(
                 [
                     "stage=walk_forward",
                     f"horizon={horizon_bars}m",
-                    f"fold={fold_index}/{len(splits)}",
+                    f"fold={fold_index}/{split_count}",
                     "status=completed",
                     f"elapsed_seconds={time.monotonic() - fold_started:.1f}",
                     f"best_iteration={getattr(model, 'best_iteration', 'unknown')}",
