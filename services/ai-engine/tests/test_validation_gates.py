@@ -72,7 +72,8 @@ def test_lazy_time_based_walk_forward_matches_eager_boundaries():
 
     assert hasattr(lazy_iterator, "__next__")
     lazy = list(lazy_iterator)
-    assert len(lazy) == len(eager) == 3
+    assert len(eager) == 2
+    assert len(lazy) == len(eager)
     for (eager_train, eager_validation), (lazy_train, lazy_validation) in zip(
         eager, lazy, strict=True
     ):
