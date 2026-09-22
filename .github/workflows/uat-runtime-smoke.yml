@@ -5,13 +5,6 @@ on:
     workflows: ['Six Pair Research Run']
     types: [completed]
   workflow_dispatch:
-  # Temporary branch-only trigger used to exercise this workflow before merge.
-  # It will be removed after the validation run.
-  push:
-    branches:
-      - 'chore/uat-runtime-smoke-handoff'
-    paths:
-      - '.github/workflows/uat-runtime-smoke.yml'
 
 permissions:
   contents: read
@@ -22,7 +15,6 @@ jobs:
     name: Verify PAPER UAT runtime handoff
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'push' ||
       (github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-24.04
