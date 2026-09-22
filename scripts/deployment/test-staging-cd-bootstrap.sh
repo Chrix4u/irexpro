@@ -135,10 +135,10 @@ PY
 [[ -z "$monolithic_calls" ]] ||
   fail "Every runner invocation must be stage-scoped; the monolithic study call is prohibited (violations at lines: $monolithic_calls)."
 
-# 4. Stage boundaries and sequential execution: pair stages follow validate,
-#    every horizon stage needs all six pair stages, selection needs all three
-#    horizon stages, the final model needs the selection, promotion needs the
-#    final model, and nothing runs collectors in a parallel matrix.
+# 4. Stage boundaries and sequential execution: jobs sharing the same GitHub
+#    concurrency group must not fan out into multiple pending jobs, because
+#    GitHub keeps at most one running and one pending member per group and may
+#    cancel older pending members. Serialize the six pairs and three horizons.
 if grep -q '^    strategy:' "$RESEARCH_WORKFLOW"; then
   fail 'Six Pair Research must not fan out collectors through a parallel matrix.'
 fi
@@ -150,17 +150,31 @@ problems = []
 pairs = [f"pair-{p.lower()}" for p in
          ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF"]]
 horizons = [f"horizon-{h}m" for h in [1, 5, 10]]
-for pair in pairs:
-    if jobs.get(pair, {}).get("needs") != ["validate"]:
-        problems.append(f"{pair} must need exactly [validate]")
-for horizon in horizons:
-    if set(jobs.get(horizon, {}).get("needs") or []) != set(pairs):
-        problems.append(f"{horizon} must need all six pair stages")
-for horizon in horizons:
+
+expected_pair_needs = {
+    pairs[0]: ["validate"],
+    **{
+        pairs[index]: ["validate", pairs[index - 1]]
+        for index in range(1, len(pairs))
+    },
+}
+for pair, expected in expected_pair_needs.items():
+    if jobs.get(pair, {}).get("needs") != expected:
+        problems.append(f"{pair} must need exactly {expected}")
+
+expected_horizon_needs = {
+    horizons[0]: ["validate", pairs[-1]],
+    horizons[1]: ["validate", horizons[0]],
+    horizons[2]: ["validate", horizons[1]],
+}
+for horizon, expected in expected_horizon_needs.items():
+    if jobs.get(horizon, {}).get("needs") != expected:
+        problems.append(f"{horizon} must need exactly {expected}")
     if jobs.get(horizon, {}).get("if") != "needs.validate.outputs.run == 'true'":
         problems.append(f"{horizon} must be gated on the relevance decision")
-if set(jobs.get("select-horizon", {}).get("needs") or []) != set(horizons):
-    problems.append("select-horizon must need all three horizon stages")
+
+if jobs.get("select-horizon", {}).get("needs") != ["validate", horizons[-1]]:
+    problems.append("select-horizon must need validate and the final horizon stage")
 if "select-horizon" not in (jobs.get("final-model", {}).get("needs") or []):
     problems.append("final-model must need select-horizon")
 if "final-model" not in (jobs.get("paper-promotion", {}).get("needs") or []):
