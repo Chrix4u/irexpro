@@ -5,7 +5,14 @@ from typing import Any, Sequence
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import confusion_matrix
+from sklearn.metrics import (
+    accuracy_score,
+    balanced_accuracy_score,
+    confusion_matrix,
+    f1_score,
+    precision_score,
+    recall_score,
+)
 
 from app.domain.training.validation import compute_classification_metrics
 
@@ -99,7 +106,11 @@ def diagnose_directional_predictions(
 
     y = y_true.astype(int)
     probabilities = np.clip(probabilities, 1e-7, 1.0 - 1e-7)
-    predicted = (probabilities >= decision_threshold).astype(int)
+    if "predicted_long" in predictions.columns:
+        predicted_values = predictions["predicted_long"].to_numpy()
+        predicted = np.asarray(predicted_values, dtype=bool).astype(int)
+    else:
+        predicted = (probabilities >= decision_threshold).astype(int)
     confidence = np.maximum(probabilities, 1.0 - probabilities)
     active = confidence >= confidence_threshold
 
@@ -108,11 +119,19 @@ def diagnose_directional_predictions(
     specificity = float(tn / (tn + fp)) if (tn + fp) else 0.0
     true_long_fraction = float(y.mean())
     predicted_long_fraction = float(predicted.mean())
-    classification = compute_classification_metrics(
+    probability_metrics = compute_classification_metrics(
         y,
         probabilities,
         threshold=decision_threshold,
     )
+    classification = {
+        **probability_metrics,
+        "accuracy": float(accuracy_score(y, predicted)),
+        "balanced_accuracy": float(balanced_accuracy_score(y, predicted)),
+        "precision": float(precision_score(y, predicted, zero_division=0)),
+        "recall": float(recall_score(y, predicted, zero_division=0)),
+        "f1": float(f1_score(y, predicted, zero_division=0)),
+    }
 
     high_conf_long = int(((predicted == 1) & active).sum())
     high_conf_short = int(((predicted == 0) & active).sum())
@@ -137,6 +156,7 @@ def diagnose_directional_predictions(
             "true_long_pred_short": int(fn),
             "true_long_pred_long": int(tp),
         },
+        "accuracy": classification["accuracy"],
         "sensitivity": sensitivity,
         "specificity": specificity,
         "balanced_accuracy": classification["balanced_accuracy"],
@@ -146,6 +166,8 @@ def diagnose_directional_predictions(
         "roc_auc": classification["roc_auc"],
         "log_loss": classification["log_loss"],
         "brier_score": classification["brier_score"],
+        "sample_count": int(len(y)),
+        "positive_rate": true_long_fraction,
         "probability_quantiles": _quantile_report(probabilities),
         "confidence_quantiles": _quantile_report(confidence),
         "decision_threshold": decision_threshold,
