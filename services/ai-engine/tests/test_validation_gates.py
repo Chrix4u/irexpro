@@ -6,6 +6,7 @@ import pandas as pd
 
 from app.domain.training.validation import (
     compute_backtest_metrics,
+    iter_purged_walk_forward_time_splits,
     purged_walk_forward_splits,
     purged_walk_forward_time_splits,
 )
@@ -36,6 +37,47 @@ def test_purged_walk_forward_splits_preserve_purge_and_embargo():
 
     assert first_train["row_id"].max() + 3 < first_validation["row_id"].min()
     assert first_validation["row_id"].max() + 2 < second_validation["row_id"].min()
+
+
+def test_lazy_time_based_walk_forward_matches_eager_boundaries():
+    frame = pd.DataFrame(
+        {
+            "decision_time": list(
+                pd.date_range("2026-01-01", periods=18, freq="min", tz="UTC")
+            )
+            * 2,
+            "instrument": ["EURUSD"] * 18 + ["USDJPY"] * 18,
+            "value": np.arange(36),
+        }
+    ).sort_values(["decision_time", "instrument"]).reset_index(drop=True)
+
+    eager = purged_walk_forward_time_splits(
+        frame,
+        time_column="decision_time",
+        min_train_periods=6,
+        validation_periods=3,
+        purge_periods=2,
+        embargo_periods=1,
+        max_splits=3,
+    )
+    lazy_iterator = iter_purged_walk_forward_time_splits(
+        frame,
+        time_column="decision_time",
+        min_train_periods=6,
+        validation_periods=3,
+        purge_periods=2,
+        embargo_periods=1,
+        max_splits=3,
+    )
+
+    assert hasattr(lazy_iterator, "__next__")
+    lazy = list(lazy_iterator)
+    assert len(lazy) == len(eager) == 3
+    for (eager_train, eager_validation), (lazy_train, lazy_validation) in zip(
+        eager, lazy, strict=True
+    ):
+        pd.testing.assert_frame_equal(lazy_train, eager_train)
+        pd.testing.assert_frame_equal(lazy_validation, eager_validation)
 
 
 def test_compute_backtest_metrics_reports_risk_and_return_diagnostics():
