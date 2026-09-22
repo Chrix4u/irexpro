@@ -84,7 +84,8 @@ def test_default_experiment_matrix_is_bounded_and_keeps_locked_baseline():
     assert baseline.sample_weight_policy == "economic"
     assert baseline.calibration == "none"
     assert baseline.feature_policy == "all"
-    assert sum(len(experiment.variants) for experiment in experiments) == 8
+    assert sum(len(experiment.variants) for experiment in experiments) == 9
+    assert experiments[-1].name == "structure_feature_ablation"
     assert CONFIDENCE_FLOOR == 0.60
 
 
@@ -310,20 +311,31 @@ def test_nested_locked_baseline_reproduces_legacy_walk_forward_metrics(monkeypat
 
 def test_feature_experiments_never_invent_non_runtime_features():
     full = _feature_columns("all")
-    ablated = _feature_columns("drop_volume")
+    volume_ablated = _feature_columns("drop_volume")
+    structure_ablated = _feature_columns("drop_structure")
 
     assert full == list(MULTITIMEFRAME_FEATURE_COLUMNS)
-    assert set(ablated).issubset(MULTITIMEFRAME_FEATURE_COLUMNS)
+    assert set(volume_ablated).issubset(MULTITIMEFRAME_FEATURE_COLUMNS)
+    assert set(structure_ablated).issubset(MULTITIMEFRAME_FEATURE_COLUMNS)
     assert set(qualification.QUALIFICATION_REGIME_COLUMNS).issubset(
         MULTITIMEFRAME_FEATURE_COLUMNS
     )
-    assert len(ablated) < len(full)
+    assert len(volume_ablated) < len(full)
+    assert len(structure_ablated) < len(full)
     assert all(
         not any(
             column.endswith(suffix)
             for suffix in qualification.VOLUME_FEATURE_SUFFIXES
         )
-        for column in ablated
+        for column in volume_ablated
+    )
+    assert all(
+        column not in qualification.STRUCTURE_GLOBAL_FEATURES
+        and not any(
+            column.endswith(suffix)
+            for suffix in qualification.STRUCTURE_FEATURE_SUFFIXES
+        )
+        for column in structure_ablated
     )
 
 
