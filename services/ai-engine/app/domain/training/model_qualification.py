@@ -52,6 +52,12 @@ TWO_STAGE_EXPERIMENT_NAME = "actionable_two_stage"
 EVENT_TWO_STAGE_EXPERIMENT_NAME = "event_barrier_two_stage"
 EVENT_PAIR_EXPERT_EXPERIMENT_NAME = "event_barrier_pair_experts"
 EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME = "event_barrier_pair_return_margin"
+EVENT_PAIR_REGIME_EXPERT_EXPERIMENT_NAME = "event_barrier_pair_regime_experts"
+REGIME_ROUTER_POLICY = "pair_m1_volatility_spread_median_v1"
+REGIME_NAMES = ("calm", "active_clean", "stressed")
+REGIME_FALLBACK_NAME = "fallback"
+MIN_REGIME_FIT_ROWS = 500
+MIN_REGIME_EARLY_ROWS = 100
 QUALIFICATION_CHECKPOINT_VERSION = 1
 QUALIFICATION_CHECKPOINT_POLICY = "experiment_outer_fold_atomic_v1"
 DECISION_THRESHOLD_GRID = (0.45, 0.475, 0.50, 0.525, 0.55)
@@ -80,6 +86,7 @@ ExperimentMode = Literal[
     "two_stage_event",
     "two_stage_event_pair_experts",
     "two_stage_event_pair_return_margin",
+    "two_stage_event_pair_regime_experts",
 ]
 
 
@@ -419,6 +426,11 @@ def default_experiments() -> tuple[QualificationExperiment, ...]:
             name=EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME,
             variants=(ModelVariant(name="event_barrier_v5_pair_return_margin"),),
             mode="two_stage_event_pair_return_margin",
+        ),
+        QualificationExperiment(
+            name=EVENT_PAIR_REGIME_EXPERT_EXPERIMENT_NAME,
+            variants=(ModelVariant(name="event_barrier_v6_pair_regime_direction"),),
+            mode="two_stage_event_pair_regime_experts",
         ),
     )
 
@@ -1433,6 +1445,226 @@ def _pair_expert_probabilities(
     return probabilities
 
 
+
+def _regime_model_key(instrument: str, regime: str) -> str:
+    return f"{instrument}::{regime}"
+
+
+def _regime_router_thresholds(frame: pd.DataFrame) -> dict[str, float]:
+    """Learn causal regime thresholds from training features only."""
+    volatility = pd.to_numeric(frame["m1_volatility_20"], errors="coerce").to_numpy(
+        dtype=float
+    )
+    spread = pd.to_numeric(frame["m1_spread_bps"], errors="coerce").to_numpy(
+        dtype=float
+    )
+    if not np.isfinite(volatility).all() or not np.isfinite(spread).all():
+        raise ValueError("regime router requires finite volatility and spread")
+    return {
+        "m1_volatility_20_median": float(np.median(volatility)),
+        "m1_spread_bps_median": float(np.median(spread)),
+    }
+
+
+def _regime_labels(
+    frame: pd.DataFrame,
+    thresholds: dict[str, float],
+) -> pd.Series:
+    """Route every row to exactly one causal market regime."""
+    volatility = pd.to_numeric(frame["m1_volatility_20"], errors="coerce")
+    spread = pd.to_numeric(frame["m1_spread_bps"], errors="coerce")
+    if volatility.isna().any() or spread.isna().any():
+        raise ValueError("regime router requires finite volatility and spread")
+
+    spread_cut = float(thresholds["m1_spread_bps_median"])
+    volatility_cut = float(thresholds["m1_volatility_20_median"])
+    labels = pd.Series("calm", index=frame.index, dtype="object")
+    stressed = spread > spread_cut
+    active_clean = (~stressed) & (volatility > volatility_cut)
+    labels.loc[active_clean] = "active_clean"
+    labels.loc[stressed] = "stressed"
+    return labels
+
+
+def _fit_event_pair_regime_experts_for_outer(
+    training_window: pd.DataFrame,
+    *,
+    variant: ModelVariant,
+    horizon_bars: int,
+) -> tuple[
+    dict[str, XGBClassifier],
+    dict[str, dict[str, float]],
+    XGBClassifier,
+    list[str],
+    dict[str, Any],
+]:
+    """Fit per-pair regime experts with an exhaustive pair fallback."""
+    feature_columns = _feature_columns(variant.feature_policy)
+    fit, early = _split_internal_early_stopping_tail(
+        training_window,
+        horizon_bars=horizon_bars,
+    )
+
+    opportunity_variant = ModelVariant(
+        name="event_barrier_v6_pooled_opportunity",
+        parameter_overrides=variant.parameter_overrides,
+        sample_weight_policy="class_balance",
+        calibration="none",
+        feature_policy=variant.feature_policy,
+    )
+    opportunity_model = _fit_binary_variant(
+        opportunity_variant,
+        fit=fit,
+        early_stop=early,
+        feature_columns=feature_columns,
+        target_column=EVENT_ACTIONABLE_TARGET_COLUMN,
+        sample_weight_policy="class_balance",
+    )
+
+    models: dict[str, XGBClassifier] = {}
+    routers: dict[str, dict[str, float]] = {}
+    pair_counts: dict[str, dict[str, Any]] = {}
+    instruments = sorted(str(value) for value in training_window["instrument"].unique())
+    if not instruments:
+        raise ValueError("regime pair-expert training requires at least one instrument")
+
+    for instrument in instruments:
+        pair_fit_all = fit.loc[fit["instrument"] == instrument].copy()
+        pair_early_all = early.loc[early["instrument"] == instrument].copy()
+        pair_fit = pair_fit_all.loc[
+            pair_fit_all[EVENT_ACTIONABLE_TARGET_COLUMN] == 1
+        ].copy()
+        pair_early = pair_early_all.loc[
+            pair_early_all[EVENT_ACTIONABLE_TARGET_COLUMN] == 1
+        ].copy()
+        if pair_fit.empty or pair_early.empty:
+            raise ValueError(
+                f"regime pair expert {instrument} lacks actionable fit/early rows"
+            )
+        if pair_fit[EVENT_DIRECTION_TARGET_COLUMN].nunique() < 2:
+            raise ValueError(f"regime pair expert {instrument} fit lacks both directions")
+        if pair_early[EVENT_DIRECTION_TARGET_COLUMN].nunique() < 2:
+            raise ValueError(
+                f"regime pair expert {instrument} early-stop lacks both directions"
+            )
+
+        fallback_variant = ModelVariant(
+            name=f"{variant.name}_{REGIME_FALLBACK_NAME}",
+            parameter_overrides=variant.parameter_overrides,
+            sample_weight_policy="class_balance",
+            calibration="none",
+            feature_policy=variant.feature_policy,
+        )
+        models[_regime_model_key(instrument, REGIME_FALLBACK_NAME)] = (
+            _fit_binary_variant(
+                fallback_variant,
+                fit=pair_fit,
+                early_stop=pair_early,
+                feature_columns=feature_columns,
+                target_column=EVENT_DIRECTION_TARGET_COLUMN,
+                sample_weight_policy="class_balance",
+            )
+        )
+
+        thresholds = _regime_router_thresholds(pair_fit_all)
+        routers[instrument] = thresholds
+        fit_regimes = _regime_labels(pair_fit, thresholds)
+        early_regimes = _regime_labels(pair_early, thresholds)
+        trained_regimes: list[str] = []
+        fallback_regimes: list[str] = []
+        regime_counts: dict[str, dict[str, int]] = {}
+
+        for regime in REGIME_NAMES:
+            regime_fit = pair_fit.loc[fit_regimes == regime].copy()
+            regime_early = pair_early.loc[early_regimes == regime].copy()
+            regime_counts[regime] = {
+                "fit_rows": int(len(regime_fit)),
+                "early_stop_rows": int(len(regime_early)),
+            }
+            sufficient = (
+                len(regime_fit) >= MIN_REGIME_FIT_ROWS
+                and len(regime_early) >= MIN_REGIME_EARLY_ROWS
+                and regime_fit[EVENT_DIRECTION_TARGET_COLUMN].nunique() >= 2
+                and regime_early[EVENT_DIRECTION_TARGET_COLUMN].nunique() >= 2
+            )
+            if not sufficient:
+                fallback_regimes.append(regime)
+                continue
+
+            regime_variant = ModelVariant(
+                name=f"{variant.name}_{regime}",
+                parameter_overrides=variant.parameter_overrides,
+                sample_weight_policy="class_balance",
+                calibration="none",
+                feature_policy=variant.feature_policy,
+            )
+            models[_regime_model_key(instrument, regime)] = _fit_binary_variant(
+                regime_variant,
+                fit=regime_fit,
+                early_stop=regime_early,
+                feature_columns=feature_columns,
+                target_column=EVENT_DIRECTION_TARGET_COLUMN,
+                sample_weight_policy="class_balance",
+            )
+            trained_regimes.append(regime)
+
+        pair_counts[instrument] = {
+            "event_actionable_fit_rows": int(len(pair_fit)),
+            "event_actionable_early_stop_rows": int(len(pair_early)),
+            "router_thresholds": thresholds,
+            "trained_regimes": trained_regimes,
+            "fallback_regimes": fallback_regimes,
+            "regime_counts": regime_counts,
+        }
+
+    counts: dict[str, Any] = {
+        "fit_rows": int(len(fit)),
+        "early_stop_rows": int(len(early)),
+        "pair_count": int(len(instruments)),
+        "direction_model_count": int(len(models)),
+        "regime_router_policy": REGIME_ROUTER_POLICY,
+        "pair_counts": pair_counts,
+    }
+    return models, routers, opportunity_model, feature_columns, counts
+
+
+def _pair_regime_expert_probabilities(
+    models: dict[str, XGBClassifier],
+    routers: dict[str, dict[str, float]],
+    frame: pd.DataFrame,
+    feature_columns: list[str],
+) -> np.ndarray:
+    """Route each row by instrument and training-derived causal regime."""
+    probabilities = np.full(len(frame), np.nan, dtype=float)
+    positions = pd.Series(np.arange(len(frame), dtype=int), index=frame.index)
+
+    for instrument, pair_group in frame.groupby("instrument", sort=False):
+        symbol = str(instrument)
+        thresholds = routers.get(symbol)
+        if thresholds is None:
+            raise ValueError(f"missing regime router for instrument {symbol}")
+        fallback = models.get(_regime_model_key(symbol, REGIME_FALLBACK_NAME))
+        if fallback is None:
+            raise ValueError(f"missing regime fallback expert for instrument {symbol}")
+
+        labels = _regime_labels(pair_group, thresholds)
+        for regime in REGIME_NAMES:
+            group = pair_group.loc[labels == regime]
+            if group.empty:
+                continue
+            model = models.get(_regime_model_key(symbol, regime), fallback)
+            group_positions = positions.loc[group.index].to_numpy(dtype=int)
+            probabilities[group_positions] = _probabilities(
+                model,
+                group,
+                feature_columns,
+            )
+
+    if not np.isfinite(probabilities).all():
+        raise ValueError("regime pair-expert routing produced non-finite probabilities")
+    return probabilities
+
+
 def _fit_event_pair_return_margin_for_outer(
     training_window: pd.DataFrame,
     *,
@@ -2395,6 +2627,58 @@ def run_nested_qualification_experiments(
                     "opportunity_threshold": confidence_floor,
                     "event_label_policy": EVENT_LABEL_POLICY,
                     "expert_router": "instrument_identity",
+                    "candidate_reports": [],
+                    "training_counts": training_counts,
+                }
+            elif experiment.mode == "two_stage_event_pair_regime_experts":
+                if len(experiment.variants) != 1 or experiment.tune_decision_threshold:
+                    raise ValueError(
+                        "regime pair-expert research must remain a fixed bounded candidate"
+                    )
+                variant = experiment.variants[0]
+                decision_threshold = 0.50
+                (
+                    direction_models,
+                    regime_routers,
+                    opportunity_model,
+                    feature_columns,
+                    training_counts,
+                ) = _fit_event_pair_regime_experts_for_outer(
+                    outer_train,
+                    variant=variant,
+                    horizon_bars=horizon_bars,
+                )
+                model = None
+                direction_probabilities = _pair_regime_expert_probabilities(
+                    direction_models,
+                    regime_routers,
+                    outer_validation,
+                    feature_columns,
+                )
+                opportunity_probabilities = _probabilities(
+                    opportunity_model,
+                    outer_validation,
+                    feature_columns,
+                )
+                predictions = _event_two_stage_prediction_frame(
+                    outer_validation,
+                    direction_probabilities=direction_probabilities,
+                    opportunity_probabilities=opportunity_probabilities,
+                    confidence_floor=confidence_floor,
+                    fold=fold_index,
+                    experiment=experiment.name,
+                    variant=variant,
+                )
+                selection = {
+                    "policy": "fixed_event_barrier_v6_pair_regime_experts_no_outer_tuning",
+                    "selected_variant": variant.name,
+                    "decision_threshold": decision_threshold,
+                    "opportunity_threshold": confidence_floor,
+                    "event_label_policy": EVENT_LABEL_POLICY,
+                    "expert_router": "instrument_identity_then_training_regime",
+                    "regime_router_policy": REGIME_ROUTER_POLICY,
+                    "regime_router_thresholds": regime_routers,
+                    "sparse_regime_policy": "pair_fallback_expert",
                     "candidate_reports": [],
                     "training_counts": training_counts,
                 }

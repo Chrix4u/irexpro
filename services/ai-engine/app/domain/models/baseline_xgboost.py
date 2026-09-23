@@ -39,6 +39,7 @@ SINGLE_TIMEFRAME_MODEL_TYPE = "xgboost_binary_direction_classifier"
 MULTITIMEFRAME_MODEL_TYPE = "xgboost_pooled_multitimeframe_direction_classifier"
 EVENT_PAIR_BUNDLE_MODEL_TYPE = "xgboost_event_pair_bundle"
 EVENT_LABEL_POLICY_RUNTIME = "first_net_return_barrier_atr1_spread2_timeout_v1"
+EVENT_PAIR_REGIME_ROUTER_POLICY_RUNTIME = "pair_m1_volatility_spread_median_v1"
 
 
 def _sha256_file(path: Path) -> str:
@@ -218,6 +219,58 @@ class BaselineXGBoostModel:
                             f"Event-pair bundle missing direction model {instrument}"
                         )
                     kind = str(item.get("kind", ""))
+                    if kind == "xgboost_regime_classifier_router":
+                        router = item.get("router")
+                        if not isinstance(router, dict):
+                            raise ValueError(
+                                f"Event-pair bundle missing regime router {instrument}"
+                            )
+                        if (
+                            router.get("policy")
+                            != EVENT_PAIR_REGIME_ROUTER_POLICY_RUNTIME
+                        ):
+                            raise ValueError("Unsupported event-pair regime router policy")
+                        volatility_cut = float(
+                            router.get("m1_volatility_20_median")
+                        )
+                        spread_cut = float(router.get("m1_spread_bps_median"))
+                        if not math.isfinite(volatility_cut) or not math.isfinite(
+                            spread_cut
+                        ):
+                            raise ValueError("Event-pair regime thresholds are non-finite")
+
+                        fallback_spec = item.get("fallback")
+                        if not isinstance(fallback_spec, dict):
+                            raise ValueError(
+                                f"Event-pair bundle missing regime fallback {instrument}"
+                            )
+                        fallback = xgb.XGBClassifier()
+                        fallback.load_model(str(component_path(fallback_spec)))
+
+                        regime_specs = item.get("regimes", {})
+                        if not isinstance(regime_specs, dict):
+                            raise ValueError("Event-pair regime models must be an object")
+                        allowed_regimes = {"calm", "active_clean", "stressed"}
+                        if not set(regime_specs).issubset(allowed_regimes):
+                            raise ValueError("Event-pair bundle contains unknown regime")
+                        regime_models: dict[str, Any] = {}
+                        for regime, regime_spec in regime_specs.items():
+                            if not isinstance(regime_spec, dict):
+                                raise ValueError("Event-pair regime model spec is invalid")
+                            if regime_spec.get("kind") != "xgboost_classifier":
+                                raise ValueError("Event-pair regime child kind is unsupported")
+                            regime_child = xgb.XGBClassifier()
+                            regime_child.load_model(
+                                str(component_path(regime_spec))
+                            )
+                            regime_models[str(regime)] = regime_child
+
+                        direction_models[instrument] = {
+                            "fallback": fallback,
+                            "regimes": regime_models,
+                        }
+                        continue
+
                     child_path = component_path(item)
                     if kind == "xgboost_classifier":
                         child = xgb.XGBClassifier()
@@ -357,9 +410,28 @@ class BaselineXGBoostModel:
         kind = str(item.get("kind", ""))
 
         return_margin_bps: float | None = None
+        market_regime: str | None = None
+        regime_fallback_used = False
         if kind == "xgboost_classifier":
             positive_probability = float(direction_model.predict_proba(frame)[0][1])
             direction_method = "pair_xgboost_predict_proba"
+        elif kind == "xgboost_regime_classifier_router":
+            router = item["router"]
+            volatility = float(features["m1_volatility_20"])
+            spread = float(features["m1_spread_bps"])
+            if spread > float(router["m1_spread_bps_median"]):
+                market_regime = "stressed"
+            elif volatility > float(router["m1_volatility_20_median"]):
+                market_regime = "active_clean"
+            else:
+                market_regime = "calm"
+            regime_models = direction_model["regimes"]
+            selected_model = regime_models.get(market_regime)
+            if selected_model is None:
+                selected_model = direction_model["fallback"]
+                regime_fallback_used = True
+            positive_probability = float(selected_model.predict_proba(frame)[0][1])
+            direction_method = "pair_regime_xgboost_predict_proba"
         elif kind == "xgboost_return_margin_regressor":
             return_margin_bps = float(direction_model.predict(frame)[0])
             calibration = item["calibration"]
@@ -391,25 +463,33 @@ class BaselineXGBoostModel:
         if return_margin_bps is not None:
             raw_scores["predicted_return_margin_bps"] = return_margin_bps
 
+        explainability: dict[str, Any] = {
+            "method": direction_method,
+            "instrument_expert": instrument,
+            "opportunity_gate": "pooled_event_opportunity_xgboost",
+            "research_experiment": self._artifact_metadata.get(
+                "research_experiment"
+            ),
+            "confidence_semantics": (
+                "Minimum of opportunity probability and pair-specific "
+                "direction confidence; not a probability of profit."
+            ),
+            "approved_for_live": False,
+        }
+        if market_regime is not None:
+            explainability["market_regime"] = market_regime
+            explainability["regime_fallback_used"] = regime_fallback_used
+            explainability["regime_router_policy"] = (
+                EVENT_PAIR_REGIME_ROUTER_POLICY_RUNTIME
+            )
+
         return ModelPrediction(
             direction=direction,
             confidence_score=round(joint_confidence, 4),
             model_version=self._model_version,
             features_used=list(self._feature_names),
             raw_scores=raw_scores,
-            explainability={
-                "method": direction_method,
-                "instrument_expert": instrument,
-                "opportunity_gate": "pooled_event_opportunity_xgboost",
-                "research_experiment": self._artifact_metadata.get(
-                    "research_experiment"
-                ),
-                "confidence_semantics": (
-                    "Minimum of opportunity probability and pair-specific "
-                    "direction confidence; not a probability of profit."
-                ),
-                "approved_for_live": False,
-            },
+            explainability=explainability,
         )
 
     def _predict_heuristic(self, features: dict[str, float]) -> ModelPrediction:

@@ -12,6 +12,7 @@ from app.domain.training.model_qualification import (
     ACTIONABLE_TARGET_COLUMN,
     CONFIDENCE_FLOOR,
     EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+    EVENT_PAIR_REGIME_EXPERT_EXPERIMENT_NAME,
     EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME,
     EVENT_TWO_STAGE_EXPERIMENT_NAME,
     TWO_STAGE_EXPERIMENT_NAME,
@@ -24,9 +25,11 @@ from app.domain.training.model_qualification import (
     _feature_columns,
     _fit_calibrator,
     _fit_event_pair_experts_for_outer,
+    _fit_event_pair_regime_experts_for_outer,
     _locked_gate_snapshot,
     _nested_windows,
     _pair_expert_probabilities,
+    _pair_regime_expert_probabilities,
     _pair_return_margin_probabilities,
     _prediction_frame,
     _select_decision_threshold,
@@ -109,16 +112,18 @@ def test_default_experiment_matrix_is_bounded_and_keeps_locked_baseline():
     assert baseline.sample_weight_policy == "economic"
     assert baseline.calibration == "none"
     assert baseline.feature_policy == "all"
-    assert sum(len(experiment.variants) for experiment in experiments) == 13
-    assert experiments[-5].name == "structure_feature_ablation"
-    assert experiments[-4].name == TWO_STAGE_EXPERIMENT_NAME
-    assert experiments[-4].mode == "two_stage_actionable"
-    assert experiments[-3].name == EVENT_TWO_STAGE_EXPERIMENT_NAME
-    assert experiments[-3].mode == "two_stage_event"
-    assert experiments[-2].name == EVENT_PAIR_EXPERT_EXPERIMENT_NAME
-    assert experiments[-2].mode == "two_stage_event_pair_experts"
-    assert experiments[-1].name == EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME
-    assert experiments[-1].mode == "two_stage_event_pair_return_margin"
+    assert sum(len(experiment.variants) for experiment in experiments) == 14
+    assert experiments[-6].name == "structure_feature_ablation"
+    assert experiments[-5].name == TWO_STAGE_EXPERIMENT_NAME
+    assert experiments[-5].mode == "two_stage_actionable"
+    assert experiments[-4].name == EVENT_TWO_STAGE_EXPERIMENT_NAME
+    assert experiments[-4].mode == "two_stage_event"
+    assert experiments[-3].name == EVENT_PAIR_EXPERT_EXPERIMENT_NAME
+    assert experiments[-3].mode == "two_stage_event_pair_experts"
+    assert experiments[-2].name == EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME
+    assert experiments[-2].mode == "two_stage_event_pair_return_margin"
+    assert experiments[-1].name == EVENT_PAIR_REGIME_EXPERT_EXPERIMENT_NAME
+    assert experiments[-1].mode == "two_stage_event_pair_regime_experts"
     assert experiments[-1].tune_decision_threshold is False
     assert CONFIDENCE_FLOOR == 0.60
     assert ACTIONABLE_LABEL_POLICY.endswith("_v1")
@@ -539,6 +544,101 @@ def test_pair_expert_probability_router_preserves_row_order_and_instrument_ident
 
     expected = np.where(frame["instrument"].eq("EURUSD"), 0.75, 0.25)
     np.testing.assert_allclose(probabilities, expected)
+
+
+
+def test_pair_regime_router_is_exhaustive_and_uses_pair_fallback():
+    class ConstantModel:
+        def __init__(self, probability):
+            self.probability = probability
+
+        def predict_proba(self, features):
+            probability = np.full(len(features), self.probability, dtype=float)
+            return np.column_stack([1.0 - probability, probability])
+
+    frame = _research_dataset(
+        periods=3,
+        instruments=("EURUSD",),
+    )
+    frame.loc[frame.index[0], "m1_volatility_20"] = 0.1
+    frame.loc[frame.index[0], "m1_spread_bps"] = 0.5
+    frame.loc[frame.index[1], "m1_volatility_20"] = 0.9
+    frame.loc[frame.index[1], "m1_spread_bps"] = 0.5
+    frame.loc[frame.index[2], "m1_volatility_20"] = 0.1
+    frame.loc[frame.index[2], "m1_spread_bps"] = 2.0
+
+    probabilities = _pair_regime_expert_probabilities(
+        {
+            "EURUSD::fallback": ConstantModel(0.55),
+            "EURUSD::calm": ConstantModel(0.60),
+            "EURUSD::active_clean": ConstantModel(0.70),
+        },
+        {
+            "EURUSD": {
+                "m1_volatility_20_median": 0.5,
+                "m1_spread_bps_median": 1.0,
+            }
+        },
+        frame,
+        list(MULTITIMEFRAME_FEATURE_COLUMNS),
+    )
+
+    np.testing.assert_allclose(probabilities, np.array([0.60, 0.70, 0.55]))
+
+
+def test_regime_pair_experts_learn_router_thresholds_from_training_only(monkeypatch):
+    dataset = _research_dataset(
+        periods=700,
+        instruments=("EURUSD", "USDJPY"),
+    )
+    period_codes = dataset.groupby("decision_time", sort=True).ngroup()
+    dataset[EVENT_ACTIONABLE_TARGET_COLUMN] = 1
+    dataset[EVENT_DIRECTION_TARGET_COLUMN] = (
+        (period_codes + dataset["instrument"].eq("USDJPY").astype(int)) % 2
+    ).astype(int)
+    dataset["m1_volatility_20"] = np.where(period_codes % 2 == 0, 0.1, 0.9)
+    dataset["m1_spread_bps"] = np.where(period_codes % 3 == 0, 2.0, 0.5)
+
+    calls: list[dict[str, object]] = []
+
+    def fake_fit(
+        variant,
+        *,
+        fit,
+        early_stop,
+        feature_columns,
+        target_column,
+        sample_weight_policy,
+    ):
+        calls.append(
+            {
+                "name": variant.name,
+                "target": target_column,
+                "fit_rows": len(fit),
+                "early_rows": len(early_stop),
+            }
+        )
+        return _FakeModel()
+
+    monkeypatch.setattr(qualification, "_fit_binary_variant", fake_fit)
+
+    models, routers, opportunity, features, counts = (
+        _fit_event_pair_regime_experts_for_outer(
+            dataset,
+            variant=ModelVariant(name="event_barrier_v6_pair_regime_direction"),
+            horizon_bars=5,
+        )
+    )
+
+    assert opportunity is not None
+    assert features == list(MULTITIMEFRAME_FEATURE_COLUMNS)
+    assert set(routers) == {"EURUSD", "USDJPY"}
+    assert all("m1_volatility_20_median" in item for item in routers.values())
+    assert all("m1_spread_bps_median" in item for item in routers.values())
+    assert "EURUSD::fallback" in models
+    assert "USDJPY::fallback" in models
+    assert counts["regime_router_policy"] == qualification.REGIME_ROUTER_POLICY
+    assert calls[0]["target"] == EVENT_ACTIONABLE_TARGET_COLUMN
 
 
 def test_event_return_margin_target_is_long_minus_short_in_bps():
