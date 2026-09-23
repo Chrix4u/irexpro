@@ -7,10 +7,6 @@ import pytest
 
 from app.domain.models.multitimeframe_features import MULTITIMEFRAME_FEATURE_COLUMNS
 from app.domain.training import model_qualification as qualification
-from app.domain.training.qualification_diagnostics import (
-    causal_regime_diagnostics,
-    feature_gain_stability_diagnostics,
-)
 from app.domain.training.model_qualification import (
     ACTIONABLE_LABEL_POLICY,
     ACTIONABLE_TARGET_COLUMN,
@@ -35,6 +31,10 @@ from app.domain.training.model_qualification import (
     default_experiments,
     evaluate_qualification_corpora,
     run_nested_qualification_experiments,
+)
+from app.domain.training.qualification_diagnostics import (
+    causal_regime_diagnostics,
+    feature_gain_stability_diagnostics,
 )
 from app.domain.training.train_multitimeframe import (
     EVENT_ACTIONABLE_TARGET_COLUMN,
