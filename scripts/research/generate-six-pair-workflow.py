@@ -1122,8 +1122,8 @@ FINAL_JOB = f"""  final-model:
         shell: bash
         run: |
           set -Eeuo pipefail
-          selected_horizon="${{ needs.select-horizon.outputs.selected }}"
-          selected_experiment="${{ needs.select-horizon.outputs.experiment }}"
+          selected_horizon="${{{{ needs.select-horizon.outputs.selected }}}}"
+          selected_experiment="${{{{ needs.select-horizon.outputs.experiment }}}}"
           [[ "$selected_horizon" =~ ^(1|5|10)$ ]] || {{
             printf 'MODEL_PROMOTION_HOLD reason=invalid_selected_horizon\\n' >&2
             exit 16
@@ -1285,7 +1285,7 @@ PROMOTION_JOB = f"""  paper-promotion:
         shell: bash
         run: |
           set -Eeuo pipefail
-          selected_horizon="${{ needs.final-model.outputs.horizon }}"
+          selected_horizon="${{{{ needs.final-model.outputs.horizon }}}}"
           [[ "$selected_horizon" =~ ^(1|5|10)$ ]] || {{
             printf 'MODEL_PROMOTION_HOLD reason=invalid_selected_horizon\\n' >&2
             exit 16
