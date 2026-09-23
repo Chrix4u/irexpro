@@ -4164,13 +4164,18 @@ jobs:
 
           # Select the exact qualification candidate using research evidence only.
           # The untouched test is deliberately NOT used for candidate selection.
-          selected_candidate="$(OUTPUT_ROOT="$OUTPUT_ROOT" node <<'NODE'
+          selected_candidate="$(QUALIFICATION_OUTPUT_ROOT="$OUTPUT_ROOT" node <<'NODE'
           const fs = require('fs');
           const path = require('path');
           const candidates = [];
+          const outputRoot = process.env.QUALIFICATION_OUTPUT_ROOT;
+          if (!outputRoot) {
+            console.error('MODEL_PROMOTION_HOLD reason=missing_qualification_output_root');
+            process.exit(2);
+          }
           for (const horizon of [1, 5, 10]) {
             const reportPath = path.join(
-              process.env.OUTPUT_ROOT,
+              outputRoot,
               'reports',
               `model_qualification_${horizon}m.json`,
             );
