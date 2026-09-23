@@ -1936,7 +1936,10 @@ def run_nested_qualification_experiments(
             raise ValueError(
                 "qualification dataset must contain actionable and no-trade classes"
             )
-    if any(experiment.mode == "two_stage_event" for experiment in experiments):
+    if any(
+        experiment.mode in {"two_stage_event", "two_stage_event_pair_experts"}
+        for experiment in experiments
+    ):
         required_event_columns = {
             EVENT_ACTIONABLE_TARGET_COLUMN,
             EVENT_DIRECTION_TARGET_COLUMN,
@@ -2015,6 +2018,7 @@ def run_nested_qualification_experiments(
                     continue
 
             opportunity_model: XGBClassifier | None = None
+            direction_models: dict[str, XGBClassifier] | None = None
             if experiment.mode == "two_stage_actionable":
                 if len(experiment.variants) != 1 or experiment.tune_decision_threshold:
                     raise ValueError(
@@ -2105,6 +2109,53 @@ def run_nested_qualification_experiments(
                     "candidate_reports": [],
                     "training_counts": training_counts,
                 }
+            elif experiment.mode == "two_stage_event_pair_experts":
+                if len(experiment.variants) != 1 or experiment.tune_decision_threshold:
+                    raise ValueError(
+                        "pair-expert event research must remain a fixed bounded candidate"
+                    )
+                variant = experiment.variants[0]
+                decision_threshold = 0.50
+                (
+                    direction_models,
+                    opportunity_model,
+                    feature_columns,
+                    training_counts,
+                ) = _fit_event_pair_experts_for_outer(
+                    outer_train,
+                    variant=variant,
+                    horizon_bars=horizon_bars,
+                )
+                model = None
+                direction_probabilities = _pair_expert_probabilities(
+                    direction_models,
+                    outer_validation,
+                    feature_columns,
+                )
+                opportunity_probabilities = _probabilities(
+                    opportunity_model,
+                    outer_validation,
+                    feature_columns,
+                )
+                predictions = _event_two_stage_prediction_frame(
+                    outer_validation,
+                    direction_probabilities=direction_probabilities,
+                    opportunity_probabilities=opportunity_probabilities,
+                    confidence_floor=confidence_floor,
+                    fold=fold_index,
+                    experiment=experiment.name,
+                    variant=variant,
+                )
+                selection = {
+                    "policy": "fixed_event_barrier_v4_pair_experts_no_outer_tuning",
+                    "selected_variant": variant.name,
+                    "decision_threshold": decision_threshold,
+                    "opportunity_threshold": confidence_floor,
+                    "event_label_policy": EVENT_LABEL_POLICY,
+                    "expert_router": "instrument_identity",
+                    "candidate_reports": [],
+                    "training_counts": training_counts,
+                }
             else:
                 if experiment.name == "baseline":
                     variant = experiment.variants[0]
@@ -2173,6 +2224,7 @@ def run_nested_qualification_experiments(
                 feature_columns=feature_columns,
                 selection=selection,
                 opportunity_model=opportunity_model,
+                direction_models=direction_models,
             )
             report.update(
                 {
@@ -2197,7 +2249,11 @@ def run_nested_qualification_experiments(
                 )
             if opportunity_model is not None:
                 del opportunity_model
-            del model
+            if direction_models is not None:
+                direction_models.clear()
+                del direction_models
+            if model is not None:
+                del model
             gc.collect()
         del outer_train, outer_validation
         gc.collect()
