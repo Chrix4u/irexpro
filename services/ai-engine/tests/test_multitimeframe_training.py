@@ -16,6 +16,13 @@ from app.domain.training.multitimeframe_corpus import build_multitimeframe_featu
 from app.domain.training.train_multitimeframe import (
     CLASS_BALANCE_SAMPLE_WEIGHT_POLICY,
     ECONOMIC_SAMPLE_WEIGHT_POLICY,
+    EVENT_ACTIONABLE_TARGET_COLUMN,
+    EVENT_BARRIER_RETURN_COLUMN,
+    EVENT_DIRECTION_TARGET_COLUMN,
+    EVENT_LABEL_POLICY,
+    EVENT_LONG_NET_RETURN_COLUMN,
+    EVENT_SHORT_NET_RETURN_COLUMN,
+    EVENT_STEP_COLUMN,
     MULTITIMEFRAME_FEATURE_COLUMNS,
     _class_balance_sample_weights,
     _compact_research_frame,
@@ -117,6 +124,12 @@ def test_compact_research_frame_preserves_model_and_evaluation_values():
         "target",
         "long_net_return",
         "short_net_return",
+        EVENT_ACTIONABLE_TARGET_COLUMN,
+        EVENT_DIRECTION_TARGET_COLUMN,
+        EVENT_LONG_NET_RETURN_COLUMN,
+        EVENT_SHORT_NET_RETURN_COLUMN,
+        EVENT_STEP_COLUMN,
+        EVENT_BARRIER_RETURN_COLUMN,
         "m1_spread_bps",
         *MULTITIMEFRAME_FEATURE_COLUMNS,
     }
@@ -131,9 +144,71 @@ def test_compact_research_frame_preserves_model_and_evaluation_values():
         "target",
         "long_net_return",
         "short_net_return",
+        EVENT_ACTIONABLE_TARGET_COLUMN,
+        EVENT_DIRECTION_TARGET_COLUMN,
+        EVENT_LONG_NET_RETURN_COLUMN,
+        EVENT_SHORT_NET_RETURN_COLUMN,
+        EVENT_STEP_COLUMN,
+        EVENT_BARRIER_RETURN_COLUMN,
         "m1_spread_bps",
     ):
         pd.testing.assert_series_equal(compact[column], prepared[column])
+
+
+def test_event_barrier_labels_are_bounded_research_outcomes_not_features():
+    horizon = 10
+    corpus = build_multitimeframe_feature_corpus(_m1_fixture())
+    prepared = prepare_instrument_corpus(
+        corpus,
+        instrument="EURUSD",
+        horizon_bars=horizon,
+    )
+
+    assert EVENT_LABEL_POLICY.endswith("_v1")
+    assert prepared[EVENT_ACTIONABLE_TARGET_COLUMN].isin([0, 1]).all()
+    assert prepared[EVENT_DIRECTION_TARGET_COLUMN].isin([0, 1]).all()
+    assert prepared[EVENT_STEP_COLUMN].between(1, horizon).all()
+    assert prepared[EVENT_BARRIER_RETURN_COLUMN].gt(0.0).all()
+    assert np.isfinite(
+        prepared[
+            [
+                EVENT_LONG_NET_RETURN_COLUMN,
+                EVENT_SHORT_NET_RETURN_COLUMN,
+                EVENT_BARRIER_RETURN_COLUMN,
+            ]
+        ].to_numpy(dtype=float)
+    ).all()
+
+    for column in (
+        EVENT_ACTIONABLE_TARGET_COLUMN,
+        EVENT_DIRECTION_TARGET_COLUMN,
+        EVENT_LONG_NET_RETURN_COLUMN,
+        EVENT_SHORT_NET_RETURN_COLUMN,
+        EVENT_STEP_COLUMN,
+        EVENT_BARRIER_RETURN_COLUMN,
+    ):
+        assert column not in MULTITIMEFRAME_FEATURE_COLUMNS
+
+
+def test_event_barrier_timeout_keeps_row_and_uses_exact_horizon_returns():
+    corpus = build_multitimeframe_feature_corpus(
+        _m1_fixture(spread_points=500.0)
+    )
+    prepared = prepare_instrument_corpus(
+        corpus,
+        instrument="EURUSD",
+        horizon_bars=5,
+    )
+    timeouts = prepared[EVENT_ACTIONABLE_TARGET_COLUMN] == 0
+    assert timeouts.any()
+    np.testing.assert_allclose(
+        prepared.loc[timeouts, EVENT_LONG_NET_RETURN_COLUMN].to_numpy(dtype=float),
+        prepared.loc[timeouts, "long_net_return"].to_numpy(dtype=float),
+    )
+    np.testing.assert_allclose(
+        prepared.loc[timeouts, EVENT_SHORT_NET_RETURN_COLUMN].to_numpy(dtype=float),
+        prepared.loc[timeouts, "short_net_return"].to_numpy(dtype=float),
+    )
 
 
 def test_mtf_v3_features_are_causal_finite_and_in_contract():

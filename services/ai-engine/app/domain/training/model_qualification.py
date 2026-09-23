@@ -22,6 +22,13 @@ from app.domain.training.qualification_diagnostics import (
     feature_gain_diagnostics,
 )
 from app.domain.training.train_multitimeframe import (
+    EVENT_ACTIONABLE_TARGET_COLUMN,
+    EVENT_BARRIER_RETURN_COLUMN,
+    EVENT_DIRECTION_TARGET_COLUMN,
+    EVENT_LABEL_POLICY,
+    EVENT_LONG_NET_RETURN_COLUMN,
+    EVENT_SHORT_NET_RETURN_COLUMN,
+    EVENT_STEP_COLUMN,
     LONG_NET_RETURN_COLUMN,
     QUALIFICATION_REGIME_COLUMNS,
     SHORT_NET_RETURN_COLUMN,
@@ -41,6 +48,7 @@ CONFIDENCE_FLOOR = 0.60
 ACTIONABLE_TARGET_COLUMN = "actionable_target"
 ACTIONABLE_LABEL_POLICY = "best_direction_net_return_after_friction_gt_zero_v1"
 TWO_STAGE_EXPERIMENT_NAME = "actionable_two_stage"
+EVENT_TWO_STAGE_EXPERIMENT_NAME = "event_barrier_two_stage"
 QUALIFICATION_CHECKPOINT_VERSION = 1
 QUALIFICATION_CHECKPOINT_POLICY = "experiment_outer_fold_atomic_v1"
 DECISION_THRESHOLD_GRID = (0.45, 0.475, 0.50, 0.525, 0.55)
@@ -63,7 +71,7 @@ STRUCTURE_GLOBAL_FEATURES = (
 ExperimentCalibration = Literal["none", "platt", "isotonic"]
 SampleWeightPolicy = Literal["economic", "class_balance"]
 FeaturePolicy = Literal["all", "drop_volume", "drop_structure"]
-ExperimentMode = Literal["directional", "two_stage_actionable"]
+ExperimentMode = Literal["directional", "two_stage_actionable", "two_stage_event"]
 
 
 @dataclass(frozen=True)
@@ -166,6 +174,7 @@ def _qualification_checkpoint_fingerprint(
         "max_splits": int(max_splits),
         "feature_columns": list(MULTITIMEFRAME_FEATURE_COLUMNS),
         "actionable_label_policy": ACTIONABLE_LABEL_POLICY,
+        "event_label_policy": EVENT_LABEL_POLICY,
         "experiments": _experiment_matrix_payload(experiments),
     }
     encoded = json.dumps(
@@ -386,6 +395,11 @@ def default_experiments() -> tuple[QualificationExperiment, ...]:
             name=TWO_STAGE_EXPERIMENT_NAME,
             variants=(ModelVariant(name="actionable_v2_direction"),),
             mode="two_stage_actionable",
+        ),
+        QualificationExperiment(
+            name=EVENT_TWO_STAGE_EXPERIMENT_NAME,
+            variants=(ModelVariant(name="event_barrier_v3_direction"),),
+            mode="two_stage_event",
         ),
     )
 
@@ -837,6 +851,90 @@ def _two_stage_prediction_frame(
     return predictions
 
 
+def _event_two_stage_prediction_frame(
+    source: pd.DataFrame,
+    *,
+    direction_probabilities: np.ndarray,
+    opportunity_probabilities: np.ndarray,
+    confidence_floor: float,
+    fold: int,
+    experiment: str,
+    variant: ModelVariant,
+) -> pd.DataFrame:
+    """Build full-stream predictions for the event/barrier two-stage experiment."""
+    if confidence_floor < CONFIDENCE_FLOOR:
+        raise ValueError("confidence floor must not be lowered below 0.60")
+    columns = [
+        "decision_time",
+        "instrument",
+        EVENT_DIRECTION_TARGET_COLUMN,
+        EVENT_ACTIONABLE_TARGET_COLUMN,
+        EVENT_LONG_NET_RETURN_COLUMN,
+        EVENT_SHORT_NET_RETURN_COLUMN,
+        EVENT_STEP_COLUMN,
+        EVENT_BARRIER_RETURN_COLUMN,
+        "m1_spread_bps",
+    ]
+    columns.extend(
+        column for column in QUALIFICATION_REGIME_COLUMNS if column in source.columns
+    )
+    predictions = source[columns].copy()
+    predictions[TARGET_COLUMN] = predictions[EVENT_DIRECTION_TARGET_COLUMN].astype(int)
+    predictions[ACTIONABLE_TARGET_COLUMN] = predictions[
+        EVENT_ACTIONABLE_TARGET_COLUMN
+    ].astype(int)
+    predictions[LONG_NET_RETURN_COLUMN] = predictions[
+        EVENT_LONG_NET_RETURN_COLUMN
+    ].astype(float)
+    predictions[SHORT_NET_RETURN_COLUMN] = predictions[
+        EVENT_SHORT_NET_RETURN_COLUMN
+    ].astype(float)
+
+    direction_probabilities = np.clip(
+        np.asarray(direction_probabilities, dtype=float),
+        1e-7,
+        1.0 - 1e-7,
+    )
+    opportunity_probabilities = np.clip(
+        np.asarray(opportunity_probabilities, dtype=float),
+        1e-7,
+        1.0 - 1e-7,
+    )
+    predictions["raw_positive_probability"] = direction_probabilities
+    predictions["positive_probability"] = direction_probabilities
+    predictions["predicted_long"] = direction_probabilities >= 0.50
+    predictions["direction_confidence"] = np.maximum(
+        direction_probabilities,
+        1.0 - direction_probabilities,
+    )
+    predictions["opportunity_probability"] = opportunity_probabilities
+    predictions["predicted_opportunity"] = (
+        opportunity_probabilities >= confidence_floor
+    )
+    predictions["confidence"] = np.minimum(
+        predictions["direction_confidence"],
+        predictions["opportunity_probability"],
+    )
+    predictions["active_trade"] = (
+        predictions["predicted_opportunity"]
+        & (predictions["direction_confidence"] >= confidence_floor)
+    )
+    predictions["selected_net_return"] = np.where(
+        predictions["predicted_long"],
+        predictions[LONG_NET_RETURN_COLUMN],
+        predictions[SHORT_NET_RETURN_COLUMN],
+    )
+    predictions["fold"] = fold
+    predictions["experiment"] = experiment
+    predictions["model_variant"] = variant.name
+    predictions["calibration_method"] = "none"
+    predictions["decision_threshold"] = 0.50
+    predictions["confidence_floor"] = confidence_floor
+    predictions["actionable_label_policy"] = EVENT_LABEL_POLICY
+    predictions["event_label_policy"] = EVENT_LABEL_POLICY
+    return predictions
+
+
 def _opportunity_classification(
     predictions: pd.DataFrame,
     *,
@@ -871,6 +969,40 @@ def _summarize_predictions(
     )
     if "opportunity_probability" not in predictions.columns:
         return summary
+
+    if "event_label_policy" in predictions.columns:
+        event_direction = predictions.loc[
+            predictions[ACTIONABLE_TARGET_COLUMN] == 1
+        ].copy()
+        summary["event_direction_evaluated_rows"] = int(len(event_direction))
+        if (
+            not event_direction.empty
+            and event_direction[TARGET_COLUMN].nunique() >= 2
+        ):
+            direction_summary = mtf_training._summarize_predictions(
+                event_direction,
+                horizon_bars=horizon_bars,
+                confidence_threshold=confidence_threshold,
+                decision_threshold=decision_threshold,
+            )
+            summary["classification"] = direction_summary["classification"]
+            summary["diagnostics"]["directional_bias"] = direction_summary[
+                "diagnostics"
+            ]["directional_bias"]
+            summary["diagnostics"]["event_direction_probability_quantiles"] = (
+                direction_summary["diagnostics"]["probability_quantiles"]
+            )
+        else:
+            summary["classification"]["balanced_accuracy"] = 0.0
+            summary["classification"]["sample_count"] = int(len(event_direction))
+            summary["diagnostics"]["warnings"] = list(
+                dict.fromkeys(
+                    [
+                        *summary["diagnostics"].get("warnings", []),
+                        "insufficient_event_direction_classes",
+                    ]
+                )
+            )
 
     direction_coverage = dict(summary["diagnostics"]["confidence_coverage"])
     active_count = int(predictions["active_trade"].sum())
@@ -1108,6 +1240,57 @@ def _fit_two_stage_for_outer(
         "early_stop_rows": int(len(early)),
         "actionable_fit_rows": int(len(directional_fit)),
         "actionable_early_stop_rows": int(len(directional_early)),
+    }
+    return direction_model, opportunity_model, feature_columns, counts
+
+
+def _fit_event_two_stage_for_outer(
+    training_window: pd.DataFrame,
+    *,
+    variant: ModelVariant,
+    horizon_bars: int,
+) -> tuple[XGBClassifier, XGBClassifier, list[str], dict[str, int]]:
+    """Fit event opportunity on all rows and direction only on true event rows."""
+    feature_columns = _feature_columns(variant.feature_policy)
+    fit, early = _split_internal_early_stopping_tail(
+        training_window,
+        horizon_bars=horizon_bars,
+    )
+    opportunity_variant = ModelVariant(
+        name="event_barrier_v3_opportunity",
+        parameter_overrides=variant.parameter_overrides,
+        sample_weight_policy="class_balance",
+        calibration="none",
+        feature_policy=variant.feature_policy,
+    )
+    opportunity_model = _fit_binary_variant(
+        opportunity_variant,
+        fit=fit,
+        early_stop=early,
+        feature_columns=feature_columns,
+        target_column=EVENT_ACTIONABLE_TARGET_COLUMN,
+        sample_weight_policy="class_balance",
+    )
+
+    directional_fit = fit.loc[
+        fit[EVENT_ACTIONABLE_TARGET_COLUMN] == 1
+    ].copy()
+    directional_early = early.loc[
+        early[EVENT_ACTIONABLE_TARGET_COLUMN] == 1
+    ].copy()
+    direction_model = _fit_binary_variant(
+        variant,
+        fit=directional_fit,
+        early_stop=directional_early,
+        feature_columns=feature_columns,
+        target_column=EVENT_DIRECTION_TARGET_COLUMN,
+        sample_weight_policy="class_balance",
+    )
+    counts = {
+        "fit_rows": int(len(fit)),
+        "early_stop_rows": int(len(early)),
+        "event_actionable_fit_rows": int(len(directional_fit)),
+        "event_actionable_early_stop_rows": int(len(directional_early)),
     }
     return direction_model, opportunity_model, feature_columns, counts
 
@@ -1596,6 +1779,29 @@ def run_nested_qualification_experiments(
             raise ValueError(
                 "qualification dataset must contain actionable and no-trade classes"
             )
+    if any(experiment.mode == "two_stage_event" for experiment in experiments):
+        required_event_columns = {
+            EVENT_ACTIONABLE_TARGET_COLUMN,
+            EVENT_DIRECTION_TARGET_COLUMN,
+            EVENT_LONG_NET_RETURN_COLUMN,
+            EVENT_SHORT_NET_RETURN_COLUMN,
+            EVENT_STEP_COLUMN,
+            EVENT_BARRIER_RETURN_COLUMN,
+        }
+        missing_event = sorted(required_event_columns.difference(dataset.columns))
+        if missing_event:
+            raise ValueError(
+                f"qualification dataset missing event-barrier columns: {missing_event}"
+            )
+        if dataset[EVENT_ACTIONABLE_TARGET_COLUMN].nunique() < 2:
+            raise ValueError(
+                "event qualification requires event and timeout/no-trade classes"
+            )
+        event_rows = dataset.loc[dataset[EVENT_ACTIONABLE_TARGET_COLUMN] == 1]
+        if event_rows[EVENT_DIRECTION_TARGET_COLUMN].nunique() < 2:
+            raise ValueError(
+                "event qualification requires both event direction classes"
+            )
     if not experiments or experiments[0].name != "baseline":
         raise ValueError("experiment matrix must start with the locked baseline")
     if (checkpoint_dir is None) != (checkpoint_fingerprint is None):
@@ -1694,6 +1900,51 @@ def run_nested_qualification_experiments(
                     "decision_threshold": decision_threshold,
                     "opportunity_threshold": confidence_floor,
                     "actionable_label_policy": ACTIONABLE_LABEL_POLICY,
+                    "candidate_reports": [],
+                    "training_counts": training_counts,
+                }
+            elif experiment.mode == "two_stage_event":
+                if len(experiment.variants) != 1 or experiment.tune_decision_threshold:
+                    raise ValueError(
+                        "event-barrier research must remain a fixed bounded candidate"
+                    )
+                variant = experiment.variants[0]
+                decision_threshold = 0.50
+                (
+                    model,
+                    opportunity_model,
+                    feature_columns,
+                    training_counts,
+                ) = _fit_event_two_stage_for_outer(
+                    outer_train,
+                    variant=variant,
+                    horizon_bars=horizon_bars,
+                )
+                direction_probabilities = _probabilities(
+                    model,
+                    outer_validation,
+                    feature_columns,
+                )
+                opportunity_probabilities = _probabilities(
+                    opportunity_model,
+                    outer_validation,
+                    feature_columns,
+                )
+                predictions = _event_two_stage_prediction_frame(
+                    outer_validation,
+                    direction_probabilities=direction_probabilities,
+                    opportunity_probabilities=opportunity_probabilities,
+                    confidence_floor=confidence_floor,
+                    fold=fold_index,
+                    experiment=experiment.name,
+                    variant=variant,
+                )
+                selection = {
+                    "policy": "fixed_event_barrier_v3_no_outer_tuning",
+                    "selected_variant": variant.name,
+                    "decision_threshold": decision_threshold,
+                    "opportunity_threshold": confidence_floor,
+                    "event_label_policy": EVENT_LABEL_POLICY,
                     "candidate_reports": [],
                     "training_counts": training_counts,
                 }
@@ -1826,6 +2077,7 @@ def run_nested_qualification_experiments(
         "horizon_bars": horizon_bars,
         "confidence_floor": confidence_floor,
         "actionable_label_policy": ACTIONABLE_LABEL_POLICY,
+        "event_label_policy": EVENT_LABEL_POLICY,
         "untouched_final_test_used": False,
         "outer_validation_used_for_tuning": False,
         "experiment_count": len(experiments),
