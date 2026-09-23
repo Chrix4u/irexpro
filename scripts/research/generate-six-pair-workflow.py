@@ -906,6 +906,7 @@ SELECT_JOB = f"""  select-horizon:
                 'baseline',
                 'event_barrier_pair_experts',
                 'event_barrier_pair_return_margin',
+                'event_barrier_pair_regime_experts',
               ]);
               if (!supported.has(experiment)) continue;
               if (!block?.research_gate?.research_gate_passed) continue;
@@ -1133,7 +1134,7 @@ FINAL_JOB = f"""  final-model:
             exit 17
           }}
           case "$selected_experiment" in
-            baseline|event_barrier_pair_experts|event_barrier_pair_return_margin) ;;
+            baseline|event_barrier_pair_experts|event_barrier_pair_return_margin|event_barrier_pair_regime_experts) ;;
             *)
               printf 'MODEL_PROMOTION_HOLD reason=selected_architecture_not_packaged horizon=%sm experiment=%s\\n' \
                 "$selected_horizon" "$selected_experiment"
