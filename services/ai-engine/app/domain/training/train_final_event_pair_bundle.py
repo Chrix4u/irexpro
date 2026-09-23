@@ -2,13 +2,11 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import pandas as pd
 
 from app.domain.models.multitimeframe_features import (
@@ -22,7 +20,6 @@ from app.domain.training.model_qualification import (
     CONFIDENCE_FLOOR,
     EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
     EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME,
-    EVENT_TWO_STAGE_EXPERIMENT_NAME,
     ModelVariant,
     _event_two_stage_prediction_frame,
     _fit_event_pair_experts_for_outer,
