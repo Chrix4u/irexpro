@@ -53,7 +53,12 @@ ECONOMIC_SAMPLE_WEIGHT_POLICY = "class_balanced_positive_net_edge_q75_capped_v2"
 RESEARCH_PROGRESS_ENV = "IREXPRO_RESEARCH_PROGRESS"
 XGBOOST_N_JOBS_ENV = "IREXPRO_XGB_N_JOBS"
 MAX_XGBOOST_N_JOBS = 4
-QUALIFICATION_REGIME_COLUMNS = ("m1_volatility_20", "h1_rsi_14")
+QUALIFICATION_REGIME_COLUMNS = (
+    "m1_volatility_20",
+    "h1_rsi_14",
+    "trend_alignment_score",
+    "momentum_alignment_score",
+)
 
 
 def _research_progress(message: str) -> None:
