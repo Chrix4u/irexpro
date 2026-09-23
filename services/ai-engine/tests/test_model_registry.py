@@ -12,6 +12,7 @@ from app.core.errors import ModelNotFoundError
 from app.domain.models.baseline_xgboost import (
     EVENT_LABEL_POLICY_RUNTIME,
     EVENT_PAIR_BUNDLE_MODEL_TYPE,
+    EVENT_PAIR_REGIME_ROUTER_POLICY_RUNTIME,
     MODEL_METADATA_PATH_ENV,
     MODEL_PATH_ENV,
     MODEL_VERSION,
@@ -227,6 +228,126 @@ def _write_event_pair_bundle(tmp_path):
     metadata_path = tmp_path / "event-pair-model.metadata.json"
     metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
     return model_path, metadata_path, direction
+
+
+
+def _write_event_pair_regime_bundle(tmp_path):
+    feature_columns = list(MULTITIMEFRAME_FEATURE_COLUMNS)
+    rows = [
+        {
+            column: float((index + position) % 7) / 10.0
+            for position, column in enumerate(feature_columns)
+        }
+        for index in range(12)
+    ]
+    frame = pd.DataFrame(rows, columns=feature_columns)
+    target = [0, 1] * 6
+
+    def save_classifier(name):
+        path = tmp_path / name
+        fitted = XGBClassifier(
+            n_estimators=2,
+            max_depth=1,
+            learning_rate=0.1,
+            n_jobs=1,
+            tree_method="hist",
+            random_state=42,
+        )
+        fitted.fit(frame, target)
+        fitted.save_model(str(path))
+        return path
+
+    opportunity_path = save_classifier("regime-opportunity.json")
+    direction = {}
+    for instrument in INITIAL_FOREX_UNIVERSE:
+        fallback_path = save_classifier(f"direction-{instrument}-fallback.json")
+        calm_path = save_classifier(f"direction-{instrument}-calm.json")
+        direction[instrument] = {
+            "kind": "xgboost_regime_classifier_router",
+            "router": {
+                "policy": EVENT_PAIR_REGIME_ROUTER_POLICY_RUNTIME,
+                "m1_volatility_20_median": 0.5,
+                "m1_spread_bps_median": 1.0,
+            },
+            "fallback": {
+                "path": fallback_path.name,
+                "sha256": _artifact_sha(fallback_path),
+                "kind": "xgboost_classifier",
+            },
+            "regimes": {
+                "calm": {
+                    "path": calm_path.name,
+                    "sha256": _artifact_sha(calm_path),
+                    "kind": "xgboost_classifier",
+                }
+            },
+        }
+
+    manifest = {
+        "bundle_version": 1,
+        "model_type": EVENT_PAIR_BUNDLE_MODEL_TYPE,
+        "experiment": "event_barrier_pair_regime_experts",
+        "event_label_policy": EVENT_LABEL_POLICY_RUNTIME,
+        "opportunity": {
+            "path": opportunity_path.name,
+            "sha256": _artifact_sha(opportunity_path),
+            "kind": "xgboost_classifier",
+        },
+        "direction": direction,
+    }
+    model_path = tmp_path / "event-pair-regime-model.json"
+    model_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    metadata = {
+        "metadata_version": 4,
+        "model_type": EVENT_PAIR_BUNDLE_MODEL_TYPE,
+        "runtime_feature_profile": MULTITIMEFRAME_RUNTIME_PROFILE,
+        "research_experiment": "event_barrier_pair_regime_experts",
+        "event_label_policy": EVENT_LABEL_POLICY_RUNTIME,
+        "backtest_evaluation_policy": MULTITIMEFRAME_BACKTEST_POLICY,
+        "research_validation_policy": MULTITIMEFRAME_RESEARCH_VALIDATION_POLICY,
+        "model_version": "event-pair-regime-test-v1",
+        "artifact_sha256": _artifact_sha(model_path),
+        "feature_columns": feature_columns,
+        "feature_schema_hash": _schema_hash(feature_columns),
+        "approved_for_paper": True,
+        "approved_for_live": False,
+        "validation_status": "untouched_test_passed",
+        "horizon_bars": 5,
+        "instruments": list(INITIAL_FOREX_UNIVERSE),
+    }
+    metadata_path = tmp_path / "event-pair-regime-model.metadata.json"
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    return model_path, metadata_path
+
+
+def test_verified_event_pair_regime_bundle_routes_and_falls_back(
+    tmp_path,
+    monkeypatch,
+):
+    model_path, metadata_path = _write_event_pair_regime_bundle(tmp_path)
+    monkeypatch.setenv(MODEL_PATH_ENV, str(model_path))
+    monkeypatch.setenv(MODEL_METADATA_PATH_ENV, str(metadata_path))
+
+    model = BaselineXGBoostModel()
+    assert model.load_model() is True
+
+    calm_features = {column: 0.0 for column in MULTITIMEFRAME_FEATURE_COLUMNS}
+    calm_features["instrument_EURUSD"] = 1.0
+    calm_features["m1_volatility_20"] = 0.1
+    calm_features["m1_spread_bps"] = 0.5
+    calm = model.predict_signal(calm_features)
+    assert calm.explainability["market_regime"] == "calm"
+    assert calm.explainability["regime_fallback_used"] is False
+
+    stressed_features = dict(calm_features)
+    stressed_features["m1_spread_bps"] = 2.0
+    stressed = model.predict_signal(stressed_features)
+    assert stressed.explainability["market_regime"] == "stressed"
+    assert stressed.explainability["regime_fallback_used"] is True
+    assert stressed.explainability["regime_router_policy"] == (
+        EVENT_PAIR_REGIME_ROUTER_POLICY_RUNTIME
+    )
 
 
 def test_verified_event_pair_bundle_loads_and_routes_one_instrument(
