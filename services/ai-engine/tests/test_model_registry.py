@@ -12,12 +12,15 @@ from app.core.errors import ModelNotFoundError
 from app.domain.models.baseline_xgboost import (
     MODEL_METADATA_PATH_ENV,
     MODEL_PATH_ENV,
+    EVENT_LABEL_POLICY_RUNTIME,
+    EVENT_PAIR_BUNDLE_MODEL_TYPE,
     MODEL_VERSION,
     MULTITIMEFRAME_MODEL_TYPE,
     BaselineXGBoostModel,
 )
 from app.domain.models.governance import create_baseline_governance
 from app.domain.models.multitimeframe_features import (
+    INITIAL_FOREX_UNIVERSE,
     MULTITIMEFRAME_BACKTEST_POLICY,
     MULTITIMEFRAME_FEATURE_COLUMNS,
     MULTITIMEFRAME_LABEL_SELECTION_POLICY,
@@ -144,6 +147,127 @@ def _write_mtf_artifact(
         )
     metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
     return model_path, metadata_path
+
+def _write_event_pair_bundle(tmp_path):
+    feature_columns = list(MULTITIMEFRAME_FEATURE_COLUMNS)
+    rows = [
+        {
+            column: float((index + position) % 7) / 10.0
+            for position, column in enumerate(feature_columns)
+        }
+        for index in range(12)
+    ]
+    frame = pd.DataFrame(rows, columns=feature_columns)
+    target = [0, 1] * 6
+
+    opportunity_path = tmp_path / "opportunity.json"
+    opportunity = XGBClassifier(
+        n_estimators=2,
+        max_depth=1,
+        learning_rate=0.1,
+        n_jobs=1,
+        tree_method="hist",
+        random_state=42,
+    )
+    opportunity.fit(frame, target)
+    opportunity.save_model(str(opportunity_path))
+
+    direction = {}
+    for instrument in INITIAL_FOREX_UNIVERSE:
+        child_path = tmp_path / f"direction-{instrument}.json"
+        child = XGBClassifier(
+            n_estimators=2,
+            max_depth=1,
+            learning_rate=0.1,
+            n_jobs=1,
+            tree_method="hist",
+            random_state=42,
+        )
+        child.fit(frame, target)
+        child.save_model(str(child_path))
+        direction[instrument] = {
+            "path": child_path.name,
+            "sha256": _artifact_sha(child_path),
+            "kind": "xgboost_classifier",
+        }
+
+    manifest = {
+        "bundle_version": 1,
+        "model_type": EVENT_PAIR_BUNDLE_MODEL_TYPE,
+        "experiment": "event_barrier_pair_experts",
+        "event_label_policy": EVENT_LABEL_POLICY_RUNTIME,
+        "opportunity": {
+            "path": opportunity_path.name,
+            "sha256": _artifact_sha(opportunity_path),
+            "kind": "xgboost_classifier",
+        },
+        "direction": direction,
+    }
+    model_path = tmp_path / "event-pair-model.json"
+    model_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    metadata = {
+        "metadata_version": 4,
+        "model_type": EVENT_PAIR_BUNDLE_MODEL_TYPE,
+        "runtime_feature_profile": MULTITIMEFRAME_RUNTIME_PROFILE,
+        "research_experiment": "event_barrier_pair_experts",
+        "event_label_policy": EVENT_LABEL_POLICY_RUNTIME,
+        "backtest_evaluation_policy": MULTITIMEFRAME_BACKTEST_POLICY,
+        "research_validation_policy": MULTITIMEFRAME_RESEARCH_VALIDATION_POLICY,
+        "model_version": "event-pair-test-v1",
+        "artifact_sha256": _artifact_sha(model_path),
+        "feature_columns": feature_columns,
+        "feature_schema_hash": _schema_hash(feature_columns),
+        "approved_for_paper": True,
+        "approved_for_live": False,
+        "validation_status": "untouched_test_passed",
+        "horizon_bars": 5,
+        "instruments": list(INITIAL_FOREX_UNIVERSE),
+    }
+    metadata_path = tmp_path / "event-pair-model.metadata.json"
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    return model_path, metadata_path, direction
+
+
+def test_verified_event_pair_bundle_loads_and_routes_one_instrument(
+    tmp_path,
+    monkeypatch,
+):
+    model_path, metadata_path, _ = _write_event_pair_bundle(tmp_path)
+    monkeypatch.setenv(MODEL_PATH_ENV, str(model_path))
+    monkeypatch.setenv(MODEL_METADATA_PATH_ENV, str(metadata_path))
+
+    model = BaselineXGBoostModel()
+    assert model.load_model() is True
+    metadata = model.get_model_metadata()
+    assert metadata["mode"] == "trained_xgboost_mtf"
+    assert metadata["model_type"] == EVENT_PAIR_BUNDLE_MODEL_TYPE
+    assert metadata["research_experiment"] == "event_barrier_pair_experts"
+    assert metadata["approved_for_paper"] is True
+    assert metadata["approved_for_live"] is False
+
+    features = {column: 0.0 for column in MULTITIMEFRAME_FEATURE_COLUMNS}
+    features["instrument_EURUSD"] = 1.0
+    prediction = model.predict_signal(features)
+
+    assert prediction.direction in {"BUY", "SELL"}
+    assert 0.0 <= prediction.confidence_score <= 1.0
+    assert prediction.explainability["instrument_expert"] == "EURUSD"
+    assert prediction.explainability["approved_for_live"] is False
+
+
+def test_event_pair_bundle_child_hash_mismatch_fails_closed(tmp_path, monkeypatch):
+    model_path, metadata_path, direction = _write_event_pair_bundle(tmp_path)
+    child_path = tmp_path / direction["EURUSD"]["path"]
+    child_path.write_bytes(child_path.read_bytes() + b"tamper")
+
+    monkeypatch.setenv(MODEL_PATH_ENV, str(model_path))
+    monkeypatch.setenv(MODEL_METADATA_PATH_ENV, str(metadata_path))
+
+    model = BaselineXGBoostModel()
+    assert model.load_model() is False
+    assert model.get_model_metadata()["mode"] == "heuristic_placeholder"
+
 
 def test_verified_mtf_artifact_loads_as_trained_runtime(tmp_path, monkeypatch):
     model_path, metadata_path = _write_mtf_artifact(tmp_path)
