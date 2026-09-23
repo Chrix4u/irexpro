@@ -790,6 +790,7 @@ SELECT_JOB = f"""  select-horizon:
 
     outputs:
       selected: ${{{{ steps.selection.outputs.selected }}}}
+      experiment: ${{{{ steps.selection.outputs.experiment }}}}
 
     steps:
 {CHECKOUT}{SSH_CONFIG}
@@ -886,37 +887,61 @@ SELECT_JOB = f"""  select-horizon:
 
           printf 'report_path=%s\\n' "$summary"
 
-          # Select exactly one horizon using research evidence only. The untouched
-          # test set is deliberately NOT used for horizon selection; it remains a
-          # final gate for the pre-selected candidate.
-          selected_horizon="$(SUMMARY_PATH="$summary" node <<'NODE'
+          # Select the exact qualification candidate using research evidence only.
+          # The untouched test is deliberately NOT used for candidate selection.
+          selected_candidate="$(OUTPUT_ROOT="$OUTPUT_ROOT" node <<'NODE'
           const fs = require('fs');
-          const report = JSON.parse(fs.readFileSync(process.env.SUMMARY_PATH, 'utf8'));
+          const path = require('path');
           const candidates = [];
-          for (const horizon of report.horizons_minutes || []) {{
-            const block = report.horizon_reports?.[String(horizon) + 'm'];
-            if (!block?.research_gate?.research_gate_passed) continue;
-            const classification = block.overall?.classification || {{}};
-            const trading = block.overall?.trading || {{}};
-            const sharpe = Number(trading.sharpe_ratio);
-            const balanced = Number(classification.balanced_accuracy);
-            const drawdown = Number(trading.max_drawdown);
-            candidates.push({{
-              horizon: Number(horizon),
-              sharpe: Number.isFinite(sharpe) ? sharpe : -Infinity,
-              balanced: Number.isFinite(balanced) ? balanced : -Infinity,
-              drawdown: Number.isFinite(drawdown) ? drawdown : Infinity,
-            }});
+          for (const horizon of [1, 5, 10]) {{
+            const reportPath = path.join(
+              process.env.OUTPUT_ROOT,
+              'reports',
+              `model_qualification_${{horizon}}m.json`,
+            );
+            if (!fs.existsSync(reportPath)) continue;
+            const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+            for (const [experiment, block] of Object.entries(report.experiments || {{}})) {{
+              const supported = new Set([
+                'baseline',
+                'event_barrier_pair_experts',
+                'event_barrier_pair_return_margin',
+              ]);
+              if (!supported.has(experiment)) continue;
+              if (!block?.research_gate?.research_gate_passed) continue;
+              const classification = block.overall?.classification || {{}};
+              const trading = block.overall?.trading || {{}};
+              const sharpe = Number(trading.sharpe_ratio);
+              const balanced = Number(classification.balanced_accuracy);
+              const drawdown = Number(trading.max_drawdown);
+              candidates.push({{
+                horizon,
+                experiment,
+                sharpe: Number.isFinite(sharpe) ? sharpe : -Infinity,
+                balanced: Number.isFinite(balanced) ? balanced : -Infinity,
+                drawdown: Number.isFinite(drawdown) ? drawdown : Infinity,
+              }});
+            }}
           }}
           candidates.sort((a, b) =>
             (b.sharpe - a.sharpe) ||
             (b.balanced - a.balanced) ||
             (a.drawdown - b.drawdown) ||
-            (a.horizon - b.horizon)
+            (a.horizon - b.horizon) ||
+            a.experiment.localeCompare(b.experiment)
           );
-          if (candidates.length > 0) process.stdout.write(String(candidates[0].horizon));
+          if (candidates.length > 0) {{
+            process.stdout.write(
+              String(candidates[0].horizon) + '|' + candidates[0].experiment
+            );
+          }}
           NODE
           )"
+          selected_horizon="${{selected_candidate%%|*}}"
+          selected_experiment=''
+          if [[ "$selected_candidate" == *'|'* ]]; then
+            selected_experiment="${{selected_candidate#*|}}"
+          fi
 
           mark_research_evaluated() {{
             install -d -m 700 "$RESEARCH_ROOT"
@@ -926,7 +951,7 @@ SELECT_JOB = f"""  select-horizon:
             mv -f "$marker_temp" "$RESEARCH_ROOT/last-research-sha"
           }}
 
-          if [[ -z "$selected_horizon" ]]; then
+          if [[ -z "$selected_candidate" || -z "$selected_horizon" || -z "$selected_experiment" ]]; then
             # The study completed and every horizon was evaluated; persist the
             # evaluated-SHA lineage marker so unrelated deploys do not retry a
             # study whose evidence was already produced.
@@ -939,6 +964,8 @@ SELECT_JOB = f"""  select-horizon:
             exit 16
           }}
           printf 'SELECTED_HORIZON horizon=%sm\\n' "$selected_horizon"
+          printf 'SELECTED_QUALIFICATION_CANDIDATE horizon=%sm experiment=%s\\n' \
+            "$selected_horizon" "$selected_experiment"
 
           # Long research runs may outlive the main SHA they started from.
           # Never promote a trained artifact after main has moved; force the
@@ -1053,10 +1080,15 @@ SELECT_JOB = f"""  select-horizon:
             "$remote_status" "$(( $(date +%s) - research_started_epoch ))"
 
           selected_horizon=''
+          selected_experiment=''
           if grep -Eq '^SELECTED_HORIZON horizon=(1|5|10)m$' "$remote_log"; then
             selected_horizon="$(grep -E '^SELECTED_HORIZON horizon=' "$remote_log" | tail -n 1 | grep -Eo '(1|5|10)' | tail -n 1)"
           fi
+          if grep -Eq '^SELECTED_QUALIFICATION_CANDIDATE horizon=(1|5|10)m experiment=[A-Za-z0-9_-]+$' "$remote_log"; then
+            selected_experiment="$(grep -E '^SELECTED_QUALIFICATION_CANDIDATE ' "$remote_log" | tail -n 1 | sed -E 's/^.* experiment=([A-Za-z0-9_-]+)$/\\1/')"
+          fi
           printf 'selected=%s\\n' "$selected_horizon" >> "$GITHUB_OUTPUT"
+          printf 'experiment=%s\\n' "$selected_experiment" >> "$GITHUB_OUTPUT"
 
           exit "$remote_status"
 
@@ -1068,7 +1100,8 @@ FINAL_JOB = f"""  final-model:
     needs: [validate, select-horizon]
     if: >-
       needs.validate.outputs.run == 'true' &&
-      needs.select-horizon.outputs.selected != ''
+      needs.select-horizon.outputs.selected != '' &&
+      needs.select-horizon.outputs.experiment != ''
     concurrency:
       group: irexpro-staging-worktree
       cancel-in-progress: false
@@ -1089,11 +1122,24 @@ FINAL_JOB = f"""  final-model:
         shell: bash
         run: |
           set -Eeuo pipefail
-          selected_horizon="${{ needs.select-horizon.outputs.selected }}"
+          selected_horizon="${{{{ needs.select-horizon.outputs.selected }}}}"
+          selected_experiment="${{{{ needs.select-horizon.outputs.experiment }}}}"
           [[ "$selected_horizon" =~ ^(1|5|10)$ ]] || {{
             printf 'MODEL_PROMOTION_HOLD reason=invalid_selected_horizon\\n' >&2
             exit 16
           }}
+          [[ "$selected_experiment" =~ ^[A-Za-z0-9_-]+$ ]] || {{
+            printf 'MODEL_PROMOTION_HOLD reason=invalid_selected_experiment\\n' >&2
+            exit 17
+          }}
+          case "$selected_experiment" in
+            baseline|event_barrier_pair_experts|event_barrier_pair_return_margin) ;;
+            *)
+              printf 'MODEL_PROMOTION_HOLD reason=selected_architecture_not_packaged horizon=%sm experiment=%s\\n' \
+                "$selected_horizon" "$selected_experiment"
+              exit 0
+              ;;
+          esac
           printf 'horizon=%s\\n' "$selected_horizon" >> "$GITHUB_OUTPUT"
           printf 'promote=false\\n' >> "$GITHUB_OUTPUT"
 
@@ -1109,16 +1155,21 @@ FINAL_JOB = f"""  final-model:
             -o IdentitiesOnly=yes \\
             -o StrictHostKeyChecking=yes \\
             "$STAGING_SSH_USER@$STAGING_SSH_HOST" \\
-            "bash -s -- $CANDIDATE_SHA $selected_horizon" <<'REMOTE' > "$remote_log" 2>&1 &
+            "bash -s -- $CANDIDATE_SHA $selected_horizon $selected_experiment" <<'REMOTE' > "$remote_log" 2>&1 &
 {STAGE_PROLOGUE}          export IREXPRO_XGB_N_JOBS=2
 
           selected_horizon="$2"
+          selected_experiment="$3"
           [[ "$selected_horizon" =~ ^(1|5|10)$ ]] || {{
             printf 'MODEL_PROMOTION_HOLD reason=invalid_selected_horizon\\n' >&2
             exit 16
           }}
-          printf 'RESEARCH_CONFIGURATION xgb_n_jobs=%s progress=%s resume=true candidate=%s stage=final_model horizon=%sm recovery=run55_exit137\\n' \\
-            "$IREXPRO_XGB_N_JOBS" "$IREXPRO_RESEARCH_PROGRESS" "$candidate_sha" "$selected_horizon"
+          [[ "$selected_experiment" =~ ^[A-Za-z0-9_-]+$ ]] || {{
+            printf 'MODEL_PROMOTION_HOLD reason=invalid_selected_experiment\\n' >&2
+            exit 17
+          }}
+          printf 'RESEARCH_CONFIGURATION xgb_n_jobs=%s progress=%s resume=true candidate=%s stage=final_model horizon=%sm experiment=%s recovery=run55_exit137\\n' \
+            "$IREXPRO_XGB_N_JOBS" "$IREXPRO_RESEARCH_PROGRESS" "$candidate_sha" "$selected_horizon" "$selected_experiment"
 
           readonly MODEL_ROOT="/home/lightworld/research/irexpro-models/$candidate_sha/h$selected_horizon"
           readonly MODEL_PATH="$MODEL_ROOT/model.json"
@@ -1128,20 +1179,34 @@ FINAL_JOB = f"""  final-model:
           rm -rf "$MODEL_ROOT"
           install -d -m 700 "$MODEL_ROOT"
 
-          if "$python_bin" -m app.domain.training.train_final_multitimeframe \\
-            --dataset "EURUSD=$OUTPUT_ROOT/corpora/EURUSD_MTF.csv" \\
-            --dataset "GBPUSD=$OUTPUT_ROOT/corpora/GBPUSD_MTF.csv" \\
-            --dataset "USDJPY=$OUTPUT_ROOT/corpora/USDJPY_MTF.csv" \\
-            --dataset "AUDUSD=$OUTPUT_ROOT/corpora/AUDUSD_MTF.csv" \\
-            --dataset "USDCAD=$OUTPUT_ROOT/corpora/USDCAD_MTF.csv" \\
-            --dataset "USDCHF=$OUTPUT_ROOT/corpora/USDCHF_MTF.csv" \\
-            --horizon-bars "$selected_horizon" \\
-            --output-model "$MODEL_PATH" \\
-            --qualification-summary "$OUTPUT_ROOT/reports/six_pair_walkforward_summary.json" \\
-            --confidence-threshold 0.60 \\
-            --commission-bps 0 \\
-            --slippage-bps 0 \\
-            --approve-paper \\
+          if [[ "$selected_experiment" == "baseline" ]]; then
+            trainer_module="app.domain.training.train_final_multitimeframe"
+            trainer_args=(
+              --qualification-summary "$OUTPUT_ROOT/reports/six_pair_walkforward_summary.json"
+            )
+          else
+            trainer_module="app.domain.training.train_final_event_pair_bundle"
+            trainer_args=(
+              --experiment "$selected_experiment"
+              --qualification-report "$OUTPUT_ROOT/reports/model_qualification_${{selected_horizon}}m.json"
+              --qualification-summary "$OUTPUT_ROOT/reports/six_pair_walkforward_summary.json"
+            )
+          fi
+
+          if "$python_bin" -m "$trainer_module" \
+            --dataset "EURUSD=$OUTPUT_ROOT/corpora/EURUSD_MTF.csv" \
+            --dataset "GBPUSD=$OUTPUT_ROOT/corpora/GBPUSD_MTF.csv" \
+            --dataset "USDJPY=$OUTPUT_ROOT/corpora/USDJPY_MTF.csv" \
+            --dataset "AUDUSD=$OUTPUT_ROOT/corpora/AUDUSD_MTF.csv" \
+            --dataset "USDCAD=$OUTPUT_ROOT/corpora/USDCAD_MTF.csv" \
+            --dataset "USDCHF=$OUTPUT_ROOT/corpora/USDCHF_MTF.csv" \
+            --horizon-bars "$selected_horizon" \
+            --output-model "$MODEL_PATH" \
+            --confidence-threshold 0.60 \
+            --commission-bps 0 \
+            --slippage-bps 0 \
+            "${{trainer_args[@]}}" \
+            --approve-paper \
             > "$TRAIN_RESULT" 2> "$TRAIN_ERROR"; then
             :
           else
@@ -1220,7 +1285,7 @@ PROMOTION_JOB = f"""  paper-promotion:
         shell: bash
         run: |
           set -Eeuo pipefail
-          selected_horizon="${{ needs.final-model.outputs.horizon }}"
+          selected_horizon="${{{{ needs.final-model.outputs.horizon }}}}"
           [[ "$selected_horizon" =~ ^(1|5|10)$ ]] || {{
             printf 'MODEL_PROMOTION_HOLD reason=invalid_selected_horizon\\n' >&2
             exit 16

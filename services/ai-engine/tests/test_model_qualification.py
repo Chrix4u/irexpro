@@ -12,12 +12,14 @@ from app.domain.training.model_qualification import (
     ACTIONABLE_TARGET_COLUMN,
     CONFIDENCE_FLOOR,
     EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+    EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME,
     EVENT_TWO_STAGE_EXPERIMENT_NAME,
     TWO_STAGE_EXPERIMENT_NAME,
     ModelVariant,
     QualificationExperiment,
     _apply_calibrator,
     _ensure_actionable_target,
+    _event_return_margin_bps,
     _event_two_stage_prediction_frame,
     _feature_columns,
     _fit_calibrator,
@@ -25,12 +27,17 @@ from app.domain.training.model_qualification import (
     _locked_gate_snapshot,
     _nested_windows,
     _pair_expert_probabilities,
+    _pair_return_margin_probabilities,
     _prediction_frame,
     _select_decision_threshold,
     _two_stage_prediction_frame,
     default_experiments,
     evaluate_qualification_corpora,
     run_nested_qualification_experiments,
+)
+from app.domain.training.qualification_diagnostics import (
+    causal_regime_diagnostics,
+    feature_gain_stability_diagnostics,
 )
 from app.domain.training.train_multitimeframe import (
     EVENT_ACTIONABLE_TARGET_COLUMN,
@@ -102,14 +109,16 @@ def test_default_experiment_matrix_is_bounded_and_keeps_locked_baseline():
     assert baseline.sample_weight_policy == "economic"
     assert baseline.calibration == "none"
     assert baseline.feature_policy == "all"
-    assert sum(len(experiment.variants) for experiment in experiments) == 12
-    assert experiments[-4].name == "structure_feature_ablation"
-    assert experiments[-3].name == TWO_STAGE_EXPERIMENT_NAME
-    assert experiments[-3].mode == "two_stage_actionable"
-    assert experiments[-2].name == EVENT_TWO_STAGE_EXPERIMENT_NAME
-    assert experiments[-2].mode == "two_stage_event"
-    assert experiments[-1].name == EVENT_PAIR_EXPERT_EXPERIMENT_NAME
-    assert experiments[-1].mode == "two_stage_event_pair_experts"
+    assert sum(len(experiment.variants) for experiment in experiments) == 13
+    assert experiments[-5].name == "structure_feature_ablation"
+    assert experiments[-4].name == TWO_STAGE_EXPERIMENT_NAME
+    assert experiments[-4].mode == "two_stage_actionable"
+    assert experiments[-3].name == EVENT_TWO_STAGE_EXPERIMENT_NAME
+    assert experiments[-3].mode == "two_stage_event"
+    assert experiments[-2].name == EVENT_PAIR_EXPERT_EXPERIMENT_NAME
+    assert experiments[-2].mode == "two_stage_event_pair_experts"
+    assert experiments[-1].name == EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME
+    assert experiments[-1].mode == "two_stage_event_pair_return_margin"
     assert experiments[-1].tune_decision_threshold is False
     assert CONFIDENCE_FLOOR == 0.60
     assert ACTIONABLE_LABEL_POLICY.endswith("_v1")
@@ -530,6 +539,60 @@ def test_pair_expert_probability_router_preserves_row_order_and_instrument_ident
 
     expected = np.where(frame["instrument"].eq("EURUSD"), 0.75, 0.25)
     np.testing.assert_allclose(probabilities, expected)
+
+
+def test_event_return_margin_target_is_long_minus_short_in_bps():
+    frame = pd.DataFrame(
+        {
+            EVENT_LONG_NET_RETURN_COLUMN: [0.0012, -0.0004, 0.0001],
+            EVENT_SHORT_NET_RETURN_COLUMN: [-0.0008, 0.0006, 0.0001],
+        }
+    )
+
+    margin = _event_return_margin_bps(frame)
+
+    np.testing.assert_allclose(margin, np.array([20.0, -10.0, 0.0]))
+
+
+def test_pair_return_margin_router_preserves_pair_identity_and_calibration():
+    class ConstantRegressor:
+        def __init__(self, score):
+            self.score = score
+
+        def predict(self, features):
+            return np.full(len(features), self.score, dtype=float)
+
+    class ScoreCalibrator:
+        def predict_proba(self, scores):
+            probability = 1.0 / (1.0 + np.exp(-scores[:, 0] / 10.0))
+            return np.column_stack([1.0 - probability, probability])
+
+    frame = _research_dataset(
+        periods=3,
+        instruments=("EURUSD", "USDJPY"),
+    )
+    probabilities = _pair_return_margin_probabilities(
+        {
+            "EURUSD": ConstantRegressor(10.0),
+            "USDJPY": ConstantRegressor(-10.0),
+        },
+        {
+            "EURUSD": ScoreCalibrator(),
+            "USDJPY": ScoreCalibrator(),
+        },
+        frame,
+        list(MULTITIMEFRAME_FEATURE_COLUMNS),
+    )
+
+    eur_probability = 1.0 / (1.0 + np.exp(-1.0))
+    jpy_probability = 1.0 / (1.0 + np.exp(1.0))
+    expected = np.where(
+        frame["instrument"].eq("EURUSD"),
+        eur_probability,
+        jpy_probability,
+    )
+    np.testing.assert_allclose(probabilities, expected)
+    assert CONFIDENCE_FLOOR == 0.60
 
 
 def test_event_pair_experts_train_direction_models_on_one_instrument_each(monkeypatch):
@@ -998,3 +1061,52 @@ def test_pooled_architecture_diagnostic_keeps_homogeneous_pairs_as_research_plau
     assert report["material_pair_heterogeneity"] is False
     assert report["stronger_instrument_normalization_research_warranted"] is False
     assert report["future_mixture_of_experts_research_warranted"] is False
+
+
+def test_feature_gain_stability_diagnostics_rewards_repeatability():
+    folds = [
+        [
+            {"feature": "stable", "normalized_gain": 0.20},
+            {"feature": "sporadic", "normalized_gain": 0.40},
+        ],
+        [
+            {"feature": "stable", "normalized_gain": 0.25},
+        ],
+        [
+            {"feature": "stable", "normalized_gain": 0.15},
+            {"feature": "other", "normalized_gain": 0.30},
+        ],
+    ]
+
+    rows = feature_gain_stability_diagnostics(folds, top_n=10)
+
+    assert rows[0]["feature"] == "stable"
+    assert rows[0]["fold_presence_count"] == 3
+    assert rows[0]["fold_presence_fraction"] == pytest.approx(1.0)
+    assert rows[0]["mean_normalized_gain"] == pytest.approx(0.20)
+    assert {row["feature"] for row in rows} == {"stable", "sporadic", "other"}
+
+
+def test_causal_regime_diagnostics_adds_alignment_and_spread_slices():
+    rows: list[dict[str, float | int]] = []
+    for index in range(90):
+        bucket = index % 3
+        target = index % 2
+        rows.append(
+            {
+                "target": target,
+                "positive_probability": 0.70 if target else 0.30,
+                "m1_volatility_20": (0.001, 0.002, 0.003)[bucket],
+                "h1_rsi_14": (35.0, 50.0, 65.0)[bucket],
+                "trend_alignment_score": (-1.0, 0.0, 1.0)[bucket],
+                "momentum_alignment_score": (-0.8, 0.0, 0.8)[bucket],
+                "m1_spread_bps": (0.5, 1.0, 2.0)[bucket],
+            }
+        )
+
+    report = causal_regime_diagnostics(pd.DataFrame(rows))
+
+    assert set(report["trend_alignment_score"]) == {"bearish", "mixed", "bullish"}
+    assert set(report["momentum_alignment_score"]) == {"bearish", "mixed", "bullish"}
+    assert {"low", "mid", "high"}.issubset(report["m1_spread_bps"])
+    assert report["trend_alignment_score"]["bullish"]["rows"] == 30

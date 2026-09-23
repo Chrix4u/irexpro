@@ -78,6 +78,70 @@ def _calibration_bins(
     return rows
 
 
+def feature_gain_stability_diagnostics(
+    fold_importance: Sequence[Sequence[dict[str, Any]]],
+    *,
+    top_n: int = 20,
+) -> list[dict[str, Any]]:
+    """Summarize feature gain stability across completed walk-forward folds.
+
+    This is diagnostic-only. Missing features in a fold contribute zero gain,
+    so a feature must be both important and repeatedly present to rank highly.
+    The output must never be used to alter an already-scored outer fold.
+    """
+    if top_n < 1:
+        raise ValueError("top_n must be positive")
+    fold_count = len(fold_importance)
+    if fold_count == 0:
+        return []
+
+    observed: dict[str, dict[str, Any]] = {}
+    for fold_index, items in enumerate(fold_importance):
+        seen: set[str] = set()
+        for rank, item in enumerate(items, start=1):
+            feature = str(item.get("feature", "")).strip()
+            if not feature or feature in seen:
+                continue
+            gain = float(item.get("normalized_gain", 0.0))
+            if not np.isfinite(gain) or gain < 0.0:
+                continue
+            seen.add(feature)
+            record = observed.setdefault(
+                feature,
+                {"gains": np.zeros(fold_count, dtype=float), "ranks": []},
+            )
+            record["gains"][fold_index] = gain
+            record["ranks"].append(rank)
+
+    rows: list[dict[str, Any]] = []
+    for feature, record in observed.items():
+        gains = np.asarray(record["gains"], dtype=float)
+        ranks = np.asarray(record["ranks"], dtype=float)
+        presence_count = int(np.count_nonzero(gains > 0.0))
+        rows.append(
+            {
+                "feature": feature,
+                "fold_presence_count": presence_count,
+                "fold_presence_fraction": float(presence_count / fold_count),
+                "mean_normalized_gain": float(gains.mean()),
+                "std_normalized_gain": float(gains.std(ddof=0)),
+                "mean_present_gain": float(gains[gains > 0.0].mean())
+                if presence_count
+                else 0.0,
+                "mean_present_rank": float(ranks.mean()) if len(ranks) else None,
+            }
+        )
+
+    rows.sort(
+        key=lambda item: (
+            -float(item["fold_presence_fraction"]),
+            -float(item["mean_normalized_gain"]),
+            str(item["feature"]),
+        )
+    )
+    return rows[:top_n]
+
+
 def diagnose_directional_predictions(
     predictions: pd.DataFrame,
     *,
@@ -298,6 +362,50 @@ def causal_regime_diagnostics(
                 rsi[name] = result
         if rsi:
             report["h1_rsi_14"] = rsi
+
+    for column in ("trend_alignment_score", "momentum_alignment_score"):
+        if column not in predictions.columns:
+            continue
+        values = pd.to_numeric(predictions[column], errors="coerce")
+        alignment: dict[str, Any] = {}
+        masks = {
+            "bearish": values <= -0.40,
+            "mixed": (values > -0.40) & (values < 0.40),
+            "bullish": values >= 0.40,
+        }
+        for name, mask in masks.items():
+            result = _regime_slice(
+                predictions,
+                mask.fillna(False),
+                confidence_threshold=confidence_threshold,
+            )
+            if result is not None:
+                alignment[name] = result
+        if alignment:
+            report[column] = alignment
+
+    if "m1_spread_bps" in predictions.columns:
+        values = pd.to_numeric(predictions["m1_spread_bps"], errors="coerce")
+        finite = values[np.isfinite(values)]
+        if len(finite) >= 60:
+            low, high = np.quantile(finite, [1.0 / 3.0, 2.0 / 3.0])
+            spread: dict[str, Any] = {
+                "boundaries": {"low_upper": float(low), "high_lower": float(high)}
+            }
+            masks = {
+                "low": values <= low,
+                "mid": (values > low) & (values < high),
+                "high": values >= high,
+            }
+            for name, mask in masks.items():
+                result = _regime_slice(
+                    predictions,
+                    mask.fillna(False),
+                    confidence_threshold=confidence_threshold,
+                )
+                if result is not None:
+                    spread[name] = result
+            report["m1_spread_bps"] = spread
 
     return report
 
