@@ -20,6 +20,7 @@ from app.domain.training import train_multitimeframe as mtf_training
 from app.domain.training.qualification_diagnostics import (
     evidence_sufficiency_warnings,
     feature_gain_diagnostics,
+    feature_gain_stability_diagnostics,
 )
 from app.domain.training.train_multitimeframe import (
     EVENT_ACTIONABLE_TARGET_COLUMN,
@@ -1732,6 +1733,44 @@ def _aggregate_experiment(
         by_instrument=by_instrument,
         opportunity_classification=opportunity_classification,
     )
+    direction_feature_stability = feature_gain_stability_diagnostics(
+        [
+            fold.get("feature_importance_gain", [])
+            for fold in fold_reports
+        ]
+    )
+    opportunity_importance = [
+        fold.get("opportunity_feature_importance_gain", [])
+        for fold in fold_reports
+        if fold.get("opportunity_feature_importance_gain") is not None
+    ]
+    opportunity_feature_stability = (
+        feature_gain_stability_diagnostics(opportunity_importance)
+        if opportunity_importance
+        else []
+    )
+    pair_names = sorted(
+        {
+            instrument
+            for fold in fold_reports
+            for instrument in fold.get(
+                "pair_direction_feature_importance_gain",
+                {},
+            )
+        }
+    )
+    pair_direction_feature_stability = {
+        instrument: feature_gain_stability_diagnostics(
+            [
+                fold.get("pair_direction_feature_importance_gain", {}).get(
+                    instrument,
+                    [],
+                )
+                for fold in fold_reports
+            ]
+        )
+        for instrument in pair_names
+    }
     return {
         "experiment": name,
         "overall": overall,
@@ -1740,6 +1779,13 @@ def _aggregate_experiment(
         "pooled_architecture_diagnostic": _pooled_architecture_diagnostic(
             by_instrument
         ),
+        "feature_stability_diagnostic": {
+            "policy": "post_hoc_outer_fold_diagnostic_only_v1",
+            "direction": direction_feature_stability,
+            "opportunity": opportunity_feature_stability,
+            "pair_direction": pair_direction_feature_stability,
+            "selection_authority": False,
+        },
         "folds": fold_reports,
         "fold_count": len(fold_reports),
         "evaluated_rows": int(len(predictions)),
