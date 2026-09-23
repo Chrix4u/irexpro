@@ -902,6 +902,12 @@ SELECT_JOB = f"""  select-horizon:
             if (!fs.existsSync(reportPath)) continue;
             const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
             for (const [experiment, block] of Object.entries(report.experiments || {{}})) {{
+              const supported = new Set([
+                'baseline',
+                'event_barrier_pair_experts',
+                'event_barrier_pair_return_margin',
+              ]);
+              if (!supported.has(experiment)) continue;
               if (!block?.research_gate?.research_gate_passed) continue;
               const classification = block.overall?.classification || {{}};
               const trading = block.overall?.trading || {{}};
@@ -1126,11 +1132,14 @@ FINAL_JOB = f"""  final-model:
             printf 'MODEL_PROMOTION_HOLD reason=invalid_selected_experiment\\n' >&2
             exit 17
           }}
-          if [[ "$selected_experiment" != "baseline" ]]; then
-            printf 'MODEL_PROMOTION_HOLD reason=selected_architecture_not_packaged horizon=%sm experiment=%s\\n' \
-              "$selected_horizon" "$selected_experiment"
-            exit 0
-          fi
+          case "$selected_experiment" in
+            baseline|event_barrier_pair_experts|event_barrier_pair_return_margin) ;;
+            *)
+              printf 'MODEL_PROMOTION_HOLD reason=selected_architecture_not_packaged horizon=%sm experiment=%s\\n' \
+                "$selected_horizon" "$selected_experiment"
+              exit 0
+              ;;
+          esac
           printf 'horizon=%s\\n' "$selected_horizon" >> "$GITHUB_OUTPUT"
           printf 'promote=false\\n' >> "$GITHUB_OUTPUT"
 
@@ -1146,16 +1155,21 @@ FINAL_JOB = f"""  final-model:
             -o IdentitiesOnly=yes \\
             -o StrictHostKeyChecking=yes \\
             "$STAGING_SSH_USER@$STAGING_SSH_HOST" \\
-            "bash -s -- $CANDIDATE_SHA $selected_horizon" <<'REMOTE' > "$remote_log" 2>&1 &
+            "bash -s -- $CANDIDATE_SHA $selected_horizon $selected_experiment" <<'REMOTE' > "$remote_log" 2>&1 &
 {STAGE_PROLOGUE}          export IREXPRO_XGB_N_JOBS=2
 
           selected_horizon="$2"
+          selected_experiment="$3"
           [[ "$selected_horizon" =~ ^(1|5|10)$ ]] || {{
             printf 'MODEL_PROMOTION_HOLD reason=invalid_selected_horizon\\n' >&2
             exit 16
           }}
-          printf 'RESEARCH_CONFIGURATION xgb_n_jobs=%s progress=%s resume=true candidate=%s stage=final_model horizon=%sm recovery=run55_exit137\\n' \\
-            "$IREXPRO_XGB_N_JOBS" "$IREXPRO_RESEARCH_PROGRESS" "$candidate_sha" "$selected_horizon"
+          [[ "$selected_experiment" =~ ^[A-Za-z0-9_-]+$ ]] || {{
+            printf 'MODEL_PROMOTION_HOLD reason=invalid_selected_experiment\\n' >&2
+            exit 17
+          }}
+          printf 'RESEARCH_CONFIGURATION xgb_n_jobs=%s progress=%s resume=true candidate=%s stage=final_model horizon=%sm experiment=%s recovery=run55_exit137\\n' \
+            "$IREXPRO_XGB_N_JOBS" "$IREXPRO_RESEARCH_PROGRESS" "$candidate_sha" "$selected_horizon" "$selected_experiment"
 
           readonly MODEL_ROOT="/home/lightworld/research/irexpro-models/$candidate_sha/h$selected_horizon"
           readonly MODEL_PATH="$MODEL_ROOT/model.json"
@@ -1165,20 +1179,34 @@ FINAL_JOB = f"""  final-model:
           rm -rf "$MODEL_ROOT"
           install -d -m 700 "$MODEL_ROOT"
 
-          if "$python_bin" -m app.domain.training.train_final_multitimeframe \\
-            --dataset "EURUSD=$OUTPUT_ROOT/corpora/EURUSD_MTF.csv" \\
-            --dataset "GBPUSD=$OUTPUT_ROOT/corpora/GBPUSD_MTF.csv" \\
-            --dataset "USDJPY=$OUTPUT_ROOT/corpora/USDJPY_MTF.csv" \\
-            --dataset "AUDUSD=$OUTPUT_ROOT/corpora/AUDUSD_MTF.csv" \\
-            --dataset "USDCAD=$OUTPUT_ROOT/corpora/USDCAD_MTF.csv" \\
-            --dataset "USDCHF=$OUTPUT_ROOT/corpora/USDCHF_MTF.csv" \\
-            --horizon-bars "$selected_horizon" \\
-            --output-model "$MODEL_PATH" \\
-            --qualification-summary "$OUTPUT_ROOT/reports/six_pair_walkforward_summary.json" \\
-            --confidence-threshold 0.60 \\
-            --commission-bps 0 \\
-            --slippage-bps 0 \\
-            --approve-paper \\
+          if [[ "$selected_experiment" == "baseline" ]]; then
+            trainer_module="app.domain.training.train_final_multitimeframe"
+            trainer_args=(
+              --qualification-summary "$OUTPUT_ROOT/reports/six_pair_walkforward_summary.json"
+            )
+          else
+            trainer_module="app.domain.training.train_final_event_pair_bundle"
+            trainer_args=(
+              --experiment "$selected_experiment"
+              --qualification-report "$OUTPUT_ROOT/reports/model_qualification_${{selected_horizon}}m.json"
+              --qualification-summary "$OUTPUT_ROOT/reports/six_pair_walkforward_summary.json"
+            )
+          fi
+
+          if "$python_bin" -m "$trainer_module" \
+            --dataset "EURUSD=$OUTPUT_ROOT/corpora/EURUSD_MTF.csv" \
+            --dataset "GBPUSD=$OUTPUT_ROOT/corpora/GBPUSD_MTF.csv" \
+            --dataset "USDJPY=$OUTPUT_ROOT/corpora/USDJPY_MTF.csv" \
+            --dataset "AUDUSD=$OUTPUT_ROOT/corpora/AUDUSD_MTF.csv" \
+            --dataset "USDCAD=$OUTPUT_ROOT/corpora/USDCAD_MTF.csv" \
+            --dataset "USDCHF=$OUTPUT_ROOT/corpora/USDCHF_MTF.csv" \
+            --horizon-bars "$selected_horizon" \
+            --output-model "$MODEL_PATH" \
+            --confidence-threshold 0.60 \
+            --commission-bps 0 \
+            --slippage-bps 0 \
+            "${{trainer_args[@]}}" \
+            --approve-paper \
             > "$TRAIN_RESULT" 2> "$TRAIN_ERROR"; then
             :
           else
