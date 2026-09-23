@@ -37,6 +37,7 @@ from app.domain.training.train_multitimeframe import (
     EVENT_LONG_NET_RETURN_COLUMN,
     EVENT_SHORT_NET_RETURN_COLUMN,
     EVENT_STEP_COLUMN,
+    TARGET_COLUMN,
     run_pooled_walk_forward_with_predictions,
 )
 from app.domain.training.validation import compute_classification_metrics
