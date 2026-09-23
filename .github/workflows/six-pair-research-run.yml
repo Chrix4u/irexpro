@@ -999,7 +999,7 @@ jobs:
           cd "$STAGING_ROOT"
           test "$(git rev-parse --show-toplevel)" = "$STAGING_ROOT"
 
-[executed on device: vps.lightworldtech.com (4204c107-72b6-4fa9-aacb-1ef0476ed1f5)]          test "$(git rev-parse HEAD)" = "$candidate_sha"
+          test "$(git rev-parse HEAD)" = "$candidate_sha"
           test -z "$(git status --porcelain)"
 
           available_kb="$(df -Pk "$STAGING_ROOT" | awk 'NR==2 {print $4}')"
@@ -2000,7 +2000,7 @@ jobs:
           chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
 
 
-[executed on device: vps.lightworldtech.com (4204c107-72b6-4fa9-aacb-1ef0476ed1f5)]      - name: Run horizon stage 1m
+      - name: Run horizon stage 1m
         if: steps.current.outputs.current == 'true'
         shell: bash
         run: |
@@ -3001,7 +3001,6 @@ jobs:
               }
             }
 
-[executed on device: vps.lightworldtech.com (4204c107-72b6-4fa9-aacb-1ef0476ed1f5)]            const opportunityTopFeatures = [...opportunityGains.entries()]
               .sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0]))
               .slice(0, 8)
               .map(([feature, gain]) => feature + ':' + gain.toFixed(6))
@@ -4002,7 +4001,7 @@ jobs:
           readonly DUKASCOPY_CACHE="/home/lightworld/research/dukascopy-raw-cache"
 
 
-[executed on device: vps.lightworldtech.com (4204c107-72b6-4fa9-aacb-1ef0476ed1f5)]          cd "$STAGING_ROOT"
+          cd "$STAGING_ROOT"
           test "$(git rev-parse --show-toplevel)" = "$STAGING_ROOT"
           test "$(git rev-parse HEAD)" = "$candidate_sha"
           test -z "$(git status --porcelain)"
@@ -4949,4 +4948,3 @@ jobs:
         run: |
           rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
 
-[executed on device: vps.lightworldtech.com (4204c107-72b6-4fa9-aacb-1ef0476ed1f5)]
