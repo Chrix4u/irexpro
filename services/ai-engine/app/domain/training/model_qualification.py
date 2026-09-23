@@ -22,6 +22,13 @@ from app.domain.training.qualification_diagnostics import (
     feature_gain_diagnostics,
 )
 from app.domain.training.train_multitimeframe import (
+    EVENT_ACTIONABLE_TARGET_COLUMN,
+    EVENT_DIRECTION_TARGET_COLUMN,
+    EVENT_LABEL_POLICY,
+    EVENT_LONG_NET_RETURN_COLUMN,
+    EVENT_SHORT_NET_RETURN_COLUMN,
+    EVENT_STEP_COLUMN,
+    EVENT_BARRIER_RETURN_COLUMN,
     LONG_NET_RETURN_COLUMN,
     QUALIFICATION_REGIME_COLUMNS,
     SHORT_NET_RETURN_COLUMN,
@@ -41,6 +48,7 @@ CONFIDENCE_FLOOR = 0.60
 ACTIONABLE_TARGET_COLUMN = "actionable_target"
 ACTIONABLE_LABEL_POLICY = "best_direction_net_return_after_friction_gt_zero_v1"
 TWO_STAGE_EXPERIMENT_NAME = "actionable_two_stage"
+EVENT_TWO_STAGE_EXPERIMENT_NAME = "event_barrier_two_stage"
 QUALIFICATION_CHECKPOINT_VERSION = 1
 QUALIFICATION_CHECKPOINT_POLICY = "experiment_outer_fold_atomic_v1"
 DECISION_THRESHOLD_GRID = (0.45, 0.475, 0.50, 0.525, 0.55)
@@ -63,7 +71,7 @@ STRUCTURE_GLOBAL_FEATURES = (
 ExperimentCalibration = Literal["none", "platt", "isotonic"]
 SampleWeightPolicy = Literal["economic", "class_balance"]
 FeaturePolicy = Literal["all", "drop_volume", "drop_structure"]
-ExperimentMode = Literal["directional", "two_stage_actionable"]
+ExperimentMode = Literal["directional", "two_stage_actionable", "two_stage_event"]
 
 
 @dataclass(frozen=True)
@@ -166,6 +174,7 @@ def _qualification_checkpoint_fingerprint(
         "max_splits": int(max_splits),
         "feature_columns": list(MULTITIMEFRAME_FEATURE_COLUMNS),
         "actionable_label_policy": ACTIONABLE_LABEL_POLICY,
+        "event_label_policy": EVENT_LABEL_POLICY,
         "experiments": _experiment_matrix_payload(experiments),
     }
     encoded = json.dumps(
@@ -386,6 +395,11 @@ def default_experiments() -> tuple[QualificationExperiment, ...]:
             name=TWO_STAGE_EXPERIMENT_NAME,
             variants=(ModelVariant(name="actionable_v2_direction"),),
             mode="two_stage_actionable",
+        ),
+        QualificationExperiment(
+            name=EVENT_TWO_STAGE_EXPERIMENT_NAME,
+            variants=(ModelVariant(name="event_barrier_v3_direction"),),
+            mode="two_stage_event",
         ),
     )
 
