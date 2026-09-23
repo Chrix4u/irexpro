@@ -1306,6 +1306,137 @@ def _fit_event_two_stage_for_outer(
     return direction_model, opportunity_model, feature_columns, counts
 
 
+def _fit_event_pair_experts_for_outer(
+    training_window: pd.DataFrame,
+    *,
+    variant: ModelVariant,
+    horizon_bars: int,
+) -> tuple[dict[str, XGBClassifier], XGBClassifier, list[str], dict[str, Any]]:
+    """Fit one direction expert per instrument plus one pooled event opportunity model."""
+    feature_columns = _feature_columns(variant.feature_policy)
+    fit, early = _split_internal_early_stopping_tail(
+        training_window,
+        horizon_bars=horizon_bars,
+    )
+
+    opportunity_variant = ModelVariant(
+        name="event_barrier_v4_pooled_opportunity",
+        parameter_overrides=variant.parameter_overrides,
+        sample_weight_policy="class_balance",
+        calibration="none",
+        feature_policy=variant.feature_policy,
+    )
+    opportunity_model = _fit_binary_variant(
+        opportunity_variant,
+        fit=fit,
+        early_stop=early,
+        feature_columns=feature_columns,
+        target_column=EVENT_ACTIONABLE_TARGET_COLUMN,
+        sample_weight_policy="class_balance",
+    )
+
+    direction_models: dict[str, XGBClassifier] = {}
+    pair_counts: dict[str, dict[str, int]] = {}
+    instruments = sorted(str(value) for value in training_window["instrument"].unique())
+    if not instruments:
+        raise ValueError("pair-expert training requires at least one instrument")
+
+    for instrument in instruments:
+        directional_fit = fit.loc[
+            (fit["instrument"] == instrument)
+            & (fit[EVENT_ACTIONABLE_TARGET_COLUMN] == 1)
+        ].copy()
+        directional_early = early.loc[
+            (early["instrument"] == instrument)
+            & (early[EVENT_ACTIONABLE_TARGET_COLUMN] == 1)
+        ].copy()
+        if directional_fit.empty or directional_early.empty:
+            raise ValueError(
+                f"pair expert {instrument} lacks event-actionable fit/early-stop rows"
+            )
+        model = _fit_binary_variant(
+            variant,
+            fit=directional_fit,
+            early_stop=directional_early,
+            feature_columns=feature_columns,
+            target_column=EVENT_DIRECTION_TARGET_COLUMN,
+            sample_weight_policy="class_balance",
+        )
+        direction_models[instrument] = model
+        pair_counts[instrument] = {
+            "event_actionable_fit_rows": int(len(directional_fit)),
+            "event_actionable_early_stop_rows": int(len(directional_early)),
+        }
+
+    counts: dict[str, Any] = {
+        "fit_rows": int(len(fit)),
+        "early_stop_rows": int(len(early)),
+        "pair_count": int(len(direction_models)),
+        "pair_counts": pair_counts,
+    }
+    return direction_models, opportunity_model, feature_columns, counts
+
+
+def _pair_expert_probabilities(
+    models: dict[str, XGBClassifier],
+    frame: pd.DataFrame,
+    feature_columns: list[str],
+) -> np.ndarray:
+    """Route each validation row only to the expert for its known instrument."""
+    probabilities = np.full(len(frame), np.nan, dtype=float)
+    positions = pd.Series(np.arange(len(frame), dtype=int), index=frame.index)
+    for instrument, group in frame.groupby("instrument", sort=False):
+        model = models.get(str(instrument))
+        if model is None:
+            raise ValueError(f"missing direction expert for instrument {instrument}")
+        group_positions = positions.loc[group.index].to_numpy(dtype=int)
+        probabilities[group_positions] = _probabilities(
+            model,
+            group,
+            feature_columns,
+        )
+    if not np.isfinite(probabilities).all():
+        raise ValueError("pair-expert routing produced non-finite probabilities")
+    return probabilities
+
+
+def _aggregate_pair_feature_gain(
+    models: dict[str, XGBClassifier],
+    feature_columns: list[str],
+) -> tuple[list[dict[str, Any]], dict[str, list[dict[str, Any]]]]:
+    """Average normalized direction feature gain across all pair experts."""
+    by_pair: dict[str, list[dict[str, Any]]] = {}
+    normalized_totals: dict[str, float] = {feature: 0.0 for feature in feature_columns}
+    raw_totals: dict[str, float] = {feature: 0.0 for feature in feature_columns}
+    for instrument, model in sorted(models.items()):
+        diagnostics = feature_gain_diagnostics(model, feature_columns)
+        by_pair[instrument] = diagnostics
+        observed = {str(item["feature"]): item for item in diagnostics}
+        for feature in feature_columns:
+            item = observed.get(feature)
+            if item is None:
+                continue
+            normalized_totals[feature] += float(item.get("normalized_gain", 0.0))
+            raw_totals[feature] += float(item.get("gain", 0.0))
+
+    divisor = float(len(models)) if models else 1.0
+    aggregate = [
+        {
+            "feature": feature,
+            "gain": raw_totals[feature] / divisor,
+            "normalized_gain": normalized_totals[feature] / divisor,
+        }
+        for feature in feature_columns
+    ]
+    aggregate.sort(
+        key=lambda item: (
+            -float(item["normalized_gain"]),
+            str(item["feature"]),
+        )
+    )
+    return aggregate, by_pair
+
+
 def _fit_selected_for_outer(
     training_window: pd.DataFrame,
     *,
@@ -1359,10 +1490,11 @@ def _fold_report(
     horizon_bars: int,
     confidence_floor: float,
     decision_threshold: float,
-    model: XGBClassifier,
+    model: XGBClassifier | None,
     feature_columns: list[str],
     selection: dict[str, Any],
     opportunity_model: XGBClassifier | None = None,
+    direction_models: dict[str, XGBClassifier] | None = None,
 ) -> dict[str, Any]:
     by_instrument = {
         instrument: _summarize_predictions(
@@ -1373,6 +1505,19 @@ def _fold_report(
         )
         for instrument, group in predictions.groupby("instrument", sort=True)
     }
+    if direction_models is not None:
+        feature_importance_gain, pair_feature_importance_gain = (
+            _aggregate_pair_feature_gain(direction_models, feature_columns)
+        )
+    elif model is not None:
+        feature_importance_gain = feature_gain_diagnostics(
+            model,
+            feature_columns,
+        )
+        pair_feature_importance_gain = None
+    else:
+        raise ValueError("fold report requires pooled or pair direction models")
+
     report = {
         "aggregate": _summarize_predictions(
             predictions,
@@ -1381,12 +1526,13 @@ def _fold_report(
             decision_threshold=decision_threshold,
         ),
         "by_instrument": by_instrument,
-        "feature_importance_gain": feature_gain_diagnostics(
-            model,
-            feature_columns,
-        ),
+        "feature_importance_gain": feature_importance_gain,
         "selection": selection,
     }
+    if pair_feature_importance_gain is not None:
+        report["pair_direction_feature_importance_gain"] = (
+            pair_feature_importance_gain
+        )
     opportunity = _opportunity_classification(
         predictions,
         confidence_floor=confidence_floor,
