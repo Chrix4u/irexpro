@@ -11,11 +11,13 @@ from app.domain.training.model_qualification import (
     ACTIONABLE_LABEL_POLICY,
     ACTIONABLE_TARGET_COLUMN,
     CONFIDENCE_FLOOR,
+    EVENT_TWO_STAGE_EXPERIMENT_NAME,
     TWO_STAGE_EXPERIMENT_NAME,
     ModelVariant,
     QualificationExperiment,
     _apply_calibrator,
     _ensure_actionable_target,
+    _event_two_stage_prediction_frame,
     _feature_columns,
     _fit_calibrator,
     _locked_gate_snapshot,
@@ -28,6 +30,13 @@ from app.domain.training.model_qualification import (
     run_nested_qualification_experiments,
 )
 from app.domain.training.train_multitimeframe import (
+    EVENT_ACTIONABLE_TARGET_COLUMN,
+    EVENT_BARRIER_RETURN_COLUMN,
+    EVENT_DIRECTION_TARGET_COLUMN,
+    EVENT_LABEL_POLICY,
+    EVENT_LONG_NET_RETURN_COLUMN,
+    EVENT_SHORT_NET_RETURN_COLUMN,
+    EVENT_STEP_COLUMN,
     run_pooled_walk_forward_with_predictions,
 )
 from app.domain.training.validation import compute_classification_metrics
@@ -89,10 +98,12 @@ def test_default_experiment_matrix_is_bounded_and_keeps_locked_baseline():
     assert baseline.sample_weight_policy == "economic"
     assert baseline.calibration == "none"
     assert baseline.feature_policy == "all"
-    assert sum(len(experiment.variants) for experiment in experiments) == 10
-    assert experiments[-2].name == "structure_feature_ablation"
-    assert experiments[-1].name == TWO_STAGE_EXPERIMENT_NAME
-    assert experiments[-1].mode == "two_stage_actionable"
+    assert sum(len(experiment.variants) for experiment in experiments) == 11
+    assert experiments[-3].name == "structure_feature_ablation"
+    assert experiments[-2].name == TWO_STAGE_EXPERIMENT_NAME
+    assert experiments[-2].mode == "two_stage_actionable"
+    assert experiments[-1].name == EVENT_TWO_STAGE_EXPERIMENT_NAME
+    assert experiments[-1].mode == "two_stage_event"
     assert experiments[-1].tune_decision_threshold is False
     assert CONFIDENCE_FLOOR == 0.60
     assert ACTIONABLE_LABEL_POLICY.endswith("_v1")
@@ -428,6 +439,65 @@ def test_two_stage_summary_uses_joint_not_direction_only_coverage():
         summary["diagnostics"]["direction_only_confidence_coverage"]["fraction"]
         == pytest.approx(2.0 / 3.0)
     )
+
+
+def test_event_two_stage_prediction_keeps_timeouts_for_economics():
+    source = _research_dataset(periods=4, instruments=("EURUSD",))
+    source[EVENT_ACTIONABLE_TARGET_COLUMN] = [1, 0, 1, 0]
+    source[EVENT_DIRECTION_TARGET_COLUMN] = [1, 0, 0, 0]
+    source[EVENT_LONG_NET_RETURN_COLUMN] = [0.0010, -0.0002, -0.0012, 0.0001]
+    source[EVENT_SHORT_NET_RETURN_COLUMN] = [-0.0011, -0.0001, 0.0011, -0.0002]
+    source[EVENT_STEP_COLUMN] = [1, 5, 2, 5]
+    source[EVENT_BARRIER_RETURN_COLUMN] = [0.0005] * 4
+
+    predictions = _event_two_stage_prediction_frame(
+        source,
+        direction_probabilities=np.array([0.75, 0.70, 0.25, 0.80]),
+        opportunity_probabilities=np.array([0.80, 0.90, 0.85, 0.40]),
+        confidence_floor=0.60,
+        fold=1,
+        experiment=EVENT_TWO_STAGE_EXPERIMENT_NAME,
+        variant=ModelVariant(name="event_barrier_v3_direction"),
+    )
+
+    assert len(predictions) == len(source)
+    assert predictions["active_trade"].tolist() == [True, True, True, False]
+    assert predictions[TARGET_COLUMN].tolist() == [1, 0, 0, 0]
+    assert predictions[qualification.ACTIONABLE_TARGET_COLUMN].tolist() == [1, 0, 1, 0]
+    assert predictions.loc[1, "selected_net_return"] == pytest.approx(-0.0002)
+    assert set(predictions["event_label_policy"]) == {EVENT_LABEL_POLICY}
+
+
+def test_event_summary_direction_classification_uses_true_events_only():
+    source = _research_dataset(periods=6, instruments=("EURUSD",))
+    source[EVENT_ACTIONABLE_TARGET_COLUMN] = [1, 1, 0, 0, 1, 1]
+    source[EVENT_DIRECTION_TARGET_COLUMN] = [1, 0, 0, 0, 1, 0]
+    source[EVENT_LONG_NET_RETURN_COLUMN] = [0.001, -0.001, -0.0001, 0.0001, 0.001, -0.001]
+    source[EVENT_SHORT_NET_RETURN_COLUMN] = [-0.001, 0.001, -0.0001, -0.0002, -0.001, 0.001]
+    source[EVENT_STEP_COLUMN] = [1, 1, 5, 5, 2, 2]
+    source[EVENT_BARRIER_RETURN_COLUMN] = [0.0005] * 6
+
+    predictions = _event_two_stage_prediction_frame(
+        source,
+        direction_probabilities=np.array([0.8, 0.2, 0.9, 0.9, 0.8, 0.2]),
+        opportunity_probabilities=np.array([0.8] * 6),
+        confidence_floor=0.60,
+        fold=1,
+        experiment=EVENT_TWO_STAGE_EXPERIMENT_NAME,
+        variant=ModelVariant(name="event_barrier_v3_direction"),
+    )
+    summary = qualification._summarize_predictions(
+        predictions,
+        horizon_bars=5,
+        confidence_threshold=0.60,
+    )
+
+    assert summary["event_direction_evaluated_rows"] == 4
+    assert summary["classification"]["sample_count"] == 4
+    assert summary["classification"]["balanced_accuracy"] == pytest.approx(1.0)
+    # Timeout rows remain present and can still become false-positive trades.
+    assert summary["rows"] == 6
+    assert summary["active_trades"] == 6
 
 
 def test_feature_experiments_never_invent_non_runtime_features():
