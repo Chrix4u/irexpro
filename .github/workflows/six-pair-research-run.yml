@@ -998,7 +998,6 @@ jobs:
 
           cd "$STAGING_ROOT"
           test "$(git rev-parse --show-toplevel)" = "$STAGING_ROOT"
-
           test "$(git rev-parse HEAD)" = "$candidate_sha"
           test -z "$(git status --porcelain)"
 
@@ -1998,7 +1997,6 @@ jobs:
           printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
           printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
-
 
       - name: Run horizon stage 1m
         if: steps.current.outputs.current == 'true'
@@ -3000,7 +2998,7 @@ jobs:
                 );
               }
             }
-
+            const opportunityTopFeatures = [...opportunityGains.entries()]
               .sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0]))
               .slice(0, 8)
               .map(([feature, gain]) => feature + ':' + gain.toFixed(6))
@@ -4000,7 +3998,6 @@ jobs:
           readonly OUTPUT_ROOT="$RESEARCH_ROOT/$candidate_sha"
           readonly DUKASCOPY_CACHE="/home/lightworld/research/dukascopy-raw-cache"
 
-
           cd "$STAGING_ROOT"
           test "$(git rev-parse --show-toplevel)" = "$STAGING_ROOT"
           test "$(git rev-parse HEAD)" = "$candidate_sha"
@@ -4947,4 +4944,3 @@ jobs:
         shell: bash
         run: |
           rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
-
