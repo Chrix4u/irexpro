@@ -19,14 +19,21 @@ from app.domain.models.multitimeframe_features import (
 from app.domain.training.model_qualification import (
     CONFIDENCE_FLOOR,
     EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+    EVENT_PAIR_REGIME_EXPERT_EXPERIMENT_NAME,
     EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME,
+    REGIME_FALLBACK_NAME,
+    REGIME_NAMES,
+    REGIME_ROUTER_POLICY,
     ModelVariant,
     _event_two_stage_prediction_frame,
     _fit_event_pair_experts_for_outer,
+    _fit_event_pair_regime_experts_for_outer,
     _fit_event_pair_return_margin_for_outer,
     _pair_expert_probabilities,
+    _pair_regime_expert_probabilities,
     _pair_return_margin_probabilities,
     _probabilities,
+    _regime_model_key,
     _summarize_predictions,
 )
 from app.domain.training.train_final_multitimeframe import (
@@ -46,6 +53,7 @@ EVENT_PAIR_BUNDLE_MODEL_TYPE = "xgboost_event_pair_bundle"
 SUPPORTED_EXPERIMENTS = {
     EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
     EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME,
+    EVENT_PAIR_REGIME_EXPERT_EXPERIMENT_NAME,
 }
 
 
@@ -112,6 +120,7 @@ def _predict_pair_candidate(
     experiment: str,
     direction_models: dict[str, Any],
     direction_calibrators: dict[str, Any] | None,
+    regime_routers: dict[str, dict[str, float]] | None,
     opportunity_model: Any,
     frame: pd.DataFrame,
     confidence_floor: float,
@@ -134,6 +143,16 @@ def _predict_pair_candidate(
             list(MULTITIMEFRAME_FEATURE_COLUMNS),
         )
         variant = ModelVariant(name="event_barrier_v5_pair_return_margin")
+    elif experiment == EVENT_PAIR_REGIME_EXPERT_EXPERIMENT_NAME:
+        if regime_routers is None:
+            raise ValueError("Regime pair candidate requires training-derived routers")
+        direction_probabilities = _pair_regime_expert_probabilities(
+            direction_models,
+            regime_routers,
+            frame,
+            list(MULTITIMEFRAME_FEATURE_COLUMNS),
+        )
+        variant = ModelVariant(name="event_barrier_v6_pair_regime_direction")
     else:
         raise ValueError(f"Unsupported final pair experiment: {experiment}")
 
@@ -161,7 +180,14 @@ def _fit_pair_candidate(
     *,
     experiment: str,
     horizon_bars: int,
-) -> tuple[dict[str, Any], dict[str, Any] | None, Any, dict[str, Any]]:
+) -> tuple[
+    dict[str, Any],
+    dict[str, Any] | None,
+    dict[str, dict[str, float]] | None,
+    Any,
+    dict[str, Any],
+]:
+    regime_routers: dict[str, dict[str, float]] | None = None
     if experiment == EVENT_PAIR_EXPERT_EXPERIMENT_NAME:
         models, opportunity, features, counts = _fit_event_pair_experts_for_outer(
             train,
@@ -181,12 +207,25 @@ def _fit_pair_candidate(
             variant=ModelVariant(name="event_barrier_v5_pair_return_margin"),
             horizon_bars=horizon_bars,
         )
+    elif experiment == EVENT_PAIR_REGIME_EXPERT_EXPERIMENT_NAME:
+        (
+            models,
+            regime_routers,
+            opportunity,
+            features,
+            counts,
+        ) = _fit_event_pair_regime_experts_for_outer(
+            train,
+            variant=ModelVariant(name="event_barrier_v6_pair_regime_direction"),
+            horizon_bars=horizon_bars,
+        )
+        calibrators = None
     else:
         raise ValueError(f"Unsupported final pair experiment: {experiment}")
 
     if features != list(MULTITIMEFRAME_FEATURE_COLUMNS):
         raise ValueError("Final pair candidate feature schema diverged from runtime")
-    return models, calibrators, opportunity, counts
+    return models, calibrators, regime_routers, opportunity, counts
 
 
 def _component_manifest(
@@ -195,6 +234,7 @@ def _component_manifest(
     experiment: str,
     direction_models: dict[str, Any],
     direction_calibrators: dict[str, Any] | None,
+    regime_routers: dict[str, dict[str, float]] | None,
     opportunity_model: Any,
 ) -> dict[str, Any]:
     root = output.parent
@@ -203,6 +243,42 @@ def _component_manifest(
 
     direction: dict[str, Any] = {}
     for instrument in INITIAL_FOREX_UNIVERSE:
+        if experiment == EVENT_PAIR_REGIME_EXPERT_EXPERIMENT_NAME:
+            if regime_routers is None or instrument not in regime_routers:
+                raise ValueError(f"Final bundle is missing regime router {instrument}")
+            fallback = direction_models.get(
+                _regime_model_key(instrument, REGIME_FALLBACK_NAME)
+            )
+            if fallback is None:
+                raise ValueError(f"Final bundle is missing regime fallback {instrument}")
+            fallback_path = root / f"direction-{instrument}-fallback.json"
+            fallback_sha = _save_xgboost_model(fallback, fallback_path)
+            regimes: dict[str, Any] = {}
+            for regime in REGIME_NAMES:
+                model = direction_models.get(_regime_model_key(instrument, regime))
+                if model is None:
+                    continue
+                path = root / f"direction-{instrument}-{regime}.json"
+                regimes[regime] = {
+                    "path": path.name,
+                    "sha256": _save_xgboost_model(model, path),
+                    "kind": "xgboost_classifier",
+                }
+            direction[instrument] = {
+                "kind": "xgboost_regime_classifier_router",
+                "router": {
+                    "policy": REGIME_ROUTER_POLICY,
+                    **regime_routers[instrument],
+                },
+                "fallback": {
+                    "path": fallback_path.name,
+                    "sha256": fallback_sha,
+                    "kind": "xgboost_classifier",
+                },
+                "regimes": regimes,
+            }
+            continue
+
         model = direction_models.get(instrument)
         if model is None:
             raise ValueError(f"Final bundle is missing direction expert {instrument}")
@@ -306,6 +382,7 @@ def train_final_event_pair_candidate(
     (
         direction_models,
         direction_calibrators,
+        regime_routers,
         opportunity_model,
         training_counts,
     ) = _fit_pair_candidate(
@@ -317,6 +394,7 @@ def train_final_event_pair_candidate(
         experiment=experiment,
         direction_models=direction_models,
         direction_calibrators=direction_calibrators,
+        regime_routers=regime_routers,
         opportunity_model=opportunity_model,
         frame=validation,
         confidence_floor=confidence_threshold,
@@ -326,6 +404,7 @@ def train_final_event_pair_candidate(
         experiment=experiment,
         direction_models=direction_models,
         direction_calibrators=direction_calibrators,
+        regime_routers=regime_routers,
         opportunity_model=opportunity_model,
         frame=test,
         confidence_floor=confidence_threshold,
@@ -361,6 +440,7 @@ def train_final_event_pair_candidate(
         experiment=experiment,
         direction_models=direction_models,
         direction_calibrators=direction_calibrators,
+        regime_routers=regime_routers,
         opportunity_model=opportunity_model,
     )
     _atomic_write_json(output, bundle)
