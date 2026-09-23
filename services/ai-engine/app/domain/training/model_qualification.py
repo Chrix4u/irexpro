@@ -970,6 +970,40 @@ def _summarize_predictions(
     if "opportunity_probability" not in predictions.columns:
         return summary
 
+    if "event_label_policy" in predictions.columns:
+        event_direction = predictions.loc[
+            predictions[ACTIONABLE_TARGET_COLUMN] == 1
+        ].copy()
+        summary["event_direction_evaluated_rows"] = int(len(event_direction))
+        if (
+            not event_direction.empty
+            and event_direction[TARGET_COLUMN].nunique() >= 2
+        ):
+            direction_summary = mtf_training._summarize_predictions(
+                event_direction,
+                horizon_bars=horizon_bars,
+                confidence_threshold=confidence_threshold,
+                decision_threshold=decision_threshold,
+            )
+            summary["classification"] = direction_summary["classification"]
+            summary["diagnostics"]["directional_bias"] = direction_summary[
+                "diagnostics"
+            ]["directional_bias"]
+            summary["diagnostics"]["event_direction_probability_quantiles"] = (
+                direction_summary["diagnostics"]["probability_quantiles"]
+            )
+        else:
+            summary["classification"]["balanced_accuracy"] = 0.0
+            summary["classification"]["sample_count"] = int(len(event_direction))
+            summary["diagnostics"]["warnings"] = list(
+                dict.fromkeys(
+                    [
+                        *summary["diagnostics"].get("warnings", []),
+                        "insufficient_event_direction_classes",
+                    ]
+                )
+            )
+
     direction_coverage = dict(summary["diagnostics"]["confidence_coverage"])
     active_count = int(predictions["active_trade"].sum())
     joint_fraction = float(active_count / len(predictions)) if len(predictions) else 0.0
@@ -1745,6 +1779,29 @@ def run_nested_qualification_experiments(
             raise ValueError(
                 "qualification dataset must contain actionable and no-trade classes"
             )
+    if any(experiment.mode == "two_stage_event" for experiment in experiments):
+        required_event_columns = {
+            EVENT_ACTIONABLE_TARGET_COLUMN,
+            EVENT_DIRECTION_TARGET_COLUMN,
+            EVENT_LONG_NET_RETURN_COLUMN,
+            EVENT_SHORT_NET_RETURN_COLUMN,
+            EVENT_STEP_COLUMN,
+            EVENT_BARRIER_RETURN_COLUMN,
+        }
+        missing_event = sorted(required_event_columns.difference(dataset.columns))
+        if missing_event:
+            raise ValueError(
+                f"qualification dataset missing event-barrier columns: {missing_event}"
+            )
+        if dataset[EVENT_ACTIONABLE_TARGET_COLUMN].nunique() < 2:
+            raise ValueError(
+                "event qualification requires event and timeout/no-trade classes"
+            )
+        event_rows = dataset.loc[dataset[EVENT_ACTIONABLE_TARGET_COLUMN] == 1]
+        if event_rows[EVENT_DIRECTION_TARGET_COLUMN].nunique() < 2:
+            raise ValueError(
+                "event qualification requires both event direction classes"
+            )
     if not experiments or experiments[0].name != "baseline":
         raise ValueError("experiment matrix must start with the locked baseline")
     if (checkpoint_dir is None) != (checkpoint_fingerprint is None):
@@ -1843,6 +1900,51 @@ def run_nested_qualification_experiments(
                     "decision_threshold": decision_threshold,
                     "opportunity_threshold": confidence_floor,
                     "actionable_label_policy": ACTIONABLE_LABEL_POLICY,
+                    "candidate_reports": [],
+                    "training_counts": training_counts,
+                }
+            elif experiment.mode == "two_stage_event":
+                if len(experiment.variants) != 1 or experiment.tune_decision_threshold:
+                    raise ValueError(
+                        "event-barrier research must remain a fixed bounded candidate"
+                    )
+                variant = experiment.variants[0]
+                decision_threshold = 0.50
+                (
+                    model,
+                    opportunity_model,
+                    feature_columns,
+                    training_counts,
+                ) = _fit_event_two_stage_for_outer(
+                    outer_train,
+                    variant=variant,
+                    horizon_bars=horizon_bars,
+                )
+                direction_probabilities = _probabilities(
+                    model,
+                    outer_validation,
+                    feature_columns,
+                )
+                opportunity_probabilities = _probabilities(
+                    opportunity_model,
+                    outer_validation,
+                    feature_columns,
+                )
+                predictions = _event_two_stage_prediction_frame(
+                    outer_validation,
+                    direction_probabilities=direction_probabilities,
+                    opportunity_probabilities=opportunity_probabilities,
+                    confidence_floor=confidence_floor,
+                    fold=fold_index,
+                    experiment=experiment.name,
+                    variant=variant,
+                )
+                selection = {
+                    "policy": "fixed_event_barrier_v3_no_outer_tuning",
+                    "selected_variant": variant.name,
+                    "decision_threshold": decision_threshold,
+                    "opportunity_threshold": confidence_floor,
+                    "event_label_policy": EVENT_LABEL_POLICY,
                     "candidate_reports": [],
                     "training_counts": training_counts,
                 }
@@ -1975,6 +2077,7 @@ def run_nested_qualification_experiments(
         "horizon_bars": horizon_bars,
         "confidence_floor": confidence_floor,
         "actionable_label_policy": ACTIONABLE_LABEL_POLICY,
+        "event_label_policy": EVENT_LABEL_POLICY,
         "untouched_final_test_used": False,
         "outer_validation_used_for_tuning": False,
         "experiment_count": len(experiments),
