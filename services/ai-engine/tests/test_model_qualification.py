@@ -11,6 +11,7 @@ from app.domain.training.model_qualification import (
     ACTIONABLE_LABEL_POLICY,
     ACTIONABLE_TARGET_COLUMN,
     CONFIDENCE_FLOOR,
+    EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
     EVENT_TWO_STAGE_EXPERIMENT_NAME,
     TWO_STAGE_EXPERIMENT_NAME,
     ModelVariant,
@@ -19,6 +20,8 @@ from app.domain.training.model_qualification import (
     _ensure_actionable_target,
     _event_two_stage_prediction_frame,
     _feature_columns,
+    _fit_event_pair_experts_for_outer,
+    _pair_expert_probabilities,
     _fit_calibrator,
     _locked_gate_snapshot,
     _nested_windows,
@@ -99,12 +102,14 @@ def test_default_experiment_matrix_is_bounded_and_keeps_locked_baseline():
     assert baseline.sample_weight_policy == "economic"
     assert baseline.calibration == "none"
     assert baseline.feature_policy == "all"
-    assert sum(len(experiment.variants) for experiment in experiments) == 11
-    assert experiments[-3].name == "structure_feature_ablation"
-    assert experiments[-2].name == TWO_STAGE_EXPERIMENT_NAME
-    assert experiments[-2].mode == "two_stage_actionable"
-    assert experiments[-1].name == EVENT_TWO_STAGE_EXPERIMENT_NAME
-    assert experiments[-1].mode == "two_stage_event"
+    assert sum(len(experiment.variants) for experiment in experiments) == 12
+    assert experiments[-4].name == "structure_feature_ablation"
+    assert experiments[-3].name == TWO_STAGE_EXPERIMENT_NAME
+    assert experiments[-3].mode == "two_stage_actionable"
+    assert experiments[-2].name == EVENT_TWO_STAGE_EXPERIMENT_NAME
+    assert experiments[-2].mode == "two_stage_event"
+    assert experiments[-1].name == EVENT_PAIR_EXPERT_EXPERIMENT_NAME
+    assert experiments[-1].mode == "two_stage_event_pair_experts"
     assert experiments[-1].tune_decision_threshold is False
     assert CONFIDENCE_FLOOR == 0.60
     assert ACTIONABLE_LABEL_POLICY.endswith("_v1")
@@ -499,6 +504,89 @@ def test_event_summary_direction_classification_uses_true_events_only():
     # Timeout rows remain present and can still become false-positive trades.
     assert summary["rows"] == 6
     assert summary["active_trades"] == 6
+
+
+def test_pair_expert_probability_router_preserves_row_order_and_instrument_identity():
+    class ConstantModel:
+        def __init__(self, probability):
+            self.probability = probability
+
+        def predict_proba(self, features):
+            probability = np.full(len(features), self.probability, dtype=float)
+            return np.column_stack([1.0 - probability, probability])
+
+    frame = _research_dataset(
+        periods=3,
+        instruments=("EURUSD", "USDJPY"),
+    )
+    probabilities = _pair_expert_probabilities(
+        {
+            "EURUSD": ConstantModel(0.75),
+            "USDJPY": ConstantModel(0.25),
+        },
+        frame,
+        list(MULTITIMEFRAME_FEATURE_COLUMNS),
+    )
+
+    expected = np.where(frame["instrument"].eq("EURUSD"), 0.75, 0.25)
+    np.testing.assert_allclose(probabilities, expected)
+
+
+def test_event_pair_experts_train_direction_models_on_one_instrument_each(monkeypatch):
+    dataset = _research_dataset(
+        periods=500,
+        instruments=("EURUSD", "USDJPY"),
+    )
+    period_codes = dataset.groupby("decision_time", sort=True).ngroup()
+    dataset[EVENT_ACTIONABLE_TARGET_COLUMN] = (period_codes % 3 != 0).astype(int)
+    dataset[EVENT_DIRECTION_TARGET_COLUMN] = (
+        (period_codes + dataset["instrument"].eq("USDJPY").astype(int)) % 2
+    ).astype(int)
+
+    calls = []
+
+    def fake_fit(
+        variant,
+        *,
+        fit,
+        early_stop,
+        feature_columns,
+        target_column,
+        sample_weight_policy,
+    ):
+        calls.append(
+            {
+                "name": variant.name,
+                "target": target_column,
+                "fit_instruments": sorted(fit["instrument"].unique().tolist()),
+                "early_instruments": sorted(early_stop["instrument"].unique().tolist()),
+            }
+        )
+        return _FakeModel()
+
+    monkeypatch.setattr(qualification, "_fit_binary_variant", fake_fit)
+
+    models, opportunity_model, features, counts = _fit_event_pair_experts_for_outer(
+        dataset,
+        variant=ModelVariant(name="event_barrier_v4_pair_direction"),
+        horizon_bars=10,
+    )
+
+    assert set(models) == {"EURUSD", "USDJPY"}
+    assert opportunity_model is not None
+    assert features == list(MULTITIMEFRAME_FEATURE_COLUMNS)
+    assert counts["pair_count"] == 2
+
+    assert calls[0]["target"] == EVENT_ACTIONABLE_TARGET_COLUMN
+    assert calls[0]["fit_instruments"] == ["EURUSD", "USDJPY"]
+    direction_calls = calls[1:]
+    assert len(direction_calls) == 2
+    assert all(call["target"] == EVENT_DIRECTION_TARGET_COLUMN for call in direction_calls)
+    assert sorted(call["fit_instruments"] for call in direction_calls) == [
+        ["EURUSD"],
+        ["USDJPY"],
+    ]
+    assert all(call["fit_instruments"] == call["early_instruments"] for call in direction_calls)
 
 
 def test_feature_experiments_never_invent_non_runtime_features():
