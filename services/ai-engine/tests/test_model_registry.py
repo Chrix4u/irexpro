@@ -10,10 +10,10 @@ from xgboost import XGBClassifier
 
 from app.core.errors import ModelNotFoundError
 from app.domain.models.baseline_xgboost import (
-    MODEL_METADATA_PATH_ENV,
-    MODEL_PATH_ENV,
     EVENT_LABEL_POLICY_RUNTIME,
     EVENT_PAIR_BUNDLE_MODEL_TYPE,
+    MODEL_METADATA_PATH_ENV,
+    MODEL_PATH_ENV,
     MODEL_VERSION,
     MULTITIMEFRAME_MODEL_TYPE,
     BaselineXGBoostModel,
