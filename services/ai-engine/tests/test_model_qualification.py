@@ -7,6 +7,10 @@ import pytest
 
 from app.domain.models.multitimeframe_features import MULTITIMEFRAME_FEATURE_COLUMNS
 from app.domain.training import model_qualification as qualification
+from app.domain.training.qualification_diagnostics import (
+    causal_regime_diagnostics,
+    feature_gain_stability_diagnostics,
+)
 from app.domain.training.model_qualification import (
     ACTIONABLE_LABEL_POLICY,
     ACTIONABLE_TARGET_COLUMN,
@@ -998,3 +1002,52 @@ def test_pooled_architecture_diagnostic_keeps_homogeneous_pairs_as_research_plau
     assert report["material_pair_heterogeneity"] is False
     assert report["stronger_instrument_normalization_research_warranted"] is False
     assert report["future_mixture_of_experts_research_warranted"] is False
+
+
+def test_feature_gain_stability_diagnostics_rewards_repeatability():
+    folds = [
+        [
+            {"feature": "stable", "normalized_gain": 0.20},
+            {"feature": "sporadic", "normalized_gain": 0.40},
+        ],
+        [
+            {"feature": "stable", "normalized_gain": 0.25},
+        ],
+        [
+            {"feature": "stable", "normalized_gain": 0.15},
+            {"feature": "other", "normalized_gain": 0.30},
+        ],
+    ]
+
+    rows = feature_gain_stability_diagnostics(folds, top_n=10)
+
+    assert rows[0]["feature"] == "stable"
+    assert rows[0]["fold_presence_count"] == 3
+    assert rows[0]["fold_presence_fraction"] == pytest.approx(1.0)
+    assert rows[0]["mean_normalized_gain"] == pytest.approx(0.20)
+    assert {row["feature"] for row in rows} == {"stable", "sporadic", "other"}
+
+
+def test_causal_regime_diagnostics_adds_alignment_and_spread_slices():
+    rows: list[dict[str, float | int]] = []
+    for index in range(90):
+        bucket = index % 3
+        target = index % 2
+        rows.append(
+            {
+                "target": target,
+                "positive_probability": 0.70 if target else 0.30,
+                "m1_volatility_20": (0.001, 0.002, 0.003)[bucket],
+                "h1_rsi_14": (35.0, 50.0, 65.0)[bucket],
+                "trend_alignment_score": (-1.0, 0.0, 1.0)[bucket],
+                "momentum_alignment_score": (-0.8, 0.0, 0.8)[bucket],
+                "m1_spread_bps": (0.5, 1.0, 2.0)[bucket],
+            }
+        )
+
+    report = causal_regime_diagnostics(pd.DataFrame(rows))
+
+    assert set(report["trend_alignment_score"]) == {"bearish", "mixed", "bullish"}
+    assert set(report["momentum_alignment_score"]) == {"bearish", "mixed", "bullish"}
+    assert {"low", "mid", "high"}.issubset(report["m1_spread_bps"])
+    assert report["trend_alignment_score"]["bullish"]["rows"] == 30
