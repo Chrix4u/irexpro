@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 from typing import Any, Literal
@@ -19,6 +20,7 @@ import pandas as pd
 from app.core.logging import get_logger
 from app.domain.models.feature_engineering import FEATURE_COLUMNS
 from app.domain.models.multitimeframe_features import (
+    INITIAL_FOREX_UNIVERSE,
     MULTITIMEFRAME_BACKTEST_POLICY,
     MULTITIMEFRAME_FEATURE_COLUMNS,
     MULTITIMEFRAME_LABEL_SELECTION_POLICY,
@@ -35,6 +37,8 @@ MODEL_METADATA_PATH_ENV = "XGBOOST_MODEL_METADATA_PATH"
 
 SINGLE_TIMEFRAME_MODEL_TYPE = "xgboost_binary_direction_classifier"
 MULTITIMEFRAME_MODEL_TYPE = "xgboost_pooled_multitimeframe_direction_classifier"
+EVENT_PAIR_BUNDLE_MODEL_TYPE = "xgboost_event_pair_bundle"
+EVENT_LABEL_POLICY_RUNTIME = "first_net_return_barrier_atr1_spread2_timeout_v1"
 
 
 def _sha256_file(path: Path) -> str:
@@ -67,6 +71,7 @@ class BaselineXGBoostModel:
         self._artifact_metadata: dict[str, Any] = {}
         self._model_type = SINGLE_TIMEFRAME_MODEL_TYPE
         self._runtime_feature_profile = "single_timeframe_v1"
+        self._bundle: dict[str, Any] = {}
 
     def load_model(self) -> bool:
         """
@@ -104,6 +109,7 @@ class BaselineXGBoostModel:
             if model_type not in {
                 SINGLE_TIMEFRAME_MODEL_TYPE,
                 MULTITIMEFRAME_MODEL_TYPE,
+                EVENT_PAIR_BUNDLE_MODEL_TYPE,
             }:
                 raise ValueError("Unsupported model_type")
 
@@ -115,15 +121,14 @@ class BaselineXGBoostModel:
             runtime_feature_profile = str(
                 metadata.get("runtime_feature_profile", "single_timeframe_v1")
             ).strip()
+            mtf_model = model_type in {
+                MULTITIMEFRAME_MODEL_TYPE,
+                EVENT_PAIR_BUNDLE_MODEL_TYPE,
+            }
             expected_features = (
-                MULTITIMEFRAME_FEATURE_COLUMNS
-                if model_type == MULTITIMEFRAME_MODEL_TYPE
-                else FEATURE_COLUMNS
+                MULTITIMEFRAME_FEATURE_COLUMNS if mtf_model else FEATURE_COLUMNS
             )
-            if (
-                model_type == MULTITIMEFRAME_MODEL_TYPE
-                and runtime_feature_profile != MULTITIMEFRAME_RUNTIME_PROFILE
-            ):
+            if mtf_model and runtime_feature_profile != MULTITIMEFRAME_RUNTIME_PROFILE:
                 raise ValueError("MTF artifact runtime_feature_profile is unsupported")
 
             if (
@@ -132,16 +137,21 @@ class BaselineXGBoostModel:
                 != MULTITIMEFRAME_LABEL_SELECTION_POLICY
             ):
                 raise ValueError("MTF artifact label_selection_policy is unsupported")
+            if (
+                model_type == EVENT_PAIR_BUNDLE_MODEL_TYPE
+                and metadata.get("event_label_policy") != EVENT_LABEL_POLICY_RUNTIME
+            ):
+                raise ValueError("Event-pair artifact event_label_policy is unsupported")
 
             if (
-                model_type == MULTITIMEFRAME_MODEL_TYPE
+                mtf_model
                 and metadata.get("backtest_evaluation_policy")
                 != MULTITIMEFRAME_BACKTEST_POLICY
             ):
                 raise ValueError("MTF artifact backtest_evaluation_policy is unsupported")
 
             if (
-                model_type == MULTITIMEFRAME_MODEL_TYPE
+                mtf_model
                 and metadata.get("research_validation_policy")
                 != MULTITIMEFRAME_RESEARCH_VALIDATION_POLICY
             ):
@@ -164,8 +174,79 @@ class BaselineXGBoostModel:
 
             import xgboost as xgb
 
-            model = xgb.XGBClassifier()
-            model.load_model(str(model_path))
+            if model_type == EVENT_PAIR_BUNDLE_MODEL_TYPE:
+                manifest = json.loads(model_path.read_text(encoding="utf-8"))
+                if manifest.get("model_type") != EVENT_PAIR_BUNDLE_MODEL_TYPE:
+                    raise ValueError("Event-pair bundle manifest model_type mismatch")
+                if manifest.get("event_label_policy") != EVENT_LABEL_POLICY_RUNTIME:
+                    raise ValueError("Event-pair bundle label policy mismatch")
+
+                root = model_path.parent.resolve()
+
+                def component_path(item: dict[str, Any]) -> Path:
+                    raw_path = str(item.get("path", "")).strip()
+                    relative = Path(raw_path)
+                    if (
+                        not raw_path
+                        or relative.is_absolute()
+                        or ".." in relative.parts
+                        or len(relative.parts) != 1
+                    ):
+                        raise ValueError("Unsafe event-pair component path")
+                    resolved = (root / relative).resolve()
+                    if resolved.parent != root or not resolved.is_file():
+                        raise ValueError("Event-pair component file is missing")
+                    expected = str(item.get("sha256", "")).lower()
+                    if not expected or _sha256_file(resolved) != expected:
+                        raise ValueError("Event-pair component SHA-256 mismatch")
+                    return resolved
+
+                opportunity_spec = manifest.get("opportunity")
+                if not isinstance(opportunity_spec, dict):
+                    raise ValueError("Event-pair bundle is missing opportunity model")
+                opportunity = xgb.XGBClassifier()
+                opportunity.load_model(str(component_path(opportunity_spec)))
+
+                direction_specs = manifest.get("direction")
+                if not isinstance(direction_specs, dict):
+                    raise ValueError("Event-pair bundle is missing direction models")
+                direction_models: dict[str, Any] = {}
+                for instrument in INITIAL_FOREX_UNIVERSE:
+                    item = direction_specs.get(instrument)
+                    if not isinstance(item, dict):
+                        raise ValueError(
+                            f"Event-pair bundle missing direction model {instrument}"
+                        )
+                    kind = str(item.get("kind", ""))
+                    child_path = component_path(item)
+                    if kind == "xgboost_classifier":
+                        child = xgb.XGBClassifier()
+                    elif kind == "xgboost_return_margin_regressor":
+                        calibration = item.get("calibration")
+                        if not isinstance(calibration, dict):
+                            raise ValueError(
+                                f"Event-pair bundle missing calibrator {instrument}"
+                            )
+                        coefficient = float(calibration.get("coefficient"))
+                        intercept = float(calibration.get("intercept"))
+                        if not math.isfinite(coefficient) or not math.isfinite(intercept):
+                            raise ValueError("Event-pair calibration is non-finite")
+                        child = xgb.XGBRegressor()
+                    else:
+                        raise ValueError("Unsupported event-pair direction model kind")
+                    child.load_model(str(child_path))
+                    direction_models[instrument] = child
+
+                self._bundle = {
+                    "manifest": manifest,
+                    "opportunity": opportunity,
+                    "direction": direction_models,
+                }
+                model = opportunity
+            else:
+                model = xgb.XGBClassifier()
+                model.load_model(str(model_path))
+                self._bundle = {}
 
             self._model = model
             self._model_loaded = True
@@ -193,6 +274,7 @@ class BaselineXGBoostModel:
             self._model_version = MODEL_VERSION
             self._feature_names = list(FEATURE_COLUMNS)
             self._artifact_metadata = {}
+            self._bundle = {}
             self._model_type = SINGLE_TIMEFRAME_MODEL_TYPE
             self._runtime_feature_profile = "single_timeframe_v1"
             return False
@@ -204,7 +286,9 @@ class BaselineXGBoostModel:
         return self._predict_heuristic(features)
 
     def _predict_with_xgboost(self, features: dict[str, float]) -> ModelPrediction:
-        """Run inference using the verified trained classifier."""
+        """Run inference using the verified trained artifact."""
+        if self._model_type == EVENT_PAIR_BUNDLE_MODEL_TYPE:
+            return self._predict_with_event_pair_bundle(features)
         missing = [name for name in self._feature_names if name not in features]
         if missing:
             raise ValueError(f"Missing model features: {missing}")
@@ -237,6 +321,92 @@ class BaselineXGBoostModel:
                 "confidence_semantics": (
                     "Directional class probability estimate from the fitted classifier; "
                     "not a probability of profit."
+                ),
+                "approved_for_live": False,
+            },
+        )
+
+    def _predict_with_event_pair_bundle(
+        self,
+        features: dict[str, float],
+    ) -> ModelPrediction:
+        missing = [name for name in self._feature_names if name not in features]
+        if missing:
+            raise ValueError(f"Missing model features: {missing}")
+
+        active_instruments = [
+            instrument
+            for instrument in INITIAL_FOREX_UNIVERSE
+            if float(features.get(f"instrument_{instrument}", 0.0)) >= 0.5
+        ]
+        if len(active_instruments) != 1:
+            raise ValueError("Event-pair runtime requires exactly one active instrument")
+        instrument = active_instruments[0]
+
+        frame = pd.DataFrame(
+            [[features[name] for name in self._feature_names]],
+            columns=self._feature_names,
+        )
+        opportunity_model = self._bundle["opportunity"]
+        opportunity_probability = float(
+            opportunity_model.predict_proba(frame)[0][1]
+        )
+        manifest = self._bundle["manifest"]
+        item = manifest["direction"][instrument]
+        direction_model = self._bundle["direction"][instrument]
+        kind = str(item.get("kind", ""))
+
+        return_margin_bps: float | None = None
+        if kind == "xgboost_classifier":
+            positive_probability = float(direction_model.predict_proba(frame)[0][1])
+            direction_method = "pair_xgboost_predict_proba"
+        elif kind == "xgboost_return_margin_regressor":
+            return_margin_bps = float(direction_model.predict(frame)[0])
+            calibration = item["calibration"]
+            coefficient = float(calibration["coefficient"])
+            intercept = float(calibration["intercept"])
+            logit = max(
+                -60.0,
+                min(60.0, coefficient * return_margin_bps + intercept),
+            )
+            positive_probability = 1.0 / (1.0 + math.exp(-logit))
+            direction_method = "pair_return_margin_logistic_calibration"
+        else:
+            raise ValueError("Unsupported loaded event-pair direction model kind")
+
+        if positive_probability >= 0.5:
+            direction: Literal["BUY", "SELL"] = "BUY"
+            direction_confidence = positive_probability
+        else:
+            direction = "SELL"
+            direction_confidence = 1.0 - positive_probability
+        joint_confidence = min(direction_confidence, opportunity_probability)
+
+        raw_scores: dict[str, float] = {
+            "opportunity_probability": opportunity_probability,
+            "positive_class_probability": positive_probability,
+            "direction_confidence": direction_confidence,
+            "joint_confidence": joint_confidence,
+        }
+        if return_margin_bps is not None:
+            raw_scores["predicted_return_margin_bps"] = return_margin_bps
+
+        return ModelPrediction(
+            direction=direction,
+            confidence_score=round(joint_confidence, 4),
+            model_version=self._model_version,
+            features_used=list(self._feature_names),
+            raw_scores=raw_scores,
+            explainability={
+                "method": direction_method,
+                "instrument_expert": instrument,
+                "opportunity_gate": "pooled_event_opportunity_xgboost",
+                "research_experiment": self._artifact_metadata.get(
+                    "research_experiment"
+                ),
+                "confidence_semantics": (
+                    "Minimum of opportunity probability and pair-specific "
+                    "direction confidence; not a probability of profit."
                 ),
                 "approved_for_live": False,
             },
@@ -284,7 +454,10 @@ class BaselineXGBoostModel:
 
     def get_model_metadata(self) -> dict[str, Any]:
         if self._model_loaded:
-            mtf = self._model_type == MULTITIMEFRAME_MODEL_TYPE
+            mtf = self._model_type in {
+                MULTITIMEFRAME_MODEL_TYPE,
+                EVENT_PAIR_BUNDLE_MODEL_TYPE,
+            }
             return {
                 "version": self._model_version,
                 "type": "xgboost_trained_mtf" if mtf else "xgboost_trained",
@@ -294,6 +467,12 @@ class BaselineXGBoostModel:
                 "runtime_feature_profile": self._runtime_feature_profile,
                 "label_selection_policy": self._artifact_metadata.get(
                     "label_selection_policy"
+                ),
+                "event_label_policy": self._artifact_metadata.get(
+                    "event_label_policy"
+                ),
+                "research_experiment": self._artifact_metadata.get(
+                    "research_experiment"
                 ),
                 "backtest_evaluation_policy": self._artifact_metadata.get(
                     "backtest_evaluation_policy"
