@@ -851,6 +851,90 @@ def _two_stage_prediction_frame(
     return predictions
 
 
+def _event_two_stage_prediction_frame(
+    source: pd.DataFrame,
+    *,
+    direction_probabilities: np.ndarray,
+    opportunity_probabilities: np.ndarray,
+    confidence_floor: float,
+    fold: int,
+    experiment: str,
+    variant: ModelVariant,
+) -> pd.DataFrame:
+    """Build full-stream predictions for the event/barrier two-stage experiment."""
+    if confidence_floor < CONFIDENCE_FLOOR:
+        raise ValueError("confidence floor must not be lowered below 0.60")
+    columns = [
+        "decision_time",
+        "instrument",
+        EVENT_DIRECTION_TARGET_COLUMN,
+        EVENT_ACTIONABLE_TARGET_COLUMN,
+        EVENT_LONG_NET_RETURN_COLUMN,
+        EVENT_SHORT_NET_RETURN_COLUMN,
+        EVENT_STEP_COLUMN,
+        EVENT_BARRIER_RETURN_COLUMN,
+        "m1_spread_bps",
+    ]
+    columns.extend(
+        column for column in QUALIFICATION_REGIME_COLUMNS if column in source.columns
+    )
+    predictions = source[columns].copy()
+    predictions[TARGET_COLUMN] = predictions[EVENT_DIRECTION_TARGET_COLUMN].astype(int)
+    predictions[ACTIONABLE_TARGET_COLUMN] = predictions[
+        EVENT_ACTIONABLE_TARGET_COLUMN
+    ].astype(int)
+    predictions[LONG_NET_RETURN_COLUMN] = predictions[
+        EVENT_LONG_NET_RETURN_COLUMN
+    ].astype(float)
+    predictions[SHORT_NET_RETURN_COLUMN] = predictions[
+        EVENT_SHORT_NET_RETURN_COLUMN
+    ].astype(float)
+
+    direction_probabilities = np.clip(
+        np.asarray(direction_probabilities, dtype=float),
+        1e-7,
+        1.0 - 1e-7,
+    )
+    opportunity_probabilities = np.clip(
+        np.asarray(opportunity_probabilities, dtype=float),
+        1e-7,
+        1.0 - 1e-7,
+    )
+    predictions["raw_positive_probability"] = direction_probabilities
+    predictions["positive_probability"] = direction_probabilities
+    predictions["predicted_long"] = direction_probabilities >= 0.50
+    predictions["direction_confidence"] = np.maximum(
+        direction_probabilities,
+        1.0 - direction_probabilities,
+    )
+    predictions["opportunity_probability"] = opportunity_probabilities
+    predictions["predicted_opportunity"] = (
+        opportunity_probabilities >= confidence_floor
+    )
+    predictions["confidence"] = np.minimum(
+        predictions["direction_confidence"],
+        predictions["opportunity_probability"],
+    )
+    predictions["active_trade"] = (
+        predictions["predicted_opportunity"]
+        & (predictions["direction_confidence"] >= confidence_floor)
+    )
+    predictions["selected_net_return"] = np.where(
+        predictions["predicted_long"],
+        predictions[LONG_NET_RETURN_COLUMN],
+        predictions[SHORT_NET_RETURN_COLUMN],
+    )
+    predictions["fold"] = fold
+    predictions["experiment"] = experiment
+    predictions["model_variant"] = variant.name
+    predictions["calibration_method"] = "none"
+    predictions["decision_threshold"] = 0.50
+    predictions["confidence_floor"] = confidence_floor
+    predictions["actionable_label_policy"] = EVENT_LABEL_POLICY
+    predictions["event_label_policy"] = EVENT_LABEL_POLICY
+    return predictions
+
+
 def _opportunity_classification(
     predictions: pd.DataFrame,
     *,
@@ -1122,6 +1206,57 @@ def _fit_two_stage_for_outer(
         "early_stop_rows": int(len(early)),
         "actionable_fit_rows": int(len(directional_fit)),
         "actionable_early_stop_rows": int(len(directional_early)),
+    }
+    return direction_model, opportunity_model, feature_columns, counts
+
+
+def _fit_event_two_stage_for_outer(
+    training_window: pd.DataFrame,
+    *,
+    variant: ModelVariant,
+    horizon_bars: int,
+) -> tuple[XGBClassifier, XGBClassifier, list[str], dict[str, int]]:
+    """Fit event opportunity on all rows and direction only on true event rows."""
+    feature_columns = _feature_columns(variant.feature_policy)
+    fit, early = _split_internal_early_stopping_tail(
+        training_window,
+        horizon_bars=horizon_bars,
+    )
+    opportunity_variant = ModelVariant(
+        name="event_barrier_v3_opportunity",
+        parameter_overrides=variant.parameter_overrides,
+        sample_weight_policy="class_balance",
+        calibration="none",
+        feature_policy=variant.feature_policy,
+    )
+    opportunity_model = _fit_binary_variant(
+        opportunity_variant,
+        fit=fit,
+        early_stop=early,
+        feature_columns=feature_columns,
+        target_column=EVENT_ACTIONABLE_TARGET_COLUMN,
+        sample_weight_policy="class_balance",
+    )
+
+    directional_fit = fit.loc[
+        fit[EVENT_ACTIONABLE_TARGET_COLUMN] == 1
+    ].copy()
+    directional_early = early.loc[
+        early[EVENT_ACTIONABLE_TARGET_COLUMN] == 1
+    ].copy()
+    direction_model = _fit_binary_variant(
+        variant,
+        fit=directional_fit,
+        early_stop=directional_early,
+        feature_columns=feature_columns,
+        target_column=EVENT_DIRECTION_TARGET_COLUMN,
+        sample_weight_policy="class_balance",
+    )
+    counts = {
+        "fit_rows": int(len(fit)),
+        "early_stop_rows": int(len(early)),
+        "event_actionable_fit_rows": int(len(directional_fit)),
+        "event_actionable_early_stop_rows": int(len(directional_early)),
     }
     return direction_model, opportunity_model, feature_columns, counts
 
