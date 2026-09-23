@@ -39,6 +39,15 @@ from app.domain.training.validation import (
 TARGET_COLUMN = "target"
 LONG_NET_RETURN_COLUMN = "long_net_return"
 SHORT_NET_RETURN_COLUMN = "short_net_return"
+EVENT_ACTIONABLE_TARGET_COLUMN = "event_actionable_target"
+EVENT_DIRECTION_TARGET_COLUMN = "event_direction_target"
+EVENT_LONG_NET_RETURN_COLUMN = "event_long_net_return"
+EVENT_SHORT_NET_RETURN_COLUMN = "event_short_net_return"
+EVENT_STEP_COLUMN = "event_step"
+EVENT_BARRIER_RETURN_COLUMN = "event_barrier_return"
+EVENT_LABEL_POLICY = "first_net_return_barrier_atr1_spread2_timeout_v1"
+EVENT_ATR_MULTIPLIER = 1.0
+EVENT_SPREAD_MULTIPLIER = 2.0
 CLASS_BALANCE_SAMPLE_WEIGHT_POLICY = "sqrt_inverse_frequency_normalized_v1"
 ECONOMIC_SAMPLE_WEIGHT_POLICY = "class_balanced_positive_net_edge_q75_capped_v2"
 RESEARCH_PROGRESS_ENV = "IREXPRO_RESEARCH_PROGRESS"
@@ -197,6 +206,116 @@ def _parse_corpus_dates(frame: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+def _attach_event_barrier_labels(
+    frame: pd.DataFrame,
+    *,
+    horizon_bars: int,
+    extra_cost: float,
+) -> pd.DataFrame:
+    """
+    Attach a bounded event/barrier research label without changing row eligibility.
+
+    The barrier is fixed from information available at decision time:
+    max(1.0 x causal M1 ATR%, 2.0 x current spread bps). Future closes and
+    future spreads are used only to determine the supervised label/evaluation
+    outcome. They are never model features.
+
+    The first future minute whose friction-aware LONG or SHORT net return
+    reaches the positive barrier determines the event direction. If neither
+    side reaches it before the exact horizon, the row is a NO-TRADE timeout.
+    """
+    if horizon_bars < 1:
+        raise ValueError("horizon_bars must be at least 1")
+
+    result = frame.copy()
+    current_close = pd.to_numeric(result["m1_close"], errors="coerce")
+    current_spread_bps = pd.to_numeric(result["m1_spread_bps"], errors="coerce")
+    current_spread_price = current_close * current_spread_bps / 10_000.0
+    atr_pct = pd.to_numeric(result["m1_atr_pct_14"], errors="coerce")
+    if (
+        current_close.isna().any()
+        or current_spread_bps.isna().any()
+        or atr_pct.isna().any()
+    ):
+        raise ValueError("event labels require finite current close/spread/ATR")
+
+    barrier_return = np.maximum(
+        EVENT_ATR_MULTIPLIER * atr_pct.to_numpy(dtype=float),
+        EVENT_SPREAD_MULTIPLIER
+        * current_spread_bps.to_numpy(dtype=float)
+        / 10_000.0,
+    )
+    barrier_return = np.maximum(barrier_return, 1e-8)
+
+    row_count = len(result)
+    actionable = np.zeros(row_count, dtype=int)
+    direction = np.zeros(row_count, dtype=int)
+    event_step = np.full(row_count, horizon_bars, dtype=int)
+
+    horizon_long = pd.to_numeric(
+        result[LONG_NET_RETURN_COLUMN], errors="coerce"
+    ).to_numpy(dtype=float)
+    horizon_short = pd.to_numeric(
+        result[SHORT_NET_RETURN_COLUMN], errors="coerce"
+    ).to_numpy(dtype=float)
+    event_long = horizon_long.copy()
+    event_short = horizon_short.copy()
+    unresolved = np.ones(row_count, dtype=bool)
+
+    long_entry = current_close + current_spread_price / 2.0
+    short_entry = current_close - current_spread_price / 2.0
+
+    for step in range(1, horizon_bars + 1):
+        future_close = current_close.shift(-step)
+        future_spread_price = current_spread_price.shift(-step)
+
+        long_exit = future_close - future_spread_price / 2.0
+        short_exit = future_close + future_spread_price / 2.0
+        long_return = (
+            (long_exit / long_entry) - 1.0 - extra_cost
+        ).to_numpy(dtype=float)
+        short_return = (
+            (short_entry - short_exit) / short_entry - extra_cost
+        ).to_numpy(dtype=float)
+
+        finite = np.isfinite(long_return) & np.isfinite(short_return)
+        long_hit = unresolved & finite & (long_return >= barrier_return)
+        short_hit = unresolved & finite & (short_return >= barrier_return)
+
+        ambiguous = long_hit & short_hit
+        if ambiguous.any():
+            # Minute-close barriers should not normally hit both directions.
+            # Fail conservative: mark as timeout/NO-TRADE instead of guessing.
+            event_step[ambiguous] = step
+            unresolved[ambiguous] = False
+
+        only_long = long_hit & ~short_hit
+        if only_long.any():
+            actionable[only_long] = 1
+            direction[only_long] = 1
+            event_step[only_long] = step
+            event_long[only_long] = long_return[only_long]
+            event_short[only_long] = short_return[only_long]
+            unresolved[only_long] = False
+
+        only_short = short_hit & ~long_hit
+        if only_short.any():
+            actionable[only_short] = 1
+            direction[only_short] = 0
+            event_step[only_short] = step
+            event_long[only_short] = long_return[only_short]
+            event_short[only_short] = short_return[only_short]
+            unresolved[only_short] = False
+
+    result[EVENT_ACTIONABLE_TARGET_COLUMN] = actionable
+    result[EVENT_DIRECTION_TARGET_COLUMN] = direction
+    result[EVENT_LONG_NET_RETURN_COLUMN] = event_long
+    result[EVENT_SHORT_NET_RETURN_COLUMN] = event_short
+    result[EVENT_STEP_COLUMN] = event_step
+    result[EVENT_BARRIER_RETURN_COLUMN] = barrier_return
+    return result
+
+
 def prepare_instrument_corpus(
     corpus: pd.DataFrame,
     *,
@@ -323,6 +442,11 @@ def prepare_instrument_corpus(
     extra_cost = (commission_bps + slippage_bps) / 10_000.0
     frame[LONG_NET_RETURN_COLUMN] = (long_exit / long_entry) - 1.0 - extra_cost
     frame[SHORT_NET_RETURN_COLUMN] = (short_entry - short_exit) / short_entry - extra_cost
+    frame = _attach_event_barrier_labels(
+        frame,
+        horizon_bars=horizon_bars,
+        extra_cost=extra_cost,
+    )
 
     # Do NOT filter rows using either future directional return. Doing so
     # would let hindsight decide which market periods the model is evaluated
@@ -401,6 +525,12 @@ def _compact_research_frame(frame: pd.DataFrame) -> pd.DataFrame:
                 TARGET_COLUMN,
                 LONG_NET_RETURN_COLUMN,
                 SHORT_NET_RETURN_COLUMN,
+                EVENT_ACTIONABLE_TARGET_COLUMN,
+                EVENT_DIRECTION_TARGET_COLUMN,
+                EVENT_LONG_NET_RETURN_COLUMN,
+                EVENT_SHORT_NET_RETURN_COLUMN,
+                EVENT_STEP_COLUMN,
+                EVENT_BARRIER_RETURN_COLUMN,
                 "m1_spread_bps",
                 *MULTITIMEFRAME_FEATURE_COLUMNS,
             ]
