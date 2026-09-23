@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
-from xgboost import XGBClassifier
+from xgboost import XGBClassifier, XGBRegressor
 
 from app.domain.models.multitimeframe_features import MULTITIMEFRAME_FEATURE_COLUMNS
 from app.domain.training import train_multitimeframe as mtf_training
@@ -51,6 +51,7 @@ ACTIONABLE_LABEL_POLICY = "best_direction_net_return_after_friction_gt_zero_v1"
 TWO_STAGE_EXPERIMENT_NAME = "actionable_two_stage"
 EVENT_TWO_STAGE_EXPERIMENT_NAME = "event_barrier_two_stage"
 EVENT_PAIR_EXPERT_EXPERIMENT_NAME = "event_barrier_pair_experts"
+EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME = "event_barrier_pair_return_margin"
 QUALIFICATION_CHECKPOINT_VERSION = 1
 QUALIFICATION_CHECKPOINT_POLICY = "experiment_outer_fold_atomic_v1"
 DECISION_THRESHOLD_GRID = (0.45, 0.475, 0.50, 0.525, 0.55)
@@ -78,6 +79,7 @@ ExperimentMode = Literal[
     "two_stage_actionable",
     "two_stage_event",
     "two_stage_event_pair_experts",
+    "two_stage_event_pair_return_margin",
 ]
 
 
@@ -413,6 +415,11 @@ def default_experiments() -> tuple[QualificationExperiment, ...]:
             variants=(ModelVariant(name="event_barrier_v4_pair_direction"),),
             mode="two_stage_event_pair_experts",
         ),
+        QualificationExperiment(
+            name=EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME,
+            variants=(ModelVariant(name="event_barrier_v5_pair_return_margin"),),
+            mode="two_stage_event_pair_return_margin",
+        ),
     )
 
 
@@ -599,6 +606,31 @@ def _model_for_variant(variant: ModelVariant) -> XGBClassifier:
     params = _build_model().get_params()
     params.update(variant.overrides())
     return XGBClassifier(**params)
+
+
+def _regression_model_for_variant(variant: ModelVariant) -> XGBRegressor:
+    """Build a bounded regressor with the same regularization budget as direction XGB."""
+    params = _build_model().get_params()
+    params.update(variant.overrides())
+    params["objective"] = "reg:squarederror"
+    params["eval_metric"] = "rmse"
+    return XGBRegressor(**params)
+
+
+def _event_return_margin_bps(frame: pd.DataFrame) -> np.ndarray:
+    """LONG-minus-SHORT realized event return in bps; supervised outcome only."""
+    long_return = pd.to_numeric(
+        frame[EVENT_LONG_NET_RETURN_COLUMN],
+        errors="coerce",
+    ).to_numpy(dtype=float)
+    short_return = pd.to_numeric(
+        frame[EVENT_SHORT_NET_RETURN_COLUMN],
+        errors="coerce",
+    ).to_numpy(dtype=float)
+    margin = (long_return - short_return) * 10_000.0
+    if not np.isfinite(margin).all():
+        raise ValueError("event return-margin target requires finite event returns")
+    return margin
 
 
 def _fit_binary_variant(
@@ -1401,8 +1433,168 @@ def _pair_expert_probabilities(
     return probabilities
 
 
+def _fit_event_pair_return_margin_for_outer(
+    training_window: pd.DataFrame,
+    *,
+    variant: ModelVariant,
+    horizon_bars: int,
+) -> tuple[
+    dict[str, XGBRegressor],
+    dict[str, LogisticRegression],
+    XGBClassifier,
+    list[str],
+    dict[str, Any],
+]:
+    """Fit per-pair return-margin regressors and calibrate direction inside training."""
+    feature_columns = _feature_columns(variant.feature_policy)
+    windows = _refit_windows(
+        training_window,
+        horizon_bars=horizon_bars,
+        min_inner_periods=50,
+    )
+
+    opportunity_variant = ModelVariant(
+        name="event_barrier_v5_pooled_opportunity",
+        parameter_overrides=variant.parameter_overrides,
+        sample_weight_policy="class_balance",
+        calibration="none",
+        feature_policy=variant.feature_policy,
+    )
+    opportunity_model = _fit_binary_variant(
+        opportunity_variant,
+        fit=windows.fit,
+        early_stop=windows.early_stop,
+        feature_columns=feature_columns,
+        target_column=EVENT_ACTIONABLE_TARGET_COLUMN,
+        sample_weight_policy="class_balance",
+    )
+
+    direction_models: dict[str, XGBRegressor] = {}
+    calibrators: dict[str, LogisticRegression] = {}
+    pair_counts: dict[str, dict[str, int]] = {}
+    instruments = sorted(str(value) for value in training_window["instrument"].unique())
+    if not instruments:
+        raise ValueError("return-margin pair research requires at least one instrument")
+
+    for instrument in instruments:
+        pair_fit = windows.fit.loc[
+            (windows.fit["instrument"] == instrument)
+            & (windows.fit[EVENT_ACTIONABLE_TARGET_COLUMN] == 1)
+        ].copy()
+        pair_early = windows.early_stop.loc[
+            (windows.early_stop["instrument"] == instrument)
+            & (windows.early_stop[EVENT_ACTIONABLE_TARGET_COLUMN] == 1)
+        ].copy()
+        pair_calibration = windows.calibration.loc[
+            (windows.calibration["instrument"] == instrument)
+            & (windows.calibration[EVENT_ACTIONABLE_TARGET_COLUMN] == 1)
+        ].copy()
+        for name, frame in (
+            ("fit", pair_fit),
+            ("early_stop", pair_early),
+            ("calibration", pair_calibration),
+        ):
+            if frame.empty:
+                raise ValueError(
+                    f"return-margin expert {instrument} has empty {name} window"
+                )
+            if frame[EVENT_DIRECTION_TARGET_COLUMN].nunique() < 2:
+                raise ValueError(
+                    f"return-margin expert {instrument} {name} window lacks both directions"
+                )
+
+        model = _regression_model_for_variant(variant)
+        model.fit(
+            pair_fit[feature_columns],
+            _event_return_margin_bps(pair_fit),
+            sample_weight=_binary_class_balance_weights(
+                pair_fit,
+                target_column=EVENT_DIRECTION_TARGET_COLUMN,
+            ),
+            eval_set=[
+                (
+                    pair_early[feature_columns],
+                    _event_return_margin_bps(pair_early),
+                )
+            ],
+            sample_weight_eval_set=[
+                _binary_class_balance_weights(
+                    pair_early,
+                    target_column=EVENT_DIRECTION_TARGET_COLUMN,
+                )
+            ],
+            verbose=False,
+        )
+        calibration_scores = np.asarray(
+            model.predict(pair_calibration[feature_columns]),
+            dtype=float,
+        ).reshape(-1, 1)
+        if not np.isfinite(calibration_scores).all():
+            raise ValueError(
+                f"return-margin expert {instrument} calibration scores are non-finite"
+            )
+        calibrator = LogisticRegression(
+            random_state=42,
+            solver="lbfgs",
+            max_iter=1000,
+            class_weight="balanced",
+        )
+        calibrator.fit(
+            calibration_scores,
+            pair_calibration[EVENT_DIRECTION_TARGET_COLUMN].astype(int),
+        )
+        direction_models[instrument] = model
+        calibrators[instrument] = calibrator
+        pair_counts[instrument] = {
+            "event_actionable_fit_rows": int(len(pair_fit)),
+            "event_actionable_early_stop_rows": int(len(pair_early)),
+            "event_actionable_calibration_rows": int(len(pair_calibration)),
+        }
+
+    counts: dict[str, Any] = {
+        "fit_rows": int(len(windows.fit)),
+        "early_stop_rows": int(len(windows.early_stop)),
+        "calibration_rows": int(len(windows.calibration)),
+        "pair_count": int(len(direction_models)),
+        "pair_counts": pair_counts,
+        "direction_target": "event_long_minus_short_net_return_bps",
+        "direction_calibration": "pair_logistic_on_inner_chronological_block",
+    }
+    return direction_models, calibrators, opportunity_model, feature_columns, counts
+
+
+def _pair_return_margin_probabilities(
+    models: dict[str, XGBRegressor],
+    calibrators: dict[str, LogisticRegression],
+    frame: pd.DataFrame,
+    feature_columns: list[str],
+) -> np.ndarray:
+    """Route each row to its pair regressor and inner-fitted probability calibrator."""
+    probabilities = np.full(len(frame), np.nan, dtype=float)
+    positions = pd.Series(np.arange(len(frame), dtype=int), index=frame.index)
+    for instrument, group in frame.groupby("instrument", sort=False):
+        key = str(instrument)
+        model = models.get(key)
+        calibrator = calibrators.get(key)
+        if model is None or calibrator is None:
+            raise ValueError(f"missing return-margin expert/calibrator for {instrument}")
+        scores = np.asarray(
+            model.predict(group[feature_columns]),
+            dtype=float,
+        ).reshape(-1, 1)
+        if not np.isfinite(scores).all():
+            raise ValueError(
+                f"return-margin expert {instrument} produced non-finite scores"
+            )
+        group_positions = positions.loc[group.index].to_numpy(dtype=int)
+        probabilities[group_positions] = calibrator.predict_proba(scores)[:, 1]
+    if not np.isfinite(probabilities).all():
+        raise ValueError("return-margin routing produced non-finite probabilities")
+    return np.clip(probabilities, 1e-7, 1.0 - 1e-7)
+
+
 def _aggregate_pair_feature_gain(
-    models: dict[str, XGBClassifier],
+    models: dict[str, Any],
     feature_columns: list[str],
 ) -> tuple[list[dict[str, Any]], dict[str, list[dict[str, Any]]]]:
     """Average normalized direction feature gain across all pair experts."""
@@ -1495,7 +1687,7 @@ def _fold_report(
     feature_columns: list[str],
     selection: dict[str, Any],
     opportunity_model: XGBClassifier | None = None,
-    direction_models: dict[str, XGBClassifier] | None = None,
+    direction_models: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     by_instrument = {
         instrument: _summarize_predictions(
@@ -1983,7 +2175,11 @@ def run_nested_qualification_experiments(
                 "qualification dataset must contain actionable and no-trade classes"
             )
     if any(
-        experiment.mode in {"two_stage_event", "two_stage_event_pair_experts"}
+        experiment.mode in {
+            "two_stage_event",
+            "two_stage_event_pair_experts",
+            "two_stage_event_pair_return_margin",
+        }
         for experiment in experiments
     ):
         required_event_columns = {
@@ -2064,7 +2260,7 @@ def run_nested_qualification_experiments(
                     continue
 
             opportunity_model: XGBClassifier | None = None
-            direction_models: dict[str, XGBClassifier] | None = None
+            direction_models: dict[str, Any] | None = None
             if experiment.mode == "two_stage_actionable":
                 if len(experiment.variants) != 1 or experiment.tune_decision_threshold:
                     raise ValueError(
@@ -2199,6 +2395,58 @@ def run_nested_qualification_experiments(
                     "opportunity_threshold": confidence_floor,
                     "event_label_policy": EVENT_LABEL_POLICY,
                     "expert_router": "instrument_identity",
+                    "candidate_reports": [],
+                    "training_counts": training_counts,
+                }
+            elif experiment.mode == "two_stage_event_pair_return_margin":
+                if len(experiment.variants) != 1 or experiment.tune_decision_threshold:
+                    raise ValueError(
+                        "return-margin pair research must remain a fixed bounded candidate"
+                    )
+                variant = experiment.variants[0]
+                decision_threshold = 0.50
+                (
+                    direction_models,
+                    direction_calibrators,
+                    opportunity_model,
+                    feature_columns,
+                    training_counts,
+                ) = _fit_event_pair_return_margin_for_outer(
+                    outer_train,
+                    variant=variant,
+                    horizon_bars=horizon_bars,
+                )
+                model = None
+                direction_probabilities = _pair_return_margin_probabilities(
+                    direction_models,
+                    direction_calibrators,
+                    outer_validation,
+                    feature_columns,
+                )
+                opportunity_probabilities = _probabilities(
+                    opportunity_model,
+                    outer_validation,
+                    feature_columns,
+                )
+                predictions = _event_two_stage_prediction_frame(
+                    outer_validation,
+                    direction_probabilities=direction_probabilities,
+                    opportunity_probabilities=opportunity_probabilities,
+                    confidence_floor=confidence_floor,
+                    fold=fold_index,
+                    experiment=experiment.name,
+                    variant=variant,
+                )
+                predictions["calibration_method"] = "pair_logistic_return_margin"
+                selection = {
+                    "policy": "fixed_event_barrier_v5_pair_return_margin_no_outer_tuning",
+                    "selected_variant": variant.name,
+                    "decision_threshold": decision_threshold,
+                    "opportunity_threshold": confidence_floor,
+                    "event_label_policy": EVENT_LABEL_POLICY,
+                    "expert_router": "instrument_identity",
+                    "direction_target": "event_long_minus_short_net_return_bps",
+                    "direction_calibration": "pair_logistic_inner_chronological",
                     "candidate_reports": [],
                     "training_counts": training_counts,
                 }
