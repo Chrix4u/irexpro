@@ -1,7 +1,7 @@
 import type { EntityManager, Repository } from 'typeorm';
 import { ExecutionReadService } from './execution-read.service';
 import { Trade, TradeStatus } from './entities/trade.entity';
-import type { TradeIntent } from './entities/trade-intent.entity';
+import type { TradeEntryDecisionSource } from './dto/trade-execution-response.dto';
 
 describe('ExecutionReadService', () => {
   let service: ExecutionReadService;
@@ -71,7 +71,7 @@ describe('ExecutionReadService', () => {
     const tradeA = { id: 'trade-a' } as Trade;
     const tradeB = { id: 'trade-b' } as Trade;
     tradeIntentRepo.find.mockResolvedValue([
-      { tradeId: 'trade-a', userId: USER_ID } as TradeIntent,
+      { tradeId: 'trade-a', userId: USER_ID } as TradeEntryDecisionSource,
       { tradeId: 'trade-b', userId: USER_ID } as TradeIntent,
     ]);
 
