@@ -152,6 +152,7 @@ async function setupAiTraderEvidence(page: Page) {
     if (apiPath === 'broker/connections') return fulfill(200, mockBrokerConnections);
     if (apiPath === 'execution/positions/open') return fulfill(200, [executionPosition]);
     if (apiPath === 'execution/trades/recent') return fulfill(200, [executionPosition]);
+    if (apiPath === 'execution/trades/closed') return fulfill(200, []);
 
     if (apiPath === 'live-account/positions') {
       return fulfill(200, { positions: [livePosition], total: 1 });
