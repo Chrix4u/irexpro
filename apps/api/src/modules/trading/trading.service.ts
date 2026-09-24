@@ -251,6 +251,20 @@ export class TradingService {
             source: 'broker',
             accountType: connection.accountType,
             mode: session.executionMode,
+            brokerId: connection.brokerId,
+            researchUat:
+              connection.brokerId === 'paper-broker' &&
+              session.executionMode === ExecutionMode.PAPER_ONLY,
+            replayStepsPerCycle:
+              connection.brokerId === 'paper-broker' &&
+              session.executionMode === ExecutionMode.PAPER_ONLY
+                ? 12
+                : 1,
+            intervalSeconds:
+              connection.brokerId === 'paper-broker' &&
+              session.executionMode === ExecutionMode.PAPER_ONLY
+                ? 10
+                : undefined,
           })
           .catch((err: Error) =>
             this.logger.warn(
@@ -543,6 +557,20 @@ export class TradingService {
         source: 'broker',
         accountType: connection.accountType,
         mode: session.executionMode,
+        brokerId: connection.brokerId,
+        researchUat:
+          connection.brokerId === 'paper-broker' &&
+          session.executionMode === ExecutionMode.PAPER_ONLY,
+        replayStepsPerCycle:
+          connection.brokerId === 'paper-broker' &&
+          session.executionMode === ExecutionMode.PAPER_ONLY
+            ? 12
+            : 1,
+        intervalSeconds:
+          connection.brokerId === 'paper-broker' &&
+          session.executionMode === ExecutionMode.PAPER_ONLY
+            ? 10
+            : undefined,
       });
       return this.aiEngineClient.getSessionStatus(sessionId);
     }
