@@ -263,6 +263,7 @@ export class StrategyOrchestratorService {
     }
 
     let executionCandidate = candidate;
+    let rebaseResearchPaperProbe = false;
 
     if (uatWorkflowProbeRequested) {
       let boundConnection;
@@ -299,14 +300,65 @@ export class StrategyOrchestratorService {
           `signal=${signalId} confidence=${candidate.confidenceScore}`,
       );
 
+      // Defer execution-market rebasing until AFTER the immutable signal
+      // identity + duplicate-recovery gate. A redelivery of the same signal
+      // must never advance the paper market or acquire a different identity
+      // merely because the simulator quote moved between deliveries.
+      rebaseResearchPaperProbe = true;
+    }
+
+    // ── Gate 4.5: Signal identity (#302, Round 5 task 50-c) ──────────────
+    // Persist-or-reuse the durable identity BEFORE risk evaluation: retries
+    // and redeliveries never produce a second logical evaluation; a same-
+    // signalId/different canonical digest (material fields OR generatedAt) is
+    // a SECURITY EVENT (typed conflict, audited by the gate — never a new
+    // idempotency key); stale/future generatedAt is typed-rejected.
+    let registration: SignalIdentityRegistration;
+    try {
+      registration = await this.signalIdentityGate.registerOrReuse(userId, {
+        signalId,
+        generatedAt: candidate.generatedAt,
+        materialFields: {
+          // Identity always binds the ORIGINAL AI/replay decision. The
+          // production-ineligible PAPER workflow rebase happens only after
+          // duplicate recovery and is retained separately in intent metadata.
+          instrument: candidate.instrument,
+          direction: candidate.direction,
+          requestedLotSize: String(candidate.suggestedVolume),
+          entryPrice: candidate.suggestedEntryPrice,
+          stopLoss: candidate.suggestedStopLoss,
+          takeProfit: candidate.suggestedTakeProfit,
+          strategyCode: candidate.strategyCode,
+          timeframe: candidate.timeframe,
+          modelVersion: candidate.modelVersion,
+        },
+      });
+    } catch (err) {
+      const reason = (err as Error).message ?? 'Signal identity rejected';
+      this.logger.warn(`Signal ${signalId} rejected at the identity gate: ${reason}`);
+      await this.recordIgnored(
+        candidate,
+        'SIGNAL_INVALID',
+        'SIGNAL_IDENTITY_REJECTED',
+        `Signal identity gate rejected the delivery: ${reason}`,
+      );
+      return { outcome: 'SIGNAL_INVALID', signalId, reason };
+    }
+
+    // ── Gate 4.6: Deterministic duplicate recovery (#302, Round 6 6-d) ──
+    // A duplicate delivery NEVER re-enters risk evaluation or dispatch: the
+    // FIRST delivery's durable outcome is the truth for this signalId.
+    if (registration.duplicate) {
+      return this.recoverDuplicateOutcome(candidate, registration);
+    }
+
+    if (rebaseResearchPaperProbe) {
       // The historical replay and the execution simulator are intentionally
-      // separate markets. A workflow probe must therefore be REBASED onto the
-      // paper broker's CURRENT quote after the exact safe boundary above is
-      // proven. This is not a model signal rewrite: the original replay
-      // reference/protection levels remain in metadata for audit, while only
-      // this production_eligible=false PAPER probe receives executable test
-      // geometry. Normal model signals, provider DEMO, and LIVE never enter
-      // this branch, and the final market-safety gate remains mandatory.
+      // separate markets. Rebase ONLY this fresh, production_eligible=false
+      // workflow probe onto the internal paper broker's CURRENT quote. The
+      // original replay geometry remains in metadata; normal model signals,
+      // provider DEMO and LIVE never enter this path. The final market-safety
+      // gate remains mandatory and independently rechecks the next quote.
       try {
         executionCandidate = await this.rebaseResearchPaperWorkflowProbe(candidate, session);
       } catch (err) {
@@ -331,48 +383,6 @@ export class StrategyOrchestratorService {
         });
         return { outcome: 'EXECUTION_FAILED', signalId, reason };
       }
-    }
-
-    // ── Gate 4.5: Signal identity (#302, Round 5 task 50-c) ──────────────
-    // Persist-or-reuse the durable identity BEFORE risk evaluation: retries
-    // and redeliveries never produce a second logical evaluation; a same-
-    // signalId/different canonical digest (material fields OR generatedAt) is
-    // a SECURITY EVENT (typed conflict, audited by the gate — never a new
-    // idempotency key); stale/future generatedAt is typed-rejected.
-    let registration: SignalIdentityRegistration;
-    try {
-      registration = await this.signalIdentityGate.registerOrReuse(userId, {
-        signalId,
-        generatedAt: candidate.generatedAt,
-        materialFields: {
-          instrument: executionCandidate.instrument,
-          direction: executionCandidate.direction,
-          requestedLotSize: String(executionCandidate.suggestedVolume),
-          entryPrice: executionCandidate.suggestedEntryPrice,
-          stopLoss: executionCandidate.suggestedStopLoss,
-          takeProfit: executionCandidate.suggestedTakeProfit,
-          strategyCode: executionCandidate.strategyCode,
-          timeframe: executionCandidate.timeframe,
-          modelVersion: executionCandidate.modelVersion,
-        },
-      });
-    } catch (err) {
-      const reason = (err as Error).message ?? 'Signal identity rejected';
-      this.logger.warn(`Signal ${signalId} rejected at the identity gate: ${reason}`);
-      await this.recordIgnored(
-        candidate,
-        'SIGNAL_INVALID',
-        'SIGNAL_IDENTITY_REJECTED',
-        `Signal identity gate rejected the delivery: ${reason}`,
-      );
-      return { outcome: 'SIGNAL_INVALID', signalId, reason };
-    }
-
-    // ── Gate 4.6: Deterministic duplicate recovery (#302, Round 6 6-d) ──
-    // A duplicate delivery NEVER re-enters risk evaluation or dispatch: the
-    // FIRST delivery's durable outcome is the truth for this signalId.
-    if (registration.duplicate) {
-      return this.recoverDuplicateOutcome(candidate, registration);
     }
 
     // ── Gate 4.7: Durable TradeIntent recording (Round 6 §2) ────────────
