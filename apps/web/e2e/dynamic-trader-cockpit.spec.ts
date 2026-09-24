@@ -357,7 +357,7 @@ test.describe('AI Trader novice workflow', () => {
     await expect(page.getByText('EURUSD', { exact: true }).first()).toBeVisible();
     await expect(page.getByText('+41.00 USD', { exact: true })).toBeVisible();
 
-    await expect(page.getByRole('heading', { level: 2, name: 'Recent AI Activity' })).toBeVisible();
+    await expect(page.getByRole('heading', { level: 2, name: 'Orders & Results' })).toBeVisible();
     await expect(page.getByText('OPEN', { exact: true }).first()).toBeVisible();
     await expect(
       page.getByText(/execution quote was too far from the risk-validated reference price/i),
@@ -381,24 +381,33 @@ test.describe('AI Trader novice workflow', () => {
   });
 
 
-  test('stacks every position metric on its own desktop row', async ({ page }) => {
+  test('supports full-detail table and stacked grid views for open positions', async ({ page }) => {
     await gotoAiTrader(page);
+
+    await expect(page.getByRole('button', { name: 'Table' })).toHaveAttribute('aria-pressed', 'true');
+    const positionTable = page.locator('.ai-trading-table').first();
+    await expect(positionTable).toBeVisible();
+    await expect(positionTable.getByText('Unrealized P&L', { exact: true })).toBeVisible();
+    await expect(page.getByText('Total unrealized P&L', { exact: true })).toBeVisible();
+    await expect(page.getByText('+41.00 USD', { exact: true })).toBeVisible();
 
     const viewport = page.viewportSize();
     expect(viewport).not.toBeNull();
     if (!viewport || viewport.width <= 700) {
-      test.skip();
       return;
     }
+
+    await page.getByRole('button', { name: 'Grid' }).click();
+    await expect(page.getByRole('button', { name: 'Grid' })).toHaveAttribute('aria-pressed', 'true');
 
     const metrics = page.locator('.ai-trade-metrics').first();
     await expect(metrics).toBeVisible();
 
     const rows = metrics.locator(':scope > div');
-    await expect(rows).toHaveCount(4);
+    await expect(rows).toHaveCount(8);
 
     const boxes = await Promise.all(
-      Array.from({ length: 4 }, (_, index) => rows.nth(index).boundingBox()),
+      Array.from({ length: 8 }, (_, index) => rows.nth(index).boundingBox()),
     );
     for (let index = 1; index < boxes.length; index += 1) {
       expect(boxes[index]).not.toBeNull();
