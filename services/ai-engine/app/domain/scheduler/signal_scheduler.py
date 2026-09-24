@@ -248,6 +248,7 @@ class SignalScheduler:
                 now = datetime.now(UTC)
                 probe_due = (
                     job.research_uat
+                    and job.uat_probe_executions_succeeded_total == 0
                     and scan_index == len(scan_plan) - 1
                     and (
                         job.last_uat_probe_at is None
