@@ -189,6 +189,9 @@ async function gotoAiTrader(
         hasAllocation: true,
         allocatedCapital: '2500.00000000',
         committedCapital: '250.00000000',
+        inFlightCommitments: '25.00000000',
+        pendingOrderCommitments: '50.00000000',
+        openPositionCommitments: '175.00000000',
         availableCapital: '2250.00000000',
       });
     }
@@ -251,7 +254,18 @@ test.describe('AI Trader novice workflow', () => {
     await expect(page.getByText('Paper Trading Broker', { exact: false }).first()).toBeVisible();
     await expect(page.getByText('10,000.00 USD', { exact: true })).toBeVisible();
     await expect(page.getByText('2,500.00 USD', { exact: true }).first()).toBeVisible();
-    await expect(page.getByText(/Committed: 250\.00 USD/i)).toBeVisible();
+    const pool = page.getByLabel('AI capital pool breakdown');
+    await expect(pool.getByText('Available', { exact: true })).toBeVisible();
+    await expect(pool.getByText('2,250.00 USD', { exact: true })).toBeVisible();
+    await expect(pool.getByText('Committed now', { exact: true })).toBeVisible();
+    await expect(pool.getByText('250.00 USD', { exact: true })).toBeVisible();
+    await expect(pool.getByText('Open positions', { exact: true })).toBeVisible();
+    await expect(pool.getByText('175.00 USD', { exact: true })).toBeVisible();
+    await expect(pool.getByText('Pending orders', { exact: true })).toBeVisible();
+    await expect(pool.getByText('50.00 USD', { exact: true })).toBeVisible();
+    await expect(pool.getByText('In-flight decisions', { exact: true })).toBeVisible();
+    await expect(pool.getByText('25.00 USD', { exact: true })).toBeVisible();
+    await expect(page.getByText(/Shared across multiple AI trades/i)).toBeVisible();
     await expect(page.getByRole('combobox', { name: 'Broker account' })).toBeDisabled();
     await expect(page.getByRole('button', { name: 'Stop AI Trading' })).toBeVisible();
 
