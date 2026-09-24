@@ -497,9 +497,19 @@
   flex-wrap: wrap;
 }
 
+.ai-activity-row__details,
 .ai-activity-row__reason,
 .ai-activity-row__time {
   grid-column: 1 / -1;
+}
+
+.ai-activity-row__details {
+  display: flex;
+  gap: 0.45rem 0.85rem;
+  flex-wrap: wrap;
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  font-variant-numeric: tabular-nums lining-nums;
 }
 
 .ai-activity-row__reason {
