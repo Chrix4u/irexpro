@@ -2,8 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { Trade, TradeStatus } from './entities/trade.entity';
-import type { TradeIntent } from './entities/trade-intent.entity';
-import { TradeIntentService } from './services/trade-intent.service';
+import { TradeIntent } from './entities/trade-intent.entity';
 
 /**
  * Read-only execution projection service for user-facing terminal clients.
@@ -17,7 +16,6 @@ export class ExecutionReadService {
   constructor(
     @InjectRepository(Trade)
     private readonly tradeRepo: Repository<Trade>,
-    private readonly tradeIntentService: TradeIntentService,
   ) {}
 
   async listOpenPositions(userId: string): Promise<Trade[]> {
@@ -55,7 +53,9 @@ export class ExecutionReadService {
     const tradeIds = [...new Set(trades.map((trade) => trade.id).filter(Boolean))];
     if (tradeIds.length === 0) return new Map();
 
-    const intents = await this.tradeIntentService.findByTradeIds(userId, tradeIds);
+    const intents = await this.tradeRepo.manager.getRepository(TradeIntent).find({
+      where: { userId, tradeId: In(tradeIds) },
+    });
 
     return new Map(
       intents
