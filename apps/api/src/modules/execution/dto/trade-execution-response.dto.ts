@@ -87,7 +87,8 @@ export class TradeExecutionResponseDto {
 
   @ApiPropertyOptional({
     nullable: true,
-    description: 'Bounded user-safe execution outcome classification; never raw provider diagnostics.',
+    description:
+      'Bounded user-safe execution outcome classification; never raw provider diagnostics.',
   })
   executionReasonCode: string | null;
 
