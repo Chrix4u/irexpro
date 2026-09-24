@@ -395,6 +395,11 @@ async def test_research_uat_probe_uses_real_confidence_and_obeys_one_minute_cool
     mock_generator = AsyncMock()
     mock_generator.generate.side_effect = generate_side_effect
     scheduler._signal_generator = mock_generator
+    scheduler._nestjs_client.publish_signal.return_value = {
+        "outcome": "EXECUTION_SUCCEEDED",
+        "signalId": candidate.signal_id,
+        "tradeId": "trade-uat-1",
+    }
 
     job = ScheduledSessionJobStub()
     job.source = "broker"
