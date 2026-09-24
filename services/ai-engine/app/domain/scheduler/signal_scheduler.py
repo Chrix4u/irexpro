@@ -219,104 +219,102 @@ class SignalScheduler:
             return
 
         generator = self._get_signal_generator()
-        replay_budget = job.replay_steps_per_cycle if job.research_uat else 1
         job.replay_steps_last_cycle = 0
         published_this_cycle = False
 
-        for instrument in job.instruments:
-            for _step in range(replay_budget):
-                try:
-                    result = await generator.generate(
-                        user_id=job.user_id,
-                        trading_session_id=job.trading_session_id,
-                        broker_connection_id=job.broker_connection_id,
-                        instrument=instrument,
-                        timeframe=job.timeframe,
-                        source=job.source,
-                        bypass_market_data_cache=job.source == "broker",
-                    )
+        scan_plan = (
+            [
+                job.instruments[index % len(job.instruments)]
+                for index in range(job.replay_steps_per_cycle)
+            ]
+            if job.research_uat
+            else list(job.instruments)
+        )
 
-                    job.replay_steps_last_cycle += 1
-                    job.replay_steps_total += 1
-                    job.last_run_at = datetime.now(UTC)
-                    telemetry = result.telemetry
-                    if telemetry is not None:
-                        previous_revision = job.market_data_revisions.get(instrument)
-                        job.last_market_data_at = telemetry.market_data_last_candle_at
-                        job.model_version = telemetry.model_version
-                        job.model_mode = telemetry.model_mode
-                        job.model_loaded = telemetry.model_loaded
-                        job.market_data_cache_bypassed = telemetry.market_data_cache_bypassed
+        for instrument in scan_plan:
+            try:
+                result = await generator.generate(
+                    user_id=job.user_id,
+                    trading_session_id=job.trading_session_id,
+                    broker_connection_id=job.broker_connection_id,
+                    instrument=instrument,
+                    timeframe=job.timeframe,
+                    source=job.source,
+                    bypass_market_data_cache=job.source == "broker",
+                )
 
-                        if previous_revision == telemetry.market_data_revision:
-                            job.last_decision = "NO_NEW_MARKET_DATA"
-                            job.last_reason = "market_data_unchanged"
-                            job.last_confidence_score = None
-                            job.last_confidence_at = None
-                            logger.debug(
-                                "Market data revision unchanged — duplicate signal opportunity suppressed",
-                                trading_session_id=trading_session_id,
-                                instrument=instrument,
-                                market_data_revision=telemetry.market_data_revision,
-                            )
-                            if not job.research_uat:
-                                break
-                            continue
+                job.replay_steps_last_cycle += 1
+                job.replay_steps_total += 1
+                job.last_run_at = datetime.now(UTC)
+                telemetry = result.telemetry
+                if telemetry is not None:
+                    previous_revision = job.market_data_revisions.get(instrument)
+                    job.last_market_data_at = telemetry.market_data_last_candle_at
+                    job.model_version = telemetry.model_version
+                    job.model_mode = telemetry.model_mode
+                    job.model_loaded = telemetry.model_loaded
+                    job.market_data_cache_bypassed = telemetry.market_data_cache_bypassed
 
-                        job.market_data_revisions[instrument] = telemetry.market_data_revision
-
-                    if not result.generated or result.signal is None:
-                        job.last_decision = "NO_TRADE"
-                        job.last_reason = (
-                            result.no_signal.reason if result.no_signal else "unknown"
-                        )
-                        job.last_confidence_score = (
-                            result.no_signal.confidence_score if result.no_signal else None
-                        )
-                        job.last_confidence_at = (
-                            job.last_run_at
-                            if job.last_confidence_score is not None
-                            else None
-                        )
+                    if previous_revision == telemetry.market_data_revision:
+                        job.last_decision = "NO_NEW_MARKET_DATA"
+                        job.last_reason = "market_data_unchanged"
+                        job.last_confidence_score = None
+                        job.last_confidence_at = None
                         logger.debug(
-                            "No signal to publish",
+                            "Market data revision unchanged — duplicate signal opportunity suppressed",
                             trading_session_id=trading_session_id,
                             instrument=instrument,
-                            reason=job.last_reason,
-                            research_uat=job.research_uat,
+                            market_data_revision=telemetry.market_data_revision,
                         )
-                        if not job.research_uat:
-                            break
                         continue
 
-                    await self._nestjs_client.publish_signal(result.signal)
-                    job.last_decision = "SIGNAL_PUBLISHED"
-                    job.last_reason = "confidence_threshold_passed"
-                    job.last_confidence_score = result.signal.confidence_score
-                    job.last_confidence_at = job.last_run_at
-                    job.signals_published_total += 1
-                    published_this_cycle = True
-                    break
-                except Exception as e:
-                    job.last_publish_failed = True
-                    job.last_run_at = datetime.now(UTC)
-                    job.last_decision = "ERROR"
-                    job.last_reason = type(e).__name__
-                    job.last_confidence_score = None
-                    job.last_confidence_at = None
-                    logger.warning(
-                        "Scheduled signal generation failed",
+                    job.market_data_revisions[instrument] = telemetry.market_data_revision
+
+                if not result.generated or result.signal is None:
+                    job.last_decision = "NO_TRADE"
+                    job.last_reason = (
+                        result.no_signal.reason if result.no_signal else "unknown"
+                    )
+                    job.last_confidence_score = (
+                        result.no_signal.confidence_score if result.no_signal else None
+                    )
+                    job.last_confidence_at = (
+                        job.last_run_at if job.last_confidence_score is not None else None
+                    )
+                    logger.debug(
+                        "No signal to publish",
                         trading_session_id=trading_session_id,
                         instrument=instrument,
-                        error=str(e),
+                        reason=job.last_reason,
                         research_uat=job.research_uat,
                     )
-                    break
+                    continue
 
-            # Research UAT intentionally publishes at most one signal per cycle.
-            if published_this_cycle and job.research_uat:
-                break
-            if job.last_publish_failed:
+                await self._nestjs_client.publish_signal(result.signal)
+                job.last_decision = "SIGNAL_PUBLISHED"
+                job.last_reason = "confidence_threshold_passed"
+                job.last_confidence_score = result.signal.confidence_score
+                job.last_confidence_at = job.last_run_at
+                job.signals_published_total += 1
+                published_this_cycle = True
+
+                # Research UAT intentionally publishes at most one signal per cycle.
+                if job.research_uat:
+                    break
+            except Exception as e:
+                job.last_publish_failed = True
+                job.last_run_at = datetime.now(UTC)
+                job.last_decision = "ERROR"
+                job.last_reason = type(e).__name__
+                job.last_confidence_score = None
+                job.last_confidence_at = None
+                logger.warning(
+                    "Scheduled signal generation failed",
+                    trading_session_id=trading_session_id,
+                    instrument=instrument,
+                    error=str(e),
+                    research_uat=job.research_uat,
+                )
                 break
 
         if (
