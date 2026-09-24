@@ -159,6 +159,29 @@ function modelModeLabel(mode: string | null | undefined): string {
   return mode.replaceAll('_', ' ');
 }
 
+function executionReasonLabel(code: string | null | undefined): string | null {
+  if (!code) return null;
+  const labels: Record<string, string> = {
+    MARKET_SAFETY_MARKET_DATA_UNAVAILABLE:
+      'Execution blocked because a current paper-market quote could not be proven.',
+    MARKET_SAFETY_STALE_PRICE:
+      'Execution blocked because the provider quote was outside the allowed freshness window.',
+    MARKET_SAFETY_ABNORMAL_SPREAD:
+      'Execution blocked because the current spread exceeded the market-safety limit.',
+    MARKET_SAFETY_PRICE_DEVIATION_EXCESSIVE:
+      'Execution blocked because the execution quote was too far from the risk-validated reference price.',
+    DISPATCH_BOUNDARY_BLOCKED:
+      'Execution authority changed before provider dispatch, so the order was blocked safely.',
+    EXECUTION_UNRESOLVED:
+      'Provider outcome is not yet proven; reconciliation is still required.',
+    EXECUTION_CANCELLED:
+      'The order was cancelled before an active position was established.',
+    EXECUTION_REJECTED:
+      'The order was rejected before an active position was established.',
+  };
+  return labels[code] ?? 'Execution did not establish an active position.';
+}
+
 function PositionCard({ position }: { position: LivePositionRowView }) {
   return (
     <article className="ai-position-card">
@@ -189,6 +212,7 @@ function PositionCard({ position }: { position: LivePositionRowView }) {
 
 function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
   const realized = trade.status === 'CLOSED' ? trade.realisedPnl : null;
+  const executionReason = executionReasonLabel(trade.executionReasonCode);
   return (
     <article className="ai-activity-row">
       <div className="ai-activity-row__symbol">
@@ -213,6 +237,9 @@ function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
           </Badge>
         )}
       </div>
+      {executionReason && (
+        <div className="ai-activity-row__reason">{executionReason}</div>
+      )}
       <div className="ai-activity-row__time">
         {formatTimestamp(trade.closedAt ?? trade.openedAt ?? trade.createdAt)}
       </div>
@@ -562,6 +589,9 @@ export default function AiTradingPage() {
       setTogglingAutomation(false);
     }
   }
+
+  const recentClosedTrades =
+    execution?.recentExecutions.filter((trade) => trade.status === 'CLOSED').slice(0, 10) ?? [];
 
   if (restoring) {
     return <div style={{ padding: '3rem' }}><LoadingSpinner text="Restoring trading workspace…" /></div>;
@@ -990,7 +1020,9 @@ export default function AiTradingPage() {
                   <Card className="ai-empty-card">
                     <strong>No open positions</strong>
                     <p className="muted">
-                      When AI automation opens a trade, the symbol, direction, current price and unrealized P&amp;L will appear here.
+                      Current unrealized P&amp;L: {money('0', allocation?.accountCurrency)}. When AI
+                      automation opens a trade, its symbol, direction, current price and unrealized
+                      P&amp;L will appear here.
                     </p>
                   </Card>
                 ) : (
@@ -1025,6 +1057,36 @@ export default function AiTradingPage() {
                   </div>
                 )}
               </section>
+            </section>
+
+            <section
+              className="ai-section ai-section--closed-trades"
+              aria-labelledby="closed-trades-title"
+            >
+              <div className="ai-section__heading">
+                <div>
+                  <p className="workspace-hero__eyebrow">Completed positions</p>
+                  <h2 id="closed-trades-title">Closed Trades &amp; Realized P&amp;L</h2>
+                </div>
+                <Badge variant={recentClosedTrades.length ? 'success' : 'info'}>
+                  {recentClosedTrades.length} recent
+                </Badge>
+              </div>
+              {recentClosedTrades.length === 0 ? (
+                <Card className="ai-empty-card">
+                  <strong>No closed trades in the latest execution history</strong>
+                  <p className="muted">
+                    Closed positions are kept separate here so realized profit or loss cannot be
+                    hidden by newer rejected workflow probes.
+                  </p>
+                </Card>
+              ) : (
+                <div className="ai-activity-list">
+                  {recentClosedTrades.map((trade) => (
+                    <ExecutionRow key={trade.id} trade={trade} />
+                  ))}
+                </div>
+              )}
             </section>
 
             <section className="ai-simple-note" aria-label="Automatic risk protection">
