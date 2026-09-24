@@ -5,7 +5,6 @@ import { ExecutionConfirmationService } from './execution-confirmation.service';
 import { ReconfirmationRequiredException } from './execution-confirmation.service';
 import type { ExecutionConfirmation } from './entities/execution-confirmation.entity';
 import type { RiskGrant } from './entities/risk-grant.entity';
-import type { RiskProfile } from '../risk/entities/risk-profile.entity';
 import type { FinalDispatchBoundary } from './orchestration/final-dispatch-boundary';
 import type { ExecutionService } from './execution.service';
 import { ExecutionConfirmationStatus, ExecutionMode } from './interfaces/execution-authority';
@@ -94,7 +93,6 @@ describe('ExecutionConfirmationService (Round 7 SEMI_AUTO confirm-path)', () => 
     service = new ExecutionConfirmationService(
       confirmationRepo as unknown as Repository<ExecutionConfirmation>,
       riskGrantRepo as unknown as Repository<RiskGrant>,
-      {} as Repository<RiskProfile>,
       {} as FinalDispatchBoundary,
       executionService as unknown as ExecutionService,
       moduleRef,
