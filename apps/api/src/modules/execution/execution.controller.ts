@@ -83,7 +83,9 @@ export class ExecutionController {
   }
 
   @Get('trades/closed')
-  @ApiOperation({ summary: 'List recent closed trades with realized P&L for the authenticated user' })
+  @ApiOperation({
+    summary: 'List recent closed trades with realized P&L for the authenticated user',
+  })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 50 })
   @ApiResponse({ status: 200, type: TradeExecutionResponseDto, isArray: true })
   async listClosedExecutions(
