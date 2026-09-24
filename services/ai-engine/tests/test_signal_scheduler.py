@@ -56,6 +56,30 @@ async def test_research_uat_route_accepts_only_internal_paper_boundary():
     scheduler.register_session.assert_called_once_with(request)
 
 
+@pytest.mark.asyncio
+async def test_research_uat_route_rejects_non_paper_boundary():
+    scheduler = MagicMock()
+    request = SessionStartRequest(
+        userId="user-1",
+        tradingSessionId="unsafe-route-uat",
+        brokerConnectionId="conn-demo",
+        brokerId="metatrader5",
+        instruments=["EURUSD"],
+        timeframe="H1",
+        source="broker",
+        accountType="DEMO",
+        mode="PAPER_ONLY",
+        researchUat=True,
+        replayStepsPerCycle=12,
+    )
+
+    response = await start_session_scheduler(request, scheduler)
+
+    assert response.registered is False
+    assert "restricted to PAPER_ONLY paper-broker DEMO sessions" in response.message
+    scheduler.register_session.assert_not_called()
+
+
 def test_research_uat_registration_rejects_non_paper_broker():
     settings = Settings(ai_scheduler_enabled=True, ai_signal_interval_seconds=3600)
     scheduler = SignalScheduler()
