@@ -585,7 +585,6 @@ describe('RiskService — Sprint 32 Production Hardening', () => {
           maxDailyLossPercent: '5.00',
           maxDrawdownPercent: '10.00',
           maxOpenTrades: 3,
-          maxDailyTrades: 10,
           maxPositionSizeLot: '0.10',
           minStopLossPips: '5.00',
           maxVolatilityScore: '0.85',
@@ -597,6 +596,7 @@ describe('RiskService — Sprint 32 Production Hardening', () => {
           snapshotVersion: 1,
         }),
       );
+      expect(snapshot).not.toHaveProperty('maxDailyTrades');
     });
 
     it('does NOT include credentials, tokens, or secrets', () => {
