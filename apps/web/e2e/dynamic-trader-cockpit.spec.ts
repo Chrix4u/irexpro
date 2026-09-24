@@ -357,7 +357,7 @@ test.describe('AI Trader novice workflow', () => {
     await expect(page.getByText('EURUSD', { exact: true }).first()).toBeVisible();
     await expect(page.getByText('+41.00 USD', { exact: true })).toBeVisible();
 
-    await expect(page.getByRole('heading', { level: 2, name: 'Recent AI Activity' })).toBeVisible();
+    await expect(page.getByRole('heading', { level: 2, name: 'Orders & Results' })).toBeVisible();
     await expect(page.getByText('OPEN', { exact: true }).first()).toBeVisible();
     await expect(
       page.getByText(/execution quote was too far from the risk-validated reference price/i),
@@ -381,24 +381,53 @@ test.describe('AI Trader novice workflow', () => {
   });
 
 
-  test('stacks every position metric on its own desktop row', async ({ page }) => {
+  test('uses full-width position/order tables with a grid fallback', async ({ page }) => {
     await gotoAiTrader(page);
 
-    const viewport = page.viewportSize();
-    expect(viewport).not.toBeNull();
-    if (!viewport || viewport.width <= 700) {
-      test.skip();
-      return;
-    }
+    const positionsSection = page.locator('.ai-section--positions');
+    const ordersSection = page.locator('.ai-section--activity');
+    const positionsTable = positionsSection.getByRole('table');
+    const ordersTable = ordersSection.getByRole('table');
 
-    const metrics = page.locator('.ai-trade-metrics').first();
+    await expect(positionsTable).toBeVisible();
+    await expect(ordersTable).toBeVisible();
+    await expect(positionsSection.getByText('Total unrealized P&L', { exact: true })).toBeVisible();
+    await expect(positionsSection.getByText('+41.00 USD', { exact: true }).first()).toBeVisible();
+    await expect(
+      positionsTable.getByRole('columnheader', { name: 'Current' }),
+    ).toBeVisible();
+    await expect(
+      positionsTable.getByRole('columnheader', { name: 'Unrealized P&L' }),
+    ).toBeVisible();
+    await expect(
+      ordersTable.getByRole('columnheader', { name: 'Entry' }),
+    ).toBeVisible();
+    await expect(
+      ordersTable.getByRole('columnheader', { name: 'Exit' }),
+    ).toBeVisible();
+    await expect(
+      ordersTable.getByRole('columnheader', { name: 'Profit / loss' }),
+    ).toBeVisible();
+
+    const [positionsBox, ordersBox] = await Promise.all([
+      positionsSection.boundingBox(),
+      ordersSection.boundingBox(),
+    ]);
+    expect(positionsBox).not.toBeNull();
+    expect(ordersBox).not.toBeNull();
+    expect(Math.abs(positionsBox!.x - ordersBox!.x)).toBeLessThan(1);
+    expect(Math.abs(positionsBox!.width - ordersBox!.width)).toBeLessThan(1);
+    expect(ordersBox!.y).toBeGreaterThan(positionsBox!.y + positionsBox!.height - 1);
+
+    await positionsSection.getByRole('button', { name: 'Grid' }).click();
+    const metrics = positionsSection.locator('.ai-trade-metrics').first();
     await expect(metrics).toBeVisible();
 
     const rows = metrics.locator(':scope > div');
-    await expect(rows).toHaveCount(4);
+    await expect(rows).toHaveCount(8);
 
     const boxes = await Promise.all(
-      Array.from({ length: 4 }, (_, index) => rows.nth(index).boundingBox()),
+      Array.from({ length: 8 }, (_, index) => rows.nth(index).boundingBox()),
     );
     for (let index = 1; index < boxes.length; index += 1) {
       expect(boxes[index]).not.toBeNull();
