@@ -1,6 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Trade, TradeCloseReason, TradeDirection, TradeStatus } from '../entities/trade.entity';
-import type { TradeIntent } from '../entities/trade-intent.entity';
 
 /**
  * Frontend-safe execution read model.
@@ -15,6 +14,13 @@ import type { TradeIntent } from '../entities/trade-intent.entity';
 
 export type TradeEntryDecisionKind = 'QUALIFIED_AI' | 'RESEARCH_UAT_PROBE' | 'UNKNOWN';
 
+export interface TradeEntryDecisionSource {
+  tradeId: string | null;
+  strategyCode: string | null;
+  modelVersion: string | null;
+  metadata: Record<string, unknown> | null;
+}
+
 const KNOWN_EXECUTION_REASON_CODES = [
   'MARKET_SAFETY_MARKET_DATA_UNAVAILABLE',
   'MARKET_SAFETY_STALE_PRICE',
@@ -28,7 +34,7 @@ function finiteProbability(value: unknown): number | null {
     : null;
 }
 
-function toEntryDecisionProvenance(intent: TradeIntent | null): {
+function toEntryDecisionProvenance(intent: TradeEntryDecisionSource | null): {
   entryDecisionKind: TradeEntryDecisionKind;
   entryConfidenceScore: number | null;
   entryConfidenceThreshold: number | null;
@@ -185,7 +191,7 @@ export class TradeExecutionResponseDto {
 
 export function toTradeExecutionResponse(
   trade: Trade,
-  intent: TradeIntent | null = null,
+  intent: TradeEntryDecisionSource | null = null,
 ): TradeExecutionResponseDto {
   const entryProvenance = toEntryDecisionProvenance(intent);
   return {
