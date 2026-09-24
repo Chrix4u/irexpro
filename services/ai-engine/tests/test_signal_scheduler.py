@@ -228,6 +228,11 @@ async def test_job_calls_signal_generator_and_publishes_valid_signal():
         mode="paper",
     )
     scheduler._signal_generator = mock_generator
+    scheduler._nestjs_client.publish_signal.return_value = {
+        "outcome": "EXECUTION_SUCCEEDED",
+        "signalId": candidate.signal_id,
+        "tradeId": "trade-uat-1",
+    }
 
     job = ScheduledSessionJobStub()
     scheduler._jobs["session-1"] = job
@@ -405,12 +410,65 @@ async def test_research_uat_probe_uses_real_confidence_and_obeys_one_minute_cool
     assert job.last_reason == "uat_workflow_probe_published"
     assert job.last_confidence_score == 0.0224
     assert job.last_uat_probe_at is not None
+    assert job.last_strategy_outcome == "EXECUTION_SUCCEEDED"
+    assert job.last_trade_id == "trade-uat-1"
+    assert job.executions_succeeded_total == 1
+    assert job.downstream_rejected_total == 0
 
     await scheduler._run_session_job("session-1")
 
     assert mock_generator.generate.await_count == 24
     assert scheduler._nestjs_client.publish_signal.await_count == 1
     assert job.signals_published_total == 1
+
+
+
+@pytest.mark.asyncio
+async def test_research_uat_records_downstream_rejection_reason():
+    settings = Settings(ai_scheduler_enabled=True, ai_signal_mode="paper")
+    scheduler = SignalScheduler(nestjs_client=AsyncMock())
+    scheduler._settings = settings
+
+    candidate = AiSignalCandidate(
+        user_id="user-1",
+        trading_session_id="session-1",
+        broker_connection_id="conn-1",
+        instrument="EURUSD",
+        direction="BUY",
+        confidence_score=0.0224,
+        suggested_stop_loss=1.09,
+        suggested_take_profit=1.12,
+        suggested_volume=0.01,
+        timeframe="H1",
+        strategy_code="uat-workflow-probe-h1",
+        model_version="baseline-xgboost-v0.1.0",
+        metadata={"uat_workflow_probe": True, "production_eligible": False},
+    )
+    mock_generator = AsyncMock()
+    mock_generator.generate.return_value = SignalGenerationResponse(
+        generated=True,
+        signal=candidate,
+        mode="paper",
+    )
+    scheduler._signal_generator = mock_generator
+    scheduler._nestjs_client.publish_signal.return_value = {
+        "outcome": "RISK_REJECTED",
+        "signalId": candidate.signal_id,
+        "reason": "STALE_PRICE: simulated quote rejected",
+    }
+
+    job = ScheduledSessionJobStub()
+    job.source = "broker"
+    job.research_uat = True
+    job.replay_steps_per_cycle = 1
+    scheduler._jobs["session-1"] = job
+
+    await scheduler._run_session_job("session-1")
+
+    assert job.last_strategy_outcome == "RISK_REJECTED"
+    assert job.last_strategy_reason == "STALE_PRICE: simulated quote rejected"
+    assert job.executions_succeeded_total == 0
+    assert job.downstream_rejected_total == 1
 
 
 @pytest.mark.asyncio
@@ -448,6 +506,11 @@ class ScheduledSessionJobStub:
     replay_steps_last_cycle = 0
     replay_steps_total = 0
     signals_published_total = 0
+    last_strategy_outcome = None
+    last_strategy_reason = None
+    last_trade_id = None
+    executions_succeeded_total = 0
+    downstream_rejected_total = 0
     last_uat_probe_at = None
 
 
