@@ -56,11 +56,17 @@ class ScheduledSessionJob:
     replay_steps_last_cycle: int = 0
     replay_steps_total: int = 0
     signals_published_total: int = 0
+    qualified_signals_published_total: int = 0
+    uat_probe_signals_published_total: int = 0
     last_strategy_outcome: str | None = None
     last_strategy_reason: str | None = None
     last_trade_id: str | None = None
     executions_succeeded_total: int = 0
+    qualified_executions_succeeded_total: int = 0
+    uat_probe_executions_succeeded_total: int = 0
     downstream_rejected_total: int = 0
+    qualified_downstream_rejected_total: int = 0
+    uat_probe_downstream_rejected_total: int = 0
     last_uat_probe_at: datetime | None = None
     registered_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
@@ -321,6 +327,10 @@ class SignalScheduler:
                 job.last_confidence_score = result.signal.confidence_score
                 job.last_confidence_at = job.last_run_at
                 job.signals_published_total += 1
+                if is_uat_probe:
+                    job.uat_probe_signals_published_total += 1
+                else:
+                    job.qualified_signals_published_total += 1
 
                 if isinstance(strategy_result, dict):
                     outcome = strategy_result.get("outcome")
@@ -337,6 +347,10 @@ class SignalScheduler:
                     )
                     if outcome == "EXECUTION_SUCCEEDED":
                         job.executions_succeeded_total += 1
+                        if is_uat_probe:
+                            job.uat_probe_executions_succeeded_total += 1
+                        else:
+                            job.qualified_executions_succeeded_total += 1
                     elif outcome in {
                         "SIGNAL_INVALID",
                         "LOW_CONFIDENCE",
@@ -347,6 +361,10 @@ class SignalScheduler:
                         "EXECUTION_FAILED",
                     }:
                         job.downstream_rejected_total += 1
+                        if is_uat_probe:
+                            job.uat_probe_downstream_rejected_total += 1
+                        else:
+                            job.qualified_downstream_rejected_total += 1
 
                 if is_uat_probe:
                     job.last_uat_probe_at = job.last_run_at
