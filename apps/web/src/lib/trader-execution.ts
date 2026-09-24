@@ -69,6 +69,7 @@ export function isTradeExecutionView(value: unknown): value is TradeExecutionVie
     isNullableString(value.realisedPnl) &&
     isNullableString(value.commission) &&
     isNullableString(value.swap) &&
+    (value.executionReasonCode === undefined || isNullableString(value.executionReasonCode)) &&
     isCloseReason(value.closeReason) &&
     isNullableString(value.openedAt) &&
     isNullableString(value.closedAt) &&
@@ -91,7 +92,7 @@ export function isTradeExecutionView(value: unknown): value is TradeExecutionVie
 export async function loadTraderExecutionSnapshot(): Promise<TraderExecutionSnapshot> {
   const [openPositions, recentExecutions] = await Promise.all([
     executionApi.listOpenPositions(),
-    executionApi.listRecentExecutions(50),
+    executionApi.listRecentExecutions(100),
   ]);
 
   if (!Array.isArray(openPositions) || !openPositions.every(isTradeExecutionView)) {
