@@ -143,6 +143,13 @@ describe('StrategyOrchestratorService', () => {
       // Round 7.1 (P1 — sizing input freshness): the ONE bounded synchronous
       // provider observation used when a LIVE snapshot is STALE/MISSING.
       observeAccountSnapshotNow: jest.fn().mockResolvedValue(undefined),
+      getCurrentPriceForConnection: jest.fn().mockResolvedValue({
+        instrument: 'EURUSD',
+        bid: '1.10000',
+        ask: '1.10010',
+        spread: '0.00010',
+        timestamp: new Date('2024-01-02T03:37:00.000Z'),
+      }),
     };
 
     // Round 7.1 (P1): the LIVE fresh-snapshot authority resolves by default
@@ -295,6 +302,9 @@ describe('StrategyOrchestratorService', () => {
     const probeCandidate = () =>
       validCandidate({
         confidenceScore: 0.0224,
+        suggestedEntryPrice: 1.2,
+        suggestedStopLoss: 1.1985,
+        suggestedTakeProfit: 1.202,
         strategyCode: 'uat-workflow-probe-h1',
         metadata: {
           uat_workflow_probe: true,
@@ -303,7 +313,7 @@ describe('StrategyOrchestratorService', () => {
         },
       });
 
-    it('allows the real low confidence only on the exact PAPER_ONLY internal paper broker', async () => {
+    it('allows the real low confidence only on the exact PAPER_ONLY internal paper broker and rebases the workflow probe onto its execution quote', async () => {
       (executionService.getActiveSession as jest.Mock).mockResolvedValue({
         ...activeSession(),
         executionMode: ExecutionMode.PAPER_ONLY,
@@ -319,7 +329,35 @@ describe('StrategyOrchestratorService', () => {
       const result = await service.processSignal(probeCandidate());
 
       expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
-      expect(riskService.validateProposedTrade).toHaveBeenCalled();
+      expect(brokerService.getCurrentPriceForConnection).toHaveBeenCalledWith(
+        'user-1',
+        'conn-1',
+        'EURUSD',
+      );
+      expect(sizingMock.sizePosition).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requestedEntryPrice: '1.10005',
+          stopLoss: '1.09855',
+        }),
+      );
+      expect(riskService.validateProposedTrade).toHaveBeenCalledWith(
+        'user-1',
+        expect.objectContaining({
+          entryPrice: '1.10005',
+          stopLoss: '1.09855',
+          takeProfit: '1.10205',
+        }),
+      );
+      expect(tradeIntentMock.recordOrReuseIntent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requestedEntryPrice: '1.10005',
+          metadata: expect.objectContaining({
+            uat_execution_probe_rebased: true,
+            uat_replay_reference_price: '1.2',
+            uat_execution_reference_price: '1.10005',
+          }),
+        }),
+      );
       expect(executionService.executeTrade).toHaveBeenCalled();
     });
 
@@ -474,6 +512,35 @@ describe('StrategyOrchestratorService', () => {
       const result = await service.processSignal(validCandidate());
       expect(result.outcome).toBe('EXECUTION_FAILED');
     });
+
+    it.each([
+      ['REJECTED', TradeStatus.REJECTED],
+      ['CANCELLED', TradeStatus.CANCELLED],
+      ['RECONCILIATION_PENDING', TradeStatus.RECONCILIATION_PENDING],
+    ])(
+      'does not misreport a returned %s trade as EXECUTION_SUCCEEDED',
+      async (_label: string, status: TradeStatus) => {
+        (executionService.executeTrade as jest.Mock).mockResolvedValue({
+          id: 'trade-terminal',
+          status,
+        } as Trade);
+
+        const result = await service.processSignal(validCandidate());
+
+        expect(result.outcome).toBe('EXECUTION_FAILED');
+        expect(result.tradeId).toBe('trade-terminal');
+        expect(result.reason).toBeTruthy();
+        expect(auditService.log).toHaveBeenCalledWith(
+          expect.objectContaining({
+            action: AuditAction.AI_SIGNAL_EXECUTION_FAILED,
+            resourceId: 'trade-terminal',
+            metadata: expect.objectContaining({
+              failureCode: `EXECUTION_RETURNED_${status}`,
+            }),
+          }),
+        );
+      },
+    );
 
     it('returns tradeId on success', async () => {
       const result = await service.processSignal(validCandidate());
