@@ -316,10 +316,7 @@ test.describe('AI Trader novice workflow', () => {
       page.getByText(/execution quote was too far from the risk-validated reference price/i),
     ).toBeVisible();
 
-    const closedTrades = page.getByRole('heading', {
-      level: 2,
-      name: 'Closed Trades & Realized P&L',
-    }).locator('..').locator('..');
+    const closedTrades = page.locator('.ai-section--closed-trades');
     await expect(closedTrades.getByText('CLOSED', { exact: true })).toBeVisible();
     await expect(closedTrades.getByText('+16.70 USD', { exact: true })).toBeVisible();
 
