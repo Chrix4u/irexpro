@@ -51,6 +51,20 @@ async def start_session_scheduler(
     """
     settings = get_settings()
 
+    if request.research_uat:
+        safe_research_uat = (
+            request.mode in ("paper", "PAPER_ONLY")
+            and request.account_type == "DEMO"
+            and request.broker_id == "paper-broker"
+            and request.source == "broker"
+        )
+        if not safe_research_uat:
+            return SessionSchedulerResponse(
+                registered=False,
+                trading_session_id=request.trading_session_id,
+                message="Research PAPER UAT is restricted to PAPER_ONLY paper-broker DEMO sessions",
+            )
+
     # Execution mode and broker environment are separate authority axes.
     # FULL_AUTO on a DEMO connection is automatic execution inside the broker's
     # sandbox. The current AI loader is paper-approved only, so any LIVE-bound
