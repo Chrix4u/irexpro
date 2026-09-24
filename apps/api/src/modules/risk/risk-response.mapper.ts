@@ -17,7 +17,6 @@ export function toRiskViolationSummary(violation: RiskViolation): RiskViolationS
   };
 }
 
-
 /**
  * Public risk-profile projection.
  *
@@ -25,9 +24,7 @@ export function toRiskViolationSummary(violation: RiskViolation): RiskViolationS
  * active risk control and must not be exposed as though the user has a daily
  * execution quota.
  */
-export function toRiskProfileResponse(
-  profile: RiskProfile,
-): Omit<RiskProfile, 'maxDailyTrades'> {
+export function toRiskProfileResponse(profile: RiskProfile): Omit<RiskProfile, 'maxDailyTrades'> {
   const { maxDailyTrades: legacyDailyTradeCap, ...publicProfile } = profile;
   void legacyDailyTradeCap;
   return publicProfile;
