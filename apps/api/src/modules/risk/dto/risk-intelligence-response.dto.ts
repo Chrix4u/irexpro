@@ -1,5 +1,5 @@
-import { AllowedTradingMode } from '../entities/risk-profile.entity';
-import { RiskRejectionCode } from '../interfaces/risk.interface';
+import type { AllowedTradingMode } from '../entities/risk-profile.entity';
+import type { RiskRejectionCode } from '../interfaces/risk.interface';
 
 export class RiskViolationSummaryResponseDto {
   id: string;
