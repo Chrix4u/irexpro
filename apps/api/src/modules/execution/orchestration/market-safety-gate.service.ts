@@ -89,7 +89,7 @@ export class MarketSafetyGateService {
    */
   async assertMarketSafeForDispatch(
     intent: ExecutionIntent,
-    _connection: BrokerConnection,
+    connection: BrokerConnection,
     orderId: string,
   ): Promise<void> {
     // 1. The provable current quote (§18 — no invention on gaps).
@@ -114,8 +114,17 @@ export class MarketSafetyGateService {
     }
 
     // 2. Freshness (the authoritative market-open signal).
+    //
+    // The internal paper broker runs on a deterministic simulation clock
+    // anchored in 2024 by design. Comparing that historical simulator clock
+    // to wall-clock time would make every PAPER_ONLY dispatch look stale and
+    // permanently prevent the simulator from exercising the execution path.
+    // This carve-out is broker-identity specific and cannot apply to a real
+    // provider. Paper quotes must still be structurally valid and continue
+    // through spread + price-deviation checks below.
+    const isDeterministicPaperSimulator = connection.brokerId === 'paper-broker';
     const age = Math.abs(Date.now() - observedAt);
-    if (age > MARKET_QUOTE_MAX_AGE_MS) {
+    if (!isDeterministicPaperSimulator && age > MARKET_QUOTE_MAX_AGE_MS) {
       await this.rejectForMarketSafety(orderId, intent, 'STALE_PRICE', (m) =>
         m(`quote age ${age}ms exceeds the ${MARKET_QUOTE_MAX_AGE_MS}ms execution window`),
       );
