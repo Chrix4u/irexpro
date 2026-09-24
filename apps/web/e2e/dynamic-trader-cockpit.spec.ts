@@ -33,6 +33,34 @@ const executionPosition = {
   updatedAt: '2026-08-31T00:45:00.000Z',
 };
 
+const closedExecution = {
+  ...executionPosition,
+  id: '55555555-5555-4555-8555-555555555556',
+  status: 'CLOSED',
+  exitPrice: '1.10177000',
+  realisedPnl: '16.70',
+  executionReasonCode: null,
+  closeReason: 'TAKE_PROFIT_HIT',
+  openedAt: '2026-08-31T00:31:00.000Z',
+  closedAt: '2026-08-31T00:35:00.000Z',
+  createdAt: '2026-08-31T00:30:00.000Z',
+  updatedAt: '2026-08-31T00:35:00.000Z',
+};
+
+const rejectedExecution = {
+  ...executionPosition,
+  id: '55555555-5555-4555-8555-555555555557',
+  status: 'REJECTED',
+  fillPrice: null,
+  exitPrice: null,
+  realisedPnl: null,
+  executionReasonCode: 'MARKET_SAFETY_PRICE_DEVIATION_EXCESSIVE',
+  openedAt: null,
+  closedAt: null,
+  createdAt: '2026-08-31T00:50:00.000Z',
+  updatedAt: '2026-08-31T00:50:00.000Z',
+};
+
 const livePosition = {
   id: executionPosition.id,
   brokerConnectionId: mockBrokerConnections[0].id,
@@ -170,7 +198,7 @@ async function gotoAiTrader(
     if (apiPath === 'execution/trades/recent') {
       return options.failExecutionReads
         ? fulfill(500, { statusCode: 500, message: 'Internal Server Error' })
-        : fulfill(200, [executionPosition]);
+        : fulfill(200, [rejectedExecution, executionPosition, closedExecution]);
     }
     if (apiPath === 'live-account/positions') {
       return options.failPositionRead
@@ -284,6 +312,16 @@ test.describe('AI Trader novice workflow', () => {
 
     await expect(page.getByRole('heading', { level: 2, name: 'Recent AI Activity' })).toBeVisible();
     await expect(page.getByText('OPEN', { exact: true }).first()).toBeVisible();
+    await expect(
+      page.getByText(/execution quote was too far from the risk-validated reference price/i),
+    ).toBeVisible();
+
+    const closedTrades = page.getByRole('heading', {
+      level: 2,
+      name: 'Closed Trades & Realized P&L',
+    }).locator('..').locator('..');
+    await expect(closedTrades.getByText('CLOSED', { exact: true })).toBeVisible();
+    await expect(closedTrades.getByText('+16.70 USD', { exact: true })).toBeVisible();
 
     await expect(page.getByText(/execution mode selector/i)).toHaveCount(0);
     await expect(page.getByText(/trading experience/i)).toHaveCount(0);
