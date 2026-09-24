@@ -87,7 +87,11 @@ export class RiskProfile {
   @Column({ name: 'max_open_trades', type: 'integer', default: 3 })
   maxOpenTrades: number;
 
-  /** Maximum number of new trades per calendar day. Default: 10. */
+  /**
+   * Legacy compatibility column. Daily trade COUNT is no longer an active
+   * risk limit; retained temporarily to avoid a destructive schema migration.
+   * Safety is enforced through exposure, loss, drawdown and per-trade controls.
+   */
   @Column({ name: 'max_daily_trades', type: 'integer', default: 10 })
   maxDailyTrades: number;
 

@@ -134,11 +134,17 @@ async def session_scheduler_status(
             replay_steps_last_cycle=0,
             replay_steps_total=0,
             signals_published_total=0,
+            qualified_signals_published_total=0,
+            uat_probe_signals_published_total=0,
             last_strategy_outcome=None,
             last_strategy_reason=None,
             last_trade_id=None,
             executions_succeeded_total=0,
+            qualified_executions_succeeded_total=0,
+            uat_probe_executions_succeeded_total=0,
             downstream_rejected_total=0,
+            qualified_downstream_rejected_total=0,
+            uat_probe_downstream_rejected_total=0,
         )
 
     anchor = job.last_run_at or job.registered_at
@@ -185,9 +191,15 @@ async def session_scheduler_status(
         replay_steps_last_cycle=job.replay_steps_last_cycle,
         replay_steps_total=job.replay_steps_total,
         signals_published_total=job.signals_published_total,
+        qualified_signals_published_total=job.qualified_signals_published_total,
+        uat_probe_signals_published_total=job.uat_probe_signals_published_total,
         last_strategy_outcome=job.last_strategy_outcome,
         last_strategy_reason=job.last_strategy_reason,
         last_trade_id=job.last_trade_id,
         executions_succeeded_total=job.executions_succeeded_total,
+        qualified_executions_succeeded_total=job.qualified_executions_succeeded_total,
+        uat_probe_executions_succeeded_total=job.uat_probe_executions_succeeded_total,
         downstream_rejected_total=job.downstream_rejected_total,
+        qualified_downstream_rejected_total=job.qualified_downstream_rejected_total,
+        uat_probe_downstream_rejected_total=job.uat_probe_downstream_rejected_total,
     )

@@ -95,10 +95,9 @@ import { ProtectiveOrderReconciliationService } from './reconciliation/protectiv
       BrokerAccount,
       ReconciliationRun,
       ReconciliationDiscrepancy,
-      // Round 5 (task 50-c): the SEMI_AUTO confirmation path rebuilds the
-      // execution decision from the consumed grant and needs the CURRENT
-      // risk profile's daily-trade limit (read-only repository use; the
-      // entity itself is risk-module-owned).
+      // Preserve the established RiskModule↔ExecutionModule TypeORM provider
+      // shape. Daily trade COUNT remains uncapped; this registration does not
+      // restore any quota or execution gate.
       RiskProfile,
     ]),
     BullModule.registerQueue(

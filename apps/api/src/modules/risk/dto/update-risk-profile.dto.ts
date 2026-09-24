@@ -40,13 +40,6 @@ export class UpdateRiskProfileDto {
   @Max(20)
   maxOpenTrades?: number;
 
-  @ApiPropertyOptional({ description: 'Max trades per day (1–50)', example: 10 })
-  @IsOptional()
-  @IsInt()
-  @Min(1)
-  @Max(50)
-  maxDailyTrades?: number;
-
   @ApiPropertyOptional({ description: 'Max position size in lots (0.01–10)', example: 0.1 })
   @IsOptional()
   @IsNumber()

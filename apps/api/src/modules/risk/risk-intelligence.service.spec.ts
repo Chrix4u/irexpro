@@ -16,7 +16,6 @@ describe('RiskIntelligenceService', () => {
         maxDailyLossPercent: '5.00',
         maxDrawdownPercent: '10.00',
         maxOpenTrades: 3,
-        maxDailyTrades: 10,
         maxPositionSizeLot: '0.1000',
         minStopLossPips: '5.00',
         maxVolatilityScore: '0.85',
@@ -110,8 +109,7 @@ describe('RiskIntelligenceService', () => {
       maxOpenPositions: 3,
       openPositionSlotsRemaining: 1,
       todayTrades: 7,
-      maxDailyTrades: 10,
-      dailyTradeSlotsRemaining: 3,
+      dailyTradeCountPolicy: 'UNBOUNDED',
     });
     expect(result.portfolio).toEqual({
       totalAccounts: 3,
@@ -145,7 +143,6 @@ describe('RiskIntelligenceService', () => {
         maxDailyLossPercent: '5.00',
         maxDrawdownPercent: '10.00',
         maxOpenTrades: 2,
-        maxDailyTrades: 3,
         maxPositionSizeLot: '0.1000',
         minStopLossPips: '5.00',
         maxVolatilityScore: '0.85',
@@ -173,6 +170,7 @@ describe('RiskIntelligenceService', () => {
     const result = await service.getIntelligence(USER_ID);
 
     expect(result.execution.openPositionSlotsRemaining).toBe(0);
-    expect(result.execution.dailyTradeSlotsRemaining).toBe(0);
+    expect(result.execution.todayTrades).toBe(8);
+    expect(result.execution.dailyTradeCountPolicy).toBe('UNBOUNDED');
   });
 });

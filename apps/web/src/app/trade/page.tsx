@@ -79,6 +79,43 @@ function money(value: string | null | undefined, currency: string | null | undef
   return currency ? `${formatted} ${currency}` : formatted;
 }
 
+function sumDecimalValues(values: Array<string | null | undefined>): string | null {
+  const parsed: Array<{ negative: boolean; whole: string; fraction: string }> = [];
+  let maxScale = 0;
+
+  for (const value of values) {
+    if (value == null) continue;
+    const match = /^([+-]?)(\d+)(?:\.(\d+))?$/.exec(value.trim());
+    if (!match) continue;
+    const fraction = match[3] ?? '';
+    maxScale = Math.max(maxScale, fraction.length);
+    parsed.push({
+      negative: match[1] === '-',
+      whole: match[2],
+      fraction,
+    });
+  }
+
+  if (parsed.length === 0) return null;
+
+  const scale = 10n ** BigInt(maxScale);
+  let total = 0n;
+  for (const value of parsed) {
+    const fraction = value.fraction.padEnd(maxScale, '0');
+    const magnitude = BigInt(value.whole) * scale + BigInt(fraction || '0');
+    total += value.negative ? -magnitude : magnitude;
+  }
+
+  const negative = total < 0n;
+  const absolute = negative ? -total : total;
+  const whole = absolute / scale;
+  const fraction = maxScale > 0
+    ? (absolute % scale).toString().padStart(maxScale, '0').replace(/0+$/, '')
+    : '';
+
+  return `${negative ? '-' : ''}${whole}${fraction ? `.${fraction}` : ''}`;
+}
+
 function pnlBadge(value: string | null): 'success' | 'error' | 'info' {
   if (!value) return 'info';
   if (value.startsWith('-')) return 'error';
@@ -119,11 +156,17 @@ interface AiAutomationRuntimeStatus {
   replay_steps_last_cycle?: number;
   replay_steps_total?: number;
   signals_published_total?: number;
+  qualified_signals_published_total?: number;
+  uat_probe_signals_published_total?: number;
   last_strategy_outcome?: string | null;
   last_strategy_reason?: string | null;
   last_trade_id?: string | null;
   executions_succeeded_total?: number;
+  qualified_executions_succeeded_total?: number;
+  uat_probe_executions_succeeded_total?: number;
   downstream_rejected_total?: number;
+  qualified_downstream_rejected_total?: number;
+  uat_probe_downstream_rejected_total?: number;
 }
 
 function runtimeReasonLabel(reason: string | null | undefined): string {
@@ -182,13 +225,46 @@ function executionReasonLabel(code: string | null | undefined): string | null {
   return labels[code] ?? 'Execution did not establish an active position.';
 }
 
+type TradeWorkspaceViewMode = 'table' | 'grid';
+
+function ViewModeToggle({
+  value,
+  onChange,
+  label,
+}: {
+  value: TradeWorkspaceViewMode;
+  onChange: (mode: TradeWorkspaceViewMode) => void;
+  label: string;
+}) {
+  return (
+    <div className="ai-view-toggle" role="group" aria-label={label}>
+      <button
+        type="button"
+        className={`ai-view-toggle__button ${value === 'table' ? 'is-active' : ''}`}
+        aria-pressed={value === 'table'}
+        onClick={() => onChange('table')}
+      >
+        Table
+      </button>
+      <button
+        type="button"
+        className={`ai-view-toggle__button ${value === 'grid' ? 'is-active' : ''}`}
+        aria-pressed={value === 'grid'}
+        onClick={() => onChange('grid')}
+      >
+        Grid
+      </button>
+    </div>
+  );
+}
+
 function PositionCard({ position }: { position: LivePositionRowView }) {
   return (
     <article className="ai-position-card">
       <div className="ai-position-card__head">
         <div>
           <strong>{position.instrument}</strong>
-          <span>{position.direction} · {position.lotSize} lot</span>
+          <span>{position.direction} · {position.lotSize} lot · {position.environment}</span>
         </div>
         <Badge variant={pnlBadge(position.unrealisedPnl)}>
           {position.unrealisedPnl === null
@@ -197,10 +273,14 @@ function PositionCard({ position }: { position: LivePositionRowView }) {
         </Badge>
       </div>
       <dl className="ai-trade-metrics">
+        <div><dt>Status</dt><dd>{position.status.replaceAll('_', ' ')}</dd></div>
         <div><dt>Entry</dt><dd>{position.fillPrice ?? position.requestedEntryPrice}</dd></div>
         <div><dt>Current</dt><dd>{position.currentPrice ?? 'Awaiting broker mark'}</dd></div>
+        <div><dt>Unrealized P&amp;L</dt><dd>{money(position.unrealisedPnl, position.accountCurrency)}</dd></div>
         <div><dt>Stop loss</dt><dd>{position.stopLoss}</dd></div>
         <div><dt>Take profit</dt><dd>{position.takeProfit}</dd></div>
+        <div><dt>Commission</dt><dd>{money(position.commission, position.accountCurrency)}</dd></div>
+        <div><dt>Swap</dt><dd>{money(position.swap, position.accountCurrency)}</dd></div>
       </dl>
       <div className="ai-position-card__foot">
         <span>{position.brokerName ?? 'Broker'}</span>
@@ -210,9 +290,83 @@ function PositionCard({ position }: { position: LivePositionRowView }) {
   );
 }
 
-function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
-  const realized = trade.status === 'CLOSED' ? trade.realisedPnl : null;
+function PositionTable({ positions }: { positions: LivePositionRowView[] }) {
+  return (
+    <div className="ai-data-table-shell" role="region" aria-label="Open positions table" tabIndex={0}>
+      <table className="ai-data-table">
+        <thead>
+          <tr>
+            <th>Position</th>
+            <th>Side</th>
+            <th>Size</th>
+            <th>Entry</th>
+            <th>Current</th>
+            <th>Unrealized P&amp;L</th>
+            <th>Stop loss</th>
+            <th>Take profit</th>
+            <th>Commission</th>
+            <th>Swap</th>
+            <th>Broker</th>
+            <th>Opened</th>
+          </tr>
+        </thead>
+        <tbody>
+          {positions.map((position) => (
+            <tr key={position.id}>
+              <td>
+                <strong>{position.instrument}</strong>
+                <small>{position.status.replaceAll('_', ' ')} · {position.environment}</small>
+              </td>
+              <td><Badge variant="info">{position.direction}</Badge></td>
+              <td>{position.lotSize} lot</td>
+              <td>{position.fillPrice ?? position.requestedEntryPrice}</td>
+              <td>{position.currentPrice ?? 'Awaiting mark'}</td>
+              <td>
+                {position.unrealisedPnl === null ? (
+                  <span className="muted">Awaiting broker</span>
+                ) : (
+                  <Badge variant={pnlBadge(position.unrealisedPnl)}>
+                    {position.unrealisedPnl.startsWith('-') ? '' : '+'}
+                    {money(position.unrealisedPnl, position.accountCurrency)}
+                  </Badge>
+                )}
+              </td>
+              <td>{position.stopLoss}</td>
+              <td>{position.takeProfit}</td>
+              <td>{money(position.commission, position.accountCurrency)}</td>
+              <td>{money(position.swap, position.accountCurrency)}</td>
+              <td>{position.brokerName ?? 'Broker'}</td>
+              <td>{formatTimestamp(position.openedAt ?? position.createdAt)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function tradeResultPnl(
+  trade: TradeExecutionView,
+  position: LivePositionRowView | undefined,
+): string | null {
+  if (trade.status === 'CLOSED') return trade.realisedPnl;
+  if (trade.status === 'OPEN' || trade.status === 'RECONCILIATION_PENDING') {
+    return position?.unrealisedPnl ?? null;
+  }
+  return null;
+}
+
+function ExecutionRow({
+  trade,
+  position,
+}: {
+  trade: TradeExecutionView;
+  position?: LivePositionRowView;
+}) {
+  const resultPnl = tradeResultPnl(trade, position);
   const executionReason = executionReasonLabel(trade.executionReasonCode);
+  const resultLabel = trade.status === 'CLOSED' ? 'Realized P&L' : 'Unrealized P&L';
+
   return (
     <article className="ai-activity-row">
       <div className="ai-activity-row__symbol">
@@ -231,19 +385,22 @@ function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
         >
           {trade.status.replaceAll('_', ' ')}
         </Badge>
-        {realized !== null && (
-          <Badge variant={pnlBadge(realized)}>
-            {realized.startsWith('-') ? '' : '+'}{money(realized, trade.accountCurrency)}
+        {resultPnl !== null && (
+          <Badge variant={pnlBadge(resultPnl)}>
+            {resultPnl.startsWith('-') ? '' : '+'}{money(resultPnl, trade.accountCurrency ?? position?.accountCurrency)}
           </Badge>
         )}
       </div>
-      {trade.status === 'CLOSED' && (
-        <div className="ai-activity-row__details">
-          <span>Entry {trade.fillPrice ?? trade.requestedEntryPrice}</span>
-          <span>Exit {trade.exitPrice ?? '—'}</span>
-          <span>{trade.closeReason ? trade.closeReason.replaceAll('_', ' ') : 'CLOSED'}</span>
-        </div>
-      )}
+      <div className="ai-activity-row__details">
+        <span>Entry {trade.fillPrice ?? trade.requestedEntryPrice}</span>
+        <span>Exit {trade.exitPrice ?? (trade.status === 'OPEN' ? 'Open' : '—')}</span>
+        <span>{resultLabel} {money(resultPnl, trade.accountCurrency ?? position?.accountCurrency)}</span>
+        <span>SL {trade.stopLoss}</span>
+        <span>TP {trade.takeProfit}</span>
+        <span>Commission {money(trade.commission, trade.accountCurrency)}</span>
+        <span>Swap {money(trade.swap, trade.accountCurrency)}</span>
+        {trade.closeReason && <span>{trade.closeReason.replaceAll('_', ' ')}</span>}
+      </div>
       {executionReason && (
         <div className="ai-activity-row__reason">{executionReason}</div>
       )}
@@ -251,6 +408,87 @@ function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
         {formatTimestamp(trade.closedAt ?? trade.openedAt ?? trade.createdAt)}
       </div>
     </article>
+  );
+}
+
+function ExecutionTable({
+  trades,
+  positionsByTradeId,
+}: {
+  trades: TradeExecutionView[];
+  positionsByTradeId: Map<string, LivePositionRowView>;
+}) {
+  return (
+    <div className="ai-data-table-shell" role="region" aria-label="Orders and results table" tabIndex={0}>
+      <table className="ai-data-table ai-data-table--orders">
+        <thead>
+          <tr>
+            <th>Order / result</th>
+            <th>Status</th>
+            <th>Side</th>
+            <th>Size</th>
+            <th>Entry</th>
+            <th>Exit</th>
+            <th>Profit / loss</th>
+            <th>Stop loss</th>
+            <th>Take profit</th>
+            <th>Commission</th>
+            <th>Swap</th>
+            <th>Opened / closed</th>
+          </tr>
+        </thead>
+        <tbody>
+          {trades.map((trade) => {
+            const position = positionsByTradeId.get(trade.id);
+            const resultPnl = tradeResultPnl(trade, position);
+            const executionReason = executionReasonLabel(trade.executionReasonCode);
+            return (
+              <tr key={trade.id}>
+                <td>
+                  <strong>{trade.instrument}</strong>
+                  {executionReason && <small>{executionReason}</small>}
+                </td>
+                <td>
+                  <Badge
+                    variant={
+                      trade.status === 'CLOSED' || trade.status === 'OPEN'
+                        ? 'success'
+                        : trade.status === 'REJECTED' || trade.status === 'CANCELLED'
+                          ? 'error'
+                          : 'warning'
+                    }
+                  >
+                    {trade.status.replaceAll('_', ' ')}
+                  </Badge>
+                </td>
+                <td>{trade.direction}</td>
+                <td>{trade.lotSize} lot</td>
+                <td>{trade.fillPrice ?? trade.requestedEntryPrice}</td>
+                <td>{trade.exitPrice ?? (trade.status === 'OPEN' ? 'Open' : '—')}</td>
+                <td>
+                  {resultPnl === null ? (
+                    <span className="muted">—</span>
+                  ) : (
+                    <Badge variant={pnlBadge(resultPnl)}>
+                      {resultPnl.startsWith('-') ? '' : '+'}
+                      {money(resultPnl, trade.accountCurrency ?? position?.accountCurrency)}
+                    </Badge>
+                  )}
+                </td>
+                <td>{trade.stopLoss}</td>
+                <td>{trade.takeProfit}</td>
+                <td>{money(trade.commission, trade.accountCurrency)}</td>
+                <td>{money(trade.swap, trade.accountCurrency)}</td>
+                <td>
+                  <span>{formatTimestamp(trade.openedAt ?? trade.createdAt)}</span>
+                  {trade.closedAt && <small>Closed {formatTimestamp(trade.closedAt)}</small>}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -274,6 +512,9 @@ export default function AiTradingPage() {
   const [activityWarning, setActivityWarning] = useState<string | null>(null);
   const [automationRuntime, setAutomationRuntime] = useState<AiAutomationRuntimeStatus | null>(null);
   const [automationRuntimeWarning, setAutomationRuntimeWarning] = useState<string | null>(null);
+
+  const [positionViewMode, setPositionViewMode] = useState<TradeWorkspaceViewMode>('table');
+  const [ordersViewMode, setOrdersViewMode] = useState<TradeWorkspaceViewMode>('table');
 
   const initializedActivity = useRef(false);
   const seenPositionIds = useRef<Set<string>>(new Set());
@@ -598,6 +839,23 @@ export default function AiTradingPage() {
   }
 
   const recentClosedTrades = execution?.closedExecutions.slice(0, 10) ?? [];
+
+  const recentExecutions = execution?.recentExecutions.slice(0, 10) ?? [];
+  const positionsByTradeId = useMemo(
+    () => new Map(livePositions.map((position) => [position.id, position])),
+    [livePositions],
+  );
+  const totalUnrealisedPnl = useMemo(
+    () => sumDecimalValues(livePositions.map((position) => position.unrealisedPnl)) ?? '0',
+    [livePositions],
+  );
+  const positionCurrency =
+    allocation?.accountCurrency ??
+    livePositions.find((position) => position.accountCurrency)?.accountCurrency ??
+    null;
+  const positionsAwaitingPnl = livePositions.filter(
+    (position) => position.unrealisedPnl === null,
+  ).length;
 
   if (restoring) {
     return <div style={{ padding: '3rem' }}><LoadingSpinner text="Restoring trading workspace…" /></div>;
@@ -944,14 +1202,33 @@ export default function AiTradingPage() {
                         </strong>
                       </div>
                       <div>
-                        <span>UAT submissions</span>
-                        <strong>{automationRuntime.signals_published_total ?? 0} submitted</strong>
+                        <span>Qualified AI submissions</span>
+                        <strong>{automationRuntime.qualified_signals_published_total ?? 0} submitted</strong>
                       </div>
                       <div>
-                        <span>UAT execution</span>
+                        <span>UAT workflow probes</span>
+                        <strong>{automationRuntime.uat_probe_signals_published_total ?? 0} submitted</strong>
+                      </div>
+                      <div>
+                        <span>Qualified AI execution</span>
                         <strong>
-                          {automationRuntime.executions_succeeded_total ?? 0} executed ·{' '}
-                          {automationRuntime.downstream_rejected_total ?? 0} rejected
+                          {automationRuntime.qualified_executions_succeeded_total ?? 0} executed ·{' '}
+                          {automationRuntime.qualified_downstream_rejected_total ?? 0} rejected
+                        </strong>
+                      </div>
+                      <div>
+                        <span>Workflow-probe execution</span>
+                        <strong>
+                          {automationRuntime.uat_probe_executions_succeeded_total ?? 0} executed ·{' '}
+                          {automationRuntime.uat_probe_downstream_rejected_total ?? 0} rejected
+                        </strong>
+                      </div>
+                      <div>
+                        <span>Workflow probe status</span>
+                        <strong>
+                          {(automationRuntime.uat_probe_executions_succeeded_total ?? 0) > 0
+                            ? 'COMPLETE · low-confidence probe injection disabled'
+                            : 'PENDING · validation probe may run when due'}
                         </strong>
                       </div>
                       <div>
@@ -981,6 +1258,17 @@ export default function AiTradingPage() {
                     <strong>{formatTimestamp(automationRuntime?.last_confidence_at)}</strong>
                   </div>
                 </div>
+
+                {automationRuntime?.research_uat && (
+                  <Alert variant="info">
+                    Research PAPER UAT can deliberately execute production-ineligible workflow probes
+                    below the normal confidence gate, but only on the internal PAPER_ONLY demo broker.
+                    These probe trades validate the end-to-end workflow; they are not qualified AI
+                    signals. After the first successful workflow-probe execution, further low-confidence
+                    probe injection is disabled for that UAT session. Qualified AI and workflow-probe
+                    execution counts are shown separately above.
+                  </Alert>
+                )}
 
                 {automationRuntime?.model_mode === 'heuristic_placeholder' && (
                   <Alert variant="warning">
@@ -1015,22 +1303,50 @@ export default function AiTradingPage() {
               <section className="ai-section ai-section--positions" aria-labelledby="open-positions-title">
                 <div className="ai-section__heading">
                   <div>
-                    <p className="workspace-hero__eyebrow">Live exposure</p>
+                    <p className="workspace-hero__eyebrow">Live exposure · refreshed every 8 seconds</p>
                     <h2 id="open-positions-title">Open Positions</h2>
                   </div>
-                  <Badge variant={livePositions.length ? 'success' : 'info'}>
-                    {livePositions.length} open
-                  </Badge>
+                  <div className="ai-section__actions">
+                    <Badge variant={livePositions.length ? 'success' : 'info'}>
+                      {livePositions.length} open
+                    </Badge>
+                    <ViewModeToggle
+                      value={positionViewMode}
+                      onChange={setPositionViewMode}
+                      label="Open positions view"
+                    />
+                  </div>
                 </div>
+
+                <div className="ai-position-summary" aria-label="Open position performance summary">
+                  <div>
+                    <span>Total unrealized P&amp;L</span>
+                    <strong className="ai-position-summary__value">
+                      {totalUnrealisedPnl.startsWith('-') ? '' : '+'}
+                      {money(totalUnrealisedPnl, positionCurrency)}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Live marks</span>
+                    <strong>
+                      {positionsAwaitingPnl === 0
+                        ? 'All positions priced'
+                        : `${positionsAwaitingPnl} awaiting broker P&L`}
+                    </strong>
+                  </div>
+                </div>
+
                 {livePositions.length === 0 ? (
                   <Card className="ai-empty-card">
                     <strong>No open positions</strong>
                     <p className="muted">
                       Current unrealized P&amp;L: {money('0', allocation?.accountCurrency)}. When AI
-                      automation opens a trade, its symbol, direction, current price and unrealized
-                      P&amp;L will appear here.
+                      automation opens a trade, its entry price, current price, stop loss, take profit,
+                      costs and live unrealized P&amp;L will appear here.
                     </p>
                   </Card>
+                ) : positionViewMode === 'table' ? (
+                  <PositionTable positions={livePositions} />
                 ) : (
                   <div className="ai-position-grid">
                     {livePositions.map((position) => (
@@ -1043,22 +1359,39 @@ export default function AiTradingPage() {
               <section className="ai-section ai-section--activity" aria-labelledby="recent-ai-activity-title">
                 <div className="ai-section__heading">
                   <div>
-                    <p className="workspace-hero__eyebrow">Orders & results</p>
-                    <h2 id="recent-ai-activity-title">Recent AI Activity</h2>
+                    <p className="workspace-hero__eyebrow">Execution history</p>
+                    <h2 id="recent-ai-activity-title">Orders &amp; Results</h2>
                   </div>
-                  <Link href="/live-account" className="ai-text-link">View all</Link>
+                  <div className="ai-section__actions">
+                    <ViewModeToggle
+                      value={ordersViewMode}
+                      onChange={setOrdersViewMode}
+                      label="Orders and results view"
+                    />
+                    <Link href="/live-account" className="ai-text-link">View all</Link>
+                  </div>
                 </div>
-                {!execution || execution.recentExecutions.length === 0 ? (
+                {!execution || recentExecutions.length === 0 ? (
                   <Card className="ai-empty-card">
                     <strong>No execution activity yet</strong>
                     <p className="muted">
-                      Orders, fills, closed positions and realized P&amp;L will appear here as the AI trades.
+                      Orders, fills, entry and exit prices, open unrealized P&amp;L and closed realized
+                      P&amp;L will appear here as the AI trades.
                     </p>
                   </Card>
+                ) : ordersViewMode === 'table' ? (
+                  <ExecutionTable
+                    trades={recentExecutions}
+                    positionsByTradeId={positionsByTradeId}
+                  />
                 ) : (
                   <div className="ai-activity-list">
-                    {execution.recentExecutions.slice(0, 10).map((trade) => (
-                      <ExecutionRow key={trade.id} trade={trade} />
+                    {recentExecutions.map((trade) => (
+                      <ExecutionRow
+                        key={trade.id}
+                        trade={trade}
+                        position={positionsByTradeId.get(trade.id)}
+                      />
                     ))}
                   </div>
                 )}
@@ -1099,7 +1432,7 @@ export default function AiTradingPage() {
               <div>
                 <strong>Automatic risk protection is active</strong>
                 <span>
-                  Daily loss, drawdown, position limits, market safety and kill-switch checks are handled by the server. You do not need to configure them.
+                  There is no fixed trades-per-day cap. The AI may take every qualified opportunity while daily loss, drawdown, concurrent-position, margin, market-safety and kill-switch protections remain enforced by the server.
                 </span>
               </div>
               <Link href="/onboarding/risk" className="ai-text-link">View protection</Link>
