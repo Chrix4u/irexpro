@@ -209,7 +209,36 @@ class SignalGenerator:
             ),
         )
 
-        # 4. Confidence threshold gate.
+        # 4. Model-specific publication policy gate.
+        # Some trained architectures require an additional structural decision
+        # condition beyond the global confidence floor. That policy must remain
+        # authoritative at runtime and is never bypassed by Research PAPER UAT.
+        if prediction.explainability.get("signal_eligible", True) is False:
+            gate_reason = str(
+                prediction.explainability.get(
+                    "signal_gate_reason",
+                    "model_policy_not_eligible",
+                )
+            )
+            logger.info(
+                "Model-specific signal gate blocked publication",
+                instrument=instrument,
+                confidence=prediction.confidence_score,
+                reason=gate_reason,
+            )
+            return SignalGenerationResponse(
+                generated=False,
+                no_signal=NoSignalResult(
+                    reason=gate_reason,
+                    instrument=instrument,
+                    confidence_score=prediction.confidence_score,
+                    threshold=get_threshold(),
+                ),
+                telemetry=telemetry,
+                mode=settings.ai_signal_mode,
+            )
+
+        # 5. Confidence threshold gate.
         # Research PAPER UAT may deliberately continue with the real low model
         # confidence so the product workflow can be exercised. This does NOT
         # convert the score into a pass; NestJS independently proves the exact
