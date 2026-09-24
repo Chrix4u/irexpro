@@ -242,12 +242,12 @@ function PositionCard({ position }: { position: LivePositionRowView }) {
       <div className="ai-position-card__head">
         <div>
           <strong>{position.instrument}</strong>
-          <span>{position.direction} · {position.lotSize} lot</span>
+          <span>{position.direction} · {position.lotSize} lot · {position.status.replaceAll('_', ' ')}</span>
         </div>
         <Badge variant={pnlBadge(position.unrealisedPnl)}>
           {position.unrealisedPnl === null
             ? 'P&L awaiting broker'
-            : `${position.unrealisedPnl.startsWith('-') ? '' : '+'}${money(position.unrealisedPnl, position.accountCurrency)}`}
+            : signedMoney(position.unrealisedPnl, position.accountCurrency)}
         </Badge>
       </div>
       <dl className="ai-trade-metrics">
@@ -255,6 +255,10 @@ function PositionCard({ position }: { position: LivePositionRowView }) {
         <div><dt>Current</dt><dd>{position.currentPrice ?? 'Awaiting broker mark'}</dd></div>
         <div><dt>Stop loss</dt><dd>{position.stopLoss}</dd></div>
         <div><dt>Take profit</dt><dd>{position.takeProfit}</dd></div>
+        <div><dt>Trailing stop</dt><dd>{position.trailingStopPips ? `${position.trailingStopPips} pips` : '—'}</dd></div>
+        <div><dt>Commission</dt><dd>{money(position.commission, position.accountCurrency)}</dd></div>
+        <div><dt>Swap</dt><dd>{money(position.swap, position.accountCurrency)}</dd></div>
+        <div><dt>Environment</dt><dd>{position.environment}</dd></div>
       </dl>
       <div className="ai-position-card__foot">
         <span>{position.brokerName ?? 'Broker'}</span>
@@ -317,11 +321,13 @@ function PositionTable({ positions }: { positions: LivePositionRowView[] }) {
             <th>Instrument</th>
             <th>Side</th>
             <th>Lots</th>
+            <th>Status</th>
             <th>Entry</th>
             <th>Current</th>
             <th>Unrealized P&amp;L</th>
             <th>Stop loss</th>
             <th>Take profit</th>
+            <th>Trailing stop</th>
             <th>Commission</th>
             <th>Swap</th>
             <th>Broker</th>
@@ -335,6 +341,7 @@ function PositionTable({ positions }: { positions: LivePositionRowView[] }) {
               <td><strong>{position.instrument}</strong></td>
               <td><Badge variant={position.direction === 'BUY' ? 'success' : 'warning'}>{position.direction}</Badge></td>
               <td>{position.lotSize}</td>
+              <td><Badge variant={position.status === 'OPEN' ? 'success' : 'warning'}>{position.status.replaceAll('_', ' ')}</Badge></td>
               <td>{position.fillPrice ?? position.requestedEntryPrice}</td>
               <td>{position.currentPrice ?? 'Awaiting mark'}</td>
               <td>
@@ -346,6 +353,7 @@ function PositionTable({ positions }: { positions: LivePositionRowView[] }) {
               </td>
               <td>{position.stopLoss}</td>
               <td>{position.takeProfit}</td>
+              <td>{position.trailingStopPips ? `${position.trailingStopPips} pips` : '—'}</td>
               <td>{money(position.commission, position.accountCurrency)}</td>
               <td>{money(position.swap, position.accountCurrency)}</td>
               <td>{position.brokerName ?? 'Broker'}</td>
