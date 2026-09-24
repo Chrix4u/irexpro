@@ -497,8 +497,15 @@
   flex-wrap: wrap;
 }
 
+.ai-activity-row__reason,
 .ai-activity-row__time {
   grid-column: 1 / -1;
+}
+
+.ai-activity-row__reason {
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  line-height: 1.45;
 }
 
 .ai-empty-card {
