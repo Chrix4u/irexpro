@@ -63,10 +63,7 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
   const connectionId = '22222222-2222-2222-2222-222222222222';
   const sessionId = '33333333-3333-4333-8333-333333333333';
 
-  const decision = (
-    signalId: string,
-    maxDailyTrades = 1,
-  ): RiskDecision & { decision: 'APPROVED' } => ({
+  const decision = (signalId: string): RiskDecision & { decision: 'APPROVED' } => ({
     decision: 'APPROVED',
     signalId,
     validatedOrder: {
@@ -81,7 +78,6 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
     appliedRules: ['TEST:REAL_POSTGRES'],
     riskScore: 10,
     evaluatedAt: new Date(),
-    maxDailyTrades,
     // Round 5 (task 50-c): the durable authority — seeded per signal by
     // seedGrant() in beforeEach; the boundary consumes it atomically.
     grantId: '',
@@ -133,7 +129,7 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
   };
 
   /** decision() + a seeded ACTIVE grant (the durable authority handle). */
-  const grantedDecision = async (signalId: string, maxDailyTrades = 1): Promise<RiskDecision> => {
+  const grantedDecision = async (signalId: string): Promise<RiskDecision> => {
     const grantId = await seedGrant(signalId);
     // Round 6 §2: the durable TradeIntent is recorded at intake — the
     // executeTrade intent guard fail-closes without it.
@@ -161,7 +157,7 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
       providerVerificationRevision: 1,
       executionControlRevision: 1,
     });
-    return { ...decision(signalId, maxDailyTrades), grantId };
+    return { ...decision(signalId), grantId };
   };
 
   beforeAll(async () => {
@@ -593,7 +589,7 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
     );
   });
 
-  it('different signals racing for final slot yield one DB row and one broker submission', async () => {
+  it('different qualified signals may reserve concurrently with no daily-count throttle', async () => {
     const [decisionA, decisionB] = await Promise.all([
       grantedDecision('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
       grantedDecision('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'),
@@ -604,14 +600,13 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
     ]);
     const fulfilled = results.filter((r) => r.status === 'fulfilled');
     const rejected = results.filter((r) => r.status === 'rejected');
-    expect(fulfilled).toHaveLength(1);
-    expect(rejected).toHaveLength(1);
-    expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(ForbiddenException);
-    expect(placeOrder).toHaveBeenCalledTimes(1);
+    expect(fulfilled).toHaveLength(2);
+    expect(rejected).toHaveLength(0);
+    expect(placeOrder).toHaveBeenCalledTimes(2);
     const rows = await dataSource.query('SELECT status FROM trading.trades WHERE user_id = $1', [
       userId,
     ]);
-    expect(rows).toHaveLength(1);
+    expect(rows).toHaveLength(2);
   });
 
   it('same signal concurrently: ONE durable trade, ONE broker submission, duplicate returns existing trade', async () => {
@@ -621,7 +616,7 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
     // idempotency key: one caller reserves the PENDING trade and proceeds to
     // provider commitment; the duplicate caller returns that existing trade.
     // Exactly one provider dispatch is therefore possible.
-    const granted = await grantedDecision(signalId, 10);
+    const granted = await grantedDecision(signalId);
     const results = await Promise.allSettled([
       service.executeTrade(userId, granted),
       service.executeTrade(userId, granted),
@@ -645,7 +640,7 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
 
   it('records the full normalized order lifecycle (CREATED→SUBMITTED→ACKNOWLEDGED→FILLED) on real PostgreSQL', async () => {
     const signalId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
-    const trade = await service.executeTrade(userId, await grantedDecision(signalId, 10));
+    const trade = await service.executeTrade(userId, await grantedDecision(signalId));
 
     // The trade (position aggregate) mirrors the outcome.
     expect(trade.status).toBe('OPEN');
@@ -679,7 +674,7 @@ describe('ExecutionService — real PostgreSQL advisory-lock concurrency', () =>
 
   it('duplicate clientOrderId never re-dispatches — exactly-once at the order layer (sequential)', async () => {
     const signalId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
-    await service.executeTrade(userId, await grantedDecision(signalId, 10));
+    await service.executeTrade(userId, await grantedDecision(signalId));
 
     // A second orchestrated dispatch with the SAME clientOrderId (e.g. a
     // retried pipeline after a crash) must NOT re-contact the provider.
