@@ -590,8 +590,7 @@ export default function AiTradingPage() {
     }
   }
 
-  const recentClosedTrades =
-    execution?.recentExecutions.filter((trade) => trade.status === 'CLOSED').slice(0, 10) ?? [];
+  const recentClosedTrades = execution?.closedExecutions.slice(0, 10) ?? [];
 
   if (restoring) {
     return <div style={{ padding: '3rem' }}><LoadingSpinner text="Restoring trading workspace…" /></div>;
