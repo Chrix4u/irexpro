@@ -521,6 +521,44 @@ describe('SharedControlRevisionService — shared control plane (Round 6, 6-b)',
     });
   });
 
+  describe('ensureExecutionControlRevisionInitialized', () => {
+    it('seeds revision 1 without recording a control mutation', async () => {
+      await expect(service.ensureExecutionControlRevisionInitialized()).resolves.toBe(1);
+
+      const state = await readControlState();
+      expect(state).not.toBeNull();
+      expect(state!.currentRevision).toBe(1);
+      expect(state!.lastBumpedAt).toBeNull();
+      expect(state!.lastReason).toContain('deployment bootstrap');
+      expect(await countRows('execution_control_revision_state')).toBe(1);
+      expect(auditLog).not.toHaveBeenCalled();
+    });
+
+    it('is idempotent and never bumps an existing revision', async () => {
+      await expect(service.ensureExecutionControlRevisionInitialized()).resolves.toBe(1);
+      await expect(service.bumpExecutionControlRevision('activation')).resolves.toBe(2);
+
+      await expect(service.ensureExecutionControlRevisionInitialized()).resolves.toBe(2);
+      await expect(service.ensureExecutionControlRevisionInitialized()).resolves.toBe(2);
+
+      const state = await readControlState();
+      expect(state!.currentRevision).toBe(2);
+      expect(await countRows('execution_control_revision_state')).toBe(1);
+    });
+
+    it('concurrent bootstrap initialization converges on one revision-1 row', async () => {
+      const results = await Promise.all(
+        Array.from({ length: 5 }, () =>
+          service.ensureExecutionControlRevisionInitialized(),
+        ),
+      );
+
+      expect(results).toEqual([1, 1, 1, 1, 1]);
+      expect((await readControlState())!.currentRevision).toBe(1);
+      expect(await countRows('execution_control_revision_state')).toBe(1);
+    });
+  });
+
   // ─── bumpExecutionControlRevision (#299 no-resurrection) ───────────────────
 
   describe('bumpExecutionControlRevision', () => {
