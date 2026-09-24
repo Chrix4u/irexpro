@@ -30,8 +30,17 @@ export interface UserCapitalAllocationView {
   accountCurrency: string;
   brokerEquity: string;
   hasAllocation: boolean;
+  /** Shared AI capital pool authorized by the user for this exact broker account. */
   allocatedCapital: string | null;
+  /** Total broker-margin commitment across in-flight, pending and open AI trades. */
   committedCapital: string;
+  /** Optional during rolling deployments from older API revisions. */
+  inFlightCommitments?: string;
+  /** Optional during rolling deployments from older API revisions. */
+  pendingOrderCommitments?: string;
+  /** Optional during rolling deployments from older API revisions. */
+  openPositionCommitments?: string;
+  /** Remaining pool capacity available for additional AI trades. */
   availableCapital: string | null;
 }
 
@@ -61,6 +70,11 @@ export interface TradeExecutionView {
   realisedPnl: string | null;
   commission: string | null;
   swap: string | null;
+  /**
+   * Bounded, user-safe outcome classification. Optional during rolling
+   * deployments; raw provider rejection diagnostics are never exposed.
+   */
+  executionReasonCode?: string | null;
   closeReason: TradeExecutionCloseReason | null;
   openedAt: string | null;
   closedAt: string | null;

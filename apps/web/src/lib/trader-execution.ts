@@ -10,6 +10,7 @@ import { api } from '@/lib/api';
 export interface TraderExecutionSnapshot {
   openPositions: TradeExecutionView[];
   recentExecutions: TradeExecutionView[];
+  closedExecutions: TradeExecutionView[];
 }
 
 const executionApi = createExecutionApi(api);
@@ -69,6 +70,7 @@ export function isTradeExecutionView(value: unknown): value is TradeExecutionVie
     isNullableString(value.realisedPnl) &&
     isNullableString(value.commission) &&
     isNullableString(value.swap) &&
+    (value.executionReasonCode === undefined || isNullableString(value.executionReasonCode)) &&
     isCloseReason(value.closeReason) &&
     isNullableString(value.openedAt) &&
     isNullableString(value.closedAt) &&
@@ -89,9 +91,10 @@ export function isTradeExecutionView(value: unknown): value is TradeExecutionVie
  * broad object shape.
  */
 export async function loadTraderExecutionSnapshot(): Promise<TraderExecutionSnapshot> {
-  const [openPositions, recentExecutions] = await Promise.all([
+  const [openPositions, recentExecutions, closedExecutions] = await Promise.all([
     executionApi.listOpenPositions(),
-    executionApi.listRecentExecutions(50),
+    executionApi.listRecentExecutions(100),
+    executionApi.listClosedExecutions(50),
   ]);
 
   if (!Array.isArray(openPositions) || !openPositions.every(isTradeExecutionView)) {
@@ -100,9 +103,15 @@ export async function loadTraderExecutionSnapshot(): Promise<TraderExecutionSnap
   if (!Array.isArray(recentExecutions) || !recentExecutions.every(isTradeExecutionView)) {
     throw new Error('Recent executions contract mismatch');
   }
+  if (!Array.isArray(closedExecutions) || !closedExecutions.every(isTradeExecutionView)) {
+    throw new Error('Closed executions contract mismatch');
+  }
   if (!openPositions.every((trade) => trade.status === 'OPEN')) {
     throw new Error('Open positions endpoint returned a non-OPEN trade');
   }
+  if (!closedExecutions.every((trade) => trade.status === 'CLOSED')) {
+    throw new Error('Closed executions endpoint returned a non-CLOSED trade');
+  }
 
-  return { openPositions, recentExecutions };
+  return { openPositions, recentExecutions, closedExecutions };
 }

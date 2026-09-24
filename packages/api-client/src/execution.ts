@@ -4,6 +4,7 @@ import type { ApiClient } from './index';
 export interface ExecutionApi {
   listOpenPositions(): Promise<TradeExecutionView[]>;
   listRecentExecutions(limit?: number): Promise<TradeExecutionView[]>;
+  listClosedExecutions(limit?: number): Promise<TradeExecutionView[]>;
 }
 
 /**
@@ -24,6 +25,13 @@ export function createExecutionApi(
       const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 100);
       return client.request<TradeExecutionView[]>(
         `/execution/trades/recent?limit=${safeLimit}`,
+      );
+    },
+
+    listClosedExecutions: (limit = 50) => {
+      const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 100);
+      return client.request<TradeExecutionView[]>(
+        `/execution/trades/closed?limit=${safeLimit}`,
       );
     },
   };

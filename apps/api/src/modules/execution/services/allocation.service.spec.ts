@@ -503,6 +503,9 @@ describe('AllocationService — server-side authoritative capital layer (Round 6
         hasAllocation: false,
         allocatedCapital: null,
         committedCapital: '0',
+        inFlightCommitments: '0',
+        pendingOrderCommitments: '0',
+        openPositionCommitments: '0',
         availableCapital: null,
       });
       expect(store.budgets).toHaveLength(0);
@@ -535,6 +538,9 @@ describe('AllocationService — server-side authoritative capital layer (Round 6
       expect(state.hasAllocation).toBe(true);
       expect(state.allocatedCapital).toBe('5000');
       expect(state.committedCapital).toBe('1250');
+      expect(state.inFlightCommitments).toBe('0');
+      expect(state.pendingOrderCommitments).toBe('0');
+      expect(state.openPositionCommitments).toBe('1250');
       expect(state.availableCapital).toBe('3750');
       expect(store.budgets).toEqual(
         expect.arrayContaining([

@@ -18,7 +18,7 @@ export type AllocationFailureCode =
   /** The account's explicit capital budget is missing AND cannot be seeded
    *  from the authoritative account state (§1c — never defaulted). */
   | 'ALLOCATION_BUDGET_UNPROVABLE'
-  /** The sized notional exceeds the account's remaining allocatable capital. */
+  /** The sized broker-required margin commitment exceeds the account's remaining allocatable capital. */
   | 'ALLOCATION_INSUFFICIENT_CAPITAL'
   /** The per-instrument aggregate exposure would exceed the account's
    *  instrument concentration cap. */
@@ -72,8 +72,17 @@ export interface UserCapitalAllocationState {
   accountCurrency: string;
   brokerEquity: string;
   hasAllocation: boolean;
+  /** User-authorized shared AI capital pool for this exact broker account. */
   allocatedCapital: string | null;
+  /** Total broker-margin commitment across in-flight, pending and open AI trades. */
   committedCapital: string;
+  /** Margin reserved by AI decisions that have not reached an order yet. */
+  inFlightCommitments: string;
+  /** Margin reserved by submitted orders that are not open positions yet. */
+  pendingOrderCommitments: string;
+  /** Margin committed by currently open/reconciling AI positions. */
+  openPositionCommitments: string;
+  /** Remaining pool capacity available for additional AI trades. */
   availableCapital: string | null;
 }
 
@@ -372,6 +381,9 @@ export class AllocationService {
         hasAllocation: false,
         allocatedCapital: null,
         committedCapital: ZERO,
+        inFlightCommitments: ZERO,
+        pendingOrderCommitments: ZERO,
+        openPositionCommitments: ZERO,
         availableCapital: null,
       };
     }
@@ -397,6 +409,9 @@ export class AllocationService {
       hasAllocation: true,
       allocatedCapital: allocated.toString(),
       committedCapital: committed.toString(),
+      inFlightCommitments: aggregate.inFlight,
+      pendingOrderCommitments: aggregate.pendingOrders,
+      openPositionCommitments: aggregate.openPositions,
       availableCapital: allocated.sub(committed).toString(),
     };
   }

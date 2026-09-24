@@ -5,10 +5,40 @@ import { Trade, TradeCloseReason, TradeDirection, TradeStatus } from '../entitie
  * Frontend-safe execution read model.
  *
  * Deliberately excludes internal ownership, signal lineage, idempotency keys,
- * broker connection identifiers, raw external order identifiers, and broker
- * rejection diagnostics. Monetary execution economics are exposed only with
- * the trade's immutable account currency provenance.
+ * broker connection identifiers, raw external order identifiers, and raw
+ * broker rejection diagnostics. A bounded executionReasonCode may be exposed
+ * for user-facing explanation without serializing provider/internal messages.
+ * Monetary execution economics are exposed only with the trade's immutable
+ * account currency provenance.
  */
+
+const KNOWN_EXECUTION_REASON_CODES = [
+  'MARKET_SAFETY_MARKET_DATA_UNAVAILABLE',
+  'MARKET_SAFETY_STALE_PRICE',
+  'MARKET_SAFETY_ABNORMAL_SPREAD',
+  'MARKET_SAFETY_PRICE_DEVIATION_EXCESSIVE',
+] as const;
+
+function toExecutionReasonCode(trade: Trade): string | null {
+  if (trade.status === TradeStatus.RECONCILIATION_PENDING) {
+    return 'EXECUTION_UNRESOLVED';
+  }
+  if (trade.status === TradeStatus.CANCELLED) {
+    return 'EXECUTION_CANCELLED';
+  }
+  if (trade.status !== TradeStatus.REJECTED) {
+    return null;
+  }
+
+  const raw = trade.brokerRejectionReason ?? '';
+  for (const code of KNOWN_EXECUTION_REASON_CODES) {
+    if (raw.includes(code)) return code;
+  }
+  if (raw.includes('DISPATCH_BOUNDARY_')) {
+    return 'DISPATCH_BOUNDARY_BLOCKED';
+  }
+  return 'EXECUTION_REJECTED';
+}
 export class TradeExecutionResponseDto {
   @ApiProperty({ format: 'uuid' })
   id: string;
@@ -55,6 +85,13 @@ export class TradeExecutionResponseDto {
   @ApiPropertyOptional({ nullable: true, description: 'Swap/financing in account currency.' })
   swap: string | null;
 
+  @ApiPropertyOptional({
+    nullable: true,
+    description:
+      'Bounded user-safe execution outcome classification; never raw provider diagnostics.',
+  })
+  executionReasonCode: string | null;
+
   @ApiPropertyOptional({ enum: TradeCloseReason, nullable: true })
   closeReason: TradeCloseReason | null;
 
@@ -88,6 +125,7 @@ export function toTradeExecutionResponse(trade: Trade): TradeExecutionResponseDt
     realisedPnl: trade.accountCurrency ? trade.realisedPnl : null,
     commission: trade.accountCurrency ? trade.commission : null,
     swap: trade.accountCurrency ? trade.swap : null,
+    executionReasonCode: toExecutionReasonCode(trade),
     closeReason: trade.closeReason,
     openedAt: trade.openedAt,
     closedAt: trade.closedAt,

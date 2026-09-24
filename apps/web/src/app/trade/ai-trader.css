@@ -213,6 +213,38 @@
   gap: clamp(0.8rem, 1.25vw, 1.1rem);
 }
 
+.ai-overview-card--allocation-pool {
+  gap: 0.55rem;
+}
+
+.ai-allocation-breakdown {
+  display: grid;
+  gap: 0.42rem;
+  margin: 0.15rem 0 0;
+}
+
+.ai-allocation-breakdown > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.ai-allocation-breakdown dt {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+}
+
+.ai-allocation-breakdown dd {
+  margin: 0;
+  text-align: right;
+  font-size: 0.78rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums lining-nums;
+  overflow-wrap: anywhere;
+}
+
 .ai-overview-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -465,8 +497,25 @@
   flex-wrap: wrap;
 }
 
+.ai-activity-row__details,
+.ai-activity-row__reason,
 .ai-activity-row__time {
   grid-column: 1 / -1;
+}
+
+.ai-activity-row__details {
+  display: flex;
+  gap: 0.45rem 0.85rem;
+  flex-wrap: wrap;
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+.ai-activity-row__reason {
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  line-height: 1.45;
 }
 
 .ai-empty-card {

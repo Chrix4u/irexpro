@@ -40,4 +40,22 @@ describe('ExecutionReadService', () => {
     await service.listRecentExecutions(USER_ID, -5);
     expect(tradeRepo.find).toHaveBeenLastCalledWith(expect.objectContaining({ take: 1 }));
   });
+
+  it('keeps closed trade history independent from rejected activity noise', async () => {
+    await service.listClosedExecutions(USER_ID, 25);
+
+    expect(tradeRepo.find).toHaveBeenCalledWith({
+      where: { userId: USER_ID, status: TradeStatus.CLOSED },
+      order: { closedAt: 'DESC', createdAt: 'DESC' },
+      take: 25,
+    });
+  });
+
+  it('clamps closed trade history limits to 1..100', async () => {
+    await service.listClosedExecutions(USER_ID, 999);
+    expect(tradeRepo.find).toHaveBeenLastCalledWith(expect.objectContaining({ take: 100 }));
+
+    await service.listClosedExecutions(USER_ID, -5);
+    expect(tradeRepo.find).toHaveBeenLastCalledWith(expect.objectContaining({ take: 1 }));
+  });
 });

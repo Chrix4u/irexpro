@@ -55,6 +55,15 @@ describe('ExecutionController frontend-safe responses', () => {
           closedAt: new Date('2026-08-28T14:00:00.000Z'),
         }),
       ]),
+      listClosedExecutions: jest.fn().mockResolvedValue([
+        makeTrade({
+          status: TradeStatus.CLOSED,
+          exitPrice: '1.10800000',
+          realisedPnl: '80.25',
+          closeReason: TradeCloseReason.TAKE_PROFIT_HIT,
+          closedAt: new Date('2026-08-28T14:00:00.000Z'),
+        }),
+      ]),
     };
     controller = new ExecutionController(
       readService as unknown as ExecutionReadService,
@@ -70,6 +79,11 @@ describe('ExecutionController frontend-safe responses', () => {
   it('passes user UUID and requested limit into recent execution reads', async () => {
     await controller.listRecentExecutions(USER_ID, 25);
     expect(readService.listRecentExecutions).toHaveBeenCalledWith(USER_ID, 25);
+  });
+
+  it('passes user UUID and requested limit into closed-trade reads', async () => {
+    await controller.listClosedExecutions(USER_ID, 25);
+    expect(readService.listClosedExecutions).toHaveBeenCalledWith(USER_ID, 25);
   });
 
   it('does not expose internal execution entity identifiers', async () => {
@@ -91,6 +105,22 @@ describe('ExecutionController frontend-safe responses', () => {
       accountCurrency: 'USD',
       realisedPnl: null,
     });
+  });
+
+  it('exposes only a bounded execution reason classification for rejected trades', async () => {
+    readService.listRecentExecutions.mockResolvedValue([
+      makeTrade({
+        status: TradeStatus.REJECTED,
+        brokerRejectionReason:
+          'MARKET_SAFETY_PRICE_DEVIATION_EXCESSIVE: internal provider detail must not leak',
+      }),
+    ]);
+
+    const [response] = await controller.listRecentExecutions(USER_ID, 50);
+
+    expect(response.executionReasonCode).toBe('MARKET_SAFETY_PRICE_DEVIATION_EXCESSIVE');
+    expect(Object.keys(response)).not.toContain('brokerRejectionReason');
+    expect(JSON.stringify(response)).not.toContain('internal provider detail');
   });
 
   it('returns authoritative lifecycle fields and currency-bound realized P&L', async () => {

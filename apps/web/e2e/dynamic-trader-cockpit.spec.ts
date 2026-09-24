@@ -33,6 +33,34 @@ const executionPosition = {
   updatedAt: '2026-08-31T00:45:00.000Z',
 };
 
+const closedExecution = {
+  ...executionPosition,
+  id: '55555555-5555-4555-8555-555555555556',
+  status: 'CLOSED',
+  exitPrice: '1.10177000',
+  realisedPnl: '16.70',
+  executionReasonCode: null,
+  closeReason: 'TAKE_PROFIT_HIT',
+  openedAt: '2026-08-31T00:31:00.000Z',
+  closedAt: '2026-08-31T00:35:00.000Z',
+  createdAt: '2026-08-31T00:30:00.000Z',
+  updatedAt: '2026-08-31T00:35:00.000Z',
+};
+
+const rejectedExecution = {
+  ...executionPosition,
+  id: '55555555-5555-4555-8555-555555555557',
+  status: 'REJECTED',
+  fillPrice: null,
+  exitPrice: null,
+  realisedPnl: null,
+  executionReasonCode: 'MARKET_SAFETY_PRICE_DEVIATION_EXCESSIVE',
+  openedAt: null,
+  closedAt: null,
+  createdAt: '2026-08-31T00:50:00.000Z',
+  updatedAt: '2026-08-31T00:50:00.000Z',
+};
+
 const livePosition = {
   id: executionPosition.id,
   brokerConnectionId: mockBrokerConnections[0].id,
@@ -170,7 +198,12 @@ async function gotoAiTrader(
     if (apiPath === 'execution/trades/recent') {
       return options.failExecutionReads
         ? fulfill(500, { statusCode: 500, message: 'Internal Server Error' })
-        : fulfill(200, [executionPosition]);
+        : fulfill(200, [rejectedExecution, executionPosition, closedExecution]);
+    }
+    if (apiPath === 'execution/trades/closed') {
+      return options.failExecutionReads
+        ? fulfill(500, { statusCode: 500, message: 'Internal Server Error' })
+        : fulfill(200, [closedExecution]);
     }
     if (apiPath === 'live-account/positions') {
       return options.failPositionRead
@@ -189,6 +222,9 @@ async function gotoAiTrader(
         hasAllocation: true,
         allocatedCapital: '2500.00000000',
         committedCapital: '250.00000000',
+        inFlightCommitments: '25.00000000',
+        pendingOrderCommitments: '50.00000000',
+        openPositionCommitments: '175.00000000',
         availableCapital: '2250.00000000',
       });
     }
@@ -251,7 +287,18 @@ test.describe('AI Trader novice workflow', () => {
     await expect(page.getByText('Paper Trading Broker', { exact: false }).first()).toBeVisible();
     await expect(page.getByText('10,000.00 USD', { exact: true })).toBeVisible();
     await expect(page.getByText('2,500.00 USD', { exact: true }).first()).toBeVisible();
-    await expect(page.getByText(/Committed: 250\.00 USD/i)).toBeVisible();
+    const pool = page.getByLabel('AI capital pool breakdown');
+    await expect(pool.getByText('Available', { exact: true })).toBeVisible();
+    await expect(pool.getByText('2,250.00 USD', { exact: true })).toBeVisible();
+    await expect(pool.getByText('Committed now', { exact: true })).toBeVisible();
+    await expect(pool.getByText('250.00 USD', { exact: true })).toBeVisible();
+    await expect(pool.getByText('Open positions', { exact: true })).toBeVisible();
+    await expect(pool.getByText('175.00 USD', { exact: true })).toBeVisible();
+    await expect(pool.getByText('Pending orders', { exact: true })).toBeVisible();
+    await expect(pool.getByText('50.00 USD', { exact: true })).toBeVisible();
+    await expect(pool.getByText('In-flight decisions', { exact: true })).toBeVisible();
+    await expect(pool.getByText('25.00 USD', { exact: true })).toBeVisible();
+    await expect(page.getByText(/Shared across multiple AI trades/i)).toBeVisible();
     await expect(page.getByRole('combobox', { name: 'Broker account' })).toBeDisabled();
     await expect(page.getByRole('button', { name: 'Stop AI Trading' })).toBeVisible();
 
@@ -270,6 +317,16 @@ test.describe('AI Trader novice workflow', () => {
 
     await expect(page.getByRole('heading', { level: 2, name: 'Recent AI Activity' })).toBeVisible();
     await expect(page.getByText('OPEN', { exact: true }).first()).toBeVisible();
+    await expect(
+      page.getByText(/execution quote was too far from the risk-validated reference price/i),
+    ).toBeVisible();
+
+    const closedTrades = page.locator('.ai-section--closed-trades');
+    await expect(closedTrades.getByText('CLOSED', { exact: true })).toBeVisible();
+    await expect(closedTrades.getByText('+16.70 USD', { exact: true })).toBeVisible();
+    await expect(closedTrades.getByText('Entry 1.10010000', { exact: true })).toBeVisible();
+    await expect(closedTrades.getByText('Exit 1.10177000', { exact: true })).toBeVisible();
+    await expect(closedTrades.getByText('TAKE PROFIT HIT', { exact: true })).toBeVisible();
 
     await expect(page.getByText(/execution mode selector/i)).toHaveCount(0);
     await expect(page.getByText(/trading experience/i)).toHaveCount(0);
