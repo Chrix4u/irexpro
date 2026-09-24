@@ -67,6 +67,7 @@ class SignalGenerator:
         candles: list[OHLCVCandle] | None = None,
         source: MarketDataSource = "mock",
         bypass_market_data_cache: bool = False,
+        uat_workflow_probe: bool = False,
     ) -> SignalGenerationResponse:
         """
         Full signal generation pipeline.
@@ -208,8 +209,13 @@ class SignalGenerator:
             ),
         )
 
-        # 4. Confidence threshold gate
-        if not is_above_threshold(prediction.confidence_score):
+        # 4. Confidence threshold gate.
+        # Research PAPER UAT may deliberately continue with the real low model
+        # confidence so the product workflow can be exercised. This does NOT
+        # convert the score into a pass; NestJS independently proves the exact
+        # PAPER_ONLY paper-broker boundary before accepting such a probe.
+        below_threshold = not is_above_threshold(prediction.confidence_score)
+        if below_threshold and not uat_workflow_probe:
             logger.info(
                 "Signal below confidence threshold — no signal generated",
                 instrument=instrument,
@@ -289,6 +295,9 @@ class SignalGenerator:
             **explainability,
             "raw_scores": prediction.raw_scores,
             "signal_mode": settings.ai_signal_mode,
+            "uat_workflow_probe": bool(uat_workflow_probe and below_threshold),
+            "production_eligible": not bool(uat_workflow_probe and below_threshold),
+            "model_confidence_threshold": get_threshold(),
         })
 
         model_mode = model_metadata.get("mode")
@@ -298,6 +307,9 @@ class SignalGenerator:
             strategy_family = "xgboost-trained"
         else:
             strategy_family = "baseline"
+
+        if uat_workflow_probe and below_threshold:
+            strategy_family = "uat-workflow-probe"
 
         candidate = AiSignalCandidate(
             signal_id=str(uuid4()),
@@ -327,6 +339,7 @@ class SignalGenerator:
             direction=candidate.direction,
             confidence=candidate.confidence_score,
             mode=settings.ai_signal_mode,
+            uat_workflow_probe=bool(uat_workflow_probe and below_threshold),
         )
 
         return SignalGenerationResponse(

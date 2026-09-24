@@ -17,6 +17,7 @@ import {
   SnapshotNotFreshError,
 } from '../broker/services/broker-account-snapshot.service';
 import { BrokerMode } from '../broker/interfaces/broker-adapter.interface';
+import { ExecutionMode } from '../execution/interfaces/execution-authority';
 import { AuditService } from '../audit/audit.service';
 import { DomainEventBus } from '../events/event-bus.service';
 import { TradingSession, TradingSessionStatus } from '../execution/entities/trading-session.entity';
@@ -287,6 +288,80 @@ describe('StrategyOrchestratorService', () => {
     it('accepts signal at confidence threshold (0.6)', async () => {
       const result = await service.processSignal(validCandidate({ confidenceScore: 0.6 }));
       expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
+    });
+  });
+
+  describe('Research PAPER UAT workflow probe boundary', () => {
+    const probeCandidate = () =>
+      validCandidate({
+        confidenceScore: 0.0224,
+        strategyCode: 'uat-workflow-probe-h1',
+        metadata: {
+          uat_workflow_probe: true,
+          production_eligible: false,
+          model_confidence_threshold: 0.6,
+        },
+      });
+
+    it('allows the real low confidence only on the exact PAPER_ONLY internal paper broker', async () => {
+      (executionService.getActiveSession as jest.Mock).mockResolvedValue({
+        ...activeSession(),
+        executionMode: ExecutionMode.PAPER_ONLY,
+      });
+      (brokerService.findConnectionById as jest.Mock).mockResolvedValue({
+        id: 'conn-1',
+        userId: 'user-1',
+        brokerId: 'paper-broker',
+        accountType: BrokerMode.DEMO,
+        logicalAccountKey: 'paper-broker::demo::acct-1',
+      });
+
+      const result = await service.processSignal(probeCandidate());
+
+      expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
+      expect(riskService.validateProposedTrade).toHaveBeenCalled();
+      expect(executionService.executeTrade).toHaveBeenCalled();
+    });
+
+    it('rejects the same probe on a real-provider DEMO connection', async () => {
+      (executionService.getActiveSession as jest.Mock).mockResolvedValue({
+        ...activeSession(),
+        executionMode: ExecutionMode.PAPER_ONLY,
+      });
+      (brokerService.findConnectionById as jest.Mock).mockResolvedValue({
+        id: 'conn-1',
+        userId: 'user-1',
+        brokerId: 'metatrader5',
+        accountType: BrokerMode.DEMO,
+        logicalAccountKey: 'metatrader5::demo::acct-1',
+      });
+
+      const result = await service.processSignal(probeCandidate());
+
+      expect(result.outcome).toBe('LOW_CONFIDENCE');
+      expect(result.reason).toContain('PAPER_ONLY internal paper-broker');
+      expect(riskService.validateProposedTrade).not.toHaveBeenCalled();
+      expect(executionService.executeTrade).not.toHaveBeenCalled();
+    });
+
+    it('rejects the probe when the authoritative session is not PAPER_ONLY', async () => {
+      (executionService.getActiveSession as jest.Mock).mockResolvedValue({
+        ...activeSession(),
+        executionMode: ExecutionMode.FULL_AUTO,
+      });
+      (brokerService.findConnectionById as jest.Mock).mockResolvedValue({
+        id: 'conn-1',
+        userId: 'user-1',
+        brokerId: 'paper-broker',
+        accountType: BrokerMode.DEMO,
+        logicalAccountKey: 'paper-broker::demo::acct-1',
+      });
+
+      const result = await service.processSignal(probeCandidate());
+
+      expect(result.outcome).toBe('LOW_CONFIDENCE');
+      expect(riskService.validateProposedTrade).not.toHaveBeenCalled();
+      expect(executionService.executeTrade).not.toHaveBeenCalled();
     });
   });
 

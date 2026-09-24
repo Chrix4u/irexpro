@@ -82,6 +82,52 @@ async def test_signal_generator_no_signal_for_low_confidence():
     assert result.no_signal.reason == "confidence_below_threshold"
 
 
+
+@pytest.mark.asyncio
+async def test_uat_workflow_probe_preserves_real_low_model_confidence():
+    gen = make_generator()
+
+    mock_model = MagicMock()
+    mock_model.get_model_version.return_value = "baseline-xgboost-v0.1.0"
+    mock_model.get_model_metadata.return_value = {
+        "version": "baseline-xgboost-v0.1.0",
+        "loaded": False,
+        "mode": "heuristic_placeholder",
+    }
+    mock_model.predict_signal.return_value = ModelPrediction(
+        direction="BUY",
+        confidence_score=0.0224,
+        model_version="baseline-xgboost-v0.1.0",
+        features_used=["price_vs_ma20"],
+        raw_scores={"price_vs_ma20": 0.00224},
+        explainability={"method": "heuristic_placeholder"},
+    )
+
+    mock_registry = MagicMock()
+    mock_registry.get_active_model.return_value = mock_model
+    governance = MagicMock()
+    governance.approved_for_paper = True
+    mock_registry.get_governance.return_value = governance
+    gen._registry = mock_registry
+
+    result = await gen.generate(
+        user_id="u1",
+        trading_session_id="s1",
+        broker_connection_id="c1",
+        instrument="EURUSD",
+        timeframe="H1",
+        uat_workflow_probe=True,
+    )
+
+    assert result.generated is True
+    assert result.signal is not None
+    assert result.signal.confidence_score == 0.0224
+    assert result.signal.strategy_code == "uat-workflow-probe-h1"
+    assert result.signal.metadata["uat_workflow_probe"] is True
+    assert result.signal.metadata["production_eligible"] is False
+    assert result.signal.metadata["model_confidence_threshold"] == 0.6
+
+
 @pytest.mark.asyncio
 async def test_signal_generator_creates_valid_candidate_for_high_confidence():
     """When model returns high confidence, a valid AiSignalCandidate should be created."""

@@ -135,6 +135,8 @@ function runtimeReasonLabel(reason: string | null | undefined): string {
       'Market data is unavailable or invalid; this scan was skipped and no confidence was evaluated',
     research_uat_replay_budget_exhausted:
       'Research PAPER replay completed its bounded market steps without an eligible signal',
+    uat_workflow_probe_published:
+      'Synthetic Research PAPER workflow probe published. The model did not pass the normal confidence gate.',
   };
   return labels[reason] ?? reason.replaceAll('_', ' ');
 }
@@ -893,7 +895,9 @@ export default function AiTradingPage() {
                     <strong>
                       {automationRuntime?.last_confidence_score == null
                         ? '—'
-                        : `${formatConfidence(automationRuntime.last_confidence_score)} / ${formatConfidence(automationRuntime.confidence_threshold)} required`}
+                        : automationRuntime.last_decision === 'UAT_WORKFLOW_PROBE'
+                          ? `${formatConfidence(automationRuntime.last_confidence_score)} actual model confidence · ${formatConfidence(automationRuntime.confidence_threshold)} normal AI gate`
+                          : `${formatConfidence(automationRuntime.last_confidence_score)} / ${formatConfidence(automationRuntime.confidence_threshold)} required`}
                     </strong>
                   </div>
                   <div>
