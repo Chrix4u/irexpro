@@ -374,8 +374,7 @@ describe('StrategyOrchestratorService', () => {
         logicalAccountKey: 'paper-broker::demo::acct-1',
       });
       identityGateMock.registerOrReuse.mockImplementation(
-        async (_userId: string, signal: Record<string, unknown>) =>
-          registrationFor(signal, true),
+        async (_userId: string, signal: Record<string, unknown>) => registrationFor(signal, true),
       );
       (executionService.findTradeBySignalId as jest.Mock).mockResolvedValue({
         id: 'trade-existing',
