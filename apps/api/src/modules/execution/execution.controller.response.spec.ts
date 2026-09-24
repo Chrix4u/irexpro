@@ -64,10 +64,12 @@ describe('ExecutionController frontend-safe responses', () => {
 
   beforeEach(() => {
     readService = {
-      getTradeIntentMap: jest.fn().mockImplementation(
-        async (_userId: string, trades: Trade[]) =>
-          new Map(trades.map((trade) => [trade.id, makeIntent({ tradeId: trade.id })])),
-      ),
+      getTradeIntentMap: jest
+        .fn()
+        .mockImplementation(
+          async (_userId: string, trades: Trade[]) =>
+            new Map(trades.map((trade) => [trade.id, makeIntent({ tradeId: trade.id })])),
+        ),
       listOpenPositions: jest.fn().mockResolvedValue([makeTrade()]),
       listRecentExecutions: jest.fn().mockResolvedValue([
         makeTrade({
