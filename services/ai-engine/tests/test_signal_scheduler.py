@@ -340,6 +340,79 @@ async def test_research_uat_replay_advances_until_one_signal_then_stops_cycle():
     assert job.signals_published_total == 1
 
 
+
+@pytest.mark.asyncio
+async def test_research_uat_probe_uses_real_confidence_and_obeys_one_minute_cooldown():
+    settings = Settings(ai_scheduler_enabled=True, ai_signal_mode="paper")
+    scheduler = SignalScheduler(nestjs_client=AsyncMock())
+    scheduler._settings = settings
+
+    from app.domain.signals.schemas import NoSignalResult
+
+    candidate = AiSignalCandidate(
+        user_id="user-1",
+        trading_session_id="session-1",
+        broker_connection_id="conn-1",
+        instrument="EURUSD",
+        direction="BUY",
+        confidence_score=0.0224,
+        suggested_stop_loss=1.09,
+        suggested_take_profit=1.12,
+        suggested_volume=0.01,
+        timeframe="H1",
+        strategy_code="uat-workflow-probe-h1",
+        model_version="baseline-xgboost-v0.1.0",
+        metadata={
+            "uat_workflow_probe": True,
+            "production_eligible": False,
+            "model_confidence_threshold": 0.6,
+        },
+    )
+
+    async def generate_side_effect(**kwargs):
+        if kwargs.get("uat_workflow_probe"):
+            return SignalGenerationResponse(
+                generated=True,
+                signal=candidate,
+                mode="paper",
+            )
+        return SignalGenerationResponse(
+            generated=False,
+            no_signal=NoSignalResult(
+                reason="confidence_below_threshold",
+                instrument="EURUSD",
+                confidence_score=0.0224,
+                threshold=0.6,
+            ),
+            mode="paper",
+        )
+
+    mock_generator = AsyncMock()
+    mock_generator.generate.side_effect = generate_side_effect
+    scheduler._signal_generator = mock_generator
+
+    job = ScheduledSessionJobStub()
+    job.source = "broker"
+    job.research_uat = True
+    job.replay_steps_per_cycle = 12
+    scheduler._jobs["session-1"] = job
+
+    await scheduler._run_session_job("session-1")
+
+    assert mock_generator.generate.await_count == 12
+    scheduler._nestjs_client.publish_signal.assert_awaited_once_with(candidate)
+    assert job.last_decision == "UAT_WORKFLOW_PROBE"
+    assert job.last_reason == "uat_workflow_probe_published"
+    assert job.last_confidence_score == 0.0224
+    assert job.last_uat_probe_at is not None
+
+    await scheduler._run_session_job("session-1")
+
+    assert mock_generator.generate.await_count == 24
+    assert scheduler._nestjs_client.publish_signal.await_count == 1
+    assert job.signals_published_total == 1
+
+
 @pytest.mark.asyncio
 async def test_shutdown_stops_scheduler_cleanly():
     settings = Settings(ai_scheduler_enabled=True, ai_signal_interval_seconds=3600)
@@ -375,6 +448,7 @@ class ScheduledSessionJobStub:
     replay_steps_last_cycle = 0
     replay_steps_total = 0
     signals_published_total = 0
+    last_uat_probe_at = None
 
 
 @pytest.mark.asyncio
