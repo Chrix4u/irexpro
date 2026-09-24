@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { Trade, TradeStatus } from './entities/trade.entity';
+import { TradeIntent } from './entities/trade-intent.entity';
 
 /**
  * Read-only execution projection service for user-facing terminal clients.
@@ -15,6 +16,8 @@ export class ExecutionReadService {
   constructor(
     @InjectRepository(Trade)
     private readonly tradeRepo: Repository<Trade>,
+    @InjectRepository(TradeIntent)
+    private readonly tradeIntentRepo: Repository<TradeIntent>,
   ) {}
 
   async listOpenPositions(userId: string): Promise<Trade[]> {
@@ -41,6 +44,26 @@ export class ExecutionReadService {
       order: { closedAt: 'DESC', createdAt: 'DESC' },
       take: safeLimit,
     });
+  }
+
+  /**
+   * Resolve durable AI-decision provenance for an already user-scoped set of
+   * trades. Both userId and tradeId are predicates, so a browser read can
+   * never use execution ids as a cross-tenant intent lookup primitive.
+   */
+  async getTradeIntentMap(userId: string, trades: Trade[]): Promise<Map<string, TradeIntent>> {
+    const tradeIds = [...new Set(trades.map((trade) => trade.id).filter(Boolean))];
+    if (tradeIds.length === 0) return new Map();
+
+    const intents = await this.tradeIntentRepo.find({
+      where: { userId, tradeId: In(tradeIds) },
+    });
+
+    return new Map(
+      intents
+        .filter((intent) => intent.tradeId)
+        .map((intent) => [intent.tradeId as string, intent]),
+    );
   }
 
   /**
