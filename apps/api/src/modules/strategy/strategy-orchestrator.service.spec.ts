@@ -361,6 +361,37 @@ describe('StrategyOrchestratorService', () => {
       expect(executionService.executeTrade).toHaveBeenCalled();
     });
 
+    it('does not rebase or advance the paper market for a duplicate UAT signal', async () => {
+      (executionService.getActiveSession as jest.Mock).mockResolvedValue({
+        ...activeSession(),
+        executionMode: ExecutionMode.PAPER_ONLY,
+      });
+      (brokerService.findConnectionById as jest.Mock).mockResolvedValue({
+        id: 'conn-1',
+        userId: 'user-1',
+        brokerId: 'paper-broker',
+        accountType: BrokerMode.DEMO,
+        logicalAccountKey: 'paper-broker::demo::acct-1',
+      });
+      identityGateMock.registerOrReuse.mockImplementation(
+        async (_userId: string, signal: Record<string, unknown>) =>
+          registrationFor(signal, true),
+      );
+      (executionService.findTradeBySignalId as jest.Mock).mockResolvedValue({
+        id: 'trade-existing',
+        signalId: 'sig-001',
+        status: TradeStatus.OPEN,
+      } as Trade);
+
+      const result = await service.processSignal(probeCandidate());
+
+      expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
+      expect(result.duplicateOfTrade?.tradeId).toBe('trade-existing');
+      expect(brokerService.getCurrentPriceForConnection).not.toHaveBeenCalled();
+      expect(sizingMock.sizePosition).not.toHaveBeenCalled();
+      expect(executionService.executeTrade).not.toHaveBeenCalled();
+    });
+
     it('rejects the same probe on a real-provider DEMO connection', async () => {
       (executionService.getActiveSession as jest.Mock).mockResolvedValue({
         ...activeSession(),
