@@ -127,6 +127,7 @@ async function gotoAiTrader(
     sessionDataEnvelope?: boolean;
     sessionGenerationString?: boolean;
     failAllocationRead?: boolean;
+    researchUat?: boolean;
   } = {},
 ) {
   setupErrorCollectors(page);
@@ -230,6 +231,7 @@ async function gotoAiTrader(
     }
     if (apiPath === 'market-data/intelligence') return fulfill(200, marketSnapshot);
     if (apiPath.startsWith('trading/sessions/') && apiPath.endsWith('/automation-status')) {
+      const researchUat = options.researchUat === true;
       return fulfill(200, {
         enabled: true,
         registered: true,
@@ -237,15 +239,31 @@ async function gotoAiTrader(
         active: true,
         instruments: ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF'],
         timeframe: 'H1',
-        interval_seconds: 60,
+        interval_seconds: researchUat ? 10 : 60,
         source: 'broker',
         last_run_at: '2026-09-19T11:30:00.000Z',
         next_run_at: '2026-09-19T11:31:00.000Z',
-        last_decision: 'NO_TRADE',
-        last_reason: 'confidence_below_threshold',
-        last_confidence_score: 0.54,
+        last_decision: researchUat ? 'UAT_WORKFLOW_PROBE' : 'NO_TRADE',
+        last_reason: researchUat ? 'uat_workflow_probe_published' : 'confidence_below_threshold',
+        last_confidence_score: researchUat ? 0.0224 : 0.54,
         confidence_threshold: 0.6,
         last_publish_failed: false,
+        research_uat: researchUat,
+        replay_steps_per_cycle: researchUat ? 12 : 1,
+        replay_steps_last_cycle: researchUat ? 12 : 0,
+        replay_steps_total: researchUat ? 48 : 0,
+        signals_published_total: researchUat ? 3 : 0,
+        qualified_signals_published_total: 0,
+        uat_probe_signals_published_total: researchUat ? 3 : 0,
+        last_strategy_outcome: researchUat ? 'EXECUTION_SUCCEEDED' : null,
+        last_strategy_reason: researchUat ? 'workflow probe completed' : null,
+        last_trade_id: researchUat ? 'trade-uat-probe-3' : null,
+        executions_succeeded_total: researchUat ? 2 : 0,
+        qualified_executions_succeeded_total: 0,
+        uat_probe_executions_succeeded_total: researchUat ? 2 : 0,
+        downstream_rejected_total: researchUat ? 1 : 0,
+        qualified_downstream_rejected_total: 0,
+        uat_probe_downstream_rejected_total: researchUat ? 1 : 0,
       });
     }
     if (apiPath === 'trading/sessions/start') {
@@ -281,6 +299,30 @@ async function gotoAiTrader(
 }
 
 test.describe('AI Trader novice workflow', () => {
+  test('separates low-confidence Research UAT probes from qualified AI executions', async ({ page }) => {
+    await gotoAiTrader(page, { researchUat: true });
+
+    await expect(
+      page.getByText(/production-ineligible workflow probes below the normal confidence gate/i),
+    ).toBeVisible();
+    await expect(page.getByText('Qualified AI submissions', { exact: true })).toBeVisible();
+    await expect(page.getByText('UAT workflow probes', { exact: true })).toBeVisible();
+    await expect(page.getByText('3 submitted', { exact: true })).toBeVisible();
+    await expect(page.getByText('Qualified AI execution', { exact: true })).toBeVisible();
+    await expect(page.getByText('0 executed · 0 rejected', { exact: true })).toBeVisible();
+    await expect(page.getByText('Workflow-probe execution', { exact: true })).toBeVisible();
+    await expect(page.getByText('2 executed · 1 rejected', { exact: true })).toBeVisible();
+    await expect(
+      page.getByText('2.24% actual model confidence · 60.00% normal AI gate', { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByText(
+        'Synthetic Research PAPER workflow probe published. The model did not pass the normal confidence gate.',
+        { exact: true },
+      ),
+    ).toBeVisible();
+  });
+
   test('shows broker, allocation, one automation control, positions and AI activity', async ({ page }) => {
     await gotoAiTrader(page);
 
