@@ -548,9 +548,7 @@ describe('SharedControlRevisionService — shared control plane (Round 6, 6-b)',
 
     it('concurrent bootstrap initialization converges on one revision-1 row', async () => {
       const results = await Promise.all(
-        Array.from({ length: 5 }, () =>
-          service.ensureExecutionControlRevisionInitialized(),
-        ),
+        Array.from({ length: 5 }, () => service.ensureExecutionControlRevisionInitialized()),
       );
 
       expect(results).toEqual([1, 1, 1, 1, 1]);
