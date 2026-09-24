@@ -56,6 +56,11 @@ class ScheduledSessionJob:
     replay_steps_last_cycle: int = 0
     replay_steps_total: int = 0
     signals_published_total: int = 0
+    last_strategy_outcome: str | None = None
+    last_strategy_reason: str | None = None
+    last_trade_id: str | None = None
+    executions_succeeded_total: int = 0
+    downstream_rejected_total: int = 0
     last_uat_probe_at: datetime | None = None
     registered_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
@@ -301,7 +306,7 @@ class SignalScheduler:
                     )
                     continue
 
-                await self._nestjs_client.publish_signal(result.signal)
+                strategy_result = await self._nestjs_client.publish_signal(result.signal)
                 is_uat_probe = bool(
                     result.signal.metadata.get("uat_workflow_probe")
                 )
@@ -316,6 +321,33 @@ class SignalScheduler:
                 job.last_confidence_score = result.signal.confidence_score
                 job.last_confidence_at = job.last_run_at
                 job.signals_published_total += 1
+
+                if isinstance(strategy_result, dict):
+                    outcome = strategy_result.get("outcome")
+                    reason = strategy_result.get("reason")
+                    trade_id = strategy_result.get("tradeId")
+                    job.last_strategy_outcome = (
+                        str(outcome) if outcome is not None else None
+                    )
+                    job.last_strategy_reason = (
+                        str(reason) if reason is not None else None
+                    )
+                    job.last_trade_id = (
+                        str(trade_id) if trade_id is not None else None
+                    )
+                    if outcome == "EXECUTION_SUCCEEDED":
+                        job.executions_succeeded_total += 1
+                    elif outcome in {
+                        "SIGNAL_INVALID",
+                        "LOW_CONFIDENCE",
+                        "SESSION_INACTIVE",
+                        "NO_BROKER_CONNECTION",
+                        "RISK_REJECTED",
+                        "RISK_SUSPENDED",
+                        "EXECUTION_FAILED",
+                    }:
+                        job.downstream_rejected_total += 1
+
                 if is_uat_probe:
                     job.last_uat_probe_at = job.last_run_at
                 published_this_cycle = True
