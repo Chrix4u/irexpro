@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { TradeIntent, TradeIntentStatus } from '../entities/trade-intent.entity';
 import { isUniqueViolation } from '../../broker/utils/db-unique-violation';
 import { ExactDecimal } from '../../../common/utils/exact-decimal';
@@ -185,6 +185,21 @@ export class TradeIntentService {
   async findBySignal(userId: string, signalId: string): Promise<TradeIntent | null> {
     return this.intentRepo.findOne({
       where: { userId, intentKey: TradeIntentService.intentKeyFor(userId, signalId) },
+    });
+  }
+
+  /**
+   * Resolve intent provenance for a tenant-scoped set of executed trades.
+   *
+   * The user predicate is mandatory even though trade ids are UUIDs. This
+   * keeps browser-facing lineage reads from becoming a cross-tenant lookup
+   * primitive while keeping TradeIntent repository ownership in this service.
+   */
+  async findByTradeIds(userId: string, tradeIds: string[]): Promise<TradeIntent[]> {
+    const ids = [...new Set(tradeIds.filter(Boolean))];
+    if (ids.length === 0) return [];
+    return this.intentRepo.find({
+      where: { userId, tradeId: In(ids) },
     });
   }
 
