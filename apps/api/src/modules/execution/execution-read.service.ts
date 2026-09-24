@@ -34,6 +34,15 @@ export class ExecutionReadService {
     });
   }
 
+  async listClosedExecutions(userId: string, limit = 50): Promise<Trade[]> {
+    const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 100);
+    return this.tradeRepo.find({
+      where: { userId, status: TradeStatus.CLOSED },
+      order: { closedAt: 'DESC', createdAt: 'DESC' },
+      take: safeLimit,
+    });
+  }
+
   /**
    * Resolve execution records for a previously user-scoped set of AI signals.
    *
