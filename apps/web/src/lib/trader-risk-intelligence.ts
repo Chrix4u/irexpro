@@ -106,7 +106,6 @@ export function isRiskIntelligenceView(value: unknown): value is RiskIntelligenc
       'maxDailyLossPercent',
       'maxDrawdownPercent',
       'maxOpenTrades',
-      'maxDailyTrades',
       'maxPositionSizeLot',
       'minStopLossPips',
       'maxVolatilityScore',
@@ -118,7 +117,6 @@ export function isRiskIntelligenceView(value: unknown): value is RiskIntelligenc
     typeof limits.maxDailyLossPercent !== 'string' ||
     typeof limits.maxDrawdownPercent !== 'string' ||
     !isNonNegativeInteger(limits.maxOpenTrades) ||
-    !isNonNegativeInteger(limits.maxDailyTrades) ||
     typeof limits.maxPositionSizeLot !== 'string' ||
     typeof limits.minStopLossPips !== 'string' ||
     typeof limits.maxVolatilityScore !== 'string' ||
@@ -141,15 +139,13 @@ export function isRiskIntelligenceView(value: unknown): value is RiskIntelligenc
       'maxOpenPositions',
       'openPositionSlotsRemaining',
       'todayTrades',
-      'maxDailyTrades',
-      'dailyTradeSlotsRemaining',
+      'dailyTradeCountPolicy',
     ]) ||
     !isNonNegativeInteger(execution.openPositions) ||
     !isNonNegativeInteger(execution.maxOpenPositions) ||
     !isNonNegativeInteger(execution.openPositionSlotsRemaining) ||
     !isNonNegativeInteger(execution.todayTrades) ||
-    !isNonNegativeInteger(execution.maxDailyTrades) ||
-    !isNonNegativeInteger(execution.dailyTradeSlotsRemaining)
+    execution.dailyTradeCountPolicy !== 'UNBOUNDED'
   ) {
     return false;
   }
