@@ -38,7 +38,6 @@ const approvedDecision = (): RiskDecision => ({
   appliedRules: ['KILL_SWITCH:OK'],
   riskScore: 30,
   evaluatedAt: new Date(),
-  maxDailyTrades: 10,
   // Round 5 (task 50-c): executeTrade requires the server-issued grant handle
   grantId: 'grant-1',
   sessionId: 'session-1',
@@ -392,98 +391,56 @@ describe('ExecutionService — Sprint 32 Idempotency', () => {
     expect(result).toBe(0);
   });
 
-  // ── Concurrent DIFFERENT-signal daily-limit race ──────────────────────────
+  // ── Concurrent DIFFERENT-signal throughput ─────────────────────────────────
 
-  it('concurrent DIFFERENT signals: only one gets the final daily slot', async () => {
-    // Sprint 32 Gate 3: the advisory lock serializes concurrent requests.
-    // Two different signalIds racing for the last daily slot must result in
-    // exactly ONE execution + ONE rejection.
-    //
-    // This test uses a mock that serializes via a mutex to prove the advisory
-    // lock semantics: the second request waits for the first to commit, then
-    // sees the PENDING reservation and is rejected.
-    //
-    // We simulate maxDailyTrades=1 with 0 existing trades. Signal A gets the
-    // slot (count=0 < 1 → INSERT PENDING). Signal B blocks until A commits,
-    // then sees count=1 >= 1 → DAILY_LIMIT_REJECTED.
-
+  it('concurrent DIFFERENT qualified signals may both reserve and execute', async () => {
     const baseDecision = approvedDecision() as RiskDecision & { decision: 'APPROVED' };
     const decisionA = {
       ...baseDecision,
       signalId: 'sig-diff-A',
       validatedOrder: { ...baseDecision.validatedOrder, idempotencyKey: 'idem-A' },
     } as RiskDecision;
-
     const decisionB = {
       ...baseDecision,
       signalId: 'sig-diff-B',
       validatedOrder: { ...baseDecision.validatedOrder, idempotencyKey: 'idem-B' },
     } as RiskDecision;
 
-    // Set maxDailyTrades=1 on both decisions
-    (decisionA as { maxDailyTrades: number }).maxDailyTrades = 1;
-    (decisionB as { maxDailyTrades: number }).maxDailyTrades = 1;
-
-    // Simulate advisory-lock serialization using a promise-based mutex.
-    // The first call acquires the lock, runs its callback, then releases.
-    // The second call waits for the first to release before running.
-    let lockPromise: Promise<void> = Promise.resolve();
-    let firstTransactionDone = false;
+    let reservationSequence = 0;
     const ds = (service as unknown as { dataSource: { transaction: jest.Mock } }).dataSource;
-
     ds.transaction.mockImplementation(
       async (cb: (manager: { query: jest.Mock }) => Promise<unknown>) => {
-        // Wait for the previous transaction to finish (advisory lock simulation)
-        const prevLock = lockPromise;
-        let releaseLock!: () => void;
-        lockPromise = new Promise<void>((resolve) => {
-          releaseLock = resolve;
-        });
-        await prevLock;
-
-        const count = firstTransactionDone ? 1 : 0;
-        const mockTrade = {
-          id: firstTransactionDone ? 'trade-rejected' : 'trade-A',
-          status: 'PENDING',
-          signal_id: firstTransactionDone ? 'sig-diff-B' : 'sig-diff-A',
-        };
+        const sequence = ++reservationSequence;
         const mgr = {
           query: jest.fn().mockImplementation((sql: string) => {
             if (sql.includes('pg_advisory_xact_lock')) return Promise.resolve([]);
             if (sql.includes('SELECT * FROM trading.trades WHERE idempotency_key'))
               return Promise.resolve([]);
-            if (sql.includes('COUNT(*)')) return Promise.resolve([{ count: String(count) }]);
-            if (sql.includes('INSERT INTO trading.trades')) return Promise.resolve([mockTrade]);
+            if (sql.includes('INSERT INTO trading.trades'))
+              return Promise.resolve([
+                {
+                  id: `trade-${sequence}`,
+                  status: 'PENDING',
+                  signal_id: sequence === 1 ? 'sig-diff-A' : 'sig-diff-B',
+                  instrument: 'EURUSD',
+                  direction: 'BUY',
+                  lot_size: '0.05',
+                },
+              ]);
             return Promise.resolve([]);
           }),
         };
-        const result = await cb(mgr);
-        firstTransactionDone = true;
-        releaseLock();
-        return result;
+        return cb(mgr);
       },
     );
 
-    // Launch both concurrently
-    const results = await Promise.allSettled([
+    const results = await Promise.all([
       service.executeTrade('user-1', decisionA),
       service.executeTrade('user-1', decisionB),
     ]);
 
-    // Exactly one should succeed, one should fail with ForbiddenException
-    const fulfilled = results.filter((r) => r.status === 'fulfilled');
-    const rejected = results.filter((r) => r.status === 'rejected');
-
-    expect(fulfilled.length).toBe(1);
-    expect(rejected.length).toBe(1);
-
-    // The rejected one should be a ForbiddenException (daily limit)
-    const rejectedError = (rejected[0] as PromiseRejectedResult).reason;
-    expect(rejectedError).toBeInstanceOf(Error);
-    expect(rejectedError.message).toContain('Daily trade limit reached');
-
-    // Broker should have been called exactly once (for the fulfilled request)
-    expect(mockOrchestratorInstance.dispatchOrder).toHaveBeenCalledTimes(1);
+    expect(results).toHaveLength(2);
+    expect(mockOrchestratorInstance.dispatchOrder).toHaveBeenCalledTimes(2);
   });
 
   // ── Concurrent SAME-signal idempotency ────────────────────────────────────
