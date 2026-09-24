@@ -307,6 +307,12 @@ export class AiSignalService {
         ? { volatilityScore: candidate.volatilityScore }
         : {}),
       ...(agentContext ? { agentContext } : {}),
+      ...(candidate.metadata?.uat_workflow_probe === true
+        ? {
+            uatWorkflowProbe: true,
+            productionEligible: candidate.metadata?.production_eligible === true,
+          }
+        : {}),
     };
   }
 }
