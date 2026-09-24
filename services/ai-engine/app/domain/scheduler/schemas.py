@@ -15,6 +15,14 @@ class SessionStartRequest(BaseModel):
     interval_seconds: int | None = Field(default=None, alias="intervalSeconds")
     source: Literal["broker", "mock"] = "broker"
     account_type: Literal["DEMO", "LIVE"] = Field(..., alias="accountType")
+    broker_id: str | None = Field(default=None, alias="brokerId")
+    research_uat: bool = Field(default=False, alias="researchUat")
+    replay_steps_per_cycle: int = Field(
+        default=1,
+        ge=1,
+        le=30,
+        alias="replayStepsPerCycle",
+    )
     # Round 5 (session authority): the NestJS API forwards the TradingSession's
     # durable executionMode. "paper" is kept for backward compatibility with
     # older API versions. Scheduled signal generation itself stays paper-only —
@@ -59,6 +67,11 @@ class SessionSchedulerStatusResponse(BaseModel):
     market_data_age_seconds: float | None = None
     market_data_cache_bypassed: bool = False
     last_publish_failed: bool = False
+    research_uat: bool = False
+    replay_steps_per_cycle: int = 1
+    replay_steps_last_cycle: int = 0
+    replay_steps_total: int = 0
+    signals_published_total: int = 0
 
 
 class SessionSchedulerResponse(BaseModel):
