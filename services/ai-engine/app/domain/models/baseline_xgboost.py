@@ -242,102 +242,118 @@ class BaselineXGBoostModel:
                         "manifest": manifest,
                         "dual_actionability": dual_models,
                     }
-                    model = dual_models["long"]
-                else:
-                    opportunity_spec = manifest.get("opportunity")
-                    if not isinstance(opportunity_spec, dict):
-                        raise ValueError("Event-pair bundle is missing opportunity model")
-                    opportunity = xgb.XGBClassifier()
-                    opportunity.load_model(str(component_path(opportunity_spec)))
-    
-                    direction_specs = manifest.get("direction")
-                    if not isinstance(direction_specs, dict):
-                        raise ValueError("Event-pair bundle is missing direction models")
-                    direction_models: dict[str, Any] = {}
-                    for instrument in INITIAL_FOREX_UNIVERSE:
-                        item = direction_specs.get(instrument)
-                        if not isinstance(item, dict):
+                    self._model = dual_models["long"]
+                    self._model_loaded = True
+                    self._model_version = model_version
+                    self._feature_names = list(feature_names)
+                    self._artifact_metadata = metadata
+                    self._model_type = model_type
+                    self._runtime_feature_profile = runtime_feature_profile
+                    logger.info(
+                        "Verified trained XGBoost model loaded",
+                        path=str(model_path),
+                        metadata_path=str(metadata_path),
+                        version=self._model_version,
+                        approved_for_paper=bool(
+                            metadata.get("approved_for_paper", False)
+                        ),
+                    )
+                    return True
+
+                opportunity_spec = manifest.get("opportunity")
+                if not isinstance(opportunity_spec, dict):
+                    raise ValueError("Event-pair bundle is missing opportunity model")
+                opportunity = xgb.XGBClassifier()
+                opportunity.load_model(str(component_path(opportunity_spec)))
+
+                direction_specs = manifest.get("direction")
+                if not isinstance(direction_specs, dict):
+                    raise ValueError("Event-pair bundle is missing direction models")
+                direction_models: dict[str, Any] = {}
+                for instrument in INITIAL_FOREX_UNIVERSE:
+                    item = direction_specs.get(instrument)
+                    if not isinstance(item, dict):
+                        raise ValueError(
+                            f"Event-pair bundle missing direction model {instrument}"
+                        )
+                    kind = str(item.get("kind", ""))
+                    if kind == "xgboost_regime_classifier_router":
+                        router = item.get("router")
+                        if not isinstance(router, dict):
                             raise ValueError(
-                                f"Event-pair bundle missing direction model {instrument}"
+                                f"Event-pair bundle missing regime router {instrument}"
                             )
-                        kind = str(item.get("kind", ""))
-                        if kind == "xgboost_regime_classifier_router":
-                            router = item.get("router")
-                            if not isinstance(router, dict):
-                                raise ValueError(
-                                    f"Event-pair bundle missing regime router {instrument}"
-                                )
-                            if (
-                                router.get("policy")
-                                != EVENT_PAIR_REGIME_ROUTER_POLICY_RUNTIME
-                            ):
-                                raise ValueError("Unsupported event-pair regime router policy")
-                            volatility_cut = float(
-                                router.get("m1_volatility_20_median")
+                        if (
+                            router.get("policy")
+                            != EVENT_PAIR_REGIME_ROUTER_POLICY_RUNTIME
+                        ):
+                            raise ValueError("Unsupported event-pair regime router policy")
+                        volatility_cut = float(
+                            router.get("m1_volatility_20_median")
+                        )
+                        spread_cut = float(router.get("m1_spread_bps_median"))
+                        if not math.isfinite(volatility_cut) or not math.isfinite(
+                            spread_cut
+                        ):
+                            raise ValueError("Event-pair regime thresholds are non-finite")
+
+                        fallback_spec = item.get("fallback")
+                        if not isinstance(fallback_spec, dict):
+                            raise ValueError(
+                                f"Event-pair bundle missing regime fallback {instrument}"
                             )
-                            spread_cut = float(router.get("m1_spread_bps_median"))
-                            if not math.isfinite(volatility_cut) or not math.isfinite(
-                                spread_cut
-                            ):
-                                raise ValueError("Event-pair regime thresholds are non-finite")
-    
-                            fallback_spec = item.get("fallback")
-                            if not isinstance(fallback_spec, dict):
-                                raise ValueError(
-                                    f"Event-pair bundle missing regime fallback {instrument}"
-                                )
-                            fallback = xgb.XGBClassifier()
-                            fallback.load_model(str(component_path(fallback_spec)))
-    
-                            regime_specs = item.get("regimes", {})
-                            if not isinstance(regime_specs, dict):
-                                raise ValueError("Event-pair regime models must be an object")
-                            allowed_regimes = {"calm", "active_clean", "stressed"}
-                            if not set(regime_specs).issubset(allowed_regimes):
-                                raise ValueError("Event-pair bundle contains unknown regime")
-                            regime_models: dict[str, Any] = {}
-                            for regime, regime_spec in regime_specs.items():
-                                if not isinstance(regime_spec, dict):
-                                    raise ValueError("Event-pair regime model spec is invalid")
-                                if regime_spec.get("kind") != "xgboost_classifier":
-                                    raise ValueError("Event-pair regime child kind is unsupported")
-                                regime_child = xgb.XGBClassifier()
-                                regime_child.load_model(
-                                    str(component_path(regime_spec))
-                                )
-                                regime_models[str(regime)] = regime_child
-    
-                            direction_models[instrument] = {
-                                "fallback": fallback,
-                                "regimes": regime_models,
-                            }
-                            continue
-    
-                        child_path = component_path(item)
-                        if kind == "xgboost_classifier":
-                            child = xgb.XGBClassifier()
-                        elif kind == "xgboost_return_margin_regressor":
-                            calibration = item.get("calibration")
-                            if not isinstance(calibration, dict):
-                                raise ValueError(
-                                    f"Event-pair bundle missing calibrator {instrument}"
-                                )
-                            coefficient = float(calibration.get("coefficient"))
-                            intercept = float(calibration.get("intercept"))
-                            if not math.isfinite(coefficient) or not math.isfinite(intercept):
-                                raise ValueError("Event-pair calibration is non-finite")
-                            child = xgb.XGBRegressor()
-                        else:
-                            raise ValueError("Unsupported event-pair direction model kind")
-                        child.load_model(str(child_path))
-                        direction_models[instrument] = child
-    
-                    self._bundle = {
-                        "manifest": manifest,
-                        "opportunity": opportunity,
-                        "direction": direction_models,
-                    }
-                    model = opportunity
+                        fallback = xgb.XGBClassifier()
+                        fallback.load_model(str(component_path(fallback_spec)))
+
+                        regime_specs = item.get("regimes", {})
+                        if not isinstance(regime_specs, dict):
+                            raise ValueError("Event-pair regime models must be an object")
+                        allowed_regimes = {"calm", "active_clean", "stressed"}
+                        if not set(regime_specs).issubset(allowed_regimes):
+                            raise ValueError("Event-pair bundle contains unknown regime")
+                        regime_models: dict[str, Any] = {}
+                        for regime, regime_spec in regime_specs.items():
+                            if not isinstance(regime_spec, dict):
+                                raise ValueError("Event-pair regime model spec is invalid")
+                            if regime_spec.get("kind") != "xgboost_classifier":
+                                raise ValueError("Event-pair regime child kind is unsupported")
+                            regime_child = xgb.XGBClassifier()
+                            regime_child.load_model(
+                                str(component_path(regime_spec))
+                            )
+                            regime_models[str(regime)] = regime_child
+
+                        direction_models[instrument] = {
+                            "fallback": fallback,
+                            "regimes": regime_models,
+                        }
+                        continue
+
+                    child_path = component_path(item)
+                    if kind == "xgboost_classifier":
+                        child = xgb.XGBClassifier()
+                    elif kind == "xgboost_return_margin_regressor":
+                        calibration = item.get("calibration")
+                        if not isinstance(calibration, dict):
+                            raise ValueError(
+                                f"Event-pair bundle missing calibrator {instrument}"
+                            )
+                        coefficient = float(calibration.get("coefficient"))
+                        intercept = float(calibration.get("intercept"))
+                        if not math.isfinite(coefficient) or not math.isfinite(intercept):
+                            raise ValueError("Event-pair calibration is non-finite")
+                        child = xgb.XGBRegressor()
+                    else:
+                        raise ValueError("Unsupported event-pair direction model kind")
+                    child.load_model(str(child_path))
+                    direction_models[instrument] = child
+
+                self._bundle = {
+                    "manifest": manifest,
+                    "opportunity": opportunity,
+                    "direction": direction_models,
+                }
+                model = opportunity
             else:
                 model = xgb.XGBClassifier()
                 model.load_model(str(model_path))
