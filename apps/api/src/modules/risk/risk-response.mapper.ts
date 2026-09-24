@@ -1,6 +1,6 @@
 import type { RiskProfile } from './entities/risk-profile.entity';
-import { RiskViolation } from './entities/risk-violation.entity';
-import { RiskViolationSummaryResponseDto } from './dto/risk-intelligence-response.dto';
+import type { RiskViolation } from './entities/risk-violation.entity';
+import type { RiskViolationSummaryResponseDto } from './dto/risk-intelligence-response.dto';
 
 /**
  * Public risk-violation projection.
