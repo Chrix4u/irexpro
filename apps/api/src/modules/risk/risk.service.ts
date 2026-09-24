@@ -879,39 +879,12 @@ export class RiskService {
     }
     appliedRules.push('CONCURRENT_TRADES:OK');
 
-    // 4b. Max daily trades
-    // Sprint 32: enforce the daily trade limit. Counts trades actually Opened
-    // today (UTC day boundary), excluding PENDING and REJECTED. Concurrency-
-    // safe via the DB unique constraint on idempotency_key.
-    let todayTrades: number;
-    try {
-      todayTrades = await this.executionService.countTodayTrades(userId);
-    } catch {
-      // Fail closed: if we cannot count today's trades, we cannot safely
-      // enforce the limit. Reject rather than risk exceeding the daily cap.
-      appliedRules.push('DAILY_TRADES:ERROR');
-      return this.rejectAndRecord(
-        userId,
-        trade,
-        RiskRejectionCode.RISK_ENGINE_ERROR,
-        'Risk Engine error: could not verify daily trade count',
-        contextSnapshot as RiskContextSnapshot,
-        evaluatedAt,
-      );
-    }
-    contextSnapshot.dailyTradesCount = todayTrades;
-    if (todayTrades >= profile.maxDailyTrades) {
-      appliedRules.push('DAILY_TRADES');
-      return this.rejectAndRecord(
-        userId,
-        trade,
-        RiskRejectionCode.MAX_DAILY_TRADES,
-        `Daily trades (${todayTrades}) has reached maxDailyTrades limit (${profile.maxDailyTrades})`,
-        contextSnapshot as RiskContextSnapshot,
-        evaluatedAt,
-      );
-    }
-    appliedRules.push('DAILY_TRADES:OK');
+    // 4b. Daily trade COUNT is intentionally uncapped.
+    // The AI may take every qualified opportunity. Safety is governed by
+    // concurrent-position limits, per-trade risk, margin/capital allocation,
+    // daily LOSS, drawdown, concentration, market safety and the kill switch.
+    // Do not reintroduce a raw trade-count throttle here.
+    appliedRules.push('DAILY_TRADE_COUNT:UNBOUNDED');
 
     // 4c. Position size check — EXACT decimal comparison (#313).
     const requestedLots = this.parseOrderDecimal(trade.requestedLotSize, 'requestedLotSize');
@@ -1189,9 +1162,6 @@ export class RiskService {
       appliedRules,
       riskScore: this.computeRiskScore(trade, profile),
       evaluatedAt,
-      // Sprint 32 Gate 2: pass maxDailyTrades to ExecutionService for the
-      // final atomic advisory-lock daily-trade-slot reservation.
-      maxDailyTrades: profile.maxDailyTrades,
       // Round 5 (#301/#295/#298): the durable authority this approval binds.
       grantId,
       sessionId: session.id,
@@ -1546,7 +1516,6 @@ export class RiskService {
       maxDailyLossPercent: normalizeDecimalStringForDigest(profile.maxDailyLossPercent),
       maxDrawdownPercent: normalizeDecimalStringForDigest(profile.maxDrawdownPercent),
       maxOpenTrades: profile.maxOpenTrades,
-      maxDailyTrades: profile.maxDailyTrades,
       maxPositionSizeLot: normalizeDecimalStringForDigest(profile.maxPositionSizeLot),
       minStopLossPips: normalizeDecimalStringForDigest(profile.minStopLossPips),
       allowedInstruments: profile.allowedInstruments ?? null,
@@ -1712,7 +1681,6 @@ export class RiskService {
       maxDrawdownPercent: profile.maxDrawdownPercent,
       // Position-level limits
       maxOpenTrades: profile.maxOpenTrades,
-      maxDailyTrades: profile.maxDailyTrades,
       maxPositionSizeLot: profile.maxPositionSizeLot,
       minStopLossPips: profile.minStopLossPips,
       // Instrument / volatility controls
@@ -1822,7 +1790,6 @@ export class RiskService {
     if (dto.maxDrawdownPercent !== undefined)
       profile.maxDrawdownPercent = dto.maxDrawdownPercent.toFixed(2);
     if (dto.maxOpenTrades !== undefined) profile.maxOpenTrades = dto.maxOpenTrades;
-    if (dto.maxDailyTrades !== undefined) profile.maxDailyTrades = dto.maxDailyTrades;
     if (dto.maxPositionSizeLot !== undefined)
       profile.maxPositionSizeLot = dto.maxPositionSizeLot.toFixed(4);
     if (dto.minStopLossPips !== undefined) profile.minStopLossPips = dto.minStopLossPips.toFixed(2);
@@ -1855,7 +1822,6 @@ export class RiskService {
       'maxDailyLossPercent',
       'maxDrawdownPercent',
       'maxOpenTrades',
-      'maxDailyTrades',
       'maxPositionSizeLot',
       'allowedInstruments',
       'maxTradeRiskPercent',
