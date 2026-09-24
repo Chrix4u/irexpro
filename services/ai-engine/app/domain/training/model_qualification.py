@@ -53,6 +53,10 @@ EVENT_TWO_STAGE_EXPERIMENT_NAME = "event_barrier_two_stage"
 EVENT_PAIR_EXPERT_EXPERIMENT_NAME = "event_barrier_pair_experts"
 EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME = "event_barrier_pair_return_margin"
 EVENT_PAIR_REGIME_EXPERT_EXPERIMENT_NAME = "event_barrier_pair_regime_experts"
+EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME = "event_barrier_dual_actionability"
+EVENT_LONG_ACTIONABLE_TARGET_COLUMN = "event_long_actionable_target"
+EVENT_SHORT_ACTIONABLE_TARGET_COLUMN = "event_short_actionable_target"
+DUAL_ACTION_MARGIN_FLOOR = 0.10
 REGIME_ROUTER_POLICY = "pair_m1_volatility_spread_median_v1"
 REGIME_NAMES = ("calm", "active_clean", "stressed")
 REGIME_FALLBACK_NAME = "fallback"
@@ -87,6 +91,7 @@ ExperimentMode = Literal[
     "two_stage_event_pair_experts",
     "two_stage_event_pair_return_margin",
     "two_stage_event_pair_regime_experts",
+    "event_dual_actionability",
 ]
 
 
@@ -431,6 +436,11 @@ def default_experiments() -> tuple[QualificationExperiment, ...]:
             name=EVENT_PAIR_REGIME_EXPERT_EXPERIMENT_NAME,
             variants=(ModelVariant(name="event_barrier_v6_pair_regime_direction"),),
             mode="two_stage_event_pair_regime_experts",
+        ),
+        QualificationExperiment(
+            name=EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME,
+            variants=(ModelVariant(name="event_barrier_v7_dual_actionability"),),
+            mode="event_dual_actionability",
         ),
     )
 
@@ -991,6 +1001,151 @@ def _event_two_stage_prediction_frame(
     return predictions
 
 
+def _ensure_event_dual_actionability_targets(
+    frame: pd.DataFrame,
+) -> pd.DataFrame:
+    """Create mutually exclusive LONG/SHORT actionability targets from event labels."""
+    required = {
+        EVENT_ACTIONABLE_TARGET_COLUMN,
+        EVENT_DIRECTION_TARGET_COLUMN,
+    }
+    missing = sorted(required.difference(frame.columns))
+    if missing:
+        raise ValueError(f"dual actionability targets require columns: {missing}")
+
+    result = frame.copy()
+    actionable = pd.to_numeric(
+        result[EVENT_ACTIONABLE_TARGET_COLUMN],
+        errors="raise",
+    ).astype(int)
+    direction = pd.to_numeric(
+        result[EVENT_DIRECTION_TARGET_COLUMN],
+        errors="raise",
+    ).astype(int)
+    if not actionable.isin((0, 1)).all() or not direction.isin((0, 1)).all():
+        raise ValueError("dual actionability targets require binary event labels")
+
+    result[EVENT_LONG_ACTIONABLE_TARGET_COLUMN] = (
+        (actionable == 1) & (direction == 1)
+    ).astype(int)
+    result[EVENT_SHORT_ACTIONABLE_TARGET_COLUMN] = (
+        (actionable == 1) & (direction == 0)
+    ).astype(int)
+    covered = (
+        result[EVENT_LONG_ACTIONABLE_TARGET_COLUMN]
+        + result[EVENT_SHORT_ACTIONABLE_TARGET_COLUMN]
+    )
+    if not covered.equals(actionable):
+        raise ValueError("dual actionability targets must exactly partition actionable rows")
+    return result
+
+
+def _event_dual_actionability_prediction_frame(
+    source: pd.DataFrame,
+    *,
+    long_probabilities: np.ndarray,
+    short_probabilities: np.ndarray,
+    confidence_floor: float,
+    fold: int,
+    experiment: str,
+    variant: ModelVariant,
+) -> pd.DataFrame:
+    """
+    Build direct BUY-vs-rest / SELL-vs-rest event predictions.
+
+    The runtime-equivalent confidence is the winning side probability. A trade
+    additionally requires a fixed separation margin so two simultaneously high
+    side scores cannot masquerade as directional certainty.
+    """
+    if confidence_floor < CONFIDENCE_FLOOR:
+        raise ValueError("confidence floor must not be lowered below 0.60")
+
+    columns = [
+        "decision_time",
+        "instrument",
+        EVENT_DIRECTION_TARGET_COLUMN,
+        EVENT_ACTIONABLE_TARGET_COLUMN,
+        EVENT_LONG_NET_RETURN_COLUMN,
+        EVENT_SHORT_NET_RETURN_COLUMN,
+        EVENT_STEP_COLUMN,
+        EVENT_BARRIER_RETURN_COLUMN,
+        "m1_spread_bps",
+    ]
+    columns.extend(
+        column for column in QUALIFICATION_REGIME_COLUMNS if column in source.columns
+    )
+    predictions = source[columns].copy()
+    predictions[TARGET_COLUMN] = predictions[EVENT_DIRECTION_TARGET_COLUMN].astype(int)
+    predictions[ACTIONABLE_TARGET_COLUMN] = predictions[
+        EVENT_ACTIONABLE_TARGET_COLUMN
+    ].astype(int)
+    predictions[LONG_NET_RETURN_COLUMN] = predictions[
+        EVENT_LONG_NET_RETURN_COLUMN
+    ].astype(float)
+    predictions[SHORT_NET_RETURN_COLUMN] = predictions[
+        EVENT_SHORT_NET_RETURN_COLUMN
+    ].astype(float)
+
+    long_probabilities = np.clip(
+        np.asarray(long_probabilities, dtype=float),
+        1e-7,
+        1.0 - 1e-7,
+    )
+    short_probabilities = np.clip(
+        np.asarray(short_probabilities, dtype=float),
+        1e-7,
+        1.0 - 1e-7,
+    )
+    if len(long_probabilities) != len(predictions) or len(short_probabilities) != len(
+        predictions
+    ):
+        raise ValueError("dual actionability probabilities must align with source rows")
+
+    probability_total = np.maximum(long_probabilities + short_probabilities, 1e-7)
+    direction_probabilities = np.clip(
+        long_probabilities / probability_total,
+        1e-7,
+        1.0 - 1e-7,
+    )
+    winning_probability = np.maximum(long_probabilities, short_probabilities)
+    action_margin = np.abs(long_probabilities - short_probabilities)
+
+    predictions["long_action_probability"] = long_probabilities
+    predictions["short_action_probability"] = short_probabilities
+    predictions["raw_positive_probability"] = direction_probabilities
+    predictions["positive_probability"] = direction_probabilities
+    predictions["predicted_long"] = long_probabilities >= short_probabilities
+    predictions["direction_confidence"] = np.maximum(
+        direction_probabilities,
+        1.0 - direction_probabilities,
+    )
+    predictions["opportunity_probability"] = winning_probability
+    predictions["predicted_opportunity"] = winning_probability >= confidence_floor
+    predictions["action_probability_margin"] = action_margin
+    predictions["confidence"] = winning_probability
+    predictions["active_trade"] = (
+        predictions["predicted_opportunity"]
+        & (predictions["action_probability_margin"] >= DUAL_ACTION_MARGIN_FLOOR)
+    )
+    predictions["selected_net_return"] = np.where(
+        predictions["predicted_long"],
+        predictions[LONG_NET_RETURN_COLUMN],
+        predictions[SHORT_NET_RETURN_COLUMN],
+    )
+    predictions["fold"] = fold
+    predictions["experiment"] = experiment
+    predictions["model_variant"] = variant.name
+    predictions["calibration_method"] = "none"
+    predictions["decision_threshold"] = 0.50
+    predictions["confidence_floor"] = confidence_floor
+    predictions["confidence_policy"] = (
+        "winning_side_probability_gte_floor_and_side_margin_gte_0_10"
+    )
+    predictions["actionable_label_policy"] = EVENT_LABEL_POLICY
+    predictions["event_label_policy"] = EVENT_LABEL_POLICY
+    return predictions
+
+
 def _opportunity_classification(
     predictions: pd.DataFrame,
     *,
@@ -1064,10 +1219,18 @@ def _summarize_predictions(
     active_count = int(predictions["active_trade"].sum())
     joint_fraction = float(active_count / len(predictions)) if len(predictions) else 0.0
     summary["diagnostics"]["direction_only_confidence_coverage"] = direction_coverage
+    coverage_policy = "opportunity_probability_and_direction_confidence_gte_floor"
+    if "confidence_policy" in predictions.columns:
+        policies = [
+            str(value)
+            for value in predictions["confidence_policy"].dropna().unique()
+        ]
+        if len(policies) == 1:
+            coverage_policy = policies[0]
     summary["diagnostics"]["confidence_coverage"] = {
         "count": active_count,
         "fraction": joint_fraction,
-        "policy": "opportunity_probability_and_direction_confidence_gte_floor",
+        "policy": coverage_policy,
     }
     summary["evidence_sufficiency_warnings"] = evidence_sufficiency_warnings(
         trade_or_period_count=int(summary["trading"]["trade_or_period_count"]),
@@ -1349,6 +1512,58 @@ def _fit_event_two_stage_for_outer(
         "event_actionable_early_stop_rows": int(len(directional_early)),
     }
     return direction_model, opportunity_model, feature_columns, counts
+
+
+def _fit_event_dual_actionability_for_outer(
+    training_window: pd.DataFrame,
+    *,
+    variant: ModelVariant,
+    horizon_bars: int,
+) -> tuple[dict[str, XGBClassifier], list[str], dict[str, Any]]:
+    """Fit independent LONG-vs-rest and SHORT-vs-rest classifiers on every row."""
+    feature_columns = _feature_columns(variant.feature_policy)
+    labeled = _ensure_event_dual_actionability_targets(training_window)
+    fit, early = _split_internal_early_stopping_tail(
+        labeled,
+        horizon_bars=horizon_bars,
+    )
+
+    models: dict[str, XGBClassifier] = {}
+    targets = {
+        "long": EVENT_LONG_ACTIONABLE_TARGET_COLUMN,
+        "short": EVENT_SHORT_ACTIONABLE_TARGET_COLUMN,
+    }
+    for side, target_column in targets.items():
+        side_variant = ModelVariant(
+            name=f"{variant.name}_{side}",
+            parameter_overrides=variant.parameter_overrides,
+            sample_weight_policy="class_balance",
+            calibration="none",
+            feature_policy=variant.feature_policy,
+        )
+        models[side] = _fit_binary_variant(
+            side_variant,
+            fit=fit,
+            early_stop=early,
+            feature_columns=feature_columns,
+            target_column=target_column,
+            sample_weight_policy="class_balance",
+        )
+
+    counts: dict[str, Any] = {
+        "fit_rows": int(len(fit)),
+        "early_stop_rows": int(len(early)),
+        "long_actionable_fit_rows": int(fit[EVENT_LONG_ACTIONABLE_TARGET_COLUMN].sum()),
+        "short_actionable_fit_rows": int(fit[EVENT_SHORT_ACTIONABLE_TARGET_COLUMN].sum()),
+        "long_actionable_early_stop_rows": int(
+            early[EVENT_LONG_ACTIONABLE_TARGET_COLUMN].sum()
+        ),
+        "short_actionable_early_stop_rows": int(
+            early[EVENT_SHORT_ACTIONABLE_TARGET_COLUMN].sum()
+        ),
+        "action_margin_floor": DUAL_ACTION_MARGIN_FLOOR,
+    }
+    return models, feature_columns, counts
 
 
 def _fit_event_pair_experts_for_outer(
@@ -2411,6 +2626,8 @@ def run_nested_qualification_experiments(
             "two_stage_event",
             "two_stage_event_pair_experts",
             "two_stage_event_pair_return_margin",
+            "two_stage_event_pair_regime_experts",
+            "event_dual_actionability",
         }
         for experiment in experiments
     ):
@@ -2580,6 +2797,53 @@ def run_nested_qualification_experiments(
                     "decision_threshold": decision_threshold,
                     "opportunity_threshold": confidence_floor,
                     "event_label_policy": EVENT_LABEL_POLICY,
+                    "candidate_reports": [],
+                    "training_counts": training_counts,
+                }
+            elif experiment.mode == "event_dual_actionability":
+                if len(experiment.variants) != 1 or experiment.tune_decision_threshold:
+                    raise ValueError(
+                        "dual-actionability event research must remain a fixed bounded candidate"
+                    )
+                variant = experiment.variants[0]
+                decision_threshold = 0.50
+                (
+                    direction_models,
+                    feature_columns,
+                    training_counts,
+                ) = _fit_event_dual_actionability_for_outer(
+                    outer_train,
+                    variant=variant,
+                    horizon_bars=horizon_bars,
+                )
+                model = None
+                long_probabilities = _probabilities(
+                    direction_models["long"],
+                    outer_validation,
+                    feature_columns,
+                )
+                short_probabilities = _probabilities(
+                    direction_models["short"],
+                    outer_validation,
+                    feature_columns,
+                )
+                predictions = _event_dual_actionability_prediction_frame(
+                    outer_validation,
+                    long_probabilities=long_probabilities,
+                    short_probabilities=short_probabilities,
+                    confidence_floor=confidence_floor,
+                    fold=fold_index,
+                    experiment=experiment.name,
+                    variant=variant,
+                )
+                selection = {
+                    "policy": "fixed_event_barrier_v7_dual_actionability_no_outer_tuning",
+                    "selected_variant": variant.name,
+                    "decision_threshold": decision_threshold,
+                    "opportunity_threshold": confidence_floor,
+                    "action_margin_floor": DUAL_ACTION_MARGIN_FLOOR,
+                    "event_label_policy": EVENT_LABEL_POLICY,
+                    "direction_policy": "independent_long_vs_rest_and_short_vs_rest",
                     "candidate_reports": [],
                     "training_counts": training_counts,
                 }
