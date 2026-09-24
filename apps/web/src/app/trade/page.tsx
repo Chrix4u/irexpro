@@ -529,6 +529,28 @@ export default function AiTradingPage() {
   }, [user, refreshTradingData]);
 
   useEffect(() => {
+    if (!user) return;
+    let disposed = false;
+    const refreshPositions = async () => {
+      try {
+        const next = await loadLiveAccountPositions();
+        if (!disposed) setLivePositions(next.positions);
+      } catch {
+        // The broader 8-second workspace refresh owns the user-facing warning.
+        // Keep the last authoritative position snapshot rather than flashing
+        // empty/zero state on a transient provider read failure.
+      }
+    };
+    const timer = window.setInterval(() => {
+      void refreshPositions();
+    }, 3000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [user]);
+
+  useEffect(() => {
     if (!pendingAutomationAction) return;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
