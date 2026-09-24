@@ -72,6 +72,11 @@ class SessionSchedulerStatusResponse(BaseModel):
     replay_steps_last_cycle: int = 0
     replay_steps_total: int = 0
     signals_published_total: int = 0
+    last_strategy_outcome: str | None = None
+    last_strategy_reason: str | None = None
+    last_trade_id: str | None = None
+    executions_succeeded_total: int = 0
+    downstream_rejected_total: int = 0
 
 
 class SessionSchedulerResponse(BaseModel):
