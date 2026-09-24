@@ -114,6 +114,11 @@ interface AiAutomationRuntimeStatus {
   market_data_age_seconds: number | null;
   market_data_cache_bypassed: boolean;
   last_publish_failed: boolean;
+  research_uat?: boolean;
+  replay_steps_per_cycle?: number;
+  replay_steps_last_cycle?: number;
+  replay_steps_total?: number;
+  signals_published_total?: number;
 }
 
 function runtimeReasonLabel(reason: string | null | undefined): string {
@@ -128,6 +133,8 @@ function runtimeReasonLabel(reason: string | null | undefined): string {
       'Current AI model is not yet approved for live-money automation',
     MarketDataError:
       'Market data is unavailable or invalid; this scan was skipped and no confidence was evaluated',
+    research_uat_replay_budget_exhausted:
+      'Research PAPER replay completed its bounded market steps without an eligible signal',
   };
   return labels[reason] ?? reason.replaceAll('_', ' ');
 }
@@ -531,7 +538,7 @@ export default function AiTradingPage() {
         });
         notify.success(
           selectedBroker.brokerId === 'paper-broker'
-            ? 'AI Trading started in the internal paper simulator.'
+            ? 'Research PAPER UAT started in the internal simulator. No live broker funds are reachable.'
             : selectedBroker.accountType === 'DEMO'
               ? "AI Trading started against this broker's DEMO environment. No live funds are used."
               : 'AI Trading started for the verified live account.',
@@ -581,6 +588,9 @@ export default function AiTradingPage() {
             <Badge variant={automationOn ? 'success' : 'info'}>
               {automationOn ? 'RUNNING' : 'STOPPED'}
             </Badge>
+            {selectedBroker?.brokerId === 'paper-broker' && (
+              <Badge variant="warning">RESEARCH PAPER</Badge>
+            )}
           </div>
         </section>
 
@@ -591,6 +601,14 @@ export default function AiTradingPage() {
         {allocationWarning && <Alert variant="warning">{allocationWarning}</Alert>}
         {activityWarning && <Alert variant="warning">{activityWarning}</Alert>}
         {automationRuntimeWarning && <Alert variant="warning">{automationRuntimeWarning}</Alert>}
+        {selectedBroker?.brokerId === 'paper-broker' && (
+          <Alert variant="info">
+            <strong>Research PAPER UAT · simulated execution only.</strong>{' '}
+            Accelerated replay may advance multiple simulated market steps per cycle so the
+            end-to-end AI, risk, execution, position and P&amp;L workflow can be tested faster.
+            No live broker funds are reachable, and model promotion gates remain unchanged.
+          </Alert>
+        )}
 
         {loading && !terminal ? (
           <Card title="Loading AI Trader">
@@ -840,8 +858,10 @@ export default function AiTradingPage() {
                   <div>
                     <span>Data read</span>
                     <strong>
-                      {selectedBroker?.brokerId === 'paper-broker'
-                        ? 'Paper simulator · one heartbeat per scan'
+                      {automationRuntime?.research_uat
+                        ? `Research replay · up to ${automationRuntime.replay_steps_per_cycle ?? 1} market steps/cycle`
+                        : selectedBroker?.brokerId === 'paper-broker'
+                          ? 'Paper simulator · one heartbeat per scan'
                         : automationRuntime?.market_data_cache_bypassed
                           ? 'Broker queried every scan'
                           : automationRuntime?.source
@@ -849,6 +869,21 @@ export default function AiTradingPage() {
                             : '—'}
                     </strong>
                   </div>
+                  {automationRuntime?.research_uat && (
+                    <>
+                      <div>
+                        <span>Replay steps</span>
+                        <strong>
+                          {automationRuntime.replay_steps_last_cycle ?? 0} last cycle ·{' '}
+                          {automationRuntime.replay_steps_total ?? 0} total
+                        </strong>
+                      </div>
+                      <div>
+                        <span>UAT signals</span>
+                        <strong>{automationRuntime.signals_published_total ?? 0} published</strong>
+                      </div>
+                    </>
+                  )}
                   <div>
                     <span>Last decision</span>
                     <strong>{automationRuntime?.last_decision?.replaceAll('_', ' ') ?? 'WAITING'}</strong>
@@ -869,9 +904,9 @@ export default function AiTradingPage() {
 
                 {automationRuntime?.model_mode === 'heuristic_placeholder' && (
                   <Alert variant="warning">
-                    The active model is the baseline heuristic scaffold, not a trained XGBoost model.
-                    Confidence is calculated from engineered market features and must not be interpreted
-                    as a production-model probability.
+                    The active model is the baseline heuristic scaffold, not a promoted XGBoost model.
+                    In Research PAPER UAT this is used to exercise the product workflow only; simulated
+                    trades are not evidence of production trading performance.
                   </Alert>
                 )}
 
