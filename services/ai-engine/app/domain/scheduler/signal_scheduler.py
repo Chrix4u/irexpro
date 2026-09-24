@@ -56,6 +56,7 @@ class ScheduledSessionJob:
     replay_steps_last_cycle: int = 0
     replay_steps_total: int = 0
     signals_published_total: int = 0
+    last_uat_probe_at: datetime | None = None
     registered_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -231,8 +232,17 @@ class SignalScheduler:
             else list(job.instruments)
         )
 
-        for instrument in scan_plan:
+        for scan_index, instrument in enumerate(scan_plan):
             try:
+                now = datetime.now(UTC)
+                probe_due = (
+                    job.research_uat
+                    and scan_index == len(scan_plan) - 1
+                    and (
+                        job.last_uat_probe_at is None
+                        or (now - job.last_uat_probe_at).total_seconds() >= 60
+                    )
+                )
                 result = await generator.generate(
                     user_id=job.user_id,
                     trading_session_id=job.trading_session_id,
@@ -241,6 +251,7 @@ class SignalScheduler:
                     timeframe=job.timeframe,
                     source=job.source,
                     bypass_market_data_cache=job.source == "broker",
+                    uat_workflow_probe=probe_due,
                 )
 
                 job.replay_steps_last_cycle += 1
@@ -291,11 +302,22 @@ class SignalScheduler:
                     continue
 
                 await self._nestjs_client.publish_signal(result.signal)
-                job.last_decision = "SIGNAL_PUBLISHED"
-                job.last_reason = "confidence_threshold_passed"
+                is_uat_probe = bool(
+                    result.signal.metadata.get("uat_workflow_probe")
+                )
+                job.last_decision = (
+                    "UAT_WORKFLOW_PROBE" if is_uat_probe else "SIGNAL_PUBLISHED"
+                )
+                job.last_reason = (
+                    "uat_workflow_probe_published"
+                    if is_uat_probe
+                    else "confidence_threshold_passed"
+                )
                 job.last_confidence_score = result.signal.confidence_score
                 job.last_confidence_at = job.last_run_at
                 job.signals_published_total += 1
+                if is_uat_probe:
+                    job.last_uat_probe_at = job.last_run_at
                 published_this_cycle = True
 
                 # Research UAT intentionally publishes at most one signal per cycle.
