@@ -688,7 +688,6 @@ describe('StrategyOrchestratorService', () => {
       ['PENDING', TradeStatus.PENDING],
       ['OPEN', TradeStatus.OPEN],
       ['CLOSED', TradeStatus.CLOSED],
-      ['RECONCILIATION_PENDING', TradeStatus.RECONCILIATION_PENDING],
     ])(
       'duplicate with an existing %s trade → EXECUTION_SUCCEEDED + duplicateOfTrade (no fresh evaluation, no dispatch)',
       async (_label: string, status: TradeStatus) => {
@@ -716,6 +715,7 @@ describe('StrategyOrchestratorService', () => {
     it.each([
       ['REJECTED', TradeStatus.REJECTED],
       ['CANCELLED', TradeStatus.CANCELLED],
+      ['RECONCILIATION_PENDING', TradeStatus.RECONCILIATION_PENDING],
     ])(
       'duplicate with an existing %s trade → EXECUTION_FAILED + duplicateOfTrade (no fresh evaluation, no dispatch)',
       async (_label: string, status: TradeStatus) => {
