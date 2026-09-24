@@ -1,7 +1,7 @@
 """Tests for SignalScheduler."""
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -418,13 +418,19 @@ async def test_research_uat_probe_uses_real_confidence_and_obeys_one_minute_cool
     assert job.last_strategy_outcome == "EXECUTION_SUCCEEDED"
     assert job.last_trade_id == "trade-uat-1"
     assert job.executions_succeeded_total == 1
+    assert job.uat_probe_executions_succeeded_total == 1
     assert job.downstream_rejected_total == 0
 
+    # Even after the legacy one-minute probe cooldown has elapsed, a successful
+    # workflow probe permanently disables further low-confidence injection for
+    # this Research PAPER UAT session.
+    job.last_uat_probe_at = datetime.now(UTC) - timedelta(seconds=61)
     await scheduler._run_session_job("session-1")
 
     assert mock_generator.generate.await_count == 24
     assert scheduler._nestjs_client.publish_signal.await_count == 1
     assert job.signals_published_total == 1
+    assert job.uat_probe_executions_succeeded_total == 1
 
 
 
@@ -515,6 +521,7 @@ class ScheduledSessionJobStub:
     last_strategy_reason = None
     last_trade_id = None
     executions_succeeded_total = 0
+    uat_probe_executions_succeeded_total = 0
     downstream_rejected_total = 0
     last_uat_probe_at = None
 
