@@ -70,6 +70,11 @@ export interface TradeExecutionView {
   realisedPnl: string | null;
   commission: string | null;
   swap: string | null;
+  /**
+   * Bounded, user-safe outcome classification. Optional during rolling
+   * deployments; raw provider rejection diagnostics are never exposed.
+   */
+  executionReasonCode?: string | null;
   closeReason: TradeExecutionCloseReason | null;
   openedAt: string | null;
   closedAt: string | null;
