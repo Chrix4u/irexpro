@@ -688,7 +688,7 @@ export default function AiTradingPage() {
                   </Button>
                 </div>
                 <span className="ai-control-card__hint">
-                  Available to new positions: {money(allocation?.availableCapital, allocation?.accountCurrency)}
+                  Shared across multiple AI trades. Available now: {money(allocation?.availableCapital, allocation?.accountCurrency)}
                 </span>
               </Card>
 
@@ -722,14 +722,36 @@ export default function AiTradingPage() {
             </section>
 
             <section className="ai-overview-grid">
-              <Card className="ai-overview-card">
-                <span className="ai-control-card__label">Allocated capital</span>
+              <Card className="ai-overview-card ai-overview-card--allocation-pool">
+                <span className="ai-control-card__label">AI capital pool</span>
                 <strong className="ai-overview-card__value">
                   {money(allocation?.allocatedCapital, allocation?.accountCurrency)}
                 </strong>
                 <span className="muted text-sm">
-                  Committed: {money(allocation?.committedCapital, allocation?.accountCurrency)}
+                  Shared across multiple trades — each trade commits only its broker-required margin.
                 </span>
+                <dl className="ai-allocation-breakdown" aria-label="AI capital pool breakdown">
+                  <div>
+                    <dt>Available</dt>
+                    <dd>{money(allocation?.availableCapital, allocation?.accountCurrency)}</dd>
+                  </div>
+                  <div>
+                    <dt>Committed now</dt>
+                    <dd>{money(allocation?.committedCapital, allocation?.accountCurrency)}</dd>
+                  </div>
+                  <div>
+                    <dt>Open positions</dt>
+                    <dd>{money(allocation?.openPositionCommitments, allocation?.accountCurrency)}</dd>
+                  </div>
+                  <div>
+                    <dt>Pending orders</dt>
+                    <dd>{money(allocation?.pendingOrderCommitments, allocation?.accountCurrency)}</dd>
+                  </div>
+                  <div>
+                    <dt>In-flight decisions</dt>
+                    <dd>{money(allocation?.inFlightCommitments, allocation?.accountCurrency)}</dd>
+                  </div>
+                </dl>
               </Card>
               <Card className="ai-overview-card">
                 <span className="ai-control-card__label">Open positions</span>
