@@ -110,8 +110,9 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
   beforeEach(() => {
     brokerService = {
       getBrokerAccountState: jest.fn().mockResolvedValue(accountState()),
-      getRequiredMargin: jest.fn().mockImplementation(
-        async (_connectionId: string, params: { lotSize: string }) => {
+      getRequiredMargin: jest
+        .fn()
+        .mockImplementation(async (_connectionId: string, params: { lotSize: string }) => {
           const lotMargins: Record<string, string> = {
             '0.01': '10.85',
             '0.1': '108.50',
@@ -120,8 +121,7 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
             '0.256': '277.76',
           };
           return lotMargins[params.lotSize] ?? '217.00';
-        },
-      ),
+        }),
     };
     orderGeometry = {
       resolveOrderGeometry: jest.fn().mockResolvedValue(geometry()),
