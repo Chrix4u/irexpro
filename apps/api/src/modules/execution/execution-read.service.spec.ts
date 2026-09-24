@@ -1,23 +1,15 @@
-import type { EntityManager, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { ExecutionReadService } from './execution-read.service';
 import { Trade, TradeStatus } from './entities/trade.entity';
-import type { TradeEntryDecisionSource } from './dto/trade-execution-response.dto';
 
 describe('ExecutionReadService', () => {
   let service: ExecutionReadService;
-  let tradeRepo: Pick<Repository<Trade>, 'find' | 'manager'> & { find: jest.Mock };
-  let tradeIntentRepo: { find: jest.Mock };
-  let getRepository: jest.Mock;
+  let tradeRepo: Pick<Repository<Trade>, 'find'> & { find: jest.Mock };
 
   const USER_ID = '11111111-1111-4111-8111-111111111111';
 
   beforeEach(() => {
-    tradeIntentRepo = { find: jest.fn().mockResolvedValue([]) };
-    getRepository = jest.fn().mockReturnValue(tradeIntentRepo);
-    tradeRepo = {
-      find: jest.fn().mockResolvedValue([]),
-      manager: { getRepository } as unknown as EntityManager,
-    };
+    tradeRepo = { find: jest.fn().mockResolvedValue([]) };
     service = new ExecutionReadService(tradeRepo as unknown as Repository<Trade>);
   });
 
@@ -65,31 +57,5 @@ describe('ExecutionReadService', () => {
 
     await service.listClosedExecutions(USER_ID, -5);
     expect(tradeRepo.find).toHaveBeenLastCalledWith(expect.objectContaining({ take: 1 }));
-  });
-
-  it('batch-resolves trade intents with both user and trade ids', async () => {
-    const tradeA = { id: 'trade-a' } as Trade;
-    const tradeB = { id: 'trade-b' } as Trade;
-    tradeIntentRepo.find.mockResolvedValue([
-      { tradeId: 'trade-a', userId: USER_ID } as TradeEntryDecisionSource,
-      { tradeId: 'trade-b', userId: USER_ID } as TradeIntent,
-    ]);
-
-    const result = await service.getTradeIntentMap(USER_ID, [tradeA, tradeB]);
-
-    expect(getRepository).toHaveBeenCalled();
-    expect(tradeIntentRepo.find).toHaveBeenCalledWith({
-      where: {
-        userId: USER_ID,
-        tradeId: expect.anything(),
-      },
-    });
-    expect(result.get('trade-a')?.userId).toBe(USER_ID);
-    expect(result.get('trade-b')?.userId).toBe(USER_ID);
-  });
-
-  it('does not query intent storage when there are no trades', async () => {
-    await expect(service.getTradeIntentMap(USER_ID, [])).resolves.toEqual(new Map());
-    expect(getRepository).not.toHaveBeenCalled();
   });
 });

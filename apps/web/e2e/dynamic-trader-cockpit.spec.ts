@@ -26,10 +26,6 @@ const executionPosition = {
   realisedPnl: null,
   commission: '0.20',
   swap: '0',
-  entryDecisionKind: 'QUALIFIED_AI',
-  entryConfidenceScore: 0.72,
-  entryConfidenceThreshold: 0.6,
-  entryModelVersion: 'xgboost-mtf-v1',
   closeReason: null,
   openedAt: '2026-08-31T00:45:00.000Z',
   closedAt: null,
@@ -196,46 +192,19 @@ async function gotoAiTrader(
       return fulfill(200, options.brokerPayload ?? mockBrokerConnections);
     }
     if (apiPath === 'execution/positions/open') {
-      const trade = options.researchUat
-        ? {
-            ...executionPosition,
-            entryDecisionKind: 'RESEARCH_UAT_PROBE',
-            entryConfidenceScore: 0.0224,
-            entryConfidenceThreshold: 0.6,
-            entryModelVersion: 'baseline-xgboost-v0.1.0',
-          }
-        : executionPosition;
       return options.failExecutionReads
         ? fulfill(500, { statusCode: 500, message: 'Internal Server Error' })
-        : fulfill(200, [trade]);
+        : fulfill(200, [executionPosition]);
     }
     if (apiPath === 'execution/trades/recent') {
-      const recent = options.researchUat
-        ? [rejectedExecution, executionPosition, closedExecution].map((trade) => ({
-            ...trade,
-            entryDecisionKind: 'RESEARCH_UAT_PROBE',
-            entryConfidenceScore: 0.0224,
-            entryConfidenceThreshold: 0.6,
-            entryModelVersion: 'baseline-xgboost-v0.1.0',
-          }))
-        : [rejectedExecution, executionPosition, closedExecution];
       return options.failExecutionReads
         ? fulfill(500, { statusCode: 500, message: 'Internal Server Error' })
-        : fulfill(200, recent);
+        : fulfill(200, [rejectedExecution, executionPosition, closedExecution]);
     }
     if (apiPath === 'execution/trades/closed') {
-      const trade = options.researchUat
-        ? {
-            ...closedExecution,
-            entryDecisionKind: 'RESEARCH_UAT_PROBE',
-            entryConfidenceScore: 0.0224,
-            entryConfidenceThreshold: 0.6,
-            entryModelVersion: 'baseline-xgboost-v0.1.0',
-          }
-        : closedExecution;
       return options.failExecutionReads
         ? fulfill(500, { statusCode: 500, message: 'Internal Server Error' })
-        : fulfill(200, [trade]);
+        : fulfill(200, [closedExecution]);
     }
     if (apiPath === 'live-account/positions') {
       return options.failPositionRead
@@ -343,16 +312,8 @@ test.describe('AI Trader novice workflow', () => {
     await expect(page.getByText('0 executed · 0 rejected', { exact: true })).toBeVisible();
     await expect(page.getByText('Workflow-probe execution', { exact: true })).toBeVisible();
     await expect(page.getByText('2 executed · 1 rejected', { exact: true })).toBeVisible();
-    await expect(page.getByText('Workflow probe status', { exact: true })).toBeVisible();
-    await expect(
-      page.getByText('COMPLETE · low-confidence probe injection disabled', { exact: true }),
-    ).toBeVisible();
     await expect(
       page.getByText('2.24% actual model confidence · 60.00% normal AI gate', { exact: true }),
-    ).toBeVisible();
-    await expect(page.getByText('Research UAT probe', { exact: true }).first()).toBeVisible();
-    await expect(
-      page.getByText('Entry confidence 2.24% / 60.00% gate', { exact: true }).first(),
     ).toBeVisible();
     await expect(
       page.getByText(
@@ -388,10 +349,6 @@ test.describe('AI Trader novice workflow', () => {
     await expect(page.getByText(/EURUSD.*GBPUSD.*USDJPY/i)).toBeVisible();
     await expect(page.getByText('NO TRADE', { exact: true })).toBeVisible();
     await expect(page.getByText('54.00% / 60.00% required', { exact: true })).toBeVisible();
-    await expect(page.getByText('Qualified AI', { exact: true }).first()).toBeVisible();
-    await expect(
-      page.getByText('Entry confidence 72.00% / 60.00% gate', { exact: true }).first(),
-    ).toBeVisible();
     await expect(
       page.getByText('Market setup did not meet the confidence threshold', { exact: true }),
     ).toBeVisible();

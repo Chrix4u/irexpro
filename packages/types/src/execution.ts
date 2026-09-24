@@ -15,8 +15,6 @@ export type TradeExecutionStatus =
 
 export type TradeExecutionDirection = 'BUY' | 'SELL';
 
-export type TradeEntryDecisionKind = 'QUALIFIED_AI' | 'RESEARCH_UAT_PROBE' | 'UNKNOWN';
-
 export type TradeExecutionCloseReason =
   | 'STOP_LOSS_HIT'
   | 'TAKE_PROFIT_HIT'
@@ -77,14 +75,6 @@ export interface TradeExecutionView {
    * deployments; raw provider rejection diagnostics are never exposed.
    */
   executionReasonCode?: string | null;
-  /** Safe provenance for the exact AI decision that created this trade. */
-  entryDecisionKind?: TradeEntryDecisionKind;
-  /** 0..1 confidence attached to the entry decision. */
-  entryConfidenceScore?: number | null;
-  /** 0..1 confidence gate attached to the entry decision. */
-  entryConfidenceThreshold?: number | null;
-  /** Model version attached to the entry decision. */
-  entryModelVersion?: string | null;
   closeReason: TradeExecutionCloseReason | null;
   openedAt: string | null;
   closedAt: string | null;

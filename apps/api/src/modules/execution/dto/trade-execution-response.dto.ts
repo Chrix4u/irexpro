@@ -12,65 +12,12 @@ import { Trade, TradeCloseReason, TradeDirection, TradeStatus } from '../entitie
  * account currency provenance.
  */
 
-export type TradeEntryDecisionKind = 'QUALIFIED_AI' | 'RESEARCH_UAT_PROBE' | 'UNKNOWN';
-
-export interface TradeEntryDecisionSource {
-  tradeId: string | null;
-  strategyCode: string | null;
-  modelVersion: string | null;
-  metadata: Record<string, unknown> | null;
-}
-
 const KNOWN_EXECUTION_REASON_CODES = [
   'MARKET_SAFETY_MARKET_DATA_UNAVAILABLE',
   'MARKET_SAFETY_STALE_PRICE',
   'MARKET_SAFETY_ABNORMAL_SPREAD',
   'MARKET_SAFETY_PRICE_DEVIATION_EXCESSIVE',
 ] as const;
-
-function finiteProbability(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1
-    ? value
-    : null;
-}
-
-function toEntryDecisionProvenance(intent: TradeEntryDecisionSource | null): {
-  entryDecisionKind: TradeEntryDecisionKind;
-  entryConfidenceScore: number | null;
-  entryConfidenceThreshold: number | null;
-  entryModelVersion: string | null;
-} {
-  if (!intent) {
-    return {
-      entryDecisionKind: 'UNKNOWN',
-      entryConfidenceScore: null,
-      entryConfidenceThreshold: null,
-      entryModelVersion: null,
-    };
-  }
-
-  const metadata = intent.metadata ?? {};
-  const confidence = finiteProbability(metadata.confidenceScore);
-  const threshold = finiteProbability(metadata.model_confidence_threshold);
-  const isUatProbe =
-    intent.strategyCode?.startsWith('uat-workflow-probe-') === true &&
-    metadata.uat_workflow_probe === true &&
-    metadata.production_eligible === false;
-
-  const qualified =
-    !isUatProbe &&
-    metadata.production_eligible !== false &&
-    confidence !== null &&
-    threshold !== null &&
-    confidence >= threshold;
-
-  return {
-    entryDecisionKind: isUatProbe ? 'RESEARCH_UAT_PROBE' : qualified ? 'QUALIFIED_AI' : 'UNKNOWN',
-    entryConfidenceScore: confidence,
-    entryConfidenceThreshold: threshold,
-    entryModelVersion: intent.modelVersion ?? null,
-  };
-}
 
 function toExecutionReasonCode(trade: Trade): string | null {
   if (trade.status === TradeStatus.RECONCILIATION_PENDING) {
@@ -145,34 +92,6 @@ export class TradeExecutionResponseDto {
   })
   executionReasonCode: string | null;
 
-  @ApiProperty({
-    enum: ['QUALIFIED_AI', 'RESEARCH_UAT_PROBE', 'UNKNOWN'],
-    description: 'Safe classification of the AI decision that created this execution.',
-  })
-  entryDecisionKind: TradeEntryDecisionKind;
-
-  @ApiPropertyOptional({
-    nullable: true,
-    minimum: 0,
-    maximum: 1,
-    description: 'Model confidence attached to this exact entry decision.',
-  })
-  entryConfidenceScore: number | null;
-
-  @ApiPropertyOptional({
-    nullable: true,
-    minimum: 0,
-    maximum: 1,
-    description: 'Confidence threshold recorded with this exact entry decision.',
-  })
-  entryConfidenceThreshold: number | null;
-
-  @ApiPropertyOptional({
-    nullable: true,
-    description: 'Model version recorded with this exact entry decision.',
-  })
-  entryModelVersion: string | null;
-
   @ApiPropertyOptional({ enum: TradeCloseReason, nullable: true })
   closeReason: TradeCloseReason | null;
 
@@ -189,11 +108,7 @@ export class TradeExecutionResponseDto {
   updatedAt: Date;
 }
 
-export function toTradeExecutionResponse(
-  trade: Trade,
-  intent: TradeEntryDecisionSource | null = null,
-): TradeExecutionResponseDto {
-  const entryProvenance = toEntryDecisionProvenance(intent);
+export function toTradeExecutionResponse(trade: Trade): TradeExecutionResponseDto {
   return {
     id: trade.id,
     instrument: trade.instrument,
@@ -211,7 +126,6 @@ export function toTradeExecutionResponse(
     commission: trade.accountCurrency ? trade.commission : null,
     swap: trade.accountCurrency ? trade.swap : null,
     executionReasonCode: toExecutionReasonCode(trade),
-    ...entryProvenance,
     closeReason: trade.closeReason,
     openedAt: trade.openedAt,
     closedAt: trade.closedAt,

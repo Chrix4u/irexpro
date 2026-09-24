@@ -165,20 +165,6 @@ function modelModeLabel(mode: string | null | undefined): string {
   return mode.replaceAll('_', ' ');
 }
 
-function entryDecisionLabel(kind: TradeExecutionView['entryDecisionKind']): string | null {
-  if (kind === 'QUALIFIED_AI') return 'Qualified AI';
-  if (kind === 'RESEARCH_UAT_PROBE') return 'Research UAT probe';
-  return null;
-}
-
-function entryConfidenceLabel(trade: TradeExecutionView): string | null {
-  if (trade.entryConfidenceScore == null) return null;
-  const score = formatConfidence(trade.entryConfidenceScore);
-  return trade.entryConfidenceThreshold == null
-    ? `Entry confidence ${score}`
-    : `Entry confidence ${score} / ${formatConfidence(trade.entryConfidenceThreshold)} gate`;
-}
-
 function executionReasonLabel(code: string | null | undefined): string | null {
   if (!code) return null;
   const labels: Record<string, string> = {
@@ -202,15 +188,7 @@ function executionReasonLabel(code: string | null | undefined): string | null {
   return labels[code] ?? 'Execution did not establish an active position.';
 }
 
-function PositionCard({
-  position,
-  trade,
-}: {
-  position: LivePositionRowView;
-  trade?: TradeExecutionView;
-}) {
-  const entryLabel = entryDecisionLabel(trade?.entryDecisionKind);
-  const confidenceLabel = trade ? entryConfidenceLabel(trade) : null;
+function PositionCard({ position }: { position: LivePositionRowView }) {
   return (
     <article className="ai-position-card">
       <div className="ai-position-card__head">
@@ -230,17 +208,6 @@ function PositionCard({
         <div><dt>Stop loss</dt><dd>{position.stopLoss}</dd></div>
         <div><dt>Take profit</dt><dd>{position.takeProfit}</dd></div>
       </dl>
-      {(entryLabel || confidenceLabel) && (
-        <div className="ai-entry-provenance">
-          {entryLabel && (
-            <Badge variant={trade?.entryDecisionKind === 'RESEARCH_UAT_PROBE' ? 'warning' : 'info'}>
-              {entryLabel}
-            </Badge>
-          )}
-          {confidenceLabel && <span>{confidenceLabel}</span>}
-          {trade?.entryModelVersion && <span>{trade.entryModelVersion}</span>}
-        </div>
-      )}
       <div className="ai-position-card__foot">
         <span>{position.brokerName ?? 'Broker'}</span>
         <span>{formatTimestamp(position.openedAt ?? position.createdAt)}</span>
@@ -252,8 +219,6 @@ function PositionCard({
 function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
   const realized = trade.status === 'CLOSED' ? trade.realisedPnl : null;
   const executionReason = executionReasonLabel(trade.executionReasonCode);
-  const entryLabel = entryDecisionLabel(trade.entryDecisionKind);
-  const confidenceLabel = entryConfidenceLabel(trade);
   return (
     <article className="ai-activity-row">
       <div className="ai-activity-row__symbol">
@@ -277,23 +242,12 @@ function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
             {realized.startsWith('-') ? '' : '+'}{money(realized, trade.accountCurrency)}
           </Badge>
         )}
-        {entryLabel && (
-          <Badge variant={trade.entryDecisionKind === 'RESEARCH_UAT_PROBE' ? 'warning' : 'info'}>
-            {entryLabel}
-          </Badge>
-        )}
       </div>
       {trade.status === 'CLOSED' && (
         <div className="ai-activity-row__details">
           <span>Entry {trade.fillPrice ?? trade.requestedEntryPrice}</span>
           <span>Exit {trade.exitPrice ?? '—'}</span>
           <span>{trade.closeReason ? trade.closeReason.replaceAll('_', ' ') : 'CLOSED'}</span>
-        </div>
-      )}
-      {(confidenceLabel || trade.entryModelVersion) && (
-        <div className="ai-activity-row__provenance">
-          {confidenceLabel && <span>{confidenceLabel}</span>}
-          {trade.entryModelVersion && <span>Model {trade.entryModelVersion}</span>}
         </div>
       )}
       {executionReason && (
@@ -346,11 +300,6 @@ export default function AiTradingPage() {
       terminal?.primaryBroker ??
       null,
     [terminal, selectedBrokerId],
-  );
-
-  const openExecutionById = useMemo(
-    () => new Map((execution?.openPositions ?? []).map((trade) => [trade.id, trade])),
-    [execution],
   );
 
   const emitActivityToasts = useCallback(
@@ -1121,11 +1070,7 @@ export default function AiTradingPage() {
                 ) : (
                   <div className="ai-position-grid">
                     {livePositions.map((position) => (
-                      <PositionCard
-                        key={position.id}
-                        position={position}
-                        trade={openExecutionById.get(position.id)}
-                      />
+                      <PositionCard key={position.id} position={position} />
                     ))}
                   </div>
                 )}

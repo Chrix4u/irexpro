@@ -2,25 +2,6 @@ import { ExecutionController } from './execution.controller';
 import { ExecutionReadService } from './execution-read.service';
 import { AllocationService } from './services/allocation.service';
 import { Trade, TradeCloseReason, TradeDirection, TradeStatus } from './entities/trade.entity';
-import { TradeIntent } from './entities/trade-intent.entity';
-
-function makeIntent(overrides: Partial<TradeIntent> = {}): TradeIntent {
-  const intent = new TradeIntent();
-  Object.assign(intent, {
-    id: '55555555-5555-4555-8555-555555555555',
-    userId: '11111111-1111-4111-8111-111111111111',
-    tradeId: '22222222-2222-4222-8222-222222222222',
-    strategyCode: 'xgboost-mtf-trained-m1',
-    modelVersion: 'xgboost-mtf-v1',
-    metadata: {
-      confidenceScore: 0.72,
-      model_confidence_threshold: 0.6,
-      production_eligible: true,
-    },
-    ...overrides,
-  });
-  return intent;
-}
 
 function makeTrade(overrides: Partial<Trade> = {}): Trade {
   const trade = new Trade();
@@ -64,12 +45,6 @@ describe('ExecutionController frontend-safe responses', () => {
 
   beforeEach(() => {
     readService = {
-      getTradeIntentMap: jest
-        .fn()
-        .mockImplementation(
-          async (_userId: string, trades: Trade[]) =>
-            new Map(trades.map((trade) => [trade.id, makeIntent({ tradeId: trade.id })])),
-        ),
       listOpenPositions: jest.fn().mockResolvedValue([makeTrade()]),
       listRecentExecutions: jest.fn().mockResolvedValue([
         makeTrade({
@@ -129,42 +104,7 @@ describe('ExecutionController frontend-safe responses', () => {
       fillPrice: '1.10010000',
       accountCurrency: 'USD',
       realisedPnl: null,
-      entryDecisionKind: 'QUALIFIED_AI',
-      entryConfidenceScore: 0.72,
-      entryConfidenceThreshold: 0.6,
-      entryModelVersion: 'xgboost-mtf-v1',
     });
-    expect(JSON.stringify(response)).not.toContain('production_eligible');
-    expect(JSON.stringify(response)).not.toContain('uat_workflow_probe');
-  });
-
-  it('classifies an exact low-confidence research workflow probe without exposing raw metadata', async () => {
-    readService.getTradeIntentMap.mockResolvedValue(
-      new Map([
-        [
-          '22222222-2222-4222-8222-222222222222',
-          makeIntent({
-            strategyCode: 'uat-workflow-probe-h1',
-            modelVersion: 'baseline-xgboost-v0.1.0',
-            metadata: {
-              confidenceScore: 0.0224,
-              model_confidence_threshold: 0.6,
-              uat_workflow_probe: true,
-              production_eligible: false,
-            },
-          }),
-        ],
-      ]),
-    );
-
-    const [response] = await controller.listOpenPositions(USER_ID);
-
-    expect(response.entryDecisionKind).toBe('RESEARCH_UAT_PROBE');
-    expect(response.entryConfidenceScore).toBe(0.0224);
-    expect(response.entryConfidenceThreshold).toBe(0.6);
-    expect(response.entryModelVersion).toBe('baseline-xgboost-v0.1.0');
-    expect(JSON.stringify(response)).not.toContain('uat_workflow_probe');
-    expect(JSON.stringify(response)).not.toContain('production_eligible');
   });
 
   it('exposes only a bounded execution reason classification for rejected trades', async () => {
