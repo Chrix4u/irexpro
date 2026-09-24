@@ -93,6 +93,24 @@ describe('ExecutionController frontend-safe responses', () => {
     });
   });
 
+  it('exposes only a bounded execution reason classification for rejected trades', async () => {
+    readService.listRecentExecutions.mockResolvedValue([
+      makeTrade({
+        status: TradeStatus.REJECTED,
+        brokerRejectionReason:
+          'MARKET_SAFETY_PRICE_DEVIATION_EXCESSIVE: internal provider detail must not leak',
+      }),
+    ]);
+
+    const [response] = await controller.listRecentExecutions(USER_ID, 50);
+
+    expect(response.executionReasonCode).toBe(
+      'MARKET_SAFETY_PRICE_DEVIATION_EXCESSIVE',
+    );
+    expect(Object.keys(response)).not.toContain('brokerRejectionReason');
+    expect(JSON.stringify(response)).not.toContain('internal provider detail');
+  });
+
   it('returns authoritative lifecycle fields and currency-bound realized P&L', async () => {
     const [response] = await controller.listRecentExecutions(USER_ID, 50);
     expect(response.exitPrice).toBe('1.10800000');
