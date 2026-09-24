@@ -51,6 +51,20 @@ async def start_session_scheduler(
     """
     settings = get_settings()
 
+    if request.research_uat:
+        safe_research_uat = (
+            request.mode in ("paper", "PAPER_ONLY")
+            and request.account_type == "DEMO"
+            and request.broker_id == "paper-broker"
+            and request.source == "broker"
+        )
+        if not safe_research_uat:
+            return SessionSchedulerResponse(
+                registered=False,
+                trading_session_id=request.trading_session_id,
+                message="Research PAPER UAT is restricted to PAPER_ONLY paper-broker DEMO sessions",
+            )
+
     # Execution mode and broker environment are separate authority axes.
     # FULL_AUTO on a DEMO connection is automatic execution inside the broker's
     # sandbox. The current AI loader is paper-approved only, so any LIVE-bound
@@ -115,6 +129,11 @@ async def session_scheduler_status(
             active=False,
             instruments=[],
             confidence_threshold=settings.ai_min_confidence_score,
+            research_uat=False,
+            replay_steps_per_cycle=1,
+            replay_steps_last_cycle=0,
+            replay_steps_total=0,
+            signals_published_total=0,
         )
 
     anchor = job.last_run_at or job.registered_at
@@ -156,4 +175,9 @@ async def session_scheduler_status(
         market_data_age_seconds=market_data_age_seconds,
         market_data_cache_bypassed=job.market_data_cache_bypassed,
         last_publish_failed=job.last_publish_failed,
+        research_uat=job.research_uat,
+        replay_steps_per_cycle=job.replay_steps_per_cycle,
+        replay_steps_last_cycle=job.replay_steps_last_cycle,
+        replay_steps_total=job.replay_steps_total,
+        signals_published_total=job.signals_published_total,
     )

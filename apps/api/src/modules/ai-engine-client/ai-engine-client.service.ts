@@ -79,6 +79,11 @@ export class AiEngineClient {
         market_data_age_seconds: null,
         market_data_cache_bypassed: false,
         last_publish_failed: false,
+        research_uat: false,
+        replay_steps_per_cycle: 1,
+        replay_steps_last_cycle: 0,
+        replay_steps_total: 0,
+        signals_published_total: 0,
       };
     }
 

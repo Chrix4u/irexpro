@@ -9,6 +9,9 @@ export interface AiSchedulerSessionStartPayload {
   timeframe: string;
   intervalSeconds?: number;
   source: 'broker' | 'mock';
+  brokerId?: string;
+  researchUat?: boolean;
+  replayStepsPerCycle?: number;
   /**
    * Exact environment of the bound broker connection. FULL_AUTO on DEMO is
    * still demo execution; LIVE remains blocked by the paper-approved AI
@@ -50,6 +53,11 @@ export interface AiSchedulerSessionStatus {
   market_data_age_seconds: number | null;
   market_data_cache_bypassed: boolean;
   last_publish_failed: boolean;
+  research_uat?: boolean;
+  replay_steps_per_cycle?: number;
+  replay_steps_last_cycle?: number;
+  replay_steps_total?: number;
+  signals_published_total?: number;
 }
 
 export interface AiSchedulerSessionRegistration {

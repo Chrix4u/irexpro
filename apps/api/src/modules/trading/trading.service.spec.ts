@@ -352,6 +352,10 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       expect(aiEngineClient.notifySessionStarted).toHaveBeenCalledWith(
         expect.objectContaining({
           instruments: ['EURUSD'],
+          brokerId: 'paper-broker',
+          researchUat: true,
+          replayStepsPerCycle: 12,
+          intervalSeconds: 10,
         }),
       );
     });

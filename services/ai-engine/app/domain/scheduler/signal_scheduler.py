@@ -51,6 +51,11 @@ class ScheduledSessionJob:
     model_mode: str | None = None
     model_loaded: bool | None = None
     market_data_cache_bypassed: bool = False
+    research_uat: bool = False
+    replay_steps_per_cycle: int = 1
+    replay_steps_last_cycle: int = 0
+    replay_steps_total: int = 0
+    signals_published_total: int = 0
     registered_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -108,12 +113,32 @@ class SignalScheduler:
             logger.warning("Mock source blocked in production for scheduler")
             return False
 
+        if request.research_uat:
+            safe_research_uat = (
+                request.mode in ("paper", "PAPER_ONLY")
+                and request.account_type == "DEMO"
+                and request.broker_id == "paper-broker"
+                and request.source == "broker"
+            )
+            if not safe_research_uat:
+                logger.warning(
+                    "Research PAPER UAT rejected by safety boundary",
+                    mode=request.mode,
+                    account_type=request.account_type,
+                    broker_id=request.broker_id,
+                    source=request.source,
+                )
+                return False
+
         session_id = request.trading_session_id
         if session_id in self._jobs:
             logger.info("Duplicate scheduler job ignored", trading_session_id=session_id)
             return False
 
-        interval = request.interval_seconds or settings.ai_signal_interval_seconds
+        interval = request.interval_seconds or (
+            10 if request.research_uat else settings.ai_signal_interval_seconds
+        )
+        replay_steps = request.replay_steps_per_cycle if request.research_uat else 1
         job = ScheduledSessionJob(
             trading_session_id=session_id,
             user_id=request.user_id,
@@ -122,6 +147,8 @@ class SignalScheduler:
             timeframe=request.timeframe.upper(),
             source=request.source,
             interval_seconds=interval,
+            research_uat=request.research_uat,
+            replay_steps_per_cycle=replay_steps,
         )
         self._jobs[session_id] = job
 
@@ -141,6 +168,8 @@ class SignalScheduler:
             trading_session_id=session_id,
             interval_seconds=interval,
             source=request.source,
+            research_uat=request.research_uat,
+            replay_steps_per_cycle=replay_steps,
         )
         return True
 
@@ -190,8 +219,19 @@ class SignalScheduler:
             return
 
         generator = self._get_signal_generator()
+        job.replay_steps_last_cycle = 0
+        published_this_cycle = False
 
-        for instrument in job.instruments:
+        scan_plan = (
+            [
+                job.instruments[index % len(job.instruments)]
+                for index in range(job.replay_steps_per_cycle)
+            ]
+            if job.research_uat
+            else list(job.instruments)
+        )
+
+        for instrument in scan_plan:
             try:
                 result = await generator.generate(
                     user_id=job.user_id,
@@ -203,6 +243,8 @@ class SignalScheduler:
                     bypass_market_data_cache=job.source == "broker",
                 )
 
+                job.replay_steps_last_cycle += 1
+                job.replay_steps_total += 1
                 job.last_run_at = datetime.now(UTC)
                 telemetry = result.telemetry
                 if telemetry is not None:
@@ -216,9 +258,6 @@ class SignalScheduler:
                     if previous_revision == telemetry.market_data_revision:
                         job.last_decision = "NO_NEW_MARKET_DATA"
                         job.last_reason = "market_data_unchanged"
-                        # This cycle performed no new model evaluation. Never
-                        # present the previous scan's confidence as if it were
-                        # current evidence for an unchanged market revision.
                         job.last_confidence_score = None
                         job.last_confidence_at = None
                         logger.debug(
@@ -233,16 +272,21 @@ class SignalScheduler:
 
                 if not result.generated or result.signal is None:
                     job.last_decision = "NO_TRADE"
-                    job.last_reason = result.no_signal.reason if result.no_signal else "unknown"
+                    job.last_reason = (
+                        result.no_signal.reason if result.no_signal else "unknown"
+                    )
                     job.last_confidence_score = (
                         result.no_signal.confidence_score if result.no_signal else None
                     )
-                    job.last_confidence_at = job.last_run_at if job.last_confidence_score is not None else None
+                    job.last_confidence_at = (
+                        job.last_run_at if job.last_confidence_score is not None else None
+                    )
                     logger.debug(
                         "No signal to publish",
                         trading_session_id=trading_session_id,
                         instrument=instrument,
                         reason=job.last_reason,
+                        research_uat=job.research_uat,
                     )
                     continue
 
@@ -251,6 +295,12 @@ class SignalScheduler:
                 job.last_reason = "confidence_threshold_passed"
                 job.last_confidence_score = result.signal.confidence_score
                 job.last_confidence_at = job.last_run_at
+                job.signals_published_total += 1
+                published_this_cycle = True
+
+                # Research UAT intentionally publishes at most one signal per cycle.
+                if job.research_uat:
+                    break
             except Exception as e:
                 job.last_publish_failed = True
                 job.last_run_at = datetime.now(UTC)
@@ -263,4 +313,14 @@ class SignalScheduler:
                     trading_session_id=trading_session_id,
                     instrument=instrument,
                     error=str(e),
+                    research_uat=job.research_uat,
                 )
+                break
+
+        if (
+            job.research_uat
+            and not published_this_cycle
+            and not job.last_publish_failed
+            and job.last_decision == "NO_TRADE"
+        ):
+            job.last_reason = "research_uat_replay_budget_exhausted"
