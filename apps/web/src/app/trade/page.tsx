@@ -638,9 +638,23 @@ export default function AiTradingPage() {
     if (!user) return;
     const timer = window.setInterval(() => {
       void refreshTradingData(false);
-    }, 5000);
+    }, 8000);
     return () => window.clearInterval(timer);
   }, [user, refreshTradingData]);
+
+  useEffect(() => {
+    if (!user) return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      void loadLiveAccountPositions()
+        .then((next) => setLivePositions(next.positions))
+        .catch(() => {
+          // The full refresh owns the user-facing partial-read warning.
+          // Keep the last proven position marks rather than blanking the table.
+        });
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [user]);
 
   useEffect(() => {
     if (!pendingAutomationAction) return;
@@ -1287,7 +1301,7 @@ export default function AiTradingPage() {
                   </div>
                   <div>
                     <span>Live performance</span>
-                    <strong>Auto-refresh every 5 seconds</strong>
+                    <strong>Auto-refresh every 3 seconds</strong>
                   </div>
                 </div>
 
