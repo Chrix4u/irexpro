@@ -121,6 +121,33 @@ describe('MarketSafetyGateService — the final pre-commitment gate (Round 6 §5
     expect(orderService.rejectOrder).toHaveBeenCalled();
   });
 
+  it('accepts the deterministic historical clock only for the internal paper broker', async () => {
+    brokerService.getCurrentPriceForConnection.mockResolvedValue(
+      quote({ timestamp: new Date('2024-01-02T03:20:00.000Z') }),
+    );
+    await expect(
+      service.assertMarketSafeForDispatch(
+        intent(),
+        { brokerId: 'paper-broker' } as never,
+        'order-1',
+      ),
+    ).resolves.toBeUndefined();
+    expect(orderService.rejectOrder).not.toHaveBeenCalled();
+  });
+
+  it('still rejects the same historical timestamp for a real provider', async () => {
+    brokerService.getCurrentPriceForConnection.mockResolvedValue(
+      quote({ timestamp: new Date('2024-01-02T03:20:00.000Z') }),
+    );
+    await expect(
+      service.assertMarketSafeForDispatch(
+        intent(),
+        { brokerId: 'metatrader5' } as never,
+        'order-1',
+      ),
+    ).rejects.toMatchObject({ code: 'STALE_PRICE' });
+  });
+
   it('MARKET_DATA_UNAVAILABLE for crossed/invalid bid-ask', async () => {
     brokerService.getCurrentPriceForConnection.mockResolvedValue(
       quote({ bid: '1.08600', ask: '1.08500', spread: '-0.00100' }),

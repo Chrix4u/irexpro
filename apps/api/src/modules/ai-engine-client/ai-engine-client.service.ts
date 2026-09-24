@@ -84,6 +84,11 @@ export class AiEngineClient {
         replay_steps_last_cycle: 0,
         replay_steps_total: 0,
         signals_published_total: 0,
+        last_strategy_outcome: null,
+        last_strategy_reason: null,
+        last_trade_id: null,
+        executions_succeeded_total: 0,
+        downstream_rejected_total: 0,
       };
     }
 

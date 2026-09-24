@@ -119,6 +119,11 @@ interface AiAutomationRuntimeStatus {
   replay_steps_last_cycle?: number;
   replay_steps_total?: number;
   signals_published_total?: number;
+  last_strategy_outcome?: string | null;
+  last_strategy_reason?: string | null;
+  last_trade_id?: string | null;
+  executions_succeeded_total?: number;
+  downstream_rejected_total?: number;
 }
 
 function runtimeReasonLabel(reason: string | null | undefined): string {
@@ -881,8 +886,21 @@ export default function AiTradingPage() {
                         </strong>
                       </div>
                       <div>
-                        <span>UAT signals</span>
-                        <strong>{automationRuntime.signals_published_total ?? 0} published</strong>
+                        <span>UAT submissions</span>
+                        <strong>{automationRuntime.signals_published_total ?? 0} submitted</strong>
+                      </div>
+                      <div>
+                        <span>UAT execution</span>
+                        <strong>
+                          {automationRuntime.executions_succeeded_total ?? 0} executed ·{' '}
+                          {automationRuntime.downstream_rejected_total ?? 0} rejected
+                        </strong>
+                      </div>
+                      <div>
+                        <span>Downstream outcome</span>
+                        <strong>
+                          {automationRuntime.last_strategy_outcome?.replaceAll('_', ' ') ?? 'WAITING'}
+                        </strong>
                       </div>
                     </>
                   )}
@@ -918,6 +936,20 @@ export default function AiTradingPage() {
                   <span>Decision explanation</span>
                   <strong>{runtimeReasonLabel(automationRuntime?.last_reason)}</strong>
                 </div>
+                {automationRuntime?.research_uat && automationRuntime.last_strategy_outcome && (
+                  <div className="ai-runtime-reason">
+                    <span>Last UAT pipeline result</span>
+                    <strong>
+                      {automationRuntime.last_strategy_outcome.replaceAll('_', ' ')}
+                      {automationRuntime.last_strategy_reason
+                        ? ` · ${automationRuntime.last_strategy_reason}`
+                        : ''}
+                      {automationRuntime.last_trade_id
+                        ? ` · trade ${automationRuntime.last_trade_id}`
+                        : ''}
+                    </strong>
+                  </div>
+                )}
               </section>
             )}
 

@@ -58,6 +58,11 @@ export interface AiSchedulerSessionStatus {
   replay_steps_last_cycle?: number;
   replay_steps_total?: number;
   signals_published_total?: number;
+  last_strategy_outcome?: string | null;
+  last_strategy_reason?: string | null;
+  last_trade_id?: string | null;
+  executions_succeeded_total?: number;
+  downstream_rejected_total?: number;
 }
 
 export interface AiSchedulerSessionRegistration {
