@@ -345,6 +345,75 @@ export class SharedControlRevisionService {
   // ─── Execution-control revision (#299 no-resurrection invariant) ──────────
 
   /**
+   * Ensure the GLOBAL execution-control revision singleton exists without
+   * recording a safety-control mutation. Deployment/bootstrap uses this to
+   * establish revision 1 before any trade-intent/risk read occurs.
+   *
+   * Concurrent bootstraps converge through the singleton PK. A pre-existing
+   * row is returned unchanged; this method never increments the revision.
+   */
+  async ensureExecutionControlRevisionInitialized(
+    reason = 'deployment bootstrap initialized execution-control revision',
+    entityManager?: EntityManager,
+  ): Promise<number> {
+    const repo = entityManager
+      ? entityManager.getRepository(ExecutionControlRevisionState)
+      : this.controlStateRepo;
+    const trimmedReason = reason.trim().slice(0, 200);
+
+    try {
+      const existing = await repo.findOne({ where: { id: SINGLETON_ID } });
+      if (existing) {
+        return existing.currentRevision;
+      }
+
+      try {
+        await repo
+          .createQueryBuilder()
+          .insert()
+          .values({
+            id: SINGLETON_ID,
+            currentRevision: 1,
+            lastReason:
+              trimmedReason || 'deployment bootstrap initialized execution-control revision',
+            lastBumpedAt: null,
+          })
+          .execute();
+      } catch (err) {
+        if (!isUniqueViolation(err)) {
+          throw new SharedControlStoreUnavailableError(
+            'seed the execution-control revision during bootstrap',
+            err,
+          );
+        }
+      }
+
+      const seeded = await repo.findOne({ where: { id: SINGLETON_ID } });
+      if (!seeded) {
+        throw new SharedControlRevisionConvergenceError(
+          'execution-control bootstrap seed did not converge',
+        );
+      }
+
+      this.logger.log(
+        `Shared execution-control revision initialized: revision=${seeded.currentRevision}`,
+      );
+      return seeded.currentRevision;
+    } catch (err) {
+      if (
+        err instanceof SharedControlStoreUnavailableError ||
+        err instanceof SharedControlRevisionConvergenceError
+      ) {
+        throw err;
+      }
+      throw new SharedControlStoreUnavailableError(
+        'initialize the execution-control revision during bootstrap',
+        err,
+      );
+    }
+  }
+
+  /**
    * Unconditionally advance the GLOBAL execution-control revision.
    *
    * CAS: `current_revision = current_revision + 1, last_reason,

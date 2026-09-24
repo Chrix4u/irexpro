@@ -75,5 +75,11 @@ export class SharedControlPlaneBootstrap implements OnModuleInit {
       `Shared provider-verification revision synced: revision=${catalogRevision} ` +
         `(catalog ${BROKER_CATALOG_VERSION}, fingerprint=${catalogFingerprint.slice(0, 12)}…)`,
     );
+
+    const executionControlRevision =
+      await this.sharedControlRevisions.ensureExecutionControlRevisionInitialized();
+    this.logger.log(
+      `Shared execution-control revision ready: revision=${executionControlRevision}`,
+    );
   }
 }
