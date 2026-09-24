@@ -79,7 +79,8 @@ export class ExecutionController {
   @ApiResponse({ status: 200, type: TradeExecutionResponseDto, isArray: true })
   async listOpenPositions(@CurrentUserId() userId: string): Promise<TradeExecutionResponseDto[]> {
     const trades = await this.executionReadService.listOpenPositions(userId);
-    return trades.map(toTradeExecutionResponse);
+    const intents = await this.executionReadService.getTradeIntentMap(userId, trades);
+    return trades.map((trade) => toTradeExecutionResponse(trade, intents.get(trade.id) ?? null));
   }
 
   @Get('trades/closed')
@@ -93,7 +94,8 @@ export class ExecutionController {
     @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
   ): Promise<TradeExecutionResponseDto[]> {
     const trades = await this.executionReadService.listClosedExecutions(userId, limit);
-    return trades.map(toTradeExecutionResponse);
+    const intents = await this.executionReadService.getTradeIntentMap(userId, trades);
+    return trades.map((trade) => toTradeExecutionResponse(trade, intents.get(trade.id) ?? null));
   }
 
   @Get('trades/recent')
@@ -105,6 +107,7 @@ export class ExecutionController {
     @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
   ): Promise<TradeExecutionResponseDto[]> {
     const trades = await this.executionReadService.listRecentExecutions(userId, limit);
-    return trades.map(toTradeExecutionResponse);
+    const intents = await this.executionReadService.getTradeIntentMap(userId, trades);
+    return trades.map((trade) => toTradeExecutionResponse(trade, intents.get(trade.id) ?? null));
   }
 }
