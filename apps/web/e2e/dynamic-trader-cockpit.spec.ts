@@ -312,6 +312,10 @@ test.describe('AI Trader novice workflow', () => {
     await expect(page.getByText('0 executed · 0 rejected', { exact: true })).toBeVisible();
     await expect(page.getByText('Workflow-probe execution', { exact: true })).toBeVisible();
     await expect(page.getByText('2 executed · 1 rejected', { exact: true })).toBeVisible();
+    await expect(page.getByText('Workflow probe status', { exact: true })).toBeVisible();
+    await expect(
+      page.getByText('COMPLETE · low-confidence probe injection disabled', { exact: true }),
+    ).toBeVisible();
     await expect(
       page.getByText('2.24% actual model confidence · 60.00% normal AI gate', { exact: true }),
     ).toBeVisible();
