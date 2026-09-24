@@ -1,5 +1,6 @@
 import { createExecutionApi } from '@irexpro/api-client/execution';
 import type {
+  TradeEntryDecisionKind,
   TradeExecutionCloseReason,
   TradeExecutionDirection,
   TradeExecutionStatus,
@@ -51,6 +52,17 @@ function isNullableString(value: unknown): value is string | null {
   return value === null || typeof value === 'string';
 }
 
+function isEntryDecisionKind(value: unknown): value is TradeEntryDecisionKind {
+  return value === 'QUALIFIED_AI' || value === 'RESEARCH_UAT_PROBE' || value === 'UNKNOWN';
+}
+
+function isNullableProbability(value: unknown): value is number | null {
+  return (
+    value === null ||
+    (typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1)
+  );
+}
+
 export function isTradeExecutionView(value: unknown): value is TradeExecutionView {
   if (!isRecord(value)) return false;
 
@@ -71,6 +83,12 @@ export function isTradeExecutionView(value: unknown): value is TradeExecutionVie
     isNullableString(value.commission) &&
     isNullableString(value.swap) &&
     (value.executionReasonCode === undefined || isNullableString(value.executionReasonCode)) &&
+    (value.entryDecisionKind === undefined || isEntryDecisionKind(value.entryDecisionKind)) &&
+    (value.entryConfidenceScore === undefined ||
+      isNullableProbability(value.entryConfidenceScore)) &&
+    (value.entryConfidenceThreshold === undefined ||
+      isNullableProbability(value.entryConfidenceThreshold)) &&
+    (value.entryModelVersion === undefined || isNullableString(value.entryModelVersion)) &&
     isCloseReason(value.closeReason) &&
     isNullableString(value.openedAt) &&
     isNullableString(value.closedAt) &&
