@@ -237,6 +237,13 @@ function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
           </Badge>
         )}
       </div>
+      {trade.status === 'CLOSED' && (
+        <div className="ai-activity-row__details">
+          <span>Entry {trade.fillPrice ?? trade.requestedEntryPrice}</span>
+          <span>Exit {trade.exitPrice ?? '—'}</span>
+          <span>{trade.closeReason ? trade.closeReason.replaceAll('_', ' ') : 'CLOSED'}</span>
+        </div>
+      )}
       {executionReason && (
         <div className="ai-activity-row__reason">{executionReason}</div>
       )}
