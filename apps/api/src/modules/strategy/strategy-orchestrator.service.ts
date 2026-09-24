@@ -1,5 +1,6 @@
 import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
+import { ExactDecimal } from '../../common/utils/exact-decimal';
 import { RiskService } from '../risk/risk.service';
 import { ExecutionService } from '../execution/execution.service';
 import { BrokerService } from '../broker/broker.service';
@@ -261,6 +262,8 @@ export class StrategyOrchestratorService {
       return { outcome: 'SESSION_INACTIVE', signalId, reason: 'No active trading session' };
     }
 
+    let executionCandidate = candidate;
+
     if (uatWorkflowProbeRequested) {
       let boundConnection;
       try {
@@ -295,6 +298,39 @@ export class StrategyOrchestratorService {
         `Research PAPER UAT workflow probe accepted below confidence threshold: ` +
           `signal=${signalId} confidence=${candidate.confidenceScore}`,
       );
+
+      // The historical replay and the execution simulator are intentionally
+      // separate markets. A workflow probe must therefore be REBASED onto the
+      // paper broker's CURRENT quote after the exact safe boundary above is
+      // proven. This is not a model signal rewrite: the original replay
+      // reference/protection levels remain in metadata for audit, while only
+      // this production_eligible=false PAPER probe receives executable test
+      // geometry. Normal model signals, provider DEMO, and LIVE never enter
+      // this branch, and the final market-safety gate remains mandatory.
+      try {
+        executionCandidate = await this.rebaseResearchPaperWorkflowProbe(candidate, session);
+      } catch (err) {
+        const reason =
+          `Research PAPER workflow probe could not be aligned to the paper execution market: ` +
+          `${(err as Error).message}`;
+        this.logger.warn(`Signal ${signalId}: ${reason}`);
+        await this.auditService.log({
+          actorUserId: userId,
+          action: AuditAction.AI_SIGNAL_EXECUTION_FAILED,
+          severity: AuditSeverity.WARNING,
+          resourceType: 'AiSignal',
+          resourceId: signalId,
+          metadata: {
+            instrument: candidate.instrument,
+            direction: candidate.direction,
+            failureCode: 'UAT_EXECUTION_MARKET_UNPROVABLE',
+          },
+        });
+        this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, {
+          outcome: 'EXECUTION_FAILED',
+        });
+        return { outcome: 'EXECUTION_FAILED', signalId, reason };
+      }
     }
 
     // ── Gate 4.5: Signal identity (#302, Round 5 task 50-c) ──────────────
@@ -309,15 +345,15 @@ export class StrategyOrchestratorService {
         signalId,
         generatedAt: candidate.generatedAt,
         materialFields: {
-          instrument: candidate.instrument,
-          direction: candidate.direction,
-          requestedLotSize: String(candidate.suggestedVolume),
-          entryPrice: candidate.suggestedEntryPrice,
-          stopLoss: candidate.suggestedStopLoss,
-          takeProfit: candidate.suggestedTakeProfit,
-          strategyCode: candidate.strategyCode,
-          timeframe: candidate.timeframe,
-          modelVersion: candidate.modelVersion,
+          instrument: executionCandidate.instrument,
+          direction: executionCandidate.direction,
+          requestedLotSize: String(executionCandidate.suggestedVolume),
+          entryPrice: executionCandidate.suggestedEntryPrice,
+          stopLoss: executionCandidate.suggestedStopLoss,
+          takeProfit: executionCandidate.suggestedTakeProfit,
+          strategyCode: executionCandidate.strategyCode,
+          timeframe: executionCandidate.timeframe,
+          modelVersion: executionCandidate.modelVersion,
         },
       });
     } catch (err) {
@@ -351,7 +387,7 @@ export class StrategyOrchestratorService {
     // may NOT proceed to risk evaluation (executeTrade enforces the guard).
     let tradeIntent: TradeIntent;
     try {
-      tradeIntent = await this.recordTradeIntent(candidate, session, registration);
+      tradeIntent = await this.recordTradeIntent(executionCandidate, session, registration);
     } catch (err) {
       const reason = `Trade intent could not be recorded (fail-closed): ${(err as Error).message}`;
       this.logger.error(`Signal ${signalId}: intent recording failed`, (err as Error).stack);
@@ -398,12 +434,17 @@ export class StrategyOrchestratorService {
       sized = await this.positionSizingService.sizePosition({
         userId,
         brokerConnectionId: session.brokerConnectionId,
-        instrument: candidate.instrument,
-        direction: candidate.direction,
-        entryType: candidate.suggestedEntryPrice != null ? 'LIMIT' : 'MARKET',
+        instrument: executionCandidate.instrument,
+        direction: executionCandidate.direction,
+        entryType: executionCandidate.suggestedEntryPrice != null ? 'LIMIT' : 'MARKET',
         requestedEntryPrice:
-          candidate.suggestedEntryPrice != null ? String(candidate.suggestedEntryPrice) : null,
-        stopLoss: candidate.suggestedStopLoss != null ? String(candidate.suggestedStopLoss) : null,
+          executionCandidate.suggestedEntryPrice != null
+            ? String(executionCandidate.suggestedEntryPrice)
+            : null,
+        stopLoss:
+          executionCandidate.suggestedStopLoss != null
+            ? String(executionCandidate.suggestedStopLoss)
+            : null,
       });
       await this.allocationService.resolveOrAllocate({
         intent: {
@@ -485,9 +526,11 @@ export class StrategyOrchestratorService {
       // normalized) — never the raw AI suggestion.
       requestedLotSize: sized.lots,
       entryPrice:
-        candidate.suggestedEntryPrice != null ? String(candidate.suggestedEntryPrice) : '0',
-      stopLoss: String(candidate.suggestedStopLoss),
-      takeProfit: String(candidate.suggestedTakeProfit),
+        executionCandidate.suggestedEntryPrice != null
+          ? String(executionCandidate.suggestedEntryPrice)
+          : '0',
+      stopLoss: String(executionCandidate.suggestedStopLoss),
+      takeProfit: String(executionCandidate.suggestedTakeProfit),
       idempotencyKey: `${candidate.userId}:${candidate.signalId}`,
       volatilityScore: candidate.volatilityScore,
       regime: normalizeMarketRegime(candidate.marketRegime),
@@ -634,7 +677,49 @@ export class StrategyOrchestratorService {
 
     try {
       const trade = await this.executionService.executeTrade(userId, riskDecision);
-      this.logger.log(`Signal ${signalId} executed: tradeId=${trade.id} status=${trade.status}`);
+      this.logger.log(
+        `Signal ${signalId} execution returned: tradeId=${trade.id} status=${trade.status}`,
+      );
+
+      // executeTrade() intentionally RETURNS durable terminal/uncertain truth
+      // for several fail-closed paths instead of throwing. A non-throwing
+      // call is therefore not synonymous with a successful execution.
+      // Only a PENDING/OPEN/CLOSED trade proves that the entry is alive or has
+      // completed. REJECTED/CANCELLED and RECONCILIATION_PENDING must never
+      // inflate the scheduler's "executed" counter.
+      const provenExecutionStatuses: readonly TradeStatus[] = [
+        TradeStatus.PENDING,
+        TradeStatus.OPEN,
+        TradeStatus.CLOSED,
+      ];
+      if (!provenExecutionStatuses.includes(trade.status)) {
+        const reason =
+          trade.status === TradeStatus.RECONCILIATION_PENDING
+            ? 'Execution outcome is unresolved and awaiting reconciliation'
+            : `Execution ended ${trade.status} before active exposure was established`;
+        await this.auditService.log({
+          actorUserId: userId,
+          action: AuditAction.AI_SIGNAL_EXECUTION_FAILED,
+          severity:
+            trade.status === TradeStatus.RECONCILIATION_PENDING
+              ? AuditSeverity.CRITICAL
+              : AuditSeverity.WARNING,
+          resourceType: 'Trade',
+          resourceId: trade.id,
+          metadata: {
+            signalId,
+            instrument: candidate.instrument,
+            direction: candidate.direction,
+            strategyCode: candidate.strategyCode,
+            failureCode: `EXECUTION_RETURNED_${trade.status}`,
+          },
+        });
+        this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, {
+          outcome: 'EXECUTION_FAILED',
+        });
+        return { outcome: 'EXECUTION_FAILED', signalId, tradeId: trade.id, reason };
+      }
+
       await this.auditService.log({
         actorUserId: userId,
         action: AuditAction.AI_SIGNAL_EXECUTED,
@@ -646,6 +731,7 @@ export class StrategyOrchestratorService {
           instrument: candidate.instrument,
           direction: candidate.direction,
           strategyCode: candidate.strategyCode,
+          tradeStatus: trade.status,
         },
       });
       this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, {
@@ -675,6 +761,93 @@ export class StrategyOrchestratorService {
   }
 
   // ─── Internal helpers ──────────────────────────────────────────────────────
+
+  /**
+   * Rebase a production-ineligible Research PAPER workflow probe from its
+   * historical replay geometry onto the CURRENT internal paper execution
+   * quote. The original replay values remain in metadata for provenance.
+   *
+   * This helper is called only AFTER processSignal has proven:
+   * PAPER_ONLY + paper-broker + DEMO + matching session/connection.
+   * It never applies to a normal model signal or any real provider.
+   */
+  private async rebaseResearchPaperWorkflowProbe(
+    candidate: AiSignalCandidate,
+    session: TradingSession,
+  ): Promise<AiSignalCandidate> {
+    if (candidate.suggestedEntryPrice == null) {
+      throw new Error('replay reference price is missing');
+    }
+
+    const quote = await this.brokerService.getCurrentPriceForConnection(
+      candidate.userId,
+      session.brokerConnectionId,
+      candidate.instrument,
+    );
+    if (!quote) {
+      throw new Error('current paper quote is unavailable');
+    }
+
+    const bid = ExactDecimal.tryParse(String(quote.bid));
+    const ask = ExactDecimal.tryParse(String(quote.ask));
+    const replayEntry = ExactDecimal.tryParse(String(candidate.suggestedEntryPrice));
+    const replayStop = ExactDecimal.tryParse(String(candidate.suggestedStopLoss));
+    const replayTake = ExactDecimal.tryParse(String(candidate.suggestedTakeProfit));
+    if (
+      !bid?.isPositive() ||
+      !ask?.isPositive() ||
+      ask.lt(bid) ||
+      !replayEntry?.isPositive() ||
+      !replayStop?.isPositive() ||
+      !replayTake?.isPositive()
+    ) {
+      throw new Error('paper quote or replay protection geometry is invalid');
+    }
+
+    const stopDistance = replayEntry.sub(replayStop).abs();
+    const takeDistance = replayTake.sub(replayEntry).abs();
+    if (!stopDistance.isPositive() || !takeDistance.isPositive()) {
+      throw new Error('replay stop/take distance is not positive');
+    }
+
+    const executionEntry = bid.add(ask).div(ExactDecimal.parse('2'), {
+      scale: 5,
+      mode: 'HALF_UP',
+    });
+    const executionStop =
+      candidate.direction === 'BUY'
+        ? executionEntry.sub(stopDistance)
+        : executionEntry.add(stopDistance);
+    const executionTake =
+      candidate.direction === 'BUY'
+        ? executionEntry.add(takeDistance)
+        : executionEntry.sub(takeDistance);
+
+    if (!executionStop.isPositive() || !executionTake.isPositive()) {
+      throw new Error('rebased paper protection level is not positive');
+    }
+
+    const entryText = executionEntry.toFixed(5, 'HALF_UP');
+    const stopText = executionStop.toFixed(5, 'HALF_UP');
+    const takeText = executionTake.toFixed(5, 'HALF_UP');
+
+    return {
+      ...candidate,
+      suggestedEntryPrice: Number(entryText),
+      suggestedStopLoss: Number(stopText),
+      suggestedTakeProfit: Number(takeText),
+      metadata: {
+        ...(candidate.metadata ?? {}),
+        uat_execution_probe_rebased: true,
+        uat_replay_reference_price: String(candidate.suggestedEntryPrice),
+        uat_replay_stop_loss: String(candidate.suggestedStopLoss),
+        uat_replay_take_profit: String(candidate.suggestedTakeProfit),
+        uat_execution_reference_price: entryText,
+        uat_execution_stop_loss: stopText,
+        uat_execution_take_profit: takeText,
+      },
+    };
+  }
 
   /**
    * Round 7.1 (P1 — sizing input freshness): resolve the LIVE fresh-snapshot
