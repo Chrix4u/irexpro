@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Trade, TradeCloseReason, TradeDirection, TradeStatus } from '../entities/trade.entity';
-import { TradeIntent } from '../entities/trade-intent.entity';
+import type { TradeIntent } from '../entities/trade-intent.entity';
 
 /**
  * Frontend-safe execution read model.
