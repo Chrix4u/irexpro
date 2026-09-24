@@ -21,7 +21,6 @@ import { ExecutionConfirmation } from './entities/execution-confirmation.entity'
 import { AiSignalIdentity } from './entities/ai-signal-identity.entity';
 import { Order } from './orders/order.entity';
 import { OrderService } from './orders/order.service';
-import { RiskProfile } from '../risk/entities/risk-profile.entity';
 import {
   TradeReconciliationJob,
   TRADE_RECONCILIATION_QUEUE,
@@ -95,11 +94,6 @@ import { ProtectiveOrderReconciliationService } from './reconciliation/protectiv
       BrokerAccount,
       ReconciliationRun,
       ReconciliationDiscrepancy,
-      // Round 5 (task 50-c): the SEMI_AUTO confirmation path rebuilds the
-      // execution decision from the consumed grant and needs the CURRENT
-      // risk profile's daily-trade limit (read-only repository use; the
-      // entity itself is risk-module-owned).
-      RiskProfile,
     ]),
     BullModule.registerQueue(
       { name: TRADE_RECONCILIATION_QUEUE },
