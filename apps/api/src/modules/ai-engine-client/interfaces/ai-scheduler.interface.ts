@@ -53,11 +53,11 @@ export interface AiSchedulerSessionStatus {
   market_data_age_seconds: number | null;
   market_data_cache_bypassed: boolean;
   last_publish_failed: boolean;
-  research_uat: boolean;
-  replay_steps_per_cycle: number;
-  replay_steps_last_cycle: number;
-  replay_steps_total: number;
-  signals_published_total: number;
+  research_uat?: boolean;
+  replay_steps_per_cycle?: number;
+  replay_steps_last_cycle?: number;
+  replay_steps_total?: number;
+  signals_published_total?: number;
 }
 
 export interface AiSchedulerSessionRegistration {
