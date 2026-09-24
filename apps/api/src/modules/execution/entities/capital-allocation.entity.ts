@@ -77,7 +77,8 @@ export class CapitalAllocation {
   @Column({ name: 'allocated_lots', type: 'numeric', precision: 10, scale: 4 })
   allocatedLots: string;
 
-  /** The notional capital committed (account currency, decimal string). */
+  /** Broker-required margin/capital committed (account currency, decimal string).
+   *  This is deliberately NOT gross leveraged position notional. */
   @Column({ name: 'allocated_capital', type: 'numeric', precision: 18, scale: 8 })
   allocatedCapital: string;
 
