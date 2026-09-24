@@ -115,6 +115,11 @@ async def session_scheduler_status(
             active=False,
             instruments=[],
             confidence_threshold=settings.ai_min_confidence_score,
+            research_uat=False,
+            replay_steps_per_cycle=1,
+            replay_steps_last_cycle=0,
+            replay_steps_total=0,
+            signals_published_total=0,
         )
 
     anchor = job.last_run_at or job.registered_at
@@ -156,4 +161,9 @@ async def session_scheduler_status(
         market_data_age_seconds=market_data_age_seconds,
         market_data_cache_bypassed=job.market_data_cache_bypassed,
         last_publish_failed=job.last_publish_failed,
+        research_uat=job.research_uat,
+        replay_steps_per_cycle=job.replay_steps_per_cycle,
+        replay_steps_last_cycle=job.replay_steps_last_cycle,
+        replay_steps_total=job.replay_steps_total,
+        signals_published_total=job.signals_published_total,
     )
