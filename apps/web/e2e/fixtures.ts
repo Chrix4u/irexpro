@@ -126,7 +126,6 @@ export const mockRiskProfile: RiskProfile = {
   maxDailyLossPercent: '5',
   maxDrawdownPercent: '10',
   maxOpenTrades: 3,
-  maxDailyTrades: 10,
   maxPositionSizeLot: '1.00',
   minStopLossPips: '10',
   allowedInstruments: null,
