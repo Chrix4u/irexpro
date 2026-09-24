@@ -972,6 +972,14 @@ export default function AiTradingPage() {
                         </strong>
                       </div>
                       <div>
+                        <span>Workflow probe status</span>
+                        <strong>
+                          {(automationRuntime.uat_probe_executions_succeeded_total ?? 0) > 0
+                            ? 'COMPLETE · low-confidence probe injection disabled'
+                            : 'PENDING · validation probe may run when due'}
+                        </strong>
+                      </div>
+                      <div>
                         <span>Downstream outcome</span>
                         <strong>
                           {automationRuntime.last_strategy_outcome?.replaceAll('_', ' ') ?? 'WAITING'}
@@ -1004,7 +1012,9 @@ export default function AiTradingPage() {
                     Research PAPER UAT can deliberately execute production-ineligible workflow probes
                     below the normal confidence gate, but only on the internal PAPER_ONLY demo broker.
                     These probe trades validate the end-to-end workflow; they are not qualified AI
-                    signals. Qualified AI and workflow-probe execution counts are shown separately above.
+                    signals. After the first successful workflow-probe execution, further low-confidence
+                    probe injection is disabled for that UAT session. Qualified AI and workflow-probe
+                    execution counts are shown separately above.
                   </Alert>
                 )}
 
