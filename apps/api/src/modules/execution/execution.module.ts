@@ -21,6 +21,7 @@ import { ExecutionConfirmation } from './entities/execution-confirmation.entity'
 import { AiSignalIdentity } from './entities/ai-signal-identity.entity';
 import { Order } from './orders/order.entity';
 import { OrderService } from './orders/order.service';
+import { RiskProfile } from '../risk/entities/risk-profile.entity';
 import {
   TradeReconciliationJob,
   TRADE_RECONCILIATION_QUEUE,
@@ -94,6 +95,10 @@ import { ProtectiveOrderReconciliationService } from './reconciliation/protectiv
       BrokerAccount,
       ReconciliationRun,
       ReconciliationDiscrepancy,
+      // Preserve the established RiskModule↔ExecutionModule TypeORM provider
+      // shape. Daily trade COUNT remains uncapped; this registration does not
+      // restore any quota or execution gate.
+      RiskProfile,
     ]),
     BullModule.registerQueue(
       { name: TRADE_RECONCILIATION_QUEUE },
