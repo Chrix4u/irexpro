@@ -820,8 +820,14 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .ai-section__actions {
+  .ai-section__heading {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .ai-section__heading > .ai-section__actions {
     width: 100%;
+    margin-left: 0;
     justify-content: space-between;
   }
 
