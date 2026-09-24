@@ -324,4 +324,3 @@ class SignalScheduler:
             and job.last_decision == "NO_TRADE"
         ):
             job.last_reason = "research_uat_replay_budget_exhausted"
-
