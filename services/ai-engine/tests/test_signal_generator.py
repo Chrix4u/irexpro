@@ -84,6 +84,57 @@ async def test_signal_generator_no_signal_for_low_confidence():
 
 
 @pytest.mark.asyncio
+async def test_model_specific_gate_is_not_bypassed_by_uat_workflow_probe():
+    gen = make_generator()
+
+    mock_model = MagicMock()
+    mock_model.get_model_version.return_value = "event-dual-actionability-test-v1"
+    mock_model.get_model_metadata.return_value = {
+        "version": "event-dual-actionability-test-v1",
+        "loaded": True,
+        "mode": "trained_xgboost_mtf",
+    }
+    mock_model.predict_signal.return_value = ModelPrediction(
+        direction="BUY",
+        confidence_score=0.72,
+        model_version="event-dual-actionability-test-v1",
+        features_used=[],
+        raw_scores={
+            "long_action_probability": 0.72,
+            "short_action_probability": 0.67,
+            "action_probability_margin": 0.05,
+        },
+        explainability={
+            "method": "dual_actionability_xgboost_predict_proba",
+            "signal_eligible": False,
+            "signal_gate_reason": "action_probability_margin_below_floor",
+        },
+    )
+
+    mock_registry = MagicMock()
+    mock_registry.get_active_model.return_value = mock_model
+    governance = MagicMock()
+    governance.approved_for_paper = True
+    mock_registry.get_governance.return_value = governance
+    gen._registry = mock_registry
+
+    result = await gen.generate(
+        user_id="u1",
+        trading_session_id="s1",
+        broker_connection_id="c1",
+        instrument="EURUSD",
+        timeframe="H1",
+        uat_workflow_probe=True,
+    )
+
+    assert result.generated is False
+    assert result.signal is None
+    assert result.no_signal is not None
+    assert result.no_signal.confidence_score == pytest.approx(0.72)
+    assert result.no_signal.reason == "action_probability_margin_below_floor"
+
+
+@pytest.mark.asyncio
 async def test_uat_workflow_probe_preserves_real_low_model_confidence():
     gen = make_generator()
 
