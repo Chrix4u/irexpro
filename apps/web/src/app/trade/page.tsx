@@ -119,11 +119,17 @@ interface AiAutomationRuntimeStatus {
   replay_steps_last_cycle?: number;
   replay_steps_total?: number;
   signals_published_total?: number;
+  qualified_signals_published_total?: number;
+  uat_probe_signals_published_total?: number;
   last_strategy_outcome?: string | null;
   last_strategy_reason?: string | null;
   last_trade_id?: string | null;
   executions_succeeded_total?: number;
+  qualified_executions_succeeded_total?: number;
+  uat_probe_executions_succeeded_total?: number;
   downstream_rejected_total?: number;
+  qualified_downstream_rejected_total?: number;
+  uat_probe_downstream_rejected_total?: number;
 }
 
 function runtimeReasonLabel(reason: string | null | undefined): string {
@@ -944,14 +950,25 @@ export default function AiTradingPage() {
                         </strong>
                       </div>
                       <div>
-                        <span>UAT submissions</span>
-                        <strong>{automationRuntime.signals_published_total ?? 0} submitted</strong>
+                        <span>Qualified AI submissions</span>
+                        <strong>{automationRuntime.qualified_signals_published_total ?? 0} submitted</strong>
                       </div>
                       <div>
-                        <span>UAT execution</span>
+                        <span>UAT workflow probes</span>
+                        <strong>{automationRuntime.uat_probe_signals_published_total ?? 0} submitted</strong>
+                      </div>
+                      <div>
+                        <span>Qualified AI execution</span>
                         <strong>
-                          {automationRuntime.executions_succeeded_total ?? 0} executed ·{' '}
-                          {automationRuntime.downstream_rejected_total ?? 0} rejected
+                          {automationRuntime.qualified_executions_succeeded_total ?? 0} executed ·{' '}
+                          {automationRuntime.qualified_downstream_rejected_total ?? 0} rejected
+                        </strong>
+                      </div>
+                      <div>
+                        <span>Workflow-probe execution</span>
+                        <strong>
+                          {automationRuntime.uat_probe_executions_succeeded_total ?? 0} executed ·{' '}
+                          {automationRuntime.uat_probe_downstream_rejected_total ?? 0} rejected
                         </strong>
                       </div>
                       <div>
@@ -981,6 +998,15 @@ export default function AiTradingPage() {
                     <strong>{formatTimestamp(automationRuntime?.last_confidence_at)}</strong>
                   </div>
                 </div>
+
+                {automationRuntime?.research_uat && (
+                  <Alert variant="info">
+                    Research PAPER UAT can deliberately execute production-ineligible workflow probes
+                    below the normal confidence gate, but only on the internal PAPER_ONLY demo broker.
+                    These probe trades validate the end-to-end workflow; they are not qualified AI
+                    signals. Qualified AI and workflow-probe execution counts are shown separately above.
+                  </Alert>
+                )}
 
                 {automationRuntime?.model_mode === 'heuristic_placeholder' && (
                   <Alert variant="warning">
