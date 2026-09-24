@@ -60,6 +60,7 @@ class ScheduledSessionJob:
     last_strategy_reason: str | None = None
     last_trade_id: str | None = None
     executions_succeeded_total: int = 0
+    uat_probe_executions_succeeded_total: int = 0
     downstream_rejected_total: int = 0
     last_uat_probe_at: datetime | None = None
     registered_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -242,6 +243,7 @@ class SignalScheduler:
                 now = datetime.now(UTC)
                 probe_due = (
                     job.research_uat
+                    and job.uat_probe_executions_succeeded_total == 0
                     and scan_index == len(scan_plan) - 1
                     and (
                         job.last_uat_probe_at is None
@@ -337,6 +339,8 @@ class SignalScheduler:
                     )
                     if outcome == "EXECUTION_SUCCEEDED":
                         job.executions_succeeded_total += 1
+                        if is_uat_probe:
+                            job.uat_probe_executions_succeeded_total += 1
                     elif outcome in {
                         "SIGNAL_INVALID",
                         "LOW_CONFIDENCE",

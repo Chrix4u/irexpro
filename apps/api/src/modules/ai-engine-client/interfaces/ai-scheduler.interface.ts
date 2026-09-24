@@ -62,6 +62,7 @@ export interface AiSchedulerSessionStatus {
   last_strategy_reason?: string | null;
   last_trade_id?: string | null;
   executions_succeeded_total?: number;
+  uat_probe_executions_succeeded_total?: number;
   downstream_rejected_total?: number;
 }
 

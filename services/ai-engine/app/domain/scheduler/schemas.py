@@ -76,6 +76,7 @@ class SessionSchedulerStatusResponse(BaseModel):
     last_strategy_reason: str | None = None
     last_trade_id: str | None = None
     executions_succeeded_total: int = 0
+    uat_probe_executions_succeeded_total: int = 0
     downstream_rejected_total: int = 0
 
 

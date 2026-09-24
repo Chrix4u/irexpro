@@ -138,6 +138,7 @@ async def session_scheduler_status(
             last_strategy_reason=None,
             last_trade_id=None,
             executions_succeeded_total=0,
+            uat_probe_executions_succeeded_total=0,
             downstream_rejected_total=0,
         )
 
@@ -189,5 +190,6 @@ async def session_scheduler_status(
         last_strategy_reason=job.last_strategy_reason,
         last_trade_id=job.last_trade_id,
         executions_succeeded_total=job.executions_succeeded_total,
+        uat_probe_executions_succeeded_total=job.uat_probe_executions_succeeded_total,
         downstream_rejected_total=job.downstream_rejected_total,
     )
