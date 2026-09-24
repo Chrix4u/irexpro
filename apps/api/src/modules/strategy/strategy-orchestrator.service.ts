@@ -26,6 +26,7 @@ import {
   SnapshotNotFreshError,
 } from '../broker/services/broker-account-snapshot.service';
 import { BrokerMode } from '../broker/interfaces/broker-adapter.interface';
+import { ExecutionMode } from '../execution/interfaces/execution-authority';
 import { TradingAuthorityService } from '../execution-authority/trading-authority.service';
 import { SharedControlRevisionService } from '../execution-authority/shared-control-revision.service';
 // Round 7 (P1 metrics — audit R7-audit-C A6): dependency-free in-process
@@ -169,8 +170,16 @@ export class StrategyOrchestratorService {
       return { outcome: 'SIGNAL_INVALID', signalId, reason: structureError };
     }
 
+    const uatWorkflowProbeRequested =
+      candidate.strategyCode.startsWith('uat-workflow-probe-') &&
+      candidate.metadata?.uat_workflow_probe === true &&
+      candidate.metadata?.production_eligible === false;
+
     // ── Gate 2: Confidence threshold ──────────────────────────────────────────
-    if (candidate.confidenceScore < CONFIDENCE_THRESHOLD) {
+    // Normal AI signals remain hard-gated at 0.60. A Research PAPER UAT
+    // workflow probe may defer this rejection only until the authoritative
+    // PAPER_ONLY + internal-paper-broker boundary is proven below.
+    if (candidate.confidenceScore < CONFIDENCE_THRESHOLD && !uatWorkflowProbeRequested) {
       const reason = `Confidence ${candidate.confidenceScore} below threshold ${CONFIDENCE_THRESHOLD}`;
       this.logger.log(`Signal ${signalId} ignored: ${reason}`);
       await this.recordIgnored(
@@ -250,6 +259,42 @@ export class StrategyOrchestratorService {
     // the compiler enforces the binding completeness below).
     if (!session) {
       return { outcome: 'SESSION_INACTIVE', signalId, reason: 'No active trading session' };
+    }
+
+    if (uatWorkflowProbeRequested) {
+      let boundConnection;
+      try {
+        boundConnection = await this.brokerService.findConnectionById(
+          session.brokerConnectionId,
+          userId,
+        );
+      } catch {
+        boundConnection = null;
+      }
+
+      const safePaperBoundary =
+        session.executionMode === ExecutionMode.PAPER_ONLY &&
+        candidate.brokerConnectionId === session.brokerConnectionId &&
+        boundConnection?.brokerId === 'paper-broker' &&
+        boundConnection?.accountType === BrokerMode.DEMO;
+
+      if (!safePaperBoundary) {
+        const reason =
+          'UAT workflow probe rejected: requires exact PAPER_ONLY internal paper-broker DEMO session';
+        this.logger.warn(`Signal ${signalId} rejected: ${reason}`);
+        await this.recordIgnored(
+          candidate,
+          'LOW_CONFIDENCE',
+          'UAT_PROBE_BOUNDARY_REJECTED',
+          reason,
+        );
+        return { outcome: 'LOW_CONFIDENCE', signalId, reason };
+      }
+
+      this.logger.warn(
+        `Research PAPER UAT workflow probe accepted below confidence threshold: ` +
+          `signal=${signalId} confidence=${candidate.confidenceScore}`,
+      );
     }
 
     // ── Gate 4.5: Signal identity (#302, Round 5 task 50-c) ──────────────
