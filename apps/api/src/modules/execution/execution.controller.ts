@@ -82,6 +82,18 @@ export class ExecutionController {
     return trades.map(toTradeExecutionResponse);
   }
 
+  @Get('trades/closed')
+  @ApiOperation({ summary: 'List recent closed trades with realized P&L for the authenticated user' })
+  @ApiQuery({ name: 'limit', required: false, type: Number, example: 50 })
+  @ApiResponse({ status: 200, type: TradeExecutionResponseDto, isArray: true })
+  async listClosedExecutions(
+    @CurrentUserId() userId: string,
+    @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
+  ): Promise<TradeExecutionResponseDto[]> {
+    const trades = await this.executionReadService.listClosedExecutions(userId, limit);
+    return trades.map(toTradeExecutionResponse);
+  }
+
   @Get('trades/recent')
   @ApiOperation({ summary: 'List recent execution lifecycle records for the authenticated user' })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 50 })
