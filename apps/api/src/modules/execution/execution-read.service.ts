@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { Trade, TradeStatus } from './entities/trade.entity';
-import { TradeIntent } from './entities/trade-intent.entity';
+import type { TradeEntryDecisionSource } from './dto/trade-execution-response.dto';
 
 /**
  * Read-only execution projection service for user-facing terminal clients.
@@ -49,13 +49,16 @@ export class ExecutionReadService {
    * trades. Both userId and tradeId are predicates, so a browser read can
    * never use execution ids as a cross-tenant intent lookup primitive.
    */
-  async getTradeIntentMap(userId: string, trades: Trade[]): Promise<Map<string, TradeIntent>> {
+  async getTradeIntentMap(
+    userId: string,
+    trades: Trade[],
+  ): Promise<Map<string, TradeEntryDecisionSource>> {
     const tradeIds = [...new Set(trades.map((trade) => trade.id).filter(Boolean))];
     if (tradeIds.length === 0) return new Map();
 
-    const intents = await this.tradeRepo.manager.getRepository(TradeIntent).find({
+    const intents = (await this.tradeRepo.manager.getRepository('trade_intents').find({
       where: { userId, tradeId: In(tradeIds) },
-    });
+    })) as TradeEntryDecisionSource[];
 
     return new Map(
       intents
