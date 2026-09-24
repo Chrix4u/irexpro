@@ -31,6 +31,53 @@ def make_start_request(session_id: str = "session-1") -> SessionStartRequest:
     )
 
 
+
+@pytest.mark.asyncio
+async def test_research_uat_route_accepts_only_internal_paper_boundary():
+    scheduler = MagicMock()
+    scheduler.register_session.return_value = True
+    request = SessionStartRequest(
+        userId="user-1",
+        tradingSessionId="paper-uat",
+        brokerConnectionId="conn-paper",
+        brokerId="paper-broker",
+        instruments=["EURUSD"],
+        timeframe="H1",
+        source="broker",
+        accountType="DEMO",
+        mode="PAPER_ONLY",
+        researchUat=True,
+        replayStepsPerCycle=12,
+    )
+
+    response = await start_session_scheduler(request, scheduler)
+
+    assert response.registered is True
+    scheduler.register_session.assert_called_once_with(request)
+
+
+def test_research_uat_registration_rejects_non_paper_broker():
+    settings = Settings(ai_scheduler_enabled=True, ai_signal_interval_seconds=3600)
+    scheduler = SignalScheduler()
+    scheduler._settings = settings
+    request = SessionStartRequest(
+        userId="user-1",
+        tradingSessionId="unsafe-uat",
+        brokerConnectionId="conn-demo",
+        brokerId="metatrader5",
+        instruments=["EURUSD"],
+        timeframe="H1",
+        source="broker",
+        accountType="DEMO",
+        mode="PAPER_ONLY",
+        researchUat=True,
+        replayStepsPerCycle=12,
+    )
+
+    assert scheduler.register_session(request) is False
+    assert scheduler.get_session_job("unsafe-uat") is None
+
+
 @pytest.mark.asyncio
 async def test_scheduler_route_allows_full_auto_for_demo_provider_environment():
     scheduler = MagicMock()
@@ -199,6 +246,76 @@ async def test_low_confidence_not_published():
     assert job.last_confidence_score == 0.2
 
 
+
+@pytest.mark.asyncio
+async def test_research_uat_replay_advances_until_one_signal_then_stops_cycle():
+    settings = Settings(ai_scheduler_enabled=True, ai_signal_mode="paper")
+    scheduler = SignalScheduler(nestjs_client=AsyncMock())
+    scheduler._settings = settings
+
+    from app.domain.signals.schemas import NoSignalResult
+
+    candidate = AiSignalCandidate(
+        user_id="user-1",
+        trading_session_id="session-1",
+        broker_connection_id="conn-1",
+        instrument="EURUSD",
+        direction="BUY",
+        confidence_score=0.72,
+        suggested_stop_loss=1.09,
+        suggested_take_profit=1.12,
+        suggested_volume=0.01,
+        timeframe="H1",
+        strategy_code="baseline-h1",
+        model_version="baseline-xgboost-v0.1.0",
+    )
+    mock_generator = AsyncMock()
+    mock_generator.generate.side_effect = [
+        SignalGenerationResponse(
+            generated=False,
+            no_signal=NoSignalResult(
+                reason="confidence_below_threshold",
+                instrument="EURUSD",
+                confidence_score=0.42,
+                threshold=0.6,
+            ),
+            mode="paper",
+        ),
+        SignalGenerationResponse(
+            generated=False,
+            no_signal=NoSignalResult(
+                reason="confidence_below_threshold",
+                instrument="EURUSD",
+                confidence_score=0.55,
+                threshold=0.6,
+            ),
+            mode="paper",
+        ),
+        SignalGenerationResponse(
+            generated=True,
+            signal=candidate,
+            mode="paper",
+        ),
+    ]
+    scheduler._signal_generator = mock_generator
+
+    job = ScheduledSessionJobStub()
+    job.source = "broker"
+    job.research_uat = True
+    job.replay_steps_per_cycle = 12
+    scheduler._jobs["session-1"] = job
+
+    await scheduler._run_session_job("session-1")
+
+    assert mock_generator.generate.await_count == 3
+    scheduler._nestjs_client.publish_signal.assert_awaited_once_with(candidate)
+    assert job.last_decision == "SIGNAL_PUBLISHED"
+    assert job.last_confidence_score == 0.72
+    assert job.replay_steps_last_cycle == 3
+    assert job.replay_steps_total == 3
+    assert job.signals_published_total == 1
+
+
 @pytest.mark.asyncio
 async def test_shutdown_stops_scheduler_cleanly():
     settings = Settings(ai_scheduler_enabled=True, ai_signal_interval_seconds=3600)
@@ -229,6 +346,11 @@ class ScheduledSessionJobStub:
     model_mode = None
     model_loaded = None
     market_data_cache_bypassed = False
+    research_uat = False
+    replay_steps_per_cycle = 1
+    replay_steps_last_cycle = 0
+    replay_steps_total = 0
+    signals_published_total = 0
 
 
 @pytest.mark.asyncio
