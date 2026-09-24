@@ -200,6 +200,11 @@ async function gotoAiTrader(
         ? fulfill(500, { statusCode: 500, message: 'Internal Server Error' })
         : fulfill(200, [rejectedExecution, executionPosition, closedExecution]);
     }
+    if (apiPath === 'execution/trades/closed') {
+      return options.failExecutionReads
+        ? fulfill(500, { statusCode: 500, message: 'Internal Server Error' })
+        : fulfill(200, [closedExecution]);
+    }
     if (apiPath === 'live-account/positions') {
       return options.failPositionRead
         ? fulfill(500, { statusCode: 500, message: 'Internal Server Error' })
