@@ -314,8 +314,13 @@ test.describe('AI Trader novice workflow', () => {
     await expect(page.getByRole('heading', { level: 2, name: 'Open Positions' })).toBeVisible();
     await expect(page.getByText('EURUSD', { exact: true }).first()).toBeVisible();
     await expect(page.getByText('+41.00 USD', { exact: true })).toBeVisible();
+    await expect(page.getByLabel('Total unrealized profit or loss')).toContainText('+41.00 USD');
+    const positionsTable = page.getByRole('table', { name: 'Open positions live performance' });
+    await expect(positionsTable).toBeVisible();
+    await expect(positionsTable.getByRole('columnheader', { name: 'Current' })).toBeVisible();
+    await expect(positionsTable.getByRole('columnheader', { name: 'Unrealized P&L' })).toBeVisible();
 
-    await expect(page.getByRole('heading', { level: 2, name: 'Recent AI Activity' })).toBeVisible();
+    await expect(page.getByRole('heading', { level: 2, name: 'Orders & Results' })).toBeVisible();
     await expect(page.getByText('OPEN', { exact: true }).first()).toBeVisible();
     await expect(
       page.getByText(/execution quote was too far from the risk-validated reference price/i),
@@ -324,8 +329,10 @@ test.describe('AI Trader novice workflow', () => {
     const closedTrades = page.locator('.ai-section--closed-trades');
     await expect(closedTrades.getByText('CLOSED', { exact: true })).toBeVisible();
     await expect(closedTrades.getByText('+16.70 USD', { exact: true })).toBeVisible();
-    await expect(closedTrades.getByText('Entry 1.10010000', { exact: true })).toBeVisible();
-    await expect(closedTrades.getByText('Exit 1.10177000', { exact: true })).toBeVisible();
+    await expect(closedTrades.getByText('Entry', { exact: true })).toBeVisible();
+    await expect(closedTrades.getByText('1.10010000', { exact: true })).toBeVisible();
+    await expect(closedTrades.getByText('Exit', { exact: true })).toBeVisible();
+    await expect(closedTrades.getByText('1.10177000', { exact: true })).toBeVisible();
     await expect(closedTrades.getByText('TAKE PROFIT HIT', { exact: true })).toBeVisible();
 
     await expect(page.getByText(/execution mode selector/i)).toHaveCount(0);
@@ -349,14 +356,15 @@ test.describe('AI Trader novice workflow', () => {
       return;
     }
 
+    await page.getByRole('button', { name: 'Grid' }).click();
     const metrics = page.locator('.ai-trade-metrics').first();
     await expect(metrics).toBeVisible();
 
     const rows = metrics.locator(':scope > div');
-    await expect(rows).toHaveCount(4);
+    await expect(rows).toHaveCount(6);
 
     const boxes = await Promise.all(
-      Array.from({ length: 4 }, (_, index) => rows.nth(index).boundingBox()),
+      Array.from({ length: 6 }, (_, index) => rows.nth(index).boundingBox()),
     );
     for (let index = 1; index < boxes.length; index += 1) {
       expect(boxes[index]).not.toBeNull();
