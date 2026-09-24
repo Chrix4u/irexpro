@@ -104,9 +104,7 @@ describe('ExecutionController frontend-safe responses', () => {
 
     const [response] = await controller.listRecentExecutions(USER_ID, 50);
 
-    expect(response.executionReasonCode).toBe(
-      'MARKET_SAFETY_PRICE_DEVIATION_EXCESSIVE',
-    );
+    expect(response.executionReasonCode).toBe('MARKET_SAFETY_PRICE_DEVIATION_EXCESSIVE');
     expect(Object.keys(response)).not.toContain('brokerRejectionReason');
     expect(JSON.stringify(response)).not.toContain('internal provider detail');
   });
