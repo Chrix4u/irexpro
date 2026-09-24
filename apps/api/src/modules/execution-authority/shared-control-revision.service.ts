@@ -360,7 +360,6 @@ export class SharedControlRevisionService {
       ? entityManager.getRepository(ExecutionControlRevisionState)
       : this.controlStateRepo;
     const trimmedReason = reason.trim().slice(0, 200);
-    const now = new Date();
 
     try {
       const existing = await repo.findOne({ where: { id: SINGLETON_ID } });
@@ -375,7 +374,8 @@ export class SharedControlRevisionService {
           .values({
             id: SINGLETON_ID,
             currentRevision: 1,
-            lastReason: trimmedReason || 'deployment bootstrap initialized execution-control revision',
+            lastReason:
+              trimmedReason || 'deployment bootstrap initialized execution-control revision',
             lastBumpedAt: null,
           })
           .execute();
