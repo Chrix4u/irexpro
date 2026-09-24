@@ -4,7 +4,6 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, MoreThan, Repository } from 'typeorm';
 import { ExecutionConfirmation } from './entities/execution-confirmation.entity';
 import { RiskGrant } from './entities/risk-grant.entity';
-import { RiskProfile } from '../risk/entities/risk-profile.entity';
 import { ExecutionConfirmationStatus, ExecutionMode } from './interfaces/execution-authority';
 import { FinalDispatchBoundary } from './orchestration/final-dispatch-boundary';
 import { ExecutionService } from './execution.service';
@@ -109,8 +108,6 @@ export class ExecutionConfirmationService {
     private readonly confirmationRepo: Repository<ExecutionConfirmation>,
     @InjectRepository(RiskGrant)
     private readonly riskGrantRepo: Repository<RiskGrant>,
-    @InjectRepository(RiskProfile)
-    private readonly riskProfileRepo: Repository<RiskProfile>,
     private readonly boundary: FinalDispatchBoundary,
     private readonly executionService: ExecutionService,
     // Round 6 (§18): resolved at CALL time — constructor-injecting RiskService
