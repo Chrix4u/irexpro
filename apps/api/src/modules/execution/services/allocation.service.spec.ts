@@ -69,6 +69,8 @@ const sizingInputsFixture = (): PositionSizingInputs => ({
   profileMaxPositionSizeLot: '1.0',
   lotsByRiskBudget: '0.2',
   lotsBeforeStepNormalization: '0.2',
+  grossNotional: '21700',
+  requiredMargin: '217',
   computedAt: new Date(0).toISOString(),
 });
 

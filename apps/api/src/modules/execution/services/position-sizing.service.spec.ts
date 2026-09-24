@@ -18,7 +18,8 @@ import { ExactDecimal } from '../../../common/utils/exact-decimal';
  * Matrix (§4):
  *   - happy path: lots = risk budget / (SL distance × contract size),
  *     clamped by profile cap + instrument max, normalized DOWN to the
- *     volume step; capital = lots × contract size × entry
+ *     volume step; capital commitment = broker-required margin, while gross
+ *     notional is retained only as sizing evidence
  *   - every missing/unprovable input → the TYPED fail-closed code
  *     (equity, free margin, currency, spec, contract size, stop loss,
  *     entry quote, profile) — NEVER a guessed volume
@@ -81,7 +82,7 @@ const geometry = (
 
 describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §4)', () => {
   let service: PositionSizingService;
-  let brokerService: { getBrokerAccountState: jest.Mock };
+  let brokerService: { getBrokerAccountState: jest.Mock; getRequiredMargin: jest.Mock };
   let orderGeometry: { resolveOrderGeometry: jest.Mock };
   let profileRepo: { findOne: jest.Mock };
 
@@ -109,6 +110,18 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
   beforeEach(() => {
     brokerService = {
       getBrokerAccountState: jest.fn().mockResolvedValue(accountState()),
+      getRequiredMargin: jest
+        .fn()
+        .mockImplementation(async (_connectionId: string, params: { lotSize: string }) => {
+          const lotMargins: Record<string, string> = {
+            '0.01': '10.85',
+            '0.1': '108.50',
+            '0.2': '217.00',
+            '0.25': '271.25',
+            '0.256': '277.76',
+          };
+          return lotMargins[params.lotSize] ?? '217.00';
+        }),
     };
     orderGeometry = {
       resolveOrderGeometry: jest.fn().mockResolvedValue(geometry()),
@@ -127,11 +140,12 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
     it('computes risk-budget lots, clamps and normalizes exactly', async () => {
       // equity 10000 × 2% = 200 risk; SL distance |1.085 − 1.075| = 0.010;
       // risk per lot = 0.010 × 100000 = 1000 → 200/1000 = 0.20 lots;
-      // capital = 0.20 × 100000 × 1.085 = 21700.
+      // gross notional = 0.20 × 100000 × 1.085 = 21700, but at the
+      // adapter's margin rules only 217.00 is capital committed.
       const sized = await service.sizePosition(baseParams());
 
       expect(sized.lots).toBe('0.2');
-      expect(sized.allocatedCapital).toBe('21700');
+      expect(sized.allocatedCapital).toBe('217');
       expect(sized.accountCurrency).toBe('USD');
       expect(sized.entryPrice).toBe('1.085');
       expect(sized.inputs.riskAmount).toBe('200');
@@ -140,7 +154,20 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
       expect(sized.inputs.entryPriceSource).toBe('MARKET_QUOTE');
       expect(sized.inputs.contractSize).toBe('100000');
       expect(sized.inputs.minLot).toBe('0.01');
+      expect(sized.inputs.grossNotional).toBe('21700');
+      expect(sized.inputs.requiredMargin).toBe('217');
       expect(sized.inputs.computedAt).toBeTruthy();
+    });
+
+    it('reserves margin rather than leveraged notional so a 1,000 USD AI allocation can admit normal FX sizing', async () => {
+      brokerService.getRequiredMargin.mockResolvedValue('110.15');
+      const sized = await service.sizePosition(baseParams({ stopLoss: '1.07500' }));
+
+      expect(sized.allocatedCapital).toBe('110.15');
+      expect(ExactDecimal.parse(sized.inputs.grossNotional).gt(ExactDecimal.parse('1000'))).toBe(
+        true,
+      );
+      expect(ExactDecimal.parse(sized.allocatedCapital).lt(ExactDecimal.parse('1000'))).toBe(true);
     });
 
     it('normalizes DOWN to the instrument volume step (0.2567 → 0.25 at step 0.01)', async () => {
@@ -173,9 +200,11 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
       });
       expect(sized.entryPrice).toBe('1.08');
       expect(sized.inputs.entryPriceSource).toBe('REQUESTED_LIMIT');
-      // risk 200 / (0.01 × 100000) = 0.2 lots; capital = 0.2 × 100000 × 1.08
+      // risk 200 / (0.01 × 100000) = 0.2 lots; gross notional is 21600,
+      // while the adapter-proved margin remains the capital commitment.
       expect(sized.lots).toBe('0.2');
-      expect(sized.allocatedCapital).toBe('21600');
+      expect(sized.allocatedCapital).toBe('217');
+      expect(sized.inputs.grossNotional).toBe('21600');
     });
   });
 
@@ -299,6 +328,13 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
       profileRepo.findOne.mockResolvedValue(profileRow({ maxTradeRiskPercent: '0' }));
       await expect(service.sizePosition(baseParams())).rejects.toMatchObject({
         code: 'RISK_BUDGET_UNPARSEABLE',
+      });
+    });
+
+    it('REQUIRED_MARGIN_UNPROVABLE when the broker cannot prove capital consumption', async () => {
+      brokerService.getRequiredMargin.mockResolvedValue(null);
+      await expect(service.sizePosition(baseParams())).rejects.toMatchObject({
+        code: 'REQUIRED_MARGIN_UNPROVABLE',
       });
     });
 

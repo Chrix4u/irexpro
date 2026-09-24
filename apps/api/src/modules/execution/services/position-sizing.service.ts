@@ -28,6 +28,8 @@ export type PositionSizingFailureCode =
   /** Sizing policy inputs unprovable. */
   | 'RISK_PROFILE_UNPROVABLE'
   | 'RISK_BUDGET_UNPARSEABLE'
+  /** The broker cannot prove the capital/margin required by the final sized volume. */
+  | 'REQUIRED_MARGIN_UNPROVABLE'
   /** The instrument's quote currency is not the account currency — no
    * implicit FX conversion is ever invented (trusted-FX authority required
    * for cross-currency sizing, deliberately out of scope). */
@@ -67,6 +69,8 @@ export interface PositionSizingInputs {
   profileMaxPositionSizeLot: string;
   lotsByRiskBudget: string;
   lotsBeforeStepNormalization: string;
+  grossNotional: string;
+  requiredMargin: string;
   computedAt: string;
 }
 
@@ -103,9 +107,11 @@ const LOT_SCALE = 8;
  *  - Currency honesty: the notional is computed in the instrument's QUOTE
  *    currency; when that is not the account currency the sizing fails with
  *    CURRENCY_MISMATCH — no implicit FX conversion is ever invented.
- *  - Margin enforcement stays at the existing risk gate (adapter-backed
- *    INSUFFICIENT_MARGIN check) — sizing does not duplicate network calls;
- *    the gate re-validates the sized order against CURRENT facts (§5).
+ *  - The AI capital-allocation ledger reserves broker-required margin/capital
+ *    consumption, NOT gross leveraged FX notional. The broker adapter is the
+ *    authority for required margin because leverage/margin rules vary by
+ *    provider and instrument. RiskService independently re-validates current
+ *    free margin later at the execution gate (defense in depth).
  *  - The FULL input + intermediate record is returned for persistence
  *    (§4: inputs/results reconstructable).
  */
@@ -336,7 +342,33 @@ export class PositionSizingService {
       );
     }
 
-    const allocatedCapital = lots.mul(contractSize).mul(entry);
+    // ── 8. Capital commitment = broker-required margin, not gross notional. ──
+    // A leveraged FX position's notional can be many times larger than the
+    // actual account capital consumed. Comparing gross notional with the user's
+    // explicit AI allocation makes even minimum-lot trades impossible on a
+    // modest allocation (e.g. 0.01 EURUSD ≈ 1,000 EUR notional but only about
+    // 1% of that capital at 100:1 leverage). The broker adapter already owns
+    // the instrument/provider-specific margin formula, so reuse that authority.
+    const grossNotional = lots.mul(contractSize).mul(entry);
+    let requiredMarginRaw: string | null = null;
+    try {
+      requiredMarginRaw = await this.brokerService.getRequiredMargin(brokerConnectionId, {
+        instrument,
+        lotSize: lots.toString(),
+        direction: params.direction,
+      });
+    } catch {
+      requiredMarginRaw = null;
+    }
+    const requiredMargin = ExactDecimal.tryParse(requiredMarginRaw ?? '');
+    if (!requiredMargin || !requiredMargin.isPositive()) {
+      throw new PositionSizingError(
+        'REQUIRED_MARGIN_UNPROVABLE',
+        `broker could not prove required margin for ${lots.toString()} lots of ${instrument}`,
+      );
+    }
+
+    const allocatedCapital = requiredMargin;
 
     const inputs: PositionSizingInputs = {
       accountCurrency,
@@ -355,12 +387,15 @@ export class PositionSizingService {
       profileMaxPositionSizeLot: profileMaxLots.toString(),
       lotsByRiskBudget: lotsByRiskBudget.toString(),
       lotsBeforeStepNormalization: lotsBeforeStep.toString(),
+      grossNotional: grossNotional.toString(),
+      requiredMargin: requiredMargin.toString(),
       computedAt: new Date().toISOString(),
     };
 
     this.logger.log(
       `Sized ${instrument} ${params.direction}: ${lots.toString()} lots ` +
-        `(risk ${riskAmount.toString()} ${accountCurrency}, capital ${allocatedCapital.toString()})`,
+        `(risk ${riskAmount.toString()} ${accountCurrency}, requiredMargin ${allocatedCapital.toString()}, ` +
+        `notional ${grossNotional.toString()})`,
     );
 
     return {
