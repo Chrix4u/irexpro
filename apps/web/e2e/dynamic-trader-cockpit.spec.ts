@@ -324,6 +324,9 @@ test.describe('AI Trader novice workflow', () => {
     const closedTrades = page.locator('.ai-section--closed-trades');
     await expect(closedTrades.getByText('CLOSED', { exact: true })).toBeVisible();
     await expect(closedTrades.getByText('+16.70 USD', { exact: true })).toBeVisible();
+    await expect(closedTrades.getByText('Entry 1.10010000', { exact: true })).toBeVisible();
+    await expect(closedTrades.getByText('Exit 1.10177000', { exact: true })).toBeVisible();
+    await expect(closedTrades.getByText('TAKE PROFIT HIT', { exact: true })).toBeVisible();
 
     await expect(page.getByText(/execution mode selector/i)).toHaveCount(0);
     await expect(page.getByText(/trading experience/i)).toHaveCount(0);
