@@ -48,14 +48,14 @@ const CONFIDENCE_THRESHOLD = 0.6;
 /**
  * Round 6 (#302) — deterministic duplicate recovery: trade statuses whose
  * original execution is treated as SUCCEEDED when a duplicate re-delivery is
- * recovered from the existing durable trade (anything that reached or passed
- * the provider). REJECTED/CANCELLED recover as EXECUTION_FAILED.
+ * recovered from durable, proven execution state. An unresolved
+ * RECONCILIATION_PENDING trade is NOT success: provider outcome is still
+ * unknown and must remain EXECUTION_FAILED until convergence proves otherwise.
  */
 const DUPLICATE_ALIVE_TRADE_STATUSES: readonly TradeStatus[] = [
   TradeStatus.PENDING,
   TradeStatus.OPEN,
   TradeStatus.CLOSED,
-  TradeStatus.RECONCILIATION_PENDING,
 ];
 
 /**
@@ -1008,8 +1008,8 @@ export class StrategyOrchestratorService {
    *
    *  - existing trade (ANY status) → typed duplicate outcome carrying the
    *    existing tradeId + status in StrategyResult.duplicateOfTrade
-   *    (EXECUTION_SUCCEEDED for PENDING/OPEN/CLOSED/RECONCILIATION_PENDING,
-   *    EXECUTION_FAILED for REJECTED/CANCELLED);
+   *    (EXECUTION_SUCCEEDED for PENDING/OPEN/CLOSED; EXECUTION_FAILED for
+   *    REJECTED/CANCELLED/RECONCILIATION_PENDING);
    *  - NO trade → the original evaluation produced no execution: a transport
    *    retry of a rejected signal stays rejected (RISK_REJECTED +
    *    duplicateOfTrade{tradeId:null, tradeStatus:'REJECTED_PREVIOUSLY'});
