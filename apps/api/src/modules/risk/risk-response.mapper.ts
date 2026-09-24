@@ -1,4 +1,4 @@
-import { RiskProfile } from './entities/risk-profile.entity';
+import type { RiskProfile } from './entities/risk-profile.entity';
 import { RiskViolation } from './entities/risk-violation.entity';
 import { RiskViolationSummaryResponseDto } from './dto/risk-intelligence-response.dto';
 
