@@ -166,6 +166,9 @@ async function setupAiTraderEvidence(page: Page) {
         hasAllocation: true,
         allocatedCapital: '2500',
         committedCapital: '250',
+        inFlightCommitments: '25',
+        pendingOrderCommitments: '50',
+        openPositionCommitments: '175',
         availableCapital: '2250',
       });
     }
