@@ -355,7 +355,7 @@ test.describe('AI Trader novice workflow', () => {
 
     await expect(page.getByRole('heading', { level: 2, name: 'Open Positions' })).toBeVisible();
     await expect(page.getByText('EURUSD', { exact: true }).first()).toBeVisible();
-    await expect(page.getByText('+41.00 USD', { exact: true })).toBeVisible();
+    await expect(page.locator('.ai-position-summary').getByText('+41.00 USD', { exact: true })).toBeVisible();
 
     await expect(page.getByRole('heading', { level: 2, name: 'Orders & Results' })).toBeVisible();
     await expect(page.getByText('OPEN', { exact: true }).first()).toBeVisible();
@@ -388,8 +388,9 @@ test.describe('AI Trader novice workflow', () => {
     const positionTable = page.locator('.ai-trading-table').first();
     await expect(positionTable).toBeVisible();
     await expect(positionTable.getByText('Unrealized P&L', { exact: true })).toBeVisible();
-    await expect(page.getByText('Total unrealized P&L', { exact: true })).toBeVisible();
-    await expect(page.getByText('+41.00 USD', { exact: true })).toBeVisible();
+    const positionSummary = page.locator('.ai-position-summary');
+    await expect(positionSummary.getByText('Total unrealized P&L', { exact: true })).toBeVisible();
+    await expect(positionSummary.getByText('+41.00 USD', { exact: true })).toBeVisible();
 
     const viewport = page.viewportSize();
     expect(viewport).not.toBeNull();
