@@ -1,7 +1,7 @@
 """Tests for SignalScheduler."""
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -353,7 +353,7 @@ async def test_research_uat_replay_advances_until_one_signal_then_stops_cycle():
 
 
 @pytest.mark.asyncio
-async def test_research_uat_probe_uses_real_confidence_and_obeys_one_minute_cooldown():
+async def test_research_uat_probe_uses_real_confidence_and_stops_after_first_successful_execution():
     settings = Settings(ai_scheduler_enabled=True, ai_signal_mode="paper")
     scheduler = SignalScheduler(nestjs_client=AsyncMock())
     scheduler._settings = settings
@@ -433,11 +433,15 @@ async def test_research_uat_probe_uses_real_confidence_and_obeys_one_minute_cool
     assert job.qualified_downstream_rejected_total == 0
     assert job.uat_probe_downstream_rejected_total == 0
 
+    # Even after the former one-minute cooldown has elapsed, a successfully
+    # completed workflow probe must never be injected again for this session.
+    job.last_uat_probe_at = datetime.now(UTC) - timedelta(seconds=120)
     await scheduler._run_session_job("session-1")
 
     assert mock_generator.generate.await_count == 24
     assert scheduler._nestjs_client.publish_signal.await_count == 1
     assert job.signals_published_total == 1
+    assert job.uat_probe_executions_succeeded_total == 1
 
 
 
