@@ -291,7 +291,6 @@ describe('StrategyOrchestratorService', () => {
     });
   });
 
-
   describe('Research PAPER UAT workflow probe boundary', () => {
     const probeCandidate = () =>
       validCandidate({
