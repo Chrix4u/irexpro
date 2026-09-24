@@ -11,15 +11,20 @@ from app.domain.training.model_qualification import (
     ACTIONABLE_LABEL_POLICY,
     ACTIONABLE_TARGET_COLUMN,
     CONFIDENCE_FLOOR,
+    EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME,
+    EVENT_LONG_ACTIONABLE_TARGET_COLUMN,
     EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
     EVENT_PAIR_REGIME_EXPERT_EXPERIMENT_NAME,
     EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME,
+    EVENT_SHORT_ACTIONABLE_TARGET_COLUMN,
     EVENT_TWO_STAGE_EXPERIMENT_NAME,
     TWO_STAGE_EXPERIMENT_NAME,
     ModelVariant,
     QualificationExperiment,
     _apply_calibrator,
     _ensure_actionable_target,
+    _ensure_event_dual_actionability_targets,
+    _event_dual_actionability_prediction_frame,
     _event_return_margin_bps,
     _event_two_stage_prediction_frame,
     _feature_columns,
@@ -112,18 +117,20 @@ def test_default_experiment_matrix_is_bounded_and_keeps_locked_baseline():
     assert baseline.sample_weight_policy == "economic"
     assert baseline.calibration == "none"
     assert baseline.feature_policy == "all"
-    assert sum(len(experiment.variants) for experiment in experiments) == 14
-    assert experiments[-6].name == "structure_feature_ablation"
-    assert experiments[-5].name == TWO_STAGE_EXPERIMENT_NAME
-    assert experiments[-5].mode == "two_stage_actionable"
-    assert experiments[-4].name == EVENT_TWO_STAGE_EXPERIMENT_NAME
-    assert experiments[-4].mode == "two_stage_event"
-    assert experiments[-3].name == EVENT_PAIR_EXPERT_EXPERIMENT_NAME
-    assert experiments[-3].mode == "two_stage_event_pair_experts"
-    assert experiments[-2].name == EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME
-    assert experiments[-2].mode == "two_stage_event_pair_return_margin"
-    assert experiments[-1].name == EVENT_PAIR_REGIME_EXPERT_EXPERIMENT_NAME
-    assert experiments[-1].mode == "two_stage_event_pair_regime_experts"
+    assert sum(len(experiment.variants) for experiment in experiments) == 15
+    assert experiments[-7].name == "structure_feature_ablation"
+    assert experiments[-6].name == TWO_STAGE_EXPERIMENT_NAME
+    assert experiments[-6].mode == "two_stage_actionable"
+    assert experiments[-5].name == EVENT_TWO_STAGE_EXPERIMENT_NAME
+    assert experiments[-5].mode == "two_stage_event"
+    assert experiments[-4].name == EVENT_PAIR_EXPERT_EXPERIMENT_NAME
+    assert experiments[-4].mode == "two_stage_event_pair_experts"
+    assert experiments[-3].name == EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME
+    assert experiments[-3].mode == "two_stage_event_pair_return_margin"
+    assert experiments[-2].name == EVENT_PAIR_REGIME_EXPERT_EXPERIMENT_NAME
+    assert experiments[-2].mode == "two_stage_event_pair_regime_experts"
+    assert experiments[-1].name == EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME
+    assert experiments[-1].mode == "event_dual_actionability"
     assert experiments[-1].tune_decision_threshold is False
     assert CONFIDENCE_FLOOR == 0.60
     assert ACTIONABLE_LABEL_POLICY.endswith("_v1")
@@ -486,6 +493,53 @@ def test_event_two_stage_prediction_keeps_timeouts_for_economics():
     assert predictions[qualification.ACTIONABLE_TARGET_COLUMN].tolist() == [1, 0, 1, 0]
     assert predictions.loc[1, "selected_net_return"] == pytest.approx(-0.0002)
     assert set(predictions["event_label_policy"]) == {EVENT_LABEL_POLICY}
+
+
+def test_event_dual_actionability_targets_partition_actionable_rows():
+    source = _research_dataset(periods=4, instruments=("EURUSD",))
+    source[EVENT_ACTIONABLE_TARGET_COLUMN] = [1, 0, 1, 0]
+    source[EVENT_DIRECTION_TARGET_COLUMN] = [1, 0, 0, 0]
+
+    labeled = _ensure_event_dual_actionability_targets(source)
+
+    assert labeled[EVENT_LONG_ACTIONABLE_TARGET_COLUMN].tolist() == [1, 0, 0, 0]
+    assert labeled[EVENT_SHORT_ACTIONABLE_TARGET_COLUMN].tolist() == [0, 0, 1, 0]
+    assert (
+        labeled[EVENT_LONG_ACTIONABLE_TARGET_COLUMN]
+        + labeled[EVENT_SHORT_ACTIONABLE_TARGET_COLUMN]
+    ).tolist() == source[EVENT_ACTIONABLE_TARGET_COLUMN].tolist()
+
+
+def test_event_dual_actionability_requires_winner_probability_and_margin():
+    source = _research_dataset(periods=4, instruments=("EURUSD",))
+    source[EVENT_ACTIONABLE_TARGET_COLUMN] = [1, 0, 1, 0]
+    source[EVENT_DIRECTION_TARGET_COLUMN] = [1, 0, 0, 0]
+    source[EVENT_LONG_NET_RETURN_COLUMN] = [0.0010, -0.0002, -0.0012, 0.0001]
+    source[EVENT_SHORT_NET_RETURN_COLUMN] = [-0.0011, -0.0001, 0.0011, -0.0002]
+    source[EVENT_STEP_COLUMN] = [1, 5, 2, 5]
+    source[EVENT_BARRIER_RETURN_COLUMN] = [0.0005] * 4
+
+    predictions = _event_dual_actionability_prediction_frame(
+        source,
+        long_probabilities=np.array([0.75, 0.62, 0.30, 0.55]),
+        short_probabilities=np.array([0.10, 0.58, 0.72, 0.20]),
+        confidence_floor=0.60,
+        fold=1,
+        experiment=EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME,
+        variant=ModelVariant(name="event_barrier_v7_dual_actionability"),
+    )
+
+    assert predictions["predicted_long"].tolist() == [True, True, False, True]
+    assert predictions["active_trade"].tolist() == [True, False, True, False]
+    np.testing.assert_allclose(
+        predictions["confidence"].to_numpy(dtype=float),
+        np.array([0.75, 0.62, 0.72, 0.55]),
+    )
+    assert set(predictions["confidence_policy"]) == {
+        "winning_side_probability_gte_floor_and_side_margin_gte_0_10"
+    }
+    assert qualification.CONFIDENCE_FLOOR == 0.60
+    assert qualification.DUAL_ACTION_MARGIN_FLOOR == 0.10
 
 
 def test_event_summary_direction_classification_uses_true_events_only():
