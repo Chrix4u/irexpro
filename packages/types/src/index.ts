@@ -747,8 +747,6 @@ export interface RiskProfile {
   maxDailyLossPercent: string;
   maxDrawdownPercent: string;
   maxOpenTrades: number;
-  /** @deprecated Legacy server field; daily trade count is no longer capped. */
-  maxDailyTrades?: number;
   maxPositionSizeLot: string;
   minStopLossPips: string;
   allowedInstruments: string[] | null;
