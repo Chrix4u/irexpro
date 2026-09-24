@@ -1374,8 +1374,7 @@ export class ExecutionService {
     connectionId: string,
     tradeIntentId?: string,
   ): Promise<
-    | { status: 'RESERVED_NEW'; trade: Trade }
-    | { status: 'DUPLICATE_EXISTING'; trade: Trade }
+    { status: 'RESERVED_NEW'; trade: Trade } | { status: 'DUPLICATE_EXISTING'; trade: Trade }
   > {
     const order = riskDecision.validatedOrder;
     const signalId = riskDecision.signalId;
