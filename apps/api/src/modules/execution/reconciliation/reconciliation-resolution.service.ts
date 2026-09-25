@@ -124,10 +124,7 @@ export class ReconciliationResolutionService {
    * Enrich a trade that is already CLOSED but was closed before the provider
    * economics were durably recorded. This does not change lifecycle state.
    */
-  async enrichClosedTradeEconomics(
-    trade: Trade,
-    closedTrade: BrokerClosedTrade,
-  ): Promise<boolean> {
+  async enrichClosedTradeEconomics(trade: Trade, closedTrade: BrokerClosedTrade): Promise<boolean> {
     if (
       trade.status !== TradeStatus.CLOSED ||
       trade.realisedPnl !== null ||
