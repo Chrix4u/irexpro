@@ -198,7 +198,12 @@ async function setupAiTraderEvidence(page: Page) {
   await expect(page.getByTestId('ai-trader-workspace')).toBeVisible();
   await expect(page.getByRole('heading', { level: 1, name: 'AI Trader' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Stop AI Trading' })).toBeVisible();
-  await expect(page.getByText('+41.00 USD', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Total unrealized profit or loss')).toContainText('+41.00 USD');
+  await expect(
+    page.getByRole('table', { name: 'Open positions live performance' }).getByText('+41.00 USD', {
+      exact: true,
+    }),
+  ).toBeVisible();
 
   await page.getByRole('button', { name: 'Stop AI Trading' }).click();
 
