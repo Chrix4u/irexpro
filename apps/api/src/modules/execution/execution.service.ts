@@ -1048,9 +1048,7 @@ export class ExecutionService {
     const killSwitchFlatten = reason === TradeCloseReason.KILL_SWITCH_FORCE_CLOSE;
     await this.auditService.log({
       actorUserId: userId,
-      action: killSwitchFlatten
-        ? AuditAction.RISK_KILL_SWITCH_ACTIVATED
-        : AuditAction.TRADE_CLOSED,
+      action: killSwitchFlatten ? AuditAction.RISK_KILL_SWITCH_ACTIVATED : AuditAction.TRADE_CLOSED,
       resourceType: 'Trade',
       resourceId: userId,
       severity:
@@ -1157,9 +1155,7 @@ export class ExecutionService {
         patch: {
           status: TradeStatus.CLOSED,
           exitPrice: dispatch.avgFillPrice,
-          ...(dispatch.realisedPnl !== undefined
-            ? { realisedPnl: dispatch.realisedPnl }
-            : {}),
+          ...(dispatch.realisedPnl !== undefined ? { realisedPnl: dispatch.realisedPnl } : {}),
           ...(dispatch.commission !== undefined ? { commission: dispatch.commission } : {}),
           ...(dispatch.swap !== undefined ? { swap: dispatch.swap } : {}),
           closedAt: new Date(),
