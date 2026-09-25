@@ -897,7 +897,8 @@ export class ExecutionService {
 
     this.logger.log(
       logPrefix +
-        ' for user ' +        userId +
+        ' for user ' +
+        userId +
         ': closing ' +
         trades.length +
         ' AI-proven OPEN position(s)',
@@ -1796,7 +1797,8 @@ export class ExecutionService {
       }
 
       if (attempt === maxAttempts) {
-        throw new ConflictException(          'Trading session authority changed repeatedly while stopping. Retry Stop AI Trading.',
+        throw new ConflictException(
+          'Trading session authority changed repeatedly while stopping. Retry Stop AI Trading.',
         );
       }
     }
