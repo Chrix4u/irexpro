@@ -302,7 +302,9 @@ test.describe('AI Trader novice workflow', () => {
     expect(researchBodyBox).not.toBeNull();
     expect(researchBodyBox!.y).toBeGreaterThan(researchHeadingBox!.y);
 
-    await expect(page.getByText('10,000.00 USD', { exact: true })).toBeVisible();
+    await expect(
+      page.getByText('10,000.00 USD', { exact: true }).first(),
+    ).toBeVisible();
     await expect(page.getByText('2,500.00 USD', { exact: true }).first()).toBeVisible();
     const pool = page.getByLabel('AI capital pool breakdown');
     await expect(pool.getByText('Available', { exact: true })).toBeVisible();
