@@ -28,6 +28,28 @@ describe('mapProviderOrderResponse', () => {
       });
     });
 
+    it('passes through synchronous close economics when the provider reports them', () => {
+      const action = mapProviderOrderResponse({
+        ...base,
+        externalOrderId: 'pos-1',
+        filledPrice: '1.09100',
+        filledQuantity: '0.05',
+        realisedPnl: '30.00',
+        commission: '-0.50',
+        swap: '-0.10',
+      });
+
+      expect(action).toEqual({
+        action: 'ACKNOWLEDGE_AND_FILL',
+        providerOrderId: 'pos-1',
+        fillQuantity: '0.05',
+        fillPrice: '1.09100',
+        realisedPnl: '30.00',
+        commission: '-0.50',
+        swap: '-0.10',
+      });
+    });
+
     it('success + price, no provider id → fill allowed (id recorded if known later)', () => {
       const action = mapProviderOrderResponse({
         ...base,

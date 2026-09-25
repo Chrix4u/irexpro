@@ -137,6 +137,7 @@ describe('StateReconciliationService — Phase E: credential lifecycle + securit
           useValue: {
             closeTradeFromProvider: jest.fn(),
             recoverTradeToOpen: jest.fn(),
+            enrichClosedTradeEconomics: jest.fn(),
             resolveOrderFromProviderState: jest.fn(),
           },
         },
@@ -211,6 +212,7 @@ describe('StateReconciliationService', () => {
   let resolution: {
     closeTradeFromProvider: jest.Mock;
     recoverTradeToOpen: jest.Mock;
+    enrichClosedTradeEconomics: jest.Mock;
     resolveOrderFromProviderState: jest.Mock;
   };
   let auditService: { log: jest.Mock };
@@ -290,6 +292,7 @@ describe('StateReconciliationService', () => {
     resolution = {
       closeTradeFromProvider: jest.fn().mockResolvedValue(true),
       recoverTradeToOpen: jest.fn().mockResolvedValue(true),
+      enrichClosedTradeEconomics: jest.fn().mockResolvedValue(true),
       resolveOrderFromProviderState: jest.fn().mockResolvedValue(false),
     };
     auditService = { log: jest.fn().mockResolvedValue(undefined) };
@@ -515,6 +518,47 @@ describe('StateReconciliationService', () => {
       expect(resolution.recoverTradeToOpen).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'trade-1', status: TradeStatus.RECONCILIATION_PENDING }),
       );
+    });
+
+    it('enriches an already-CLOSED trade whose realised P&L is missing', async () => {
+      const closedMissing = {
+        ...openTrade(),
+        status: TradeStatus.CLOSED,
+        realisedPnl: null,
+        closedAt: new Date('2025-01-01T01:00:00Z'),
+      } as Trade;
+
+      // First tradeRepo.find = live/pending comparator set; second = CLOSED
+      // enrichment candidates.
+      tradeRepo.find
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([closedMissing]);
+      adapter.getClosedTrades.mockResolvedValue([
+        {
+          externalOrderId: 'pos-1',
+          instrument: 'EURUSD',
+          direction: 'BUY',
+          lotSize: '1.0000',
+          openPrice: '1.10000',
+          closePrice: '1.10300',
+          stopLoss: '0',
+          takeProfit: '0',
+          realisedPnl: '30.00',
+          openedAt: new Date('2025-01-01T00:00:00Z'),
+          closedAt: new Date('2025-01-01T01:00:00Z'),
+          commission: '0',
+          swap: '0',
+          closeReason: 'TP',
+        },
+      ]);
+
+      await service.runForConnection(connection());
+
+      expect(resolution.enrichClosedTradeEconomics).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'trade-1', status: TradeStatus.CLOSED }),
+        expect.objectContaining({ externalOrderId: 'pos-1', realisedPnl: '30.00' }),
+      );
+      expect(resolution.closeTradeFromProvider).not.toHaveBeenCalled();
     });
 
     it('resolves orders by stable identifier via getOrderById (Directive §26)', async () => {

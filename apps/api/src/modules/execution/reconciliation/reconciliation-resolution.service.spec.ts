@@ -210,6 +210,82 @@ describe('ReconciliationResolutionService', () => {
     });
   });
 
+  describe('enrichClosedTradeEconomics', () => {
+    it('fills missing realised P&L on an already-CLOSED trade without reopening it', async () => {
+      const trade = baseTrade({
+        status: TradeStatus.CLOSED,
+        exitPrice: null,
+        realisedPnl: null,
+        commission: null,
+        swap: null,
+        closedAt: new Date('2025-01-01T01:00:00Z'),
+      });
+      const changed = await service.enrichClosedTradeEconomics(trade, {
+        externalOrderId: 'pos-1',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        lotSize: '1.0000',
+        openPrice: '1.10000',
+        closePrice: '1.10300',
+        stopLoss: '0',
+        takeProfit: '0',
+        realisedPnl: '30.00',
+        openedAt: new Date('2025-01-01T00:00:00Z'),
+        closedAt: new Date('2025-01-01T01:00:00Z'),
+        commission: '-0.50',
+        swap: '0.00',
+        closeReason: 'TP',
+      });
+
+      expect(changed).toBe(true);
+      expect(tradeRepo.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'trade-1',
+          status: TradeStatus.CLOSED,
+          realisedPnl: expect.anything(),
+        }),
+        expect.objectContaining({
+          realisedPnl: '30.00',
+          exitPrice: '1.10300',
+          commission: '-0.50',
+          swap: '0.00',
+        }),
+      );
+      expect(auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: AuditAction.TRADE_RECONCILED,
+          metadata: expect.objectContaining({ enrichment: 'CLOSED_TRADE_ECONOMICS' }),
+        }),
+      );
+    });
+
+    it('does not overwrite economics that are already present', async () => {
+      const trade = baseTrade({
+        status: TradeStatus.CLOSED,
+        realisedPnl: '25.00',
+      });
+      const changed = await service.enrichClosedTradeEconomics(trade, {
+        externalOrderId: 'pos-1',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        lotSize: '1.0000',
+        openPrice: '1.10000',
+        closePrice: '1.10300',
+        stopLoss: '0',
+        takeProfit: '0',
+        realisedPnl: '30.00',
+        openedAt: new Date(),
+        closedAt: new Date(),
+        commission: '0',
+        swap: '0',
+        closeReason: 'TP',
+      });
+
+      expect(changed).toBe(false);
+      expect(tradeRepo.update).not.toHaveBeenCalled();
+    });
+  });
+
   // ─── recoverTradeToOpen ────────────────────────────────────────────────────
 
   describe('recoverTradeToOpen', () => {

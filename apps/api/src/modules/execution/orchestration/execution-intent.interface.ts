@@ -101,6 +101,9 @@ export type ProviderDispatchOutcome =
       providerOrderId: string;
       filledQuantity: string;
       avgFillPrice: string;
+      realisedPnl?: string;
+      commission?: string;
+      swap?: string;
     }
   | {
       outcome: 'WORKING';
