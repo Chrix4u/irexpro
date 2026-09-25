@@ -5,12 +5,15 @@ import {
   DefaultValuePipe,
   Get,
   ParseIntPipe,
+  Param,
   Post,
   Query,
 } from '@nestjs/common';
 import { ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUserId } from '../../common/decorators/current-user.decorator';
 import { ExecutionReadService } from './execution-read.service';
+import { ExecutionService } from './execution.service';
+import { TradeCloseReason } from './entities/trade.entity';
 import {
   AllocationError,
   AllocationService,
@@ -35,6 +38,7 @@ export class ExecutionController {
   constructor(
     private readonly executionReadService: ExecutionReadService,
     private readonly allocationService: AllocationService,
+    private readonly executionService: ExecutionService,
   ) {}
 
   @Get('capital-allocation')
@@ -80,6 +84,46 @@ export class ExecutionController {
   async listOpenPositions(@CurrentUserId() userId: string): Promise<TradeExecutionResponseDto[]> {
     const trades = await this.executionReadService.listOpenPositions(userId);
     return trades.map(toTradeExecutionResponse);
+  }
+
+  @Post('positions/close-all')
+  @ApiOperation({
+    summary: 'Close all currently OPEN positions for the authenticated user',
+  })
+  async closeAllOpenPositions(@CurrentUserId() userId: string): Promise<{
+    targetCount: number;
+    closedCount: number;
+    unresolvedCount: number;
+    results: Array<{ tradeId: string; closed: boolean; status: string; detail?: string }>;
+  }> {
+    const results = await this.executionService.emergencyCloseAllOpenPositions(
+      userId,
+      TradeCloseReason.MANUAL_CLOSE,
+    );
+    const closedCount = results.filter((result) => result.closed).length;
+    return {
+      targetCount: results.length,
+      closedCount,
+      unresolvedCount: results.length - closedCount,
+      results,
+    };
+  }
+
+  @Post('positions/:tradeId/close')
+  @ApiOperation({
+    summary: 'Close one currently OPEN position owned by the authenticated user',
+  })
+  @ApiResponse({ status: 200, type: TradeExecutionResponseDto })
+  async closeOpenPosition(
+    @CurrentUserId() userId: string,
+    @Param('tradeId') tradeId: string,
+  ): Promise<TradeExecutionResponseDto> {
+    const trade = await this.executionService.closeTrade(
+      tradeId,
+      userId,
+      TradeCloseReason.MANUAL_CLOSE,
+    );
+    return toTradeExecutionResponse(trade);
   }
 
   @Get('trades/closed')
