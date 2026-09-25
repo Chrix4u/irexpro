@@ -7,11 +7,7 @@ export class PaperBrokerStateStore {
 
   async load(connectionId: string): Promise<unknown | null> {
     const rows: Array<{ state: unknown }> = await this.dataSource.query(
-      [
-        'SELECT state',
-        '  FROM broker.paper_broker_states',
-        ' WHERE connection_id = $1',
-      ].join('\n'),
+      ['SELECT state', '  FROM broker.paper_broker_states', ' WHERE connection_id = $1'].join('\n'),
       [connectionId],
     );
     if (!rows[0]) return null;
