@@ -206,7 +206,11 @@ export class DeterministicPaperPriceFeed extends PaperPriceFeed {
   }
 
   restoreState(state: { bidUnits: string; stepIndex: number }): void {
-    if (!/^-?\d+$/.test(state.bidUnits) || !Number.isSafeInteger(state.stepIndex) || state.stepIndex < 0) {
+    if (
+      !/^-?\d+$/.test(state.bidUnits) ||
+      !Number.isSafeInteger(state.stepIndex) ||
+      state.stepIndex < 0
+    ) {
       throw new Error('Malformed deterministic paper price-feed state');
     }
     this.bidUnits = BigInt(state.bidUnits);
