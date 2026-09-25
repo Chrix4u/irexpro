@@ -89,6 +89,7 @@ import { PaperBrokerStateStore } from './services/paper-broker-state.store';
     // (accept generation-fenced writes, freshness gate for NEW exposure,
     // legacy current-view projection guarded by generation).
     BrokerAccountSnapshotService,
+    PaperBrokerStateStore,
     PortfolioReadService,
     // Sprint 56 / Task 48-D — evidence-based write path for
     // BrokerConnection.demoValidated
