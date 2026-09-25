@@ -182,12 +182,12 @@ function executionReasonLabel(code: string | null | undefined): string | null {
   return labels[code] ?? 'Execution did not establish an active position.';
 }
 
-function sumDecimalStrings(values: Array<string | null | undefined>): string {
-  const valid = values.filter((value): value is string => Boolean(value?.trim()));
-  if (valid.length === 0) return '0';
+function sumDecimalStrings(values: Array<string | null | undefined>): string | null {
+  if (values.length === 0) return '0';
+  if (values.some((value) => !value?.trim())) return null;
 
-  const parsed = valid.map((value) => {
-    const match = /^([+-]?)(\d+)(?:\.(\d+))?$/.exec(value.trim());
+  const parsed = values.map((value) => {
+    const match = /^([+-]?)(\d+)(?:\.(\d+))?$/.exec(value!.trim());
     if (!match) return null;
     return {
       negative: match[1] === '-',
@@ -195,7 +195,7 @@ function sumDecimalStrings(values: Array<string | null | undefined>): string {
       fraction: match[3] ?? '',
     };
   });
-  if (parsed.some((value) => value === null)) return '0';
+  if (parsed.some((value) => value === null)) return null;
 
   const decimals = parsed as Array<{ negative: boolean; whole: string; fraction: string }>;
   const scale = Math.max(...decimals.map((value) => value.fraction.length), 0);
@@ -710,9 +710,12 @@ export default function AiTradingPage() {
   );
   const positionCurrency = positionCurrencies.length === 1 ? positionCurrencies[0] : null;
   const totalUnrealisedPnl =
-    livePositions.length > 0 && positionCurrencies.length <= 1
+    livePositions.length > 0 && positionCurrencies.length === 1
       ? sumDecimalStrings(livePositions.map((position) => position.unrealisedPnl))
       : null;
+  const totalUnrealisedPnlUnavailable =
+    livePositions.length > 0 &&
+    (positionCurrencies.length !== 1 || totalUnrealisedPnl === null);
 
   if (restoring) {
     return <div style={{ padding: '3rem' }}><LoadingSpinner text="Restoring trading workspace…" /></div>;
@@ -761,10 +764,14 @@ export default function AiTradingPage() {
         {automationRuntimeWarning && <Alert variant="warning">{automationRuntimeWarning}</Alert>}
         {selectedBroker?.brokerId === 'paper-broker' && (
           <Alert variant="info">
-            <strong>Research PAPER UAT · simulated execution only.</strong>{' '}
-            Accelerated replay may advance multiple simulated market steps per cycle so the
-            end-to-end AI, risk, execution, position and P&amp;L workflow can be tested faster.
-            No live broker funds are reachable, and model promotion gates remain unchanged.
+            <div className="ai-research-uat-copy">
+              <strong>Research PAPER UAT · simulated execution only.</strong>
+              <span>
+                Accelerated replay may advance multiple simulated market steps per cycle so the
+                end-to-end AI, risk, execution, position and P&amp;L workflow can be tested faster.
+                No live broker funds are reachable, and model promotion gates remain unchanged.
+              </span>
+            </div>
           </Alert>
         )}
 
@@ -904,33 +911,36 @@ export default function AiTradingPage() {
                   </div>
                 </dl>
               </Card>
-              <Card className="ai-overview-card">
-                <span className="ai-control-card__label">Open positions</span>
-                <strong className="ai-overview-card__value">{livePositions.length}</strong>
-                <span className="muted text-sm">Provider-enriched position state</span>
-              </Card>
-              <Card className="ai-overview-card">
-                <span className="ai-control-card__label">AI session</span>
-                <strong className="ai-overview-card__value">
-                  {!terminal?.sessionStateKnown
-                    ? 'UNAVAILABLE'
-                    : terminal.session?.status ?? 'STOPPED'}
-                </strong>
-                <span className="muted text-sm">
-                  {!terminal?.sessionStateKnown
-                    ? 'Session status is being verified'
-                    : terminal.session
-                      ? `Started ${formatTimestamp(terminal.session.startedAt)}`
-                      : 'Start AI Trading to begin'}
-                </span>
-              </Card>
-              <Card className="ai-overview-card">
-                <span className="ai-control-card__label">EURUSD · H1</span>
-                <strong className="ai-overview-card__value">{market?.quote.bid ?? '—'}</strong>
-                <span className="muted text-sm">
-                  {market ? `Spread ${market.quote.spread} · ${market.status}` : 'Market snapshot unavailable'}
-                </span>
-              </Card>
+
+              <div className="ai-overview-summary-stack" aria-label="Trading snapshot">
+                <Card className="ai-overview-card ai-overview-card--compact">
+                  <span className="ai-control-card__label">Open positions</span>
+                  <strong className="ai-overview-card__value">{livePositions.length}</strong>
+                  <span className="muted text-sm">Provider-enriched position state</span>
+                </Card>
+                <Card className="ai-overview-card ai-overview-card--compact">
+                  <span className="ai-control-card__label">AI session</span>
+                  <strong className="ai-overview-card__value">
+                    {!terminal?.sessionStateKnown
+                      ? 'UNAVAILABLE'
+                      : terminal.session?.status ?? 'STOPPED'}
+                  </strong>
+                  <span className="muted text-sm">
+                    {!terminal?.sessionStateKnown
+                      ? 'Session status is being verified'
+                      : terminal.session
+                        ? `Started ${formatTimestamp(terminal.session.startedAt)}`
+                        : 'Start AI Trading to begin'}
+                  </span>
+                </Card>
+                <Card className="ai-overview-card ai-overview-card--compact">
+                  <span className="ai-control-card__label">EURUSD · H1</span>
+                  <strong className="ai-overview-card__value">{market?.quote.bid ?? '—'}</strong>
+                  <span className="muted text-sm">
+                    {market ? `Spread ${market.quote.spread} · ${market.status}` : 'Market snapshot unavailable'}
+                  </span>
+                </Card>
+              </div>
             </section>
 
             {automationOn && (
@@ -1126,120 +1136,139 @@ export default function AiTradingPage() {
               </section>
             )}
 
-            <section className="ai-trading-grid">
-              <section className="ai-section ai-section--positions" aria-labelledby="open-positions-title">
-                <div className="ai-section__heading ai-section__heading--positions">
-                  <div>
-                    <p className="workspace-hero__eyebrow">Live exposure</p>
-                    <h2 id="open-positions-title">Open Positions</h2>
-                  </div>
-                  <div className="ai-position-toolbar">
-                    <div className="ai-position-total" aria-label="Total unrealized profit or loss">
-                      <span>Total unrealized P&amp;L</span>
-                      <strong className={totalUnrealisedPnl && totalUnrealisedPnl.startsWith('-') ? 'is-negative' : 'is-positive'}>
-                        {totalUnrealisedPnl === null
-                          ? livePositions.length === 0
-                            ? money('0', allocation?.accountCurrency)
-                            : 'Multiple currencies'
-                          : `${totalUnrealisedPnl.startsWith('-') ? '' : '+'}${money(totalUnrealisedPnl, positionCurrency ?? allocation?.accountCurrency)}`}
-                      </strong>
-                    </div>
-                    <div className="ai-view-toggle" role="group" aria-label="Open position display">
-                      <button
-                        type="button"
-                        className={positionView === 'table' ? 'is-active' : ''}
-                        aria-pressed={positionView === 'table'}
-                        onClick={() => setPositionView('table')}
-                      >
-                        Table
-                      </button>
-                      <button
-                        type="button"
-                        className={positionView === 'grid' ? 'is-active' : ''}
-                        aria-pressed={positionView === 'grid'}
-                        onClick={() => setPositionView('grid')}
-                      >
-                        Grid
-                      </button>
-                    </div>
-                    <Badge variant={livePositions.length ? 'success' : 'info'}>
-                      {livePositions.length} open
-                    </Badge>
-                  </div>
+            <section
+              className="ai-section ai-section--positions"
+              aria-labelledby="open-positions-title"
+            >
+              <div className="ai-section__heading ai-section__heading--positions">
+                <div>
+                  <p className="workspace-hero__eyebrow">Live exposure</p>
+                  <h2 id="open-positions-title">Open Positions</h2>
                 </div>
-                {livePositions.length === 0 ? (
-                  <Card className="ai-empty-card">
-                    <strong>No open positions</strong>
+                <div className="ai-position-toolbar">
+                  <div className="ai-position-total" aria-label="Total unrealized profit or loss">
+                    <span>Total unrealized P&amp;L</span>
+                    <strong
+                      className={
+                        totalUnrealisedPnlUnavailable
+                          ? ''
+                          : totalUnrealisedPnl?.startsWith('-')
+                            ? 'is-negative'
+                            : 'is-positive'
+                      }
+                    >
+                      {livePositions.length === 0
+                        ? money('0', allocation?.accountCurrency)
+                        : totalUnrealisedPnlUnavailable
+                          ? 'Awaiting complete broker marks'
+                          : `${totalUnrealisedPnl!.startsWith('-') ? '' : '+'}${money(
+                              totalUnrealisedPnl,
+                              positionCurrency ?? allocation?.accountCurrency,
+                            )}`}
+                    </strong>
+                  </div>
+                  <div className="ai-view-toggle" role="group" aria-label="Open position display">
+                    <button
+                      type="button"
+                      className={positionView === 'table' ? 'is-active' : ''}
+                      aria-pressed={positionView === 'table'}
+                      onClick={() => setPositionView('table')}
+                    >
+                      Table
+                    </button>
+                    <button
+                      type="button"
+                      className={positionView === 'grid' ? 'is-active' : ''}
+                      aria-pressed={positionView === 'grid'}
+                      onClick={() => setPositionView('grid')}
+                    >
+                      Grid
+                    </button>
+                  </div>
+                  <Badge variant={livePositions.length ? 'success' : 'info'}>
+                    {livePositions.length} open
+                  </Badge>
+                </div>
+              </div>
+              {livePositions.length === 0 ? (
+                <Card className="ai-empty-card">
+                  <strong>No open positions</strong>
+                  <p className="muted">
+                    Current unrealized P&amp;L: {money('0', allocation?.accountCurrency)}. When AI
+                    automation opens a trade, its entry, current price, costs and live unrealized
+                    P&amp;L will appear here.
+                  </p>
+                </Card>
+              ) : positionView === 'table' ? (
+                <PositionTable positions={livePositions} />
+              ) : (
+                <div className="ai-position-grid">
+                  {livePositions.map((position) => (
+                    <PositionCard key={position.id} position={position} />
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section
+              className="ai-trading-grid ai-trading-grid--history"
+              aria-label="Closed trades and recent AI activity"
+            >
+              <section
+                className="ai-section ai-history-card ai-section--closed-trades"
+                aria-labelledby="closed-trades-title"
+              >
+                <div className="ai-section__heading">
+                  <div>
+                    <p className="workspace-hero__eyebrow">Completed positions</p>
+                    <h2 id="closed-trades-title">Closed Trades &amp; Realized P&amp;L</h2>
+                  </div>
+                  <Badge variant={recentClosedTrades.length ? 'success' : 'info'}>
+                    {recentClosedTrades.length} recent
+                  </Badge>
+                </div>
+                {recentClosedTrades.length === 0 ? (
+                  <Card className="ai-empty-card ai-empty-card--compact">
+                    <strong>No closed trades in the latest execution history</strong>
                     <p className="muted">
-                      Current unrealized P&amp;L: {money('0', allocation?.accountCurrency)}. When AI
-                      automation opens a trade, its entry, current price, costs and live unrealized
-                      P&amp;L will appear here.
+                      Closed positions stay separate so realized profit or loss remains easy to audit.
                     </p>
                   </Card>
-                ) : positionView === 'table' ? (
-                  <PositionTable positions={livePositions} />
                 ) : (
-                  <div className="ai-position-grid">
-                    {livePositions.map((position) => (
-                      <PositionCard key={position.id} position={position} />
+                  <div className="ai-activity-list ai-activity-list--scroll">
+                    {recentClosedTrades.map((trade) => (
+                      <ExecutionRow key={trade.id} trade={trade} />
                     ))}
                   </div>
                 )}
               </section>
 
-              <section className="ai-section ai-section--activity" aria-labelledby="orders-results-title">
+              <section
+                className="ai-section ai-history-card ai-section--activity"
+                aria-labelledby="recent-ai-activity-title"
+              >
                 <div className="ai-section__heading">
                   <div>
-                    <p className="workspace-hero__eyebrow">Execution history</p>
-                    <h2 id="orders-results-title">Orders &amp; Results</h2>
+                    <p className="workspace-hero__eyebrow">Orders &amp; decisions</p>
+                    <h2 id="recent-ai-activity-title">Recent AI Activity</h2>
                   </div>
                   <Link href="/live-account" className="ai-text-link">View all</Link>
                 </div>
                 {!execution || execution.recentExecutions.length === 0 ? (
-                  <Card className="ai-empty-card">
+                  <Card className="ai-empty-card ai-empty-card--compact">
                     <strong>No execution activity yet</strong>
                     <p className="muted">
-                      Orders, fills, entry and exit prices, realized P&amp;L and execution outcomes will appear here as the AI trades.
+                      Orders, fills, execution outcomes and AI workflow decisions will appear here.
                     </p>
                   </Card>
                 ) : (
-                  <div className="ai-activity-list">
+                  <div className="ai-activity-list ai-activity-list--scroll">
                     {execution.recentExecutions.slice(0, 10).map((trade) => (
                       <ExecutionRow key={trade.id} trade={trade} />
                     ))}
                   </div>
                 )}
               </section>
-            </section>
-
-            <section
-              className="ai-section ai-section--closed-trades"
-              aria-labelledby="closed-trades-title"
-            >
-              <div className="ai-section__heading">
-                <div>
-                  <p className="workspace-hero__eyebrow">Completed positions</p>
-                  <h2 id="closed-trades-title">Closed Trades &amp; Realized P&amp;L</h2>
-                </div>
-                <Badge variant={recentClosedTrades.length ? 'success' : 'info'}>
-                  {recentClosedTrades.length} recent
-                </Badge>
-              </div>
-              {recentClosedTrades.length === 0 ? (
-                <Card className="ai-empty-card">
-                  <strong>No closed trades in the latest execution history</strong>
-                  <p className="muted">
-                    Closed positions are kept separate here so realized profit or loss cannot be
-                    hidden by newer rejected workflow probes.
-                  </p>
-                </Card>
-              ) : (
-                <div className="ai-activity-list">
-                  {recentClosedTrades.map((trade) => (
-                    <ExecutionRow key={trade.id} trade={trade} />
-                  ))}
-                </div>
-              )}
             </section>
 
             <section className="ai-simple-note" aria-label="Automatic risk protection">
