@@ -9,6 +9,7 @@ import { CTraderAdapter } from './ctrader/ctrader.adapter';
 import { CTraderClientService } from './ctrader/ctrader-client.service';
 import { OandaAdapter } from './oanda/oanda.adapter';
 import { MetaApiClientService } from '../services/metaapi-client.service';
+import { PaperBrokerStateStore } from '../services/paper-broker-state.store';
 
 const makeAdapter = (brokerId: string, brokerName: string): IBrokerAdapter => ({
   brokerId,
@@ -411,6 +412,11 @@ describe('BrokerModule — connection-scoped cTrader adapter factory wiring', ()
       metaApiClient,
       configService,
       ctraderClientStub,
+      {
+        load: jest.fn().mockResolvedValue(null),
+        loadBootstrap: jest.fn().mockResolvedValue(null),
+        save: jest.fn().mockResolvedValue(undefined),
+      } as unknown as PaperBrokerStateStore,
     );
     brokerModule.onModuleInit();
   });

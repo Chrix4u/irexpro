@@ -1096,6 +1096,38 @@ describe('ExecutionService', () => {
       );
     });
 
+    it('persists broker-reported close economics in the guarded CLOSED transition', async () => {
+      tradeRepo.findOne.mockResolvedValue(openTrade());
+      orchestrator.dispatchOrder.mockResolvedValueOnce({
+        outcome: 'FILLED',
+        order: mockOrder,
+        orderId: mockOrder.id,
+        providerOrderId: 'close-ext-1',
+        filledQuantity: '0.05',
+        avgFillPrice: '1.09100',
+        realisedPnl: '30.00',
+        commission: '-0.50',
+        swap: '-0.10',
+      });
+
+      await service.closeTrade('trade-1', 'user-1', TradeCloseReason.MANUAL_CLOSE);
+
+      expect(tradeCas.applyCasTransition).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tradeId: 'trade-1',
+          expectedFrom: TradeStatus.OPEN,
+          target: TradeStatus.CLOSED,
+          patch: expect.objectContaining({
+            status: TradeStatus.CLOSED,
+            exitPrice: '1.09100',
+            realisedPnl: '30.00',
+            commission: '-0.50',
+            swap: '-0.10',
+          }),
+        }),
+      );
+    });
+
     it('FAIL-CLOSED: provider-refused close throws ConflictException and trade stays OPEN', async () => {
       tradeRepo.findOne.mockResolvedValue(openTrade());
       orchestrator.dispatchOrder.mockResolvedValueOnce({

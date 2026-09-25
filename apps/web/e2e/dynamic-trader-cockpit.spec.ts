@@ -116,6 +116,8 @@ async function gotoAiTrader(
     active?: boolean;
     onStart?: () => void;
     onStop?: () => void;
+    onClosePosition?: (tradeId: string) => void;
+    onCloseAll?: () => void;
     failExecutionReads?: boolean;
     failPositionRead?: boolean;
     dropFirstRiskRead?: boolean;
@@ -189,6 +191,37 @@ async function gotoAiTrader(
     }
     if (apiPath === 'broker/connections') {
       return fulfill(200, options.brokerPayload ?? mockBrokerConnections);
+    }
+    if (apiPath.startsWith('execution/positions/') && apiPath.endsWith('/close')) {
+      const tradeId = apiPath.split('/')[2] ?? '';
+      options.onClosePosition?.(tradeId);
+      return fulfill(200, {
+        ...executionPosition,
+        id: tradeId || executionPosition.id,
+        status: 'CLOSED',
+        exitPrice: '1.10420000',
+        realisedPnl: '41.00',
+        commission: '0.20',
+        swap: '0',
+        closeReason: 'MANUAL_CLOSE',
+        closedAt: '2026-08-31T01:01:00.000Z',
+        updatedAt: '2026-08-31T01:01:00.000Z',
+      });
+    }
+    if (apiPath === 'execution/positions/close-all') {
+      options.onCloseAll?.();
+      return fulfill(200, {
+        targetCount: 1,
+        closedCount: 1,
+        unresolvedCount: 0,
+        results: [
+          {
+            tradeId: executionPosition.id,
+            closed: true,
+            status: 'CLOSED',
+          },
+        ],
+      });
     }
     if (apiPath === 'execution/positions/open') {
       return options.failExecutionReads
@@ -315,6 +348,10 @@ test.describe('AI Trader novice workflow', () => {
     await expect(pool.getByText('50.00 USD', { exact: true })).toBeVisible();
     await expect(pool.getByText('In-flight decisions', { exact: true })).toBeVisible();
     await expect(pool.getByText('25.00 USD', { exact: true })).toBeVisible();
+    await expect(pool.getByText('Capital use model', { exact: true })).toBeVisible();
+    await expect(pool.getByText('Broker margin reserved', { exact: true })).toBeVisible();
+    await expect(pool.getByText('Broker', { exact: true })).toBeVisible();
+    await expect(pool.getByText('Protection', { exact: true })).toBeVisible();
     await expect(page.getByText(/Shared across multiple AI trades/i)).toBeVisible();
     await expect(page.getByRole('combobox', { name: 'Broker account' })).toBeDisabled();
     await expect(page.getByRole('button', { name: 'Stop AI Trading' })).toBeVisible();
@@ -336,6 +373,12 @@ test.describe('AI Trader novice workflow', () => {
     await expect(positionsTable.getByText('+41.00 USD', { exact: true })).toBeVisible();
     await expect(positionsTable.getByRole('columnheader', { name: 'Current' })).toBeVisible();
     await expect(positionsTable.getByRole('columnheader', { name: 'Unrealized P&L' })).toBeVisible();
+    await expect(positionsTable.getByRole('columnheader', { name: 'Action' })).toBeVisible();
+    await expect(positionsTable.getByRole('button', { name: 'Close', exact: true })).toBeVisible();
+    const brokerChip = positionsTable.locator('.ai-broker-chip').first();
+    await expect(brokerChip).toHaveText('Paper · DEMO');
+    await expect(brokerChip).toHaveAttribute('title', /Paper Trading Broker.*DEMO/);
+    await expect(page.getByRole('button', { name: 'Close All', exact: true })).toBeVisible();
 
     await expect(page.getByRole('heading', { level: 2, name: 'Recent AI Activity' })).toBeVisible();
     await expect(page.getByText('OPEN', { exact: true }).first()).toBeVisible();
@@ -374,6 +417,17 @@ test.describe('AI Trader novice workflow', () => {
       expect(closedBox!.y).toBeGreaterThan(positionsBox!.y);
       expect(Math.abs(closedBox!.y - activityBox!.y)).toBeLessThan(2);
       expect(activityBox!.x).toBeGreaterThan(closedBox!.x);
+
+      const overview = page.locator('.ai-overview-grid');
+      const allocationCard = overview.locator('.ai-overview-card--allocation-pool');
+      const summaryStack = overview.locator('.ai-overview-summary-stack');
+      const [allocationBox, summaryBox] = await Promise.all([
+        allocationCard.boundingBox(),
+        summaryStack.boundingBox(),
+      ]);
+      expect(allocationBox).not.toBeNull();
+      expect(summaryBox).not.toBeNull();
+      expect(Math.abs(allocationBox!.height - summaryBox!.height)).toBeLessThan(3);
     }
 
     await expect(page.getByText(/execution mode selector/i)).toHaveCount(0);
@@ -386,6 +440,53 @@ test.describe('AI Trader novice workflow', () => {
     assertNoExternalRequests(page);
   });
 
+
+  test('requires confirmation before closing one position', async ({ page }) => {
+    let closedTradeId = '';
+    await gotoAiTrader(page, {
+      onClosePosition: (tradeId) => {
+        closedTradeId = tradeId;
+      },
+    });
+
+    await page
+      .getByRole('table', { name: 'Open positions live performance' })
+      .getByRole('button', { name: 'Close', exact: true })
+      .click();
+
+    const dialog = page.getByRole('alertdialog', { name: 'Close EURUSD position?' });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText(/actual exit price is determined by the broker/i)).toBeVisible();
+    expect(closedTradeId).toBe('');
+
+    await dialog.getByRole('button', { name: 'Close Position', exact: true }).click();
+    expect(closedTradeId).toBe(executionPosition.id);
+    await expect(dialog).toHaveCount(0);
+
+    assertNoExternalRequests(page);
+  });
+
+  test('requires confirmation before closing all open positions', async ({ page }) => {
+    let closeAllRequests = 0;
+    await gotoAiTrader(page, {
+      onCloseAll: () => {
+        closeAllRequests += 1;
+      },
+    });
+
+    await page.getByRole('button', { name: 'Close All', exact: true }).click();
+
+    const dialog = page.getByRole('alertdialog', { name: 'Close all 1 open positions?' });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText(/every currently OPEN position/i)).toBeVisible();
+    expect(closeAllRequests).toBe(0);
+
+    await dialog.getByRole('button', { name: 'Close All Positions', exact: true }).click();
+    expect(closeAllRequests).toBe(1);
+    await expect(dialog).toHaveCount(0);
+
+    assertNoExternalRequests(page);
+  });
 
   test('stacks every position metric on its own desktop row', async ({ page }) => {
     await gotoAiTrader(page);

@@ -137,6 +137,7 @@ describe('StateReconciliationService — Phase E: credential lifecycle + securit
           useValue: {
             closeTradeFromProvider: jest.fn(),
             recoverTradeToOpen: jest.fn(),
+            enrichClosedTradeEconomics: jest.fn(),
             resolveOrderFromProviderState: jest.fn(),
           },
         },
@@ -211,6 +212,7 @@ describe('StateReconciliationService', () => {
   let resolution: {
     closeTradeFromProvider: jest.Mock;
     recoverTradeToOpen: jest.Mock;
+    enrichClosedTradeEconomics: jest.Mock;
     resolveOrderFromProviderState: jest.Mock;
   };
   let auditService: { log: jest.Mock };
@@ -290,6 +292,7 @@ describe('StateReconciliationService', () => {
     resolution = {
       closeTradeFromProvider: jest.fn().mockResolvedValue(true),
       recoverTradeToOpen: jest.fn().mockResolvedValue(true),
+      enrichClosedTradeEconomics: jest.fn().mockResolvedValue(true),
       resolveOrderFromProviderState: jest.fn().mockResolvedValue(false),
     };
     auditService = { log: jest.fn().mockResolvedValue(undefined) };

@@ -210,6 +210,51 @@ describe('ReconciliationResolutionService', () => {
     });
   });
 
+  describe('enrichClosedTradeEconomics', () => {
+    it('fills missing economics on an already-CLOSED trade without changing lifecycle state', async () => {
+      const trade = baseTrade({
+        status: TradeStatus.CLOSED,
+        exitPrice: null,
+        realisedPnl: null,
+        commission: null,
+        swap: null,
+        closedAt: new Date('2025-01-01T01:00:00Z'),
+      });
+
+      const changed = await service.enrichClosedTradeEconomics(trade, {
+        externalOrderId: 'pos-1',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        lotSize: '1.0000',
+        openPrice: '1.10000',
+        closePrice: '1.10300',
+        stopLoss: '0',
+        takeProfit: '0',
+        realisedPnl: '30.00',
+        openedAt: new Date('2025-01-01T00:00:00Z'),
+        closedAt: new Date('2025-01-01T01:00:00Z'),
+        commission: '-0.50',
+        swap: '0.00',
+        closeReason: 'TP',
+      });
+
+      expect(changed).toBe(true);
+      expect(tradeRepo.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'trade-1',
+          status: TradeStatus.CLOSED,
+          realisedPnl: expect.anything(),
+        }),
+        expect.objectContaining({
+          exitPrice: '1.10300',
+          realisedPnl: '30.00',
+          commission: '-0.50',
+          swap: '0.00',
+        }),
+      );
+    });
+  });
+
   // ─── recoverTradeToOpen ────────────────────────────────────────────────────
 
   describe('recoverTradeToOpen', () => {

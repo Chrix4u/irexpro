@@ -28,6 +28,9 @@ export type ProviderResponseAction =
       providerOrderId?: string;
       fillQuantity?: string;
       fillPrice: string;
+      realisedPnl?: string;
+      commission?: string;
+      swap?: string;
     }
   | {
       action: 'ACKNOWLEDGE';
@@ -70,6 +73,9 @@ export function mapProviderOrderResponse(result: BrokerOrderResult): ProviderRes
       providerOrderId: result.externalOrderId,
       fillQuantity: result.filledQuantity,
       fillPrice: result.filledPrice,
+      ...(result.realisedPnl !== undefined ? { realisedPnl: result.realisedPnl } : {}),
+      ...(result.commission !== undefined ? { commission: result.commission } : {}),
+      ...(result.swap !== undefined ? { swap: result.swap } : {}),
     };
   }
 

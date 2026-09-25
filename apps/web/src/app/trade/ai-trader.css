@@ -225,18 +225,21 @@
   display: grid;
   grid-template-columns: minmax(420px, 1.45fr) minmax(300px, 0.85fr);
   gap: clamp(0.8rem, 1.25vw, 1.1rem);
-  align-items: start;
+  align-items: stretch;
 }
 
 .ai-overview-card--allocation-pool {
   gap: 0.55rem;
+  height: 100%;
 }
 
 .ai-overview-summary-stack {
   display: grid;
+  grid-template-rows: repeat(3, minmax(0, 1fr));
   gap: 0.75rem;
-  align-content: start;
+  align-content: stretch;
   min-width: 0;
+  height: 100%;
 }
 
 .ai-allocation-breakdown {
@@ -526,7 +529,7 @@
 
 .ai-data-table {
   width: 100%;
-  min-width: 1180px;
+  min-width: 1060px;
   border-collapse: collapse;
   font-size: 0.78rem;
   font-variant-numeric: tabular-nums lining-nums;
@@ -565,6 +568,26 @@
 .ai-data-table td small {
   color: var(--text-muted);
   font-size: 0.68rem;
+}
+
+.ai-broker-chip {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  max-width: 116px;
+  min-width: 0;
+  padding: 0.16rem 0.42rem;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.08);
+  color: var(--text-muted);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .ai-order-detail-grid {
@@ -633,6 +656,10 @@
 .ai-position-card__foot {
   color: var(--text-muted);
   font-size: 0.78rem;
+}
+
+.ai-position-card > .btn {
+  justify-self: end;
 }
 
 .ai-trade-metrics {
@@ -793,6 +820,8 @@
 
   .ai-overview-summary-stack {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-rows: minmax(0, 1fr);
+    height: auto;
   }
 
   .ai-runtime-grid {
@@ -951,6 +980,15 @@
   .ai-position-toolbar {
     width: 100%;
     justify-content: space-between;
+  }
+
+  .ai-position-toolbar > .btn {
+    flex: 1 1 100%;
+  }
+
+  .ai-position-card > .btn {
+    width: 100%;
+    justify-self: stretch;
   }
 
   .ai-position-total {

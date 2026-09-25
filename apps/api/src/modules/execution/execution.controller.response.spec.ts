@@ -1,5 +1,6 @@
 import { ExecutionController } from './execution.controller';
 import { ExecutionReadService } from './execution-read.service';
+import { ExecutionService } from './execution.service';
 import { AllocationService } from './services/allocation.service';
 import { Trade, TradeCloseReason, TradeDirection, TradeStatus } from './entities/trade.entity';
 
@@ -40,6 +41,7 @@ function makeTrade(overrides: Partial<Trade> = {}): Trade {
 describe('ExecutionController frontend-safe responses', () => {
   let controller: ExecutionController;
   let readService: Record<string, jest.Mock>;
+  let executionService: Record<string, jest.Mock>;
 
   const USER_ID = '11111111-1111-4111-8111-111111111111';
 
@@ -65,9 +67,30 @@ describe('ExecutionController frontend-safe responses', () => {
         }),
       ]),
     };
+    executionService = {
+      closeTrade: jest.fn().mockResolvedValue(
+        makeTrade({
+          status: TradeStatus.CLOSED,
+          exitPrice: '1.10700000',
+          realisedPnl: '69.80',
+          closeReason: TradeCloseReason.MANUAL_CLOSE,
+          closedAt: new Date('2026-08-28T13:00:00.000Z'),
+        }),
+      ),
+      emergencyCloseAllOpenPositions: jest.fn().mockResolvedValue([
+        { tradeId: 'trade-1', closed: true, status: TradeStatus.CLOSED },
+        {
+          tradeId: 'trade-2',
+          closed: false,
+          status: TradeStatus.RECONCILIATION_PENDING,
+          detail: 'awaiting provider confirmation',
+        },
+      ]),
+    };
     controller = new ExecutionController(
       readService as unknown as ExecutionReadService,
       {} as AllocationService,
+      executionService as unknown as ExecutionService,
     );
   });
 
@@ -84,6 +107,46 @@ describe('ExecutionController frontend-safe responses', () => {
   it('passes user UUID and requested limit into closed-trade reads', async () => {
     await controller.listClosedExecutions(USER_ID, 25);
     expect(readService.listClosedExecutions).toHaveBeenCalledWith(USER_ID, 25);
+  });
+
+  it('closes only the authenticated user position through ExecutionService', async () => {
+    const response = await controller.closeOpenPosition(USER_ID, 'trade-1');
+
+    expect(executionService.closeTrade).toHaveBeenCalledWith(
+      'trade-1',
+      USER_ID,
+      TradeCloseReason.MANUAL_CLOSE,
+    );
+    expect(response).toMatchObject({
+      status: TradeStatus.CLOSED,
+      exitPrice: '1.10700000',
+      realisedPnl: '69.80',
+      closeReason: TradeCloseReason.MANUAL_CLOSE,
+    });
+    expect(Object.keys(response)).not.toContain('externalOrderId');
+  });
+
+  it('close-all uses the guarded manual-close flatten and reports unresolved positions', async () => {
+    const response = await controller.closeAllOpenPositions(USER_ID);
+
+    expect(executionService.emergencyCloseAllOpenPositions).toHaveBeenCalledWith(
+      USER_ID,
+      TradeCloseReason.MANUAL_CLOSE,
+    );
+    expect(response).toEqual({
+      targetCount: 2,
+      closedCount: 1,
+      unresolvedCount: 1,
+      results: [
+        { tradeId: 'trade-1', closed: true, status: TradeStatus.CLOSED },
+        {
+          tradeId: 'trade-2',
+          closed: false,
+          status: TradeStatus.RECONCILIATION_PENDING,
+          detail: 'awaiting provider confirmation',
+        },
+      ],
+    });
   });
 
   it('does not expose internal execution entity identifiers', async () => {

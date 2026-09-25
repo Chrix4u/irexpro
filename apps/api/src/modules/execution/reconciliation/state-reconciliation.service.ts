@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, IsNull, Repository } from 'typeorm';
 import { BrokerConnection } from '../../broker/entities/broker-connection.entity';
 import { BrokerAccount } from '../../broker/entities/broker-account.entity';
 import { BrokerService } from '../../broker/broker.service';
@@ -226,21 +226,31 @@ export class StateReconciliationService {
       };
 
       // ── Phase 4: internal state ─────────────────────────────────────────
-      const [internalOrders, internalTrades, storedAccount] = await Promise.all([
-        this.orderRepo.find({
-          where: {
-            brokerConnectionId: connection.id,
-            status: In([...RECONCILABLE_ORDER_STATUSES] as OrderStatus[]),
-          },
-        }),
-        this.tradeRepo.find({
-          where: {
-            brokerConnectionId: connection.id,
-            status: In([...RECONCILABLE_TRADE_STATUSES] as TradeStatus[]),
-          },
-        }),
-        this.accountRepo.findOne({ where: { brokerConnectionId: connection.id } }),
-      ]);
+      const [internalOrders, internalTrades, storedAccount, closedTradesMissingEconomics] =
+        await Promise.all([
+          this.orderRepo.find({
+            where: {
+              brokerConnectionId: connection.id,
+              status: In([...RECONCILABLE_ORDER_STATUSES] as OrderStatus[]),
+            },
+          }),
+          this.tradeRepo.find({
+            where: {
+              brokerConnectionId: connection.id,
+              status: In([...RECONCILABLE_TRADE_STATUSES] as TradeStatus[]),
+            },
+          }),
+          this.accountRepo.findOne({ where: { brokerConnectionId: connection.id } }),
+          this.tradeRepo.find({
+            where: {
+              brokerConnectionId: connection.id,
+              status: TradeStatus.CLOSED,
+              realisedPnl: IsNull(),
+            },
+            order: { closedAt: 'DESC' },
+            take: 100,
+          }),
+        ]);
 
       const internalState = {
         orders: internalOrders.map((o) => this.toOrderSnapshot(o)),
@@ -294,8 +304,11 @@ export class StateReconciliationService {
       let autoResolvedCount = 0;
 
       // 7a. Positions: externally-closed + RECONCILIATION_PENDING recovery.
+      const tradesNeedingClosedHistory = [...internalTrades, ...closedTradesMissingEconomics];
       const closedTrades =
-        internalTrades.length > 0 ? await this.fetchClosedTrades(adapter, internalTrades) : [];
+        tradesNeedingClosedHistory.length > 0
+          ? await this.fetchClosedTrades(adapter, tradesNeedingClosedHistory)
+          : [];
       for (const trade of internalTrades) {
         try {
           const position = trade.externalOrderId
@@ -336,6 +349,24 @@ export class StateReconciliationService {
           errors++;
           this.logger.warn(
             `Trade resolution failed for ${trade.id} (retried next run): ` +
+              sanitizeReconciliationReason(err),
+          );
+        }
+      }
+
+      // 7a.2. Already-CLOSED rows may pre-date synchronous close-economics
+      // persistence. Enrich them from exact provider history without changing
+      // lifecycle state or feeding them back into the open-position comparator.
+      for (const trade of closedTradesMissingEconomics) {
+        if (!trade.externalOrderId) continue;
+        const match = closedTrades.find((ct) => ct.externalOrderId === trade.externalOrderId);
+        if (!match) continue;
+        try {
+          await this.resolution.enrichClosedTradeEconomics(trade, match);
+        } catch (err) {
+          errors++;
+          this.logger.warn(
+            `Closed-trade economics enrichment failed for ${trade.id} (retried next run): ` +
               sanitizeReconciliationReason(err),
           );
         }
