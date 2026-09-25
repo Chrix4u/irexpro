@@ -825,6 +825,10 @@
     grid-column: 1 / -1;
   }
 
+  .ai-overview-card--allocation-pool .ai-allocation-breakdown {
+    grid-column: 1 / -1;
+  }
+
   .ai-overview-card__value {
     text-align: right;
   }
