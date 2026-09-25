@@ -91,6 +91,14 @@ function connectionLabel(broker: TerminalBrokerView | null): string {
   return broker.displayName || broker.brokerName;
 }
 
+function compactBrokerLabel(value: string | null | undefined): string {
+  if (!value) return 'Broker';
+  return value
+    .replace(/\s*\(Simulated\s*[—-]\s*PAPER_ONLY\)\s*/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 interface AiAutomationRuntimeStatus {
   enabled: boolean;
   registered: boolean;
@@ -213,7 +221,15 @@ function sumDecimalStrings(values: Array<string | null | undefined>): string | n
   return `${negative ? '-' : ''}${whole.toString()}${fraction ? `.${fraction}` : ''}`;
 }
 
-function PositionCard({ position }: { position: LivePositionRowView }) {
+function PositionCard({
+  position,
+  closing,
+  onClose,
+}: {
+  position: LivePositionRowView;
+  closing: boolean;
+  onClose: (tradeId: string) => void;
+}) {
   return (
     <article className="ai-position-card">
       <div className="ai-position-card__head">
@@ -236,14 +252,32 @@ function PositionCard({ position }: { position: LivePositionRowView }) {
         <div><dt>Swap</dt><dd>{money(position.swap, position.accountCurrency)}</dd></div>
       </dl>
       <div className="ai-position-card__foot">
-        <span>{position.brokerName ?? 'Broker'} · {position.environment}</span>
+        <span>{compactBrokerLabel(position.brokerName)} · {position.environment}</span>
         <span>{formatTimestamp(position.openedAt ?? position.createdAt)}</span>
       </div>
+      <Button
+        type="button"
+        variant="danger"
+        size="sm"
+        loading={closing}
+        disabled={closing}
+        onClick={() => onClose(position.id)}
+      >
+        {closing ? 'Closing…' : 'Close position'}
+      </Button>
     </article>
   );
 }
 
-function PositionTable({ positions }: { positions: LivePositionRowView[] }) {
+function PositionTable({
+  positions,
+  closingTradeId,
+  onClose,
+}: {
+  positions: LivePositionRowView[];
+  closingTradeId: string | null;
+  onClose: (tradeId: string) => void;
+}) {
   return (
     <div className="ai-data-table-wrap">
       <table className="ai-data-table" aria-label="Open positions live performance">
@@ -261,12 +295,16 @@ function PositionTable({ positions }: { positions: LivePositionRowView[] }) {
             <th>Swap</th>
             <th>Status</th>
             <th>Opened</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody>
           {positions.map((position) => (
             <tr key={position.id}>
-              <td><strong>{position.instrument}</strong><small>{position.brokerName ?? 'Broker'} · {position.environment}</small></td>
+              <td>
+                <strong>{position.instrument}</strong>
+                <small>{compactBrokerLabel(position.brokerName)} · {position.environment}</small>
+              </td>
               <td><Badge variant={position.direction === 'BUY' ? 'success' : 'warning'}>{position.direction}</Badge></td>
               <td>{position.lotSize}</td>
               <td>{position.fillPrice ?? position.requestedEntryPrice}</td>
@@ -284,6 +322,18 @@ function PositionTable({ positions }: { positions: LivePositionRowView[] }) {
               <td>{money(position.swap, position.accountCurrency)}</td>
               <td>{position.status.replaceAll('_', ' ')}</td>
               <td>{formatTimestamp(position.openedAt ?? position.createdAt)}</td>
+              <td>
+                <Button
+                  type="button"
+                  variant="danger"
+                  size="sm"
+                  loading={closingTradeId === position.id}
+                  disabled={closingTradeId !== null}
+                  onClick={() => onClose(position.id)}
+                >
+                  {closingTradeId === position.id ? 'Closing…' : 'Close'}
+                </Button>
+              </td>
             </tr>
           ))}
         </tbody>
@@ -359,6 +409,8 @@ export default function AiTradingPage() {
   const [automationRuntime, setAutomationRuntime] = useState<AiAutomationRuntimeStatus | null>(null);
   const [automationRuntimeWarning, setAutomationRuntimeWarning] = useState<string | null>(null);
   const [positionView, setPositionView] = useState<'table' | 'grid'>('table');
+  const [closingTradeId, setClosingTradeId] = useState<string | null>(null);
+  const [closingAllPositions, setClosingAllPositions] = useState(false);
 
   const initializedActivity = useRef(false);
   const seenPositionIds = useRef<Set<string>>(new Set());
@@ -704,6 +756,56 @@ export default function AiTradingPage() {
     }
   }
 
+  async function closePositionNow(tradeId: string) {
+    if (closingTradeId || closingAllPositions) return;
+    setClosingTradeId(tradeId);
+    setError(null);
+    try {
+      await api.request(`/execution/positions/${encodeURIComponent(tradeId)}/close`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      notify.success('Position close submitted and confirmed by the execution service.');
+      await refreshTradingData(false);
+    } catch (requestError) {
+      const message = mapApiError(requestError).message;
+      setError(message);
+      notify.error(message);
+    } finally {
+      setClosingTradeId(null);
+    }
+  }
+
+  async function closeAllPositionsNow() {
+    if (livePositions.length === 0 || closingTradeId || closingAllPositions) return;
+    setClosingAllPositions(true);
+    setError(null);
+    try {
+      const results = await api.request<Array<{ tradeId: string; closed: boolean; status: string }>>(
+        '/execution/positions/close-all',
+        { method: 'POST', body: JSON.stringify({}) },
+      );
+      const closedCount = results.filter((result) => result.closed).length;
+      const unresolvedCount = results.length - closedCount;
+      if (unresolvedCount === 0) {
+        notify.success(
+          `Closed ${closedCount} AI position${closedCount === 1 ? '' : 's'} successfully.`,
+        );
+      } else {
+        notify.warning(
+          `${closedCount} position${closedCount === 1 ? '' : 's'} closed; ${unresolvedCount} require reconciliation.`,
+        );
+      }
+      await refreshTradingData(false);
+    } catch (requestError) {
+      const message = mapApiError(requestError).message;
+      setError(message);
+      notify.error(message);
+    } finally {
+      setClosingAllPositions(false);
+    }
+  }
+
   const recentClosedTrades = execution?.closedExecutions.slice(0, 10) ?? [];
   const positionCurrencies = Array.from(
     new Set(livePositions.map((position) => position.accountCurrency ?? '').filter(Boolean)),
@@ -904,6 +1006,10 @@ export default function AiTradingPage() {
                   <div>
                     <dt>Pending orders</dt>
                     <dd>{money(allocation?.pendingOrderCommitments, allocation?.accountCurrency)}</dd>
+                  </div>
+                  <div>
+                    <dt>Broker equity</dt>
+                    <dd>{money(allocation?.brokerEquity, allocation?.accountCurrency)}</dd>
                   </div>
                   <div>
                     <dt>In-flight decisions</dt>
@@ -1188,6 +1294,18 @@ export default function AiTradingPage() {
                   <Badge variant={livePositions.length ? 'success' : 'info'}>
                     {livePositions.length} open
                   </Badge>
+                  {livePositions.length > 0 && (
+                    <Button
+                      type="button"
+                      variant="danger"
+                      size="sm"
+                      loading={closingAllPositions}
+                      disabled={closingAllPositions || closingTradeId !== null}
+                      onClick={() => void closeAllPositionsNow()}
+                    >
+                      {closingAllPositions ? 'Closing all…' : 'Close all'}
+                    </Button>
+                  )}
                 </div>
               </div>
               {livePositions.length === 0 ? (
@@ -1200,11 +1318,20 @@ export default function AiTradingPage() {
                   </p>
                 </Card>
               ) : positionView === 'table' ? (
-                <PositionTable positions={livePositions} />
+                <PositionTable
+                  positions={livePositions}
+                  closingTradeId={closingTradeId}
+                  onClose={(tradeId) => void closePositionNow(tradeId)}
+                />
               ) : (
                 <div className="ai-position-grid">
                   {livePositions.map((position) => (
-                    <PositionCard key={position.id} position={position} />
+                    <PositionCard
+                      key={position.id}
+                      position={position}
+                      closing={closingTradeId === position.id}
+                      onClose={(tradeId) => void closePositionNow(tradeId)}
+                    />
                   ))}
                 </div>
               )}
