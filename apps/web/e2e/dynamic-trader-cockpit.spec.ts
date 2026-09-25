@@ -329,11 +329,11 @@ test.describe('AI Trader novice workflow', () => {
     ).toBeVisible();
 
     await expect(page.getByRole('heading', { level: 2, name: 'Open Positions' })).toBeVisible();
-    await expect(page.getByText('EURUSD', { exact: true }).first()).toBeVisible();
-    await expect(page.getByText('+41.00 USD', { exact: true })).toBeVisible();
     await expect(page.getByLabel('Total unrealized profit or loss')).toContainText('+41.00 USD');
     const positionsTable = page.getByRole('table', { name: 'Open positions live performance' });
     await expect(positionsTable).toBeVisible();
+    await expect(positionsTable.getByText('EURUSD', { exact: true })).toBeVisible();
+    await expect(positionsTable.getByText('+41.00 USD', { exact: true })).toBeVisible();
     await expect(positionsTable.getByRole('columnheader', { name: 'Current' })).toBeVisible();
     await expect(positionsTable.getByRole('columnheader', { name: 'Unrealized P&L' })).toBeVisible();
 
