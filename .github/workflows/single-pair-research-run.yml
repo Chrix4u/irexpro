@@ -1,0 +1,218 @@
+name: Single Pair Research Run
+
+on:
+  workflow_run:
+    workflows: ['Staging Deploy']
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      pair:
+        description: Pair to research first
+        required: true
+        default: USDJPY
+        type: choice
+        options: [USDJPY, EURUSD, GBPUSD, AUDUSD, USDCAD, USDCHF]
+      horizon:
+        description: Entry horizon in M1 bars
+        required: true
+        default: '1'
+        type: choice
+        options: ['1', '5', '10']
+
+permissions:
+  contents: read
+
+env:
+  CANDIDATE_SHA: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.workflow_run.head_sha }}
+  TARGET_PAIR: ${{ github.event_name == 'workflow_dispatch' && inputs.pair || 'USDJPY' }}
+  TARGET_HORIZON: ${{ github.event_name == 'workflow_dispatch' && inputs.horizon || '1' }}
+  STAGING_SSH_HOST: vps.lightworldtech.com
+  STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
+  STAGING_SSH_USER: ${{ vars.STAGING_SSH_USER }}
+  SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+  SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+
+jobs:
+  research:
+    name: USDJPY-first fast diagnostic and qualification
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
+    concurrency:
+      group: irexpro-single-pair-research
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    environment:
+      name: staging
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+
+      - name: Verify candidate and research relevance
+        id: relevance
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch --quiet --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          if [[ "$(git rev-parse origin/main)" != "$CANDIDATE_SHA" ]]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "SINGLE_PAIR_RESEARCH_SKIPPED reason=candidate_superseded"
+            exit 0
+          fi
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed="$(git diff-tree --no-commit-id --name-only -r "$CANDIDATE_SHA")"
+          if grep -Eq '^(\.github/workflows/single-pair-research-run\.yml|services/ai-engine/app/domain/(training|models)/|services/ai-engine/(pyproject\.toml|requirements\.lock)$)' <<<"$changed"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "SINGLE_PAIR_RESEARCH_SKIPPED reason=no_model_or_research_input_change"
+          fi
+
+      - name: Configure pinned SSH identity
+        if: steps.relevance.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$STAGING_SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Run one-pair diagnostic then qualification
+        if: steps.relevance.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i "$HOME/.ssh/irexpro_staging" -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            "bash -s -- $CANDIDATE_SHA $TARGET_PAIR $TARGET_HORIZON" <<'REMOTE'
+          set -Eeuo pipefail
+          candidate_sha="$1"
+          pair="$2"
+          horizon="$3"
+          staging='/home/lightworld/webapps/irexpro-staging'
+          six_root='/home/lightworld/research/irexpro-six-pair'
+          single_root='/home/lightworld/research/irexpro-single-pair'
+          marker="$six_root/last-research-sha"
+
+          cd "$staging"
+          test "$(git rev-parse HEAD)" = "$candidate_sha"
+          case "$pair" in USDJPY|EURUSD|GBPUSD|AUDUSD|USDCAD|USDCHF) ;; *) exit 2 ;; esac
+          case "$horizon" in 1|5|10) ;; *) exit 3 ;; esac
+
+          source_sha="$(tr -d '[:space:]' < "$marker" 2>/dev/null || true)"
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "SINGLE_PAIR_RESEARCH_HOLD reason=missing_evaluated_six_pair_lineage"
+            exit 0
+          }
+          source_root="$six_root/$source_sha"
+          corpus="$source_root/corpora/${pair}_MTF.csv"
+          source_report="$source_root/reports/model_qualification_${horizon}m.json"
+          test -s "$corpus"
+          test -s "$source_report"
+
+          output="$single_root/$candidate_sha/${pair}/h${horizon}"
+          mkdir -p "$output"
+          cd "$staging/services/ai-engine"
+          python_bin='.venv/bin/python'
+          test -x "$python_bin"
+          export PYTHONPATH="$PWD"
+
+          cutoff="$("$python_bin" - "$source_report" <<'PY'
+          import json, sys
+          report=json.load(open(sys.argv[1]))
+          print(report['qualification_decision_time_before'])
+          PY
+          )"
+
+          run_eval() {
+            mode="$1"
+            splits="$2"
+            report="$output/${mode}.json"
+            predictions="$output/${mode}_predictions.csv"
+            checkpoint="$output/${mode}_folds"
+            MODE="$mode" PAIR="$pair" HORIZON="$horizon" CORPUS="$corpus" \
+              REPORT="$report" PREDICTIONS="$predictions" CHECKPOINT="$checkpoint" \
+              CUTOFF="$cutoff" SPLITS="$splits" "$python_bin" - <<'PY'
+          import json, os
+          from app.domain.training.train_multitimeframe import evaluate_multi_pair_corpora
+          from app.domain.training.run_first_six_pair import _research_gate
+
+          pair=os.environ['PAIR']
+          report=evaluate_multi_pair_corpora(
+              {pair: os.environ['CORPUS']},
+              horizon_bars=int(os.environ['HORIZON']),
+              report_path=os.environ['REPORT'],
+              confidence_threshold=0.60,
+              commission_bps=0.0,
+              slippage_bps=0.0,
+              min_net_return_bps=0.0,
+              max_splits=int(os.environ['SPLITS']),
+              decision_time_before=os.environ['CUTOFF'],
+              predictions_path=os.environ['PREDICTIONS'],
+              checkpoint_dir=os.environ['CHECKPOINT'],
+          )
+          gate=_research_gate(report)
+          out={
+              'mode': os.environ['MODE'],
+              'pair': pair,
+              'horizon_minutes': int(os.environ['HORIZON']),
+              'gate': gate,
+              'overall': report['overall'],
+              'by_instrument': report['by_instrument'],
+              'fold_count': report['fold_count'],
+          }
+          print(json.dumps(out, sort_keys=True))
+          PY
+          }
+
+          diagnostic="$(run_eval diagnostic 3)"
+          printf '%s\n' "$diagnostic" > "$output/diagnostic-gate.json"
+          diagnostic_pass="$("$python_bin" - "$output/diagnostic-gate.json" <<'PY'
+          import json, sys
+          print('true' if json.load(open(sys.argv[1]))['gate']['research_gate_passed'] else 'false')
+          PY
+          )"
+
+          if [[ "$diagnostic_pass" != 'true' ]]; then
+            echo "SINGLE_PAIR_DIAGNOSTIC_HOLD pair=$pair horizon=${horizon}m"
+            "$python_bin" - "$output/diagnostic-gate.json" <<'PY'
+          import json, sys
+          g=json.load(open(sys.argv[1]))['gate']
+          print('OBSERVED', json.dumps(g['observed'], sort_keys=True))
+          print('CHECKS', json.dumps(g['checks'], sort_keys=True))
+          PY
+            exit 0
+          fi
+
+          qualification="$(run_eval qualification 5)"
+          printf '%s\n' "$qualification" > "$output/qualification-gate.json"
+          "$python_bin" - "$output/qualification-gate.json" <<'PY'
+          import json, sys
+          g=json.load(open(sys.argv[1]))['gate']
+          status='PASS' if g['research_gate_passed'] else 'HOLD'
+          print(f"SINGLE_PAIR_QUALIFICATION_{status}")
+          print('OBSERVED', json.dumps(g['observed'], sort_keys=True))
+          print('CHECKS', json.dumps(g['checks'], sort_keys=True))
+          PY
+          REMOTE
+
+      - name: Remove ephemeral SSH material
+        if: ${{ always() }}
+        shell: bash
+        run: rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"

@@ -20,10 +20,10 @@
 # job uses a timeout above 360 minutes.
 name: Six Pair Research Run
 
+# Legacy broad-universe workflow. It is intentionally manual-only now.
+# Production research moved to single-pair qualification so unrelated deploys
+# can never consume hours re-evaluating unchanged model inputs.
 on:
-  workflow_run:
-    workflows: ['Staging Deploy']
-    types: [completed]
   workflow_dispatch:
 
 permissions:
