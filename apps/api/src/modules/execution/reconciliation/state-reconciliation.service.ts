@@ -304,10 +304,7 @@ export class StateReconciliationService {
       let autoResolvedCount = 0;
 
       // 7a. Positions: externally-closed + RECONCILIATION_PENDING recovery.
-      const tradesNeedingClosedHistory = [
-        ...internalTrades,
-        ...closedTradesMissingEconomics,
-      ];
+      const tradesNeedingClosedHistory = [...internalTrades, ...closedTradesMissingEconomics];
       const closedTrades =
         tradesNeedingClosedHistory.length > 0
           ? await this.fetchClosedTrades(adapter, tradesNeedingClosedHistory)
