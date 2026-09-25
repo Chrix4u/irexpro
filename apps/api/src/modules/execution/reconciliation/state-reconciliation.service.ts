@@ -298,18 +298,29 @@ export class StateReconciliationService {
         internalTrades.length > 0 ? await this.fetchClosedTrades(adapter, internalTrades) : [];
       for (const trade of internalTrades) {
         try {
-          const position = trade.externalOrderId
-            ? await adapter.getPositionById(trade.externalOrderId)
+          // Providers may use a position identifier that differs from the
+          // originating order identifier. Prefer the durable position id when
+          // execution captured one; fall back to the legacy order id.
+          const providerPositionRef = trade.externalPositionId ?? trade.externalOrderId;
+          const position = providerPositionRef
+            ? await adapter.getPositionById(providerPositionRef)
             : null;
 
-          if (position === null && trade.externalOrderId) {
-            const match = closedTrades.find((ct) => ct.externalOrderId === trade.externalOrderId);
+          if (position === null && providerPositionRef) {
+            // Closed-trade adapters normalize their stable trade/position id
+            // into externalOrderId. Match the same provider reference we used
+            // for the position lookup, with a legacy order-id fallback.
+            const match = closedTrades.find(
+              (ct) =>
+                ct.externalOrderId === providerPositionRef ||
+                (trade.externalOrderId !== null && ct.externalOrderId === trade.externalOrderId),
+            );
             const closed = await this.resolution.closeTradeFromProvider(trade, match ?? null);
             if (closed) {
               resolutionRefs.push({
                 type: ReconciliationDiscrepancyType.POSITION_CLOSED_EXTERNALLY,
                 internalRefId: trade.id,
-                providerRef: trade.externalOrderId,
+                providerRef: providerPositionRef,
                 resolution: 'Provider reports the position closed — trade converged to CLOSED',
               });
             }
