@@ -9,6 +9,7 @@ import { mapApiError } from '@/lib/error-mapping';
 import { api } from '@/lib/api';
 import { formatEnumLabel } from '@irexpro/types';
 import type { OnboardingStatus } from '@irexpro/types';
+import type { LiveAccountActivityPage } from '@irexpro/types/live-account';
 
 export default function DashboardPage() {
   const { user, logout, restoring } = useAuth();
@@ -17,6 +18,9 @@ export default function DashboardPage() {
   const [onboardingLoading, setOnboardingLoading] = useState(true);
   const [onboardingError, setOnboardingError] = useState<string | null>(null);
   const onboardingErrorShownRef = useRef(false);
+  const [recentActivity, setRecentActivity] = useState<LiveAccountActivityPage | null>(null);
+  const [activityLoading, setActivityLoading] = useState(true);
+  const [activityError, setActivityError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!user) return;
@@ -39,6 +43,34 @@ export default function DashboardPage() {
     })();
     return () => { cancelled = true; };
   }, [user, notify]);
+
+  useEffect(() => {
+    if (!user) {
+      setRecentActivity(null);
+      setActivityLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setActivityLoading(true);
+    setActivityError(null);
+    (async () => {
+      try {
+        const activity = await api.request<LiveAccountActivityPage>(
+          '/live-account/activity?limit=8&offset=0',
+        );
+        if (!cancelled) setRecentActivity(activity);
+      } catch (err) {
+        if (!cancelled) {
+          setActivityError(err instanceof Error ? err.message : 'Failed to load recent activity');
+        }
+      } finally {
+        if (!cancelled) setActivityLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
 
   if (restoring) {
     return <div style={{ padding: '3rem' }}><LoadingSpinner text="Restoring session…" /></div>;
@@ -126,8 +158,62 @@ export default function DashboardPage() {
           </Card>
         </section>
 
-        <Card title="Recent activity" subtitle="Server-authoritative decisions and executions appear in the trading surfaces.">
-          <EmptyState icon="↗" title="No trading activity yet" description="AI decision evidence and execution history will appear after the trading pipeline records activity." />
+        <Card
+          title="Recent activity"
+          subtitle={
+            recentActivity
+              ? `${recentActivity.total} server-recorded event${recentActivity.total === 1 ? '' : 's'}`
+              : 'Server-authoritative account and trading events.'
+          }
+        >
+          {activityLoading ? (
+            <LoadingSpinner text="Loading recent activity…" />
+          ) : activityError ? (
+            <Alert variant="error">{activityError}</Alert>
+          ) : recentActivity && recentActivity.activity.length > 0 ? (
+            <div style={{ display: 'grid', gap: 'var(--space-2)' }}>
+              {recentActivity.activity.map((item) => (
+                <div
+                  key={item.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 'var(--space-3)',
+                    padding: 'var(--space-3)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 'var(--radius-md)',
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+                      <strong>{formatEnumLabel(item.action)}</strong>
+                      <Badge variant={item.severity === 'INFO' ? 'info' : 'warning'}>
+                        {formatEnumLabel(item.severity)}
+                      </Badge>
+                    </div>
+                    <p className="text-sm muted mt-1">
+                      {item.resourceType ? formatEnumLabel(item.resourceType) : 'Account activity'}
+                    </p>
+                  </div>
+                  <time className="text-sm muted" dateTime={item.createdAt} style={{ whiteSpace: 'nowrap' }}>
+                    {new Date(item.createdAt).toLocaleString()}
+                  </time>
+                </div>
+              ))}
+              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <Link href="/live-account" className="btn btn--secondary btn--sm">
+                  View trading activity
+                </Link>
+              </div>
+            </div>
+          ) : (
+            <EmptyState
+              icon="↗"
+              title="No trading activity yet"
+              description="Activity will appear here as soon as the server records account, AI, broker, order or trade events."
+            />
+          )}
         </Card>
       </main>
     </DashboardShell>

@@ -16,7 +16,10 @@ export interface BrokerSummary {
  * returned adapter's `brokerId` MUST stay the canonical provider id (e.g.
  * 'ctrader'); the requested identity is carried separately by the adapter.
  */
-export type BrokerAdapterFactory = (requestedBrokerId: string) => IBrokerAdapter;
+export type BrokerAdapterFactory = (
+  requestedBrokerId: string,
+  connectionId?: string,
+) => IBrokerAdapter;
 
 interface BrokerAdapterRegistration {
   adapter: IBrokerAdapter;
@@ -151,7 +154,7 @@ export class BrokerAdapterRegistry {
       return existing.adapter;
     }
 
-    const adapter = this.instantiate(brokerId);
+    const adapter = this.instantiate(brokerId, connectionId);
     this.connectionSessions.set(connectionId, { brokerId, adapter });
     return adapter;
   }
@@ -184,7 +187,7 @@ export class BrokerAdapterRegistry {
     return this.connectionSessions.size;
   }
 
-  private instantiate(brokerId: string): IBrokerAdapter {
+  private instantiate(brokerId: string, connectionId?: string): IBrokerAdapter {
     const registration = this.getRegistration(brokerId);
     if (!registration.factory) {
       throw new ConflictException(
@@ -193,7 +196,7 @@ export class BrokerAdapterRegistry {
       );
     }
 
-    const adapter = registration.factory(brokerId);
+    const adapter = registration.factory(brokerId, connectionId);
     if (adapter === registration.adapter) {
       throw new ConflictException(
         `Broker adapter ${brokerId} isolation factory returned its metadata/root singleton; ` +
