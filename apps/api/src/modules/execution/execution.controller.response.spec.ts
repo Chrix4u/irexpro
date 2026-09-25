@@ -1,5 +1,6 @@
 import { ExecutionController } from './execution.controller';
 import { ExecutionReadService } from './execution-read.service';
+import { ExecutionService } from './execution.service';
 import { AllocationService } from './services/allocation.service';
 import { Trade, TradeCloseReason, TradeDirection, TradeStatus } from './entities/trade.entity';
 
@@ -68,6 +69,10 @@ describe('ExecutionController frontend-safe responses', () => {
     controller = new ExecutionController(
       readService as unknown as ExecutionReadService,
       {} as AllocationService,
+      {
+        closeTrade: jest.fn(),
+        closeAllAiOpenPositions: jest.fn(),
+      } as unknown as ExecutionService,
     );
   });
 

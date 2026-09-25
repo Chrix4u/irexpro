@@ -225,11 +225,13 @@
   display: grid;
   grid-template-columns: minmax(420px, 1.45fr) minmax(300px, 0.85fr);
   gap: clamp(0.8rem, 1.25vw, 1.1rem);
-  align-items: start;
+  align-items: stretch;
 }
 
 .ai-overview-card--allocation-pool {
   gap: 0.55rem;
+  height: 100%;
+  align-content: start;
 }
 
 .ai-overview-summary-stack {
@@ -526,7 +528,7 @@
 
 .ai-data-table {
   width: 100%;
-  min-width: 1180px;
+  min-width: 1240px;
   border-collapse: collapse;
   font-size: 0.78rem;
   font-variant-numeric: tabular-nums lining-nums;
@@ -563,8 +565,17 @@
 }
 
 .ai-data-table td small {
+  display: block;
+  max-width: 150px;
+  overflow: hidden;
   color: var(--text-muted);
   font-size: 0.68rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-data-table td:first-child {
+  max-width: 170px;
 }
 
 .ai-order-detail-grid {
@@ -633,6 +644,14 @@
 .ai-position-card__foot {
   color: var(--text-muted);
   font-size: 0.78rem;
+}
+
+.ai-position-card__foot > span:first-child {
+  min-width: 0;
+  max-width: 70%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ai-trade-metrics {

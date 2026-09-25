@@ -4,6 +4,7 @@ import {
   Controller,
   DefaultValuePipe,
   Get,
+  Param,
   ParseIntPipe,
   Post,
   Query,
@@ -11,6 +12,8 @@ import {
 import { ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUserId } from '../../common/decorators/current-user.decorator';
 import { ExecutionReadService } from './execution-read.service';
+import { ExecutionService } from './execution.service';
+import { TradeCloseReason } from './entities/trade.entity';
 import {
   AllocationError,
   AllocationService,
@@ -35,6 +38,7 @@ export class ExecutionController {
   constructor(
     private readonly executionReadService: ExecutionReadService,
     private readonly allocationService: AllocationService,
+    private readonly executionService: ExecutionService,
   ) {}
 
   @Get('capital-allocation')
@@ -80,6 +84,27 @@ export class ExecutionController {
   async listOpenPositions(@CurrentUserId() userId: string): Promise<TradeExecutionResponseDto[]> {
     const trades = await this.executionReadService.listOpenPositions(userId);
     return trades.map(toTradeExecutionResponse);
+  }
+
+  @Post('positions/close-all')
+  @ApiOperation({ summary: 'Close all AI-opened positions for the authenticated user' })
+  async closeAllAiPositions(@CurrentUserId() userId: string) {
+    return this.executionService.closeAllAiOpenPositions(userId, TradeCloseReason.MANUAL_CLOSE);
+  }
+
+  @Post('positions/:tradeId/close')
+  @ApiOperation({ summary: 'Close one open position for the authenticated user' })
+  @ApiResponse({ status: 200, type: TradeExecutionResponseDto })
+  async closePosition(
+    @CurrentUserId() userId: string,
+    @Param('tradeId') tradeId: string,
+  ): Promise<TradeExecutionResponseDto> {
+    const trade = await this.executionService.closeTrade(
+      tradeId,
+      userId,
+      TradeCloseReason.MANUAL_CLOSE,
+    );
+    return toTradeExecutionResponse(trade);
   }
 
   @Get('trades/closed')

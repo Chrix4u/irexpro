@@ -72,12 +72,17 @@ export class ReconciliationResolutionService {
 
     const exitPrice = closedTrade?.closePrice ?? null;
     const realisedPnl = closedTrade?.realisedPnl ?? null;
+    const commission = closedTrade?.commission ?? null;
+    const swap = closedTrade?.swap ?? null;
+    const closedAt = closedTrade?.closedAt ?? new Date();
 
     const result = await this.tradeRepo.update({ id: trade.id, status: trade.status }, {
       status: TradeStatus.CLOSED,
       exitPrice,
       realisedPnl,
-      closedAt: new Date(),
+      commission,
+      swap,
+      closedAt,
       closeReason: TradeCloseReason.BROKER_CLOSE,
     } as never);
 
@@ -97,6 +102,9 @@ export class ReconciliationResolutionService {
         closeReason: TradeCloseReason.BROKER_CLOSE,
         exitPrice,
         realisedPnl,
+        commission,
+        swap,
+        providerClosedAt: closedAt.toISOString(),
         externalOrderId: trade.externalOrderId,
         source: 'state-reconciliation',
       },
