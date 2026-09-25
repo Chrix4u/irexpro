@@ -291,6 +291,10 @@ export interface BrokerOrderResult {
    * conservatively assume the full requested quantity was filled. */
   filledQuantity?: string;
   filledAt?: Date;
+  /** Close economics when the provider can prove them synchronously. */
+  realisedPnl?: string;
+  commission?: string;
+  swap?: string;
   status: 'FILLED' | 'PENDING' | 'REJECTED' | 'FAILED';
   brokerMessage?: string;
   rawResponse?: unknown;

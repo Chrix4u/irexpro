@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
 import { Trade, TradeCloseReason, TradeStatus } from '../entities/trade.entity';
 import { Order } from '../orders/order.entity';
 import { OrderStatus } from '../orders/order.enums';
@@ -115,6 +115,59 @@ export class ReconciliationResolutionService {
     // Provider-observed close implies the linked entry order FILLED.
     await this.resolveLinkedOrder(trade.id, trade.userId, OrderStatus.FILLED, {
       reason: 'Provider-observed position closed — entry order resolved FILLED',
+    });
+
+    return true;
+  }
+
+  /**
+   * Enrich a trade that is already CLOSED but was closed before the provider
+   * economics were durably recorded. This does not change lifecycle state.
+   */
+  async enrichClosedTradeEconomics(
+    trade: Trade,
+    closedTrade: BrokerClosedTrade,
+  ): Promise<boolean> {
+    if (
+      trade.status !== TradeStatus.CLOSED ||
+      trade.realisedPnl !== null ||
+      !trade.externalOrderId ||
+      closedTrade.externalOrderId !== trade.externalOrderId
+    ) {
+      return false;
+    }
+
+    const result = await this.tradeRepo.update(
+      {
+        id: trade.id,
+        status: TradeStatus.CLOSED,
+        realisedPnl: IsNull(),
+      },
+      {
+        realisedPnl: closedTrade.realisedPnl,
+        ...(trade.exitPrice === null ? { exitPrice: closedTrade.closePrice } : {}),
+        ...(trade.commission === null ? { commission: closedTrade.commission } : {}),
+        ...(trade.swap === null ? { swap: closedTrade.swap } : {}),
+        ...(trade.closedAt === null ? { closedAt: closedTrade.closedAt } : {}),
+      } as never,
+    );
+
+    if (!result.affected) return false;
+
+    await this.auditService.log({
+      actorUserId: trade.userId,
+      action: AuditAction.TRADE_RECONCILED,
+      resourceType: 'Trade',
+      resourceId: trade.id,
+      metadata: {
+        source: 'state-reconciliation',
+        enrichment: 'CLOSED_TRADE_ECONOMICS',
+        externalOrderId: trade.externalOrderId,
+        exitPrice: closedTrade.closePrice,
+        realisedPnl: closedTrade.realisedPnl,
+        commission: closedTrade.commission,
+        swap: closedTrade.swap,
+      },
     });
 
     return true;

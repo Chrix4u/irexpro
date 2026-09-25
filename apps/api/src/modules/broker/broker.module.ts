@@ -33,6 +33,7 @@ import { BrokerHealthCheckProducer } from './jobs/broker-health-check.producer';
 import { AuditModule } from '../audit/audit.module';
 import { ExecutionAuthorityModule } from '../execution-authority/execution-authority.module';
 import { BrokerAccountSnapshotService } from './services/broker-account-snapshot.service';
+import { PaperBrokerStateStore } from './services/paper-broker-state.store';
 
 /**
  * BrokerModule — Pluggable broker integration layer with health monitoring.
@@ -159,6 +160,7 @@ export class BrokerModule implements OnModuleInit {
     private metaApiClient: MetaApiClientService,
     private configService: ConfigService,
     private cTraderClient: CTraderClientService,
+    private paperBrokerStateStore: PaperBrokerStateStore,
   ) {}
 
   onModuleInit() {
@@ -168,7 +170,11 @@ export class BrokerModule implements OnModuleInit {
     // provider infrastructure (the MetaAPI connection pool, the cTrader
     // environment-connection pool) remains shared underneath by design.
     this.registry.register(this.metaTraderAdapter, () => new MetaTraderAdapter(this.metaApiClient));
-    this.registry.register(this.paperBrokerAdapter, () => new PaperBrokerAdapter());
+    this.registry.register(
+      this.paperBrokerAdapter,
+      (_requestedBrokerId: string, connectionId?: string) =>
+        new PaperBrokerAdapter(undefined, undefined, this.paperBrokerStateStore, connectionId),
+    );
     // Sprint 51 PR-7 — OANDA v20 REST native adapter (BETA: implemented +
     // contract-tested; live verification pending — see
     // docs/brokers/oanda-v20-adapter.md).
