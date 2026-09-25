@@ -897,7 +897,8 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       if (original) {
         this.logger.log(
           `PaperBrokerAdapter: idempotent replay for key=${dedupeKey} ` +
-            `returns original result [PAPER_ONLY]`,        );
+            `returns original result [PAPER_ONLY]`,
+        );
         return { ...original };
       }
 
