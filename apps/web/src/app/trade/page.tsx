@@ -213,7 +213,31 @@ function sumDecimalStrings(values: Array<string | null | undefined>): string | n
   return `${negative ? '-' : ''}${whole.toString()}${fraction ? `.${fraction}` : ''}`;
 }
 
-function PositionCard({ position }: { position: LivePositionRowView }) {
+function compactBrokerLabel(position: LivePositionRowView): string {
+  const broker = (position.brokerName ?? 'Broker').trim();
+  const normalized = broker.toLowerCase();
+  let name = broker;
+  if (normalized.includes('paper')) name = 'Paper';
+  else if (normalized.includes('metatrader 5') || normalized.includes('mt5')) name = 'MT5';
+  else if (normalized.includes('oanda')) name = 'OANDA';
+  else if (normalized.includes('ctrader')) name = 'cTrader';
+  else if (broker.length > 12) name = broker.split(/\s+/)[0]?.slice(0, 12) || 'Broker';
+  return `${name} · ${position.environment}`;
+}
+
+type PositionCloseRequest =
+  | { mode: 'ONE'; position: LivePositionRowView }
+  | { mode: 'ALL' };
+
+function PositionCard({
+  position,
+  closing,
+  onClose,
+}: {
+  position: LivePositionRowView;
+  closing: boolean;
+  onClose: (position: LivePositionRowView) => void;
+}) {
   return (
     <article className="ai-position-card">
       <div className="ai-position-card__head">
@@ -236,14 +260,36 @@ function PositionCard({ position }: { position: LivePositionRowView }) {
         <div><dt>Swap</dt><dd>{money(position.swap, position.accountCurrency)}</dd></div>
       </dl>
       <div className="ai-position-card__foot">
-        <span>{position.brokerName ?? 'Broker'} · {position.environment}</span>
+        <span
+          className="ai-broker-chip"
+          title={`${position.brokerName ?? 'Broker'} · ${position.environment}`}
+        >
+          {compactBrokerLabel(position)}
+        </span>
         <span>{formatTimestamp(position.openedAt ?? position.createdAt)}</span>
       </div>
+      <Button
+        type="button"
+        variant="danger"
+        size="sm"
+        disabled={closing}
+        onClick={() => onClose(position)}
+      >
+        {closing ? 'Closing…' : 'Close Position'}
+      </Button>
     </article>
   );
 }
 
-function PositionTable({ positions }: { positions: LivePositionRowView[] }) {
+function PositionTable({
+  positions,
+  closingTradeId,
+  onClose,
+}: {
+  positions: LivePositionRowView[];
+  closingTradeId: string | null;
+  onClose: (position: LivePositionRowView) => void;
+}) {
   return (
     <div className="ai-data-table-wrap">
       <table className="ai-data-table" aria-label="Open positions live performance">
@@ -261,12 +307,21 @@ function PositionTable({ positions }: { positions: LivePositionRowView[] }) {
             <th>Swap</th>
             <th>Status</th>
             <th>Opened</th>
+            <th aria-label="Position actions">Action</th>
           </tr>
         </thead>
         <tbody>
           {positions.map((position) => (
             <tr key={position.id}>
-              <td><strong>{position.instrument}</strong><small>{position.brokerName ?? 'Broker'} · {position.environment}</small></td>
+              <td>
+                <strong>{position.instrument}</strong>
+                <span
+                  className="ai-broker-chip"
+                  title={`${position.brokerName ?? 'Broker'} · ${position.environment}`}
+                >
+                  {compactBrokerLabel(position)}
+                </span>
+              </td>
               <td><Badge variant={position.direction === 'BUY' ? 'success' : 'warning'}>{position.direction}</Badge></td>
               <td>{position.lotSize}</td>
               <td>{position.fillPrice ?? position.requestedEntryPrice}</td>
@@ -284,6 +339,17 @@ function PositionTable({ positions }: { positions: LivePositionRowView[] }) {
               <td>{money(position.swap, position.accountCurrency)}</td>
               <td>{position.status.replaceAll('_', ' ')}</td>
               <td>{formatTimestamp(position.openedAt ?? position.createdAt)}</td>
+              <td>
+                <Button
+                  type="button"
+                  variant="danger"
+                  size="sm"
+                  disabled={closingTradeId === position.id}
+                  onClick={() => onClose(position)}
+                >
+                  {closingTradeId === position.id ? 'Closing…' : 'Close'}
+                </Button>
+              </td>
             </tr>
           ))}
         </tbody>
@@ -359,6 +425,9 @@ export default function AiTradingPage() {
   const [automationRuntime, setAutomationRuntime] = useState<AiAutomationRuntimeStatus | null>(null);
   const [automationRuntimeWarning, setAutomationRuntimeWarning] = useState<string | null>(null);
   const [positionView, setPositionView] = useState<'table' | 'grid'>('table');
+  const [pendingPositionClose, setPendingPositionClose] = useState<PositionCloseRequest | null>(null);
+  const [closingTradeId, setClosingTradeId] = useState<string | null>(null);
+  const [closingAllPositions, setClosingAllPositions] = useState(false);
 
   const initializedActivity = useRef(false);
   const seenPositionIds = useRef<Set<string>>(new Set());
@@ -565,6 +634,63 @@ export default function AiTradingPage() {
       document.body.style.overflow = previousOverflow;
     };
   }, [pendingAutomationAction, togglingAutomation]);
+
+  function requestPositionClose(position: LivePositionRowView) {
+    setPendingPositionClose({ mode: 'ONE', position });
+  }
+
+  function requestCloseAllPositions() {
+    if (livePositions.length === 0) {
+      notify.info('There are no open positions to close.');
+      return;
+    }
+    setPendingPositionClose({ mode: 'ALL' });
+  }
+
+  async function confirmPositionClose() {
+    if (!pendingPositionClose) return;
+    setError(null);
+
+    try {
+      if (pendingPositionClose.mode === 'ONE') {
+        const position = pendingPositionClose.position;
+        setClosingTradeId(position.id);
+        await api.request<TradeExecutionView>(
+          `/execution/positions/${encodeURIComponent(position.id)}/close`,
+          { method: 'POST' },
+        );
+        notify.success(`${position.instrument} close request completed.`);
+      } else {
+        setClosingAllPositions(true);
+        const result = await api.request<{
+          targetCount: number;
+          closedCount: number;
+          unresolvedCount: number;
+        }>('/execution/positions/close-all', { method: 'POST' });
+        if (result.unresolvedCount > 0) {
+          notify.warning(
+            `${result.closedCount} of ${result.targetCount} positions were confirmed closed; ` +
+              `${result.unresolvedCount} require reconciliation or another close attempt.`,
+          );
+        } else {
+          notify.success(
+            result.closedCount === 1
+              ? '1 open position was closed.'
+              : `${result.closedCount} open positions were closed.`,
+          );
+        }
+      }
+      setPendingPositionClose(null);
+      await refreshTradingData(false);
+    } catch (requestError) {
+      const message = mapApiError(requestError).message;
+      setError(message);
+      notify.error(message);
+    } finally {
+      setClosingTradeId(null);
+      setClosingAllPositions(false);
+    }
+  }
 
   async function handleBrokerChange(nextId: string) {
     setSelectedBrokerId(nextId);
@@ -909,6 +1035,18 @@ export default function AiTradingPage() {
                     <dt>In-flight decisions</dt>
                     <dd>{money(allocation?.inFlightCommitments, allocation?.accountCurrency)}</dd>
                   </div>
+                  <div>
+                    <dt>Capital use model</dt>
+                    <dd>Broker margin reserved</dd>
+                  </div>
+                  <div>
+                    <dt>Broker</dt>
+                    <dd>{connectionLabel(selectedBroker)}</dd>
+                  </div>
+                  <div>
+                    <dt>Protection</dt>
+                    <dd>Loss · drawdown · margin gates</dd>
+                  </div>
                 </dl>
               </Card>
 
@@ -1188,6 +1326,17 @@ export default function AiTradingPage() {
                   <Badge variant={livePositions.length ? 'success' : 'info'}>
                     {livePositions.length} open
                   </Badge>
+                  {livePositions.length > 0 && (
+                    <Button
+                      type="button"
+                      variant="danger"
+                      size="sm"
+                      disabled={closingAllPositions || closingTradeId !== null}
+                      onClick={requestCloseAllPositions}
+                    >
+                      {closingAllPositions ? 'Closing All…' : 'Close All'}
+                    </Button>
+                  )}
                 </div>
               </div>
               {livePositions.length === 0 ? (
@@ -1200,11 +1349,20 @@ export default function AiTradingPage() {
                   </p>
                 </Card>
               ) : positionView === 'table' ? (
-                <PositionTable positions={livePositions} />
+                <PositionTable
+                  positions={livePositions}
+                  closingTradeId={closingTradeId}
+                  onClose={requestPositionClose}
+                />
               ) : (
                 <div className="ai-position-grid">
                   {livePositions.map((position) => (
-                    <PositionCard key={position.id} position={position} />
+                    <PositionCard
+                      key={position.id}
+                      position={position}
+                      closing={closingTradeId === position.id}
+                      onClose={requestPositionClose}
+                    />
                   ))}
                 </div>
               )}
@@ -1281,6 +1439,67 @@ export default function AiTradingPage() {
               <Link href="/onboarding/risk" className="ai-text-link">View protection</Link>
             </section>
           </>
+        )}
+
+        {pendingPositionClose && (
+          <div
+            className="ai-confirm-overlay"
+            onMouseDown={(event) => {
+              if (
+                event.target === event.currentTarget &&
+                !closingAllPositions &&
+                closingTradeId === null
+              ) {
+                setPendingPositionClose(null);
+              }
+            }}
+          >
+            <section
+              className="ai-confirm-dialog"
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="position-close-title"
+              aria-describedby="position-close-description"
+            >
+              <div className="ai-confirm-dialog__header">
+                <span className="ai-control-card__label">Immediate market close</span>
+                <h2 id="position-close-title">
+                  {pendingPositionClose.mode === 'ALL'
+                    ? `Close all ${livePositions.length} open positions?`
+                    : `Close ${pendingPositionClose.position.instrument} position?`}
+                </h2>
+              </div>
+              <p id="position-close-description" className="ai-confirm-dialog__description">
+                {pendingPositionClose.mode === 'ALL'
+                  ? 'iRexPro will submit a close request for every currently OPEN position, one by one, using the existing broker-safe close path.'
+                  : `This will submit an immediate close request for the ${pendingPositionClose.position.direction} ${pendingPositionClose.position.instrument} position (${pendingPositionClose.position.lotSize} lot).`}
+              </p>
+              <Alert variant="warning">
+                The actual exit price is determined by the broker at execution time. If a close
+                cannot be proven immediately, iRexPro will report it as unresolved/reconciliation
+                pending rather than pretending the exposure is closed.
+              </Alert>
+              <div className="ai-confirm-dialog__actions">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={closingAllPositions || closingTradeId !== null}
+                  onClick={() => setPendingPositionClose(null)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  variant="danger"
+                  loading={closingAllPositions || closingTradeId !== null}
+                  autoFocus
+                  onClick={() => void confirmPositionClose()}
+                >
+                  {pendingPositionClose.mode === 'ALL' ? 'Close All Positions' : 'Close Position'}
+                </Button>
+              </div>
+            </section>
+          </div>
         )}
 
         {pendingAutomationAction && (
