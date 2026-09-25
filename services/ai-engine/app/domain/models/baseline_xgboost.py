@@ -40,6 +40,8 @@ MULTITIMEFRAME_MODEL_TYPE = "xgboost_pooled_multitimeframe_direction_classifier"
 EVENT_PAIR_BUNDLE_MODEL_TYPE = "xgboost_event_pair_bundle"
 EVENT_LABEL_POLICY_RUNTIME = "first_net_return_barrier_atr1_spread2_timeout_v1"
 EVENT_PAIR_REGIME_ROUTER_POLICY_RUNTIME = "pair_m1_volatility_spread_median_v1"
+EVENT_DUAL_ACTIONABILITY_EXPERIMENT_RUNTIME = "event_barrier_dual_actionability"
+DUAL_ACTION_MARGIN_FLOOR_RUNTIME = 0.10
 
 
 def _sha256_file(path: Path) -> str:
@@ -201,6 +203,62 @@ class BaselineXGBoostModel:
                     if not expected or _sha256_file(resolved) != expected:
                         raise ValueError("Event-pair component SHA-256 mismatch")
                     return resolved
+
+                experiment = str(manifest.get("experiment", "")).strip()
+                if experiment == EVENT_DUAL_ACTIONABILITY_EXPERIMENT_RUNTIME:
+                    dual_spec = manifest.get("dual_actionability")
+                    if not isinstance(dual_spec, dict):
+                        raise ValueError("Dual-actionability bundle is missing decision models")
+                    if dual_spec.get("kind") != "xgboost_dual_actionability":
+                        raise ValueError("Dual-actionability bundle kind is unsupported")
+                    action_margin_floor = float(dual_spec.get("action_margin_floor"))
+                    if (
+                        not math.isfinite(action_margin_floor)
+                        or not math.isclose(
+                            action_margin_floor,
+                            DUAL_ACTION_MARGIN_FLOOR_RUNTIME,
+                            rel_tol=0.0,
+                            abs_tol=1e-12,
+                        )
+                    ):
+                        raise ValueError("Dual-actionability margin policy mismatch")
+
+                    dual_models: dict[str, Any] = {}
+                    for side in ("long", "short"):
+                        side_spec = dual_spec.get(side)
+                        if not isinstance(side_spec, dict):
+                            raise ValueError(
+                                f"Dual-actionability bundle is missing {side} model"
+                            )
+                        if side_spec.get("kind") != "xgboost_classifier":
+                            raise ValueError(
+                                f"Dual-actionability {side} model kind is unsupported"
+                            )
+                        child = xgb.XGBClassifier()
+                        child.load_model(str(component_path(side_spec)))
+                        dual_models[side] = child
+
+                    self._bundle = {
+                        "manifest": manifest,
+                        "dual_actionability": dual_models,
+                    }
+                    self._model = dual_models["long"]
+                    self._model_loaded = True
+                    self._model_version = model_version
+                    self._feature_names = list(feature_names)
+                    self._artifact_metadata = metadata
+                    self._model_type = model_type
+                    self._runtime_feature_profile = runtime_feature_profile
+                    logger.info(
+                        "Verified trained XGBoost model loaded",
+                        path=str(model_path),
+                        metadata_path=str(metadata_path),
+                        version=self._model_version,
+                        approved_for_paper=bool(
+                            metadata.get("approved_for_paper", False)
+                        ),
+                    )
+                    return True
 
                 opportunity_spec = manifest.get("opportunity")
                 if not isinstance(opportunity_spec, dict):
@@ -387,6 +445,13 @@ class BaselineXGBoostModel:
         if missing:
             raise ValueError(f"Missing model features: {missing}")
 
+        manifest = self._bundle["manifest"]
+        if (
+            str(manifest.get("experiment", "")).strip()
+            == EVENT_DUAL_ACTIONABILITY_EXPERIMENT_RUNTIME
+        ):
+            return self._predict_with_event_dual_actionability_bundle(features)
+
         active_instruments = [
             instrument
             for instrument in INITIAL_FOREX_UNIVERSE
@@ -490,6 +555,71 @@ class BaselineXGBoostModel:
             features_used=list(self._feature_names),
             raw_scores=raw_scores,
             explainability=explainability,
+        )
+
+    def _predict_with_event_dual_actionability_bundle(
+        self,
+        features: dict[str, float],
+    ) -> ModelPrediction:
+        active_instruments = [
+            instrument
+            for instrument in INITIAL_FOREX_UNIVERSE
+            if float(features.get(f"instrument_{instrument}", 0.0)) >= 0.5
+        ]
+        if len(active_instruments) != 1:
+            raise ValueError(
+                "Dual-actionability runtime requires exactly one active instrument"
+            )
+        instrument = active_instruments[0]
+
+        frame = pd.DataFrame(
+            [[features[name] for name in self._feature_names]],
+            columns=self._feature_names,
+        )
+        models = self._bundle["dual_actionability"]
+        long_probability = float(models["long"].predict_proba(frame)[0][1])
+        short_probability = float(models["short"].predict_proba(frame)[0][1])
+        winning_probability = max(long_probability, short_probability)
+        action_margin = abs(long_probability - short_probability)
+        signal_eligible = action_margin >= DUAL_ACTION_MARGIN_FLOOR_RUNTIME
+
+        direction: Literal["BUY", "SELL"]
+        if long_probability >= short_probability:
+            direction = "BUY"
+        else:
+            direction = "SELL"
+
+        return ModelPrediction(
+            direction=direction,
+            confidence_score=round(winning_probability, 4),
+            model_version=self._model_version,
+            features_used=list(self._feature_names),
+            raw_scores={
+                "long_action_probability": long_probability,
+                "short_action_probability": short_probability,
+                "winning_action_probability": winning_probability,
+                "action_probability_margin": action_margin,
+                "action_margin_floor": DUAL_ACTION_MARGIN_FLOOR_RUNTIME,
+            },
+            explainability={
+                "method": "dual_actionability_xgboost_predict_proba",
+                "instrument_expert": instrument,
+                "research_experiment": self._artifact_metadata.get(
+                    "research_experiment"
+                ),
+                "signal_eligible": signal_eligible,
+                "signal_gate_reason": (
+                    "eligible"
+                    if signal_eligible
+                    else "action_probability_margin_below_floor"
+                ),
+                "confidence_semantics": (
+                    "Winning LONG/SHORT actionability probability. Signal publication "
+                    "also requires a 0.10 separation between the two side scores; "
+                    "confidence is not a probability of profit."
+                ),
+                "approved_for_live": False,
+            },
         )
 
     def _predict_heuristic(self, features: dict[str, float]) -> ModelPrediction:

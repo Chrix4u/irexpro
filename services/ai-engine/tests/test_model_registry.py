@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
@@ -10,6 +11,8 @@ from xgboost import XGBClassifier
 
 from app.core.errors import ModelNotFoundError
 from app.domain.models.baseline_xgboost import (
+    DUAL_ACTION_MARGIN_FLOOR_RUNTIME,
+    EVENT_DUAL_ACTIONABILITY_EXPERIMENT_RUNTIME,
     EVENT_LABEL_POLICY_RUNTIME,
     EVENT_PAIR_BUNDLE_MODEL_TYPE,
     EVENT_PAIR_REGIME_ROUTER_POLICY_RUNTIME,
@@ -231,6 +234,82 @@ def _write_event_pair_bundle(tmp_path):
 
 
 
+def _write_event_dual_actionability_bundle(tmp_path):
+    feature_columns = list(MULTITIMEFRAME_FEATURE_COLUMNS)
+    rows = [
+        {
+            column: float((index + position) % 7) / 10.0
+            for position, column in enumerate(feature_columns)
+        }
+        for index in range(12)
+    ]
+    frame = pd.DataFrame(rows, columns=feature_columns)
+    target = [0, 1] * 6
+
+    def save_classifier(name):
+        path = tmp_path / name
+        fitted = XGBClassifier(
+            n_estimators=2,
+            max_depth=1,
+            learning_rate=0.1,
+            n_jobs=1,
+            tree_method="hist",
+            random_state=42,
+        )
+        fitted.fit(frame, target)
+        fitted.save_model(str(path))
+        return path
+
+    long_path = save_classifier("long-action.json")
+    short_path = save_classifier("short-action.json")
+    manifest = {
+        "bundle_version": 1,
+        "model_type": EVENT_PAIR_BUNDLE_MODEL_TYPE,
+        "experiment": EVENT_DUAL_ACTIONABILITY_EXPERIMENT_RUNTIME,
+        "event_label_policy": EVENT_LABEL_POLICY_RUNTIME,
+        "dual_actionability": {
+            "kind": "xgboost_dual_actionability",
+            "action_margin_floor": DUAL_ACTION_MARGIN_FLOOR_RUNTIME,
+            "long": {
+                "path": long_path.name,
+                "sha256": _artifact_sha(long_path),
+                "kind": "xgboost_classifier",
+            },
+            "short": {
+                "path": short_path.name,
+                "sha256": _artifact_sha(short_path),
+                "kind": "xgboost_classifier",
+            },
+        },
+    }
+    model_path = tmp_path / "event-dual-actionability-model.json"
+    model_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    metadata = {
+        "metadata_version": 4,
+        "model_type": EVENT_PAIR_BUNDLE_MODEL_TYPE,
+        "runtime_feature_profile": MULTITIMEFRAME_RUNTIME_PROFILE,
+        "research_experiment": EVENT_DUAL_ACTIONABILITY_EXPERIMENT_RUNTIME,
+        "event_label_policy": EVENT_LABEL_POLICY_RUNTIME,
+        "backtest_evaluation_policy": MULTITIMEFRAME_BACKTEST_POLICY,
+        "research_validation_policy": MULTITIMEFRAME_RESEARCH_VALIDATION_POLICY,
+        "model_version": "event-dual-actionability-test-v1",
+        "artifact_sha256": _artifact_sha(model_path),
+        "feature_columns": feature_columns,
+        "feature_schema_hash": _schema_hash(feature_columns),
+        "approved_for_paper": True,
+        "approved_for_live": False,
+        "validation_status": "untouched_test_passed",
+        "horizon_bars": 10,
+        "instruments": list(INITIAL_FOREX_UNIVERSE),
+        "action_margin_floor": DUAL_ACTION_MARGIN_FLOOR_RUNTIME,
+    }
+    metadata_path = tmp_path / "event-dual-actionability-model.metadata.json"
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    return model_path, metadata_path, manifest
+
+
+
 def _write_event_pair_regime_bundle(tmp_path):
     feature_columns = list(MULTITIMEFRAME_FEATURE_COLUMNS)
     rows = [
@@ -319,6 +398,68 @@ def _write_event_pair_regime_bundle(tmp_path):
     metadata_path = tmp_path / "event-pair-regime-model.metadata.json"
     metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
     return model_path, metadata_path
+
+
+def test_verified_event_dual_actionability_bundle_enforces_side_margin(
+    tmp_path,
+    monkeypatch,
+):
+    model_path, metadata_path, _ = _write_event_dual_actionability_bundle(tmp_path)
+    monkeypatch.setenv(MODEL_PATH_ENV, str(model_path))
+    monkeypatch.setenv(MODEL_METADATA_PATH_ENV, str(metadata_path))
+
+    model = BaselineXGBoostModel()
+    assert model.load_model() is True
+    metadata = model.get_model_metadata()
+    assert metadata["mode"] == "trained_xgboost_mtf"
+    assert (
+        metadata["research_experiment"]
+        == EVENT_DUAL_ACTIONABILITY_EXPERIMENT_RUNTIME
+    )
+
+    features = {column: 0.0 for column in MULTITIMEFRAME_FEATURE_COLUMNS}
+    features["instrument_EURUSD"] = 1.0
+
+    long_model = MagicMock()
+    short_model = MagicMock()
+    long_model.predict_proba.return_value = [[0.18, 0.82]]
+    short_model.predict_proba.return_value = [[0.79, 0.21]]
+    model._bundle["dual_actionability"]["long"] = long_model
+    model._bundle["dual_actionability"]["short"] = short_model
+
+    eligible = model.predict_signal(features)
+    assert eligible.direction == "BUY"
+    assert eligible.confidence_score == pytest.approx(0.82)
+    assert eligible.raw_scores["action_probability_margin"] == pytest.approx(0.61)
+    assert eligible.explainability["signal_eligible"] is True
+
+    long_model.predict_proba.return_value = [[0.35, 0.65]]
+    short_model.predict_proba.return_value = [[0.42, 0.58]]
+    blocked = model.predict_signal(features)
+    assert blocked.direction == "BUY"
+    assert blocked.confidence_score == pytest.approx(0.65)
+    assert blocked.raw_scores["action_probability_margin"] == pytest.approx(0.07)
+    assert blocked.explainability["signal_eligible"] is False
+    assert (
+        blocked.explainability["signal_gate_reason"]
+        == "action_probability_margin_below_floor"
+    )
+
+
+def test_event_dual_actionability_child_hash_mismatch_fails_closed(
+    tmp_path,
+    monkeypatch,
+):
+    model_path, metadata_path, manifest = _write_event_dual_actionability_bundle(tmp_path)
+    child_path = tmp_path / manifest["dual_actionability"]["long"]["path"]
+    child_path.write_bytes(child_path.read_bytes() + b"tamper")
+
+    monkeypatch.setenv(MODEL_PATH_ENV, str(model_path))
+    monkeypatch.setenv(MODEL_METADATA_PATH_ENV, str(metadata_path))
+
+    model = BaselineXGBoostModel()
+    assert model.load_model() is False
+    assert model.get_model_metadata()["mode"] == "heuristic_placeholder"
 
 
 def test_verified_event_pair_regime_bundle_routes_and_falls_back(

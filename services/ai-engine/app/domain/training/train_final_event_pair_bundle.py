@@ -18,6 +18,8 @@ from app.domain.models.multitimeframe_features import (
 )
 from app.domain.training.model_qualification import (
     CONFIDENCE_FLOOR,
+    DUAL_ACTION_MARGIN_FLOOR,
+    EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME,
     EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
     EVENT_PAIR_REGIME_EXPERT_EXPERIMENT_NAME,
     EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME,
@@ -25,7 +27,9 @@ from app.domain.training.model_qualification import (
     REGIME_NAMES,
     REGIME_ROUTER_POLICY,
     ModelVariant,
+    _event_dual_actionability_prediction_frame,
     _event_two_stage_prediction_frame,
+    _fit_event_dual_actionability_for_outer,
     _fit_event_pair_experts_for_outer,
     _fit_event_pair_regime_experts_for_outer,
     _fit_event_pair_return_margin_for_outer,
@@ -51,6 +55,7 @@ from app.domain.training.train_multitimeframe import (
 
 EVENT_PAIR_BUNDLE_MODEL_TYPE = "xgboost_event_pair_bundle"
 SUPPORTED_EXPERIMENTS = {
+    EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME,
     EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
     EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME,
     EVENT_PAIR_REGIME_EXPERT_EXPERIMENT_NAME,
@@ -126,6 +131,31 @@ def _predict_pair_candidate(
     confidence_floor: float,
     horizon_bars: int,
 ) -> pd.DataFrame:
+    if experiment == EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME:
+        long_model = direction_models.get("long")
+        short_model = direction_models.get("short")
+        if long_model is None or short_model is None:
+            raise ValueError("Dual-actionability candidate requires LONG and SHORT models")
+        long_probabilities = _probabilities(
+            long_model,
+            frame,
+            list(MULTITIMEFRAME_FEATURE_COLUMNS),
+        )
+        short_probabilities = _probabilities(
+            short_model,
+            frame,
+            list(MULTITIMEFRAME_FEATURE_COLUMNS),
+        )
+        return _event_dual_actionability_prediction_frame(
+            frame,
+            long_probabilities=long_probabilities,
+            short_probabilities=short_probabilities,
+            confidence_floor=confidence_floor,
+            fold=0,
+            experiment=experiment,
+            variant=ModelVariant(name="event_barrier_v7_dual_actionability"),
+        )
+
     if experiment == EVENT_PAIR_EXPERT_EXPERIMENT_NAME:
         direction_probabilities = _pair_expert_probabilities(
             direction_models,
@@ -188,7 +218,15 @@ def _fit_pair_candidate(
     dict[str, Any],
 ]:
     regime_routers: dict[str, dict[str, float]] | None = None
-    if experiment == EVENT_PAIR_EXPERT_EXPERIMENT_NAME:
+    if experiment == EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME:
+        models, features, counts = _fit_event_dual_actionability_for_outer(
+            train,
+            variant=ModelVariant(name="event_barrier_v7_dual_actionability"),
+            horizon_bars=horizon_bars,
+        )
+        calibrators = None
+        opportunity = None
+    elif experiment == EVENT_PAIR_EXPERT_EXPERIMENT_NAME:
         models, opportunity, features, counts = _fit_event_pair_experts_for_outer(
             train,
             variant=ModelVariant(name="event_barrier_v4_pair_direction"),
@@ -238,6 +276,34 @@ def _component_manifest(
     opportunity_model: Any,
 ) -> dict[str, Any]:
     root = output.parent
+    if experiment == EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME:
+        long_model = direction_models.get("long")
+        short_model = direction_models.get("short")
+        if long_model is None or short_model is None:
+            raise ValueError("Final dual-actionability bundle requires LONG and SHORT models")
+        long_path = root / "long-action.json"
+        short_path = root / "short-action.json"
+        return {
+            "bundle_version": 1,
+            "model_type": EVENT_PAIR_BUNDLE_MODEL_TYPE,
+            "experiment": experiment,
+            "event_label_policy": EVENT_LABEL_POLICY,
+            "dual_actionability": {
+                "kind": "xgboost_dual_actionability",
+                "action_margin_floor": DUAL_ACTION_MARGIN_FLOOR,
+                "long": {
+                    "path": long_path.name,
+                    "sha256": _save_xgboost_model(long_model, long_path),
+                    "kind": "xgboost_classifier",
+                },
+                "short": {
+                    "path": short_path.name,
+                    "sha256": _save_xgboost_model(short_model, short_path),
+                    "kind": "xgboost_classifier",
+                },
+            },
+        }
+
     opportunity_path = root / "opportunity.json"
     opportunity_sha = _save_xgboost_model(opportunity_model, opportunity_path)
 
@@ -472,6 +538,11 @@ def train_final_event_pair_candidate(
         "confidence_threshold": confidence_threshold,
         "opportunity_threshold": confidence_threshold,
         "direction_threshold": 0.50,
+        "action_margin_floor": (
+            DUAL_ACTION_MARGIN_FLOOR
+            if experiment == EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME
+            else None
+        ),
         "training_counts": training_counts,
         "bundle_components": bundle,
         "cost_model": {
@@ -511,8 +582,13 @@ def train_final_event_pair_candidate(
         "approved_for_sandbox": paper_approved,
         "approved_for_live": False,
         "confidence_semantics": (
-            "Joint confidence is the minimum of event-opportunity probability "
-            "and pair-specific directional confidence; it is not a probability of profit."
+            "Winning LONG/SHORT actionability probability with a mandatory 0.10 "
+            "side-separation gate; it is not a probability of profit."
+            if experiment == EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME
+            else (
+                "Joint confidence is the minimum of event-opportunity probability "
+                "and pair-specific directional confidence; it is not a probability of profit."
+            )
         ),
         "created_at": timestamp.isoformat(),
     }
