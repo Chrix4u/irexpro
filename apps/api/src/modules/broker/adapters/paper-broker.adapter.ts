@@ -897,8 +897,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       if (original) {
         this.logger.log(
           `PaperBrokerAdapter: idempotent replay for key=${dedupeKey} ` +
-            `returns original result [PAPER_ONLY]`,
-        );
+            `returns original result [PAPER_ONLY]`,        );
         return { ...original };
       }
 
@@ -1173,13 +1172,22 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       const quote = this._feed.quote();
       const closePrice = quoteMid(quote);
 
-      this.closePositionUnits(position, closeUnits, closedLot, closePrice, 'MANUAL');
+      const closedTrade = this.closePositionUnits(
+        position,
+        closeUnits,
+        closedLot,
+        closePrice,
+        'MANUAL',
+      );
       return {
         success: true,
         externalOrderId,
         filledPrice: closePrice,
         filledQuantity: closedLot,
-        filledAt: this._clock.now(),
+        filledAt: closedTrade.closedAt,
+        realisedPnl: closedTrade.realisedPnl,
+        commission: closedTrade.commission,
+        swap: closedTrade.swap,
         status: 'FILLED',
         brokerMessage: 'PAPER_ONLY simulated close',
       };
