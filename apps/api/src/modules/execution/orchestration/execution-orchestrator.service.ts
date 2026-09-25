@@ -598,6 +598,9 @@ export class ExecutionOrchestrator {
             providerOrderId: filled.providerOrderId ?? action.providerOrderId ?? '',
             filledQuantity: filled.filledQuantity,
             avgFillPrice: filled.avgFillPrice ?? action.fillPrice,
+            realisedPnl: action.realisedPnl,
+            commission: action.commission,
+            swap: action.swap,
           };
         }
 
