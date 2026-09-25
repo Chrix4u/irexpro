@@ -897,8 +897,7 @@ export class RiskService {
       this.logger.log(
         `Signal ${trade.signalId}: lot size reduced from ${requestedLots.toString()} to ` +
           `${maxLots.toString()} (maxPositionSizeLot)`,
-      );
-      appliedRules.push(
+      );      appliedRules.push(
         `POSITION_SIZE:REDUCED_${requestedLots.toString()}_TO_${maxLots.toString()}`,
       );
 
@@ -1172,7 +1171,10 @@ export class RiskService {
       // row (logical account, currency, daily-risk period). LIVE decisions
       // carry the snapshot-bound values; PAPER carries the projected view's
       // currency when the source provides one (never fabricated).
-      logicalAccountKey: liveSnapshotBinding?.logicalAccountKey,
+      logicalAccountKey:
+        liveSnapshotBinding?.logicalAccountKey ??
+        connection.logicalAccountKey?.trim() ??
+        undefined,
       accountCurrency: liveSnapshotBinding?.currency ?? accountState.currency ?? undefined,
       riskPeriodId: liveRiskPeriodId ?? undefined,
     };
@@ -1794,8 +1796,7 @@ export class RiskService {
       profile.maxPositionSizeLot = dto.maxPositionSizeLot.toFixed(4);
     if (dto.minStopLossPips !== undefined) profile.minStopLossPips = dto.minStopLossPips.toFixed(2);
     if (dto.allowedInstruments !== undefined) profile.allowedInstruments = dto.allowedInstruments;
-    if (dto.maxVolatilityScore !== undefined)
-      profile.maxVolatilityScore = dto.maxVolatilityScore.toFixed(2);
+    if (dto.maxVolatilityScore !== undefined)      profile.maxVolatilityScore = dto.maxVolatilityScore.toFixed(2);
     if (dto.rejectLowLiquidity !== undefined) profile.rejectLowLiquidity = dto.rejectLowLiquidity;
 
     // Sprint 29: new onboarding fields

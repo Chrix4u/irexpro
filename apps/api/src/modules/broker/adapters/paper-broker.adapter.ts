@@ -22,6 +22,7 @@ import {
 import type { OrderCapabilityDeclaration } from '../interfaces/order-capability';
 import { BrokerAdapterError, BrokerErrorCode } from '../interfaces/broker-adapter.errors';
 import { ProviderDispatchCertainty } from '../interfaces/provider-dispatch-certainty';
+import { PaperBrokerStateStore } from '../services/paper-broker-state.store';
 
 /**
  * PaperBrokerAdapter — safe simulated broker for paper trading only.
@@ -105,9 +106,10 @@ import { ProviderDispatchCertainty } from '../interfaces/provider-dispatch-certa
  * - closeAllOrders closes POSITIONS only (kill-switch semantics: open
  *   exposure), books them as closeReason SYSTEM, and leaves working orders
  *   untouched — cancelOrder is the honest path for those.
- * - Connection lifecycle: paper-account state persists for the adapter
- *   instance's lifetime; reconnects (e.g. periodic health checks) never wipe
- *   orders, positions, history, or balance.
+ * - Connection lifecycle: persisted BrokerConnection-scoped PAPER state is
+ *   durably stored in PostgreSQL. Reconnects, API restarts and deployments
+ *   restore balance, positions, orders, history, idempotency state, quote walk
+ *   and simulated clock instead of resetting the account to 10,000.00.
  *
  * Use cases:
  * - Paper-mode end-to-end signal pipeline tests
@@ -199,6 +201,18 @@ export class DeterministicPaperPriceFeed extends PaperPriceFeed {
     return this.format();
   }
 
+  snapshotState(): { bidUnits: string; stepIndex: number } {
+    return { bidUnits: this.bidUnits.toString(), stepIndex: this.stepIndex };
+  }
+
+  restoreState(state: { bidUnits: string; stepIndex: number }): void {
+    if (!/^-?\d+$/.test(state.bidUnits) || !Number.isSafeInteger(state.stepIndex) || state.stepIndex < 0) {
+      throw new Error('Malformed deterministic paper price-feed state');
+    }
+    this.bidUnits = BigInt(state.bidUnits);
+    this.stepIndex = state.stepIndex;
+  }
+
   private format(): PaperQuote {
     return {
       bid: formatScaledDecimal(this.bidUnits, PAPER_PRICE_SCALE),
@@ -225,6 +239,17 @@ export class DeterministicPaperClock extends PaperClock {
 
   advance(ms: number): void {
     this.offsetMs += Math.max(0, Math.trunc(ms));
+  }
+
+  snapshotState(): { offsetMs: number } {
+    return { offsetMs: this.offsetMs };
+  }
+
+  restoreState(state: { offsetMs: number }): void {
+    if (!Number.isSafeInteger(state.offsetMs) || state.offsetMs < 0) {
+      throw new Error('Malformed deterministic paper clock state');
+    }
+    this.offsetMs = state.offsetMs;
   }
 }
 
@@ -460,6 +485,37 @@ interface PaperClosedTrade {
   closeReason: 'TP' | 'SL' | 'MANUAL' | 'SYSTEM';
 }
 
+type PaperWorkingOrderState = Omit<PaperWorkingOrder, 'placedAt'> & { placedAt: string };
+type PaperPositionState = Omit<PaperPosition, 'units' | 'openedAt'> & {
+  units: string;
+  openedAt: string;
+};
+type PaperClosedTradeState = Omit<PaperClosedTrade, 'openedAt' | 'closedAt'> & {
+  openedAt: string;
+  closedAt: string;
+};
+type PaperOrderStateSnapshot = Omit<BrokerOrderState, 'placedAt' | 'updatedAt'> & {
+  placedAt?: string | null;
+  updatedAt?: string | null;
+};
+type PaperOrderResultSnapshot = Omit<BrokerOrderResult, 'filledAt'> & {
+  filledAt?: string;
+};
+
+interface PaperBrokerDurableStateV1 {
+  version: 1;
+  balance: string;
+  orderCounter: number;
+  marketTickCounter: number;
+  feedState: { bidUnits: string; stepIndex: number } | null;
+  clockState: { offsetMs: number } | null;
+  working: PaperWorkingOrderState[];
+  positions: PaperPositionState[];
+  closedTrades: PaperClosedTradeState[];
+  orderStates: Array<[string, PaperOrderStateSnapshot]>;
+  resultsByDedupeKey: Array<[string, PaperOrderResultSnapshot]>;
+}
+
 // ─── Adapter ─────────────────────────────────────────────────────────────────
 
 @Injectable()
@@ -485,15 +541,235 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   private readonly _orderStates = new Map<string, BrokerOrderState>();
   /** True-dedupe acknowledgement store, keyed by clientOrderId ?? idempotencyKey. */
   private readonly _resultsByDedupeKey = new Map<string, BrokerOrderResult>();
+  private _durableStateHydrated = false;
+  private _durableWriteTail: Promise<void> = Promise.resolve();
 
   /**
-   * The feed and clock are constructor-injectable determinism seams for specs
-   * (scripted falling walks, fake clocks). Under Nest DI both are optional and
-   * default to the deterministic implementations above.
+   * The feed and clock are constructor-injectable determinism seams for specs.
+   * Runtime connection-scoped PAPER adapters also receive a durable state
+   * store + BrokerConnection id so simulated provider truth survives API
+   * restarts/deploys. Root/ephemeral adapters intentionally have no id and
+   * therefore remain isolated in-memory instances.
    */
-  constructor(@Optional() priceFeed?: PaperPriceFeed, @Optional() clock?: PaperClock) {
+  constructor(
+    @Optional() priceFeed?: PaperPriceFeed,
+    @Optional() clock?: PaperClock,
+    @Optional() private readonly stateStore?: PaperBrokerStateStore,
+    @Optional() private readonly connectionId?: string,
+  ) {
     this._feed = priceFeed ?? new DeterministicPaperPriceFeed();
     this._clock = clock ?? new DeterministicPaperClock();
+  }
+
+  private serializeDurableState(): PaperBrokerDurableStateV1 {
+    return {
+      version: 1,
+      balance: this._balance,
+      orderCounter: this._orderCounter,
+      marketTickCounter: this._marketTickCounter,
+      feedState:
+        this._feed instanceof DeterministicPaperPriceFeed ? this._feed.snapshotState() : null,
+      clockState:
+        this._clock instanceof DeterministicPaperClock ? this._clock.snapshotState() : null,
+      working: this._working.map((order) => ({
+        ...order,
+        placedAt: order.placedAt.toISOString(),
+      })),
+      positions: Array.from(this._positions.values()).map((position) => ({
+        ...position,
+        units: position.units.toString(),
+        openedAt: position.openedAt.toISOString(),
+      })),
+      closedTrades: this._closedTrades.map((trade) => ({
+        ...trade,
+        openedAt: trade.openedAt.toISOString(),
+        closedAt: trade.closedAt.toISOString(),
+      })),
+      orderStates: Array.from(this._orderStates.entries()).map(([key, state]) => [
+        key,
+        {
+          ...state,
+          placedAt: state.placedAt ? state.placedAt.toISOString() : state.placedAt,
+          updatedAt: state.updatedAt ? state.updatedAt.toISOString() : state.updatedAt,
+          raw: undefined,
+        },
+      ]),
+      resultsByDedupeKey: Array.from(this._resultsByDedupeKey.entries()).map(([key, result]) => [
+        key,
+        {
+          ...result,
+          filledAt: result.filledAt?.toISOString(),
+          rawResponse: undefined,
+        },
+      ]),
+    };
+  }
+
+  private restoreDurableState(raw: unknown): void {
+    if (!raw || typeof raw !== 'object' || (raw as { version?: unknown }).version !== 1) {
+      throw new Error('Unsupported or malformed PAPER broker durable-state version');
+    }
+    const state = raw as PaperBrokerDurableStateV1;
+    parseScaledDecimal(state.balance, 'balance', BrokerErrorCode.BROKER_SERVER_ERROR);
+    if (
+      !Number.isSafeInteger(state.orderCounter) ||
+      state.orderCounter < 0 ||
+      !Number.isSafeInteger(state.marketTickCounter) ||
+      state.marketTickCounter < 0 ||
+      !Array.isArray(state.working) ||
+      !Array.isArray(state.positions) ||
+      !Array.isArray(state.closedTrades) ||
+      !Array.isArray(state.orderStates) ||
+      !Array.isArray(state.resultsByDedupeKey)
+    ) {
+      throw new Error('Malformed PAPER broker durable-state payload');
+    }
+
+    const parseDate = (value: string, field: string): Date => {
+      const date = new Date(value);
+      if (!Number.isFinite(date.getTime())) {
+        throw new Error(`Malformed PAPER broker durable-state date: ${field}`);
+      }
+      return date;
+    };
+
+    this._balance = toMoney(state.balance);
+    this._orderCounter = state.orderCounter;
+    this._marketTickCounter = state.marketTickCounter;
+
+    this._working.splice(
+      0,
+      this._working.length,
+      ...state.working.map((order) => ({
+        ...order,
+        placedAt: parseDate(order.placedAt, 'working.placedAt'),
+      })),
+    );
+
+    this._positions.clear();
+    for (const position of state.positions) {
+      if (!/^\d+$/.test(position.units)) {
+        throw new Error('Malformed PAPER broker durable-state position units');
+      }
+      this._positions.set(position.positionId, {
+        ...position,
+        units: BigInt(position.units),
+        openedAt: parseDate(position.openedAt, 'position.openedAt'),
+      });
+    }
+
+    this._closedTrades.splice(
+      0,
+      this._closedTrades.length,
+      ...state.closedTrades.map((trade) => ({
+        ...trade,
+        openedAt: parseDate(trade.openedAt, 'closedTrade.openedAt'),
+        closedAt: parseDate(trade.closedAt, 'closedTrade.closedAt'),
+      })),
+    );
+
+    this._orderStates.clear();
+    for (const [key, orderState] of state.orderStates) {
+      this._orderStates.set(key, {
+        ...orderState,
+        placedAt:
+          orderState.placedAt == null
+            ? orderState.placedAt
+            : parseDate(orderState.placedAt, 'orderState.placedAt'),
+        updatedAt:
+          orderState.updatedAt == null
+            ? orderState.updatedAt
+            : parseDate(orderState.updatedAt, 'orderState.updatedAt'),
+      });
+    }
+
+    this._resultsByDedupeKey.clear();
+    for (const [key, result] of state.resultsByDedupeKey) {
+      this._resultsByDedupeKey.set(key, {
+        ...result,
+        filledAt: result.filledAt ? parseDate(result.filledAt, 'result.filledAt') : undefined,
+      });
+    }
+
+    if (state.feedState && this._feed instanceof DeterministicPaperPriceFeed) {
+      this._feed.restoreState(state.feedState);
+    }
+    if (state.clockState && this._clock instanceof DeterministicPaperClock) {
+      this._clock.restoreState(state.clockState);
+    }
+  }
+
+  private async hydrateDurableStateOnce(): Promise<void> {
+    if (this._durableStateHydrated) return;
+    if (!this.stateStore || !this.connectionId) {
+      this._durableStateHydrated = true;
+      return;
+    }
+
+    try {
+      const stored = await this.stateStore.load(this.connectionId);
+      if (stored) {
+        this.restoreDurableState(stored);
+        this.logger.log(
+          `PaperBrokerAdapter restored durable provider state for connection ${this.connectionId}`,
+        );
+      } else {
+        const bootstrap = await this.stateStore.loadBootstrap(this.connectionId);
+        if (bootstrap) {
+          if (bootstrap.activeTradeCount > 0) {
+            throw new Error(
+              `Cannot bootstrap durable PAPER state while ${bootstrap.activeTradeCount} ` +
+                'active internal trade(s) exist. Resolve/close them first; refusing to ' +
+                'fabricate an empty provider after restart.',
+            );
+          }
+          parseScaledDecimal(
+            bootstrap.balance,
+            'bootstrap.balance',
+            BrokerErrorCode.BROKER_SERVER_ERROR,
+          );
+          this._balance = toMoney(bootstrap.balance);
+          this._orderCounter = Math.max(
+            this._orderCounter,
+            bootstrap.maxPaperOrderCounter,
+          );
+        }
+        await this.stateStore.save(this.connectionId, this.serializeDurableState());
+        this.logger.log(
+          `PaperBrokerAdapter initialized durable provider state for connection ${this.connectionId} ` +
+            `at balance=${this._balance}`,
+        );
+      }
+      this._durableStateHydrated = true;
+    } catch (err) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.BROKER_SERVER_ERROR,
+        `Unable to restore durable PAPER broker state: ${(err as Error).message}`,
+        undefined,
+        false,
+        ProviderDispatchCertainty.DEFINITELY_NOT_SENT,
+      );
+    }
+  }
+
+  private async persistDurableState(): Promise<void> {
+    if (!this.stateStore || !this.connectionId || !this._durableStateHydrated) return;
+    const snapshot = this.serializeDurableState();
+    const write = this._durableWriteTail.then(() =>
+      this.stateStore!.save(this.connectionId!, snapshot),
+    );
+    this._durableWriteTail = write.catch(() => undefined);
+    try {
+      await write;
+    } catch (err) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.BROKER_SERVER_ERROR,
+        `Unable to persist durable PAPER broker state: ${(err as Error).message}`,
+        undefined,
+        false,
+        ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER,
+      );
+    }
   }
 
   setMode(mode: BrokerMode): void {
@@ -508,8 +784,8 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
 
   async connect(_credentials: DecryptedBrokerCredentials): Promise<BrokerConnectionResult> {
     // Credentials intentionally ignored — paper broker needs none.
-    // Account state PERSISTS across reconnects (health checks must never wipe
-    // orders/positions/history — the "preserve" contract).
+    // Restore provider state before exposing the connection as healthy.
+    await this.hydrateDurableStateOnce();
     this._connected = true;
     this.logger.log('PaperBrokerAdapter connected (simulated)');
     return {
@@ -621,8 +897,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       const lot = parseScaledDecimal(params.lotSize, 'lotSize', BrokerErrorCode.INVALID_LOT_SIZE);
       if (lot.negative || lot.digits === 0n) return null;
       // Any exact lot-step spelling is calculable; non-step values are not.
-      try {
-        lotSizeToUnits(params.lotSize);
+      try {        lotSizeToUnits(params.lotSize);
       } catch {
         return null;
       }
@@ -784,6 +1059,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     this.assertConnected();
     this.requireInstrument(instrument);
     const quote = this.advanceMarket();
+    await this.persistDurableState();
     return {
       instrument: PAPER_INSTRUMENT,
       bid: quote.bid,
@@ -940,6 +1216,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       }
 
       this._resultsByDedupeKey.set(dedupeKey, result);
+      await this.persistDurableState();
       this.logger.log(
         `PaperBrokerAdapter: simulated order placed id=${orderId} ` +
           `instrument=${instrument} dir=${order.direction} lot=${order.lotSize} ` +
@@ -1123,6 +1400,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         if (stopLoss !== undefined) working.stopLoss = stopLoss;
         if (takeProfit !== undefined) working.takeProfit = takeProfit;
       }
+      await this.persistDurableState();
       return {
         success: true,
         externalOrderId,
@@ -1173,13 +1451,23 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       const quote = this._feed.quote();
       const closePrice = quoteMid(quote);
 
-      this.closePositionUnits(position, closeUnits, closedLot, closePrice, 'MANUAL');
+      const closedTrade = this.closePositionUnits(
+        position,
+        closeUnits,
+        closedLot,
+        closePrice,
+        'MANUAL',
+      );
+      await this.persistDurableState();
       return {
         success: true,
         externalOrderId,
         filledPrice: closePrice,
         filledQuantity: closedLot,
-        filledAt: this._clock.now(),
+        filledAt: closedTrade.closedAt,
+        realisedPnl: closedTrade.realisedPnl,
+        commission: closedTrade.commission,
+        swap: closedTrade.swap,
         status: 'FILLED',
         brokerMessage: 'PAPER_ONLY simulated close',
       };
@@ -1222,6 +1510,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         placedAt: cancelled.placedAt,
         updatedAt: now,
       });
+      await this.persistDurableState();
       this.logger.log(
         `PaperBrokerAdapter: cancelled working order id=${externalOrderId} ` +
           `kind=${cancelled.orderKind} [PAPER_ONLY]`,
@@ -1261,6 +1550,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         }
       }
 
+      await this.persistDurableState();
       this.logger.log(
         `PaperBrokerAdapter: closeAllOrders closed=${closedCount} failed=${failedCount} ` +
           `(working orders left untouched: ${this._working.length}) [PAPER_ONLY]`,
@@ -1506,8 +1796,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
    * closed units, adjusts the balance, and reduces/removes the position.
    */
   private closePositionUnits(
-    position: PaperPosition,
-    closeUnits: bigint,
+    position: PaperPosition,    closeUnits: bigint,
     closedLot: string,
     closePrice: string,
     closeReason: PaperClosedTrade['closeReason'],

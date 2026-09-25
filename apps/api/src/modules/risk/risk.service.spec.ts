@@ -371,6 +371,8 @@ describe('RiskService', () => {
         expect(result.sessionGeneration).toBe(1);
         expect(result.executionMode).toBe(ExecutionMode.PAPER_ONLY);
         expect(result.brokerConnectionId).toBe('conn-1');
+        expect(result.logicalAccountKey).toBe('metatrader5|MetaQuotes-Demo|12345');
+        expect(result.accountCurrency).toBe('USD');
       }
     });
 
@@ -896,7 +898,6 @@ describe('RiskService', () => {
       expect(riskGrantService.invalidateGrantsForSession).not.toHaveBeenCalled();
       void callCount;
     });
-
     it('REJECTS with RISK_ENGINE_QUERY_FAILED when the daily-loss query throws (no SKIPPED)', async () => {
       dailyRiskPeriod.getTodayRealisedLossExact.mockRejectedValue(new Error('timeout'));
 

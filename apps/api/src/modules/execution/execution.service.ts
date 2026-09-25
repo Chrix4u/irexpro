@@ -897,8 +897,7 @@ export class ExecutionService {
 
     this.logger.log(
       logPrefix +
-        ' for user ' +
-        userId +
+        ' for user ' +        userId +
         ': closing ' +
         trades.length +
         ' AI-proven OPEN position(s)',
@@ -1136,8 +1135,9 @@ export class ExecutionService {
     const dispatch = await this.orchestrator.dispatchOrder(closeIntent, connection);
 
     if (dispatch.outcome === 'FILLED') {
-      // exit price = the close order's fill price; P&L populated by
-      // reconciliation job.
+      // Persist every close economic the provider can prove AT the CLOSED
+      // transition. Providers that cannot report P&L synchronously leave the
+      // optional fields absent for the reconciliation enrichment path.
       // Issue #315: CAS OPEN → CLOSED — a concurrent reconciliation close is
       // never double-applied; a reload already showing CLOSED is idempotent.
       const outcome = await this.tradeCas.applyCasTransition({
@@ -1147,6 +1147,11 @@ export class ExecutionService {
         patch: {
           status: TradeStatus.CLOSED,
           exitPrice: dispatch.avgFillPrice,
+          ...(dispatch.realisedPnl !== undefined
+            ? { realisedPnl: dispatch.realisedPnl }
+            : {}),
+          ...(dispatch.commission !== undefined ? { commission: dispatch.commission } : {}),
+          ...(dispatch.swap !== undefined ? { swap: dispatch.swap } : {}),
           closedAt: new Date(),
           closeReason: reason,
         },
@@ -1165,6 +1170,9 @@ export class ExecutionService {
         resourceId: trade.id,
         metadata: {
           exitPrice: dispatch.avgFillPrice,
+          realisedPnl: dispatch.realisedPnl ?? null,
+          commission: dispatch.commission ?? null,
+          swap: dispatch.swap ?? null,
           closeReason: reason,
           externalOrderId: trade.externalOrderId,
           closeOrderId: dispatch.orderId,
@@ -1788,7 +1796,6 @@ export class ExecutionService {
         }
         return;
       }
-
       if (attempt === maxAttempts) {
         throw new ConflictException(
           'Trading session authority changed repeatedly while stopping. Retry Stop AI Trading.',

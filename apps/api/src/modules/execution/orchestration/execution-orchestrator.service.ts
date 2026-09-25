@@ -598,6 +598,9 @@ export class ExecutionOrchestrator {
             providerOrderId: filled.providerOrderId ?? action.providerOrderId ?? '',
             filledQuantity: filled.filledQuantity,
             avgFillPrice: filled.avgFillPrice ?? action.fillPrice,
+            realisedPnl: action.realisedPnl,
+            commission: action.commission,
+            swap: action.swap,
           };
         }
 
@@ -894,8 +897,7 @@ export class ExecutionOrchestrator {
             'provably never reached the provider (DEFINITELY_NOT_SENT); retrying in ' +
             `${delay}ms`,
         );
-        await new Promise((r) => setTimeout(r, delay));
-      }
+        await new Promise((r) => setTimeout(r, delay));      }
     }
 
     throw lastError ?? new Error('All retry attempts exhausted');

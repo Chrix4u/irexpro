@@ -9,6 +9,7 @@ import { CTraderAdapter } from './ctrader/ctrader.adapter';
 import { CTraderClientService } from './ctrader/ctrader-client.service';
 import { OandaAdapter } from './oanda/oanda.adapter';
 import { MetaApiClientService } from '../services/metaapi-client.service';
+import { PaperBrokerStateStore } from '../services/paper-broker-state.store';
 
 const makeAdapter = (brokerId: string, brokerName: string): IBrokerAdapter => ({
   brokerId,
@@ -411,8 +412,22 @@ describe('BrokerModule — connection-scoped cTrader adapter factory wiring', ()
       metaApiClient,
       configService,
       ctraderClientStub,
+      {
+        load: jest.fn().mockResolvedValue(null),
+        loadBootstrap: jest.fn().mockResolvedValue(null),
+        save: jest.fn().mockResolvedValue(undefined),
+        remove: jest.fn().mockResolvedValue(undefined),
+      } as unknown as PaperBrokerStateStore,
     );
     brokerModule.onModuleInit();
+  });
+
+  it('passes the persisted connection id into the PAPER adapter factory', async () => {
+    const paper = registry.getAdapterForConnection('paper-connection-1', 'paper-broker');
+    expect(paper).toBeInstanceOf(PaperBrokerAdapter);
+    await expect(
+      paper.connect({ accountId: 'paper-account-001' }),
+    ).resolves.toMatchObject({ success: true, accountId: 'paper-account-001' });
   });
 
   it('registers every canonical provider WITH an isolation factory (no metadata-only gaps)', () => {
