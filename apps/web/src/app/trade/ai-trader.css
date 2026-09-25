@@ -935,7 +935,17 @@
   }
 
   .ai-section__heading--positions {
-    align-items: flex-start;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .ai-section__heading--positions > :first-child {
+    width: 100%;
+  }
+
+  .ai-section__heading--positions > .ai-position-toolbar {
+    width: 100%;
+    margin-left: 0;
   }
 
   .ai-position-toolbar {
