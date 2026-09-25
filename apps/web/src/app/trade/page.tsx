@@ -1275,7 +1275,7 @@ export default function AiTradingPage() {
               <div>
                 <strong>Automatic risk protection is active</strong>
                 <span>
-                  Daily loss, drawdown, position limits, market safety and kill-switch checks are handled by the server. You do not need to configure them.
+                  There is no fixed trades-per-day cap. The AI may take every qualified opportunity while daily loss, drawdown, concurrent-position, margin, market-safety and kill-switch protections remain enforced by the server.
                 </span>
               </div>
               <Link href="/onboarding/risk" className="ai-text-link">View protection</Link>

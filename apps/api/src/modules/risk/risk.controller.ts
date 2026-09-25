@@ -15,7 +15,7 @@ import { ToggleKillSwitchDto } from './dto/kill-switch.dto';
 import { UpdateRiskProfileDto } from './dto/update-risk-profile.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUserId } from '../../common/decorators/current-user.decorator';
-import { toRiskViolationSummary } from './risk-response.mapper';
+import { toRiskProfileResponse, toRiskViolationSummary } from './risk-response.mapper';
 
 /**
  * RiskController — User-facing risk management endpoints.
@@ -63,7 +63,8 @@ export class RiskController {
   @ApiOperation({ summary: 'Get your current risk profile and limits' })
   @ApiResponse({ status: 200, description: 'Current risk profile' })
   async getRiskProfile(@CurrentUserId() userId: string) {
-    return this.riskService.getOrCreateProfile(userId);
+    const profile = await this.riskService.getOrCreateProfile(userId);
+    return toRiskProfileResponse(profile);
   }
 
   @Patch('profile')
@@ -75,7 +76,8 @@ export class RiskController {
   })
   @ApiResponse({ status: 200, description: 'Updated risk profile' })
   async updateRiskProfile(@Body() dto: UpdateRiskProfileDto, @CurrentUserId() userId: string) {
-    return this.riskService.updateProfile(userId, dto);
+    const profile = await this.riskService.updateProfile(userId, dto);
+    return toRiskProfileResponse(profile);
   }
 
   // ─── Risk violations ──────────────────────────────────────────────────────

@@ -747,7 +747,6 @@ export interface RiskProfile {
   maxDailyLossPercent: string;
   maxDrawdownPercent: string;
   maxOpenTrades: number;
-  maxDailyTrades: number;
   maxPositionSizeLot: string;
   minStopLossPips: string;
   allowedInstruments: string[] | null;
@@ -768,7 +767,6 @@ export interface UpdateRiskProfileRequest {
   maxDailyLossPercent?: number;
   maxDrawdownPercent?: number;
   maxOpenTrades?: number;
-  maxDailyTrades?: number;
   maxPositionSizeLot?: number;
   minStopLossPips?: number;
   allowedInstruments?: string[] | null;

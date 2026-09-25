@@ -21,7 +21,6 @@ const safeSnapshot = {
       maxDailyLossPercent: '5.00',
       maxDrawdownPercent: '10.00',
       maxOpenTrades: 3,
-      maxDailyTrades: 10,
       maxPositionSizeLot: '0.1000',
       minStopLossPips: '5.00',
       maxVolatilityScore: '0.85',
@@ -36,8 +35,7 @@ const safeSnapshot = {
     maxOpenPositions: 3,
     openPositionSlotsRemaining: 1,
     todayTrades: 7,
-    maxDailyTrades: 10,
-    dailyTradeSlotsRemaining: 3,
+    dailyTradeCountPolicy: 'UNBOUNDED',
   },
   portfolio: {
     totalAccounts: 2,
@@ -87,7 +85,8 @@ test.describe('Portfolio & Risk Intelligence', () => {
 
     await expect(page.getByText('Full Auto', { exact: true })).toBeVisible();
     await expect(page.getByText('2 / 3', { exact: true })).toBeVisible();
-    await expect(page.getByText('7 / 10', { exact: true })).toBeVisible();
+    await expect(page.getByText('7', { exact: true })).toBeVisible();
+    await expect(page.getByText('AI-driven · no fixed cap', { exact: true })).toBeVisible();
     await expect(page.getByText('1 / 1 / 0', { exact: true })).toBeVisible();
     await expect(page.getByText('Max Concurrent Trades', { exact: true })).toBeVisible();
     await expect(page.getByText('Open trade limit reached', { exact: true })).toBeVisible();

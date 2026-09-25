@@ -101,7 +101,8 @@ function isRisk(value: unknown): value is AiCopilotRiskView {
       'brokerConnected',
       'riskAcknowledgementAccepted',
       'openPositionSlotsRemaining',
-      'dailyTradeSlotsRemaining',
+      'todayTrades',
+      'dailyTradeCountPolicy',
       'stalePortfolioSnapshots',
       'unavailablePortfolioSnapshots',
       'recentViolationCount',
@@ -115,7 +116,8 @@ function isRisk(value: unknown): value is AiCopilotRiskView {
     typeof value.brokerConnected === 'boolean' &&
     typeof value.riskAcknowledgementAccepted === 'boolean' &&
     isNonNegativeInteger(value.openPositionSlotsRemaining) &&
-    isNonNegativeInteger(value.dailyTradeSlotsRemaining) &&
+    isNonNegativeInteger(value.todayTrades) &&
+    value.dailyTradeCountPolicy === 'UNBOUNDED' &&
     isNonNegativeInteger(value.stalePortfolioSnapshots) &&
     isNonNegativeInteger(value.unavailablePortfolioSnapshots) &&
     isNonNegativeInteger(value.recentViolationCount)
