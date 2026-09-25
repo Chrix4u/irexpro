@@ -144,13 +144,11 @@ export default function PortfolioRiskPage() {
                   </div>
                   <div className="workspace-kv-row">
                     <dt className="text-sm muted">Trades opened today</dt>
-                    <dd>
-                      {snapshot.execution.todayTrades} / {snapshot.execution.maxDailyTrades}
-                    </dd>
+                    <dd>{snapshot.execution.todayTrades}</dd>
                   </div>
                   <div className="workspace-kv-row">
-                    <dt className="text-sm muted">Daily trade slots remaining</dt>
-                    <dd>{snapshot.execution.dailyTradeSlotsRemaining}</dd>
+                    <dt className="text-sm muted">Daily trade policy</dt>
+                    <dd>AI-driven · no fixed cap</dd>
                   </div>
                 </dl>
               </Card>

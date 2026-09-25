@@ -24,9 +24,6 @@ export interface RiskApprovalResult {
   appliedRules: string[];
   riskScore: number;
   evaluatedAt: Date;
-  /** Sprint 32 Gate 2: passed to ExecutionService for the final atomic
-   * advisory-lock daily-trade-slot reservation. */
-  maxDailyTrades: number;
   /** Round 5 (#301): opaque handle to the durable server-authoritative
    * RiskGrant issued with this approval. ExecutionService must verify +
    * atomically consume the grant at the final dispatch boundary — a
@@ -124,6 +121,7 @@ export enum RiskRejectionCode {
 
   // Position-level limits
   MAX_CONCURRENT_TRADES = 'MAX_CONCURRENT_TRADES',
+  /** Historical compatibility only. New decisions no longer enforce a daily trade-count cap. */
   MAX_DAILY_TRADES = 'MAX_DAILY_TRADES',
   POSITION_SIZE_EXCEEDED = 'POSITION_SIZE_EXCEEDED',
 

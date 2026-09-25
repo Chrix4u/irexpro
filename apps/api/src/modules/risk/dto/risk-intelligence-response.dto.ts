@@ -1,5 +1,5 @@
-import { AllowedTradingMode } from '../entities/risk-profile.entity';
-import { RiskRejectionCode } from '../interfaces/risk.interface';
+import type { AllowedTradingMode } from '../entities/risk-profile.entity';
+import type { RiskRejectionCode } from '../interfaces/risk.interface';
 
 export class RiskViolationSummaryResponseDto {
   id: string;
@@ -12,7 +12,6 @@ export class RiskPolicyLimitsResponseDto {
   maxDailyLossPercent: string;
   maxDrawdownPercent: string;
   maxOpenTrades: number;
-  maxDailyTrades: number;
   maxPositionSizeLot: string;
   minStopLossPips: string;
   maxVolatilityScore: string;
@@ -38,8 +37,7 @@ export class RiskExecutionCapacityResponseDto {
   maxOpenPositions: number;
   openPositionSlotsRemaining: number;
   todayTrades: number;
-  maxDailyTrades: number;
-  dailyTradeSlotsRemaining: number;
+  dailyTradeCountPolicy: 'UNBOUNDED';
 }
 
 export class PortfolioFreshnessSummaryResponseDto {

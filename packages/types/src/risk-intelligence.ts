@@ -32,7 +32,6 @@ export interface RiskPolicyLimitsView {
   maxDailyLossPercent: string;
   maxDrawdownPercent: string;
   maxOpenTrades: number;
-  maxDailyTrades: number;
   maxPositionSizeLot: string;
   minStopLossPips: string;
   maxVolatilityScore: string;
@@ -57,8 +56,7 @@ export interface RiskIntelligenceView {
     maxOpenPositions: number;
     openPositionSlotsRemaining: number;
     todayTrades: number;
-    maxDailyTrades: number;
-    dailyTradeSlotsRemaining: number;
+    dailyTradeCountPolicy: 'UNBOUNDED';
   };
   portfolio: {
     totalAccounts: number;

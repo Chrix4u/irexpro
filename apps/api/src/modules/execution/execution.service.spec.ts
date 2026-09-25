@@ -50,8 +50,6 @@ const approvedDecision: RiskDecision = {
   appliedRules: ['KILL_SWITCH:OK'],
   riskScore: 30,
   evaluatedAt: new Date(),
-  // Sprint 32 Gate 2: required for the advisory-lock daily-trade-slot reservation
-  maxDailyTrades: 10,
   // Round 5 (task 50-c): the durable authority handle — the final dispatch
   // boundary requires + atomically consumes the server-issued grant.
   grantId: 'grant-1',
@@ -304,9 +302,8 @@ describe('ExecutionService', () => {
     };
 
     auditService = { log: jest.fn().mockResolvedValue(undefined) };
-    // Sprint 32 Gate 3: mock dataSource.transaction for atomicallyReserveTradeSlot.
-    // The mock manager supports: advisory lock, idempotency SELECT, count SELECT,
-    // and INSERT ... RETURNING.
+    // Atomic reservation mock: per-decision advisory lock, idempotency SELECT,
+    // and INSERT ... RETURNING. There is no daily trade-count query.
     const mockTradeRow = {
       id: 'trade-1',
       user_id: 'user-1',

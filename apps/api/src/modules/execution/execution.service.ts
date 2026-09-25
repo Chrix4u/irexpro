@@ -279,13 +279,12 @@ export class ExecutionService {
       operationClass: ProviderOperationClass.NEW_EXPOSURE,
     });
 
-    // ── Step 4: ATOMIC reservation (advisory lock + idempotency + daily limit + PENDING INSERT)
+    // ── Step 4: ATOMIC reservation (per-decision advisory lock + idempotency + PENDING INSERT)
     //
-    // Sprint 32 Gate 3: the PENDING INSERT now happens INSIDE the advisory-lock
-    // transaction. This closes the TOCTOU race from Gate 2 where the INSERT
-    // occurred after the lock released.
+    // Different qualified signals may reserve concurrently. Only the SAME
+    // idempotent trade decision serializes, preserving exactly-once execution
+    // without imposing a day-wide throughput throttle.
     //
-    // The transaction is short: lock → idempotency check → count → INSERT → COMMIT.
     // The broker network request happens AFTER this method returns — never
     // inside the transaction.
     const reservation = await this.atomicallyReserveTradeSlot(
@@ -319,37 +318,6 @@ export class ExecutionService {
       // already-EXECUTED intent stays bound to its original trade).
       await this.tradeIntents.markExecuted(tradeIntent.id, reservation.trade.id);
       return reservation.trade;
-    }
-
-    if (reservation.status === 'DAILY_LIMIT_REJECTED') {
-      this.logger.warn(
-        `Daily trade limit reached for user ${userId}: ${reservation.currentCount}/${reservation.maxDailyTrades} ` +
-          `(signal ${signalId} rejected by atomic advisory-lock guard)`,
-      );
-      // §2: the daily-cap rejection is DEFINITIVE for this decision — the
-      // intent is terminally REJECTED so a replay of the same AI decision can
-      // never re-enter the pipeline (the signal-identity duplicate-recovery
-      // path would return the first outcome anyway; this makes the intent
-      // state itself honest).
-      await this.tradeIntents.markRejected(tradeIntent.id);
-      await this.auditService.log({
-        actorUserId: userId,
-        action: AuditAction.TRADE_REJECTED,
-        resourceType: 'Trade',
-        resourceId: signalId,
-        metadata: {
-          signalId,
-          reason: 'MAX_DAILY_TRADES_EXCEEDED',
-          currentCount: reservation.currentCount,
-          maxDailyTrades: reservation.maxDailyTrades,
-          guard: 'advisory-lock',
-        },
-        severity: AuditSeverity.WARNING,
-      });
-      throw new ForbiddenException(
-        `Daily trade limit reached (${reservation.currentCount}/${reservation.maxDailyTrades}). ` +
-          `Cannot execute signal ${signalId}.`,
-      );
     }
 
     // RESERVED_NEW: PENDING trade is persisted (reservation is durable).
@@ -1390,20 +1358,15 @@ export class ExecutionService {
   }
 
   /**
-   * Sprint 32 Gate 3 — Atomic trade-slot reservation.
+   * Atomic trade reservation.
    *
-   * This is the SINGLE method that acquires the advisory lock, checks
-   * idempotency, checks the daily-trade limit, and INSERTS the PENDING trade
-   * — all inside ONE short DB transaction. The lock is released on COMMIT,
-   * and the PENDING trade is already persisted when the lock releases.
+   * A short advisory lock is scoped to the idempotent decision, NOT to the
+   * user/day. This keeps same-signal retries exactly-once while allowing
+   * independent qualified AI signals to reserve concurrently.
    *
-   * This closes the TOCTOU race from Gate 2 where the PENDING INSERT occurred
-   * AFTER the advisory-lock transaction committed.
-   *
-   * Returns a discriminated union:
+   * Returns:
    *   - RESERVED_NEW: new PENDING trade persisted (broker submission follows)
    *   - DUPLICATE_EXISTING: same idempotency_key already exists (return existing)
-   *   - DAILY_LIMIT_REJECTED: daily trade limit reached
    */
   async atomicallyReserveTradeSlot(
     userId: string,
@@ -1411,13 +1374,10 @@ export class ExecutionService {
     connectionId: string,
     tradeIntentId?: string,
   ): Promise<
-    | { status: 'RESERVED_NEW'; trade: Trade }
-    | { status: 'DUPLICATE_EXISTING'; trade: Trade }
-    | { status: 'DAILY_LIMIT_REJECTED'; currentCount: number; maxDailyTrades: number }
+    { status: 'RESERVED_NEW'; trade: Trade } | { status: 'DUPLICATE_EXISTING'; trade: Trade }
   > {
     const order = riskDecision.validatedOrder;
     const signalId = riskDecision.signalId;
-    const maxDailyTrades = riskDecision.maxDailyTrades;
 
     const idempotencyKey = this.generateIdempotencyKey(
       userId,
@@ -1426,11 +1386,11 @@ export class ExecutionService {
       signalId,
     );
 
-    const todayStr = new Date().toISOString().slice(0, 10);
-    const lockKey = this.computeDailyTradeLockKey(userId, todayStr);
+    const lockKey = this.computeTradeReservationLockKey(userId, idempotencyKey);
 
     return this.dataSource.transaction(async (manager) => {
-      // 1. Acquire advisory lock scoped to (userId + UTC day)
+      // 1. Serialize only this idempotent decision. Different signals for the
+      // same user are intentionally free to reserve concurrently.
       await manager.query('SELECT pg_advisory_xact_lock($1)', [lockKey]);
 
       // 2. Idempotency check: if a trade with this idempotency_key already
@@ -1446,45 +1406,9 @@ export class ExecutionService {
         return { status: 'DUPLICATE_EXISTING' as const, trade: existing };
       }
 
-      // 3. Daily-trade-limit count: OPEN+CLOSED (opened today) + PENDING
-      //    (created today — reservations). REJECTED/CANCELLED don't count.
-      //    Round 5 (issue #314) uncertain-exposure accounting: a trade left
-      //    RECONCILIATION_PENDING by a dispatch that MAY have reached the
-      //    provider (or NULL — legacy, conservatively uncertain) RETAINS its
-      //    daily capacity reservation; DEFINITELY_NOT_SENT is released once.
-      const todayStart = new Date();
-      todayStart.setUTCHours(0, 0, 0, 0);
-
-      const countResult = await manager.query(
-        `SELECT COUNT(*) AS count
-         FROM trading.trades
-         WHERE user_id = $1
-           AND (
-             (opened_at >= $2 AND status IN ('OPEN', 'CLOSED'))
-             OR
-             (created_at >= $2 AND status = 'PENDING')
-             OR
-             (
-               (created_at >= $2 OR opened_at >= $2)
-               AND status = 'RECONCILIATION_PENDING'
-               AND COALESCE(dispatch_certainty, 'MAY_HAVE_REACHED_PROVIDER') <> 'DEFINITELY_NOT_SENT'
-             )
-           )`,
-        [userId, todayStart.toISOString()],
-      );
-
-      const currentCount = parseInt(countResult[0]?.count ?? '0', 10);
-
-      // 4. If limit reached, reject
-      if (currentCount >= maxDailyTrades) {
-        return {
-          status: 'DAILY_LIMIT_REJECTED' as const,
-          currentCount,
-          maxDailyTrades,
-        };
-      }
-
-      // 5. INSERT the PENDING trade INSIDE this transaction.
+      // 3. INSERT the PENDING trade INSIDE this transaction.
+      // There is deliberately no daily trade-count gate here. Exposure and
+      // loss safety are enforced by RiskService and the final dispatch gates.
       //    The unique constraint on idempotency_key is the final safety net
       //    for same-signalId duplicates — if two concurrent transactions
       //    somehow both reach this point (impossible due to advisory lock),
@@ -2144,18 +2068,12 @@ export class ExecutionService {
   }
 
   /**
-   * Compute a stable 32-bit integer advisory lock key from userId + date.
-   * PostgreSQL advisory lock keys are bigint; we use a single 32-bit key
-   * for simplicity (sufficient for user+day scoping).
-   *
-   * Sprint 50 PR-3: derived from a SHA-256 digest instead of the legacy
-   * char-code loop — CodeQL flagged the unbounded-length iteration over
-   * user-controlled input; the digest also distributes better. Lock-key
-   * VALUES change vs. the legacy hash, which only affects transient
-   * in-flight locks (never persisted state).
+   * Compute a stable advisory-lock key for one idempotent trade decision.
+   * Different signals for the same user intentionally receive different keys
+   * so valid opportunities are not serialized behind a day-wide lock.
    */
-  private computeDailyTradeLockKey(userId: string, dateStr: string): number {
-    const digest = crypto.createHash('sha256').update(`${userId}:${dateStr}`).digest();
+  private computeTradeReservationLockKey(userId: string, idempotencyKey: string): number {
+    const digest = crypto.createHash('sha256').update(`${userId}:${idempotencyKey}`).digest();
     return digest.readUInt32BE(0) & 0x7fffffff;
   }
 }

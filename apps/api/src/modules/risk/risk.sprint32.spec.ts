@@ -251,41 +251,20 @@ describe('RiskService — Sprint 32 Production Hardening', () => {
     service = module.get(RiskService);
   });
 
-  // ── Part C: Max daily trades ───────────────────────────────────────────────
+  // ── Part C: Daily trade count is not a risk throttle ────────────────────────
 
-  describe('Step 4b — Max daily trades', () => {
-    it('approves when below the daily trade limit', async () => {
-      executionService.countTodayTrades.mockResolvedValue(3);
+  describe('Step 4b — Unbounded daily trade count', () => {
+    it('does not query or enforce a daily trade-count cap', async () => {
+      executionService.countTodayTrades.mockRejectedValue(
+        new Error('legacy count path must not be consulted'),
+      );
+
       const decision = await service.validateProposedTrade('user-1', validTrade());
+
       expect(decision.decision).toBe('APPROVED');
-    });
-
-    it('rejects with MAX_DAILY_TRADES when at the limit', async () => {
-      executionService.countTodayTrades.mockResolvedValue(10); // == maxDailyTrades (10)
-      const decision = await service.validateProposedTrade('user-1', validTrade());
-      expect(decision.decision).toBe('REJECTED');
-      if (decision.decision === 'REJECTED') {
-        expect(decision.rejectionCode).toBe(RiskRejectionCode.MAX_DAILY_TRADES);
-        expect(decision.rejectionReason).toContain('10');
-      }
-    });
-
-    it('rejects with MAX_DAILY_TRADES when above the limit', async () => {
-      executionService.countTodayTrades.mockResolvedValue(15);
-      const decision = await service.validateProposedTrade('user-1', validTrade());
-      expect(decision.decision).toBe('REJECTED');
-      if (decision.decision === 'REJECTED') {
-        expect(decision.rejectionCode).toBe(RiskRejectionCode.MAX_DAILY_TRADES);
-      }
-    });
-
-    it('fails closed with RISK_ENGINE_ERROR when countTodayTrades throws', async () => {
-      executionService.countTodayTrades.mockRejectedValue(new Error('DB connection lost'));
-      const decision = await service.validateProposedTrade('user-1', validTrade());
-      expect(decision.decision).toBe('REJECTED');
-      if (decision.decision === 'REJECTED') {
-        expect(decision.rejectionCode).toBe(RiskRejectionCode.RISK_ENGINE_ERROR);
-        expect(decision.rejectionReason).toContain('daily trade count');
+      expect(executionService.countTodayTrades).not.toHaveBeenCalled();
+      if (decision.decision === 'APPROVED') {
+        expect(decision.appliedRules).toContain('DAILY_TRADE_COUNT:UNBOUNDED');
       }
     });
   });
@@ -606,7 +585,6 @@ describe('RiskService — Sprint 32 Production Hardening', () => {
           maxDailyLossPercent: '5.00',
           maxDrawdownPercent: '10.00',
           maxOpenTrades: 3,
-          maxDailyTrades: 10,
           maxPositionSizeLot: '0.10',
           minStopLossPips: '5.00',
           maxVolatilityScore: '0.85',
@@ -618,6 +596,7 @@ describe('RiskService — Sprint 32 Production Hardening', () => {
           snapshotVersion: 1,
         }),
       );
+      expect(snapshot).not.toHaveProperty('maxDailyTrades');
     });
 
     it('does NOT include credentials, tokens, or secrets', () => {

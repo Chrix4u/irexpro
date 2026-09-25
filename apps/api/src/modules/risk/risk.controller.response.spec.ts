@@ -5,6 +5,32 @@ import { RiskRejectionCode } from './interfaces/risk.interface';
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 
 describe('RiskController public response hardening', () => {
+  it('does not expose the legacy maxDailyTrades database field as an active profile limit', async () => {
+    const riskService = {
+      getOrCreateProfile: jest.fn().mockResolvedValue({
+        id: 'profile-1',
+        userId: USER_ID,
+        killSwitchActive: false,
+        maxDailyLossPercent: '5.00',
+        maxDrawdownPercent: '10.00',
+        maxOpenTrades: 3,
+        maxDailyTrades: 10,
+        maxPositionSizeLot: '0.1000',
+      }),
+    };
+
+    const controller = new RiskController(riskService as unknown as RiskService);
+    const response = await controller.getRiskProfile(USER_ID);
+
+    expect(response).not.toHaveProperty('maxDailyTrades');
+    expect(response).toMatchObject({
+      maxDailyLossPercent: '5.00',
+      maxDrawdownPercent: '10.00',
+      maxOpenTrades: 3,
+      maxPositionSizeLot: '0.1000',
+    });
+  });
+
   it('removes userId, signalId, and riskContext from violation responses', async () => {
     const riskService = {
       getViolations: jest.fn().mockResolvedValue([

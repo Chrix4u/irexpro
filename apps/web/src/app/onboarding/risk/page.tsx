@@ -96,6 +96,12 @@ export default function AiProtectionPage() {
                   <span className="workspace-metric__hint">The AI cannot exceed the server-managed open-position limit.</span>
                 </div>
               </Card>
+              <Card title="Daily trade count">
+                <div className="workspace-metric">
+                  <span className="workspace-metric__value">AI-driven</span>
+                  <span className="workspace-metric__hint">No fixed trades-per-day cap. Every qualified opportunity can be considered while the protections above remain active.</span>
+                </div>
+              </Card>
             </section>
 
             <Card

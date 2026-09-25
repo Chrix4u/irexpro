@@ -4,13 +4,13 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, MoreThan, Repository } from 'typeorm';
 import { ExecutionConfirmation } from './entities/execution-confirmation.entity';
 import { RiskGrant } from './entities/risk-grant.entity';
-import { RiskProfile } from '../risk/entities/risk-profile.entity';
 import { ExecutionConfirmationStatus, ExecutionMode } from './interfaces/execution-authority';
 import { FinalDispatchBoundary } from './orchestration/final-dispatch-boundary';
 import { ExecutionService } from './execution.service';
 import { Trade } from './entities/trade.entity';
 import { RiskDecision } from '../risk/interfaces/risk.interface';
 import { RiskService } from '../risk/risk.service';
+import { RiskProfile } from '../risk/entities/risk-profile.entity';
 
 /** Frontend-safe view of ONE pending SEMI_AUTO confirmation (full order detail). */
 export interface PendingExecutionConfirmationView {
@@ -109,6 +109,10 @@ export class ExecutionConfirmationService {
     private readonly confirmationRepo: Repository<ExecutionConfirmation>,
     @InjectRepository(RiskGrant)
     private readonly riskGrantRepo: Repository<RiskGrant>,
+    // Keep the pre-existing local repository provider in the constructor so
+    // the RiskModule↔ExecutionModule circular graph retains its proven DI
+    // shape. It is intentionally not used for daily trade-count authority;
+    // daily trade COUNT remains uncapped.
     @InjectRepository(RiskProfile)
     private readonly riskProfileRepo: Repository<RiskProfile>,
     private readonly boundary: FinalDispatchBoundary,
