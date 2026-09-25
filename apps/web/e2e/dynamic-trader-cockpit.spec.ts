@@ -285,6 +285,23 @@ test.describe('AI Trader novice workflow', () => {
     await gotoAiTrader(page);
 
     await expect(page.getByText('Paper Trading Broker', { exact: false }).first()).toBeVisible();
+
+    const researchUat = page.locator('.ai-research-uat-copy');
+    const researchUatHeading = researchUat.getByText(
+      'Research PAPER UAT · simulated execution only.',
+      { exact: true },
+    );
+    const researchUatBody = researchUat.getByText(/Accelerated replay may advance multiple simulated market steps/i);
+    await expect(researchUatHeading).toBeVisible();
+    await expect(researchUatBody).toBeVisible();
+    const [researchHeadingBox, researchBodyBox] = await Promise.all([
+      researchUatHeading.boundingBox(),
+      researchUatBody.boundingBox(),
+    ]);
+    expect(researchHeadingBox).not.toBeNull();
+    expect(researchBodyBox).not.toBeNull();
+    expect(researchBodyBox!.y).toBeGreaterThan(researchHeadingBox!.y);
+
     await expect(page.getByText('10,000.00 USD', { exact: true })).toBeVisible();
     await expect(page.getByText('2,500.00 USD', { exact: true }).first()).toBeVisible();
     const pool = page.getByLabel('AI capital pool breakdown');
@@ -320,7 +337,7 @@ test.describe('AI Trader novice workflow', () => {
     await expect(positionsTable.getByRole('columnheader', { name: 'Current' })).toBeVisible();
     await expect(positionsTable.getByRole('columnheader', { name: 'Unrealized P&L' })).toBeVisible();
 
-    await expect(page.getByRole('heading', { level: 2, name: 'Orders & Results' })).toBeVisible();
+    await expect(page.getByRole('heading', { level: 2, name: 'Recent AI Activity' })).toBeVisible();
     await expect(page.getByText('OPEN', { exact: true }).first()).toBeVisible();
     await expect(
       page.getByText(/execution quote was too far from the risk-validated reference price/i),
@@ -334,6 +351,30 @@ test.describe('AI Trader novice workflow', () => {
     await expect(closedTrades.getByText('Exit', { exact: true })).toBeVisible();
     await expect(closedTrades.getByText('1.10177000', { exact: true })).toBeVisible();
     await expect(closedTrades.getByText('TAKE PROFIT HIT', { exact: true })).toBeVisible();
+
+    const recentActivity = page.locator('.ai-section--activity');
+    const positionsSection = page.locator('.ai-section--positions');
+    const closedScroll = closedTrades.locator('.ai-activity-list--scroll');
+    const activityScroll = recentActivity.locator('.ai-activity-list--scroll');
+    await expect(closedScroll).toBeVisible();
+    await expect(activityScroll).toBeVisible();
+    await expect(closedScroll).toHaveCSS('overflow-y', 'auto');
+    await expect(activityScroll).toHaveCSS('overflow-y', 'auto');
+
+    const viewport = page.viewportSize();
+    if (viewport && viewport.width > 980) {
+      const [positionsBox, closedBox, activityBox] = await Promise.all([
+        positionsSection.boundingBox(),
+        closedTrades.boundingBox(),
+        recentActivity.boundingBox(),
+      ]);
+      expect(positionsBox).not.toBeNull();
+      expect(closedBox).not.toBeNull();
+      expect(activityBox).not.toBeNull();
+      expect(closedBox!.y).toBeGreaterThan(positionsBox!.y);
+      expect(Math.abs(closedBox!.y - activityBox!.y)).toBeLessThan(2);
+      expect(activityBox!.x).toBeGreaterThan(closedBox!.x);
+    }
 
     await expect(page.getByText(/execution mode selector/i)).toHaveCount(0);
     await expect(page.getByText(/trading experience/i)).toHaveCount(0);
