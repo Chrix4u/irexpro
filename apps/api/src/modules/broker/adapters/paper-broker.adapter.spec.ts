@@ -84,12 +84,15 @@ const CLOCK_BASE_MS = 1_000_000_000;
 /** The default deterministic clock epoch (module-instantiated adapters). */
 const DEFAULT_CLOCK_EPOCH = Date.UTC(2024, 0, 2, 3, 4, 5);
 
-function scriptedAdapter(quotes: PaperQuote[], baseMs = CLOCK_BASE_MS): PaperBrokerAdapter {
+async function scriptedAdapter(
+  quotes: PaperQuote[],
+  baseMs = CLOCK_BASE_MS,
+): Promise<PaperBrokerAdapter> {
   const adapter = new PaperBrokerAdapter(
     new ScriptedPaperPriceFeed(quotes),
     new FakePaperClock(baseMs),
   );
-  void adapter.connect({ accountId: 'paper-account-001' });
+  await adapter.connect({ accountId: 'paper-account-001' });
   return adapter;
 }
 
@@ -780,7 +783,7 @@ describe('PaperBrokerAdapter', () => {
   });
 
   it('BUY LIMIT fills at the prevailing ask when the market falls to the limit', async () => {
-    const sim = scriptedAdapter([BASE, { bid: '1.09400', ask: '1.09410' }]);
+    const sim = await scriptedAdapter([BASE, { bid: '1.09400', ask: '1.09410' }]);
     const placed = await sim.placeOrder(
       order({
         idempotencyKey: 'buy-limit',
@@ -808,7 +811,7 @@ describe('PaperBrokerAdapter', () => {
   });
 
   it('SELL LIMIT fills at the prevailing bid when the market rises to the limit', async () => {
-    const sim = scriptedAdapter([BASE, { bid: '1.10050', ask: '1.10060' }]);
+    const sim = await scriptedAdapter([BASE, { bid: '1.10050', ask: '1.10060' }]);
     await sim.placeOrder(
       order({
         idempotencyKey: 'sell-limit',
@@ -838,7 +841,7 @@ describe('PaperBrokerAdapter', () => {
   });
 
   it('SELL STOP fills at the bid when the market falls to the stop', async () => {
-    const sim = scriptedAdapter([BASE, { bid: '1.09900', ask: '1.09910' }]);
+    const sim = await scriptedAdapter([BASE, { bid: '1.09900', ask: '1.09910' }]);
     await sim.placeOrder(
       order({
         idempotencyKey: 'sell-stop',
@@ -854,7 +857,7 @@ describe('PaperBrokerAdapter', () => {
   });
 
   it('STOP_LIMIT triggers like STOP then fills like LIMIT in the same tick', async () => {
-    const sim = scriptedAdapter([BASE, { bid: '1.10500', ask: '1.10510' }]);
+    const sim = await scriptedAdapter([BASE, { bid: '1.10500', ask: '1.10510' }]);
     const placed = await sim.placeOrder(
       order({
         idempotencyKey: 'stop-limit-ok',
@@ -873,7 +876,7 @@ describe('PaperBrokerAdapter', () => {
   });
 
   it('STOP_LIMIT stays WORKING (honest miss) when the price runs past the limit', async () => {
-    const sim = scriptedAdapter([
+    const sim = await scriptedAdapter([
       BASE,
       { bid: '1.10500', ask: '1.10530' }, // triggers the stop but ask > limit 1.10520
       { bid: '1.10500', ask: '1.10510' }, // comes back to the limit → fills
@@ -904,7 +907,7 @@ describe('PaperBrokerAdapter', () => {
   });
 
   it('working-order fills inherit the order protection levels', async () => {
-    const sim = scriptedAdapter([BASE, { bid: '1.09400', ask: '1.09410' }]);
+    const sim = await scriptedAdapter([BASE, { bid: '1.09400', ask: '1.09410' }]);
     await sim.placeOrder(
       order({
         idempotencyKey: 'limit-protected',
@@ -920,7 +923,7 @@ describe('PaperBrokerAdapter', () => {
   });
 
   it('working-order fills REJECT honestly when free margin cannot cover them at fill time', async () => {
-    const sim = scriptedAdapter([BASE, { bid: '1.09400', ask: '1.09410' }]);
+    const sim = await scriptedAdapter([BASE, { bid: '1.09400', ask: '1.09410' }]);
     await sim.placeOrder(
       order({
         idempotencyKey: 'limit-too-big',
@@ -991,7 +994,7 @@ describe('PaperBrokerAdapter', () => {
   // ─── SL / TP evaluation on ticks ──────────────────────────────────────────
 
   it('BUY position TP closes exactly at the level (closeReason TP, balance adjusted)', async () => {
-    const sim = scriptedAdapter([BASE, { bid: '1.10500', ask: '1.10510' }]);
+    const sim = await scriptedAdapter([BASE, { bid: '1.10500', ask: '1.10510' }]);
     await sim.placeOrder(order({ idempotencyKey: 'tp-buy', takeProfit: '1.10500' }));
     await sim.getCurrentPrice('EURUSD'); // bid 1.10500 ≥ TP
 
@@ -1016,7 +1019,7 @@ describe('PaperBrokerAdapter', () => {
   });
 
   it('BUY position SL closes exactly at the level (closeReason SL)', async () => {
-    const sim = scriptedAdapter([BASE, { bid: '1.09500', ask: '1.09510' }]);
+    const sim = await scriptedAdapter([BASE, { bid: '1.09500', ask: '1.09510' }]);
     await sim.placeOrder(order({ idempotencyKey: 'sl-buy', stopLoss: '1.09500' }));
     await sim.getCurrentPrice('EURUSD'); // bid 1.09500 ≤ SL
 
@@ -1032,7 +1035,7 @@ describe('PaperBrokerAdapter', () => {
   });
 
   it('SELL position TP closes when ask drops to the level', async () => {
-    const sim = scriptedAdapter([BASE, { bid: '1.09490', ask: '1.09500' }]);
+    const sim = await scriptedAdapter([BASE, { bid: '1.09490', ask: '1.09500' }]);
     await sim.placeOrder(
       order({ idempotencyKey: 'tp-sell', direction: 'SELL', takeProfit: '1.09500' }),
     );
@@ -1050,7 +1053,7 @@ describe('PaperBrokerAdapter', () => {
   });
 
   it('SELL position SL closes when ask rises to the level', async () => {
-    const sim = scriptedAdapter([BASE, { bid: '1.10490', ask: '1.10500' }]);
+    const sim = await scriptedAdapter([BASE, { bid: '1.10490', ask: '1.10500' }]);
     await sim.placeOrder(
       order({ idempotencyKey: 'sl-sell', direction: 'SELL', stopLoss: '1.10500' }),
     );
@@ -1066,7 +1069,7 @@ describe('PaperBrokerAdapter', () => {
   });
 
   it('positions created by a fill this tick are first evaluated on the NEXT tick', async () => {
-    const sim = scriptedAdapter([
+    const sim = await scriptedAdapter([
       BASE,
       { bid: '1.09400', ask: '1.09410' }, // fills the BUY LIMIT; its bid ALREADY satisfies the SL condition
       { bid: '1.09390', ask: '1.09400' }, // next tick: SL evaluates and closes
@@ -1115,7 +1118,7 @@ describe('PaperBrokerAdapter', () => {
   });
 
   it('modifyOrder updates a WORKING order protection (carried into the eventual fill)', async () => {
-    const sim = scriptedAdapter([BASE, { bid: '1.09400', ask: '1.09410' }]);
+    const sim = await scriptedAdapter([BASE, { bid: '1.09400', ask: '1.09410' }]);
     await sim.placeOrder(
       order({
         idempotencyKey: 'modify-working',
@@ -1181,7 +1184,7 @@ describe('PaperBrokerAdapter', () => {
   });
 
   it('closeOrder partial close respects lotSize, books the reduced part, reduces margin', async () => {
-    const sim = scriptedAdapter([BASE, { bid: '1.10200', ask: '1.10210' }]);
+    const sim = await scriptedAdapter([BASE, { bid: '1.10200', ask: '1.10210' }]);
     await sim.placeOrder(order({ idempotencyKey: 'close-partial' }));
     await sim.getCurrentPrice('EURUSD'); // revalue at bid 1.10200
     const result = await sim.closeOrder('paper-order-000001', '0.04');
@@ -1303,7 +1306,7 @@ describe('PaperBrokerAdapter', () => {
   // ─── closeAllOrders ───────────────────────────────────────────────────────
 
   it('closeAllOrders closes positions only (SYSTEM) and leaves working orders untouched', async () => {
-    const sim = scriptedAdapter([BASE, { bid: '1.10200', ask: '1.10210' }]);
+    const sim = await scriptedAdapter([BASE, { bid: '1.10200', ask: '1.10210' }]);
     await sim.placeOrder(order({ idempotencyKey: 'kill-buy' }));
     await sim.placeOrder(order({ idempotencyKey: 'kill-sell', direction: 'SELL' }));
     await sim.placeOrder(
@@ -1333,7 +1336,7 @@ describe('PaperBrokerAdapter', () => {
   // ─── Closed-trade history ─────────────────────────────────────────────────
 
   it('getClosedTrades filters by the [from, to] window (inclusive, deterministic clock)', async () => {
-    const sim = scriptedAdapter([BASE, { bid: '1.10500', ask: '1.10510' }]);
+    const sim = await scriptedAdapter([BASE, { bid: '1.10500', ask: '1.10510' }]);
     await sim.placeOrder(order({ idempotencyKey: 'window-tp', takeProfit: '1.10500' }));
     await sim.getCurrentPrice('EURUSD'); // closed at CLOCK_BASE_MS + 1000
 
