@@ -1045,14 +1045,23 @@ export class ExecutionService {
     }
 
     const closedCount = results.filter((r) => r.closed).length;
+    const killSwitchFlatten = reason === TradeCloseReason.KILL_SWITCH_FORCE_CLOSE;
     await this.auditService.log({
       actorUserId: userId,
-      action: AuditAction.RISK_KILL_SWITCH_ACTIVATED,
+      action: killSwitchFlatten
+        ? AuditAction.RISK_KILL_SWITCH_ACTIVATED
+        : AuditAction.TRADE_CLOSED,
       resourceType: 'Trade',
       resourceId: userId,
-      severity: closedCount === results.length ? AuditSeverity.WARNING : AuditSeverity.CRITICAL,
+      severity:
+        closedCount === results.length
+          ? killSwitchFlatten
+            ? AuditSeverity.WARNING
+            : AuditSeverity.INFO
+          : AuditSeverity.CRITICAL,
       metadata: {
-        emergencyFlatten: true,
+        emergencyFlatten: killSwitchFlatten,
+        manualCloseAll: !killSwitchFlatten,
         closeReason: reason,
         targetCount: results.length,
         closedCount,
