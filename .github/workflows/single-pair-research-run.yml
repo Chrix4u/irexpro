@@ -17,7 +17,7 @@ on:
         required: true
         default: '1'
         type: choice
-        options: ['1', '5', '10']
+        options: ['1', '3', '5', '10']
 
 permissions:
   contents: read
@@ -25,7 +25,7 @@ permissions:
 env:
   CANDIDATE_SHA: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.workflow_run.head_sha }}
   TARGET_PAIR: ${{ github.event_name == 'workflow_dispatch' && inputs.pair || 'USDJPY' }}
-  TARGET_HORIZON: ${{ github.event_name == 'workflow_dispatch' && inputs.horizon || '1' }}
+  TARGET_HORIZON: ${{ github.event_name == 'workflow_dispatch' && inputs.horizon || '3' }}
   STAGING_SSH_HOST: vps.lightworldtech.com
   STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
   STAGING_SSH_USER: ${{ vars.STAGING_SSH_USER }}
@@ -118,7 +118,7 @@ jobs:
           cd "$staging"
           test "$(git rev-parse HEAD)" = "$candidate_sha"
           case "$pair" in USDJPY|EURUSD|GBPUSD|AUDUSD|USDCAD|USDCHF) ;; *) exit 2 ;; esac
-          case "$horizon" in 1|5|10) ;; *) exit 3 ;; esac
+          case "$horizon" in 1|3|5|10) ;; *) exit 3 ;; esac
 
           source_sha="$(tr -d '[:space:]' < "$marker" 2>/dev/null || true)"
           [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || {
@@ -128,6 +128,13 @@ jobs:
           source_root="$six_root/$source_sha"
           corpus="$source_root/corpora/${pair}_MTF.csv"
           source_report="$source_root/reports/model_qualification_${horizon}m.json"
+          # The frozen qualification cutoff is study-wide. 3m was not part of
+          # the original 1/5/10 report set, so reuse the frozen 1m report only
+          # to recover that same cutoff timestamp; the 3m labels/evaluation are
+          # rebuilt causally from the unchanged corpus.
+          if [[ "$horizon" == "3" ]]; then
+            source_report="$source_root/reports/model_qualification_1m.json"
+          fi
           test -s "$corpus"
           test -s "$source_report"
 
