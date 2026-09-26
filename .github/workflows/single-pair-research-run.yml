@@ -221,6 +221,21 @@ jobs:
           ))
           PY
 
+          "$python_bin" - "$output/qualification.json" <<'PY'
+          import json, sys
+          e=json.load(open(sys.argv[1]))['experiments']['event_barrier_hybrid_opportunity_dual_direction']
+          g=e['research_gate']
+          status='PASS' if g['research_gate_passed'] else 'HOLD'
+          print(f"SINGLE_PAIR_HYBRID_DUAL_DIRECTION_QUALIFICATION_{status}")
+          print('HYBRID_OBSERVED', json.dumps(g['observed'], sort_keys=True))
+          print('HYBRID_CHECKS', json.dumps(g['checks'], sort_keys=True))
+          print('HYBRID_ACTIVE_TRADES', e['overall']['active_trades'])
+          print('HYBRID_EVIDENCE_WARNINGS', json.dumps(e['overall'].get('evidence_sufficiency_warnings', [])))
+          print('HYBRID_DUAL_DIRECTION_DIAGNOSTICS', json.dumps(
+              e.get('dual_actionability_diagnostics'), sort_keys=True
+          ))
+          PY
+
           if [[ "$qualification_pass" != 'true' ]]; then
             exit 0
           fi
