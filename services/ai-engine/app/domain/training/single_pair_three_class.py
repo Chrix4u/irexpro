@@ -14,14 +14,12 @@ import numpy as np
 import pandas as pd
 from xgboost import XGBClassifier
 
-from app.domain.models.multitimeframe_features import (
-    MULTITIMEFRAME_FEATURE_COLUMNS,
-)
+from app.domain.models.multitimeframe_features import MULTITIMEFRAME_FEATURE_COLUMNS
 from app.domain.training.model_qualification import (
     ACTIONABLE_TARGET_COLUMN,
     CONFIDENCE_FLOOR,
-    ModelVariant,
     OPPORTUNITY_CLASSIFICATION_THRESHOLD,
+    ModelVariant,
     _fit_binary_variant,
     _opportunity_classification,
     _probabilities,
@@ -44,9 +42,7 @@ from app.domain.training.train_multitimeframe import (
     _xgboost_n_jobs,
     load_and_prepare_corpora,
 )
-from app.domain.training.validation import (
-    iter_purged_walk_forward_time_splits,
-)
+from app.domain.training.validation import iter_purged_walk_forward_time_splits
 
 EXPERIMENT_NAME = "event_barrier_three_class_v1"
 THREE_CLASS_TARGET = "three_class_target"
