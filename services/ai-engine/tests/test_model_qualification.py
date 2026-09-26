@@ -18,6 +18,7 @@ from app.domain.training.model_qualification import (
     EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME,
     EVENT_SHORT_ACTIONABLE_TARGET_COLUMN,
     EVENT_TWO_STAGE_EXPERIMENT_NAME,
+    OPPORTUNITY_CLASSIFICATION_THRESHOLD,
     TWO_STAGE_EXPERIMENT_NAME,
     ModelVariant,
     QualificationExperiment,
@@ -27,6 +28,7 @@ from app.domain.training.model_qualification import (
     _event_dual_actionability_prediction_frame,
     _event_return_margin_bps,
     _event_two_stage_prediction_frame,
+    _opportunity_classification,
     _feature_columns,
     _fit_calibrator,
     _fit_event_pair_experts_for_outer,
@@ -437,6 +439,32 @@ def test_two_stage_trade_requires_opportunity_and_direction_confidence():
     )
     assert len(predictions) == len(source)
     assert set(predictions["actionable_label_policy"]) == {ACTIONABLE_LABEL_POLICY}
+
+
+
+def test_opportunity_classification_threshold_is_separate_from_trade_confidence_floor():
+    source = _research_dataset(periods=4, instruments=("EURUSD",))
+    source = _ensure_actionable_target(source)
+    source[ACTIONABLE_TARGET_COLUMN] = [0, 0, 1, 1]
+
+    predictions = _two_stage_prediction_frame(
+        source,
+        direction_probabilities=np.array([0.70, 0.70, 0.70, 0.70]),
+        opportunity_probabilities=np.array([0.45, 0.49, 0.51, 0.55]),
+        confidence_floor=0.60,
+        fold=1,
+        experiment=TWO_STAGE_EXPERIMENT_NAME,
+        variant=ModelVariant(name="actionable_v2_direction"),
+    )
+
+    metrics = _opportunity_classification(predictions)
+
+    assert OPPORTUNITY_CLASSIFICATION_THRESHOLD == pytest.approx(0.50)
+    assert CONFIDENCE_FLOOR == pytest.approx(0.60)
+    assert metrics is not None
+    assert metrics["balanced_accuracy"] == pytest.approx(1.0)
+    assert predictions["predicted_opportunity"].tolist() == [False, False, False, False]
+    assert predictions["active_trade"].tolist() == [False, False, False, False]
 
 
 def test_two_stage_summary_uses_joint_not_direction_only_coverage():
