@@ -2177,7 +2177,7 @@ def _fold_report(
         )
     opportunity = _opportunity_classification(
         predictions,
-        confidence_floor=confidence_floor,
+        classification_threshold=OPPORTUNITY_CLASSIFICATION_THRESHOLD,
     )
     if opportunity is not None:
         report["opportunity_classification"] = opportunity
