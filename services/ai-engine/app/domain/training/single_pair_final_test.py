@@ -14,6 +14,7 @@ from app.domain.training.model_qualification import (
     EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
     OPPORTUNITY_CLASSIFICATION_THRESHOLD,
     TARGET_COLUMN,
+    _ensure_actionable_target,
     _opportunity_classification,
     _summarize_predictions,
 )
@@ -437,6 +438,7 @@ def evaluate_single_pair_future_holdout(
         commission_bps=0.0,
         slippage_bps=0.0,
     )
+    pooled = _ensure_actionable_target(pooled)
     if dataset_hashes != research_hashes:
         raise ValueError("Future-holdout dataset does not match qualified dataset")
 
