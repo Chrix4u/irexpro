@@ -206,6 +206,18 @@ jobs:
           print('EVIDENCE_WARNINGS', json.dumps(e['overall'].get('evidence_sufficiency_warnings', [])))
           PY
 
+          "$python_bin" - "$output/qualification.json" <<'PY'
+          import json, sys
+          e=json.load(open(sys.argv[1]))['experiments']['event_barrier_dual_actionability']
+          g=e['research_gate']
+          status='PASS' if g['research_gate_passed'] else 'HOLD'
+          print(f"SINGLE_PAIR_DUAL_ACTIONABILITY_QUALIFICATION_{status}")
+          print('DUAL_OBSERVED', json.dumps(g['observed'], sort_keys=True))
+          print('DUAL_CHECKS', json.dumps(g['checks'], sort_keys=True))
+          print('DUAL_ACTIVE_TRADES', e['overall']['active_trades'])
+          print('DUAL_EVIDENCE_WARNINGS', json.dumps(e['overall'].get('evidence_sufficiency_warnings', [])))
+          PY
+
           if [[ "$qualification_pass" != 'true' ]]; then
             exit 0
           fi
