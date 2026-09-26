@@ -161,16 +161,16 @@ jobs:
           diagnostic_pass="$("$python_bin" - "$output/diagnostic.json" <<'PY'
           import json, sys
           r=json.load(open(sys.argv[1]))
-          g=r['experiments']['event_barrier_pair_experts']['research_gate']
+          g=r['experiments']['actionable_opportunity_event_pair_experts']['research_gate']
           print('true' if g['research_gate_passed'] else 'false')
           PY
           )"
 
           if [[ "$diagnostic_pass" != 'true' ]]; then
-            echo "SINGLE_PAIR_EVENT_EXPERT_DIAGNOSTIC_HOLD pair=$pair horizon=${horizon}m"
+            echo "SINGLE_PAIR_HYBRID_DIAGNOSTIC_HOLD pair=$pair horizon=${horizon}m"
             "$python_bin" - "$output/diagnostic.json" <<'PY'
           import json, sys
-          e=json.load(open(sys.argv[1]))['experiments']['event_barrier_pair_experts']
+          e=json.load(open(sys.argv[1]))['experiments']['actionable_opportunity_event_pair_experts']
           print('OBSERVED', json.dumps(e['research_gate']['observed'], sort_keys=True))
           print('CHECKS', json.dumps(e['research_gate']['checks'], sort_keys=True))
           print('ACTIVE_TRADES', e['overall']['active_trades'])
@@ -182,10 +182,10 @@ jobs:
           run_candidate qualification 5 | tee "$output/qualification-summary.json"
           "$python_bin" - "$output/qualification.json" <<'PY'
           import json, sys
-          e=json.load(open(sys.argv[1]))['experiments']['event_barrier_pair_experts']
+          e=json.load(open(sys.argv[1]))['experiments']['actionable_opportunity_event_pair_experts']
           g=e['research_gate']
           status='PASS' if g['research_gate_passed'] else 'HOLD'
-          print(f"SINGLE_PAIR_EVENT_EXPERT_QUALIFICATION_{status}")
+          print(f"SINGLE_PAIR_HYBRID_QUALIFICATION_{status}")
           print('OBSERVED', json.dumps(g['observed'], sort_keys=True))
           print('CHECKS', json.dumps(g['checks'], sort_keys=True))
           print('ACTIVE_TRADES', e['overall']['active_trades'])
