@@ -37,6 +37,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 2
           persist-credentials: false
 
       - name: Verify candidate and research relevance
@@ -56,9 +57,15 @@ jobs:
             exit 0
           fi
           parent_sha="$(git rev-parse "$CANDIDATE_SHA^1" 2>/dev/null || true)"
-          changed="$(git diff --name-only "$parent_sha" "$CANDIDATE_SHA" 2>/dev/null || true)"
+          if [[ ! "$parent_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "SINGLE_PAIR_RESEARCH_REQUIRED reason=parent_unavailable_fail_safe"
+            exit 0
+          fi
+          changed="$(git diff --name-only "$parent_sha" "$CANDIDATE_SHA")"
           if grep -Eq '^(\.github/workflows/single-pair-research-run\.yml|services/ai-engine/app/domain/(training|models)/|services/ai-engine/(pyproject\.toml|requirements\.lock)$)' <<<"$changed"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "SINGLE_PAIR_RESEARCH_REQUIRED reason=model_or_research_input_change"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
             echo "SINGLE_PAIR_RESEARCH_SKIPPED reason=no_model_or_research_input_change"
