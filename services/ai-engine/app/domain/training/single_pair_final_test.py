@@ -31,6 +31,7 @@ from app.domain.training.train_multitimeframe import (
 )
 
 SINGLE_PAIR_FINAL_TEST_POLICY = "single_pair_untouched_event_expert_v1"
+SINGLE_PAIR_FUTURE_HOLDOUT_POLICY = "single_pair_future_holdout_event_expert_v1"
 
 
 def _binary_balanced_accuracy(truth: pd.Series, predicted: pd.Series) -> float | None:
@@ -388,6 +389,158 @@ def evaluate_single_pair_untouched_test(
     return report
 
 
+def evaluate_single_pair_future_holdout(
+    datasets: dict[str, str | Path],
+    *,
+    horizon_bars: int,
+    qualification_report_path: str | Path,
+    report_path: str | Path,
+    future_holdout_start: str | pd.Timestamp,
+    min_holdout_rows: int = 2500,
+    confidence_threshold: float = CONFIDENCE_FLOOR,
+) -> dict[str, Any]:
+    """Evaluate only rows strictly after a frozen future boundary.
+
+    The qualification report must use the same boundary as its
+    decision_time_before cutoff. Model fitting consumes only pre-boundary rows
+    with a horizon-sized purge gap; the future holdout is never used for
+    selection, fitting, calibration, threshold tuning, or early stopping.
+    """
+    if len(datasets) != 1:
+        raise ValueError("Future holdout test requires exactly one dataset")
+    if min_holdout_rows < 500:
+        raise ValueError("min_holdout_rows must be at least 500")
+    if confidence_threshold < CONFIDENCE_FLOOR or confidence_threshold >= 1.0:
+        raise ValueError("confidence threshold must remain >= 0.60 and < 1.0")
+
+    instrument = next(iter(datasets)).upper()
+    research_gate, cutoff, research_hashes = _load_qualified_single_pair(
+        qualification_report_path,
+        instrument=instrument,
+        horizon_bars=horizon_bars,
+    )
+    holdout_start = pd.Timestamp(future_holdout_start)
+    holdout_start = (
+        holdout_start.tz_localize("UTC")
+        if holdout_start.tzinfo is None
+        else holdout_start.tz_convert("UTC")
+    )
+    if cutoff != holdout_start:
+        raise ValueError(
+            "Future holdout start must exactly match the qualification research cutoff"
+        )
+
+    pooled, dataset_hashes = load_and_prepare_corpora(
+        datasets,
+        horizon_bars=horizon_bars,
+        min_net_return_bps=0.0,
+        commission_bps=0.0,
+        slippage_bps=0.0,
+    )
+    if dataset_hashes != research_hashes:
+        raise ValueError("Future-holdout dataset does not match qualified dataset")
+
+    purge_boundary = holdout_start - pd.Timedelta(minutes=horizon_bars)
+    train = pooled.loc[pooled["decision_time"] < purge_boundary].copy()
+    holdout = pooled.loc[pooled["decision_time"] >= holdout_start].copy()
+    train = train.sort_values(["decision_time", "instrument"]).reset_index(drop=True)
+    holdout = holdout.sort_values(["decision_time", "instrument"]).reset_index(drop=True)
+
+    if train.empty:
+        raise ValueError("Future holdout leaves no pre-boundary training rows")
+    if len(holdout) < min_holdout_rows:
+        raise ValueError(
+            f"Future holdout has {len(holdout)} rows; at least {min_holdout_rows} are required"
+        )
+    if train[TARGET_COLUMN].nunique() < 2:
+        raise ValueError("Future-holdout training rows contain only one direction class")
+    if holdout[TARGET_COLUMN].nunique() < 2:
+        raise ValueError("Future holdout contains only one direction class")
+    if holdout[ACTIONABLE_TARGET_COLUMN].nunique() < 2:
+        raise ValueError("Future holdout lacks both opportunity classes")
+
+    actual_holdout_start = pd.Timestamp(holdout["decision_time"].min())
+    if actual_holdout_start < holdout_start:
+        raise ValueError("Future holdout overlaps the frozen research boundary")
+
+    (
+        direction_models,
+        direction_calibrators,
+        regime_routers,
+        opportunity_model,
+        training_counts,
+    ) = _fit_pair_candidate(
+        train,
+        experiment=EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+        horizon_bars=horizon_bars,
+    )
+    holdout_predictions = _predict_pair_candidate(
+        experiment=EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+        direction_models=direction_models,
+        direction_calibrators=direction_calibrators,
+        regime_routers=regime_routers,
+        opportunity_model=opportunity_model,
+        frame=holdout,
+        confidence_floor=confidence_threshold,
+        horizon_bars=horizon_bars,
+    )
+    holdout_metrics = _summarize_predictions(
+        holdout_predictions,
+        horizon_bars=horizon_bars,
+        confidence_threshold=confidence_threshold,
+    )
+    opportunity_metrics = _opportunity_classification(
+        holdout_predictions,
+        classification_threshold=OPPORTUNITY_CLASSIFICATION_THRESHOLD,
+    )
+    gate = _single_pair_final_gate(holdout_metrics, opportunity_metrics)
+
+    report = {
+        "policy": SINGLE_PAIR_FUTURE_HOLDOUT_POLICY,
+        "instrument": instrument,
+        "horizon_bars": int(horizon_bars),
+        "experiment": EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+        "dataset_sha256": dataset_hashes,
+        "research_gate": research_gate,
+        "qualification_decision_time_before": cutoff.isoformat(),
+        "future_holdout_start": holdout_start.isoformat(),
+        "research_separation_verified": True,
+        "future_holdout_used_for_training": False,
+        "split": {
+            "train_rows": int(len(train)),
+            "holdout_rows": int(len(holdout)),
+            "train_start": train["decision_time"].min().isoformat(),
+            "train_end": train["decision_time"].max().isoformat(),
+            "holdout_start": holdout["decision_time"].min().isoformat(),
+            "holdout_end": holdout["decision_time"].max().isoformat(),
+            "purge_minutes": int(horizon_bars),
+        },
+        "training_counts": training_counts,
+        "future_holdout_metrics": holdout_metrics,
+        "direction_failure_diagnostics": {
+            "policy": "diagnostic_only_no_threshold_or_model_tuning",
+            "future_holdout": _direction_failure_diagnostics(holdout_predictions),
+        },
+        "future_holdout_opportunity_classification": opportunity_metrics,
+        "final_test_gate": gate,
+        "approved_for_paper": False,
+        "approved_for_live": False,
+        "note": (
+            "This is a one-touch future holdout evaluation. Passing authorizes "
+            "packaging review only and does not itself promote PAPER or LIVE."
+        ),
+    }
+    output = Path(report_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temp = output.with_suffix(output.suffix + ".tmp")
+    temp.write_text(
+        json.dumps(report, indent=2, sort_keys=True, default=str),
+        encoding="utf-8",
+    )
+    temp.replace(output)
+    return report
+
+
 def _parse_dataset(value: str) -> dict[str, str]:
     instrument, separator, path = value.partition("=")
     if not separator or not instrument.strip() or not path.strip():
@@ -402,15 +555,28 @@ def main() -> None:
     parser.add_argument("--qualification-report", required=True)
     parser.add_argument("--report", required=True)
     parser.add_argument("--confidence-threshold", type=float, default=CONFIDENCE_FLOOR)
+    parser.add_argument("--future-holdout-start")
+    parser.add_argument("--min-future-holdout-rows", type=int, default=2500)
     args = parser.parse_args()
 
-    report = evaluate_single_pair_untouched_test(
-        _parse_dataset(args.dataset),
-        horizon_bars=args.horizon_bars,
-        qualification_report_path=args.qualification_report,
-        report_path=args.report,
-        confidence_threshold=args.confidence_threshold,
-    )
+    if args.future_holdout_start:
+        report = evaluate_single_pair_future_holdout(
+            _parse_dataset(args.dataset),
+            horizon_bars=args.horizon_bars,
+            qualification_report_path=args.qualification_report,
+            report_path=args.report,
+            future_holdout_start=args.future_holdout_start,
+            min_holdout_rows=args.min_future_holdout_rows,
+            confidence_threshold=args.confidence_threshold,
+        )
+    else:
+        report = evaluate_single_pair_untouched_test(
+            _parse_dataset(args.dataset),
+            horizon_bars=args.horizon_bars,
+            qualification_report_path=args.qualification_report,
+            report_path=args.report,
+            confidence_threshold=args.confidence_threshold,
+        )
     print(json.dumps({
         "instrument": report["instrument"],
         "horizon_bars": report["horizon_bars"],
