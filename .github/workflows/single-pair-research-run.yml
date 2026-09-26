@@ -34,7 +34,7 @@ env:
 
 jobs:
   research:
-    name: USDJPY-first fast diagnostic and qualification
+    name: Single-pair event expert diagnostic and qualification
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
@@ -92,7 +92,7 @@ jobs:
           printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
 
-      - name: Run one-pair diagnostic then qualification
+      - name: Run event-expert diagnostic then qualification
         if: steps.relevance.outputs.run == 'true'
         shell: bash
         run: |
@@ -135,80 +135,56 @@ jobs:
 
           cutoff="$("$python_bin" - "$source_report" <<'PY'
           import json, sys
-          report=json.load(open(sys.argv[1]))
-          print(report['qualification_decision_time_before'])
+          print(json.load(open(sys.argv[1]))['qualification_decision_time_before'])
           PY
           )"
 
-          run_eval() {
+          run_candidate() {
             mode="$1"
             splits="$2"
             report="$output/${mode}.json"
-            predictions="$output/${mode}_predictions.csv"
-            checkpoint="$output/${mode}_folds"
-            MODE="$mode" PAIR="$pair" HORIZON="$horizon" CORPUS="$corpus" \
-              REPORT="$report" PREDICTIONS="$predictions" CHECKPOINT="$checkpoint" \
-              CUTOFF="$cutoff" SPLITS="$splits" "$python_bin" - <<'PY'
-          import json, os
-          from app.domain.training.train_multitimeframe import evaluate_multi_pair_corpora
-          from app.domain.training.run_first_six_pair import _research_gate
-
-          pair=os.environ['PAIR']
-          report=evaluate_multi_pair_corpora(
-              {pair: os.environ['CORPUS']},
-              horizon_bars=int(os.environ['HORIZON']),
-              report_path=os.environ['REPORT'],
-              confidence_threshold=0.60,
-              commission_bps=0.0,
-              slippage_bps=0.0,
-              min_net_return_bps=0.0,
-              max_splits=int(os.environ['SPLITS']),
-              decision_time_before=os.environ['CUTOFF'],
-              predictions_path=os.environ['PREDICTIONS'],
-              checkpoint_dir=os.environ['CHECKPOINT'],
-          )
-          gate=_research_gate(report)
-          out={
-              'mode': os.environ['MODE'],
-              'pair': pair,
-              'horizon_minutes': int(os.environ['HORIZON']),
-              'gate': gate,
-              'overall': report['overall'],
-              'by_instrument': report['by_instrument'],
-              'fold_count': report['fold_count'],
-          }
-          print(json.dumps(out, sort_keys=True))
-          PY
+            "$python_bin" -m app.domain.training.single_pair_qualification \
+              --dataset "$pair=$corpus" \
+              --horizon-bars "$horizon" \
+              --decision-time-before "$cutoff" \
+              --report "$report" \
+              --max-splits "$splits" \
+              --confidence-floor 0.60
           }
 
-          diagnostic="$(run_eval diagnostic 3)"
-          printf '%s\n' "$diagnostic" > "$output/diagnostic-gate.json"
-          diagnostic_pass="$("$python_bin" - "$output/diagnostic-gate.json" <<'PY'
+          run_candidate diagnostic 3 | tee "$output/diagnostic-summary.json"
+          diagnostic_pass="$("$python_bin" - "$output/diagnostic.json" <<'PY'
           import json, sys
-          print('true' if json.load(open(sys.argv[1]))['gate']['research_gate_passed'] else 'false')
+          r=json.load(open(sys.argv[1]))
+          g=r['experiments']['event_barrier_pair_experts']['research_gate']
+          print('true' if g['research_gate_passed'] else 'false')
           PY
           )"
 
           if [[ "$diagnostic_pass" != 'true' ]]; then
-            echo "SINGLE_PAIR_DIAGNOSTIC_HOLD pair=$pair horizon=${horizon}m"
-            "$python_bin" - "$output/diagnostic-gate.json" <<'PY'
+            echo "SINGLE_PAIR_EVENT_EXPERT_DIAGNOSTIC_HOLD pair=$pair horizon=${horizon}m"
+            "$python_bin" - "$output/diagnostic.json" <<'PY'
           import json, sys
-          g=json.load(open(sys.argv[1]))['gate']
-          print('OBSERVED', json.dumps(g['observed'], sort_keys=True))
-          print('CHECKS', json.dumps(g['checks'], sort_keys=True))
+          e=json.load(open(sys.argv[1]))['experiments']['event_barrier_pair_experts']
+          print('OBSERVED', json.dumps(e['research_gate']['observed'], sort_keys=True))
+          print('CHECKS', json.dumps(e['research_gate']['checks'], sort_keys=True))
+          print('ACTIVE_TRADES', e['overall']['active_trades'])
+          print('EVIDENCE_WARNINGS', json.dumps(e['overall'].get('evidence_sufficiency_warnings', [])))
           PY
             exit 0
           fi
 
-          qualification="$(run_eval qualification 5)"
-          printf '%s\n' "$qualification" > "$output/qualification-gate.json"
-          "$python_bin" - "$output/qualification-gate.json" <<'PY'
+          run_candidate qualification 5 | tee "$output/qualification-summary.json"
+          "$python_bin" - "$output/qualification.json" <<'PY'
           import json, sys
-          g=json.load(open(sys.argv[1]))['gate']
+          e=json.load(open(sys.argv[1]))['experiments']['event_barrier_pair_experts']
+          g=e['research_gate']
           status='PASS' if g['research_gate_passed'] else 'HOLD'
-          print(f"SINGLE_PAIR_QUALIFICATION_{status}")
+          print(f"SINGLE_PAIR_EVENT_EXPERT_QUALIFICATION_{status}")
           print('OBSERVED', json.dumps(g['observed'], sort_keys=True))
           print('CHECKS', json.dumps(g['checks'], sort_keys=True))
+          print('ACTIVE_TRADES', e['overall']['active_trades'])
+          print('EVIDENCE_WARNINGS', json.dumps(e['overall'].get('evidence_sufficiency_warnings', [])))
           PY
           REMOTE
 
