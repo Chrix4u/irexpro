@@ -92,14 +92,17 @@ def _direction_failure_diagnostics(predictions: pd.DataFrame) -> dict[str, Any]:
     ordered = event_rows.sort_values("decision_time").copy()
     temporal_quartiles: list[dict[str, Any]] = []
     if len(ordered) >= 4:
-        for idx, chunk in enumerate(pd.array_split(ordered, 4), start=1):
+        boundaries = [round(len(ordered) * i / 4) for i in range(5)]
+        for idx in range(4):
+            chunk = ordered.iloc[boundaries[idx]:boundaries[idx + 1]]
             if chunk.empty:
                 continue
+            quartile_number = idx + 1
             chunk_truth = pd.to_numeric(chunk[TARGET_COLUMN], errors="raise").astype(int)
             chunk_pred = chunk["predicted_long"].astype(bool)
             temporal_quartiles.append(
                 {
-                    "quartile": idx,
+                    "quartile": quartile_number,
                     "rows": int(len(chunk)),
                     "start": pd.Timestamp(chunk["decision_time"].min()).isoformat(),
                     "end": pd.Timestamp(chunk["decision_time"].max()).isoformat(),
