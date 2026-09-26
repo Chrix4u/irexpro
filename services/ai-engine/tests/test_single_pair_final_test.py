@@ -181,6 +181,12 @@ def test_future_holdout_attaches_actionable_target_before_split_validation(
             "target": [0, 1] * 1000,
             "long_net_return": [0.001, -0.001] * 1000,
             "short_net_return": [-0.001, 0.001] * 1000,
+            "event_actionable_target": [0, 1] * 1000,
+            "event_direction_target": [0, 1] * 1000,
+            "event_long_net_return": [0.001, -0.001] * 1000,
+            "event_short_net_return": [-0.001, 0.001] * 1000,
+            "event_step": [1] * 2000,
+            "event_barrier_return": [0.0005] * 2000,
         }
     )
     called = {"value": False}
