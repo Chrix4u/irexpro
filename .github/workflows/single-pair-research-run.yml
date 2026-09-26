@@ -189,7 +189,7 @@ jobs:
           run_candidate qualification 5 | tee "$output/qualification-summary.json"
           qualification_pass="$("$python_bin" - "$output/qualification.json" <<'PY'
           import json, sys
-          e=json.load(open(sys.argv[1]))['experiments']['event_barrier_pair_experts']
+          e=json.load(open(sys.argv[1]))['experiments']['event_barrier_pair_return_margin']
           g=e['research_gate']
           print('true' if g['research_gate_passed'] else 'false')
           PY
@@ -208,79 +208,24 @@ jobs:
 
           "$python_bin" - "$output/qualification.json" <<'PY'
           import json, sys
-          e=json.load(open(sys.argv[1]))['experiments']['event_barrier_dual_actionability']
+          e=json.load(open(sys.argv[1]))['experiments']['event_barrier_pair_return_margin']
           g=e['research_gate']
           status='PASS' if g['research_gate_passed'] else 'HOLD'
-          print(f"SINGLE_PAIR_DUAL_ACTIONABILITY_QUALIFICATION_{status}")
-          print('DUAL_OBSERVED', json.dumps(g['observed'], sort_keys=True))
-          print('DUAL_CHECKS', json.dumps(g['checks'], sort_keys=True))
-          print('DUAL_ACTIVE_TRADES', e['overall']['active_trades'])
-          print('DUAL_EVIDENCE_WARNINGS', json.dumps(e['overall'].get('evidence_sufficiency_warnings', [])))
-          print('DUAL_ACTIONABILITY_DIAGNOSTICS', json.dumps(
-              e.get('dual_actionability_diagnostics'), sort_keys=True
-          ))
-          PY
-
-          "$python_bin" - "$output/qualification.json" <<'PY'
-          import json, sys
-          e=json.load(open(sys.argv[1]))['experiments']['event_barrier_hybrid_opportunity_dual_direction']
-          g=e['research_gate']
-          status='PASS' if g['research_gate_passed'] else 'HOLD'
-          print(f"SINGLE_PAIR_HYBRID_DUAL_DIRECTION_QUALIFICATION_{status}")
-          print('HYBRID_OBSERVED', json.dumps(g['observed'], sort_keys=True))
-          print('HYBRID_CHECKS', json.dumps(g['checks'], sort_keys=True))
-          print('HYBRID_ACTIVE_TRADES', e['overall']['active_trades'])
-          print('HYBRID_EVIDENCE_WARNINGS', json.dumps(e['overall'].get('evidence_sufficiency_warnings', [])))
-          print('HYBRID_DUAL_DIRECTION_DIAGNOSTICS', json.dumps(
-              e.get('dual_actionability_diagnostics'), sort_keys=True
+          print(f"SINGLE_PAIR_RETURN_MARGIN_QUALIFICATION_{status}")
+          print('RETURN_MARGIN_OBSERVED', json.dumps(g['observed'], sort_keys=True))
+          print('RETURN_MARGIN_CHECKS', json.dumps(g['checks'], sort_keys=True))
+          print('RETURN_MARGIN_ACTIVE_TRADES', e['overall']['active_trades'])
+          print('RETURN_MARGIN_EVIDENCE_WARNINGS', json.dumps(
+              e['overall'].get('evidence_sufficiency_warnings', [])
           ))
           PY
 
           if [[ "$qualification_pass" != 'true' ]]; then
+            echo "SINGLE_PAIR_FAST_LOOP_STOP reason=return_margin_candidate_not_qualified"
             exit 0
           fi
 
-          final_report="$output/untouched-final-test.json"
-          "$python_bin" -m app.domain.training.single_pair_final_test \
-            --dataset "$pair=$corpus" \
-            --horizon-bars "$horizon" \
-            --qualification-report "$output/qualification.json" \
-            --report "$final_report" \
-            --confidence-threshold 0.60 | tee "$output/untouched-final-test-summary.json"
-
-          "$python_bin" - "$final_report" <<'PY'
-          import json, sys
-          r=json.load(open(sys.argv[1]))
-          g=r['final_test_gate']
-          status='PASS' if g['passed'] else 'HOLD'
-          print(f"SINGLE_PAIR_UNTOUCHED_FINAL_TEST_{status}")
-          print('OBSERVED', json.dumps(g['observed'], sort_keys=True))
-          print('CHECKS', json.dumps(g['checks'], sort_keys=True))
-          print('TEST_ROWS', r['split']['test_rows'])
-          print('APPROVED_FOR_PAPER', r['approved_for_paper'])
-          print('APPROVED_FOR_LIVE', r['approved_for_live'])
-          d=r.get('direction_failure_diagnostics', {})
-          print('DIRECTION_DIAGNOSTIC_POLICY', d.get('policy'))
-          for scope in ('validation', 'untouched_test'):
-              block=d.get(scope, {})
-              print(f'DIRECTION_DIAGNOSTICS_{scope.upper()}', json.dumps({
-                  'rows': block.get('rows'),
-                  'event_direction_rows': block.get('event_direction_rows'),
-                  'active_trades': block.get('active_trades'),
-                  'balanced_accuracy': block.get('balanced_accuracy'),
-                  'confusion': block.get('confusion'),
-                  'true_long_fraction': block.get('true_long_fraction'),
-                  'predicted_long_fraction': block.get('predicted_long_fraction'),
-                  'mean_positive_probability': block.get('mean_positive_probability'),
-                  'brier_score': block.get('brier_score'),
-              }, sort_keys=True))
-              print(f'DIRECTION_TEMPORAL_QUARTILES_{scope.upper()}', json.dumps(
-                  block.get('temporal_quartiles', []), sort_keys=True
-              ))
-              print(f'DIRECTION_CONFIDENCE_BANDS_{scope.upper()}', json.dumps(
-                  block.get('confidence_bands', []), sort_keys=True
-              ))
-          PY
+          echo "SINGLE_PAIR_FRESH_HOLDOUT_REQUIRED candidate=event_barrier_pair_return_margin pair=$pair horizon=${horizon}m"
           REMOTE
 
       - name: Remove ephemeral SSH material
