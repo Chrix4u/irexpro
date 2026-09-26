@@ -124,7 +124,7 @@ def candidate_summary(report: dict[str, Any]) -> dict[str, Any]:
     gate = candidate["research_gate"]
     overall = candidate["overall"]
     return {
-        "experiment": EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+        "experiment": HYBRID_ACTIONABLE_EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
         "research_gate_passed": bool(gate["research_gate_passed"]),
         "observed": gate["observed"],
         "checks": gate["checks"],
