@@ -70,7 +70,12 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          changed="$(git diff-tree --no-commit-id --name-only -r "$CANDIDATE_SHA")"
+          parent_sha="$(git rev-parse "$CANDIDATE_SHA^1" 2>/dev/null || true)"
+          if [[ "$parent_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            changed="$(git diff --name-only "$parent_sha" "$CANDIDATE_SHA")"
+          else
+            changed="$(git diff-tree --no-commit-id --name-only -r --root "$CANDIDATE_SHA")"
+          fi
           if grep -Eq '^(\.github/workflows/single-pair-research-run\.yml|services/ai-engine/app/domain/(training|models)/|services/ai-engine/(pyproject\.toml|requirements\.lock)$)' <<<"$changed"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
