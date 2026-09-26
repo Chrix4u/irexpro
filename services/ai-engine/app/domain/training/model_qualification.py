@@ -65,6 +65,7 @@ MIN_REGIME_EARLY_ROWS = 100
 QUALIFICATION_CHECKPOINT_VERSION = 1
 QUALIFICATION_CHECKPOINT_POLICY = "experiment_outer_fold_atomic_v2_opportunity_classification"
 OPPORTUNITY_CLASSIFICATION_THRESHOLD = 0.50
+OPPORTUNITY_SAMPLE_WEIGHT_POLICY = "inverse_frequency_power_0_75_capped_v1"
 DECISION_THRESHOLD_GRID = (0.45, 0.475, 0.50, 0.525, 0.55)
 MIN_ISOTONIC_ROWS = 500
 MIN_ISOTONIC_CLASS_ROWS = 100
@@ -198,6 +199,7 @@ def _qualification_checkpoint_fingerprint(
         "actionable_label_policy": ACTIONABLE_LABEL_POLICY,
         "event_label_policy": EVENT_LABEL_POLICY,
         "opportunity_classification_threshold": OPPORTUNITY_CLASSIFICATION_THRESHOLD,
+        "opportunity_sample_weight_policy": OPPORTUNITY_SAMPLE_WEIGHT_POLICY,
         "experiments": _experiment_matrix_payload(experiments),
     }
     encoded = json.dumps(
@@ -616,6 +618,33 @@ def _binary_class_balance_weights(
     return (weights / float(weights.mean())).astype(float)
 
 
+def _opportunity_class_balance_weights(
+    frame: pd.DataFrame,
+    *,
+    target_column: str = EVENT_ACTIONABLE_TARGET_COLUMN,
+) -> np.ndarray:
+    """Apply stronger but bounded weighting to the rare opportunity class.
+
+    Direction models keep the existing moderate square-root class weighting.
+    Opportunity/no-opportunity detection is substantially more imbalanced, so
+    use a 0.75 inverse-frequency power with conservative caps. Weights are
+    derived only from the current fit/early-stop partition and normalized to
+    mean one; no outer validation information is used.
+    """
+    target = pd.to_numeric(frame[target_column], errors="coerce").to_numpy(dtype=float)
+    if not np.isfinite(target).all() or not np.isin(target, [0.0, 1.0]).all():
+        raise ValueError(f"{target_column} opportunity weights require finite binary labels")
+    labels = target.astype(int)
+    counts = np.bincount(labels, minlength=2).astype(float)
+    if (counts <= 0.0).any():
+        raise ValueError(f"{target_column} opportunity weights require both classes")
+    total = float(len(labels))
+    per_class = np.power(total / (2.0 * counts), 0.75)
+    weights = np.clip(per_class[labels], 0.35, 4.0)
+    weights = weights / float(weights.mean())
+    return np.clip(weights, 0.25, 4.0).astype(float)
+
+
 def _sample_weights(frame: pd.DataFrame, policy: SampleWeightPolicy) -> np.ndarray:
     if policy == "economic":
         return _economic_sample_weights(frame)
@@ -675,6 +704,15 @@ def _fit_binary_variant(
     if target_column == TARGET_COLUMN:
         fit_weights = _sample_weights(fit, sample_weight_policy)
         early_weights = _class_balance_sample_weights(early_stop)
+    elif target_column == EVENT_ACTIONABLE_TARGET_COLUMN:
+        fit_weights = _opportunity_class_balance_weights(
+            fit,
+            target_column=target_column,
+        )
+        early_weights = _opportunity_class_balance_weights(
+            early_stop,
+            target_column=target_column,
+        )
     else:
         fit_weights = _binary_class_balance_weights(
             fit,
