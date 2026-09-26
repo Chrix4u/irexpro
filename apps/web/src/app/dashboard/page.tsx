@@ -9,6 +9,8 @@ import { mapApiError } from '@/lib/error-mapping';
 import { api } from '@/lib/api';
 import { formatEnumLabel } from '@irexpro/types';
 import type { OnboardingStatus } from '@irexpro/types';
+import type { LiveAccountActivityPage, LiveActivityRowView } from '@irexpro/types/live-account';
+import { loadLiveAccountActivity } from '@/lib/live-account';
 
 export default function DashboardPage() {
   const { user, logout, restoring } = useAuth();
@@ -16,6 +18,9 @@ export default function DashboardPage() {
   const [onboarding, setOnboarding] = useState<OnboardingStatus | null>(null);
   const [onboardingLoading, setOnboardingLoading] = useState(true);
   const [onboardingError, setOnboardingError] = useState<string | null>(null);
+  const [activity, setActivity] = useState<LiveAccountActivityPage | null>(null);
+  const [activityLoading, setActivityLoading] = useState(true);
+  const [activityError, setActivityError] = useState<string | null>(null);
   const onboardingErrorShownRef = useRef(false);
 
   useEffect(() => {
@@ -39,6 +44,35 @@ export default function DashboardPage() {
     })();
     return () => { cancelled = true; };
   }, [user, notify]);
+
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+
+    const refreshActivity = async (initial = false) => {
+      if (initial && !cancelled) setActivityLoading(true);
+      try {
+        const nextActivity = await loadLiveAccountActivity(8, 0);
+        if (!cancelled) {
+          setActivity(nextActivity);
+          setActivityError(null);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setActivityError(mapApiError(err).message);
+        }
+      } finally {
+        if (initial && !cancelled) setActivityLoading(false);
+      }
+    };
+
+    void refreshActivity(true);
+    const timer = window.setInterval(() => void refreshActivity(false), 15000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [user]);
 
   if (restoring) {
     return <div style={{ padding: '3rem' }}><LoadingSpinner text="Restoring session…" /></div>;
@@ -126,8 +160,25 @@ export default function DashboardPage() {
           </Card>
         </section>
 
-        <Card title="Recent activity" subtitle="Server-authoritative decisions and executions appear in the trading surfaces.">
-          <EmptyState icon="↗" title="No trading activity yet" description="AI decision evidence and execution history will appear after the trading pipeline records activity." />
+        <Card title="Recent activity" subtitle="Latest server-authoritative account, AI trading and execution events.">
+          {activityLoading ? (
+            <LoadingSpinner text="Loading recent activity…" />
+          ) : activityError ? (
+            <Alert variant="error">{activityError}</Alert>
+          ) : activity?.activity.length ? (
+            <div>
+              <div role="list" aria-label="Recent account activity" style={{ display: 'grid', gap: 'var(--space-3)' }}>
+                {activity.activity.map((item) => (
+                  <ActivityRow key={item.id} item={item} />
+                ))}
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: 'var(--space-3)' }}>
+                <Link href="/live-account" className="btn btn--secondary btn--sm">View all activity</Link>
+              </div>
+            </div>
+          ) : (
+            <EmptyState icon="↗" title="No activity yet" description="Broker, AI session and execution events will appear here as soon as the server records them." />
+          )}
         </Card>
       </main>
     </DashboardShell>
@@ -214,5 +265,52 @@ function OnboardingCard({ status }: { status: OnboardingStatus }) {
         </Link>
       )}
     </Card>
+  );
+}
+
+
+function ActivityRow({ item }: { item: LiveActivityRowView }) {
+  const badgeVariant = item.severity === 'CRITICAL'
+    ? 'error'
+    : item.severity === 'WARNING'
+      ? 'warning'
+      : 'info';
+  const label = item.action
+    .toLowerCase()
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+  const timestamp = new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date(item.createdAt));
+
+  return (
+    <div
+      role="listitem"
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'minmax(0, 1fr) auto',
+        gap: 'var(--space-3)',
+        alignItems: 'center',
+        paddingBottom: 'var(--space-3)',
+        borderBottom: '1px solid var(--border-subtle)',
+      }}
+    >
+      <div style={{ minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+          <strong>{label}</strong>
+          <Badge variant={badgeVariant}>{item.severity}</Badge>
+        </div>
+        <p className="text-sm muted mt-1">
+          {item.resourceType ? item.resourceType : 'Account activity'}
+          {item.resourceId ? ` · ${item.resourceId.slice(0, 8)}` : ''}
+        </p>
+      </div>
+      <time className="text-sm muted" dateTime={item.createdAt} style={{ whiteSpace: 'nowrap' }}>
+        {timestamp}
+      </time>
+    </div>
   );
 }

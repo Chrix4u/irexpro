@@ -23,6 +23,14 @@ test.describe('Dashboard', () => {
     await expect(page.locator('.card__title', { hasText: /performance fee/i })).toBeVisible();
   });
 
+  test('shows server-authoritative recent activity', async ({ page }) => {
+    const recentActivity = page.getByRole('list', { name: 'Recent account activity' });
+    await expect(recentActivity).toBeVisible();
+    await expect(recentActivity.getByText('Order Filled')).toBeVisible();
+    await expect(recentActivity.getByText('Ai Session Started')).toBeVisible();
+    await expect(page.getByRole('link', { name: /view all activity/i })).toHaveAttribute('href', '/live-account');
+  });
+
   test('uses the simplified three-step readiness model', async ({ page }) => {
     const checklist = page.locator('.checklist').first();
     await expect(checklist).toBeVisible();

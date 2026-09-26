@@ -394,6 +394,35 @@ export async function setupAuthInterception(page: Page): Promise<void> {
       return route.fulfill(jsonFulfill(200, mockBrokerConnections[0]));
     }
 
+    // ── Live account activity ──────────────────────────────────────────
+    if (apiPath === 'live-account/activity') {
+      return route.fulfill(
+        jsonFulfill(200, {
+          activity: [
+            {
+              id: 'audit_00000000-0000-0000-0000-000000000001',
+              action: 'ORDER_FILLED',
+              resourceType: 'TradeOrder',
+              resourceId: 'order_00000000-0000-0000-0000-000000000001',
+              severity: 'INFO',
+              createdAt: '2026-09-26T20:15:00.000Z',
+            },
+            {
+              id: 'audit_00000000-0000-0000-0000-000000000002',
+              action: 'AI_SESSION_STARTED',
+              resourceType: 'TradingSession',
+              resourceId: 'sess_00000000-0000-0000-0000-000000000001',
+              severity: 'INFO',
+              createdAt: '2026-09-26T20:10:00.000Z',
+            },
+          ],
+          total: 2,
+          limit: 8,
+          offset: 0,
+        }),
+      );
+    }
+
     // ── Trading ─────────────────────────────────────────────────────────
     if (apiPath === 'trading/sessions/start') {
       // TradingController returns TradingSessionResponseDto directly.
