@@ -1,0 +1,175 @@
+name: USDJPY Five-Minute Research
+
+on:
+  workflow_run:
+    workflows: ['Staging Deploy']
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CANDIDATE_SHA: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.workflow_run.head_sha }}
+  STAGING_SSH_HOST: vps.lightworldtech.com
+  STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
+  STAGING_SSH_USER: ${{ vars.STAGING_SSH_USER }}
+  SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+  SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+
+jobs:
+  research:
+    name: USDJPY 5m direction bounded study
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
+    concurrency:
+      group: irexpro-usdjpy-five-minute
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment:
+      name: staging
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Verify five-minute relevance
+        id: relevance
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch --quiet --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          if [[ "$(git rev-parse origin/main)" != "$CANDIDATE_SHA" ]]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "FIVE_MINUTE_RESEARCH_SKIPPED reason=candidate_superseded"
+            exit 0
+          fi
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          parent_sha="$(git rev-parse "$CANDIDATE_SHA^1" 2>/dev/null || true)"
+          changed="$(git diff --name-only "$parent_sha" "$CANDIDATE_SHA" || true)"
+          if grep -Eq '^\.github/workflows/usdjpy-five-minute-research\.yml$' <<<"$changed"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "FIVE_MINUTE_RESEARCH_REQUIRED"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "FIVE_MINUTE_RESEARCH_SKIPPED reason=no_five_minute_change"
+          fi
+
+      - name: Configure pinned SSH identity
+        if: steps.relevance.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$STAGING_SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Run bounded USDJPY 5m study
+        if: steps.relevance.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i "$HOME/.ssh/irexpro_staging" -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            "bash -s -- $CANDIDATE_SHA" <<'REMOTE'
+          set -Eeuo pipefail
+          umask 077
+
+          candidate_sha="$1"
+          staging='/home/lightworld/webapps/irexpro-staging'
+          source_root='/home/lightworld/research/irexpro-usdjpy-v4/e346d27274b298d43a464a53c1473144f57c1f3f'
+          corpus="$source_root/corpora/USDJPY_MTF.csv"
+          output="/home/lightworld/research/irexpro-usdjpy-five-minute/$candidate_sha"
+          qualification="$output/qualification.json"
+          future="$output/future-holdout.json"
+          readonly holdout_start='2026-09-22T18:00:00Z'
+          readonly horizon='5'
+
+          cd "$staging"
+          test "$(git rev-parse HEAD)" = "$candidate_sha"
+          test -z "$(git status --porcelain)"
+          test -s "$corpus"
+
+          cd "$staging/services/ai-engine"
+          python_bin='.venv/bin/python'
+          test -x "$python_bin"
+          export PYTHONPATH="$PWD"
+          export IREXPRO_XGB_N_JOBS=4
+          install -d -m 700 "$output"
+
+          "$python_bin" -m app.domain.training.single_pair_qualification \
+            --dataset "USDJPY=$corpus" \
+            --horizon-bars "$horizon" \
+            --decision-time-before "$holdout_start" \
+            --report "$qualification" \
+            --max-splits 3 \
+            --confidence-floor 0.60 \
+            | tee "$output/qualification-summary.json"
+
+          "$python_bin" - "$qualification" <<'PY'
+          import json, sys
+          r=json.load(open(sys.argv[1]))
+          e=r['experiments']['event_barrier_pair_experts']
+          g=e['research_gate']
+          print('USDJPY_5M_QUALIFICATION_' + ('PASS' if g['research_gate_passed'] else 'HOLD'))
+          print('QUALIFICATION_OBSERVED', json.dumps(g['observed'], sort_keys=True))
+          print('QUALIFICATION_CHECKS', json.dumps(g['checks'], sort_keys=True))
+          print('QUALIFICATION_ACTIVE_TRADES', e['overall']['active_trades'])
+          print('QUALIFICATION_WARNINGS', json.dumps(e['overall'].get('evidence_sufficiency_warnings', [])))
+          if not g['research_gate_passed']:
+              raise SystemExit(42)
+          PY
+          status=$?
+          if [[ "$status" -eq 42 ]]; then
+            echo "USDJPY_5M_STOP reason=qualification_failed"
+            exit 0
+          elif [[ "$status" -ne 0 ]]; then
+            exit "$status"
+          fi
+
+          "$python_bin" -m app.domain.training.single_pair_final_test \
+            --dataset "USDJPY=$corpus" \
+            --horizon-bars "$horizon" \
+            --qualification-report "$qualification" \
+            --report "$future" \
+            --confidence-threshold 0.60 \
+            --future-holdout-start "$holdout_start" \
+            --min-future-holdout-rows 2500 \
+            | tee "$output/future-holdout-summary.json"
+
+          "$python_bin" - "$future" <<'PY'
+          import json, sys
+          r=json.load(open(sys.argv[1]))
+          g=r['final_test_gate']
+          print('USDJPY_5M_FUTURE_HOLDOUT_' + ('PASS' if g['passed'] else 'HOLD'))
+          print('FUTURE_OBSERVED', json.dumps(g['observed'], sort_keys=True))
+          print('FUTURE_CHECKS', json.dumps(g['checks'], sort_keys=True))
+          print('FUTURE_ROWS', r['split']['holdout_rows'])
+          print('FUTURE_START', r['split']['holdout_start'])
+          print('FUTURE_END', r['split']['holdout_end'])
+          print('APPROVED_FOR_PAPER', r['approved_for_paper'])
+          print('APPROVED_FOR_LIVE', r['approved_for_live'])
+          PY
+          REMOTE
+
+      - name: Remove ephemeral SSH material
+        if: ${{ always() }}
+        shell: bash
+        run: rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
