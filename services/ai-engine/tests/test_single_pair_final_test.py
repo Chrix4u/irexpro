@@ -6,6 +6,7 @@ import json
 import pandas as pd
 import pytest
 
+from app.domain.training import single_pair_final_test as final_test
 from app.domain.training.model_qualification import EVENT_PAIR_EXPERT_EXPERIMENT_NAME
 from app.domain.training.single_pair_final_test import (
     SINGLE_PAIR_FINAL_TEST_POLICY,
@@ -163,3 +164,47 @@ def test_future_holdout_requires_exact_frozen_qualification_boundary(tmp_path):
         )
 
     assert SINGLE_PAIR_FUTURE_HOLDOUT_POLICY.endswith("_v1")
+
+
+def test_future_holdout_attaches_actionable_target_before_split_validation(
+    tmp_path, monkeypatch
+):
+    qualification = tmp_path / "qualification.json"
+    qualification.write_text(json.dumps(_qualification_payload()), encoding="utf-8")
+
+    frame = pd.DataFrame(
+        {
+            "decision_time": pd.date_range(
+                "2026-06-30T12:00:00Z", periods=2000, freq="min"
+            ),
+            "instrument": ["USDJPY"] * 2000,
+            "target": [0, 1] * 1000,
+            "long_net_return": [0.001, -0.001] * 1000,
+            "short_net_return": [-0.001, 0.001] * 1000,
+        }
+    )
+    called = {"value": False}
+
+    def fake_load(*_args, **_kwargs):
+        return frame.copy(), {"USDJPY": "abc123"}
+
+    def fake_attach(source):
+        called["value"] = True
+        result = source.copy()
+        result["actionable_target"] = [0, 1] * 1000
+        return result
+
+    monkeypatch.setattr(final_test, "load_and_prepare_corpora", fake_load)
+    monkeypatch.setattr(final_test, "_ensure_actionable_target", fake_attach)
+
+    with pytest.raises(ValueError, match="at least 1000"):
+        evaluate_single_pair_future_holdout(
+            {"USDJPY": tmp_path / "unused.csv"},
+            horizon_bars=1,
+            qualification_report_path=qualification,
+            report_path=tmp_path / "future.json",
+            future_holdout_start="2026-07-01T00:00:00Z",
+            min_holdout_rows=1000,
+        )
+
+    assert called["value"] is True
