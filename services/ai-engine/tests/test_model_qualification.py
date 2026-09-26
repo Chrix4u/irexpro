@@ -18,6 +18,7 @@ from app.domain.training.model_qualification import (
     EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME,
     EVENT_SHORT_ACTIONABLE_TARGET_COLUMN,
     EVENT_TWO_STAGE_EXPERIMENT_NAME,
+    HYBRID_ACTIONABLE_EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
     TWO_STAGE_EXPERIMENT_NAME,
     ModelVariant,
     QualificationExperiment,
@@ -31,6 +32,7 @@ from app.domain.training.model_qualification import (
     _fit_calibrator,
     _fit_event_pair_experts_for_outer,
     _fit_event_pair_regime_experts_for_outer,
+    _hybrid_actionable_event_prediction_frame,
     _locked_gate_snapshot,
     _nested_windows,
     _pair_expert_probabilities,
@@ -540,6 +542,61 @@ def test_event_dual_actionability_requires_winner_probability_and_margin():
     }
     assert qualification.CONFIDENCE_FLOOR == 0.60
     assert qualification.DUAL_ACTION_MARGIN_FLOOR == 0.10
+
+
+def test_hybrid_prediction_keeps_opportunity_and_event_direction_targets_separate():
+    source = _research_dataset(periods=6, instruments=("USDJPY",))
+    source = _ensure_actionable_target(source)
+    source[ACTIONABLE_TARGET_COLUMN] = [1, 0, 1, 0, 1, 0]
+    source[EVENT_ACTIONABLE_TARGET_COLUMN] = [1, 1, 0, 0, 1, 1]
+    source[EVENT_DIRECTION_TARGET_COLUMN] = [1, 0, 0, 0, 1, 0]
+    source[EVENT_LONG_NET_RETURN_COLUMN] = [
+        0.0010,
+        -0.0010,
+        0.0002,
+        -0.0002,
+        0.0011,
+        -0.0011,
+    ]
+    source[EVENT_SHORT_NET_RETURN_COLUMN] = [
+        -0.0010,
+        0.0010,
+        -0.0002,
+        0.0002,
+        -0.0011,
+        0.0011,
+    ]
+    source[EVENT_STEP_COLUMN] = [1, 1, 1, 1, 1, 1]
+    source[EVENT_BARRIER_RETURN_COLUMN] = [0.0005] * 6
+
+    predictions = _hybrid_actionable_event_prediction_frame(
+        source,
+        direction_probabilities=np.array([0.80, 0.20, 0.75, 0.30, 0.55, 0.10]),
+        opportunity_probabilities=np.array([0.80, 0.90, 0.70, 0.40, 0.95, 0.65]),
+        confidence_floor=0.60,
+        fold=1,
+        experiment=HYBRID_ACTIONABLE_EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+        variant=ModelVariant(name="actionable_event_hybrid_pair_direction"),
+    )
+
+    assert predictions[ACTIONABLE_TARGET_COLUMN].tolist() == [1, 0, 1, 0, 1, 0]
+    assert predictions[TARGET_COLUMN].tolist() == [1, 0, 0, 0, 1, 0]
+    assert predictions["active_trade"].tolist() == [True, True, True, False, False, True]
+    assert set(predictions["actionable_label_policy"]) == {ACTIONABLE_LABEL_POLICY}
+    assert set(predictions["event_label_policy"]) == {EVENT_LABEL_POLICY}
+    assert set(predictions["confidence_policy"]) == {
+        "actionable_opportunity_and_event_direction_confidence_gte_floor"
+    }
+
+    summary = qualification._summarize_predictions(
+        predictions,
+        horizon_bars=1,
+        confidence_threshold=0.60,
+    )
+    # Direction quality is evaluated on the true event/barrier rows only,
+    # while opportunity quality remains the friction-positive target.
+    assert summary["event_direction_evaluated_rows"] == 4
+    assert summary["classification"]["sample_count"] == 4
 
 
 def test_event_summary_direction_classification_uses_true_events_only():
