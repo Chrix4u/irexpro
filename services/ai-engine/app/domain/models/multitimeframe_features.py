@@ -67,6 +67,11 @@ TIME_FEATURE_COLUMNS = (
 CROSS_TIMEFRAME_FEATURE_COLUMNS = (
     "trend_alignment_score",
     "momentum_alignment_score",
+    "trend_momentum_agreement",
+    "higher_timeframe_trend_score",
+    "entry_momentum_score",
+    "volatility_ratio_m1_h1",
+    "spread_to_atr_ratio",
 )
 
 
@@ -281,6 +286,33 @@ def build_multitimeframe_runtime_features(
     ]
     features["trend_alignment_score"] = float(np.mean(trend_signs))
     features["momentum_alignment_score"] = float(np.mean(momentum_signs))
+    features["trend_momentum_agreement"] = float(
+        features["trend_alignment_score"] * features["momentum_alignment_score"]
+    )
+    features["higher_timeframe_trend_score"] = float(
+        np.mean(
+            [
+                np.sign(features["h1_price_vs_ma20"]),
+                np.sign(features["h4_price_vs_ma20"]),
+            ]
+        )
+    )
+    features["entry_momentum_score"] = float(
+        np.mean(
+            [
+                np.sign(features["m1_momentum_5"]),
+                np.sign(features["m5_momentum_5"]),
+            ]
+        )
+    )
+    eps = 1e-12
+    features["volatility_ratio_m1_h1"] = float(
+        features["m1_volatility_20"] / max(abs(features["h1_volatility_20"]), eps)
+    )
+    features["spread_to_atr_ratio"] = float(
+        features["m1_spread_bps"]
+        / max(abs(features["m1_atr_pct_14"]) * 10_000.0, eps)
+    )
 
     for candidate in INITIAL_FOREX_UNIVERSE:
         features[f"instrument_{candidate}"] = 1.0 if candidate == symbol else 0.0
