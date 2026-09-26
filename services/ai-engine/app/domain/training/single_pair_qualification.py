@@ -19,9 +19,8 @@ import pandas as pd
 
 from app.domain.training.model_qualification import (
     CONFIDENCE_FLOOR,
-    EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME,
-    EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
     EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+    EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME,
     ModelVariant,
     QualificationExperiment,
     _qualification_checkpoint_fingerprint,
@@ -43,14 +42,9 @@ def single_pair_experiments() -> tuple[QualificationExperiment, ...]:
             mode="two_stage_event_pair_experts",
         ),
         QualificationExperiment(
-            name=EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME,
-            variants=(ModelVariant(name="event_barrier_v7_dual_actionability"),),
-            mode="event_dual_actionability",
-        ),
-        QualificationExperiment(
-            name=EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
-            variants=(ModelVariant(name="event_barrier_v8_hybrid_dual_direction"),),
-            mode="event_hybrid_dual_direction",
+            name=EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME,
+            variants=(ModelVariant(name="event_barrier_v5_pair_return_margin"),),
+            mode="two_stage_event_pair_return_margin",
         ),
     )
 
@@ -108,8 +102,7 @@ def evaluate_single_pair_candidate(
         "experiment": EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
         "comparison_experiments": [
             EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
-            EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME,
-            EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
+            EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME,
         ],
         "research_only": True,
         "approved_for_paper": False,
