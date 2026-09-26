@@ -50,6 +50,7 @@ EVENT_ATR_MULTIPLIER = 1.0
 EVENT_SPREAD_MULTIPLIER = 2.0
 CLASS_BALANCE_SAMPLE_WEIGHT_POLICY = "sqrt_inverse_frequency_normalized_v1"
 ECONOMIC_SAMPLE_WEIGHT_POLICY = "class_balanced_positive_net_edge_q75_capped_v2"
+DIRECTION_THRESHOLD_SELECTION_POLICY = "single_pair_internal_balanced_accuracy_grid_v1"
 RESEARCH_PROGRESS_ENV = "IREXPRO_RESEARCH_PROGRESS"
 XGBOOST_N_JOBS_ENV = "IREXPRO_XGB_N_JOBS"
 MAX_XGBOOST_N_JOBS = 4
@@ -757,6 +758,45 @@ def _split_internal_early_stopping_tail(
 
     return fit_frame, early_stop_frame
 
+
+def _select_direction_threshold(
+    labels: pd.Series | np.ndarray,
+    probabilities: np.ndarray,
+) -> tuple[float, float]:
+    """Select a causal LONG/SHORT threshold by balanced accuracy.
+
+    This is a model-selection parameter. Callers may use only an internal
+    training/early-stopping partition; outer walk-forward validation labels
+    must never participate. Ties prefer the threshold closest to 0.50, then
+    the lower threshold for deterministic behaviour.
+    """
+    y = np.asarray(labels, dtype=int)
+    p = np.asarray(probabilities, dtype=float)
+    if len(y) != len(p) or len(y) == 0:
+        raise ValueError("Direction-threshold selection requires aligned non-empty arrays")
+    if not np.isin(y, [0, 1]).all() or not np.isfinite(p).all():
+        raise ValueError("Direction-threshold selection requires finite binary labels/probabilities")
+    negatives = y == 0
+    positives = y == 1
+    if not negatives.any() or not positives.any():
+        raise ValueError("Direction-threshold selection requires both classes")
+
+    candidates = np.round(np.arange(0.35, 0.651, 0.01), 2)
+    scored: list[tuple[float, float]] = []
+    for threshold in candidates:
+        predicted = p >= threshold
+        sensitivity = float(predicted[positives].mean())
+        specificity = float((~predicted[negatives]).mean())
+        scored.append((float((sensitivity + specificity) / 2.0), float(threshold)))
+
+    best_score = max(score for score, _ in scored)
+    best_thresholds = [
+        threshold for score, threshold in scored
+        if abs(score - best_score) <= 1e-12
+    ]
+    selected = min(best_thresholds, key=lambda value: (abs(value - 0.50), value))
+    return float(selected), float(best_score)
+
 def _non_overlapping_portfolio_periods(
     predictions: pd.DataFrame,
     *,
@@ -1062,6 +1102,20 @@ def _run_pooled_walk_forward_core(
             verbose=False,
         )
 
+        single_instrument_mode = dataset["instrument"].nunique() == 1
+        decision_threshold = 0.50
+        internal_threshold_balanced_accuracy = None
+        if single_instrument_mode:
+            internal_probabilities = model.predict_proba(
+                early_stop_frame[MULTITIMEFRAME_FEATURE_COLUMNS]
+            )[:, 1]
+            decision_threshold, internal_threshold_balanced_accuracy = (
+                _select_direction_threshold(
+                    early_stop_frame[TARGET_COLUMN].astype(int),
+                    internal_probabilities,
+                )
+            )
+
         probabilities = model.predict_proba(
             validation_frame[MULTITIMEFRAME_FEATURE_COLUMNS]
         )[:, 1]
@@ -1080,7 +1134,7 @@ def _run_pooled_walk_forward_core(
         )
         predictions = validation_frame[prediction_columns].copy()
         predictions["positive_probability"] = probabilities
-        predictions["predicted_long"] = probabilities >= 0.5
+        predictions["predicted_long"] = probabilities >= decision_threshold
         predictions["confidence"] = np.maximum(probabilities, 1.0 - probabilities)
         predictions["active_trade"] = predictions["confidence"] >= confidence_threshold
         predictions["selected_net_return"] = np.where(
@@ -1101,6 +1155,13 @@ def _run_pooled_walk_forward_core(
         fold_report = {
             **expected_checkpoint,
             "best_iteration": int(getattr(model, "best_iteration", -1)),
+            "decision_threshold": decision_threshold,
+            "internal_threshold_balanced_accuracy": internal_threshold_balanced_accuracy,
+            "direction_threshold_selection_policy": (
+                DIRECTION_THRESHOLD_SELECTION_POLICY
+                if single_instrument_mode
+                else "fixed_0.50_pooled_compatibility"
+            ),
             "feature_importance_gain": feature_gain_diagnostics(
                 model,
                 MULTITIMEFRAME_FEATURE_COLUMNS,
@@ -1168,6 +1229,7 @@ def _run_pooled_walk_forward_core(
             "confidence_threshold": confidence_threshold,
             "training_sample_weight_policy": ECONOMIC_SAMPLE_WEIGHT_POLICY,
             "validation_sample_weight_policy": CLASS_BALANCE_SAMPLE_WEIGHT_POLICY,
+        "direction_threshold_selection_policy": DIRECTION_THRESHOLD_SELECTION_POLICY,
         },
     }
     return report, all_predictions.copy()
@@ -1266,6 +1328,7 @@ def evaluate_multi_pair_corpora(
         ),
         "feature_columns": MULTITIMEFRAME_FEATURE_COLUMNS,
         "model_params": model_params,
+        "direction_threshold_selection_policy": DIRECTION_THRESHOLD_SELECTION_POLICY,
         "label_selection_policy": MULTITIMEFRAME_LABEL_SELECTION_POLICY,
         "backtest_evaluation_policy": MULTITIMEFRAME_BACKTEST_POLICY,
         "research_validation_policy": MULTITIMEFRAME_RESEARCH_VALIDATION_POLICY,
