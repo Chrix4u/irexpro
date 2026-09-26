@@ -3,7 +3,9 @@
 The fast loop intentionally evaluates only:
 1. the locked directional baseline (governance reference), and
 2. the event-barrier pair-expert architecture that already showed the
-   strongest USDJPY out-of-sample evidence in the six-pair study.
+   strongest USDJPY directional evidence, and
+3. a targeted hybrid that keeps that direction expert but uses the more
+   learnable friction-positive opportunity target.
 
 No research gate is lowered and no PAPER/LIVE approval is produced here.
 """
@@ -20,6 +22,7 @@ import pandas as pd
 from app.domain.training.model_qualification import (
     CONFIDENCE_FLOOR,
     EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+    HYBRID_ACTIONABLE_EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
     ModelVariant,
     QualificationExperiment,
     _qualification_checkpoint_fingerprint,
@@ -39,6 +42,11 @@ def single_pair_experiments() -> tuple[QualificationExperiment, ...]:
             name=EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
             variants=(ModelVariant(name="event_barrier_v4_pair_direction"),),
             mode="two_stage_event_pair_experts",
+        ),
+        QualificationExperiment(
+            name=HYBRID_ACTIONABLE_EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+            variants=(ModelVariant(name="actionable_event_hybrid_pair_direction"),),
+            mode="hybrid_actionable_event_pair_experts",
         ),
     )
 
@@ -93,7 +101,7 @@ def evaluate_single_pair_candidate(
     report["single_pair_scope"] = {
         "instrument": next(iter(sorted(datasets))),
         "horizon_bars": int(horizon_bars),
-        "experiment": EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+        "experiment": HYBRID_ACTIONABLE_EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
         "research_only": True,
         "approved_for_paper": False,
         "approved_for_live": False,
@@ -110,11 +118,13 @@ def evaluate_single_pair_candidate(
 
 
 def candidate_summary(report: dict[str, Any]) -> dict[str, Any]:
-    candidate = report["experiments"][EVENT_PAIR_EXPERT_EXPERIMENT_NAME]
+    candidate = report["experiments"][
+        HYBRID_ACTIONABLE_EVENT_PAIR_EXPERT_EXPERIMENT_NAME
+    ]
     gate = candidate["research_gate"]
     overall = candidate["overall"]
     return {
-        "experiment": EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+        "experiment": HYBRID_ACTIONABLE_EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
         "research_gate_passed": bool(gate["research_gate_passed"]),
         "observed": gate["observed"],
         "checks": gate["checks"],

@@ -51,6 +51,9 @@ ACTIONABLE_LABEL_POLICY = "best_direction_net_return_after_friction_gt_zero_v1"
 TWO_STAGE_EXPERIMENT_NAME = "actionable_two_stage"
 EVENT_TWO_STAGE_EXPERIMENT_NAME = "event_barrier_two_stage"
 EVENT_PAIR_EXPERT_EXPERIMENT_NAME = "event_barrier_pair_experts"
+HYBRID_ACTIONABLE_EVENT_PAIR_EXPERT_EXPERIMENT_NAME = (
+    "actionable_opportunity_event_pair_experts"
+)
 EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME = "event_barrier_pair_return_margin"
 EVENT_PAIR_REGIME_EXPERT_EXPERIMENT_NAME = "event_barrier_pair_regime_experts"
 EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME = "event_barrier_dual_actionability"
@@ -89,6 +92,7 @@ ExperimentMode = Literal[
     "two_stage_actionable",
     "two_stage_event",
     "two_stage_event_pair_experts",
+    "hybrid_actionable_event_pair_experts",
     "two_stage_event_pair_return_margin",
     "two_stage_event_pair_regime_experts",
     "event_dual_actionability",
@@ -1001,6 +1005,91 @@ def _event_two_stage_prediction_frame(
     return predictions
 
 
+def _hybrid_actionable_event_prediction_frame(
+    source: pd.DataFrame,
+    *,
+    direction_probabilities: np.ndarray,
+    opportunity_probabilities: np.ndarray,
+    confidence_floor: float,
+    fold: int,
+    experiment: str,
+    variant: ModelVariant,
+) -> pd.DataFrame:
+    """Use friction-positive opportunity with event-barrier pair direction."""
+    if confidence_floor < CONFIDENCE_FLOOR:
+        raise ValueError("confidence floor must not be lowered below 0.60")
+    columns = [
+        "decision_time",
+        "instrument",
+        ACTIONABLE_TARGET_COLUMN,
+        EVENT_ACTIONABLE_TARGET_COLUMN,
+        EVENT_DIRECTION_TARGET_COLUMN,
+        EVENT_LONG_NET_RETURN_COLUMN,
+        EVENT_SHORT_NET_RETURN_COLUMN,
+        EVENT_STEP_COLUMN,
+        EVENT_BARRIER_RETURN_COLUMN,
+        "m1_spread_bps",
+    ]
+    columns.extend(
+        column for column in QUALIFICATION_REGIME_COLUMNS if column in source.columns
+    )
+    predictions = source[columns].copy()
+    predictions[TARGET_COLUMN] = predictions[EVENT_DIRECTION_TARGET_COLUMN].astype(int)
+    predictions[LONG_NET_RETURN_COLUMN] = predictions[
+        EVENT_LONG_NET_RETURN_COLUMN
+    ].astype(float)
+    predictions[SHORT_NET_RETURN_COLUMN] = predictions[
+        EVENT_SHORT_NET_RETURN_COLUMN
+    ].astype(float)
+
+    direction_probabilities = np.clip(
+        np.asarray(direction_probabilities, dtype=float),
+        1e-7,
+        1.0 - 1e-7,
+    )
+    opportunity_probabilities = np.clip(
+        np.asarray(opportunity_probabilities, dtype=float),
+        1e-7,
+        1.0 - 1e-7,
+    )
+    predictions["raw_positive_probability"] = direction_probabilities
+    predictions["positive_probability"] = direction_probabilities
+    predictions["predicted_long"] = direction_probabilities >= 0.50
+    predictions["direction_confidence"] = np.maximum(
+        direction_probabilities,
+        1.0 - direction_probabilities,
+    )
+    predictions["opportunity_probability"] = opportunity_probabilities
+    predictions["predicted_opportunity"] = (
+        opportunity_probabilities >= confidence_floor
+    )
+    predictions["confidence"] = np.minimum(
+        predictions["direction_confidence"],
+        predictions["opportunity_probability"],
+    )
+    predictions["active_trade"] = (
+        predictions["predicted_opportunity"]
+        & (predictions["direction_confidence"] >= confidence_floor)
+    )
+    predictions["selected_net_return"] = np.where(
+        predictions["predicted_long"],
+        predictions[LONG_NET_RETURN_COLUMN],
+        predictions[SHORT_NET_RETURN_COLUMN],
+    )
+    predictions["fold"] = fold
+    predictions["experiment"] = experiment
+    predictions["model_variant"] = variant.name
+    predictions["calibration_method"] = "none"
+    predictions["decision_threshold"] = 0.50
+    predictions["confidence_floor"] = confidence_floor
+    predictions["actionable_label_policy"] = ACTIONABLE_LABEL_POLICY
+    predictions["event_label_policy"] = EVENT_LABEL_POLICY
+    predictions["confidence_policy"] = (
+        "actionable_opportunity_and_event_direction_confidence_gte_floor"
+    )
+    return predictions
+
+
 def _ensure_event_dual_actionability_targets(
     frame: pd.DataFrame,
 ) -> pd.DataFrame:
@@ -1182,8 +1271,13 @@ def _summarize_predictions(
         return summary
 
     if "event_label_policy" in predictions.columns:
+        event_mask_column = (
+            EVENT_ACTIONABLE_TARGET_COLUMN
+            if EVENT_ACTIONABLE_TARGET_COLUMN in predictions.columns
+            else ACTIONABLE_TARGET_COLUMN
+        )
         event_direction = predictions.loc[
-            predictions[ACTIONABLE_TARGET_COLUMN] == 1
+            predictions[event_mask_column] == 1
         ].copy()
         summary["event_direction_evaluated_rows"] = int(len(event_direction))
         if (
@@ -1631,6 +1725,79 @@ def _fit_event_pair_experts_for_outer(
     counts: dict[str, Any] = {
         "fit_rows": int(len(fit)),
         "early_stop_rows": int(len(early)),
+        "pair_count": int(len(direction_models)),
+        "pair_counts": pair_counts,
+    }
+    return direction_models, opportunity_model, feature_columns, counts
+
+
+def _fit_hybrid_actionable_event_pair_experts_for_outer(
+    training_window: pd.DataFrame,
+    *,
+    variant: ModelVariant,
+    horizon_bars: int,
+) -> tuple[dict[str, XGBClassifier], XGBClassifier, list[str], dict[str, Any]]:
+    """Fit actionable opportunity plus event-barrier direction experts."""
+    feature_columns = _feature_columns(variant.feature_policy)
+    fit, early = _split_internal_early_stopping_tail(
+        training_window,
+        horizon_bars=horizon_bars,
+    )
+
+    opportunity_variant = ModelVariant(
+        name="actionable_event_hybrid_opportunity",
+        parameter_overrides=variant.parameter_overrides,
+        sample_weight_policy="class_balance",
+        calibration="none",
+        feature_policy=variant.feature_policy,
+    )
+    opportunity_model = _fit_binary_variant(
+        opportunity_variant,
+        fit=fit,
+        early_stop=early,
+        feature_columns=feature_columns,
+        target_column=ACTIONABLE_TARGET_COLUMN,
+        sample_weight_policy="class_balance",
+    )
+
+    direction_models: dict[str, XGBClassifier] = {}
+    pair_counts: dict[str, dict[str, int]] = {}
+    instruments = sorted(str(value) for value in training_window["instrument"].unique())
+    if not instruments:
+        raise ValueError("hybrid pair-expert training requires at least one instrument")
+
+    for instrument in instruments:
+        directional_fit = fit.loc[
+            (fit["instrument"] == instrument)
+            & (fit[EVENT_ACTIONABLE_TARGET_COLUMN] == 1)
+        ].copy()
+        directional_early = early.loc[
+            (early["instrument"] == instrument)
+            & (early[EVENT_ACTIONABLE_TARGET_COLUMN] == 1)
+        ].copy()
+        if directional_fit.empty or directional_early.empty:
+            raise ValueError(
+                f"hybrid pair expert {instrument} lacks event-actionable fit/early-stop rows"
+            )
+        model = _fit_binary_variant(
+            variant,
+            fit=directional_fit,
+            early_stop=directional_early,
+            feature_columns=feature_columns,
+            target_column=EVENT_DIRECTION_TARGET_COLUMN,
+            sample_weight_policy="class_balance",
+        )
+        direction_models[instrument] = model
+        pair_counts[instrument] = {
+            "event_actionable_fit_rows": int(len(directional_fit)),
+            "event_actionable_early_stop_rows": int(len(directional_early)),
+        }
+
+    counts: dict[str, Any] = {
+        "fit_rows": int(len(fit)),
+        "early_stop_rows": int(len(early)),
+        "actionable_fit_rows": int(fit[ACTIONABLE_TARGET_COLUMN].sum()),
+        "actionable_early_stop_rows": int(early[ACTIONABLE_TARGET_COLUMN].sum()),
         "pair_count": int(len(direction_models)),
         "pair_counts": pair_counts,
     }
@@ -2615,7 +2782,13 @@ def run_nested_qualification_experiments(
         raise ValueError("qualification dataset must contain both directional classes")
     if experiments is None:
         experiments = default_experiments()
-    if any(experiment.mode == "two_stage_actionable" for experiment in experiments):
+    if any(
+        experiment.mode in {
+            "two_stage_actionable",
+            "hybrid_actionable_event_pair_experts",
+        }
+        for experiment in experiments
+    ):
         dataset = _ensure_actionable_target(dataset)
         if dataset[ACTIONABLE_TARGET_COLUMN].nunique() < 2:
             raise ValueError(
@@ -2625,6 +2798,7 @@ def run_nested_qualification_experiments(
         experiment.mode in {
             "two_stage_event",
             "two_stage_event_pair_experts",
+            "hybrid_actionable_event_pair_experts",
             "two_stage_event_pair_return_margin",
             "two_stage_event_pair_regime_experts",
             "event_dual_actionability",
@@ -2889,6 +3063,57 @@ def run_nested_qualification_experiments(
                     "selected_variant": variant.name,
                     "decision_threshold": decision_threshold,
                     "opportunity_threshold": confidence_floor,
+                    "event_label_policy": EVENT_LABEL_POLICY,
+                    "expert_router": "instrument_identity",
+                    "candidate_reports": [],
+                    "training_counts": training_counts,
+                }
+            elif experiment.mode == "hybrid_actionable_event_pair_experts":
+                if len(experiment.variants) != 1 or experiment.tune_decision_threshold:
+                    raise ValueError(
+                        "hybrid pair-expert research must remain a fixed bounded candidate"
+                    )
+                variant = experiment.variants[0]
+                decision_threshold = 0.50
+                (
+                    direction_models,
+                    opportunity_model,
+                    feature_columns,
+                    training_counts,
+                ) = _fit_hybrid_actionable_event_pair_experts_for_outer(
+                    outer_train,
+                    variant=variant,
+                    horizon_bars=horizon_bars,
+                )
+                model = None
+                direction_probabilities = _pair_expert_probabilities(
+                    direction_models,
+                    outer_validation,
+                    feature_columns,
+                )
+                opportunity_probabilities = _probabilities(
+                    opportunity_model,
+                    outer_validation,
+                    feature_columns,
+                )
+                predictions = _hybrid_actionable_event_prediction_frame(
+                    outer_validation,
+                    direction_probabilities=direction_probabilities,
+                    opportunity_probabilities=opportunity_probabilities,
+                    confidence_floor=confidence_floor,
+                    fold=fold_index,
+                    experiment=experiment.name,
+                    variant=variant,
+                )
+                selection = {
+                    "policy": (
+                        "fixed_actionable_opportunity_event_pair_direction_v1_"
+                        "no_outer_tuning"
+                    ),
+                    "selected_variant": variant.name,
+                    "decision_threshold": decision_threshold,
+                    "opportunity_threshold": confidence_floor,
+                    "actionable_label_policy": ACTIONABLE_LABEL_POLICY,
                     "event_label_policy": EVENT_LABEL_POLICY,
                     "expert_router": "instrument_identity",
                     "candidate_reports": [],
