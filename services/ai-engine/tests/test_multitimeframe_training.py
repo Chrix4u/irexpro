@@ -15,8 +15,8 @@ from app.domain.models.multitimeframe_features import (
 from app.domain.training.multitimeframe_corpus import build_multitimeframe_feature_corpus
 from app.domain.training.train_multitimeframe import (
     CLASS_BALANCE_SAMPLE_WEIGHT_POLICY,
-    ECONOMIC_SAMPLE_WEIGHT_POLICY,
     DIRECTION_THRESHOLD_SELECTION_POLICY,
+    ECONOMIC_SAMPLE_WEIGHT_POLICY,
     EVENT_ACTIONABLE_TARGET_COLUMN,
     EVENT_BARRIER_RETURN_COLUMN,
     EVENT_DIRECTION_TARGET_COLUMN,
