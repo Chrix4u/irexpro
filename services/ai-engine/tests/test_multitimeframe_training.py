@@ -213,7 +213,7 @@ def test_event_barrier_timeout_keeps_row_and_uses_exact_horizon_returns():
     )
 
 
-def test_mtf_v3_features_are_causal_finite_and_in_contract():
+def test_mtf_v4_features_are_causal_finite_and_in_contract():
     corpus = build_multitimeframe_feature_corpus(_m1_fixture())
     prepared = prepare_instrument_corpus(
         corpus,
@@ -221,7 +221,7 @@ def test_mtf_v3_features_are_causal_finite_and_in_contract():
         horizon_bars=5,
     )
 
-    assert MULTITIMEFRAME_RUNTIME_PROFILE == "multitimeframe_v3"
+    assert MULTITIMEFRAME_RUNTIME_PROFILE == "multitimeframe_v4"
     for suffix in MULTITIMEFRAME_DIRECT_FEATURE_COLUMNS:
         column = f"m1_{suffix}"
         assert column in corpus.columns
@@ -231,7 +231,18 @@ def test_mtf_v3_features_are_causal_finite_and_in_contract():
     for column in CROSS_TIMEFRAME_FEATURE_COLUMNS:
         assert column in MULTITIMEFRAME_FEATURE_COLUMNS
         assert np.isfinite(prepared[column].to_numpy(dtype=float)).all()
+
+    for column in (
+        "trend_alignment_score",
+        "momentum_alignment_score",
+        "trend_momentum_agreement",
+        "higher_timeframe_trend_score",
+        "entry_momentum_score",
+    ):
         assert prepared[column].between(-1.0, 1.0).all()
+
+    assert prepared["volatility_ratio_m1_h1"].ge(0.0).all()
+    assert prepared["spread_to_atr_ratio"].ge(0.0).all()
 
 
 def test_class_balance_weights_favor_minority_without_extreme_scaling():
