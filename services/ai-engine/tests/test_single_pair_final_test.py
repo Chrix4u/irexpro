@@ -203,14 +203,19 @@ def test_future_holdout_attaches_actionable_target_before_split_validation(
     monkeypatch.setattr(final_test, "load_and_prepare_corpora", fake_load)
     monkeypatch.setattr(final_test, "_ensure_actionable_target", fake_attach)
 
-    with pytest.raises(ValueError, match="at least 1000"):
+    def stop_before_model_fit(*_args, **_kwargs):
+        raise RuntimeError("stop-after-label-validation")
+
+    monkeypatch.setattr(final_test, "_fit_pair_candidate", stop_before_model_fit)
+
+    with pytest.raises(RuntimeError, match="stop-after-label-validation"):
         evaluate_single_pair_future_holdout(
             {"USDJPY": tmp_path / "unused.csv"},
             horizon_bars=1,
             qualification_report_path=qualification,
             report_path=tmp_path / "future.json",
             future_holdout_start="2026-07-01T00:00:00Z",
-            min_holdout_rows=1000,
+            min_holdout_rows=500,
         )
 
     assert called["value"] is True
