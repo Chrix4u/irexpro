@@ -54,6 +54,7 @@ EVENT_PAIR_EXPERT_EXPERIMENT_NAME = "event_barrier_pair_experts"
 EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME = "event_barrier_pair_return_margin"
 EVENT_PAIR_REGIME_EXPERT_EXPERIMENT_NAME = "event_barrier_pair_regime_experts"
 EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME = "event_barrier_dual_actionability"
+EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME = "event_barrier_hybrid_opportunity_dual_direction"
 EVENT_LONG_ACTIONABLE_TARGET_COLUMN = "event_long_actionable_target"
 EVENT_SHORT_ACTIONABLE_TARGET_COLUMN = "event_short_actionable_target"
 DUAL_ACTION_MARGIN_FLOOR = 0.10
@@ -94,6 +95,7 @@ ExperimentMode = Literal[
     "two_stage_event_pair_return_margin",
     "two_stage_event_pair_regime_experts",
     "event_dual_actionability",
+    "event_hybrid_dual_direction",
 ]
 
 
@@ -1186,6 +1188,53 @@ def _event_dual_actionability_prediction_frame(
     return predictions
 
 
+def _event_hybrid_dual_direction_prediction_frame(
+    source: pd.DataFrame,
+    *,
+    long_probabilities: np.ndarray,
+    short_probabilities: np.ndarray,
+    opportunity_probabilities: np.ndarray,
+    confidence_floor: float,
+    fold: int,
+    experiment: str,
+    variant: ModelVariant,
+) -> pd.DataFrame:
+    """Use pooled opportunity confidence with normalized dual-side direction confidence."""
+    predictions = _event_dual_actionability_prediction_frame(
+        source,
+        long_probabilities=long_probabilities,
+        short_probabilities=short_probabilities,
+        confidence_floor=confidence_floor,
+        fold=fold,
+        experiment=experiment,
+        variant=variant,
+    )
+    opportunity_probabilities = np.clip(
+        np.asarray(opportunity_probabilities, dtype=float),
+        1e-7,
+        1.0 - 1e-7,
+    )
+    if len(opportunity_probabilities) != len(predictions):
+        raise ValueError("hybrid opportunity probabilities must align with source rows")
+
+    predictions["opportunity_probability"] = opportunity_probabilities
+    predictions["predicted_opportunity"] = opportunity_probabilities >= confidence_floor
+    predictions["confidence"] = np.minimum(
+        opportunity_probabilities,
+        predictions["direction_confidence"].to_numpy(dtype=float),
+    )
+    predictions["active_trade"] = (
+        predictions["predicted_opportunity"]
+        & (predictions["direction_confidence"] >= confidence_floor)
+        & (predictions["action_probability_margin"] >= DUAL_ACTION_MARGIN_FLOOR)
+    )
+    predictions["confidence_policy"] = (
+        "pooled_opportunity_probability_gte_floor_and_normalized_direction_"
+        "confidence_gte_floor_and_side_margin_gte_0_10"
+    )
+    return predictions
+
+
 def _opportunity_classification(
     predictions: pd.DataFrame,
     *,
@@ -1675,6 +1724,72 @@ def _fit_event_dual_actionability_for_outer(
         "action_margin_floor": DUAL_ACTION_MARGIN_FLOOR,
     }
     return models, feature_columns, counts
+
+
+def _fit_event_hybrid_dual_direction_for_outer(
+    training_window: pd.DataFrame,
+    *,
+    variant: ModelVariant,
+    horizon_bars: int,
+) -> tuple[dict[str, XGBClassifier], XGBClassifier, list[str], dict[str, Any]]:
+    """Fit a pooled event-opportunity model plus independent LONG/SHORT direction models."""
+    feature_columns = _feature_columns(variant.feature_policy)
+    labeled = _ensure_event_dual_actionability_targets(training_window)
+    fit, early = _split_internal_early_stopping_tail(
+        labeled,
+        horizon_bars=horizon_bars,
+    )
+
+    opportunity_variant = ModelVariant(
+        name=f"{variant.name}_opportunity",
+        parameter_overrides=variant.parameter_overrides,
+        sample_weight_policy="class_balance",
+        calibration="none",
+        feature_policy=variant.feature_policy,
+    )
+    opportunity_model = _fit_binary_variant(
+        opportunity_variant,
+        fit=fit,
+        early_stop=early,
+        feature_columns=feature_columns,
+        target_column=EVENT_ACTIONABLE_TARGET_COLUMN,
+        sample_weight_policy="class_balance",
+    )
+
+    models: dict[str, XGBClassifier] = {}
+    for side, target_column in {
+        "long": EVENT_LONG_ACTIONABLE_TARGET_COLUMN,
+        "short": EVENT_SHORT_ACTIONABLE_TARGET_COLUMN,
+    }.items():
+        side_variant = ModelVariant(
+            name=f"{variant.name}_{side}",
+            parameter_overrides=variant.parameter_overrides,
+            sample_weight_policy="class_balance",
+            calibration="none",
+            feature_policy=variant.feature_policy,
+        )
+        models[side] = _fit_binary_variant(
+            side_variant,
+            fit=fit,
+            early_stop=early,
+            feature_columns=feature_columns,
+            target_column=target_column,
+            sample_weight_policy="class_balance",
+        )
+
+    counts = {
+        "fit_rows": int(len(fit)),
+        "early_stop_rows": int(len(early)),
+        "event_actionable_fit_rows": int(fit[EVENT_ACTIONABLE_TARGET_COLUMN].sum()),
+        "event_actionable_early_stop_rows": int(
+            early[EVENT_ACTIONABLE_TARGET_COLUMN].sum()
+        ),
+        "long_actionable_fit_rows": int(fit[EVENT_LONG_ACTIONABLE_TARGET_COLUMN].sum()),
+        "short_actionable_fit_rows": int(fit[EVENT_SHORT_ACTIONABLE_TARGET_COLUMN].sum()),
+        "action_margin_floor": DUAL_ACTION_MARGIN_FLOOR,
+        "confidence_floor_policy": "opportunity_and_normalized_direction_gte_floor",
+    }
+    return models, opportunity_model, feature_columns, counts
 
 
 def _fit_event_pair_experts_for_outer(
@@ -2745,6 +2860,7 @@ def run_nested_qualification_experiments(
             "two_stage_event_pair_return_margin",
             "two_stage_event_pair_regime_experts",
             "event_dual_actionability",
+            "event_hybrid_dual_direction",
         }
         for experiment in experiments
     ):
@@ -2964,6 +3080,62 @@ def run_nested_qualification_experiments(
                     "action_margin_floor": DUAL_ACTION_MARGIN_FLOOR,
                     "event_label_policy": EVENT_LABEL_POLICY,
                     "direction_policy": "independent_long_vs_rest_and_short_vs_rest",
+                    "candidate_reports": [],
+                    "training_counts": training_counts,
+                }
+            elif experiment.mode == "event_hybrid_dual_direction":
+                if len(experiment.variants) != 1 or experiment.tune_decision_threshold:
+                    raise ValueError(
+                        "hybrid dual-direction research must remain a fixed bounded candidate"
+                    )
+                variant = experiment.variants[0]
+                decision_threshold = 0.50
+                (
+                    direction_models,
+                    opportunity_model,
+                    feature_columns,
+                    training_counts,
+                ) = _fit_event_hybrid_dual_direction_for_outer(
+                    outer_train,
+                    variant=variant,
+                    horizon_bars=horizon_bars,
+                )
+                model = None
+                long_probabilities = _probabilities(
+                    direction_models["long"],
+                    outer_validation,
+                    feature_columns,
+                )
+                short_probabilities = _probabilities(
+                    direction_models["short"],
+                    outer_validation,
+                    feature_columns,
+                )
+                opportunity_probabilities = _probabilities(
+                    opportunity_model,
+                    outer_validation,
+                    feature_columns,
+                )
+                predictions = _event_hybrid_dual_direction_prediction_frame(
+                    outer_validation,
+                    long_probabilities=long_probabilities,
+                    short_probabilities=short_probabilities,
+                    opportunity_probabilities=opportunity_probabilities,
+                    confidence_floor=confidence_floor,
+                    fold=fold_index,
+                    experiment=experiment.name,
+                    variant=variant,
+                )
+                selection = {
+                    "policy": "fixed_event_barrier_v8_hybrid_opportunity_dual_direction_no_outer_tuning",
+                    "selected_variant": variant.name,
+                    "decision_threshold": decision_threshold,
+                    "opportunity_threshold": confidence_floor,
+                    "opportunity_classification_threshold": OPPORTUNITY_CLASSIFICATION_THRESHOLD,
+                    "direction_confidence_threshold": confidence_floor,
+                    "action_margin_floor": DUAL_ACTION_MARGIN_FLOOR,
+                    "event_label_policy": EVENT_LABEL_POLICY,
+                    "direction_policy": "independent_long_vs_rest_and_short_vs_rest_normalized",
                     "candidate_reports": [],
                     "training_counts": training_counts,
                 }
