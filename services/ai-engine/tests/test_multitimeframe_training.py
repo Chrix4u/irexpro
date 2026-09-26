@@ -15,6 +15,7 @@ from app.domain.models.multitimeframe_features import (
 from app.domain.training.multitimeframe_corpus import build_multitimeframe_feature_corpus
 from app.domain.training.train_multitimeframe import (
     CLASS_BALANCE_SAMPLE_WEIGHT_POLICY,
+    DIRECTION_THRESHOLD_SELECTION_POLICY,
     ECONOMIC_SAMPLE_WEIGHT_POLICY,
     EVENT_ACTIONABLE_TARGET_COLUMN,
     EVENT_BARRIER_RETURN_COLUMN,
@@ -29,6 +30,7 @@ from app.domain.training.train_multitimeframe import (
     _economic_sample_weights,
     _load_fold_checkpoint,
     _non_overlapping_portfolio_periods,
+    _select_direction_threshold,
     _split_internal_early_stopping_tail,
     _trade_metrics,
     _write_fold_checkpoint,
@@ -305,6 +307,27 @@ def test_prepare_instrument_corpus_rejects_future_profitability_row_filter():
             min_net_return_bps=0.1,
         )
 
+
+
+def test_single_pair_direction_threshold_is_selected_from_internal_labels():
+    labels = pd.Series([0, 0, 0, 1, 1, 1])
+    probabilities = np.array([0.41, 0.52, 0.54, 0.56, 0.62, 0.71])
+
+    threshold, balanced_accuracy = _select_direction_threshold(labels, probabilities)
+
+    assert DIRECTION_THRESHOLD_SELECTION_POLICY == "single_pair_internal_balanced_accuracy_grid_v1"
+    assert threshold == pytest.approx(0.55)
+    assert balanced_accuracy == pytest.approx(1.0)
+
+
+def test_single_pair_direction_threshold_ties_prefer_half():
+    labels = pd.Series([0, 0, 1, 1])
+    probabilities = np.array([0.10, 0.20, 0.80, 0.90])
+
+    threshold, balanced_accuracy = _select_direction_threshold(labels, probabilities)
+
+    assert threshold == pytest.approx(0.50)
+    assert balanced_accuracy == pytest.approx(1.0)
 
 def test_trading_gate_equal_weights_same_time_and_skips_overlapping_horizons():
     start = pd.Timestamp("2026-01-05T10:00:00Z")
