@@ -229,6 +229,27 @@ jobs:
           print('TEST_ROWS', r['split']['test_rows'])
           print('APPROVED_FOR_PAPER', r['approved_for_paper'])
           print('APPROVED_FOR_LIVE', r['approved_for_live'])
+          d=r.get('direction_failure_diagnostics', {})
+          print('DIRECTION_DIAGNOSTIC_POLICY', d.get('policy'))
+          for scope in ('validation', 'untouched_test'):
+              block=d.get(scope, {})
+              print(f'DIRECTION_DIAGNOSTICS_{scope.upper()}', json.dumps({
+                  'rows': block.get('rows'),
+                  'event_direction_rows': block.get('event_direction_rows'),
+                  'active_trades': block.get('active_trades'),
+                  'balanced_accuracy': block.get('balanced_accuracy'),
+                  'confusion': block.get('confusion'),
+                  'true_long_fraction': block.get('true_long_fraction'),
+                  'predicted_long_fraction': block.get('predicted_long_fraction'),
+                  'mean_positive_probability': block.get('mean_positive_probability'),
+                  'brier_score': block.get('brier_score'),
+              }, sort_keys=True))
+              print(f'DIRECTION_TEMPORAL_QUARTILES_{scope.upper()}', json.dumps(
+                  block.get('temporal_quartiles', []), sort_keys=True
+              ))
+              print(f'DIRECTION_CONFIDENCE_BANDS_{scope.upper()}', json.dumps(
+                  block.get('confidence_bands', []), sort_keys=True
+              ))
           PY
           REMOTE
 
