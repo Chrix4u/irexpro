@@ -1,7 +1,6 @@
 from app.domain.training.model_qualification import (
-    EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME,
-    EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
     EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+    EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME,
 )
 from app.domain.training.single_pair_qualification import (
     candidate_summary,
@@ -15,19 +14,13 @@ def test_single_pair_experiment_matrix_is_intentionally_bounded():
     assert [experiment.name for experiment in experiments] == [
         "baseline",
         EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
-        EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME,
-        EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
+        EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME,
     ]
     assert experiments[0].mode == "directional"
     assert experiments[1].mode == "two_stage_event_pair_experts"
     assert experiments[1].variants[0].name == "event_barrier_v4_pair_direction"
-    assert experiments[2].mode == "event_dual_actionability"
-    assert experiments[2].variants[0].name == "event_barrier_v7_dual_actionability"
-    assert experiments[3].mode == "event_hybrid_dual_direction"
-    assert (
-        experiments[3].variants[0].name
-        == "event_barrier_v8_hybrid_dual_direction"
-    )
+    assert experiments[2].mode == "two_stage_event_pair_return_margin"
+    assert experiments[2].variants[0].name == "event_barrier_v5_pair_return_margin"
 
 
 def test_candidate_summary_uses_event_pair_expert_gate():
