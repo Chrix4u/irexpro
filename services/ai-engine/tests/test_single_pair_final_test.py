@@ -11,9 +11,9 @@ from app.domain.training.single_pair_final_test import (
     SINGLE_PAIR_FINAL_TEST_POLICY,
     SINGLE_PAIR_FUTURE_HOLDOUT_POLICY,
     _direction_failure_diagnostics,
-    evaluate_single_pair_future_holdout,
     _load_qualified_single_pair,
     _single_pair_final_gate,
+    evaluate_single_pair_future_holdout,
 )
 
 
