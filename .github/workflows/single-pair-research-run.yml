@@ -25,7 +25,7 @@ permissions:
 env:
   CANDIDATE_SHA: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.workflow_run.head_sha }}
   TARGET_PAIR: ${{ github.event_name == 'workflow_dispatch' && inputs.pair || 'USDJPY' }}
-  TARGET_HORIZON: ${{ github.event_name == 'workflow_dispatch' && inputs.horizon || '3' }}
+  TARGET_HORIZON: ${{ github.event_name == 'workflow_dispatch' && inputs.horizon || '1' }}
   STAGING_SSH_HOST: vps.lightworldtech.com
   STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
   STAGING_SSH_USER: ${{ vars.STAGING_SSH_USER }}
