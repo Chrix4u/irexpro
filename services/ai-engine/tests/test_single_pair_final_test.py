@@ -104,7 +104,7 @@ def test_direction_failure_diagnostics_reports_confusion_and_temporal_drift():
             "decision_time": pd.date_range(
                 "2026-07-01", periods=8, freq="min", tz="UTC"
             ),
-            "event_actionable": [1] * 8,
+            "actionable_target": [1] * 8,
             "target": [0, 0, 1, 1, 0, 1, 0, 1],
             "predicted_long": [False, True, True, False, True, True, False, False],
             "positive_probability": [0.2, 0.7, 0.8, 0.3, 0.65, 0.75, 0.4, 0.45],
@@ -130,7 +130,7 @@ def test_direction_failure_diagnostics_is_diagnostic_only_for_empty_event_rows()
             "decision_time": pd.date_range(
                 "2026-07-01", periods=2, freq="min", tz="UTC"
             ),
-            "event_actionable": [0, 0],
+            "actionable_target": [0, 0],
             "target": [0, 1],
             "predicted_long": [False, True],
             "positive_probability": [0.3, 0.7],
