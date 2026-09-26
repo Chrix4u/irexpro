@@ -152,6 +152,7 @@ jobs:
               --source dukascopy_frozen_current
           fi
 
+          set +e
           "$python_bin" - "$corpus" "$fresh_holdout_start" <<'PY'
           import sys
           import pandas as pd
@@ -167,9 +168,13 @@ jobs:
               raise SystemExit(42)
           PY
           status="$?"
+          set -e
           if [[ "$status" == '42' ]]; then
             echo "SINGLE_PAIR_RESEARCH_HOLD reason=insufficient_genuinely_future_rows minimum=2500"
             exit 0
+          fi
+          if [[ "$status" != '0' ]]; then
+            exit "$status"
           fi
 
           if [[ ! -s "$qualification" ]]; then
