@@ -5,27 +5,12 @@ on:
     workflows: ['Staging Deploy']
     types: [completed]
   workflow_dispatch:
-    inputs:
-      pair:
-        description: Pair to research first
-        required: true
-        default: USDJPY
-        type: choice
-        options: [USDJPY, EURUSD, GBPUSD, AUDUSD, USDCAD, USDCHF]
-      horizon:
-        description: Entry horizon in M1 bars
-        required: true
-        default: '1'
-        type: choice
-        options: ['1', '3', '5', '10']
 
 permissions:
   contents: read
 
 env:
   CANDIDATE_SHA: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.workflow_run.head_sha }}
-  TARGET_PAIR: ${{ github.event_name == 'workflow_dispatch' && inputs.pair || 'USDJPY' }}
-  TARGET_HORIZON: ${{ github.event_name == 'workflow_dispatch' && inputs.horizon || '1' }}
   STAGING_SSH_HOST: vps.lightworldtech.com
   STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
   STAGING_SSH_USER: ${{ vars.STAGING_SSH_USER }}
@@ -34,7 +19,7 @@ env:
 
 jobs:
   research:
-    name: Single-pair event expert diagnostic and qualification
+    name: USDJPY v4 fresh-data qualification and future holdout
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
@@ -43,7 +28,7 @@ jobs:
       group: irexpro-single-pair-research
       cancel-in-progress: false
     runs-on: ubuntu-24.04
-    timeout-minutes: 240
+    timeout-minutes: 180
     environment:
       name: staging
 
@@ -71,11 +56,7 @@ jobs:
             exit 0
           fi
           parent_sha="$(git rev-parse "$CANDIDATE_SHA^1" 2>/dev/null || true)"
-          if [[ "$parent_sha" =~ ^[0-9a-f]{40}$ ]]; then
-            changed="$(git diff --name-only "$parent_sha" "$CANDIDATE_SHA")"
-          else
-            changed="$(git diff-tree --no-commit-id --name-only -r --root "$CANDIDATE_SHA")"
-          fi
+          changed="$(git diff --name-only "$parent_sha" "$CANDIDATE_SHA" 2>/dev/null || true)"
           if grep -Eq '^(\.github/workflows/single-pair-research-run\.yml|services/ai-engine/app/domain/(training|models)/|services/ai-engine/(pyproject\.toml|requirements\.lock)$)' <<<"$changed"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
@@ -97,7 +78,7 @@ jobs:
           printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
 
-      - name: Run event-expert diagnostic then qualification
+      - name: Run fresh USDJPY v4 study
         if: steps.relevance.outputs.run == 'true'
         shell: bash
         run: |
@@ -105,127 +86,153 @@ jobs:
           ssh -i "$HOME/.ssh/irexpro_staging" -p "$STAGING_SSH_PORT" \
             -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
-            "bash -s -- $CANDIDATE_SHA $TARGET_PAIR $TARGET_HORIZON" <<'REMOTE'
+            "bash -s -- $CANDIDATE_SHA" <<'REMOTE'
           set -Eeuo pipefail
+          umask 077
+
           candidate_sha="$1"
-          pair="$2"
-          horizon="$3"
           staging='/home/lightworld/webapps/irexpro-staging'
-          six_root='/home/lightworld/research/irexpro-six-pair'
-          single_root='/home/lightworld/research/irexpro-single-pair'
-          marker="$six_root/last-research-sha"
+          research_root='/home/lightworld/research/irexpro-usdjpy-v4'
+          output="$research_root/$candidate_sha"
+          raw="$output/raw/USDJPY_M1.csv"
+          corpus="$output/corpora/USDJPY_MTF.csv"
+          qualification="$output/qualification.json"
+          future_report="$output/future-holdout.json"
+          cache='/home/lightworld/research/dukascopy-raw-cache'
+          effective_before_file="$output/effective-before.txt"
+          readonly pair='USDJPY'
+          readonly horizon='1'
+          readonly fresh_holdout_start='2026-09-22T18:00:00Z'
 
           cd "$staging"
           test "$(git rev-parse HEAD)" = "$candidate_sha"
-          case "$pair" in USDJPY|EURUSD|GBPUSD|AUDUSD|USDCAD|USDCHF) ;; *) exit 2 ;; esac
-          case "$horizon" in 1|3|5|10) ;; *) exit 3 ;; esac
+          test -z "$(git status --porcelain)"
 
-          source_sha="$(tr -d '[:space:]' < "$marker" 2>/dev/null || true)"
-          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || {
-            echo "SINGLE_PAIR_RESEARCH_HOLD reason=missing_evaluated_six_pair_lineage"
-            exit 0
-          }
-          source_root="$six_root/$source_sha"
-          corpus="$source_root/corpora/${pair}_MTF.csv"
-          source_report="$source_root/reports/model_qualification_${horizon}m.json"
-          # The frozen qualification cutoff is study-wide. 3m was not part of
-          # the original 1/5/10 report set, so reuse the frozen 1m report only
-          # to recover that same cutoff timestamp; the 3m labels/evaluation are
-          # rebuilt causally from the unchanged corpus.
-          if [[ "$horizon" == "3" ]]; then
-            source_report="$source_root/reports/model_qualification_1m.json"
-          fi
-          test -s "$corpus"
-          test -s "$source_report"
-
-          output="$single_root/$candidate_sha/${pair}/h${horizon}"
-          mkdir -p "$output"
           cd "$staging/services/ai-engine"
           python_bin='.venv/bin/python'
           test -x "$python_bin"
           export PYTHONPATH="$PWD"
+          export IREXPRO_XGB_N_JOBS=4
 
-          cutoff="$("$python_bin" - "$source_report" <<'PY'
-          import json, sys
-          print(json.load(open(sys.argv[1]))['qualification_decision_time_before'])
+          runtime_profile="$("$python_bin" - <<'PY'
+          from app.domain.models.multitimeframe_features import MULTITIMEFRAME_RUNTIME_PROFILE
+          print(MULTITIMEFRAME_RUNTIME_PROFILE)
           PY
           )"
+          if [[ "$runtime_profile" != 'multitimeframe_v4' ]]; then
+            echo "SINGLE_PAIR_RESEARCH_HOLD reason=unexpected_runtime_profile profile=$runtime_profile"
+            exit 0
+          fi
 
-          run_candidate() {
-            mode="$1"
-            splits="$2"
-            report="$output/${mode}.json"
+          install -d -m 700 "$output/raw" "$output/corpora" "$cache"
+          if [[ ! -s "$effective_before_file" ]]; then
+            date -u '+%Y-%m-%dT%H:00:00Z' > "$effective_before_file.tmp"
+            chmod 600 "$effective_before_file.tmp"
+            mv -f "$effective_before_file.tmp" "$effective_before_file"
+          fi
+          effective_before="$(tr -d '[:space:]' < "$effective_before_file")"
+          echo "FRESH_DATA_EFFECTIVE_BEFORE $effective_before"
+
+          if [[ ! -s "$raw" ]]; then
+            "$python_bin" -m app.domain.training.collect_dukascopy \
+              --instrument "$pair" \
+              --target-rows 100000 \
+              --output "$raw" \
+              --max-lookback-days 180 \
+              --parallelism 4 \
+              --cache-dir "$cache" \
+              --effective-before "$effective_before"
+          fi
+
+          if [[ ! -s "$corpus" ]]; then
+            "$python_bin" -m app.domain.training.multitimeframe_corpus \
+              --m1-dataset "$raw" \
+              --instrument "$pair" \
+              --output "$corpus" \
+              --source dukascopy_frozen_current
+          fi
+
+          "$python_bin" - "$corpus" "$fresh_holdout_start" <<'PY'
+          import sys
+          import pandas as pd
+          path, boundary = sys.argv[1], pd.Timestamp(sys.argv[2])
+          frame = pd.read_csv(path, usecols=['decision_time'])
+          times = pd.to_datetime(frame['decision_time'], utc=True, errors='raise')
+          fresh = times[times >= boundary]
+          print('FRESH_CORPUS_ROWS', len(frame))
+          print('FRESH_HOLDOUT_RAW_ROWS', len(fresh))
+          print('FRESH_CORPUS_START', times.min().isoformat())
+          print('FRESH_CORPUS_END', times.max().isoformat())
+          if len(fresh) < 2500:
+              raise SystemExit(42)
+          PY
+          status="$?"
+          if [[ "$status" == '42' ]]; then
+            echo "SINGLE_PAIR_RESEARCH_HOLD reason=insufficient_genuinely_future_rows minimum=2500"
+            exit 0
+          fi
+
+          if [[ ! -s "$qualification" ]]; then
             "$python_bin" -m app.domain.training.single_pair_qualification \
               --dataset "$pair=$corpus" \
               --horizon-bars "$horizon" \
-              --decision-time-before "$cutoff" \
-              --report "$report" \
-              --max-splits "$splits" \
-              --confidence-floor 0.60
-          }
-
-          run_candidate diagnostic 3 | tee "$output/diagnostic-summary.json"
-          diagnostic_pass="$("$python_bin" - "$output/diagnostic.json" <<'PY'
-          import json, sys
-          r=json.load(open(sys.argv[1]))
-          g=r['experiments']['event_barrier_pair_experts']['research_gate']
-          print('true' if g['research_gate_passed'] else 'false')
-          PY
-          )"
-
-          if [[ "$diagnostic_pass" != 'true' ]]; then
-            echo "SINGLE_PAIR_EVENT_EXPERT_DIAGNOSTIC_HOLD pair=$pair horizon=${horizon}m"
-            "$python_bin" - "$output/diagnostic.json" <<'PY'
-          import json, sys
-          e=json.load(open(sys.argv[1]))['experiments']['event_barrier_pair_experts']
-          print('OBSERVED', json.dumps(e['research_gate']['observed'], sort_keys=True))
-          print('CHECKS', json.dumps(e['research_gate']['checks'], sort_keys=True))
-          print('ACTIVE_TRADES', e['overall']['active_trades'])
-          print('EVIDENCE_WARNINGS', json.dumps(e['overall'].get('evidence_sufficiency_warnings', [])))
-          PY
-            exit 0
+              --decision-time-before "$fresh_holdout_start" \
+              --report "$qualification" \
+              --max-splits 3 \
+              --confidence-floor 0.60 \
+              | tee "$output/qualification-summary.json"
           fi
 
-          run_candidate qualification 5 | tee "$output/qualification-summary.json"
-          qualification_pass="$("$python_bin" - "$output/qualification.json" <<'PY'
+          qualification_pass="$("$python_bin" - "$qualification" <<'PY'
           import json, sys
-          e=json.load(open(sys.argv[1]))['experiments']['event_barrier_pair_return_margin']
+          e=json.load(open(sys.argv[1]))['experiments']['event_barrier_pair_experts']
           g=e['research_gate']
           print('true' if g['research_gate_passed'] else 'false')
           PY
           )"
-          "$python_bin" - "$output/qualification.json" <<'PY'
+          "$python_bin" - "$qualification" <<'PY'
           import json, sys
           e=json.load(open(sys.argv[1]))['experiments']['event_barrier_pair_experts']
           g=e['research_gate']
           status='PASS' if g['research_gate_passed'] else 'HOLD'
-          print(f"SINGLE_PAIR_EVENT_EXPERT_QUALIFICATION_{status}")
+          print(f'USDJPY_V4_QUALIFICATION_{status}')
           print('OBSERVED', json.dumps(g['observed'], sort_keys=True))
           print('CHECKS', json.dumps(g['checks'], sort_keys=True))
           print('ACTIVE_TRADES', e['overall']['active_trades'])
-          print('EVIDENCE_WARNINGS', json.dumps(e['overall'].get('evidence_sufficiency_warnings', [])))
-          PY
-
-          "$python_bin" - "$output/qualification.json" <<'PY'
-          import json, sys
-          e=json.load(open(sys.argv[1]))['experiments']['event_barrier_pair_return_margin']
-          g=e['research_gate']
-          status='PASS' if g['research_gate_passed'] else 'HOLD'
-          print(f"SINGLE_PAIR_RETURN_MARGIN_QUALIFICATION_{status}")
-          print('RETURN_MARGIN_OBSERVED', json.dumps(g['observed'], sort_keys=True))
-          print('RETURN_MARGIN_CHECKS', json.dumps(g['checks'], sort_keys=True))
-          print('RETURN_MARGIN_ACTIVE_TRADES', e['overall']['active_trades'])
-          print('RETURN_MARGIN_EVIDENCE_WARNINGS', json.dumps(
-              e['overall'].get('evidence_sufficiency_warnings', [])
-          ))
+          print('WARNINGS', json.dumps(e['overall'].get('evidence_sufficiency_warnings', [])))
           PY
 
           if [[ "$qualification_pass" != 'true' ]]; then
-            echo "SINGLE_PAIR_FAST_LOOP_STOP reason=return_margin_candidate_not_qualified"
+            echo "USDJPY_V4_STOP reason=pre_holdout_qualification_failed"
             exit 0
           fi
 
-          echo "SINGLE_PAIR_FRESH_HOLDOUT_REQUIRED candidate=event_barrier_pair_return_margin pair=$pair horizon=${horizon}m"
+          if [[ ! -s "$future_report" ]]; then
+            "$python_bin" -m app.domain.training.single_pair_final_test \
+              --dataset "$pair=$corpus" \
+              --horizon-bars "$horizon" \
+              --qualification-report "$qualification" \
+              --report "$future_report" \
+              --confidence-threshold 0.60 \
+              --future-holdout-start "$fresh_holdout_start" \
+              --min-future-holdout-rows 2500 \
+              | tee "$output/future-holdout-summary.json"
+          fi
+
+          "$python_bin" - "$future_report" <<'PY'
+          import json, sys
+          r=json.load(open(sys.argv[1]))
+          g=r['final_test_gate']
+          status='PASS' if g['passed'] else 'HOLD'
+          print(f'USDJPY_V4_FUTURE_HOLDOUT_{status}')
+          print('OBSERVED', json.dumps(g['observed'], sort_keys=True))
+          print('CHECKS', json.dumps(g['checks'], sort_keys=True))
+          print('HOLDOUT_ROWS', r['split']['holdout_rows'])
+          print('HOLDOUT_START', r['split']['holdout_start'])
+          print('HOLDOUT_END', r['split']['holdout_end'])
+          print('APPROVED_FOR_PAPER', r['approved_for_paper'])
+          print('APPROVED_FOR_LIVE', r['approved_for_live'])
+          PY
           REMOTE
 
       - name: Remove ephemeral SSH material
