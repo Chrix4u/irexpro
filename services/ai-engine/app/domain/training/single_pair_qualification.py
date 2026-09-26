@@ -20,6 +20,7 @@ import pandas as pd
 from app.domain.training.model_qualification import (
     CONFIDENCE_FLOOR,
     EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME,
+    EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
     EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
     ModelVariant,
     QualificationExperiment,
@@ -45,6 +46,11 @@ def single_pair_experiments() -> tuple[QualificationExperiment, ...]:
             name=EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME,
             variants=(ModelVariant(name="event_barrier_v7_dual_actionability"),),
             mode="event_dual_actionability",
+        ),
+        QualificationExperiment(
+            name=EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
+            variants=(ModelVariant(name="event_barrier_v8_hybrid_dual_direction"),),
+            mode="event_hybrid_dual_direction",
         ),
     )
 
@@ -103,6 +109,7 @@ def evaluate_single_pair_candidate(
         "comparison_experiments": [
             EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
             EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME,
+            EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
         ],
         "research_only": True,
         "approved_for_paper": False,
