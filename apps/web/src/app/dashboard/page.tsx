@@ -166,11 +166,13 @@ export default function DashboardPage() {
           ) : activityError ? (
             <Alert variant="error">{activityError}</Alert>
           ) : activity?.activity.length ? (
-            <div role="list" aria-label="Recent account activity" style={{ display: 'grid', gap: 'var(--space-3)' }}>
-              {activity.activity.map((item) => (
-                <ActivityRow key={item.id} item={item} />
-              ))}
-              <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: 'var(--space-1)' }}>
+            <div>
+              <div role="list" aria-label="Recent account activity" style={{ display: 'grid', gap: 'var(--space-3)' }}>
+                {activity.activity.map((item) => (
+                  <ActivityRow key={item.id} item={item} />
+                ))}
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: 'var(--space-3)' }}>
                 <Link href="/live-account" className="btn btn--secondary btn--sm">View all activity</Link>
               </div>
             </div>
