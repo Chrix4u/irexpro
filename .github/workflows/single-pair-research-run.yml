@@ -187,6 +187,13 @@ jobs:
           fi
 
           run_candidate qualification 5 | tee "$output/qualification-summary.json"
+          qualification_pass="$("$python_bin" - "$output/qualification.json" <<'PY'
+          import json, sys
+          e=json.load(open(sys.argv[1]))['experiments']['event_barrier_pair_experts']
+          g=e['research_gate']
+          print('true' if g['research_gate_passed'] else 'false')
+          PY
+          )"
           "$python_bin" - "$output/qualification.json" <<'PY'
           import json, sys
           e=json.load(open(sys.argv[1]))['experiments']['event_barrier_pair_experts']
@@ -197,6 +204,31 @@ jobs:
           print('CHECKS', json.dumps(g['checks'], sort_keys=True))
           print('ACTIVE_TRADES', e['overall']['active_trades'])
           print('EVIDENCE_WARNINGS', json.dumps(e['overall'].get('evidence_sufficiency_warnings', [])))
+          PY
+
+          if [[ "$qualification_pass" != 'true' ]]; then
+            exit 0
+          fi
+
+          final_report="$output/untouched-final-test.json"
+          "$python_bin" -m app.domain.training.single_pair_final_test \
+            --dataset "$pair=$corpus" \
+            --horizon-bars "$horizon" \
+            --qualification-report "$output/qualification.json" \
+            --report "$final_report" \
+            --confidence-threshold 0.60 | tee "$output/untouched-final-test-summary.json"
+
+          "$python_bin" - "$final_report" <<'PY'
+          import json, sys
+          r=json.load(open(sys.argv[1]))
+          g=r['final_test_gate']
+          status='PASS' if g['passed'] else 'HOLD'
+          print(f"SINGLE_PAIR_UNTOUCHED_FINAL_TEST_{status}")
+          print('OBSERVED', json.dumps(g['observed'], sort_keys=True))
+          print('CHECKS', json.dumps(g['checks'], sort_keys=True))
+          print('TEST_ROWS', r['split']['test_rows'])
+          print('APPROVED_FOR_PAPER', r['approved_for_paper'])
+          print('APPROVED_FOR_LIVE', r['approved_for_live'])
           PY
           REMOTE
 
