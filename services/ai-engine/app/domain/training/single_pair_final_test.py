@@ -9,8 +9,10 @@ from typing import Any
 import pandas as pd
 
 from app.domain.training.model_qualification import (
+    ACTIONABLE_TARGET_COLUMN,
     CONFIDENCE_FLOOR,
     EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+    TARGET_COLUMN,
     OPPORTUNITY_CLASSIFICATION_THRESHOLD,
     _opportunity_classification,
     _summarize_predictions,
