@@ -19,6 +19,7 @@ from app.domain.training.model_qualification import (
     EVENT_SHORT_ACTIONABLE_TARGET_COLUMN,
     EVENT_TWO_STAGE_EXPERIMENT_NAME,
     OPPORTUNITY_CLASSIFICATION_THRESHOLD,
+    OPPORTUNITY_SAMPLE_WEIGHT_POLICY,
     TWO_STAGE_EXPERIMENT_NAME,
     ModelVariant,
     QualificationExperiment,
@@ -34,6 +35,7 @@ from app.domain.training.model_qualification import (
     _fit_event_pair_regime_experts_for_outer,
     _locked_gate_snapshot,
     _nested_windows,
+    _opportunity_class_balance_weights,
     _opportunity_classification,
     _pair_expert_probabilities,
     _pair_regime_expert_probabilities,
@@ -400,6 +402,26 @@ def test_qualification_checkpoints_resume_without_refitting(monkeypatch, tmp_pat
     incompatible["checkpoint_fingerprint"] = "different-fingerprint"
     run_nested_qualification_experiments(dataset, **incompatible)
     assert fit_calls > first_fit_calls
+
+
+
+def test_opportunity_weights_strengthen_rare_class_without_extreme_values():
+    frame = pd.DataFrame(
+        {EVENT_ACTIONABLE_TARGET_COLUMN: ([0] * 90) + ([1] * 10)}
+    )
+
+    opportunity = _opportunity_class_balance_weights(frame)
+    moderate = qualification._binary_class_balance_weights(
+        frame,
+        target_column=EVENT_ACTIONABLE_TARGET_COLUMN,
+    )
+
+    assert OPPORTUNITY_SAMPLE_WEIGHT_POLICY == "inverse_frequency_power_0_75_capped_v1"
+    assert opportunity.mean() == pytest.approx(1.0)
+    assert opportunity.min() >= 0.25
+    assert opportunity.max() <= 4.0
+    assert opportunity[-1] > moderate[-1]
+    assert opportunity[-1] / opportunity[0] > moderate[-1] / moderate[0]
 
 
 def test_actionable_target_keeps_every_row_and_requires_positive_net_edge():
