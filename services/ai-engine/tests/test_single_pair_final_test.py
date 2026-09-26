@@ -9,7 +9,9 @@ import pytest
 from app.domain.training.model_qualification import EVENT_PAIR_EXPERT_EXPERIMENT_NAME
 from app.domain.training.single_pair_final_test import (
     SINGLE_PAIR_FINAL_TEST_POLICY,
+    SINGLE_PAIR_FUTURE_HOLDOUT_POLICY,
     _direction_failure_diagnostics,
+    evaluate_single_pair_future_holdout,
     _load_qualified_single_pair,
     _single_pair_final_gate,
 )
@@ -144,3 +146,20 @@ def test_direction_failure_diagnostics_is_diagnostic_only_for_empty_event_rows()
     assert diagnostics["event_direction_rows"] == 0
     assert diagnostics["balanced_accuracy"] is None
     assert diagnostics["confusion"] == {"tn": 0, "fp": 0, "fn": 0, "tp": 0}
+
+
+def test_future_holdout_requires_exact_frozen_qualification_boundary(tmp_path):
+    qualification = tmp_path / "qualification.json"
+    qualification.write_text(json.dumps(_qualification_payload()), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="exactly match"):
+        evaluate_single_pair_future_holdout(
+            {"USDJPY": tmp_path / "unused.csv"},
+            horizon_bars=1,
+            qualification_report_path=qualification,
+            report_path=tmp_path / "future.json",
+            future_holdout_start="2026-07-02T00:00:00Z",
+            min_holdout_rows=500,
+        )
+
+    assert SINGLE_PAIR_FUTURE_HOLDOUT_POLICY.endswith("_v1")
