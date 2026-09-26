@@ -9,9 +9,11 @@ from typing import Any
 import pandas as pd
 
 from app.domain.training.model_qualification import (
+    ACTIONABLE_TARGET_COLUMN,
     CONFIDENCE_FLOOR,
     EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
     OPPORTUNITY_CLASSIFICATION_THRESHOLD,
+    TARGET_COLUMN,
     _opportunity_classification,
     _summarize_predictions,
 )
@@ -29,6 +31,137 @@ from app.domain.training.train_multitimeframe import (
 )
 
 SINGLE_PAIR_FINAL_TEST_POLICY = "single_pair_untouched_event_expert_v1"
+
+
+def _binary_balanced_accuracy(truth: pd.Series, predicted: pd.Series) -> float | None:
+    """Compute binary balanced accuracy without changing model decisions."""
+    truth_int = pd.to_numeric(truth, errors="raise").astype(int)
+    predicted_bool = predicted.astype(bool)
+    positives = truth_int == 1
+    negatives = truth_int == 0
+    if not positives.any() or not negatives.any():
+        return None
+    tpr = float((predicted_bool[positives]).mean())
+    tnr = float((~predicted_bool[negatives]).mean())
+    return float((tpr + tnr) / 2.0)
+
+
+def _direction_failure_diagnostics(predictions: pd.DataFrame) -> dict[str, Any]:
+    """Describe directional behavior for diagnosis only; never tune or gate from it."""
+    if predictions.empty:
+        return {
+            "rows": 0,
+            "event_direction_rows": 0,
+            "active_trades": 0,
+            "balanced_accuracy": None,
+            "confusion": {"tn": 0, "fp": 0, "fn": 0, "tp": 0},
+            "true_long_fraction": None,
+            "predicted_long_fraction": None,
+            "mean_positive_probability": None,
+            "brier_score": None,
+            "temporal_quartiles": [],
+            "confidence_bands": [],
+        }
+
+    event_rows = predictions.loc[
+        predictions[ACTIONABLE_TARGET_COLUMN] == 1
+    ].copy()
+    if event_rows.empty:
+        return {
+            "rows": int(len(predictions)),
+            "event_direction_rows": 0,
+            "active_trades": int(predictions["active_trade"].sum()),
+            "balanced_accuracy": None,
+            "confusion": {"tn": 0, "fp": 0, "fn": 0, "tp": 0},
+            "true_long_fraction": None,
+            "predicted_long_fraction": None,
+            "mean_positive_probability": None,
+            "brier_score": None,
+            "temporal_quartiles": [],
+            "confidence_bands": [],
+        }
+
+    truth = pd.to_numeric(event_rows[TARGET_COLUMN], errors="raise").astype(int)
+    predicted_long = event_rows["predicted_long"].astype(bool)
+    probabilities = pd.to_numeric(
+        event_rows["positive_probability"], errors="raise"
+    ).astype(float)
+    tn = int(((truth == 0) & (~predicted_long)).sum())
+    fp = int(((truth == 0) & predicted_long).sum())
+    fn = int(((truth == 1) & (~predicted_long)).sum())
+    tp = int(((truth == 1) & predicted_long).sum())
+
+    ordered = event_rows.sort_values("decision_time").copy()
+    temporal_quartiles: list[dict[str, Any]] = []
+    if len(ordered) >= 4:
+        boundaries = [round(len(ordered) * i / 4) for i in range(5)]
+        for idx in range(4):
+            chunk = ordered.iloc[boundaries[idx]:boundaries[idx + 1]]
+            if chunk.empty:
+                continue
+            quartile_number = idx + 1
+            chunk_truth = pd.to_numeric(chunk[TARGET_COLUMN], errors="raise").astype(int)
+            chunk_pred = chunk["predicted_long"].astype(bool)
+            temporal_quartiles.append(
+                {
+                    "quartile": quartile_number,
+                    "rows": int(len(chunk)),
+                    "start": pd.Timestamp(chunk["decision_time"].min()).isoformat(),
+                    "end": pd.Timestamp(chunk["decision_time"].max()).isoformat(),
+                    "balanced_accuracy": _binary_balanced_accuracy(
+                        chunk_truth, chunk_pred
+                    ),
+                    "true_long_fraction": float(chunk_truth.mean()),
+                    "predicted_long_fraction": float(chunk_pred.mean()),
+                    "mean_positive_probability": float(
+                        pd.to_numeric(
+                            chunk["positive_probability"], errors="raise"
+                        ).mean()
+                    ),
+                }
+            )
+
+    confidence = pd.to_numeric(event_rows["direction_confidence"], errors="raise")
+    band_specs = (
+        ("0.50-0.55", 0.50, 0.55),
+        ("0.55-0.60", 0.55, 0.60),
+        ("0.60-0.70", 0.60, 0.70),
+        ("0.70-0.80", 0.70, 0.80),
+        ("0.80-1.00", 0.80, 1.0000001),
+    )
+    confidence_bands: list[dict[str, Any]] = []
+    for label, lower, upper in band_specs:
+        mask = (confidence >= lower) & (confidence < upper)
+        band = event_rows.loc[mask]
+        if band.empty:
+            continue
+        band_truth = pd.to_numeric(band[TARGET_COLUMN], errors="raise").astype(int)
+        band_pred = band["predicted_long"].astype(bool)
+        confidence_bands.append(
+            {
+                "band": label,
+                "rows": int(len(band)),
+                "balanced_accuracy": _binary_balanced_accuracy(
+                    band_truth, band_pred
+                ),
+                "true_long_fraction": float(band_truth.mean()),
+                "predicted_long_fraction": float(band_pred.mean()),
+            }
+        )
+
+    return {
+        "rows": int(len(predictions)),
+        "event_direction_rows": int(len(event_rows)),
+        "active_trades": int(predictions["active_trade"].sum()),
+        "balanced_accuracy": _binary_balanced_accuracy(truth, predicted_long),
+        "confusion": {"tn": tn, "fp": fp, "fn": fn, "tp": tp},
+        "true_long_fraction": float(truth.mean()),
+        "predicted_long_fraction": float(predicted_long.mean()),
+        "mean_positive_probability": float(probabilities.mean()),
+        "brier_score": float(((probabilities - truth.astype(float)) ** 2).mean()),
+        "temporal_quartiles": temporal_quartiles,
+        "confidence_bands": confidence_bands,
+    }
 
 
 def _load_qualified_single_pair(
@@ -233,6 +366,11 @@ def evaluate_single_pair_untouched_test(
         "training_counts": training_counts,
         "validation_metrics": validation_metrics,
         "untouched_test_metrics": test_metrics,
+        "direction_failure_diagnostics": {
+            "policy": "diagnostic_only_no_threshold_or_model_tuning",
+            "validation": _direction_failure_diagnostics(validation_predictions),
+            "untouched_test": _direction_failure_diagnostics(test_predictions),
+        },
         "untouched_opportunity_classification": opportunity_metrics,
         "final_test_gate": gate,
         "approved_for_paper": False,

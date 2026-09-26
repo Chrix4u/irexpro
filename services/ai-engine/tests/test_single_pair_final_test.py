@@ -9,6 +9,7 @@ import pytest
 from app.domain.training.model_qualification import EVENT_PAIR_EXPERT_EXPERIMENT_NAME
 from app.domain.training.single_pair_final_test import (
     SINGLE_PAIR_FINAL_TEST_POLICY,
+    _direction_failure_diagnostics,
     _load_qualified_single_pair,
     _single_pair_final_gate,
 )
@@ -95,3 +96,51 @@ def test_single_pair_final_gate_holds_when_opportunity_accuracy_misses():
     assert gate["passed"] is False
     assert gate["checks"]["balanced_accuracy"] is True
     assert gate["checks"]["opportunity_balanced_accuracy"] is False
+
+
+def test_direction_failure_diagnostics_reports_confusion_and_temporal_drift():
+    frame = pd.DataFrame(
+        {
+            "decision_time": pd.date_range(
+                "2026-07-01", periods=8, freq="min", tz="UTC"
+            ),
+            "actionable_target": [1] * 8,
+            "target": [0, 0, 1, 1, 0, 1, 0, 1],
+            "predicted_long": [False, True, True, False, True, True, False, False],
+            "positive_probability": [0.2, 0.7, 0.8, 0.3, 0.65, 0.75, 0.4, 0.45],
+            "direction_confidence": [0.8, 0.7, 0.8, 0.7, 0.65, 0.75, 0.6, 0.55],
+            "active_trade": [False, True, True, False, True, True, False, False],
+        }
+    )
+
+    diagnostics = _direction_failure_diagnostics(frame)
+
+    assert diagnostics["event_direction_rows"] == 8
+    assert diagnostics["confusion"] == {"tn": 2, "fp": 2, "fn": 2, "tp": 2}
+    assert diagnostics["balanced_accuracy"] == pytest.approx(0.5)
+    assert diagnostics["true_long_fraction"] == pytest.approx(0.5)
+    assert diagnostics["predicted_long_fraction"] == pytest.approx(0.5)
+    assert len(diagnostics["temporal_quartiles"]) == 4
+    assert diagnostics["confidence_bands"]
+
+
+def test_direction_failure_diagnostics_is_diagnostic_only_for_empty_event_rows():
+    frame = pd.DataFrame(
+        {
+            "decision_time": pd.date_range(
+                "2026-07-01", periods=2, freq="min", tz="UTC"
+            ),
+            "actionable_target": [0, 0],
+            "target": [0, 1],
+            "predicted_long": [False, True],
+            "positive_probability": [0.3, 0.7],
+            "direction_confidence": [0.7, 0.7],
+            "active_trade": [False, False],
+        }
+    )
+
+    diagnostics = _direction_failure_diagnostics(frame)
+
+    assert diagnostics["event_direction_rows"] == 0
+    assert diagnostics["balanced_accuracy"] is None
+    assert diagnostics["confusion"] == {"tn": 0, "fp": 0, "fn": 0, "tp": 0}
