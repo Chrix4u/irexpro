@@ -852,16 +852,33 @@ def main() -> None:
     parser.add_argument("--parallelism", type=int, default=3)
     parser.add_argument("--cache-dir")
     parser.add_argument(
+        "--effective-before",
+        help=(
+            "Freeze collection to this UTC ISO-8601 timestamp. "
+            "Retries with the same value reproduce the same completed-hour window."
+        ),
+    )
+    parser.add_argument(
         "--no-m1-chunks",
         action="store_true",
         help="Disable the derived daily M1 materialized chunk cache",
     )
     args = parser.parse_args()
 
+    effective_before = None
+    if args.effective_before:
+        raw = args.effective_before.strip().replace("Z", "+00:00")
+        effective_before = datetime.fromisoformat(raw)
+        if effective_before.tzinfo is None:
+            effective_before = effective_before.replace(tzinfo=UTC)
+        else:
+            effective_before = effective_before.astimezone(UTC)
+
     result = collect_dukascopy_m1_corpus(
         instrument=args.instrument,
         target_rows=args.target_rows,
         output_path=args.output,
+        now=effective_before,
         max_lookback_days=args.max_lookback_days,
         parallelism=args.parallelism,
         cache_dir=args.cache_dir,

@@ -20,7 +20,6 @@ import pandas as pd
 from app.domain.training.model_qualification import (
     CONFIDENCE_FLOOR,
     EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
-    EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME,
     ModelVariant,
     QualificationExperiment,
     _qualification_checkpoint_fingerprint,
@@ -40,11 +39,6 @@ def single_pair_experiments() -> tuple[QualificationExperiment, ...]:
             name=EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
             variants=(ModelVariant(name="event_barrier_v4_pair_direction"),),
             mode="two_stage_event_pair_experts",
-        ),
-        QualificationExperiment(
-            name=EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME,
-            variants=(ModelVariant(name="event_barrier_v5_pair_return_margin"),),
-            mode="two_stage_event_pair_return_margin",
         ),
     )
 
@@ -102,7 +96,6 @@ def evaluate_single_pair_candidate(
         "experiment": EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
         "comparison_experiments": [
             EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
-            EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME,
         ],
         "research_only": True,
         "approved_for_paper": False,

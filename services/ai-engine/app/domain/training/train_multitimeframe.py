@@ -59,6 +59,10 @@ QUALIFICATION_REGIME_COLUMNS = (
     "h1_rsi_14",
     "trend_alignment_score",
     "momentum_alignment_score",
+    "higher_timeframe_trend_score",
+    "entry_momentum_score",
+    "volatility_ratio_m1_h1",
+    "spread_to_atr_ratio",
 )
 
 
@@ -420,9 +424,35 @@ def prepare_instrument_corpus(
     ]
     frame["trend_alignment_score"] = np.sign(frame[trend_columns]).mean(axis=1)
     frame["momentum_alignment_score"] = np.sign(frame[momentum_columns]).mean(axis=1)
+    frame["trend_momentum_agreement"] = (
+        frame["trend_alignment_score"] * frame["momentum_alignment_score"]
+    )
+    frame["higher_timeframe_trend_score"] = np.sign(
+        frame[["h1_price_vs_ma20", "h4_price_vs_ma20"]]
+    ).mean(axis=1)
+    frame["entry_momentum_score"] = np.sign(
+        frame[["m1_momentum_5", "m5_momentum_5"]]
+    ).mean(axis=1)
+    eps = 1e-12
+    frame["volatility_ratio_m1_h1"] = (
+        pd.to_numeric(frame["m1_volatility_20"], errors="coerce")
+        / pd.to_numeric(frame["h1_volatility_20"], errors="coerce").abs().clip(lower=eps)
+    )
+    frame["spread_to_atr_ratio"] = (
+        pd.to_numeric(frame["m1_spread_bps"], errors="coerce")
+        / (
+            pd.to_numeric(frame["m1_atr_pct_14"], errors="coerce").abs()
+            * 10_000.0
+        ).clip(lower=eps)
+    )
     if set(CROSS_TIMEFRAME_FEATURE_COLUMNS) != {
         "trend_alignment_score",
         "momentum_alignment_score",
+        "trend_momentum_agreement",
+        "higher_timeframe_trend_score",
+        "entry_momentum_score",
+        "volatility_ratio_m1_h1",
+        "spread_to_atr_ratio",
     }:
         raise ValueError("Cross-timeframe training/runtime feature contract diverged")
 

@@ -1,6 +1,5 @@
 from app.domain.training.model_qualification import (
     EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
-    EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME,
 )
 from app.domain.training.single_pair_qualification import (
     candidate_summary,
@@ -14,13 +13,10 @@ def test_single_pair_experiment_matrix_is_intentionally_bounded():
     assert [experiment.name for experiment in experiments] == [
         "baseline",
         EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
-        EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME,
     ]
     assert experiments[0].mode == "directional"
     assert experiments[1].mode == "two_stage_event_pair_experts"
     assert experiments[1].variants[0].name == "event_barrier_v4_pair_direction"
-    assert experiments[2].mode == "two_stage_event_pair_return_margin"
-    assert experiments[2].variants[0].name == "event_barrier_v5_pair_return_margin"
 
 
 def test_candidate_summary_uses_event_pair_expert_gate():
