@@ -216,6 +216,9 @@ jobs:
           print('DUAL_CHECKS', json.dumps(g['checks'], sort_keys=True))
           print('DUAL_ACTIVE_TRADES', e['overall']['active_trades'])
           print('DUAL_EVIDENCE_WARNINGS', json.dumps(e['overall'].get('evidence_sufficiency_warnings', [])))
+          print('DUAL_ACTIONABILITY_DIAGNOSTICS', json.dumps(
+              e.get('dual_actionability_diagnostics'), sort_keys=True
+          ))
           PY
 
           if [[ "$qualification_pass" != 'true' ]]; then

@@ -24,6 +24,7 @@ from app.domain.training.model_qualification import (
     ModelVariant,
     QualificationExperiment,
     _apply_calibrator,
+    _dual_actionability_diagnostics,
     _ensure_actionable_target,
     _ensure_event_dual_actionability_targets,
     _event_dual_actionability_prediction_frame,
@@ -590,6 +591,41 @@ def test_event_dual_actionability_requires_winner_probability_and_margin():
     }
     assert qualification.CONFIDENCE_FLOOR == 0.60
     assert qualification.DUAL_ACTION_MARGIN_FLOOR == 0.10
+
+
+def test_dual_actionability_diagnostics_explain_zero_trade_filtering():
+    source = _research_dataset(periods=4, instruments=("EURUSD",))
+    source[EVENT_ACTIONABLE_TARGET_COLUMN] = [1, 0, 1, 0]
+    source[EVENT_DIRECTION_TARGET_COLUMN] = [1, 0, 0, 0]
+    source[EVENT_LONG_NET_RETURN_COLUMN] = [0.0010, -0.0002, -0.0012, 0.0001]
+    source[EVENT_SHORT_NET_RETURN_COLUMN] = [-0.0011, -0.0001, 0.0011, -0.0002]
+    source[EVENT_STEP_COLUMN] = [1, 5, 2, 5]
+    source[EVENT_BARRIER_RETURN_COLUMN] = [0.0005] * 4
+
+    predictions = _event_dual_actionability_prediction_frame(
+        source,
+        long_probabilities=np.array([0.59, 0.62, 0.30, 0.55]),
+        short_probabilities=np.array([0.10, 0.58, 0.61, 0.20]),
+        confidence_floor=0.60,
+        fold=1,
+        experiment=EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME,
+        variant=ModelVariant(name="event_barrier_v7_dual_actionability"),
+    )
+
+    diagnostics = _dual_actionability_diagnostics(
+        predictions,
+        confidence_floor=0.60,
+    )
+
+    assert diagnostics is not None
+    assert diagnostics["winner_probability_pass_count"] == 2
+    assert diagnostics["margin_pass_count"] == 3
+    assert diagnostics["both_pass_count"] == 1
+    assert diagnostics["active_trades"] == 1
+    assert diagnostics["long_probability_gte_floor_count"] == 1
+    assert diagnostics["short_probability_gte_floor_count"] == 1
+    assert diagnostics["both_sides_gte_floor_count"] == 0
+    assert diagnostics["policy"] == "diagnostic_only_no_gate_or_threshold_change"
 
 
 def test_event_summary_direction_classification_uses_true_events_only():

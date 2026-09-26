@@ -1204,6 +1204,77 @@ def _opportunity_classification(
     )
 
 
+def _dual_actionability_diagnostics(
+    predictions: pd.DataFrame,
+    *,
+    confidence_floor: float,
+) -> dict[str, Any] | None:
+    required = {
+        "long_action_probability",
+        "short_action_probability",
+        "action_probability_margin",
+        "active_trade",
+    }
+    if not required.issubset(predictions.columns):
+        return None
+
+    long_probability = pd.to_numeric(
+        predictions["long_action_probability"], errors="raise"
+    ).astype(float)
+    short_probability = pd.to_numeric(
+        predictions["short_action_probability"], errors="raise"
+    ).astype(float)
+    winning_probability = pd.concat(
+        [long_probability, short_probability], axis=1
+    ).max(axis=1)
+    margin = pd.to_numeric(
+        predictions["action_probability_margin"], errors="raise"
+    ).astype(float)
+
+    winner_pass = winning_probability >= confidence_floor
+    margin_pass = margin >= DUAL_ACTION_MARGIN_FLOOR
+    both_pass = winner_pass & margin_pass
+
+    quantiles = (0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0)
+
+    def q(series: pd.Series) -> dict[str, float]:
+        values = series.quantile(quantiles)
+        return {
+            f"p{int(percentile * 100):02d}": float(values.loc[percentile])
+            for percentile in quantiles
+        }
+
+    return {
+        "policy": "diagnostic_only_no_gate_or_threshold_change",
+        "rows": int(len(predictions)),
+        "active_trades": int(predictions["active_trade"].sum()),
+        "confidence_floor": float(confidence_floor),
+        "action_margin_floor": float(DUAL_ACTION_MARGIN_FLOOR),
+        "winner_probability_pass_count": int(winner_pass.sum()),
+        "winner_probability_pass_fraction": float(winner_pass.mean()),
+        "margin_pass_count": int(margin_pass.sum()),
+        "margin_pass_fraction": float(margin_pass.mean()),
+        "both_pass_count": int(both_pass.sum()),
+        "both_pass_fraction": float(both_pass.mean()),
+        "long_probability_gte_floor_count": int(
+            (long_probability >= confidence_floor).sum()
+        ),
+        "short_probability_gte_floor_count": int(
+            (short_probability >= confidence_floor).sum()
+        ),
+        "both_sides_gte_floor_count": int(
+            (
+                (long_probability >= confidence_floor)
+                & (short_probability >= confidence_floor)
+            ).sum()
+        ),
+        "long_probability_quantiles": q(long_probability),
+        "short_probability_quantiles": q(short_probability),
+        "winning_probability_quantiles": q(winning_probability),
+        "action_margin_quantiles": q(margin),
+    }
+
+
 def _summarize_predictions(
     predictions: pd.DataFrame,
     *,
@@ -2450,10 +2521,16 @@ def _aggregate_experiment(
         )
         for instrument in pair_names
     }
+    dual_actionability_diagnostics = _dual_actionability_diagnostics(
+        predictions,
+        confidence_floor=confidence_floor,
+    )
+
     return {
         "experiment": name,
         "overall": overall,
         "opportunity_classification": opportunity_classification,
+        "dual_actionability_diagnostics": dual_actionability_diagnostics,
         "by_instrument": by_instrument,
         "pooled_architecture_diagnostic": _pooled_architecture_diagnostic(
             by_instrument
