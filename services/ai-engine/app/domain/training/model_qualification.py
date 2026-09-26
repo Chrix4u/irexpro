@@ -63,7 +63,8 @@ REGIME_FALLBACK_NAME = "fallback"
 MIN_REGIME_FIT_ROWS = 500
 MIN_REGIME_EARLY_ROWS = 100
 QUALIFICATION_CHECKPOINT_VERSION = 1
-QUALIFICATION_CHECKPOINT_POLICY = "experiment_outer_fold_atomic_v1"
+QUALIFICATION_CHECKPOINT_POLICY = "experiment_outer_fold_atomic_v2_opportunity_classification"
+OPPORTUNITY_CLASSIFICATION_THRESHOLD = 0.50
 DECISION_THRESHOLD_GRID = (0.45, 0.475, 0.50, 0.525, 0.55)
 MIN_ISOTONIC_ROWS = 500
 MIN_ISOTONIC_CLASS_ROWS = 100
@@ -196,6 +197,7 @@ def _qualification_checkpoint_fingerprint(
         "feature_columns": list(MULTITIMEFRAME_FEATURE_COLUMNS),
         "actionable_label_policy": ACTIONABLE_LABEL_POLICY,
         "event_label_policy": EVENT_LABEL_POLICY,
+        "opportunity_classification_threshold": OPPORTUNITY_CLASSIFICATION_THRESHOLD,
         "experiments": _experiment_matrix_payload(experiments),
     }
     encoded = json.dumps(
@@ -1149,7 +1151,7 @@ def _event_dual_actionability_prediction_frame(
 def _opportunity_classification(
     predictions: pd.DataFrame,
     *,
-    confidence_floor: float,
+    classification_threshold: float = OPPORTUNITY_CLASSIFICATION_THRESHOLD,
 ) -> dict[str, float | int | None] | None:
     required = {
         ACTIONABLE_TARGET_COLUMN,
@@ -1160,7 +1162,7 @@ def _opportunity_classification(
     return compute_classification_metrics(
         predictions[ACTIONABLE_TARGET_COLUMN].to_numpy(dtype=int),
         predictions["opportunity_probability"].to_numpy(dtype=float),
-        threshold=confidence_floor,
+        threshold=classification_threshold,
     )
 
 
@@ -2364,7 +2366,7 @@ def _aggregate_experiment(
     }
     opportunity_classification = _opportunity_classification(
         predictions,
-        confidence_floor=confidence_floor,
+        classification_threshold=OPPORTUNITY_CLASSIFICATION_THRESHOLD,
     )
     gate = _qualification_gate_from_aggregate(
         overall=overall,
@@ -2751,6 +2753,7 @@ def run_nested_qualification_experiments(
                     "selected_variant": variant.name,
                     "decision_threshold": decision_threshold,
                     "opportunity_threshold": confidence_floor,
+                    "opportunity_classification_threshold": OPPORTUNITY_CLASSIFICATION_THRESHOLD,
                     "actionable_label_policy": ACTIONABLE_LABEL_POLICY,
                     "candidate_reports": [],
                     "training_counts": training_counts,
@@ -2796,6 +2799,7 @@ def run_nested_qualification_experiments(
                     "selected_variant": variant.name,
                     "decision_threshold": decision_threshold,
                     "opportunity_threshold": confidence_floor,
+                    "opportunity_classification_threshold": OPPORTUNITY_CLASSIFICATION_THRESHOLD,
                     "event_label_policy": EVENT_LABEL_POLICY,
                     "candidate_reports": [],
                     "training_counts": training_counts,
@@ -2841,6 +2845,7 @@ def run_nested_qualification_experiments(
                     "selected_variant": variant.name,
                     "decision_threshold": decision_threshold,
                     "opportunity_threshold": confidence_floor,
+                    "opportunity_classification_threshold": OPPORTUNITY_CLASSIFICATION_THRESHOLD,
                     "action_margin_floor": DUAL_ACTION_MARGIN_FLOOR,
                     "event_label_policy": EVENT_LABEL_POLICY,
                     "direction_policy": "independent_long_vs_rest_and_short_vs_rest",
@@ -2889,6 +2894,7 @@ def run_nested_qualification_experiments(
                     "selected_variant": variant.name,
                     "decision_threshold": decision_threshold,
                     "opportunity_threshold": confidence_floor,
+                    "opportunity_classification_threshold": OPPORTUNITY_CLASSIFICATION_THRESHOLD,
                     "event_label_policy": EVENT_LABEL_POLICY,
                     "expert_router": "instrument_identity",
                     "candidate_reports": [],
@@ -2938,6 +2944,7 @@ def run_nested_qualification_experiments(
                     "selected_variant": variant.name,
                     "decision_threshold": decision_threshold,
                     "opportunity_threshold": confidence_floor,
+                    "opportunity_classification_threshold": OPPORTUNITY_CLASSIFICATION_THRESHOLD,
                     "event_label_policy": EVENT_LABEL_POLICY,
                     "expert_router": "instrument_identity_then_training_regime",
                     "regime_router_policy": REGIME_ROUTER_POLICY,
@@ -2991,6 +2998,7 @@ def run_nested_qualification_experiments(
                     "selected_variant": variant.name,
                     "decision_threshold": decision_threshold,
                     "opportunity_threshold": confidence_floor,
+                    "opportunity_classification_threshold": OPPORTUNITY_CLASSIFICATION_THRESHOLD,
                     "event_label_policy": EVENT_LABEL_POLICY,
                     "expert_router": "instrument_identity",
                     "direction_target": "event_long_minus_short_net_return_bps",
