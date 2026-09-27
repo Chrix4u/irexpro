@@ -6,9 +6,9 @@ import pytest
 
 from app.domain.training.research_trial_ledger import (
     ResearchTrial,
-    trial_from_report,
     append_trial,
     comparable_sharpes,
+    trial_from_report,
 )
 
 
