@@ -56,6 +56,7 @@ EVENT_PAIR_REGIME_EXPERT_EXPERIMENT_NAME = "event_barrier_pair_regime_experts"
 EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME = "event_barrier_dual_actionability"
 EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME = "event_barrier_hybrid_opportunity_dual_direction"
 EVENT_HYBRID_PAYOFF_EXPERIMENT_NAME = "event_barrier_hybrid_opportunity_dual_direction_payoff"
+EVENT_HYBRID_EDGE_EXPERIMENT_NAME = "event_barrier_hybrid_opportunity_dual_direction_edge"
 EVENT_LONG_ACTIONABLE_TARGET_COLUMN = "event_long_actionable_target"
 EVENT_SHORT_ACTIONABLE_TARGET_COLUMN = "event_short_actionable_target"
 DUAL_ACTION_MARGIN_FLOOR = 0.10
@@ -98,6 +99,7 @@ ExperimentMode = Literal[
     "event_dual_actionability",
     "event_hybrid_dual_direction",
     "event_hybrid_dual_direction_payoff",
+    "event_hybrid_dual_direction_edge",
 ]
 
 
@@ -1284,6 +1286,57 @@ def _event_hybrid_payoff_prediction_frame(
         "pooled_opportunity_probability_gte_floor_and_normalized_direction_"
         "confidence_gte_floor_and_side_margin_gte_0_10_and_train_only_"
         "expected_selected_net_return_gt_0_and_edge_gt_0"
+    )
+    return predictions
+
+
+def _event_hybrid_edge_prediction_frame(
+    source: pd.DataFrame,
+    *,
+    long_probabilities: np.ndarray,
+    short_probabilities: np.ndarray,
+    opportunity_probabilities: np.ndarray,
+    expected_long_return_bps: np.ndarray,
+    expected_short_return_bps: np.ndarray,
+    confidence_floor: float,
+    fold: int,
+    experiment: str,
+    variant: ModelVariant,
+) -> pd.DataFrame:
+    """Hybrid direction candidate with a fixed train-only relative-payoff edge filter."""
+    predictions = _event_hybrid_dual_direction_prediction_frame(
+        source,
+        long_probabilities=long_probabilities,
+        short_probabilities=short_probabilities,
+        opportunity_probabilities=opportunity_probabilities,
+        confidence_floor=confidence_floor,
+        fold=fold,
+        experiment=experiment,
+        variant=variant,
+    )
+    long_bps = np.asarray(expected_long_return_bps, dtype=float)
+    short_bps = np.asarray(expected_short_return_bps, dtype=float)
+    if len(long_bps) != len(predictions) or len(short_bps) != len(predictions):
+        raise ValueError("hybrid edge predictions must align with source rows")
+    if not np.isfinite(long_bps).all() or not np.isfinite(short_bps).all():
+        raise ValueError("hybrid edge predictions must be finite")
+
+    selected = np.where(predictions["predicted_long"], long_bps, short_bps)
+    opposite = np.where(predictions["predicted_long"], short_bps, long_bps)
+    edge = selected - opposite
+    predictions["expected_long_net_return_bps"] = long_bps
+    predictions["expected_short_net_return_bps"] = short_bps
+    predictions["expected_selected_net_return_bps"] = selected
+    predictions["expected_opposite_net_return_bps"] = opposite
+    predictions["expected_payoff_edge_bps"] = edge
+    predictions["payoff_filter_pass"] = edge > 0.0
+    predictions["active_trade"] = (
+        predictions["active_trade"] & predictions["payoff_filter_pass"]
+    )
+    predictions["confidence_policy"] = (
+        "pooled_opportunity_probability_gte_floor_and_normalized_direction_"
+        "confidence_gte_floor_and_side_margin_gte_0_10_and_train_only_"
+        "selected_minus_opposite_expected_net_return_gt_0"
     )
     return predictions
 
@@ -2973,6 +3026,7 @@ def run_nested_qualification_experiments(
             "event_dual_actionability",
             "event_hybrid_dual_direction",
             "event_hybrid_dual_direction_payoff",
+            "event_hybrid_dual_direction_edge",
         }
         for experiment in experiments
     ):
@@ -3319,6 +3373,75 @@ def run_nested_qualification_experiments(
                     "event_label_policy": EVENT_LABEL_POLICY,
                     "direction_policy": "independent_long_vs_rest_and_short_vs_rest_normalized",
                     "payoff_policy": "train_only_long_short_net_return_regressors",
+                    "candidate_reports": [],
+                    "training_counts": training_counts,
+                }
+            elif experiment.mode == "event_hybrid_dual_direction_edge":
+                if len(experiment.variants) != 1 or experiment.tune_decision_threshold:
+                    raise ValueError(
+                        "hybrid edge research must remain a fixed bounded candidate"
+                    )
+                variant = experiment.variants[0]
+                decision_threshold = 0.50
+                (
+                    direction_models,
+                    opportunity_model,
+                    payoff_models,
+                    feature_columns,
+                    training_counts,
+                ) = _fit_event_hybrid_payoff_for_outer(
+                    outer_train,
+                    variant=variant,
+                    horizon_bars=horizon_bars,
+                )
+                model = None
+                long_probabilities = _probabilities(
+                    direction_models["long"],
+                    outer_validation,
+                    feature_columns,
+                )
+                short_probabilities = _probabilities(
+                    direction_models["short"],
+                    outer_validation,
+                    feature_columns,
+                )
+                opportunity_probabilities = _probabilities(
+                    opportunity_model,
+                    outer_validation,
+                    feature_columns,
+                )
+                expected_long_return_bps = np.asarray(
+                    payoff_models["long"].predict(outer_validation[feature_columns]),
+                    dtype=float,
+                )
+                expected_short_return_bps = np.asarray(
+                    payoff_models["short"].predict(outer_validation[feature_columns]),
+                    dtype=float,
+                )
+                predictions = _event_hybrid_edge_prediction_frame(
+                    outer_validation,
+                    long_probabilities=long_probabilities,
+                    short_probabilities=short_probabilities,
+                    opportunity_probabilities=opportunity_probabilities,
+                    expected_long_return_bps=expected_long_return_bps,
+                    expected_short_return_bps=expected_short_return_bps,
+                    confidence_floor=confidence_floor,
+                    fold=fold_index,
+                    experiment=experiment.name,
+                    variant=variant,
+                )
+                selection = {
+                    "policy": "fixed_event_barrier_v10_hybrid_edge_no_outer_tuning",
+                    "selected_variant": variant.name,
+                    "decision_threshold": decision_threshold,
+                    "opportunity_threshold": confidence_floor,
+                    "opportunity_classification_threshold": OPPORTUNITY_CLASSIFICATION_THRESHOLD,
+                    "direction_confidence_threshold": confidence_floor,
+                    "action_margin_floor": DUAL_ACTION_MARGIN_FLOOR,
+                    "payoff_edge_threshold_bps": 0.0,
+                    "event_label_policy": EVENT_LABEL_POLICY,
+                    "direction_policy": "independent_long_vs_rest_and_short_vs_rest_normalized",
+                    "payoff_policy": "train_only_relative_long_short_net_return_edge",
                     "candidate_reports": [],
                     "training_counts": training_counts,
                 }
