@@ -194,3 +194,48 @@ def robustness_snapshot(
             **expected_maximum_sharpe(comparable_trial_sharpes),
         }
     return payload
+
+
+def cost_stress_frontier(
+    returns: Iterable[float],
+    *,
+    extra_cost_bps: Iterable[float] = (0.0, 0.25, 0.5, 1.0, 1.5, 2.0, 3.0),
+) -> dict[str, object]:
+    """Apply deterministic extra round-trip costs to already net-of-spread returns."""
+    values = np.asarray(list(returns), dtype=float)
+    if values.size == 0:
+        raise ValueError("returns must be non-empty")
+    if not np.isfinite(values).all():
+        raise ValueError("returns contain non-finite values")
+
+    scenarios: list[dict[str, float | int | None]] = []
+    for cost_bps in extra_cost_bps:
+        cost = float(cost_bps)
+        if cost < 0.0:
+            raise ValueError("extra_cost_bps cannot contain negative values")
+        stressed = values - (cost / 10_000.0)
+        gross_profit = float(stressed[stressed > 0.0].sum())
+        gross_loss = float(-stressed[stressed < 0.0].sum())
+        profit_factor = gross_profit / gross_loss if gross_loss > 0.0 else None
+        scenarios.append(
+            {
+                "extra_cost_bps": cost,
+                "trade_count": int(values.size),
+                "wins": int((stressed > 0.0).sum()),
+                "losses": int((stressed < 0.0).sum()),
+                "win_rate": float((stressed > 0.0).mean()),
+                "mean_return_bps": float(stressed.mean() * 10_000.0),
+                "total_return_bps_sum": float(stressed.sum() * 10_000.0),
+                "profit_factor": (
+                    float(profit_factor) if profit_factor is not None else None
+                ),
+            }
+        )
+    return {
+        "break_even_extra_cost_bps_by_mean": float(values.mean() * 10_000.0),
+        "scenarios": scenarios,
+        "warning": (
+            "Stress results inherit the underlying trade-sample uncertainty and "
+            "must not be interpreted as independent evidence."
+        ),
+    }
