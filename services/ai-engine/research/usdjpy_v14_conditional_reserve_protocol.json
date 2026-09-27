@@ -1,0 +1,34 @@
+{
+  "protocol": "USDJPY v14 conditional historical reserve evaluation",
+  "candidate": "v14",
+  "research_only": true,
+  "future_v10_holdout_touched": false,
+  "pre_registered_before_v14_fold_2_or_3_results": true,
+  "qualification_stage": {
+    "required_checks": [
+      "all_inner_selections_succeeded",
+      "minimum_trade_evidence",
+      "minimum_each_fold_trade_evidence",
+      "fold_concentration_lte_0_80",
+      "two_sided_execution",
+      "minimum_each_side_trade_evidence",
+      "aggregate_side_concentration_lte_0_85",
+      "positive_fold_fraction_gte_0_60",
+      "aggregate_profit_factor_gte_1_15",
+      "aggregate_sharpe_gte_1_0",
+      "aggregate_max_drawdown_lte_0_12",
+      "profit_factor_after_extra_1bps_gte_1_15"
+    ],
+    "action_if_any_check_fails": "DO_NOT_CONSUME_HISTORICAL_RESERVE"
+  },
+  "historical_reserve": {
+    "start": "2026-09-21T17:24:00+00:00",
+    "end": "2026-09-25T20:59:00+00:00",
+    "one_touch": true,
+    "action_if_v14_qualification_passes": "EVALUATE_V14_ONCE_WITHOUT_RETUNING",
+    "action_after_evaluation": "SEAL_RESULT_AND_DO_NOT_RETUNE_V14_ON_THIS_RESERVE"
+  },
+  "paper_approval": false,
+  "live_approval": false,
+  "note": "Passing the historical reserve would still not consume or replace the frozen v10 future holdout and does not itself approve PAPER or LIVE."
+}
