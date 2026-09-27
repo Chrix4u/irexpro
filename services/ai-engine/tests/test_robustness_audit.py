@@ -5,6 +5,7 @@ import pytest
 from app.domain.training.robustness_audit import (
     assess_trade_evidence,
     cost_stress_frontier,
+    deflated_sharpe_ratio,
     expected_maximum_sharpe,
     probabilistic_sharpe_ratio,
     robustness_snapshot,
@@ -59,3 +60,25 @@ def test_cost_stress_frontier_reduces_edge() -> None:
     base, stressed = result["scenarios"]
     assert stressed["mean_return_bps"] < base["mean_return_bps"]
     assert result["break_even_extra_cost_bps_by_mean"] > 0.0
+
+
+def test_deflated_sharpe_penalizes_multiple_trials() -> None:
+    returns = [
+        0.0010, 0.0008, 0.0012, -0.0002, 0.0009,
+        0.0011, 0.0007, -0.0001, 0.0010, 0.0006,
+    ]
+    psr = probabilistic_sharpe_ratio(returns)["probabilistic_sharpe_ratio"]
+    dsr = deflated_sharpe_ratio(
+        returns,
+        comparable_trial_sharpes=[-0.4, 0.1, 0.4, 0.8, 1.2],
+    )["deflated_sharpe_ratio"]
+    assert 0.0 <= dsr <= 1.0
+    assert dsr < psr
+
+
+def test_deflated_sharpe_requires_trial_dispersion() -> None:
+    with pytest.raises(ValueError, match="non-zero dispersion"):
+        deflated_sharpe_ratio(
+            [0.0010, 0.0008, -0.0002, 0.0009],
+            comparable_trial_sharpes=[0.5, 0.5],
+        )
