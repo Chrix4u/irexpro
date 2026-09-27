@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -243,6 +244,7 @@ def evaluate_v14(
                 )
                 continue
 
+        fold_started = time.monotonic()
         print(
             json.dumps(
                 {"fold": fold_index, "phase": "training_started"},
@@ -256,6 +258,17 @@ def evaluate_v14(
             min_inner_periods=50,
         )
         inner_models = _fit_models(nested.fit, nested.early_stop, variant=variant)
+        print(
+            json.dumps(
+                {
+                    "fold": fold_index,
+                    "phase": "inner_models_fitted",
+                    "elapsed_seconds": round(time.monotonic() - fold_started, 3),
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
         inner_calibrators = _fit_side_calibrators(
             inner_models,
             nested.calibration,
@@ -266,6 +279,18 @@ def evaluate_v14(
             calibrators=inner_calibrators,
         )
         gate_selection = select_economic_side_thresholds(selection_scored)
+        print(
+            json.dumps(
+                {
+                    "fold": fold_index,
+                    "phase": "inner_gate_selected",
+                    "eligible_count": gate_selection["eligible_count"],
+                    "elapsed_seconds": round(time.monotonic() - fold_started, 3),
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
 
         refit = _refit_windows(
             outer_train,
@@ -273,6 +298,17 @@ def evaluate_v14(
             min_inner_periods=50,
         )
         outer_models = _fit_models(refit.fit, refit.early_stop, variant=variant)
+        print(
+            json.dumps(
+                {
+                    "fold": fold_index,
+                    "phase": "outer_models_fitted",
+                    "elapsed_seconds": round(time.monotonic() - fold_started, 3),
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
         outer_calibrators = _fit_side_calibrators(
             outer_models,
             refit.calibration,
@@ -312,6 +348,7 @@ def evaluate_v14(
                     "long": fold["trading"].get("long_trades", 0),
                     "short": fold["trading"].get("short_trades", 0),
                     "total_return": fold["trading"]["total_return"],
+                    "elapsed_seconds": round(time.monotonic() - fold_started, 3),
                 },
                 sort_keys=True,
             ),
