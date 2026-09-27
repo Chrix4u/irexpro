@@ -95,12 +95,13 @@ jobs:
           candidate_sha="$1"
           staging='/home/lightworld/webapps/irexpro-staging'
           research_root='/home/lightworld/research/irexpro-usdjpy-hybrid-direction'
+          reference_sha='8b79b373c7800998465879eef2fa03409fe49e44'
+          reference="$research_root/$reference_sha"
           output="$research_root/$candidate_sha"
-          boundary_file="$output/frozen-boundary.txt"
-          raw="$output/raw/USDJPY_M1.csv"
-          corpus="$output/corpora/USDJPY_MTF.csv"
+          boundary_file="$reference/frozen-boundary.txt"
+          raw="$reference/raw/USDJPY_M1.csv"
+          corpus="$reference/corpora/USDJPY_MTF.csv"
           qualification="$output/qualification.json"
-          cache='/home/lightworld/research/dukascopy-raw-cache'
           readonly pair='USDJPY'
           readonly horizon='1'
 
@@ -114,33 +115,14 @@ jobs:
           export PYTHONPATH="$PWD"
           export IREXPRO_XGB_N_JOBS=4
 
-          install -d -m 700 "$output/raw" "$output/corpora" "$cache"
-          if [[ ! -s "$boundary_file" ]]; then
-            date -u '+%Y-%m-%dT%H:00:00Z' > "$boundary_file.tmp"
-            chmod 600 "$boundary_file.tmp"
-            mv -f "$boundary_file.tmp" "$boundary_file"
-          fi
+          install -d -m 700 "$output"
+          test -s "$boundary_file"
+          test -s "$raw"
+          test -s "$corpus"
           boundary="$(tr -d '[:space:]' < "$boundary_file")"
+          test "$boundary" = '2026-09-27T05:00:00Z'
           echo "USDJPY_HYBRID_PAYOFF_FROZEN_BOUNDARY $boundary"
-
-          if [[ ! -s "$raw" ]]; then
-            "$python_bin" -m app.domain.training.collect_dukascopy \
-              --instrument "$pair" \
-              --target-rows 100000 \
-              --output "$raw" \
-              --max-lookback-days 180 \
-              --parallelism 4 \
-              --cache-dir "$cache" \
-              --effective-before "$boundary"
-          fi
-
-          if [[ ! -s "$corpus" ]]; then
-            "$python_bin" -m app.domain.training.multitimeframe_corpus \
-              --m1-dataset "$raw" \
-              --instrument "$pair" \
-              --output "$corpus" \
-              --source dukascopy_frozen_hybrid_payoff
-          fi
+          echo "USDJPY_HYBRID_PAYOFF_REFERENCE_SHA $reference_sha"
 
           "$python_bin" -m app.domain.training.single_pair_qualification \
             --dataset "$pair=$corpus" \
