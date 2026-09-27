@@ -25,6 +25,8 @@ def test_single_pair_experiment_matrix_is_intentionally_bounded():
     assert experiments[2].variants[0].name == "event_barrier_v8_hybrid_dual_direction"
     assert experiments[3].mode == "event_hybrid_dual_direction_payoff"
     assert experiments[3].variants[0].name == "event_barrier_v9_hybrid_payoff"
+    assert experiments[3].mode == "event_hybrid_dual_direction_payoff"
+    assert experiments[3].variants[0].name == "event_barrier_v9_hybrid_payoff"
 
 
 def test_candidate_summary_uses_hybrid_payoff_gate():
