@@ -1152,7 +1152,7 @@ describe('BrokerService', () => {
       connectionRepo.findOne.mockResolvedValue(
         connectedConnection({ credentialStatus: 'REVOKED' }),
       );
-      const adapter = { setMode: jest.fn(), getAccountBalance: jest.fn() };
+      const adapter = { setMode: jest.fn(), getAccountInfo: jest.fn() };
       registry.getAdapter.mockReturnValue(adapter);
       await expect(service.observeAccountSnapshotNow('user-1', 'conn-1')).rejects.toThrow();
       expect(adapter.getAccountInfo).not.toHaveBeenCalled();
