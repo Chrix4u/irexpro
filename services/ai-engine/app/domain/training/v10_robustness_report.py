@@ -240,6 +240,55 @@ def _opportunity_gate_diagnostics(frame: pd.DataFrame) -> dict[str, object]:
         ),
     }
 
+
+def _short_regime_diagnostics(frame: pd.DataFrame) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for column in ("m1_volatility_20", "m1_spread_bps"):
+        values = pd.to_numeric(frame[column], errors="raise")
+        low_cut = float(values.quantile(1.0 / 3.0))
+        high_cut = float(values.quantile(2.0 / 3.0))
+        regimes = pd.cut(
+            values,
+            bins=[-np.inf, low_cut, high_cut, np.inf],
+            labels=["low", "mid", "high"],
+            include_lowest=True,
+        )
+        rows: dict[str, object] = {}
+        for regime in ("low", "mid", "high"):
+            subset = frame.loc[regimes == regime].copy()
+            true_short = subset.loc[
+                (subset["event_actionable_target"] == 1)
+                & (subset["event_direction_target"] == 0)
+            ].copy()
+            if true_short.empty:
+                rows[regime] = {"true_short_opportunities": 0}
+                continue
+            correct = ~true_short["predicted_long"].astype(bool)
+            pre_payoff = (
+                correct
+                & (true_short["direction_confidence"] >= 0.60)
+                & (true_short["opportunity_probability"] >= 0.60)
+                & (true_short["action_probability_margin"] >= 0.10)
+            )
+            rows[regime] = {
+                "rows": int(len(subset)),
+                "true_short_opportunities": int(len(true_short)),
+                "short_direction_recall": float(correct.mean()),
+                "short_pre_payoff_gate_recall": float(pre_payoff.mean()),
+                "mean_true_short_opportunity_probability": float(
+                    true_short["opportunity_probability"].mean()
+                ),
+                "mean_true_short_action_margin": float(
+                    true_short["action_probability_margin"].mean()
+                ),
+            }
+        result[column] = {
+            "low_cut": low_cut,
+            "high_cut": high_cut,
+            "regimes": rows,
+        }
+    return result
+
 def generate_report(qualification_root: Path) -> dict[str, object]:
     checkpoint_root = qualification_root / "qualification.checkpoints"
     pattern = f"fold-*-{EXPERIMENT}.csv"
@@ -301,6 +350,7 @@ def generate_report(qualification_root: Path) -> dict[str, object]:
         "directional_gating_funnel": _gating_funnel(all_predictions),
         "directional_payoff_diagnostics": _directional_payoff_diagnostics(all_predictions),
         "opportunity_gate_diagnostics": _opportunity_gate_diagnostics(all_predictions),
+        "short_regime_diagnostics": _short_regime_diagnostics(all_predictions),
         "statistical_robustness": robustness_snapshot(
             returns,
             comparable_trial_sharpes=trial_sharpes if len(trial_sharpes) >= 2 else None,
