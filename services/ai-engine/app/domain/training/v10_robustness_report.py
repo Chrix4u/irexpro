@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from app.domain.training.robustness_audit import robustness_snapshot
+from app.domain.training.robustness_audit import cost_stress_frontier, robustness_snapshot
 
 EXPERIMENT = "event_barrier_hybrid_opportunity_dual_direction_payoff_risk"
 CONFIDENCE_BUCKETS = [0.0, 0.60, 0.65, 0.70, 0.80, 1.0]
@@ -305,6 +305,7 @@ def generate_report(qualification_root: Path) -> dict[str, object]:
             returns,
             comparable_trial_sharpes=trial_sharpes if len(trial_sharpes) >= 2 else None,
         ),
+        "execution_cost_stress": cost_stress_frontier(returns),
         "worst_fold": worst_fold,
         "interpretation": {
             "research_gate_unchanged": True,
