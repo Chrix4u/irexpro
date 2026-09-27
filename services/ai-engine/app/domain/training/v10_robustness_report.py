@@ -130,6 +130,29 @@ def _context(active: pd.DataFrame) -> dict[str, object]:
     return {"direction": direction, "session": session, "market": market}
 
 
+def _gating_funnel(frame: pd.DataFrame) -> dict[str, object]:
+    rows: dict[str, object] = {}
+    for name, mask in {
+        "long": frame["predicted_long"].astype(bool),
+        "short": ~frame["predicted_long"].astype(bool),
+    }.items():
+        side = frame.loc[mask].copy()
+        direction = side["direction_confidence"] >= 0.60
+        opportunity = side["opportunity_probability"] >= 0.60
+        margin = side["action_probability_margin"] >= 0.10
+        payoff = side["payoff_filter_pass"].astype(bool)
+        rows[name] = {
+            "predictions": int(len(side)),
+            "direction_confidence_pass": int(direction.sum()),
+            "opportunity_confidence_pass": int(opportunity.sum()),
+            "margin_pass": int(margin.sum()),
+            "payoff_pass": int(payoff.sum()),
+            "pre_payoff_pass": int((direction & opportunity & margin).sum()),
+            "all_filters_pass": int((direction & opportunity & margin & payoff).sum()),
+        }
+    return rows
+
+
 def generate_report(qualification_root: Path) -> dict[str, object]:
     checkpoint_root = qualification_root / "qualification.checkpoints"
     pattern = f"fold-*-{EXPERIMENT}.csv"
@@ -155,6 +178,7 @@ def generate_report(qualification_root: Path) -> dict[str, object]:
         )
 
     combined = pd.concat(active_frames, ignore_index=True)
+    all_predictions = pd.concat([pd.read_csv(path) for path in paths], ignore_index=True)
     returns = pd.to_numeric(combined["selected_net_return"], errors="raise").tolist()
     trial_sharpes: list[float] = []
     qualification_path = qualification_root / "qualification.json"
@@ -187,6 +211,7 @@ def generate_report(qualification_root: Path) -> dict[str, object]:
         "overall_trades": _trade_summary(combined),
         "overall_context": _context(combined),
         "overall_calibration": _calibration(combined),
+        "directional_gating_funnel": _gating_funnel(all_predictions),
         "statistical_robustness": robustness_snapshot(
             returns,
             comparable_trial_sharpes=trial_sharpes if len(trial_sharpes) >= 2 else None,
@@ -197,6 +222,8 @@ def generate_report(qualification_root: Path) -> dict[str, object]:
             "headline_risk_metrics_reliable": len(combined) >= 30,
             "preferred_trade_evidence_reached": len(combined) >= 100,
             "holdout_consumed": False,
+            "two_sided_execution_observed": bool((combined["predicted_long"].astype(bool)).any() and (~combined["predicted_long"].astype(bool)).any()),
+            "directional_warning": ("Only one execution direction is represented in qualification trades." if len(combined) and combined["predicted_long"].nunique() < 2 else None),
         },
     }
 
