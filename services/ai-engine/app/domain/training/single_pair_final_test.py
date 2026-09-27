@@ -13,6 +13,7 @@ from app.domain.training.model_qualification import (
     ACTIONABLE_TARGET_COLUMN,
     CONFIDENCE_FLOOR,
     EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
+    EVENT_HYBRID_PAYOFF_EXPERIMENT_NAME,
     EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
     OPPORTUNITY_CLASSIFICATION_THRESHOLD,
     TARGET_COLUMN,
@@ -199,6 +200,7 @@ def _load_qualified_single_pair(
     if experiment not in {
         EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
         EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
+        EVENT_HYBRID_PAYOFF_EXPERIMENT_NAME,
     }:
         raise ValueError("Qualification report experiment is unsupported")
     if payload.get("event_label_policy") != EVENT_LABEL_POLICY:
