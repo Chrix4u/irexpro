@@ -221,6 +221,7 @@ def evaluate_v14(
     max_splits: int = 3,
     candidate_sha: str = "UNSPECIFIED",
     checkpoint_dir: str | Path | None = None,
+    preflight_only: bool = False,
 ) -> dict[str, Any]:
     pooled, hashes = load_and_prepare_corpora(
         datasets,
@@ -232,7 +233,11 @@ def evaluate_v14(
     validation = int(unique_periods * 0.04)
     variant = ModelVariant(name="event_barrier_v14_side_specific_economic")
     fingerprint = research_fingerprint(
-        experiment=EXPERIMENT_NAME,
+        experiment=(
+            f"{EXPERIMENT_NAME}:preflight"
+            if preflight_only
+            else EXPERIMENT_NAME
+        ),
         candidate_sha=candidate_sha,
         dataset_hashes=hashes,
         decision_time_before=pd.Timestamp(decision_time_before).isoformat(),
@@ -316,6 +321,44 @@ def evaluate_v14(
             ),
             flush=True,
         )
+
+        if preflight_only:
+            fold = {
+                "fold": fold_index,
+                "preflight_only": True,
+                "validation_start": str(
+                    outer_validation["decision_time"].min()
+                ),
+                "validation_end": str(
+                    outer_validation["decision_time"].max()
+                ),
+                "inner_gate_selection": gate_selection,
+            }
+            folds.append(fold)
+            if checkpoint_dir is not None:
+                save_fold_checkpoint(
+                    checkpoint_dir,
+                    fingerprint=fingerprint,
+                    fold_index=fold_index,
+                    fold_report=fold,
+                )
+            print(
+                json.dumps(
+                    {
+                        "fold": fold_index,
+                        "phase": "preflight_complete",
+                        "eligible_count": gate_selection["eligible_count"],
+                        "selected": gate_selection["selected"] is not None,
+                        "elapsed_seconds": round(
+                            time.monotonic() - fold_started,
+                            3,
+                        ),
+                    },
+                    sort_keys=True,
+                ),
+                flush=True,
+            )
+            continue
 
         if gate_selection["selected"] is None:
             fold = _outer_fold_report(
@@ -421,6 +464,32 @@ def evaluate_v14(
             ),
             flush=True,
         )
+
+    if preflight_only:
+        return {
+            "experiment": EXPERIMENT_NAME,
+            "research_only": True,
+            "preflight_only": True,
+            "approved_for_paper": False,
+            "approved_for_live": False,
+            "decision_time_before": pd.Timestamp(
+                decision_time_before
+            ).isoformat(),
+            "dataset_sha256": hashes,
+            "checkpoint_fingerprint": fingerprint,
+            "folds": folds,
+            "preflight": {
+                "fold_count": len(folds),
+                "selection_success_count": sum(
+                    fold["inner_gate_selection"]["selected"] is not None
+                    for fold in folds
+                ),
+                "selection_failure_count": sum(
+                    fold["inner_gate_selection"]["selected"] is None
+                    for fold in folds
+                ),
+            },
+        }
 
     records = [
         record
@@ -569,6 +638,11 @@ def main() -> None:
     parser.add_argument("--max-splits", type=int, default=3)
     parser.add_argument("--candidate-sha", default="UNSPECIFIED")
     parser.add_argument("--checkpoint-dir")
+    parser.add_argument(
+        "--preflight-only",
+        action="store_true",
+        help="Run inner selection diagnostics without fitting/scoring outer validation.",
+    )
     args = parser.parse_args()
 
     report = evaluate_v14(
@@ -578,6 +652,7 @@ def main() -> None:
         max_splits=args.max_splits,
         candidate_sha=args.candidate_sha,
         checkpoint_dir=args.checkpoint_dir,
+        preflight_only=args.preflight_only,
     )
     output = Path(args.report)
     output.parent.mkdir(parents=True, exist_ok=True)
