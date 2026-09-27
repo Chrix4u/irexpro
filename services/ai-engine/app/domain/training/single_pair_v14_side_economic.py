@@ -91,15 +91,16 @@ def _candidate_report(
             (gated["short_action_probability"] >= short_threshold).to_numpy(int),
         )
     )
-    eligible = (
-        total_trades >= MIN_INNER_TRADES
-        and long_trades >= MIN_INNER_SIDE_TRADES
-        and short_trades >= MIN_INNER_SIDE_TRADES
-        and side_concentration <= MAX_INNER_SIDE_CONCENTRATION
-        and float(trading["total_return"]) > 0.0
-        and pf_for_gate >= 1.15
-        and float(trading["max_drawdown"]) <= 0.12
-    )
+    checks = {
+        "minimum_inner_trades": total_trades >= MIN_INNER_TRADES,
+        "minimum_long_trades": long_trades >= MIN_INNER_SIDE_TRADES,
+        "minimum_short_trades": short_trades >= MIN_INNER_SIDE_TRADES,
+        "side_concentration": side_concentration <= MAX_INNER_SIDE_CONCENTRATION,
+        "positive_total_return": float(trading["total_return"]) > 0.0,
+        "profit_factor": pf_for_gate >= 1.15,
+        "max_drawdown": float(trading["max_drawdown"]) <= 0.12,
+    }
+    eligible = all(checks.values())
     return {
         "long_threshold": float(long_threshold),
         "short_threshold": float(short_threshold),
@@ -108,6 +109,7 @@ def _candidate_report(
         "mean_side_balanced_accuracy": (long_ba + short_ba) / 2.0,
         "side_concentration": float(side_concentration),
         "trading": trading,
+        "checks": checks,
         "eligible": bool(eligible),
     }
 
@@ -124,6 +126,19 @@ def select_economic_side_thresholds(scored: pd.DataFrame) -> dict[str, Any]:
     ]
     eligible = [row for row in candidates if row["eligible"]]
     if not eligible:
+        failure_counts = {
+            key: sum(not bool(row["checks"][key]) for row in candidates)
+            for key in candidates[0]["checks"]
+        }
+        near_candidates = sorted(
+            candidates,
+            key=lambda row: (
+                sum(bool(value) for value in row["checks"].values()),
+                float(row["trading"]["total_return"]),
+                -row["side_concentration"],
+            ),
+            reverse=True,
+        )[:5]
         return {
             "selected": None,
             "candidate_count": len(candidates),
@@ -132,6 +147,8 @@ def select_economic_side_thresholds(scored: pd.DataFrame) -> dict[str, Any]:
                 "No inner side-threshold pair met two-sided evidence, "
                 "concentration, profit-factor, return, and drawdown constraints."
             ),
+            "failure_counts": failure_counts,
+            "best_near_candidates": near_candidates,
             "candidates": candidates,
         }
 
