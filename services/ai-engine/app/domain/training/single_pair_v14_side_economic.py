@@ -17,6 +17,11 @@ from typing import Any
 import pandas as pd
 from sklearn.metrics import balanced_accuracy_score
 
+from app.domain.training.fold_checkpoint import (
+    load_fold_checkpoint,
+    research_fingerprint,
+    save_fold_checkpoint,
+)
 from app.domain.training.model_qualification import (
     EVENT_LONG_ACTIONABLE_TARGET_COLUMN,
     EVENT_SHORT_ACTIONABLE_TARGET_COLUMN,
@@ -188,6 +193,8 @@ def evaluate_v14(
     horizon_bars: int,
     decision_time_before: str,
     max_splits: int = 3,
+    candidate_sha: str = "UNSPECIFIED",
+    checkpoint_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     pooled, hashes = load_and_prepare_corpora(
         datasets,
@@ -198,6 +205,13 @@ def evaluate_v14(
     min_train = int(unique_periods * 0.82)
     validation = int(unique_periods * 0.04)
     variant = ModelVariant(name="event_barrier_v14_side_specific_economic")
+    fingerprint = research_fingerprint(
+        experiment=EXPERIMENT_NAME,
+        candidate_sha=candidate_sha,
+        dataset_hashes=hashes,
+        decision_time_before=pd.Timestamp(decision_time_before).isoformat(),
+        horizon_bars=horizon_bars,
+    )
 
     folds: list[dict[str, Any]] = []
     for fold_index, (outer_train, outer_validation) in enumerate(
@@ -212,6 +226,30 @@ def evaluate_v14(
         ),
         start=1,
     ):
+        if checkpoint_dir is not None:
+            resumed = load_fold_checkpoint(
+                checkpoint_dir,
+                fingerprint=fingerprint,
+                fold_index=fold_index,
+            )
+            if resumed is not None:
+                folds.append(resumed)
+                print(
+                    json.dumps(
+                        {"fold": fold_index, "resumed_from_checkpoint": True},
+                        sort_keys=True,
+                    ),
+                    flush=True,
+                )
+                continue
+
+        print(
+            json.dumps(
+                {"fold": fold_index, "phase": "training_started"},
+                sort_keys=True,
+            ),
+            flush=True,
+        )
         nested = _nested_windows(
             outer_train,
             horizon_bars=horizon_bars,
@@ -250,6 +288,13 @@ def evaluate_v14(
         fold["validation_end"] = str(outer_validation["decision_time"].max())
         fold["inner_gate_selection"] = gate_selection
         folds.append(fold)
+        if checkpoint_dir is not None:
+            save_fold_checkpoint(
+                checkpoint_dir,
+                fingerprint=fingerprint,
+                fold_index=fold_index,
+                fold_report=fold,
+            )
 
         selected = gate_selection["selected"]
         print(
@@ -342,6 +387,7 @@ def evaluate_v14(
             "side_specific_calibration": True,
             "inner_two_sided_economic_threshold_selection": True,
             "future_holdout_touched": False,
+            "checkpoint_fingerprint": fingerprint,
         },
         "dataset_sha256": hashes,
         "folds": folds,
@@ -371,6 +417,8 @@ def main() -> None:
     parser.add_argument("--decision-time-before", required=True)
     parser.add_argument("--report", required=True)
     parser.add_argument("--max-splits", type=int, default=3)
+    parser.add_argument("--candidate-sha", default="UNSPECIFIED")
+    parser.add_argument("--checkpoint-dir")
     args = parser.parse_args()
 
     report = evaluate_v14(
@@ -378,6 +426,8 @@ def main() -> None:
         horizon_bars=args.horizon_bars,
         decision_time_before=args.decision_time_before,
         max_splits=args.max_splits,
+        candidate_sha=args.candidate_sha,
+        checkpoint_dir=args.checkpoint_dir,
     )
     output = Path(args.report)
     output.parent.mkdir(parents=True, exist_ok=True)
