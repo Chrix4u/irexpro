@@ -64,6 +64,7 @@ def test_selector_can_choose_from_inner_classification_evidence() -> None:
         0.30,
         0.35,
         0.40,
+        0.45,
     }
     assert choice.metrics["opportunity_balanced_accuracy"] == 1.0
     assert choice.metrics["direction_balanced_accuracy"] == 1.0
