@@ -185,6 +185,70 @@ jobs:
           });
           NODE
 
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const dotenv = require('dotenv');
+          const jwt = require('jsonwebtoken');
+          const { Client } = require('pg');
+          const env = dotenv.parse(fs.readFileSync(path.join(process.cwd(), '.env')));
+
+          (async () => {
+            const client = new Client({
+              host: env.DB_HOST || 'localhost',
+              port: Number(env.DB_PORT || 5432),
+              database: env.DB_NAME || 'irexpro_dev',
+              user: env.DB_USER || 'irexpro',
+              password: env.DB_PASSWORD,
+              ssl: env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
+            });
+            await client.connect();
+            const q = await client.query([
+              "SELECT u.id AS user_id, u.email, u.session_version, c.id AS connection_id",
+              "FROM trading.trading_sessions ts",
+              "JOIN broker.broker_connections c ON c.id = ts.broker_connection_id",
+              "JOIN identity.users u ON u.id = c.user_id",
+              "WHERE ts.status = 'ACTIVE'",
+              "ORDER BY ts.started_at DESC LIMIT 1"
+            ].join("\n"));
+            await client.end();
+            if (!q.rows[0]) throw new Error('no active session user found');
+
+            const row = q.rows[0];
+            const token = jwt.sign(
+              {
+                sub: row.user_id,
+                email: row.email || null,
+                roles: [],
+                tokenType: 'access',
+                sessionVersion: Number(row.session_version || 0),
+              },
+              env.JWT_SECRET,
+              { algorithm: 'HS256', expiresIn: '2m', jwtid: 'staging-allocation-diagnostic' },
+            );
+
+            const url =
+              'http://127.0.0.1:3010/api/v1/execution/capital-allocation?brokerConnectionId=' +
+              encodeURIComponent(row.connection_id);
+            const response = await fetch(url, {
+              headers: { Authorization: 'Bearer ' + token, Accept: 'application/json' },
+            });
+            const body = await response.text();
+            const safe = body
+              .replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, '[uuid]')
+              .replace(/[A-Za-z0-9_-]{40,}/g, '[redacted]');
+            console.log('=== ACTIVE SESSION ALLOCATION ENDPOINT ===');
+            console.log('status=' + response.status);
+            console.log('body=' + safe.slice(0, 1200));
+          })().catch(err => {
+            console.error(
+              'endpoint_diagnostic_error=' +
+              (err?.message || String(err)).replace(/[A-Za-z0-9]{20,}/g,'[redacted]')
+            );
+            process.exit(1);
+          });
+          NODE
+
           cd ../..
           echo '=== RECENT ALLOCATION/RECONCILIATION ERRORS ==='
           pm2 logs "$api_id" --nostream --lines 800 2>/dev/null \
