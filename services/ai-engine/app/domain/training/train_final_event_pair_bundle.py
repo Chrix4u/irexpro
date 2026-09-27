@@ -384,7 +384,7 @@ def _component_manifest(
     direction_calibrators: dict[str, Any] | None,
     regime_routers: dict[str, dict[str, float]] | None,
     opportunity_model: Any,
-    payoff_models: dict[str, Any] | None,
+    payoff_models: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     root = output.parent
     if experiment == EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME:
