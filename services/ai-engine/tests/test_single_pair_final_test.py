@@ -9,6 +9,7 @@ import pytest
 from app.domain.training import single_pair_final_test as final_test
 from app.domain.training.model_qualification import (
     EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
+    EVENT_HYBRID_PAYOFF_RISK_EXPERIMENT_NAME,
     EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
 )
 from app.domain.training.single_pair_final_test import (
@@ -89,6 +90,32 @@ def test_load_qualified_single_pair_accepts_frozen_hybrid_candidate(tmp_path):
         "qualification_frame_sha256": None,
         "qualification_frame_rows": None,
     }
+
+
+
+
+def test_load_qualified_single_pair_accepts_payoff_risk_candidate(tmp_path):
+    payload = _qualification_payload()
+    payload["single_pair_scope"]["experiment"] = EVENT_HYBRID_PAYOFF_RISK_EXPERIMENT_NAME
+    payload["experiments"] = {
+        EVENT_HYBRID_PAYOFF_RISK_EXPERIMENT_NAME: {
+            "research_gate": {"research_gate_passed": True}
+        }
+    }
+    path = tmp_path / "qualification-payoff-risk.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    experiment, gate, cutoff, hashes, provenance = _load_qualified_single_pair(
+        path,
+        instrument="USDJPY",
+        horizon_bars=1,
+    )
+
+    assert experiment == EVENT_HYBRID_PAYOFF_RISK_EXPERIMENT_NAME
+    assert gate["research_gate_passed"] is True
+    assert cutoff == pd.Timestamp("2026-07-01T00:00:00Z")
+    assert hashes == {"USDJPY": "abc123"}
+    assert provenance["qualification_frame_sha256"] is None
 
 
 def test_load_qualified_single_pair_rejects_wrong_instrument(tmp_path):
