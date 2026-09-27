@@ -189,7 +189,7 @@ jobs:
           const fs = require('fs');
           const path = require('path');
           const dotenv = require('dotenv');
-          const jwt = require('jsonwebtoken');
+          const { JwtService } = require('@nestjs/jwt');
           const { Client } = require('pg');
           const env = dotenv.parse(fs.readFileSync(path.join(process.cwd(), '.env')));
 
@@ -215,6 +215,7 @@ jobs:
             if (!q.rows[0]) throw new Error('no active session user found');
 
             const row = q.rows[0];
+            const jwt = new JwtService({ secret: env.JWT_SECRET, signOptions: { algorithm: 'HS256' } });
             const token = jwt.sign(
               {
                 sub: row.user_id,
@@ -223,8 +224,7 @@ jobs:
                 tokenType: 'access',
                 sessionVersion: Number(row.session_version || 0),
               },
-              env.JWT_SECRET,
-              { algorithm: 'HS256', expiresIn: '2m', jwtid: 'staging-allocation-diagnostic' },
+              { expiresIn: '2m', jwtid: 'staging-allocation-diagnostic' },
             );
 
             const url =
