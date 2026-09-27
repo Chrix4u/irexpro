@@ -23,7 +23,10 @@ from app.domain.training.fold_checkpoint import (
     research_fingerprint,
     save_fold_checkpoint,
 )
-from app.domain.training.robustness_audit import extended_risk_metrics
+from app.domain.training.robustness_audit import (
+    cost_stress_frontier,
+    extended_risk_metrics,
+)
 from app.domain.training.model_qualification import (
     EVENT_LONG_ACTIONABLE_TARGET_COLUMN,
     EVENT_SHORT_ACTIONABLE_TARGET_COLUMN,
@@ -374,13 +377,16 @@ def evaluate_v14(
             1.0 / 365.25,
         )
         periods_per_year = max(float(len(active)) / span_years, 1.0)
+        aggregate_returns = active["selected_net_return"].to_numpy(float)
         aggregate_extended_risk = extended_risk_metrics(
-            active["selected_net_return"].to_numpy(float),
+            aggregate_returns,
             annualization_factor=periods_per_year,
         )
+        aggregate_cost_stress = cost_stress_frontier(aggregate_returns)
     else:
         aggregate_trading = _trading_metrics(pd.DataFrame())
         aggregate_extended_risk = None
+        aggregate_cost_stress = None
 
     trade_counts = [int(fold["trading"]["trade_count"]) for fold in folds]
     total_trades = int(aggregate_trading["trade_count"])
@@ -449,6 +455,7 @@ def evaluate_v14(
                 positive_folds / len(folds) if folds else 0.0
             ),
             "extended_risk": aggregate_extended_risk,
+            "execution_cost_stress": aggregate_cost_stress,
         },
         "robustness_gate": robustness_gate,
     }
