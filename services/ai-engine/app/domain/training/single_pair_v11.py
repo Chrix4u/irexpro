@@ -73,6 +73,7 @@ def _score_frame(
     opportunity_model: Any,
     payoff_models: dict[str, Any],
     feature_columns: list[str],
+    direction_calibrator: Any,
     opportunity_calibrator: Any,
     fold: int,
 ) -> pd.DataFrame:
@@ -110,7 +111,11 @@ def _score_frame(
         1e-7,
         1.0 - 1e-7,
     )
-    predicted_long = long_probability >= short_probability
+    calibrated_long = _apply_calibrator(
+        direction_calibrator,
+        normalized_long,
+    )
+    predicted_long = calibrated_long >= 0.50
 
     long_upside = np.maximum(
         np.asarray(
@@ -145,10 +150,11 @@ def _score_frame(
 
     result["long_action_probability"] = long_probability
     result["short_action_probability"] = short_probability
-    result["positive_probability"] = normalized_long
+    result["raw_positive_probability"] = normalized_long
+    result["positive_probability"] = calibrated_long
     result["predicted_long"] = predicted_long
     result["direction_confidence"] = np.maximum(
-        normalized_long, 1.0 - normalized_long
+        calibrated_long, 1.0 - calibrated_long
     )
     result["raw_opportunity_probability"] = raw_opportunity
     result["opportunity_probability"] = calibrated_opportunity
@@ -182,19 +188,47 @@ def _fit_calibrated_scoring_stack(
     calibration_frame: pd.DataFrame,
     *,
     horizon_bars: int,
-) -> tuple[dict[str, Any], Any, dict[str, Any], list[str], Any]:
+) -> tuple[dict[str, Any], Any, dict[str, Any], list[str], Any, Any]:
     (
         direction_models,
         opportunity_model,
         payoff_models,
         feature_columns,
     ) = _fit_v11_models(training_prefix, horizon_bars=horizon_bars)
+    calibration_long = _probabilities(
+        direction_models["long"],
+        calibration_frame,
+        feature_columns,
+    )
+    calibration_short = _probabilities(
+        direction_models["short"],
+        calibration_frame,
+        feature_columns,
+    )
+    calibration_total = np.maximum(calibration_long + calibration_short, 1e-7)
+    raw_direction = np.clip(
+        calibration_long / calibration_total,
+        1e-7,
+        1.0 - 1e-7,
+    )
+    actionable = (
+        calibration_frame[EVENT_ACTIONABLE_TARGET_COLUMN].to_numpy(dtype=int) == 1
+    )
+    direction_calibrator = _fit_calibrator(
+        CALIBRATION_METHOD,
+        probabilities=raw_direction[actionable],
+        labels=calibration_frame.loc[
+            actionable,
+            EVENT_DIRECTION_TARGET_COLUMN,
+        ].to_numpy(dtype=int),
+    )
+
     calibration_raw = _probabilities(
         opportunity_model,
         calibration_frame,
         feature_columns,
     )
-    calibrator = _fit_calibrator(
+    opportunity_calibrator = _fit_calibrator(
         CALIBRATION_METHOD,
         probabilities=calibration_raw,
         labels=calibration_frame[EVENT_ACTIONABLE_TARGET_COLUMN].to_numpy(
@@ -206,7 +240,8 @@ def _fit_calibrated_scoring_stack(
         opportunity_model,
         payoff_models,
         feature_columns,
-        calibrator,
+        direction_calibrator,
+        opportunity_calibrator,
     )
 
 
@@ -249,7 +284,6 @@ def _trading_metrics(predictions: pd.DataFrame) -> dict[str, Any]:
         ),
         "max_drawdown": float(abs(drawdown.min())),
     }
-
 
 
 def _selection_funnel(frame: pd.DataFrame) -> dict[str, Any]:
@@ -300,6 +334,7 @@ def _selection_funnel(frame: pd.DataFrame) -> dict[str, Any]:
                 ] = int(active.sum())
         result["by_direction"][name] = rows
     return result
+
 
 def _fold_report(
     predictions: pd.DataFrame,
@@ -386,7 +421,8 @@ def run_v11_qualification(
             inner_opportunity,
             inner_payoff,
             inner_features,
-            inner_calibrator,
+            inner_direction_calibrator,
+            inner_opportunity_calibrator,
         ) = _fit_calibrated_scoring_stack(
             inner_training_prefix,
             inner.calibration,
@@ -398,7 +434,8 @@ def run_v11_qualification(
             opportunity_model=inner_opportunity,
             payoff_models=inner_payoff,
             feature_columns=inner_features,
-            opportunity_calibrator=inner_calibrator,
+            direction_calibrator=inner_direction_calibrator,
+            opportunity_calibrator=inner_opportunity_calibrator,
             fold=0,
         )
         choice = select_execution_thresholds(inner_selection)
@@ -417,7 +454,8 @@ def run_v11_qualification(
             outer_opportunity,
             outer_payoff,
             outer_features,
-            outer_calibrator,
+            outer_direction_calibrator,
+            outer_opportunity_calibrator,
         ) = _fit_calibrated_scoring_stack(
             outer_training_prefix,
             refit.calibration,
@@ -429,7 +467,8 @@ def run_v11_qualification(
             opportunity_model=outer_opportunity,
             payoff_models=outer_payoff,
             feature_columns=outer_features,
-            opportunity_calibrator=outer_calibrator,
+            direction_calibrator=outer_direction_calibrator,
+            opportunity_calibrator=outer_opportunity_calibrator,
             fold=fold,
         )
         evaluated = apply_v11_execution_policy(
