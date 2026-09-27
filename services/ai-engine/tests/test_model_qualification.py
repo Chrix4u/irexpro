@@ -1386,3 +1386,48 @@ def test_hybrid_payoff_filter_requires_positive_selected_return_and_edge():
     )
     assert qualification.CONFIDENCE_FLOOR == 0.60
     assert qualification.DUAL_ACTION_MARGIN_FLOOR == 0.10
+
+
+def test_hybrid_payoff_risk_filter_is_directionally_symmetric():
+    source = _research_dataset(periods=2, instruments=("EURUSD",))
+    source[EVENT_ACTIONABLE_TARGET_COLUMN] = [1, 1]
+    source[EVENT_DIRECTION_TARGET_COLUMN] = [1, 0]
+    source[EVENT_LONG_NET_RETURN_COLUMN] = [0.001, -0.001]
+    source[EVENT_SHORT_NET_RETURN_COLUMN] = [-0.001, 0.001]
+    source[EVENT_STEP_COLUMN] = [1, 1]
+    source[EVENT_BARRIER_RETURN_COLUMN] = [0.0005, 0.0005]
+
+    predictions = qualification._event_hybrid_payoff_risk_prediction_frame(
+        source,
+        long_probabilities=np.array([0.75, 0.10]),
+        short_probabilities=np.array([0.10, 0.75]),
+        opportunity_probabilities=np.array([0.80, 0.80]),
+        expected_long_upside_bps=np.array([2.30, 0.40]),
+        expected_long_downside_bps=np.array([1.00, 1.80]),
+        expected_short_upside_bps=np.array([0.40, 2.30]),
+        expected_short_downside_bps=np.array([1.80, 1.00]),
+        confidence_floor=0.60,
+        fold=1,
+        experiment=qualification.EVENT_HYBRID_PAYOFF_RISK_EXPERIMENT_NAME,
+        variant=ModelVariant(name="event_barrier_v10_hybrid_payoff_risk"),
+    )
+
+    assert predictions["predicted_long"].tolist() == [True, False]
+    assert predictions["payoff_filter_pass"].tolist() == [True, True]
+    assert predictions["active_trade"].tolist() == [True, True]
+    np.testing.assert_allclose(
+        predictions["expected_selected_upside_bps"].to_numpy(dtype=float),
+        np.array([2.30, 2.30]),
+    )
+    np.testing.assert_allclose(
+        predictions["expected_selected_downside_bps"].to_numpy(dtype=float),
+        np.array([1.00, 1.00]),
+    )
+    np.testing.assert_allclose(
+        predictions["expected_selected_net_bps"].to_numpy(dtype=float),
+        np.array([1.30, 1.30]),
+    )
+    np.testing.assert_allclose(
+        predictions["expected_payoff_ratio"].to_numpy(dtype=float),
+        np.array([2.30, 2.30]),
+    )
