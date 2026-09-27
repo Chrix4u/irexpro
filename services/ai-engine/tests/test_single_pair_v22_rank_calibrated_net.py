@@ -30,9 +30,12 @@ def test_v22_disables_side_without_inner_economic_evidence() -> None:
 
 
 def test_v22_selects_profitable_rank_policy() -> None:
-    returns = [-0.001] * 10 + [0.001] * 10
+    # With a 95th-percentile minimum rank and a 10-trade evidence floor,
+    # the fixture needs at least 200 observations so the selected tail can
+    # contain 10 economically positive records.
+    returns = [-0.001] * 190 + [0.001] * 10
     selected = v22.select_rank_policy(
-        _scored("short", returns, direct_values=list(range(20))),
+        _scored("short", returns, direct_values=list(range(200))),
         side="short",
     )
     assert selected["enabled"] is True
