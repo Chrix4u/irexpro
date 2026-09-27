@@ -266,17 +266,20 @@ def evaluate_v13(
             inner_models,
             nested.calibration,
         )
+        selection_labeled = _ensure_event_dual_actionability_targets(
+            nested.selection
+        )
         selection_scored = _score_frame(
             inner_models,
-            nested.selection,
+            selection_labeled,
             calibrators=inner_calibrators,
         )
         long_choice = select_side_threshold(
-            nested.selection[EVENT_LONG_ACTIONABLE_TARGET_COLUMN].to_numpy(int),
+            selection_labeled[EVENT_LONG_ACTIONABLE_TARGET_COLUMN].to_numpy(int),
             selection_scored["long_action_probability"].to_numpy(float),
         )
         short_choice = select_side_threshold(
-            nested.selection[EVENT_SHORT_ACTIONABLE_TARGET_COLUMN].to_numpy(int),
+            selection_labeled[EVENT_SHORT_ACTIONABLE_TARGET_COLUMN].to_numpy(int),
             selection_scored["short_action_probability"].to_numpy(float),
         )
 
