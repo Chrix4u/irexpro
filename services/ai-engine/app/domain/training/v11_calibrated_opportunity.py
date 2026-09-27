@@ -5,6 +5,7 @@ only on inner chronological selection data and then locked for outer-fold use.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -27,10 +28,11 @@ ACTION_MARGIN_GRID = (0.00, 0.02, 0.03, 0.05, 0.075, 0.10)
 PAYOFF_RATIO_FLOOR = 1.15
 DIRECTION_CONFIDENCE_FLOOR = 0.60
 MIN_OPPORTUNITY_PREDICTIONS = 100
-MIN_DIRECTION_EVALUATED_ROWS = 50
+MIN_DIRECTION_EVALUATED_ROWS = 20
 MIN_OPPORTUNITY_BALANCED_ACCURACY = 0.52
 MIN_OPPORTUNITY_RECALL = 0.10
-MIN_DIRECTION_BALANCED_ACCURACY = 0.50
+MIN_DIRECTION_BALANCED_ACCURACY = 0.52
+MIN_DIRECTION_WILSON_LOWER_BOUND = 0.50
 
 
 @dataclass(frozen=True)
@@ -64,6 +66,28 @@ def _balanced_accuracy(
     sensitivity = float((predicted[positives] == 1).mean())
     specificity = float((predicted[negatives] == 0).mean())
     return (sensitivity + specificity) / 2.0
+
+
+def _wilson_lower_bound(
+    successes: int,
+    total: int,
+    *,
+    z_score: float = 1.959963984540054,
+) -> float | None:
+    """Return the two-sided 95% Wilson lower bound for a Bernoulli rate."""
+    if total <= 0:
+        return None
+    if successes < 0 or successes > total:
+        raise ValueError("successes must be between zero and total")
+    proportion = successes / total
+    z2 = z_score * z_score
+    denominator = 1.0 + z2 / total
+    centre = proportion + z2 / (2.0 * total)
+    adjustment = z_score * math.sqrt(
+        (proportion * (1.0 - proportion) / total)
+        + (z2 / (4.0 * total * total))
+    )
+    return (centre - adjustment) / denominator
 
 
 def apply_v11_execution_policy(
@@ -217,10 +241,15 @@ def _classification_metrics(
     direction_rows = int(direction_mask.sum())
     actionable_rows = int(actionable.sum())
     direction_coverage = direction_rows / max(1, actionable_rows)
+    direction_correct = int((direction_truth == direction_prediction).sum())
     direction_accuracy = (
-        float((direction_truth == direction_prediction).mean())
+        float(direction_correct / direction_rows)
         if direction_rows
         else None
+    )
+    direction_wilson_lower = _wilson_lower_bound(
+        direction_correct,
+        direction_rows,
     )
     predicted_long_count = int((direction_prediction == 1).sum())
     predicted_short_count = int((direction_prediction == 0).sum())
@@ -235,6 +264,7 @@ def _classification_metrics(
         "direction_actionable_rows": actionable_rows,
         "direction_coverage": float(direction_coverage),
         "direction_accuracy": direction_accuracy,
+        "direction_wilson_lower_95": direction_wilson_lower,
         "direction_balanced_accuracy": direction_balanced,
         "direction_predicted_long": predicted_long_count,
         "direction_predicted_short": predicted_short_count,
@@ -291,6 +321,9 @@ def select_execution_thresholds(
                 and direction_balanced is not None
                 and float(direction_balanced)
                 >= MIN_DIRECTION_BALANCED_ACCURACY
+                and classification["direction_wilson_lower_95"] is not None
+                and float(classification["direction_wilson_lower_95"])
+                > MIN_DIRECTION_WILSON_LOWER_BOUND
                 and int(classification["direction_predicted_long"]) > 0
                 and int(classification["direction_predicted_short"]) > 0
             )
@@ -325,16 +358,18 @@ def select_execution_thresholds(
             eligible=False,
             reason=(
                 "No inner-selection candidate met opportunity balanced-accuracy/"
-                "recall and two-sided direction-coverage requirements; "
+                "recall and statistically significant two-sided direction "
+                "confidence requirements; "
                 "conservative v10 thresholds retained."
             ),
             metrics=fallback_metrics,
             candidates=tuple(candidates),
         )
 
-    def key(row: dict[str, Any]) -> tuple[float, float, float, float, float, float]:
+    def key(row: dict[str, Any]) -> tuple[float, float, float, float, float, float, float]:
         return (
             float(row["opportunity_balanced_accuracy"]),
+            float(row["direction_wilson_lower_95"]),
             float(row["direction_balanced_accuracy"]),
             float(row["opportunity_recall"]),
             float(row["direction_coverage"]),
