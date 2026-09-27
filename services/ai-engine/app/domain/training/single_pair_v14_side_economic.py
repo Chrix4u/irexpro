@@ -49,6 +49,7 @@ MIN_INNER_TRADES = 12
 MIN_INNER_SIDE_TRADES = 2
 MAX_INNER_SIDE_CONCENTRATION = 0.85
 MIN_OUTER_TRADES = 30
+MIN_OUTER_SIDE_TRADES = 5
 MIN_PER_FOLD_TRADES = 5
 MAX_FOLD_TRADE_CONCENTRATION = 0.80
 
@@ -401,6 +402,24 @@ def evaluate_v14(
         float(fold["trading"]["total_return"]) > 0.0 for fold in folds
     )
     profit_factor = aggregate_trading.get("profit_factor")
+    cost_pf_1bps = None
+    if aggregate_cost_stress is not None:
+        one_bps = next(
+            (
+                row
+                for row in aggregate_cost_stress["scenarios"]
+                if float(row["extra_cost_bps"]) == 1.0
+            ),
+            None,
+        )
+        if one_bps is not None:
+            cost_pf_1bps = one_bps["profit_factor"]
+
+    side_concentration = (
+        max(long_trades, short_trades) / total_trades
+        if total_trades > 0
+        else 1.0
+    )
     robustness_gate = {
         "all_inner_selections_succeeded": all(
             not bool(fold["selection_failed"]) for fold in folds
@@ -411,6 +430,11 @@ def evaluate_v14(
         "fold_concentration_lte_0_80": max_concentration
         <= MAX_FOLD_TRADE_CONCENTRATION,
         "two_sided_execution": long_trades > 0 and short_trades > 0,
+        "minimum_each_side_trade_evidence": (
+            long_trades >= MIN_OUTER_SIDE_TRADES
+            and short_trades >= MIN_OUTER_SIDE_TRADES
+        ),
+        "aggregate_side_concentration_lte_0_85": side_concentration <= 0.85,
         "positive_fold_fraction_gte_0_60": (
             positive_folds / len(folds) >= 0.60 if folds else False
         ),
@@ -424,6 +448,9 @@ def evaluate_v14(
             aggregate_trading.get("max_drawdown", 1.0)
         )
         <= 0.12,
+        "profit_factor_after_extra_1bps_gte_1_15": (
+            cost_pf_1bps is not None and float(cost_pf_1bps) >= 1.15
+        ),
     }
     robustness_gate["research_robustness_passed"] = all(
         bool(value) for key, value in robustness_gate.items()
@@ -443,6 +470,9 @@ def evaluate_v14(
             "side_specific_calibration": True,
             "inner_two_sided_economic_threshold_selection": True,
             "future_holdout_touched": False,
+            "minimum_outer_side_trades": MIN_OUTER_SIDE_TRADES,
+            "maximum_outer_side_concentration": 0.85,
+            "execution_stress_gate_extra_bps": 1.0,
             "checkpoint_fingerprint": fingerprint,
         },
         "dataset_sha256": hashes,
