@@ -11,6 +11,7 @@ No research gate is lowered and no PAPER/LIVE approval is produced here.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ import pandas as pd
 
 from app.domain.training.model_qualification import (
     CONFIDENCE_FLOOR,
+    EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
     EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
     ModelVariant,
     QualificationExperiment,
@@ -26,6 +28,18 @@ from app.domain.training.model_qualification import (
     run_nested_qualification_experiments,
 )
 from app.domain.training.train_multitimeframe import load_and_prepare_corpora
+
+
+def _qualification_frame_sha256(frame: pd.DataFrame) -> str:
+    """Stable semantic fingerprint of the frozen pre-boundary qualification frame."""
+    ordered = frame.copy()
+    ordered["decision_time"] = pd.to_datetime(
+        ordered["decision_time"], utc=True, errors="raise"
+    ).map(lambda value: value.isoformat())
+    ordered = ordered.sort_values(["decision_time", "instrument"]).reset_index(drop=True)
+    ordered = ordered.reindex(sorted(ordered.columns), axis=1)
+    payload = ordered.to_csv(index=False, float_format="%.12g", lineterminator="\n")
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def single_pair_experiments() -> tuple[QualificationExperiment, ...]:
@@ -39,6 +53,11 @@ def single_pair_experiments() -> tuple[QualificationExperiment, ...]:
             name=EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
             variants=(ModelVariant(name="event_barrier_v4_pair_direction"),),
             mode="two_stage_event_pair_experts",
+        ),
+        QualificationExperiment(
+            name=EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
+            variants=(ModelVariant(name="event_barrier_v8_hybrid_dual_direction"),),
+            mode="event_hybrid_dual_direction",
         ),
     )
 
@@ -86,6 +105,8 @@ def evaluate_single_pair_candidate(
         checkpoint_fingerprint=fingerprint,
     )
     report["dataset_sha256"] = hashes
+    report["qualification_frame_sha256"] = _qualification_frame_sha256(pooled)
+    report["qualification_frame_rows"] = int(len(pooled))
     report["qualification_checkpoint_fingerprint"] = fingerprint
     report["qualification_decision_time_before"] = pd.Timestamp(
         decision_time_before
@@ -93,9 +114,10 @@ def evaluate_single_pair_candidate(
     report["single_pair_scope"] = {
         "instrument": next(iter(sorted(datasets))),
         "horizon_bars": int(horizon_bars),
-        "experiment": EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+        "experiment": EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
         "comparison_experiments": [
             EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+            EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
         ],
         "research_only": True,
         "approved_for_paper": False,
@@ -113,11 +135,11 @@ def evaluate_single_pair_candidate(
 
 
 def candidate_summary(report: dict[str, Any]) -> dict[str, Any]:
-    candidate = report["experiments"][EVENT_PAIR_EXPERT_EXPERIMENT_NAME]
+    candidate = report["experiments"][EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME]
     gate = candidate["research_gate"]
     overall = candidate["overall"]
     return {
-        "experiment": EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+        "experiment": EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
         "research_gate_passed": bool(gate["research_gate_passed"]),
         "observed": gate["observed"],
         "checks": gate["checks"],

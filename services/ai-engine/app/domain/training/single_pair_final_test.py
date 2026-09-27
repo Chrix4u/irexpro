@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,7 @@ import pandas as pd
 from app.domain.training.model_qualification import (
     ACTIONABLE_TARGET_COLUMN,
     CONFIDENCE_FLOOR,
+    EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
     EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
     OPPORTUNITY_CLASSIFICATION_THRESHOLD,
     TARGET_COLUMN,
@@ -166,12 +168,25 @@ def _direction_failure_diagnostics(predictions: pd.DataFrame) -> dict[str, Any]:
     }
 
 
+
+
+def _qualification_frame_sha256(frame: pd.DataFrame) -> str:
+    ordered = frame.copy()
+    ordered["decision_time"] = pd.to_datetime(
+        ordered["decision_time"], utc=True, errors="raise"
+    ).map(lambda value: value.isoformat())
+    ordered = ordered.sort_values(["decision_time", "instrument"]).reset_index(drop=True)
+    ordered = ordered.reindex(sorted(ordered.columns), axis=1)
+    payload = ordered.to_csv(index=False, float_format="%.12g", lineterminator="\n")
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def _load_qualified_single_pair(
     path: str | Path,
     *,
     instrument: str,
     horizon_bars: int,
-) -> tuple[dict[str, Any], pd.Timestamp, dict[str, str]]:
+) -> tuple[str, dict[str, Any], pd.Timestamp, dict[str, str], dict[str, Any]]:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     scope = payload.get("single_pair_scope")
     if not isinstance(scope, dict):
@@ -180,7 +195,11 @@ def _load_qualified_single_pair(
         raise ValueError("Qualification report instrument does not match final test")
     if int(scope.get("horizon_bars", -1)) != int(horizon_bars):
         raise ValueError("Qualification report horizon does not match final test")
-    if scope.get("experiment") != EVENT_PAIR_EXPERT_EXPERIMENT_NAME:
+    experiment = str(scope.get("experiment", ""))
+    if experiment not in {
+        EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+        EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
+    }:
         raise ValueError("Qualification report experiment is unsupported")
     if payload.get("event_label_policy") != EVENT_LABEL_POLICY:
         raise ValueError("Qualification report event label policy is unsupported")
@@ -189,9 +208,9 @@ def _load_qualified_single_pair(
     if bool(payload.get("outer_validation_used_for_tuning", True)):
         raise ValueError("Qualification report reused outer validation for tuning")
 
-    block = payload.get("experiments", {}).get(EVENT_PAIR_EXPERT_EXPERIMENT_NAME)
+    block = payload.get("experiments", {}).get(experiment)
     if not isinstance(block, dict):
-        raise ValueError("Qualification report is missing event pair expert result")
+        raise ValueError("Qualification report is missing selected experiment result")
     gate = block.get("research_gate")
     if not isinstance(gate, dict) or not bool(gate.get("research_gate_passed", False)):
         raise ValueError("Single-pair research gate has not passed")
@@ -205,7 +224,17 @@ def _load_qualified_single_pair(
     hashes = payload.get("dataset_sha256")
     if not isinstance(hashes, dict) or set(hashes) != {instrument}:
         raise ValueError("Qualification report dataset hashes do not match single-pair scope")
-    return gate, cutoff, {str(k): str(v) for k, v in hashes.items()}
+    provenance = {
+        "qualification_frame_sha256": payload.get("qualification_frame_sha256"),
+        "qualification_frame_rows": payload.get("qualification_frame_rows"),
+    }
+    return (
+        experiment,
+        gate,
+        cutoff,
+        {str(k): str(v) for k, v in hashes.items()},
+        provenance,
+    )
 
 
 def _single_pair_final_gate(
@@ -273,7 +302,7 @@ def evaluate_single_pair_untouched_test(
     if confidence_threshold < CONFIDENCE_FLOOR or confidence_threshold >= 1.0:
         raise ValueError("confidence threshold must remain >= 0.60 and < 1.0")
 
-    research_gate, cutoff, research_hashes = _load_qualified_single_pair(
+    experiment, research_gate, cutoff, research_hashes, research_provenance = _load_qualified_single_pair(
         qualification_report_path,
         instrument=instrument,
         horizon_bars=horizon_bars,
@@ -285,7 +314,12 @@ def evaluate_single_pair_untouched_test(
         commission_bps=0.0,
         slippage_bps=0.0,
     )
-    if dataset_hashes != research_hashes:
+    qualified_frame_hash = research_provenance.get("qualification_frame_sha256")
+    if qualified_frame_hash:
+        pre_cutoff = pooled.loc[pooled["decision_time"] < cutoff].copy()
+        if _qualification_frame_sha256(pre_cutoff) != qualified_frame_hash:
+            raise ValueError("Final-test pre-boundary frame does not match qualification")
+    elif dataset_hashes != research_hashes:
         raise ValueError("Final-test dataset does not match qualified dataset")
 
     train, validation, test = _chronological_final_split(
@@ -305,11 +339,11 @@ def evaluate_single_pair_untouched_test(
         training_counts,
     ) = _fit_pair_candidate(
         train,
-        experiment=EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+        experiment=experiment,
         horizon_bars=horizon_bars,
     )
     validation_predictions = _predict_pair_candidate(
-        experiment=EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+        experiment=experiment,
         direction_models=direction_models,
         direction_calibrators=direction_calibrators,
         regime_routers=regime_routers,
@@ -319,7 +353,7 @@ def evaluate_single_pair_untouched_test(
         horizon_bars=horizon_bars,
     )
     test_predictions = _predict_pair_candidate(
-        experiment=EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+        experiment=experiment,
         direction_models=direction_models,
         direction_calibrators=direction_calibrators,
         regime_routers=regime_routers,
@@ -349,7 +383,7 @@ def evaluate_single_pair_untouched_test(
         "policy": SINGLE_PAIR_FINAL_TEST_POLICY,
         "instrument": instrument,
         "horizon_bars": int(horizon_bars),
-        "experiment": EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+        "experiment": experiment,
         "dataset_sha256": dataset_hashes,
         "research_gate": research_gate,
         "qualification_decision_time_before": cutoff.isoformat(),
@@ -415,7 +449,7 @@ def evaluate_single_pair_future_holdout(
         raise ValueError("confidence threshold must remain >= 0.60 and < 1.0")
 
     instrument = next(iter(datasets)).upper()
-    research_gate, cutoff, research_hashes = _load_qualified_single_pair(
+    experiment, research_gate, cutoff, research_hashes, research_provenance = _load_qualified_single_pair(
         qualification_report_path,
         instrument=instrument,
         horizon_bars=horizon_bars,
@@ -439,8 +473,21 @@ def evaluate_single_pair_future_holdout(
         slippage_bps=0.0,
     )
     pooled = _ensure_actionable_target(pooled)
-    if dataset_hashes != research_hashes:
-        raise ValueError("Future-holdout dataset does not match qualified dataset")
+    qualified_frame_hash = research_provenance.get("qualification_frame_sha256")
+    if not qualified_frame_hash:
+        if dataset_hashes != research_hashes:
+            raise ValueError("Future-holdout dataset does not match qualified dataset")
+    else:
+        qualified_prefix = pooled.loc[pooled["decision_time"] < cutoff].copy()
+        if _qualification_frame_sha256(qualified_prefix) != qualified_frame_hash:
+            raise ValueError(
+                "Future-holdout historical prefix does not match frozen qualification frame"
+            )
+        expected_rows = research_provenance.get("qualification_frame_rows")
+        if expected_rows is not None and len(qualified_prefix) != int(expected_rows):
+            raise ValueError(
+                "Future-holdout historical prefix row count does not match qualification"
+            )
 
     purge_boundary = holdout_start - pd.Timedelta(minutes=horizon_bars)
     train = pooled.loc[pooled["decision_time"] < purge_boundary].copy()
@@ -473,11 +520,11 @@ def evaluate_single_pair_future_holdout(
         training_counts,
     ) = _fit_pair_candidate(
         train,
-        experiment=EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+        experiment=experiment,
         horizon_bars=horizon_bars,
     )
     holdout_predictions = _predict_pair_candidate(
-        experiment=EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+        experiment=experiment,
         direction_models=direction_models,
         direction_calibrators=direction_calibrators,
         regime_routers=regime_routers,
@@ -501,7 +548,7 @@ def evaluate_single_pair_future_holdout(
         "policy": SINGLE_PAIR_FUTURE_HOLDOUT_POLICY,
         "instrument": instrument,
         "horizon_bars": int(horizon_bars),
-        "experiment": EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+        "experiment": experiment,
         "dataset_sha256": dataset_hashes,
         "research_gate": research_gate,
         "qualification_decision_time_before": cutoff.isoformat(),

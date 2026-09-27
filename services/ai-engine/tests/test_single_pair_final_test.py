@@ -7,7 +7,10 @@ import pandas as pd
 import pytest
 
 from app.domain.training import single_pair_final_test as final_test
-from app.domain.training.model_qualification import EVENT_PAIR_EXPERT_EXPERIMENT_NAME
+from app.domain.training.model_qualification import (
+    EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
+    EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+)
 from app.domain.training.single_pair_final_test import (
     SINGLE_PAIR_FINAL_TEST_POLICY,
     SINGLE_PAIR_FUTURE_HOLDOUT_POLICY,
@@ -42,16 +45,50 @@ def test_load_qualified_single_pair_requires_exact_scope_and_passed_gate(tmp_pat
     path = tmp_path / "qualification.json"
     path.write_text(json.dumps(_qualification_payload()), encoding="utf-8")
 
-    gate, cutoff, hashes = _load_qualified_single_pair(
+    experiment, gate, cutoff, hashes, provenance = _load_qualified_single_pair(
         path,
         instrument="USDJPY",
         horizon_bars=1,
     )
 
+    assert experiment == EVENT_PAIR_EXPERT_EXPERIMENT_NAME
     assert gate["research_gate_passed"] is True
     assert cutoff == pd.Timestamp("2026-07-01T00:00:00Z")
     assert hashes == {"USDJPY": "abc123"}
+    assert provenance == {
+        "qualification_frame_sha256": None,
+        "qualification_frame_rows": None,
+    }
     assert SINGLE_PAIR_FINAL_TEST_POLICY.endswith("_v1")
+
+
+
+
+def test_load_qualified_single_pair_accepts_frozen_hybrid_candidate(tmp_path):
+    payload = _qualification_payload()
+    payload["single_pair_scope"]["experiment"] = EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME
+    payload["experiments"] = {
+        EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME: {
+            "research_gate": {"research_gate_passed": True}
+        }
+    }
+    path = tmp_path / "qualification-hybrid.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    experiment, gate, cutoff, hashes, provenance = _load_qualified_single_pair(
+        path,
+        instrument="USDJPY",
+        horizon_bars=1,
+    )
+
+    assert experiment == EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME
+    assert gate["research_gate_passed"] is True
+    assert cutoff == pd.Timestamp("2026-07-01T00:00:00Z")
+    assert hashes == {"USDJPY": "abc123"}
+    assert provenance == {
+        "qualification_frame_sha256": None,
+        "qualification_frame_rows": None,
+    }
 
 
 def test_load_qualified_single_pair_rejects_wrong_instrument(tmp_path):

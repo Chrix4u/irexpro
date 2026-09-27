@@ -20,6 +20,7 @@ from app.domain.training.model_qualification import (
     CONFIDENCE_FLOOR,
     DUAL_ACTION_MARGIN_FLOOR,
     EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME,
+    EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
     EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
     EVENT_PAIR_REGIME_EXPERT_EXPERIMENT_NAME,
     EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME,
@@ -28,8 +29,10 @@ from app.domain.training.model_qualification import (
     REGIME_ROUTER_POLICY,
     ModelVariant,
     _event_dual_actionability_prediction_frame,
+    _event_hybrid_dual_direction_prediction_frame,
     _event_two_stage_prediction_frame,
     _fit_event_dual_actionability_for_outer,
+    _fit_event_hybrid_dual_direction_for_outer,
     _fit_event_pair_experts_for_outer,
     _fit_event_pair_regime_experts_for_outer,
     _fit_event_pair_return_margin_for_outer,
@@ -56,6 +59,7 @@ from app.domain.training.train_multitimeframe import (
 EVENT_PAIR_BUNDLE_MODEL_TYPE = "xgboost_event_pair_bundle"
 SUPPORTED_EXPERIMENTS = {
     EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME,
+    EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
     EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
     EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME,
     EVENT_PAIR_REGIME_EXPERT_EXPERIMENT_NAME,
@@ -156,6 +160,39 @@ def _predict_pair_candidate(
             variant=ModelVariant(name="event_barrier_v7_dual_actionability"),
         )
 
+    if experiment == EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME:
+        long_model = direction_models.get("long")
+        short_model = direction_models.get("short")
+        if long_model is None or short_model is None or opportunity_model is None:
+            raise ValueError(
+                "Hybrid dual-direction candidate requires LONG, SHORT and opportunity models"
+            )
+        long_probabilities = _probabilities(
+            long_model,
+            frame,
+            list(MULTITIMEFRAME_FEATURE_COLUMNS),
+        )
+        short_probabilities = _probabilities(
+            short_model,
+            frame,
+            list(MULTITIMEFRAME_FEATURE_COLUMNS),
+        )
+        opportunity_probabilities = _probabilities(
+            opportunity_model,
+            frame,
+            list(MULTITIMEFRAME_FEATURE_COLUMNS),
+        )
+        return _event_hybrid_dual_direction_prediction_frame(
+            frame,
+            long_probabilities=long_probabilities,
+            short_probabilities=short_probabilities,
+            opportunity_probabilities=opportunity_probabilities,
+            confidence_floor=confidence_floor,
+            fold=0,
+            experiment=experiment,
+            variant=ModelVariant(name="event_barrier_v8_hybrid_dual_direction"),
+        )
+
     if experiment == EVENT_PAIR_EXPERT_EXPERIMENT_NAME:
         direction_probabilities = _pair_expert_probabilities(
             direction_models,
@@ -226,6 +263,13 @@ def _fit_pair_candidate(
         )
         calibrators = None
         opportunity = None
+    elif experiment == EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME:
+        models, opportunity, features, counts = _fit_event_hybrid_dual_direction_for_outer(
+            train,
+            variant=ModelVariant(name="event_barrier_v8_hybrid_dual_direction"),
+            horizon_bars=horizon_bars,
+        )
+        calibrators = None
     elif experiment == EVENT_PAIR_EXPERT_EXPERIMENT_NAME:
         models, opportunity, features, counts = _fit_event_pair_experts_for_outer(
             train,
@@ -291,6 +335,43 @@ def _component_manifest(
             "dual_actionability": {
                 "kind": "xgboost_dual_actionability",
                 "action_margin_floor": DUAL_ACTION_MARGIN_FLOOR,
+                "long": {
+                    "path": long_path.name,
+                    "sha256": _save_xgboost_model(long_model, long_path),
+                    "kind": "xgboost_classifier",
+                },
+                "short": {
+                    "path": short_path.name,
+                    "sha256": _save_xgboost_model(short_model, short_path),
+                    "kind": "xgboost_classifier",
+                },
+            },
+        }
+
+    if experiment == EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME:
+        long_model = direction_models.get("long")
+        short_model = direction_models.get("short")
+        if long_model is None or short_model is None or opportunity_model is None:
+            raise ValueError(
+                "Final hybrid bundle requires LONG, SHORT and opportunity models"
+            )
+        long_path = root / "long-direction.json"
+        short_path = root / "short-direction.json"
+        opportunity_path = root / "opportunity.json"
+        return {
+            "bundle_version": 1,
+            "model_type": EVENT_PAIR_BUNDLE_MODEL_TYPE,
+            "experiment": experiment,
+            "event_label_policy": EVENT_LABEL_POLICY,
+            "hybrid_dual_direction": {
+                "kind": "xgboost_hybrid_opportunity_dual_direction",
+                "confidence_floor": CONFIDENCE_FLOOR,
+                "action_margin_floor": DUAL_ACTION_MARGIN_FLOOR,
+                "opportunity": {
+                    "path": opportunity_path.name,
+                    "sha256": _save_xgboost_model(opportunity_model, opportunity_path),
+                    "kind": "xgboost_classifier",
+                },
                 "long": {
                     "path": long_path.name,
                     "sha256": _save_xgboost_model(long_model, long_path),
@@ -540,7 +621,10 @@ def train_final_event_pair_candidate(
         "direction_threshold": 0.50,
         "action_margin_floor": (
             DUAL_ACTION_MARGIN_FLOOR
-            if experiment == EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME
+            if experiment in {
+                EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME,
+                EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
+            }
             else None
         ),
         "training_counts": training_counts,

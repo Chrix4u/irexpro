@@ -1,4 +1,5 @@
 from app.domain.training.model_qualification import (
+    EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
     EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
 )
 from app.domain.training.single_pair_qualification import (
@@ -13,16 +14,19 @@ def test_single_pair_experiment_matrix_is_intentionally_bounded():
     assert [experiment.name for experiment in experiments] == [
         "baseline",
         EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+        EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
     ]
     assert experiments[0].mode == "directional"
     assert experiments[1].mode == "two_stage_event_pair_experts"
     assert experiments[1].variants[0].name == "event_barrier_v4_pair_direction"
+    assert experiments[2].mode == "event_hybrid_dual_direction"
+    assert experiments[2].variants[0].name == "event_barrier_v8_hybrid_dual_direction"
 
 
-def test_candidate_summary_uses_event_pair_expert_gate():
+def test_candidate_summary_uses_hybrid_dual_direction_gate():
     report = {
         "experiments": {
-            EVENT_PAIR_EXPERT_EXPERIMENT_NAME: {
+            EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME: {
                 "research_gate": {
                     "research_gate_passed": True,
                     "observed": {"balanced_accuracy": 0.53},
@@ -39,6 +43,7 @@ def test_candidate_summary_uses_event_pair_expert_gate():
 
     summary = candidate_summary(report)
 
+    assert summary["experiment"] == EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME
     assert summary["research_gate_passed"] is True
     assert summary["observed"]["balanced_accuracy"] == 0.53
     assert summary["active_trades"] == 12
