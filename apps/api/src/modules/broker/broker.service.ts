@@ -1391,7 +1391,7 @@ export class BrokerService {
         lastErrorMessage: null,
       });
 
-      await this.upsertBrokerAccount(connectionId, accountInfo.currency, {
+      await this.upsertBrokerAccount(connectionId, accountInfo.currency ?? undefined, {
         balance: accountInfo.balance,
         equity: accountInfo.equity,
       });
