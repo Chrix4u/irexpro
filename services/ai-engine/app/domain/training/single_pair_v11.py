@@ -289,6 +289,8 @@ def _fold_report(
             ),
             "action_margin_floor": float(threshold_choice.action_margin_floor),
             "inner_metrics": threshold_choice.metrics,
+            "candidate_count": len(threshold_choice.candidates),
+            "candidate_reports": list(threshold_choice.candidates),
         },
         "trading": _trading_metrics(predictions),
     }
