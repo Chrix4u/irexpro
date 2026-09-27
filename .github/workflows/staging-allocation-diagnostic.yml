@@ -45,6 +45,7 @@ jobs:
             "bash -s" <<'REMOTE'
           set -Eeuo pipefail
           cd /home/lightworld/webapps/irexpro-staging
+          echo 'stage=connected'
 
           api_id="$(pm2 jlist | node -e '
             let s="";
@@ -56,49 +57,77 @@ jobs:
               process.stdout.write(String(p.pm_id));
             });
           ')"
+          echo "stage=pm2 api_id=$api_id"
 
-          db_url="$(pm2 env "$api_id" | sed -n 's/^DATABASE_URL: //p' | tail -n1)"
+          db_url="$(pm2 jlist | node -e '
+            let s="";
+            process.stdin.on("data",d=>s+=d);
+            process.stdin.on("end",()=>{
+              const xs=JSON.parse(s);
+              const p=xs.find(x=>x.name==="irexpro-api-staging");
+              const v=p?.pm2_env?.DATABASE_URL || p?.pm2_env?.env?.DATABASE_URL || "";
+              if(!v) process.exit(3);
+              process.stdout.write(String(v));
+            });
+          ')"
           test -n "$db_url"
+          echo 'stage=db-url-found'
 
-          echo '=== CONNECTED PAPER ACCOUNTS ==='
-          psql "$db_url" -X -A -F '|' -t -v ON_ERROR_STOP=1 <<'SQL'
-          SELECT
-            left(c.id::text,8) AS connection,
-            c.status,
-            c.account_type,
-            CASE WHEN c.logical_account_key IS NULL THEN 'MISSING' ELSE 'PRESENT' END AS logical_key,
-            COALESCE(a.balance::text,'NULL') AS legacy_balance,
-            COALESCE(a.equity::text,'NULL') AS legacy_equity,
-            COALESCE(a.currency,'NULL') AS legacy_currency,
-            COALESCE(b.total_capital::text,'NULL') AS budget,
-            COALESCE(b.account_currency,'NULL') AS budget_currency,
-            COALESCE(s.balance::text,'NULL') AS snapshot_balance,
-            COALESCE(s.equity::text,'NULL') AS snapshot_equity,
-            COALESCE(s.currency,'NULL') AS snapshot_currency,
-            COALESCE(s.generation::text,'NULL') AS snapshot_generation
-          FROM broker.broker_connections c
-          LEFT JOIN broker.broker_accounts a
-            ON a.broker_connection_id = c.id
-          LEFT JOIN trading.capital_budgets b
-            ON b.user_id = c.user_id
-           AND b.logical_account_key = c.logical_account_key
-          LEFT JOIN LATERAL (
-            SELECT balance,equity,currency,generation
-            FROM broker.broker_account_snapshots s
-            WHERE s.connection_id = c.id
-            ORDER BY generation DESC
-            LIMIT 1
-          ) s ON true
-          WHERE c.broker_id = 'paper-broker'
-            AND c.status = 'CONNECTED'
-          ORDER BY c.created_at DESC
-          LIMIT 10;
-          SQL
+          export DATABASE_URL="$db_url"
+          cd apps/api
+          node <<'NODE'
+          const { Client } = require('pg');
+          (async () => {
+            const client = new Client({ connectionString: process.env.DATABASE_URL });
+            await client.connect();
+            const sql = `
+              SELECT
+                left(c.id::text,8) AS connection,
+                c.status,
+                c.account_type,
+                CASE WHEN c.logical_account_key IS NULL THEN 'MISSING' ELSE 'PRESENT' END AS logical_key,
+                COALESCE(a.balance::text,'NULL') AS legacy_balance,
+                COALESCE(a.equity::text,'NULL') AS legacy_equity,
+                COALESCE(a.currency,'NULL') AS legacy_currency,
+                COALESCE(b.total_capital::text,'NULL') AS budget,
+                COALESCE(b.account_currency,'NULL') AS budget_currency,
+                COALESCE(s.balance::text,'NULL') AS snapshot_balance,
+                COALESCE(s.equity::text,'NULL') AS snapshot_equity,
+                COALESCE(s.currency,'NULL') AS snapshot_currency,
+                COALESCE(s.generation::text,'NULL') AS snapshot_generation
+              FROM broker.broker_connections c
+              LEFT JOIN broker.broker_accounts a ON a.broker_connection_id = c.id
+              LEFT JOIN trading.capital_budgets b
+                ON b.user_id = c.user_id
+               AND b.logical_account_key = c.logical_account_key
+              LEFT JOIN LATERAL (
+                SELECT balance,equity,currency,generation
+                FROM broker.broker_account_snapshots s
+                WHERE s.connection_id = c.id
+                ORDER BY generation DESC
+                LIMIT 1
+              ) s ON true
+              WHERE c.broker_id = 'paper-broker'
+                AND c.status = 'CONNECTED'
+              ORDER BY c.created_at DESC
+              LIMIT 10
+            `;
+            const result = await client.query(sql);
+            console.log('=== CONNECTED PAPER ACCOUNTS ===');
+            for (const r of result.rows) {
+              console.log(Object.entries(r).map(([k,v]) => `${k}=${v}`).join(' | '));
+            }
+            await client.end();
+          })().catch(err => {
+            console.error('diagnostic_db_error=' + (err?.message || String(err)).replace(/[A-Za-z0-9]{20,}/g,'[redacted]'));
+            process.exit(1);
+          });
+          NODE
 
           echo '=== RECENT ALLOCATION/RECONCILIATION ERRORS ==='
-          pm2 logs "$api_id" --nostream --lines 600 2>/dev/null \
+          pm2 logs "$api_id" --nostream --lines 800 2>/dev/null \
             | grep -E 'ALLOCATION_|Capital allocation|PAPER_SIMULATOR_STATE_RESET|Account snapshot acceptance failed|capital-allocation' \
-            | tail -n 80 \
+            | tail -n 100 \
             | sed -E 's/[0-9a-f]{8}-[0-9a-f-]{27,}/[uuid]/gi' || true
           REMOTE
 
