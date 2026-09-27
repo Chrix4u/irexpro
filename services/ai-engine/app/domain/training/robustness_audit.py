@@ -154,6 +154,67 @@ def expected_maximum_sharpe(
     }
 
 
+
+def deflated_sharpe_ratio(
+    returns: Iterable[float],
+    *,
+    comparable_trial_sharpes: Iterable[float],
+) -> dict[str, float]:
+    """Compute Bailey/López de Prado DSR from same-frequency Sharpe trials.
+
+    comparable_trial_sharpes must use the same return frequency as the Sharpe
+    implied by returns. This intentionally refuses mixed-frequency or
+    single-trial shortcuts.
+    """
+    values, skewness, kurtosis = _sample_moments(returns)
+    trials = np.asarray(list(comparable_trial_sharpes), dtype=float)
+    if trials.size < 2:
+        raise ValueError("at least two comparable trial Sharpes are required")
+    if not np.isfinite(trials).all():
+        raise ValueError("comparable_trial_sharpes contain non-finite values")
+
+    observed_sharpe = float(values.mean() / values.std(ddof=1))
+    trial_std = float(trials.std(ddof=1))
+    if trial_std <= 0.0:
+        raise ValueError("comparable trial Sharpes require non-zero dispersion")
+
+    normal = NormalDist()
+    n_trials = float(trials.size)
+    expected_maximum_null = trial_std * (
+        (1.0 - EULER_MASCHERONI)
+        * normal.inv_cdf(1.0 - 1.0 / n_trials)
+        + EULER_MASCHERONI
+        * normal.inv_cdf(1.0 - 1.0 / (n_trials * math.e))
+    )
+
+    denominator_term = (
+        1.0
+        - skewness * observed_sharpe
+        + ((kurtosis - 1.0) / 4.0) * (observed_sharpe**2)
+    )
+    if denominator_term <= 0.0:
+        raise ValueError("DSR denominator is not positive")
+
+    z_score = (
+        (observed_sharpe - expected_maximum_null)
+        * math.sqrt(values.size - 1)
+        / math.sqrt(denominator_term)
+    )
+    probability = NormalDist().cdf(z_score)
+    return {
+        "sample_count": float(values.size),
+        "trial_count": float(trials.size),
+        "sample_sharpe_same_frequency": observed_sharpe,
+        "trial_sharpe_std_same_frequency": trial_std,
+        "expected_maximum_null_sharpe_same_frequency": float(
+            expected_maximum_null
+        ),
+        "skewness": skewness,
+        "kurtosis": kurtosis,
+        "z_score": float(z_score),
+        "deflated_sharpe_ratio": float(probability),
+    }
+
 def robustness_snapshot(
     returns: Iterable[float],
     *,
