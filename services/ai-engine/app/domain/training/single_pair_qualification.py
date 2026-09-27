@@ -11,6 +11,7 @@ No research gate is lowered and no PAPER/LIVE approval is produced here.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,20 @@ from app.domain.training.model_qualification import (
     run_nested_qualification_experiments,
 )
 from app.domain.training.train_multitimeframe import load_and_prepare_corpora
+
+
+
+
+def _qualification_frame_sha256(frame: pd.DataFrame) -> str:
+    """Stable semantic fingerprint of the frozen pre-boundary qualification frame."""
+    ordered = frame.copy()
+    ordered["decision_time"] = pd.to_datetime(
+        ordered["decision_time"], utc=True, errors="raise"
+    ).map(lambda value: value.isoformat())
+    ordered = ordered.sort_values(["decision_time", "instrument"]).reset_index(drop=True)
+    ordered = ordered.reindex(sorted(ordered.columns), axis=1)
+    payload = ordered.to_csv(index=False, float_format="%.12g", lineterminator="\n")
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def single_pair_experiments() -> tuple[QualificationExperiment, ...]:
@@ -92,6 +107,8 @@ def evaluate_single_pair_candidate(
         checkpoint_fingerprint=fingerprint,
     )
     report["dataset_sha256"] = hashes
+    report["qualification_frame_sha256"] = _qualification_frame_sha256(pooled)
+    report["qualification_frame_rows"] = int(len(pooled))
     report["qualification_checkpoint_fingerprint"] = fingerprint
     report["qualification_decision_time_before"] = pd.Timestamp(
         decision_time_before
