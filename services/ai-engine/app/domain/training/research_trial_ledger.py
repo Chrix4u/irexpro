@@ -33,7 +33,7 @@ def trial_from_report(
     outer_era: str,
 ) -> ResearchTrial:
     aggregate = report.get("aggregate") or {}
-    trading = aggregate.get("trading") or {}
+    trading = aggregate.get("trading") or aggregate
     gate = report.get("robustness_gate") or report.get("research_gate") or {}
     passed = bool(
         gate.get("research_robustness_passed")
