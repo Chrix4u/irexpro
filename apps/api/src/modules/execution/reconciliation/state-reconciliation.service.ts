@@ -24,6 +24,7 @@ import { RiskGrant } from '../entities/risk-grant.entity';
 import { RiskGrantStatus } from '../interfaces/execution-authority';
 import { AllocationService } from '../services/allocation.service';
 import {
+  compareDecimal,
   compareStates,
   InternalAccountSnapshot,
   InternalOrderSnapshot,
@@ -89,7 +90,6 @@ const RECONCILABLE_TRADE_STATUSES = [
 /** Keep reconciliation error handling aligned with the execution boundary. */
 const SECRET_LIKE_RUN = /[A-Za-z0-9]{16,}/g;
 const RECONCILIATION_REASON_MAX_LENGTH = 500;
-
 
 const PAPER_BROKER_ID = 'paper-broker';
 const PAPER_STARTING_BALANCE = '10000.00';
