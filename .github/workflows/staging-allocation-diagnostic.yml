@@ -59,26 +59,24 @@ jobs:
           ')"
           echo "stage=pm2 api_id=$api_id"
 
-          db_url="$(pm2 jlist | node -e '
-            let s="";
-            process.stdin.on("data",d=>s+=d);
-            process.stdin.on("end",()=>{
-              const xs=JSON.parse(s);
-              const p=xs.find(x=>x.name==="irexpro-api-staging");
-              const v=p?.pm2_env?.DATABASE_URL || p?.pm2_env?.env?.DATABASE_URL || "";
-              if(!v) process.exit(3);
-              process.stdout.write(String(v));
-            });
-          ')"
-          test -n "$db_url"
-          echo 'stage=db-url-found'
-
-          export DATABASE_URL="$db_url"
+          test -f apps/api/.env
+          echo 'stage=api-env-found'
           cd apps/api
           node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const dotenv = require('dotenv');
           const { Client } = require('pg');
+          const env = dotenv.parse(fs.readFileSync(path.join(process.cwd(), '.env')));
           (async () => {
-            const client = new Client({ connectionString: process.env.DATABASE_URL });
+            const client = new Client({
+              host: env.DB_HOST || 'localhost',
+              port: Number(env.DB_PORT || 5432),
+              database: env.DB_NAME || 'irexpro_dev',
+              user: env.DB_USER || 'irexpro',
+              password: env.DB_PASSWORD,
+              ssl: env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
+            });
             await client.connect();
             const sql = `
               SELECT
