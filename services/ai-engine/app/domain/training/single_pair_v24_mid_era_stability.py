@@ -20,6 +20,10 @@ from app.domain.training.model_qualification import (
     _nested_windows,
     _refit_windows,
 )
+from app.domain.training.single_pair_v11_calibrated_gating import (
+    _fit_models,
+    _trading_metrics,
+)
 from app.domain.training.single_pair_v16_two_sided_economic import (
     MAX_FOLD_TRADE_CONCENTRATION,
     MIN_OUTER_TRADES,
@@ -30,7 +34,6 @@ from app.domain.training.single_pair_v16_two_sided_economic import (
     select_long_regime_policy,
     select_short_regime_policy,
 )
-from app.domain.training.single_pair_v11_calibrated_gating import _fit_models, _trading_metrics
 from app.domain.training.train_multitimeframe import load_and_prepare_corpora
 from app.domain.training.validation import iter_purged_walk_forward_time_splits
 
