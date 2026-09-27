@@ -1155,7 +1155,7 @@ describe('BrokerService', () => {
       const adapter = { setMode: jest.fn(), getAccountBalance: jest.fn() };
       registry.getAdapter.mockReturnValue(adapter);
       await expect(service.observeAccountSnapshotNow('user-1', 'conn-1')).rejects.toThrow();
-      expect(adapter.getAccountBalance).not.toHaveBeenCalled();
+      expect(adapter.getAccountInfo).not.toHaveBeenCalled();
     });
 
     it('fails closed when the reconnect itself reports failure (no observation of a rejected session)', async () => {
@@ -1172,7 +1172,7 @@ describe('BrokerService', () => {
       await expect(service.observeAccountSnapshotNow('user-1', 'conn-1')).rejects.toThrow(
         'reconnect failed',
       );
-      expect(adapter.getAccountBalance).not.toHaveBeenCalled();
+      expect(adapter.getAccountInfo).not.toHaveBeenCalled();
       expect(snapshotService.acceptSnapshot).not.toHaveBeenCalled();
     });
 
@@ -1198,7 +1198,7 @@ describe('BrokerService', () => {
 
       // NOTHING from the mislabeled session may become trusted snapshot
       // truth — the entire point of P0-1.
-      expect(adapter.getAccountBalance).not.toHaveBeenCalled();
+      expect(adapter.getAccountInfo).not.toHaveBeenCalled();
       expect(snapshotService.acceptSnapshot).not.toHaveBeenCalled();
       // Guarded SUSPENDED transition (fixture authorization is ACTIVE).
       expect(connectionRepo.update).toHaveBeenCalledWith(
