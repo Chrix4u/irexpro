@@ -113,6 +113,23 @@ def main() -> None:
     parser.add_argument("--outer-era", required=True)
     args = parser.parse_args()
 
+    ledger_path = Path(args.ledger)
+    if ledger_path.exists():
+        existing = json.loads(ledger_path.read_text(encoding="utf-8"))
+        if any(row.get("candidate_sha") == args.candidate_sha for row in existing):
+            print(
+                json.dumps(
+                    {
+                        "candidate": args.candidate,
+                        "candidate_sha": args.candidate_sha,
+                        "trial_count": len(existing),
+                        "status": "already_recorded",
+                    },
+                    sort_keys=True,
+                )
+            )
+            return
+
     report = json.loads(Path(args.report).read_text(encoding="utf-8"))
     trial = trial_from_report(
         report,
@@ -120,7 +137,7 @@ def main() -> None:
         candidate_sha=args.candidate_sha,
         outer_era=args.outer_era,
     )
-    rows = append_trial(args.ledger, trial)
+    rows = append_trial(ledger_path, trial)
     print(
         json.dumps(
             {
