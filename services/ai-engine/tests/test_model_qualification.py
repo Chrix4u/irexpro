@@ -1380,6 +1380,9 @@ def test_hybrid_payoff_filter_requires_positive_selected_return_and_edge():
     assert predictions["payoff_filter_pass"].tolist() == [True, True, False, False]
     assert predictions["active_trade"].tolist() == [True, True, False, False]
     assert predictions["expected_selected_net_return_bps"].tolist() == [2.0, 2.0, -0.5, -0.5]
-    assert predictions["expected_payoff_edge_bps"].tolist() == [3.0, 3.0, 0.3, 0.5]
+    np.testing.assert_allclose(
+        predictions["expected_payoff_edge_bps"].to_numpy(dtype=float),
+        np.array([3.0, 3.0, 0.3, 0.5]),
+    )
     assert qualification.CONFIDENCE_FLOOR == 0.60
     assert qualification.DUAL_ACTION_MARGIN_FLOOR == 0.10
