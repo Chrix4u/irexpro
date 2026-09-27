@@ -17,11 +17,11 @@ from sklearn.metrics import balanced_accuracy_score, brier_score_loss
 
 from app.domain.training.model_qualification import (
     EVENT_ACTIONABLE_TARGET_COLUMN,
+    EVENT_BARRIER_RETURN_COLUMN,
     EVENT_DIRECTION_TARGET_COLUMN,
     EVENT_LONG_NET_RETURN_COLUMN,
     EVENT_SHORT_NET_RETURN_COLUMN,
     EVENT_STEP_COLUMN,
-    EVENT_BARRIER_RETURN_COLUMN,
     ModelVariant,
     _apply_calibrator,
     _fit_calibrator,
