@@ -10,6 +10,7 @@ from app.domain.models.multitimeframe_features import MULTITIMEFRAME_FEATURE_COL
 from app.domain.training.model_qualification import (
     DUAL_ACTION_MARGIN_FLOOR,
     EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME,
+    EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
 )
 from app.domain.training.train_final_event_pair_bundle import (
     EVENT_PAIR_BUNDLE_MODEL_TYPE,
@@ -72,6 +73,37 @@ def test_v7_dual_actionability_is_supported_for_final_packaging(tmp_path):
 
     for side in ("long", "short"):
         spec = dual[side]
+        child = tmp_path / spec["path"]
+        assert spec["kind"] == "xgboost_classifier"
+        assert child.is_file()
+        assert spec["sha256"] == _sha256(child)
+
+
+def test_v8_hybrid_dual_direction_is_supported_for_final_packaging(tmp_path):
+    assert EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME in SUPPORTED_EXPERIMENTS
+
+    output = tmp_path / "hybrid-bundle.json"
+    manifest = _component_manifest(
+        output,
+        experiment=EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
+        direction_models={
+            "long": _fit_classifier(),
+            "short": _fit_classifier(),
+        },
+        direction_calibrators=None,
+        regime_routers=None,
+        opportunity_model=_fit_classifier(),
+    )
+
+    assert manifest["model_type"] == EVENT_PAIR_BUNDLE_MODEL_TYPE
+    assert manifest["experiment"] == EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME
+    hybrid = manifest["hybrid_dual_direction"]
+    assert hybrid["kind"] == "xgboost_hybrid_opportunity_dual_direction"
+    assert hybrid["confidence_floor"] == 0.60
+    assert hybrid["action_margin_floor"] == DUAL_ACTION_MARGIN_FLOOR
+
+    for component in ("opportunity", "long", "short"):
+        spec = hybrid[component]
         child = tmp_path / spec["path"]
         assert spec["kind"] == "xgboost_classifier"
         assert child.is_file()
