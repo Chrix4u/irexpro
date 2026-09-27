@@ -43,7 +43,7 @@ def test_v15_short_selector_can_select_profitable_inner_short_policy() -> None:
     )
 
 
-def test_v15_governance_keeps_locked_economic_floor_and_research_only_output(monkeypatch) -> None:
+def test_v15_governance_keeps_locked_economic_floor_and_research_only_output() -> None:
     assert v15.PAYOFF_RATIO_FLOOR == 1.15
     assert v15.MIN_SHORT_SELECTION_PROFIT_FACTOR == 1.15
     assert v15.MIN_OUTER_TRADES == 20
