@@ -56,9 +56,11 @@ EVENT_PAIR_REGIME_EXPERT_EXPERIMENT_NAME = "event_barrier_pair_regime_experts"
 EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME = "event_barrier_dual_actionability"
 EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME = "event_barrier_hybrid_opportunity_dual_direction"
 EVENT_HYBRID_PAYOFF_EXPERIMENT_NAME = "event_barrier_hybrid_opportunity_dual_direction_payoff"
+EVENT_HYBRID_PAYOFF_RISK_EXPERIMENT_NAME = "event_barrier_hybrid_opportunity_dual_direction_payoff_risk"
 EVENT_LONG_ACTIONABLE_TARGET_COLUMN = "event_long_actionable_target"
 EVENT_SHORT_ACTIONABLE_TARGET_COLUMN = "event_short_actionable_target"
 DUAL_ACTION_MARGIN_FLOOR = 0.10
+PAYOFF_RISK_RATIO_FLOOR = 1.15
 REGIME_ROUTER_POLICY = "pair_m1_volatility_spread_median_v1"
 REGIME_NAMES = ("calm", "active_clean", "stressed")
 REGIME_FALLBACK_NAME = "fallback"
@@ -98,6 +100,7 @@ ExperimentMode = Literal[
     "event_dual_actionability",
     "event_hybrid_dual_direction",
     "event_hybrid_dual_direction_payoff",
+    "event_hybrid_dual_direction_payoff_risk",
 ]
 
 
@@ -1288,6 +1291,79 @@ def _event_hybrid_payoff_prediction_frame(
     return predictions
 
 
+def _event_hybrid_payoff_risk_prediction_frame(
+    source: pd.DataFrame,
+    *,
+    long_probabilities: np.ndarray,
+    short_probabilities: np.ndarray,
+    opportunity_probabilities: np.ndarray,
+    expected_long_upside_bps: np.ndarray,
+    expected_long_downside_bps: np.ndarray,
+    expected_short_upside_bps: np.ndarray,
+    expected_short_downside_bps: np.ndarray,
+    confidence_floor: float,
+    fold: int,
+    experiment: str,
+    variant: ModelVariant,
+) -> pd.DataFrame:
+    """Hybrid candidate with a train-only expected upside/downside quality gate."""
+    predictions = _event_hybrid_dual_direction_prediction_frame(
+        source,
+        long_probabilities=long_probabilities,
+        short_probabilities=short_probabilities,
+        opportunity_probabilities=opportunity_probabilities,
+        confidence_floor=confidence_floor,
+        fold=fold,
+        experiment=experiment,
+        variant=variant,
+    )
+    arrays = [
+        np.asarray(expected_long_upside_bps, dtype=float),
+        np.asarray(expected_long_downside_bps, dtype=float),
+        np.asarray(expected_short_upside_bps, dtype=float),
+        np.asarray(expected_short_downside_bps, dtype=float),
+    ]
+    if any(len(values) != len(predictions) for values in arrays):
+        raise ValueError("hybrid payoff-risk predictions must align with source rows")
+    if any(not np.isfinite(values).all() for values in arrays):
+        raise ValueError("hybrid payoff-risk predictions must be finite")
+
+    long_upside = np.maximum(arrays[0], 0.0)
+    long_downside = np.maximum(arrays[1], 0.0)
+    short_upside = np.maximum(arrays[2], 0.0)
+    short_downside = np.maximum(arrays[3], 0.0)
+    selected_upside = np.where(predictions["predicted_long"], long_upside, short_upside)
+    selected_downside = np.where(
+        predictions["predicted_long"], long_downside, short_downside
+    )
+    expected_net = selected_upside - selected_downside
+    payoff_ratio = np.divide(
+        selected_upside,
+        np.maximum(selected_downside, 1e-6),
+    )
+
+    predictions["expected_long_upside_bps"] = long_upside
+    predictions["expected_long_downside_bps"] = long_downside
+    predictions["expected_short_upside_bps"] = short_upside
+    predictions["expected_short_downside_bps"] = short_downside
+    predictions["expected_selected_upside_bps"] = selected_upside
+    predictions["expected_selected_downside_bps"] = selected_downside
+    predictions["expected_selected_net_bps"] = expected_net
+    predictions["expected_payoff_ratio"] = payoff_ratio
+    predictions["payoff_filter_pass"] = (
+        (expected_net > 0.0) & (payoff_ratio >= PAYOFF_RISK_RATIO_FLOOR)
+    )
+    predictions["active_trade"] = (
+        predictions["active_trade"] & predictions["payoff_filter_pass"]
+    )
+    predictions["confidence_policy"] = (
+        "pooled_opportunity_probability_gte_floor_and_normalized_direction_"
+        "confidence_gte_floor_and_side_margin_gte_0_10_and_train_only_"
+        "expected_upside_downside_ratio_gte_1_15"
+    )
+    return predictions
+
+
 def _opportunity_classification(
     predictions: pd.DataFrame,
     *,
@@ -1897,6 +1973,75 @@ def _fit_event_hybrid_payoff_for_outer(
         "payoff_filter_policy": (
             "selected_expected_net_return_bps_gt_0_and_selected_minus_opposite_gt_0"
         ),
+        "payoff_fit_rows": int(len(fit)),
+        "payoff_early_stop_rows": int(len(early)),
+    }
+    return direction_models, opportunity_model, payoff_models, feature_columns, counts
+
+
+def _fit_event_hybrid_payoff_risk_for_outer(
+    training_window: pd.DataFrame,
+    *,
+    variant: ModelVariant,
+    horizon_bars: int,
+) -> tuple[
+    dict[str, XGBClassifier],
+    XGBClassifier,
+    dict[str, XGBRegressor],
+    list[str],
+    dict[str, Any],
+]:
+    """Fit hybrid classifiers plus side-specific expected upside/downside models."""
+    direction_models, opportunity_model, feature_columns, counts = (
+        _fit_event_hybrid_dual_direction_for_outer(
+            training_window,
+            variant=variant,
+            horizon_bars=horizon_bars,
+        )
+    )
+    fit, early = _split_internal_early_stopping_tail(
+        training_window,
+        horizon_bars=horizon_bars,
+    )
+    payoff_models: dict[str, XGBRegressor] = {}
+    for side, target_column in {
+        "long": EVENT_LONG_NET_RETURN_COLUMN,
+        "short": EVENT_SHORT_NET_RETURN_COLUMN,
+    }.items():
+        fit_return = (
+            pd.to_numeric(fit[target_column], errors="raise").to_numpy(dtype=float)
+            * 10_000.0
+        )
+        early_return = (
+            pd.to_numeric(early[target_column], errors="raise").to_numpy(dtype=float)
+            * 10_000.0
+        )
+        for component, fit_target, early_target in (
+            ("upside", np.maximum(fit_return, 0.0), np.maximum(early_return, 0.0)),
+            ("downside", np.maximum(-fit_return, 0.0), np.maximum(-early_return, 0.0)),
+        ):
+            model = _regression_model_for_variant(
+                ModelVariant(
+                    name=f"{variant.name}_{side}_{component}",
+                    parameter_overrides=variant.parameter_overrides,
+                    sample_weight_policy="economic",
+                    calibration="none",
+                    feature_policy=variant.feature_policy,
+                )
+            )
+            model.fit(
+                fit[feature_columns],
+                fit_target,
+                eval_set=[(early[feature_columns], early_target)],
+                verbose=False,
+            )
+            payoff_models[f"{side}_{component}"] = model
+    counts = {
+        **counts,
+        "payoff_filter_policy": (
+            "train_only_selected_expected_upside_downside_ratio_gte_1_15"
+        ),
+        "payoff_risk_ratio_floor": PAYOFF_RISK_RATIO_FLOOR,
         "payoff_fit_rows": int(len(fit)),
         "payoff_early_stop_rows": int(len(early)),
     }
@@ -2973,6 +3118,7 @@ def run_nested_qualification_experiments(
             "event_dual_actionability",
             "event_hybrid_dual_direction",
             "event_hybrid_dual_direction_payoff",
+            "event_hybrid_dual_direction_payoff_risk",
         }
         for experiment in experiments
     ):
@@ -3319,6 +3465,89 @@ def run_nested_qualification_experiments(
                     "event_label_policy": EVENT_LABEL_POLICY,
                     "direction_policy": "independent_long_vs_rest_and_short_vs_rest_normalized",
                     "payoff_policy": "train_only_long_short_net_return_regressors",
+                    "candidate_reports": [],
+                    "training_counts": training_counts,
+                }
+            elif experiment.mode == "event_hybrid_dual_direction_payoff_risk":
+                if len(experiment.variants) != 1 or experiment.tune_decision_threshold:
+                    raise ValueError(
+                        "hybrid payoff-risk research must remain a fixed bounded candidate"
+                    )
+                variant = experiment.variants[0]
+                decision_threshold = 0.50
+                (
+                    direction_models,
+                    opportunity_model,
+                    payoff_models,
+                    feature_columns,
+                    training_counts,
+                ) = _fit_event_hybrid_payoff_risk_for_outer(
+                    outer_train,
+                    variant=variant,
+                    horizon_bars=horizon_bars,
+                )
+                model = None
+                long_probabilities = _probabilities(
+                    direction_models["long"],
+                    outer_validation,
+                    feature_columns,
+                )
+                short_probabilities = _probabilities(
+                    direction_models["short"],
+                    outer_validation,
+                    feature_columns,
+                )
+                opportunity_probabilities = _probabilities(
+                    opportunity_model,
+                    outer_validation,
+                    feature_columns,
+                )
+                predictions = _event_hybrid_payoff_risk_prediction_frame(
+                    outer_validation,
+                    long_probabilities=long_probabilities,
+                    short_probabilities=short_probabilities,
+                    opportunity_probabilities=opportunity_probabilities,
+                    expected_long_upside_bps=np.asarray(
+                        payoff_models["long_upside"].predict(
+                            outer_validation[feature_columns]
+                        ),
+                        dtype=float,
+                    ),
+                    expected_long_downside_bps=np.asarray(
+                        payoff_models["long_downside"].predict(
+                            outer_validation[feature_columns]
+                        ),
+                        dtype=float,
+                    ),
+                    expected_short_upside_bps=np.asarray(
+                        payoff_models["short_upside"].predict(
+                            outer_validation[feature_columns]
+                        ),
+                        dtype=float,
+                    ),
+                    expected_short_downside_bps=np.asarray(
+                        payoff_models["short_downside"].predict(
+                            outer_validation[feature_columns]
+                        ),
+                        dtype=float,
+                    ),
+                    confidence_floor=confidence_floor,
+                    fold=fold_index,
+                    experiment=experiment.name,
+                    variant=variant,
+                )
+                selection = {
+                    "policy": "fixed_event_barrier_v10_hybrid_payoff_risk_no_outer_tuning",
+                    "selected_variant": variant.name,
+                    "decision_threshold": decision_threshold,
+                    "opportunity_threshold": confidence_floor,
+                    "opportunity_classification_threshold": OPPORTUNITY_CLASSIFICATION_THRESHOLD,
+                    "direction_confidence_threshold": confidence_floor,
+                    "action_margin_floor": DUAL_ACTION_MARGIN_FLOOR,
+                    "payoff_risk_ratio_floor": PAYOFF_RISK_RATIO_FLOOR,
+                    "event_label_policy": EVENT_LABEL_POLICY,
+                    "direction_policy": "independent_long_vs_rest_and_short_vs_rest_normalized",
+                    "payoff_policy": "train_only_expected_upside_downside_ratio",
                     "candidate_reports": [],
                     "training_counts": training_counts,
                 }
