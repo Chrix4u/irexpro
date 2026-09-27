@@ -420,6 +420,16 @@ describe('StateReconciliationService', () => {
     it('persists detected discrepancies and surfaces NEW ones (events + audits)', async () => {
       tradeRepo.find.mockResolvedValue([openTrade()]);
       adapter.getPositionById.mockResolvedValue(null); // position gone
+      adapter.getClosedTrades.mockResolvedValue([
+        {
+          externalOrderId: 'pos-1',
+          closePrice: '1.12000',
+          realisedPnl: '20.00',
+          commission: '0.00',
+          swap: '0.00',
+          closedAt: new Date('2025-01-01T00:05:00Z'),
+        },
+      ]);
 
       persistence.persistDiscrepancies.mockResolvedValue({
         inserted: 1,
@@ -550,6 +560,73 @@ describe('StateReconciliationService', () => {
       expect(brokerService.applyProviderAccountSnapshot).not.toHaveBeenCalled();
     });
 
+    it('fails closed when a restarted paper simulator would overwrite a durable non-pristine balance', async () => {
+      accountRepo.findOne.mockResolvedValue({
+        brokerConnectionId: 'conn-1',
+        balance: '10030.00',
+        equity: '10030.00',
+        margin: '0.00',
+        freeMargin: '10030.00',
+        marginLevel: '0.00',
+        currency: 'USD',
+        leverage: 100,
+      });
+      adapter.getClosedTrades.mockResolvedValue([]);
+
+      const outcome = await service.runForConnection(connection());
+
+      expect(outcome.status).toBe(ReconciliationRunStatus.FAILED);
+      expect(persistence.failRun).toHaveBeenCalledWith(
+        'run-1',
+        expect.stringContaining('PAPER_SIMULATOR_STATE_RESET'),
+      );
+      expect(brokerService.applyProviderAccountSnapshot).not.toHaveBeenCalled();
+      expect(resolution.closeTradeFromProvider).not.toHaveBeenCalled();
+    });
+
+    it('fails closed instead of fabricating a null-economics close when paper memory lost an open trade', async () => {
+      tradeRepo.find.mockResolvedValue([openTrade()]);
+      adapter.getClosedTrades.mockResolvedValue([]);
+
+      const outcome = await service.runForConnection(connection());
+
+      expect(outcome.status).toBe(ReconciliationRunStatus.FAILED);
+      expect(persistence.failRun).toHaveBeenCalledWith(
+        'run-1',
+        expect.stringContaining('PAPER_SIMULATOR_STATE_RESET'),
+      );
+      expect(resolution.closeTradeFromProvider).not.toHaveBeenCalled();
+      expect(brokerService.applyProviderAccountSnapshot).not.toHaveBeenCalled();
+    });
+
+    it('still accepts a genuine paper close when provider closed history carries the economics', async () => {
+      tradeRepo.find.mockResolvedValue([openTrade()]);
+      adapter.getClosedTrades.mockResolvedValue([
+        {
+          externalOrderId: 'pos-1',
+          closePrice: '1.12000',
+          realisedPnl: '20.00',
+          commission: '0.00',
+          swap: '0.00',
+          closedAt: new Date('2025-01-01T00:05:00Z'),
+        },
+      ]);
+
+      const outcome = await service.runForConnection(connection());
+
+      expect(outcome.status).toBe(ReconciliationRunStatus.COMPLETED);
+      expect(resolution.closeTradeFromProvider).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'trade-1' }),
+        expect.objectContaining({
+          closePrice: '1.12000',
+          realisedPnl: '20.00',
+          commission: '0.00',
+          swap: '0.00',
+        }),
+      );
+      expect(brokerService.applyProviderAccountSnapshot).toHaveBeenCalled();
+    });
+
     // ─── Round 7.1 (P0-1): environment enforcement on the reconciliation ──
     // ─── session — no provider snapshot from a mislabeled environment ──────
 
@@ -595,6 +672,16 @@ describe('StateReconciliationService', () => {
 
     it('counts per-item resolution errors but completes the run (retried next cycle)', async () => {
       tradeRepo.find.mockResolvedValue([openTrade()]);
+      adapter.getClosedTrades.mockResolvedValue([
+        {
+          externalOrderId: 'pos-1',
+          closePrice: '1.12000',
+          realisedPnl: '20.00',
+          commission: '0.00',
+          swap: '0.00',
+          closedAt: new Date('2025-01-01T00:05:00Z'),
+        },
+      ]);
       adapter.getPositionById.mockRejectedValue(new Error('position lookup flaky'));
 
       const outcome = await service.runForConnection(connection());
