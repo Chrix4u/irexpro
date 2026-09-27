@@ -62,12 +62,14 @@ jobs:
           test -f apps/api/.env
           echo 'stage=api-env-found'
           cd apps/api
+
           node <<'NODE'
           const fs = require('fs');
           const path = require('path');
           const dotenv = require('dotenv');
           const { Client } = require('pg');
           const env = dotenv.parse(fs.readFileSync(path.join(process.cwd(), '.env')));
+
           (async () => {
             const client = new Client({
               host: env.DB_HOST || 'localhost',
@@ -78,83 +80,69 @@ jobs:
               ssl: env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
             });
             await client.connect();
-            const sql = `
-              SELECT
-                left(c.id::text,8) AS connection,
-                left(c.user_id::text,8) AS user_ref,
-                c.broker_id,
-                c.status,
-                c.account_type,
-                CASE WHEN c.logical_account_key IS NULL THEN 'MISSING' ELSE 'PRESENT' END AS logical_key,
-                COALESCE(a.balance::text,'NULL') AS legacy_balance,
-                COALESCE(a.equity::text,'NULL') AS legacy_equity,
-                COALESCE(a.currency,'NULL') AS legacy_currency,
-                COALESCE(b.total_capital::text,'NULL') AS budget,
-                COALESCE(b.account_currency,'NULL') AS budget_currency,
-                COALESCE(s.balance::text,'NULL') AS snapshot_balance,
-                COALESCE(s.equity::text,'NULL') AS snapshot_equity,
-                COALESCE(s.currency,'NULL') AS snapshot_currency,
-                COALESCE(s.generation::text,'NULL') AS snapshot_generation,
-                CASE WHEN ts.id IS NULL THEN 'NO' ELSE 'YES' END AS active_session,
-                CASE
-                  WHEN c.logical_account_key IS NULL THEN 'FAIL_LOGICAL_KEY'
-                  WHEN COALESCE(s.equity, a.equity) IS NULL OR COALESCE(s.equity, a.equity) <= 0 THEN 'FAIL_EQUITY'
-                  WHEN COALESCE(s.currency, a.currency) IS NULL OR COALESCE(s.currency, a.currency) !~ '^[A-Z]{3}            for (const r of result.rows) {
-              console.log(Object.entries(r).map(([k,v]) => `${k}=${v}`).join(' | '));
-            }
-            await client.end();
-          })().catch(err => {
-            console.error('diagnostic_db_error=' + (err?.message || String(err)).replace(/[A-Za-z0-9]{20,}/g,'[redacted]'));
-            process.exit(1);
-          });
-          NODE
 
-          echo '=== RECENT ALLOCATION/RECONCILIATION ERRORS ==='
-          pm2 logs "$api_id" --nostream --lines 800 2>/dev/null \
-            | grep -E 'ALLOCATION_|Capital allocation|PAPER_SIMULATOR_STATE_RESET|Account snapshot acceptance failed|capital-allocation' \
-            | tail -n 100 \
-            | sed -E 's/[0-9a-f]{8}-[0-9a-f-]{27,}/[uuid]/gi' || true
-          REMOTE
+            const sql = [
+              "SELECT",
+              "  left(c.id::text,8) AS connection,",
+              "  left(c.user_id::text,8) AS user_ref,",
+              "  c.broker_id,",
+              "  c.status,",
+              "  c.account_type,",
+              "  CASE WHEN c.logical_account_key IS NULL THEN 'MISSING' ELSE 'PRESENT' END AS logical_key,",
+              "  COALESCE(a.balance::text,'NULL') AS legacy_balance,",
+              "  COALESCE(a.equity::text,'NULL') AS legacy_equity,",
+              "  COALESCE(a.currency,'NULL') AS legacy_currency,",
+              "  COALESCE(b.total_capital::text,'NULL') AS budget,",
+              "  COALESCE(b.account_currency,'NULL') AS budget_currency,",
+              "  COALESCE(s.balance::text,'NULL') AS snapshot_balance,",
+              "  COALESCE(s.equity::text,'NULL') AS snapshot_equity,",
+              "  COALESCE(s.currency,'NULL') AS snapshot_currency,",
+              "  COALESCE(s.generation::text,'NULL') AS snapshot_generation,",
+              "  CASE WHEN ts.id IS NULL THEN 'NO' ELSE 'YES' END AS active_session,",
+              "  CASE",
+              "    WHEN c.logical_account_key IS NULL THEN 'FAIL_LOGICAL_KEY'",
+              "    WHEN COALESCE(s.equity, a.equity) IS NULL OR COALESCE(s.equity, a.equity) <= 0 THEN 'FAIL_EQUITY'",
+              "    WHEN COALESCE(s.currency, a.currency) IS NULL OR length(COALESCE(s.currency, a.currency)) <> 3 THEN 'FAIL_CURRENCY'",
+              "    WHEN b.id IS NOT NULL AND b.account_currency <> COALESCE(s.currency, a.currency) THEN 'FAIL_BUDGET_CURRENCY'",
+              "    ELSE 'PRECONDITIONS_OK'",
+              "  END AS allocation_precondition",
+              "FROM broker.broker_connections c",
+              "LEFT JOIN broker.broker_accounts a ON a.broker_connection_id = c.id",
+              "LEFT JOIN trading.capital_budgets b",
+              "  ON b.user_id = c.user_id",
+              " AND b.logical_account_key = c.logical_account_key",
+              "LEFT JOIN LATERAL (",
+              "  SELECT balance,equity,currency,generation",
+              "  FROM broker.broker_account_snapshots s",
+              "  WHERE s.connection_id = c.id",
+              "  ORDER BY generation DESC",
+              "  LIMIT 1",
+              ") s ON true",
+              "LEFT JOIN trading.trading_sessions ts",
+              "  ON ts.broker_connection_id = c.id",
+              " AND ts.status = 'ACTIVE'",
+              "WHERE c.status = 'CONNECTED'",
+              "ORDER BY CASE WHEN ts.id IS NULL THEN 1 ELSE 0 END, c.created_at DESC",
+              "LIMIT 25"
+            ].join("\n");
 
-      - name: Remove SSH material
-        if: always()
-        shell: bash
-        run: rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
- THEN 'FAIL_CURRENCY'
-                  WHEN b.id IS NOT NULL AND b.account_currency <> COALESCE(s.currency, a.currency) THEN 'FAIL_BUDGET_CURRENCY'
-                  ELSE 'PRECONDITIONS_OK'
-                END AS allocation_precondition
-              FROM broker.broker_connections c
-              LEFT JOIN broker.broker_accounts a ON a.broker_connection_id = c.id
-              LEFT JOIN trading.capital_budgets b
-                ON b.user_id = c.user_id
-               AND b.logical_account_key = c.logical_account_key
-              LEFT JOIN LATERAL (
-                SELECT balance,equity,currency,generation
-                FROM broker.broker_account_snapshots s
-                WHERE s.connection_id = c.id
-                ORDER BY generation DESC
-                LIMIT 1
-              ) s ON true
-              LEFT JOIN trading.trading_sessions ts
-                ON ts.broker_connection_id = c.id
-               AND ts.status = 'ACTIVE'
-              WHERE c.status = 'CONNECTED'
-              ORDER BY CASE WHEN ts.id IS NULL THEN 1 ELSE 0 END, c.created_at DESC
-              LIMIT 25
-            `;
             const result = await client.query(sql);
             console.log('=== CONNECTED ACCOUNTS / ACTIVE SESSION ===');
             for (const r of result.rows) {
-              console.log(Object.entries(r).map(([k,v]) => `${k}=${v}`).join(' | '));
+              console.log(Object.entries(r).map(([k,v]) => String(k)+'='+String(v)).join(' | '));
             }
+
             await client.end();
           })().catch(err => {
-            console.error('diagnostic_db_error=' + (err?.message || String(err)).replace(/[A-Za-z0-9]{20,}/g,'[redacted]'));
+            console.error(
+              'diagnostic_db_error=' +
+              (err?.message || String(err)).replace(/[A-Za-z0-9]{20,}/g,'[redacted]')
+            );
             process.exit(1);
           });
           NODE
 
+          cd ../..
           echo '=== RECENT ALLOCATION/RECONCILIATION ERRORS ==='
           pm2 logs "$api_id" --nostream --lines 800 2>/dev/null \
             | grep -E 'ALLOCATION_|Capital allocation|PAPER_SIMULATOR_STATE_RESET|Account snapshot acceptance failed|capital-allocation' \
