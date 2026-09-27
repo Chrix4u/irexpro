@@ -1,0 +1,256 @@
+name: USDJPY v10 Future Holdout
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: readiness checks evidence volume only; consume performs the one-touch holdout evaluation
+        required: true
+        type: choice
+        options:
+          - readiness
+          - consume
+        default: readiness
+
+permissions:
+  contents: read
+
+env:
+  STAGING_SSH_HOST: vps.lightworldtech.com
+  STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
+  STAGING_SSH_USER: ${{ vars.STAGING_SSH_USER }}
+  SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+  SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+
+jobs:
+  future-holdout:
+    name: USDJPY v10 pinned future holdout
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    environment:
+      name: staging
+    concurrency:
+      group: irexpro-usdjpy-v10-future-holdout
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout workflow source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Configure pinned SSH identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$STAGING_SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Check readiness or consume sealed holdout
+        shell: bash
+        env:
+          HOLDOUT_MODE: ${{ inputs.mode }}
+        run: |
+          set -Eeuo pipefail
+          ssh -i "$HOME/.ssh/irexpro_staging" -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            "bash -s -- '$HOLDOUT_MODE'" <<'REMOTE'
+          set -Eeuo pipefail
+          umask 077
+
+          mode="$1"
+          case "$mode" in
+            readiness|consume) ;;
+            *) echo "Unsupported holdout mode: $mode" >&2; exit 2 ;;
+          esac
+
+          readonly staging='/home/lightworld/webapps/irexpro-staging'
+          readonly research_root='/home/lightworld/research'
+          readonly frozen_reference_sha='8b79b373c7800998465879eef2fa03409fe49e44'
+          readonly qualification_sha='87302ce319a7a6ef3f76f0cb75702b797081015e'
+          readonly evaluator_sha='11e098427e585c8e17f94860e58e255f0fce76f2'
+          readonly boundary='2026-09-27T05:00:00+00:00'
+          readonly pair='USDJPY'
+          readonly horizon='1'
+          readonly minimum_evaluation_rows='2500'
+          readonly minimum_raw_future_rows='3000'
+
+          readonly frozen_root="$research_root/irexpro-usdjpy-hybrid-direction/$frozen_reference_sha"
+          readonly qualification_root="$research_root/irexpro-usdjpy-hybrid-direction/$qualification_sha"
+          readonly holdout_root="$research_root/irexpro-usdjpy-v10-future-holdout"
+          readonly evaluator_root="$holdout_root/evaluator-$evaluator_sha"
+          readonly rolling_raw="$holdout_root/rolling/USDJPY_M1.csv"
+          readonly expanded_raw="$holdout_root/sealed/USDJPY_M1_expanded.csv"
+          readonly expanded_corpus="$holdout_root/sealed/USDJPY_MTF_expanded.csv"
+          readonly report="$holdout_root/sealed/future-holdout-report.json"
+          readonly marker="$holdout_root/sealed/holdout-state.json"
+          readonly cache="$research_root/dukascopy-raw-cache"
+
+          test -d "$staging/.git" || test -f "$staging/.git"
+          test -s "$frozen_root/raw/USDJPY_M1.csv"
+          test -s "$qualification_root/qualification.json"
+          install -d -m 700 "$holdout_root/rolling" "$holdout_root/sealed"
+
+          python_bin="$staging/services/ai-engine/.venv/bin/python"
+          test -x "$python_bin"
+
+          if [[ ! -d "$evaluator_root" ]]; then
+            git -C "$staging" cat-file -e "$evaluator_sha^{commit}"
+            git -C "$staging" worktree add --detach "$evaluator_root" "$evaluator_sha"
+          fi
+          test "$(git -C "$evaluator_root" rev-parse HEAD)" = "$evaluator_sha"
+          evaluator_ai="$evaluator_root/services/ai-engine"
+          export PYTHONPATH="$evaluator_ai"
+          export IREXPRO_XGB_N_JOBS=4
+
+          "$python_bin" - "$qualification_root/qualification.json" "$boundary" <<'PY'
+          import json, sys
+          report=json.load(open(sys.argv[1]))
+          cutoff=report.get("qualification_decision_time_before")
+          scope=report.get("single_pair_scope") or {}
+          experiment=scope.get("experiment")
+          gate=((report.get("experiments") or {}).get(experiment) or {}).get("research_gate") or {}
+          expected=sys.argv[2].replace("Z","+00:00")
+          if cutoff != expected:
+              raise SystemExit(f"Qualification cutoff mismatch: {cutoff} != {expected}")
+          if experiment != "event_barrier_hybrid_opportunity_dual_direction_payoff_risk":
+              raise SystemExit(f"Unexpected qualified experiment: {experiment}")
+          if not gate.get("research_gate_passed"):
+              raise SystemExit("Qualified v10 research gate is not PASS")
+          print("V10_QUALIFICATION_PIN_VERIFIED")
+          PY
+
+          cd "$evaluator_ai"
+
+          "$python_bin" -m app.domain.training.collect_dukascopy \
+            --instrument "$pair" \
+            --target-rows 5000 \
+            --output "$rolling_raw" \
+            --max-lookback-days 14 \
+            --parallelism 4 \
+            --cache-dir "$cache"
+
+          future_rows="$("$python_bin" - "$rolling_raw" "$boundary" <<'PY'
+          import pandas as pd, sys
+          frame=pd.read_csv(sys.argv[1])
+          ts=pd.to_datetime(frame["timestamp"], utc=True, errors="raise")
+          boundary=pd.Timestamp(sys.argv[2])
+          print(int((ts >= boundary).sum()))
+          PY
+          )"
+          echo "USDJPY_V10_FUTURE_RAW_ROWS $future_rows"
+          echo "USDJPY_V10_MINIMUM_RAW_ROWS $minimum_raw_future_rows"
+
+          if (( future_rows < minimum_raw_future_rows )); then
+            echo "USDJPY_V10_HOLDOUT_NOT_READY"
+            exit 0
+          fi
+
+          if [[ "$mode" == "readiness" ]]; then
+            echo "USDJPY_V10_HOLDOUT_READY_FOR_ONE_TOUCH_EVALUATION"
+            exit 0
+          fi
+
+          if [[ -s "$marker" ]]; then
+            echo "USDJPY_V10_HOLDOUT_ALREADY_STARTED_OR_CONSUMED" >&2
+            cat "$marker"
+            exit 3
+          fi
+
+          "$python_bin" - \
+            "$frozen_root/raw/USDJPY_M1.csv" \
+            "$rolling_raw" \
+            "$expanded_raw" \
+            "$boundary" \
+            "$minimum_raw_future_rows" <<'PY'
+          import os, sys, pandas as pd
+          frozen_path, recent_path, output_path, raw_boundary, minimum = sys.argv[1:]
+          boundary=pd.Timestamp(raw_boundary)
+          frozen=pd.read_csv(frozen_path)
+          recent=pd.read_csv(recent_path)
+          frozen_ts=pd.to_datetime(frozen["timestamp"], utc=True, errors="raise")
+          recent_ts=pd.to_datetime(recent["timestamp"], utc=True, errors="raise")
+          prefix=frozen.loc[frozen_ts < boundary].copy()
+          future=recent.loc[recent_ts >= boundary].copy()
+          if len(future) < int(minimum):
+              raise SystemExit("Future raw evidence dropped below minimum during sealing")
+          combined=pd.concat([prefix, future], ignore_index=True)
+          combined["_ts"]=pd.to_datetime(combined["timestamp"], utc=True, errors="raise")
+          combined=combined.sort_values("_ts").drop_duplicates("timestamp", keep="first").drop(columns="_ts")
+          tmp=output_path+".tmp"
+          combined.to_csv(tmp,index=False)
+          os.replace(tmp,output_path)
+          print("SEALED_PREFIX_ROWS",len(prefix))
+          print("SEALED_FUTURE_RAW_ROWS",len(future))
+          print("SEALED_TOTAL_RAW_ROWS",len(combined))
+          PY
+
+          "$python_bin" -m app.domain.training.multitimeframe_corpus \
+            --m1-dataset "$expanded_raw" \
+            --instrument "$pair" \
+            --output "$expanded_corpus" \
+            --source dukascopy_v10_sealed_future_holdout
+
+          "$python_bin" - "$marker" "$qualification_sha" "$evaluator_sha" "$boundary" "$expanded_corpus" <<'PY'
+          import hashlib, json, os, sys
+          marker, qsha, esha, boundary, corpus = sys.argv[1:]
+          h=hashlib.sha256(open(corpus,"rb").read()).hexdigest()
+          payload={
+              "state":"STARTED",
+              "qualification_sha":qsha,
+              "evaluator_sha":esha,
+              "future_holdout_start":boundary,
+              "expanded_corpus_sha256":h,
+          }
+          tmp=marker+".tmp"
+          with open(tmp,"w",encoding="utf-8") as f:
+              json.dump(payload,f,sort_keys=True,indent=2)
+          os.replace(tmp,marker)
+          print("USDJPY_V10_HOLDOUT_SEALED_AND_STARTED")
+          PY
+
+          "$python_bin" -m app.domain.training.single_pair_final_test \
+            --dataset "$pair=$expanded_corpus" \
+            --horizon-bars "$horizon" \
+            --qualification-report "$qualification_root/qualification.json" \
+            --report "$report" \
+            --confidence-threshold 0.60 \
+            --future-holdout-start "$boundary" \
+            --min-future-holdout-rows "$minimum_evaluation_rows"
+
+          "$python_bin" - "$marker" "$report" <<'PY'
+          import hashlib, json, os, sys
+          marker, report_path = sys.argv[1:]
+          report=json.load(open(report_path))
+          current=json.load(open(marker))
+          current.update({
+              "state":"COMPLETED",
+              "report_sha256":hashlib.sha256(open(report_path,"rb").read()).hexdigest(),
+              "final_test_gate":report.get("final_test_gate"),
+              "future_holdout_rows":((report.get("split") or {}).get("holdout_rows")),
+              "approved_for_paper":False,
+              "approved_for_live":False,
+          })
+          tmp=marker+".tmp"
+          with open(tmp,"w",encoding="utf-8") as f:
+              json.dump(current,f,sort_keys=True,indent=2)
+          os.replace(tmp,marker)
+          gate=(report.get("final_test_gate") or {})
+          print("USDJPY_V10_FUTURE_HOLDOUT_"+("PASS" if gate.get("passed") else "HOLD"))
+          print("OBSERVED",json.dumps(gate.get("observed"),sort_keys=True))
+          print("CHECKS",json.dumps(gate.get("checks"),sort_keys=True))
+          PY
+          REMOTE
+
+      - name: Remove ephemeral SSH material
+        if: always()
+        shell: bash
+        run: rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
