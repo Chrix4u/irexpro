@@ -1,0 +1,393 @@
+"""USDJPY v14 research: side-specific calibrated economic gating.
+
+v14 is a new candidate built after v13's outer folds were exposed. It does not
+retune v13. LONG and SHORT actionability remain independently calibrated, but
+threshold pairs are eligible only when nested inner-selection trading economics
+and two-sided evidence are acceptable. Outer validation uses a later disjoint
+historical era (82%-94% of the pre-boundary corpus), preserving v11-v13 eras.
+Frozen v10 and its future holdout remain untouched.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+from sklearn.metrics import balanced_accuracy_score
+
+from app.domain.training.model_qualification import (
+    EVENT_LONG_ACTIONABLE_TARGET_COLUMN,
+    EVENT_SHORT_ACTIONABLE_TARGET_COLUMN,
+    ModelVariant,
+    _nested_windows,
+    _refit_windows,
+)
+from app.domain.training.single_pair_v11_calibrated_gating import _fit_models, _trading_metrics
+from app.domain.training.single_pair_v13_side_specific import (
+    SIDE_THRESHOLD_GRID,
+    _apply_side_policy,
+    _fit_side_calibrators,
+    _score_frame,
+)
+from app.domain.training.train_multitimeframe import load_and_prepare_corpora
+from app.domain.training.validation import iter_purged_walk_forward_time_splits
+
+EXPERIMENT_NAME = "event_barrier_v14_side_specific_economic_gating"
+MIN_INNER_TRADES = 12
+MIN_INNER_SIDE_TRADES = 2
+MAX_INNER_SIDE_CONCENTRATION = 0.85
+MIN_OUTER_TRADES = 30
+MIN_PER_FOLD_TRADES = 5
+MAX_FOLD_TRADE_CONCENTRATION = 0.80
+
+
+def _candidate_report(
+    scored: pd.DataFrame,
+    *,
+    long_threshold: float,
+    short_threshold: float,
+) -> dict[str, Any]:
+    gated = _apply_side_policy(
+        scored,
+        long_threshold=long_threshold,
+        short_threshold=short_threshold,
+    )
+    active = gated.loc[gated["active_trade"]].copy()
+    trading = _trading_metrics(active)
+    long_trades = int(trading.get("long_trades", 0))
+    short_trades = int(trading.get("short_trades", 0))
+    total_trades = int(trading["trade_count"])
+    side_concentration = (
+        max(long_trades, short_trades) / total_trades if total_trades else 1.0
+    )
+    profit_factor = trading.get("profit_factor")
+    pf_for_gate = (
+        float(profit_factor)
+        if profit_factor is not None
+        else (float("inf") if total_trades >= MIN_INNER_TRADES else 0.0)
+    )
+    long_ba = float(
+        balanced_accuracy_score(
+            gated[EVENT_LONG_ACTIONABLE_TARGET_COLUMN].to_numpy(int),
+            (gated["long_action_probability"] >= long_threshold).to_numpy(int),
+        )
+    )
+    short_ba = float(
+        balanced_accuracy_score(
+            gated[EVENT_SHORT_ACTIONABLE_TARGET_COLUMN].to_numpy(int),
+            (gated["short_action_probability"] >= short_threshold).to_numpy(int),
+        )
+    )
+    eligible = (
+        total_trades >= MIN_INNER_TRADES
+        and long_trades >= MIN_INNER_SIDE_TRADES
+        and short_trades >= MIN_INNER_SIDE_TRADES
+        and side_concentration <= MAX_INNER_SIDE_CONCENTRATION
+        and float(trading["total_return"]) > 0.0
+        and pf_for_gate >= 1.15
+        and float(trading["max_drawdown"]) <= 0.12
+    )
+    return {
+        "long_threshold": float(long_threshold),
+        "short_threshold": float(short_threshold),
+        "long_balanced_accuracy": long_ba,
+        "short_balanced_accuracy": short_ba,
+        "mean_side_balanced_accuracy": (long_ba + short_ba) / 2.0,
+        "side_concentration": float(side_concentration),
+        "trading": trading,
+        "eligible": bool(eligible),
+    }
+
+
+def select_economic_side_thresholds(scored: pd.DataFrame) -> dict[str, Any]:
+    candidates = [
+        _candidate_report(
+            scored,
+            long_threshold=long_threshold,
+            short_threshold=short_threshold,
+        )
+        for long_threshold in SIDE_THRESHOLD_GRID
+        for short_threshold in SIDE_THRESHOLD_GRID
+    ]
+    eligible = [row for row in candidates if row["eligible"]]
+    if not eligible:
+        return {
+            "selected": None,
+            "candidate_count": len(candidates),
+            "eligible_count": 0,
+            "reason": (
+                "No inner side-threshold pair met two-sided evidence, "
+                "concentration, profit-factor, return, and drawdown constraints."
+            ),
+            "candidates": candidates,
+        }
+
+    selected = max(
+        eligible,
+        key=lambda row: (
+            min(
+                float(row["trading"]["profit_factor"])
+                if row["trading"]["profit_factor"] is not None
+                else 3.0,
+                3.0,
+            ),
+            float(row["trading"]["total_return"]),
+            row["mean_side_balanced_accuracy"],
+            min(float(row["trading"]["trade_count"]), 40.0) / 40.0,
+            -row["side_concentration"],
+        ),
+    )
+    return {
+        "selected": selected,
+        "candidate_count": len(candidates),
+        "eligible_count": len(eligible),
+        "candidates": candidates,
+    }
+
+
+def _outer_fold_report(
+    scored: pd.DataFrame,
+    *,
+    selection: dict[str, Any],
+) -> dict[str, Any]:
+    selected = selection["selected"]
+    if selected is None:
+        return {
+            "selection_failed": True,
+            "active_trade_records": [],
+            "trading": _trading_metrics(pd.DataFrame()),
+        }
+
+    gated = _apply_side_policy(
+        scored,
+        long_threshold=float(selected["long_threshold"]),
+        short_threshold=float(selected["short_threshold"]),
+    )
+    active = gated.loc[gated["active_trade"]].copy()
+    return {
+        "selection_failed": False,
+        "long_threshold": float(selected["long_threshold"]),
+        "short_threshold": float(selected["short_threshold"]),
+        "trading": _trading_metrics(active),
+        "active_trade_records": [
+            {
+                "decision_time": str(row.decision_time),
+                "predicted_long": bool(row.predicted_long),
+                "selected_net_return": float(row.selected_net_return),
+            }
+            for row in active.itertuples(index=False)
+        ],
+    }
+
+
+def evaluate_v14(
+    datasets: dict[str, str | Path],
+    *,
+    horizon_bars: int,
+    decision_time_before: str,
+    max_splits: int = 3,
+) -> dict[str, Any]:
+    pooled, hashes = load_and_prepare_corpora(
+        datasets,
+        horizon_bars=horizon_bars,
+        decision_time_before=decision_time_before,
+    )
+    unique_periods = int(pooled["decision_time"].nunique())
+    min_train = int(unique_periods * 0.82)
+    validation = int(unique_periods * 0.04)
+    variant = ModelVariant(name="event_barrier_v14_side_specific_economic")
+
+    folds: list[dict[str, Any]] = []
+    for fold_index, (outer_train, outer_validation) in enumerate(
+        iter_purged_walk_forward_time_splits(
+            pooled,
+            time_column="decision_time",
+            min_train_periods=min_train,
+            validation_periods=validation,
+            purge_periods=horizon_bars,
+            embargo_periods=horizon_bars,
+            max_splits=max_splits,
+        ),
+        start=1,
+    ):
+        nested = _nested_windows(
+            outer_train,
+            horizon_bars=horizon_bars,
+            min_inner_periods=50,
+        )
+        inner_models = _fit_models(nested.fit, nested.early_stop, variant=variant)
+        inner_calibrators = _fit_side_calibrators(
+            inner_models,
+            nested.calibration,
+        )
+        selection_scored = _score_frame(
+            inner_models,
+            nested.selection,
+            calibrators=inner_calibrators,
+        )
+        gate_selection = select_economic_side_thresholds(selection_scored)
+
+        refit = _refit_windows(
+            outer_train,
+            horizon_bars=horizon_bars,
+            min_inner_periods=50,
+        )
+        outer_models = _fit_models(refit.fit, refit.early_stop, variant=variant)
+        outer_calibrators = _fit_side_calibrators(
+            outer_models,
+            refit.calibration,
+        )
+        outer_scored = _score_frame(
+            outer_models,
+            outer_validation,
+            calibrators=outer_calibrators,
+        )
+        fold = _outer_fold_report(outer_scored, selection=gate_selection)
+        fold["fold"] = fold_index
+        fold["validation_start"] = str(outer_validation["decision_time"].min())
+        fold["validation_end"] = str(outer_validation["decision_time"].max())
+        fold["inner_gate_selection"] = gate_selection
+        folds.append(fold)
+
+        selected = gate_selection["selected"]
+        print(
+            json.dumps(
+                {
+                    "fold": fold_index,
+                    "selection_failed": fold["selection_failed"],
+                    "long_threshold": (
+                        selected["long_threshold"] if selected is not None else None
+                    ),
+                    "short_threshold": (
+                        selected["short_threshold"] if selected is not None else None
+                    ),
+                    "trades": fold["trading"]["trade_count"],
+                    "long": fold["trading"].get("long_trades", 0),
+                    "short": fold["trading"].get("short_trades", 0),
+                    "total_return": fold["trading"]["total_return"],
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+
+    records = [
+        record
+        for fold in folds
+        for record in fold["active_trade_records"]
+    ]
+    if records:
+        active = pd.DataFrame(records)
+        active["decision_time"] = pd.to_datetime(
+            active["decision_time"], utc=True, errors="raise"
+        )
+        aggregate_trading = _trading_metrics(active)
+    else:
+        aggregate_trading = _trading_metrics(pd.DataFrame())
+
+    trade_counts = [int(fold["trading"]["trade_count"]) for fold in folds]
+    total_trades = int(aggregate_trading["trade_count"])
+    long_trades = int(aggregate_trading.get("long_trades", 0))
+    short_trades = int(aggregate_trading.get("short_trades", 0))
+    max_concentration = (
+        max(trade_counts) / total_trades
+        if total_trades > 0 and trade_counts
+        else 0.0
+    )
+    positive_folds = sum(
+        float(fold["trading"]["total_return"]) > 0.0 for fold in folds
+    )
+    profit_factor = aggregate_trading.get("profit_factor")
+    robustness_gate = {
+        "all_inner_selections_succeeded": all(
+            not bool(fold["selection_failed"]) for fold in folds
+        ),
+        "minimum_trade_evidence": total_trades >= MIN_OUTER_TRADES,
+        "minimum_each_fold_trade_evidence": bool(trade_counts)
+        and min(trade_counts) >= MIN_PER_FOLD_TRADES,
+        "fold_concentration_lte_0_80": max_concentration
+        <= MAX_FOLD_TRADE_CONCENTRATION,
+        "two_sided_execution": long_trades > 0 and short_trades > 0,
+        "positive_fold_fraction_gte_0_60": (
+            positive_folds / len(folds) >= 0.60 if folds else False
+        ),
+        "aggregate_profit_factor_gte_1_15": profit_factor is not None
+        and float(profit_factor) >= 1.15,
+        "aggregate_sharpe_gte_1_0": (
+            aggregate_trading.get("sharpe_ratio") is not None
+            and float(aggregate_trading["sharpe_ratio"]) >= 1.0
+        ),
+        "aggregate_max_drawdown_lte_0_12": float(
+            aggregate_trading.get("max_drawdown", 1.0)
+        )
+        <= 0.12,
+    }
+    robustness_gate["research_robustness_passed"] = all(
+        bool(value) for key, value in robustness_gate.items()
+        if key != "research_robustness_passed"
+    )
+
+    return {
+        "experiment": EXPERIMENT_NAME,
+        "research_only": True,
+        "approved_for_paper": False,
+        "approved_for_live": False,
+        "decision_time_before": pd.Timestamp(decision_time_before).isoformat(),
+        "protocol": {
+            "outer_min_train_fraction": 0.82,
+            "outer_validation_fraction": 0.04,
+            "outer_era_disjoint_from_v11_v12_v13": True,
+            "side_specific_calibration": True,
+            "inner_two_sided_economic_threshold_selection": True,
+            "future_holdout_touched": False,
+        },
+        "dataset_sha256": hashes,
+        "folds": folds,
+        "aggregate": {
+            "trading": aggregate_trading,
+            "fold_trade_counts": trade_counts,
+            "max_fold_trade_fraction": max_concentration,
+            "positive_fold_fraction": (
+                positive_folds / len(folds) if folds else 0.0
+            ),
+        },
+        "robustness_gate": robustness_gate,
+    }
+
+
+def _parse_dataset(value: str) -> dict[str, str]:
+    instrument, sep, path = value.partition("=")
+    if not sep:
+        raise ValueError("--dataset must use INSTRUMENT=/path.csv")
+    return {instrument.strip().upper(): path.strip()}
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset", required=True)
+    parser.add_argument("--horizon-bars", type=int, default=1)
+    parser.add_argument("--decision-time-before", required=True)
+    parser.add_argument("--report", required=True)
+    parser.add_argument("--max-splits", type=int, default=3)
+    args = parser.parse_args()
+
+    report = evaluate_v14(
+        _parse_dataset(args.dataset),
+        horizon_bars=args.horizon_bars,
+        decision_time_before=args.decision_time_before,
+        max_splits=args.max_splits,
+    )
+    output = Path(args.report)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        json.dumps(report, indent=2, sort_keys=True, default=str),
+        encoding="utf-8",
+    )
+    print(json.dumps(report["aggregate"], sort_keys=True))
+    print(json.dumps(report["robustness_gate"], sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()
