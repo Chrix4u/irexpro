@@ -1377,7 +1377,13 @@ export class BrokerService {
         return false;
       }
 
-      const balance = await adapter.getAccountBalance();
+      // The authoritative snapshot model requires a COMPLETE financial
+      // observation. A balance-only health read used to append newer snapshots
+      // with freeMargin/margin/leverage = NULL; those partial generations then
+      // shadowed the last complete snapshot and made capital allocation/risk
+      // reads fail closed despite valid equity. Read the provider's full
+      // account state and persist all financial fields as one logical version.
+      const accountInfo = await adapter.getAccountInfo();
 
       await this.connectionRepo.update(connectionId, {
         lastHealthCheckAt: new Date(),
@@ -1385,20 +1391,20 @@ export class BrokerService {
         lastErrorMessage: null,
       });
 
-      await this.upsertBrokerAccount(connectionId, balance.currency, {
-        balance: balance.balance,
-        equity: balance.equity,
+      await this.upsertBrokerAccount(connectionId, accountInfo.currency ?? undefined, {
+        balance: accountInfo.balance,
+        equity: accountInfo.equity,
       });
 
-      // Round 6 live-execution completion (§1a): the health check observes
-      // REAL provider financial state — accept it as the next authoritative
-      // snapshot (monotonic generation). providerObservedAt = the provider's
-      // own balance timestamp, so freshness is NEVER derived from write time.
       await this.recordAccountSnapshot(connection, {
-        balance: balance.balance,
-        equity: balance.equity,
-        currency: balance.currency,
-        providerObservedAt: balance.timestamp ?? null,
+        balance: accountInfo.balance,
+        equity: accountInfo.equity,
+        margin: accountInfo.margin,
+        freeMargin: accountInfo.freeMargin,
+        marginLevel: accountInfo.marginLevel,
+        leverage: accountInfo.leverage,
+        currency: accountInfo.currency,
+        providerObservedAt: null,
         source: 'health-check',
       });
 
@@ -2387,12 +2393,21 @@ export class BrokerService {
       );
     }
 
-    const balance = await adapter.getAccountBalance();
+    // New-exposure authority consumes the latest accepted snapshot and requires
+    // complete account capacity facts. Never append a partial balance-only
+    // generation here: doing so would immediately shadow a complete snapshot
+    // with freeMargin = NULL and make the very risk evaluation that requested
+    // the refresh fail closed.
+    const accountInfo = await adapter.getAccountInfo();
     await this.recordAccountSnapshot(connection, {
-      balance: balance.balance,
-      equity: balance.equity,
-      currency: balance.currency,
-      providerObservedAt: balance.timestamp ?? null,
+      balance: accountInfo.balance,
+      equity: accountInfo.equity,
+      margin: accountInfo.margin,
+      freeMargin: accountInfo.freeMargin,
+      marginLevel: accountInfo.marginLevel,
+      leverage: accountInfo.leverage,
+      currency: accountInfo.currency,
+      providerObservedAt: null,
       source: 'on-demand-risk-evaluation',
     });
   }

@@ -939,25 +939,29 @@ describe('BrokerService', () => {
   // ─── healthCheck ─────────────────────────────────────────────────────────
 
   describe('healthCheck()', () => {
-    /** Standard healthy adapter — connect + getAccountBalance both succeed. */
+    /** Standard healthy adapter — connect + full getAccountInfo both succeed. */
     const healthyAdapter = () => ({
       setMode: jest.fn(),
       // Round 7: BrokerConnectionResult contract — the observed environment
       // must be reported (matches the declared DEMO connection fixture).
       connect: jest.fn().mockResolvedValue({ success: true, accountType: BrokerMode.DEMO }),
-      getAccountBalance: jest.fn().mockResolvedValue({
+      getAccountInfo: jest.fn().mockResolvedValue({
+        accountId: 'paper-account-001',
         balance: '10000.00',
         equity: '10000.00',
+        margin: '0.00',
+        freeMargin: '10000.00',
+        marginLevel: '0.00',
+        leverage: 100,
         currency: 'USD',
-        timestamp: new Date(),
       }),
     });
 
-    /** Failing adapter — connect succeeds but getAccountBalance throws. */
+    /** Failing adapter — connect succeeds but the full account read throws. */
     const failingAdapter = (error = 'connection timeout') => ({
       setMode: jest.fn(),
       connect: jest.fn().mockResolvedValue({ success: true, accountType: BrokerMode.DEMO }),
-      getAccountBalance: jest.fn().mockRejectedValue(new Error(error)),
+      getAccountInfo: jest.fn().mockRejectedValue(new Error(error)),
     });
 
     it('returns false when connection is not CONNECTED status', async () => {
@@ -1049,7 +1053,7 @@ describe('BrokerService', () => {
       const adapter = {
         setMode: jest.fn(),
         connect: jest.fn().mockResolvedValue({ success: true, accountType: BrokerMode.LIVE }),
-        getAccountBalance: jest.fn(),
+        getAccountInfo: jest.fn(),
       };
       registry.getAdapter.mockReturnValue(adapter);
       connectionRepo.findOne.mockResolvedValue(connectedConnection({ consecutiveFailureCount: 0 }));
@@ -1085,7 +1089,7 @@ describe('BrokerService', () => {
       const adapter = {
         setMode: jest.fn(),
         connect: jest.fn().mockRejectedValue(new Error('MetaAPI SDK unavailable')),
-        getAccountBalance: jest.fn(),
+        getAccountInfo: jest.fn(),
       };
       registry.getAdapter.mockReturnValue(adapter);
       connectionRepo.findOne.mockResolvedValue(connectedConnection());
@@ -1105,15 +1109,19 @@ describe('BrokerService', () => {
   // ─── Round 7 (P1): on-demand LIVE snapshot observation ──────────────────
 
   describe('observeAccountSnapshotNow() — Round 7 P1 LIVE snapshot availability', () => {
-    it('observes the provider balance and records it as an authoritative snapshot', async () => {
+    it('observes the provider account and records it as a complete authoritative snapshot', async () => {
       const adapter = {
         setMode: jest.fn(),
         connect: jest.fn().mockResolvedValue({ success: true, accountType: BrokerMode.DEMO }),
-        getAccountBalance: jest.fn().mockResolvedValue({
+        getAccountInfo: jest.fn().mockResolvedValue({
+          accountId: 'paper-account-001',
           balance: '10100.00',
           equity: '10125.00',
+          margin: '125.00',
+          freeMargin: '10000.00',
+          marginLevel: '8100.00',
+          leverage: 100,
           currency: 'USD',
-          timestamp: new Date(),
         }),
       };
       registry.getAdapter.mockReturnValue(adapter);
@@ -1121,14 +1129,18 @@ describe('BrokerService', () => {
 
       await service.observeAccountSnapshotNow('user-1', 'conn-1');
 
-      expect(adapter.getAccountBalance).toHaveBeenCalledTimes(1);
+      expect(adapter.getAccountInfo).toHaveBeenCalledTimes(1);
       // The observation flows through the SAME §1a accept path the health
-      // check uses (acceptSnapshot + legacy projection).
+      // check uses (acceptSnapshot + legacy projection) and must remain complete.
       expect(snapshotService.acceptSnapshot).toHaveBeenCalledWith(
         expect.objectContaining({
           connectionId: 'conn-1',
           balance: '10100.00',
           equity: '10125.00',
+          margin: '125.00',
+          freeMargin: '10000.00',
+          marginLevel: '8100.00',
+          leverage: 100,
           currency: 'USD',
           source: 'on-demand-risk-evaluation',
         }),
@@ -1148,10 +1160,10 @@ describe('BrokerService', () => {
       connectionRepo.findOne.mockResolvedValue(
         connectedConnection({ credentialStatus: 'REVOKED' }),
       );
-      const adapter = { setMode: jest.fn(), getAccountBalance: jest.fn() };
+      const adapter = { setMode: jest.fn(), getAccountInfo: jest.fn() };
       registry.getAdapter.mockReturnValue(adapter);
       await expect(service.observeAccountSnapshotNow('user-1', 'conn-1')).rejects.toThrow();
-      expect(adapter.getAccountBalance).not.toHaveBeenCalled();
+      expect(adapter.getAccountInfo).not.toHaveBeenCalled();
     });
 
     it('fails closed when the reconnect itself reports failure (no observation of a rejected session)', async () => {
@@ -1160,7 +1172,7 @@ describe('BrokerService', () => {
         connect: jest
           .fn()
           .mockResolvedValue({ success: false, accountType: null, error: 'session expired' }),
-        getAccountBalance: jest.fn(),
+        getAccountInfo: jest.fn(),
       };
       registry.getAdapter.mockReturnValue(adapter);
       connectionRepo.findOne.mockResolvedValue(connectedConnection());
@@ -1168,7 +1180,7 @@ describe('BrokerService', () => {
       await expect(service.observeAccountSnapshotNow('user-1', 'conn-1')).rejects.toThrow(
         'reconnect failed',
       );
-      expect(adapter.getAccountBalance).not.toHaveBeenCalled();
+      expect(adapter.getAccountInfo).not.toHaveBeenCalled();
       expect(snapshotService.acceptSnapshot).not.toHaveBeenCalled();
     });
 
@@ -1180,7 +1192,7 @@ describe('BrokerService', () => {
       const adapter = {
         setMode: jest.fn(),
         connect: jest.fn().mockResolvedValue({ success: true, accountType: BrokerMode.LIVE }),
-        getAccountBalance: jest.fn(),
+        getAccountInfo: jest.fn(),
       };
       registry.getAdapter.mockReturnValue(adapter);
       connectionRepo.findOne.mockResolvedValue(connectedConnection());
@@ -1194,7 +1206,7 @@ describe('BrokerService', () => {
 
       // NOTHING from the mislabeled session may become trusted snapshot
       // truth — the entire point of P0-1.
-      expect(adapter.getAccountBalance).not.toHaveBeenCalled();
+      expect(adapter.getAccountInfo).not.toHaveBeenCalled();
       expect(snapshotService.acceptSnapshot).not.toHaveBeenCalled();
       // Guarded SUSPENDED transition (fixture authorization is ACTIVE).
       expect(connectionRepo.update).toHaveBeenCalledWith(
@@ -1233,7 +1245,7 @@ describe('BrokerService', () => {
       const adapter = {
         setMode: jest.fn(),
         connect: jest.fn().mockResolvedValue({ success: true, accountType: BrokerMode.DEMO }),
-        getAccountBalance: jest.fn(),
+        getAccountInfo: jest.fn(),
       };
       registry.getAdapter.mockReturnValue(adapter);
       connectionRepo.findOne.mockResolvedValue(
@@ -1251,11 +1263,15 @@ describe('BrokerService', () => {
       const adapter = {
         setMode: jest.fn(),
         connect: jest.fn().mockResolvedValue({ success: true, accountType: BrokerMode.DEMO }),
-        getAccountBalance: jest.fn().mockResolvedValue({
+        getAccountInfo: jest.fn().mockResolvedValue({
+          accountId: 'paper-account-001',
           balance: '5000.00',
           equity: '5000.00',
+          margin: '0.00',
+          freeMargin: '5000.00',
+          marginLevel: '0.00',
+          leverage: 100,
           currency: 'USD',
-          timestamp: new Date(),
         }),
       };
       registry.getAdapter.mockReturnValue(adapter);
@@ -1273,11 +1289,15 @@ describe('BrokerService', () => {
       const adapter = {
         setMode: jest.fn(),
         connect: jest.fn().mockResolvedValue({ success: true, accountType: BrokerMode.DEMO }),
-        getAccountBalance: jest.fn().mockResolvedValue({
+        getAccountInfo: jest.fn().mockResolvedValue({
+          accountId: 'paper-account-001',
           balance: '1.00',
           equity: '1.00',
+          margin: '0.00',
+          freeMargin: '1.00',
+          marginLevel: '0.00',
+          leverage: 100,
           currency: 'USD',
-          timestamp: new Date(),
         }),
       };
       registry.getAdapter.mockReturnValue(adapter);
