@@ -55,6 +55,7 @@ EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME = "event_barrier_pair_return_margin"
 EVENT_PAIR_REGIME_EXPERT_EXPERIMENT_NAME = "event_barrier_pair_regime_experts"
 EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME = "event_barrier_dual_actionability"
 EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME = "event_barrier_hybrid_opportunity_dual_direction"
+EVENT_HYBRID_PAYOFF_EXPERIMENT_NAME = "event_barrier_hybrid_opportunity_dual_direction_payoff"
 EVENT_LONG_ACTIONABLE_TARGET_COLUMN = "event_long_actionable_target"
 EVENT_SHORT_ACTIONABLE_TARGET_COLUMN = "event_short_actionable_target"
 DUAL_ACTION_MARGIN_FLOOR = 0.10
@@ -96,6 +97,7 @@ ExperimentMode = Literal[
     "two_stage_event_pair_regime_experts",
     "event_dual_actionability",
     "event_hybrid_dual_direction",
+    "event_hybrid_dual_direction_payoff",
 ]
 
 
@@ -1235,6 +1237,57 @@ def _event_hybrid_dual_direction_prediction_frame(
     return predictions
 
 
+def _event_hybrid_payoff_prediction_frame(
+    source: pd.DataFrame,
+    *,
+    long_probabilities: np.ndarray,
+    short_probabilities: np.ndarray,
+    opportunity_probabilities: np.ndarray,
+    expected_long_return_bps: np.ndarray,
+    expected_short_return_bps: np.ndarray,
+    confidence_floor: float,
+    fold: int,
+    experiment: str,
+    variant: ModelVariant,
+) -> pd.DataFrame:
+    """Hybrid direction candidate with a fixed, train-only expected-payoff filter."""
+    predictions = _event_hybrid_dual_direction_prediction_frame(
+        source,
+        long_probabilities=long_probabilities,
+        short_probabilities=short_probabilities,
+        opportunity_probabilities=opportunity_probabilities,
+        confidence_floor=confidence_floor,
+        fold=fold,
+        experiment=experiment,
+        variant=variant,
+    )
+    long_bps = np.asarray(expected_long_return_bps, dtype=float)
+    short_bps = np.asarray(expected_short_return_bps, dtype=float)
+    if len(long_bps) != len(predictions) or len(short_bps) != len(predictions):
+        raise ValueError("hybrid payoff predictions must align with source rows")
+    if not np.isfinite(long_bps).all() or not np.isfinite(short_bps).all():
+        raise ValueError("hybrid payoff predictions must be finite")
+
+    selected = np.where(predictions["predicted_long"], long_bps, short_bps)
+    opposite = np.where(predictions["predicted_long"], short_bps, long_bps)
+    edge = selected - opposite
+    predictions["expected_long_net_return_bps"] = long_bps
+    predictions["expected_short_net_return_bps"] = short_bps
+    predictions["expected_selected_net_return_bps"] = selected
+    predictions["expected_opposite_net_return_bps"] = opposite
+    predictions["expected_payoff_edge_bps"] = edge
+    predictions["payoff_filter_pass"] = (selected > 0.0) & (edge > 0.0)
+    predictions["active_trade"] = (
+        predictions["active_trade"] & predictions["payoff_filter_pass"]
+    )
+    predictions["confidence_policy"] = (
+        "pooled_opportunity_probability_gte_floor_and_normalized_direction_"
+        "confidence_gte_floor_and_side_margin_gte_0_10_and_train_only_"
+        "expected_selected_net_return_gt_0_and_edge_gt_0"
+    )
+    return predictions
+
+
 def _opportunity_classification(
     predictions: pd.DataFrame,
     *,
@@ -1790,6 +1843,64 @@ def _fit_event_hybrid_dual_direction_for_outer(
         "confidence_floor_policy": "opportunity_and_normalized_direction_gte_floor",
     }
     return models, opportunity_model, feature_columns, counts
+
+
+def _fit_event_hybrid_payoff_for_outer(
+    training_window: pd.DataFrame,
+    *,
+    variant: ModelVariant,
+    horizon_bars: int,
+) -> tuple[
+    dict[str, XGBClassifier],
+    XGBClassifier,
+    dict[str, XGBRegressor],
+    list[str],
+    dict[str, Any],
+]:
+    """Fit hybrid classifiers plus LONG/SHORT net-return regressors on training only."""
+    direction_models, opportunity_model, feature_columns, counts = (
+        _fit_event_hybrid_dual_direction_for_outer(
+            training_window,
+            variant=variant,
+            horizon_bars=horizon_bars,
+        )
+    )
+    fit, early = _split_internal_early_stopping_tail(
+        training_window,
+        horizon_bars=horizon_bars,
+    )
+    payoff_models: dict[str, XGBRegressor] = {}
+    for side, target_column in {
+        "long": EVENT_LONG_NET_RETURN_COLUMN,
+        "short": EVENT_SHORT_NET_RETURN_COLUMN,
+    }.items():
+        model = _regression_model_for_variant(
+            ModelVariant(
+                name=f"{variant.name}_{side}_payoff",
+                parameter_overrides=variant.parameter_overrides,
+                sample_weight_policy="economic",
+                calibration="none",
+                feature_policy=variant.feature_policy,
+            )
+        )
+        fit_target = pd.to_numeric(fit[target_column], errors="raise").to_numpy(dtype=float) * 10_000.0
+        early_target = pd.to_numeric(early[target_column], errors="raise").to_numpy(dtype=float) * 10_000.0
+        model.fit(
+            fit[feature_columns],
+            fit_target,
+            eval_set=[(early[feature_columns], early_target)],
+            verbose=False,
+        )
+        payoff_models[side] = model
+    counts = {
+        **counts,
+        "payoff_filter_policy": (
+            "selected_expected_net_return_bps_gt_0_and_selected_minus_opposite_gt_0"
+        ),
+        "payoff_fit_rows": int(len(fit)),
+        "payoff_early_stop_rows": int(len(early)),
+    }
+    return direction_models, opportunity_model, payoff_models, feature_columns, counts
 
 
 def _fit_event_pair_experts_for_outer(
@@ -2861,6 +2972,7 @@ def run_nested_qualification_experiments(
             "two_stage_event_pair_regime_experts",
             "event_dual_actionability",
             "event_hybrid_dual_direction",
+            "event_hybrid_dual_direction_payoff",
         }
         for experiment in experiments
     ):
@@ -2943,6 +3055,7 @@ def run_nested_qualification_experiments(
 
             opportunity_model: XGBClassifier | None = None
             direction_models: dict[str, Any] | None = None
+            payoff_models: dict[str, XGBRegressor] | None = None
             if experiment.mode == "two_stage_actionable":
                 if len(experiment.variants) != 1 or experiment.tune_decision_threshold:
                     raise ValueError(
@@ -3136,6 +3249,76 @@ def run_nested_qualification_experiments(
                     "action_margin_floor": DUAL_ACTION_MARGIN_FLOOR,
                     "event_label_policy": EVENT_LABEL_POLICY,
                     "direction_policy": "independent_long_vs_rest_and_short_vs_rest_normalized",
+                    "candidate_reports": [],
+                    "training_counts": training_counts,
+                }
+            elif experiment.mode == "event_hybrid_dual_direction_payoff":
+                if len(experiment.variants) != 1 or experiment.tune_decision_threshold:
+                    raise ValueError(
+                        "hybrid payoff research must remain a fixed bounded candidate"
+                    )
+                variant = experiment.variants[0]
+                decision_threshold = 0.50
+                (
+                    direction_models,
+                    opportunity_model,
+                    payoff_models,
+                    feature_columns,
+                    training_counts,
+                ) = _fit_event_hybrid_payoff_for_outer(
+                    outer_train,
+                    variant=variant,
+                    horizon_bars=horizon_bars,
+                )
+                model = None
+                long_probabilities = _probabilities(
+                    direction_models["long"],
+                    outer_validation,
+                    feature_columns,
+                )
+                short_probabilities = _probabilities(
+                    direction_models["short"],
+                    outer_validation,
+                    feature_columns,
+                )
+                opportunity_probabilities = _probabilities(
+                    opportunity_model,
+                    outer_validation,
+                    feature_columns,
+                )
+                expected_long_return_bps = np.asarray(
+                    payoff_models["long"].predict(outer_validation[feature_columns]),
+                    dtype=float,
+                )
+                expected_short_return_bps = np.asarray(
+                    payoff_models["short"].predict(outer_validation[feature_columns]),
+                    dtype=float,
+                )
+                predictions = _event_hybrid_payoff_prediction_frame(
+                    outer_validation,
+                    long_probabilities=long_probabilities,
+                    short_probabilities=short_probabilities,
+                    opportunity_probabilities=opportunity_probabilities,
+                    expected_long_return_bps=expected_long_return_bps,
+                    expected_short_return_bps=expected_short_return_bps,
+                    confidence_floor=confidence_floor,
+                    fold=fold_index,
+                    experiment=experiment.name,
+                    variant=variant,
+                )
+                selection = {
+                    "policy": "fixed_event_barrier_v9_hybrid_payoff_no_outer_tuning",
+                    "selected_variant": variant.name,
+                    "decision_threshold": decision_threshold,
+                    "opportunity_threshold": confidence_floor,
+                    "opportunity_classification_threshold": OPPORTUNITY_CLASSIFICATION_THRESHOLD,
+                    "direction_confidence_threshold": confidence_floor,
+                    "action_margin_floor": DUAL_ACTION_MARGIN_FLOOR,
+                    "payoff_threshold_bps": 0.0,
+                    "payoff_edge_threshold_bps": 0.0,
+                    "event_label_policy": EVENT_LABEL_POLICY,
+                    "direction_policy": "independent_long_vs_rest_and_short_vs_rest_normalized",
+                    "payoff_policy": "train_only_long_short_net_return_regressors",
                     "candidate_reports": [],
                     "training_counts": training_counts,
                 }
@@ -3389,6 +3572,9 @@ def run_nested_qualification_experiments(
             if direction_models is not None:
                 direction_models.clear()
                 del direction_models
+            if payoff_models is not None:
+                payoff_models.clear()
+                del payoff_models
             if model is not None:
                 del model
             gc.collect()
