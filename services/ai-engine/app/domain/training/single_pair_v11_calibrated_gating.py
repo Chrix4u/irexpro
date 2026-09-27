@@ -339,6 +339,14 @@ def _fold_report(
     )
     return {
         "rows": int(len(gated)),
+        "active_trade_records": [
+            {
+                "decision_time": str(row.decision_time),
+                "predicted_long": bool(row.predicted_long),
+                "selected_net_return": float(row.selected_net_return),
+            }
+            for row in active.itertuples(index=False)
+        ],
         "opportunity_threshold": float(opportunity_threshold),
         "margin_floor": float(margin_floor),
         "direction_balanced_accuracy": direction_balanced,
@@ -454,6 +462,23 @@ def evaluate_v11(
     long_trades = sum(int(f["trading"]["long_trades"]) for f in folds)
     short_trades = sum(int(f["trading"]["short_trades"]) for f in folds)
     positive_folds = sum(float(f["trading"]["total_return"]) > 0.0 for f in folds)
+    fold_trade_counts = [int(f["trading"]["trade_count"]) for f in folds]
+    max_fold_trade_fraction = (
+        max(fold_trade_counts) / trades if trades > 0 and fold_trade_counts else 0.0
+    )
+    active_records = [
+        record
+        for fold in folds
+        for record in fold["active_trade_records"]
+    ]
+    if active_records:
+        active_frame = pd.DataFrame(active_records)
+        active_frame["decision_time"] = pd.to_datetime(
+            active_frame["decision_time"], utc=True, errors="raise"
+        )
+        aggregate_trading = _trading_metrics(active_frame)
+    else:
+        aggregate_trading = _trading_metrics(pd.DataFrame())
     direction_values = [
         float(f["direction_balanced_accuracy"])
         for f in folds
@@ -461,7 +486,7 @@ def evaluate_v11(
     ]
     opportunity_values = [float(f["opportunity_balanced_accuracy"]) for f in folds]
 
-    return {
+    report = {
         "experiment": EXPERIMENT_NAME,
         "research_only": True,
         "approved_for_paper": False,
@@ -474,6 +499,9 @@ def evaluate_v11(
             "long_trades": long_trades,
             "short_trades": short_trades,
             "positive_fold_fraction": positive_folds / len(folds) if folds else 0.0,
+            "fold_trade_counts": fold_trade_counts,
+            "max_fold_trade_fraction": max_fold_trade_fraction,
+            "trading": aggregate_trading,
             "mean_direction_balanced_accuracy": (
                 float(np.mean(direction_values)) if direction_values else None
             ),
@@ -483,16 +511,42 @@ def evaluate_v11(
         },
         "robustness_gate": {
             "minimum_trade_evidence": trades >= MIN_ROBUST_TRADES,
+            "minimum_each_fold_trade_evidence": bool(fold_trade_counts)
+            and min(fold_trade_counts) >= 5,
+            "fold_concentration_lte_0_80": max_fold_trade_fraction <= 0.80,
             "two_sided_execution": long_trades > 0 and short_trades > 0,
             "positive_fold_fraction_gte_0_60": (
                 positive_folds / len(folds) >= 0.60 if folds else False
             ),
+            "aggregate_profit_factor_gte_1_15": (
+                aggregate_trading.get("profit_factor") is not None
+                and float(aggregate_trading["profit_factor"]) >= 1.15
+            ),
+            "aggregate_sharpe_gte_1_0": (
+                aggregate_trading.get("sharpe_ratio") is not None
+                and float(aggregate_trading["sharpe_ratio"]) >= 1.0
+            ),
+            "aggregate_max_drawdown_lte_0_12": (
+                float(aggregate_trading.get("max_drawdown", 1.0)) <= 0.12
+            ),
+            "research_robustness_passed": False,
             "note": (
                 "This is a research robustness gate only. It cannot approve PAPER/LIVE "
                 "and does not consume the frozen v10 future holdout."
             ),
         },
     }
+    gate = report["robustness_gate"]
+    gate["research_robustness_passed"] = all(
+        bool(value)
+        for key, value in gate.items()
+        if key
+        not in {
+            "research_robustness_passed",
+            "note",
+        }
+    )
+    return report
 
 
 def _parse_dataset(value: str) -> dict[str, str]:
