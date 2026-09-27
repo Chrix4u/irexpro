@@ -1,0 +1,130 @@
+name: USDJPY v11 Calibrated Opportunity Research
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CANDIDATE_SHA: ${{ github.sha }}
+  CANDIDATE_REF: ${{ github.ref_name }}
+  STAGING_SSH_HOST: vps.lightworldtech.com
+  STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
+  STAGING_SSH_USER: ${{ vars.STAGING_SSH_USER }}
+  SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+  SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+
+jobs:
+  qualify:
+    name: Run leakage-safe USDJPY v11 qualification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    environment:
+      name: staging
+    concurrency:
+      group: irexpro-usdjpy-v11-calibrated-opportunity
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Configure pinned SSH identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$STAGING_SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Run isolated v11 research
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i "$HOME/.ssh/irexpro_staging" -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            "bash -s -- $CANDIDATE_SHA $CANDIDATE_REF" <<'REMOTE'
+          set -Eeuo pipefail
+          umask 077
+
+          candidate_sha="$1"
+          candidate_ref="$2"
+          staging='/home/lightworld/webapps/irexpro-staging'
+          reference='/home/lightworld/research/irexpro-usdjpy-hybrid-direction/8b79b373c7800998465879eef2fa03409fe49e44'
+          corpus="$reference/corpora/USDJPY_MTF.csv"
+          boundary_file="$reference/frozen-boundary.txt"
+          output="/home/lightworld/research/irexpro-usdjpy-v11-calibrated-opportunity/$candidate_sha"
+          worktree="/tmp/irexpro-v11-$candidate_sha"
+          python_bin="$staging/services/ai-engine/.venv/bin/python"
+
+          test -s "$corpus"
+          test -s "$boundary_file"
+          boundary="$(tr -d '[:space:]' < "$boundary_file")"
+          test "$boundary" = '2026-09-27T05:00:00Z'
+          test -x "$python_bin"
+
+          cd "$staging"
+          git fetch --quiet --no-tags origin "$candidate_ref"
+          test "$(git rev-parse FETCH_HEAD)" = "$candidate_sha"
+          rm -rf "$worktree"
+          git worktree add --detach "$worktree" "$candidate_sha"
+          trap 'git -C "'"$staging"'" worktree remove --force "'"$worktree"'" >/dev/null 2>&1 || true' EXIT
+
+          install -d -m 700 "$output"
+          cd "$worktree/services/ai-engine"
+          export PYTHONPATH="$PWD"
+          export IREXPRO_XGB_N_JOBS=4
+
+          "$python_bin" -m app.domain.training.single_pair_v11 \
+            --dataset "$corpus" \
+            --instrument USDJPY \
+            --horizon-bars 1 \
+            --decision-time-before "$boundary" \
+            --max-splits 3 \
+            --report "$output/report.json" \
+            --predictions "$output/predictions.csv" \
+            | tee "$output/summary.json"
+
+          "$python_bin" - "$output/report.json" <<'PY'
+          import json, sys
+          report=json.load(open(sys.argv[1]))
+          print('USDJPY_V11_RESEARCH_ONLY')
+          print('OVERALL', json.dumps(report['overall_trading'], sort_keys=True))
+          for fold in report['folds']:
+              print(
+                  'FOLD',
+                  fold['fold'],
+                  json.dumps(
+                      {
+                          'threshold_selection': {
+                              key: value
+                              for key, value in fold['threshold_selection'].items()
+                              if key != 'candidate_reports'
+                          },
+                          'trading': fold['trading'],
+                          'directional_balanced_accuracy': fold['directional_balanced_accuracy'],
+                          'opportunity_brier_score': fold['opportunity_brier_score'],
+                      },
+                      sort_keys=True,
+                  ),
+              )
+          print('PAPER_APPROVED', report['approved_for_paper'])
+          print('LIVE_APPROVED', report['approved_for_live'])
+          PY
+          REMOTE
+
+      - name: Remove ephemeral SSH material
+        if: always()
+        shell: bash
+        run: rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
