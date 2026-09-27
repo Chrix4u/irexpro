@@ -468,6 +468,7 @@ def evaluate_v14(
     if preflight_only:
         return {
             "experiment": EXPERIMENT_NAME,
+            "candidate_sha": candidate_sha,
             "research_only": True,
             "preflight_only": True,
             "approved_for_paper": False,
@@ -590,6 +591,7 @@ def evaluate_v14(
 
     return {
         "experiment": EXPERIMENT_NAME,
+        "candidate_sha": candidate_sha,
         "research_only": True,
         "approved_for_paper": False,
         "approved_for_live": False,
