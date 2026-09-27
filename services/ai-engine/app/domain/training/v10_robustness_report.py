@@ -170,9 +170,22 @@ def _directional_payoff_diagnostics(frame: pd.DataFrame) -> dict[str, object]:
             result[name] = {"pre_payoff_candidates": 0}
             continue
         ratios = pd.to_numeric(pre["expected_payoff_ratio"], errors="raise")
+        upside = pd.to_numeric(pre["expected_selected_upside_bps"], errors="raise")
+        downside = pd.to_numeric(pre["expected_selected_downside_bps"], errors="raise")
+        expected_net = pd.to_numeric(pre["expected_selected_net_bps"], errors="raise")
         realized = pd.to_numeric(pre["selected_net_return"], errors="raise")
+        payoff_pass = pre["payoff_filter_pass"].astype(bool)
         result[name] = {
             "pre_payoff_candidates": int(len(pre)),
+            "payoff_filter_pass": int(payoff_pass.sum()),
+            "payoff_filter_pass_rate": float(payoff_pass.mean()),
+            "expected_upside_bps_mean": float(upside.mean()),
+            "expected_upside_bps_median": float(upside.median()),
+            "expected_downside_bps_mean": float(downside.mean()),
+            "expected_downside_bps_median": float(downside.median()),
+            "expected_net_bps_mean": float(expected_net.mean()),
+            "expected_net_bps_median": float(expected_net.median()),
+            "expected_net_positive": int((expected_net > 0.0).sum()),
             "payoff_ratio_min": float(ratios.min()),
             "payoff_ratio_median": float(ratios.median()),
             "payoff_ratio_max": float(ratios.max()),
