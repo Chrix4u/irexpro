@@ -1109,15 +1109,19 @@ describe('BrokerService', () => {
   // ─── Round 7 (P1): on-demand LIVE snapshot observation ──────────────────
 
   describe('observeAccountSnapshotNow() — Round 7 P1 LIVE snapshot availability', () => {
-    it('observes the provider balance and records it as an authoritative snapshot', async () => {
+    it('observes the provider account and records it as a complete authoritative snapshot', async () => {
       const adapter = {
         setMode: jest.fn(),
         connect: jest.fn().mockResolvedValue({ success: true, accountType: BrokerMode.DEMO }),
-        getAccountBalance: jest.fn().mockResolvedValue({
+        getAccountInfo: jest.fn().mockResolvedValue({
+          accountId: 'paper-account-001',
           balance: '10100.00',
           equity: '10125.00',
+          margin: '125.00',
+          freeMargin: '10000.00',
+          marginLevel: '8100.00',
+          leverage: 100,
           currency: 'USD',
-          timestamp: new Date(),
         }),
       };
       registry.getAdapter.mockReturnValue(adapter);
@@ -1125,14 +1129,18 @@ describe('BrokerService', () => {
 
       await service.observeAccountSnapshotNow('user-1', 'conn-1');
 
-      expect(adapter.getAccountBalance).toHaveBeenCalledTimes(1);
+      expect(adapter.getAccountInfo).toHaveBeenCalledTimes(1);
       // The observation flows through the SAME §1a accept path the health
-      // check uses (acceptSnapshot + legacy projection).
+      // check uses (acceptSnapshot + legacy projection) and must remain complete.
       expect(snapshotService.acceptSnapshot).toHaveBeenCalledWith(
         expect.objectContaining({
           connectionId: 'conn-1',
           balance: '10100.00',
           equity: '10125.00',
+          margin: '125.00',
+          freeMargin: '10000.00',
+          marginLevel: '8100.00',
+          leverage: 100,
           currency: 'USD',
           source: 'on-demand-risk-evaluation',
         }),
