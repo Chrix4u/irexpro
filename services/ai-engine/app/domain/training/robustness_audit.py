@@ -257,6 +257,94 @@ def robustness_snapshot(
     return payload
 
 
+
+
+def extended_risk_metrics(
+    returns: Iterable[float],
+    *,
+    annualization_factor: float,
+    var_confidence: float = 0.95,
+) -> dict[str, float | int | None]:
+    """Compute path and tail-risk diagnostics from net return observations."""
+    values = np.asarray(list(returns), dtype=float)
+    if values.size == 0:
+        raise ValueError("returns must be non-empty")
+    if not np.isfinite(values).all():
+        raise ValueError("returns contain non-finite values")
+    if annualization_factor <= 0.0:
+        raise ValueError("annualization_factor must be positive")
+    if not 0.5 < var_confidence < 1.0:
+        raise ValueError("var_confidence must be between 0.5 and 1.0")
+    if (values <= -1.0).any():
+        raise ValueError("returns cannot be less than or equal to -100%")
+
+    equity = np.cumprod(1.0 + values)
+    running_peak = np.maximum.accumulate(np.concatenate(([1.0], equity)))[1:]
+    drawdowns = equity / running_peak - 1.0
+    max_drawdown = float(abs(drawdowns.min()))
+
+    periods = float(values.size)
+    annualized_return = float(
+        equity[-1] ** (annualization_factor / periods) - 1.0
+    )
+    calmar = (
+        annualized_return / max_drawdown
+        if max_drawdown > 0.0
+        else None
+    )
+
+    winners = values[values > 0.0]
+    losers = values[values < 0.0]
+    average_winner = float(winners.mean()) if winners.size else None
+    average_loser = float(losers.mean()) if losers.size else None
+    payoff_ratio = (
+        average_winner / abs(average_loser)
+        if average_winner is not None
+        and average_loser is not None
+        and average_loser != 0.0
+        else None
+    )
+
+    longest_loss_streak = current_loss_streak = 0
+    longest_underwater = current_underwater = 0
+    for value, drawdown in zip(values, drawdowns, strict=True):
+        if value < 0.0:
+            current_loss_streak += 1
+            longest_loss_streak = max(
+                longest_loss_streak,
+                current_loss_streak,
+            )
+        else:
+            current_loss_streak = 0
+
+        if drawdown < 0.0:
+            current_underwater += 1
+            longest_underwater = max(longest_underwater, current_underwater)
+        else:
+            current_underwater = 0
+
+    loss_quantile = float(np.quantile(values, 1.0 - var_confidence))
+    tail = values[values <= loss_quantile]
+    cvar = float(tail.mean()) if tail.size else loss_quantile
+
+    return {
+        "observation_count": int(values.size),
+        "annualized_return": annualized_return,
+        "max_drawdown": max_drawdown,
+        "calmar_ratio": float(calmar) if calmar is not None else None,
+        "win_rate": float((values > 0.0).mean()),
+        "average_winner": average_winner,
+        "average_loser": average_loser,
+        "payoff_ratio": float(payoff_ratio) if payoff_ratio is not None else None,
+        "expectancy": float(values.mean()),
+        "max_consecutive_losses": int(longest_loss_streak),
+        "underwater_fraction": float((drawdowns < 0.0).mean()),
+        "max_underwater_periods": int(longest_underwater),
+        "var_confidence": float(var_confidence),
+        "value_at_risk_return": loss_quantile,
+        "conditional_value_at_risk_return": cvar,
+    }
+
 def cost_stress_frontier(
     returns: Iterable[float],
     *,
