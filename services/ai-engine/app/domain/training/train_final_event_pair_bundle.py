@@ -21,6 +21,7 @@ from app.domain.training.model_qualification import (
     DUAL_ACTION_MARGIN_FLOOR,
     EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME,
     EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
+    EVENT_HYBRID_PAYOFF_RISK_EXPERIMENT_NAME,
     EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
     EVENT_PAIR_REGIME_EXPERT_EXPERIMENT_NAME,
     EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME,
@@ -30,9 +31,11 @@ from app.domain.training.model_qualification import (
     ModelVariant,
     _event_dual_actionability_prediction_frame,
     _event_hybrid_dual_direction_prediction_frame,
+    _event_hybrid_payoff_risk_prediction_frame,
     _event_two_stage_prediction_frame,
     _fit_event_dual_actionability_for_outer,
     _fit_event_hybrid_dual_direction_for_outer,
+    _fit_event_hybrid_payoff_risk_for_outer,
     _fit_event_pair_experts_for_outer,
     _fit_event_pair_regime_experts_for_outer,
     _fit_event_pair_return_margin_for_outer,
@@ -60,6 +63,7 @@ EVENT_PAIR_BUNDLE_MODEL_TYPE = "xgboost_event_pair_bundle"
 SUPPORTED_EXPERIMENTS = {
     EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME,
     EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
+    EVENT_HYBRID_PAYOFF_RISK_EXPERIMENT_NAME,
     EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
     EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME,
     EVENT_PAIR_REGIME_EXPERT_EXPERIMENT_NAME,
@@ -160,6 +164,57 @@ def _predict_pair_candidate(
             variant=ModelVariant(name="event_barrier_v7_dual_actionability"),
         )
 
+    if experiment == EVENT_HYBRID_PAYOFF_RISK_EXPERIMENT_NAME:
+        long_model = direction_models.get("long")
+        short_model = direction_models.get("short")
+        required_payoff = {
+            "long_upside",
+            "long_downside",
+            "short_upside",
+            "short_downside",
+        }
+        if (
+            long_model is None
+            or short_model is None
+            or opportunity_model is None
+            or payoff_models is None
+            or not required_payoff.issubset(payoff_models)
+        ):
+            raise ValueError(
+                "Final hybrid payoff-risk bundle requires all classifier and payoff models"
+            )
+        components = {
+            "opportunity": opportunity_model,
+            "long_direction": long_model,
+            "short_direction": short_model,
+            **{f"payoff_{name}": payoff_models[name] for name in sorted(required_payoff)},
+        }
+        specs: dict[str, Any] = {}
+        for name, model in components.items():
+            child = root / f"{name.replace('_', '-')}.json"
+            specs[name] = {
+                "path": child.name,
+                "sha256": _save_xgboost_model(model, child),
+                "kind": (
+                    "xgboost_regressor"
+                    if name.startswith("payoff_")
+                    else "xgboost_classifier"
+                ),
+            }
+        return {
+            "bundle_version": 1,
+            "model_type": EVENT_PAIR_BUNDLE_MODEL_TYPE,
+            "experiment": experiment,
+            "event_label_policy": EVENT_LABEL_POLICY,
+            "hybrid_payoff_risk": {
+                "kind": "xgboost_hybrid_opportunity_dual_direction_payoff_risk",
+                "confidence_floor": CONFIDENCE_FLOOR,
+                "action_margin_floor": DUAL_ACTION_MARGIN_FLOOR,
+                "payoff_risk_ratio_floor": 1.15,
+                **specs,
+            },
+        }
+
     if experiment == EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME:
         long_model = direction_models.get("long")
         short_model = direction_models.get("short")
@@ -242,6 +297,75 @@ def _predict_pair_candidate(
     return predictions
 
 
+def _fit_hybrid_payoff_risk_candidate(
+    train: pd.DataFrame,
+    *,
+    horizon_bars: int,
+) -> tuple[dict[str, Any], Any, dict[str, Any], dict[str, Any]]:
+    models, opportunity, payoff_models, features, counts = (
+        _fit_event_hybrid_payoff_risk_for_outer(
+            train,
+            variant=ModelVariant(name="event_barrier_v10_hybrid_payoff_risk"),
+            horizon_bars=horizon_bars,
+        )
+    )
+    if features != list(MULTITIMEFRAME_FEATURE_COLUMNS):
+        raise ValueError("Final hybrid payoff-risk feature schema diverged from runtime")
+    return models, opportunity, payoff_models, counts
+
+
+def _predict_hybrid_payoff_risk_candidate(
+    *,
+    direction_models: dict[str, Any],
+    opportunity_model: Any,
+    payoff_models: dict[str, Any],
+    frame: pd.DataFrame,
+    confidence_floor: float,
+) -> pd.DataFrame:
+    feature_columns = list(MULTITIMEFRAME_FEATURE_COLUMNS)
+    long_model = direction_models.get("long")
+    short_model = direction_models.get("short")
+    required_payoff = {
+        "long_upside",
+        "long_downside",
+        "short_upside",
+        "short_downside",
+    }
+    if (
+        long_model is None
+        or short_model is None
+        or opportunity_model is None
+        or not required_payoff.issubset(payoff_models)
+    ):
+        raise ValueError(
+            "Hybrid payoff-risk candidate requires direction, opportunity and payoff models"
+        )
+    return _event_hybrid_payoff_risk_prediction_frame(
+        frame,
+        long_probabilities=_probabilities(long_model, frame, feature_columns),
+        short_probabilities=_probabilities(short_model, frame, feature_columns),
+        opportunity_probabilities=_probabilities(
+            opportunity_model, frame, feature_columns
+        ),
+        expected_long_upside_bps=payoff_models["long_upside"].predict(
+            frame[feature_columns]
+        ),
+        expected_long_downside_bps=payoff_models["long_downside"].predict(
+            frame[feature_columns]
+        ),
+        expected_short_upside_bps=payoff_models["short_upside"].predict(
+            frame[feature_columns]
+        ),
+        expected_short_downside_bps=payoff_models["short_downside"].predict(
+            frame[feature_columns]
+        ),
+        confidence_floor=confidence_floor,
+        fold=0,
+        experiment=EVENT_HYBRID_PAYOFF_RISK_EXPERIMENT_NAME,
+        variant=ModelVariant(name="event_barrier_v10_hybrid_payoff_risk"),
+    )
+
+
 def _fit_pair_candidate(
     train: pd.DataFrame,
     *,
@@ -318,6 +442,7 @@ def _component_manifest(
     direction_calibrators: dict[str, Any] | None,
     regime_routers: dict[str, dict[str, float]] | None,
     opportunity_model: Any,
+    payoff_models: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     root = output.parent
     if experiment == EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME:
@@ -526,37 +651,65 @@ def train_final_event_pair_candidate(
     if approve_paper and not research_separation_verified:
         raise ValueError("Untouched final test overlaps the research qualification boundary")
 
-    (
-        direction_models,
-        direction_calibrators,
-        regime_routers,
-        opportunity_model,
-        training_counts,
-    ) = _fit_pair_candidate(
-        train,
-        experiment=experiment,
-        horizon_bars=horizon_bars,
-    )
-    validation_predictions = _predict_pair_candidate(
-        experiment=experiment,
-        direction_models=direction_models,
-        direction_calibrators=direction_calibrators,
-        regime_routers=regime_routers,
-        opportunity_model=opportunity_model,
-        frame=validation,
-        confidence_floor=confidence_threshold,
-        horizon_bars=horizon_bars,
-    )
-    test_predictions = _predict_pair_candidate(
-        experiment=experiment,
-        direction_models=direction_models,
-        direction_calibrators=direction_calibrators,
-        regime_routers=regime_routers,
-        opportunity_model=opportunity_model,
-        frame=test,
-        confidence_floor=confidence_threshold,
-        horizon_bars=horizon_bars,
-    )
+    payoff_models: dict[str, Any] | None = None
+    if experiment == EVENT_HYBRID_PAYOFF_RISK_EXPERIMENT_NAME:
+        (
+            direction_models,
+            opportunity_model,
+            payoff_models,
+            training_counts,
+        ) = _fit_hybrid_payoff_risk_candidate(
+            train,
+            horizon_bars=horizon_bars,
+        )
+        direction_calibrators = None
+        regime_routers = None
+        validation_predictions = _predict_hybrid_payoff_risk_candidate(
+            direction_models=direction_models,
+            opportunity_model=opportunity_model,
+            payoff_models=payoff_models,
+            frame=validation,
+            confidence_floor=confidence_threshold,
+        )
+        test_predictions = _predict_hybrid_payoff_risk_candidate(
+            direction_models=direction_models,
+            opportunity_model=opportunity_model,
+            payoff_models=payoff_models,
+            frame=test,
+            confidence_floor=confidence_threshold,
+        )
+    else:
+        (
+            direction_models,
+            direction_calibrators,
+            regime_routers,
+            opportunity_model,
+            training_counts,
+        ) = _fit_pair_candidate(
+            train,
+            experiment=experiment,
+            horizon_bars=horizon_bars,
+        )
+        validation_predictions = _predict_pair_candidate(
+            experiment=experiment,
+            direction_models=direction_models,
+            direction_calibrators=direction_calibrators,
+            regime_routers=regime_routers,
+            opportunity_model=opportunity_model,
+            frame=validation,
+            confidence_floor=confidence_threshold,
+            horizon_bars=horizon_bars,
+        )
+        test_predictions = _predict_pair_candidate(
+            experiment=experiment,
+            direction_models=direction_models,
+            direction_calibrators=direction_calibrators,
+            regime_routers=regime_routers,
+            opportunity_model=opportunity_model,
+            frame=test,
+            confidence_floor=confidence_threshold,
+            horizon_bars=horizon_bars,
+        )
     validation_metrics = _summarize_predictions(
         validation_predictions,
         horizon_bars=horizon_bars,
@@ -589,6 +742,7 @@ def train_final_event_pair_candidate(
         direction_calibrators=direction_calibrators,
         regime_routers=regime_routers,
         opportunity_model=opportunity_model,
+        payoff_models=payoff_models,
     )
     _atomic_write_json(output, bundle)
 
@@ -624,6 +778,7 @@ def train_final_event_pair_candidate(
             if experiment in {
                 EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME,
                 EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
+                EVENT_HYBRID_PAYOFF_RISK_EXPERIMENT_NAME,
             }
             else None
         ),
