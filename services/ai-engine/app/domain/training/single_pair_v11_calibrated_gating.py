@@ -434,6 +434,21 @@ def evaluate_v11(
         report["inner_opportunity_selection"] = opportunity_choice
         report["inner_margin_selection"] = margin_choice
         folds.append(report)
+        print(
+            json.dumps(
+                {
+                    "fold": fold_index,
+                    "opportunity_threshold": opportunity_choice["threshold"],
+                    "margin_floor": margin_choice["margin_floor"],
+                    "trade_count": report["trading"]["trade_count"],
+                    "long_trades": report["trading"]["long_trades"],
+                    "short_trades": report["trading"]["short_trades"],
+                    "total_return": report["trading"]["total_return"],
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
 
     trades = sum(int(f["trading"]["trade_count"]) for f in folds)
     long_trades = sum(int(f["trading"]["long_trades"]) for f in folds)
