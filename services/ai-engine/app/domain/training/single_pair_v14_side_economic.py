@@ -314,6 +314,48 @@ def evaluate_v14(
             flush=True,
         )
 
+        if gate_selection["selected"] is None:
+            fold = _outer_fold_report(
+                pd.DataFrame(),
+                selection=gate_selection,
+            )
+            fold["fold"] = fold_index
+            fold["validation_start"] = str(
+                outer_validation["decision_time"].min()
+            )
+            fold["validation_end"] = str(
+                outer_validation["decision_time"].max()
+            )
+            fold["inner_gate_selection"] = gate_selection
+            folds.append(fold)
+            if checkpoint_dir is not None:
+                save_fold_checkpoint(
+                    checkpoint_dir,
+                    fingerprint=fingerprint,
+                    fold_index=fold_index,
+                    fold_report=fold,
+                )
+            print(
+                json.dumps(
+                    {
+                        "fold": fold_index,
+                        "selection_failed": True,
+                        "phase": "outer_refit_skipped",
+                        "trades": 0,
+                        "long": 0,
+                        "short": 0,
+                        "total_return": 0.0,
+                        "elapsed_seconds": round(
+                            time.monotonic() - fold_started,
+                            3,
+                        ),
+                    },
+                    sort_keys=True,
+                ),
+                flush=True,
+            )
+            continue
+
         refit = _refit_windows(
             outer_train,
             horizon_bars=horizon_bars,
