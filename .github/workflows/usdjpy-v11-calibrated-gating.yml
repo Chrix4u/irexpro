@@ -1,0 +1,137 @@
+name: USDJPY v11 Calibrated Gating Research
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CANDIDATE_SHA: ${{ github.sha }}
+  STAGING_SSH_HOST: vps.lightworldtech.com
+  STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
+  STAGING_SSH_USER: ${{ vars.STAGING_SSH_USER }}
+  SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+  SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+
+jobs:
+  research:
+    name: USDJPY v11 nested calibrated-gating qualification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    environment:
+      name: staging
+    concurrency:
+      group: irexpro-usdjpy-v11-calibrated-gating
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Verify exact main candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch --quiet --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git rev-parse origin/main)" = "$CANDIDATE_SHA"
+
+      - name: Configure pinned SSH identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$STAGING_SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Run frozen pre-boundary v11 research
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i "$HOME/.ssh/irexpro_staging" -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            "bash -s -- $CANDIDATE_SHA" <<'REMOTE'
+          set -Eeuo pipefail
+          umask 077
+
+          candidate_sha="$1"
+          staging='/home/lightworld/webapps/irexpro-staging'
+          corpus='/home/lightworld/research/irexpro-usdjpy-hybrid-direction/8b79b373c7800998465879eef2fa03409fe49e44/corpora/USDJPY_MTF.csv'
+          expected_corpus_sha='34f3fdb0d28f265494747dcc9a4647ed00e288fcaf5eab1efaa54629353a40e3'
+          boundary='2026-09-27T05:00:00+00:00'
+          output="/home/lightworld/research/irexpro-usdjpy-v11-calibrated-gating/$candidate_sha"
+          report="$output/qualification.json"
+          reference_v10='/home/lightworld/research/irexpro-usdjpy-hybrid-direction/87302ce319a7a6ef3f76f0cb75702b797081015e/qualification.json'
+
+          cd "$staging"
+          test "$(git rev-parse HEAD)" = "$candidate_sha"
+          test -z "$(git status --porcelain)"
+
+          actual_corpus_sha="$(sha256sum "$corpus" | awk '{print $1}')"
+          test "$actual_corpus_sha" = "$expected_corpus_sha"
+
+          cd "$staging/services/ai-engine"
+          python_bin='.venv/bin/python'
+          test -x "$python_bin"
+          export PYTHONPATH="$PWD"
+          export IREXPRO_XGB_N_JOBS=4
+
+          install -d -m 700 "$output"
+
+          if [[ ! -s "$report" ]]; then
+            "$python_bin" -m app.domain.training.single_pair_v11_qualification \
+              --dataset "USDJPY=$corpus" \
+              --horizon-bars 1 \
+              --decision-time-before "$boundary" \
+              --report "$report" \
+              --max-splits 3 \
+              | tee "$output/summary.json"
+          fi
+
+          "$python_bin" - "$report" <<'PY'
+          import json
+          import sys
+
+          report = json.load(open(sys.argv[1]))
+          candidate_name = (
+              'event_barrier_hybrid_opportunity_dual_direction_'
+              'payoff_risk_calibrated_gating'
+          )
+          candidate = report['experiments'][candidate_name]
+          baseline = report['reference_v10']
+
+          print('USDJPY_V11_RESEARCH_GATE_' + (
+              'PASS' if candidate['research_gate']['research_gate_passed'] else 'HOLD'
+          ))
+          print('V11_OBSERVED', json.dumps(
+              candidate['research_gate']['observed'], sort_keys=True
+          ))
+          print('V11_CHECKS', json.dumps(
+              candidate['research_gate']['checks'], sort_keys=True
+          ))
+          print('V11_ACTIVE_TRADES', candidate['overall']['active_trades'])
+          print('V10_ACTIVE_TRADES', baseline['active_trades'])
+          print('V11_SELECTIONS', json.dumps(
+              [fold['selection'] for fold in candidate['folds']], sort_keys=True
+          ))
+          print('APPROVED_FOR_PAPER false')
+          print('APPROVED_FOR_LIVE false')
+          print('FROZEN_V10_FUTURE_HOLDOUT_UNCHANGED true')
+          PY
+          REMOTE
+
+      - name: Remove ephemeral SSH material
+        if: ${{ always() }}
+        shell: bash
+        run: rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"

@@ -1386,3 +1386,99 @@ def test_hybrid_payoff_filter_requires_positive_selected_return_and_edge():
     )
     assert qualification.CONFIDENCE_FLOOR == 0.60
     assert qualification.DUAL_ACTION_MARGIN_FLOOR == 0.10
+
+
+def test_v10_payoff_risk_frame_keeps_locked_gates_by_default():
+    import numpy as np
+    import pandas as pd
+
+    from app.domain.training.model_qualification import (
+        ModelVariant,
+        _event_hybrid_payoff_risk_prediction_frame,
+    )
+
+    source = pd.DataFrame(
+        {
+            "decision_time": pd.to_datetime(
+                ["2026-01-01T00:00:00Z", "2026-01-01T00:01:00Z"]
+            ),
+            "instrument": ["USDJPY", "USDJPY"],
+            "event_direction_target": [1, 0],
+            "event_actionable_target": [1, 1],
+            "event_long_net_return": [0.001, -0.001],
+            "event_short_net_return": [-0.001, 0.001],
+            "event_step": [1, 1],
+            "event_barrier_return": [0.0001, 0.0001],
+            "m1_spread_bps": [0.2, 0.2],
+            "m1_volatility_20": [0.0001, 0.0001],
+            "h1_rsi_14": [50.0, 50.0],
+            "trend_alignment_score": [1.0, -1.0],
+            "momentum_alignment_score": [1.0, -1.0],
+        }
+    )
+    predictions = _event_hybrid_payoff_risk_prediction_frame(
+        source,
+        long_probabilities=np.array([0.70, 0.20]),
+        short_probabilities=np.array([0.20, 0.70]),
+        opportunity_probabilities=np.array([0.59, 0.61]),
+        expected_long_upside_bps=np.array([2.0, 0.5]),
+        expected_long_downside_bps=np.array([1.0, 1.0]),
+        expected_short_upside_bps=np.array([0.5, 2.0]),
+        expected_short_downside_bps=np.array([1.0, 1.0]),
+        confidence_floor=0.60,
+        fold=1,
+        experiment="test",
+        variant=ModelVariant(name="test"),
+    )
+
+    assert predictions["selected_opportunity_floor"].tolist() == [0.60, 0.60]
+    assert predictions["selected_action_margin_floor"].tolist() == [0.10, 0.10]
+    assert predictions["active_trade"].tolist() == [False, True]
+
+
+def test_v11_payoff_risk_frame_can_use_training_selected_gates():
+    import numpy as np
+    import pandas as pd
+
+    from app.domain.training.model_qualification import (
+        ModelVariant,
+        _event_hybrid_payoff_risk_prediction_frame,
+    )
+
+    source = pd.DataFrame(
+        {
+            "decision_time": pd.to_datetime(["2026-01-01T00:00:00Z"]),
+            "instrument": ["USDJPY"],
+            "event_direction_target": [0],
+            "event_actionable_target": [1],
+            "event_long_net_return": [-0.001],
+            "event_short_net_return": [0.001],
+            "event_step": [1],
+            "event_barrier_return": [0.0001],
+            "m1_spread_bps": [0.2],
+            "m1_volatility_20": [0.0001],
+            "h1_rsi_14": [50.0],
+            "trend_alignment_score": [-1.0],
+            "momentum_alignment_score": [-1.0],
+        }
+    )
+    predictions = _event_hybrid_payoff_risk_prediction_frame(
+        source,
+        long_probabilities=np.array([0.20]),
+        short_probabilities=np.array([0.31]),
+        opportunity_probabilities=np.array([0.50]),
+        expected_long_upside_bps=np.array([0.5]),
+        expected_long_downside_bps=np.array([1.0]),
+        expected_short_upside_bps=np.array([2.0]),
+        expected_short_downside_bps=np.array([1.0]),
+        confidence_floor=0.60,
+        opportunity_floor=0.45,
+        action_margin_floor=0.05,
+        fold=1,
+        experiment="test_v11",
+        variant=ModelVariant(name="test_v11"),
+    )
+
+    assert predictions["predicted_long"].tolist() == [False]
+    assert predictions["payoff_filter_pass"].tolist() == [True]
+    assert predictions["active_trade"].tolist() == [True]

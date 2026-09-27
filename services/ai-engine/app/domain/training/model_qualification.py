@@ -57,10 +57,16 @@ EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME = "event_barrier_dual_actionability"
 EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME = "event_barrier_hybrid_opportunity_dual_direction"
 EVENT_HYBRID_PAYOFF_EXPERIMENT_NAME = "event_barrier_hybrid_opportunity_dual_direction_payoff"
 EVENT_HYBRID_PAYOFF_RISK_EXPERIMENT_NAME = "event_barrier_hybrid_opportunity_dual_direction_payoff_risk"
+EVENT_HYBRID_CALIBRATED_GATING_EXPERIMENT_NAME = (
+    "event_barrier_hybrid_opportunity_dual_direction_payoff_risk_calibrated_gating"
+)
 EVENT_LONG_ACTIONABLE_TARGET_COLUMN = "event_long_actionable_target"
 EVENT_SHORT_ACTIONABLE_TARGET_COLUMN = "event_short_actionable_target"
 DUAL_ACTION_MARGIN_FLOOR = 0.10
 PAYOFF_RISK_RATIO_FLOOR = 1.15
+V11_OPPORTUNITY_THRESHOLD_GRID = (0.40, 0.45, 0.50, 0.55, 0.60)
+V11_ACTION_MARGIN_GRID = (0.05, 0.075, 0.10)
+V11_MIN_SELECTION_TRADES = 5
 REGIME_ROUTER_POLICY = "pair_m1_volatility_spread_median_v1"
 REGIME_NAMES = ("calm", "active_clean", "stressed")
 REGIME_FALLBACK_NAME = "fallback"
@@ -101,6 +107,7 @@ ExperimentMode = Literal[
     "event_hybrid_dual_direction",
     "event_hybrid_dual_direction_payoff",
     "event_hybrid_dual_direction_payoff_risk",
+    "event_hybrid_dual_direction_payoff_risk_calibrated_gating",
 ]
 
 
@@ -1305,8 +1312,23 @@ def _event_hybrid_payoff_risk_prediction_frame(
     fold: int,
     experiment: str,
     variant: ModelVariant,
+    opportunity_floor: float | None = None,
+    action_margin_floor: float = DUAL_ACTION_MARGIN_FLOOR,
 ) -> pd.DataFrame:
-    """Hybrid candidate with a train-only expected upside/downside quality gate."""
+    """Hybrid candidate with a train-only expected upside/downside quality gate.
+
+    v10 callers omit opportunity_floor/action_margin_floor and retain the locked
+    0.60/0.10 policy. v11 may supply thresholds selected strictly inside the
+    outer training window.
+    """
+    selected_opportunity_floor = (
+        confidence_floor if opportunity_floor is None else float(opportunity_floor)
+    )
+    if not 0.0 < selected_opportunity_floor < 1.0:
+        raise ValueError("opportunity_floor must be between zero and one")
+    if not 0.0 <= action_margin_floor < 1.0:
+        raise ValueError("action_margin_floor must be between zero and one")
+
     predictions = _event_hybrid_dual_direction_prediction_frame(
         source,
         long_probabilities=long_probabilities,
@@ -1317,6 +1339,15 @@ def _event_hybrid_payoff_risk_prediction_frame(
         experiment=experiment,
         variant=variant,
     )
+    predictions["predicted_opportunity"] = (
+        predictions["opportunity_probability"] >= selected_opportunity_floor
+    )
+    predictions["active_trade"] = (
+        predictions["predicted_opportunity"]
+        & (predictions["direction_confidence"] >= confidence_floor)
+        & (predictions["action_probability_margin"] >= action_margin_floor)
+    )
+
     arrays = [
         np.asarray(expected_long_upside_bps, dtype=float),
         np.asarray(expected_long_downside_bps, dtype=float),
@@ -1350,6 +1381,8 @@ def _event_hybrid_payoff_risk_prediction_frame(
     predictions["expected_selected_downside_bps"] = selected_downside
     predictions["expected_selected_net_bps"] = expected_net
     predictions["expected_payoff_ratio"] = payoff_ratio
+    predictions["selected_opportunity_floor"] = selected_opportunity_floor
+    predictions["selected_action_margin_floor"] = float(action_margin_floor)
     predictions["payoff_filter_pass"] = (
         (expected_net > 0.0) & (payoff_ratio >= PAYOFF_RISK_RATIO_FLOOR)
     )
@@ -1357,8 +1390,8 @@ def _event_hybrid_payoff_risk_prediction_frame(
         predictions["active_trade"] & predictions["payoff_filter_pass"]
     )
     predictions["confidence_policy"] = (
-        "pooled_opportunity_probability_gte_floor_and_normalized_direction_"
-        "confidence_gte_floor_and_side_margin_gte_0_10_and_train_only_"
+        "pooled_opportunity_probability_gte_selected_floor_and_normalized_direction_"
+        "confidence_gte_0_60_and_selected_side_margin_and_train_only_"
         "expected_upside_downside_ratio_gte_1_15"
     )
     return predictions
@@ -2046,6 +2079,243 @@ def _fit_event_hybrid_payoff_risk_for_outer(
         "payoff_early_stop_rows": int(len(early)),
     }
     return direction_models, opportunity_model, payoff_models, feature_columns, counts
+
+
+def _select_v11_gating_inside_outer_training(
+    training_window: pd.DataFrame,
+    *,
+    variant: ModelVariant,
+    horizon_bars: int,
+    confidence_floor: float,
+    min_inner_periods: int,
+) -> tuple[float, float, list[dict[str, Any]]]:
+    """Select bounded opportunity/margin gates using training-only nested selection."""
+    windows = _nested_windows(
+        training_window,
+        horizon_bars=horizon_bars,
+        min_inner_periods=min_inner_periods,
+    )
+    inner_training = (
+        pd.concat([windows.fit, windows.early_stop], ignore_index=True)
+        .sort_values(["decision_time", "instrument"])
+        .reset_index(drop=True)
+    )
+    (
+        direction_models,
+        opportunity_model,
+        payoff_models,
+        feature_columns,
+        _,
+    ) = _fit_event_hybrid_payoff_risk_for_outer(
+        inner_training,
+        variant=variant,
+        horizon_bars=horizon_bars,
+    )
+
+    calibration_raw = _probabilities(
+        opportunity_model, windows.calibration, feature_columns
+    )
+    opportunity_calibrator = _fit_calibrator(
+        "platt",
+        probabilities=calibration_raw,
+        labels=windows.calibration[EVENT_ACTIONABLE_TARGET_COLUMN].to_numpy(dtype=int),
+    )
+
+    selection_frame = windows.selection
+    long_probabilities = _probabilities(
+        direction_models["long"], selection_frame, feature_columns
+    )
+    short_probabilities = _probabilities(
+        direction_models["short"], selection_frame, feature_columns
+    )
+    opportunity_probabilities = _apply_calibrator(
+        opportunity_calibrator,
+        _probabilities(opportunity_model, selection_frame, feature_columns),
+    )
+    expected_long_upside_bps = np.asarray(
+        payoff_models["long_upside"].predict(selection_frame[feature_columns]),
+        dtype=float,
+    )
+    expected_long_downside_bps = np.asarray(
+        payoff_models["long_downside"].predict(selection_frame[feature_columns]),
+        dtype=float,
+    )
+    expected_short_upside_bps = np.asarray(
+        payoff_models["short_upside"].predict(selection_frame[feature_columns]),
+        dtype=float,
+    )
+    expected_short_downside_bps = np.asarray(
+        payoff_models["short_downside"].predict(selection_frame[feature_columns]),
+        dtype=float,
+    )
+
+    candidate_reports: list[dict[str, Any]] = []
+    for opportunity_floor in V11_OPPORTUNITY_THRESHOLD_GRID:
+        for action_margin_floor in V11_ACTION_MARGIN_GRID:
+            predictions = _event_hybrid_payoff_risk_prediction_frame(
+                selection_frame,
+                long_probabilities=long_probabilities,
+                short_probabilities=short_probabilities,
+                opportunity_probabilities=opportunity_probabilities,
+                expected_long_upside_bps=expected_long_upside_bps,
+                expected_long_downside_bps=expected_long_downside_bps,
+                expected_short_upside_bps=expected_short_upside_bps,
+                expected_short_downside_bps=expected_short_downside_bps,
+                confidence_floor=confidence_floor,
+                opportunity_floor=opportunity_floor,
+                action_margin_floor=action_margin_floor,
+                fold=0,
+                experiment=EVENT_HYBRID_CALIBRATED_GATING_EXPERIMENT_NAME,
+                variant=variant,
+            )
+            report = _inner_candidate_report(
+                predictions,
+                horizon_bars=horizon_bars,
+                confidence_floor=confidence_floor,
+                decision_threshold=0.50,
+            )
+            trading = report["summary"]["trading"]
+            active_trades = int(trading["trade_or_period_count"])
+            total_return = float(trading["total_return"])
+            profit_factor = (
+                float(trading["profit_factor"])
+                if trading["profit_factor"] is not None
+                else 0.0
+            )
+            long_trades = int(
+                (
+                    predictions["active_trade"].astype(bool)
+                    & predictions["predicted_long"].astype(bool)
+                ).sum()
+            )
+            short_trades = int(
+                (
+                    predictions["active_trade"].astype(bool)
+                    & ~predictions["predicted_long"].astype(bool)
+                ).sum()
+            )
+            eligible = (
+                active_trades >= V11_MIN_SELECTION_TRADES
+                and total_return > 0.0
+                and profit_factor >= 1.0
+            )
+            evidence_score = min(float(active_trades), 30.0) / 30.0
+            profit_factor_score = min(profit_factor, 3.0) / 3.0
+            selection_key = (
+                1.0 if eligible else 0.0,
+                evidence_score,
+                profit_factor_score,
+                total_return,
+                -float(opportunity_floor),
+                -float(action_margin_floor),
+            )
+            candidate_reports.append(
+                {
+                    "opportunity_floor": float(opportunity_floor),
+                    "action_margin_floor": float(action_margin_floor),
+                    "active_trades": active_trades,
+                    "long_trades": long_trades,
+                    "short_trades": short_trades,
+                    "total_return": total_return,
+                    "profit_factor": (
+                        float(trading["profit_factor"])
+                        if trading["profit_factor"] is not None
+                        else None
+                    ),
+                    "win_rate": float(trading["win_rate"]),
+                    "eligible": eligible,
+                    "selection_key": list(selection_key),
+                }
+            )
+
+    eligible_reports = [row for row in candidate_reports if row["eligible"]]
+    if not eligible_reports:
+        candidate_reports.append(
+            {
+                "selection_fallback": True,
+                "fallback_reason": "no_inner_candidate_met_minimum_economic_evidence",
+                "opportunity_floor": float(confidence_floor),
+                "action_margin_floor": float(DUAL_ACTION_MARGIN_FLOOR),
+            }
+        )
+        return (
+            float(confidence_floor),
+            float(DUAL_ACTION_MARGIN_FLOOR),
+            candidate_reports,
+        )
+
+    selected = max(
+        eligible_reports,
+        key=lambda row: (
+            tuple(row["selection_key"]),
+            -float(row["opportunity_floor"]),
+            -float(row["action_margin_floor"]),
+        ),
+    )
+    return (
+        float(selected["opportunity_floor"]),
+        float(selected["action_margin_floor"]),
+        candidate_reports,
+    )
+
+
+def _fit_v11_calibrated_payoff_risk_for_outer(
+    training_window: pd.DataFrame,
+    *,
+    variant: ModelVariant,
+    horizon_bars: int,
+) -> tuple[
+    dict[str, XGBClassifier],
+    XGBClassifier,
+    _CalibrationModel,
+    dict[str, XGBRegressor],
+    list[str],
+    dict[str, Any],
+]:
+    """Fit v11 models and Platt-calibrate opportunity probability training-only."""
+    windows = _refit_windows(
+        training_window,
+        horizon_bars=horizon_bars,
+    )
+    model_training = (
+        pd.concat([windows.fit, windows.early_stop], ignore_index=True)
+        .sort_values(["decision_time", "instrument"])
+        .reset_index(drop=True)
+    )
+    (
+        direction_models,
+        opportunity_model,
+        payoff_models,
+        feature_columns,
+        counts,
+    ) = _fit_event_hybrid_payoff_risk_for_outer(
+        model_training,
+        variant=variant,
+        horizon_bars=horizon_bars,
+    )
+    calibration_raw = _probabilities(
+        opportunity_model,
+        windows.calibration,
+        feature_columns,
+    )
+    opportunity_calibrator = _fit_calibrator(
+        "platt",
+        probabilities=calibration_raw,
+        labels=windows.calibration[EVENT_ACTIONABLE_TARGET_COLUMN].to_numpy(dtype=int),
+    )
+    counts = {
+        **counts,
+        "opportunity_calibration": "platt_training_only",
+        "opportunity_calibration_rows": int(len(windows.calibration)),
+    }
+    return (
+        direction_models,
+        opportunity_model,
+        opportunity_calibrator,
+        payoff_models,
+        feature_columns,
+        counts,
+    )
 
 
 def _fit_event_pair_experts_for_outer(
@@ -3119,6 +3389,7 @@ def run_nested_qualification_experiments(
             "event_hybrid_dual_direction",
             "event_hybrid_dual_direction_payoff",
             "event_hybrid_dual_direction_payoff_risk",
+            "event_hybrid_dual_direction_payoff_risk_calibrated_gating",
         }
         for experiment in experiments
     ):
@@ -3549,6 +3820,116 @@ def run_nested_qualification_experiments(
                     "direction_policy": "independent_long_vs_rest_and_short_vs_rest_normalized",
                     "payoff_policy": "train_only_expected_upside_downside_ratio",
                     "candidate_reports": [],
+                    "training_counts": training_counts,
+                }
+            elif experiment.mode == "event_hybrid_dual_direction_payoff_risk_calibrated_gating":
+                if len(experiment.variants) != 1 or experiment.tune_decision_threshold:
+                    raise ValueError(
+                        "v11 calibrated gating must remain a fixed bounded candidate"
+                    )
+                variant = experiment.variants[0]
+                decision_threshold = 0.50
+                (
+                    selected_opportunity_floor,
+                    selected_action_margin_floor,
+                    gating_candidate_reports,
+                ) = _select_v11_gating_inside_outer_training(
+                    outer_train,
+                    variant=variant,
+                    horizon_bars=horizon_bars,
+                    confidence_floor=confidence_floor,
+                    min_inner_periods=min_inner_periods,
+                )
+                (
+                    direction_models,
+                    opportunity_model,
+                    opportunity_calibrator,
+                    payoff_models,
+                    feature_columns,
+                    training_counts,
+                ) = _fit_v11_calibrated_payoff_risk_for_outer(
+                    outer_train,
+                    variant=variant,
+                    horizon_bars=horizon_bars,
+                )
+                model = None
+                long_probabilities = _probabilities(
+                    direction_models["long"],
+                    outer_validation,
+                    feature_columns,
+                )
+                short_probabilities = _probabilities(
+                    direction_models["short"],
+                    outer_validation,
+                    feature_columns,
+                )
+                opportunity_probabilities = _apply_calibrator(
+                    opportunity_calibrator,
+                    _probabilities(
+                        opportunity_model,
+                        outer_validation,
+                        feature_columns,
+                    ),
+                )
+                predictions = _event_hybrid_payoff_risk_prediction_frame(
+                    outer_validation,
+                    long_probabilities=long_probabilities,
+                    short_probabilities=short_probabilities,
+                    opportunity_probabilities=opportunity_probabilities,
+                    expected_long_upside_bps=np.asarray(
+                        payoff_models["long_upside"].predict(
+                            outer_validation[feature_columns]
+                        ),
+                        dtype=float,
+                    ),
+                    expected_long_downside_bps=np.asarray(
+                        payoff_models["long_downside"].predict(
+                            outer_validation[feature_columns]
+                        ),
+                        dtype=float,
+                    ),
+                    expected_short_upside_bps=np.asarray(
+                        payoff_models["short_upside"].predict(
+                            outer_validation[feature_columns]
+                        ),
+                        dtype=float,
+                    ),
+                    expected_short_downside_bps=np.asarray(
+                        payoff_models["short_downside"].predict(
+                            outer_validation[feature_columns]
+                        ),
+                        dtype=float,
+                    ),
+                    confidence_floor=confidence_floor,
+                    opportunity_floor=selected_opportunity_floor,
+                    action_margin_floor=selected_action_margin_floor,
+                    fold=fold_index,
+                    experiment=experiment.name,
+                    variant=variant,
+                )
+                outer_active = predictions["active_trade"].astype(bool)
+                outer_long = predictions["predicted_long"].astype(bool)
+                selection = {
+                    "policy": "nested_training_only_v11_opportunity_and_margin_selection",
+                    "selected_variant": variant.name,
+                    "decision_threshold": decision_threshold,
+                    "opportunity_threshold": selected_opportunity_floor,
+                    "opportunity_threshold_grid": list(V11_OPPORTUNITY_THRESHOLD_GRID),
+                    "direction_confidence_threshold": confidence_floor,
+                    "action_margin_floor": selected_action_margin_floor,
+                    "action_margin_grid": list(V11_ACTION_MARGIN_GRID),
+                    "minimum_inner_selection_trades": V11_MIN_SELECTION_TRADES,
+                    "opportunity_calibration": "platt_training_only",
+                    "outer_active_trades": int(outer_active.sum()),
+                    "outer_long_trades": int((outer_active & outer_long).sum()),
+                    "outer_short_trades": int((outer_active & ~outer_long).sum()),
+                    "payoff_risk_ratio_floor": PAYOFF_RISK_RATIO_FLOOR,
+                    "event_label_policy": EVENT_LABEL_POLICY,
+                    "direction_policy": (
+                        "independent_long_vs_rest_and_short_vs_rest_normalized"
+                    ),
+                    "payoff_policy": "train_only_expected_upside_downside_ratio",
+                    "candidate_reports": gating_candidate_reports,
                     "training_counts": training_counts,
                 }
             elif experiment.mode == "two_stage_event_pair_experts":
