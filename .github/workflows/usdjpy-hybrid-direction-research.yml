@@ -1,0 +1,178 @@
+name: USDJPY Hybrid Direction Research
+
+on:
+  workflow_run:
+    workflows: ['Staging Deploy']
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CANDIDATE_SHA: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.workflow_run.head_sha }}
+  STAGING_SSH_HOST: vps.lightworldtech.com
+  STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
+  STAGING_SSH_USER: ${{ vars.STAGING_SSH_USER }}
+  SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+  SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+
+jobs:
+  qualify:
+    name: Freeze and qualify USDJPY hybrid direction candidate
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
+    concurrency:
+      group: irexpro-usdjpy-hybrid-direction
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    environment:
+      name: staging
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Verify research relevance
+        id: relevance
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch --quiet --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          if [[ "$(git rev-parse origin/main)" != "$CANDIDATE_SHA" ]]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "USDJPY_HYBRID_SKIPPED reason=candidate_superseded"
+            exit 0
+          fi
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          parent_sha="$(git rev-parse "$CANDIDATE_SHA^1" 2>/dev/null || true)"
+          changed="$(git diff --name-only "$parent_sha" "$CANDIDATE_SHA" || true)"
+          if grep -Eq '^(.github/workflows/usdjpy-hybrid-direction-research.yml|services/ai-engine/app/domain/training/(single_pair_qualification|single_pair_final_test|model_qualification|train_final_event_pair_bundle).py|services/ai-engine/tests/test_(single_pair_qualification|single_pair_final_test|final_event_pair_bundle).py)$' <<<"$changed"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "USDJPY_HYBRID_REQUIRED reason=hybrid_research_change"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "USDJPY_HYBRID_SKIPPED reason=no_hybrid_research_change"
+          fi
+
+      - name: Configure pinned SSH identity
+        if: steps.relevance.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$STAGING_SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Freeze boundary and run pre-boundary qualification
+        if: steps.relevance.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i "$HOME/.ssh/irexpro_staging" -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            "bash -s -- $CANDIDATE_SHA" <<'REMOTE'
+          set -Eeuo pipefail
+          umask 077
+
+          candidate_sha="$1"
+          staging='/home/lightworld/webapps/irexpro-staging'
+          research_root='/home/lightworld/research/irexpro-usdjpy-hybrid-direction'
+          output="$research_root/$candidate_sha"
+          boundary_file="$output/frozen-boundary.txt"
+          raw="$output/raw/USDJPY_M1.csv"
+          corpus="$output/corpora/USDJPY_MTF.csv"
+          qualification="$output/qualification.json"
+          cache='/home/lightworld/research/dukascopy-raw-cache'
+          readonly pair='USDJPY'
+          readonly horizon='1'
+
+          cd "$staging"
+          test "$(git rev-parse HEAD)" = "$candidate_sha"
+          test -z "$(git status --porcelain)"
+
+          cd "$staging/services/ai-engine"
+          python_bin='.venv/bin/python'
+          test -x "$python_bin"
+          export PYTHONPATH="$PWD"
+          export IREXPRO_XGB_N_JOBS=4
+
+          install -d -m 700 "$output/raw" "$output/corpora" "$cache"
+          if [[ ! -s "$boundary_file" ]]; then
+            date -u '+%Y-%m-%dT%H:00:00Z' > "$boundary_file.tmp"
+            chmod 600 "$boundary_file.tmp"
+            mv -f "$boundary_file.tmp" "$boundary_file"
+          fi
+          boundary="$(tr -d '[:space:]' < "$boundary_file")"
+          echo "USDJPY_HYBRID_FROZEN_BOUNDARY $boundary"
+
+          if [[ ! -s "$raw" ]]; then
+            "$python_bin" -m app.domain.training.collect_dukascopy \
+              --instrument "$pair" \
+              --target-rows 100000 \
+              --output "$raw" \
+              --max-lookback-days 180 \
+              --parallelism 4 \
+              --cache-dir "$cache" \
+              --effective-before "$boundary"
+          fi
+
+          if [[ ! -s "$corpus" ]]; then
+            "$python_bin" -m app.domain.training.multitimeframe_corpus \
+              --m1-dataset "$raw" \
+              --instrument "$pair" \
+              --output "$corpus" \
+              --source dukascopy_frozen_hybrid_direction
+          fi
+
+          "$python_bin" -m app.domain.training.single_pair_qualification \
+            --dataset "$pair=$corpus" \
+            --horizon-bars "$horizon" \
+            --decision-time-before "$boundary" \
+            --report "$qualification" \
+            --max-splits 3 \
+            --confidence-floor 0.60 \
+            | tee "$output/qualification-summary.json"
+
+          "$python_bin" - "$qualification" <<'PY'
+          import json, sys
+          from app.domain.training.model_qualification import (
+              EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
+          )
+          r=json.load(open(sys.argv[1]))
+          e=r['experiments'][EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME]
+          g=e['research_gate']
+          status='PASS' if g['research_gate_passed'] else 'HOLD'
+          print(f'USDJPY_HYBRID_QUALIFICATION_{status}')
+          print('OBSERVED', json.dumps(g['observed'], sort_keys=True))
+          print('CHECKS', json.dumps(g['checks'], sort_keys=True))
+          print('ACTIVE_TRADES', e['overall']['active_trades'])
+          print('WARNINGS', json.dumps(e['overall'].get('evidence_sufficiency_warnings', [])))
+          print('FROZEN_FRAME_SHA256', r['qualification_frame_sha256'])
+          print('FROZEN_FRAME_ROWS', r['qualification_frame_rows'])
+          if g['research_gate_passed']:
+              print('USDJPY_HYBRID_AWAIT_FUTURE_HOLDOUT')
+          PY
+          REMOTE
+
+      - name: Remove ephemeral SSH material
+        if: always()
+        shell: bash
+        run: rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
