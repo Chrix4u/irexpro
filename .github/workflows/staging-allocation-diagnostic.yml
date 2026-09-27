@@ -132,6 +132,49 @@ jobs:
               console.log(Object.entries(r).map(([k,v]) => String(k)+'='+String(v)).join(' | '));
             }
 
+            const detailSql = [
+              "WITH active AS (",
+              "  SELECT c.user_id, c.logical_account_key, c.id AS connection_id",
+              "  FROM trading.trading_sessions ts",
+              "  JOIN broker.broker_connections c ON c.id = ts.broker_connection_id",
+              "  WHERE ts.status = 'ACTIVE'",
+              "  ORDER BY ts.started_at DESC",
+              "  LIMIT 1",
+              "), rows AS (",
+              "  SELECT a.allocated_capital, a.allocated_lots, a.instrument, a.direction,",
+              "         a.strategy_code, i.status AS intent_status, t.status AS trade_status",
+              "  FROM trading.capital_allocations a",
+              "  JOIN active x ON x.user_id = a.user_id AND x.logical_account_key = a.logical_account_key",
+              "  LEFT JOIN trading.trade_intents i ON i.id = a.trade_intent_id",
+              "  LEFT JOIN trading.trades t ON t.trade_intent_id = a.trade_intent_id",
+              "  WHERE a.status = 'ACTIVE'",
+              ")",
+              "SELECT",
+              "  COALESCE(SUM(CASE WHEN trade_status IS NULL AND intent_status='CREATED' THEN allocated_capital ELSE 0 END),0)::text AS inflight,",
+              "  COALESCE(SUM(CASE WHEN trade_status='PENDING' THEN allocated_capital ELSE 0 END),0)::text AS pending,",
+              "  COALESCE(SUM(CASE WHEN trade_status IN ('OPEN','RECONCILIATION_PENDING') THEN allocated_capital ELSE 0 END),0)::text AS open,",
+              "  COUNT(*)::text AS active_allocation_rows",
+              "FROM rows"
+            ].join("\n");
+            const detail = await client.query(detailSql);
+            console.log('=== ACTIVE SESSION COMMITMENTS ===');
+            console.log(Object.entries(detail.rows[0] || {}).map(([k,v]) => String(k)+'='+String(v)).join(' | '));
+
+            const budgetDetail = await client.query([
+              "SELECT",
+              "  b.total_capital::text AS budget,",
+              "  b.account_currency,",
+              "  length(b.account_currency)::text AS currency_len,",
+              "  octet_length(b.account_currency)::text AS currency_bytes",
+              "FROM trading.capital_budgets b",
+              "JOIN trading.trading_sessions ts ON ts.status='ACTIVE'",
+              "JOIN broker.broker_connections c ON c.id=ts.broker_connection_id",
+              "WHERE b.user_id=c.user_id AND b.logical_account_key=c.logical_account_key",
+              "ORDER BY ts.started_at DESC LIMIT 1"
+            ].join("\n"));
+            console.log('=== ACTIVE SESSION BUDGET DETAIL ===');
+            console.log(Object.entries(budgetDetail.rows[0] || {}).map(([k,v]) => String(k)+'='+String(v)).join(' | '));
+
             await client.end();
           })().catch(err => {
             console.error(
