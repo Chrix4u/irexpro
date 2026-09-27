@@ -164,57 +164,6 @@ def _predict_pair_candidate(
             variant=ModelVariant(name="event_barrier_v7_dual_actionability"),
         )
 
-    if experiment == EVENT_HYBRID_PAYOFF_RISK_EXPERIMENT_NAME:
-        long_model = direction_models.get("long")
-        short_model = direction_models.get("short")
-        required_payoff = {
-            "long_upside",
-            "long_downside",
-            "short_upside",
-            "short_downside",
-        }
-        if (
-            long_model is None
-            or short_model is None
-            or opportunity_model is None
-            or payoff_models is None
-            or not required_payoff.issubset(payoff_models)
-        ):
-            raise ValueError(
-                "Final hybrid payoff-risk bundle requires all classifier and payoff models"
-            )
-        components = {
-            "opportunity": opportunity_model,
-            "long_direction": long_model,
-            "short_direction": short_model,
-            **{f"payoff_{name}": payoff_models[name] for name in sorted(required_payoff)},
-        }
-        specs: dict[str, Any] = {}
-        for name, model in components.items():
-            child = root / f"{name.replace('_', '-')}.json"
-            specs[name] = {
-                "path": child.name,
-                "sha256": _save_xgboost_model(model, child),
-                "kind": (
-                    "xgboost_regressor"
-                    if name.startswith("payoff_")
-                    else "xgboost_classifier"
-                ),
-            }
-        return {
-            "bundle_version": 1,
-            "model_type": EVENT_PAIR_BUNDLE_MODEL_TYPE,
-            "experiment": experiment,
-            "event_label_policy": EVENT_LABEL_POLICY,
-            "hybrid_payoff_risk": {
-                "kind": "xgboost_hybrid_opportunity_dual_direction_payoff_risk",
-                "confidence_floor": CONFIDENCE_FLOOR,
-                "action_margin_floor": DUAL_ACTION_MARGIN_FLOOR,
-                "payoff_risk_ratio_floor": 1.15,
-                **specs,
-            },
-        }
-
     if experiment == EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME:
         long_model = direction_models.get("long")
         short_model = direction_models.get("short")
@@ -470,6 +419,57 @@ def _component_manifest(
                     "sha256": _save_xgboost_model(short_model, short_path),
                     "kind": "xgboost_classifier",
                 },
+            },
+        }
+
+    if experiment == EVENT_HYBRID_PAYOFF_RISK_EXPERIMENT_NAME:
+        long_model = direction_models.get("long")
+        short_model = direction_models.get("short")
+        required_payoff = {
+            "long_upside",
+            "long_downside",
+            "short_upside",
+            "short_downside",
+        }
+        if (
+            long_model is None
+            or short_model is None
+            or opportunity_model is None
+            or payoff_models is None
+            or not required_payoff.issubset(payoff_models)
+        ):
+            raise ValueError(
+                "Final hybrid payoff-risk bundle requires all classifier and payoff models"
+            )
+        components = {
+            "opportunity": opportunity_model,
+            "long_direction": long_model,
+            "short_direction": short_model,
+            **{f"payoff_{name}": payoff_models[name] for name in sorted(required_payoff)},
+        }
+        specs: dict[str, Any] = {}
+        for name, component_model in components.items():
+            child = root / f"{name.replace('_', '-')}.json"
+            specs[name] = {
+                "path": child.name,
+                "sha256": _save_xgboost_model(component_model, child),
+                "kind": (
+                    "xgboost_regressor"
+                    if name.startswith("payoff_")
+                    else "xgboost_classifier"
+                ),
+            }
+        return {
+            "bundle_version": 1,
+            "model_type": EVENT_PAIR_BUNDLE_MODEL_TYPE,
+            "experiment": experiment,
+            "event_label_policy": EVENT_LABEL_POLICY,
+            "hybrid_payoff_risk": {
+                "kind": "xgboost_hybrid_opportunity_dual_direction_payoff_risk",
+                "confidence_floor": CONFIDENCE_FLOOR,
+                "action_margin_floor": DUAL_ACTION_MARGIN_FLOOR,
+                "payoff_risk_ratio_floor": 1.15,
+                **specs,
             },
         }
 
