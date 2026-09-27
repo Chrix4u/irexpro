@@ -41,6 +41,7 @@ from app.domain.training.validation import iter_purged_walk_forward_time_splits
 EXPERIMENT_NAME = "event_barrier_v11_calibrated_opportunity_payoff_risk"
 MODEL_NAME = "event_barrier_v11_calibrated_opportunity_payoff_risk"
 CALIBRATION_METHOD = "platt"
+DIRECTION_BLEND_WEIGHTS = (0.0, 0.25, 0.50, 0.75, 1.0)
 
 
 def _concat_chronological(*frames: pd.DataFrame) -> pd.DataFrame:
@@ -55,8 +56,8 @@ def _fit_v11_models(
     training_window: pd.DataFrame,
     *,
     horizon_bars: int,
-) -> tuple[Any, Any, dict[str, Any], list[str]]:
-    """Fit direct actionable-only direction + pooled opportunity + payoff-risk models."""
+) -> tuple[Any, dict[str, Any], Any, dict[str, Any], list[str]]:
+    """Fit both direction views plus pooled opportunity and payoff-risk models."""
     variant = ModelVariant(name=MODEL_NAME)
 
     direction_model, opportunity_model, feature_columns, _ = (
@@ -68,7 +69,7 @@ def _fit_v11_models(
     )
 
     (
-        _unused_side_models,
+        side_direction_models,
         _unused_opportunity_model,
         payoff_models,
         payoff_feature_columns,
@@ -79,19 +80,58 @@ def _fit_v11_models(
         horizon_bars=horizon_bars,
     )
     if payoff_feature_columns != feature_columns:
-        raise ValueError("v11 direct direction/payoff feature columns diverged")
-    return direction_model, opportunity_model, payoff_models, feature_columns
+        raise ValueError("v11 direction/payoff feature columns diverged")
+    return (
+        direction_model,
+        side_direction_models,
+        opportunity_model,
+        payoff_models,
+        feature_columns,
+    )
+
+
+def _raw_direction_probability(
+    *,
+    direction_model: Any,
+    side_direction_models: dict[str, Any],
+    source: pd.DataFrame,
+    feature_columns: list[str],
+    blend_weight: float,
+) -> np.ndarray:
+    """Blend actionable-only direction with normalized dual-side direction."""
+    if not 0.0 <= blend_weight <= 1.0:
+        raise ValueError("blend_weight must be between zero and one")
+    direct = _probabilities(direction_model, source, feature_columns)
+    long_side = _probabilities(
+        side_direction_models["long"],
+        source,
+        feature_columns,
+    )
+    short_side = _probabilities(
+        side_direction_models["short"],
+        source,
+        feature_columns,
+    )
+    dual = np.clip(
+        long_side / np.maximum(long_side + short_side, 1e-7),
+        1e-7,
+        1.0 - 1e-7,
+    )
+    blended = (blend_weight * direct) + ((1.0 - blend_weight) * dual)
+    return np.clip(blended, 1e-7, 1.0 - 1e-7)
 
 
 def _score_frame(
     source: pd.DataFrame,
     *,
     direction_model: Any,
+    side_direction_models: dict[str, Any],
     opportunity_model: Any,
     payoff_models: dict[str, Any],
     feature_columns: list[str],
     direction_calibrator: Any,
     opportunity_calibrator: Any,
+    direction_blend_weight: float,
     fold: int,
 ) -> pd.DataFrame:
     columns = [
@@ -109,10 +149,12 @@ def _score_frame(
     available = [column for column in columns if column in source.columns]
     result = source[available].copy()
 
-    raw_direction = _probabilities(
-        direction_model,
-        source,
-        feature_columns,
+    raw_direction = _raw_direction_probability(
+        direction_model=direction_model,
+        side_direction_models=side_direction_models,
+        source=source,
+        feature_columns=feature_columns,
+        blend_weight=direction_blend_weight,
     )
     calibrated_long = _apply_calibrator(
         direction_calibrator,
@@ -191,30 +233,29 @@ def _score_frame(
     result["experiment"] = EXPERIMENT_NAME
     result["model_variant"] = MODEL_NAME
     result["calibration_method"] = CALIBRATION_METHOD
+    result["direction_blend_weight"] = float(direction_blend_weight)
     return result
 
 
-def _fit_calibrated_scoring_stack(
-    training_prefix: pd.DataFrame,
-    calibration_frame: pd.DataFrame,
+def _fit_direction_calibrator(
     *,
-    horizon_bars: int,
-) -> tuple[dict[str, Any], Any, dict[str, Any], list[str], Any, Any]:
-    (
-        direction_model,
-        opportunity_model,
-        payoff_models,
-        feature_columns,
-    ) = _fit_v11_models(training_prefix, horizon_bars=horizon_bars)
-    raw_direction = _probabilities(
-        direction_model,
-        calibration_frame,
-        feature_columns,
+    direction_model: Any,
+    side_direction_models: dict[str, Any],
+    feature_columns: list[str],
+    calibration_frame: pd.DataFrame,
+    blend_weight: float,
+) -> Any:
+    raw_direction = _raw_direction_probability(
+        direction_model=direction_model,
+        side_direction_models=side_direction_models,
+        source=calibration_frame,
+        feature_columns=feature_columns,
+        blend_weight=blend_weight,
     )
     actionable = (
         calibration_frame[EVENT_ACTIONABLE_TARGET_COLUMN].to_numpy(dtype=int) == 1
     )
-    direction_calibrator = _fit_calibrator(
+    return _fit_calibrator(
         CALIBRATION_METHOD,
         probabilities=raw_direction[actionable],
         labels=calibration_frame.loc[
@@ -223,25 +264,34 @@ def _fit_calibrated_scoring_stack(
         ].to_numpy(dtype=int),
     )
 
+
+def _fit_opportunity_calibrator(
+    *,
+    opportunity_model: Any,
+    feature_columns: list[str],
+    calibration_frame: pd.DataFrame,
+) -> Any:
     calibration_raw = _probabilities(
         opportunity_model,
         calibration_frame,
         feature_columns,
     )
-    opportunity_calibrator = _fit_calibrator(
+    return _fit_calibrator(
         CALIBRATION_METHOD,
         probabilities=calibration_raw,
         labels=calibration_frame[EVENT_ACTIONABLE_TARGET_COLUMN].to_numpy(
             dtype=int
         ),
     )
+
+
+def _blend_choice_key(choice: Any) -> tuple[float, float, float, float]:
+    metrics = choice.metrics
     return (
-        direction_model,
-        opportunity_model,
-        payoff_models,
-        feature_columns,
-        direction_calibrator,
-        opportunity_calibrator,
+        float(metrics.get("direction_wilson_lower_95") or -1.0),
+        float(metrics.get("direction_balanced_accuracy") or -1.0),
+        float(metrics.get("opportunity_balanced_accuracy") or -1.0),
+        float(metrics.get("opportunity_recall") or -1.0),
     )
 
 
@@ -378,6 +428,8 @@ def _fold_report(
     *,
     threshold_choice: Any,
     inner_selection: pd.DataFrame,
+    direction_blend_weight: float,
+    blend_candidates: list[dict[str, Any]],
 ) -> dict[str, Any]:
     actionable = predictions.loc[
         predictions[EVENT_ACTIONABLE_TARGET_COLUMN] == 1
@@ -405,6 +457,10 @@ def _fold_report(
         "directional_balanced_accuracy": directional_balanced_accuracy,
         "opportunity_brier_score": opportunity_brier,
         "inner_selection_funnel": _selection_funnel(inner_selection),
+        "direction_blend": {
+            "selected_weight": float(direction_blend_weight),
+            "candidate_reports": blend_candidates,
+        },
         "threshold_selection": {
             "eligible": bool(threshold_choice.eligible),
             "reason": threshold_choice.reason,
@@ -455,27 +511,89 @@ def run_v11_qualification(
         )
         (
             inner_direction,
+            inner_side_direction,
             inner_opportunity,
             inner_payoff,
             inner_features,
-            inner_direction_calibrator,
-            inner_opportunity_calibrator,
-        ) = _fit_calibrated_scoring_stack(
+        ) = _fit_v11_models(
             inner_training_prefix,
-            inner.calibration,
             horizon_bars=horizon_bars,
         )
-        inner_selection = _score_frame(
-            inner.selection,
-            direction_model=inner_direction,
+        inner_opportunity_calibrator = _fit_opportunity_calibrator(
             opportunity_model=inner_opportunity,
-            payoff_models=inner_payoff,
             feature_columns=inner_features,
-            direction_calibrator=inner_direction_calibrator,
-            opportunity_calibrator=inner_opportunity_calibrator,
-            fold=0,
+            calibration_frame=inner.calibration,
         )
-        choice = select_execution_thresholds(inner_selection)
+
+        blend_candidates: list[dict[str, Any]] = []
+        selected_weight: float | None = None
+        selected_choice: Any | None = None
+        selected_inner: pd.DataFrame | None = None
+        for blend_weight in DIRECTION_BLEND_WEIGHTS:
+            direction_calibrator = _fit_direction_calibrator(
+                direction_model=inner_direction,
+                side_direction_models=inner_side_direction,
+                feature_columns=inner_features,
+                calibration_frame=inner.calibration,
+                blend_weight=blend_weight,
+            )
+            candidate_selection = _score_frame(
+                inner.selection,
+                direction_model=inner_direction,
+                side_direction_models=inner_side_direction,
+                opportunity_model=inner_opportunity,
+                payoff_models=inner_payoff,
+                feature_columns=inner_features,
+                direction_calibrator=direction_calibrator,
+                opportunity_calibrator=inner_opportunity_calibrator,
+                direction_blend_weight=blend_weight,
+                fold=0,
+            )
+            candidate_choice = select_execution_thresholds(candidate_selection)
+            blend_candidates.append(
+                {
+                    "blend_weight": float(blend_weight),
+                    "eligible": bool(candidate_choice.eligible),
+                    "opportunity_threshold": float(
+                        candidate_choice.opportunity_threshold
+                    ),
+                    "action_margin_floor": float(
+                        candidate_choice.action_margin_floor
+                    ),
+                    "metrics": candidate_choice.metrics,
+                }
+            )
+            if candidate_choice.eligible and (
+                selected_choice is None
+                or _blend_choice_key(candidate_choice)
+                > _blend_choice_key(selected_choice)
+            ):
+                selected_weight = float(blend_weight)
+                selected_choice = candidate_choice
+                selected_inner = candidate_selection
+
+        if selected_choice is None:
+            selected_weight = 1.0
+            direction_calibrator = _fit_direction_calibrator(
+                direction_model=inner_direction,
+                side_direction_models=inner_side_direction,
+                feature_columns=inner_features,
+                calibration_frame=inner.calibration,
+                blend_weight=selected_weight,
+            )
+            selected_inner = _score_frame(
+                inner.selection,
+                direction_model=inner_direction,
+                side_direction_models=inner_side_direction,
+                opportunity_model=inner_opportunity,
+                payoff_models=inner_payoff,
+                feature_columns=inner_features,
+                direction_calibrator=direction_calibrator,
+                opportunity_calibrator=inner_opportunity_calibrator,
+                direction_blend_weight=selected_weight,
+                fold=0,
+            )
+            selected_choice = select_execution_thresholds(selected_inner)
 
         refit = _refit_windows(
             outer_train,
@@ -488,37 +606,51 @@ def run_v11_qualification(
         )
         (
             outer_direction,
+            outer_side_direction,
             outer_opportunity,
             outer_payoff,
             outer_features,
-            outer_direction_calibrator,
-            outer_opportunity_calibrator,
-        ) = _fit_calibrated_scoring_stack(
+        ) = _fit_v11_models(
             outer_training_prefix,
-            refit.calibration,
             horizon_bars=horizon_bars,
+        )
+        outer_direction_calibrator = _fit_direction_calibrator(
+            direction_model=outer_direction,
+            side_direction_models=outer_side_direction,
+            feature_columns=outer_features,
+            calibration_frame=refit.calibration,
+            blend_weight=selected_weight,
+        )
+        outer_opportunity_calibrator = _fit_opportunity_calibrator(
+            opportunity_model=outer_opportunity,
+            feature_columns=outer_features,
+            calibration_frame=refit.calibration,
         )
         scored = _score_frame(
             outer_validation,
             direction_model=outer_direction,
+            side_direction_models=outer_side_direction,
             opportunity_model=outer_opportunity,
             payoff_models=outer_payoff,
             feature_columns=outer_features,
             direction_calibrator=outer_direction_calibrator,
             opportunity_calibrator=outer_opportunity_calibrator,
+            direction_blend_weight=selected_weight,
             fold=fold,
         )
         evaluated = apply_v11_execution_policy(
             scored,
-            opportunity_threshold=choice.opportunity_threshold,
-            action_margin_floor=choice.action_margin_floor,
+            opportunity_threshold=selected_choice.opportunity_threshold,
+            action_margin_floor=selected_choice.action_margin_floor,
         )
         prediction_frames.append(evaluated)
         fold_reports.append(
             _fold_report(
                 evaluated,
-                threshold_choice=choice,
-                inner_selection=inner_selection,
+                threshold_choice=selected_choice,
+                inner_selection=selected_inner,
+                direction_blend_weight=selected_weight,
+                blend_candidates=blend_candidates,
             )
         )
 
@@ -529,8 +661,9 @@ def run_v11_qualification(
         "approved_for_paper": False,
         "approved_for_live": False,
         "selection_policy": (
-            "inner chronological Platt calibration plus bounded threshold grid; "
-            "outer validation never participates in threshold selection"
+            "inner chronological Platt calibration plus bounded direction-blend/"
+            "execution-threshold search; outer validation never participates in "
+            "selection"
         ),
         "payoff_ratio_floor": 1.15,
         "direction_confidence_floor": 0.60,
