@@ -49,7 +49,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
           if [[ "$(git rev-parse origin/main)" != "$CANDIDATE_SHA" ]]; then
             echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "USDJPY_HYBRID_PAYOFF_SKIPPED reason=candidate_superseded"
+            echo "USDJPY_HYBRID_PAYOFF_PAYOFF_SKIPPED reason=candidate_superseded"
             exit 0
           fi
           if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
@@ -60,10 +60,10 @@ jobs:
           changed="$(git diff --name-only "$parent_sha" "$CANDIDATE_SHA" || true)"
           if grep -Eq '^(.github/workflows/usdjpy-hybrid-direction-research.yml|services/ai-engine/app/domain/training/(single_pair_qualification|single_pair_final_test|model_qualification|train_final_event_pair_bundle).py|services/ai-engine/tests/test_(single_pair_qualification|single_pair_final_test|final_event_pair_bundle).py)$' <<<"$changed"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
-            echo "USDJPY_HYBRID_PAYOFF_REQUIRED reason=hybrid_research_change"
+            echo "USDJPY_HYBRID_PAYOFF_PAYOFF_REQUIRED reason=hybrid_research_change"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "USDJPY_HYBRID_PAYOFF_SKIPPED reason=no_hybrid_research_change"
+            echo "USDJPY_HYBRID_PAYOFF_PAYOFF_SKIPPED reason=no_hybrid_research_change"
           fi
 
       - name: Configure pinned SSH identity
@@ -121,8 +121,8 @@ jobs:
           test -s "$corpus"
           boundary="$(tr -d '[:space:]' < "$boundary_file")"
           test "$boundary" = '2026-09-27T05:00:00Z'
-          echo "USDJPY_HYBRID_PAYOFF_FROZEN_BOUNDARY $boundary"
-          echo "USDJPY_HYBRID_PAYOFF_REFERENCE_SHA $reference_sha"
+          echo "USDJPY_HYBRID_PAYOFF_PAYOFF_FROZEN_BOUNDARY $boundary"
+          echo "USDJPY_HYBRID_PAYOFF_PAYOFF_REFERENCE_SHA $reference_sha"
 
           "$python_bin" -m app.domain.training.single_pair_qualification \
             --dataset "$pair=$corpus" \
@@ -142,7 +142,7 @@ jobs:
           e=r['experiments'][EVENT_HYBRID_PAYOFF_EXPERIMENT_NAME]
           g=e['research_gate']
           status='PASS' if g['research_gate_passed'] else 'HOLD'
-          print(f'USDJPY_HYBRID_PAYOFF_QUALIFICATION_{status}')
+          print(f'USDJPY_HYBRID_PAYOFF_PAYOFF_QUALIFICATION_{status}')
           print('OBSERVED', json.dumps(g['observed'], sort_keys=True))
           print('CHECKS', json.dumps(g['checks'], sort_keys=True))
           print('ACTIVE_TRADES', e['overall']['active_trades'])
@@ -150,7 +150,7 @@ jobs:
           print('FROZEN_FRAME_SHA256', r['qualification_frame_sha256'])
           print('FROZEN_FRAME_ROWS', r['qualification_frame_rows'])
           if g['research_gate_passed']:
-              print('USDJPY_HYBRID_PAYOFF_AWAIT_FUTURE_HOLDOUT')
+              print('USDJPY_HYBRID_PAYOFF_PAYOFF_AWAIT_FUTURE_HOLDOUT')
           PY
           REMOTE
 
