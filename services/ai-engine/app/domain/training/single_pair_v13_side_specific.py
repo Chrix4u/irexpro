@@ -25,6 +25,7 @@ from app.domain.training.model_qualification import (
     ModelVariant,
     _apply_calibrator,
     _fit_calibrator,
+    _ensure_event_dual_actionability_targets,
     _nested_windows,
     _probabilities,
     _refit_windows,
@@ -84,6 +85,7 @@ def _fit_side_calibrators(
     models: Any,
     calibration: pd.DataFrame,
 ) -> dict[str, Any]:
+    calibration = _ensure_event_dual_actionability_targets(calibration)
     calibrators: dict[str, Any] = {}
     for side, model, target in (
         ("long", models.long_model, EVENT_LONG_ACTIONABLE_TARGET_COLUMN),
@@ -104,6 +106,7 @@ def _score_frame(
     *,
     calibrators: dict[str, Any],
 ) -> pd.DataFrame:
+    frame = _ensure_event_dual_actionability_targets(frame)
     features = models.feature_columns
     long_prob = _apply_calibrator(
         calibrators["long"],
