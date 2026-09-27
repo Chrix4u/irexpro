@@ -50,3 +50,14 @@ def test_selector_returns_economic_two_sided_threshold_pair() -> None:
     assert selected["eligible"] is True
     assert selected["trading"]["long_trades"] >= 2
     assert selected["trading"]["short_trades"] >= 2
+
+
+def test_selector_explains_when_no_threshold_pair_is_eligible() -> None:
+    frame = _frame().copy()
+    frame["event_long_net_return"] = -0.001
+    frame["event_short_net_return"] = -0.001
+    result = select_economic_side_thresholds(frame)
+    assert result["selected"] is None
+    assert result["eligible_count"] == 0
+    assert "failure_counts" in result
+    assert len(result["best_near_candidates"]) <= 5
