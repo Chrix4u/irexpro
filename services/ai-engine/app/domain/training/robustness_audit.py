@@ -7,9 +7,9 @@ interpreted confidently and provides probabilistic Sharpe diagnostics.
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass
 from statistics import NormalDist
-from typing import Iterable
 
 import numpy as np
 
