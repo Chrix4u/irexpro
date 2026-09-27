@@ -4,6 +4,7 @@ import pytest
 
 from app.domain.training.robustness_audit import (
     assess_trade_evidence,
+    cost_stress_frontier,
     expected_maximum_sharpe,
     probabilistic_sharpe_ratio,
     robustness_snapshot,
@@ -51,3 +52,10 @@ def test_snapshot_does_not_fake_multiple_testing_without_ledger() -> None:
 def test_psr_rejects_zero_variance() -> None:
     with pytest.raises(ValueError, match="non-zero sample variance"):
         probabilistic_sharpe_ratio([0.001, 0.001, 0.001])
+
+
+def test_cost_stress_frontier_reduces_edge() -> None:
+    result = cost_stress_frontier([0.0010, -0.0002, 0.0008], extra_cost_bps=[0.0, 1.0])
+    base, stressed = result["scenarios"]
+    assert stressed["mean_return_bps"] < base["mean_return_bps"]
+    assert result["break_even_extra_cost_bps_by_mean"] > 0.0
