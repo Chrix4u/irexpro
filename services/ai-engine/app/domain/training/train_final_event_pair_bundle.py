@@ -21,6 +21,7 @@ from app.domain.training.model_qualification import (
     DUAL_ACTION_MARGIN_FLOOR,
     EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME,
     EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
+    EVENT_HYBRID_PAYOFF_EXPERIMENT_NAME,
     EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
     EVENT_PAIR_REGIME_EXPERT_EXPERIMENT_NAME,
     EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME,
@@ -30,9 +31,11 @@ from app.domain.training.model_qualification import (
     ModelVariant,
     _event_dual_actionability_prediction_frame,
     _event_hybrid_dual_direction_prediction_frame,
+    _event_hybrid_payoff_prediction_frame,
     _event_two_stage_prediction_frame,
     _fit_event_dual_actionability_for_outer,
     _fit_event_hybrid_dual_direction_for_outer,
+    _fit_event_hybrid_payoff_for_outer,
     _fit_event_pair_experts_for_outer,
     _fit_event_pair_regime_experts_for_outer,
     _fit_event_pair_return_margin_for_outer,
@@ -60,6 +63,7 @@ EVENT_PAIR_BUNDLE_MODEL_TYPE = "xgboost_event_pair_bundle"
 SUPPORTED_EXPERIMENTS = {
     EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME,
     EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
+    EVENT_HYBRID_PAYOFF_EXPERIMENT_NAME,
     EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
     EVENT_PAIR_RETURN_MARGIN_EXPERIMENT_NAME,
     EVENT_PAIR_REGIME_EXPERT_EXPERIMENT_NAME,
@@ -131,6 +135,7 @@ def _predict_pair_candidate(
     direction_calibrators: dict[str, Any] | None,
     regime_routers: dict[str, dict[str, float]] | None,
     opportunity_model: Any,
+    payoff_models: dict[str, Any] | None,
     frame: pd.DataFrame,
     confidence_floor: float,
     horizon_bars: int,
@@ -193,6 +198,52 @@ def _predict_pair_candidate(
             variant=ModelVariant(name="event_barrier_v8_hybrid_dual_direction"),
         )
 
+    if experiment == EVENT_HYBRID_PAYOFF_EXPERIMENT_NAME:
+        long_model = direction_models.get("long")
+        short_model = direction_models.get("short")
+        if (
+            long_model is None
+            or short_model is None
+            or opportunity_model is None
+            or payoff_models is None
+        ):
+            raise ValueError(
+                "Hybrid payoff candidate requires direction, opportunity and payoff models"
+            )
+        long_probabilities = _probabilities(
+            long_model,
+            frame,
+            list(MULTITIMEFRAME_FEATURE_COLUMNS),
+        )
+        short_probabilities = _probabilities(
+            short_model,
+            frame,
+            list(MULTITIMEFRAME_FEATURE_COLUMNS),
+        )
+        opportunity_probabilities = _probabilities(
+            opportunity_model,
+            frame,
+            list(MULTITIMEFRAME_FEATURE_COLUMNS),
+        )
+        expected_long_return_bps = payoff_models["long"].predict(
+            frame[list(MULTITIMEFRAME_FEATURE_COLUMNS)]
+        )
+        expected_short_return_bps = payoff_models["short"].predict(
+            frame[list(MULTITIMEFRAME_FEATURE_COLUMNS)]
+        )
+        return _event_hybrid_payoff_prediction_frame(
+            frame,
+            long_probabilities=long_probabilities,
+            short_probabilities=short_probabilities,
+            opportunity_probabilities=opportunity_probabilities,
+            expected_long_return_bps=expected_long_return_bps,
+            expected_short_return_bps=expected_short_return_bps,
+            confidence_floor=confidence_floor,
+            fold=0,
+            experiment=experiment,
+            variant=ModelVariant(name="event_barrier_v9_hybrid_payoff"),
+        )
+
     if experiment == EVENT_PAIR_EXPERT_EXPERIMENT_NAME:
         direction_probabilities = _pair_expert_probabilities(
             direction_models,
@@ -252,9 +303,11 @@ def _fit_pair_candidate(
     dict[str, Any] | None,
     dict[str, dict[str, float]] | None,
     Any,
+    dict[str, Any] | None,
     dict[str, Any],
 ]:
     regime_routers: dict[str, dict[str, float]] | None = None
+    payoff_models: dict[str, Any] | None = None
     if experiment == EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME:
         models, features, counts = _fit_event_dual_actionability_for_outer(
             train,
@@ -267,6 +320,19 @@ def _fit_pair_candidate(
         models, opportunity, features, counts = _fit_event_hybrid_dual_direction_for_outer(
             train,
             variant=ModelVariant(name="event_barrier_v8_hybrid_dual_direction"),
+            horizon_bars=horizon_bars,
+        )
+        calibrators = None
+    elif experiment == EVENT_HYBRID_PAYOFF_EXPERIMENT_NAME:
+        (
+            models,
+            opportunity,
+            payoff_models,
+            features,
+            counts,
+        ) = _fit_event_hybrid_payoff_for_outer(
+            train,
+            variant=ModelVariant(name="event_barrier_v9_hybrid_payoff"),
             horizon_bars=horizon_bars,
         )
         calibrators = None
@@ -307,7 +373,7 @@ def _fit_pair_candidate(
 
     if features != list(MULTITIMEFRAME_FEATURE_COLUMNS):
         raise ValueError("Final pair candidate feature schema diverged from runtime")
-    return models, calibrators, regime_routers, opportunity, counts
+    return models, calibrators, regime_routers, opportunity, payoff_models, counts
 
 
 def _component_manifest(
@@ -318,6 +384,7 @@ def _component_manifest(
     direction_calibrators: dict[str, Any] | None,
     regime_routers: dict[str, dict[str, float]] | None,
     opportunity_model: Any,
+    payoff_models: dict[str, Any] | None,
 ) -> dict[str, Any]:
     root = output.parent
     if experiment == EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME:
@@ -381,6 +448,64 @@ def _component_manifest(
                     "path": short_path.name,
                     "sha256": _save_xgboost_model(short_model, short_path),
                     "kind": "xgboost_classifier",
+                },
+            },
+        }
+
+    if experiment == EVENT_HYBRID_PAYOFF_EXPERIMENT_NAME:
+        long_model = direction_models.get("long")
+        short_model = direction_models.get("short")
+        if (
+            long_model is None
+            or short_model is None
+            or opportunity_model is None
+            or payoff_models is None
+        ):
+            raise ValueError(
+                "Final hybrid payoff bundle requires direction, opportunity and payoff models"
+            )
+        paths = {
+            "long_direction": root / "long-direction.json",
+            "short_direction": root / "short-direction.json",
+            "opportunity": root / "opportunity.json",
+            "long_payoff": root / "long-payoff.json",
+            "short_payoff": root / "short-payoff.json",
+        }
+        return {
+            "bundle_version": 1,
+            "model_type": EVENT_PAIR_BUNDLE_MODEL_TYPE,
+            "experiment": experiment,
+            "event_label_policy": EVENT_LABEL_POLICY,
+            "hybrid_payoff": {
+                "kind": "xgboost_hybrid_opportunity_dual_direction_payoff",
+                "confidence_floor": CONFIDENCE_FLOOR,
+                "action_margin_floor": DUAL_ACTION_MARGIN_FLOOR,
+                "payoff_threshold_bps": 0.0,
+                "payoff_edge_threshold_bps": 0.0,
+                "opportunity": {
+                    "path": paths["opportunity"].name,
+                    "sha256": _save_xgboost_model(opportunity_model, paths["opportunity"]),
+                    "kind": "xgboost_classifier",
+                },
+                "long_direction": {
+                    "path": paths["long_direction"].name,
+                    "sha256": _save_xgboost_model(long_model, paths["long_direction"]),
+                    "kind": "xgboost_classifier",
+                },
+                "short_direction": {
+                    "path": paths["short_direction"].name,
+                    "sha256": _save_xgboost_model(short_model, paths["short_direction"]),
+                    "kind": "xgboost_classifier",
+                },
+                "long_payoff": {
+                    "path": paths["long_payoff"].name,
+                    "sha256": _save_xgboost_model(payoff_models["long"], paths["long_payoff"]),
+                    "kind": "xgboost_regressor",
+                },
+                "short_payoff": {
+                    "path": paths["short_payoff"].name,
+                    "sha256": _save_xgboost_model(payoff_models["short"], paths["short_payoff"]),
+                    "kind": "xgboost_regressor",
                 },
             },
         }
@@ -531,6 +656,7 @@ def train_final_event_pair_candidate(
         direction_calibrators,
         regime_routers,
         opportunity_model,
+        payoff_models,
         training_counts,
     ) = _fit_pair_candidate(
         train,
@@ -543,6 +669,7 @@ def train_final_event_pair_candidate(
         direction_calibrators=direction_calibrators,
         regime_routers=regime_routers,
         opportunity_model=opportunity_model,
+        payoff_models=payoff_models,
         frame=validation,
         confidence_floor=confidence_threshold,
         horizon_bars=horizon_bars,
@@ -553,6 +680,7 @@ def train_final_event_pair_candidate(
         direction_calibrators=direction_calibrators,
         regime_routers=regime_routers,
         opportunity_model=opportunity_model,
+        payoff_models=payoff_models,
         frame=test,
         confidence_floor=confidence_threshold,
         horizon_bars=horizon_bars,
@@ -589,6 +717,7 @@ def train_final_event_pair_candidate(
         direction_calibrators=direction_calibrators,
         regime_routers=regime_routers,
         opportunity_model=opportunity_model,
+        payoff_models=payoff_models,
     )
     _atomic_write_json(output, bundle)
 
