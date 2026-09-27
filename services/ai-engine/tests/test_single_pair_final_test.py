@@ -45,7 +45,7 @@ def test_load_qualified_single_pair_requires_exact_scope_and_passed_gate(tmp_pat
     path = tmp_path / "qualification.json"
     path.write_text(json.dumps(_qualification_payload()), encoding="utf-8")
 
-    experiment, gate, cutoff, hashes = _load_qualified_single_pair(
+    experiment, gate, cutoff, hashes, provenance = _load_qualified_single_pair(
         path,
         instrument="USDJPY",
         horizon_bars=1,
@@ -55,6 +55,10 @@ def test_load_qualified_single_pair_requires_exact_scope_and_passed_gate(tmp_pat
     assert gate["research_gate_passed"] is True
     assert cutoff == pd.Timestamp("2026-07-01T00:00:00Z")
     assert hashes == {"USDJPY": "abc123"}
+    assert provenance == {
+        "qualification_frame_sha256": None,
+        "qualification_frame_rows": None,
+    }
     assert SINGLE_PAIR_FINAL_TEST_POLICY.endswith("_v1")
 
 
@@ -71,7 +75,7 @@ def test_load_qualified_single_pair_accepts_frozen_hybrid_candidate(tmp_path):
     path = tmp_path / "qualification-hybrid.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
 
-    experiment, gate, cutoff, hashes = _load_qualified_single_pair(
+    experiment, gate, cutoff, hashes, provenance = _load_qualified_single_pair(
         path,
         instrument="USDJPY",
         horizon_bars=1,
@@ -81,6 +85,10 @@ def test_load_qualified_single_pair_accepts_frozen_hybrid_candidate(tmp_path):
     assert gate["research_gate_passed"] is True
     assert cutoff == pd.Timestamp("2026-07-01T00:00:00Z")
     assert hashes == {"USDJPY": "abc123"}
+    assert provenance == {
+        "qualification_frame_sha256": None,
+        "qualification_frame_rows": None,
+    }
 
 
 def test_load_qualified_single_pair_rejects_wrong_instrument(tmp_path):
