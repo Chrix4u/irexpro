@@ -251,10 +251,61 @@ def _trading_metrics(predictions: pd.DataFrame) -> dict[str, Any]:
     }
 
 
+
+def _selection_funnel(frame: pd.DataFrame) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "opportunity_quantiles": {
+            str(key): float(value)
+            for key, value in frame["opportunity_probability"]
+            .quantile([0.10, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99])
+            .to_dict()
+            .items()
+        },
+        "by_direction": {},
+    }
+    for name, mask in {
+        "long": frame["predicted_long"].astype(bool),
+        "short": ~frame["predicted_long"].astype(bool),
+    }.items():
+        side = frame.loc[mask].copy()
+        direction_pass = side["direction_confidence"] >= 0.60
+        payoff_pass = (
+            (side["expected_selected_net_bps"] > 0.0)
+            & (side["expected_payoff_ratio"] >= 1.15)
+        )
+        rows: dict[str, Any] = {
+            "predictions": int(len(side)),
+            "direction_confidence_pass": int(direction_pass.sum()),
+            "payoff_pass": int(payoff_pass.sum()),
+            "direction_and_payoff_pass": int((direction_pass & payoff_pass).sum()),
+            "payoff_ratio_quantiles": {
+                str(key): float(value)
+                for key, value in side["expected_payoff_ratio"]
+                .quantile([0.50, 0.75, 0.90, 0.95, 0.99])
+                .to_dict()
+                .items()
+            },
+            "threshold_counts": {},
+        }
+        for opportunity_threshold in (0.15, 0.20, 0.25, 0.30, 0.35, 0.40):
+            for margin_floor in (0.00, 0.02, 0.03, 0.05):
+                active = (
+                    direction_pass
+                    & payoff_pass
+                    & (side["opportunity_probability"] >= opportunity_threshold)
+                    & (side["action_probability_margin"] >= margin_floor)
+                )
+                rows["threshold_counts"][
+                    f"opp_{opportunity_threshold:.2f}_margin_{margin_floor:.2f}"
+                ] = int(active.sum())
+        result["by_direction"][name] = rows
+    return result
+
 def _fold_report(
     predictions: pd.DataFrame,
     *,
     threshold_choice: Any,
+    inner_selection: pd.DataFrame,
 ) -> dict[str, Any]:
     actionable = predictions.loc[
         predictions[EVENT_ACTIONABLE_TARGET_COLUMN] == 1
@@ -281,6 +332,7 @@ def _fold_report(
         "validation_rows": int(len(predictions)),
         "directional_balanced_accuracy": directional_balanced_accuracy,
         "opportunity_brier_score": opportunity_brier,
+        "inner_selection_funnel": _selection_funnel(inner_selection),
         "threshold_selection": {
             "eligible": bool(threshold_choice.eligible),
             "reason": threshold_choice.reason,
@@ -386,7 +438,13 @@ def run_v11_qualification(
             action_margin_floor=choice.action_margin_floor,
         )
         prediction_frames.append(evaluated)
-        fold_reports.append(_fold_report(evaluated, threshold_choice=choice))
+        fold_reports.append(
+            _fold_report(
+                evaluated,
+                threshold_choice=choice,
+                inner_selection=inner_selection,
+            )
+        )
 
     combined = pd.concat(prediction_frames, ignore_index=True)
     report = {
