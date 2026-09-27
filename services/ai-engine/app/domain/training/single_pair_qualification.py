@@ -30,8 +30,6 @@ from app.domain.training.model_qualification import (
 from app.domain.training.train_multitimeframe import load_and_prepare_corpora
 
 
-
-
 def _qualification_frame_sha256(frame: pd.DataFrame) -> str:
     """Stable semantic fingerprint of the frozen pre-boundary qualification frame."""
     ordered = frame.copy()
