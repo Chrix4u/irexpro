@@ -11,6 +11,7 @@ import pandas as pd
 from app.domain.training.model_qualification import (
     ACTIONABLE_TARGET_COLUMN,
     CONFIDENCE_FLOOR,
+    EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
     EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
     OPPORTUNITY_CLASSIFICATION_THRESHOLD,
     TARGET_COLUMN,
@@ -171,7 +172,7 @@ def _load_qualified_single_pair(
     *,
     instrument: str,
     horizon_bars: int,
-) -> tuple[dict[str, Any], pd.Timestamp, dict[str, str]]:
+) -> tuple[str, dict[str, Any], pd.Timestamp, dict[str, str]]:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     scope = payload.get("single_pair_scope")
     if not isinstance(scope, dict):
@@ -180,7 +181,11 @@ def _load_qualified_single_pair(
         raise ValueError("Qualification report instrument does not match final test")
     if int(scope.get("horizon_bars", -1)) != int(horizon_bars):
         raise ValueError("Qualification report horizon does not match final test")
-    if scope.get("experiment") != EVENT_PAIR_EXPERT_EXPERIMENT_NAME:
+    experiment = str(scope.get("experiment", ""))
+    if experiment not in {
+        EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+        EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
+    }:
         raise ValueError("Qualification report experiment is unsupported")
     if payload.get("event_label_policy") != EVENT_LABEL_POLICY:
         raise ValueError("Qualification report event label policy is unsupported")
@@ -189,9 +194,9 @@ def _load_qualified_single_pair(
     if bool(payload.get("outer_validation_used_for_tuning", True)):
         raise ValueError("Qualification report reused outer validation for tuning")
 
-    block = payload.get("experiments", {}).get(EVENT_PAIR_EXPERT_EXPERIMENT_NAME)
+    block = payload.get("experiments", {}).get(experiment)
     if not isinstance(block, dict):
-        raise ValueError("Qualification report is missing event pair expert result")
+        raise ValueError("Qualification report is missing selected experiment result")
     gate = block.get("research_gate")
     if not isinstance(gate, dict) or not bool(gate.get("research_gate_passed", False)):
         raise ValueError("Single-pair research gate has not passed")
@@ -205,7 +210,7 @@ def _load_qualified_single_pair(
     hashes = payload.get("dataset_sha256")
     if not isinstance(hashes, dict) or set(hashes) != {instrument}:
         raise ValueError("Qualification report dataset hashes do not match single-pair scope")
-    return gate, cutoff, {str(k): str(v) for k, v in hashes.items()}
+    return experiment, gate, cutoff, {str(k): str(v) for k, v in hashes.items()}
 
 
 def _single_pair_final_gate(
@@ -273,7 +278,7 @@ def evaluate_single_pair_untouched_test(
     if confidence_threshold < CONFIDENCE_FLOOR or confidence_threshold >= 1.0:
         raise ValueError("confidence threshold must remain >= 0.60 and < 1.0")
 
-    research_gate, cutoff, research_hashes = _load_qualified_single_pair(
+    experiment, research_gate, cutoff, research_hashes = _load_qualified_single_pair(
         qualification_report_path,
         instrument=instrument,
         horizon_bars=horizon_bars,
@@ -305,11 +310,11 @@ def evaluate_single_pair_untouched_test(
         training_counts,
     ) = _fit_pair_candidate(
         train,
-        experiment=EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+        experiment=experiment,
         horizon_bars=horizon_bars,
     )
     validation_predictions = _predict_pair_candidate(
-        experiment=EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+        experiment=experiment,
         direction_models=direction_models,
         direction_calibrators=direction_calibrators,
         regime_routers=regime_routers,
@@ -319,7 +324,7 @@ def evaluate_single_pair_untouched_test(
         horizon_bars=horizon_bars,
     )
     test_predictions = _predict_pair_candidate(
-        experiment=EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+        experiment=experiment,
         direction_models=direction_models,
         direction_calibrators=direction_calibrators,
         regime_routers=regime_routers,
@@ -349,7 +354,7 @@ def evaluate_single_pair_untouched_test(
         "policy": SINGLE_PAIR_FINAL_TEST_POLICY,
         "instrument": instrument,
         "horizon_bars": int(horizon_bars),
-        "experiment": EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+        "experiment": experiment,
         "dataset_sha256": dataset_hashes,
         "research_gate": research_gate,
         "qualification_decision_time_before": cutoff.isoformat(),
@@ -415,7 +420,7 @@ def evaluate_single_pair_future_holdout(
         raise ValueError("confidence threshold must remain >= 0.60 and < 1.0")
 
     instrument = next(iter(datasets)).upper()
-    research_gate, cutoff, research_hashes = _load_qualified_single_pair(
+    experiment, research_gate, cutoff, research_hashes = _load_qualified_single_pair(
         qualification_report_path,
         instrument=instrument,
         horizon_bars=horizon_bars,
@@ -473,11 +478,11 @@ def evaluate_single_pair_future_holdout(
         training_counts,
     ) = _fit_pair_candidate(
         train,
-        experiment=EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+        experiment=experiment,
         horizon_bars=horizon_bars,
     )
     holdout_predictions = _predict_pair_candidate(
-        experiment=EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+        experiment=experiment,
         direction_models=direction_models,
         direction_calibrators=direction_calibrators,
         regime_routers=regime_routers,
@@ -501,7 +506,7 @@ def evaluate_single_pair_future_holdout(
         "policy": SINGLE_PAIR_FUTURE_HOLDOUT_POLICY,
         "instrument": instrument,
         "horizon_bars": int(horizon_bars),
-        "experiment": EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
+        "experiment": experiment,
         "dataset_sha256": dataset_hashes,
         "research_gate": research_gate,
         "qualification_decision_time_before": cutoff.isoformat(),
