@@ -6,6 +6,7 @@ import pytest
 
 from app.domain.training.research_trial_ledger import (
     ResearchTrial,
+    trial_from_report,
     append_trial,
     comparable_sharpes,
 )
@@ -44,3 +45,31 @@ def test_comparable_sharpes_skips_missing_values(tmp_path) -> None:
     rows = append_trial(path, _trial("def", None))
     assert comparable_sharpes(rows) == [1.2]
     assert json.loads(path.read_text())[-1]["sharpe_ratio"] is None
+
+
+def test_trial_from_report_supports_legacy_flat_aggregate() -> None:
+    report = {
+        "experiment": "v11",
+        "aggregate": {
+            "trade_count": 62,
+            "long_trades": 22,
+            "short_trades": 40,
+            "sharpe_ratio": -7.0,
+            "profit_factor": 0.61,
+            "max_drawdown": 0.01,
+            "total_return": -0.006,
+        },
+        "robustness_gate": {"research_robustness_passed": False},
+        "approved_for_paper": False,
+        "approved_for_live": False,
+    }
+    trial = trial_from_report(
+        report,
+        candidate="v11",
+        candidate_sha="legacy",
+        outer_era="60-81%",
+    )
+    assert trial.trade_count == 62
+    assert trial.long_trades == 22
+    assert trial.short_trades == 40
+    assert trial.sharpe_ratio == -7.0
