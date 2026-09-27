@@ -19,6 +19,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+          persist-credentials: false
 
       - name: Run pinned v11 research on staging
         env:
