@@ -26,6 +26,7 @@ from app.domain.training.model_qualification import (
     _apply_calibrator,
     _fit_calibrator,
     _fit_event_hybrid_payoff_risk_for_outer,
+    _fit_event_two_stage_for_outer,
     _nested_windows,
     _probabilities,
     _refit_windows,
@@ -54,22 +55,38 @@ def _fit_v11_models(
     training_window: pd.DataFrame,
     *,
     horizon_bars: int,
-) -> tuple[dict[str, Any], Any, dict[str, Any], list[str]]:
+) -> tuple[Any, Any, dict[str, Any], list[str]]:
+    """Fit direct actionable-only direction + pooled opportunity + payoff-risk models."""
     variant = ModelVariant(name=MODEL_NAME)
-    direction_models, opportunity_model, payoff_models, feature_columns, _ = (
-        _fit_event_hybrid_payoff_risk_for_outer(
+
+    direction_model, opportunity_model, feature_columns, _ = (
+        _fit_event_two_stage_for_outer(
             training_window,
             variant=variant,
             horizon_bars=horizon_bars,
         )
     )
-    return direction_models, opportunity_model, payoff_models, feature_columns
+
+    (
+        _unused_side_models,
+        _unused_opportunity_model,
+        payoff_models,
+        payoff_feature_columns,
+        _,
+    ) = _fit_event_hybrid_payoff_risk_for_outer(
+        training_window,
+        variant=variant,
+        horizon_bars=horizon_bars,
+    )
+    if payoff_feature_columns != feature_columns:
+        raise ValueError("v11 direct direction/payoff feature columns diverged")
+    return direction_model, opportunity_model, payoff_models, feature_columns
 
 
 def _score_frame(
     source: pd.DataFrame,
     *,
-    direction_models: dict[str, Any],
+    direction_model: Any,
     opportunity_model: Any,
     payoff_models: dict[str, Any],
     feature_columns: list[str],
@@ -92,30 +109,26 @@ def _score_frame(
     available = [column for column in columns if column in source.columns]
     result = source[available].copy()
 
-    long_probability = _probabilities(
-        direction_models["long"], source, feature_columns
-    )
-    short_probability = _probabilities(
-        direction_models["short"], source, feature_columns
-    )
-    raw_opportunity = _probabilities(
-        opportunity_model, source, feature_columns
-    )
-    calibrated_opportunity = _apply_calibrator(
-        opportunity_calibrator, raw_opportunity
-    )
-
-    probability_total = np.maximum(long_probability + short_probability, 1e-7)
-    normalized_long = np.clip(
-        long_probability / probability_total,
-        1e-7,
-        1.0 - 1e-7,
+    raw_direction = _probabilities(
+        direction_model,
+        source,
+        feature_columns,
     )
     calibrated_long = _apply_calibrator(
         direction_calibrator,
-        normalized_long,
+        raw_direction,
     )
     predicted_long = calibrated_long >= 0.50
+
+    raw_opportunity = _probabilities(
+        opportunity_model,
+        source,
+        feature_columns,
+    )
+    calibrated_opportunity = _apply_calibrator(
+        opportunity_calibrator,
+        raw_opportunity,
+    )
 
     long_upside = np.maximum(
         np.asarray(
@@ -148,9 +161,7 @@ def _score_frame(
     selected_upside = np.where(predicted_long, long_upside, short_upside)
     selected_downside = np.where(predicted_long, long_downside, short_downside)
 
-    result["long_action_probability"] = long_probability
-    result["short_action_probability"] = short_probability
-    result["raw_positive_probability"] = normalized_long
+    result["raw_positive_probability"] = raw_direction
     result["positive_probability"] = calibrated_long
     result["predicted_long"] = predicted_long
     result["direction_confidence"] = np.maximum(
@@ -159,7 +170,7 @@ def _score_frame(
     result["raw_opportunity_probability"] = raw_opportunity
     result["opportunity_probability"] = calibrated_opportunity
     result["action_probability_margin"] = np.abs(
-        long_probability - short_probability
+        (2.0 * calibrated_long) - 1.0
     )
     result["expected_long_upside_bps"] = long_upside
     result["expected_long_downside_bps"] = long_downside
@@ -190,26 +201,15 @@ def _fit_calibrated_scoring_stack(
     horizon_bars: int,
 ) -> tuple[dict[str, Any], Any, dict[str, Any], list[str], Any, Any]:
     (
-        direction_models,
+        direction_model,
         opportunity_model,
         payoff_models,
         feature_columns,
     ) = _fit_v11_models(training_prefix, horizon_bars=horizon_bars)
-    calibration_long = _probabilities(
-        direction_models["long"],
+    raw_direction = _probabilities(
+        direction_model,
         calibration_frame,
         feature_columns,
-    )
-    calibration_short = _probabilities(
-        direction_models["short"],
-        calibration_frame,
-        feature_columns,
-    )
-    calibration_total = np.maximum(calibration_long + calibration_short, 1e-7)
-    raw_direction = np.clip(
-        calibration_long / calibration_total,
-        1e-7,
-        1.0 - 1e-7,
     )
     actionable = (
         calibration_frame[EVENT_ACTIONABLE_TARGET_COLUMN].to_numpy(dtype=int) == 1
@@ -236,7 +236,7 @@ def _fit_calibrated_scoring_stack(
         ),
     )
     return (
-        direction_models,
+        direction_model,
         opportunity_model,
         payoff_models,
         feature_columns,
@@ -467,7 +467,7 @@ def run_v11_qualification(
         )
         inner_selection = _score_frame(
             inner.selection,
-            direction_models=inner_direction,
+            direction_model=inner_direction,
             opportunity_model=inner_opportunity,
             payoff_models=inner_payoff,
             feature_columns=inner_features,
@@ -500,7 +500,7 @@ def run_v11_qualification(
         )
         scored = _score_frame(
             outer_validation,
-            direction_models=outer_direction,
+            direction_model=outer_direction,
             opportunity_model=outer_opportunity,
             payoff_models=outer_payoff,
             feature_columns=outer_features,
