@@ -11,7 +11,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import pandas as pd
 from sklearn.metrics import balanced_accuracy_score
 
