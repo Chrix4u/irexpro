@@ -7,6 +7,7 @@ from app.domain.training.robustness_audit import (
     cost_stress_frontier,
     deflated_sharpe_ratio,
     expected_maximum_sharpe,
+    extended_risk_metrics,
     probabilistic_sharpe_ratio,
     robustness_snapshot,
 )
@@ -81,4 +82,26 @@ def test_deflated_sharpe_requires_trial_dispersion() -> None:
         deflated_sharpe_ratio(
             [0.0010, 0.0008, -0.0002, 0.0009],
             comparable_trial_sharpes=[0.5, 0.5],
+        )
+
+
+def test_extended_risk_metrics_cover_tail_and_path_risk() -> None:
+    result = extended_risk_metrics(
+        [0.01, -0.02, -0.01, 0.015, 0.005],
+        annualization_factor=252.0,
+    )
+    assert result["observation_count"] == 5
+    assert result["max_consecutive_losses"] == 2
+    assert 0.0 <= result["underwater_fraction"] <= 1.0
+    assert result["max_underwater_periods"] >= 1
+    assert result["value_at_risk_return"] <= 0.0
+    assert result["conditional_value_at_risk_return"] <= result["value_at_risk_return"]
+
+
+def test_extended_risk_metrics_validate_confidence() -> None:
+    with pytest.raises(ValueError, match="var_confidence"):
+        extended_risk_metrics(
+            [0.01, -0.01, 0.02],
+            annualization_factor=252.0,
+            var_confidence=0.5,
         )
