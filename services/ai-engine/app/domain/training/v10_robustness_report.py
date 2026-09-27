@@ -184,6 +184,62 @@ def _directional_payoff_diagnostics(frame: pd.DataFrame) -> dict[str, object]:
         }
     return result
 
+
+def _opportunity_gate_diagnostics(frame: pd.DataFrame) -> dict[str, object]:
+    target = frame["event_actionable_target"].astype(int)
+    probability = pd.to_numeric(frame["opportunity_probability"], errors="raise")
+    positives = int(target.sum())
+    thresholds: dict[str, object] = {}
+    for threshold in (0.40, 0.50, 0.60):
+        predicted = probability >= threshold
+        true_positive = int((predicted & (target == 1)).sum())
+        false_positive = int((predicted & (target == 0)).sum())
+        thresholds[f"{threshold:.2f}"] = {
+            "predicted_positive": int(predicted.sum()),
+            "precision": true_positive / max(1, true_positive + false_positive),
+            "recall": true_positive / max(1, positives),
+        }
+
+    side_recall: dict[str, object] = {}
+    for name, truth in {"long": 1, "short": 0}.items():
+        true_side = frame.loc[
+            (frame["event_actionable_target"] == 1)
+            & (frame["event_direction_target"] == truth)
+        ].copy()
+        if true_side.empty:
+            side_recall[name] = {"true_opportunities": 0}
+            continue
+        correct_direction = (
+            true_side["predicted_long"].astype(bool)
+            if truth == 1
+            else ~true_side["predicted_long"].astype(bool)
+        )
+        pre_payoff = (
+            correct_direction
+            & (true_side["direction_confidence"] >= 0.60)
+            & (true_side["opportunity_probability"] >= 0.60)
+            & (true_side["action_probability_margin"] >= 0.10)
+        )
+        side_recall[name] = {
+            "true_opportunities": int(len(true_side)),
+            "correct_direction": int(correct_direction.sum()),
+            "correct_direction_recall": float(correct_direction.mean()),
+            "pre_payoff_gate_pass": int(pre_payoff.sum()),
+            "pre_payoff_gate_recall": float(pre_payoff.mean()),
+        }
+
+    return {
+        "positive_rows": positives,
+        "positive_base_rate": float(target.mean()),
+        "thresholds": thresholds,
+        "side_recall": side_recall,
+        "warning": (
+            "The fixed 0.60 opportunity threshold is highly selective; "
+            "interpret execution scarcity as a gating/calibration issue, not "
+            "as proof that directional opportunities are absent."
+        ),
+    }
+
 def generate_report(qualification_root: Path) -> dict[str, object]:
     checkpoint_root = qualification_root / "qualification.checkpoints"
     pattern = f"fold-*-{EXPERIMENT}.csv"
@@ -244,6 +300,7 @@ def generate_report(qualification_root: Path) -> dict[str, object]:
         "overall_calibration": _calibration(combined),
         "directional_gating_funnel": _gating_funnel(all_predictions),
         "directional_payoff_diagnostics": _directional_payoff_diagnostics(all_predictions),
+        "opportunity_gate_diagnostics": _opportunity_gate_diagnostics(all_predictions),
         "statistical_robustness": robustness_snapshot(
             returns,
             comparable_trial_sharpes=trial_sharpes if len(trial_sharpes) >= 2 else None,
@@ -256,6 +313,7 @@ def generate_report(qualification_root: Path) -> dict[str, object]:
             "holdout_consumed": False,
             "two_sided_execution_observed": bool((combined["predicted_long"].astype(bool)).any() and (~combined["predicted_long"].astype(bool)).any()),
             "directional_warning": ("Only one execution direction is represented in qualification trades." if len(combined) and combined["predicted_long"].nunique() < 2 else None),
+            "opportunity_gate_warning": ("Current 0.60 opportunity gate has very low recall and suppresses valid opportunities; frozen v10 remains unchanged."),
         },
     }
 
