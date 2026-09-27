@@ -110,10 +110,18 @@ function looksLikeResetPaperProviderState(params: {
   providerPositions: import('../../broker/interfaces/broker-adapter.interface').BrokerPosition[];
   providerAccount: import('../../broker/interfaces/broker-adapter.interface').BrokerAccountInfo;
   internalTrades: Trade[];
+  closedTrades: import('../../broker/interfaces/broker-adapter.interface').BrokerClosedTrade[];
   storedAccount: BrokerAccount | null;
 }): boolean {
-  const { connection, providerOrders, providerPositions, providerAccount, internalTrades, storedAccount } =
-    params;
+  const {
+    connection,
+    providerOrders,
+    providerPositions,
+    providerAccount,
+    internalTrades,
+    closedTrades,
+    storedAccount,
+  } = params;
 
   if (connection.brokerId !== PAPER_BROKER_ID) return false;
   if (providerOrders.length !== 0 || providerPositions.length !== 0) return false;
@@ -126,7 +134,7 @@ function looksLikeResetPaperProviderState(params: {
 
   if (!pristineProviderAccount) return false;
 
-  const durableTradeEvidence = internalTrades.length > 0;
+  const durableTradeEvidence = internalTrades.length > 0 && closedTrades.length === 0;
   const durableFinancialEvidence =
     storedAccount !== null &&
     (!isPaperStartingBalance(storedAccount.balance) ||
@@ -287,6 +295,9 @@ export class StateReconciliationService {
         this.accountRepo.findOne({ where: { brokerConnectionId: connection.id } }),
       ]);
 
+      const closedTrades =
+        internalTrades.length > 0 ? await this.fetchClosedTrades(adapter, internalTrades) : [];
+
       const internalState = {
         orders: internalOrders.map((o) => this.toOrderSnapshot(o)),
         trades: internalTrades.map((t) => this.toTradeSnapshot(t)),
@@ -305,6 +316,7 @@ export class StateReconciliationService {
           providerPositions,
           providerAccount,
           internalTrades,
+          closedTrades,
           storedAccount,
         })
       ) {
@@ -360,8 +372,6 @@ export class StateReconciliationService {
       let autoResolvedCount = 0;
 
       // 7a. Positions: externally-closed + RECONCILIATION_PENDING recovery.
-      const closedTrades =
-        internalTrades.length > 0 ? await this.fetchClosedTrades(adapter, internalTrades) : [];
       for (const trade of internalTrades) {
         try {
           // Providers may use a position identifier that differs from the
