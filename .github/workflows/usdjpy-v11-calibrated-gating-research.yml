@@ -1,0 +1,77 @@
+name: USDJPY v11 Calibrated Gating Research
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: usdjpy-v11-calibrated-gating
+  cancel-in-progress: false
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run pinned v11 research on staging
+        env:
+          STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+          STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+          STAGING_SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
+          CANDIDATE_SHA: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$STAGING_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$STAGING_SSH_HOST" >> ~/.ssh/known_hosts
+
+          ssh -i ~/.ssh/id_ed25519 "$STAGING_SSH_USER@$STAGING_SSH_HOST"             "bash -s -- $CANDIDATE_SHA" <<'REMOTE'
+          set -Eeuo pipefail
+          umask 077
+
+          candidate_sha="$1"
+          staging='/home/lightworld/webapps/irexpro-staging'
+          research_root='/home/lightworld/research/irexpro-usdjpy-v11-calibrated-gating'
+          reference_root='/home/lightworld/research/irexpro-usdjpy-hybrid-direction/8b79b373c7800998465879eef2fa03409fe49e44'
+          corpus="$reference_root/corpora/USDJPY_MTF.csv"
+          output="$research_root/$candidate_sha"
+          boundary='2026-09-27T05:00:00Z'
+
+          cd "$staging"
+          git fetch origin "$candidate_sha"
+          test -z "$(git status --porcelain)"
+
+          worktree="/tmp/irexpro-v11-$candidate_sha"
+          rm -rf "$worktree"
+          git worktree add --detach "$worktree" "$candidate_sha"
+          trap 'git -C "$staging" worktree remove --force "$worktree" >/dev/null 2>&1 || true' EXIT
+
+          cd "$worktree/services/ai-engine"
+          python_bin="$staging/services/ai-engine/.venv/bin/python"
+          test -x "$python_bin"
+          test -s "$corpus"
+          export PYTHONPATH="$PWD"
+          export IREXPRO_XGB_N_JOBS=4
+
+          install -d -m 700 "$output"
+          "$python_bin" -m app.domain.training.single_pair_v11_calibrated_gating             --dataset "USDJPY=$corpus"             --horizon-bars 1             --decision-time-before "$boundary"             --report "$output/qualification.json"             --max-splits 3             | tee "$output/summary.txt"
+
+          "$python_bin" - "$output/qualification.json" <<'PY'
+          import json, sys
+          r=json.load(open(sys.argv[1]))
+          a=r["aggregate"]
+          g=r["robustness_gate"]
+          print("USDJPY_V11_CALIBRATED_GATING_RESEARCH_COMPLETE")
+          print(json.dumps(a, sort_keys=True))
+          print(json.dumps(g, sort_keys=True))
+          assert r["approved_for_paper"] is False
+          assert r["approved_for_live"] is False
+          PY
+          REMOTE
