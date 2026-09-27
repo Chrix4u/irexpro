@@ -13,6 +13,7 @@ from app.domain.training.model_qualification import (
     ACTIONABLE_TARGET_COLUMN,
     CONFIDENCE_FLOOR,
     EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
+    EVENT_HYBRID_PAYOFF_RISK_EXPERIMENT_NAME,
     EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
     OPPORTUNITY_CLASSIFICATION_THRESHOLD,
     TARGET_COLUMN,
@@ -21,7 +22,9 @@ from app.domain.training.model_qualification import (
     _summarize_predictions,
 )
 from app.domain.training.train_final_event_pair_bundle import (
+    _fit_hybrid_payoff_risk_candidate,
     _fit_pair_candidate,
+    _predict_hybrid_payoff_risk_candidate,
     _predict_pair_candidate,
 )
 from app.domain.training.train_final_multitimeframe import (
@@ -199,6 +202,7 @@ def _load_qualified_single_pair(
     if experiment not in {
         EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
         EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
+        EVENT_HYBRID_PAYOFF_RISK_EXPERIMENT_NAME,
     }:
         raise ValueError("Qualification report experiment is unsupported")
     if payload.get("event_label_policy") != EVENT_LABEL_POLICY:
@@ -331,37 +335,62 @@ def evaluate_single_pair_untouched_test(
     if not research_separation_verified:
         raise ValueError("Untouched test overlaps the research qualification boundary")
 
-    (
-        direction_models,
-        direction_calibrators,
-        regime_routers,
-        opportunity_model,
-        training_counts,
-    ) = _fit_pair_candidate(
-        train,
-        experiment=experiment,
-        horizon_bars=horizon_bars,
-    )
-    validation_predictions = _predict_pair_candidate(
-        experiment=experiment,
-        direction_models=direction_models,
-        direction_calibrators=direction_calibrators,
-        regime_routers=regime_routers,
-        opportunity_model=opportunity_model,
-        frame=validation,
-        confidence_floor=confidence_threshold,
-        horizon_bars=horizon_bars,
-    )
-    test_predictions = _predict_pair_candidate(
-        experiment=experiment,
-        direction_models=direction_models,
-        direction_calibrators=direction_calibrators,
-        regime_routers=regime_routers,
-        opportunity_model=opportunity_model,
-        frame=test,
-        confidence_floor=confidence_threshold,
-        horizon_bars=horizon_bars,
-    )
+    if experiment == EVENT_HYBRID_PAYOFF_RISK_EXPERIMENT_NAME:
+        (
+            direction_models,
+            opportunity_model,
+            payoff_models,
+            training_counts,
+        ) = _fit_hybrid_payoff_risk_candidate(
+            train,
+            horizon_bars=horizon_bars,
+        )
+        validation_predictions = _predict_hybrid_payoff_risk_candidate(
+            direction_models=direction_models,
+            opportunity_model=opportunity_model,
+            payoff_models=payoff_models,
+            frame=validation,
+            confidence_floor=confidence_threshold,
+        )
+        test_predictions = _predict_hybrid_payoff_risk_candidate(
+            direction_models=direction_models,
+            opportunity_model=opportunity_model,
+            payoff_models=payoff_models,
+            frame=test,
+            confidence_floor=confidence_threshold,
+        )
+    else:
+        (
+            direction_models,
+            direction_calibrators,
+            regime_routers,
+            opportunity_model,
+            training_counts,
+        ) = _fit_pair_candidate(
+            train,
+            experiment=experiment,
+            horizon_bars=horizon_bars,
+        )
+        validation_predictions = _predict_pair_candidate(
+            experiment=experiment,
+            direction_models=direction_models,
+            direction_calibrators=direction_calibrators,
+            regime_routers=regime_routers,
+            opportunity_model=opportunity_model,
+            frame=validation,
+            confidence_floor=confidence_threshold,
+            horizon_bars=horizon_bars,
+        )
+        test_predictions = _predict_pair_candidate(
+            experiment=experiment,
+            direction_models=direction_models,
+            direction_calibrators=direction_calibrators,
+            regime_routers=regime_routers,
+            opportunity_model=opportunity_model,
+            frame=test,
+            confidence_floor=confidence_threshold,
+            horizon_bars=horizon_bars,
+        )
 
     validation_metrics = _summarize_predictions(
         validation_predictions,
@@ -512,27 +541,45 @@ def evaluate_single_pair_future_holdout(
     if actual_holdout_start < holdout_start:
         raise ValueError("Future holdout overlaps the frozen research boundary")
 
-    (
-        direction_models,
-        direction_calibrators,
-        regime_routers,
-        opportunity_model,
-        training_counts,
-    ) = _fit_pair_candidate(
-        train,
-        experiment=experiment,
-        horizon_bars=horizon_bars,
-    )
-    holdout_predictions = _predict_pair_candidate(
-        experiment=experiment,
-        direction_models=direction_models,
-        direction_calibrators=direction_calibrators,
-        regime_routers=regime_routers,
-        opportunity_model=opportunity_model,
-        frame=holdout,
-        confidence_floor=confidence_threshold,
-        horizon_bars=horizon_bars,
-    )
+    if experiment == EVENT_HYBRID_PAYOFF_RISK_EXPERIMENT_NAME:
+        (
+            direction_models,
+            opportunity_model,
+            payoff_models,
+            training_counts,
+        ) = _fit_hybrid_payoff_risk_candidate(
+            train,
+            horizon_bars=horizon_bars,
+        )
+        holdout_predictions = _predict_hybrid_payoff_risk_candidate(
+            direction_models=direction_models,
+            opportunity_model=opportunity_model,
+            payoff_models=payoff_models,
+            frame=holdout,
+            confidence_floor=confidence_threshold,
+        )
+    else:
+        (
+            direction_models,
+            direction_calibrators,
+            regime_routers,
+            opportunity_model,
+            training_counts,
+        ) = _fit_pair_candidate(
+            train,
+            experiment=experiment,
+            horizon_bars=horizon_bars,
+        )
+        holdout_predictions = _predict_pair_candidate(
+            experiment=experiment,
+            direction_models=direction_models,
+            direction_calibrators=direction_calibrators,
+            regime_routers=regime_routers,
+            opportunity_model=opportunity_model,
+            frame=holdout,
+            confidence_floor=confidence_threshold,
+            horizon_bars=horizon_bars,
+        )
     holdout_metrics = _summarize_predictions(
         holdout_predictions,
         horizon_bars=horizon_bars,
