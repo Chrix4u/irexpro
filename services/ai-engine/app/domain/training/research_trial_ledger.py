@@ -1,6 +1,7 @@
 """Append-only research trial ledger helpers for model-selection accounting."""
 from __future__ import annotations
 
+import argparse
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -100,3 +101,38 @@ def comparable_sharpes(rows: list[dict[str, Any]]) -> list[float]:
         if value is not None:
             result.append(float(value))
     return result
+
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--ledger", required=True)
+    parser.add_argument("--report", required=True)
+    parser.add_argument("--candidate", required=True)
+    parser.add_argument("--candidate-sha", required=True)
+    parser.add_argument("--outer-era", required=True)
+    args = parser.parse_args()
+
+    report = json.loads(Path(args.report).read_text(encoding="utf-8"))
+    trial = trial_from_report(
+        report,
+        candidate=args.candidate,
+        candidate_sha=args.candidate_sha,
+        outer_era=args.outer_era,
+    )
+    rows = append_trial(args.ledger, trial)
+    print(
+        json.dumps(
+            {
+                "candidate": trial.candidate,
+                "candidate_sha": trial.candidate_sha,
+                "trial_count": len(rows),
+                "research_passed": trial.research_passed,
+            },
+            sort_keys=True,
+        )
+    )
+
+
+if __name__ == "__main__":
+    main()
