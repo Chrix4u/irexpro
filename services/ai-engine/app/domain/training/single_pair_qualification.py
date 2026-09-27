@@ -125,7 +125,6 @@ def evaluate_single_pair_candidate(
             EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
             EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
             EVENT_HYBRID_PAYOFF_EXPERIMENT_NAME,
-            EVENT_HYBRID_PAYOFF_EXPERIMENT_NAME,
         ],
         "research_only": True,
         "approved_for_paper": False,
