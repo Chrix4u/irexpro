@@ -12,6 +12,7 @@ from app.domain.training.model_qualification import (
     ACTIONABLE_TARGET_COLUMN,
     CONFIDENCE_FLOOR,
     EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME,
+    EVENT_HYBRID_EDGE_EXPERIMENT_NAME,
     EVENT_HYBRID_PAYOFF_EXPERIMENT_NAME,
     EVENT_LONG_ACTIONABLE_TARGET_COLUMN,
     EVENT_PAIR_EXPERT_EXPERIMENT_NAME,
@@ -29,6 +30,7 @@ from app.domain.training.model_qualification import (
     _ensure_actionable_target,
     _ensure_event_dual_actionability_targets,
     _event_dual_actionability_prediction_frame,
+    _event_hybrid_edge_prediction_frame,
     _event_hybrid_payoff_prediction_frame,
     _event_return_margin_bps,
     _event_two_stage_prediction_frame,
@@ -1384,5 +1386,44 @@ def test_hybrid_payoff_filter_requires_positive_selected_return_and_edge():
         predictions["expected_payoff_edge_bps"].to_numpy(dtype=float),
         np.array([3.0, 3.0, 0.3, 0.5]),
     )
+    assert qualification.CONFIDENCE_FLOOR == 0.60
+    assert qualification.DUAL_ACTION_MARGIN_FLOOR == 0.10
+
+
+def test_hybrid_edge_filter_uses_relative_payoff_not_absolute_return():
+    source = _research_dataset(periods=4, instruments=("EURUSD",))
+    source[EVENT_ACTIONABLE_TARGET_COLUMN] = [1, 1, 1, 1]
+    source[EVENT_DIRECTION_TARGET_COLUMN] = [1, 0, 1, 0]
+    source[EVENT_LONG_NET_RETURN_COLUMN] = [0.001, -0.001, 0.001, -0.001]
+    source[EVENT_SHORT_NET_RETURN_COLUMN] = [-0.001, 0.001, -0.001, 0.001]
+    source[EVENT_STEP_COLUMN] = [1, 1, 1, 1]
+    source[EVENT_BARRIER_RETURN_COLUMN] = [0.0005] * 4
+
+    predictions = _event_hybrid_edge_prediction_frame(
+        source,
+        long_probabilities=np.array([0.75, 0.20, 0.72, 0.25]),
+        short_probabilities=np.array([0.10, 0.75, 0.15, 0.70]),
+        opportunity_probabilities=np.array([0.80, 0.80, 0.80, 0.80]),
+        expected_long_return_bps=np.array([-0.20, -0.50, -0.80, -0.20]),
+        expected_short_return_bps=np.array([-0.50, -0.20, -0.40, -0.60]),
+        confidence_floor=0.60,
+        fold=1,
+        experiment=EVENT_HYBRID_EDGE_EXPERIMENT_NAME,
+        variant=ModelVariant(name="event_barrier_v10_hybrid_edge"),
+    )
+
+    assert predictions["predicted_long"].tolist() == [True, False, True, False]
+    assert predictions["expected_selected_net_return_bps"].tolist() == [
+        -0.20,
+        -0.20,
+        -0.80,
+        -0.60,
+    ]
+    np.testing.assert_allclose(
+        predictions["expected_payoff_edge_bps"].to_numpy(dtype=float),
+        np.array([0.30, 0.30, -0.40, -0.40]),
+    )
+    assert predictions["payoff_filter_pass"].tolist() == [True, True, False, False]
+    assert predictions["active_trade"].tolist() == [True, True, False, False]
     assert qualification.CONFIDENCE_FLOOR == 0.60
     assert qualification.DUAL_ACTION_MARGIN_FLOOR == 0.10
