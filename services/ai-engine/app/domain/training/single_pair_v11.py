@@ -41,7 +41,7 @@ from app.domain.training.validation import iter_purged_walk_forward_time_splits
 EXPERIMENT_NAME = "event_barrier_v11_calibrated_opportunity_payoff_risk"
 MODEL_NAME = "event_barrier_v11_calibrated_opportunity_payoff_risk"
 CALIBRATION_METHOD = "platt"
-DIRECTION_BLEND_WEIGHTS = (0.0, 0.25, 0.50, 0.75, 1.0)
+DIRECTION_BLEND_WEIGHTS = (0.0,)
 
 
 def _concat_chronological(*frames: pd.DataFrame) -> pd.DataFrame:
@@ -161,6 +161,16 @@ def _score_frame(
         raw_direction,
     )
     predicted_long = calibrated_long >= 0.50
+    long_side_probability = _probabilities(
+        side_direction_models["long"],
+        source,
+        feature_columns,
+    )
+    short_side_probability = _probabilities(
+        side_direction_models["short"],
+        source,
+        feature_columns,
+    )
 
     raw_opportunity = _probabilities(
         opportunity_model,
@@ -212,7 +222,7 @@ def _score_frame(
     result["raw_opportunity_probability"] = raw_opportunity
     result["opportunity_probability"] = calibrated_opportunity
     result["action_probability_margin"] = np.abs(
-        (2.0 * calibrated_long) - 1.0
+        long_side_probability - short_side_probability
     )
     result["expected_long_upside_bps"] = long_upside
     result["expected_long_downside_bps"] = long_downside
@@ -232,7 +242,7 @@ def _score_frame(
     result["fold"] = int(fold)
     result["experiment"] = EXPERIMENT_NAME
     result["model_variant"] = MODEL_NAME
-    result["calibration_method"] = CALIBRATION_METHOD
+    result["calibration_method"] = "opportunity_platt_direction_none"
     result["direction_blend_weight"] = float(direction_blend_weight)
     return result
 
@@ -256,7 +266,7 @@ def _fit_direction_calibrator(
         calibration_frame[EVENT_ACTIONABLE_TARGET_COLUMN].to_numpy(dtype=int) == 1
     )
     return _fit_calibrator(
-        CALIBRATION_METHOD,
+        "none",
         probabilities=raw_direction[actionable],
         labels=calibration_frame.loc[
             actionable,
@@ -661,9 +671,10 @@ def run_v11_qualification(
         "approved_for_paper": False,
         "approved_for_live": False,
         "selection_policy": (
-            "inner chronological Platt calibration plus bounded direction-blend/"
-            "execution-threshold search; outer validation never participates in "
-            "selection"
+            "inner chronological Platt calibration of opportunity probability plus "
+            "bounded opportunity/margin threshold search; v10 normalized dual-side "
+            "direction probability remains uncalibrated and outer validation never "
+            "participates in selection"
         ),
         "payoff_ratio_floor": 1.15,
         "direction_confidence_floor": 0.60,
