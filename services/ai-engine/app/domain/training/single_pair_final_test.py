@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -167,12 +168,25 @@ def _direction_failure_diagnostics(predictions: pd.DataFrame) -> dict[str, Any]:
     }
 
 
+
+
+def _qualification_frame_sha256(frame: pd.DataFrame) -> str:
+    ordered = frame.copy()
+    ordered["decision_time"] = pd.to_datetime(
+        ordered["decision_time"], utc=True, errors="raise"
+    ).map(lambda value: value.isoformat())
+    ordered = ordered.sort_values(["decision_time", "instrument"]).reset_index(drop=True)
+    ordered = ordered.reindex(sorted(ordered.columns), axis=1)
+    payload = ordered.to_csv(index=False, float_format="%.12g", lineterminator="\n")
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def _load_qualified_single_pair(
     path: str | Path,
     *,
     instrument: str,
     horizon_bars: int,
-) -> tuple[str, dict[str, Any], pd.Timestamp, dict[str, str]]:
+) -> tuple[str, dict[str, Any], pd.Timestamp, dict[str, str], dict[str, Any]]:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     scope = payload.get("single_pair_scope")
     if not isinstance(scope, dict):
@@ -210,7 +224,17 @@ def _load_qualified_single_pair(
     hashes = payload.get("dataset_sha256")
     if not isinstance(hashes, dict) or set(hashes) != {instrument}:
         raise ValueError("Qualification report dataset hashes do not match single-pair scope")
-    return experiment, gate, cutoff, {str(k): str(v) for k, v in hashes.items()}
+    provenance = {
+        "qualification_frame_sha256": payload.get("qualification_frame_sha256"),
+        "qualification_frame_rows": payload.get("qualification_frame_rows"),
+    }
+    return (
+        experiment,
+        gate,
+        cutoff,
+        {str(k): str(v) for k, v in hashes.items()},
+        provenance,
+    )
 
 
 def _single_pair_final_gate(
@@ -278,7 +302,7 @@ def evaluate_single_pair_untouched_test(
     if confidence_threshold < CONFIDENCE_FLOOR or confidence_threshold >= 1.0:
         raise ValueError("confidence threshold must remain >= 0.60 and < 1.0")
 
-    experiment, research_gate, cutoff, research_hashes = _load_qualified_single_pair(
+    experiment, research_gate, cutoff, research_hashes, research_provenance = _load_qualified_single_pair(
         qualification_report_path,
         instrument=instrument,
         horizon_bars=horizon_bars,
@@ -290,7 +314,12 @@ def evaluate_single_pair_untouched_test(
         commission_bps=0.0,
         slippage_bps=0.0,
     )
-    if dataset_hashes != research_hashes:
+    qualified_frame_hash = research_provenance.get("qualification_frame_sha256")
+    if qualified_frame_hash:
+        pre_cutoff = pooled.loc[pooled["decision_time"] < cutoff].copy()
+        if _qualification_frame_sha256(pre_cutoff) != qualified_frame_hash:
+            raise ValueError("Final-test pre-boundary frame does not match qualification")
+    elif dataset_hashes != research_hashes:
         raise ValueError("Final-test dataset does not match qualified dataset")
 
     train, validation, test = _chronological_final_split(
@@ -420,7 +449,7 @@ def evaluate_single_pair_future_holdout(
         raise ValueError("confidence threshold must remain >= 0.60 and < 1.0")
 
     instrument = next(iter(datasets)).upper()
-    experiment, research_gate, cutoff, research_hashes = _load_qualified_single_pair(
+    experiment, research_gate, cutoff, research_hashes, research_provenance = _load_qualified_single_pair(
         qualification_report_path,
         instrument=instrument,
         horizon_bars=horizon_bars,
@@ -444,8 +473,21 @@ def evaluate_single_pair_future_holdout(
         slippage_bps=0.0,
     )
     pooled = _ensure_actionable_target(pooled)
-    if dataset_hashes != research_hashes:
-        raise ValueError("Future-holdout dataset does not match qualified dataset")
+    qualified_frame_hash = research_provenance.get("qualification_frame_sha256")
+    if not qualified_frame_hash:
+        if dataset_hashes != research_hashes:
+            raise ValueError("Future-holdout dataset does not match qualified dataset")
+    else:
+        qualified_prefix = pooled.loc[pooled["decision_time"] < cutoff].copy()
+        if _qualification_frame_sha256(qualified_prefix) != qualified_frame_hash:
+            raise ValueError(
+                "Future-holdout historical prefix does not match frozen qualification frame"
+            )
+        expected_rows = research_provenance.get("qualification_frame_rows")
+        if expected_rows is not None and len(qualified_prefix) != int(expected_rows):
+            raise ValueError(
+                "Future-holdout historical prefix row count does not match qualification"
+            )
 
     purge_boundary = holdout_start - pd.Timedelta(minutes=horizon_bars)
     train = pooled.loc[pooled["decision_time"] < purge_boundary].copy()
