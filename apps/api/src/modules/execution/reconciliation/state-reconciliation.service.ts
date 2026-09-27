@@ -24,6 +24,7 @@ import { RiskGrant } from '../entities/risk-grant.entity';
 import { RiskGrantStatus } from '../interfaces/execution-authority';
 import { AllocationService } from '../services/allocation.service';
 import {
+  compareDecimal,
   compareStates,
   InternalAccountSnapshot,
   InternalOrderSnapshot,
@@ -89,6 +90,63 @@ const RECONCILABLE_TRADE_STATUSES = [
 /** Keep reconciliation error handling aligned with the execution boundary. */
 const SECRET_LIKE_RUN = /[A-Za-z0-9]{16,}/g;
 const RECONCILIATION_REASON_MAX_LENGTH = 500;
+
+const PAPER_BROKER_ID = 'paper-broker';
+const PAPER_STARTING_BALANCE = '10000.00';
+
+function isZeroLikeDecimal(value: string | null | undefined): boolean {
+  if (value == null) return false;
+  return /^[-+]?0+(?:\.0+)?$/.test(value.trim());
+}
+
+function isPaperStartingBalance(value: string | null | undefined): boolean {
+  if (value == null) return false;
+  return compareDecimal(value, PAPER_STARTING_BALANCE) === 0;
+}
+
+function looksLikeResetPaperProviderState(params: {
+  connection: BrokerConnection;
+  providerOrders: import('../../broker/interfaces/broker-adapter.interface').BrokerOrderState[];
+  providerPositions: import('../../broker/interfaces/broker-adapter.interface').BrokerPosition[];
+  providerAccount: import('../../broker/interfaces/broker-adapter.interface').BrokerAccountInfo;
+  internalOrders: Order[];
+  internalTrades: Trade[];
+  closedTrades: import('../../broker/interfaces/broker-adapter.interface').BrokerClosedTrade[];
+  storedAccount: BrokerAccount | null;
+}): boolean {
+  const {
+    connection,
+    providerOrders,
+    providerPositions,
+    providerAccount,
+    internalOrders,
+    internalTrades,
+    closedTrades,
+    storedAccount,
+  } = params;
+
+  if (connection.brokerId !== PAPER_BROKER_ID) return false;
+  if (providerOrders.length !== 0 || providerPositions.length !== 0) return false;
+
+  const pristineProviderAccount =
+    isPaperStartingBalance(providerAccount.balance) &&
+    isPaperStartingBalance(providerAccount.equity) &&
+    isZeroLikeDecimal(providerAccount.margin) &&
+    isPaperStartingBalance(providerAccount.freeMargin);
+
+  if (!pristineProviderAccount) return false;
+
+  const durableTradeEvidence =
+    internalOrders.length === 0 &&
+    internalTrades.some((trade) => trade.status === TradeStatus.OPEN) &&
+    closedTrades.length === 0;
+  const durableFinancialEvidence =
+    storedAccount !== null &&
+    (!isPaperStartingBalance(storedAccount.balance) ||
+      !isPaperStartingBalance(storedAccount.equity));
+
+  return durableTradeEvidence || durableFinancialEvidence;
+}
 
 /**
  * Provider/runtime errors can include credential material in their message.
@@ -242,11 +300,37 @@ export class StateReconciliationService {
         this.accountRepo.findOne({ where: { brokerConnectionId: connection.id } }),
       ]);
 
+      const closedTrades =
+        internalTrades.length > 0 ? await this.fetchClosedTrades(adapter, internalTrades) : [];
+
       const internalState = {
         orders: internalOrders.map((o) => this.toOrderSnapshot(o)),
         trades: internalTrades.map((t) => this.toTradeSnapshot(t)),
         account: storedAccount ? this.toAccountSnapshot(storedAccount) : null,
       };
+
+      // PAPER_ONLY restart guard: the in-process simulator starts from a
+      // pristine 10,000.00 account after an API process restart. Durable DB
+      // state must never be overwritten by that reset fingerprint, and open
+      // trades must never be falsely auto-closed with null economics simply
+      // because the simulator's in-memory positions/history were lost.
+      if (
+        looksLikeResetPaperProviderState({
+          connection,
+          providerOrders,
+          providerPositions,
+          providerAccount,
+          internalOrders,
+          internalTrades,
+          closedTrades,
+          storedAccount,
+        })
+      ) {
+        throw new Error(
+          'PAPER_SIMULATOR_STATE_RESET: provider memory is pristine while durable account/trade ' +
+            'state proves prior paper activity; reconciliation refused to overwrite durable truth',
+        );
+      }
 
       // ── Phase 5: pure diff ──────────────────────────────────────────────
       const candidates = compareStates(internalState, providerState, new Date());
@@ -294,8 +378,6 @@ export class StateReconciliationService {
       let autoResolvedCount = 0;
 
       // 7a. Positions: externally-closed + RECONCILIATION_PENDING recovery.
-      const closedTrades =
-        internalTrades.length > 0 ? await this.fetchClosedTrades(adapter, internalTrades) : [];
       for (const trade of internalTrades) {
         try {
           // Providers may use a position identifier that differs from the
