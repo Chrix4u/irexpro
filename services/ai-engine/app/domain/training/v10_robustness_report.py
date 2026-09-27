@@ -153,6 +153,37 @@ def _gating_funnel(frame: pd.DataFrame) -> dict[str, object]:
     return rows
 
 
+
+def _directional_payoff_diagnostics(frame: pd.DataFrame) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for name, mask in {
+        "long": frame["predicted_long"].astype(bool),
+        "short": ~frame["predicted_long"].astype(bool),
+    }.items():
+        side = frame.loc[mask].copy()
+        pre = side.loc[
+            (side["direction_confidence"] >= 0.60)
+            & (side["opportunity_probability"] >= 0.60)
+            & (side["action_probability_margin"] >= 0.10)
+        ].copy()
+        if pre.empty:
+            result[name] = {"pre_payoff_candidates": 0}
+            continue
+        ratios = pd.to_numeric(pre["expected_payoff_ratio"], errors="raise")
+        realized = pd.to_numeric(pre["selected_net_return"], errors="raise")
+        result[name] = {
+            "pre_payoff_candidates": int(len(pre)),
+            "payoff_ratio_min": float(ratios.min()),
+            "payoff_ratio_median": float(ratios.median()),
+            "payoff_ratio_max": float(ratios.max()),
+            "payoff_ratio_gte_1_0": int((ratios >= 1.0).sum()),
+            "payoff_ratio_gte_1_15": int((ratios >= 1.15).sum()),
+            "realized_win_rate": float((realized > 0.0).mean()),
+            "realized_average_return": float(realized.mean()),
+            "realized_total_return": float(realized.sum()),
+        }
+    return result
+
 def generate_report(qualification_root: Path) -> dict[str, object]:
     checkpoint_root = qualification_root / "qualification.checkpoints"
     pattern = f"fold-*-{EXPERIMENT}.csv"
@@ -212,6 +243,7 @@ def generate_report(qualification_root: Path) -> dict[str, object]:
         "overall_context": _context(combined),
         "overall_calibration": _calibration(combined),
         "directional_gating_funnel": _gating_funnel(all_predictions),
+        "directional_payoff_diagnostics": _directional_payoff_diagnostics(all_predictions),
         "statistical_robustness": robustness_snapshot(
             returns,
             comparable_trial_sharpes=trial_sharpes if len(trial_sharpes) >= 2 else None,
