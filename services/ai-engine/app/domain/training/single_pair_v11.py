@@ -31,11 +31,11 @@ from app.domain.training.model_qualification import (
     _refit_windows,
 )
 from app.domain.training.train_multitimeframe import load_and_prepare_corpora
-from app.domain.training.validation import iter_purged_walk_forward_time_splits
 from app.domain.training.v11_calibrated_opportunity import (
     apply_v11_execution_policy,
     select_execution_thresholds,
 )
+from app.domain.training.validation import iter_purged_walk_forward_time_splits
 
 EXPERIMENT_NAME = "event_barrier_v11_calibrated_opportunity_payoff_risk"
 MODEL_NAME = "event_barrier_v11_calibrated_opportunity_payoff_risk"
