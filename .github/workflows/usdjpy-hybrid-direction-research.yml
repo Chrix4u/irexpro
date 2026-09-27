@@ -19,7 +19,7 @@ env:
 
 jobs:
   qualify:
-    name: Freeze and qualify USDJPY hybrid payoff candidate
+    name: Qualify USDJPY hybrid payoff candidate
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
@@ -47,18 +47,23 @@ jobs:
           set -Eeuo pipefail
           git fetch --quiet --no-tags origin main
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
           if [[ "$(git rev-parse origin/main)" != "$CANDIDATE_SHA" ]]; then
             echo "run=false" >> "$GITHUB_OUTPUT"
             echo "USDJPY_HYBRID_PAYOFF_SKIPPED reason=candidate_superseded"
             exit 0
           fi
+
           if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+
           parent_sha="$(git rev-parse "$CANDIDATE_SHA^1" 2>/dev/null || true)"
           changed="$(git diff --name-only "$parent_sha" "$CANDIDATE_SHA" || true)"
-          if grep -Eq '^(\.github/workflows/usdjpy-hybrid-direction-research\.yml|services/ai-engine/app/domain/training/(single_pair_qualification|single_pair_final_test|model_qualification|train_final_event_pair_bundle)\.py|services/ai-engine/tests/test_(single_pair_qualification|single_pair_final_test|final_event_pair_bundle)\.py)
+          research_pattern='^(\.github/workflows/usdjpy-hybrid-direction-research\.yml|services/ai-engine/app/domain/training/(single_pair_qualification|single_pair_final_test|model_qualification|train_final_event_pair_bundle)\.py|services/ai-engine/tests/test_(single_pair_qualification|single_pair_final_test|final_event_pair_bundle)\.py)$'
+
+          if grep -Eq "$research_pattern" <<<"$changed"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             echo "USDJPY_HYBRID_PAYOFF_REQUIRED reason=hybrid_research_change"
           else
@@ -80,7 +85,7 @@ jobs:
           printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
 
-      - name: Freeze boundary and run pre-boundary qualification
+      - name: Run frozen-boundary payoff qualification
         if: steps.relevance.outputs.run == 'true'
         shell: bash
         run: |
@@ -99,7 +104,6 @@ jobs:
           reference="$research_root/$reference_sha"
           output="$research_root/$candidate_sha"
           boundary_file="$reference/frozen-boundary.txt"
-          raw="$reference/raw/USDJPY_M1.csv"
           corpus="$reference/corpora/USDJPY_MTF.csv"
           qualification="$output/qualification.json"
           readonly pair='USDJPY'
@@ -117,10 +121,10 @@ jobs:
 
           install -d -m 700 "$output"
           test -s "$boundary_file"
-          test -s "$raw"
           test -s "$corpus"
           boundary="$(tr -d '[:space:]' < "$boundary_file")"
           test "$boundary" = '2026-09-27T05:00:00Z'
+
           echo "USDJPY_HYBRID_PAYOFF_FROZEN_BOUNDARY $boundary"
           echo "USDJPY_HYBRID_PAYOFF_REFERENCE_SHA $reference_sha"
 
@@ -134,123 +138,34 @@ jobs:
             | tee "$output/qualification-summary.json"
 
           "$python_bin" - "$qualification" <<'PY'
-          import json, sys
+          import json
+          import sys
+
           from app.domain.training.model_qualification import (
               EVENT_HYBRID_PAYOFF_EXPERIMENT_NAME,
           )
-          r=json.load(open(sys.argv[1]))
-          e=r['experiments'][EVENT_HYBRID_PAYOFF_EXPERIMENT_NAME]
-          g=e['research_gate']
-          status='PASS' if g['research_gate_passed'] else 'HOLD'
-          print(f'USDJPY_HYBRID_PAYOFF_QUALIFICATION_{status}')
-          print('OBSERVED', json.dumps(g['observed'], sort_keys=True))
-          print('CHECKS', json.dumps(g['checks'], sort_keys=True))
-          print('ACTIVE_TRADES', e['overall']['active_trades'])
-          print('WARNINGS', json.dumps(e['overall'].get('evidence_sufficiency_warnings', [])))
-          print('FROZEN_FRAME_SHA256', r['qualification_frame_sha256'])
-          print('FROZEN_FRAME_ROWS', r['qualification_frame_rows'])
-          if g['research_gate_passed']:
-              print('USDJPY_HYBRID_PAYOFF_AWAIT_FUTURE_HOLDOUT')
-          PY
-          REMOTE
 
-      - name: Remove ephemeral SSH material
-        if: always()
-        shell: bash
-        run: rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
- <<<"$changed"; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            echo "USDJPY_HYBRID_PAYOFF_REQUIRED reason=hybrid_research_change"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "USDJPY_HYBRID_PAYOFF_SKIPPED reason=no_hybrid_research_change"
-          fi
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              report = json.load(handle)
 
-      - name: Configure pinned SSH identity
-        if: steps.relevance.outputs.run == 'true'
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          test -n "$STAGING_SSH_USER"
-          test -n "$SSH_PRIVATE_KEY"
-          test -n "$SSH_KNOWN_HOSTS"
-          umask 077
-          install -d -m 700 "$HOME/.ssh"
-          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
-          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
-          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+          experiment = report["experiments"][EVENT_HYBRID_PAYOFF_EXPERIMENT_NAME]
+          gate = experiment["research_gate"]
+          status = "PASS" if gate["research_gate_passed"] else "HOLD"
 
-      - name: Freeze boundary and run pre-boundary qualification
-        if: steps.relevance.outputs.run == 'true'
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          ssh -i "$HOME/.ssh/irexpro_staging" -p "$STAGING_SSH_PORT" \
-            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
-            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
-            "bash -s -- $CANDIDATE_SHA" <<'REMOTE'
-          set -Eeuo pipefail
-          umask 077
-
-          candidate_sha="$1"
-          staging='/home/lightworld/webapps/irexpro-staging'
-          research_root='/home/lightworld/research/irexpro-usdjpy-hybrid-direction'
-          reference_sha='8b79b373c7800998465879eef2fa03409fe49e44'
-          reference="$research_root/$reference_sha"
-          output="$research_root/$candidate_sha"
-          boundary_file="$reference/frozen-boundary.txt"
-          raw="$reference/raw/USDJPY_M1.csv"
-          corpus="$reference/corpora/USDJPY_MTF.csv"
-          qualification="$output/qualification.json"
-          readonly pair='USDJPY'
-          readonly horizon='1'
-
-          cd "$staging"
-          test "$(git rev-parse HEAD)" = "$candidate_sha"
-          test -z "$(git status --porcelain)"
-
-          cd "$staging/services/ai-engine"
-          python_bin='.venv/bin/python'
-          test -x "$python_bin"
-          export PYTHONPATH="$PWD"
-          export IREXPRO_XGB_N_JOBS=4
-
-          install -d -m 700 "$output"
-          test -s "$boundary_file"
-          test -s "$raw"
-          test -s "$corpus"
-          boundary="$(tr -d '[:space:]' < "$boundary_file")"
-          test "$boundary" = '2026-09-27T05:00:00Z'
-          echo "USDJPY_HYBRID_PAYOFF_FROZEN_BOUNDARY $boundary"
-          echo "USDJPY_HYBRID_PAYOFF_REFERENCE_SHA $reference_sha"
-
-          "$python_bin" -m app.domain.training.single_pair_qualification \
-            --dataset "$pair=$corpus" \
-            --horizon-bars "$horizon" \
-            --decision-time-before "$boundary" \
-            --report "$qualification" \
-            --max-splits 3 \
-            --confidence-floor 0.60 \
-            | tee "$output/qualification-summary.json"
-
-          "$python_bin" - "$qualification" <<'PY'
-          import json, sys
-          from app.domain.training.model_qualification import (
-              EVENT_HYBRID_PAYOFF_EXPERIMENT_NAME,
+          print(f"USDJPY_HYBRID_PAYOFF_QUALIFICATION_{status}")
+          print("OBSERVED", json.dumps(gate["observed"], sort_keys=True))
+          print("CHECKS", json.dumps(gate["checks"], sort_keys=True))
+          print("ACTIVE_TRADES", experiment["overall"]["active_trades"])
+          print(
+              "WARNINGS",
+              json.dumps(
+                  experiment["overall"].get("evidence_sufficiency_warnings", [])
+              ),
           )
-          r=json.load(open(sys.argv[1]))
-          e=r['experiments'][EVENT_HYBRID_PAYOFF_EXPERIMENT_NAME]
-          g=e['research_gate']
-          status='PASS' if g['research_gate_passed'] else 'HOLD'
-          print(f'USDJPY_HYBRID_PAYOFF_QUALIFICATION_{status}')
-          print('OBSERVED', json.dumps(g['observed'], sort_keys=True))
-          print('CHECKS', json.dumps(g['checks'], sort_keys=True))
-          print('ACTIVE_TRADES', e['overall']['active_trades'])
-          print('WARNINGS', json.dumps(e['overall'].get('evidence_sufficiency_warnings', [])))
-          print('FROZEN_FRAME_SHA256', r['qualification_frame_sha256'])
-          print('FROZEN_FRAME_ROWS', r['qualification_frame_rows'])
-          if g['research_gate_passed']:
-              print('USDJPY_HYBRID_PAYOFF_AWAIT_FUTURE_HOLDOUT')
+          print("FROZEN_FRAME_SHA256", report["qualification_frame_sha256"])
+          print("FROZEN_FRAME_ROWS", report["qualification_frame_rows"])
+          if gate["research_gate_passed"]:
+              print("USDJPY_HYBRID_PAYOFF_AWAIT_FUTURE_HOLDOUT")
           PY
           REMOTE
 
