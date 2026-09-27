@@ -152,6 +152,19 @@ class _RefitWindows:
     calibration: pd.DataFrame
 
 
+@dataclass
+class _V11SelectedCandidate:
+    opportunity_floor: float
+    action_margin_floor: float
+    candidate_reports: list[dict[str, Any]]
+    direction_models: dict[str, XGBClassifier]
+    opportunity_model: XGBClassifier
+    opportunity_calibrator: _CalibrationModel
+    payoff_models: dict[str, XGBRegressor]
+    feature_columns: list[str]
+    training_counts: dict[str, Any]
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -2088,8 +2101,8 @@ def _select_v11_gating_inside_outer_training(
     horizon_bars: int,
     confidence_floor: float,
     min_inner_periods: int,
-) -> tuple[float, float, list[dict[str, Any]]]:
-    """Select bounded opportunity/margin gates using training-only nested selection."""
+) -> _V11SelectedCandidate:
+    """Freeze one calibrated model+gate candidate using training-only nested selection."""
     windows = _nested_windows(
         training_window,
         horizon_bars=horizon_bars,
@@ -2105,7 +2118,7 @@ def _select_v11_gating_inside_outer_training(
         opportunity_model,
         payoff_models,
         feature_columns,
-        _,
+        training_counts,
     ) = _fit_event_hybrid_payoff_risk_for_outer(
         inner_training,
         variant=variant,
@@ -2120,6 +2133,13 @@ def _select_v11_gating_inside_outer_training(
         probabilities=calibration_raw,
         labels=windows.calibration[EVENT_ACTIONABLE_TARGET_COLUMN].to_numpy(dtype=int),
     )
+    training_counts = {
+        **training_counts,
+        "opportunity_calibration": "platt_training_only",
+        "opportunity_calibration_rows": int(len(windows.calibration)),
+        "v11_selection_rows": int(len(windows.selection)),
+        "v11_model_refit_after_gate_selection": False,
+    }
 
     selection_frame = windows.selection
     long_probabilities = _probabilities(
@@ -2238,10 +2258,16 @@ def _select_v11_gating_inside_outer_training(
                 "action_margin_floor": float(DUAL_ACTION_MARGIN_FLOOR),
             }
         )
-        return (
-            float(confidence_floor),
-            float(DUAL_ACTION_MARGIN_FLOOR),
-            candidate_reports,
+        return _V11SelectedCandidate(
+            opportunity_floor=float(confidence_floor),
+            action_margin_floor=float(DUAL_ACTION_MARGIN_FLOOR),
+            candidate_reports=candidate_reports,
+            direction_models=direction_models,
+            opportunity_model=opportunity_model,
+            opportunity_calibrator=opportunity_calibrator,
+            payoff_models=payoff_models,
+            feature_columns=feature_columns,
+            training_counts=training_counts,
         )
 
     selected = max(
@@ -2252,69 +2278,16 @@ def _select_v11_gating_inside_outer_training(
             -float(row["action_margin_floor"]),
         ),
     )
-    return (
-        float(selected["opportunity_floor"]),
-        float(selected["action_margin_floor"]),
-        candidate_reports,
-    )
-
-
-def _fit_v11_calibrated_payoff_risk_for_outer(
-    training_window: pd.DataFrame,
-    *,
-    variant: ModelVariant,
-    horizon_bars: int,
-) -> tuple[
-    dict[str, XGBClassifier],
-    XGBClassifier,
-    _CalibrationModel,
-    dict[str, XGBRegressor],
-    list[str],
-    dict[str, Any],
-]:
-    """Fit v11 models and Platt-calibrate opportunity probability training-only."""
-    windows = _refit_windows(
-        training_window,
-        horizon_bars=horizon_bars,
-    )
-    model_training = (
-        pd.concat([windows.fit, windows.early_stop], ignore_index=True)
-        .sort_values(["decision_time", "instrument"])
-        .reset_index(drop=True)
-    )
-    (
-        direction_models,
-        opportunity_model,
-        payoff_models,
-        feature_columns,
-        counts,
-    ) = _fit_event_hybrid_payoff_risk_for_outer(
-        model_training,
-        variant=variant,
-        horizon_bars=horizon_bars,
-    )
-    calibration_raw = _probabilities(
-        opportunity_model,
-        windows.calibration,
-        feature_columns,
-    )
-    opportunity_calibrator = _fit_calibrator(
-        "platt",
-        probabilities=calibration_raw,
-        labels=windows.calibration[EVENT_ACTIONABLE_TARGET_COLUMN].to_numpy(dtype=int),
-    )
-    counts = {
-        **counts,
-        "opportunity_calibration": "platt_training_only",
-        "opportunity_calibration_rows": int(len(windows.calibration)),
-    }
-    return (
-        direction_models,
-        opportunity_model,
-        opportunity_calibrator,
-        payoff_models,
-        feature_columns,
-        counts,
+    return _V11SelectedCandidate(
+        opportunity_floor=float(selected["opportunity_floor"]),
+        action_margin_floor=float(selected["action_margin_floor"]),
+        candidate_reports=candidate_reports,
+        direction_models=direction_models,
+        opportunity_model=opportunity_model,
+        opportunity_calibrator=opportunity_calibrator,
+        payoff_models=payoff_models,
+        feature_columns=feature_columns,
+        training_counts=training_counts,
     )
 
 
@@ -3829,29 +3802,22 @@ def run_nested_qualification_experiments(
                     )
                 variant = experiment.variants[0]
                 decision_threshold = 0.50
-                (
-                    selected_opportunity_floor,
-                    selected_action_margin_floor,
-                    gating_candidate_reports,
-                ) = _select_v11_gating_inside_outer_training(
+                selected_candidate = _select_v11_gating_inside_outer_training(
                     outer_train,
                     variant=variant,
                     horizon_bars=horizon_bars,
                     confidence_floor=confidence_floor,
                     min_inner_periods=min_inner_periods,
                 )
-                (
-                    direction_models,
-                    opportunity_model,
-                    opportunity_calibrator,
-                    payoff_models,
-                    feature_columns,
-                    training_counts,
-                ) = _fit_v11_calibrated_payoff_risk_for_outer(
-                    outer_train,
-                    variant=variant,
-                    horizon_bars=horizon_bars,
-                )
+                selected_opportunity_floor = selected_candidate.opportunity_floor
+                selected_action_margin_floor = selected_candidate.action_margin_floor
+                gating_candidate_reports = selected_candidate.candidate_reports
+                direction_models = selected_candidate.direction_models
+                opportunity_model = selected_candidate.opportunity_model
+                opportunity_calibrator = selected_candidate.opportunity_calibrator
+                payoff_models = selected_candidate.payoff_models
+                feature_columns = selected_candidate.feature_columns
+                training_counts = selected_candidate.training_counts
                 model = None
                 long_probabilities = _probabilities(
                     direction_models["long"],
@@ -3910,7 +3876,7 @@ def run_nested_qualification_experiments(
                 outer_active = predictions["active_trade"].astype(bool)
                 outer_long = predictions["predicted_long"].astype(bool)
                 selection = {
-                    "policy": "nested_training_only_v11_opportunity_and_margin_selection",
+                    "policy": "nested_training_only_v11_frozen_model_and_gate_selection",
                     "selected_variant": variant.name,
                     "decision_threshold": decision_threshold,
                     "opportunity_threshold": selected_opportunity_floor,
@@ -3920,6 +3886,7 @@ def run_nested_qualification_experiments(
                     "action_margin_grid": list(V11_ACTION_MARGIN_GRID),
                     "minimum_inner_selection_trades": V11_MIN_SELECTION_TRADES,
                     "opportunity_calibration": "platt_training_only",
+                    "model_refit_after_gate_selection": False,
                     "outer_active_trades": int(outer_active.sum()),
                     "outer_long_trades": int((outer_active & outer_long).sum()),
                     "outer_short_trades": int((outer_active & ~outer_long).sum()),
