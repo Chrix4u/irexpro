@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
-
 import pandas as pd
 
 
@@ -20,7 +18,7 @@ class ValidationEra:
         candidate: str,
         start: str,
         end: str,
-    ) -> "ValidationEra":
+    ) -> ValidationEra:
         start_ts = pd.Timestamp(start)
         end_ts = pd.Timestamp(end)
         if start_ts.tzinfo is None:
