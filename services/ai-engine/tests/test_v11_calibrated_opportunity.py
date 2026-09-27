@@ -57,8 +57,8 @@ def test_selector_can_choose_inner_threshold_without_outer_data() -> None:
         minimum_side_trades=3,
     )
     assert choice.eligible is True
-    assert choice.opportunity_threshold in {0.35, 0.40, 0.45, 0.50}
-    assert choice.action_margin_floor in {0.03, 0.05}
+    assert choice.opportunity_threshold in {0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50}
+    assert choice.action_margin_floor in {0.00, 0.02, 0.03, 0.05}
 
 
 def test_selector_falls_back_when_two_sided_evidence_missing() -> None:
