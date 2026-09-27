@@ -11,6 +11,7 @@ from app.domain.training.model_qualification import (
     DUAL_ACTION_MARGIN_FLOOR,
     EVENT_DUAL_ACTIONABILITY_EXPERIMENT_NAME,
     EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_NAME,
+    EVENT_HYBRID_PAYOFF_RISK_EXPERIMENT_NAME,
 )
 from app.domain.training.train_final_event_pair_bundle import (
     EVENT_PAIR_BUNDLE_MODEL_TYPE,
@@ -106,5 +107,45 @@ def test_v8_hybrid_dual_direction_is_supported_for_final_packaging(tmp_path):
         spec = hybrid[component]
         child = tmp_path / spec["path"]
         assert spec["kind"] == "xgboost_classifier"
+        assert child.is_file()
+        assert spec["sha256"] == _sha256(child)
+
+
+def test_v10_payoff_risk_is_supported_for_final_packaging(tmp_path):
+    assert EVENT_HYBRID_PAYOFF_RISK_EXPERIMENT_NAME in SUPPORTED_EXPERIMENTS
+
+    output = tmp_path / "payoff-risk-bundle.json"
+    classifier = _fit_classifier()
+    payoff_models = {
+        "long_upside": _fit_classifier(),
+        "long_downside": _fit_classifier(),
+        "short_upside": _fit_classifier(),
+        "short_downside": _fit_classifier(),
+    }
+    manifest = _component_manifest(
+        output,
+        experiment=EVENT_HYBRID_PAYOFF_RISK_EXPERIMENT_NAME,
+        direction_models={"long": classifier, "short": _fit_classifier()},
+        direction_calibrators=None,
+        regime_routers=None,
+        opportunity_model=_fit_classifier(),
+        payoff_models=payoff_models,
+    )
+
+    assert manifest["experiment"] == EVENT_HYBRID_PAYOFF_RISK_EXPERIMENT_NAME
+    block = manifest["hybrid_payoff_risk"]
+    assert block["kind"] == "xgboost_hybrid_opportunity_dual_direction_payoff_risk"
+    assert block["payoff_risk_ratio_floor"] == 1.15
+    for name in (
+        "opportunity",
+        "long_direction",
+        "short_direction",
+        "payoff_long_upside",
+        "payoff_long_downside",
+        "payoff_short_upside",
+        "payoff_short_downside",
+    ):
+        spec = block[name]
+        child = tmp_path / spec["path"]
         assert child.is_file()
         assert spec["sha256"] == _sha256(child)
