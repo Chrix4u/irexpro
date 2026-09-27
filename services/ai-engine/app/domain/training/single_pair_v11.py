@@ -307,11 +307,48 @@ def _selection_funnel(frame: pd.DataFrame) -> dict[str, Any]:
             (side["expected_selected_net_bps"] > 0.0)
             & (side["expected_payoff_ratio"] >= 1.15)
         )
+        payoff_candidates = side.loc[payoff_pass].copy()
+        payoff_candidate_rows: list[dict[str, Any]] = []
+        for _, candidate in payoff_candidates.nlargest(
+            10, "expected_payoff_ratio"
+        ).iterrows():
+            payoff_candidate_rows.append(
+                {
+                    "decision_time": str(candidate["decision_time"]),
+                    "predicted_long": bool(candidate["predicted_long"]),
+                    "direction_confidence": float(candidate["direction_confidence"]),
+                    "raw_direction_probability": float(
+                        candidate["raw_positive_probability"]
+                    ),
+                    "opportunity_probability": float(
+                        candidate["opportunity_probability"]
+                    ),
+                    "action_probability_margin": float(
+                        candidate["action_probability_margin"]
+                    ),
+                    "expected_payoff_ratio": float(
+                        candidate["expected_payoff_ratio"]
+                    ),
+                    "expected_selected_net_bps": float(
+                        candidate["expected_selected_net_bps"]
+                    ),
+                    "event_actionable_target": int(
+                        candidate[EVENT_ACTIONABLE_TARGET_COLUMN]
+                    ),
+                    "event_direction_target": int(
+                        candidate[EVENT_DIRECTION_TARGET_COLUMN]
+                    ),
+                    "selected_net_return": float(
+                        candidate["selected_net_return"]
+                    ),
+                }
+            )
         rows: dict[str, Any] = {
             "predictions": int(len(side)),
             "direction_confidence_pass": int(direction_pass.sum()),
             "payoff_pass": int(payoff_pass.sum()),
             "direction_and_payoff_pass": int((direction_pass & payoff_pass).sum()),
+            "payoff_candidates": payoff_candidate_rows,
             "payoff_ratio_quantiles": {
                 str(key): float(value)
                 for key, value in side["expected_payoff_ratio"]
