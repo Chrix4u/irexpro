@@ -109,6 +109,7 @@ function looksLikeResetPaperProviderState(params: {
   providerOrders: import('../../broker/interfaces/broker-adapter.interface').BrokerOrderState[];
   providerPositions: import('../../broker/interfaces/broker-adapter.interface').BrokerPosition[];
   providerAccount: import('../../broker/interfaces/broker-adapter.interface').BrokerAccountInfo;
+  internalOrders: Order[];
   internalTrades: Trade[];
   closedTrades: import('../../broker/interfaces/broker-adapter.interface').BrokerClosedTrade[];
   storedAccount: BrokerAccount | null;
@@ -118,6 +119,7 @@ function looksLikeResetPaperProviderState(params: {
     providerOrders,
     providerPositions,
     providerAccount,
+    internalOrders,
     internalTrades,
     closedTrades,
     storedAccount,
@@ -134,7 +136,10 @@ function looksLikeResetPaperProviderState(params: {
 
   if (!pristineProviderAccount) return false;
 
-  const durableTradeEvidence = internalTrades.length > 0 && closedTrades.length === 0;
+  const durableTradeEvidence =
+    internalOrders.length === 0 &&
+    internalTrades.some((trade) => trade.status === TradeStatus.OPEN) &&
+    closedTrades.length === 0;
   const durableFinancialEvidence =
     storedAccount !== null &&
     (!isPaperStartingBalance(storedAccount.balance) ||
@@ -315,6 +320,7 @@ export class StateReconciliationService {
           providerOrders,
           providerPositions,
           providerAccount,
+          internalOrders,
           internalTrades,
           closedTrades,
           storedAccount,
