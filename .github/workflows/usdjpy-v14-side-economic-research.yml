@@ -65,6 +65,13 @@ jobs:
           install -d -m 700 "$output"
           "$python_bin" -m app.domain.training.single_pair_v14_side_economic             --dataset "USDJPY=$corpus"             --horizon-bars 1             --decision-time-before "$boundary"             --report "$output/qualification.json"             --max-splits 3             | tee "$output/summary.txt"
 
+          "$python_bin" -m app.domain.training.research_trial_ledger \
+            --ledger "/home/lightworld/research/irexpro-usdjpy-trial-ledger/ledger.json" \
+            --report "$output/qualification.json" \
+            --candidate "v14" \
+            --candidate-sha "$candidate_sha" \
+            --outer-era "82-94%"
+
           "$python_bin" - "$output/qualification.json" <<'PY'
           import json
           import sys
