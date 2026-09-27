@@ -23,10 +23,6 @@ from app.domain.training.fold_checkpoint import (
     research_fingerprint,
     save_fold_checkpoint,
 )
-from app.domain.training.robustness_audit import (
-    cost_stress_frontier,
-    extended_risk_metrics,
-)
 from app.domain.training.model_qualification import (
     EVENT_LONG_ACTIONABLE_TARGET_COLUMN,
     EVENT_SHORT_ACTIONABLE_TARGET_COLUMN,
@@ -34,7 +30,14 @@ from app.domain.training.model_qualification import (
     _nested_windows,
     _refit_windows,
 )
-from app.domain.training.single_pair_v11_calibrated_gating import _fit_models, _trading_metrics
+from app.domain.training.robustness_audit import (
+    cost_stress_frontier,
+    extended_risk_metrics,
+)
+from app.domain.training.single_pair_v11_calibrated_gating import (
+    _fit_models,
+    _trading_metrics,
+)
 from app.domain.training.single_pair_v13_side_specific import (
     SIDE_THRESHOLD_GRID,
     _apply_side_policy,
