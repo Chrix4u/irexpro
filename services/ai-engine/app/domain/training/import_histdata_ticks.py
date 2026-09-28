@@ -12,9 +12,9 @@ import csv
 import hashlib
 import heapq
 import json
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from collections.abc import Iterator
 from typing import IO
 from zipfile import ZipFile
 
