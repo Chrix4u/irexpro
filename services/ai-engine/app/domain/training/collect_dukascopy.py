@@ -645,69 +645,121 @@ def collect_dukascopy_m1_corpus(
                         day_rows_by_timestamp[str(row["timestamp"])] = row
 
         # Public datafeed occasionally returns transient 5xx responses under
-        # concurrency. Retry failed hours serially with a larger retry budget.
-        # A single exhausted serial pass can still coincide with a short-lived
-        # provider outage, so use a small number of bounded recovery rounds
-        # separated by cooldowns. Never silently skip an unresolved hour: an
-        # artificial data gap would contaminate indicators and return evidence.
+        # concurrency. Fresh-data collection remains fail-closed with the
+        # original bounded serial recovery. Historical backfills retry all
+        # failed hours once in parallel; if any still fail, the entire UTC day
+        # is excluded rather than admitting a partial indicator window.
         day_unrecoverable_hour: datetime | None = None
         day_unrecoverable_error: Exception | None = None
-        for failed_hour, original_error in failed_hours:
-            last_error: Exception = original_error
-            recovered = False
-            recovery_rounds = 1 if skip_unrecoverable_days else 3
-            for recovery_round in range(recovery_rounds):
-                if recovery_round > 0:
-                    time.sleep(15.0 * recovery_round)
 
-                serial_recovery_calls += 1
-                recovery_telemetry: dict[str, Any] = {}
-                try:
-                    _hour, rows, payload_bytes, missing = _fetch_hour(
+        if skip_unrecoverable_days and failed_hours:
+            recovery_telemetries: dict[datetime, dict[str, Any]] = {
+                hour: {} for hour, _ in failed_hours
+            }
+            recovery_results: list[
+                tuple[datetime, list[dict[str, Any]], int, bool]
+            ] = []
+            recovery_failures: list[tuple[datetime, Exception]] = []
+            recovery_workers = min(
+                max(1, throttle.level),
+                len(failed_hours),
+            )
+            with ThreadPoolExecutor(max_workers=recovery_workers) as pool:
+                futures = {
+                    pool.submit(
+                        _fetch_hour,
                         instrument=symbol,
                         hour=failed_hour,
                         price_digits=price_digits,
-                        timeout_seconds=(
-                            fetch_timeout_seconds
-                            if skip_unrecoverable_days
-                            else max(timeout_seconds, 30.0)
-                        ),
-                        max_retries=(
-                            fetch_max_retries
-                            if skip_unrecoverable_days
-                            else max(max_retries + 2 + recovery_round, 7)
-                        ),
+                        timeout_seconds=fetch_timeout_seconds,
+                        max_retries=fetch_max_retries,
                         cache_dir=cache_root,
-                        telemetry=recovery_telemetry,
+                        telemetry=recovery_telemetries[failed_hour],
+                    ): failed_hour
+                    for failed_hour, _ in failed_hours
+                }
+                for future in as_completed(futures):
+                    failed_hour = futures[future]
+                    serial_recovery_calls += 1
+                    try:
+                        recovery_results.append(future.result())
+                    except Exception as recovery_error:
+                        recovery_failures.append(
+                            (failed_hour, recovery_error)
+                        )
+                        day_pressure_events += 1
+
+            if recovery_failures:
+                recovery_failures.sort(key=lambda item: item[0])
+                day_unrecoverable_hour, day_unrecoverable_error = (
+                    recovery_failures[0]
+                )
+            else:
+                for recovered_hour, rows, payload_bytes, missing in sorted(
+                    recovery_results,
+                    key=lambda item: item[0],
+                ):
+                    telemetry.record_hour_telemetry(
+                        recovery_telemetries.get(recovered_hour)
                     )
-                except Exception as recovery_error:
-                    last_error = recovery_error
-                    day_pressure_events += 1
-                    continue
+                    recovered_hours += 1
+                    bytes_downloaded += payload_bytes
+                    if missing:
+                        missing_hours += 1
+                        continue
+                    if rows:
+                        hours_with_data += 1
+                    for row in rows:
+                        day_rows_by_timestamp[str(row["timestamp"])] = row
 
-                telemetry.record_hour_telemetry(recovery_telemetry)
-                recovered = True
-                break
+        if not skip_unrecoverable_days:
+            for failed_hour, original_error in failed_hours:
+                last_error: Exception = original_error
+                recovered = False
+                for recovery_round in range(3):
+                    if recovery_round > 0:
+                        time.sleep(15.0 * recovery_round)
 
-            if not recovered:
-                if skip_unrecoverable_days:
-                    day_unrecoverable_hour = failed_hour
-                    day_unrecoverable_error = last_error
+                    serial_recovery_calls += 1
+                    recovery_telemetry: dict[str, Any] = {}
+                    try:
+                        _hour, rows, payload_bytes, missing = _fetch_hour(
+                            instrument=symbol,
+                            hour=failed_hour,
+                            price_digits=price_digits,
+                            timeout_seconds=max(timeout_seconds, 30.0),
+                            max_retries=max(
+                                max_retries + 2 + recovery_round,
+                                7,
+                            ),
+                            cache_dir=cache_root,
+                            telemetry=recovery_telemetry,
+                        )
+                    except Exception as recovery_error:
+                        last_error = recovery_error
+                        day_pressure_events += 1
+                        continue
+
+                    telemetry.record_hour_telemetry(recovery_telemetry)
+                    recovered = True
                     break
-                raise RuntimeError(
-                    "Dukascopy hour remained unavailable after bounded serial recovery: "
-                    f"{symbol} {failed_hour.isoformat()}"
-                ) from last_error
 
-            recovered_hours += 1
-            bytes_downloaded += payload_bytes
-            if missing:
-                missing_hours += 1
-                continue
-            if rows:
-                hours_with_data += 1
-            for row in rows:
-                day_rows_by_timestamp[str(row["timestamp"])] = row
+                if not recovered:
+                    raise RuntimeError(
+                        "Dukascopy hour remained unavailable after bounded "
+                        "serial recovery: "
+                        f"{symbol} {failed_hour.isoformat()}"
+                    ) from last_error
+
+                recovered_hours += 1
+                bytes_downloaded += payload_bytes
+                if missing:
+                    missing_hours += 1
+                    continue
+                if rows:
+                    hours_with_data += 1
+                for row in rows:
+                    day_rows_by_timestamp[str(row["timestamp"])] = row
 
         if day_unrecoverable_hour is not None:
             skipped_unrecoverable_days += 1
