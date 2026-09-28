@@ -72,6 +72,7 @@ def _fit_models(
 
     opportunity_variant = ModelVariant(
         name=f"{variant.name}_opportunity",
+        parameter_overrides=variant.parameter_overrides,
         sample_weight_policy="class_balance",
         calibration="none",
         feature_policy=variant.feature_policy,
@@ -92,6 +93,7 @@ def _fit_models(
     }.items():
         side_variant = ModelVariant(
             name=f"{variant.name}_{side}",
+            parameter_overrides=variant.parameter_overrides,
             sample_weight_policy="class_balance",
             calibration="none",
             feature_policy=variant.feature_policy,
@@ -119,7 +121,11 @@ def _fit_models(
             ("downside", np.maximum(-fit_return, 0.0), np.maximum(-early_return, 0.0)),
         ):
             model = _regression_model_for_variant(
-                ModelVariant(name=f"{variant.name}_{side}_{component}")
+                ModelVariant(
+                    name=f"{variant.name}_{side}_{component}",
+                    parameter_overrides=variant.parameter_overrides,
+                    feature_policy=variant.feature_policy,
+                )
             )
             model.fit(
                 fit[features],
