@@ -455,8 +455,7 @@ def test_collection_remains_fail_closed_for_unrecoverable_hour_by_default(
         cache_dir=None,
         telemetry=None,
     ):
-        del instrument, cache_dir, telemetry
-        observed_budgets.append((float(timeout_seconds), int(max_retries)))
+        del instrument, timeout_seconds, max_retries, cache_dir, telemetry
         if hour.date().isoformat() == "2026-01-07" and hour.hour == 10:
             raise RuntimeError("synthetic persistent provider failure")
         rows = []
