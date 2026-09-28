@@ -967,6 +967,7 @@ export class StateReconciliationService {
   /** Best-effort provider closed-trade economics for external closes. */
   private async fetchClosedTrades(
     adapter: {
+      readonly brokerId?: string;
       getClosedTrades(
         from: Date,
         to: Date,
@@ -979,7 +980,12 @@ export class StateReconciliationService {
         (min, t) => (t.openedAt && (!min || t.openedAt < min) ? t.openedAt : min),
         null,
       );
-      return await adapter.getClosedTrades(earliest ?? new Date(0), new Date());
+      // The PAPER_ONLY provider uses a deterministic/replay clock whose
+      // timestamps intentionally do not share wall-clock chronology with
+      // trading.trades.openedAt. Fetch its complete durable close history and
+      // match by provider id. Real brokers retain the bounded time window.
+      const from = adapter.brokerId === 'paper-broker' ? new Date(0) : (earliest ?? new Date(0));
+      return await adapter.getClosedTrades(from, new Date());
     } catch (err) {
       this.logger.warn(`Closed-trade lookup unavailable: ${sanitizeReconciliationReason(err)}`);
       return [];

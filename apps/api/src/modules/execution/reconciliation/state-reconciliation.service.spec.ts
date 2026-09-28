@@ -216,6 +216,7 @@ describe('StateReconciliationService', () => {
   let auditService: { log: jest.Mock };
   let eventBus: { publish: jest.Mock };
   let adapter: {
+    brokerId?: string;
     setMode: jest.Mock;
     connect: jest.Mock;
     listOrders: jest.Mock;
@@ -497,6 +498,36 @@ describe('StateReconciliationService', () => {
         DomainEventType.RECONCILIATION_DISCREPANCY_RESOLVED,
         'user-1',
         expect.objectContaining({ discrepancyId: 'disc-1' }),
+      );
+    });
+
+    it('queries full durable close history for paper broker clocks', async () => {
+      adapter.brokerId = 'paper-broker';
+      tradeRepo.find.mockResolvedValue([openTrade()]);
+      adapter.getPositionById.mockResolvedValue(null);
+      adapter.getClosedTrades.mockResolvedValue([
+        {
+          externalOrderId: 'pos-1',
+          closePrice: '1.12000',
+          realisedPnl: '20.00',
+          commission: '0.00',
+          swap: '0.00',
+          closedAt: new Date('2024-01-02T03:05:00Z'),
+        },
+      ]);
+      persistence.resolveDiscrepanciesByRef.mockResolvedValue([]);
+
+      await service.runForConnection(connection());
+
+      expect(adapter.getClosedTrades).toHaveBeenCalledWith(new Date(0), expect.any(Date));
+      expect(resolution.closeTradeFromProvider).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'trade-1' }),
+        expect.objectContaining({
+          closePrice: '1.12000',
+          realisedPnl: '20.00',
+          commission: '0.00',
+          swap: '0.00',
+        }),
       );
     });
 
