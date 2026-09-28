@@ -488,6 +488,11 @@ export default function AiTradingPage() {
       const status = await loadTraderTerminalStatus();
       setTerminal(status);
 
+      // Keep secondary market-intelligence context aligned with the actual
+      // scheduler universe. Falling back to EURUSD preserves the ordinary
+      // non-research workspace before a runtime is registered.
+      let marketInstrument = 'EURUSD';
+
       if (status.session) {
         try {
           const runtime = await api.request<AiAutomationRuntimeStatus>(
@@ -495,6 +500,10 @@ export default function AiTradingPage() {
           );
           setAutomationRuntime(runtime);
           setAutomationRuntimeWarning(null);
+          const runtimeInstrument = runtime.instruments.find((value) =>
+            /^[A-Z0-9._-]{3,24}$/.test(value),
+          );
+          if (runtimeInstrument) marketInstrument = runtimeInstrument;
         } catch {
           setAutomationRuntime(null);
           setAutomationRuntimeWarning(
@@ -556,7 +565,9 @@ export default function AiTradingPage() {
       }
 
       try {
-        setMarket(await loadMarketIntelligence({ instrument: 'EURUSD', timeframe: 'H1', limit: 48 }));
+        setMarket(
+          await loadMarketIntelligence({ instrument: marketInstrument, timeframe: 'H1', limit: 48 }),
+        );
       } catch {
         setMarket(null);
       }
