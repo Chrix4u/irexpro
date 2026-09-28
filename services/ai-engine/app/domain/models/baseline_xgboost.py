@@ -42,7 +42,9 @@ EVENT_LABEL_POLICY_RUNTIME = "first_net_return_barrier_atr1_spread2_timeout_v1"
 EVENT_PAIR_REGIME_ROUTER_POLICY_RUNTIME = "pair_m1_volatility_spread_median_v1"
 EVENT_DUAL_ACTIONABILITY_EXPERIMENT_RUNTIME = "event_barrier_dual_actionability"
 EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_RUNTIME = "event_barrier_hybrid_opportunity_dual_direction"
+EVENT_HYBRID_PAYOFF_RISK_EXPERIMENT_RUNTIME = "event_barrier_hybrid_opportunity_dual_direction_payoff_risk"
 DUAL_ACTION_MARGIN_FLOOR_RUNTIME = 0.10
+PAYOFF_RISK_RATIO_FLOOR_RUNTIME = 1.15
 
 
 def _sha256_file(path: Path) -> str:
@@ -206,6 +208,34 @@ class BaselineXGBoostModel:
                     return resolved
 
                 experiment = str(manifest.get("experiment", "")).strip()
+                if experiment == EVENT_HYBRID_PAYOFF_RISK_EXPERIMENT_RUNTIME:
+                    spec = manifest.get("hybrid_payoff_risk")
+                    if not isinstance(spec, dict) or spec.get("kind") != "xgboost_hybrid_opportunity_dual_direction_payoff_risk":
+                        raise ValueError("Hybrid payoff-risk bundle specification is invalid")
+                    if not math.isclose(float(spec.get("action_margin_floor")), DUAL_ACTION_MARGIN_FLOOR_RUNTIME, rel_tol=0.0, abs_tol=1e-12):
+                        raise ValueError("Hybrid payoff-risk margin policy mismatch")
+                    if not math.isclose(float(spec.get("payoff_risk_ratio_floor")), PAYOFF_RISK_RATIO_FLOOR_RUNTIME, rel_tol=0.0, abs_tol=1e-12):
+                        raise ValueError("Hybrid payoff-risk ratio policy mismatch")
+                    classifiers = {}
+                    for name in ("opportunity", "long_direction", "short_direction"):
+                        item = spec.get(name)
+                        if not isinstance(item, dict) or item.get("kind") != "xgboost_classifier":
+                            raise ValueError(f"Hybrid payoff-risk classifier {name} is invalid")
+                        model = xgb.XGBClassifier(); model.load_model(str(component_path(item))); classifiers[name] = model
+                    payoff = {}
+                    for name in ("payoff_long_upside", "payoff_long_downside", "payoff_short_upside", "payoff_short_downside"):
+                        item = spec.get(name)
+                        if not isinstance(item, dict) or item.get("kind") != "xgboost_regressor":
+                            raise ValueError(f"Hybrid payoff-risk regressor {name} is invalid")
+                        model = xgb.XGBRegressor(); model.load_model(str(component_path(item))); payoff[name] = model
+                    self._bundle = {"manifest": manifest, **classifiers, **payoff}
+                    self._model = classifiers["long_direction"]
+                    self._model_loaded = True; self._model_version = model_version
+                    self._feature_names = list(feature_names); self._artifact_metadata = metadata
+                    self._model_type = model_type; self._runtime_feature_profile = runtime_feature_profile
+                    logger.info("Verified trained XGBoost payoff-risk model loaded", path=str(model_path), metadata_path=str(metadata_path), version=self._model_version, approved_for_paper=bool(metadata.get("approved_for_paper", False)))
+                    return True
+
                 if experiment in {
                     EVENT_DUAL_ACTIONABILITY_EXPERIMENT_RUNTIME,
                     EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_RUNTIME,
@@ -461,6 +491,8 @@ class BaselineXGBoostModel:
 
         manifest = self._bundle["manifest"]
         experiment = str(manifest.get("experiment", "")).strip()
+        if experiment == EVENT_HYBRID_PAYOFF_RISK_EXPERIMENT_RUNTIME:
+            return self._predict_with_event_hybrid_payoff_risk_bundle(features)
         if experiment == EVENT_DUAL_ACTIONABILITY_EXPERIMENT_RUNTIME:
             return self._predict_with_event_dual_actionability_bundle(features)
         if experiment == EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_RUNTIME:
@@ -571,6 +603,83 @@ class BaselineXGBoostModel:
             explainability=explainability,
         )
 
+
+    def _predict_with_event_hybrid_payoff_risk_bundle(
+        self,
+        features: dict[str, float],
+    ) -> ModelPrediction:
+        missing = [name for name in self._feature_names if name not in features]
+        if missing:
+            raise ValueError(f"Missing model features: {missing}")
+        active_instruments = [
+            instrument
+            for instrument in INITIAL_FOREX_UNIVERSE
+            if float(features.get(f"instrument_{instrument}", 0.0)) >= 0.5
+        ]
+        if active_instruments != ["USDJPY"]:
+            raise ValueError("Research payoff-risk runtime is restricted to USDJPY")
+        frame = pd.DataFrame(
+            [[features[name] for name in self._feature_names]],
+            columns=self._feature_names,
+        )
+        long_probability = float(self._bundle["long_direction"].predict_proba(frame)[0][1])
+        short_probability = float(self._bundle["short_direction"].predict_proba(frame)[0][1])
+        total = max(long_probability + short_probability, 1e-7)
+        long_direction_probability = long_probability / total
+        direction_confidence = max(long_direction_probability, 1.0 - long_direction_probability)
+        action_margin = abs(long_probability - short_probability)
+        opportunity_probability = float(self._bundle["opportunity"].predict_proba(frame)[0][1])
+        direction: Literal["BUY", "SELL"] = "BUY" if long_probability >= short_probability else "SELL"
+        prefix = "long" if direction == "BUY" else "short"
+        upside = max(0.0, float(self._bundle[f"payoff_{prefix}_upside"].predict(frame)[0]))
+        downside = max(0.0, float(self._bundle[f"payoff_{prefix}_downside"].predict(frame)[0]))
+        expected_net = upside - downside
+        payoff_ratio = upside / max(downside, 1e-6)
+        margin_ok = action_margin >= DUAL_ACTION_MARGIN_FLOOR_RUNTIME
+        net_ok = expected_net > 0.0
+        ratio_ok = payoff_ratio >= PAYOFF_RISK_RATIO_FLOOR_RUNTIME
+        signal_eligible = margin_ok and net_ok and ratio_ok
+        if not margin_ok:
+            gate_reason = "action_probability_margin_below_floor"
+        elif not net_ok:
+            gate_reason = "expected_selected_net_not_positive"
+        elif not ratio_ok:
+            gate_reason = "expected_payoff_ratio_below_floor"
+        else:
+            gate_reason = "eligible"
+        confidence = min(opportunity_probability, direction_confidence)
+        return ModelPrediction(
+            direction=direction,
+            confidence_score=round(confidence, 4),
+            model_version=self._model_version,
+            features_used=list(self._feature_names),
+            raw_scores={
+                "opportunity_probability": opportunity_probability,
+                "long_action_probability": long_probability,
+                "short_action_probability": short_probability,
+                "normalized_direction_confidence": direction_confidence,
+                "joint_confidence": confidence,
+                "action_probability_margin": action_margin,
+                "action_margin_floor": DUAL_ACTION_MARGIN_FLOOR_RUNTIME,
+                "expected_selected_upside_bps": upside,
+                "expected_selected_downside_bps": downside,
+                "expected_selected_net_bps": expected_net,
+                "expected_payoff_ratio": payoff_ratio,
+                "payoff_risk_ratio_floor": PAYOFF_RISK_RATIO_FLOOR_RUNTIME,
+            },
+            explainability={
+                "method": "hybrid_opportunity_dual_actionability_payoff_risk_xgboost",
+                "instrument_expert": "USDJPY",
+                "research_experiment": EVENT_HYBRID_PAYOFF_RISK_EXPERIMENT_RUNTIME,
+                "signal_eligible": signal_eligible,
+                "signal_gate_reason": gate_reason,
+                "confidence_semantics": (
+                    "Minimum of opportunity probability and normalized LONG/SHORT direction confidence, "
+                    "with mandatory side-margin and train-only payoff-risk filters; not a probability of profit."
+                ),
+                "approved_for_live": False,
+            },
+        )
 
     def _predict_with_event_hybrid_dual_direction_bundle(
         self,

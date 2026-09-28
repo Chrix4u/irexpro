@@ -227,11 +227,24 @@ class SignalGenerator:
                     "model_policy_not_eligible",
                 )
             )
+            diagnostic_scores = (
+                prediction.raw_scores
+                if research_uat_authorized
+                else {}
+            )
             logger.info(
                 "Model-specific signal gate blocked publication",
                 instrument=instrument,
                 confidence=prediction.confidence_score,
                 reason=gate_reason,
+                market_data_last_candle_at=latest_candle.timestamp.isoformat(),
+                market_data_revision=telemetry.market_data_revision,
+                opportunity_probability=diagnostic_scores.get("opportunity_probability"),
+                long_action_probability=diagnostic_scores.get("long_action_probability"),
+                short_action_probability=diagnostic_scores.get("short_action_probability"),
+                action_probability_margin=diagnostic_scores.get("action_probability_margin"),
+                expected_selected_net_bps=diagnostic_scores.get("expected_selected_net_bps"),
+                expected_payoff_ratio=diagnostic_scores.get("expected_payoff_ratio"),
             )
             return SignalGenerationResponse(
                 generated=False,
@@ -252,11 +265,20 @@ class SignalGenerator:
         # PAPER_ONLY paper-broker boundary before accepting such a probe.
         below_threshold = not is_above_threshold(prediction.confidence_score)
         if below_threshold and not uat_workflow_probe:
+            diagnostic_scores = prediction.raw_scores if research_uat_authorized else {}
             logger.info(
                 "Signal below confidence threshold — no signal generated",
                 instrument=instrument,
                 confidence=prediction.confidence_score,
                 threshold=get_threshold(),
+                market_data_last_candle_at=latest_candle.timestamp.isoformat(),
+                market_data_revision=telemetry.market_data_revision,
+                opportunity_probability=diagnostic_scores.get("opportunity_probability"),
+                long_action_probability=diagnostic_scores.get("long_action_probability"),
+                short_action_probability=diagnostic_scores.get("short_action_probability"),
+                action_probability_margin=diagnostic_scores.get("action_probability_margin"),
+                expected_selected_net_bps=diagnostic_scores.get("expected_selected_net_bps"),
+                expected_payoff_ratio=diagnostic_scores.get("expected_payoff_ratio"),
             )
             return SignalGenerationResponse(
                 generated=False,
