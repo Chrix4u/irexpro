@@ -451,6 +451,21 @@ def collect_dukascopy_m1_corpus(
         raise ValueError("parallelism must be between 1 and 16")
     if not 1 <= batch_hours <= 168:
         raise ValueError("batch_hours must be between 1 and 168")
+    if timeout_seconds <= 0:
+        raise ValueError("timeout_seconds must be positive")
+    if max_retries < 0:
+        raise ValueError("max_retries must be non-negative")
+
+    fetch_timeout_seconds = (
+        min(float(timeout_seconds), 10.0)
+        if skip_unrecoverable_days
+        else float(timeout_seconds)
+    )
+    fetch_max_retries = (
+        min(int(max_retries), 1)
+        if skip_unrecoverable_days
+        else int(max_retries)
+    )
 
     observed_now = now or datetime.now(UTC)
     if observed_now.tzinfo is None:
@@ -600,8 +615,8 @@ def collect_dukascopy_m1_corpus(
                         instrument=symbol,
                         hour=hour,
                         price_digits=price_digits,
-                        timeout_seconds=timeout_seconds,
-                        max_retries=max_retries,
+                        timeout_seconds=fetch_timeout_seconds,
+                        max_retries=fetch_max_retries,
                         cache_dir=cache_root,
                         telemetry=hour_telemetries[hour],
                     ): hour
@@ -640,7 +655,8 @@ def collect_dukascopy_m1_corpus(
         for failed_hour, original_error in failed_hours:
             last_error: Exception = original_error
             recovered = False
-            for recovery_round in range(3):
+            recovery_rounds = 1 if skip_unrecoverable_days else 3
+            for recovery_round in range(recovery_rounds):
                 if recovery_round > 0:
                     time.sleep(15.0 * recovery_round)
 
@@ -651,8 +667,16 @@ def collect_dukascopy_m1_corpus(
                         instrument=symbol,
                         hour=failed_hour,
                         price_digits=price_digits,
-                        timeout_seconds=max(timeout_seconds, 30.0),
-                        max_retries=max(max_retries + 2 + recovery_round, 7),
+                        timeout_seconds=(
+                            fetch_timeout_seconds
+                            if skip_unrecoverable_days
+                            else max(timeout_seconds, 30.0)
+                        ),
+                        max_retries=(
+                            fetch_max_retries
+                            if skip_unrecoverable_days
+                            else max(max_retries + 2 + recovery_round, 7)
+                        ),
                         cache_dir=cache_root,
                         telemetry=recovery_telemetry,
                     )
@@ -872,6 +896,8 @@ def main() -> None:
     parser.add_argument("--output", required=True)
     parser.add_argument("--max-lookback-days", type=int, default=90)
     parser.add_argument("--parallelism", type=int, default=3)
+    parser.add_argument("--timeout-seconds", type=float, default=30.0)
+    parser.add_argument("--max-retries", type=int, default=5)
     parser.add_argument("--cache-dir")
     parser.add_argument(
         "--effective-before",
@@ -912,6 +938,8 @@ def main() -> None:
         now=effective_before,
         max_lookback_days=args.max_lookback_days,
         parallelism=args.parallelism,
+        timeout_seconds=args.timeout_seconds,
+        max_retries=args.max_retries,
         cache_dir=args.cache_dir,
         use_m1_chunks=not args.no_m1_chunks,
         skip_unrecoverable_days=args.skip_unrecoverable_days,
