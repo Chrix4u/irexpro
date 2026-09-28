@@ -14,7 +14,8 @@ import heapq
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import IO, Iterator
+from collections.abc import Iterator
+from typing import IO
 from zipfile import ZipFile
 
 EST_TO_UTC = timedelta(hours=5)
