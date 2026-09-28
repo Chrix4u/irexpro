@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import lzma
 import struct
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -569,3 +570,78 @@ def test_research_backfill_can_skip_whole_unrecoverable_day(
     assert observed_budgets
     assert all(timeout <= 10.0 for timeout, _ in observed_budgets)
     assert all(retries <= 1 for _, retries in observed_budgets)
+
+
+def test_research_backfill_recovers_failed_hours_in_parallel(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    attempts: dict[datetime, int] = {}
+    recovery_threads: set[int] = set()
+    barrier = threading.Barrier(2)
+
+    def flaky_fetch_hour(
+        *,
+        instrument: str,
+        hour: datetime,
+        price_digits: int,
+        timeout_seconds: float,
+        max_retries: int,
+        cache_dir=None,
+        telemetry=None,
+    ):
+        del instrument, timeout_seconds, max_retries, cache_dir, telemetry
+        attempts[hour] = attempts.get(hour, 0) + 1
+
+        if hour.date().isoformat() == "2026-01-07" and hour.hour in {9, 10}:
+            if attempts[hour] == 1:
+                raise RuntimeError("synthetic transient provider failure")
+            if attempts[hour] == 2:
+                recovery_threads.add(threading.get_ident())
+                barrier.wait(timeout=2.0)
+
+        rows = []
+        for minute in range(60):
+            timestamp = hour + timedelta(minutes=minute)
+            close = 1.10 + minute * 0.000001
+            rows.append(
+                {
+                    "timestamp": timestamp.isoformat(),
+                    "open": close,
+                    "high": close + 0.00001,
+                    "low": close - 0.00001,
+                    "close": close,
+                    "volume": 10.0,
+                    "tick_volume": 10.0,
+                    "spread_points": 2.0,
+                    "price_digits": price_digits,
+                    "quote_volume": 25.0,
+                }
+            )
+        return hour, rows, 2048, False
+
+    monkeypatch.setattr(
+        "app.domain.training.collect_dukascopy._fetch_hour",
+        flaky_fetch_hour,
+    )
+
+    output = tmp_path / "parallel-recovery.csv"
+    result = collect_dukascopy_m1_corpus(
+        instrument="EURUSD",
+        target_rows=250,
+        output_path=output,
+        now=datetime(2026, 1, 7, 12, tzinfo=UTC),
+        max_lookback_days=3,
+        parallelism=2,
+        batch_hours=12,
+        timeout_seconds=5.0,
+        max_retries=0,
+        skip_unrecoverable_days=True,
+    )
+
+    assert result["recovered_hours"] == 2
+    assert result["skipped_unrecoverable_days"] == 0
+    assert len(recovery_threads) == 2
+    assert attempts[datetime(2026, 1, 7, 9, tzinfo=UTC)] == 2
+    assert attempts[datetime(2026, 1, 7, 10, tzinfo=UTC)] == 2
+    assert len(pd.read_csv(output)) == 250
