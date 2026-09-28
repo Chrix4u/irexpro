@@ -455,7 +455,8 @@ def test_collection_remains_fail_closed_for_unrecoverable_hour_by_default(
         cache_dir=None,
         telemetry=None,
     ):
-        del instrument, timeout_seconds, max_retries, cache_dir, telemetry
+        del instrument, cache_dir, telemetry
+        observed_budgets.append((float(timeout_seconds), int(max_retries)))
         if hour.date().isoformat() == "2026-01-07" and hour.hour == 10:
             raise RuntimeError("synthetic persistent provider failure")
         rows = []
@@ -503,6 +504,8 @@ def test_research_backfill_can_skip_whole_unrecoverable_day(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
+    observed_budgets: list[tuple[float, int]] = []
+
     def unavailable_hour(
         *,
         instrument: str,
@@ -513,7 +516,8 @@ def test_research_backfill_can_skip_whole_unrecoverable_day(
         cache_dir=None,
         telemetry=None,
     ):
-        del instrument, timeout_seconds, max_retries, cache_dir, telemetry
+        del instrument, cache_dir, telemetry
+        observed_budgets.append((float(timeout_seconds), int(max_retries)))
         if hour.date().isoformat() == "2026-01-07" and hour.hour == 10:
             raise RuntimeError("synthetic persistent provider failure")
         rows = []
@@ -563,3 +567,6 @@ def test_research_backfill_can_skip_whole_unrecoverable_day(
     assert result["skipped_unrecoverable_dates"] == ["2026-01-07"]
     assert timestamps.max().date().isoformat() == "2026-01-06"
     assert not (timestamps.dt.date.astype(str) == "2026-01-07").any()
+    assert observed_budgets
+    assert all(timeout <= 10.0 for timeout, _ in observed_budgets)
+    assert all(retries <= 1 for _, retries in observed_budgets)
