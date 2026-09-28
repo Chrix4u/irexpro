@@ -6,6 +6,8 @@ import pandas as pd
 
 from app.domain.training import single_pair_v26_profitability_classifier as v26
 from app.domain.training.model_qualification import (
+    EVENT_ACTIONABLE_TARGET_COLUMN,
+    EVENT_DIRECTION_TARGET_COLUMN,
     EVENT_LONG_ACTIONABLE_TARGET_COLUMN,
     EVENT_LONG_NET_RETURN_COLUMN,
     EVENT_SHORT_ACTIONABLE_TARGET_COLUMN,
@@ -41,6 +43,8 @@ def _scored(side: str, returns: list[float]) -> pd.DataFrame:
 def test_v26_profitability_target_uses_after_friction_net_return_sign() -> None:
     frame = pd.DataFrame(
         {
+            EVENT_ACTIONABLE_TARGET_COLUMN: [1, 1, 0],
+            EVENT_DIRECTION_TARGET_COLUMN: [1, 0, 0],
             EVENT_LONG_ACTIONABLE_TARGET_COLUMN: [1, 0, 0],
             EVENT_SHORT_ACTIONABLE_TARGET_COLUMN: [0, 1, 0],
             EVENT_LONG_NET_RETURN_COLUMN: [0.001, 0.0, -0.001],
