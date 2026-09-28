@@ -439,3 +439,127 @@ def test_collection_skips_closed_weekend_hours_without_network(
     assert len(requested) >= 5
     assert result["market_closed_hours_skipped"] > 0
     assert len(pd.read_csv(output)) == 250
+
+
+def test_collection_remains_fail_closed_for_unrecoverable_hour_by_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    def unavailable_hour(
+        *,
+        instrument: str,
+        hour: datetime,
+        price_digits: int,
+        timeout_seconds: float,
+        max_retries: int,
+        cache_dir=None,
+        telemetry=None,
+    ):
+        del instrument, timeout_seconds, max_retries, cache_dir, telemetry
+        if hour.date().isoformat() == "2026-01-07" and hour.hour == 10:
+            raise RuntimeError("synthetic persistent provider failure")
+        rows = []
+        for minute in range(60):
+            timestamp = hour + timedelta(minutes=minute)
+            close = 1.10 + minute * 0.000001
+            rows.append(
+                {
+                    "timestamp": timestamp.isoformat(),
+                    "open": close,
+                    "high": close + 0.00001,
+                    "low": close - 0.00001,
+                    "close": close,
+                    "volume": 10.0,
+                    "tick_volume": 10.0,
+                    "spread_points": 2.0,
+                    "price_digits": price_digits,
+                    "quote_volume": 25.0,
+                }
+            )
+        return hour, rows, 2048, False
+
+    monkeypatch.setattr(
+        "app.domain.training.collect_dukascopy._fetch_hour",
+        unavailable_hour,
+    )
+    monkeypatch.setattr(
+        "app.domain.training.collect_dukascopy.time.sleep",
+        lambda _seconds: None,
+    )
+
+    with pytest.raises(RuntimeError, match="remained unavailable"):
+        collect_dukascopy_m1_corpus(
+            instrument="EURUSD",
+            target_rows=250,
+            output_path=tmp_path / "strict.csv",
+            now=datetime(2026, 1, 7, 12, tzinfo=UTC),
+            max_lookback_days=3,
+            parallelism=2,
+            batch_hours=6,
+        )
+
+
+def test_research_backfill_can_skip_whole_unrecoverable_day(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    def unavailable_hour(
+        *,
+        instrument: str,
+        hour: datetime,
+        price_digits: int,
+        timeout_seconds: float,
+        max_retries: int,
+        cache_dir=None,
+        telemetry=None,
+    ):
+        del instrument, timeout_seconds, max_retries, cache_dir, telemetry
+        if hour.date().isoformat() == "2026-01-07" and hour.hour == 10:
+            raise RuntimeError("synthetic persistent provider failure")
+        rows = []
+        for minute in range(60):
+            timestamp = hour + timedelta(minutes=minute)
+            close = 1.10 + minute * 0.000001
+            rows.append(
+                {
+                    "timestamp": timestamp.isoformat(),
+                    "open": close,
+                    "high": close + 0.00001,
+                    "low": close - 0.00001,
+                    "close": close,
+                    "volume": 10.0,
+                    "tick_volume": 10.0,
+                    "spread_points": 2.0,
+                    "price_digits": price_digits,
+                    "quote_volume": 25.0,
+                }
+            )
+        return hour, rows, 2048, False
+
+    monkeypatch.setattr(
+        "app.domain.training.collect_dukascopy._fetch_hour",
+        unavailable_hour,
+    )
+    monkeypatch.setattr(
+        "app.domain.training.collect_dukascopy.time.sleep",
+        lambda _seconds: None,
+    )
+
+    output = tmp_path / "backfill.csv"
+    result = collect_dukascopy_m1_corpus(
+        instrument="EURUSD",
+        target_rows=250,
+        output_path=output,
+        now=datetime(2026, 1, 7, 12, tzinfo=UTC),
+        max_lookback_days=3,
+        parallelism=2,
+        batch_hours=6,
+        skip_unrecoverable_days=True,
+    )
+
+    frame = pd.read_csv(output)
+    timestamps = pd.to_datetime(frame["timestamp"], utc=True, errors="raise")
+    assert result["skipped_unrecoverable_days"] == 1
+    assert result["skipped_unrecoverable_dates"] == ["2026-01-07"]
+    assert timestamps.max().date().isoformat() == "2026-01-06"
+    assert not (timestamps.dt.date.astype(str) == "2026-01-07").any()
