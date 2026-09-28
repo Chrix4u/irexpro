@@ -429,6 +429,7 @@ def collect_dukascopy_m1_corpus(
     use_m1_chunks: bool = True,
     throttle_policy: AdaptiveThrottlePolicy | None = None,
     progress: ProgressLogger | None = None,
+    skip_unrecoverable_days: bool = False,
 ) -> dict[str, Any]:
     """Collect latest real Dukascopy bid/ask ticks and aggregate to M1.
 
@@ -503,6 +504,8 @@ def collect_dukascopy_m1_corpus(
     recovered_hours = 0
     serial_recovery_calls = 0
     market_closed_hours = 0
+    skipped_unrecoverable_days = 0
+    skipped_unrecoverable_dates: list[str] = []
     telemetry = _CollectionTelemetry()
 
     def _log(message: str) -> None:
@@ -632,6 +635,8 @@ def collect_dukascopy_m1_corpus(
         # provider outage, so use a small number of bounded recovery rounds
         # separated by cooldowns. Never silently skip an unresolved hour: an
         # artificial data gap would contaminate indicators and return evidence.
+        day_unrecoverable_hour: datetime | None = None
+        day_unrecoverable_error: Exception | None = None
         for failed_hour, original_error in failed_hours:
             last_error: Exception = original_error
             recovered = False
@@ -661,6 +666,10 @@ def collect_dukascopy_m1_corpus(
                 break
 
             if not recovered:
+                if skip_unrecoverable_days:
+                    day_unrecoverable_hour = failed_hour
+                    day_unrecoverable_error = last_error
+                    break
                 raise RuntimeError(
                     "Dukascopy hour remained unavailable after bounded serial recovery: "
                     f"{symbol} {failed_hour.isoformat()}"
@@ -675,6 +684,17 @@ def collect_dukascopy_m1_corpus(
                 hours_with_data += 1
             for row in rows:
                 day_rows_by_timestamp[str(row["timestamp"])] = row
+
+        if day_unrecoverable_hour is not None:
+            skipped_unrecoverable_days += 1
+            skipped_unrecoverable_dates.append(trading_date.isoformat())
+            _log(
+                f"status=day_skipped_unrecoverable date={trading_date.isoformat()} "
+                f"hour={day_unrecoverable_hour.isoformat()} "
+                f"error={type(day_unrecoverable_error).__name__}"
+            )
+            throttle.observe_batch(max(day_pressure_events, 1))
+            continue
 
         throttle.observe_batch(day_pressure_events)
 
@@ -800,6 +820,8 @@ def collect_dukascopy_m1_corpus(
         "recovered_hours": recovered_hours,
         "serial_recovery_calls": serial_recovery_calls,
         "market_closed_hours_skipped": market_closed_hours,
+        "skipped_unrecoverable_days": skipped_unrecoverable_days,
+        "skipped_unrecoverable_dates": skipped_unrecoverable_dates,
         "bytes_downloaded": bytes_downloaded,
         "m1_chunks_enabled": chunks_enabled,
         "study_cutoff_hour": cutoff_token,
@@ -859,6 +881,15 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--skip-unrecoverable-days",
+        action="store_true",
+        help=(
+            "Research backfill only: if any open hour remains unavailable after "
+            "bounded recovery, exclude that entire UTC day and continue earlier. "
+            "The default remains fail-closed."
+        ),
+    )
+    parser.add_argument(
         "--no-m1-chunks",
         action="store_true",
         help="Disable the derived daily M1 materialized chunk cache",
@@ -883,6 +914,7 @@ def main() -> None:
         parallelism=args.parallelism,
         cache_dir=args.cache_dir,
         use_m1_chunks=not args.no_m1_chunks,
+        skip_unrecoverable_days=args.skip_unrecoverable_days,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
 
