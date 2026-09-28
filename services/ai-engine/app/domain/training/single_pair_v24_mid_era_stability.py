@@ -49,11 +49,16 @@ def _evaluate_era(
     validation_fraction: float,
     horizon_bars: int,
     max_splits: int,
+    start_split: int = 1,
 ) -> dict[str, Any]:
     if not 0.30 <= train_fraction <= 0.94:
         raise ValueError("train_fraction must stay within the predeclared historical audit range")
     if not 0.005 <= validation_fraction <= 0.05:
         raise ValueError("validation_fraction out of audit bounds")
+    if start_split < 1:
+        raise ValueError("start_split must be >= 1")
+    if max_splits < 1:
+        raise ValueError("max_splits must be >= 1")
 
     unique_periods = int(pooled["decision_time"].nunique())
     min_train = max(250, int(unique_periods * train_fraction))
@@ -71,10 +76,14 @@ def _evaluate_era(
             validation_periods=validation,
             purge_periods=horizon_bars,
             embargo_periods=horizon_bars,
-            max_splits=max_splits,
+            max_splits=start_split + max_splits - 1,
         ),
         start=1,
     ):
+        if fold_index < start_split:
+            continue
+        if fold_index >= start_split + max_splits:
+            break
         nested = _nested_windows(
             outer_train,
             horizon_bars=horizon_bars,
@@ -177,6 +186,8 @@ def _evaluate_era(
     return {
         "train_fraction": train_fraction,
         "validation_fraction": validation_fraction,
+        "start_split": start_split,
+        "requested_splits": max_splits,
         "folds": folds,
         "aggregate": {
             "trading": trading,
@@ -196,6 +207,7 @@ def evaluate_v24(
     train_fractions: tuple[float, ...] = DEFAULT_TRAIN_FRACTIONS,
     validation_fraction: float = DEFAULT_VALIDATION_FRACTION,
     max_splits: int = 1,
+    start_split: int = 1,
 ) -> dict[str, Any]:
     pooled, hashes = load_and_prepare_corpora(
         datasets,
@@ -209,6 +221,7 @@ def evaluate_v24(
             validation_fraction=validation_fraction,
             horizon_bars=horizon_bars,
             max_splits=max_splits,
+            start_split=start_split,
         )
         for fraction in train_fractions
     ]
@@ -225,6 +238,7 @@ def evaluate_v24(
             "train_fractions": list(train_fractions),
             "validation_fraction": validation_fraction,
             "max_splits": max_splits,
+            "start_split": start_split,
             "no_outer_retuning": True,
         },
         "eras": eras,
@@ -257,6 +271,7 @@ def main() -> None:
     parser.add_argument("--train-fractions", default="0.60,0.80")
     parser.add_argument("--validation-fraction", type=float, default=0.02)
     parser.add_argument("--max-splits", type=int, default=1)
+    parser.add_argument("--start-split", type=int, default=1)
     args = parser.parse_args()
 
     report = evaluate_v24(
@@ -266,6 +281,7 @@ def main() -> None:
         train_fractions=_parse_fractions(args.train_fractions),
         validation_fraction=args.validation_fraction,
         max_splits=args.max_splits,
+        start_split=args.start_split,
     )
     output = Path(args.report)
     output.parent.mkdir(parents=True, exist_ok=True)
