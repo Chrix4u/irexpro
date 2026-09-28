@@ -7,6 +7,7 @@ import pytest
 from app.domain.training.import_histdata_ticks import (
     aggregate_histdata_ticks,
     parse_histdata_timestamp,
+    reorder_histdata_ticks,
 )
 
 
@@ -56,3 +57,26 @@ def test_histdata_tick_order_must_be_chronological() -> None:
     )
     with pytest.raises(ValueError, match="not chronological"):
         list(aggregate_histdata_ticks(ticks, price_digits=3))
+
+
+def test_histdata_one_second_jitter_is_reordered() -> None:
+    ticks = iter(
+        [
+            (datetime(2026, 7, 1, 5, 30, 20, tzinfo=UTC), 157.10, 157.11),
+            (datetime(2026, 7, 1, 5, 30, 19, tzinfo=UTC), 157.09, 157.10),
+            (datetime(2026, 7, 1, 5, 30, 21, tzinfo=UTC), 157.11, 157.12),
+        ]
+    )
+    ordered = list(reorder_histdata_ticks(ticks, max_backward_seconds=1.0))
+    assert [row[0].second for row in ordered] == [19, 20, 21]
+
+
+def test_histdata_jitter_beyond_one_second_fails_closed() -> None:
+    ticks = iter(
+        [
+            (datetime(2026, 7, 1, 5, 30, 20, tzinfo=UTC), 157.10, 157.11),
+            (datetime(2026, 7, 1, 5, 30, 18, tzinfo=UTC), 157.09, 157.10),
+        ]
+    )
+    with pytest.raises(ValueError, match="exceeded bounded reorder window"):
+        list(reorder_histdata_ticks(ticks, max_backward_seconds=1.0))
