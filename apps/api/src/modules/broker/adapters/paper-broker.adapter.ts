@@ -23,6 +23,7 @@ import {
 import type { OrderCapabilityDeclaration } from '../interfaces/order-capability';
 import { BrokerAdapterError, BrokerErrorCode } from '../interfaces/broker-adapter.errors';
 import { ProviderDispatchCertainty } from '../interfaces/provider-dispatch-certainty';
+import { PaperBrokerStateService } from '../services/paper-broker-state.service';
 
 /**
  * PaperBrokerAdapter — safe simulated broker for paper trading only.
@@ -200,6 +201,22 @@ export class DeterministicPaperPriceFeed extends PaperPriceFeed {
     return this.format();
   }
 
+  restoreTickCounter(tickCounter: number): void {
+    if (!Number.isSafeInteger(tickCounter) || tickCounter < 0) {
+      throw new Error('Paper feed tick counter must be a non-negative safe integer');
+    }
+    const cycleLength = PAPER_TICK_STEPS_UNITS.length;
+    const cycleSum = PAPER_TICK_STEPS_UNITS.reduce((sum, step) => sum + step, 0n);
+    const completeCycles = Math.floor(tickCounter / cycleLength);
+    const remainder = tickCounter % cycleLength;
+    let bidUnits = 110_000n + cycleSum * BigInt(completeCycles);
+    for (let index = 0; index < remainder; index += 1) {
+      bidUnits += PAPER_TICK_STEPS_UNITS[index]!;
+    }
+    this.bidUnits = bidUnits;
+    this.stepIndex = tickCounter;
+  }
+
   private format(): PaperQuote {
     return {
       bid: formatScaledDecimal(this.bidUnits, PAPER_PRICE_SCALE),
@@ -207,7 +224,6 @@ export class DeterministicPaperPriceFeed extends PaperPriceFeed {
     };
   }
 }
-
 
 interface PaperReplayRow {
   timestamp: Date;
@@ -225,6 +241,7 @@ interface PaperReplayRow {
 class CsvReplayPaperPriceFeed extends PaperPriceFeed {
   readonly instrument = 'USDJPY';
   private readonly rows: PaperReplayRow[];
+  private readonly startCursor: number;
   private cursor: number;
 
   constructor(path: string, replayStartIso: string) {
@@ -233,64 +250,112 @@ class CsvReplayPaperPriceFeed extends PaperPriceFeed {
     if (lines.length < 3) throw new Error('Paper replay CSV has insufficient rows');
     const headers = lines[0]!.split(',');
     const idx = Object.fromEntries(headers.map((h, i) => [h.trim(), i]));
-    const required = ['timestamp','open','high','low','close','volume','tick_volume','spread_points','price_digits'];
-    for (const name of required) if (idx[name] === undefined) throw new Error(`Paper replay CSV missing ${name}`);
-    this.rows = lines.slice(1).filter(Boolean).map((line) => {
-      const c = line.split(',');
-      return {
-        timestamp: new Date(c[idx.timestamp]!),
-        open: c[idx.open]!, high: c[idx.high]!, low: c[idx.low]!, close: c[idx.close]!,
-        volume: c[idx.volume] || c[idx.tick_volume] || '0',
-        tickVolume: c[idx.tick_volume] || c[idx.volume] || '0',
-        spreadPoints: c[idx.spread_points] || '0',
-        priceDigits: Number(c[idx.price_digits] || '3'),
-      };
-    });
+    const required = [
+      'timestamp',
+      'open',
+      'high',
+      'low',
+      'close',
+      'volume',
+      'tick_volume',
+      'spread_points',
+      'price_digits',
+    ];
+    for (const name of required)
+      if (idx[name] === undefined) throw new Error(`Paper replay CSV missing ${name}`);
+    this.rows = lines
+      .slice(1)
+      .filter(Boolean)
+      .map((line) => {
+        const c = line.split(',');
+        return {
+          timestamp: new Date(c[idx.timestamp]!),
+          open: c[idx.open]!,
+          high: c[idx.high]!,
+          low: c[idx.low]!,
+          close: c[idx.close]!,
+          volume: c[idx.volume] || c[idx.tick_volume] || '0',
+          tickVolume: c[idx.tick_volume] || c[idx.volume] || '0',
+          spreadPoints: c[idx.spread_points] || '0',
+          priceDigits: Number(c[idx.price_digits] || '3'),
+        };
+      });
     const replayStart = new Date(replayStartIso).getTime();
     const first = this.rows.findIndex((row) => row.timestamp.getTime() >= replayStart);
     if (first <= 0) throw new Error('Paper replay start requires prior context row');
     this.cursor = first - 1;
+    this.startCursor = this.cursor;
   }
 
-  quote(): PaperQuote { return this.quoteFor(this.rows[this.cursor]!); }
+  quote(): PaperQuote {
+    return this.quoteFor(this.rows[this.cursor]!);
+  }
   tick(): PaperQuote {
     if (this.cursor < this.rows.length - 1) this.cursor += 1;
     return this.quote();
   }
-  now(): Date { return new Date(this.rows[this.cursor]!.timestamp); }
-  digits(): number { return this.rows[this.cursor]!.priceDigits; }
+  restoreTickCounter(tickCounter: number): void {
+    if (!Number.isSafeInteger(tickCounter) || tickCounter < 0) {
+      throw new Error('Paper replay tick counter must be a non-negative safe integer');
+    }
+    this.cursor = Math.min(this.rows.length - 1, this.startCursor + tickCounter);
+  }
+  now(): Date {
+    return new Date(this.rows[this.cursor]!.timestamp);
+  }
+  digits(): number {
+    return this.rows[this.cursor]!.priceDigits;
+  }
 
   ohlcv(timeframe: string, count: number): OHLCV[] {
     const spacingMs = PAPER_TIMEFRAME_MS[timeframe];
-    if (!spacingMs) throw new BrokerAdapterError(BrokerErrorCode.INVALID_REQUEST, `Unsupported paper-market timeframe: ${timeframe}`);
+    if (!spacingMs)
+      throw new BrokerAdapterError(
+        BrokerErrorCode.INVALID_REQUEST,
+        `Unsupported paper-market timeframe: ${timeframe}`,
+      );
     const source = this.rows.slice(0, this.cursor + 1);
     const buckets = new Map<number, PaperReplayRow[]>();
     for (const row of source) {
       const key = Math.floor(row.timestamp.getTime() / spacingMs) * spacingMs;
       const bucket = buckets.get(key) ?? [];
-      bucket.push(row); buckets.set(key, bucket);
+      bucket.push(row);
+      buckets.set(key, bucket);
     }
-    return Array.from(buckets.entries()).sort((a,b)=>a[0]-b[0]).slice(-count).map(([key, rows]) => {
-      const first = rows[0]!, last = rows[rows.length-1]!;
-      const high = Math.max(...rows.map(r=>Number(r.high)));
-      const low = Math.min(...rows.map(r=>Number(r.low)));
-      const volume = rows.reduce((sum,r)=>sum+Number(r.volume||0),0);
-      const ticks = rows.reduce((sum,r)=>sum+Number(r.tickVolume||0),0);
-      return {
-        timestamp: new Date(key), open: first.open, high: high.toFixed(last.priceDigits),
-        low: low.toFixed(last.priceDigits), close: last.close,
-        volume: String(volume), tickVolume: String(ticks), spreadPoints: last.spreadPoints,
-        priceDigits: last.priceDigits, brokerTime: last.timestamp.toISOString(),
-      };
-    });
+    return Array.from(buckets.entries())
+      .sort((a, b) => a[0] - b[0])
+      .slice(-count)
+      .map(([key, rows]) => {
+        const first = rows[0]!,
+          last = rows[rows.length - 1]!;
+        const high = Math.max(...rows.map((r) => Number(r.high)));
+        const low = Math.min(...rows.map((r) => Number(r.low)));
+        const volume = rows.reduce((sum, r) => sum + Number(r.volume || 0), 0);
+        const ticks = rows.reduce((sum, r) => sum + Number(r.tickVolume || 0), 0);
+        return {
+          timestamp: new Date(key),
+          open: first.open,
+          high: high.toFixed(last.priceDigits),
+          low: low.toFixed(last.priceDigits),
+          close: last.close,
+          volume: String(volume),
+          tickVolume: String(ticks),
+          spreadPoints: last.spreadPoints,
+          priceDigits: last.priceDigits,
+          brokerTime: last.timestamp.toISOString(),
+        };
+      });
   }
 
   private quoteFor(row: PaperReplayRow): PaperQuote {
     const digits = row.priceDigits;
     const mid = Number(row.close);
-    const spread = Number(row.spreadPoints || '0') * 10 ** (-digits);
+    const spread = Number(row.spreadPoints || '0') * 10 ** -digits;
     const renderDigits = Math.min(8, digits + 1);
-    return { bid: (mid - spread / 2).toFixed(renderDigits), ask: (mid + spread / 2).toFixed(renderDigits) };
+    return {
+      bid: (mid - spread / 2).toFixed(renderDigits),
+      ask: (mid + spread / 2).toFixed(renderDigits),
+    };
   }
 }
 
@@ -312,6 +377,13 @@ export class DeterministicPaperClock extends PaperClock {
 
   advance(ms: number): void {
     this.offsetMs += Math.max(0, Math.trunc(ms));
+  }
+
+  restoreTickCounter(tickCounter: number): void {
+    if (!Number.isSafeInteger(tickCounter) || tickCounter < 0) {
+      throw new Error('Paper clock tick counter must be a non-negative safe integer');
+    }
+    this.offsetMs = tickCounter * PAPER_TICK_DURATION_MS;
   }
 }
 
@@ -461,7 +533,10 @@ function toMoney(value: string): string {
 
 /** The mid of a quote — the paper engine's MARKET/manual-close fill price. */
 function quoteMid(quote: PaperQuote): string {
-  const scale = Math.max((quote.bid.split('.')[1] ?? '').length, (quote.ask.split('.')[1] ?? '').length);
+  const scale = Math.max(
+    (quote.bid.split('.')[1] ?? '').length,
+    (quote.ask.split('.')[1] ?? '').length,
+  );
   return divideDecimalStrings(addDecimalStrings(quote.bid, quote.ask), '2', scale);
 }
 
@@ -548,6 +623,41 @@ interface PaperClosedTrade {
   closeReason: 'TP' | 'SL' | 'MANUAL' | 'SYSTEM';
 }
 
+type SerializedPaperWorkingOrder = Omit<PaperWorkingOrder, 'placedAt'> & {
+  placedAt: string;
+};
+
+type SerializedPaperPosition = Omit<PaperPosition, 'units' | 'openedAt'> & {
+  units: string;
+  openedAt: string;
+};
+
+type SerializedPaperClosedTrade = Omit<PaperClosedTrade, 'openedAt' | 'closedAt'> & {
+  openedAt: string;
+  closedAt: string;
+};
+
+type SerializedBrokerOrderState = Omit<BrokerOrderState, 'placedAt' | 'updatedAt' | 'raw'> & {
+  placedAt?: string | null;
+  updatedAt?: string | null;
+};
+
+type SerializedBrokerOrderResult = Omit<BrokerOrderResult, 'filledAt' | 'rawResponse'> & {
+  filledAt?: string;
+};
+
+interface PaperBrokerDurableStateV1 {
+  version: 1;
+  orderCounter: number;
+  marketTickCounter: number;
+  balance: string;
+  working: SerializedPaperWorkingOrder[];
+  positions: SerializedPaperPosition[];
+  closedTrades: SerializedPaperClosedTrade[];
+  orderStates: Array<[string, SerializedBrokerOrderState]>;
+  resultsByDedupeKey: Array<[string, SerializedBrokerOrderResult]>;
+}
+
 // ─── Adapter ─────────────────────────────────────────────────────────────────
 
 @Injectable()
@@ -574,18 +684,30 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   private readonly _orderStates = new Map<string, BrokerOrderState>();
   /** True-dedupe acknowledgement store, keyed by clientOrderId ?? idempotencyKey. */
   private readonly _resultsByDedupeKey = new Map<string, BrokerOrderResult>();
+  private readonly _stateStore?: PaperBrokerStateService;
+  private readonly _connectionId?: string;
+  private _stateLoaded = false;
+  private _persistQueue: Promise<void> = Promise.resolve();
 
   /**
    * The feed and clock are constructor-injectable determinism seams for specs
    * (scripted falling walks, fake clocks). Under Nest DI both are optional and
    * default to the deterministic implementations above.
    */
-  constructor(@Optional() priceFeed?: PaperPriceFeed, @Optional() clock?: PaperClock) {
+  constructor(
+    @Optional() priceFeed?: PaperPriceFeed,
+    @Optional() clock?: PaperClock,
+    @Optional() stateStore?: PaperBrokerStateService,
+    @Optional() connectionId?: string,
+  ) {
     const replayPath = !priceFeed ? (process.env.PAPER_REPLAY_M1_CSV ?? '').trim() : '';
     const replayStart = (process.env.PAPER_REPLAY_START ?? '').trim();
-    this._replayFeed = replayPath && replayStart ? new CsvReplayPaperPriceFeed(replayPath, replayStart) : null;
+    this._replayFeed =
+      replayPath && replayStart ? new CsvReplayPaperPriceFeed(replayPath, replayStart) : null;
     this._feed = priceFeed ?? this._replayFeed ?? new DeterministicPaperPriceFeed();
     this._clock = clock ?? new DeterministicPaperClock();
+    this._stateStore = stateStore;
+    this._connectionId = connectionId;
   }
 
   private currentTime(): Date {
@@ -604,10 +726,18 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
 
   async connect(_credentials: DecryptedBrokerCredentials): Promise<BrokerConnectionResult> {
     // Credentials intentionally ignored — paper broker needs none.
-    // Account state PERSISTS across reconnects (health checks must never wipe
-    // orders/positions/history — the "preserve" contract).
+    // Preserve the historical synchronous-connect seam for isolated test/
+    // ephemeral adapters. Persisted connection adapters restore before use.
+    if (this._stateStore && this._connectionId) {
+      await this.restoreDurableState();
+    }
     this._connected = true;
-    this.logger.log('PaperBrokerAdapter connected (simulated)');
+    if (this._stateStore && this._connectionId) {
+      await this.persistDurableState();
+    }
+    this.logger.log(
+      `PaperBrokerAdapter connected (simulated)${this._connectionId ? ' [durable]' : ''}`,
+    );
     return {
       success: true,
       accountId: PAPER_ACCOUNT_ID,
@@ -618,6 +748,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   }
 
   async disconnect(): Promise<void> {
+    await this.persistDurableState();
     this._connected = false;
     this.logger.log('PaperBrokerAdapter disconnected');
   }
@@ -714,7 +845,11 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   async getRequiredMargin(params: RequiredMarginParams): Promise<string | null> {
     this.assertConnected();
     try {
-      try { this.requireInstrument(params.instrument); } catch { return null; }
+      try {
+        this.requireInstrument(params.instrument);
+      } catch {
+        return null;
+      }
       const lot = parseScaledDecimal(params.lotSize, 'lotSize', BrokerErrorCode.INVALID_LOT_SIZE);
       if (lot.negative || lot.digits === 0n) return null;
       // Any exact lot-step spelling is calculable; non-step values are not.
@@ -862,9 +997,14 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     return [
       {
         symbol,
-        description: this._replayFeed ? 'US Dollar vs Japanese Yen (Real-data Paper Replay)' : 'Euro vs US Dollar (Paper)',
+        description: this._replayFeed
+          ? 'US Dollar vs Japanese Yen (Real-data Paper Replay)'
+          : 'Euro vs US Dollar (Paper)',
         digits: this._replayFeed ? this._replayFeed.digits() : PAPER_PRICE_SCALE,
-        minLot: PAPER_MIN_LOT, maxLot: PAPER_MAX_LOT, lotStep: '0.01', contractSize: PAPER_CONTRACT_SIZE,
+        minLot: PAPER_MIN_LOT,
+        maxLot: PAPER_MAX_LOT,
+        lotStep: '0.01',
+        contractSize: PAPER_CONTRACT_SIZE,
       },
     ];
   }
@@ -879,6 +1019,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     this.assertConnected();
     this.requireInstrument(instrument);
     const quote = this.advanceMarket();
+    await this.persistDurableState();
     return {
       instrument: this.requireInstrument(instrument),
       bid: quote.bid,
@@ -1039,6 +1180,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       }
 
       this._resultsByDedupeKey.set(dedupeKey, result);
+      await this.persistDurableState();
       this.logger.log(
         `PaperBrokerAdapter: simulated order placed id=${orderId} ` +
           `instrument=${instrument} dir=${order.direction} lot=${order.lotSize} ` +
@@ -1222,6 +1364,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         if (stopLoss !== undefined) working.stopLoss = stopLoss;
         if (takeProfit !== undefined) working.takeProfit = takeProfit;
       }
+      await this.persistDurableState();
       return {
         success: true,
         externalOrderId,
@@ -1279,6 +1422,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         closePrice,
         'MANUAL',
       );
+      await this.persistDurableState();
       return {
         success: true,
         externalOrderId,
@@ -1330,6 +1474,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         placedAt: cancelled.placedAt,
         updatedAt: now,
       });
+      await this.persistDurableState();
       this.logger.log(
         `PaperBrokerAdapter: cancelled working order id=${externalOrderId} ` +
           `kind=${cancelled.orderKind} [PAPER_ONLY]`,
@@ -1369,6 +1514,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         }
       }
 
+      await this.persistDurableState();
       this.logger.log(
         `PaperBrokerAdapter: closeAllOrders closed=${closedCount} failed=${failedCount} ` +
           `(working orders left untouched: ${this._working.length}) [PAPER_ONLY]`,
@@ -1659,6 +1805,168 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         `pnl=${realisedPnl} USD) [PAPER_ONLY]`,
     );
     return trade;
+  }
+
+  private durableSnapshot(): PaperBrokerDurableStateV1 {
+    const orderStates: Array<[string, SerializedBrokerOrderState]> = Array.from(
+      this._orderStates.entries(),
+      ([key, value]) => {
+        const { raw: ignoredRaw, placedAt, updatedAt, ...rest } = value;
+        void ignoredRaw;
+        return [
+          key,
+          {
+            ...rest,
+            placedAt: placedAt?.toISOString() ?? null,
+            updatedAt: updatedAt?.toISOString() ?? null,
+          },
+        ];
+      },
+    );
+    const resultsByDedupeKey: Array<[string, SerializedBrokerOrderResult]> = Array.from(
+      this._resultsByDedupeKey.entries(),
+      ([key, value]) => {
+        const { rawResponse: ignoredRawResponse, filledAt, ...rest } = value;
+        void ignoredRawResponse;
+        return [
+          key,
+          {
+            ...rest,
+            filledAt: filledAt?.toISOString(),
+          },
+        ];
+      },
+    );
+
+    return {
+      version: 1,
+      orderCounter: this._orderCounter,
+      marketTickCounter: this._marketTickCounter,
+      balance: this._balance,
+      working: this._working.map((order) => ({
+        ...order,
+        placedAt: order.placedAt.toISOString(),
+      })),
+      positions: Array.from(this._positions.values()).map((position) => ({
+        ...position,
+        units: position.units.toString(),
+        openedAt: position.openedAt.toISOString(),
+      })),
+      closedTrades: this._closedTrades.map((trade) => ({
+        ...trade,
+        openedAt: trade.openedAt.toISOString(),
+        closedAt: trade.closedAt.toISOString(),
+      })),
+      orderStates,
+      resultsByDedupeKey,
+    };
+  }
+
+  private async restoreDurableState(): Promise<void> {
+    if (this._stateLoaded || !this._stateStore || !this._connectionId) return;
+
+    const raw = await this._stateStore.load(this._connectionId);
+    this._stateLoaded = true;
+    if (!raw) return;
+
+    const state = raw as unknown as PaperBrokerDurableStateV1;
+    if (
+      state.version !== 1 ||
+      !Number.isSafeInteger(state.orderCounter) ||
+      !Number.isSafeInteger(state.marketTickCounter) ||
+      state.orderCounter < 0 ||
+      state.marketTickCounter < 0 ||
+      typeof state.balance !== 'string' ||
+      !Array.isArray(state.working) ||
+      !Array.isArray(state.positions) ||
+      !Array.isArray(state.closedTrades) ||
+      !Array.isArray(state.orderStates) ||
+      !Array.isArray(state.resultsByDedupeKey)
+    ) {
+      throw new Error('Invalid durable paper broker state for connection ' + this._connectionId);
+    }
+
+    this._orderCounter = state.orderCounter;
+    this._marketTickCounter = state.marketTickCounter;
+    this._balance = state.balance;
+
+    this._working.splice(
+      0,
+      this._working.length,
+      ...state.working.map((order) => ({
+        ...order,
+        placedAt: new Date(order.placedAt),
+      })),
+    );
+
+    this._positions.clear();
+    for (const position of state.positions) {
+      this._positions.set(position.positionId, {
+        ...position,
+        units: BigInt(position.units),
+        openedAt: new Date(position.openedAt),
+      });
+    }
+
+    this._closedTrades.splice(
+      0,
+      this._closedTrades.length,
+      ...state.closedTrades.map((trade) => ({
+        ...trade,
+        openedAt: new Date(trade.openedAt),
+        closedAt: new Date(trade.closedAt),
+      })),
+    );
+
+    this._orderStates.clear();
+    for (const [key, value] of state.orderStates) {
+      this._orderStates.set(key, {
+        ...value,
+        placedAt: value.placedAt ? new Date(value.placedAt) : null,
+        updatedAt: value.updatedAt ? new Date(value.updatedAt) : null,
+      });
+    }
+
+    this._resultsByDedupeKey.clear();
+    for (const [key, value] of state.resultsByDedupeKey) {
+      this._resultsByDedupeKey.set(key, {
+        ...value,
+        filledAt: value.filledAt ? new Date(value.filledAt) : undefined,
+      });
+    }
+
+    if (this._feed instanceof DeterministicPaperPriceFeed) {
+      this._feed.restoreTickCounter(this._marketTickCounter);
+    }
+    if (this._replayFeed) {
+      this._replayFeed.restoreTickCounter(this._marketTickCounter);
+    }
+    if (this._clock instanceof DeterministicPaperClock) {
+      this._clock.restoreTickCounter(this._marketTickCounter);
+    }
+
+    this.logger.log(
+      'PaperBrokerAdapter restored durable state connection=' +
+        this._connectionId +
+        ' positions=' +
+        this._positions.size +
+        ' working=' +
+        this._working.length +
+        ' closed=' +
+        this._closedTrades.length +
+        ' tick=' +
+        this._marketTickCounter,
+    );
+  }
+
+  private async persistDurableState(): Promise<void> {
+    if (!this._stateStore || !this._connectionId) return;
+    const snapshot = this.durableSnapshot() as unknown as Record<string, unknown>;
+    const write = this._persistQueue.then(() =>
+      this._stateStore!.save(this._connectionId!, snapshot),
+    );
+    this._persistQueue = write.catch(() => undefined);
+    await write;
   }
 
   // ─── Request validation ───────────────────────────────────────────────────

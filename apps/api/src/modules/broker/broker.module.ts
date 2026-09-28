@@ -1,4 +1,4 @@
-import { Module, OnModuleInit } from '@nestjs/common';
+import { Module, OnModuleInit, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BullModule } from '@nestjs/bullmq';
@@ -12,6 +12,7 @@ import { BrokerRegistryController } from './broker-registry.controller';
 import { BrokerConnection } from './entities/broker-connection.entity';
 import { BrokerAccount } from './entities/broker-account.entity';
 import { BrokerAccountSnapshot } from './entities/broker-account-snapshot.entity';
+import { PaperBrokerState } from './entities/paper-broker-state.entity';
 import { BrokerOAuthFlow } from './entities/broker-oauth-flow.entity';
 import { BrokerLinkOutbox } from './entities/broker-link-outbox.entity';
 import { BrokerAdapterRegistry } from './adapters/broker-adapter.registry';
@@ -33,6 +34,7 @@ import { BrokerHealthCheckProducer } from './jobs/broker-health-check.producer';
 import { AuditModule } from '../audit/audit.module';
 import { ExecutionAuthorityModule } from '../execution-authority/execution-authority.module';
 import { BrokerAccountSnapshotService } from './services/broker-account-snapshot.service';
+import { PaperBrokerStateService } from './services/paper-broker-state.service';
 
 /**
  * BrokerModule — Pluggable broker integration layer with health monitoring.
@@ -61,6 +63,7 @@ import { BrokerAccountSnapshotService } from './services/broker-account-snapshot
       BrokerConnection,
       BrokerAccount,
       BrokerAccountSnapshot,
+      PaperBrokerState,
       BrokerOAuthFlow,
       BrokerLinkOutbox,
     ]),
@@ -88,6 +91,7 @@ import { BrokerAccountSnapshotService } from './services/broker-account-snapshot
     // (accept generation-fenced writes, freshness gate for NEW exposure,
     // legacy current-view projection guarded by generation).
     BrokerAccountSnapshotService,
+    PaperBrokerStateService,
     PortfolioReadService,
     // Sprint 56 / Task 48-D — evidence-based write path for
     // BrokerConnection.demoValidated
@@ -132,6 +136,7 @@ import { BrokerAccountSnapshotService } from './services/broker-account-snapshot
     // Round 6: exported so RiskModule (and the trading session start path)
     // can resolve fresh exact-connection snapshots for NEW-exposure authority.
     BrokerAccountSnapshotService,
+    PaperBrokerStateService,
     PortfolioReadService,
     BrokerAdapterRegistry,
     BrokerProviderRegistryService,
@@ -159,6 +164,7 @@ export class BrokerModule implements OnModuleInit {
     private metaApiClient: MetaApiClientService,
     private configService: ConfigService,
     private cTraderClient: CTraderClientService,
+    @Optional() private paperBrokerStateService?: PaperBrokerStateService,
   ) {}
 
   onModuleInit() {
@@ -168,7 +174,11 @@ export class BrokerModule implements OnModuleInit {
     // provider infrastructure (the MetaAPI connection pool, the cTrader
     // environment-connection pool) remains shared underneath by design.
     this.registry.register(this.metaTraderAdapter, () => new MetaTraderAdapter(this.metaApiClient));
-    this.registry.register(this.paperBrokerAdapter, () => new PaperBrokerAdapter());
+    this.registry.register(
+      this.paperBrokerAdapter,
+      (_requestedBrokerId, connectionId) =>
+        new PaperBrokerAdapter(undefined, undefined, this.paperBrokerStateService, connectionId),
+    );
     // Sprint 51 PR-7 — OANDA v20 REST native adapter (BETA: implemented +
     // contract-tested; live verification pending — see
     // docs/brokers/oanda-v20-adapter.md).
