@@ -24,6 +24,10 @@ from app.domain.training.single_pair_v11_calibrated_gating import (
     _fit_models,
     _trading_metrics,
 )
+from app.domain.training.single_pair_v11_calibrated_gating import (
+    _fit_models,
+    _trading_metrics,
+)
 from app.domain.training.single_pair_v16_two_sided_economic import (
     MAX_FOLD_TRADE_CONCENTRATION,
     MIN_OUTER_TRADES,
