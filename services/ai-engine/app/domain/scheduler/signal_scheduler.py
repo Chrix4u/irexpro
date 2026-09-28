@@ -52,6 +52,7 @@ class ScheduledSessionJob:
     model_loaded: bool | None = None
     market_data_cache_bypassed: bool = False
     research_uat: bool = False
+    workflow_probe_enabled: bool = True
     replay_steps_per_cycle: int = 1
     replay_steps_last_cycle: int = 0
     replay_steps_total: int = 0
@@ -154,6 +155,7 @@ class SignalScheduler:
             source=request.source,
             interval_seconds=interval,
             research_uat=request.research_uat,
+            workflow_probe_enabled=request.workflow_probe_enabled,
             replay_steps_per_cycle=replay_steps,
         )
         self._jobs[session_id] = job
@@ -175,6 +177,7 @@ class SignalScheduler:
             interval_seconds=interval,
             source=request.source,
             research_uat=request.research_uat,
+            workflow_probe_enabled=request.workflow_probe_enabled,
             replay_steps_per_cycle=replay_steps,
         )
         return True
@@ -242,6 +245,7 @@ class SignalScheduler:
                 now = datetime.now(UTC)
                 probe_due = (
                     job.research_uat
+                    and job.workflow_probe_enabled
                     and scan_index == len(scan_plan) - 1
                     and (
                         job.last_uat_probe_at is None
@@ -257,6 +261,7 @@ class SignalScheduler:
                     source=job.source,
                     bypass_market_data_cache=job.source == "broker",
                     uat_workflow_probe=probe_due,
+                    research_uat_authorized=job.research_uat,
                 )
 
                 job.replay_steps_last_cycle += 1
@@ -370,11 +375,3 @@ class SignalScheduler:
                     research_uat=job.research_uat,
                 )
                 break
-
-        if (
-            job.research_uat
-            and not published_this_cycle
-            and not job.last_publish_failed
-            and job.last_decision == "NO_TRADE"
-        ):
-            job.last_reason = "research_uat_replay_budget_exhausted"

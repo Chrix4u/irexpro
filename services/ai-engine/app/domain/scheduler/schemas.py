@@ -17,6 +17,7 @@ class SessionStartRequest(BaseModel):
     account_type: Literal["DEMO", "LIVE"] = Field(..., alias="accountType")
     broker_id: str | None = Field(default=None, alias="brokerId")
     research_uat: bool = Field(default=False, alias="researchUat")
+    workflow_probe_enabled: bool = Field(default=True, alias="workflowProbeEnabled")
     replay_steps_per_cycle: int = Field(
         default=1,
         ge=1,

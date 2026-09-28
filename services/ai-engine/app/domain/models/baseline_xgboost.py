@@ -41,6 +41,7 @@ EVENT_PAIR_BUNDLE_MODEL_TYPE = "xgboost_event_pair_bundle"
 EVENT_LABEL_POLICY_RUNTIME = "first_net_return_barrier_atr1_spread2_timeout_v1"
 EVENT_PAIR_REGIME_ROUTER_POLICY_RUNTIME = "pair_m1_volatility_spread_median_v1"
 EVENT_DUAL_ACTIONABILITY_EXPERIMENT_RUNTIME = "event_barrier_dual_actionability"
+EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_RUNTIME = "event_barrier_hybrid_opportunity_dual_direction"
 DUAL_ACTION_MARGIN_FLOOR_RUNTIME = 0.10
 
 
@@ -205,7 +206,10 @@ class BaselineXGBoostModel:
                     return resolved
 
                 experiment = str(manifest.get("experiment", "")).strip()
-                if experiment == EVENT_DUAL_ACTIONABILITY_EXPERIMENT_RUNTIME:
+                if experiment in {
+                    EVENT_DUAL_ACTIONABILITY_EXPERIMENT_RUNTIME,
+                    EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_RUNTIME,
+                }:
                     dual_spec = manifest.get("dual_actionability")
                     if not isinstance(dual_spec, dict):
                         raise ValueError("Dual-actionability bundle is missing decision models")
@@ -238,10 +242,20 @@ class BaselineXGBoostModel:
                         child.load_model(str(component_path(side_spec)))
                         dual_models[side] = child
 
-                    self._bundle = {
+                    bundle = {
                         "manifest": manifest,
                         "dual_actionability": dual_models,
                     }
+                    if experiment == EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_RUNTIME:
+                        opportunity_spec = manifest.get("opportunity")
+                        if not isinstance(opportunity_spec, dict):
+                            raise ValueError("Hybrid dual-actionability bundle is missing opportunity model")
+                        if opportunity_spec.get("kind") != "xgboost_classifier":
+                            raise ValueError("Hybrid opportunity model kind is unsupported")
+                        opportunity = xgb.XGBClassifier()
+                        opportunity.load_model(str(component_path(opportunity_spec)))
+                        bundle["opportunity"] = opportunity
+                    self._bundle = bundle
                     self._model = dual_models["long"]
                     self._model_loaded = True
                     self._model_version = model_version
@@ -446,11 +460,11 @@ class BaselineXGBoostModel:
             raise ValueError(f"Missing model features: {missing}")
 
         manifest = self._bundle["manifest"]
-        if (
-            str(manifest.get("experiment", "")).strip()
-            == EVENT_DUAL_ACTIONABILITY_EXPERIMENT_RUNTIME
-        ):
+        experiment = str(manifest.get("experiment", "")).strip()
+        if experiment == EVENT_DUAL_ACTIONABILITY_EXPERIMENT_RUNTIME:
             return self._predict_with_event_dual_actionability_bundle(features)
+        if experiment == EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_RUNTIME:
+            return self._predict_with_event_hybrid_dual_direction_bundle(features)
 
         active_instruments = [
             instrument
@@ -555,6 +569,70 @@ class BaselineXGBoostModel:
             features_used=list(self._feature_names),
             raw_scores=raw_scores,
             explainability=explainability,
+        )
+
+
+    def _predict_with_event_hybrid_dual_direction_bundle(
+        self,
+        features: dict[str, float],
+    ) -> ModelPrediction:
+        missing = [name for name in self._feature_names if name not in features]
+        if missing:
+            raise ValueError(f"Missing model features: {missing}")
+        active_instruments = [
+            instrument
+            for instrument in INITIAL_FOREX_UNIVERSE
+            if float(features.get(f"instrument_{instrument}", 0.0)) >= 0.5
+        ]
+        if active_instruments != ["USDJPY"]:
+            raise ValueError("Research hybrid runtime is restricted to USDJPY")
+        frame = pd.DataFrame(
+            [[features[name] for name in self._feature_names]],
+            columns=self._feature_names,
+        )
+        models = self._bundle["dual_actionability"]
+        long_probability = float(models["long"].predict_proba(frame)[0][1])
+        short_probability = float(models["short"].predict_proba(frame)[0][1])
+        total = max(long_probability + short_probability, 1e-7)
+        long_direction_probability = long_probability / total
+        direction_confidence = max(long_direction_probability, 1.0 - long_direction_probability)
+        action_margin = abs(long_probability - short_probability)
+        opportunity_probability = float(
+            self._bundle["opportunity"].predict_proba(frame)[0][1]
+        )
+        confidence = min(opportunity_probability, direction_confidence)
+        direction: Literal["BUY", "SELL"] = (
+            "BUY" if long_probability >= short_probability else "SELL"
+        )
+        margin_ok = action_margin >= DUAL_ACTION_MARGIN_FLOOR_RUNTIME
+        return ModelPrediction(
+            direction=direction,
+            confidence_score=round(confidence, 4),
+            model_version=self._model_version,
+            features_used=list(self._feature_names),
+            raw_scores={
+                "opportunity_probability": opportunity_probability,
+                "long_action_probability": long_probability,
+                "short_action_probability": short_probability,
+                "normalized_direction_confidence": direction_confidence,
+                "joint_confidence": confidence,
+                "action_probability_margin": action_margin,
+                "action_margin_floor": DUAL_ACTION_MARGIN_FLOOR_RUNTIME,
+            },
+            explainability={
+                "method": "hybrid_opportunity_dual_actionability_xgboost",
+                "instrument_expert": "USDJPY",
+                "research_experiment": EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_RUNTIME,
+                "signal_eligible": margin_ok,
+                "signal_gate_reason": (
+                    "eligible" if margin_ok else "action_probability_margin_below_floor"
+                ),
+                "confidence_semantics": (
+                    "Minimum of opportunity probability and normalized LONG/SHORT direction confidence; "
+                    "not a probability of profit."
+                ),
+                "approved_for_live": False,
+            },
         )
 
     def _predict_with_event_dual_actionability_bundle(

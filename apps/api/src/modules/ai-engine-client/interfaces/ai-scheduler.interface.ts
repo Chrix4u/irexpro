@@ -11,6 +11,7 @@ export interface AiSchedulerSessionStartPayload {
   source: 'broker' | 'mock';
   brokerId?: string;
   researchUat?: boolean;
+  workflowProbeEnabled?: boolean;
   replayStepsPerCycle?: number;
   /**
    * Exact environment of the bound broker connection. FULL_AUTO on DEMO is

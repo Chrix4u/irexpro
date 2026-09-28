@@ -698,6 +698,48 @@ export default function AiTradingPage() {
         const result = await api.stopTradingSession(terminal.session.id);
         const summary = result.positionCloseSummary;
 
+        // Keep the Stop UX in sync with the server-confirmed flatten immediately.
+        // Only remove rows optimistically when the COMPLETE response proves that
+        // every displayed position for this broker was part of the confirmed close.
+        // Otherwise unresolved/manual-looking rows stay visible until the
+        // authoritative positions endpoint says they are gone.
+        if (summary.state === 'COMPLETE' && summary.targetCount !== null) {
+          setLivePositions((current) => {
+            const brokerPositions = current.filter(
+              (position) => position.brokerConnectionId === selectedBroker.id,
+            );
+            if (brokerPositions.length !== summary.targetCount) return current;
+            return current.filter(
+              (position) => position.brokerConnectionId !== selectedBroker.id,
+            );
+          });
+        }
+
+        // Refresh the positions resource directly after Stop instead of relying
+        // solely on the broader workspace refresh, which can briefly retain its
+        // pre-stop snapshot. A short second read absorbs provider persistence lag.
+        try {
+          const immediate = await loadLiveAccountPositions();
+          const remainingForBroker = immediate.positions.filter(
+            (position) => position.brokerConnectionId === selectedBroker.id,
+          );
+          const closureShouldBeComplete =
+            summary.state === 'COMPLETE' && summary.unresolvedCount === 0;
+
+          if (!closureShouldBeComplete || remainingForBroker.length === 0) {
+            setLivePositions(immediate.positions);
+          } else {
+            window.setTimeout(() => {
+              void loadLiveAccountPositions()
+                .then((latest) => setLivePositions(latest.positions))
+                .catch(() => undefined);
+            }, 500);
+          }
+        } catch {
+          // The optimistic COMPLETE update above remains visible. The normal
+          // polling loop will reconcile against the server on its next pass.
+        }
+
         if (summary.state === 'COMPLETE') {
           if (summary.closedCount > 0) {
             notify.success(

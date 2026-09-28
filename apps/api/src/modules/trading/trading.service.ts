@@ -255,11 +255,8 @@ export class TradingService {
             researchUat:
               connection.brokerId === 'paper-broker' &&
               session.executionMode === ExecutionMode.PAPER_ONLY,
-            replayStepsPerCycle:
-              connection.brokerId === 'paper-broker' &&
-              session.executionMode === ExecutionMode.PAPER_ONLY
-                ? 12
-                : 1,
+            workflowProbeEnabled: false,
+            replayStepsPerCycle: 1,
             intervalSeconds:
               connection.brokerId === 'paper-broker' &&
               session.executionMode === ExecutionMode.PAPER_ONLY
@@ -561,11 +558,8 @@ export class TradingService {
         researchUat:
           connection.brokerId === 'paper-broker' &&
           session.executionMode === ExecutionMode.PAPER_ONLY,
-        replayStepsPerCycle:
-          connection.brokerId === 'paper-broker' &&
-          session.executionMode === ExecutionMode.PAPER_ONLY
-            ? 12
-            : 1,
+        workflowProbeEnabled: false,
+        replayStepsPerCycle: 1,
         intervalSeconds:
           connection.brokerId === 'paper-broker' &&
           session.executionMode === ExecutionMode.PAPER_ONLY

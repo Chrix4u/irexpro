@@ -68,6 +68,7 @@ class SignalGenerator:
         source: MarketDataSource = "mock",
         bypass_market_data_cache: bool = False,
         uat_workflow_probe: bool = False,
+        research_uat_authorized: bool = False,
     ) -> SignalGenerationResponse:
         """
         Full signal generation pipeline.
@@ -91,9 +92,15 @@ class SignalGenerator:
         governance = self._registry.get_governance(model.get_model_version())
 
         if not governance.approved_for_paper:
-            raise SignalGenerationError(
-                f"Model {model.get_model_version()} is not approved for paper mode"
+            research_uat_allowed = bool(
+                research_uat_authorized
+                and governance.extra_metadata.get("research_paper_uat_only", False)
+                and not governance.approved_for_live
             )
+            if not research_uat_allowed:
+                raise SignalGenerationError(
+                    f"Model {model.get_model_version()} is not approved for paper mode"
+                )
 
         runtime_profile = str(
             model_metadata.get("runtime_feature_profile", "single_timeframe_v1")

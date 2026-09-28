@@ -1,4 +1,5 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
+import { readFileSync } from 'node:fs';
 import {
   BrokerAccountInfo,
   BrokerBalance,
@@ -207,6 +208,92 @@ export class DeterministicPaperPriceFeed extends PaperPriceFeed {
   }
 }
 
+
+interface PaperReplayRow {
+  timestamp: Date;
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+  volume: string;
+  tickVolume: string;
+  spreadPoints: string;
+  priceDigits: number;
+}
+
+/** Optional real-market USDJPY M1 replay for Research PAPER UAT only. */
+class CsvReplayPaperPriceFeed extends PaperPriceFeed {
+  readonly instrument = 'USDJPY';
+  private readonly rows: PaperReplayRow[];
+  private cursor: number;
+
+  constructor(path: string, replayStartIso: string) {
+    super();
+    const lines = readFileSync(path, 'utf8').trim().split(/\r?\n/);
+    if (lines.length < 3) throw new Error('Paper replay CSV has insufficient rows');
+    const headers = lines[0]!.split(',');
+    const idx = Object.fromEntries(headers.map((h, i) => [h.trim(), i]));
+    const required = ['timestamp','open','high','low','close','volume','tick_volume','spread_points','price_digits'];
+    for (const name of required) if (idx[name] === undefined) throw new Error(`Paper replay CSV missing ${name}`);
+    this.rows = lines.slice(1).filter(Boolean).map((line) => {
+      const c = line.split(',');
+      return {
+        timestamp: new Date(c[idx.timestamp]!),
+        open: c[idx.open]!, high: c[idx.high]!, low: c[idx.low]!, close: c[idx.close]!,
+        volume: c[idx.volume] || c[idx.tick_volume] || '0',
+        tickVolume: c[idx.tick_volume] || c[idx.volume] || '0',
+        spreadPoints: c[idx.spread_points] || '0',
+        priceDigits: Number(c[idx.price_digits] || '3'),
+      };
+    });
+    const replayStart = new Date(replayStartIso).getTime();
+    const first = this.rows.findIndex((row) => row.timestamp.getTime() >= replayStart);
+    if (first <= 0) throw new Error('Paper replay start requires prior context row');
+    this.cursor = first - 1;
+  }
+
+  quote(): PaperQuote { return this.quoteFor(this.rows[this.cursor]!); }
+  tick(): PaperQuote {
+    if (this.cursor < this.rows.length - 1) this.cursor += 1;
+    return this.quote();
+  }
+  now(): Date { return new Date(this.rows[this.cursor]!.timestamp); }
+  digits(): number { return this.rows[this.cursor]!.priceDigits; }
+
+  ohlcv(timeframe: string, count: number): OHLCV[] {
+    const spacingMs = PAPER_TIMEFRAME_MS[timeframe];
+    if (!spacingMs) throw new BrokerAdapterError(BrokerErrorCode.INVALID_REQUEST, `Unsupported paper-market timeframe: ${timeframe}`);
+    const source = this.rows.slice(0, this.cursor + 1);
+    const buckets = new Map<number, PaperReplayRow[]>();
+    for (const row of source) {
+      const key = Math.floor(row.timestamp.getTime() / spacingMs) * spacingMs;
+      const bucket = buckets.get(key) ?? [];
+      bucket.push(row); buckets.set(key, bucket);
+    }
+    return Array.from(buckets.entries()).sort((a,b)=>a[0]-b[0]).slice(-count).map(([key, rows]) => {
+      const first = rows[0]!, last = rows[rows.length-1]!;
+      const high = Math.max(...rows.map(r=>Number(r.high)));
+      const low = Math.min(...rows.map(r=>Number(r.low)));
+      const volume = rows.reduce((sum,r)=>sum+Number(r.volume||0),0);
+      const ticks = rows.reduce((sum,r)=>sum+Number(r.tickVolume||0),0);
+      return {
+        timestamp: new Date(key), open: first.open, high: high.toFixed(last.priceDigits),
+        low: low.toFixed(last.priceDigits), close: last.close,
+        volume: String(volume), tickVolume: String(ticks), spreadPoints: last.spreadPoints,
+        priceDigits: last.priceDigits, brokerTime: last.timestamp.toISOString(),
+      };
+    });
+  }
+
+  private quoteFor(row: PaperReplayRow): PaperQuote {
+    const digits = row.priceDigits;
+    const mid = Number(row.close);
+    const spread = Number(row.spreadPoints || '0') * 10 ** (-digits);
+    const renderDigits = Math.min(8, digits + 1);
+    return { bid: (mid - spread / 2).toFixed(renderDigits), ask: (mid + spread / 2).toFixed(renderDigits) };
+  }
+}
+
 /** Deterministic clock seam (no Date.now anywhere in the engine). */
 export abstract class PaperClock {
   /** Current simulated time (pure read). */
@@ -374,7 +461,8 @@ function toMoney(value: string): string {
 
 /** The mid of a quote — the paper engine's MARKET/manual-close fill price. */
 function quoteMid(quote: PaperQuote): string {
-  return divideDecimalStrings(addDecimalStrings(quote.bid, quote.ask), '2', PAPER_PRICE_SCALE);
+  const scale = Math.max((quote.bid.split('.')[1] ?? '').length, (quote.ask.split('.')[1] ?? '').length);
+  return divideDecimalStrings(addDecimalStrings(quote.bid, quote.ask), '2', scale);
 }
 
 /**
@@ -477,6 +565,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   private _balance = PAPER_STARTING_BALANCE;
 
   private readonly _feed: PaperPriceFeed;
+  private readonly _replayFeed: CsvReplayPaperPriceFeed | null;
   private readonly _clock: PaperClock;
   private readonly _working: PaperWorkingOrder[] = [];
   private readonly _positions = new Map<string, PaperPosition>();
@@ -492,8 +581,15 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
    * default to the deterministic implementations above.
    */
   constructor(@Optional() priceFeed?: PaperPriceFeed, @Optional() clock?: PaperClock) {
-    this._feed = priceFeed ?? new DeterministicPaperPriceFeed();
+    const replayPath = !priceFeed ? (process.env.PAPER_REPLAY_M1_CSV ?? '').trim() : '';
+    const replayStart = (process.env.PAPER_REPLAY_START ?? '').trim();
+    this._replayFeed = replayPath && replayStart ? new CsvReplayPaperPriceFeed(replayPath, replayStart) : null;
+    this._feed = priceFeed ?? this._replayFeed ?? new DeterministicPaperPriceFeed();
     this._clock = clock ?? new DeterministicPaperClock();
+  }
+
+  private currentTime(): Date {
+    return this._replayFeed ? this._replayFeed.now() : this._clock.now();
   }
 
   setMode(mode: BrokerMode): void {
@@ -517,7 +613,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       accountId: PAPER_ACCOUNT_ID,
       accountType: BrokerMode.DEMO,
       currency: PAPER_CURRENCY,
-      serverTime: this._clock.now(),
+      serverTime: this.currentTime(),
     };
   }
 
@@ -553,13 +649,14 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     }
   }
 
-  /** The single-instrument simulation only knows EURUSD. */
+  /** The default simulator is EURUSD; Research UAT replay is USDJPY-only. */
   private requireInstrument(instrument: string): string {
     const symbol = instrument.trim().toUpperCase();
-    if (symbol !== PAPER_INSTRUMENT) {
+    const supported = this._replayFeed ? this._replayFeed.instrument : PAPER_INSTRUMENT;
+    if (symbol !== supported) {
       throw new BrokerAdapterError(
         BrokerErrorCode.INVALID_INSTRUMENT,
-        `Paper broker supports ${PAPER_INSTRUMENT} only (received "${instrument}").`,
+        `Paper broker supports ${supported} only in the active feed (received "${instrument}").`,
       );
     }
     return symbol;
@@ -589,7 +686,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       balance: snapshot.balance,
       equity: snapshot.equity,
       currency: PAPER_CURRENCY,
-      timestamp: this._clock.now(),
+      timestamp: this.currentTime(),
     };
   }
 
@@ -617,7 +714,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   async getRequiredMargin(params: RequiredMarginParams): Promise<string | null> {
     this.assertConnected();
     try {
-      if (params.instrument.trim().toUpperCase() !== PAPER_INSTRUMENT) return null;
+      try { this.requireInstrument(params.instrument); } catch { return null; }
       const lot = parseScaledDecimal(params.lotSize, 'lotSize', BrokerErrorCode.INVALID_LOT_SIZE);
       if (lot.negative || lot.digits === 0n) return null;
       // Any exact lot-step spelling is calculable; non-step values are not.
@@ -761,15 +858,13 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
 
   async getInstrumentList(): Promise<BrokerInstrument[]> {
     this.assertConnected();
+    const symbol = this._replayFeed ? this._replayFeed.instrument : PAPER_INSTRUMENT;
     return [
       {
-        symbol: PAPER_INSTRUMENT,
-        description: 'Euro vs US Dollar (Paper)',
-        digits: PAPER_PRICE_SCALE,
-        minLot: PAPER_MIN_LOT,
-        maxLot: PAPER_MAX_LOT,
-        lotStep: '0.01',
-        contractSize: PAPER_CONTRACT_SIZE,
+        symbol,
+        description: this._replayFeed ? 'US Dollar vs Japanese Yen (Real-data Paper Replay)' : 'Euro vs US Dollar (Paper)',
+        digits: this._replayFeed ? this._replayFeed.digits() : PAPER_PRICE_SCALE,
+        minLot: PAPER_MIN_LOT, maxLot: PAPER_MAX_LOT, lotStep: '0.01', contractSize: PAPER_CONTRACT_SIZE,
       },
     ];
   }
@@ -785,11 +880,11 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     this.requireInstrument(instrument);
     const quote = this.advanceMarket();
     return {
-      instrument: PAPER_INSTRUMENT,
+      instrument: this.requireInstrument(instrument),
       bid: quote.bid,
       ask: quote.ask,
       spread: subtractDecimalStrings(quote.ask, quote.bid),
-      timestamp: this._clock.now(),
+      timestamp: this.currentTime(),
     };
   }
 
@@ -806,12 +901,16 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       );
     }
 
+    if (this._replayFeed) {
+      return this._replayFeed.ohlcv(normalizedTimeframe, count);
+    }
+
     // Deterministic but EVOLVING candles. The market tick counter is advanced
     // by the explicit paper heartbeat (getCurrentPrice) once per AI scan; OHLCV
     // reads are pure snapshots so an MTF evaluation does not tick five times.
     const candles: OHLCV[] = [];
     const base = 1.1;
-    const now = this._clock.now();
+    const now = this.currentTime();
     const phaseNow = this._marketTickCounter;
 
     for (let i = count - 1; i >= 0; i--) {
@@ -912,7 +1011,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       if (orderKind === 'MARKET') {
         result = this.executeMarketOrder(orderId, order, instrument, stopLoss, takeProfit, comment);
       } else {
-        const placedAt = this._clock.now();
+        const placedAt = this.currentTime();
         const working: PaperWorkingOrder = {
           orderId,
           dedupeKey,
@@ -1036,15 +1135,15 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       limitPrice: null,
       stopPrice: null,
       timeInForce: order.timeInForce ?? 'GTC',
-      placedAt: this._clock.now(),
-      updatedAt: this._clock.now(),
+      placedAt: this.currentTime(),
+      updatedAt: this.currentTime(),
     });
     return {
       success: true,
       externalOrderId: orderId,
       filledPrice: fillPrice,
       filledQuantity: order.lotSize.trim(),
-      filledAt: this._clock.now(),
+      filledAt: this.currentTime(),
       status: 'FILLED',
       brokerMessage: 'PAPER_ONLY simulated fill',
     };
@@ -1073,7 +1172,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       entryPrice,
       stopLoss,
       takeProfit,
-      openedAt: this._clock.now(),
+      openedAt: this.currentTime(),
     };
     this._positions.set(orderId, position);
     return position;
@@ -1214,7 +1313,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         );
       }
       const [cancelled] = this._working.splice(index, 1);
-      const now = this._clock.now();
+      const now = this.currentTime();
       this._orderStates.set(externalOrderId, {
         providerOrderId: externalOrderId,
         clientOrderId: cancelled.dedupeKey,
@@ -1324,7 +1423,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   private advanceMarket(): PaperQuote {
     const quote = this._feed.tick();
     this._marketTickCounter += 1;
-    this._clock.advance(PAPER_TICK_DURATION_MS);
+    if (!this._replayFeed) this._clock.advance(PAPER_TICK_DURATION_MS);
     this.evaluatePositions(quote);
     this.evaluateWorkingOrders(quote);
     return quote;
@@ -1458,7 +1557,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       this._orderStates.set(order.orderId, {
         ...this.workingOrderState(order),
         status: 'REJECTED',
-        updatedAt: this._clock.now(),
+        updatedAt: this.currentTime(),
       });
       this.logger.warn(
         `PaperBrokerAdapter: working order id=${order.orderId} REJECTED at fill time — ` +
@@ -1495,7 +1594,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       stopPrice: order.stopPrice ?? null,
       timeInForce: order.timeInForce,
       placedAt: order.placedAt,
-      updatedAt: this._clock.now(),
+      updatedAt: this.currentTime(),
     });
     this.logger.log(
       `PaperBrokerAdapter: working order id=${order.orderId} filled at ${fillPrice} ` +
@@ -1539,7 +1638,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       takeProfit: position.takeProfit,
       realisedPnl,
       openedAt: position.openedAt,
-      closedAt: this._clock.now(),
+      closedAt: this.currentTime(),
       commission: '0',
       swap: '0',
       closeReason,
