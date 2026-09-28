@@ -1082,10 +1082,18 @@ export default function AiTradingPage() {
                   </span>
                 </Card>
                 <Card className="ai-overview-card ai-overview-card--compact">
-                  <span className="ai-control-card__label">EURUSD · H1</span>
+                  <span className="ai-control-card__label">
+                    {automationRuntime?.instruments?.length
+                      ? `${automationRuntime.instruments.join(' · ')} · ${automationRuntime.timeframe ?? 'MTF'}`
+                      : 'Market snapshot'}
+                  </span>
                   <strong className="ai-overview-card__value">{market?.quote.bid ?? '—'}</strong>
                   <span className="muted text-sm">
-                    {market ? `Spread ${market.quote.spread} · ${market.status}` : 'Market snapshot unavailable'}
+                    {market
+                      ? `Spread ${market.quote.spread} · ${market.status}`
+                      : automationRuntime?.research_uat
+                        ? 'Research replay market state is shown in the AI Engine Monitor below'
+                        : 'Market snapshot unavailable'}
                   </span>
                 </Card>
               </div>
@@ -1265,7 +1273,12 @@ export default function AiTradingPage() {
 
                 <div className="ai-runtime-reason">
                   <span>Decision explanation</span>
-                  <strong>{runtimeReasonLabel(automationRuntime?.last_reason)}</strong>
+                  <strong>
+                    {automationRuntime?.research_uat &&
+                    automationRuntime?.last_decision === 'NO_NEW_MARKET_DATA'
+                      ? 'The real-data replay has reached its latest available candle. The previous model evaluation is preserved and no duplicate decision is published.'
+                      : runtimeReasonLabel(automationRuntime?.last_reason)}
+                  </strong>
                 </div>
                 {automationRuntime?.research_uat && automationRuntime.last_strategy_outcome && (
                   <div className="ai-runtime-reason">
