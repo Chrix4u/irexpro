@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import heapq
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -107,6 +108,49 @@ def iter_histdata_ticks(path: str | Path) -> Iterator[tuple[datetime, float, flo
             archive.close()
 
 
+def reorder_histdata_ticks(
+    ticks: Iterator[tuple[datetime, float, float]],
+    *,
+    max_backward_seconds: float = 1.0,
+) -> Iterator[tuple[datetime, float, float]]:
+    """Repair only tightly bounded provider ordering jitter.
+
+    HistData 2026 tick files contain rare one-second reversals. A watermark
+    buffer reorders those ticks without allowing arbitrary historical sorting.
+    Anything arriving more than max_backward_seconds behind the maximum seen
+    timestamp fails closed.
+    """
+    if max_backward_seconds < 0.0:
+        raise ValueError("max_backward_seconds must be non-negative")
+
+    heap: list[tuple[datetime, int, float, float]] = []
+    max_seen: datetime | None = None
+    sequence = 0
+
+    for timestamp, bid, ask in ticks:
+        if max_seen is not None:
+            lag = (max_seen - timestamp).total_seconds()
+            if lag > max_backward_seconds:
+                raise ValueError(
+                    "HistData tick ordering exceeded bounded reorder window: "
+                    f"{lag:.6f}s > {max_backward_seconds:.6f}s"
+                )
+        if max_seen is None or timestamp > max_seen:
+            max_seen = timestamp
+
+        heapq.heappush(heap, (timestamp, sequence, bid, ask))
+        sequence += 1
+        assert max_seen is not None
+        watermark = max_seen - timedelta(seconds=max_backward_seconds)
+        while heap and heap[0][0] <= watermark:
+            ordered_timestamp, _seq, ordered_bid, ordered_ask = heapq.heappop(heap)
+            yield ordered_timestamp, ordered_bid, ordered_ask
+
+    while heap:
+        ordered_timestamp, _seq, ordered_bid, ordered_ask = heapq.heappop(heap)
+        yield ordered_timestamp, ordered_bid, ordered_ask
+
+
 def aggregate_histdata_ticks(
     ticks: Iterator[tuple[datetime, float, float]],
     *,
@@ -176,7 +220,10 @@ def import_histdata_ticks(
         writer = csv.DictWriter(handle, fieldnames=OUTPUT_COLUMNS)
         writer.writeheader()
         for row in aggregate_histdata_ticks(
-            iter_histdata_ticks(source),
+            reorder_histdata_ticks(
+                iter_histdata_ticks(source),
+                max_backward_seconds=1.0,
+            ),
             price_digits=price_digits,
         ):
             writer.writerow(row)
@@ -203,6 +250,7 @@ def import_histdata_ticks(
         "instrument": instrument.upper(),
         "price_digits": price_digits,
         "aggregation": "M1 midpoint OHLC from bid/ask ticks",
+        "bounded_tick_reorder_seconds": 1.0,
         "spread_semantics": "last tick ask-bid converted to price points",
         "tick_volume_semantics": "number of quote ticks per minute",
         "quote_volume_available": False,
