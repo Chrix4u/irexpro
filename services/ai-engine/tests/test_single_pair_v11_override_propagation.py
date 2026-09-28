@@ -10,7 +10,7 @@ from app.domain.training.model_qualification import ModelVariant
 
 
 class _DummyRegressor:
-    def fit(self, *args: Any, **kwargs: Any) -> "_DummyRegressor":
+    def fit(self, *args: Any, **kwargs: Any) -> _DummyRegressor:
         return self
 
 
