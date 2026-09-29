@@ -217,14 +217,25 @@ export class MarketIntelligenceService {
     }>,
   ): Promise<MarketIntelligenceResponseDto> {
     const candles = rawCandles
-      .map((candle) => ({
-        timestamp: toIso(candle.timestamp),
-        open: candle.open,
-        high: candle.high,
-        low: candle.low,
-        close: candle.close,
-        volume: candle.volume,
-      }))
+      .map((candle) => {
+        const highCandidates = [candle.high, candle.open, candle.close];
+        const lowCandidates = [candle.low, candle.open, candle.close];
+        const high = highCandidates.reduce((best, value) =>
+          Number(value) > Number(best) ? value : best,
+        );
+        const low = lowCandidates.reduce((best, value) =>
+          Number(value) < Number(best) ? value : best,
+        );
+
+        return {
+          timestamp: toIso(candle.timestamp),
+          open: candle.open,
+          high,
+          low,
+          close: candle.close,
+          volume: candle.volume,
+        };
+      })
       .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
 
     if (candles.length === 0) {

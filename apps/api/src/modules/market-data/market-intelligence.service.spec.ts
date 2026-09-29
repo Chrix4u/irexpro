@@ -103,6 +103,59 @@ describe('MarketIntelligenceService', () => {
     expect(serialized).not.toContain('secret');
   });
 
+  it('normalizes malformed OHLC envelopes for browser-safe chart projection', async () => {
+    jest.spyOn(Date, 'now').mockReturnValue(new Date('2026-09-28T23:00:30.000Z').getTime());
+    brokerService.findActiveConnectionForUser.mockResolvedValue({
+      ...connection,
+      brokerId: 'paper-broker',
+      accountType: 'DEMO',
+    });
+    brokerService.getCurrentPriceForConnection.mockResolvedValue({
+      instrument: 'USDJPY',
+      bid: '157.398',
+      ask: '157.404',
+      spread: '0.006',
+      timestamp: new Date('2026-09-28T22:59:30.000Z'),
+    });
+    brokerService.getOhlcvForConnection.mockResolvedValue([
+      {
+        timestamp: new Date('2026-09-28T22:54:00.000Z'),
+        open: '157.4345',
+        high: '157.435',
+        low: '157.434',
+        close: '157.4355',
+        volume: '20',
+      },
+      {
+        timestamp: new Date('2026-09-28T22:55:00.000Z'),
+        open: '157.4345',
+        high: '157.437',
+        low: '157.434',
+        close: '157.4335',
+        volume: '17',
+      },
+    ]);
+
+    const result = await createService().getSnapshot(userId, {
+      instrument: 'USDJPY',
+      timeframe: 'M1',
+      limit: 60,
+    });
+
+    expect(result.candles[0]).toEqual(expect.objectContaining({
+      open: '157.4345',
+      high: '157.4355',
+      low: '157.434',
+      close: '157.4355',
+    }));
+    expect(result.candles[1]).toEqual(expect.objectContaining({
+      open: '157.4345',
+      high: '157.437',
+      low: '157.4335',
+      close: '157.4335',
+    }));
+  });
+
   it('marks old broker evidence stale instead of presenting it as live', async () => {
     jest.spyOn(Date, 'now').mockReturnValue(new Date('2026-08-30T14:30:00.000Z').getTime());
     marketDataReader.getCurrentPrice.mockResolvedValue({
