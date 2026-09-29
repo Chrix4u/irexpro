@@ -10,6 +10,7 @@ class SessionStartRequest(BaseModel):
     user_id: str = Field(..., alias="userId")
     trading_session_id: str = Field(..., alias="tradingSessionId")
     broker_connection_id: str = Field(..., alias="brokerConnectionId")
+    market_data_connection_id: str | None = Field(default=None, alias="marketDataConnectionId")
     instruments: list[str] = Field(..., min_length=1)
     timeframe: str = "H1"
     interval_seconds: int | None = Field(default=None, alias="intervalSeconds")

@@ -64,6 +64,7 @@ class SignalGenerator:
         broker_connection_id: str,
         instrument: str,
         timeframe: str = "H1",
+        market_data_connection_id: str | None = None,
         candles: list[OHLCVCandle] | None = None,
         source: MarketDataSource = "mock",
         bypass_market_data_cache: bool = False,
@@ -119,6 +120,7 @@ class SignalGenerator:
         )
 
         signal_timeframe = timeframe.upper()
+        data_connection_id = market_data_connection_id or broker_connection_id
         latest_candle: OHLCVCandle
         revision_parts: list[str] = [instrument.upper()]
 
@@ -141,7 +143,7 @@ class SignalGenerator:
                     timeframe=required_timeframe,
                     limit=100,
                     user_id=user_id,
-                    broker_connection_id=broker_connection_id,
+                    broker_connection_id=data_connection_id,
                     bypass_cache=True,
                     advance_simulation=(source == "broker" and index == 0),
                 )
@@ -183,7 +185,7 @@ class SignalGenerator:
                     timeframe=timeframe,
                     limit=100,
                     user_id=user_id,
-                    broker_connection_id=broker_connection_id,
+                    broker_connection_id=data_connection_id,
                     bypass_cache=bypass_market_data_cache,
                     advance_simulation=(source == "broker"),
                 )

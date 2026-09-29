@@ -5,6 +5,8 @@ export interface AiSchedulerSessionStartPayload {
   userId: string;
   tradingSessionId: string;
   brokerConnectionId: string;
+  /** Read-only market-data connection. Defaults to brokerConnectionId. */
+  marketDataConnectionId?: string;
   instruments: string[];
   timeframe: string;
   intervalSeconds?: number;

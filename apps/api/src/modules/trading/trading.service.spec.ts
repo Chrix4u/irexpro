@@ -110,6 +110,7 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       // Round 5 (#295): kept as a NEVER-CALLED regression sentinel — session
       // start must bind the EXACT requested connection, never discovery.
       findActiveConnectionForUser: jest.fn(),
+      findConnectionsByUser: jest.fn().mockResolvedValue([buildHealthyConnection()]),
       findConnectionsByIds: jest.fn().mockResolvedValue([buildHealthyConnection()]),
       findConnectionById: jest.fn().mockResolvedValue(buildHealthyConnection()),
       getBrokerAccountState: jest.fn().mockResolvedValue({
@@ -352,6 +353,32 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       expect(session.id).toBe('session-1');
       expect(subscriptionsService.canUserStartAiAutoTrading).not.toHaveBeenCalled();
       expect(executionService.startSession).toHaveBeenCalled();
+    });
+
+    it('keeps PAPER execution bound while using a connected MT5 DEMO account for market data', async () => {
+      brokerService.findConnectionsByUser.mockResolvedValue([
+        buildHealthyConnection(),
+        buildHealthyConnection({
+          id: 'market-data-1',
+          brokerId: 'metatrader5',
+          brokerName: 'MetaTrader 5',
+          accountType: BrokerMode.DEMO,
+          encryptedCredentials: 'ciphertext',
+          credentialIv: 'iv',
+          credentialTag: 'tag',
+        }),
+      ]);
+
+      await service.startTradingSession('user-1', 'conn-1');
+
+      expect(aiEngineClient.notifySessionStarted).toHaveBeenCalledWith(
+        expect.objectContaining({
+          brokerConnectionId: 'conn-1',
+          marketDataConnectionId: 'market-data-1',
+          brokerId: 'paper-broker',
+          researchUat: true,
+        }),
+      );
     });
 
     it('registers only preferred instruments the bound broker actually supports', async () => {

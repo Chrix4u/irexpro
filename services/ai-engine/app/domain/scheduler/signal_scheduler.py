@@ -50,6 +50,7 @@ class ScheduledSessionJob:
     timeframe: str
     source: MarketDataSource
     interval_seconds: int
+    market_data_connection_id: str | None = None
     active: bool = True
     last_run_at: datetime | None = None
     last_publish_failed: bool = False
@@ -169,6 +170,9 @@ class SignalScheduler:
             timeframe=request.timeframe.upper(),
             source=request.source,
             interval_seconds=interval,
+            market_data_connection_id=(
+                request.market_data_connection_id or request.broker_connection_id
+            ),
             research_uat=request.research_uat,
             workflow_probe_enabled=request.workflow_probe_enabled,
             replay_steps_per_cycle=replay_steps,
@@ -275,6 +279,7 @@ class SignalScheduler:
                     user_id=job.user_id,
                     trading_session_id=job.trading_session_id,
                     broker_connection_id=job.broker_connection_id,
+                    market_data_connection_id=job.market_data_connection_id,
                     instrument=instrument,
                     timeframe=job.timeframe,
                     source=job.source,

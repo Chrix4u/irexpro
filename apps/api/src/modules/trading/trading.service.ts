@@ -344,11 +344,16 @@ export class TradingService {
     try {
       const instruments = await this.resolveAiSchedulerInstruments(userId, connection.id);
       if (instruments.length > 0) {
+        const marketDataConnectionId = await this.resolveAiSchedulerMarketDataConnectionId(
+          userId,
+          connection,
+        );
         void this.aiEngineClient
           .notifySessionStarted({
             userId,
             tradingSessionId: session.id,
             brokerConnectionId: connection.id,
+            marketDataConnectionId,
             instruments,
             timeframe: 'H1',
             source: 'broker',
@@ -649,10 +654,15 @@ export class TradingService {
         };
       }
 
+      const marketDataConnectionId = await this.resolveAiSchedulerMarketDataConnectionId(
+        userId,
+        connection,
+      );
       await this.aiEngineClient.notifySessionStarted({
         userId,
         tradingSessionId: session.id,
         brokerConnectionId: session.brokerConnectionId,
+        marketDataConnectionId,
         instruments,
         timeframe: 'H1',
         source: 'broker',
@@ -675,6 +685,36 @@ export class TradingService {
     }
 
     return runtime;
+  }
+
+  private async resolveAiSchedulerMarketDataConnectionId(
+    userId: string,
+    executionConnection: BrokerConnection,
+  ): Promise<string> {
+    if (executionConnection.brokerId !== 'paper-broker') {
+      return executionConnection.id;
+    }
+
+    const connections = await this.brokerService.findConnectionsByUser(userId);
+    const providerMarketDataConnection = connections.find(
+      (candidate) =>
+        candidate.id !== executionConnection.id &&
+        candidate.brokerId === 'metatrader5' &&
+        candidate.accountType === BrokerMode.DEMO &&
+        candidate.status === BrokerConnectionStatus.CONNECTED &&
+        Boolean(candidate.encryptedCredentials) &&
+        Boolean(candidate.credentialIv) &&
+        Boolean(candidate.credentialTag),
+    );
+
+    if (providerMarketDataConnection) {
+      this.logger.log(
+        `PAPER execution ${executionConnection.id} using provider market data ${providerMarketDataConnection.id}`,
+      );
+      return providerMarketDataConnection.id;
+    }
+
+    return executionConnection.id;
   }
 
   private getResearchReplayStepsPerCycle(): number {
