@@ -392,38 +392,106 @@ function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
 
 
 function MarketPriceChart({ candles }: { candles: MarketCandleView[] }) {
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   if (!candles.length) {
     return <div className="ai-market-chart__empty">Waiting for market candles…</div>;
   }
-  const values = candles.map((candle) => Number(candle.close)).filter(Number.isFinite);
-  if (!values.length) return <div className="ai-market-chart__empty">Chart unavailable</div>;
-  const width = 760;
-  const height = 250;
-  const pad = 18;
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const spread = Math.max(max - min, Math.abs(max) * 0.0001, 0.00001);
-  const points = values.map((value, index) => {
-    const x = pad + (index / Math.max(values.length - 1, 1)) * (width - pad * 2);
-    const y = pad + ((max - value) / spread) * (height - pad * 2);
-    return `${x.toFixed(2)},${y.toFixed(2)}`;
-  }).join(' ');
-  const area = `${pad},${height - pad} ${points} ${width - pad},${height - pad}`;
+
+  const parsed = candles
+    .map((candle) => ({
+      ...candle,
+      openN: Number(candle.open),
+      highN: Number(candle.high),
+      lowN: Number(candle.low),
+      closeN: Number(candle.close),
+      volumeN: Number(candle.volume),
+    }))
+    .filter((candle) => [candle.openN, candle.highN, candle.lowN, candle.closeN].every(Number.isFinite));
+  if (!parsed.length) return <div className="ai-market-chart__empty">Chart unavailable</div>;
+
+  const width = 820;
+  const height = 320;
+  const priceBottom = 245;
+  const volumeTop = 262;
+  const padX = 26;
+  const min = Math.min(...parsed.map((candle) => candle.lowN));
+  const max = Math.max(...parsed.map((candle) => candle.highN));
+  const range = Math.max(max - min, Math.abs(max) * 0.0001, 0.00001);
+  const maxVolume = Math.max(...parsed.map((candle) => candle.volumeN), 1);
+  const slot = (width - padX * 2) / Math.max(parsed.length, 1);
+  const bodyWidth = Math.max(2.2, Math.min(8, slot * 0.58));
+  const y = (value: number) => 14 + ((max - value) / range) * (priceBottom - 28);
+  const activeIndex = hoveredIndex == null ? parsed.length - 1 : hoveredIndex;
+  const active = parsed[Math.max(0, Math.min(activeIndex, parsed.length - 1))];
+
+  const onMove = (event: React.MouseEvent<SVGSVGElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const x = ((event.clientX - rect.left) / rect.width) * width;
+    const index = Math.round((x - padX - slot / 2) / slot);
+    setHoveredIndex(Math.max(0, Math.min(parsed.length - 1, index)));
+  };
+
   return (
     <div className="ai-market-chart">
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Instrument price chart">
-        <defs>
-          <linearGradient id="irex-chart-fill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="currentColor" stopOpacity="0.24" />
-            <stop offset="100%" stopColor="currentColor" stopOpacity="0" />
-          </linearGradient>
-        </defs>
-        <polyline className="ai-market-chart__area" points={area} />
-        <polyline className="ai-market-chart__line" points={points} />
-      </svg>
-      <div className="ai-market-chart__range">
-        <span>{min.toFixed(3)}</span><span>{max.toFixed(3)}</span>
+      <div className="ai-market-chart__ohlc">
+        <span>{new Date(active.timestamp).toLocaleString()}</span>
+        <span>O <strong>{active.open}</strong></span>
+        <span>H <strong>{active.high}</strong></span>
+        <span>L <strong>{active.low}</strong></span>
+        <span>C <strong>{active.close}</strong></span>
+        <span>Vol <strong>{active.volume}</strong></span>
       </div>
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        role="img"
+        aria-label="Interactive candlestick chart"
+        onMouseMove={onMove}
+        onMouseLeave={() => setHoveredIndex(null)}
+      >
+        {[0.2, 0.4, 0.6, 0.8].map((fraction) => (
+          <line
+            key={fraction}
+            className="ai-market-chart__gridline"
+            x1={padX}
+            x2={width - padX}
+            y1={14 + (priceBottom - 28) * fraction}
+            y2={14 + (priceBottom - 28) * fraction}
+          />
+        ))}
+        {parsed.map((candle, index) => {
+          const x = padX + slot * index + slot / 2;
+          const isUp = candle.closeN >= candle.openN;
+          const top = y(Math.max(candle.openN, candle.closeN));
+          const bottom = y(Math.min(candle.openN, candle.closeN));
+          const volumeHeight = Math.max(2, (candle.volumeN / maxVolume) * 42);
+          return (
+            <g key={`${candle.timestamp}-${index}`} className={isUp ? 'is-up' : 'is-down'}>
+              <line className="ai-market-chart__wick" x1={x} x2={x} y1={y(candle.highN)} y2={y(candle.lowN)} />
+              <rect
+                className="ai-market-chart__candle"
+                x={x - bodyWidth / 2}
+                y={Math.min(top, bottom)}
+                width={bodyWidth}
+                height={Math.max(1.8, Math.abs(bottom - top))}
+                rx="1.2"
+              />
+              <rect
+                className="ai-market-chart__volume"
+                x={x - bodyWidth / 2}
+                y={volumeTop + 42 - volumeHeight}
+                width={bodyWidth}
+                height={volumeHeight}
+                rx="1"
+              />
+            </g>
+          );
+        })}
+        {hoveredIndex != null && (() => {
+          const x = padX + slot * activeIndex + slot / 2;
+          return <line className="ai-market-chart__crosshair" x1={x} x2={x} y1="8" y2={height - 10} />;
+        })()}
+      </svg>
+      <div className="ai-market-chart__range"><span>{min.toFixed(3)}</span><span>{max.toFixed(3)}</span></div>
     </div>
   );
 }
@@ -484,6 +552,14 @@ export default function AiTradingPage() {
   const watchedInstruments = automationRuntime?.instruments?.length
     ? automationRuntime.instruments
     : [chartInstrument];
+  const latestChartCandle = market?.candles?.at(-1) ?? null;
+  const previousChartCandle = market?.candles && market.candles.length > 1 ? market.candles.at(-2) ?? null : null;
+  const chartMove = latestChartCandle && previousChartCandle
+    ? Number(latestChartCandle.close) - Number(previousChartCandle.close)
+    : null;
+  const chartMovePercent = chartMove != null && previousChartCandle && Number(previousChartCandle.close) !== 0
+    ? (chartMove / Number(previousChartCandle.close)) * 100
+    : null;
 
   // The ACTIVE session is the execution authority. While it exists, the
   // workspace must stay visibly pinned to that exact broker account instead
@@ -1268,6 +1344,20 @@ export default function AiTradingPage() {
                             {timeframe}
                           </button>
                         ))}
+                      </div>
+                    </div>
+                    <div className="ai-cockpit__market-stats">
+                      <div><span>Open</span><strong>{latestChartCandle?.open ?? '—'}</strong></div>
+                      <div><span>High</span><strong>{latestChartCandle?.high ?? '—'}</strong></div>
+                      <div><span>Low</span><strong>{latestChartCandle?.low ?? '—'}</strong></div>
+                      <div><span>Spread</span><strong>{market?.quote.spread ?? '—'}</strong></div>
+                      <div className={chartMove != null && chartMove < 0 ? 'is-down' : 'is-up'}>
+                        <span>Last move</span>
+                        <strong>
+                          {chartMove == null || chartMovePercent == null
+                            ? '—'
+                            : `${chartMove >= 0 ? '+' : ''}${chartMove.toFixed(3)} (${chartMovePercent >= 0 ? '+' : ''}${chartMovePercent.toFixed(3)}%)`}
+                        </strong>
                       </div>
                     </div>
                     <MarketPriceChart candles={market?.candles ?? []} />
