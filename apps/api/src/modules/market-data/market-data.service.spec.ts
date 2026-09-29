@@ -5,11 +5,13 @@ import { BrokerService } from '../broker/broker.service';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../../common/enums/audit-action.enum';
 import { InternalOhlcvQueryDto } from './dto/internal-ohlcv-query.dto';
+import { ProviderQuoteCandleStoreService } from './services/provider-quote-candle-store.service';
 
 describe('MarketDataService', () => {
   let service: MarketDataService;
   let brokerService: jest.Mocked<Partial<BrokerService>>;
   let auditService: jest.Mocked<Partial<AuditService>>;
+  let providerQuoteStore: { getCandles: jest.Mock };
 
   const query: InternalOhlcvQueryDto = {
     userId: '00000000-0000-0000-0000-000000000001',
@@ -53,12 +55,16 @@ describe('MarketDataService', () => {
     auditService = {
       log: jest.fn().mockResolvedValue(undefined),
     };
+    providerQuoteStore = {
+      getCandles: jest.fn().mockResolvedValue([]),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         MarketDataService,
         { provide: BrokerService, useValue: brokerService },
         { provide: AuditService, useValue: auditService },
+        { provide: ProviderQuoteCandleStoreService, useValue: providerQuoteStore },
       ],
     }).compile();
 
@@ -155,6 +161,25 @@ describe('MarketDataService', () => {
         actorUserId: query.userId,
         resourceId: query.brokerConnectionId,
       }),
+    );
+  });
+
+  it('falls back to sampled provider candles when MetaApi historical data is unavailable', async () => {
+    (brokerService.getOhlcvForConnection as jest.Mock).mockRejectedValueOnce(
+      new Error('To allow market data access please top up your account.'),
+    );
+    providerQuoteStore.getCandles.mockResolvedValueOnce(mockCandles);
+
+    const result = await service.getInternalOhlcv(query);
+
+    expect(result.source).toBe('provider-sampled-local');
+    expect(result.count).toBe(1);
+    expect(result.candles[0]?.source).toBe('provider-sampled-local');
+    expect(providerQuoteStore.getCandles).toHaveBeenCalledWith(
+      query.brokerConnectionId,
+      'EURUSD',
+      'H1',
+      50,
     );
   });
 

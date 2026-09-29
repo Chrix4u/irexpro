@@ -63,6 +63,7 @@ export class ProviderQuoteCandleStoreService {
       SELECT bucket_time, open, high, low, close, sample_count, spread_close
       FROM market_data.provider_quote_candles
       WHERE connection_id = $1 AND instrument = $2 AND timeframe = 'M1'
+        AND bucket_time < date_trunc('minute', now())
       ORDER BY bucket_time DESC
       LIMIT $3
       `,
@@ -79,6 +80,71 @@ export class ProviderQuoteCandleStoreService {
       tickVolume: String(row.sample_count),
       spreadPoints: String(row.spread_close),
     }));
+  }
+
+  async getCandles(
+    connectionId: string,
+    instrument: string,
+    timeframe: string,
+    count: number,
+  ): Promise<OHLCV[]> {
+    const normalized = timeframe.toUpperCase();
+    if (normalized === 'M1') {
+      return this.getM1Candles(connectionId, instrument, count);
+    }
+
+    const minutesByTimeframe: Record<string, number> = {
+      M5: 5,
+      M15: 15,
+      M30: 30,
+      H1: 60,
+      H4: 240,
+      D1: 1440,
+    };
+    const bucketMinutes = minutesByTimeframe[normalized];
+    if (!bucketMinutes) return [];
+
+    const m1 = await this.getM1Candles(
+      connectionId,
+      instrument,
+      Math.max(count * bucketMinutes * 2, bucketMinutes),
+    );
+    const groups = new Map<number, OHLCV[]>();
+    const bucketMs = bucketMinutes * 60_000;
+    for (const candle of m1) {
+      const ts = new Date(candle.timestamp).getTime();
+      const key = Math.floor(ts / bucketMs) * bucketMs;
+      const group = groups.get(key) ?? [];
+      group.push(candle);
+      groups.set(key, group);
+    }
+
+    const now = Date.now();
+    const aggregated: OHLCV[] = [];
+    for (const [bucketStart, group] of [...groups.entries()].sort((a, b) => a[0] - b[0])) {
+      if (group.length !== bucketMinutes) continue;
+      if (bucketStart + bucketMs > now) continue;
+      const ordered = [...group].sort(
+        (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+      );
+      const highs = ordered.map((x) => Number(x.high));
+      const lows = ordered.map((x) => Number(x.low));
+      if (highs.some((x) => !Number.isFinite(x)) || lows.some((x) => !Number.isFinite(x))) {
+        continue;
+      }
+      const volume = ordered.reduce((sum, x) => sum + Number(x.volume || 0), 0);
+      aggregated.push({
+        timestamp: new Date(bucketStart),
+        open: ordered[0].open,
+        high: Math.max(...highs).toFixed(10),
+        low: Math.min(...lows).toFixed(10),
+        close: ordered[ordered.length - 1].close,
+        volume: String(volume),
+        tickVolume: String(volume),
+      });
+    }
+
+    return aggregated.slice(-count);
   }
 
   async countM1Candles(connectionId: string, instrument: string): Promise<number> {
