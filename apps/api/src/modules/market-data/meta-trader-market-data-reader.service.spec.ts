@@ -60,8 +60,8 @@ describe('MetaTraderMarketDataReaderService', () => {
     expect(quoteA.ask).toBe('1.17010000');
     expect(quoteB.bid).toBe('1.28000000');
     expect(quoteB.ask).toBe('1.28020000');
-    expect(metaApiClient.getOrCreateConnection).toHaveBeenCalledWith(accountA);
-    expect(metaApiClient.getOrCreateConnection).toHaveBeenCalledWith(accountB);
+    expect(metaApiClient.getOrCreateConnection).toHaveBeenCalledWith(accountA, { requireSynchronization: false });
+    expect(metaApiClient.getOrCreateConnection).toHaveBeenCalledWith(accountB, { requireSynchronization: false });
     expect(connectionA.getSymbolPrice).toHaveBeenCalledWith('EURUSD');
     expect(connectionB.getSymbolPrice).toHaveBeenCalledWith('EURUSD');
   });

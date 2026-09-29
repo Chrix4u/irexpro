@@ -43,7 +43,9 @@ export class MetaTraderMarketDataReaderService {
   constructor(private readonly metaApiClient: MetaApiClientService) {}
 
   async getCurrentPrice(accountId: string, instrument: string): Promise<BrokerPrice> {
-    const connection = await this.metaApiClient.getOrCreateConnection(accountId);
+    const connection = await this.metaApiClient.getOrCreateConnection(accountId, {
+      requireSynchronization: false,
+    });
 
     // RPC connections expose direct quote reads. subscribeToMarketData() is a
     // streaming-connection API and is not available on MetaApi RPC connections.
@@ -74,7 +76,9 @@ export class MetaTraderMarketDataReaderService {
   ): Promise<OHLCV[]> {
     // Ensure this exact account has a live pooled connection before reading its
     // account-level historical candle API.
-    await this.metaApiClient.getOrCreateConnection(accountId);
+    await this.metaApiClient.getOrCreateConnection(accountId, {
+      requireSynchronization: false,
+    });
 
     const pool = (this.metaApiClient as unknown as MetaApiPoolView).connectionPool;
     const entry = pool.get(accountId);

@@ -99,7 +99,12 @@ export class MetaTraderAdapter implements IBrokerAdapter {
 
   async connect(credentials: DecryptedBrokerCredentials): Promise<BrokerConnectionResult> {
     try {
-      const conn = await this.metaApiClient.getOrCreateConnection(credentials.accountId);
+      const conn = await this.metaApiClient.getOrCreateConnection(credentials.accountId, {
+        // DEMO market-data connections are allowed to use direct RPC reads
+        // without waiting for the streaming synchronization layer. LIVE
+        // connections retain the fail-closed synchronization requirement.
+        requireSynchronization: this.mode === BrokerMode.LIVE,
+      });
       this.currentAccountId = credentials.accountId;
 
       const info = await conn.getAccountInformation();

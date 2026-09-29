@@ -63,7 +63,11 @@ export class MetaApiClientService implements OnModuleDestroy {
    * Connection is cached in the pool and reused.
    * If the existing connection is not synchronised, it will reconnect.
    */
-  async getOrCreateConnection(metaApiAccountId: string): Promise<any> {
+  async getOrCreateConnection(
+    metaApiAccountId: string,
+    options: { requireSynchronization?: boolean } = {},
+  ): Promise<any> {
+    const requireSynchronization = options.requireSynchronization ?? true;
     this.assertAvailable();
 
     const existing = this.connectionPool.get(metaApiAccountId);
@@ -88,7 +92,9 @@ export class MetaApiClientService implements OnModuleDestroy {
 
     const connection = account.getRPCConnection();
     await connection.connect();
-    await connection.waitSynchronized(this.SYNC_TIMEOUT_SECONDS);
+    if (requireSynchronization) {
+      await connection.waitSynchronized(this.SYNC_TIMEOUT_SECONDS);
+    }
 
     this.connectionPool.set(metaApiAccountId, {
       account,
