@@ -26,6 +26,24 @@ export class PaperBrokerStateService {
           state_version = EXCLUDED.state_version,
           state = EXCLUDED.state,
           updated_at = now()
+        WHERE
+          COALESCE((EXCLUDED.state ->> 'marketTickCounter')::bigint, -1)
+            >= COALESCE((paper_broker_states.state ->> 'marketTickCounter')::bigint, -1)
+          AND COALESCE((EXCLUDED.state ->> 'orderCounter')::bigint, -1)
+            >= COALESCE((paper_broker_states.state ->> 'orderCounter')::bigint, -1)
+          AND (
+            COALESCE(jsonb_array_length(EXCLUDED.state -> 'positions'), 0)
+            + COALESCE(jsonb_array_length(EXCLUDED.state -> 'closedTrades'), 0)
+            + COALESCE(jsonb_array_length(EXCLUDED.state -> 'working'), 0)
+          ) >= (
+            COALESCE(jsonb_array_length(paper_broker_states.state -> 'positions'), 0)
+            + COALESCE(jsonb_array_length(paper_broker_states.state -> 'closedTrades'), 0)
+            + COALESCE(jsonb_array_length(paper_broker_states.state -> 'working'), 0)
+          )
+          AND COALESCE(jsonb_array_length(EXCLUDED.state -> 'orderStates'), 0)
+            >= COALESCE(jsonb_array_length(paper_broker_states.state -> 'orderStates'), 0)
+          AND COALESCE(jsonb_array_length(EXCLUDED.state -> 'resultsByDedupeKey'), 0)
+            >= COALESCE(jsonb_array_length(paper_broker_states.state -> 'resultsByDedupeKey'), 0)
       `,
       [connectionId, JSON.stringify(state)],
     );
