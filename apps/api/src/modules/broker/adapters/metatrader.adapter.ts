@@ -433,9 +433,10 @@ export class MetaTraderAdapter implements IBrokerAdapter {
   async getCurrentPrice(instrument: string): Promise<BrokerPrice> {
     const conn = await this.getActiveConnection();
     try {
-      await conn.subscribeToMarketData(instrument);
+      // RPC connections expose direct quote reads. Market-data subscription
+      // methods belong to the streaming connection API and are intentionally
+      // not required for DEMO/PAPER quote collection.
       const price = await conn.getSymbolPrice(instrument);
-      await conn.unsubscribeFromMarketData(instrument);
       return {
         instrument,
         bid: this.toDecimalString(price.bid),
