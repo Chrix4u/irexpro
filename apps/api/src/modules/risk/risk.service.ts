@@ -1171,9 +1171,11 @@ export class RiskService {
       brokerConnectionId: session.brokerConnectionId,
       // Round 6 (#362): immutable per-trade provenance → the durable Trade
       // row (logical account, currency, daily-risk period). LIVE decisions
-      // carry the snapshot-bound values; PAPER carries the projected view's
-      // currency when the source provides one (never fabricated).
-      logicalAccountKey: liveSnapshotBinding?.logicalAccountKey,
+      // carry the snapshot-bound values; PAPER carries the connection's
+      // durable logical-account identity plus the projected account currency
+      // when the source provides one (never fabricated).
+      logicalAccountKey:
+        liveSnapshotBinding?.logicalAccountKey ?? connection.logicalAccountKey ?? undefined,
       accountCurrency: liveSnapshotBinding?.currency ?? accountState.currency ?? undefined,
       riskPeriodId: liveRiskPeriodId ?? undefined,
     };

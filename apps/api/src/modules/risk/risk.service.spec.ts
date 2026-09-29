@@ -811,6 +811,10 @@ describe('RiskService', () => {
       const result = await service.validateProposedTrade('user-1', validTrade());
 
       expect(result.decision).toBe('APPROVED');
+      if (result.decision === 'APPROVED') {
+        expect(result.logicalAccountKey).toBe('metatrader5|MetaQuotes-Demo|12345');
+        expect(result.accountCurrency).toBe('USD');
+      }
       expect(dailyRiskPeriod.getTodayRealisedLossExact).toHaveBeenCalledWith({
         userId: 'user-1',
         logicalAccountKey: 'metatrader5|MetaQuotes-Demo|12345',
