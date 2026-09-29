@@ -256,7 +256,7 @@ export class TradingService {
               connection.brokerId === 'paper-broker' &&
               session.executionMode === ExecutionMode.PAPER_ONLY,
             workflowProbeEnabled: false,
-            replayStepsPerCycle: 1,
+            replayStepsPerCycle: this.getResearchReplayStepsPerCycle(),
             intervalSeconds:
               connection.brokerId === 'paper-broker' &&
               session.executionMode === ExecutionMode.PAPER_ONLY
@@ -559,7 +559,7 @@ export class TradingService {
           connection.brokerId === 'paper-broker' &&
           session.executionMode === ExecutionMode.PAPER_ONLY,
         workflowProbeEnabled: false,
-        replayStepsPerCycle: 1,
+        replayStepsPerCycle: this.getResearchReplayStepsPerCycle(),
         intervalSeconds:
           connection.brokerId === 'paper-broker' &&
           session.executionMode === ExecutionMode.PAPER_ONLY
@@ -570,6 +570,12 @@ export class TradingService {
     }
 
     return runtime;
+  }
+
+  private getResearchReplayStepsPerCycle(): number {
+    const raw = Number(process.env.RESEARCH_PAPER_REPLAY_STEPS_PER_CYCLE ?? '1');
+    if (!Number.isSafeInteger(raw)) return 1;
+    return Math.min(30, Math.max(1, raw));
   }
 
   private async resolveAiSchedulerInstruments(
