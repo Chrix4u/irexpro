@@ -58,6 +58,10 @@ export interface PositionSizingInputs {
   freeMargin: string;
   riskPercent: string;
   riskAmount: string;
+  baseCurrency: string;
+  quoteCurrency: string;
+  riskAmountInQuoteCurrency: string;
+  riskCurrencyConversion: 'ACCOUNT_IS_QUOTE' | 'ACCOUNT_IS_BASE_USING_ENTRY';
   entryPrice: string;
   entryPriceSource: 'MARKET_QUOTE' | 'REQUESTED_LIMIT';
   stopLoss: string;
@@ -288,30 +292,44 @@ export class PositionSizingService {
       );
     }
 
-    // ── 6. Currency honesty: notional is in the QUOTE currency. ───────────
-    // Standard FX symbols are <BASE><QUOTE> (6 alpha chars). The quote
-    // currency must equal the account currency — otherwise an implicit FX
-    // conversion would be invented, which is forbidden.
-    if (!/^[A-Z]{6,}$/.test(instrument.toUpperCase())) {
+    // ── 6. Currency honesty: risk-per-lot is in the QUOTE currency. ──────
+    // Standard FX symbols are exactly <BASE><QUOTE>. When the account
+    // currency is the quote currency, no conversion is needed. When the
+    // account currency is the base currency (e.g. USD account trading
+    // USDJPY), the already-proven entry quote is the authoritative
+    // quote-currency-per-account-currency conversion rate. A third-currency
+    // account still fails closed because that would require another trusted
+    // FX conversion authority.
+    const normalizedInstrument = instrument.toUpperCase();
+    if (!/^[A-Z]{6}$/.test(normalizedInstrument)) {
       throw new PositionSizingError(
         'CURRENCY_MISMATCH',
-        `cannot prove the quote currency of non-standard symbol ${instrument} — ` +
-          'cross-currency sizing requires a trusted FX authority (out of scope)',
+        `cannot prove base/quote currencies of non-standard symbol ${instrument} — ` +
+          'cross-currency sizing requires a trusted FX authority',
       );
     }
-    const quoteCurrency = instrument.toUpperCase().slice(3, 6);
-    if (quoteCurrency !== accountCurrency) {
+    const baseCurrency = normalizedInstrument.slice(0, 3);
+    const quoteCurrency = normalizedInstrument.slice(3, 6);
+    const riskAmount = equity.mul(riskPercent).divByPowerOfTen(2); // account currency
+    let riskAmountInQuoteCurrency: ExactDecimal;
+    let riskCurrencyConversion: 'ACCOUNT_IS_QUOTE' | 'ACCOUNT_IS_BASE_USING_ENTRY';
+    if (quoteCurrency === accountCurrency) {
+      riskAmountInQuoteCurrency = riskAmount;
+      riskCurrencyConversion = 'ACCOUNT_IS_QUOTE';
+    } else if (baseCurrency === accountCurrency) {
+      riskAmountInQuoteCurrency = riskAmount.mul(entry);
+      riskCurrencyConversion = 'ACCOUNT_IS_BASE_USING_ENTRY';
+    } else {
       throw new PositionSizingError(
         'CURRENCY_MISMATCH',
-        `instrument ${instrument} quotes in ${quoteCurrency} but the account is ` +
-          `${accountCurrency} — no implicit FX conversion is invented`,
+        `instrument ${instrument} is ${baseCurrency}/${quoteCurrency} but account currency is ` +
+          `${accountCurrency} — neither FX leg matches the account currency`,
       );
     }
 
     // ── 7. The sizing math (ExactDecimal only). ───────────────────────────
-    const riskAmount = equity.mul(riskPercent).divByPowerOfTen(2); // pct → fraction
     const riskPerLot = slDistance.mul(contractSize);
-    const lotsByRiskBudget = riskAmount.divDown(riskPerLot, LOT_SCALE);
+    const lotsByRiskBudget = riskAmountInQuoteCurrency.divDown(riskPerLot, LOT_SCALE);
     if (!lotsByRiskBudget.isPositive()) {
       throw new PositionSizingError(
         'POSITION_SIZE_ZERO',
@@ -376,6 +394,10 @@ export class PositionSizingService {
       freeMargin: freeMargin.toString(),
       riskPercent: riskPercent.toString(),
       riskAmount: riskAmount.toString(),
+      baseCurrency,
+      quoteCurrency,
+      riskAmountInQuoteCurrency: riskAmountInQuoteCurrency.toString(),
+      riskCurrencyConversion,
       entryPrice: entry.toString(),
       entryPriceSource,
       stopLoss: stopLoss.toString(),

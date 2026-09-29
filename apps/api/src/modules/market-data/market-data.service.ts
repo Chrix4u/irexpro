@@ -43,6 +43,7 @@ export class MarketDataService {
           userId,
           brokerConnectionId,
           instrument,
+          { advanceSimulation: true },
         );
         if (!heartbeat) {
           throw new Error('Paper simulator heartbeat could not be advanced');

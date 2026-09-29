@@ -80,7 +80,7 @@ export interface IBrokerAdapter {
   // ─── Market data ──────────────────────────────────────────────────────────
 
   getInstrumentList(): Promise<BrokerInstrument[]>;
-  getCurrentPrice(instrument: string): Promise<BrokerPrice>;
+  getCurrentPrice(instrument: string, options?: { advanceSimulation?: boolean }): Promise<BrokerPrice>;
   getOHLCV(instrument: string, timeframe: string, count: number, before?: Date): Promise<OHLCV[]>;
 
   // ─── Order management ─────────────────────────────────────────────────────

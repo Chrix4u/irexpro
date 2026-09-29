@@ -1283,6 +1283,54 @@ describe('RiskService', () => {
       expect(result.decision).toBe('APPROVED');
     });
 
+    it('converts USDJPY stop risk and notional into USD when the USD account is the base currency', async () => {
+      brokerService.getBrokerAccountState.mockResolvedValue({
+        balance: '10000.00',
+        equity: '10000.00',
+        freeMargin: '9900.00',
+        currency: 'USD',
+      });
+
+      const result = await service.validateProposedTrade(
+        'user-1',
+        validTrade({
+          instrument: 'USDJPY',
+          requestedLotSize: '0.10',
+          entryPrice: '156.8795',
+          stopLoss: '156.1730',
+          takeProfit: '157.5000',
+        }),
+      );
+
+      expect(result.decision).toBe('APPROVED');
+    });
+
+    it('fails closed when the account currency matches neither FX leg', async () => {
+      brokerService.getBrokerAccountState.mockResolvedValue({
+        balance: '10000.00',
+        equity: '10000.00',
+        freeMargin: '9900.00',
+        currency: 'USD',
+      });
+
+      const result = await service.validateProposedTrade(
+        'user-1',
+        validTrade({
+          instrument: 'GBPJPY',
+          requestedLotSize: '0.05',
+          entryPrice: '200.000',
+          stopLoss: '199.500',
+          takeProfit: '201.000',
+        }),
+      );
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.ACCOUNT_STATE_UNAVAILABLE);
+        expect(result.rejectionReason).toContain('matches neither leg');
+      }
+    });
+
     it('LIVE NEW exposure fails CLOSED with a typed code when contract size is unavailable', async () => {
       brokerService.findConnectionById.mockResolvedValue(
         defaultConnection({ accountType: 'LIVE' }),

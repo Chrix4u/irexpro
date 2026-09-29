@@ -322,8 +322,10 @@ class CsvReplayPaperPriceFeed extends PaperPriceFeed {
       bucket.push(row);
       buckets.set(key, bucket);
     }
+    const requiredRows = Math.max(1, Math.trunc(spacingMs / 60_000));
     return Array.from(buckets.entries())
       .sort((a, b) => a[0] - b[0])
+      .filter(([, rows]) => rows.length === requiredRows)
       .slice(-count)
       .map(([key, rows]) => {
         const first = rows[0]!,
@@ -865,8 +867,13 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         multiplyDecimalStrings(params.lotSize.trim(), PAPER_CONTRACT_SIZE),
         mid,
       );
-      // / leverage (100) → exact right shift by 2, rendered at 2dp half-up.
-      return roundHalfUpAtScale(divideByPowerOfTen(product, 2), PAPER_MONEY_SCALE);
+      const quoteMargin = divideByPowerOfTen(product, 2);
+      const accountMargin = this.quoteAmountToAccountCurrencyExact(
+        params.instrument,
+        quoteMargin,
+        mid,
+      );
+      return roundHalfUpAtScale(accountMargin, PAPER_MONEY_SCALE);
     } catch {
       return null;
     }
@@ -904,21 +911,66 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     return this.accountSnapshot().freeMargin;
   }
 
-  /** (currentPrice − entry) × units with the direction sign — exact strings. */
+  /**
+   * Convert an amount expressed in an FX instrument's quote currency into the
+   * PAPER account currency. The simulator is USD-denominated and supports
+   * either USD as quote (EURUSD) or USD as base (USDJPY Research UAT).
+   * Third-currency conversions are never invented.
+   */
+  private quoteAmountToAccountCurrencyExact(
+    instrument: string,
+    quoteAmount: string,
+    conversionPrice: string,
+  ): string {
+    const symbol = instrument.trim().toUpperCase();
+    if (!/^[A-Z]{6}$/.test(symbol)) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.INVALID_INSTRUMENT,
+        `Cannot prove FX base/quote currencies for ${instrument}.`,
+      );
+    }
+    const baseCurrency = symbol.slice(0, 3);
+    const quoteCurrency = symbol.slice(3, 6);
+    if (quoteCurrency === PAPER_CURRENCY) return quoteAmount;
+    if (baseCurrency === PAPER_CURRENCY) {
+      return divideDecimalStrings(quoteAmount, conversionPrice, 12);
+    }
+    throw new BrokerAdapterError(
+      BrokerErrorCode.INVALID_INSTRUMENT,
+      `Paper account currency ${PAPER_CURRENCY} matches neither leg of ${symbol}.`,
+    );
+  }
+
+  /** Required margin converted into the PAPER account currency. */
+  private marginInAccountCurrencyExact(
+    instrument: string,
+    units: bigint,
+    entryPrice: string,
+  ): string {
+    const quoteMargin = divideByPowerOfTen(
+      multiplyDecimalStrings(units.toString(), entryPrice),
+      2,
+    );
+    return this.quoteAmountToAccountCurrencyExact(instrument, quoteMargin, entryPrice);
+  }
+
+  /** (currentPrice − entry) × units, converted into account currency. */
   private unrealisedPnlExact(position: PaperPosition, quote: PaperQuote): string {
     const exitPrice = position.direction === 'BUY' ? quote.bid : quote.ask;
     const diff =
       position.direction === 'BUY'
         ? subtractDecimalStrings(exitPrice, position.entryPrice)
         : subtractDecimalStrings(position.entryPrice, exitPrice);
-    return multiplyDecimalStrings(diff, position.units.toString());
+    const quotePnl = multiplyDecimalStrings(diff, position.units.toString());
+    return this.quoteAmountToAccountCurrencyExact(position.instrument, quotePnl, exitPrice);
   }
 
-  /** units × entryPrice / leverage — margin locked at fill, exact strings. */
+  /** Margin locked at fill and denominated in the account currency. */
   private positionMarginExact(position: PaperPosition): string {
-    return divideByPowerOfTen(
-      multiplyDecimalStrings(position.units.toString(), position.entryPrice),
-      2,
+    return this.marginInAccountCurrencyExact(
+      position.instrument,
+      position.units,
+      position.entryPrice,
     );
   }
 
@@ -1015,11 +1067,17 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
    * (position SL/TP first, then working orders). This is the only public
    * surface that moves the market.
    */
-  async getCurrentPrice(instrument: string): Promise<BrokerPrice> {
+  async getCurrentPrice(
+    instrument: string,
+    options?: { advanceSimulation?: boolean },
+  ): Promise<BrokerPrice> {
     this.assertConnected();
     this.requireInstrument(instrument);
-    const quote = this.advanceMarket();
-    await this.persistDurableState();
+    const shouldAdvance = !this._replayFeed || options?.advanceSimulation === true;
+    const quote = shouldAdvance ? this.advanceMarket() : this._feed.quote();
+    if (shouldAdvance) {
+      await this.persistDurableState();
+    }
     return {
       instrument: this.requireInstrument(instrument),
       bid: quote.bid,
@@ -1244,7 +1302,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     const fillPrice = quoteMid(quote);
     const units = lotSizeToUnits(order.lotSize);
     const requiredMargin = toMoney(
-      divideByPowerOfTen(multiplyDecimalStrings(units.toString(), fillPrice), 2),
+      this.marginInAccountCurrencyExact(instrument, units, fillPrice),
     );
     if (compareDecimalStrings(requiredMargin, this.freeMargin()) > 0) {
       throw new BrokerAdapterError(
@@ -1694,7 +1752,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   private fillWorkingOrder(order: PaperWorkingOrder, fillPrice: string): void {
     const units = lotSizeToUnits(order.lotSize);
     const requiredMargin = toMoney(
-      divideByPowerOfTen(multiplyDecimalStrings(units.toString(), fillPrice), 2),
+      this.marginInAccountCurrencyExact(order.instrument, units, fillPrice),
     );
     if (compareDecimalStrings(requiredMargin, this.freeMargin()) > 0) {
       // No caller to notify on a deferred fill — the order transitions to a
@@ -1770,7 +1828,10 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       position.direction === 'BUY'
         ? subtractDecimalStrings(closePrice, position.entryPrice)
         : subtractDecimalStrings(position.entryPrice, closePrice);
-    const realisedPnl = toMoney(multiplyDecimalStrings(diff, closeUnits.toString()));
+    const quotePnl = multiplyDecimalStrings(diff, closeUnits.toString());
+    const realisedPnl = toMoney(
+      this.quoteAmountToAccountCurrencyExact(position.instrument, quotePnl, closePrice),
+    );
     this._balance = toMoney(addDecimalStrings(this._balance, realisedPnl));
 
     const trade: PaperClosedTrade = {

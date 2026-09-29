@@ -1069,6 +1069,7 @@ export class RiskService {
         connection,
         currentEquity,
         effectiveQuantity,
+        accountState.currency?.trim().toUpperCase() ?? '',
         appliedRules,
         contextSnapshot as RiskContextSnapshot,
         evaluatedAt,
@@ -1299,6 +1300,7 @@ export class RiskService {
     connection: BrokerConnection,
     equity: ExactDecimal,
     quantity: ExactDecimal,
+    accountCurrency: string,
     appliedRules: string[],
     contextSnapshot: RiskContextSnapshot,
     evaluatedAt: Date,
@@ -1375,7 +1377,54 @@ export class RiskService {
     const stop = this.parseOrderDecimal(trade.stopLoss!, 'stopLoss');
 
     // ── maxTradeRiskPercent: risk at stop vs equity ───────────────────────
-    const riskAtStop = entry.sub(stop).abs().mul(quantity).mul(contractSize);
+    // Price-distance × quantity × contractSize is denominated in the
+    // instrument's QUOTE currency. Compare it with account equity only after
+    // proving a deterministic conversion into the broker account currency.
+    const normalizedInstrument = trade.instrument.trim().toUpperCase();
+    if (!/^[A-Z]{6}$/.test(normalizedInstrument) || !/^[A-Z]{3}$/.test(accountCurrency)) {
+      appliedRules.push('MAX_TRADE_RISK:CURRENCY_UNVERIFIED');
+      return {
+        rejection: await this.rejectAndRecord(
+          userId,
+          trade,
+          RiskRejectionCode.ACCOUNT_STATE_UNAVAILABLE,
+          'Cannot prove FX base/quote and account-currency units for ' + trade.instrument +
+            ' — rejecting (fail-closed)',
+          contextSnapshot,
+          evaluatedAt,
+        ),
+        quoteRef: geometry.quoteRef,
+      };
+    }
+    const baseCurrency = normalizedInstrument.slice(0, 3);
+    const quoteCurrency = normalizedInstrument.slice(3, 6);
+    const riskAtStopQuote = entry.sub(stop).abs().mul(quantity).mul(contractSize);
+    let riskAtStop: ExactDecimal;
+    let notional: ExactDecimal;
+    if (accountCurrency === quoteCurrency) {
+      riskAtStop = riskAtStopQuote;
+      notional = entry.mul(quantity).mul(contractSize);
+    } else if (accountCurrency === baseCurrency) {
+      // divUp is deliberate: safety ratios must never understate risk/leverage.
+      riskAtStop = riskAtStopQuote.divUp(stop, 12);
+      const notionalQuote = entry.mul(quantity).mul(contractSize);
+      notional = notionalQuote.divUp(entry, 12);
+    } else {
+      appliedRules.push('MAX_TRADE_RISK:CURRENCY_UNVERIFIED');
+      return {
+        rejection: await this.rejectAndRecord(
+          userId,
+          trade,
+          RiskRejectionCode.ACCOUNT_STATE_UNAVAILABLE,
+          'Account currency ' + accountCurrency + ' matches neither leg of ' +
+            normalizedInstrument +
+            '; a trusted third-currency FX conversion is unavailable — rejecting (fail-closed)',
+          contextSnapshot,
+          evaluatedAt,
+        ),
+        quoteRef: geometry.quoteRef,
+      };
+    }
     const maxTradeRiskPercent = this.parseProfileDecimal(
       profile.maxTradeRiskPercent,
       'maxTradeRiskPercent',
@@ -1415,7 +1464,7 @@ export class RiskService {
     appliedRules.push('MAX_TRADE_RISK:OK');
 
     // ── maxLeverageAllowed: EFFECTIVE ORDER LEVERAGE = notional / equity ──
-    const notional = entry.mul(quantity).mul(contractSize);
+    // notional above is already denominated in account currency.
     const effectiveLeverage = notional.divUp(equity, LEVERAGE_SCALE);
     const maxLeverage = this.parseProfileDecimal(
       String(profile.maxLeverageAllowed),

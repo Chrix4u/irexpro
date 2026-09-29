@@ -1947,6 +1947,7 @@ export class BrokerService {
     userId: string,
     brokerConnectionId: string,
     instrument: string,
+    options?: { advanceSimulation?: boolean },
   ): Promise<BrokerPrice | null> {
     const connection = await this.findConnectionById(brokerConnectionId, userId);
 
@@ -1975,7 +1976,7 @@ export class BrokerService {
 
     try {
       await adapter.connect(credentials);
-      const price = await adapter.getCurrentPrice(instrument);
+      const price = await adapter.getCurrentPrice(instrument, options);
       if (
         !price ||
         !price.bid ||

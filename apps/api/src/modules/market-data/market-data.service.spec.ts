@@ -113,6 +113,7 @@ describe('MarketDataService', () => {
       query.userId,
       query.brokerConnectionId,
       'EURUSD',
+      { advanceSimulation: true },
     );
     expect(result.source).toBe('paper-broker');
     expect(result.candles[0]?.source).toBe('paper-broker');

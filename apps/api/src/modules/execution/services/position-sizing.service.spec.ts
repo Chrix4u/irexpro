@@ -43,6 +43,16 @@ const EURUSD_SPEC: BrokerInstrument = {
   contractSize: '100000',
 };
 
+const USDJPY_SPEC: BrokerInstrument = {
+  symbol: 'USDJPY',
+  description: 'US Dollar vs Japanese Yen',
+  digits: 3,
+  minLot: '0.01',
+  maxLot: '10.00',
+  lotStep: '0.01',
+  contractSize: '100000',
+};
+
 const profileRow = (overrides: Partial<RiskProfile> = {}): RiskProfile =>
   ({
     userId: USER,
@@ -373,7 +383,34 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
       );
     });
 
-    it('CURRENCY_MISMATCH when the instrument quotes in a different currency (no invented FX)', async () => {
+    it('sizes USDJPY for a USD account using the proven entry as USD-to-JPY conversion', async () => {
+      orderGeometry.resolveOrderGeometry.mockResolvedValue(
+        geometry({
+          contractSize: ExactDecimal.parse('100000'),
+          freshQuote: ExactDecimal.parse('150.000'),
+          instrumentSpec: USDJPY_SPEC,
+        }),
+      );
+      brokerService.getRequiredMargin.mockResolvedValue('600.00');
+
+      const result = await service.sizePosition(
+        baseParams({
+          instrument: 'USDJPY',
+          stopLoss: '149.500',
+        }),
+      );
+
+      expect(result.lots).toBe('0.6');
+      expect(result.inputs.riskAmount).toBe('200');
+      expect(result.inputs.baseCurrency).toBe('USD');
+      expect(result.inputs.quoteCurrency).toBe('JPY');
+      expect(result.inputs.riskAmountInQuoteCurrency).toBe('30000');
+      expect(result.inputs.riskCurrencyConversion).toBe('ACCOUNT_IS_BASE_USING_ENTRY');
+      expect(result.inputs.lotsByRiskBudget).toBe('0.6');
+      expect(result.inputs.requiredMargin).toBe('600');
+    });
+
+    it('CURRENCY_MISMATCH when neither FX leg matches the account currency', async () => {
       await expect(
         service.sizePosition(baseParams({ instrument: 'GBPJPY' })),
       ).rejects.toMatchObject({ code: 'CURRENCY_MISMATCH' });
