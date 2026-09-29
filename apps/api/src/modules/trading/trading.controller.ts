@@ -71,7 +71,7 @@ export class TradingController {
   }
 
   @Post('advanced-controls')
-  @ApiOperation({ summary: 'Update Research PAPER Advanced AI Controls' })
+  @ApiOperation({ summary: 'Update LIVE-promotable Advanced AI Controls' })
   async updateAdvancedControls(
     @CurrentUserId() userId: string,
     @Headers('x-irexpro-step-up') stepUpToken: string | undefined,
@@ -81,7 +81,7 @@ export class TradingController {
     return this.tradingService.updateAdvancedAiControls(
       userId,
       stepUpToken,
-      dto.researchPaperConfidenceFloor,
+      dto.executionConfidenceFloor,
     );
   }
 

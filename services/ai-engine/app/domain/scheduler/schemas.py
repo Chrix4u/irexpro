@@ -26,7 +26,7 @@ class SessionStartRequest(BaseModel):
     )
     confidence_threshold_override: float | None = Field(
         default=None,
-        ge=0.30,
+        ge=0.60,
         le=0.70,
         alias="confidenceThresholdOverride",
     )

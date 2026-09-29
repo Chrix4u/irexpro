@@ -17,13 +17,17 @@ export class AiRuntimePreference {
   userId: string;
 
   @Column({
+    // Legacy physical column name retained for backward-compatible migration.
+    // Domain semantics are now mode-consistent: this confidence floor applies
+    // identically to Demo/PAPER/LIVE and may never be lower than the qualified
+    // production floor.
     name: 'research_paper_confidence_floor',
     type: 'numeric',
     precision: 4,
     scale: 3,
     default: '0.600',
   })
-  researchPaperConfidenceFloor: string;
+  executionConfidenceFloor: string;
 
   @Column({ name: 'revision', type: 'integer', default: 1 })
   revision: number;

@@ -117,7 +117,13 @@ export class TradingService {
     await this.authService.verifyAdvancedControlsStepUpToken(userId, stepUpToken);
 
     const preference = await this.aiRuntimePreferenceRepo.findOne({ where: { userId } });
-    const confidenceFloor = Number(preference?.researchPaperConfidenceFloor ?? '0.600');
+    const storedConfidenceFloor = Number(preference?.executionConfidenceFloor ?? '0.600');
+    const confidenceFloor =
+      Number.isFinite(storedConfidenceFloor) &&
+      storedConfidenceFloor >= 0.6 &&
+      storedConfidenceFloor <= 0.7
+        ? storedConfidenceFloor
+        : 0.6;
 
     let modelMetadata = null;
     try {
@@ -131,11 +137,11 @@ export class TradingService {
     const gate = modelMetadata?.research_gate ?? null;
     return {
       controls: {
-        researchPaperConfidenceFloor: confidenceFloor,
-        researchPaperConfidenceMin: 0.3,
-        researchPaperConfidenceMax: 0.7,
-        normalPaperAndLiveMinimumConfidence: 0.6,
-        appliesTo: 'RESEARCH_PAPER_ONLY',
+        executionConfidenceFloor: confidenceFloor,
+        executionConfidenceMin: 0.6,
+        executionConfidenceMax: 0.7,
+        qualifiedMinimumConfidence: 0.6,
+        appliesTo: 'ALL_EXECUTION_MODES',
         revision: preference?.revision ?? 1,
       },
       modelQualification: gate
@@ -154,16 +160,16 @@ export class TradingService {
   async updateAdvancedAiControls(
     userId: string,
     stepUpToken: string,
-    researchPaperConfidenceFloor: number,
+    executionConfidenceFloor: number,
   ) {
     await this.authService.verifyAdvancedControlsStepUpToken(userId, stepUpToken);
     if (
-      !Number.isFinite(researchPaperConfidenceFloor) ||
-      researchPaperConfidenceFloor < 0.3 ||
-      researchPaperConfidenceFloor > 0.7
+      !Number.isFinite(executionConfidenceFloor) ||
+      executionConfidenceFloor < 0.6 ||
+      executionConfidenceFloor > 0.7
     ) {
       throw new ForbiddenException(
-        'Research PAPER confidence must stay within the server-authorized 0.30–0.70 range',
+        'Execution confidence must stay within the LIVE-promotable 0.60–0.70 range',
       );
     }
 
@@ -171,11 +177,11 @@ export class TradingService {
     if (!preference) {
       preference = this.aiRuntimePreferenceRepo.create({
         userId,
-        researchPaperConfidenceFloor: researchPaperConfidenceFloor.toFixed(3),
+        executionConfidenceFloor: executionConfidenceFloor.toFixed(3),
         revision: 1,
       });
     } else {
-      preference.researchPaperConfidenceFloor = researchPaperConfidenceFloor.toFixed(3);
+      preference.executionConfidenceFloor = executionConfidenceFloor.toFixed(3);
       preference.revision += 1;
     }
     preference = await this.aiRuntimePreferenceRepo.save(preference);
@@ -188,19 +194,19 @@ export class TradingService {
       resourceId: preference.id,
       metadata: {
         revision: preference.revision,
-        researchPaperConfidenceFloor: preference.researchPaperConfidenceFloor,
-        appliesTo: 'RESEARCH_PAPER_ONLY',
-        normalPaperAndLiveMinimumConfidence: 0.6,
+        executionConfidenceFloor: preference.executionConfidenceFloor,
+        appliesTo: 'ALL_EXECUTION_MODES',
+        qualifiedMinimumConfidence: 0.6,
       },
     });
 
     return this.getAdvancedAiControls(userId, stepUpToken);
   }
 
-  async getResearchPaperConfidenceFloor(userId: string): Promise<number> {
+  async getExecutionConfidenceFloor(userId: string): Promise<number> {
     const preference = await this.aiRuntimePreferenceRepo.findOne({ where: { userId } });
-    const value = Number(preference?.researchPaperConfidenceFloor ?? '0.600');
-    return Number.isFinite(value) && value >= 0.3 && value <= 0.7 ? value : 0.6;
+    const value = Number(preference?.executionConfidenceFloor ?? '0.600');
+    return Number.isFinite(value) && value >= 0.6 && value <= 0.7 ? value : 0.6;
   }
 
   /**
@@ -354,11 +360,7 @@ export class TradingService {
               session.executionMode === ExecutionMode.PAPER_ONLY,
             workflowProbeEnabled: false,
             replayStepsPerCycle: this.getResearchReplayStepsPerCycle(),
-            confidenceThresholdOverride:
-              connection.brokerId === 'paper-broker' &&
-              session.executionMode === ExecutionMode.PAPER_ONLY
-                ? await this.getResearchPaperConfidenceFloor(userId)
-                : undefined,
+            confidenceThresholdOverride: await this.getExecutionConfidenceFloor(userId),
             intervalSeconds:
               connection.brokerId === 'paper-broker' &&
               session.executionMode === ExecutionMode.PAPER_ONLY
@@ -662,11 +664,7 @@ export class TradingService {
           session.executionMode === ExecutionMode.PAPER_ONLY,
         workflowProbeEnabled: false,
         replayStepsPerCycle: this.getResearchReplayStepsPerCycle(),
-        confidenceThresholdOverride:
-          connection.brokerId === 'paper-broker' &&
-          session.executionMode === ExecutionMode.PAPER_ONLY
-            ? await this.getResearchPaperConfidenceFloor(userId)
-            : undefined,
+        confidenceThresholdOverride: await this.getExecutionConfidenceFloor(userId),
         intervalSeconds:
           connection.brokerId === 'paper-broker' &&
           session.executionMode === ExecutionMode.PAPER_ONLY

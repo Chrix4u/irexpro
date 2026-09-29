@@ -89,11 +89,11 @@ export interface AdvancedAiStepUpResponse {
 
 export interface AdvancedAiControlsResponse {
   controls: {
-    researchPaperConfidenceFloor: number;
-    researchPaperConfidenceMin: number;
-    researchPaperConfidenceMax: number;
-    normalPaperAndLiveMinimumConfidence: number;
-    appliesTo: 'RESEARCH_PAPER_ONLY';
+    executionConfidenceFloor: number;
+    executionConfidenceMin: number;
+    executionConfidenceMax: number;
+    qualifiedMinimumConfidence: number;
+    appliesTo: 'ALL_EXECUTION_MODES';
     revision: number;
   };
   modelQualification: {
@@ -220,10 +220,10 @@ export interface ApiClient {
   updateRiskProfile(body: UpdateRiskProfileRequest): Promise<RiskProfile>;
   /** Step-up protected Advanced AI Controls and active-model qualification evidence. */
   getAdvancedAiControls(stepUpToken: string): Promise<AdvancedAiControlsResponse>;
-  /** Update the Research PAPER-only confidence preference. */
+  /** Update the LIVE-promotable execution confidence preference. */
   updateAdvancedAiControls(
     stepUpToken: string,
-    body: { researchPaperConfidenceFloor: number },
+    body: { executionConfidenceFloor: number },
   ): Promise<AdvancedAiControlsResponse>;
   /** GET /broker/connections/supported → list of supported brokers. */
   listSupportedBrokers(): Promise<SupportedBroker[]>;

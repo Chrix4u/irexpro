@@ -173,7 +173,7 @@ export default function AdvancedAiControlsPage() {
       const next = await api.getAdvancedAiControls(auth.stepUpToken);
       setStepUpToken(auth.stepUpToken);
       setControls(next);
-      setConfidencePercent(Math.round(next.controls.researchPaperConfidenceFloor * 100));
+      setConfidencePercent(Math.round(next.controls.executionConfidenceFloor * 100));
       setPassword('');
       setMfaCode('');
     } catch (requestError) {
@@ -190,7 +190,7 @@ export default function AdvancedAiControlsPage() {
     setSaving(true);
     try {
       const next = await api.updateAdvancedAiControls(stepUpToken, {
-        researchPaperConfidenceFloor: confidencePercent / 100,
+        executionConfidenceFloor: confidencePercent / 100,
       });
       setControls(next);
       setSaved(true);
@@ -214,8 +214,7 @@ export default function AdvancedAiControlsPage() {
             <p className="workspace-hero__eyebrow">Protected research controls</p>
             <h1 id="advanced-ai-title" className="workspace-hero__title">Advanced AI Controls</h1>
             <p className="workspace-hero__description">
-              Inspect the active model&apos;s qualification evidence and, in Research PAPER only,
-              adjust the experimental confidence floor within server-authorized bounds.
+              Inspect the active model&apos;s qualification evidence and adjust only controls that have the same meaning and enforcement path in Demo, PAPER and LIVE.
             </p>
           </div>
           <div className="workspace-hero__actions">
@@ -228,8 +227,7 @@ export default function AdvancedAiControlsPage() {
         {error && <Alert variant="error">{error}</Alert>}
         {saved && (
           <Alert variant="success">
-            Research PAPER preference saved. It will apply the next time the Research PAPER
-            scheduler session is registered.
+            Execution preference saved. It will apply consistently to the next Demo, PAPER or LIVE scheduler session.
           </Alert>
         )}
 
@@ -239,9 +237,8 @@ export default function AdvancedAiControlsPage() {
             subtitle="Advanced controls stay locked until you acknowledge the risk and prove your identity again."
           >
             <Alert variant="warning">
-              <strong>Changing research AI thresholds can materially change trade frequency and simulated losses.</strong>{' '}
-              Lower confidence can admit weaker model decisions. These controls do not change the model&apos;s
-              qualification results and do not guarantee profitability. Normal PAPER/LIVE server floors remain protected.
+              <strong>Changing execution AI controls can materially change trade frequency, drawdown, and losses in every execution mode.</strong>{' '}
+              These controls do not change model qualification results and do not guarantee profitability. No setting on this page may weaken the active model&apos;s qualified production floor.
             </Alert>
 
             <label style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start', marginTop: '1rem' }}>
@@ -252,8 +249,7 @@ export default function AdvancedAiControlsPage() {
                 style={{ marginTop: '0.2rem' }}
               />
               <span>
-                I understand that changing Research PAPER AI controls can increase trade frequency,
-                drawdown, and simulated losses, and I want to continue.
+                I understand that these controls are designed to promote unchanged to LIVE, can alter trade frequency and losses, and I want to continue.
               </span>
             </label>
 
@@ -332,8 +328,8 @@ export default function AdvancedAiControlsPage() {
             </Card>
 
             <Card
-              title="Research PAPER confidence"
-              subtitle="Experimental only. This value cannot lower normal PAPER/LIVE server confidence floors."
+              title="Execution confidence"
+              subtitle="Same setting and server enforcement in Demo, PAPER and LIVE. It cannot be set below the active qualified production floor."
             >
               <div className="workspace-form-section">
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem' }}>
@@ -342,29 +338,29 @@ export default function AdvancedAiControlsPage() {
                 </div>
                 <input
                   type="range"
-                  min={Math.round(controls.controls.researchPaperConfidenceMin * 100)}
-                  max={Math.round(controls.controls.researchPaperConfidenceMax * 100)}
+                  min={Math.round(controls.controls.executionConfidenceMin * 100)}
+                  max={Math.round(controls.controls.executionConfidenceMax * 100)}
                   step={1}
                   value={confidencePercent}
                   onChange={(event) => setConfidencePercent(Number(event.target.value))}
                   style={{ width: '100%', marginTop: '1rem' }}
-                  aria-label="Research PAPER confidence floor"
+                  aria-label="Execution confidence floor"
                 />
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span className="muted text-sm">30% experimental minimum</span>
+                  <span className="muted text-sm">60% qualified minimum</span>
                   <span className="muted text-sm">70% maximum</span>
                 </div>
               </div>
 
               <Alert variant="warning">
-                Normal PAPER/LIVE minimum confidence remains{' '}
-                <strong>{Math.round(controls.controls.normalPaperAndLiveMinimumConfidence * 100)}%</strong>.
-                A value below that is accepted only inside the explicitly authorized Research PAPER simulator.
+                The active qualified minimum is{' '}
+                <strong>{Math.round(controls.controls.qualifiedMinimumConfidence * 100)}%</strong>.
+                Demo, PAPER and LIVE all use this same user preference and the same lower bound.
               </Alert>
 
               <div className="workspace-actions mt-4">
                 <Button type="button" variant="primary" loading={saving} onClick={() => void save()}>
-                  Save Research PAPER Preference
+                  Save Execution Preference
                 </Button>
                 <Button
                   type="button"
