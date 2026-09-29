@@ -141,6 +141,14 @@ export class StrategyOrchestratorService {
     }
   }
 
+  private async markSignalProcessed(userId: string, signalId: string): Promise<void> {
+    await this.signalIdentityGate.markProcessed(userId, signalId).catch((err) =>
+      this.logger.warn(
+        `Signal ${signalId}: identity could not be marked PROCESSED (${(err as Error).message})`,
+      ),
+    );
+  }
+
   /**
    * Process an AI signal candidate through the full validation pipeline.
    *
@@ -381,6 +389,7 @@ export class StrategyOrchestratorService {
         this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, {
           outcome: 'EXECUTION_FAILED',
         });
+        await this.markSignalProcessed(userId, signalId);
         return { outcome: 'EXECUTION_FAILED', signalId, reason };
       }
     }
@@ -417,6 +426,7 @@ export class StrategyOrchestratorService {
       this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, {
         outcome: 'EXECUTION_FAILED',
       });
+      await this.markSignalProcessed(userId, signalId);
       return { outcome: 'EXECUTION_FAILED', signalId, reason };
     }
 
@@ -455,6 +465,7 @@ export class StrategyOrchestratorService {
           executionCandidate.suggestedStopLoss != null
             ? String(executionCandidate.suggestedStopLoss)
             : null,
+        requestedLotUpperBound: String(executionCandidate.suggestedVolume),
       });
       await this.allocationService.resolveOrAllocate({
         intent: {
@@ -515,6 +526,7 @@ export class StrategyOrchestratorService {
           : METRIC_NAMES.SIZING_FAILURES,
         { code },
       );
+      await this.markSignalProcessed(userId, signalId);
       return { outcome: 'EXECUTION_FAILED', signalId, reason };
     }
 
@@ -582,6 +594,7 @@ export class StrategyOrchestratorService {
       this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, {
         outcome: 'RISK_REJECTED',
       });
+      await this.markSignalProcessed(userId, signalId);
       return { outcome: 'RISK_REJECTED', signalId, reason };
     }
 
@@ -629,6 +642,7 @@ export class StrategyOrchestratorService {
       this.metrics?.increment(METRIC_NAMES.INTENTS_REJECTED, {
         code: riskDecision.rejectionCode,
       });
+      await this.markSignalProcessed(userId, signalId);
       return {
         outcome,
         signalId,
@@ -676,6 +690,7 @@ export class StrategyOrchestratorService {
       this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, {
         outcome: 'EXECUTION_PENDING_CONFIRMATION',
       });
+      await this.markSignalProcessed(userId, signalId);
       return {
         outcome: 'EXECUTION_PENDING_CONFIRMATION',
         signalId,
@@ -727,6 +742,7 @@ export class StrategyOrchestratorService {
         this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, {
           outcome: 'EXECUTION_FAILED',
         });
+        await this.markSignalProcessed(userId, signalId);
         return { outcome: 'EXECUTION_FAILED', signalId, tradeId: trade.id, reason };
       }
 
@@ -747,6 +763,7 @@ export class StrategyOrchestratorService {
       this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, {
         outcome: 'EXECUTION_SUCCEEDED',
       });
+      await this.markSignalProcessed(userId, signalId);
       return { outcome: 'EXECUTION_SUCCEEDED', signalId, tradeId: trade.id };
     } catch (err) {
       const reason = `Execution failed: ${(err as Error).message}`;
@@ -766,6 +783,7 @@ export class StrategyOrchestratorService {
       this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, {
         outcome: 'EXECUTION_FAILED',
       });
+      await this.markSignalProcessed(userId, signalId);
       return { outcome: 'EXECUTION_FAILED', signalId, reason };
     }
   }

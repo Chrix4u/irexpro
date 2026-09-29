@@ -71,6 +71,7 @@ export interface PositionSizingInputs {
   maxLot: string;
   lotStep: string;
   profileMaxPositionSizeLot: string;
+  requestedLotUpperBound: string;
   lotsByRiskBudget: string;
   lotsBeforeStepNormalization: string;
   grossNotional: string;
@@ -146,6 +147,7 @@ export class PositionSizingService {
     entryType: 'MARKET' | 'LIMIT';
     requestedEntryPrice: string | null;
     stopLoss: string | null;
+    requestedLotUpperBound: string;
   }): Promise<SizedPosition> {
     const { userId, brokerConnectionId, instrument } = params;
 
@@ -337,9 +339,19 @@ export class PositionSizingService {
           `(risk per lot ${riskPerLot.toString()})`,
       );
     }
+    const requestedLotUpperBound = ExactDecimal.tryParse(params.requestedLotUpperBound);
+    if (!requestedLotUpperBound || !requestedLotUpperBound.isPositive()) {
+      throw new PositionSizingError(
+        'RISK_BUDGET_UNPARSEABLE',
+        `AI requested lot upper bound is not a provable positive decimal: ${params.requestedLotUpperBound}`,
+      );
+    }
     const lotsBeforeStep = ExactDecimal.min(
-      ExactDecimal.min(lotsByRiskBudget, profileMaxLots),
-      maxLot,
+      ExactDecimal.min(
+        ExactDecimal.min(lotsByRiskBudget, profileMaxLots),
+        maxLot,
+      ),
+      requestedLotUpperBound,
     );
 
     // Normalize DOWN to the instrument's volume step (conservative for risk).
@@ -407,6 +419,7 @@ export class PositionSizingService {
       maxLot: maxLot.toString(),
       lotStep: lotStep.toString(),
       profileMaxPositionSizeLot: profileMaxLots.toString(),
+      requestedLotUpperBound: requestedLotUpperBound.toString(),
       lotsByRiskBudget: lotsByRiskBudget.toString(),
       lotsBeforeStepNormalization: lotsBeforeStep.toString(),
       grossNotional: grossNotional.toString(),

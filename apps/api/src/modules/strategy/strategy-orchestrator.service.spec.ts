@@ -338,6 +338,7 @@ describe('StrategyOrchestratorService', () => {
         expect.objectContaining({
           requestedEntryPrice: '1.10005',
           stopLoss: '1.09855',
+          requestedLotUpperBound: String(probeCandidate().suggestedVolume),
         }),
       );
       expect(riskService.validateProposedTrade).toHaveBeenCalledWith(

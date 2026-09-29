@@ -105,6 +105,7 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
       entryType: 'MARKET' | 'LIMIT';
       requestedEntryPrice: string | null;
       stopLoss: string | null;
+      requestedLotUpperBound: string;
     }> = {},
   ) => ({
     userId: USER,
@@ -114,6 +115,7 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
     entryType: 'MARKET' as const,
     requestedEntryPrice: null,
     stopLoss: '1.07500',
+    requestedLotUpperBound: '10.00',
     ...overrides,
   });
 
@@ -199,6 +201,16 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
       const sized = await service.sizePosition(baseParams());
       expect(sized.lots).toBe('0.1');
       expect(sized.inputs.profileMaxPositionSizeLot).toBe('0.1');
+    });
+
+    it('never upsizes beyond the AI-requested lot ceiling', async () => {
+      const sized = await service.sizePosition(
+        baseParams({ requestedLotUpperBound: '0.01' }),
+      );
+      expect(sized.inputs.lotsByRiskBudget).toBe('0.2');
+      expect(sized.inputs.requestedLotUpperBound).toBe('0.01');
+      expect(sized.lots).toBe('0.01');
+      expect(sized.allocatedCapital).toBe('10.85');
     });
 
     it('uses the REQUESTED price for LIMIT entries', async () => {
