@@ -34,6 +34,7 @@ const WORKSPACE_NAV: WorkspaceNavGroup[] = [
       { href: '/trade', label: 'AI Trading', Icon: TradeIcon },
       { href: '/trade/portfolio', label: 'Portfolio', Icon: PortfolioIcon },
       { href: '/portfolio', label: 'Portfolio & Risk', Icon: ShieldIcon },
+      { href: '/settings/advanced-ai', label: 'Advanced AI Controls', Icon: ShieldIcon },
       { href: '/live-account', label: 'Positions & Activity', Icon: PortfolioIcon, matchPrefix: true },
     ],
   },

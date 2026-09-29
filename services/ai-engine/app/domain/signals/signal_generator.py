@@ -69,12 +69,20 @@ class SignalGenerator:
         bypass_market_data_cache: bool = False,
         uat_workflow_probe: bool = False,
         research_uat_authorized: bool = False,
+        confidence_threshold_override: float | None = None,
     ) -> SignalGenerationResponse:
         """
         Full signal generation pipeline.
         Returns SignalGenerationResponse with either a candidate or a no-signal result.
         """
         settings = get_settings()
+        effective_confidence_threshold = get_threshold()
+        if (
+            research_uat_authorized
+            and confidence_threshold_override is not None
+            and 0.30 <= confidence_threshold_override <= 0.70
+        ):
+            effective_confidence_threshold = float(confidence_threshold_override)
 
         if settings.ai_signal_mode == "live":
             raise LiveModeNotSupportedError(
@@ -252,7 +260,7 @@ class SignalGenerator:
                     reason=gate_reason,
                     instrument=instrument,
                     confidence_score=prediction.confidence_score,
-                    threshold=get_threshold(),
+                    threshold=effective_confidence_threshold,
                 ),
                 telemetry=telemetry,
                 mode=settings.ai_signal_mode,
@@ -263,14 +271,14 @@ class SignalGenerator:
         # confidence so the product workflow can be exercised. This does NOT
         # convert the score into a pass; NestJS independently proves the exact
         # PAPER_ONLY paper-broker boundary before accepting such a probe.
-        below_threshold = not is_above_threshold(prediction.confidence_score)
+        below_threshold = prediction.confidence_score < effective_confidence_threshold
         if below_threshold and not uat_workflow_probe:
             diagnostic_scores = prediction.raw_scores if research_uat_authorized else {}
             logger.info(
                 "Signal below confidence threshold — no signal generated",
                 instrument=instrument,
                 confidence=prediction.confidence_score,
-                threshold=get_threshold(),
+                threshold=effective_confidence_threshold,
                 market_data_last_candle_at=latest_candle.timestamp.isoformat(),
                 market_data_revision=telemetry.market_data_revision,
                 opportunity_probability=diagnostic_scores.get("opportunity_probability"),
@@ -286,7 +294,7 @@ class SignalGenerator:
                     reason="confidence_below_threshold",
                     instrument=instrument,
                     confidence_score=prediction.confidence_score,
-                    threshold=get_threshold(),
+                    threshold=effective_confidence_threshold,
                 ),
                 telemetry=telemetry,
                 mode=settings.ai_signal_mode,
@@ -355,7 +363,7 @@ class SignalGenerator:
             "signal_mode": settings.ai_signal_mode,
             "uat_workflow_probe": bool(uat_workflow_probe and below_threshold),
             "production_eligible": not bool(uat_workflow_probe and below_threshold),
-            "model_confidence_threshold": get_threshold(),
+            "model_confidence_threshold": effective_confidence_threshold,
             "research_horizon_bars": model_metadata.get("horizon_bars"),
         })
 

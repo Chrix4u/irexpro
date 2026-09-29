@@ -172,7 +172,11 @@ async def session_scheduler_status(
         last_reason=job.last_reason,
         last_confidence_score=job.last_confidence_score,
         last_confidence_at=job.last_confidence_at.isoformat() if job.last_confidence_at else None,
-        confidence_threshold=settings.ai_min_confidence_score,
+        confidence_threshold=(
+            job.confidence_threshold_override
+            if job.research_uat and job.confidence_threshold_override is not None
+            else settings.ai_min_confidence_score
+        ),
         model_version=job.model_version,
         model_mode=job.model_mode,
         model_loaded=job.model_loaded,

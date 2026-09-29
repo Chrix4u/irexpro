@@ -125,6 +125,7 @@ export default function AiProtectionPage() {
               <div className="workspace-actions mt-4" style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
                 <Link href="/onboarding/broker" className="btn btn--secondary">Broker Account</Link>
                 <Link href="/trade" className="btn btn--primary">Open AI Trading</Link>
+                <Link href="/settings/advanced-ai" className="btn btn--secondary">Advanced AI Controls</Link>
               </div>
             </Card>
           </>

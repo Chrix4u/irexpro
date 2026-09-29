@@ -144,6 +144,9 @@ export enum AuditAction {
   // AI trading session
   AI_TRADING_ENABLED = 'AI_TRADING_ENABLED',
   AI_TRADING_DISABLED = 'AI_TRADING_DISABLED',
+  ADVANCED_AI_CONTROLS_STEP_UP_SUCCEEDED = 'ADVANCED_AI_CONTROLS_STEP_UP_SUCCEEDED',
+  ADVANCED_AI_CONTROLS_STEP_UP_FAILED = 'ADVANCED_AI_CONTROLS_STEP_UP_FAILED',
+  ADVANCED_AI_CONTROLS_UPDATED = 'ADVANCED_AI_CONTROLS_UPDATED',
 
   // Sprint 56 correction round 5 — session authority (issue #298): explicit +
   // audited execution-mode change; bumps authorityGeneration and invalidates

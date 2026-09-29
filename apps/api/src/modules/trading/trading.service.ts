@@ -6,6 +6,8 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { BrokerService } from '../broker/broker.service';
 import { RiskService } from '../risk/risk.service';
 import { ExecutionService } from '../execution/execution.service';
@@ -27,6 +29,8 @@ import { BrokerAccountSnapshotService } from '../broker/services/broker-account-
 import { BrokerAccountSnapshot } from '../broker/entities/broker-account-snapshot.entity';
 import { ExactDecimal } from '../../common/utils/exact-decimal';
 import { TradeCloseReason } from '../execution/entities/trade.entity';
+import { AuthService } from '../auth/auth.service';
+import { AiRuntimePreference } from './entities/ai-runtime-preference.entity';
 
 export type AiStopPositionCloseState = 'COMPLETE' | 'PARTIAL' | 'UNKNOWN';
 
@@ -104,7 +108,100 @@ export class TradingService {
     // Round 6 (§6/#297/#312): the durable account-snapshot authority the
     // session's opening financial state binds to (fail-closed — never `?? '0'`).
     private readonly brokerAccountSnapshotService: BrokerAccountSnapshotService,
+    private readonly authService: AuthService,
+    @InjectRepository(AiRuntimePreference)
+    private readonly aiRuntimePreferenceRepo: Repository<AiRuntimePreference>,
   ) {}
+
+  async getAdvancedAiControls(userId: string, stepUpToken: string) {
+    await this.authService.verifyAdvancedControlsStepUpToken(userId, stepUpToken);
+
+    const preference = await this.aiRuntimePreferenceRepo.findOne({ where: { userId } });
+    const confidenceFloor = Number(preference?.researchPaperConfidenceFloor ?? '0.600');
+
+    let modelMetadata = null;
+    try {
+      modelMetadata = await this.aiEngineClient.getActiveModelMetadata();
+    } catch (err) {
+      this.logger.warn(
+        `Advanced AI controls could not load model qualification: ${(err as Error).message}`,
+      );
+    }
+
+    const gate = modelMetadata?.research_gate ?? null;
+    return {
+      controls: {
+        researchPaperConfidenceFloor: confidenceFloor,
+        researchPaperConfidenceMin: 0.3,
+        researchPaperConfidenceMax: 0.7,
+        normalPaperAndLiveMinimumConfidence: 0.6,
+        appliesTo: 'RESEARCH_PAPER_ONLY',
+        revision: preference?.revision ?? 1,
+      },
+      modelQualification: gate
+        ? {
+            modelVersion: modelMetadata?.version ?? null,
+            passed: gate.research_gate_passed === true,
+            thresholds: gate.thresholds ?? {},
+            observed: gate.observed ?? {},
+            checks: gate.checks ?? {},
+            editable: false,
+          }
+        : null,
+    };
+  }
+
+  async updateAdvancedAiControls(
+    userId: string,
+    stepUpToken: string,
+    researchPaperConfidenceFloor: number,
+  ) {
+    await this.authService.verifyAdvancedControlsStepUpToken(userId, stepUpToken);
+    if (
+      !Number.isFinite(researchPaperConfidenceFloor) ||
+      researchPaperConfidenceFloor < 0.3 ||
+      researchPaperConfidenceFloor > 0.7
+    ) {
+      throw new ForbiddenException(
+        'Research PAPER confidence must stay within the server-authorized 0.30–0.70 range',
+      );
+    }
+
+    let preference = await this.aiRuntimePreferenceRepo.findOne({ where: { userId } });
+    if (!preference) {
+      preference = this.aiRuntimePreferenceRepo.create({
+        userId,
+        researchPaperConfidenceFloor: researchPaperConfidenceFloor.toFixed(3),
+        revision: 1,
+      });
+    } else {
+      preference.researchPaperConfidenceFloor = researchPaperConfidenceFloor.toFixed(3);
+      preference.revision += 1;
+    }
+    preference = await this.aiRuntimePreferenceRepo.save(preference);
+
+    await this.auditService.log({
+      actorUserId: userId,
+      action: AuditAction.ADVANCED_AI_CONTROLS_UPDATED,
+      severity: AuditSeverity.WARNING,
+      resourceType: 'AiRuntimePreference',
+      resourceId: preference.id,
+      metadata: {
+        revision: preference.revision,
+        researchPaperConfidenceFloor: preference.researchPaperConfidenceFloor,
+        appliesTo: 'RESEARCH_PAPER_ONLY',
+        normalPaperAndLiveMinimumConfidence: 0.6,
+      },
+    });
+
+    return this.getAdvancedAiControls(userId, stepUpToken);
+  }
+
+  async getResearchPaperConfidenceFloor(userId: string): Promise<number> {
+    const preference = await this.aiRuntimePreferenceRepo.findOne({ where: { userId } });
+    const value = Number(preference?.researchPaperConfidenceFloor ?? '0.600');
+    return Number.isFinite(value) && value >= 0.3 && value <= 0.7 ? value : 0.6;
+  }
 
   /**
    * Start a new trading session bound to the EXACT requested broker connection.
@@ -257,6 +354,11 @@ export class TradingService {
               session.executionMode === ExecutionMode.PAPER_ONLY,
             workflowProbeEnabled: false,
             replayStepsPerCycle: this.getResearchReplayStepsPerCycle(),
+            confidenceThresholdOverride:
+              connection.brokerId === 'paper-broker' &&
+              session.executionMode === ExecutionMode.PAPER_ONLY
+                ? await this.getResearchPaperConfidenceFloor(userId)
+                : undefined,
             intervalSeconds:
               connection.brokerId === 'paper-broker' &&
               session.executionMode === ExecutionMode.PAPER_ONLY
@@ -560,6 +662,11 @@ export class TradingService {
           session.executionMode === ExecutionMode.PAPER_ONLY,
         workflowProbeEnabled: false,
         replayStepsPerCycle: this.getResearchReplayStepsPerCycle(),
+        confidenceThresholdOverride:
+          connection.brokerId === 'paper-broker' &&
+          session.executionMode === ExecutionMode.PAPER_ONLY
+            ? await this.getResearchPaperConfidenceFloor(userId)
+            : undefined,
         intervalSeconds:
           connection.brokerId === 'paper-broker' &&
           session.executionMode === ExecutionMode.PAPER_ONLY

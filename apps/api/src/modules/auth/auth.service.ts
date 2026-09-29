@@ -619,6 +619,94 @@ export class AuthService {
     return Number.isInteger(payload.sessionVersion) ? payload.sessionVersion! : 0;
   }
 
+  async issueAdvancedControlsStepUpToken(
+    userId: string,
+    password: string,
+    mfaCode?: string,
+    riskAcknowledged = false,
+    ipAddress?: string,
+  ): Promise<{ stepUpToken: string; expiresInSeconds: number; mfaRequired: boolean }> {
+    if (!riskAcknowledged) {
+      throw new BadRequestException('Advanced AI Controls risk acknowledgement is required');
+    }
+    const user = await this.userRepo.findOne({ where: { id: userId } });
+    if (!user) throw new UnauthorizedException('Re-authentication failed');
+
+    const passwordValid = await argon2.verify(user.passwordHash, password);
+    const mfaValid =
+      !user.mfaEnabled ||
+      (!!this.mfaService && this.mfaService.verifyLoginChallenge(user, mfaCode));
+
+    if (!passwordValid || !mfaValid) {
+      await this.auditService.log({
+        actorUserId: user.id,
+        action: AuditAction.ADVANCED_AI_CONTROLS_STEP_UP_FAILED,
+        severity: AuditSeverity.WARNING,
+        ipAddress,
+        metadata: {
+          result: 'failed',
+          passwordValid,
+          mfaRequired: user.mfaEnabled,
+          mfaPresented: Boolean(mfaCode),
+        },
+      });
+      throw new UnauthorizedException('Re-authentication failed');
+    }
+
+    const expiresInSeconds = 10 * 60;
+    const stepUpToken = this.jwtService.sign(
+      {
+        sub: user.id,
+        tokenType: 'step_up' as const,
+        purpose: 'ADVANCED_AI_CONTROLS' as const,
+        sessionVersion: this.userSessionVersion(user),
+        jti: randomUUID(),
+      },
+      { expiresIn: expiresInSeconds },
+    );
+
+    await this.auditService.log({
+      actorUserId: user.id,
+      action: AuditAction.ADVANCED_AI_CONTROLS_STEP_UP_SUCCEEDED,
+      severity: AuditSeverity.INFO,
+      ipAddress,
+      metadata: {
+        result: 'success',
+        purpose: 'ADVANCED_AI_CONTROLS',
+        mfaRequired: user.mfaEnabled,
+        riskAcknowledged: true,
+        expiresInSeconds,
+      },
+    });
+
+    return { stepUpToken, expiresInSeconds, mfaRequired: user.mfaEnabled };
+  }
+
+  async verifyAdvancedControlsStepUpToken(userId: string, token: string): Promise<void> {
+    let payload: JwtPayload;
+    try {
+      payload = this.jwtService.verify<JwtPayload>(token);
+    } catch {
+      throw new UnauthorizedException('Advanced controls authorization expired or invalid');
+    }
+
+    if (
+      payload.sub !== userId ||
+      payload.tokenType !== 'step_up' ||
+      payload.purpose !== 'ADVANCED_AI_CONTROLS'
+    ) {
+      throw new UnauthorizedException('Advanced controls authorization is invalid');
+    }
+
+    const user = await this.userRepo.findOne({
+      where: { id: userId },
+      select: ['id', 'sessionVersion'],
+    });
+    if (!user || this.payloadSessionVersion(payload) !== this.userSessionVersion(user)) {
+      throw new UnauthorizedException('Advanced controls authorization has been revoked');
+    }
+  }
+
   async validateUser(id: string): Promise<User | null> {
     return this.userRepo.findOne({ where: { id } });
   }

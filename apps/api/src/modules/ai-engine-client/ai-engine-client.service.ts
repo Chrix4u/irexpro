@@ -10,6 +10,19 @@ import {
 const INTERNAL_API_KEY_HEADER = 'x-irexpro-internal-api-key';
 const REQUEST_TIMEOUT_MS = 5000;
 
+export interface AiActiveModelMetadata {
+  version?: string;
+  mode?: string;
+  loaded?: boolean;
+  validation_status?: string;
+  research_gate?: {
+    thresholds?: Record<string, number>;
+    observed?: Record<string, number>;
+    checks?: Record<string, boolean>;
+    research_gate_passed?: boolean;
+  } | null;
+}
+
 /**
  * AiEngineClient — HTTP client for NestJS → Python AI engine coordination.
  *
@@ -94,6 +107,41 @@ export class AiEngineClient {
 
     const url = `${this.getBaseUrl()}/scheduler/sessions/status`;
     return this.post<AiSchedulerSessionStatus>(url, { tradingSessionId }, tradingSessionId);
+  }
+
+  async getActiveModelMetadata(): Promise<AiActiveModelMetadata> {
+    const url = `${this.getBaseUrl()}/models/active`;
+    return this.get<AiActiveModelMetadata>(url, 'active-model');
+  }
+
+  private async get<T>(url: string, context: string): Promise<T> {
+    const apiKey = this.getInternalApiKey();
+    if (!apiKey) {
+      throw new Error('AI engine internal API key is not configured');
+    }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          [INTERNAL_API_KEY_HEADER]: apiKey,
+        },
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        throw new Error(`AI engine returned HTTP ${response.status}`);
+      }
+      return (await response.json()) as T;
+    } catch (err) {
+      this.logger.warn(
+        `AI engine model metadata error context=${context}: ${(err as Error).message}`,
+      );
+      throw err;
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   private async post<T>(url: string, body: Record<string, unknown>, sessionId: string): Promise<T> {

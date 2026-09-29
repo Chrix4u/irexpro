@@ -75,6 +75,37 @@ import type {
  * back via `getAccessToken`. `includeCredentials` is kept for same-origin
  * cookie scenarios but is not the primary auth mechanism.
  */
+export interface AdvancedAiStepUpRequest {
+  password: string;
+  mfaCode?: string;
+  riskAcknowledged: true;
+}
+
+export interface AdvancedAiStepUpResponse {
+  stepUpToken: string;
+  expiresInSeconds: number;
+  mfaRequired: boolean;
+}
+
+export interface AdvancedAiControlsResponse {
+  controls: {
+    researchPaperConfidenceFloor: number;
+    researchPaperConfidenceMin: number;
+    researchPaperConfidenceMax: number;
+    normalPaperAndLiveMinimumConfidence: number;
+    appliesTo: 'RESEARCH_PAPER_ONLY';
+    revision: number;
+  };
+  modelQualification: {
+    modelVersion: string | null;
+    passed: boolean;
+    thresholds: Record<string, number>;
+    observed: Record<string, number>;
+    checks: Record<string, boolean>;
+    editable: false;
+  } | null;
+}
+
 export interface CreateApiClientOptions {
   baseUrl: string;
   includeCredentials?: boolean;
@@ -156,6 +187,8 @@ export interface ApiClient {
    * MFA enrollment. Both fields are secrets — never log, persist, or cache them.
    */
   changePassword(body: ChangePasswordRequest): Promise<AuthActionResponse>;
+  /** Re-authenticate and accept the warning before Advanced AI Controls. */
+  stepUpAdvancedAiControls(body: AdvancedAiStepUpRequest): Promise<AdvancedAiStepUpResponse>;
   /**
    * POST /auth/sessions/revoke-others (requires Authorization: Bearer) →
    * { accessToken, refreshToken }. Revokes every session except the caller's
@@ -185,6 +218,13 @@ export interface ApiClient {
   getRiskProfile(): Promise<RiskProfile>;
   /** PATCH /risk/profile → update risk profile + risk acknowledgement. */
   updateRiskProfile(body: UpdateRiskProfileRequest): Promise<RiskProfile>;
+  /** Step-up protected Advanced AI Controls and active-model qualification evidence. */
+  getAdvancedAiControls(stepUpToken: string): Promise<AdvancedAiControlsResponse>;
+  /** Update the Research PAPER-only confidence preference. */
+  updateAdvancedAiControls(
+    stepUpToken: string,
+    body: { researchPaperConfidenceFloor: number },
+  ): Promise<AdvancedAiControlsResponse>;
   /** GET /broker/connections/supported → list of supported brokers. */
   listSupportedBrokers(): Promise<SupportedBroker[]>;
   /** GET /broker/connections → user's broker connections (no credentials). */
@@ -506,6 +546,12 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
         body: JSON.stringify(body),
       }),
 
+    stepUpAdvancedAiControls: (body) =>
+      request<AdvancedAiStepUpResponse>('/auth/step-up/advanced-ai-controls', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+
     revokeOtherSessions: () =>
       request<AuthTokens>('/auth/sessions/revoke-others', { method: 'POST' }),
 
@@ -542,6 +588,18 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
     updateRiskProfile: (body) =>
       request<RiskProfile>('/risk/profile', {
         method: 'PATCH',
+        body: JSON.stringify(body),
+      }),
+
+    getAdvancedAiControls: (stepUpToken) =>
+      request<AdvancedAiControlsResponse>('/trading/sessions/advanced-controls', {
+        headers: { 'x-irexpro-step-up': stepUpToken },
+      }),
+
+    updateAdvancedAiControls: (stepUpToken, body) =>
+      request<AdvancedAiControlsResponse>('/trading/sessions/advanced-controls', {
+        method: 'POST',
+        headers: { 'x-irexpro-step-up': stepUpToken },
         body: JSON.stringify(body),
       }),
 

@@ -144,6 +144,7 @@ function workspaceRouteTitle(activeRoute: string | undefined): string {
   if (activeRoute === '/trade') return 'AI Trading';
   if (activeRoute === '/trade/portfolio') return 'Portfolio';
   if (activeRoute === '/portfolio') return 'Portfolio & Risk';
+  if (activeRoute === '/settings/advanced-ai') return 'Advanced AI Controls';
   if (activeRoute === '/live-account' || activeRoute?.startsWith('/live-account/')) {
     return 'Positions & Activity';
   }

@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   Logger,
   NotFoundException,
   Param,
@@ -13,6 +14,7 @@ import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { TradingService, type StopTradingSessionResult } from './trading.service';
 import { StartSessionDto } from './dto/start-session.dto';
 import { ChangeExecutionModeDto } from './dto/change-execution-mode.dto';
+import { UpdateAdvancedAiControlsDto } from './dto/update-advanced-ai-controls.dto';
 import {
   ActiveTradingSessionResponseDto,
   TradingSessionResponseDto,
@@ -57,6 +59,31 @@ export class TradingController {
   private readonly logger = new Logger(TradingController.name);
 
   constructor(private readonly tradingService: TradingService) {}
+
+  @Get('advanced-controls')
+  @ApiOperation({ summary: 'Read step-up-protected Advanced AI Controls' })
+  async getAdvancedControls(
+    @CurrentUserId() userId: string,
+    @Headers('x-irexpro-step-up') stepUpToken?: string,
+  ) {
+    if (!stepUpToken) throw new BadRequestException('Step-up authorization is required');
+    return this.tradingService.getAdvancedAiControls(userId, stepUpToken);
+  }
+
+  @Post('advanced-controls')
+  @ApiOperation({ summary: 'Update Research PAPER Advanced AI Controls' })
+  async updateAdvancedControls(
+    @CurrentUserId() userId: string,
+    @Headers('x-irexpro-step-up') stepUpToken: string | undefined,
+    @Body() dto: UpdateAdvancedAiControlsDto,
+  ) {
+    if (!stepUpToken) throw new BadRequestException('Step-up authorization is required');
+    return this.tradingService.updateAdvancedAiControls(
+      userId,
+      stepUpToken,
+      dto.researchPaperConfidenceFloor,
+    );
+  }
 
   /**
    * Start a trading session.

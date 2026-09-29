@@ -66,6 +66,7 @@ class ScheduledSessionJob:
     research_uat: bool = False
     workflow_probe_enabled: bool = True
     replay_steps_per_cycle: int = 1
+    confidence_threshold_override: float | None = None
     replay_steps_last_cycle: int = 0
     replay_steps_total: int = 0
     signals_published_total: int = 0
@@ -170,6 +171,9 @@ class SignalScheduler:
             research_uat=request.research_uat,
             workflow_probe_enabled=request.workflow_probe_enabled,
             replay_steps_per_cycle=replay_steps,
+            confidence_threshold_override=(
+                request.confidence_threshold_override if request.research_uat else None
+            ),
         )
         self._jobs[session_id] = job
 
@@ -192,6 +196,7 @@ class SignalScheduler:
             research_uat=request.research_uat,
             workflow_probe_enabled=request.workflow_probe_enabled,
             replay_steps_per_cycle=replay_steps,
+            confidence_threshold_override=job.confidence_threshold_override,
         )
         return True
 
@@ -275,6 +280,7 @@ class SignalScheduler:
                     bypass_market_data_cache=job.source == "broker",
                     uat_workflow_probe=probe_due,
                     research_uat_authorized=job.research_uat,
+                    confidence_threshold_override=job.confidence_threshold_override,
                 )
 
                 job.replay_steps_last_cycle += 1

@@ -13,6 +13,7 @@ export interface AiSchedulerSessionStartPayload {
   researchUat?: boolean;
   workflowProbeEnabled?: boolean;
   replayStepsPerCycle?: number;
+  confidenceThresholdOverride?: number;
   /**
    * Exact environment of the bound broker connection. FULL_AUTO on DEMO is
    * still demo execution; LIVE remains blocked by the paper-approved AI

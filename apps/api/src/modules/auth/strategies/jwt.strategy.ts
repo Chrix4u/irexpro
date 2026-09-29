@@ -13,9 +13,11 @@ export interface JwtPayload {
   email: string | null;
   roles: string[];
   /** Distinguishes bearer access JWTs from refresh JWTs. */
-  tokenType?: 'access' | 'refresh';
+  tokenType?: 'access' | 'refresh' | 'step_up';
   /** Signed browser persistence preference carried only by refresh JWTs. */
   rememberMe?: boolean;
+  /** Purpose binding for short-lived step-up tokens. */
+  purpose?: 'ADVANCED_AI_CONTROLS';
   /** Server-side token generation used for immediate revocation. */
   sessionVersion?: number;
   /** Unique token id so each rotation produces a distinct JWT. */

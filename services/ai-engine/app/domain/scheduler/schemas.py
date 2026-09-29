@@ -24,6 +24,12 @@ class SessionStartRequest(BaseModel):
         le=30,
         alias="replayStepsPerCycle",
     )
+    confidence_threshold_override: float | None = Field(
+        default=None,
+        ge=0.30,
+        le=0.70,
+        alias="confidenceThresholdOverride",
+    )
     # Round 5 (session authority): the NestJS API forwards the TradingSession's
     # durable executionMode. "paper" is kept for backward compatibility with
     # older API versions. Scheduled signal generation itself stays paper-only —

@@ -889,6 +889,7 @@ class BaselineXGBoostModel:
                 "artifact_sha256": self._artifact_metadata.get("artifact_sha256"),
                 "horizon_bars": self._artifact_metadata.get("horizon_bars"),
                 "instruments": self._artifact_metadata.get("instruments", []),
+                "research_gate": self._artifact_metadata.get("research_gate"),
             }
 
         return {
