@@ -10,8 +10,9 @@ IMPORTANT:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
+from uuid import uuid4
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -27,6 +28,17 @@ from app.integrations.nestjs_client import NestJsClient
 logger = get_logger(__name__)
 
 MarketDataSource = Literal["mock", "broker"]
+
+
+@dataclass(frozen=True)
+class PendingHorizonExit:
+    trade_id: str
+    instrument: str
+    due_market_at: datetime
+    confidence_score: float
+    strategy_code: str
+    model_version: str
+    entry_signal_id: str
 
 
 @dataclass
@@ -63,6 +75,7 @@ class ScheduledSessionJob:
     executions_succeeded_total: int = 0
     downstream_rejected_total: int = 0
     last_uat_probe_at: datetime | None = None
+    pending_horizon_exits: dict[str, PendingHorizonExit] = field(default_factory=dict)
     registered_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -292,6 +305,52 @@ class SignalScheduler:
 
                     job.market_data_revisions[instrument] = telemetry.market_data_revision
 
+                    pending_exit = job.pending_horizon_exits.get(instrument)
+                    if (
+                        job.research_uat
+                        and pending_exit is not None
+                        and telemetry.market_data_last_candle_at >= pending_exit.due_market_at
+                    ):
+                        exit_signal_id = str(uuid4())
+                        exit_result = await self._nestjs_client.publish_exit_signal(
+                            signal_id=exit_signal_id,
+                            user_id=job.user_id,
+                            trading_session_id=job.trading_session_id,
+                            instrument=pending_exit.instrument,
+                            trade_id=pending_exit.trade_id,
+                            confidence_score=pending_exit.confidence_score,
+                            strategy_code=pending_exit.strategy_code,
+                            model_version=pending_exit.model_version,
+                            rationale=(
+                                "Research PAPER horizon expiry: "
+                                f"{pending_exit.due_market_at.isoformat()} "
+                                f"from entry signal {pending_exit.entry_signal_id}"
+                            ),
+                        )
+                        outcome = (
+                            exit_result.get("outcome")
+                            if isinstance(exit_result, dict)
+                            else None
+                        )
+                        if outcome in {"EXIT_SUCCEEDED", "NO_OPEN_POSITION", "DUPLICATE_RECOVERED"}:
+                            job.pending_horizon_exits.pop(instrument, None)
+                        job.last_strategy_outcome = (
+                            str(outcome) if outcome is not None else "HORIZON_EXIT_SUBMITTED"
+                        )
+                        job.last_strategy_reason = "research_horizon_expired"
+                        logger.info(
+                            "Research PAPER horizon exit processed",
+                            trading_session_id=trading_session_id,
+                            instrument=instrument,
+                            trade_id=pending_exit.trade_id,
+                            due_market_at=pending_exit.due_market_at.isoformat(),
+                            market_data_last_candle_at=telemetry.market_data_last_candle_at.isoformat(),
+                            outcome=outcome,
+                        )
+                        # Do not open new exposure on the same replay step used
+                        # to close the expired research position.
+                        continue
+
                 if not result.generated or result.signal is None:
                     job.last_decision = "NO_TRADE"
                     job.last_reason = (
@@ -343,6 +402,35 @@ class SignalScheduler:
                     )
                     if outcome == "EXECUTION_SUCCEEDED":
                         job.executions_succeeded_total += 1
+                        horizon_raw = result.signal.metadata.get("research_horizon_bars")
+                        if (
+                            job.research_uat
+                            and trade_id is not None
+                            and telemetry is not None
+                            and isinstance(horizon_raw, int)
+                            and horizon_raw >= 1
+                            and result.signal.timeframe.upper() == "M1"
+                        ):
+                            job.pending_horizon_exits[instrument] = PendingHorizonExit(
+                                trade_id=str(trade_id),
+                                instrument=instrument,
+                                due_market_at=(
+                                    telemetry.market_data_last_candle_at
+                                    + timedelta(minutes=horizon_raw)
+                                ),
+                                confidence_score=result.signal.confidence_score,
+                                strategy_code=result.signal.strategy_code,
+                                model_version=result.signal.model_version,
+                                entry_signal_id=result.signal.signal_id,
+                            )
+                            logger.info(
+                                "Research PAPER horizon exit scheduled",
+                                trading_session_id=trading_session_id,
+                                instrument=instrument,
+                                trade_id=str(trade_id),
+                                horizon_bars=horizon_raw,
+                                due_market_at=job.pending_horizon_exits[instrument].due_market_at.isoformat(),
+                            )
                     elif outcome in {
                         "SIGNAL_INVALID",
                         "LOW_CONFIDENCE",

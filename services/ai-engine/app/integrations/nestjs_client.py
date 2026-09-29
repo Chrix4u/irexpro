@@ -132,6 +132,68 @@ class NestJsClient:
             logger.error("NestJS client error", error=str(e), signal_id=candidate.signal_id)
             raise NestJsIntegrationError(f"Failed to reach NestJS API: {e}") from e
 
+    async def publish_exit_signal(
+        self,
+        *,
+        signal_id: str,
+        user_id: str,
+        trading_session_id: str,
+        instrument: str,
+        trade_id: str,
+        confidence_score: float,
+        strategy_code: str,
+        model_version: str,
+        rationale: str,
+    ) -> dict:
+        """Publish one risk-reducing exit decision through the serialized NestJS exit pipeline."""
+        payload = {
+            "signalId": signal_id,
+            "userId": user_id,
+            "tradingSessionId": trading_session_id,
+            "instrument": instrument,
+            "tradeId": trade_id,
+            "confidenceScore": confidence_score,
+            "generatedAt": datetime.now().astimezone().isoformat(),
+            "strategyCode": strategy_code,
+            "modelVersion": model_version,
+            "rationale": rationale,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
+                response = await client.post(
+                    self._settings.nestjs_exit_signal_url,
+                    json=payload,
+                    headers=self._get_headers(),
+                )
+            if response.status_code in (200, 201):
+                logger.info(
+                    "Exit signal published to NestJS",
+                    signal_id=signal_id,
+                    trade_id=trade_id,
+                    instrument=instrument,
+                    status=response.status_code,
+                )
+                return response.json()
+            logger.warning(
+                "NestJS rejected exit signal",
+                signal_id=signal_id,
+                trade_id=trade_id,
+                status=response.status_code,
+            )
+            raise NestJsIntegrationError(
+                f"NestJS returned HTTP {response.status_code} for exit signal {signal_id}"
+            )
+        except NestJsIntegrationError:
+            raise
+        except Exception as e:
+            logger.error(
+                "NestJS exit client error",
+                error=str(e),
+                signal_id=signal_id,
+                trade_id=trade_id,
+            )
+            raise NestJsIntegrationError(f"Failed to reach NestJS exit API: {e}") from e
+
     async def health_check(self) -> dict:
         """Ping the NestJS health endpoint to verify connectivity."""
         health_url = f"{self._settings.nestjs_api_base_url.rstrip('/v1')}/health"

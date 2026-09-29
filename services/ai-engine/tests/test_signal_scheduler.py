@@ -517,6 +517,7 @@ class ScheduledSessionJobStub:
     executions_succeeded_total = 0
     downstream_rejected_total = 0
     last_uat_probe_at = None
+    pending_horizon_exits = {}
 
 
 @pytest.mark.asyncio
@@ -596,3 +597,104 @@ async def test_scan_error_clears_previous_confidence_instead_of_reusing_it():
     assert job.last_confidence_at is None
     assert job.last_run_at is not None
     assert job.last_publish_failed is True
+
+
+@pytest.mark.asyncio
+async def test_research_uat_closes_successful_trade_at_exact_model_horizon():
+    settings = Settings(ai_scheduler_enabled=True, ai_signal_mode="paper")
+    client = AsyncMock()
+    scheduler = SignalScheduler(nestjs_client=client)
+    scheduler._settings = settings
+
+    candidate = AiSignalCandidate(
+        user_id="user-1",
+        trading_session_id="session-1",
+        broker_connection_id="conn-1",
+        instrument="USDJPY",
+        direction="BUY",
+        confidence_score=0.62,
+        suggested_entry_price=156.8795,
+        suggested_stop_loss=156.173,
+        suggested_take_profit=157.8215,
+        suggested_volume=0.01,
+        timeframe="M1",
+        strategy_code="xgboost-mtf-trained-m1",
+        model_version="qualified-v10",
+        metadata={"research_horizon_bars": 1, "uat_workflow_probe": False},
+    )
+    entry_telemetry = SignalEvaluationTelemetry(
+        model_version="qualified-v10",
+        model_mode="trained_xgboost_mtf",
+        model_loaded=True,
+        market_data_last_candle_at="2026-09-28T08:01:00Z",
+        market_data_revision="entry-revision",
+        market_data_cache_bypassed=True,
+    )
+    next_telemetry = SignalEvaluationTelemetry(
+        model_version="qualified-v10",
+        model_mode="trained_xgboost_mtf",
+        model_loaded=True,
+        market_data_last_candle_at="2026-09-28T08:02:00Z",
+        market_data_revision="next-revision",
+        market_data_cache_bypassed=True,
+    )
+    mock_generator = AsyncMock()
+    mock_generator.generate.side_effect = [
+        SignalGenerationResponse(
+            generated=True,
+            signal=candidate,
+            telemetry=entry_telemetry,
+            mode="paper",
+        ),
+        SignalGenerationResponse(
+            generated=False,
+            no_signal=NoSignalResult(
+                reason="action_probability_margin_below_floor",
+                instrument="USDJPY",
+                confidence_score=0.57,
+                threshold=0.6,
+            ),
+            telemetry=next_telemetry,
+            mode="paper",
+        ),
+    ]
+    scheduler._signal_generator = mock_generator
+    client.publish_signal.return_value = {
+        "outcome": "EXECUTION_SUCCEEDED",
+        "signalId": candidate.signal_id,
+        "tradeId": "11111111-1111-4111-8111-111111111111",
+    }
+    client.publish_exit_signal.return_value = {
+        "outcome": "EXIT_SUCCEEDED",
+        "signalId": "exit-1",
+        "trades": [
+            {"tradeId": "11111111-1111-4111-8111-111111111111", "closed": True}
+        ],
+    }
+
+    job = ScheduledSessionJobStub()
+    job.instruments = ["USDJPY"]
+    job.source = "broker"
+    job.research_uat = True
+    job.replay_steps_per_cycle = 1
+    job.pending_horizon_exits = {}
+    job.market_data_revisions = {}
+    scheduler._jobs["session-1"] = job
+
+    await scheduler._run_session_job("session-1")
+
+    assert "USDJPY" in job.pending_horizon_exits
+    pending = job.pending_horizon_exits["USDJPY"]
+    assert pending.trade_id == "11111111-1111-4111-8111-111111111111"
+    assert pending.due_market_at.isoformat() == "2026-09-28T08:02:00+00:00"
+
+    await scheduler._run_session_job("session-1")
+
+    client.publish_exit_signal.assert_awaited_once()
+    kwargs = client.publish_exit_signal.await_args.kwargs
+    assert kwargs["trade_id"] == "11111111-1111-4111-8111-111111111111"
+    assert kwargs["confidence_score"] == 0.62
+    assert kwargs["instrument"] == "USDJPY"
+    assert "USDJPY" not in job.pending_horizon_exits
+    assert job.last_strategy_outcome == "EXIT_SUCCEEDED"
+    assert job.last_strategy_reason == "research_horizon_expired"

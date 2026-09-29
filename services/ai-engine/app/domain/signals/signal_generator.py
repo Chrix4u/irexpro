@@ -356,6 +356,7 @@ class SignalGenerator:
             "uat_workflow_probe": bool(uat_workflow_probe and below_threshold),
             "production_eligible": not bool(uat_workflow_probe and below_threshold),
             "model_confidence_threshold": get_threshold(),
+            "research_horizon_bars": model_metadata.get("horizon_bars"),
         })
 
         model_mode = model_metadata.get("mode")
