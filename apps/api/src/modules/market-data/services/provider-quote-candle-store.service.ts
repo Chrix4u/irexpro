@@ -78,7 +78,6 @@ export class ProviderQuoteCandleStoreService {
       close: String(row.close),
       volume: String(row.sample_count),
       tickVolume: String(row.sample_count),
-      spreadPoints: String(row.spread_close),
     }));
   }
 
