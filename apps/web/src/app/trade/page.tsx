@@ -1364,16 +1364,30 @@ export default function AiTradingPage() {
                   </div>
 
                   <aside className={`ai-confidence ai-confidence--${confidenceTone}`}>
-                    <span className="ai-cockpit__label">AI confidence</span>
+                    <span className="ai-cockpit__label">
+                      {automationRuntime?.last_decision === 'NO_NEW_MARKET_DATA'
+                        ? 'Last evaluated confidence'
+                        : 'AI confidence'}
+                    </span>
                     <strong className="ai-confidence__value">{formatConfidence(automationRuntime?.last_confidence_score)}</strong>
                     <div className="ai-confidence__track" aria-hidden="true">
                       <span style={{ width: `${confidencePercent}%` }} />
                     </div>
                     <div className="ai-confidence__meta">
-                      <span>{confidencePercent >= 60 ? 'Qualified strength' : 'Building conviction'}</span>
+                      <span>
+                        {automationRuntime?.last_decision === 'NO_NEW_MARKET_DATA'
+                          ? 'Waiting for new market data'
+                          : confidencePercent >= 60
+                            ? 'Qualified strength'
+                            : 'Building conviction'}
+                      </span>
                       <span>{formatConfidence(automationRuntime?.confidence_threshold)} gate</span>
                     </div>
-                    <p>{runtimeReasonLabel(automationRuntime?.last_reason)}</p>
+                    <p>
+                      {automationRuntime?.last_decision === 'NO_NEW_MARKET_DATA'
+                        ? `No new candle after ${formatTimestamp(automationRuntime?.last_market_data_at)}. Confidence will update when a new market revision is evaluated.`
+                        : runtimeReasonLabel(automationRuntime?.last_reason)}
+                    </p>
                   </aside>
                 </div>
 
