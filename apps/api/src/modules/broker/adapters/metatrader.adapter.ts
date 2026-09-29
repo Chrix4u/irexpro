@@ -820,7 +820,9 @@ export class MetaTraderAdapter implements IBrokerAdapter {
       );
     }
     try {
-      return await this.metaApiClient.getOrCreateConnection(this.currentAccountId);
+      return await this.metaApiClient.getOrCreateConnection(this.currentAccountId, {
+        requireSynchronization: this.mode === BrokerMode.LIVE,
+      });
     } catch (err) {
       throw this.mapError(err);
     }
@@ -832,21 +834,16 @@ export class MetaTraderAdapter implements IBrokerAdapter {
     instrument: string,
     direction: string,
   ): Promise<number | null> {
-    const connection = await this.metaApiClient.getOrCreateConnection(accountId);
+    const connection = await this.metaApiClient.getOrCreateConnection(accountId, {
+      requireSynchronization: this.mode === BrokerMode.LIVE,
+    });
     try {
-      await connection.subscribeToMarketData(instrument);
       const price = await connection.getSymbolPrice(instrument);
       const priceValue = direction === 'BUY' ? Number(price?.ask) : Number(price?.bid);
       if (!Number.isFinite(priceValue) || priceValue <= 0) return null;
       return priceValue;
     } catch {
       return null;
-    } finally {
-      try {
-        await connection.unsubscribeFromMarketData(instrument);
-      } catch {
-        // Best-effort market-data cleanup; validation itself fails closed.
-      }
     }
   }
 

@@ -73,6 +73,9 @@ export class MetaApiClientService implements OnModuleDestroy {
     const existing = this.connectionPool.get(metaApiAccountId);
     if (existing) {
       const conn = existing.connection;
+      if (!requireSynchronization) {
+        return conn;
+      }
       if (typeof conn.isSynchronized === 'function' && conn.isSynchronized()) {
         return conn;
       }
