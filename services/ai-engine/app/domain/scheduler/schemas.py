@@ -71,6 +71,7 @@ class SessionSchedulerStatusResponse(BaseModel):
     model_mode: str | None = None
     model_loaded: bool | None = None
     last_market_data_at: str | None = None
+    last_market_data_close: str | None = None
     market_data_age_seconds: float | None = None
     market_data_cache_bypassed: bool = False
     last_publish_failed: bool = False

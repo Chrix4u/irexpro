@@ -119,6 +119,7 @@ interface AiAutomationRuntimeStatus {
   model_mode: string | null;
   model_loaded: boolean | null;
   last_market_data_at: string | null;
+  last_market_data_close: string | null;
   market_data_age_seconds: number | null;
   market_data_cache_bypassed: boolean;
   last_publish_failed: boolean;
@@ -1098,12 +1099,18 @@ export default function AiTradingPage() {
                       ? `${automationRuntime.instruments.join(' · ')} · ${automationRuntime.timeframe ?? 'MTF'}`
                       : 'Market snapshot'}
                   </span>
-                  <strong className="ai-overview-card__value">{market?.quote.bid ?? '—'}</strong>
+                  <strong className="ai-overview-card__value">
+                    {automationRuntime?.research_uat
+                      ? automationRuntime.last_market_data_close ?? '—'
+                      : market?.quote.bid ?? '—'}
+                  </strong>
                   <span className="muted text-sm">
-                    {market
-                      ? `Spread ${market.quote.spread} · ${market.status}`
-                      : automationRuntime?.research_uat
-                        ? 'Research replay market state is shown in the AI Engine Monitor below'
+                    {automationRuntime?.research_uat
+                      ? automationRuntime.last_market_data_close
+                        ? `Replay close · ${formatTimestamp(automationRuntime.last_market_data_at)}`
+                        : 'Awaiting first replay market evaluation'
+                      : market
+                        ? `Spread ${market.quote.spread} · ${market.status}`
                         : 'Market snapshot unavailable'}
                   </span>
                 </Card>
@@ -1229,10 +1236,29 @@ export default function AiTradingPage() {
                   {automationRuntime?.research_uat && (
                     <>
                       <div>
-                        <span>Replay steps</span>
+                        <span>Replay price</span>
                         <strong>
-                          {automationRuntime.replay_steps_last_cycle ?? 0} last cycle ·{' '}
-                          {automationRuntime.replay_steps_total ?? 0} total
+                          {automationRuntime.last_market_data_close ?? 'Awaiting replay price'}
+                          {automationRuntime.last_market_data_at
+                            ? ` · ${formatTimestamp(automationRuntime.last_market_data_at)}`
+                            : ''}
+                        </strong>
+                      </div>
+                      <div>
+                        <span>Replay progress</span>
+                        <strong>
+                          {automationRuntime.replay_steps_last_cycle ?? 0} steps last cycle ·{' '}
+                          {automationRuntime.replay_steps_total ?? 0} evaluated
+                        </strong>
+                      </div>
+                      <div>
+                        <span>Scans without signal</span>
+                        <strong>
+                          {Math.max(
+                            0,
+                            (automationRuntime.replay_steps_total ?? 0) -
+                              (automationRuntime.signals_published_total ?? 0),
+                          )} filtered · {runtimeReasonLabel(automationRuntime.last_reason)}
                         </strong>
                       </div>
                       <div>

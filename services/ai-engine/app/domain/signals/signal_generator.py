@@ -218,6 +218,7 @@ class SignalGenerator:
             model_mode=str(model_metadata.get("mode", "unknown")),
             model_loaded=bool(model_metadata.get("loaded", False)),
             market_data_last_candle_at=latest_candle.timestamp,
+            market_data_last_close=str(latest_candle.close),
             market_data_revision=sha256(revision_material.encode("utf-8")).hexdigest(),
             market_data_cache_bypassed=(
                 True if mtf_runtime else bypass_market_data_cache

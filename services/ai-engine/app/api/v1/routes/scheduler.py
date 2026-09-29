@@ -181,6 +181,7 @@ async def session_scheduler_status(
         model_mode=job.model_mode,
         model_loaded=job.model_loaded,
         last_market_data_at=job.last_market_data_at.isoformat() if job.last_market_data_at else None,
+        last_market_data_close=job.last_market_data_close,
         market_data_age_seconds=market_data_age_seconds,
         market_data_cache_bypassed=job.market_data_cache_bypassed,
         last_publish_failed=job.last_publish_failed,

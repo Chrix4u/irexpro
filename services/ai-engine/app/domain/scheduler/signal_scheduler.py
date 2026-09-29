@@ -59,6 +59,7 @@ class ScheduledSessionJob:
     last_confidence_at: datetime | None = None
     market_data_revisions: dict[str, str] = field(default_factory=dict)
     last_market_data_at: datetime | None = None
+    last_market_data_close: str | None = None
     model_version: str | None = None
     model_mode: str | None = None
     model_loaded: bool | None = None
@@ -290,6 +291,7 @@ class SignalScheduler:
                 if telemetry is not None:
                     previous_revision = job.market_data_revisions.get(instrument)
                     job.last_market_data_at = telemetry.market_data_last_candle_at
+                    job.last_market_data_close = telemetry.market_data_last_close
                     job.model_version = telemetry.model_version
                     job.model_mode = telemetry.model_mode
                     job.model_loaded = telemetry.model_loaded
