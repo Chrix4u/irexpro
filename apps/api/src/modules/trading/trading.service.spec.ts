@@ -18,6 +18,9 @@ import { AllowedTradingMode } from '../risk/entities/risk-profile.entity';
 import { BrokerAccountSnapshotService } from '../broker/services/broker-account-snapshot.service';
 import { BrokerConnectionStatus, BrokerMode } from '../broker/interfaces/broker-adapter.interface';
 import { TradeCloseReason, TradeStatus } from '../execution/entities/trade.entity';
+import { AuthService } from '../auth/auth.service';
+import { AiRuntimePreference } from './entities/ai-runtime-preference.entity';
+import { getRepositoryToken } from '@nestjs/typeorm';
 
 /**
  * TradingService tests — Sprint 29 amendment + free-access regression +
@@ -96,6 +99,8 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
   let aiEngineClient: Record<string, jest.Mock>;
   let onboardingService: Record<string, jest.Mock>;
   let brokerAccountSnapshotService: Record<string, jest.Mock>;
+  let authService: Record<string, jest.Mock>;
+  let aiRuntimePreferenceRepo: Record<string, jest.Mock>;
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -211,6 +216,16 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       getOnboardingStatus: jest.fn(),
     };
 
+    authService = {
+      verifyAdvancedControlsStepUpToken: jest.fn().mockResolvedValue(undefined),
+    };
+
+    aiRuntimePreferenceRepo = {
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn((value) => value),
+      save: jest.fn(async (value) => ({ id: 'pref-1', revision: 1, ...value })),
+    };
+
     module = await Test.createTestingModule({
       providers: [
         TradingService,
@@ -225,6 +240,8 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
         { provide: AiEngineClient, useValue: aiEngineClient },
         { provide: OnboardingService, useValue: onboardingService },
         { provide: BrokerAccountSnapshotService, useValue: brokerAccountSnapshotService },
+        { provide: AuthService, useValue: authService },
+        { provide: getRepositoryToken(AiRuntimePreference), useValue: aiRuntimePreferenceRepo },
       ],
     }).compile();
 
@@ -354,7 +371,7 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
           instruments: ['EURUSD'],
           brokerId: 'paper-broker',
           researchUat: true,
-          replayStepsPerCycle: 12,
+          replayStepsPerCycle: 1,
           intervalSeconds: 10,
         }),
       );

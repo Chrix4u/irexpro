@@ -293,10 +293,9 @@ describe('StrategyOrchestratorService', () => {
     });
 
     it('enforces a higher scheduler-carried execution confidence floor', async () => {
-      const candidate = probeCandidate({
+      const candidate = validCandidate({
         confidenceScore: 0.65,
         metadata: {
-          ...probeCandidate().metadata,
           model_confidence_threshold: 0.7,
         },
       });
@@ -305,14 +304,13 @@ describe('StrategyOrchestratorService', () => {
 
       expect(result.outcome).toBe('LOW_CONFIDENCE');
       expect(result.reason).toContain('threshold 0.7');
-      expect(riskServiceMock.validateProposedTrade).not.toHaveBeenCalled();
+      expect(riskService.validateProposedTrade).not.toHaveBeenCalled();
     });
 
     it('never allows metadata to lower the production confidence floor below 0.6', async () => {
-      const candidate = probeCandidate({
+      const candidate = validCandidate({
         confidenceScore: 0.59,
         metadata: {
-          ...probeCandidate().metadata,
           model_confidence_threshold: 0.3,
         },
       });
@@ -321,7 +319,7 @@ describe('StrategyOrchestratorService', () => {
 
       expect(result.outcome).toBe('LOW_CONFIDENCE');
       expect(result.reason).toContain('threshold 0.6');
-      expect(riskServiceMock.validateProposedTrade).not.toHaveBeenCalled();
+      expect(riskService.validateProposedTrade).not.toHaveBeenCalled();
     });
 
     it('accepts signal at confidence threshold (0.6)', async () => {
