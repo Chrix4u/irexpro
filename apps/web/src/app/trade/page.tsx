@@ -8,7 +8,7 @@ import {
   type TradeExecutionView,
 } from '@irexpro/types/execution';
 import type { LivePositionRowView } from '@irexpro/types/live-account';
-import type { MarketIntelligenceView } from '@irexpro/types/market-intelligence';
+import type { MarketCandleView, MarketIntelligenceView } from '@irexpro/types/market-intelligence';
 import { Alert, Badge, Button, Card, DashboardShell, Input, LoadingSpinner } from '@/components/ui';
 import { useAuth } from '@/context/auth-context';
 import { useNotification } from '@/hooks/useNotification';
@@ -390,6 +390,44 @@ function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
   );
 }
 
+
+function MarketPriceChart({ candles }: { candles: MarketCandleView[] }) {
+  if (!candles.length) {
+    return <div className="ai-market-chart__empty">Waiting for market candles…</div>;
+  }
+  const values = candles.map((candle) => Number(candle.close)).filter(Number.isFinite);
+  if (!values.length) return <div className="ai-market-chart__empty">Chart unavailable</div>;
+  const width = 760;
+  const height = 250;
+  const pad = 18;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const spread = Math.max(max - min, Math.abs(max) * 0.0001, 0.00001);
+  const points = values.map((value, index) => {
+    const x = pad + (index / Math.max(values.length - 1, 1)) * (width - pad * 2);
+    const y = pad + ((max - value) / spread) * (height - pad * 2);
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  }).join(' ');
+  const area = `${pad},${height - pad} ${points} ${width - pad},${height - pad}`;
+  return (
+    <div className="ai-market-chart">
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Instrument price chart">
+        <defs>
+          <linearGradient id="irex-chart-fill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="currentColor" stopOpacity="0.24" />
+            <stop offset="100%" stopColor="currentColor" stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        <polyline className="ai-market-chart__area" points={area} />
+        <polyline className="ai-market-chart__line" points={points} />
+      </svg>
+      <div className="ai-market-chart__range">
+        <span>{min.toFixed(3)}</span><span>{max.toFixed(3)}</span>
+      </div>
+    </div>
+  );
+}
+
 export default function AiTradingPage() {
   const { user, logout, restoring } = useAuth();
   const notify = useNotification();
@@ -398,6 +436,9 @@ export default function AiTradingPage() {
   const [execution, setExecution] = useState<TraderExecutionSnapshot | null>(null);
   const [livePositions, setLivePositions] = useState<LivePositionRowView[]>([]);
   const [market, setMarket] = useState<MarketIntelligenceView | null>(null);
+  const [chartInstrument, setChartInstrument] = useState('USDJPY');
+  const [chartTimeframe, setChartTimeframe] = useState<'M1' | 'M5' | 'M15' | 'H1' | 'H4'>('M1');
+  const [chartLoading, setChartLoading] = useState(false);
   const [allocation, setAllocation] = useState<UserCapitalAllocationView | null>(null);
   const [selectedBrokerId, setSelectedBrokerId] = useState<string>('');
   const [allocationAmount, setAllocationAmount] = useState('');
@@ -435,6 +476,14 @@ export default function AiTradingPage() {
               automationRuntime?.last_decision === 'NO_NEW_MARKET_DATA'
             ? 'scanning'
             : 'running';
+
+  const confidenceValue = automationRuntime?.last_confidence_score ?? 0;
+  const confidencePercent = Math.max(0, Math.min(100, confidenceValue * 100));
+  const confidenceTone =
+    confidencePercent >= 70 ? 'strong' : confidencePercent >= 60 ? 'ready' : confidencePercent >= 45 ? 'building' : 'weak';
+  const watchedInstruments = automationRuntime?.instruments?.length
+    ? automationRuntime.instruments
+    : [chartInstrument];
 
   // The ACTIVE session is the execution authority. While it exists, the
   // workspace must stay visibly pinned to that exact broker account instead
@@ -579,13 +628,6 @@ export default function AiTradingPage() {
         setAllocation(null);
       }
 
-      try {
-        setMarket(
-          await loadMarketIntelligence({ instrument: marketInstrument, timeframe: 'H1', limit: 48 }),
-        );
-      } catch {
-        setMarket(null);
-      }
     } catch (requestError) {
       setError(mapApiError(requestError).message);
     } finally {
@@ -605,6 +647,36 @@ export default function AiTradingPage() {
     }, 8000);
     return () => window.clearInterval(timer);
   }, [user, refreshTradingData]);
+
+  useEffect(() => {
+    const watched = automationRuntime?.instruments ?? [];
+    if (watched.length && !watched.includes(chartInstrument)) {
+      setChartInstrument(watched[0]);
+    }
+  }, [automationRuntime?.instruments, chartInstrument]);
+
+  useEffect(() => {
+    if (!user || !selectedBrokerId) return;
+    let cancelled = false;
+    const refreshChart = async () => {
+      setChartLoading(true);
+      try {
+        const snapshot = await loadMarketIntelligence({
+          instrument: chartInstrument,
+          timeframe: chartTimeframe,
+          limit: 90,
+        });
+        if (!cancelled) setMarket(snapshot);
+      } catch {
+        if (!cancelled) setMarket(null);
+      } finally {
+        if (!cancelled) setChartLoading(false);
+      }
+    };
+    void refreshChart();
+    const timer = window.setInterval(() => void refreshChart(), 10000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [user, selectedBrokerId, chartInstrument, chartTimeframe]);
 
   useEffect(() => {
     if (!user) return;
@@ -1147,219 +1219,87 @@ export default function AiTradingPage() {
             </section>
 
             {automationOn && (
-              <section className="ai-runtime-panel" data-ai-state={aiVisualState} aria-label="AI engine runtime">
-                <div className="ai-runtime-panel__heading">
+              <section className="ai-runtime-panel ai-cockpit" data-ai-state={aiVisualState} aria-label="AI trading cockpit">
+                <div className="ai-cockpit__topbar">
                   <div>
-                    <p className="workspace-hero__eyebrow">Automation runtime</p>
-                    <h2>AI Engine Monitor</h2>
+                    <p className="workspace-hero__eyebrow">AI market cockpit</p>
+                    <h2>Live Market Intelligence</h2>
                   </div>
-                  <Badge
-                    variant={
-                      automationRuntime?.last_decision === 'ERROR'
-                        ? 'warning'
-                        : automationRuntime?.active && automationRuntime?.registered
-                          ? 'success'
-                          : automationRuntime?.last_decision === 'BLOCKED'
-                          ? 'warning'
-                          : 'info'
-                    }
-                  >
-                    {automationRuntime?.last_decision === 'ERROR'
-                      ? 'DATA ISSUE'
-                      : automationRuntime?.active && automationRuntime?.registered
-                        ? 'SCANNING'
-                        : automationRuntime?.last_decision === 'BLOCKED'
-                        ? 'BLOCKED'
-                        : automationRuntime?.enabled
-                          ? 'WAITING'
-                          : 'OFFLINE'}
-                  </Badge>
-                </div>
-
-                <div className="ai-runtime-grid">
-                  <div>
-                    <span>AI engine</span>
-                    <strong>{automationRuntime?.enabled ? 'CONNECTED' : 'NOT ACTIVE'}</strong>
-                  </div>
-                  <div>
-                    <span>Signal scheduler</span>
-                    <strong>
-                      {automationRuntime?.registered && automationRuntime?.active
-                        ? 'ACTIVE'
-                        : automationRuntime?.last_decision === 'BLOCKED'
-                          ? 'BLOCKED'
-                          : 'NOT REGISTERED'}
-                    </strong>
-                  </div>
-                  <div>
-                    <span>Watching</span>
-                    <strong>
-                      {automationRuntime?.instruments?.length
-                        ? `${automationRuntime.instruments.join(' · ')}${automationRuntime.timeframe ? ` · ${automationRuntime.timeframe}` : ''}`
-                        : '—'}
-                    </strong>
-                  </div>
-                  <div>
-                    <span>Scan interval</span>
-                    <strong>
-                      {automationRuntime?.interval_seconds
-                        ? `Every ${automationRuntime.interval_seconds}s`
-                        : '—'}
-                    </strong>
-                  </div>
-                  <div>
-                    <span>Last market scan</span>
-                    <strong>{formatTimestamp(automationRuntime?.last_run_at)}</strong>
-                  </div>
-                  <div>
-                    <span>Next scan</span>
-                    <strong>{formatTimestamp(automationRuntime?.next_run_at)}</strong>
-                  </div>
-                  <div>
-                    <span>Model</span>
-                    <strong>
-                      {automationRuntime?.model_version
-                        ? `${automationRuntime.model_version} · ${modelModeLabel(automationRuntime.model_mode)}`
-                        : 'Awaiting first evaluation'}
-                    </strong>
-                  </div>
-                  <div>
-                    <span>Market data</span>
-                    <strong className="ai-runtime-market-data">
-                      {automationRuntime?.last_market_data_at
-                        ? selectedBroker?.brokerId === 'paper-broker'
-                          ? (
-                            <time dateTime={automationRuntime.last_market_data_at}>
-                              Simulated · {formatTimestamp(automationRuntime.last_market_data_at)}
-                            </time>
-                          )
-                          : (
-                            <>
-                              <time dateTime={automationRuntime.last_market_data_at}>
-                                {formatTimestamp(automationRuntime.last_market_data_at)}
-                              </time>
-                              <small className="ai-runtime-market-data__age">
-                                {formatAgeSeconds(automationRuntime.market_data_age_seconds)}
-                              </small>
-                            </>
-                          )
-                        : selectedBroker?.brokerId === 'paper-broker'
-                          ? 'Awaiting simulated market snapshot'
-                          : 'Awaiting first broker snapshot'}
-                    </strong>
-                  </div>
-                  <div>
-                    <span>Data read</span>
-                    <strong>
-                      {automationRuntime?.research_uat
-                        ? `Research replay · up to ${automationRuntime.replay_steps_per_cycle ?? 1} market steps/cycle`
-                        : selectedBroker?.brokerId === 'paper-broker'
-                          ? 'Paper simulator · one heartbeat per scan'
-                        : automationRuntime?.market_data_cache_bypassed
-                          ? 'Broker queried every scan'
-                          : automationRuntime?.source
-                            ? `${automationRuntime.source.toUpperCase()} · cache eligible`
-                            : '—'}
-                    </strong>
-                  </div>
-                  {automationRuntime?.research_uat && (
-                    <>
-                      <div>
-                        <span>Replay price</span>
-                        <strong>
-                          {automationRuntime.last_market_data_close ?? 'Awaiting replay price'}
-                          {automationRuntime.last_market_data_at
-                            ? ` · ${formatTimestamp(automationRuntime.last_market_data_at)}`
-                            : ''}
-                        </strong>
-                      </div>
-                      <div>
-                        <span>Replay progress</span>
-                        <strong>
-                          {automationRuntime.replay_steps_last_cycle ?? 0} steps last cycle ·{' '}
-                          {automationRuntime.replay_steps_total ?? 0} evaluated
-                        </strong>
-                      </div>
-                      <div>
-                        <span>Scans without signal</span>
-                        <strong>
-                          {Math.max(
-                            0,
-                            (automationRuntime.replay_steps_total ?? 0) -
-                              (automationRuntime.signals_published_total ?? 0),
-                          )} filtered · {runtimeReasonLabel(automationRuntime.last_reason)}
-                        </strong>
-                      </div>
-                      <div>
-                        <span>UAT submissions</span>
-                        <strong>{automationRuntime.signals_published_total ?? 0} submitted</strong>
-                      </div>
-                      <div>
-                        <span>UAT execution</span>
-                        <strong>
-                          {automationRuntime.executions_succeeded_total ?? 0} executed ·{' '}
-                          {automationRuntime.downstream_rejected_total ?? 0} rejected
-                        </strong>
-                      </div>
-                      <div>
-                        <span>Downstream outcome</span>
-                        <strong>
-                          {automationRuntime.last_strategy_outcome?.replaceAll('_', ' ') ?? 'WAITING'}
-                        </strong>
-                      </div>
-                    </>
-                  )}
-                  <div>
-                    <span>Last decision</span>
-                    <strong>{automationRuntime?.last_decision?.replaceAll('_', ' ') ?? 'WAITING'}</strong>
-                  </div>
-                  <div>
-                    <span>Confidence</span>
-                    <strong>
-                      {automationRuntime?.last_confidence_score == null
-                        ? '—'
-                        : automationRuntime.last_decision === 'UAT_WORKFLOW_PROBE'
-                          ? `${formatConfidence(automationRuntime.last_confidence_score)} actual model confidence · ${formatConfidence(automationRuntime.confidence_threshold)} normal AI gate`
-                          : `${formatConfidence(automationRuntime.last_confidence_score)} / ${formatConfidence(automationRuntime.confidence_threshold)} required`}
-                    </strong>
-                  </div>
-                  <div>
-                    <span>Confidence evaluated</span>
-                    <strong>{formatTimestamp(automationRuntime?.last_confidence_at)}</strong>
+                  <div className="ai-cockpit__status">
+                    <MotionStatusOrb
+                      tone={aiVisualState === 'error' ? 'error' : aiVisualState === 'blocked' ? 'warning' : aiVisualState === 'signal' ? 'info' : 'success'}
+                      active={automationOn}
+                    />
+                    <Badge variant={aiVisualState === 'error' ? 'error' : aiVisualState === 'blocked' ? 'warning' : 'success'}>
+                      {aiVisualState === 'signal' ? 'SIGNAL READY' : aiVisualState === 'blocked' ? 'WAITING' : aiVisualState === 'error' ? 'DATA ISSUE' : 'SCANNING'}
+                    </Badge>
                   </div>
                 </div>
 
-                {automationRuntime?.model_mode === 'heuristic_placeholder' && (
-                  <Alert variant="warning">
-                    The active model is the baseline heuristic scaffold, not a promoted XGBoost model.
-                    In Research PAPER UAT this is used to exercise the product workflow only; simulated
-                    trades are not evidence of production trading performance.
-                  </Alert>
-                )}
-
-                <div className="ai-runtime-reason">
-                  <span>Decision explanation</span>
-                  <strong>
-                    {automationRuntime?.research_uat &&
-                    automationRuntime?.last_decision === 'NO_NEW_MARKET_DATA'
-                      ? 'The real-data replay has reached its latest available candle. The previous model evaluation is preserved and no duplicate decision is published.'
-                      : runtimeReasonLabel(automationRuntime?.last_reason)}
-                  </strong>
+                <div className="ai-cockpit__instruments" aria-label="Watched instruments">
+                  {watchedInstruments.map((instrument) => (
+                    <button
+                      key={instrument}
+                      type="button"
+                      className={instrument === chartInstrument ? 'is-active' : ''}
+                      onClick={() => setChartInstrument(instrument)}
+                    >
+                      {instrument}
+                    </button>
+                  ))}
                 </div>
-                {automationRuntime?.research_uat && automationRuntime.last_strategy_outcome && (
-                  <div className="ai-runtime-reason">
-                    <span>Last UAT pipeline result</span>
-                    <strong>
-                      {automationRuntime.last_strategy_outcome.replaceAll('_', ' ')}
-                      {automationRuntime.last_strategy_reason
-                        ? ` · ${automationRuntime.last_strategy_reason}`
-                        : ''}
-                      {automationRuntime.last_trade_id
-                        ? ` · trade ${automationRuntime.last_trade_id}`
-                        : ''}
-                    </strong>
+
+                <div className="ai-cockpit__grid">
+                  <div className="ai-cockpit__chart-card">
+                    <div className="ai-cockpit__chart-head">
+                      <div>
+                        <span className="ai-cockpit__label">{chartInstrument}</span>
+                        <strong>{automationRuntime?.research_uat ? automationRuntime.last_market_data_close ?? market?.quote.bid ?? '—' : market?.quote.bid ?? '—'}</strong>
+                        <small>{chartLoading ? 'Updating chart…' : `${chartTimeframe} market view`}</small>
+                      </div>
+                      <div className="ai-cockpit__timeframes">
+                        {(['M1', 'M5', 'M15', 'H1', 'H4'] as const).map((timeframe) => (
+                          <button
+                            key={timeframe}
+                            type="button"
+                            className={chartTimeframe === timeframe ? 'is-active' : ''}
+                            onClick={() => setChartTimeframe(timeframe)}
+                          >
+                            {timeframe}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <MarketPriceChart candles={market?.candles ?? []} />
                   </div>
-                )}
+
+                  <aside className={`ai-confidence ai-confidence--${confidenceTone}`}>
+                    <span className="ai-cockpit__label">AI confidence</span>
+                    <strong className="ai-confidence__value">{formatConfidence(automationRuntime?.last_confidence_score)}</strong>
+                    <div className="ai-confidence__track" aria-hidden="true">
+                      <span style={{ width: `${confidencePercent}%` }} />
+                    </div>
+                    <div className="ai-confidence__meta">
+                      <span>{confidencePercent >= 60 ? 'Qualified strength' : 'Building conviction'}</span>
+                      <span>{formatConfidence(automationRuntime?.confidence_threshold)} gate</span>
+                    </div>
+                    <p>{runtimeReasonLabel(automationRuntime?.last_reason)}</p>
+                  </aside>
+                </div>
+
+                <details className="ai-cockpit__technical">
+                  <summary>Technical details</summary>
+                  <div className="ai-cockpit__technical-grid">
+                    <div><span>Model</span><strong>{automationRuntime?.model_version ?? 'Awaiting model'}</strong></div>
+                    <div><span>Timeframes</span><strong>{automationRuntime?.timeframe ?? 'MTF'}</strong></div>
+                    <div><span>Last scan</span><strong>{formatTimestamp(automationRuntime?.last_run_at)}</strong></div>
+                    <div><span>Next scan</span><strong>{formatTimestamp(automationRuntime?.next_run_at)}</strong></div>
+                    <div><span>Replay steps</span><strong>{automationRuntime?.replay_steps_total ?? 0}</strong></div>
+                    <div><span>Executions</span><strong>{automationRuntime?.executions_succeeded_total ?? 0} succeeded</strong></div>
+                    <div><span>Last decision</span><strong>{automationRuntime?.last_decision?.replaceAll('_', ' ') ?? 'WAITING'}</strong></div>
+                    <div><span>Market timestamp</span><strong>{formatTimestamp(automationRuntime?.last_market_data_at)}</strong></div>
+                  </div>
+                </details>
               </section>
             )}
 
