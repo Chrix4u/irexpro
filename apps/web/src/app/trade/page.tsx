@@ -12,6 +12,7 @@ import type { MarketIntelligenceView } from '@irexpro/types/market-intelligence'
 import { Alert, Badge, Button, Card, DashboardShell, Input, LoadingSpinner } from '@/components/ui';
 import { useAuth } from '@/context/auth-context';
 import { useNotification } from '@/hooks/useNotification';
+import { MotionStatusOrb } from '@/components/ui/motion-status-orb';
 import { api } from '@/lib/api';
 import { formatAgeSeconds } from '@/lib/duration';
 import { mapApiError } from '@/lib/error-mapping';
@@ -421,6 +422,19 @@ export default function AiTradingPage() {
   const automationOn =
     terminal?.sessionStateKnown === true &&
     (terminal.session?.status === 'ACTIVE' || terminal.session?.status === 'PAUSED');
+  const aiVisualState = !automationOn
+    ? 'stopped'
+    : automationRuntime?.last_decision === 'ERROR'
+      ? 'error'
+      : automationRuntime?.last_decision === 'BLOCKED'
+        ? 'blocked'
+        : automationRuntime?.last_decision === 'SIGNAL_PUBLISHED' ||
+            automationRuntime?.last_strategy_outcome === 'EXECUTION_SUCCEEDED'
+          ? 'signal'
+          : automationRuntime?.last_decision === 'NO_TRADE' ||
+              automationRuntime?.last_decision === 'NO_NEW_MARKET_DATA'
+            ? 'scanning'
+            : 'running';
 
   // The ACTIVE session is the execution authority. While it exists, the
   // workspace must stay visibly pinned to that exact broker account instead
@@ -900,8 +914,23 @@ export default function AiTradingPage() {
               Strategy selection, position sizing and risk checks run automatically on the server.
             </p>
           </div>
-          <div className="ai-trader__hero-state">
+          <div className="ai-trader__hero-state" data-ai-state={aiVisualState}>
             <span>AI Trading</span>
+            <MotionStatusOrb
+              tone={
+                aiVisualState === 'error'
+                  ? 'error'
+                  : aiVisualState === 'blocked'
+                    ? 'warning'
+                    : aiVisualState === 'signal'
+                      ? 'info'
+                      : automationOn
+                        ? 'success'
+                        : 'neutral'
+              }
+              active={automationOn}
+              label={`AI Trading ${automationOn ? 'running' : 'stopped'}`}
+            />
             <Badge variant={automationOn ? 'success' : 'info'}>
               {automationOn ? 'RUNNING' : 'STOPPED'}
             </Badge>
@@ -1118,7 +1147,7 @@ export default function AiTradingPage() {
             </section>
 
             {automationOn && (
-              <section className="ai-runtime-panel" aria-label="AI engine runtime">
+              <section className="ai-runtime-panel" data-ai-state={aiVisualState} aria-label="AI engine runtime">
                 <div className="ai-runtime-panel__heading">
                   <div>
                     <p className="workspace-hero__eyebrow">Automation runtime</p>
@@ -1501,6 +1530,29 @@ export default function AiTradingPage() {
             </section>
           </>
         )}
+
+
+        <style jsx global>{`
+          .ai-trader__hero, .ai-runtime-panel, .ai-control-card, .ai-overview-card, .ai-history-card {
+            transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease, background 180ms ease;
+          }
+          .ai-runtime-panel { position: relative; overflow: hidden; }
+          .ai-runtime-panel::after {
+            content: ''; position: absolute; top: 0; left: -38%; width: 38%; height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(56,189,248,.9), transparent); opacity: 0; pointer-events: none;
+          }
+          .ai-runtime-panel[data-ai-state='running'], .ai-runtime-panel[data-ai-state='scanning'] {
+            border-color: rgba(34,197,94,.28); box-shadow: 0 18px 50px rgba(2,6,23,.18), inset 0 0 30px rgba(34,197,94,.025);
+          }
+          .ai-runtime-panel[data-ai-state='running']::after, .ai-runtime-panel[data-ai-state='scanning']::after { opacity: .72; animation: irexSweep 3.2s linear infinite; }
+          .ai-runtime-panel[data-ai-state='signal'] { border-color: rgba(56,189,248,.42); box-shadow: 0 20px 56px rgba(14,165,233,.12); }
+          .ai-runtime-panel[data-ai-state='signal']::after { opacity: .95; animation: irexSweep 1.35s linear infinite; }
+          .ai-runtime-panel[data-ai-state='blocked'] { border-color: rgba(245,158,11,.34); }
+          .ai-runtime-panel[data-ai-state='error'] { border-color: rgba(239,68,68,.36); }
+          @media (hover:hover) { .ai-control-card:hover, .ai-overview-card:hover, .ai-history-card:hover, .ai-runtime-grid > div:hover { transform: translateY(-2px); box-shadow: 0 14px 32px rgba(2,6,23,.18); } }
+          @keyframes irexSweep { from { transform: translateX(0); } to { transform: translateX(365%); } }
+          @media (prefers-reduced-motion: reduce) { .ai-runtime-panel::after { animation: none !important; } .ai-trader__hero, .ai-runtime-panel, .ai-control-card, .ai-overview-card, .ai-history-card { transition: none !important; } }
+        `}</style>
 
         {pendingAutomationAction && (
           <div

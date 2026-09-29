@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useAuth } from '@/context/auth-context';
 import { DashboardShell, Card, Badge, EmptyState, LoadingSpinner, Alert } from '@/components/ui';
 import { useNotification } from '@/hooks/useNotification';
+import { MotionStatusOrb } from '@/components/ui/motion-status-orb';
 import { mapApiError } from '@/lib/error-mapping';
 import { api } from '@/lib/api';
 import { formatEnumLabel } from '@irexpro/types';
@@ -95,8 +96,8 @@ export default function DashboardPage() {
 
   return (
     <DashboardShell user={user} onLogout={logout} activeRoute="/dashboard">
-      <main className="workspace-page" aria-labelledby="dashboard-title">
-        <section className="workspace-hero">
+      <main className="workspace-page dashboard-motion" aria-labelledby="dashboard-title">
+        <section className="workspace-hero dashboard-motion__hero">
           <div className="workspace-hero__copy">
             <p className="workspace-hero__eyebrow">Trading operations overview</p>
             <h1 id="dashboard-title" className="workspace-hero__title">
@@ -106,7 +107,12 @@ export default function DashboardPage() {
               Track onboarding readiness, broker connectivity, account protection and the next step in your trading workflow from one responsive overview.
             </p>
           </div>
-          <div className="workspace-hero__actions">
+          <div className="workspace-hero__actions dashboard-motion__status">
+            <MotionStatusOrb
+              tone={onboarding?.canStartTrading ? 'success' : 'info'}
+              active={!onboardingLoading}
+              label={onboarding?.canStartTrading ? 'Trading ready' : 'Setup in progress'}
+            />
             <Badge variant={onboarding?.canStartTrading ? 'success' : 'info'}>
               {onboarding?.canStartTrading ? 'Trading ready' : 'Setup in progress'}
             </Badge>
@@ -126,7 +132,7 @@ export default function DashboardPage() {
         )}
 
         <section className="workspace-stat-grid" aria-label="Account overview">
-          <Card>
+          <Card className="dashboard-motion__card">
             <span className="stat-card__icon" aria-hidden="true">👤</span>
             <h2 className="card__title">Account status</h2>
             <div className="mt-2">
@@ -140,7 +146,7 @@ export default function DashboardPage() {
             </div>
           </Card>
 
-          <Card>
+          <Card className="dashboard-motion__card">
             <span className="stat-card__icon" aria-hidden="true">🔌</span>
             <h2 className="card__title">Broker connection</h2>
             {onboarding?.brokerConnected ? (
@@ -150,7 +156,7 @@ export default function DashboardPage() {
             )}
           </Card>
 
-          <Card>
+          <Card className="dashboard-motion__card">
             <span className="stat-card__icon" aria-hidden="true">◈</span>
             <h2 className="card__title">Performance fee</h2>
             <p className="text-sm muted" style={{ lineHeight: 1.65 }}>
@@ -160,7 +166,7 @@ export default function DashboardPage() {
           </Card>
         </section>
 
-        <Card title="Recent activity" subtitle="Latest server-authoritative account, AI trading and execution events.">
+        <Card title="Recent activity" subtitle="Latest server-authoritative account, AI trading and execution events." className="dashboard-motion__activity">
           {activityLoading ? (
             <LoadingSpinner text="Loading recent activity…" />
           ) : activityError ? (
@@ -289,6 +295,7 @@ function ActivityRow({ item }: { item: LiveActivityRowView }) {
   return (
     <div
       role="listitem"
+      className="dashboard-motion__activity-row"
       style={{
         display: 'grid',
         gridTemplateColumns: 'minmax(0, 1fr) auto',

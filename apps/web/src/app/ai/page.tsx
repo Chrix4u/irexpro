@@ -10,6 +10,7 @@ import type {
 } from '@irexpro/types/ai-decision-explorer';
 import { Alert, Badge, Button, Card, DashboardShell, EmptyState, LoadingSpinner } from '@/components/ui';
 import { useAuth } from '@/context/auth-context';
+import { MotionStatusOrb } from '@/components/ui/motion-status-orb';
 import { loadAiDecisionExplorer } from '@/lib/ai-decision-explorer';
 
 function formatTimestamp(value: string | null): string {
@@ -107,8 +108,8 @@ export default function AiDecisionExplorerPage() {
 
   return (
     <DashboardShell user={user} onLogout={logout} activeRoute="/ai" title="AI Decision Explorer">
-      <main className="terminal-foundation">
-        <section className="terminal-foundation__hero" aria-labelledby="ai-decision-title">
+      <main className="terminal-foundation ai-explorer-motion">
+        <section className="terminal-foundation__hero ai-explorer-motion__hero" aria-labelledby="ai-decision-title">
           <div>
             <p className="terminal-foundation__eyebrow">Autonomous decision evidence</p>
             <h1 id="ai-decision-title" className="terminal-foundation__title">
@@ -118,16 +119,26 @@ export default function AiDecisionExplorerPage() {
               Inspect persisted signal provenance, eligibility gates, risk approval or veto, and execution lifecycle. This surface reports recorded evidence only; it does not expose hidden model reasoning or reconstruct missing facts in the browser.
             </p>
           </div>
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            loading={loading}
-            disabled={loading}
-            onClick={() => void refresh()}
-          >
-            {loading ? 'Refreshing…' : 'Refresh decisions'}
-          </Button>
+          <div className="ai-explorer-motion__actions">
+            <MotionStatusOrb
+              tone={error ? 'error' : loading ? 'info' : 'success'}
+              active={!error}
+              label={error ? 'Decision evidence unavailable' : loading ? 'Refreshing decision evidence' : 'Decision evidence available'}
+            />
+            <Badge variant={error ? 'error' : loading ? 'info' : 'success'}>
+              {error ? 'UNAVAILABLE' : loading ? 'REFRESHING' : 'EVIDENCE LIVE'}
+            </Badge>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              loading={loading}
+              disabled={loading}
+              onClick={() => void refresh()}
+            >
+              {loading ? 'Refreshing…' : 'Refresh decisions'}
+            </Button>
+          </div>
         </section>
 
         {error && <Alert variant="error">{error}</Alert>}
@@ -147,19 +158,19 @@ export default function AiDecisionExplorerPage() {
                 gap: 'var(--space-4)',
               }}
             >
-              <Card title="Recent Decisions">
+              <Card title="Recent Decisions" className="ai-explorer-motion__summary-card">
                 <strong style={{ fontSize: '1.75rem' }}>{summary.total}</strong>
                 <p className="text-sm muted mt-1">Persisted signal receipts</p>
               </Card>
-              <Card title="Execution Accepted">
+              <Card title="Execution Accepted" className="ai-explorer-motion__summary-card">
                 <strong style={{ fontSize: '1.75rem' }}>{summary.executed}</strong>
                 <p className="text-sm muted mt-1">Approved signals accepted by execution</p>
               </Card>
-              <Card title="Risk Vetoes">
+              <Card title="Risk Vetoes" className="ai-explorer-motion__summary-card">
                 <strong style={{ fontSize: '1.75rem' }}>{summary.vetoed}</strong>
                 <p className="text-sm muted mt-1">Signals blocked by the risk engine</p>
               </Card>
-              <Card title="Eligibility Stops">
+              <Card title="Eligibility Stops" className="ai-explorer-motion__summary-card">
                 <strong style={{ fontSize: '1.75rem' }}>{summary.ignored}</strong>
                 <p className="text-sm muted mt-1">Signals stopped before risk execution</p>
               </Card>
@@ -181,6 +192,7 @@ export default function AiDecisionExplorerPage() {
                     {snapshot.decisions.map((decision) => (
                       <article
                         key={decision.signalId}
+                        className="ai-explorer-motion__decision-card"
                         style={{
                           border: '1px solid var(--border-subtle)',
                           borderRadius: 'var(--radius-lg)',
