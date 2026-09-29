@@ -300,9 +300,21 @@ class SignalScheduler:
                     if previous_revision == telemetry.market_data_revision:
                         job.last_decision = "NO_NEW_MARKET_DATA"
                         job.last_reason = "market_data_unchanged"
-                        # Preserve the last evaluated model confidence/time. An unchanged
-                        # market-data revision means no NEW inference was warranted; it
-                        # must not erase the last genuine evaluation from the monitor.
+                        # Preserve the last evaluated confidence. After a scheduler restart
+                        # the in-memory value may be empty even though this same candle can
+                        # still be evaluated deterministically; hydrate it from the current
+                        # generation result without publishing a duplicate signal.
+                        if job.last_confidence_score is None:
+                            recovered_confidence = (
+                                result.signal.confidence_score
+                                if result.signal is not None
+                                else result.no_signal.confidence_score
+                                if result.no_signal is not None
+                                else None
+                            )
+                            if recovered_confidence is not None:
+                                job.last_confidence_score = recovered_confidence
+                                job.last_confidence_at = job.last_run_at
                         logger.debug(
                             "Market data revision unchanged — duplicate signal opportunity suppressed",
                             trading_session_id=trading_session_id,
@@ -364,12 +376,12 @@ class SignalScheduler:
                     job.last_reason = (
                         result.no_signal.reason if result.no_signal else "unknown"
                     )
-                    job.last_confidence_score = (
+                    evaluated_confidence = (
                         result.no_signal.confidence_score if result.no_signal else None
                     )
-                    job.last_confidence_at = (
-                        job.last_run_at if job.last_confidence_score is not None else None
-                    )
+                    if evaluated_confidence is not None:
+                        job.last_confidence_score = evaluated_confidence
+                        job.last_confidence_at = job.last_run_at
                     logger.debug(
                         "No signal to publish",
                         trading_session_id=trading_session_id,
@@ -462,8 +474,9 @@ class SignalScheduler:
                 job.last_run_at = datetime.now(UTC)
                 job.last_decision = "ERROR"
                 job.last_reason = type(e).__name__
-                job.last_confidence_score = None
-                job.last_confidence_at = None
+                # A transient runtime/data error must not erase the most recent
+                # genuine model confidence already shown to the user. The error
+                # state remains explicit via last_decision/last_reason.
                 logger.warning(
                     "Scheduled signal generation failed",
                     trading_session_id=trading_session_id,

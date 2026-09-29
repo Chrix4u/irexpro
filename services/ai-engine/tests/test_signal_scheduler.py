@@ -558,8 +558,8 @@ async def test_unchanged_market_revision_suppresses_duplicate_signal_publish():
     scheduler._signal_generator = mock_generator
     job = ScheduledSessionJobStub()
     job.market_data_revisions["EURUSD"] = "same-market-revision"
-    job.last_confidence_score = 0.0285
-    job.last_confidence_at = object()
+    job.last_confidence_score = None
+    job.last_confidence_at = None
     scheduler._jobs["session-1"] = job
 
     await scheduler._run_session_job("session-1")
@@ -567,14 +567,14 @@ async def test_unchanged_market_revision_suppresses_duplicate_signal_publish():
     scheduler._nestjs_client.publish_signal.assert_not_called()
     assert job.last_decision == "NO_NEW_MARKET_DATA"
     assert job.last_reason == "market_data_unchanged"
-    assert job.last_confidence_score is None
-    assert job.last_confidence_at is None
+    assert job.last_confidence_score == pytest.approx(0.8)
+    assert job.last_confidence_at is not None
     assert job.model_mode == "heuristic_placeholder"
     assert job.market_data_cache_bypassed is True
 
 
 @pytest.mark.asyncio
-async def test_scan_error_clears_previous_confidence_instead_of_reusing_it():
+async def test_scan_error_preserves_previous_confidence_while_reporting_error():
     settings = Settings(ai_scheduler_enabled=True, ai_signal_mode="paper")
     scheduler = SignalScheduler(nestjs_client=AsyncMock())
     scheduler._settings = settings
@@ -593,8 +593,8 @@ async def test_scan_error_clears_previous_confidence_instead_of_reusing_it():
 
     assert job.last_decision == "ERROR"
     assert job.last_reason == "MarketDataError"
-    assert job.last_confidence_score is None
-    assert job.last_confidence_at is None
+    assert job.last_confidence_score == pytest.approx(0.0285)
+    assert job.last_confidence_at is not None
     assert job.last_run_at is not None
     assert job.last_publish_failed is True
 
