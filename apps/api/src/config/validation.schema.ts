@@ -103,6 +103,16 @@ export const validationSchema = Joi.object({
   // In production: store in AWS Secrets Manager / HashiCorp Vault.
   NESTJS_INTERNAL_API_KEY: Joi.string().optional().allow(''),
 
+  // Generic external strategy/signal provider intake. It is fail-closed by
+  // default and PAPER_ONLY even when enabled. Provider secrets are supplied
+  // as a service header; never place them in TradingView webhook bodies.
+  EXTERNAL_SIGNAL_PROVIDER_ENABLED: Joi.string().valid('true', 'false').optional().allow(''),
+  EXTERNAL_SIGNAL_PROVIDER_KEY: Joi.when('EXTERNAL_SIGNAL_PROVIDER_ENABLED', {
+    is: 'true',
+    then: Joi.string().min(32).required(),
+    otherwise: Joi.string().min(32).optional().allow(''),
+  }),
+
   // Python AI engine scheduler coordination (NestJS → AI engine)
   AI_ENGINE_BASE_URL: Joi.string().default('http://localhost:8001/api/v1'),
   AI_ENGINE_SCHEDULER_ENABLED: Joi.boolean().default(false),

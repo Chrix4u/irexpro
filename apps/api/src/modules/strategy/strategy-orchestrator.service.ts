@@ -250,6 +250,44 @@ export class StrategyOrchestratorService {
       return { outcome: 'SESSION_INACTIVE', signalId, reason };
     }
 
+    // ── Gate 3.5: External-provider certification boundary ───────────────────
+    // External strategy feeds are admitted for evidence collection only. The
+    // provider relay key authenticates transport; it NEVER grants DEMO/LIVE
+    // trading authority. Until a future server-side provider certification
+    // record exists, these signals must bind to the internal PAPER_ONLY
+    // paper-broker DEMO session exactly.
+    const externalProviderPaperOnly =
+      candidate.metadata?.signal_source === 'EXTERNAL_PROVIDER' &&
+      candidate.metadata?.external_provider_paper_only === true;
+    if (externalProviderPaperOnly) {
+      let paperConnection;
+      try {
+        paperConnection = await this.brokerService.findConnectionById(
+          session.brokerConnectionId,
+          userId,
+        );
+      } catch {
+        paperConnection = null;
+      }
+      const exactPaperBoundary =
+        session.executionMode === ExecutionMode.PAPER_ONLY &&
+        candidate.brokerConnectionId === session.brokerConnectionId &&
+        paperConnection?.brokerId === 'paper-broker' &&
+        paperConnection?.accountType === BrokerMode.DEMO;
+      if (!exactPaperBoundary) {
+        const reason =
+          'External provider signal rejected: provider is PAPER_ONLY and requires the exact internal paper-broker DEMO session';
+        this.logger.warn(`Signal ${signalId} rejected: ${reason}`);
+        await this.recordIgnored(
+          candidate,
+          'SIGNAL_INVALID',
+          'EXTERNAL_PROVIDER_PAPER_ONLY',
+          reason,
+        );
+        return { outcome: 'SIGNAL_INVALID', signalId, reason };
+      }
+    }
+
     // ── Gate 4: Broker connection active ──────────────────────────────────────
     try {
       const hasBroker = await this.brokerService.hasActiveConnection(userId);

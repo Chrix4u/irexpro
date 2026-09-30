@@ -1,4 +1,12 @@
-import { Body, Controller, ForbiddenException, Logger, Post, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  ForbiddenException,
+  Logger,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiHeader, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 import { Public } from '../../common/decorators/public.decorator';
@@ -10,12 +18,18 @@ import { CurrentUserId } from '../../common/decorators/current-user.decorator';
 import { AiSignalService } from './ai-signal.service';
 import { SimulateSignalDto } from './dto/simulate-signal.dto';
 import { InternalSignalDto } from './dto/internal-signal.dto';
+import { ExternalProviderSignalDto } from './dto/external-provider-signal.dto';
 // Round 6 live-execution completion (§10): the internal exit-signal intake.
 import { InternalExitSignalDto } from './dto/internal-exit-signal.dto';
 import { StrategyResult } from '../strategy/interfaces/strategy.interface';
 import { AiExitResult } from '../strategy/interfaces/ai-exit-signal.interface';
 import { AiSignalCandidate } from './interfaces/ai-signal-candidate.interface';
-import { v4 as uuidv4 } from 'uuid';
+import { v4 as uuidv4, v5 as uuidv5 } from 'uuid';
+import { createHash } from 'crypto';
+import {
+  ExternalSignalApiKeyGuard,
+  EXTERNAL_SIGNAL_API_KEY_HEADER,
+} from '../../common/guards/external-signal-api-key.guard';
 
 /**
  * AiController
@@ -159,6 +173,102 @@ export class AiController {
       metadata: { ...dto.metadata, source: 'python-ai-engine' },
     };
 
+    return this.aiSignalService.receiveSignal(candidate);
+  }
+
+  /**
+   * EXTERNAL PROVIDER: receive a normalized strategy signal from a trusted
+   * provider relay. The provider key authenticates only the relay. It grants
+   * no trading authority: StrategyOrchestrator independently forces these
+   * candidates onto an internal PAPER_ONLY paper-broker session.
+   *
+   * POST /api/v1/ai/external/signals
+   */
+  @Post('external/signals')
+  @Public()
+  @UseGuards(ExternalSignalApiKeyGuard)
+  @ApiOperation({
+    summary: '[EXTERNAL PROVIDER] Receive PAPER-only signal candidate',
+    description:
+      'Trusted-provider relay intake. Signals remain PAPER_ONLY until provider certification. ' +
+      'Every candidate still passes Strategy Orchestrator → Risk Engine → Execution Engine.',
+  })
+  @ApiHeader({
+    name: EXTERNAL_SIGNAL_API_KEY_HEADER,
+    description: 'External provider relay API key',
+    required: true,
+  })
+  async receiveExternalSignal(@Body() dto: ExternalProviderSignalDto): Promise<StrategyResult> {
+    const generatedAt = new Date(dto.generatedAt);
+    const now = Date.now();
+    const generatedMs = generatedAt.getTime();
+    if (!Number.isFinite(generatedMs)) {
+      throw new BadRequestException('Invalid generatedAt');
+    }
+    if (generatedMs > now + 30_000) {
+      throw new BadRequestException('Signal generatedAt is too far in the future');
+    }
+    if (now - generatedMs > 120_000) {
+      throw new BadRequestException('External signal is stale (maximum age is 120 seconds)');
+    }
+
+    if (dto.expiresAt) {
+      const expiresAt = new Date(dto.expiresAt).getTime();
+      if (!Number.isFinite(expiresAt) || expiresAt <= now) {
+        throw new BadRequestException('External signal is expired');
+      }
+      if (expiresAt <= generatedMs || expiresAt - generatedMs > 600_000) {
+        throw new BadRequestException('expiresAt must be after generatedAt and within 10 minutes');
+      }
+    }
+
+    // Stable provider event identity: provider retries map to the same signal
+    // and the existing durable AiSignalIdentity gate performs exact replay/
+    // conflict handling. No retry may mint a fresh logical trade decision.
+    const externalSignalNamespace = 'e1f0c1a2-8d5b-4c3a-9f11-7a9a5e4c2d10';
+    const signalId = uuidv5(`${dto.providerCode}|${dto.externalSignalId}`, externalSignalNamespace);
+
+    const rawStrategyCode = `external-${dto.providerCode}-${dto.strategyCode}`;
+    const durableStrategyCode =
+      rawStrategyCode.length <= 100
+        ? rawStrategyCode
+        : `${rawStrategyCode.slice(0, 83)}-${createHash('sha256')
+            .update(rawStrategyCode)
+            .digest('hex')
+            .slice(0, 16)}`;
+
+    const candidate: AiSignalCandidate = {
+      signalId,
+      userId: dto.userId,
+      tradingSessionId: dto.tradingSessionId,
+      brokerConnectionId: dto.brokerConnectionId,
+      instrument: dto.instrument,
+      direction: dto.direction,
+      confidenceScore: dto.confidenceScore,
+      suggestedEntryPrice: dto.suggestedEntryPrice,
+      suggestedStopLoss: dto.suggestedStopLoss,
+      suggestedTakeProfit: dto.suggestedTakeProfit,
+      suggestedVolume: dto.suggestedVolume,
+      timeframe: dto.timeframe,
+      strategyCode: durableStrategyCode,
+      generatedAt,
+      modelVersion: `external-provider/${dto.providerCode}/paper-only-v1`,
+      metadata: {
+        signal_source: 'EXTERNAL_PROVIDER',
+        external_provider_code: dto.providerCode,
+        external_provider_event_id_hash: createHash('sha256')
+          .update(dto.externalSignalId)
+          .digest('hex'),
+        external_provider_paper_only: true,
+        production_eligible: false,
+        ...(dto.sourceReference ? { source_reference: dto.sourceReference } : {}),
+      },
+    };
+
+    this.logger.log(
+      `[EXTERNAL PROVIDER] PAPER-only candidate provider=${dto.providerCode} ` +
+        `instrument=${dto.instrument} direction=${dto.direction} signal=${signalId}`,
+    );
     return this.aiSignalService.receiveSignal(candidate);
   }
 

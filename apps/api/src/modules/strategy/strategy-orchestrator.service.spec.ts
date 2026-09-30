@@ -464,6 +464,83 @@ describe('StrategyOrchestratorService', () => {
     });
   });
 
+  describe('External provider PAPER-only boundary', () => {
+    const externalCandidate = () =>
+      validCandidate({
+        confidenceScore: 0.72,
+        strategyCode: 'external-tradingview-relay-trend-v1',
+        modelVersion: 'external-provider/tradingview-relay/paper-only-v1',
+        metadata: {
+          signal_source: 'EXTERNAL_PROVIDER',
+          external_provider_code: 'tradingview-relay',
+          external_provider_paper_only: true,
+          production_eligible: false,
+        },
+      });
+
+    it('allows a certified-shape external signal only on the exact internal PAPER broker', async () => {
+      (executionService.getActiveSession as jest.Mock).mockResolvedValue({
+        ...activeSession(),
+        executionMode: ExecutionMode.PAPER_ONLY,
+      });
+      (brokerService.findConnectionById as jest.Mock).mockResolvedValue({
+        id: 'conn-1',
+        userId: 'user-1',
+        brokerId: 'paper-broker',
+        accountType: BrokerMode.DEMO,
+        logicalAccountKey: 'paper-broker::demo::acct-1',
+      });
+
+      const result = await service.processSignal(externalCandidate());
+
+      expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
+      expect(riskService.validateProposedTrade).toHaveBeenCalled();
+      expect(executionService.executeTrade).toHaveBeenCalled();
+    });
+
+    it('rejects an external provider signal on FULL_AUTO even with a paper broker connection', async () => {
+      (executionService.getActiveSession as jest.Mock).mockResolvedValue({
+        ...activeSession(),
+        executionMode: ExecutionMode.FULL_AUTO,
+      });
+      (brokerService.findConnectionById as jest.Mock).mockResolvedValue({
+        id: 'conn-1',
+        userId: 'user-1',
+        brokerId: 'paper-broker',
+        accountType: BrokerMode.DEMO,
+        logicalAccountKey: 'paper-broker::demo::acct-1',
+      });
+
+      const result = await service.processSignal(externalCandidate());
+
+      expect(result.outcome).toBe('SIGNAL_INVALID');
+      expect(result.reason).toContain('PAPER_ONLY');
+      expect(riskService.validateProposedTrade).not.toHaveBeenCalled();
+      expect(executionService.executeTrade).not.toHaveBeenCalled();
+    });
+
+    it('rejects an external provider signal on a real-provider DEMO connection', async () => {
+      (executionService.getActiveSession as jest.Mock).mockResolvedValue({
+        ...activeSession(),
+        executionMode: ExecutionMode.PAPER_ONLY,
+      });
+      (brokerService.findConnectionById as jest.Mock).mockResolvedValue({
+        id: 'conn-1',
+        userId: 'user-1',
+        brokerId: 'metatrader5',
+        accountType: BrokerMode.DEMO,
+        logicalAccountKey: 'metatrader5::demo::acct-1',
+      });
+
+      const result = await service.processSignal(externalCandidate());
+
+      expect(result.outcome).toBe('SIGNAL_INVALID');
+      expect(result.reason).toContain('paper-broker');
+      expect(riskService.validateProposedTrade).not.toHaveBeenCalled();
+      expect(executionService.executeTrade).not.toHaveBeenCalled();
+    });
+  });
+
   describe('Gate 3: Trading session active', () => {
     it('rejects when no active session', async () => {
       (executionService.getActiveSession as jest.Mock).mockResolvedValue(null);

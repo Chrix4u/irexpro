@@ -120,6 +120,11 @@ export default () => ({
   internalApi: {
     key: process.env.NESTJS_INTERNAL_API_KEY,
   },
+  externalSignals: {
+    // Generic trusted-provider intake. Fail-closed unless explicitly enabled.
+    enabled: process.env.EXTERNAL_SIGNAL_PROVIDER_ENABLED === 'true',
+    apiKey: process.env.EXTERNAL_SIGNAL_PROVIDER_KEY,
+  },
   aiEngine: {
     baseUrl: process.env.AI_ENGINE_BASE_URL ?? 'http://localhost:8001/api/v1',
     schedulerEnabled: process.env.AI_ENGINE_SCHEDULER_ENABLED === 'true',

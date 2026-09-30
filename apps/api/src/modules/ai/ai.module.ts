@@ -7,12 +7,15 @@ import { AiCopilotService } from './ai-copilot.service';
 import { AiController } from './ai.controller';
 import { AiDecisionExplorerController } from './ai-decision-explorer.controller';
 import { AiCopilotController } from './ai-copilot.controller';
+import { ExternalSignalPerformanceController } from './external-signal-performance.controller';
+import { ExternalSignalPerformanceService } from './external-signal-performance.service';
 import { StrategyModule } from '../strategy/strategy.module';
 import { AuditModule } from '../audit/audit.module';
 import { ExecutionModule } from '../execution/execution.module';
 import { MarketDataModule } from '../market-data/market-data.module';
 import { RiskModule } from '../risk/risk.module';
 import { InternalApiKeyGuard } from '../../common/guards/internal-api-key.guard';
+import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-api-key.guard';
 
 /**
  * AiModule — AI Signal Engine intake, routing, and browser-safe intelligence.
@@ -35,13 +38,20 @@ import { InternalApiKeyGuard } from '../../common/guards/internal-api-key.guard'
     MarketDataModule,
     RiskModule,
   ],
-  controllers: [AiController, AiDecisionExplorerController, AiCopilotController],
+  controllers: [
+    AiController,
+    AiDecisionExplorerController,
+    AiCopilotController,
+    ExternalSignalPerformanceController,
+  ],
   providers: [
     AiService,
     AiSignalService,
     AiDecisionExplorerService,
     AiCopilotService,
     InternalApiKeyGuard,
+    ExternalSignalApiKeyGuard,
+    ExternalSignalPerformanceService,
   ],
   exports: [AiService, AiSignalService],
 })
