@@ -217,16 +217,19 @@ jobs:
             --output "$expanded_corpus" \
             --source dukascopy_v10_sealed_future_holdout
 
-          "$python_bin" - "$marker" "$qualification_sha" "$evaluator_sha" "$boundary" "$expanded_corpus" <<'PY'
+          "$python_bin" - "$marker" "$qualification_sha" "$evaluator_sha" "$boundary" "$expanded_corpus" "$rolling_raw" "$minimum_raw_future_rows" <<'PY'
           import hashlib, json, os, sys
-          marker, qsha, esha, boundary, corpus = sys.argv[1:]
-          h=hashlib.sha256(open(corpus,"rb").read()).hexdigest()
+          marker, qsha, esha, boundary, corpus, raw, raw_rows = sys.argv[1:]
+          corpus_hash=hashlib.sha256(open(corpus,"rb").read()).hexdigest()
+          raw_hash=hashlib.sha256(open(raw,"rb").read()).hexdigest()
           payload={
               "state":"STARTED",
               "qualification_sha":qsha,
               "evaluator_sha":esha,
               "future_holdout_start":boundary,
-              "expanded_corpus_sha256":h,
+              "frozen_raw_rows":int(raw_rows),
+              "frozen_raw_sha256":raw_hash,
+              "expanded_corpus_sha256":corpus_hash,
           }
           tmp=marker+".tmp"
           with open(tmp,"w",encoding="utf-8") as f:
