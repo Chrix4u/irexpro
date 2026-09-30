@@ -295,7 +295,7 @@ export function sessionAuthorityPresentation(
       statusLabel: "No active session",
       executionBlocked: true,
       blockedReasons: [
-        "No active trading session — execution authority is not started. Start or manage sessions from the web workspace.",
+        "No active trading session — execution authority is not started. Start or manage the session from AI Trading.",
       ],
     };
   }

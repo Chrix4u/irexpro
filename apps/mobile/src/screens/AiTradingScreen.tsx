@@ -15,6 +15,7 @@ import {
 import type { BrokerConnectionView } from "@irexpro/types";
 import type {
   AiAutomationRuntimeStatusView,
+  ExecutionConfirmationView,
   TradingSessionView,
   UserCapitalAllocationView,
 } from "@irexpro/types/execution";
@@ -95,6 +96,9 @@ export default function AiTradingScreen() {
   const [error, setError] = useState<string | null>(null);
   const [runtime, setRuntime] = useState<AiAutomationRuntimeStatusView | null>(null);
   const [runtimeWarning, setRuntimeWarning] = useState<string | null>(null);
+  const [confirmations, setConfirmations] = useState<ExecutionConfirmationView[]>([]);
+  const [confirmationsWarning, setConfirmationsWarning] = useState<string | null>(null);
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
 
   const automationOn = isAutomationRunning(session);
 
@@ -153,6 +157,25 @@ export default function AiTradingScreen() {
     }
   }, []);
 
+  const loadConfirmations = useCallback(async (activeSession: TradingSessionView | null) => {
+    if (!activeSession || activeSession.executionMode !== "SEMI_AUTO") {
+      setConfirmations([]);
+      setConfirmationsWarning(null);
+      return;
+    }
+
+    try {
+      const payload = await api.listPendingExecutionConfirmations();
+      setConfirmations(payload.confirmations);
+      setConfirmationsWarning(null);
+    } catch {
+      setConfirmations([]);
+      setConfirmationsWarning(
+        "Pending SEMI_AUTO confirmations could not be loaded from the server. No order has been approved locally.",
+      );
+    }
+  }, []);
+
   const load = useCallback(async () => {
     try {
       const [userConnections, activeSession] = await Promise.all([
@@ -175,6 +198,7 @@ export default function AiTradingScreen() {
       await Promise.all([
         loadAllocation(nextBrokerId),
         loadRuntime(activeSession.session),
+        loadConfirmations(activeSession.session),
       ]);
     } catch (requestError) {
       setError(safeMessage(requestError, "Failed to load AI Trading"));
@@ -182,7 +206,7 @@ export default function AiTradingScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [loadAllocation, loadRuntime]);
+  }, [loadAllocation, loadConfirmations, loadRuntime]);
 
   useEffect(() => {
     void load();
@@ -195,6 +219,14 @@ export default function AiTradingScreen() {
     }, 8000);
     return () => clearInterval(timer);
   }, [loadRuntime, session]);
+
+  useEffect(() => {
+    if (!session || session.executionMode !== "SEMI_AUTO") return;
+    const timer = setInterval(() => {
+      void loadConfirmations(session);
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [loadConfirmations, session]);
 
   const refresh = useCallback(() => {
     setRefreshing(true);
@@ -318,6 +350,60 @@ export default function AiTradingScreen() {
       setBusy(null);
     }
   }, [load, session]);
+
+  const confirmPendingOrder = useCallback(
+    async (confirmation: ExecutionConfirmationView) => {
+      if (!session || confirmingId) return;
+      setConfirmingId(confirmation.id);
+      setConfirmationsWarning(null);
+      try {
+        const result = await api.confirmExecutionConfirmation(confirmation.id);
+        if (result.status === "CONSUMED") {
+          Alert.alert(
+            "Order confirmation consumed",
+            `${confirmation.direction} ${confirmation.instrument} · ${confirmation.quantity} has been accepted by the server for the exact bound order payload. Final execution still depends on current server/broker protections.`,
+          );
+        }
+        await Promise.all([
+          loadConfirmations(session),
+          loadRuntime(session),
+        ]);
+      } catch (requestError) {
+        const message = safeMessage(
+          requestError,
+          "The server rejected this order confirmation.",
+        );
+        setConfirmationsWarning(message);
+        Alert.alert(
+          "Confirmation not accepted",
+          message +
+            "\n\nNo approval has been assumed. Refresh AI Trading to verify the server state.",
+        );
+        await loadConfirmations(session);
+      } finally {
+        setConfirmingId(null);
+      }
+    },
+    [confirmingId, loadConfirmations, loadRuntime, session],
+  );
+
+  const requestOrderConfirmation = useCallback(
+    (confirmation: ExecutionConfirmationView) => {
+      if (confirmingId) return;
+      Alert.alert(
+        "Confirm this AI order?",
+        `${confirmation.direction} ${confirmation.instrument} · ${confirmation.quantity}\nSL: ${confirmation.stopLoss ?? "—"} · TP: ${confirmation.takeProfit ?? "—"}\nExpires: ${formatRuntimeTime(confirmation.expiresAt)}\n\nPayload digest:\n${confirmation.orderPayloadDigest}\n\nThis confirmation is one-time and bound to this exact server order payload.`,
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Confirm Order",
+            onPress: () => void confirmPendingOrder(confirmation),
+          },
+        ],
+      );
+    },
+    [confirmPendingOrder, confirmingId],
+  );
 
   const requestAutomationAction = useCallback(() => {
     if (automationOn) {
@@ -628,6 +714,90 @@ export default function AiTradingScreen() {
           ) : null}
         </View>
 
+        {session?.executionMode === "SEMI_AUTO" ? (
+          <View style={[styles.card, styles.confirmationCard]}>
+            <View style={styles.runtimeHeader}>
+              <View style={styles.runtimeHeaderCopy}>
+                <Text style={styles.cardKicker}>SEMI-AUTO CONFIRMATIONS</Text>
+                <Text style={styles.cardTitle}>
+                  Pending orders · {confirmations.length}
+                </Text>
+              </View>
+            </View>
+
+            <Text style={styles.muted}>
+              Every order below was queued by the server and is bound to an exact
+              one-time payload. Confirming relays approval only; final execution
+              remains subject to current risk, authority and broker checks.
+            </Text>
+
+            {confirmationsWarning ? (
+              <View style={styles.inlineWarning}>
+                <Text style={styles.runtimeWarningText}>{confirmationsWarning}</Text>
+              </View>
+            ) : null}
+
+            {confirmations.length > 0 ? (
+              confirmations.map((confirmation) => (
+                <View key={confirmation.id} style={styles.confirmationItem}>
+                  <View style={styles.runtimeHeader}>
+                    <View style={styles.runtimeHeaderCopy}>
+                      <Text style={styles.confirmationInstrument}>
+                        {confirmation.direction} {confirmation.instrument}
+                      </Text>
+                      <Text style={styles.runtimeSubvalue}>
+                        {confirmation.quantity} · expires{" "}
+                        {formatRuntimeTime(confirmation.expiresAt)}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.detailGrid}>
+                    <View style={styles.detailCell}>
+                      <Text style={styles.detailLabel}>Stop loss</Text>
+                      <Text style={styles.detailValue}>
+                        {confirmation.stopLoss ?? "—"}
+                      </Text>
+                    </View>
+                    <View style={styles.detailCell}>
+                      <Text style={styles.detailLabel}>Take profit</Text>
+                      <Text style={styles.detailValue}>
+                        {confirmation.takeProfit ?? "—"}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <Text style={styles.detailLabel}>Bound payload digest</Text>
+                  <Text selectable style={styles.payloadDigest}>
+                    {confirmation.orderPayloadDigest}
+                  </Text>
+
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Confirm ${confirmation.direction} ${confirmation.instrument} order`}
+                    disabled={confirmingId !== null}
+                    onPress={() => requestOrderConfirmation(confirmation)}
+                    style={[
+                      styles.confirmButton,
+                      confirmingId !== null && styles.disabled,
+                    ]}
+                  >
+                    {confirmingId === confirmation.id ? (
+                      <ActivityIndicator color="#042f2e" size="small" />
+                    ) : (
+                      <Text style={styles.confirmButtonText}>Confirm exact order</Text>
+                    )}
+                  </Pressable>
+                </View>
+              ))
+            ) : (
+              <Text style={styles.hint}>
+                No server-queued confirmations are pending.
+              </Text>
+            )}
+          </View>
+        ) : null}
+
         {runtimeWarning ? (
           <View style={styles.runtimeWarningCard} accessibilityRole="alert">
             <Text style={styles.runtimeWarningTitle}>AI runtime status unavailable</Text>
@@ -933,6 +1103,38 @@ const styles = StyleSheet.create({
     fontSize: 10,
     textAlign: "center",
   },
+  confirmationCard: { borderColor: "#6d28d9" },
+  confirmationItem: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#413060",
+    backgroundColor: "#0c1322",
+    padding: 12,
+    gap: 10,
+  },
+  confirmationInstrument: { color: "#e9d5ff", fontSize: 14, fontWeight: "800" },
+  inlineWarning: {
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: "#854d0e",
+    backgroundColor: "#271a08",
+    padding: 9,
+  },
+  payloadDigest: {
+    color: "#a8b3cf",
+    fontSize: 9,
+    lineHeight: 14,
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+  },
+  confirmButton: {
+    minHeight: 44,
+    borderRadius: 10,
+    backgroundColor: "#c4b5fd",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 12,
+  },
+  confirmButtonText: { color: "#2e1065", fontSize: 12, fontWeight: "900" },
   runtimeWarningCard: {
     borderRadius: 12,
     borderWidth: 1,

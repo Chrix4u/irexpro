@@ -386,7 +386,7 @@ export default function LiveAccountScreen() {
               <Text style={styles.mutedSmall}>
                 Authority generation {session.authorityGeneration}
                 {session.executionMode === "SEMI_AUTO"
-                  ? " · confirmations are approved in the web workspace"
+                  ? " · pending confirmations are handled in AI Trading"
                   : ""}
               </Text>
             ) : null}
