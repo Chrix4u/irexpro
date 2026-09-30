@@ -253,6 +253,16 @@ def test_future_holdout_attaches_actionable_target_before_split_validation(
             "event_barrier_return": [0.0005] * 2000,
         }
     )
+    payload = _qualification_payload()
+    frozen_prefix = frame.loc[
+        frame["decision_time"] < pd.Timestamp("2026-07-01T00:00:00Z")
+    ].copy()
+    payload["qualification_frame_sha256"] = final_test._qualification_frame_sha256(
+        frozen_prefix
+    )
+    payload["qualification_frame_rows"] = len(frozen_prefix)
+    qualification.write_text(json.dumps(payload), encoding="utf-8")
+
     called = {"value": False}
 
     def fake_load(*_args, **_kwargs):
