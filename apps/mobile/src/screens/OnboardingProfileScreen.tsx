@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Text } from 'react-native';
 import { api } from '../lib/api';
+import { buildProfileUpdate } from './onboarding-screen.logic';
 import { ActionButton, Banner, Card, LabeledInput, SectionHeader, palette } from '../components/ui';
 
 export default function OnboardingProfileScreen({
@@ -43,37 +44,23 @@ export default function OnboardingProfileScreen({
   }, [load]);
 
   const save = useCallback(async () => {
-    const country = countryCode.trim().toUpperCase();
-    const currency = preferredCurrency.trim().toUpperCase();
-
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateOfBirth.trim())) {
-      setError('Enter your date of birth in YYYY-MM-DD format.');
-      return;
-    }
-    if (!/^[A-Z]{2}$/.test(country)) {
-      setError('Enter a valid two-letter country code, for example GH.');
-      return;
-    }
-    if (!/^[A-Z]{3}$/.test(currency)) {
-      setError('Enter a valid three-letter currency code, for example USD.');
-      return;
-    }
-    if (!timezone.trim()) {
-      setError('Timezone is required.');
+    const built = buildProfileUpdate({
+      firstName,
+      lastName,
+      dateOfBirth,
+      countryCode,
+      timezone,
+      preferredCurrency,
+    });
+    if ('error' in built) {
+      setError(built.error ?? 'Invalid profile details.');
       return;
     }
 
     setSaving(true);
     setError(null);
     try {
-      await api.updateMyProfile({
-        firstName: firstName.trim() || undefined,
-        lastName: lastName.trim() || undefined,
-        dateOfBirth: dateOfBirth.trim(),
-        countryCode: country,
-        timezone: timezone.trim(),
-        preferredCurrency: currency,
-      });
+      await api.updateMyProfile(built.body);
       onContinue();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Failed to save profile');

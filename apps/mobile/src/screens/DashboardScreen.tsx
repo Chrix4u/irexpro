@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import type { OnboardingStatus } from '@irexpro/types';
 import { api } from '../lib/api';
+import { destinationForOnboardingStep } from './onboarding-screen.logic';
 import { ActionButton, Card, SectionHeader, StatusPill, palette } from '../components/ui';
 
 export default function DashboardScreen({
@@ -39,9 +40,16 @@ export default function DashboardScreen({
 
   const nextAction = useMemo(() => {
     if (!onboarding) return null;
-    if (onboarding.nextStep === 'PROFILE') return { label: 'Complete trader profile', action: onOpenProfile };
-    if (onboarding.nextStep === 'ELIGIBILITY') return { label: 'Complete eligibility', action: onOpenEligibility };
-    if (onboarding.nextStep === 'BROKER_CONNECTION') return { label: 'Connect broker', action: onOpenBroker };
+    const destination = destinationForOnboardingStep(onboarding.nextStep);
+    if (destination === 'profile-onboarding') {
+      return { label: 'Complete trader profile', action: onOpenProfile };
+    }
+    if (destination === 'eligibility-onboarding') {
+      return { label: 'Complete eligibility', action: onOpenEligibility };
+    }
+    if (destination === 'brokers') {
+      return { label: 'Connect broker', action: onOpenBroker };
+    }
     return null;
   }, [onOpenBroker, onOpenEligibility, onOpenProfile, onboarding]);
 

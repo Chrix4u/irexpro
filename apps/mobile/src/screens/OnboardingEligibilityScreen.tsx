@@ -3,6 +3,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { createEligibilityApi } from '@irexpro/api-client/eligibility';
 import type { EligibilityDisclosureKey, EligibilityStatusView } from '@irexpro/types/eligibility';
 import { api } from '../lib/api';
+import { buildDisclosureAcceptance, disclosuresAreSelectable } from './onboarding-screen.logic';
 import { ActionButton, Banner, Card, SectionHeader, StatusPill, palette } from '../components/ui';
 
 const eligibilityApi = createEligibilityApi(api);
@@ -91,30 +92,19 @@ export default function OnboardingEligibilityScreen({
     setError(null);
     setMessage(null);
 
-    if (status.ageStatus !== 'ADULT') {
-      setError('The adult-age requirement must be satisfied before disclosure evidence can be recorded.');
+    const built = buildDisclosureAcceptance(status, selected);
+    if ('error' in built) {
+      setError(built.error ?? 'Eligibility evidence is incomplete.');
       return;
     }
-    if (missing.some((item) => !selected.has(item.key))) {
-      setError('Review and accept every outstanding required disclosure before continuing.');
-      return;
-    }
-    if (missing.length === 0) {
+    if (built.body === null) {
       if (status.canProceed) onContinue();
       return;
     }
 
     setSaving(true);
     try {
-      const next = await eligibilityApi.acceptDisclosures({
-        policyVersion: status.policyVersion,
-        policyFingerprint: status.policyFingerprint,
-        acceptances: missing.map((item) => ({
-          key: item.key,
-          version: item.version,
-          contentSha256: item.contentSha256,
-        })),
-      });
+      const next = await eligibilityApi.acceptDisclosures(built.body);
       setStatus(next);
       setSelected(new Set());
       if (next.canProceed) {
@@ -131,9 +121,9 @@ export default function OnboardingEligibilityScreen({
     } finally {
       setSaving(false);
     }
-  }, [missing, onContinue, selected, status]);
+  }, [onContinue, selected, status]);
 
-  const disclosuresDisabled = !status || status.ageStatus !== 'ADULT' || status.jurisdictionStatus === 'INELIGIBLE';
+  const disclosuresDisabled = !status || !disclosuresAreSelectable(status);
 
   return (
     <ScrollView style={styles.flex} contentContainerStyle={styles.content}>
