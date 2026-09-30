@@ -247,20 +247,22 @@ export default function BrokerScreen() {
               style={styles.card}
               accessibilityLabel={`${connection.brokerName} ${connection.accountType} connection`}
             >
-              <View style={styles.rowBetween}>
-                <Text style={styles.cardTitle} numberOfLines={2} ellipsizeMode="tail">
+              <View style={styles.cardIdentityHeader}>
+                <Text style={styles.cardTitle} numberOfLines={3} ellipsizeMode="tail">
                   {connection.brokerName}
                 </Text>
-                <Text
-                  style={[
-                    styles.envBadge,
-                    connection.accountType === "LIVE"
-                      ? styles.envLive
-                      : styles.envDemo,
-                  ]}
-                >
-                  {connection.accountType}
-                </Text>
+                <View style={styles.badgeRow}>
+                  <Text
+                    style={[
+                      styles.envBadge,
+                      connection.accountType === "LIVE"
+                        ? styles.envLive
+                        : styles.envDemo,
+                    ]}
+                  >
+                    {connection.accountType}
+                  </Text>
+                </View>
               </View>
               <Text
                 style={[
@@ -368,23 +370,25 @@ export default function BrokerScreen() {
               style={styles.card}
               accessibilityLabel={`${entry.name}, ${presentation.label}`}
             >
-              <View style={styles.rowBetween}>
-                <Text style={styles.cardTitle} numberOfLines={2} ellipsizeMode="tail">
+              <View style={styles.cardIdentityHeader}>
+                <Text style={styles.cardTitle} numberOfLines={3} ellipsizeMode="tail">
                   {entry.name}
                 </Text>
-                <Text
-                  style={[
-                    styles.statusBadge,
-                    {
-                      color: presentation.color,
-                      borderColor: presentation.color,
-                    },
-                  ]}
-                  numberOfLines={2}
-                  ellipsizeMode="tail"
-                >
-                  {presentation.label}
-                </Text>
+                <View style={styles.badgeRow}>
+                  <Text
+                    style={[
+                      styles.statusBadge,
+                      {
+                        color: presentation.color,
+                        borderColor: presentation.color,
+                      },
+                    ]}
+                    numberOfLines={2}
+                    ellipsizeMode="tail"
+                  >
+                    {presentation.label}
+                  </Text>
+                </View>
               </View>
               <Text style={styles.mutedSmall} numberOfLines={3}>
                 {presentation.description}
@@ -993,8 +997,21 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     gap: 9,
   },
+  cardIdentityHeader: {
+    width: "100%",
+    minWidth: 0,
+    gap: 8,
+  },
+  badgeRow: {
+    width: "100%",
+    minWidth: 0,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "flex-start",
+    gap: 6,
+  },
   cardTitle: {
-    flex: 1,
+    width: "100%",
     minWidth: 0,
     flexShrink: 1,
     fontSize: 16,
@@ -1010,6 +1027,8 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   rowWrap: {
+    width: "100%",
+    minWidth: 0,
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 6,
@@ -1053,7 +1072,8 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   envBadge: {
-    flexShrink: 0,
+    maxWidth: "100%",
+    flexShrink: 1,
     alignSelf: "flex-start",
     borderRadius: 999,
     paddingHorizontal: 9,

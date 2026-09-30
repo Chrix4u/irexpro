@@ -109,14 +109,40 @@ export default function AiTradingScreen() {
     [connections, selectedBrokerId],
   );
 
+  const sessionBroker = useMemo(
+    () =>
+      session
+        ? connections.find(
+            (connection) => connection.id === session.brokerConnectionId,
+          ) ?? null
+        : null,
+    [connections, session],
+  );
+
+  const connectedAlternatives = useMemo(
+    () =>
+      connections.filter(
+        (connection) =>
+          connection.status === "CONNECTED" &&
+          connection.id !== session?.brokerConnectionId,
+      ),
+    [connections, session],
+  );
+
+  const sessionBrokerDisconnected =
+    Boolean(sessionBroker) && sessionBroker?.status !== "CONNECTED";
+
   const selectableConnections = useMemo(() => {
     if (session) {
-      return connections.filter(
+      const bound = connections.find(
         (connection) => connection.id === session.brokerConnectionId,
       );
+      return bound
+        ? [bound, ...connectedAlternatives]
+        : connectedAlternatives;
     }
     return connections.filter((connection) => connection.status === "CONNECTED");
-  }, [connections, session]);
+  }, [connectedAlternatives, connections, session]);
 
   const loadAllocation = useCallback(async (brokerConnectionId: string | null) => {
     if (!brokerConnectionId) {
@@ -536,6 +562,20 @@ export default function AiTradingScreen() {
           </View>
         ) : null}
 
+        {sessionBrokerDisconnected ? (
+          <View style={styles.sessionBindingWarning} accessibilityRole="alert">
+            <Text style={styles.sessionBindingWarningTitle}>
+              Active AI session broker is disconnected
+            </Text>
+            <Text style={styles.sessionBindingWarningText}>
+              This AI session is still bound to {sessionBroker ? brokerLabel(sessionBroker) : "its original broker"}.
+              {connectedAlternatives.length > 0
+                ? ` ${connectedAlternatives.length} other connected broker account${connectedAlternatives.length === 1 ? "" : "s"} ${connectedAlternatives.length === 1 ? "is" : "are"} available, but iRexPro will not silently move an active trading session to another account. Stop AI Trading first, then select the connected broker.`
+                : " Reconnect that broker or stop AI Trading before selecting another account."}
+            </Text>
+          </View>
+        ) : null}
+
         <View style={styles.card}>
           <Text style={styles.cardKicker}>1 · BROKER ACCOUNT</Text>
           {selectableConnections.length === 0 ? (
@@ -577,6 +617,9 @@ export default function AiTradingScreen() {
                         {brokerLabel(connection)}
                       </Text>
                       <Text style={styles.brokerOptionMeta}>
+                        {session?.brokerConnectionId === connection.id
+                          ? "SESSION"
+                          : "AVAILABLE"}{" · "}
                         {connection.accountType} · {connection.status}
                       </Text>
                     </Pressable>
@@ -1219,6 +1262,25 @@ const styles = StyleSheet.create({
   },
   runtimeValue: { color: "#e2e8f0", fontSize: 12, fontWeight: "700", marginTop: 3 },
   runtimeSubvalue: { color: "#7f8ba8", fontSize: 10, lineHeight: 15, marginTop: 2 },
+  sessionBindingWarning: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#a16207",
+    backgroundColor: "#2a1d06",
+    padding: 13,
+    marginBottom: 12,
+    gap: 5,
+  },
+  sessionBindingWarningTitle: {
+    color: "#fde68a",
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  sessionBindingWarningText: {
+    color: "#d6b95a",
+    fontSize: 11,
+    lineHeight: 17,
+  },
   truthCard: {
     borderRadius: 14,
     borderWidth: 1,
