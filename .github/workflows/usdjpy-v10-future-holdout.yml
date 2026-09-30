@@ -76,7 +76,7 @@ jobs:
           readonly research_root='/home/lightworld/research'
           readonly frozen_reference_sha='8b79b373c7800998465879eef2fa03409fe49e44'
           readonly qualification_sha='87302ce319a7a6ef3f76f0cb75702b797081015e'
-          readonly evaluator_sha='11e098427e585c8e17f94860e58e255f0fce76f2'
+          readonly evaluator_sha='5ee5f29477c6061612a6543506da89878e414ac7'
           readonly boundary='2026-09-27T05:00:00+00:00'
           readonly pair='USDJPY'
           readonly horizon='1'
