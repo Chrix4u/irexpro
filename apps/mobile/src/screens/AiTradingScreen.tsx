@@ -14,6 +14,7 @@ import {
 } from "react-native";
 import type { BrokerConnectionView } from "@irexpro/types";
 import type {
+  AiAutomationRuntimeStatusView,
   TradingSessionView,
   UserCapitalAllocationView,
 } from "@irexpro/types/execution";
@@ -41,6 +42,46 @@ function safeMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
 }
 
+function formatConfidence(value: number | null | undefined): string {
+  return value == null ? "—" : `${(value * 100).toFixed(2)}%`;
+}
+
+function formatRuntimeTime(value: string | null | undefined): string {
+  if (!value) return "—";
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+}
+
+function modelModeLabel(value: string | null | undefined): string {
+  if (!value) return "Unknown";
+  if (value === "heuristic_placeholder") return "Heuristic scaffold";
+  if (value === "trained_xgboost_mtf") return "Trained MTF XGBoost";
+  if (value === "trained_xgboost" || value === "real") return "Trained XGBoost";
+  return value.replaceAll("_", " ");
+}
+
+function runtimeReasonLabel(value: string | null | undefined): string {
+  if (!value) return "Waiting for the first market scan.";
+  const labels: Record<string, string> = {
+    confidence_below_threshold:
+      "Market setup did not meet the confidence threshold.",
+    confidence_threshold_passed:
+      "Signal passed the confidence threshold and was published.",
+    market_data_unchanged:
+      "No new market-data revision was available, so no duplicate signal was published.",
+    scheduler_integration_disabled: "AI scheduler integration is disabled.",
+    model_not_approved_for_live:
+      "Current AI model is not yet approved for live-money automation.",
+    MarketDataError:
+      "Market data is unavailable or invalid; this scan was skipped.",
+    research_uat_replay_budget_exhausted:
+      "Research PAPER replay completed its bounded market steps without an eligible signal.",
+    uat_workflow_probe_published:
+      "Synthetic Research PAPER workflow probe published; the model did not pass the normal confidence gate.",
+  };
+  return labels[value] ?? value.replaceAll("_", " ");
+}
+
 export default function AiTradingScreen() {
   const [connections, setConnections] = useState<BrokerConnectionView[]>([]);
   const [session, setSession] = useState<TradingSessionView | null>(null);
@@ -52,6 +93,8 @@ export default function AiTradingScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState<BusyAction>(null);
   const [error, setError] = useState<string | null>(null);
+  const [runtime, setRuntime] = useState<AiAutomationRuntimeStatusView | null>(null);
+  const [runtimeWarning, setRuntimeWarning] = useState<string | null>(null);
 
   const automationOn = isAutomationRunning(session);
 
@@ -91,6 +134,25 @@ export default function AiTradingScreen() {
     }
   }, []);
 
+  const loadRuntime = useCallback(async (activeSession: TradingSessionView | null) => {
+    if (!activeSession) {
+      setRuntime(null);
+      setRuntimeWarning(null);
+      return;
+    }
+
+    try {
+      const next = await api.getAutomationRuntimeStatus(activeSession.id);
+      setRuntime(next);
+      setRuntimeWarning(null);
+    } catch {
+      setRuntime(null);
+      setRuntimeWarning(
+        "AI Trading is running, but the AI engine runtime status could not be verified yet. Start/Stop controls remain governed by the server trading session.",
+      );
+    }
+  }, []);
+
   const load = useCallback(async () => {
     try {
       const [userConnections, activeSession] = await Promise.all([
@@ -110,18 +172,29 @@ export default function AiTradingScreen() {
       setSelectedBrokerId(nextBrokerId);
       setError(null);
 
-      await loadAllocation(nextBrokerId);
+      await Promise.all([
+        loadAllocation(nextBrokerId),
+        loadRuntime(activeSession.session),
+      ]);
     } catch (requestError) {
       setError(safeMessage(requestError, "Failed to load AI Trading"));
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [loadAllocation]);
+  }, [loadAllocation, loadRuntime]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (!session) return;
+    const timer = setInterval(() => {
+      void loadRuntime(session);
+    }, 8000);
+    return () => clearInterval(timer);
+  }, [loadRuntime, session]);
 
   const refresh = useCallback(() => {
     setRefreshing(true);
@@ -555,6 +628,150 @@ export default function AiTradingScreen() {
           ) : null}
         </View>
 
+        {runtimeWarning ? (
+          <View style={styles.runtimeWarningCard} accessibilityRole="alert">
+            <Text style={styles.runtimeWarningTitle}>AI runtime status unavailable</Text>
+            <Text style={styles.runtimeWarningText}>{runtimeWarning}</Text>
+          </View>
+        ) : null}
+
+        {automationOn && runtime ? (
+          <View style={[styles.card, styles.runtimeCard]}>
+            <View style={styles.runtimeHeader}>
+              <View style={styles.runtimeHeaderCopy}>
+                <Text style={styles.cardKicker}>AI RUNTIME</Text>
+                <Text style={styles.cardTitle}>
+                  {runtime.research_uat ? "Research PAPER UAT" : "Automation runtime"}
+                </Text>
+              </View>
+              <View
+                style={[
+                  styles.runtimeBadge,
+                  runtime.active ? styles.runtimeBadgeActive : styles.runtimeBadgeIdle,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.runtimeBadgeText,
+                    runtime.active ? styles.runtimeBadgeTextActive : styles.runtimeBadgeTextIdle,
+                  ]}
+                >
+                  {runtime.active ? "ACTIVE" : "IDLE"}
+                </Text>
+              </View>
+            </View>
+
+            {runtime.research_uat ? (
+              <View style={styles.researchBanner}>
+                <Text style={styles.researchBannerTitle}>RESEARCH PAPER</Text>
+                <Text style={styles.researchBannerText}>
+                  Simulated execution only. Model promotion gates remain unchanged.
+                </Text>
+              </View>
+            ) : null}
+
+            <View style={styles.confidencePanel}>
+              <View>
+                <Text style={styles.detailLabel}>
+                  {runtime.last_decision === "NO_NEW_MARKET_DATA"
+                    ? "Last evaluated confidence"
+                    : "AI confidence"}
+                </Text>
+                <Text style={styles.confidenceValue}>
+                  {formatConfidence(runtime.last_confidence_score)}
+                </Text>
+              </View>
+              <View style={styles.confidenceGate}>
+                <Text style={styles.detailLabel}>Gate</Text>
+                <Text style={styles.confidenceGateValue}>
+                  {formatConfidence(runtime.confidence_threshold)}
+                </Text>
+              </View>
+            </View>
+
+            <Text style={styles.runtimeReason}>
+              {runtimeReasonLabel(runtime.last_reason)}
+            </Text>
+
+            <View style={styles.runtimeGrid}>
+              <View style={styles.runtimeCell}>
+                <Text style={styles.detailLabel}>Model</Text>
+                <Text style={styles.runtimeValue}>
+                  {runtime.model_version ?? "Awaiting model"}
+                </Text>
+                <Text style={styles.runtimeSubvalue}>
+                  {modelModeLabel(runtime.model_mode)} ·{" "}
+                  {runtime.model_loaded === true
+                    ? "loaded"
+                    : runtime.model_loaded === false
+                      ? "not loaded"
+                      : "load state unknown"}
+                </Text>
+              </View>
+              <View style={styles.runtimeCell}>
+                <Text style={styles.detailLabel}>Last decision</Text>
+                <Text style={styles.runtimeValue}>
+                  {runtime.last_decision?.replaceAll("_", " ") ?? "WAITING"}
+                </Text>
+                <Text style={styles.runtimeSubvalue}>
+                  {runtime.instruments.length
+                    ? runtime.instruments.join(", ")
+                    : "No instruments reported"}
+                </Text>
+              </View>
+              <View style={styles.runtimeCell}>
+                <Text style={styles.detailLabel}>Timeframe / scan</Text>
+                <Text style={styles.runtimeValue}>
+                  {runtime.timeframe ?? "MTF"} ·{" "}
+                  {runtime.interval_seconds != null
+                    ? `${runtime.interval_seconds}s`
+                    : "interval —"}
+                </Text>
+                <Text style={styles.runtimeSubvalue}>
+                  Next {formatRuntimeTime(runtime.next_run_at)}
+                </Text>
+              </View>
+              <View style={styles.runtimeCell}>
+                <Text style={styles.detailLabel}>Market timestamp</Text>
+                <Text style={styles.runtimeValue}>
+                  {formatRuntimeTime(runtime.last_market_data_at)}
+                </Text>
+                <Text style={styles.runtimeSubvalue}>
+                  Last close {runtime.last_market_data_close ?? "—"}
+                </Text>
+              </View>
+              <View style={styles.runtimeCell}>
+                <Text style={styles.detailLabel}>Replay steps</Text>
+                <Text style={styles.runtimeValue}>
+                  {runtime.replay_steps_total ?? 0}
+                </Text>
+                <Text style={styles.runtimeSubvalue}>
+                  Last cycle {runtime.replay_steps_last_cycle ?? 0}
+                </Text>
+              </View>
+              <View style={styles.runtimeCell}>
+                <Text style={styles.detailLabel}>Executions / signals</Text>
+                <Text style={styles.runtimeValue}>
+                  {runtime.executions_succeeded_total ?? 0} /{" "}
+                  {runtime.signals_published_total ?? 0}
+                </Text>
+                <Text style={styles.runtimeSubvalue}>
+                  Downstream rejected {runtime.downstream_rejected_total ?? 0}
+                </Text>
+              </View>
+            </View>
+
+            <Text style={styles.sessionMeta}>
+              Last scan {formatRuntimeTime(runtime.last_run_at)}
+            </Text>
+          </View>
+        ) : automationOn && !runtimeWarning ? (
+          <View style={styles.card}>
+            <Text style={styles.cardKicker}>AI RUNTIME</Text>
+            <Text style={styles.muted}>Waiting for runtime status…</Text>
+          </View>
+        ) : null}
+
         <View style={styles.truthCard}>
           <Text style={styles.truthTitle}>Execution truth</Text>
           <Text style={styles.truthText}>
@@ -716,6 +933,69 @@ const styles = StyleSheet.create({
     fontSize: 10,
     textAlign: "center",
   },
+  runtimeWarningCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#854d0e",
+    backgroundColor: "#271a08",
+    padding: 12,
+    marginBottom: 12,
+    gap: 4,
+  },
+  runtimeWarningTitle: { color: "#fde68a", fontSize: 12, fontWeight: "800" },
+  runtimeWarningText: { color: "#fcd34d", fontSize: 11, lineHeight: 17 },
+  runtimeCard: { borderColor: "#155e75" },
+  runtimeHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 12,
+  },
+  runtimeHeaderCopy: { flex: 1, gap: 4 },
+  runtimeBadge: {
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+  },
+  runtimeBadgeActive: { borderColor: "#14b8a6", backgroundColor: "#052e2b" },
+  runtimeBadgeIdle: { borderColor: "#475569", backgroundColor: "#172033" },
+  runtimeBadgeText: { fontSize: 9, fontWeight: "900", letterSpacing: 0.8 },
+  runtimeBadgeTextActive: { color: "#5eead4" },
+  runtimeBadgeTextIdle: { color: "#cbd5e1" },
+  researchBanner: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#a16207",
+    backgroundColor: "#2a1d06",
+    padding: 10,
+    gap: 2,
+  },
+  researchBannerTitle: { color: "#fde68a", fontSize: 10, fontWeight: "900" },
+  researchBannerText: { color: "#d6b95a", fontSize: 10, lineHeight: 15 },
+  confidencePanel: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-end",
+    borderRadius: 12,
+    backgroundColor: "#0c1322",
+    padding: 12,
+  },
+  confidenceValue: { color: "#5eead4", fontSize: 27, fontWeight: "900", marginTop: 3 },
+  confidenceGate: { alignItems: "flex-end" },
+  confidenceGateValue: { color: "#f8fafc", fontSize: 16, fontWeight: "800", marginTop: 3 },
+  runtimeReason: { color: "#cbd5e1", fontSize: 12, lineHeight: 18 },
+  runtimeGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  runtimeCell: {
+    flexBasis: "48%",
+    flexGrow: 1,
+    borderRadius: 10,
+    backgroundColor: "#0c1322",
+    padding: 10,
+    minWidth: 140,
+  },
+  runtimeValue: { color: "#e2e8f0", fontSize: 12, fontWeight: "700", marginTop: 3 },
+  runtimeSubvalue: { color: "#7f8ba8", fontSize: 10, lineHeight: 15, marginTop: 2 },
   truthCard: {
     borderRadius: 14,
     borderWidth: 1,

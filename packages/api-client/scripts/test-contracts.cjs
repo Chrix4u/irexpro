@@ -507,6 +507,67 @@ async function testActiveTradingSessionContract() {
   assert.equal(init.headers['Content-Type'], 'application/json');
 }
 
+async function testAutomationRuntimeStatusContract() {
+  const calls = [];
+  const responseBody = {
+    enabled: true,
+    registered: true,
+    trading_session_id: 'sess/needs encoding-1',
+    active: true,
+    instruments: ['USDJPY'],
+    timeframe: 'H1',
+    interval_seconds: 10,
+    source: 'research_replay',
+    last_run_at: '2026-09-30T12:00:00.000Z',
+    next_run_at: '2026-09-30T12:00:10.000Z',
+    last_decision: 'NO_NEW_MARKET_DATA',
+    last_reason: 'market_data_unchanged',
+    last_confidence_score: 0.3376,
+    last_confidence_at: '2026-09-30T12:00:00.000Z',
+    confidence_threshold: 0.6,
+    model_version: 'fixture-v10',
+    model_mode: 'trained_xgboost_mtf',
+    model_loaded: true,
+    last_market_data_at: '2026-09-29T19:59:00.000Z',
+    last_market_data_close: '143.210',
+    market_data_age_seconds: 100,
+    market_data_cache_bypassed: false,
+    last_publish_failed: false,
+    research_uat: true,
+    replay_steps_total: 543,
+    signals_published_total: 0,
+    executions_succeeded_total: 0,
+    downstream_rejected_total: 0,
+  };
+  const fakeFetch = async (url, init) => {
+    calls.push({ url, init });
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => responseBody,
+    };
+  };
+
+  const { createApiClient } = loadApiClient(fakeFetch);
+  const client = createApiClient({
+    baseUrl: 'https://api.example.test/api/v1',
+    getAccessToken: () => 'fixture-access-token',
+  });
+
+  const result = await client.getAutomationRuntimeStatus('sess/needs encoding-1');
+  assert.deepEqual(result, responseBody);
+  assert.equal(calls.length, 1, 'automation runtime must issue exactly one request');
+  const [{ url, init }] = calls;
+  assert.equal(
+    url,
+    'https://api.example.test/api/v1/trading/sessions/sess%2Fneeds%20encoding-1/automation-status',
+  );
+  assert.equal(init.method ?? 'GET', 'GET');
+  assert.equal(init.headers.Authorization, 'Bearer fixture-access-token');
+  assert.equal(init.headers['Content-Type'], 'application/json');
+}
+
 async function testStartTradingSessionContract() {
   const calls = [];
   const responseBody = {
@@ -865,6 +926,8 @@ async function main() {
   console.log('api-client oauth handoff contract test passed.');
   await testActiveTradingSessionContract();
   console.log('api-client active-trading-session contract test passed.');
+  await testAutomationRuntimeStatusContract();
+  console.log('api-client automation-runtime contract test passed.');
   await testStartTradingSessionContract();
   console.log('api-client trading-session start contract test passed.');
   await testChangeTradingSessionModeContract();
