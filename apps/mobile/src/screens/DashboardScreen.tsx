@@ -1,8 +1,22 @@
-import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  ActivityIndicator,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import type { OnboardingStatus } from '@irexpro/types';
 import { api } from '../lib/api';
-import { ActionButton, Card, SectionHeader, StatusPill, palette } from '../components/ui';
+import {
+  ActionButton,
+  Banner,
+  Card,
+  SectionHeader,
+  StatusPill,
+  palette,
+} from '../components/ui';
 
 export default function DashboardScreen({
   onOpenProfile,
@@ -15,46 +29,109 @@ export default function DashboardScreen({
 }) {
   const [onboarding, setOnboarding] = useState<OnboardingStatus | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const status = await api.getOnboardingStatus();
-        if (!cancelled) {
-          setOnboarding(status);
-          setError(null);
-        }
-      } catch (requestError) {
-        if (!cancelled) setError(requestError instanceof Error ? requestError.message : 'Failed to load onboarding status');
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+  const load = useCallback(async () => {
+    try {
+      const status = await api.getOnboardingStatus();
+      setOnboarding(status);
+      setError(null);
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : 'Failed to load onboarding status',
+      );
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    void load();
+  }, [load]);
 
   const nextAction = useMemo(() => {
     if (!onboarding) return null;
-    if (onboarding.nextStep === 'PROFILE') return { label: 'Complete trader profile', action: onOpenProfile };
-    if (onboarding.nextStep === 'ELIGIBILITY') return { label: 'Complete eligibility', action: onOpenEligibility };
-    if (onboarding.nextStep === 'BROKER_CONNECTION') return { label: 'Connect broker', action: onOpenBroker };
+    if (onboarding.nextStep === 'PROFILE') {
+      return { label: 'Complete trader profile', action: onOpenProfile };
+    }
+    if (onboarding.nextStep === 'ELIGIBILITY') {
+      return { label: 'Complete eligibility', action: onOpenEligibility };
+    }
+    if (onboarding.nextStep === 'BROKER_CONNECTION') {
+      return { label: 'Connect broker', action: onOpenBroker };
+    }
     return null;
   }, [onOpenBroker, onOpenEligibility, onOpenProfile, onboarding]);
 
-  return (
-    <View style={styles.container}>
-      <Text style={styles.eyebrow}>IREXPRO</Text>
-      <Text style={styles.title}>Home</Text>
-      <Text style={styles.subtitle}>Your setup and AI trading readiness at a glance.</Text>
+  const completedSteps = onboarding
+    ? [
+        onboarding.profileCompleted,
+        onboarding.eligibilityCompleted,
+        onboarding.brokerConnected,
+      ].filter(Boolean).length
+    : 0;
 
-      <Card>
+  return (
+    <ScrollView
+      style={styles.screen}
+      contentContainerStyle={styles.container}
+      showsVerticalScrollIndicator={false}
+      keyboardShouldPersistTaps="handled"
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          tintColor={palette.accent}
+          colors={[palette.accent]}
+          progressBackgroundColor={palette.card}
+        />
+      }
+    >
+      <View style={styles.hero}>
+        <View style={styles.heroGlow} />
+        <Text style={styles.eyebrow}>IREXPRO · MOBILE</Text>
+        <Text style={styles.title}>Trading command center</Text>
+        <Text style={styles.subtitle}>
+          Setup status, broker readiness and AI trading access in one place.
+        </Text>
+
+        <View style={styles.heroStats}>
+          <View style={styles.heroStat}>
+            <Text style={styles.heroStatValue}>{completedSteps}/3</Text>
+            <Text style={styles.heroStatLabel}>Setup steps</Text>
+          </View>
+          <View style={styles.heroDivider} />
+          <View style={styles.heroStat}>
+            <Text
+              style={[
+                styles.heroStatValue,
+                onboarding?.canStartTrading
+                  ? styles.heroStatReady
+                  : styles.heroStatPending,
+              ]}
+            >
+              {onboarding?.canStartTrading ? 'READY' : 'CHECK'}
+            </Text>
+            <Text style={styles.heroStatLabel}>Trading gate</Text>
+          </View>
+        </View>
+      </View>
+
+      {error ? <Banner variant="error">{error}</Banner> : null}
+
+      <Card style={styles.readinessCard}>
         <SectionHeader
-          title="Ready for AI Trading?"
-          description="Readiness is verified by the server. The mobile app does not bypass profile, eligibility, broker or model gates."
+          title="AI trading readiness"
+          description="Every gate is verified by the server. Mobile cannot bypass profile, eligibility, broker or model controls."
           right={
             onboarding ? (
               <StatusPill
@@ -70,64 +147,260 @@ export default function DashboardScreen({
             <ActivityIndicator color={palette.accent} />
             <Text style={styles.muted}>Checking readiness…</Text>
           </View>
-        ) : error ? (
-          <Text style={styles.error}>{error}</Text>
         ) : onboarding ? (
           <>
-            <ReadinessRow label="Profile" complete={onboarding.profileCompleted} />
-            <ReadinessRow label="Eligibility" complete={onboarding.eligibilityCompleted} />
-            <ReadinessRow label="Broker" complete={onboarding.brokerConnected} />
-            <ReadinessRow label="Trading readiness" complete={onboarding.canStartTrading} />
+            <ReadinessRow
+              index="01"
+              label="Trader profile"
+              complete={onboarding.profileCompleted}
+            />
+            <ReadinessRow
+              index="02"
+              label="Eligibility & disclosures"
+              complete={onboarding.eligibilityCompleted}
+            />
+            <ReadinessRow
+              index="03"
+              label="Broker connection"
+              complete={onboarding.brokerConnected}
+            />
+            <ReadinessRow
+              index="04"
+              label="Trading readiness"
+              complete={onboarding.canStartTrading}
+              last
+            />
+
             {nextAction ? (
-              <ActionButton label={nextAction.label} onPress={nextAction.action} />
+              <ActionButton
+                label={nextAction.label}
+                onPress={nextAction.action}
+              />
             ) : (
-              <Text style={styles.readyCopy}>
-                Setup gates are complete. Use the AI tab to manage server-approved AI Trading.
-              </Text>
+              <View style={styles.readyPanel}>
+                <Text style={styles.readyPanelTitle}>Setup gates complete</Text>
+                <Text style={styles.readyCopy}>
+                  Use the AI tab to manage server-approved AI Trading and view
+                  live runtime status.
+                </Text>
+              </View>
             )}
           </>
         ) : null}
       </Card>
 
-      <Card>
-        <SectionHeader
-          title="Mobile onboarding"
-          description="Profile, adult-age/KYC readiness, jurisdiction disclosures and broker setup can now be completed from the native app."
+      <SectionHeader
+        title="Account setup"
+        description="Manage the prerequisites that control broker and AI access."
+      />
+
+      <View style={styles.actionGrid}>
+        <QuickAction
+          kicker="IDENTITY"
+          title="Trader profile"
+          description="Personal details and account identity."
+          onPress={onOpenProfile}
         />
-        <ActionButton label="Trader profile" secondary onPress={onOpenProfile} />
-        <ActionButton label="Eligibility & disclosures" secondary onPress={onOpenEligibility} />
-        <ActionButton label="Broker connections" secondary onPress={onOpenBroker} />
-      </Card>
+        <QuickAction
+          kicker="COMPLIANCE"
+          title="Eligibility"
+          description="Adult-age, KYC and disclosures."
+          onPress={onOpenEligibility}
+        />
+        <QuickAction
+          kicker="EXECUTION"
+          title="Broker"
+          description="Connect, verify or reconnect an account."
+          onPress={onOpenBroker}
+        />
+      </View>
+
+      <View style={styles.bottomSpacer} />
+    </ScrollView>
+  );
+}
+
+function ReadinessRow({
+  index,
+  label,
+  complete,
+  last = false,
+}: {
+  index: string;
+  label: string;
+  complete: boolean;
+  last?: boolean;
+}) {
+  return (
+    <View style={[styles.statusRow, last && styles.statusRowLast]}>
+      <View style={styles.statusLabelGroup}>
+        <View style={[styles.stepDot, complete && styles.stepDotComplete]}>
+          <Text style={[styles.stepDotText, complete && styles.stepDotTextComplete]}>
+            {complete ? '✓' : index}
+          </Text>
+        </View>
+        <Text style={styles.statusText}>{label}</Text>
+      </View>
+      <StatusPill
+        status={complete ? 'COMPLETE' : 'PENDING'}
+        tone={complete ? 'positive' : 'warning'}
+      />
     </View>
   );
 }
 
-function ReadinessRow({ label, complete }: { label: string; complete: boolean }) {
+function QuickAction({
+  kicker,
+  title,
+  description,
+  onPress,
+}: {
+  kicker: string;
+  title: string;
+  description: string;
+  onPress: () => void;
+}) {
   return (
-    <View style={styles.statusRow}>
-      <Text style={styles.statusText}>{label}</Text>
-      <StatusPill status={complete ? 'COMPLETE' : 'PENDING'} tone={complete ? 'positive' : 'warning'} />
+    <View style={styles.quickCard}>
+      <Text style={styles.quickKicker}>{kicker}</Text>
+      <Text style={styles.quickTitle}>{title}</Text>
+      <Text style={styles.quickDescription}>{description}</Text>
+      <ActionButton label="Open" secondary onPress={onPress} />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: palette.bg, padding: 18 },
-  eyebrow: { color: palette.accent, fontSize: 11, fontWeight: '800', letterSpacing: 1.1, marginTop: 8 },
-  title: { fontSize: 27, fontWeight: '800', color: palette.text, marginTop: 6 },
-  subtitle: { color: palette.muted, fontSize: 14, marginTop: 5, marginBottom: 18 },
-  loadingRow: { flexDirection: 'row', gap: 10, alignItems: 'center', marginTop: 14 },
+  screen: { flex: 1, backgroundColor: palette.bg },
+  container: {
+    paddingHorizontal: 18,
+    paddingTop: 14,
+    paddingBottom: 26,
+  },
+  hero: {
+    overflow: 'hidden',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#1f6f69',
+    backgroundColor: '#0d1d27',
+    padding: 20,
+    marginBottom: 16,
+  },
+  heroGlow: {
+    position: 'absolute',
+    width: 150,
+    height: 150,
+    borderRadius: 75,
+    backgroundColor: '#123e42',
+    opacity: 0.7,
+    top: -65,
+    right: -45,
+  },
+  eyebrow: {
+    color: '#5eead4',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 1.4,
+  },
+  title: {
+    fontSize: 27,
+    fontWeight: '900',
+    color: palette.text,
+    marginTop: 8,
+    maxWidth: 300,
+  },
+  subtitle: {
+    color: palette.bodySoft,
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 7,
+    maxWidth: 330,
+  },
+  heroStats: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    borderRadius: 14,
+    backgroundColor: 'rgba(4, 15, 22, 0.55)',
+    marginTop: 18,
+    padding: 12,
+  },
+  heroStat: { flex: 1, gap: 3 },
+  heroStatValue: { color: palette.text, fontSize: 17, fontWeight: '900' },
+  heroStatReady: { color: '#5eead4' },
+  heroStatPending: { color: '#fde68a' },
+  heroStatLabel: { color: palette.helper, fontSize: 10, fontWeight: '700' },
+  heroDivider: { width: 1, backgroundColor: '#22404a', marginHorizontal: 14 },
+  readinessCard: { marginTop: 2 },
+  loadingRow: {
+    flexDirection: 'row',
+    gap: 10,
+    alignItems: 'center',
+    marginTop: 16,
+  },
   muted: { color: palette.muted, fontSize: 13 },
-  error: { color: palette.errorText, fontSize: 13, lineHeight: 19, marginTop: 12 },
   statusRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     gap: 12,
-    paddingVertical: 10,
+    paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: palette.cardBorder,
   },
-  statusText: { color: palette.body, fontSize: 14, fontWeight: '600' },
-  readyCopy: { color: palette.success.text, fontSize: 13, lineHeight: 19, marginTop: 14 },
+  statusRowLast: { borderBottomWidth: 0 },
+  statusLabelGroup: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
+  stepDot: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: palette.inputBorder,
+    backgroundColor: palette.input,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stepDotComplete: {
+    borderColor: palette.success.border,
+    backgroundColor: palette.success.background,
+  },
+  stepDotText: { color: palette.muted, fontSize: 9, fontWeight: '900' },
+  stepDotTextComplete: { color: '#5eead4', fontSize: 13 },
+  statusText: { color: palette.body, fontSize: 13, fontWeight: '700', flexShrink: 1 },
+  readyPanel: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: palette.success.border,
+    backgroundColor: palette.success.background,
+    padding: 12,
+    marginTop: 12,
+  },
+  readyPanelTitle: { color: '#5eead4', fontSize: 12, fontWeight: '900' },
+  readyCopy: {
+    color: palette.success.text,
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 3,
+  },
+  actionGrid: { gap: 10, marginTop: 12 },
+  quickCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: palette.cardBorder,
+    backgroundColor: palette.card,
+    padding: 15,
+  },
+  quickKicker: {
+    color: palette.accent,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 1,
+  },
+  quickTitle: { color: palette.text, fontSize: 16, fontWeight: '800', marginTop: 5 },
+  quickDescription: {
+    color: palette.muted,
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 3,
+  },
+  bottomSpacer: { height: 12 },
 });

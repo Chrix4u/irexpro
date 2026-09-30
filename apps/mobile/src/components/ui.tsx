@@ -1,6 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ComponentProps, ReactNode } from 'react';
 import {
+  ActivityIndicator,
+  Animated,
+  Easing,
+  Modal,
   Pressable,
   StyleSheet,
   Text,
@@ -238,6 +242,170 @@ export function Banner({
   );
 }
 
+
+export function ActionDialog({
+  visible,
+  kicker,
+  title,
+  message,
+  detailLines = [],
+  confirmLabel,
+  cancelLabel = 'Cancel',
+  onConfirm,
+  onCancel,
+  busy = false,
+  danger = false,
+  status,
+}: {
+  visible: boolean;
+  kicker?: string;
+  title: string;
+  message: string;
+  detailLines?: string[];
+  confirmLabel: string;
+  cancelLabel?: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+  busy?: boolean;
+  danger?: boolean;
+  status?: { tone: 'success' | 'error' | 'info'; message: string } | null;
+}) {
+  const progress = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (!visible) {
+      progress.setValue(0);
+      return;
+    }
+    Animated.timing(progress, {
+      toValue: 1,
+      duration: 210,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [progress, visible]);
+
+  const translateY = progress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [18, 0],
+  });
+  const scale = progress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.97, 1],
+  });
+
+  return (
+    <Modal
+      transparent
+      visible={visible}
+      animationType="fade"
+      statusBarTranslucent
+      onRequestClose={busy ? undefined : onCancel}
+    >
+      <View style={styles.dialogBackdrop}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Close dialog"
+          style={StyleSheet.absoluteFill}
+          onPress={busy ? undefined : onCancel}
+        />
+        <Animated.View
+          style={[
+            styles.dialogPanel,
+            {
+              opacity: progress,
+              transform: [{ translateY }, { scale }],
+            },
+          ]}
+          accessibilityViewIsModal
+        >
+          <View style={[styles.dialogAccent, danger && styles.dialogAccentDanger]} />
+          {kicker ? <Text style={styles.dialogKicker}>{kicker}</Text> : null}
+          <Text style={styles.dialogTitle}>{title}</Text>
+          <Text style={styles.dialogMessage}>{message}</Text>
+
+          {detailLines.length > 0 ? (
+            <View style={styles.dialogDetails}>
+              {detailLines.map((line) => (
+                <View key={line} style={styles.dialogDetailRow}>
+                  <View style={styles.dialogDetailDot} />
+                  <Text style={styles.dialogDetailText}>{line}</Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
+
+          {status ? (
+            <View
+              style={[
+                styles.dialogStatus,
+                status.tone === 'success'
+                  ? styles.dialogStatusSuccess
+                  : status.tone === 'error'
+                    ? styles.dialogStatusError
+                    : styles.dialogStatusInfo,
+              ]}
+              accessibilityRole="alert"
+            >
+              <Text
+                style={[
+                  styles.dialogStatusText,
+                  status.tone === 'success'
+                    ? styles.dialogStatusTextSuccess
+                    : status.tone === 'error'
+                      ? styles.dialogStatusTextError
+                      : styles.dialogStatusTextInfo,
+                ]}
+              >
+                {status.message}
+              </Text>
+            </View>
+          ) : null}
+
+          <View style={styles.dialogActions}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={cancelLabel}
+              onPress={onCancel}
+              disabled={busy}
+              style={[styles.dialogButton, styles.dialogCancel, busy && styles.dialogDisabled]}
+            >
+              <Text style={styles.dialogCancelText}>{cancelLabel}</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={confirmLabel}
+              onPress={onConfirm}
+              disabled={busy}
+              style={[
+                styles.dialogButton,
+                danger ? styles.dialogConfirmDanger : styles.dialogConfirm,
+                busy && styles.dialogDisabled,
+              ]}
+            >
+              {busy ? (
+                <ActivityIndicator
+                  size="small"
+                  color={danger ? palette.danger.text : palette.accentText}
+                />
+              ) : (
+                <Text
+                  style={[
+                    styles.dialogConfirmText,
+                    danger && styles.dialogConfirmDangerText,
+                  ]}
+                >
+                  {confirmLabel}
+                </Text>
+              )}
+            </Pressable>
+          </View>
+        </Animated.View>
+      </View>
+    </Modal>
+  );
+}
+
 /**
  * Animation-free loading placeholder block. Compose inside `Card`s to
  * skeleton out a screen while data loads.
@@ -336,6 +504,134 @@ const styles = StyleSheet.create({
   },
   bannerText: { fontSize: 13, lineHeight: 19 },
   divider: { height: 1, backgroundColor: palette.cardBorder, marginTop: 16 },
+  dialogBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(2, 6, 23, 0.78)',
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+  },
+  dialogPanel: {
+    overflow: 'hidden',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: palette.cardBorder,
+    backgroundColor: '#10182a',
+    padding: 18,
+    shadowColor: '#000000',
+    shadowOpacity: 0.32,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 16,
+  },
+  dialogAccent: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: 4,
+    backgroundColor: palette.accent,
+  },
+  dialogAccentDanger: { backgroundColor: '#ef4444' },
+  dialogKicker: {
+    color: palette.accent,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 1.1,
+    textTransform: 'uppercase',
+    marginBottom: 6,
+  },
+  dialogTitle: {
+    color: palette.text,
+    fontSize: 20,
+    fontWeight: '900',
+    marginBottom: 7,
+  },
+  dialogMessage: {
+    color: palette.bodySoft,
+    fontSize: 13,
+    lineHeight: 20,
+  },
+  dialogDetails: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: palette.cardBorder,
+    backgroundColor: palette.input,
+    padding: 11,
+    marginTop: 14,
+    gap: 9,
+  },
+  dialogDetailRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 9,
+  },
+  dialogDetailDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: palette.accent,
+    marginTop: 6,
+  },
+  dialogDetailText: {
+    flex: 1,
+    color: palette.muted,
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  dialogStatus: {
+    borderRadius: 10,
+    borderWidth: 1,
+    padding: 10,
+    marginTop: 13,
+  },
+  dialogStatusSuccess: {
+    backgroundColor: palette.success.background,
+    borderColor: palette.success.border,
+  },
+  dialogStatusError: {
+    backgroundColor: palette.error.background,
+    borderColor: palette.error.border,
+  },
+  dialogStatusInfo: {
+    backgroundColor: palette.info.background,
+    borderColor: palette.info.border,
+  },
+  dialogStatusText: { fontSize: 12, lineHeight: 18 },
+  dialogStatusTextSuccess: { color: palette.success.text },
+  dialogStatusTextError: { color: palette.error.text },
+  dialogStatusTextInfo: { color: palette.info.text },
+  dialogActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 18,
+  },
+  dialogButton: {
+    flex: 1,
+    minHeight: 46,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+  },
+  dialogCancel: {
+    backgroundColor: palette.secondaryButton,
+    borderWidth: 1,
+    borderColor: palette.inputBorder,
+  },
+  dialogConfirm: { backgroundColor: palette.accent },
+  dialogConfirmDanger: {
+    backgroundColor: palette.danger.background,
+    borderWidth: 1,
+    borderColor: '#b91c1c',
+  },
+  dialogDisabled: { opacity: 0.56 },
+  dialogCancelText: { color: palette.body, fontSize: 13, fontWeight: '800' },
+  dialogConfirmText: {
+    color: palette.accentText,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  dialogConfirmDangerText: { color: palette.danger.text },
   skeletonBlock: {
     backgroundColor: palette.input,
     borderRadius: 8,

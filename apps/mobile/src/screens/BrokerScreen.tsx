@@ -15,7 +15,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   KeyboardAvoidingView,
   Linking,
   Modal,
@@ -36,6 +35,7 @@ import type {
 } from "@irexpro/types";
 import { api } from "../lib/api";
 import {
+  brokerConnectionAction,
   buildConnectionRequest,
   credentialFields,
   isConnectableEntry,
@@ -53,6 +53,7 @@ import {
   oauthAccountOptions,
   parseBrokerOAuthHandoffLink,
 } from "./broker-screen-oauth.logic";
+import { ActionDialog, Banner, palette } from "../components/ui";
 
 const ENVIRONMENT_OPTIONS: ReadonlyArray<"DEMO" | "LIVE"> = ["DEMO", "LIVE"];
 
@@ -65,6 +66,10 @@ export default function BrokerScreen() {
 
   const [connectTarget, setConnectTarget] =
     useState<BrokerRegistryEntry | null>(null);
+  const [actionTarget, setActionTarget] = useState<BrokerConnectionView | null>(null);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -94,35 +99,79 @@ export default function BrokerScreen() {
     void load();
   }, [load]);
 
-  const disconnect = useCallback(
-    (connection: BrokerConnectionView) => {
-      Alert.alert(
-        "Disconnect broker",
-        `Disconnect ${connection.brokerName} (${connection.accountType})?`,
-        [
-          { text: "Cancel", style: "cancel" },
-          {
-            text: "Disconnect",
-            style: "destructive",
-            onPress: () => {
-              void (async () => {
-                try {
-                  await api.disconnectBroker(connection.id);
-                  await load();
-                } catch (err) {
-                  Alert.alert(
-                    "Disconnect failed",
-                    err instanceof Error ? err.message : "Unknown error",
-                  );
-                }
-              })();
-            },
-          },
-        ],
-      );
-    },
-    [load],
-  );
+  const openConnectionAction = useCallback((connection: BrokerConnectionView) => {
+    setActionError(null);
+    setNotice(null);
+    setActionTarget(connection);
+  }, []);
+
+  const closeConnectionAction = useCallback(() => {
+    if (actionBusy) return;
+    setActionTarget(null);
+    setActionError(null);
+  }, [actionBusy]);
+
+  const confirmConnectionAction = useCallback(async () => {
+    if (!actionTarget || actionBusy) return;
+
+    const action = brokerConnectionAction(actionTarget.status);
+    if (action === "WAIT") return;
+
+    setActionBusy(true);
+    setActionError(null);
+    try {
+      if (action === "DISCONNECT") {
+        await api.disconnectBroker(actionTarget.id);
+        setNotice(
+          `${actionTarget.brokerName} disconnected. New AI exposure authority has been invalidated for this connection.`,
+        );
+      } else {
+        await api.connectBroker(actionTarget.id);
+        setNotice(`${actionTarget.brokerName} reconnect request completed.`);
+      }
+
+      await load();
+      setActionTarget(null);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Broker action failed";
+
+      try {
+        const refreshed = await api.listBrokerConnections();
+        setConnections(refreshed);
+        const reconciled = refreshed.find(
+          (connection) => connection.id === actionTarget.id,
+        );
+
+        const reconciledSuccess =
+          (action === "DISCONNECT" &&
+            reconciled?.status === "DISCONNECTED") ||
+          (action === "RECONNECT" &&
+            reconciled?.status === "CONNECTED");
+
+        if (reconciledSuccess) {
+          setActionError(null);
+          setNotice(
+            action === "DISCONNECT"
+              ? `${actionTarget.brokerName} is confirmed disconnected.`
+              : `${actionTarget.brokerName} is confirmed connected.`,
+          );
+          setActionTarget(null);
+          return;
+        }
+      } catch {
+        // Preserve the original action error; the user can retry/refresh.
+      }
+
+      setActionError(message);
+    } finally {
+      setActionBusy(false);
+    }
+  }, [actionBusy, actionTarget, load]);
+
+  const actionIntent = actionTarget
+    ? brokerConnectionAction(actionTarget.status)
+    : null;
 
   if (loading) {
     return (
@@ -149,7 +198,13 @@ export default function BrokerScreen() {
           />
         }
       >
-        <Text style={styles.title}>Brokers</Text>
+        <Text style={styles.eyebrow}>EXECUTION CONNECTIVITY</Text>
+        <Text style={styles.title}>Broker connections</Text>
+        <Text style={styles.screenSubtitle}>
+          Connect, verify, disconnect or reconnect broker accounts without bypassing server trading gates.
+        </Text>
+
+        {notice ? <Banner variant="success">{notice}</Banner> : null}
 
         {error ? (
           <View
@@ -185,6 +240,7 @@ export default function BrokerScreen() {
               connection,
               registry.find((entry) => entry.id === connection.brokerId) ?? null,
             );
+            const connectionAction = brokerConnectionAction(connection.status);
             return (
             <View
               key={connection.id}
@@ -223,11 +279,38 @@ export default function BrokerScreen() {
                 </Text>
               ) : null}
               <View style={styles.rowWrap}>
-                <Text style={styles.chip}>{connection.status}</Text>
-                <Text style={styles.chip}>
+                <Text
+                  style={[
+                    styles.chip,
+                    connection.status === "CONNECTED"
+                      ? styles.chipPositive
+                      : connection.status === "ERROR"
+                        ? styles.chipDanger
+                        : styles.chipNeutral,
+                  ]}
+                >
+                  {connection.status}
+                </Text>
+                <Text
+                  style={[
+                    styles.chip,
+                    connection.authorizationStatus === "ACTIVE"
+                      ? styles.chipPositive
+                      : styles.chipNeutral,
+                  ]}
+                >
                   {connection.authorizationStatus}
                 </Text>
-                <Text style={styles.chip}>{connection.credentialStatus}</Text>
+                <Text
+                  style={[
+                    styles.chip,
+                    connection.credentialStatus === "VERIFIED"
+                      ? styles.chipPositive
+                      : styles.chipNeutral,
+                  ]}
+                >
+                  {connection.credentialStatus}
+                </Text>
                 {connection.lastSyncAt ? (
                   <Text style={styles.mutedSmall}>
                     Synced {new Date(connection.lastSyncAt).toLocaleString()}
@@ -241,11 +324,29 @@ export default function BrokerScreen() {
               ) : null}
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel={`Disconnect ${connection.brokerName}`}
-                style={styles.secondaryButton}
-                onPress={() => disconnect(connection)}
+                accessibilityLabel={`${connectionAction === "DISCONNECT" ? "Disconnect" : "Reconnect"} ${connection.brokerName}`}
+                disabled={connectionAction === "WAIT"}
+                style={[
+                  connectionAction === "DISCONNECT"
+                    ? styles.dangerButton
+                    : styles.secondaryButton,
+                  connectionAction === "WAIT" && styles.buttonDisabled,
+                ]}
+                onPress={() => openConnectionAction(connection)}
               >
-                <Text style={styles.secondaryButtonText}>Disconnect</Text>
+                <Text
+                  style={
+                    connectionAction === "DISCONNECT"
+                      ? styles.dangerButtonText
+                      : styles.secondaryButtonText
+                  }
+                >
+                  {connectionAction === "DISCONNECT"
+                    ? "Disconnect"
+                    : connectionAction === "WAIT"
+                      ? "Connecting…"
+                      : "Reconnect"}
+                </Text>
               </Pressable>
             </View>
             );
@@ -316,6 +417,47 @@ export default function BrokerScreen() {
           );
         })}
       </ScrollView>
+
+      <ActionDialog
+        visible={Boolean(actionTarget && actionIntent !== "WAIT")}
+        kicker={actionIntent === "DISCONNECT" ? "BROKER SAFETY" : "BROKER CONNECTION"}
+        title={
+          actionIntent === "DISCONNECT"
+            ? "Disconnect broker?"
+            : "Reconnect broker?"
+        }
+        message={
+          actionTarget
+            ? actionIntent === "DISCONNECT"
+              ? `Disconnect ${actionTarget.brokerName} ${actionTarget.accountType} account ${actionTarget.accountId ?? ""}?`
+              : `Reconnect ${actionTarget.brokerName} ${actionTarget.accountType} account ${actionTarget.accountId ?? ""}?`
+            : ""
+        }
+        detailLines={
+          actionIntent === "DISCONNECT"
+            ? [
+                "New AI exposure authority for this connection will be invalidated.",
+                "Open broker positions are not assumed closed by a broker disconnect.",
+                "The saved connection remains available so you can reconnect later.",
+              ]
+            : [
+                "The server reuses the saved encrypted credential set; secrets are never displayed in the app.",
+                "Provider connectivity and authorization checks run again before the connection becomes usable.",
+                "Trading remains blocked unless every current server-side gate passes.",
+              ]
+        }
+        confirmLabel={actionIntent === "DISCONNECT" ? "Disconnect" : "Reconnect"}
+        cancelLabel="Cancel"
+        busy={actionBusy}
+        danger={actionIntent === "DISCONNECT"}
+        status={
+          actionError
+            ? { tone: "error", message: actionError }
+            : null
+        }
+        onCancel={closeConnectionAction}
+        onConfirm={() => void confirmConnectionAction()}
+      />
 
       {connectTarget ? (
         <ConnectFlowModal
@@ -808,38 +950,41 @@ function ConnectFlowModal({
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1 },
-  scrollContent: { padding: 16, paddingBottom: 48 },
+  flex: { flex: 1, backgroundColor: palette.bg },
+  scrollContent: { paddingHorizontal: 18, paddingTop: 14, paddingBottom: 64 },
+  eyebrow: { color: palette.accent, fontSize: 9, fontWeight: "900", letterSpacing: 1.15, marginBottom: 6 },
+  screenSubtitle: { color: palette.muted, fontSize: 13, lineHeight: 19, marginTop: -2, marginBottom: 16 },
   center: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
     gap: 12,
     padding: 24,
+    backgroundColor: palette.bg,
   },
   title: {
-    fontSize: 24,
-    fontWeight: "700",
-    color: "#0f172a",
-    marginBottom: 12,
+    fontSize: 26,
+    fontWeight: "900",
+    color: palette.text,
+    marginBottom: 8,
   },
   sectionTitle: {
     fontSize: 16,
-    fontWeight: "600",
-    color: "#334155",
+    fontWeight: "800",
+    color: palette.text,
     marginTop: 20,
-    marginBottom: 8,
+    marginBottom: 10,
   },
   card: {
-    backgroundColor: "#ffffff",
-    borderRadius: 12,
+    backgroundColor: palette.card,
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: "#e2e8f0",
+    borderColor: palette.cardBorder,
     padding: 16,
     marginBottom: 12,
-    gap: 8,
+    gap: 9,
   },
-  cardTitle: { fontSize: 16, fontWeight: "600", color: "#0f172a" },
+  cardTitle: { fontSize: 16, fontWeight: "800", color: palette.text },
   rowBetween: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -851,20 +996,24 @@ const styles = StyleSheet.create({
     gap: 6,
     alignItems: "center",
   },
-  muted: { color: "#64748b", fontSize: 14 },
-  mutedSmall: { color: "#94a3b8", fontSize: 12 },
+  muted: { color: palette.muted, fontSize: 13, lineHeight: 19 },
+  mutedSmall: { color: palette.helper, fontSize: 11, lineHeight: 17 },
   chip: {
-    backgroundColor: "#f1f5f9",
-    color: "#475569",
+    backgroundColor: palette.input,
+    color: palette.bodySoft,
     borderRadius: 999,
     paddingHorizontal: 8,
-    paddingVertical: 2,
-    fontSize: 11,
+    paddingVertical: 3,
+    fontSize: 10,
+    fontWeight: "800",
     overflow: "hidden",
   },
+  chipPositive: { backgroundColor: "#0d2928", color: "#5eead4" },
+  chipNeutral: { backgroundColor: "#18233b", color: "#b9c3dd" },
+  chipDanger: { backgroundColor: "#3b171c", color: "#fecaca" },
   routeChip: {
-    backgroundColor: "#ecfdf5",
-    color: "#047857",
+    backgroundColor: "#0d2928",
+    color: "#5eead4",
     borderRadius: 999,
     paddingHorizontal: 8,
     paddingVertical: 2,
@@ -888,8 +1037,8 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     overflow: "hidden",
   },
-  envDemo: { backgroundColor: "#fef3c7", color: "#92400e" },
-  envLive: { backgroundColor: "#ffe4e6", color: "#9f1239" },
+  envDemo: { backgroundColor: "#291f0b", color: "#fde68a" },
+  envLive: { backgroundColor: "#3b171c", color: "#fecaca" },
   verificationLabel: {
     fontSize: 12,
     fontWeight: "700",
@@ -897,68 +1046,79 @@ const styles = StyleSheet.create({
   },
   envOption: {
     borderWidth: 1,
-    borderColor: "#cbd5e1",
+    borderColor: palette.inputBorder,
     borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 8,
     marginRight: 8,
   },
-  envOptionActive: { borderColor: "#0d9488", backgroundColor: "#ccfbf1" },
-  envOptionText: { color: "#475569", fontSize: 13, fontWeight: "600" },
-  envOptionTextActive: { color: "#134e4a" },
+  envOptionActive: { borderColor: palette.accent, backgroundColor: "#0d2928" },
+  envOptionText: { color: palette.muted, fontSize: 13, fontWeight: "700" },
+  envOptionTextActive: { color: "#5eead4" },
   label: {
     fontSize: 13,
     fontWeight: "600",
-    color: "#334155",
+    color: palette.body,
     marginTop: 12,
     marginBottom: 4,
   },
   input: {
     borderWidth: 1,
-    borderColor: "#cbd5e1",
+    borderColor: palette.inputBorder,
     borderRadius: 10,
     paddingHorizontal: 12,
     paddingVertical: 10,
     fontSize: 15,
-    color: "#0f172a",
-    backgroundColor: "#ffffff",
+    color: palette.inputText,
+    backgroundColor: palette.input,
   },
   primaryButton: {
-    backgroundColor: "#0d9488",
+    backgroundColor: palette.accent,
     borderRadius: 10,
     alignItems: "center",
     paddingVertical: 12,
     marginTop: 16,
   },
-  primaryButtonText: { color: "#ffffff", fontSize: 15, fontWeight: "700" },
+  primaryButtonText: { color: palette.accentText, fontSize: 14, fontWeight: "900" },
   secondaryButton: {
     borderWidth: 1,
-    borderColor: "#cbd5e1",
+    borderColor: palette.inputBorder,
+    backgroundColor: palette.secondaryButton,
     borderRadius: 10,
     alignItems: "center",
     paddingVertical: 10,
     marginTop: 8,
   },
-  secondaryButtonText: { color: "#334155", fontSize: 14, fontWeight: "600" },
+  secondaryButtonText: { color: palette.body, fontSize: 13, fontWeight: "800" },
+  dangerButton: {
+    borderWidth: 1,
+    borderColor: palette.danger.border,
+    backgroundColor: palette.danger.background,
+    borderRadius: 10,
+    alignItems: "center",
+    paddingVertical: 10,
+    marginTop: 8,
+  },
+  dangerButtonText: { color: palette.danger.text, fontSize: 13, fontWeight: "900" },
   buttonDisabled: { opacity: 0.6 },
   // ── cTrader OAuth flow (Sprint 56 correction round 1 / audit point 6) ──
-  sectionHint: { color: "#475569", fontSize: 14, lineHeight: 20, marginBottom: 12 },
-  mutedText: { color: "#64748b", fontSize: 12, marginTop: 2 },
+  sectionHint: { color: palette.muted, fontSize: 13, lineHeight: 19, marginBottom: 12 },
+  mutedText: { color: palette.helper, fontSize: 12, marginTop: 2 },
   accountOption: {
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
     padding: 12,
     borderWidth: 1,
-    borderColor: "#e2e8f0",
+    borderColor: palette.cardBorder,
     borderRadius: 10,
-    backgroundColor: "#f8fafc",
+    backgroundColor: palette.input,
     marginBottom: 8,
   },
   accountOptionDisabled: { opacity: 0.6 },
-  accountOptionTitle: { fontSize: 15, fontWeight: "600", color: "#0f172a" },
+  accountOptionTitle: { fontSize: 15, fontWeight: "700", color: palette.text },
   smallButton: {
-    backgroundColor: "#0d9488",
+    backgroundColor: palette.accent,
     borderRadius: 8,
     paddingHorizontal: 14,
     paddingVertical: 8,
@@ -967,23 +1127,23 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   errorCard: {
-    backgroundColor: "#fef2f2",
-    borderColor: "#fecdd3",
+    backgroundColor: palette.error.background,
+    borderColor: palette.error.border,
     borderWidth: 1,
     borderRadius: 12,
     padding: 14,
     marginBottom: 12,
     gap: 8,
   },
-  errorText: { color: "#b91c1c", fontSize: 13 },
-  errorTextSmall: { color: "#b91c1c", fontSize: 12 },
-  successText: { color: "#047857", fontSize: 13 },
+  errorText: { color: palette.error.text, fontSize: 13 },
+  errorTextSmall: { color: palette.errorText, fontSize: 12 },
+  successText: { color: palette.success.text, fontSize: 13 },
   retryButton: {
     alignSelf: "flex-start",
-    backgroundColor: "#fee2e2",
+    backgroundColor: palette.danger.background,
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 6,
   },
-  retryButtonText: { color: "#b91c1c", fontWeight: "600", fontSize: 13 },
+  retryButtonText: { color: palette.danger.text, fontWeight: "800", fontSize: 13 },
 });

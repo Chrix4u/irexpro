@@ -843,6 +843,37 @@ async function testPositionCloseContracts() {
   }
 }
 
+async function testBrokerDisconnect204Contract() {
+  const calls = [];
+  const fakeFetch = async (url, init) => {
+    calls.push({ url, init });
+    return {
+      ok: true,
+      status: 204,
+      statusText: 'No Content',
+      json: async () => {
+        throw new Error('204 responses must not be parsed as JSON');
+      },
+    };
+  };
+
+  const { createApiClient } = loadApiClient(fakeFetch);
+  const client = createApiClient({
+    baseUrl: 'https://api.example.test/api/v1',
+    getAccessToken: () => 'fixture-access-token',
+  });
+
+  const result = await client.disconnectBroker('conn/needs encoding');
+  assert.equal(result, undefined);
+  assert.equal(calls.length, 1);
+  assert.equal(
+    calls[0].url,
+    'https://api.example.test/api/v1/broker/connections/conn/needs encoding/disconnect',
+  );
+  assert.equal(calls[0].init.method, 'POST');
+  assert.equal(calls[0].init.headers.Authorization, 'Bearer fixture-access-token');
+}
+
 async function testUnauthorizedRecoveryIsSingleFlightAndRetriesOnce() {
   const calls = [];
   let token = 'expired-token';
@@ -938,6 +969,8 @@ async function main() {
   console.log('api-client confirmation 409-failure contract test passed.');
   await testPositionCloseContracts();
   console.log('api-client position-close contracts test passed.');
+  await testBrokerDisconnect204Contract();
+  console.log('api-client broker-disconnect 204 contract test passed.');
   await testUnauthorizedRecoveryIsSingleFlightAndRetriesOnce();
   console.log('api-client single-flight unauthorized recovery test passed.');
 }
