@@ -30,9 +30,10 @@ import type {
   LiveOrderStatusFilter,
   LivePositionRowView,
 } from "@irexpro/types";
-import type { TradingSessionView } from "@irexpro/types/execution";
+import type { TradeExecutionView, TradingSessionView } from "@irexpro/types/execution";
 import { api } from "../lib/api";
 import { liveAccount } from "../lib/live-account";
+import { execution } from "../lib/execution";
 import { useRealtime } from "../context/realtime-context";
 import {
   activityPresentation,
@@ -53,6 +54,7 @@ export default function LiveAccountScreen() {
   );
   const [orders, setOrders] = useState<LiveAccountOrdersPage | null>(null);
   const [activity, setActivity] = useState<LiveAccountActivityPage | null>(null);
+  const [closedExecutions, setClosedExecutions] = useState<TradeExecutionView[]>([]);
   const [orderFilter, setOrderFilter] = useState<LiveOrderStatusFilter>("ALL");
   // ── Trading session authority (Sprint 56 correction round 5) ──
   // The session mode/status/generation ARE the authoritative trading state
@@ -100,17 +102,19 @@ export default function LiveAccountScreen() {
         }
       })();
       try {
-        const [ov, pos, ord, act] = await Promise.all([
+        const [ov, pos, ord, act, closed] = await Promise.all([
           liveAccount.getOverview(),
           liveAccount.getPositions(),
           liveAccount.getOrders(filter),
           liveAccount.getActivity(30, 0),
+          execution.listClosedExecutions(20),
           loadSession,
         ]);
         setOverview(ov);
         setPositions(pos);
         setOrders(ord);
         setActivity(act);
+        setClosedExecutions(closed);
         setError(null);
       } catch (err) {
         setError(
@@ -645,6 +649,93 @@ export default function LiveAccountScreen() {
         </View>
       )}
 
+      <Text style={styles.sectionTitle}>Closed Trades & Realized P&L</Text>
+      {closedExecutions.length > 0 ? (
+        closedExecutions.map((trade) => {
+          const realisedLabel =
+            trade.realisedPnl && trade.accountCurrency
+              ? `${trade.accountCurrency} ${trade.realisedPnl}`
+              : "Realized P&L —";
+          const pnlTone =
+            trade.realisedPnl?.startsWith("-") === true
+              ? styles.realisedNegative
+              : styles.realisedPositive;
+
+          return (
+            <View
+              key={trade.id}
+              style={styles.card}
+              accessibilityLabel={`Closed ${trade.instrument} ${trade.direction} trade`}
+            >
+              <View style={styles.rowBetween}>
+                <View style={styles.rowWrap}>
+                  <Text
+                    style={[
+                      styles.directionBadge,
+                      trade.direction === "BUY"
+                        ? styles.directionBuy
+                        : styles.directionSell,
+                    ]}
+                  >
+                    {trade.direction}
+                  </Text>
+                  <Text style={styles.cardTitle}>{trade.instrument}</Text>
+                </View>
+                <Text style={[styles.realisedPnl, pnlTone]}>{realisedLabel}</Text>
+              </View>
+
+              <View style={styles.tradeEconomicsGrid}>
+                <View style={styles.tradeEconomicsCell}>
+                  <Text style={styles.mutedSmall}>Entry</Text>
+                  <Text style={styles.tradeEconomicsValue}>
+                    {trade.fillPrice ?? trade.requestedEntryPrice}
+                  </Text>
+                </View>
+                <View style={styles.tradeEconomicsCell}>
+                  <Text style={styles.mutedSmall}>Exit</Text>
+                  <Text style={styles.tradeEconomicsValue}>{trade.exitPrice ?? "—"}</Text>
+                </View>
+                <View style={styles.tradeEconomicsCell}>
+                  <Text style={styles.mutedSmall}>Commission</Text>
+                  <Text style={styles.tradeEconomicsValue}>
+                    {trade.commission && trade.accountCurrency
+                      ? `${trade.accountCurrency} ${trade.commission}`
+                      : "—"}
+                  </Text>
+                </View>
+                <View style={styles.tradeEconomicsCell}>
+                  <Text style={styles.mutedSmall}>Swap</Text>
+                  <Text style={styles.tradeEconomicsValue}>
+                    {trade.swap && trade.accountCurrency
+                      ? `${trade.accountCurrency} ${trade.swap}`
+                      : "—"}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.rowBetween}>
+                <Text style={styles.mutedSmall}>
+                  {trade.closeReason
+                    ? trade.closeReason.replaceAll("_", " ")
+                    : "Close reason —"}
+                </Text>
+                <Text style={styles.mutedSmall}>{trade.lotSize} lots</Text>
+              </View>
+              <Text style={styles.mutedSmall}>
+                Opened {trade.openedAt ? new Date(trade.openedAt).toLocaleString() : "—"}
+              </Text>
+              <Text style={styles.mutedSmall}>
+                Closed {trade.closedAt ? new Date(trade.closedAt).toLocaleString() : "—"}
+              </Text>
+            </View>
+          );
+        })
+      ) : (
+        <View style={styles.card}>
+          <Text style={styles.muted}>No closed trades recorded yet.</Text>
+        </View>
+      )}
+
       <Text style={styles.sectionTitle}>Orders</Text>
       <View style={styles.rowWrap}>
         {(["ALL", "WORKING", "HISTORY"] as const).map((filter) => (
@@ -880,6 +971,24 @@ const styles = StyleSheet.create({
   muted: { color: "#64748b", fontSize: 13 },
   mutedSmall: { color: "#94a3b8", fontSize: 11 },
   positionPnl: { color: "#0f766e", fontSize: 11, fontWeight: "700" },
+  realisedPnl: { fontSize: 12, fontWeight: "800" },
+  realisedPositive: { color: "#047857" },
+  realisedNegative: { color: "#be123c" },
+  tradeEconomicsGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 2,
+  },
+  tradeEconomicsCell: {
+    flexBasis: "48%",
+    borderRadius: 8,
+    backgroundColor: "#f8fafc",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    gap: 2,
+  },
+  tradeEconomicsValue: { color: "#0f172a", fontSize: 12, fontWeight: "700" },
   sessionMode: { color: "#e2e8f0", fontSize: 14, fontWeight: "700" },
   sessionStatus: { fontSize: 12, fontWeight: "700" },
   filterOption: {
