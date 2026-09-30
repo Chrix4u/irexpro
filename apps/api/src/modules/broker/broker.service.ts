@@ -789,6 +789,51 @@ export class BrokerService {
       this.logger.log(
         `Broker connected: id=${connectionId} account=${result.accountId} user=${userId}`,
       );
+    } catch (err) {
+      // Provider/SDK exceptions (timeouts, provisioning permission failures,
+      // transport errors, etc.) previously escaped through `finally` and left
+      // the durable connection row stuck in CONNECTING forever. Result-level
+      // broker failures above already persist their own terminal ERROR state
+      // before throwing BadRequestException, so only unhandled exceptions are
+      // normalized here.
+      if (!(err instanceof BadRequestException)) {
+        const failureError =
+          err instanceof Error ? err.message : 'Broker connection failed unexpectedly';
+        try {
+          await this.applyGuardedAuthorizationUpdate(
+            connectionId,
+            inFlightAuthorization,
+            {
+              status: BrokerConnectionStatus.ERROR,
+              lastErrorMessage: failureError,
+              consecutiveFailureCount: () => 'consecutive_failure_count + 1',
+              ...(BrokerAuthorizationStateMachine.canTransition(
+                inFlightAuthorization,
+                BrokerAuthorizationStatus.ERROR,
+              )
+                ? { authorizationStatus: BrokerAuthorizationStatus.ERROR }
+                : {}),
+            },
+            'connectBroker provider-exception ERROR transition',
+          );
+        } catch (transitionErr) {
+          this.logger.warn(
+            `connectBroker provider-exception transition lost a concurrent state race for ` +
+              `${connectionId}: ${(transitionErr as Error).message}`,
+          );
+        }
+
+        await this.auditService.log({
+          actorUserId: userId,
+          action: AuditAction.BROKER_CONNECT_FAILED,
+          resourceType: 'BrokerConnection',
+          resourceId: connectionId,
+          ipAddress,
+          metadata: { brokerId: connection.brokerId, error: failureError },
+          severity: AuditSeverity.WARNING,
+        });
+      }
+      throw err;
     } finally {
       // Explicitly zero out reference — decrypted credentials go out of scope here
       Object.keys(credentials).forEach((k) => {
