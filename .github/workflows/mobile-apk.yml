@@ -69,7 +69,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           pnpm --filter @irexpro/mobile typecheck
-          pnpm --filter @irexpro/mobile test -- --runInBand
+          pnpm --filter @irexpro/mobile test
           pnpm --filter @irexpro/mobile validate:release-config
           pnpm --filter @irexpro/mobile exec expo install --check
 
