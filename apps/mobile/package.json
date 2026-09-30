@@ -18,6 +18,7 @@
     "eas-build-pre-install": "node ./scripts/validate-release-config.cjs --eas-build"
   },
   "dependencies": {
+    "@babel/runtime": "7.29.7",
     "@irexpro/api-client": "workspace:*",
     "@irexpro/types": "workspace:*",
     "expo": "~55.0.31",
