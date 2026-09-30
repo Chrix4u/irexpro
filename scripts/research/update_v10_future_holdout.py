@@ -99,6 +99,8 @@ def fill_forward_cache(
     start_after: datetime,
     observed_now: datetime,
     max_new_rows: int,
+    timeout_seconds: float,
+    max_retries: int,
 ) -> dict:
     from app.domain.training.collect_dukascopy import (
         _fetch_hour,
@@ -128,8 +130,8 @@ def fill_forward_cache(
                 instrument='USDJPY',
                 hour=hour,
                 price_digits=3,
-                timeout_seconds=10.0,
-                max_retries=1,
+                timeout_seconds=timeout_seconds,
+                max_retries=max_retries,
                 cache_dir=cache_dir,
                 telemetry=telemetry,
             )
@@ -162,6 +164,8 @@ def main():
     ap.add_argument('--holdout',default='/home/lightworld/research/irexpro-usdjpy-v10-future-holdout/rolling/USDJPY_M1.csv')
     ap.add_argument('--cache-dir',default='/home/lightworld/research/dukascopy-raw-cache')
     ap.add_argument('--target-fetch-rows',type=int,default=3000)
+    ap.add_argument('--frontier-timeout-seconds',type=float,default=20.0)
+    ap.add_argument('--frontier-max-retries',type=int,default=3)
     a=ap.parse_args()
     repo=Path(a.repo); holdout=Path(a.holdout)
     ai=repo/'services/ai-engine'; py=ai/'.venv/bin/python'
@@ -192,6 +196,8 @@ def main():
             start_after=frontier,
             observed_now=observed_now,
             max_new_rows=max(TARGET-len(existing_post_times),0),
+            timeout_seconds=a.frontier_timeout_seconds,
+            max_retries=a.frontier_max_retries,
         )
     else:
         with tempfile.TemporaryDirectory(prefix='irex-v10-holdout-') as td:
