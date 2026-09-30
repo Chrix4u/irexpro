@@ -45,6 +45,7 @@ import type {
 } from '@irexpro/types';
 import type {
   ActiveTradingSessionResponse,
+  AiPositionCloseResultView,
   ChangeTradingSessionModeRequest,
   ChangeTradingSessionModeResponse,
   ConfirmExecutionConfirmationResponse,
@@ -53,6 +54,7 @@ import type {
   StartTradingSessionResponse,
   StopTradingSessionResponse,
   SetUserCapitalAllocationRequest,
+  TradeExecutionView,
   UserCapitalAllocationView,
 } from '@irexpro/types/execution';
 
@@ -269,6 +271,10 @@ export interface ApiClient {
   setCapitalAllocation(
     body: SetUserCapitalAllocationRequest,
   ): Promise<UserCapitalAllocationView>;
+  /** POST /execution/positions/:tradeId/close → request risk-reducing closure of one owned open position. */
+  closePosition(tradeId: string): Promise<TradeExecutionView>;
+  /** POST /execution/positions/close-all → request closure of all provably AI-opened positions. */
+  closeAllAiPositions(): Promise<AiPositionCloseResultView[]>;
 
   // ── Sprint 56 correction round 5: execution authority (issues #295/#298) ──
   /**
@@ -699,6 +705,21 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
       request<UserCapitalAllocationView>('/execution/capital-allocation', {
         method: 'POST',
         body: JSON.stringify(body),
+      }),
+
+    closePosition: (tradeId) =>
+      request<TradeExecutionView>(
+        `/execution/positions/${encodeURIComponent(tradeId)}/close`,
+        {
+          method: 'POST',
+          body: JSON.stringify({}),
+        },
+      ),
+
+    closeAllAiPositions: () =>
+      request<AiPositionCloseResultView[]>('/execution/positions/close-all', {
+        method: 'POST',
+        body: JSON.stringify({}),
       }),
 
     listPendingExecutionConfirmations: () =>

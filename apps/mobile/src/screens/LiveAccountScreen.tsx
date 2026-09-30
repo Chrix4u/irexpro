@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -61,6 +62,8 @@ export default function LiveAccountScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [closingPositionId, setClosingPositionId] = useState<string | null>(null);
+  const [closingAllPositions, setClosingAllPositions] = useState(false);
   const {
     connected,
     stale,
@@ -149,6 +152,128 @@ export default function LiveAccountScreen() {
     },
     [load],
   );
+
+  const closePosition = useCallback(
+    async (position: LivePositionRowView) => {
+      if (closingPositionId || closingAllPositions) return;
+      setClosingPositionId(position.id);
+      setError(null);
+      try {
+        const result = await api.closePosition(position.id);
+        if (result.status === "CLOSED") {
+          Alert.alert(
+            "Position closed",
+            `${position.instrument} ${position.direction} is confirmed closed by the execution service.`,
+          );
+        } else {
+          Alert.alert(
+            "Closure requires reconciliation",
+            `${position.instrument} is now ${result.status}. Positions & Activity remains the authoritative view until the server confirms closure.`,
+          );
+        }
+        await load();
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : "Failed to close position";
+        setError(message);
+        Alert.alert(
+          "Close failed",
+          message +
+            "\n\nThe position has not been assumed closed. Refresh Positions & Activity to verify its authoritative server state.",
+        );
+      } finally {
+        setClosingPositionId(null);
+      }
+    },
+    [closingAllPositions, closingPositionId, load],
+  );
+
+  const requestClosePosition = useCallback(
+    (position: LivePositionRowView) => {
+      if (closingPositionId || closingAllPositions) return;
+      Alert.alert(
+        "Close this position?",
+        `${position.instrument} ${position.direction} · ${position.lotSize} lots\n\nThis requests immediate risk-reducing closure through the execution service. The broker-confirmed exit price may differ from the current displayed mark.`,
+        [
+          { text: "Keep Open", style: "cancel" },
+          {
+            text: "Close Position",
+            style: "destructive",
+            onPress: () => void closePosition(position),
+          },
+        ],
+      );
+    },
+    [closePosition, closingAllPositions, closingPositionId],
+  );
+
+  const closeAllPositions = useCallback(async () => {
+    if (
+      !positions ||
+      positions.positions.length === 0 ||
+      closingPositionId ||
+      closingAllPositions
+    ) {
+      return;
+    }
+
+    setClosingAllPositions(true);
+    setError(null);
+    try {
+      const results = await api.closeAllAiPositions();
+      const closedCount = results.filter((result) => result.closed).length;
+      const unresolved = results.filter((result) => !result.closed);
+      if (unresolved.length === 0) {
+        Alert.alert(
+          "AI positions closed",
+          `Confirmed closed: ${closedCount} position${closedCount === 1 ? "" : "s"}.`,
+        );
+      } else {
+        const statusSummary = unresolved
+          .slice(0, 3)
+          .map((result) => `${result.tradeId.slice(0, 8)}… · ${result.status}`)
+          .join("\n");
+        Alert.alert(
+          "Some positions need reconciliation",
+          `${closedCount} confirmed closed; ${unresolved.length} unresolved.\n\n${statusSummary}\n\nRefresh Positions & Activity until the server confirms the final broker state.`,
+        );
+      }
+      await load();
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Failed to close AI positions";
+      setError(message);
+      Alert.alert(
+        "Close all failed",
+        message +
+          "\n\nNo position is assumed closed. Refresh Positions & Activity to verify the authoritative server state.",
+      );
+    } finally {
+      setClosingAllPositions(false);
+    }
+  }, [closingAllPositions, closingPositionId, load, positions]);
+
+  const requestCloseAllPositions = useCallback(() => {
+    const count = positions?.positions.length ?? 0;
+    if (count === 0 || closingPositionId || closingAllPositions) return;
+    Alert.alert(
+      "Close all AI-opened positions?",
+      `This requests immediate closure of every open position the server can prove was opened by iRexPro.\n\nVisible open positions: ${count}. Broker/manual positions without AI provenance are not swept.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Close All AI Positions",
+          style: "destructive",
+          onPress: () => void closeAllPositions(),
+        },
+      ],
+    );
+  }, [
+    closeAllPositions,
+    closingAllPositions,
+    closingPositionId,
+    positions,
+  ]);
 
   if (loading) {
     return (
@@ -420,7 +545,27 @@ export default function LiveAccountScreen() {
         </View>
       )}
 
-      <Text style={styles.sectionTitle}>Positions</Text>
+      <View style={styles.sectionHeadingRow}>
+        <Text style={styles.sectionTitle}>Positions</Text>
+        {positions && positions.positions.length > 0 ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Close all AI-opened positions"
+            disabled={closingAllPositions || closingPositionId !== null}
+            onPress={requestCloseAllPositions}
+            style={[
+              styles.closeAllButton,
+              (closingAllPositions || closingPositionId !== null) && styles.disabledControl,
+            ]}
+          >
+            {closingAllPositions ? (
+              <ActivityIndicator color="#ffffff" size="small" />
+            ) : (
+              <Text style={styles.closeAllButtonText}>Close all</Text>
+            )}
+          </Pressable>
+        ) : null}
+      </View>
       {positions && positions.positions.length > 0 ? (
         positions.positions.map((position: LivePositionRowView) => (
           <View
@@ -471,6 +616,27 @@ export default function LiveAccountScreen() {
             {position.brokerName ? (
               <Text style={styles.mutedSmall}>{position.brokerName}</Text>
             ) : null}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Close ${position.instrument} position`}
+              disabled={
+                closingAllPositions ||
+                (closingPositionId !== null && closingPositionId !== position.id)
+              }
+              onPress={() => requestClosePosition(position)}
+              style={[
+                styles.closePositionButton,
+                (closingAllPositions ||
+                  (closingPositionId !== null && closingPositionId !== position.id)) &&
+                  styles.disabledControl,
+              ]}
+            >
+              {closingPositionId === position.id ? (
+                <ActivityIndicator color="#be123c" size="small" />
+              ) : (
+                <Text style={styles.closePositionButtonText}>Close position</Text>
+              )}
+            </Pressable>
           </View>
         ))
       ) : (
@@ -637,6 +803,36 @@ const styles = StyleSheet.create({
     marginTop: 20,
     marginBottom: 8,
   },
+  sectionHeadingRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+  },
+  closeAllButton: {
+    marginTop: 12,
+    borderRadius: 9,
+    backgroundColor: "#be123c",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    minWidth: 84,
+    alignItems: "center",
+  },
+  closeAllButtonText: { color: "#ffffff", fontSize: 12, fontWeight: "800" },
+  closePositionButton: {
+    marginTop: 4,
+    alignSelf: "flex-start",
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: "#fecdd3",
+    backgroundColor: "#fff1f2",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    minWidth: 118,
+    alignItems: "center",
+  },
+  closePositionButtonText: { color: "#be123c", fontSize: 12, fontWeight: "800" },
+  disabledControl: { opacity: 0.45 },
   card: {
     backgroundColor: "#ffffff",
     borderRadius: 12,

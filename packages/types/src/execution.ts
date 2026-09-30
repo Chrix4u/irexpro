@@ -82,6 +82,15 @@ export interface TradeExecutionView {
   updatedAt: string;
 }
 
+/** Result for one AI-position close attempt returned by close-all. */
+export interface AiPositionCloseResultView {
+  tradeId: string;
+  closed: boolean;
+  status: TradeExecutionStatus;
+  /** User-safe server detail when closure is unresolved or requires reconciliation. */
+  detail?: string;
+}
+
 // ─── Execution authority: trading session (Sprint 56 correction round 5) ─────
 //
 // Issues #295/#298: the TradingSession is THE authoritative execution target.

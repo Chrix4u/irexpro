@@ -733,6 +733,55 @@ async function testConfirmExecutionConfirmation409Contract() {
 }
 
 
+async function testPositionCloseContracts() {
+  const calls = [];
+  const fakeFetch = async (url, init) => {
+    calls.push({ url, init });
+    const isCloseAll = url.endsWith('/execution/positions/close-all');
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () =>
+        isCloseAll
+          ? [{ tradeId: 'trade-1', closed: true, status: 'CLOSED' }]
+          : { id: 'trade/needs encoding', status: 'CLOSED' },
+    };
+  };
+
+  const { createApiClient } = loadApiClient(fakeFetch);
+  const client = createApiClient({
+    baseUrl: 'https://api.example.test/api/v1',
+    getAccessToken: () => 'fixture-access-token',
+  });
+
+  const one = await client.closePosition('trade/needs encoding');
+  const all = await client.closeAllAiPositions();
+
+  assert.equal(one.status, 'CLOSED');
+  assert.deepEqual(all, [{ tradeId: 'trade-1', closed: true, status: 'CLOSED' }]);
+  assert.equal(calls.length, 2);
+
+  assert.equal(
+    calls[0].url,
+    'https://api.example.test/api/v1/execution/positions/trade%2Fneeds%20encoding/close',
+  );
+  assert.equal(calls[0].init.method, 'POST');
+  assert.deepEqual(JSON.parse(calls[0].init.body), {});
+
+  assert.equal(
+    calls[1].url,
+    'https://api.example.test/api/v1/execution/positions/close-all',
+  );
+  assert.equal(calls[1].init.method, 'POST');
+  assert.deepEqual(JSON.parse(calls[1].init.body), {});
+
+  for (const { init } of calls) {
+    assert.equal(init.headers.Authorization, 'Bearer fixture-access-token');
+    assert.equal(init.headers['Content-Type'], 'application/json');
+  }
+}
+
 async function testUnauthorizedRecoveryIsSingleFlightAndRetriesOnce() {
   const calls = [];
   let token = 'expired-token';
@@ -824,6 +873,8 @@ async function main() {
   console.log('api-client execution confirmations contract test passed.');
   await testConfirmExecutionConfirmation409Contract();
   console.log('api-client confirmation 409-failure contract test passed.');
+  await testPositionCloseContracts();
+  console.log('api-client position-close contracts test passed.');
   await testUnauthorizedRecoveryIsSingleFlightAndRetriesOnce();
   console.log('api-client single-flight unauthorized recovery test passed.');
 }
