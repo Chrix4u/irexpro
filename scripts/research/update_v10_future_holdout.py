@@ -43,6 +43,16 @@ def main():
     a=ap.parse_args()
     repo=Path(a.repo); holdout=Path(a.holdout)
     ai=repo/'services/ai-engine'; py=ai/'.venv/bin/python'
+    counter_path=holdout.with_suffix('.counter.json')
+    if counter_path.exists() and holdout.exists():
+        previous=json.loads(counter_path.read_text())
+        if previous.get('complete'):
+            current_hash=sha256(holdout)
+            expected_hash=previous.get('holdout_sha256')
+            if expected_hash and current_hash != expected_hash:
+                raise SystemExit('Completed sealed holdout hash mismatch; refusing to modify it')
+            print(json.dumps(previous,sort_keys=True))
+            return
     with tempfile.TemporaryDirectory(prefix='irex-v10-holdout-') as td:
         recent=Path(td)/'USDJPY_recent.csv'
         cmd=[str(py),'-m','app.domain.training.collect_dukascopy','--instrument','USDJPY','--target-rows',str(a.target_fetch_rows),'--output',str(recent),'--max-lookback-days','10','--parallelism','2','--max-retries','3','--cache-dir',a.cache_dir,'--skip-unrecoverable-days']
@@ -59,17 +69,24 @@ def main():
             if r['timestamp'] not in merged: new_after_boundary += 1
             merged[r['timestamp']]=r
         rows=sorted(merged.values(),key=lambda r:parse_ts(r['timestamp']))
-        write_atomic(holdout,rows)
+        prefix=[r for r in rows if parse_ts(r['timestamp'])<=BOUNDARY]
         post=[r for r in rows if parse_ts(r['timestamp'])>BOUNDARY]
+        previous_post_count=sum(1 for r in existing if parse_ts(r['timestamp'])>BOUNDARY)
+        if len(post)>=TARGET:
+            post=post[:TARGET]
+        rows=prefix+post
+        write_atomic(holdout,rows)
         count=len(post)
+        rows_added=max(0,count-previous_post_count)
         manifest={
-            'manifest_version':1,'purpose':'sealed_v10_future_holdout_collection_only',
+            'manifest_version':2,'purpose':'sealed_v10_future_holdout_collection_only',
             'instrument':'USDJPY','timeframe':'M1','boundary_exclusive':BOUNDARY.isoformat(),
             'target_new_closed_candles':TARGET,'new_closed_candles_collected':count,
             'remaining':max(TARGET-count,0),'complete':count>=TARGET,
             'first_post_boundary':post[0]['timestamp'] if post else None,
             'latest_post_boundary':post[-1]['timestamp'] if post else None,
-            'rows_added_this_refresh':new_after_boundary,
+            'rows_added_this_refresh':rows_added,
+            'sealed_at_target':count>=TARGET,
             'holdout_sha256':sha256(holdout),'updated_at':datetime.now(timezone.utc).isoformat(),
             'research_only':True,'consumed_for_training':False,'consumed_for_model_selection':False,
         }
