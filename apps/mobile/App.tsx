@@ -14,6 +14,8 @@ import PaymentsScreen from './src/screens/PaymentsScreen';
 import BrokerScreen from './src/screens/BrokerScreen';
 import LiveAccountScreen from './src/screens/LiveAccountScreen';
 import AiTradingScreen from './src/screens/AiTradingScreen';
+import OnboardingProfileScreen from './src/screens/OnboardingProfileScreen';
+import OnboardingEligibilityScreen from './src/screens/OnboardingEligibilityScreen';
 
 /**
  * iRexPro mobile app entry (Expo + React Native + TypeScript).
@@ -36,7 +38,15 @@ import AiTradingScreen from './src/screens/AiTradingScreen';
  * realtime socket so no authenticated channel outlives the session.
  */
 
-type Tab = 'dashboard' | 'ai' | 'brokers' | 'live' | 'account' | 'payments';
+type Tab =
+  | 'dashboard'
+  | 'profile-onboarding'
+  | 'eligibility-onboarding'
+  | 'ai'
+  | 'brokers'
+  | 'live'
+  | 'account'
+  | 'payments';
 
 /** Unauthenticated stack: login, forgot-password, and the pre-auth appeal. */
 type AuthScreen = 'login' | 'forgot-password' | 'appeal';
@@ -127,7 +137,26 @@ function AppShell() {
     <RealtimeProvider>
       <View style={styles.shell}>
         <SafeAreaView style={styles.content} edges={['top', 'left', 'right']}>
-          {tab === 'dashboard' && <DashboardScreen />}
+          {tab === 'dashboard' && (
+            <DashboardScreen
+              onOpenProfile={() => setTab('profile-onboarding')}
+              onOpenEligibility={() => setTab('eligibility-onboarding')}
+              onOpenBroker={() => setTab('brokers')}
+            />
+          )}
+          {tab === 'profile-onboarding' && (
+            <OnboardingProfileScreen
+              onContinue={() => setTab('eligibility-onboarding')}
+              onBack={() => setTab('dashboard')}
+            />
+          )}
+          {tab === 'eligibility-onboarding' && (
+            <OnboardingEligibilityScreen
+              onContinue={() => setTab('brokers')}
+              onEditProfile={() => setTab('profile-onboarding')}
+              onBack={() => setTab('dashboard')}
+            />
+          )}
           {tab === 'ai' && <AiTradingScreen />}
           {tab === 'brokers' && <BrokerScreen />}
           {tab === 'live' && <LiveAccountScreen />}

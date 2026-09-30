@@ -1,101 +1,133 @@
-import { useEffect, useState } from 'react';
-import { StyleSheet, Text, View, ActivityIndicator } from 'react-native';
-import { useAuth } from '@/context/auth-context';
-import { api } from '../lib/api';
+import { useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import type { OnboardingStatus } from '@irexpro/types';
+import { api } from '../lib/api';
+import { ActionButton, Card, SectionHeader, StatusPill, palette } from '../components/ui';
 
-/**
- * Mobile dashboard — novice AI-first flow.
- *
- * Keeps eligibility and broker readiness visible without exposing strategy,
- * risk-parameter, or execution-mode configuration to novice users.
- */
-export default function DashboardScreen() {
-  const { user } = useAuth();
+export default function DashboardScreen({
+  onOpenProfile,
+  onOpenEligibility,
+  onOpenBroker,
+}: {
+  onOpenProfile: () => void;
+  onOpenEligibility: () => void;
+  onOpenBroker: () => void;
+}) {
   const [onboarding, setOnboarding] = useState<OnboardingStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!user) return;
     let cancelled = false;
     (async () => {
       try {
         const status = await api.getOnboardingStatus();
-        if (!cancelled) setOnboarding(status);
-      } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load onboarding status');
+        if (!cancelled) {
+          setOnboarding(status);
+          setError(null);
+        }
+      } catch (requestError) {
+        if (!cancelled) setError(requestError instanceof Error ? requestError.message : 'Failed to load onboarding status');
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
-    return () => { cancelled = true; };
-  }, [user]);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const nextAction = useMemo(() => {
+    if (!onboarding) return null;
+    if (onboarding.nextStep === 'PROFILE') return { label: 'Complete trader profile', action: onOpenProfile };
+    if (onboarding.nextStep === 'ELIGIBILITY') return { label: 'Complete eligibility', action: onOpenEligibility };
+    if (onboarding.nextStep === 'BROKER_CONNECTION') return { label: 'Connect broker', action: onOpenBroker };
+    return null;
+  }, [onOpenBroker, onOpenEligibility, onOpenProfile, onboarding]);
 
   return (
     <View style={styles.container}>
+      <Text style={styles.eyebrow}>IREXPRO</Text>
       <Text style={styles.title}>Home</Text>
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>Welcome back</Text>
-        <Text style={styles.muted}>{user ? user.email ?? user.phone ?? 'Trader' : 'Not signed in'}</Text>
-      </View>
+      <Text style={styles.subtitle}>Your setup and AI trading readiness at a glance.</Text>
 
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>Ready for AI Trading?</Text>
+      <Card>
+        <SectionHeader
+          title="Ready for AI Trading?"
+          description="Readiness is verified by the server. The mobile app does not bypass profile, eligibility, broker or model gates."
+          right={
+            onboarding ? (
+              <StatusPill
+                status={onboarding.canStartTrading ? 'READY' : 'SETUP_REQUIRED'}
+                tone={onboarding.canStartTrading ? 'positive' : 'warning'}
+              />
+            ) : undefined
+          }
+        />
+
         {loading ? (
-          <ActivityIndicator color="#14b8a6" />
+          <View style={styles.loadingRow}>
+            <ActivityIndicator color={palette.accent} />
+            <Text style={styles.muted}>Checking readiness…</Text>
+          </View>
         ) : error ? (
-          <Text style={styles.errorText}>{error}</Text>
+          <Text style={styles.error}>{error}</Text>
         ) : onboarding ? (
-          <View>
-            <View style={styles.statusRow}>
-              <Text style={styles.statusText}>{onboarding.profileCompleted ? '✅' : '⬜'} Profile</Text>
-              <Text style={onboarding.profileCompleted ? styles.doneText : styles.pendingText}>
-                {onboarding.profileCompleted ? 'Done' : 'Pending'}
-              </Text>
-            </View>
-            <View style={styles.statusRow}>
-              <Text style={styles.statusText}>{onboarding.eligibilityCompleted ? '✅' : '⬜'} Eligibility</Text>
-              <Text style={onboarding.eligibilityCompleted ? styles.doneText : styles.pendingText}>
-                {onboarding.eligibilityCompleted ? 'Done' : 'Pending'}
-              </Text>
-            </View>
-            <View style={styles.statusRow}>
-              <Text style={styles.statusText}>{onboarding.brokerConnected ? '✅' : '⬜'} Broker</Text>
-              <Text style={onboarding.brokerConnected ? styles.doneText : styles.pendingText}>
-                {onboarding.brokerConnected ? 'Connected' : 'Pending'}
-              </Text>
-            </View>
-            <View style={[styles.statusRow, { marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#243049' }]}>
-              <Text style={styles.cardTitle}>Can start AI Trading</Text>
-              <Text style={onboarding.canStartTrading ? styles.doneText : styles.pendingText}>
-                {onboarding.canStartTrading ? 'Yes' : 'No'}
-              </Text>
-            </View>
-            {!onboarding.canStartTrading && onboarding.missingSteps.length > 0 && (
-              <Text style={styles.muted}>
-                Next step: {onboarding.nextStep.replace(/_/g, ' ').toLowerCase()}
+          <>
+            <ReadinessRow label="Profile" complete={onboarding.profileCompleted} />
+            <ReadinessRow label="Eligibility" complete={onboarding.eligibilityCompleted} />
+            <ReadinessRow label="Broker" complete={onboarding.brokerConnected} />
+            <ReadinessRow label="Trading readiness" complete={onboarding.canStartTrading} />
+            {nextAction ? (
+              <ActionButton label={nextAction.label} onPress={nextAction.action} />
+            ) : (
+              <Text style={styles.readyCopy}>
+                Setup gates are complete. Use the AI tab to manage server-approved AI Trading.
               </Text>
             )}
-            <Text style={[styles.muted, { marginTop: 8, fontSize: 12 }]}>
-              Complete any missing profile or eligibility step on the web, then use the Broker and AI tabs here.
-            </Text>
-          </View>
+          </>
         ) : null}
-      </View>
+      </Card>
+
+      <Card>
+        <SectionHeader
+          title="Mobile onboarding"
+          description="Profile, adult-age/KYC readiness, jurisdiction disclosures and broker setup can now be completed from the native app."
+        />
+        <ActionButton label="Trader profile" secondary onPress={onOpenProfile} />
+        <ActionButton label="Eligibility & disclosures" secondary onPress={onOpenEligibility} />
+        <ActionButton label="Broker connections" secondary onPress={onOpenBroker} />
+      </Card>
+    </View>
+  );
+}
+
+function ReadinessRow({ label, complete }: { label: string; complete: boolean }) {
+  return (
+    <View style={styles.statusRow}>
+      <Text style={styles.statusText}>{label}</Text>
+      <StatusPill status={complete ? 'COMPLETE' : 'PENDING'} tone={complete ? 'positive' : 'warning'} />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0b1020', padding: 20 },
-  title: { fontSize: 24, fontWeight: '700', color: '#e8edff', marginTop: 12, marginBottom: 12 },
-  card: { backgroundColor: '#131a2e', borderColor: '#243049', borderWidth: 1, borderRadius: 12, padding: 16, marginBottom: 12 },
-  cardTitle: { fontSize: 16, fontWeight: '600', color: '#e8edff', marginBottom: 6 },
-  muted: { color: '#9aa7c7', fontSize: 14, lineHeight: 20 },
-  errorText: { color: '#ef4444', fontSize: 14 },
-  statusRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
-  statusText: { color: '#e8edff', fontSize: 14 },
-  doneText: { color: '#10b981', fontSize: 13, fontWeight: '600' },
-  pendingText: { color: '#f59e0b', fontSize: 13, fontWeight: '600' },
+  container: { flex: 1, backgroundColor: palette.bg, padding: 18 },
+  eyebrow: { color: palette.accent, fontSize: 11, fontWeight: '800', letterSpacing: 1.1, marginTop: 8 },
+  title: { fontSize: 27, fontWeight: '800', color: palette.text, marginTop: 6 },
+  subtitle: { color: palette.muted, fontSize: 14, marginTop: 5, marginBottom: 18 },
+  loadingRow: { flexDirection: 'row', gap: 10, alignItems: 'center', marginTop: 14 },
+  muted: { color: palette.muted, fontSize: 13 },
+  error: { color: palette.errorText, fontSize: 13, lineHeight: 19, marginTop: 12 },
+  statusRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: palette.cardBorder,
+  },
+  statusText: { color: palette.body, fontSize: 14, fontWeight: '600' },
+  readyCopy: { color: palette.success.text, fontSize: 13, lineHeight: 19, marginTop: 14 },
 });
