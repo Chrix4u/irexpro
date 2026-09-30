@@ -832,6 +832,20 @@ export class BrokerService {
           metadata: { brokerId: connection.brokerId, error: failureError },
           severity: AuditSeverity.WARNING,
         });
+
+        const normalized = failureError.toLowerCase();
+        const publicMessage = normalized.includes('top up your account')
+          ? 'MetaApi could not deploy this trading account because the MetaApi account balance must be topped up.'
+          : normalized.includes('do not have access to') || normalized.includes('permission')
+            ? 'MetaApi rejected this connection because the API token is missing a required account-management permission.'
+            : normalized.includes('timed out') || normalized.includes('timeout')
+              ? 'MetaApi timed out while connecting to the trading account. Please verify the account is deployed and connected, then try again.'
+              : 'The broker provider could not complete the connection. Please check the provider account status and try again.';
+
+        throw new BadRequestException({
+          code: 'BROKER_CONNECTION_FAILED',
+          message: publicMessage,
+        });
       }
       throw err;
     } finally {
