@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "iRexPro — native mobile app foundation for iOS and Android (Expo + React Native + TypeScript).",
-  "main": "App.tsx",
+  "main": "index.ts",
   "scripts": {
     "start": "expo start",
     "android": "expo start --android",

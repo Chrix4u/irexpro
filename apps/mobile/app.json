@@ -2,7 +2,7 @@
   "expo": {
     "name": "iRexPro",
     "slug": "irexpro-mobile",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "irexpro",
@@ -19,7 +19,7 @@
     },
     "android": {
       "package": "com.irexpro.mobile",
-      "versionCode": 1,
+      "versionCode": 2,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0b1020"
