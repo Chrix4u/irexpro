@@ -1,0 +1,113 @@
+name: Mobile APK Preview
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/native-mobile-onboarding-20260930
+    paths:
+      - 'apps/mobile/**'
+      - 'packages/api-client/**'
+      - 'packages/types/**'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'package.json'
+      - '.github/workflows/mobile-apk.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-apk-preview-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+  PNPM_VERSION: '10.34.5'
+  CI: '1'
+  EXPO_NO_TELEMETRY: '1'
+  EXPO_PUBLIC_API_BASE_URL: 'https://irexpro.lightworldtech.com/api/v1'
+
+jobs:
+  build-apk:
+    name: Build installable Android preview APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Select Java 17 and verify Android SDK
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "${JAVA_HOME_17_X64:-}"
+          test -n "${ANDROID_HOME:-}"
+          echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
+          "$JAVA_HOME_17_X64/bin/java" -version
+          test -d "$ANDROID_HOME"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate mobile source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pnpm --filter @irexpro/mobile typecheck
+          pnpm --filter @irexpro/mobile test -- --runInBand
+          pnpm --filter @irexpro/mobile validate:release-config
+          pnpm --filter @irexpro/mobile exec expo install --check
+
+      - name: Generate Android native project
+        run: >-
+          pnpm --filter @irexpro/mobile exec expo prebuild
+          --platform android
+          --clean
+          --no-install
+
+      - name: Build standalone release APK
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd apps/mobile/android
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Prepare preview artifact
+        id: artifact
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          src='apps/mobile/android/app/build/outputs/apk/release/app-release.apk'
+          test -s "$src"
+          short_sha="${GITHUB_SHA:0:7}"
+          out="apps/mobile/irexpro-android-preview-${short_sha}.apk"
+          cp "$src" "$out"
+          sha256sum "$out" | tee "${out}.sha256"
+          echo "apk=$out" >> "$GITHUB_OUTPUT"
+          echo "checksum=${out}.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload installable APK
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: irexpro-android-preview-${{ github.sha }}
+          path: |
+            ${{ steps.artifact.outputs.apk }}
+            ${{ steps.artifact.outputs.checksum }}
+          if-no-files-found: error
+          retention-days: 14
