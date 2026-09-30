@@ -21,10 +21,14 @@ export function isAutomationRunning(
 export function isBrokerExecutionReady(
   connection: BrokerConnectionView,
 ): boolean {
-  return (
-    connection.status === "CONNECTED" &&
-    connection.authorizationStatus === "ACTIVE"
-  );
+  if (connection.status !== "CONNECTED") return false;
+
+  // The internal paper broker is database-authoritatively PAPER_ONLY and
+  // cannot create LIVE exposure. Backend session start gates it on connected
+  // transport + fresh health, not ACTIVE external-provider authorization.
+  if (connection.brokerId === "paper-broker") return true;
+
+  return connection.authorizationStatus === "ACTIVE";
 }
 
 export function startExecutionModeFor(
@@ -45,12 +49,22 @@ export function pinnedBrokerId(
 ): string | null {
   if (session) return session.brokerConnectionId;
 
-  if (
-    requestedId &&
-    connections.some((connection) => connection.id === requestedId)
-  ) {
-    return requestedId;
+  if (requestedId) {
+    const requested = connections.find(
+      (connection) => connection.id === requestedId,
+    );
+    if (requested?.status === "CONNECTED") {
+      return requestedId;
+    }
   }
+
+  const executionReady = connections.find(isBrokerExecutionReady);
+  if (executionReady) return executionReady.id;
+
+  const connected = connections.find(
+    (connection) => connection.status === "CONNECTED",
+  );
+  if (connected) return connected.id;
 
   return connections[0]?.id ?? null;
 }

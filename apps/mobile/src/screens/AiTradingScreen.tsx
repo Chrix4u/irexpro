@@ -591,7 +591,26 @@ export default function AiTradingScreen() {
                     <Text style={styles.detailValue}>{selectedBroker.accountType}</Text>
                   </View>
                   <View style={styles.detailCell}>
+                    <Text style={styles.detailLabel}>Connection</Text>
+                    <Text
+                      style={[
+                        styles.detailValue,
+                        selectedBroker.status === "CONNECTED"
+                          ? styles.goodText
+                          : styles.warnText,
+                      ]}
+                    >
+                      {selectedBroker.status}
+                    </Text>
+                  </View>
+                  <View style={styles.detailCell}>
                     <Text style={styles.detailLabel}>Authorization</Text>
+                    <Text style={styles.detailValue}>
+                      {selectedBroker.authorizationStatus}
+                    </Text>
+                  </View>
+                  <View style={styles.detailCell}>
+                    <Text style={styles.detailLabel}>AI readiness</Text>
                     <Text
                       style={[
                         styles.detailValue,
@@ -600,7 +619,9 @@ export default function AiTradingScreen() {
                           : styles.warnText,
                       ]}
                     >
-                      {selectedBroker.authorizationStatus}
+                      {isBrokerExecutionReady(selectedBroker)
+                        ? "READY"
+                        : "AUTHORIZATION REQUIRED"}
                     </Text>
                   </View>
                 </View>

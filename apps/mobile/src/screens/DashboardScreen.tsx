@@ -31,25 +31,38 @@ export default function DashboardScreen({
   const { width } = useWindowDimensions();
   const compact = width < 390;
   const [onboarding, setOnboarding] = useState<OnboardingStatus | null>(null);
+  const [brokerTransportConnected, setBrokerTransportConnected] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    try {
-      const status = await api.getOnboardingStatus();
-      setOnboarding(status);
+    const [onboardingResult, brokerResult] = await Promise.allSettled([
+      api.getOnboardingStatus(),
+      api.listBrokerConnections(),
+    ]);
+
+    if (onboardingResult.status === 'fulfilled') {
+      setOnboarding(onboardingResult.value);
       setError(null);
-    } catch (requestError) {
+    } else {
       setError(
-        requestError instanceof Error
-          ? requestError.message
+        onboardingResult.reason instanceof Error
+          ? onboardingResult.reason.message
           : 'Failed to load onboarding status',
       );
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
     }
+
+    if (brokerResult.status === 'fulfilled') {
+      setBrokerTransportConnected(
+        brokerResult.value.some((connection) => connection.status === 'CONNECTED'),
+      );
+    } else {
+      setBrokerTransportConnected(null);
+    }
+
+    setLoading(false);
+    setRefreshing(false);
   }, []);
 
   useEffect(() => {
@@ -61,6 +74,14 @@ export default function DashboardScreen({
     void load();
   }, [load]);
 
+  const effectiveBrokerConnected =
+    brokerTransportConnected ?? onboarding?.brokerConnected ?? false;
+
+  const brokerReadinessMismatch =
+    onboarding !== null &&
+    brokerTransportConnected !== null &&
+    onboarding.brokerConnected !== brokerTransportConnected;
+
   const nextAction = useMemo(() => {
     if (!onboarding) return null;
     if (onboarding.nextStep === 'PROFILE') {
@@ -70,16 +91,21 @@ export default function DashboardScreen({
       return { label: 'Complete eligibility', action: onOpenEligibility };
     }
     if (onboarding.nextStep === 'BROKER_CONNECTION') {
-      return { label: 'Connect broker', action: onOpenBroker };
+      return {
+        label: effectiveBrokerConnected
+          ? 'Review broker readiness'
+          : 'Connect broker',
+        action: onOpenBroker,
+      };
     }
     return null;
-  }, [onOpenBroker, onOpenEligibility, onOpenProfile, onboarding]);
+  }, [effectiveBrokerConnected, onOpenBroker, onOpenEligibility, onOpenProfile, onboarding]);
 
   const completedSteps = onboarding
     ? [
         onboarding.profileCompleted,
         onboarding.eligibilityCompleted,
-        onboarding.brokerConnected,
+        effectiveBrokerConnected,
       ].filter(Boolean).length
     : 0;
 
@@ -130,6 +156,14 @@ export default function DashboardScreen({
       </View>
 
       {error ? <Banner variant="error">{error}</Banner> : null}
+
+      {brokerReadinessMismatch ? (
+        <Banner variant="info">
+          {brokerTransportConnected
+            ? 'Broker transport is connected, but trading readiness has not reconciled yet. Trading remains blocked until the server readiness gate confirms it.'
+            : 'Trading readiness still references a broker connection, but the live broker list is not currently connected. Refresh Broker before starting AI Trading.'}
+        </Banner>
+      ) : null}
 
       <Card style={styles.readinessCard}>
         <View
@@ -192,7 +226,7 @@ export default function DashboardScreen({
             <ReadinessRow
               index="03"
               label="Broker connection"
-              complete={onboarding.brokerConnected}
+              complete={effectiveBrokerConnected}
               compact={compact}
             />
             <ReadinessRow

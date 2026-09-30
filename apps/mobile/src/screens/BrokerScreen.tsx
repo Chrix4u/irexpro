@@ -248,7 +248,9 @@ export default function BrokerScreen() {
               accessibilityLabel={`${connection.brokerName} ${connection.accountType} connection`}
             >
               <View style={styles.rowBetween}>
-                <Text style={styles.cardTitle}>{connection.brokerName}</Text>
+                <Text style={styles.cardTitle} numberOfLines={2} ellipsizeMode="tail">
+                  {connection.brokerName}
+                </Text>
                 <Text
                   style={[
                     styles.envBadge,
@@ -274,7 +276,7 @@ export default function BrokerScreen() {
                   : "Account pending"}
               </Text>
               {connection.logicalAccountKey ? (
-                <Text style={styles.mutedSmall}>
+                <Text style={styles.mutedSmall} numberOfLines={1} ellipsizeMode="middle">
                   Logical account {connection.logicalAccountKey}
                 </Text>
               ) : null}
@@ -367,7 +369,9 @@ export default function BrokerScreen() {
               accessibilityLabel={`${entry.name}, ${presentation.label}`}
             >
               <View style={styles.rowBetween}>
-                <Text style={styles.cardTitle}>{entry.name}</Text>
+                <Text style={styles.cardTitle} numberOfLines={2} ellipsizeMode="tail">
+                  {entry.name}
+                </Text>
                 <Text
                   style={[
                     styles.statusBadge,
@@ -376,6 +380,8 @@ export default function BrokerScreen() {
                       borderColor: presentation.color,
                     },
                   ]}
+                  numberOfLines={2}
+                  ellipsizeMode="tail"
                 >
                   {presentation.label}
                 </Text>
@@ -976,6 +982,9 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   card: {
+    width: "100%",
+    minWidth: 0,
+    overflow: "hidden",
     backgroundColor: palette.card,
     borderRadius: 16,
     borderWidth: 1,
@@ -984,11 +993,21 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     gap: 9,
   },
-  cardTitle: { fontSize: 16, fontWeight: "800", color: palette.text },
+  cardTitle: {
+    flex: 1,
+    minWidth: 0,
+    flexShrink: 1,
+    fontSize: 16,
+    lineHeight: 21,
+    fontWeight: "800",
+    color: palette.text,
+  },
   rowBetween: {
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "center",
+    alignItems: "flex-start",
+    gap: 10,
+    minWidth: 0,
   },
   rowWrap: {
     flexDirection: "row",
@@ -1021,20 +1040,27 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   statusBadge: {
+    flexShrink: 1,
+    maxWidth: "48%",
     borderWidth: 1,
     borderRadius: 999,
     paddingHorizontal: 8,
-    paddingVertical: 2,
-    fontSize: 11,
-    fontWeight: "600",
+    paddingVertical: 3,
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: "700",
+    textAlign: "center",
     overflow: "hidden",
   },
   envBadge: {
+    flexShrink: 0,
+    alignSelf: "flex-start",
     borderRadius: 999,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    fontSize: 11,
-    fontWeight: "700",
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: "900",
     overflow: "hidden",
   },
   envDemo: { backgroundColor: "#291f0b", color: "#fde68a" },

@@ -95,7 +95,25 @@ describe("AI Trading mobile logic", () => {
     expect(pinnedBrokerId(connections, null, "broker-1")).toBe("broker-1");
   });
 
-  it("requires both CONNECTED and ACTIVE authorization before start", () => {
+  it("prefers a connected broker over a remembered disconnected record", () => {
+    const connections = [
+      broker({ id: "broker-old", status: "DISCONNECTED", authorizationStatus: "DISCONNECTED" }),
+      broker({ id: "broker-connected", status: "CONNECTED", authorizationStatus: "AUTHORIZED" }),
+    ];
+    expect(pinnedBrokerId(connections, null, "broker-old")).toBe(
+      "broker-connected",
+    );
+  });
+
+  it("prefers execution-ready ACTIVE authorization when several brokers are connected", () => {
+    const connections = [
+      broker({ id: "broker-connected", authorizationStatus: "AUTHORIZED" }),
+      broker({ id: "broker-active", authorizationStatus: "ACTIVE" }),
+    ];
+    expect(pinnedBrokerId(connections, null, null)).toBe("broker-active");
+  });
+
+  it("requires ACTIVE authorization for external brokers", () => {
     expect(isBrokerExecutionReady(broker())).toBe(true);
     expect(
       isBrokerExecutionReady(
@@ -104,6 +122,27 @@ describe("AI Trading mobile logic", () => {
     ).toBe(false);
     expect(
       isBrokerExecutionReady(broker({ status: "DISCONNECTED" })),
+    ).toBe(false);
+  });
+
+  it("accepts a CONNECTED internal paper broker without external ACTIVE authorization", () => {
+    expect(
+      isBrokerExecutionReady(
+        broker({
+          brokerId: "paper-broker",
+          status: "CONNECTED",
+          authorizationStatus: "AUTHORIZED",
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isBrokerExecutionReady(
+        broker({
+          brokerId: "paper-broker",
+          status: "DISCONNECTED",
+          authorizationStatus: "AUTHORIZED",
+        }),
+      ),
     ).toBe(false);
   });
 

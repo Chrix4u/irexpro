@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   HttpCode,
   HttpStatus,
   Logger,
@@ -56,6 +57,8 @@ export class BrokerController {
   // ─── User connections CRUD ─────────────────────────────────────────────────
 
   @Get()
+  @Header('Cache-Control', 'no-store')
+  @Header('Pragma', 'no-cache')
   @SerializeOptions({ strategy: 'excludeAll' })
   @ApiOperation({ summary: 'List current user broker connections' })
   @ApiResponse({ status: 200, type: [BrokerConnectionResponseDto] })
@@ -65,6 +68,8 @@ export class BrokerController {
   }
 
   @Get(':connectionId')
+  @Header('Cache-Control', 'no-store')
+  @Header('Pragma', 'no-cache')
   @SerializeOptions({ strategy: 'excludeAll' })
   @ApiOperation({ summary: 'Get a specific broker connection' })
   @ApiParam({ name: 'connectionId', description: 'Broker connection UUID' })
