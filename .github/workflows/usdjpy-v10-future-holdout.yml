@@ -88,6 +88,7 @@ jobs:
           readonly holdout_root="$research_root/irexpro-usdjpy-v10-future-holdout"
           readonly evaluator_root="$holdout_root/evaluator-$evaluator_sha"
           readonly rolling_raw="$holdout_root/rolling/USDJPY_M1.csv"
+          readonly rolling_counter="$holdout_root/rolling/USDJPY_M1.counter.json"
           readonly expanded_raw="$holdout_root/sealed/USDJPY_M1_expanded.csv"
           readonly expanded_corpus="$holdout_root/sealed/USDJPY_MTF_expanded.csv"
           readonly report="$holdout_root/sealed/future-holdout-report.json"
@@ -130,28 +131,45 @@ jobs:
 
           cd "$evaluator_ai"
 
-          "$python_bin" -m app.domain.training.collect_dukascopy \
-            --instrument "$pair" \
-            --target-rows 5000 \
-            --output "$rolling_raw" \
-            --max-lookback-days 14 \
-            --parallelism 4 \
-            --cache-dir "$cache"
+          "$staging/scripts/research/update_v10_future_holdout.py"
 
-          future_rows="$("$python_bin" - "$rolling_raw" "$boundary" <<'PY'
-          import pandas as pd, sys
-          frame=pd.read_csv(sys.argv[1])
-          ts=pd.to_datetime(frame["timestamp"], utc=True, errors="raise")
-          boundary=pd.Timestamp(sys.argv[2])
-          print(int((ts >= boundary).sum()))
+          read -r future_rows counter_complete counter_sealed counter_hash file_hash <<EOF
+          $("$python_bin" - "$rolling_raw" "$rolling_counter" "$boundary" "$minimum_raw_future_rows" <<'PY'
+          import hashlib, json, pandas as pd, sys
+          raw_path,counter_path,raw_boundary,expected_rows=sys.argv[1:]
+          frame=pd.read_csv(raw_path)
+          ts=pd.to_datetime(frame["timestamp"],utc=True,errors="raise")
+          boundary=pd.Timestamp(raw_boundary)
+          future=int((ts > boundary).sum())
+          counter=json.load(open(counter_path))
+          digest=hashlib.sha256(open(raw_path,"rb").read()).hexdigest()
+          expected_hash=counter.get("holdout_sha256")
+          if expected_hash and digest != expected_hash:
+              raise SystemExit("Frozen holdout hash mismatch")
+          print(
+              future,
+              str(bool(counter.get("complete"))).lower(),
+              str(bool(counter.get("sealed_at_target"))).lower(),
+              expected_hash or "",
+              digest,
+          )
           PY
-          )"
+          )
+          EOF
           echo "USDJPY_V10_FUTURE_RAW_ROWS $future_rows"
           echo "USDJPY_V10_MINIMUM_RAW_ROWS $minimum_raw_future_rows"
 
           if (( future_rows < minimum_raw_future_rows )); then
             echo "USDJPY_V10_HOLDOUT_NOT_READY"
             exit 0
+          fi
+          if [[ "$counter_complete" != "true" || "$counter_sealed" != "true" ]]; then
+            echo "USDJPY_V10_HOLDOUT_COUNTER_NOT_SEALED" >&2
+            exit 4
+          fi
+          if (( future_rows != minimum_raw_future_rows )); then
+            echo "USDJPY_V10_HOLDOUT_ROW_COUNT_NOT_EXACT" >&2
+            exit 5
           fi
 
           if [[ "$mode" == "readiness" ]]; then
@@ -179,9 +197,9 @@ jobs:
           frozen_ts=pd.to_datetime(frozen["timestamp"], utc=True, errors="raise")
           recent_ts=pd.to_datetime(recent["timestamp"], utc=True, errors="raise")
           prefix=frozen.loc[frozen_ts < boundary].copy()
-          future=recent.loc[recent_ts >= boundary].copy()
-          if len(future) < int(minimum):
-              raise SystemExit("Future raw evidence dropped below minimum during sealing")
+          future=recent.loc[recent_ts > boundary].copy()
+          if len(future) != int(minimum):
+              raise SystemExit(f"Frozen future holdout must contain exactly {minimum} rows, got {len(future)}")
           combined=pd.concat([prefix, future], ignore_index=True)
           combined["_ts"]=pd.to_datetime(combined["timestamp"], utc=True, errors="raise")
           combined=combined.sort_values("_ts").drop_duplicates("timestamp", keep="first").drop(columns="_ts")
