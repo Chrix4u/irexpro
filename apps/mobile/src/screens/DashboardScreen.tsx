@@ -5,6 +5,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import type { OnboardingStatus } from '@irexpro/types';
@@ -27,6 +28,8 @@ export default function DashboardScreen({
   onOpenEligibility: () => void;
   onOpenBroker: () => void;
 }) {
+  const { width } = useWindowDimensions();
+  const compact = width < 390;
   const [onboarding, setOnboarding] = useState<OnboardingStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -129,18 +132,43 @@ export default function DashboardScreen({
       {error ? <Banner variant="error">{error}</Banner> : null}
 
       <Card style={styles.readinessCard}>
-        <SectionHeader
-          title="AI trading readiness"
-          description="Every gate is verified by the server. Mobile cannot bypass profile, eligibility, broker or model controls."
-          right={
-            onboarding ? (
-              <StatusPill
-                status={onboarding.canStartTrading ? 'READY' : 'SETUP_REQUIRED'}
-                tone={onboarding.canStartTrading ? 'positive' : 'warning'}
-              />
-            ) : undefined
-          }
-        />
+        <View
+          style={[
+            styles.readinessHeader,
+            compact && styles.readinessHeaderCompact,
+          ]}
+        >
+          <View style={styles.readinessHeaderCopy}>
+            <Text style={styles.readinessTitle}>AI trading readiness</Text>
+            <Text style={styles.readinessDescription}>
+              Every gate is verified by the server. Mobile cannot bypass
+              profile, eligibility, broker or model controls.
+            </Text>
+          </View>
+          <View
+            style={[
+              styles.readinessStatusSlot,
+              compact && styles.readinessStatusSlotCompact,
+            ]}
+          >
+            <StatusPill
+              status={
+                loading
+                  ? 'CHECKING'
+                  : onboarding?.canStartTrading
+                    ? 'READY'
+                    : 'SETUP_REQUIRED'
+              }
+              tone={
+                loading
+                  ? 'neutral'
+                  : onboarding?.canStartTrading
+                    ? 'positive'
+                    : 'warning'
+              }
+            />
+          </View>
+        </View>
 
         {loading ? (
           <View style={styles.loadingRow}>
@@ -153,21 +181,25 @@ export default function DashboardScreen({
               index="01"
               label="Trader profile"
               complete={onboarding.profileCompleted}
+              compact={compact}
             />
             <ReadinessRow
               index="02"
               label="Eligibility & disclosures"
               complete={onboarding.eligibilityCompleted}
+              compact={compact}
             />
             <ReadinessRow
               index="03"
               label="Broker connection"
               complete={onboarding.brokerConnected}
+              compact={compact}
             />
             <ReadinessRow
               index="04"
               label="Trading readiness"
               complete={onboarding.canStartTrading}
+              compact={compact}
               last
             />
 
@@ -224,15 +256,23 @@ function ReadinessRow({
   index,
   label,
   complete,
+  compact = false,
   last = false,
 }: {
   index: string;
   label: string;
   complete: boolean;
+  compact?: boolean;
   last?: boolean;
 }) {
   return (
-    <View style={[styles.statusRow, last && styles.statusRowLast]}>
+    <View
+      style={[
+        styles.statusRow,
+        compact && styles.statusRowCompact,
+        last && styles.statusRowLast,
+      ]}
+    >
       <View style={styles.statusLabelGroup}>
         <View style={[styles.stepDot, complete && styles.stepDotComplete]}>
           <Text style={[styles.stepDotText, complete && styles.stepDotTextComplete]}>
@@ -331,6 +371,45 @@ const styles = StyleSheet.create({
   heroStatLabel: { color: palette.helper, fontSize: 10, fontWeight: '700' },
   heroDivider: { width: 1, backgroundColor: '#22404a', marginHorizontal: 14 },
   readinessCard: { marginTop: 2 },
+  readinessHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 4,
+  },
+  readinessHeaderCompact: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    gap: 10,
+  },
+  readinessHeaderCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  readinessTitle: {
+    color: palette.text,
+    fontSize: 17,
+    fontWeight: '800',
+    lineHeight: 22,
+  },
+  readinessDescription: {
+    color: palette.muted,
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 5,
+  },
+  readinessStatusSlot: {
+    minHeight: 28,
+    minWidth: 102,
+    alignItems: 'flex-end',
+    justifyContent: 'flex-start',
+    flexShrink: 0,
+  },
+  readinessStatusSlotCompact: {
+    alignItems: 'flex-start',
+    minWidth: 0,
+  },
   loadingRow: {
     flexDirection: 'row',
     gap: 10,
@@ -347,8 +426,19 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: palette.cardBorder,
   },
+  statusRowCompact: {
+    alignItems: 'flex-start',
+    flexWrap: 'wrap',
+    rowGap: 8,
+  },
   statusRowLast: { borderBottomWidth: 0 },
-  statusLabelGroup: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
+  statusLabelGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+    minWidth: 0,
+  },
   stepDot: {
     width: 28,
     height: 28,
@@ -365,7 +455,14 @@ const styles = StyleSheet.create({
   },
   stepDotText: { color: palette.muted, fontSize: 9, fontWeight: '900' },
   stepDotTextComplete: { color: '#5eead4', fontSize: 13 },
-  statusText: { color: palette.body, fontSize: 13, fontWeight: '700', flexShrink: 1 },
+  statusText: {
+    color: palette.body,
+    fontSize: 13,
+    fontWeight: '700',
+    flexShrink: 1,
+    minWidth: 0,
+    lineHeight: 18,
+  },
   readyPanel: {
     borderRadius: 12,
     borderWidth: 1,

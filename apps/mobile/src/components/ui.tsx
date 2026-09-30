@@ -435,7 +435,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 12,
   },
-  sectionHeadingCopy: { flex: 1 },
+  sectionHeadingCopy: { flex: 1, minWidth: 0 },
   cardTitle: { fontSize: 17, fontWeight: '700', color: palette.text, marginBottom: 5 },
   muted: { color: palette.muted, fontSize: 13, lineHeight: 19 },
   button: {
@@ -494,8 +494,22 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   revealToggleText: { color: palette.body, fontSize: 13, fontWeight: '700' },
-  pill: { borderRadius: 999, paddingHorizontal: 9, paddingVertical: 5, borderWidth: 1 },
-  pillText: { fontSize: 11, fontWeight: '800', textTransform: 'uppercase' },
+  pill: {
+    alignSelf: 'flex-start',
+    maxWidth: '100%',
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderWidth: 1,
+    flexShrink: 1,
+  },
+  pillText: {
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    flexShrink: 1,
+    textAlign: 'center',
+  },
   banner: {
     borderWidth: 1,
     borderRadius: 10,
