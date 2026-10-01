@@ -113,6 +113,21 @@ export const validationSchema = Joi.object({
     otherwise: Joi.string().min(32).optional().allow(''),
   }),
 
+  // TradingView's public webhook route is authenticated at the network edge
+  // (Cloudflare origin + official TradingView source-IP allowlist). User and
+  // broker/session bindings stay server-side and never appear in the alert.
+  TRADINGVIEW_WEBHOOK_ENABLED: Joi.string().valid('true', 'false').optional().allow(''),
+  TRADINGVIEW_WEBHOOK_USER_ID: Joi.when('TRADINGVIEW_WEBHOOK_ENABLED', {
+    is: 'true',
+    then: Joi.string()
+      .guid({ version: ['uuidv4'] })
+      .required(),
+    otherwise: Joi.string()
+      .guid({ version: ['uuidv4'] })
+      .optional()
+      .allow(''),
+  }),
+
   // Python AI engine scheduler coordination (NestJS → AI engine)
   AI_ENGINE_BASE_URL: Joi.string().default('http://localhost:8001/api/v1'),
   AI_ENGINE_SCHEDULER_ENABLED: Joi.boolean().default(false),

@@ -1,6 +1,7 @@
 import {
   IsDateString,
   IsEnum,
+  IsIn,
   IsNumber,
   IsOptional,
   IsString,
@@ -88,6 +89,21 @@ export class ExternalProviderSignalDto {
   @IsString()
   @Matches(/^(M1|M5|M15|H1|H4)$/)
   timeframe: string;
+
+  @ApiPropertyOptional({
+    description: 'Provider-observed market regime, normalized by iRexPro before risk evaluation',
+    enum: ['TRENDING', 'RANGING', 'VOLATILE', 'HIGH_VOLATILITY', 'LOW_LIQUIDITY'],
+  })
+  @IsOptional()
+  @IsIn(['TRENDING', 'RANGING', 'VOLATILE', 'HIGH_VOLATILITY', 'LOW_LIQUIDITY'])
+  marketRegime?: 'TRENDING' | 'RANGING' | 'VOLATILE' | 'HIGH_VOLATILITY' | 'LOW_LIQUIDITY';
+
+  @ApiPropertyOptional({ description: 'Provider volatility score on the 0–1 iRexPro scale' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(1)
+  volatilityScore?: number;
 
   @IsDateString()
   generatedAt: string;

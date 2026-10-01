@@ -9,6 +9,9 @@ import { AiDecisionExplorerController } from './ai-decision-explorer.controller'
 import { AiCopilotController } from './ai-copilot.controller';
 import { ExternalSignalPerformanceController } from './external-signal-performance.controller';
 import { ExternalSignalPerformanceService } from './external-signal-performance.service';
+import { TradingViewWebhookController } from './tradingview-webhook.controller';
+import { TradingViewWebhookService } from './tradingview-webhook.service';
+import { TradingViewWebhookGuard } from '../../common/guards/tradingview-webhook.guard';
 import { StrategyModule } from '../strategy/strategy.module';
 import { AuditModule } from '../audit/audit.module';
 import { ExecutionModule } from '../execution/execution.module';
@@ -43,6 +46,7 @@ import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-a
     AiDecisionExplorerController,
     AiCopilotController,
     ExternalSignalPerformanceController,
+    TradingViewWebhookController,
   ],
   providers: [
     AiService,
@@ -52,6 +56,8 @@ import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-a
     InternalApiKeyGuard,
     ExternalSignalApiKeyGuard,
     ExternalSignalPerformanceService,
+    TradingViewWebhookService,
+    TradingViewWebhookGuard,
   ],
   exports: [AiService, AiSignalService],
 })

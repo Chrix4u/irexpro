@@ -251,6 +251,8 @@ export class AiController {
       suggestedVolume: dto.suggestedVolume,
       timeframe: dto.timeframe,
       strategyCode: durableStrategyCode,
+      marketRegime: dto.marketRegime,
+      volatilityScore: dto.volatilityScore,
       generatedAt,
       modelVersion: `external-provider/${dto.providerCode}/paper-only-v1`,
       metadata: {

@@ -125,6 +125,10 @@ export default () => ({
     enabled: process.env.EXTERNAL_SIGNAL_PROVIDER_ENABLED === 'true',
     apiKey: process.env.EXTERNAL_SIGNAL_PROVIDER_KEY,
   },
+  tradingViewWebhook: {
+    enabled: process.env.TRADINGVIEW_WEBHOOK_ENABLED === 'true',
+    userId: process.env.TRADINGVIEW_WEBHOOK_USER_ID,
+  },
   aiEngine: {
     baseUrl: process.env.AI_ENGINE_BASE_URL ?? 'http://localhost:8001/api/v1',
     schedulerEnabled: process.env.AI_ENGINE_SCHEDULER_ENABLED === 'true',

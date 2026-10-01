@@ -20,6 +20,8 @@ function makeDto(overrides: Partial<ExternalProviderSignalDto> = {}): ExternalPr
     suggestedTakeProfit: 1.095,
     suggestedVolume: 0.01,
     timeframe: 'M5',
+    marketRegime: 'TRENDING',
+    volatilityScore: 0.4,
     generatedAt,
     expiresAt: new Date(Date.now() + 60_000).toISOString(),
     sourceReference: 'alert-42',
@@ -51,6 +53,8 @@ describe('AiController — external provider intake', () => {
     expect(candidate.signalId).toMatch(/^[0-9a-f-]{36}$/);
     expect(candidate.strategyCode).toBe('external-tradingview-relay-trend-breakout-v3');
     expect(candidate.modelVersion).toBe('external-provider/tradingview-relay/paper-only-v1');
+    expect(candidate.marketRegime).toBe('TRENDING');
+    expect(candidate.volatilityScore).toBe(0.4);
     expect(candidate.metadata).toEqual(
       expect.objectContaining({
         signal_source: 'EXTERNAL_PROVIDER',
