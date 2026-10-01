@@ -27,9 +27,21 @@ function strongEvidenceRows() {
       realised_pnl: losing ? '-5' : '10',
       closed_at: new Date(start + i * 5 * 60_000 + 60_000),
       allocated_capital: '1000',
+      broker_connection_id: '11111111-1111-4111-8111-111111111111',
+      session_opening_balance: '10000',
+      session_started_at: new Date(start - 60_000),
     });
   }
   return rows;
+}
+
+function strongEquitySnapshots() {
+  const start = Date.UTC(2026, 8, 1, 0, 0, 0);
+  return Array.from({ length: 121 }, (_, i) => ({
+    connection_id: '11111111-1111-4111-8111-111111111111',
+    equity: String(10000 + i * 5),
+    accepted_at: new Date(start + i * 5 * 60_000),
+  }));
 }
 
 describe('ExternalSignalPerformanceService', () => {
@@ -49,7 +61,15 @@ describe('ExternalSignalPerformanceService', () => {
 
   it('marks strong PAPER evidence eligible for DEMO review without auto-promoting it', async () => {
     const dataSource = {
-      query: jest.fn().mockResolvedValue(strongEvidenceRows()),
+      query: jest
+        .fn()
+        .mockImplementation((sql: string) =>
+          Promise.resolve(
+            sql.includes('broker.broker_account_snapshots')
+              ? strongEquitySnapshots()
+              : strongEvidenceRows(),
+          ),
+        ),
     } as unknown as DataSource;
     const service = new ExternalSignalPerformanceService(dataSource);
     const report = await service.getProviderPerformance(
@@ -68,6 +88,115 @@ describe('ExternalSignalPerformanceService', () => {
     expect(report.certificationStatus).toBe('ELIGIBLE_FOR_DEMO_REVIEW');
     expect(report.automaticDemoPromotion).toBe(false);
     expect(report.automaticLivePromotion).toBe(false);
+  });
+
+  it('uses conventional realised-P&L profit factor rather than margin-normalized PF', async () => {
+    const start = new Date('2026-09-01T00:00:00.000Z');
+    const rows = [
+      {
+        signal_generated_at: start,
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        confidence_score: '0.70',
+        trade_id: 'trade-win',
+        trade_status: 'CLOSED',
+        fill_price: '1.0',
+        exit_price: '1.01',
+        realised_pnl: '10',
+        closed_at: new Date(start.getTime() + 60_000),
+        allocated_capital: '100',
+        broker_connection_id: '11111111-1111-4111-8111-111111111111',
+        session_opening_balance: '10000',
+        session_started_at: start,
+      },
+      {
+        signal_generated_at: new Date(start.getTime() + 600_000),
+        instrument: 'GBPUSD',
+        direction: 'SELL',
+        confidence_score: '0.70',
+        trade_id: 'trade-loss',
+        trade_status: 'CLOSED',
+        fill_price: '1.0',
+        exit_price: '1.01',
+        realised_pnl: '-5',
+        closed_at: new Date(start.getTime() + 660_000),
+        allocated_capital: '1000',
+        broker_connection_id: '11111111-1111-4111-8111-111111111111',
+        session_opening_balance: '10000',
+        session_started_at: start,
+      },
+    ];
+    const snapshots = [
+      {
+        connection_id: '11111111-1111-4111-8111-111111111111',
+        equity: '10000',
+        accepted_at: start,
+      },
+      {
+        connection_id: '11111111-1111-4111-8111-111111111111',
+        equity: '9995',
+        accepted_at: new Date(start.getTime() + 700_000),
+      },
+    ];
+    const dataSource = {
+      query: jest
+        .fn()
+        .mockImplementation((sql: string) =>
+          Promise.resolve(sql.includes('broker.broker_account_snapshots') ? snapshots : rows),
+        ),
+    } as unknown as DataSource;
+    const report = await new ExternalSignalPerformanceService(dataSource).getProviderPerformance(
+      'user-1',
+      'provider-a',
+    );
+    expect(report.observed.profitFactor).toBeCloseTo(2, 10);
+  });
+
+  it('measures drawdown from account equity snapshots, not compounded margin returns', async () => {
+    const start = new Date('2026-09-01T00:00:00.000Z');
+    const rows = [
+      {
+        signal_generated_at: start,
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        confidence_score: '0.70',
+        trade_id: 'trade-1',
+        trade_status: 'CLOSED',
+        fill_price: '1.0',
+        exit_price: '0.99',
+        realised_pnl: '-10',
+        closed_at: new Date(start.getTime() + 60_000),
+        allocated_capital: '10',
+        broker_connection_id: '11111111-1111-4111-8111-111111111111',
+        session_opening_balance: '10000',
+        session_started_at: start,
+      },
+    ];
+    const snapshots = [
+      {
+        connection_id: '11111111-1111-4111-8111-111111111111',
+        equity: '10000',
+        accepted_at: start,
+      },
+      {
+        connection_id: '11111111-1111-4111-8111-111111111111',
+        equity: '9900',
+        accepted_at: new Date(start.getTime() + 30_000),
+      },
+    ];
+    const dataSource = {
+      query: jest
+        .fn()
+        .mockImplementation((sql: string) =>
+          Promise.resolve(sql.includes('broker.broker_account_snapshots') ? snapshots : rows),
+        ),
+    } as unknown as DataSource;
+    const report = await new ExternalSignalPerformanceService(dataSource).getProviderPerformance(
+      'user-1',
+      'provider-a',
+    );
+    expect(report.observed.maxDrawdown).toBeCloseTo(0.01, 10);
+    expect(report.checks.maxDrawdown).toBe(true);
   });
 
   it('scopes the SQL query to the exact user and provider code', async () => {

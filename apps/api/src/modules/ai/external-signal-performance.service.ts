@@ -28,6 +28,15 @@ type EvidenceRow = {
   realised_pnl: string | number | null;
   closed_at: Date | string | null;
   allocated_capital: string | number | null;
+  broker_connection_id: string | null;
+  session_opening_balance: string | number | null;
+  session_started_at: Date | string | null;
+};
+
+type EquitySnapshotRow = {
+  connection_id: string;
+  equity: string | number | null;
+  accepted_at: Date | string;
 };
 
 function finite(value: unknown): number | null {
@@ -71,9 +80,9 @@ function balancedAccuracy(rows: EvidenceRow[]): number | null {
   return (tp / (tp + fn) + tn / (tn + fp)) / 2;
 }
 
-function profitFactor(returns: number[]): number | null {
-  const profit = returns.filter((x) => x > 0).reduce((a, b) => a + b, 0);
-  const loss = -returns.filter((x) => x < 0).reduce((a, b) => a + b, 0);
+function profitFactor(realisedPnls: number[]): number | null {
+  const profit = realisedPnls.filter((x) => x > 0).reduce((a, b) => a + b, 0);
+  const loss = -realisedPnls.filter((x) => x < 0).reduce((a, b) => a + b, 0);
   if (loss === 0) return profit > 0 ? 1_000_000 : null;
   return profit / loss;
 }
@@ -91,12 +100,12 @@ function sampleSharpe(returns: number[]): number | null {
   return (Math.sqrt(returns.length) * mean) / sd;
 }
 
-function maxDrawdown(returns: number[]): number {
-  let equity = 1;
-  let peak = 1;
+function maxEquityDrawdown(equities: number[]): number | null {
+  const valid = equities.filter((value) => Number.isFinite(value) && value > 0);
+  if (!valid.length) return null;
+  let peak = valid[0];
   let worst = 0;
-  for (const r of returns) {
-    equity *= Math.max(0, 1 + r);
+  for (const equity of valid) {
     peak = Math.max(peak, equity);
     const dd = peak > 0 ? (peak - equity) / peak : 1;
     worst = Math.max(worst, dd);
@@ -122,10 +131,14 @@ export class ExternalSignalPerformanceService {
           t.exit_price,
           t.realised_pnl,
           t.closed_at,
-          ca.allocated_capital
+          ca.allocated_capital,
+          ti.broker_connection_id,
+          ts.opening_balance AS session_opening_balance,
+          ts.started_at AS session_started_at
         FROM trading.trade_intents ti
         LEFT JOIN trading.trades t ON t.trade_intent_id = ti.id
         LEFT JOIN trading.capital_allocations ca ON ca.trade_intent_id = ti.id
+        LEFT JOIN trading.trading_sessions ts ON ts.id = ti.trading_session_id
         WHERE ti.user_id = $1
           AND ti.metadata->>'signal_source' = 'EXTERNAL_PROVIDER'
           AND ti.metadata->>'external_provider_code' = $2
@@ -148,17 +161,70 @@ export class ExternalSignalPerformanceService {
         row.trade_status === 'CLOSED' &&
         row.closed_at != null &&
         finite(row.realised_pnl) !== null &&
-        finite(row.allocated_capital) !== null &&
-        (finite(row.allocated_capital) ?? 0) > 0,
+        finite(row.session_opening_balance) !== null &&
+        (finite(row.session_opening_balance) ?? 0) > 0,
     );
 
+    const realisedPnls = closed.map((row) => finite(row.realised_pnl) ?? 0);
     const tradeReturns = closed.map(
-      (row) => (finite(row.realised_pnl) ?? 0) / (finite(row.allocated_capital) as number),
+      (row, index) => realisedPnls[index] / (finite(row.session_opening_balance) as number),
     );
     const ba = balancedAccuracy(closed);
-    const pf = profitFactor(tradeReturns);
+    const pf = profitFactor(realisedPnls);
     const sharpe = sampleSharpe(tradeReturns);
-    const dd = maxDrawdown(tradeReturns);
+
+    // Drawdown must be measured from ACCOUNT equity, not broker margin. The
+    // provider owns the exact PAPER connection while its campaign is active,
+    // so authoritative account snapshots include both realised and unrealised
+    // campaign P&L. Query from the earliest provider-bound session start and
+    // calculate drawdown independently per connection; the worst account path
+    // is the campaign drawdown. Missing snapshot evidence fails the gate closed.
+    const startsByConnection = new Map<string, number>();
+    for (const row of rows) {
+      if (!row.broker_connection_id) continue;
+      const started = new Date(row.session_started_at ?? row.signal_generated_at).getTime();
+      if (!Number.isFinite(started)) continue;
+      const current = startsByConnection.get(row.broker_connection_id);
+      if (current === undefined || started < current) {
+        startsByConnection.set(row.broker_connection_id, started);
+      }
+    }
+
+    let dd: number | null = null;
+    if (startsByConnection.size > 0) {
+      const overallStart = new Date(Math.min(...startsByConnection.values()));
+      const snapshotRows = (await this.dataSource.query(
+        `
+          SELECT connection_id, equity, accepted_at
+          FROM broker.broker_account_snapshots
+          WHERE connection_id = ANY($1::uuid[])
+            AND accepted_at >= $2
+          ORDER BY connection_id ASC, accepted_at ASC, generation ASC
+        `,
+        [[...startsByConnection.keys()], overallStart],
+      )) as EquitySnapshotRow[];
+      const byConnection = new Map<string, number[]>();
+      for (const snapshot of snapshotRows) {
+        const start = startsByConnection.get(snapshot.connection_id);
+        const acceptedAt = new Date(snapshot.accepted_at).getTime();
+        const equity = finite(snapshot.equity);
+        if (
+          start === undefined ||
+          !Number.isFinite(acceptedAt) ||
+          acceptedAt < start ||
+          equity === null
+        ) {
+          continue;
+        }
+        const series = byConnection.get(snapshot.connection_id) ?? [];
+        series.push(equity);
+        byConnection.set(snapshot.connection_id, series);
+      }
+      const perConnection = [...byConnection.values()]
+        .map((series) => maxEquityDrawdown(series))
+        .filter((value): value is number => value !== null);
+      if (perConnection.length) dd = Math.max(...perConnection);
+    }
 
     const weekly = new Map<string, number>();
     for (let i = 0; i < closed.length; i += 1) {
@@ -207,7 +273,7 @@ export class ExternalSignalPerformanceService {
       balancedAccuracy: ba !== null && ba >= EXTERNAL_PROVIDER_REVIEW_GATES.minBalancedAccuracy,
       sharpeRatio: sharpe !== null && sharpe >= EXTERNAL_PROVIDER_REVIEW_GATES.minSharpeRatio,
       profitFactor: pf !== null && pf >= EXTERNAL_PROVIDER_REVIEW_GATES.minProfitFactor,
-      maxDrawdown: dd <= EXTERNAL_PROVIDER_REVIEW_GATES.maxDrawdown,
+      maxDrawdown: dd !== null && dd <= EXTERNAL_PROVIDER_REVIEW_GATES.maxDrawdown,
       positiveWindowFraction:
         positiveWindowFraction >= EXTERNAL_PROVIDER_REVIEW_GATES.minPositiveWindowFraction,
       positiveInstrumentFraction:
@@ -234,13 +300,16 @@ export class ExternalSignalPerformanceService {
       methodology: {
         balancedAccuracy:
           'Executed-trade direction vs fill-to-exit price direction; flat exits are excluded.',
-        profitFactorAndDrawdown:
-          'Computed from realised P&L divided by the durable allocated capital for each closed PAPER trade.',
+        profitFactor:
+          'Conventional gross realised profit divided by gross realised loss across closed PAPER trades.',
+        maxDrawdown:
+          'Peak-to-trough drawdown from authoritative broker account equity snapshots during the provider campaign; includes unrealised equity changes.',
         sharpeRatio:
-          'sqrt(N) times mean trade return divided by sample standard deviation; evidence-window, not annualized.',
-        positiveWindowFraction: 'Fraction of UTC calendar weeks with positive normalized return.',
+          'sqrt(N) times mean per-trade account return divided by sample standard deviation; each trade return is realised P&L divided by its session opening balance. Evidence-window, not annualized.',
+        positiveWindowFraction:
+          'Fraction of UTC calendar weeks with positive summed per-trade account return.',
         positiveInstrumentFraction:
-          'Fraction of the fixed six-pair universe with positive normalized return.',
+          'Fraction of the fixed six-pair universe with positive summed per-trade account return.',
       },
     };
   }

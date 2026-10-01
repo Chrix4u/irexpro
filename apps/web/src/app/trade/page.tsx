@@ -157,7 +157,7 @@ interface ExternalProviderPerformanceView {
     balancedAccuracy: number | null;
     profitFactor: number | null;
     evidenceWindowSharpeRatio: number | null;
-    maxDrawdown: number;
+    maxDrawdown: number | null;
     positiveWeeklyWindowFraction: number;
     positiveInstrumentFraction: number;
     minSubmittedConfidence: number | null;
@@ -1860,7 +1860,7 @@ export default function AiTradingPage() {
 
                   <div
                     className="ai-provider-evidence__gates"
-                    aria-label="TradingView promotion gates"
+                    aria-label="VPS Twelve Data qualification gates"
                   >
                     {[
                       ["BA ≥ 0.52", providerEvidence?.checks.balancedAccuracy],

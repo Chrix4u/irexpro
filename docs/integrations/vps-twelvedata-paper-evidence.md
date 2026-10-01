@@ -106,6 +106,16 @@ Provider results are read from the durable signal → intent → allocation → 
 
 Passing every gate only makes the provider eligible for a separate DEMO review. It never auto-promotes to DEMO or LIVE.
 
+### Scorecard economics
+
+- **Balanced accuracy** compares the submitted BUY/SELL direction with fill-to-exit price direction on closed trades; flat exits are excluded.
+- **Profit Factor** is conventional gross realised USD profit divided by gross realised USD loss. Broker-required margin is not used as the PF denominator.
+- **Evidence Sharpe** is `sqrt(N) × mean / sample SD` of per-trade account returns, where each return is realised P&L divided by that trade's session opening balance. It is deliberately labelled evidence-window Sharpe and is not annualized.
+- **Max drawdown** is peak-to-trough drawdown from authoritative PAPER account equity snapshots beginning with the provider campaign's first bound session. This includes unrealised equity movement and fails closed if snapshot evidence is unavailable.
+- **Positive weeks** and **positive pairs** use summed per-trade account returns; the pair denominator remains the fixed six-pair universe.
+
+These definitions intentionally avoid normalizing performance by broker margin. Margin is a capital-allocation/execution constraint, not the account equity base against which strategy drawdown should be judged.
+
 ## Status endpoint
 
 Authenticated clients can read:
