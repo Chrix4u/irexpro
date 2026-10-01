@@ -1,0 +1,111 @@
+//@version=6
+indicator("iRexPro Six-Pair PAPER Evidence Collector v1", overlay = false, dynamic_requests = true, max_bars_back = 500)
+
+// IMPORTANT
+// ---------
+// This script is an integration/evidence collector, NOT a qualified trading edge.
+// iRexPro independently enforces confidence, risk, sizing, PAPER-only authority,
+// duplicate protection, and provider performance gates on the server.
+
+string signalTf = input.timeframe("5", "Signal timeframe", options = ["1", "5", "15", "60", "240"])
+string eurusdSource = input.symbol("OANDA:EURUSD", "EURUSD source")
+string gbpusdSource = input.symbol("OANDA:GBPUSD", "GBPUSD source")
+string usdjpySource = input.symbol("OANDA:USDJPY", "USDJPY source")
+string audusdSource = input.symbol("OANDA:AUDUSD", "AUDUSD source")
+string usdcadSource = input.symbol("OANDA:USDCAD", "USDCAD source")
+string usdchfSource = input.symbol("OANDA:USDCHF", "USDCHF source")
+
+float CONFIDENCE_FLOOR = 0.64
+float VOLATILITY_CEILING = 0.85
+float STOP_ATR_MULTIPLIER = 1.50
+float TARGET_ATR_MULTIPLIER = 2.50
+
+f_clamp(float x, float lo, float hi) =>
+    math.max(lo, math.min(hi, x))
+
+f_api_tf(string tf) =>
+    tf == "1" ? "M1" : tf == "5" ? "M5" : tf == "15" ? "M15" : tf == "60" ? "H1" : "H4"
+
+f_num(float x) =>
+    str.tostring(x, "#.#####")
+
+array<string> tvSymbols = array.from(
+    eurusdSource,
+    gbpusdSource,
+    usdjpySource,
+    audusdSource,
+    usdcadSource,
+    usdchfSource
+)
+array<string> apiSymbols = array.from("EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF")
+
+string bestApiSymbol = ""
+string bestDirection = ""
+string bestRegime = ""
+float bestScore = na
+float bestConfidence = na
+float bestVolatility = na
+float bestEntry = na
+float bestStop = na
+float bestTarget = na
+int bestSignalBarTime = na
+
+for i = 0 to array.size(tvSymbols) - 1
+    string tvSymbol = array.get(tvSymbols, i)
+    string apiSymbol = array.get(apiSymbols, i)
+
+    // One data request per pair; tuple packing keeps the request count small.
+    [ctxTime, px, ema9, ema21, ema50, rsi14, atr14] = request.security(
+         tvSymbol,
+         signalTf,
+         [time, close, ta.ema(close, 9), ta.ema(close, 21), ta.ema(close, 50), ta.rsi(close, 14), ta.atr(14)],
+         gaps = barmerge.gaps_off,
+         lookahead = barmerge.lookahead_off
+     )
+
+    bool longTrend = ema9 > ema21 and ema21 > ema50
+    bool shortTrend = ema9 < ema21 and ema21 < ema50
+    bool longSetup = longTrend and rsi14 >= 55.0 and rsi14 <= 72.0
+    bool shortSetup = shortTrend and rsi14 <= 45.0 and rsi14 >= 28.0
+    int direction = longSetup ? 1 : shortSetup ? -1 : 0
+
+    float relativeAtr = px > 0.0 ? atr14 / px : 0.0
+    // A bounded 0..1 evidence field. iRexPro still independently rejects
+    // submitted volatility above the account's server-side risk ceiling.
+    float volatilityScore = f_clamp(relativeAtr / 0.0015, 0.0, 1.0)
+    float emaSeparation = atr14 > 0.0 ? f_clamp(math.abs(ema9 - ema21) / atr14 / 2.0, 0.0, 1.0) : 0.0
+    float rsiStrength = direction == 1 ? f_clamp((rsi14 - 50.0) / 22.0, 0.0, 1.0) : direction == -1 ? f_clamp((50.0 - rsi14) / 22.0, 0.0, 1.0) : 0.0
+    float confidence = f_clamp(0.60 + 0.12 * emaSeparation + 0.08 * rsiStrength, 0.60, 0.80)
+    bool eligible = direction != 0 and atr14 > 0.0 and volatilityScore <= VOLATILITY_CEILING and confidence >= CONFIDENCE_FLOOR
+
+    if eligible
+        float score = confidence + 0.05 * emaSeparation - 0.02 * volatilityScore
+        if na(bestScore) or score > bestScore
+            bestScore := score
+            bestApiSymbol := apiSymbol
+            bestDirection := direction == 1 ? "BUY" : "SELL"
+            bestRegime := volatilityScore >= 0.75 ? "HIGH_VOLATILITY" : "TRENDING"
+            bestConfidence := confidence
+            bestVolatility := volatilityScore
+            bestEntry := px
+            bestStop := direction == 1 ? px - atr14 * STOP_ATR_MULTIPLIER : px + atr14 * STOP_ATR_MULTIPLIER
+            bestTarget := direction == 1 ? px + atr14 * TARGET_ATR_MULTIPLIER : px - atr14 * TARGET_ATR_MULTIPLIER
+            bestSignalBarTime := ctxTime
+
+// The event id is deterministic for the selected symbol/bar/direction. If
+// TradingView retries the exact same webhook, iRexPro recovers the original
+// durable outcome and does not create a second trade.
+var string lastEventId = ""
+string apiTf = f_api_tf(signalTf)
+string eventId = bestApiSymbol != "" ? bestApiSymbol + "-" + str.tostring(bestSignalBarTime) + "-" + bestDirection : ""
+
+if barstate.isconfirmed and bestApiSymbol != "" and eventId != lastEventId
+    string generatedAt = str.format_time(timenow, "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC")
+    string expiresAt = str.format_time(timenow + 300000, "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC")
+    string payload = '{"eventId":"' + eventId + '","instrument":"' + bestApiSymbol + '","direction":"' + bestDirection + '","confidence":' + f_num(bestConfidence) + ',"entryPrice":' + f_num(bestEntry) + ',"stopLoss":' + f_num(bestStop) + ',"takeProfit":' + f_num(bestTarget) + ',"suggestedVolume":0.01,"timeframe":"' + apiTf + '","strategy":"irexpro-tv-six-pair-v1","marketRegime":"' + bestRegime + '","volatilityScore":' + f_num(bestVolatility) + ',"generatedAt":"' + generatedAt + '","expiresAt":"' + expiresAt + '"}'
+    alert(payload, alert.freq_once_per_bar_close)
+    lastEventId := eventId
+
+// Lightweight chart diagnostics only. These do not participate in execution.
+plot(na(bestConfidence) ? 0.0 : bestConfidence, "Selected confidence", color = color.blue)
+hline(CONFIDENCE_FLOOR, "Collector confidence floor", color = color.gray, linestyle = hline.style_dashed)
