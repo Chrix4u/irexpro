@@ -718,7 +718,7 @@ export default function AiTradingPage() {
   const [chartInstrument, setChartInstrument] = useState("USDJPY");
   const [chartTimeframe, setChartTimeframe] = useState<
     "M1" | "M5" | "M15" | "H1" | "H4"
-  >("M1");
+  >("M5");
   const [chartLoading, setChartLoading] = useState(false);
   const [allocation, setAllocation] =
     useState<UserCapitalAllocationView | null>(null);
@@ -1004,6 +1004,12 @@ export default function AiTradingPage() {
     }, 8000);
     return () => window.clearInterval(timer);
   }, [user, refreshTradingData]);
+
+  useEffect(() => {
+    if (vpsScannerStatus?.enabled && chartTimeframe === "M1") {
+      setChartTimeframe("M5");
+    }
+  }, [vpsScannerStatus?.enabled, chartTimeframe]);
 
   useEffect(() => {
     const watched = automationRuntime?.instruments ?? [];
@@ -1975,20 +1981,21 @@ export default function AiTradingPage() {
                         </small>
                       </div>
                       <div className="ai-cockpit__timeframes">
-                        {(["M1", "M5", "M15", "H1", "H4"] as const).map(
-                          (timeframe) => (
-                            <button
-                              key={timeframe}
-                              type="button"
-                              className={
-                                chartTimeframe === timeframe ? "is-active" : ""
-                              }
-                              onClick={() => setChartTimeframe(timeframe)}
-                            >
-                              {timeframe}
-                            </button>
-                          ),
-                        )}
+                        {(vpsScannerStatus?.enabled
+                          ? (["M5", "M15", "H1", "H4"] as const)
+                          : (["M1", "M5", "M15", "H1", "H4"] as const)
+                        ).map((timeframe) => (
+                          <button
+                            key={timeframe}
+                            type="button"
+                            className={
+                              chartTimeframe === timeframe ? "is-active" : ""
+                            }
+                            onClick={() => setChartTimeframe(timeframe)}
+                          >
+                            {timeframe}
+                          </button>
+                        ))}
                       </div>
                     </div>
                     <div className="ai-cockpit__market-stats">

@@ -107,7 +107,7 @@ describe('VpsForexSignalCollectorService', () => {
 
   it('refreshes all six live PAPER feeds and publishes only the strongest PAPER candidate', async () => {
     const live = new LivePaperMarketDataService();
-    live.registerLiveConnection('conn-1');
+    expect(live.isLiveConnection('conn-1')).toBe(false);
     const receiveSignal = jest
       .fn()
       .mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED', signalId: 'x' });
@@ -142,6 +142,7 @@ describe('VpsForexSignalCollectorService', () => {
       'symbol=EUR%2FUSD%2CGBP%2FUSD%2CUSD%2FJPY',
     );
     expect(heartbeat).toHaveBeenCalledTimes(6);
+    expect(live.isLiveConnection('conn-1')).toBe(true);
     expect(receiveSignal).toHaveBeenCalledTimes(1);
     expect(receiveSignal).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -163,7 +164,6 @@ describe('VpsForexSignalCollectorService', () => {
 
   it('refreshes market data but does not publish without the exact active PAPER session', async () => {
     const live = new LivePaperMarketDataService();
-    live.registerLiveConnection('conn-1');
     const receiveSignal = jest.fn();
     const collector = new VpsForexSignalCollectorService(
       config({
@@ -184,6 +184,7 @@ describe('VpsForexSignalCollectorService', () => {
     await collector.collectOnce(fetchMock as unknown as typeof fetch);
     expect(receiveSignal).not.toHaveBeenCalled();
     expect(live.getQuote('EURUSD').bid).toBeTruthy();
+    expect(live.isLiveConnection('conn-1')).toBe(false);
   });
 
   it('stops a legacy scheduler job for the exact active PAPER session on scanner startup', async () => {

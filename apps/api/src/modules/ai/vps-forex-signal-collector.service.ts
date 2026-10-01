@@ -181,7 +181,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       );
       return;
     }
-    this.livePaperMarket.registerLiveConnection(connectionId);
+    // Do not switch the PAPER adapter into live mode until a complete six-pair
+    // batch has been fetched. This prevents startup/health reads from seeing an
+    // empty live cache between API boot and the first scheduled collection.
 
     // API restarts can happen while a PAPER session already exists. Stop any
     // legacy Python scheduler job for the exact bound session before this
@@ -302,11 +304,16 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         session.executionMode !== ExecutionMode.PAPER_ONLY ||
         session.brokerConnectionId !== connectionId
       ) {
+        this.livePaperMarket.unregisterLiveConnection(connectionId);
         this.logger.warn(
           'VPS live feed refreshed, but signal publication is blocked until the configured PAPER_ONLY session is active',
         );
         return;
       }
+
+      // Atomic handoff: only after all six series were parsed and cached AND
+      // the exact PAPER authority is active do broker reads switch to live mode.
+      this.livePaperMarket.registerLiveConnection(connectionId);
 
       // Heartbeat every instrument after the cache refresh. This makes the
       // PAPER adapter evaluate SL/TP/resting orders against the SAME live
@@ -386,7 +393,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     const params = new URLSearchParams({
       symbol: SYMBOLS.map(([, provider]) => provider).join(','),
       interval: '5min',
-      outputsize: '70',
+      outputsize: '500',
       timezone: 'UTC',
       order: 'asc',
       end_date: new Date(lastClosedBoundary).toISOString().slice(0, 19),

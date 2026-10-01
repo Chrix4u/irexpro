@@ -137,10 +137,19 @@ export class LivePaperMarketDataService {
   getOHLCV(instrument: string, timeframe: string, count: number): OHLCV[] {
     const symbol = this.requireSupported(instrument);
     const tf = timeframe.trim().toUpperCase();
-    if (tf !== 'M5') {
+    const timeframeMinutes: Record<string, number> = {
+      M5: 5,
+      M15: 15,
+      M30: 30,
+      H1: 60,
+      H4: 240,
+      D1: 1440,
+    };
+    const minutes = timeframeMinutes[tf];
+    if (!minutes) {
       throw new BrokerAdapterError(
         BrokerErrorCode.INVALID_REQUEST,
-        `VPS live PAPER evidence currently supports M5 candles only (requested ${timeframe}).`,
+        `VPS live PAPER market data supports M5/M15/M30/H1/H4/D1 (requested ${timeframe}).`,
       );
     }
     const rows = this.candles.get(symbol) ?? [];
@@ -152,9 +161,49 @@ export class LivePaperMarketDataService {
         true,
       );
     }
-    return rows
-      .slice(-Math.max(1, count))
-      .map((row) => ({ ...row, timestamp: new Date(row.timestamp) }));
+    if (tf === 'M5') {
+      return rows
+        .slice(-Math.max(1, count))
+        .map((row) => ({ ...row, timestamp: new Date(row.timestamp) }));
+    }
+
+    const bucketMs = minutes * 60_000;
+    const latestClosedAt = this.latestObservedAt?.getTime() ?? 0;
+    const buckets = new Map<number, OHLCV[]>();
+    for (const row of rows) {
+      const ts = row.timestamp.getTime();
+      const bucketStart = Math.floor(ts / bucketMs) * bucketMs;
+      // Higher-timeframe candles are exposed only after the entire bucket is
+      // closed. This avoids presenting a partial H1/H4 bar as final evidence.
+      if (bucketStart + bucketMs > latestClosedAt) continue;
+      const bucket = buckets.get(bucketStart) ?? [];
+      bucket.push(row);
+      buckets.set(bucketStart, bucket);
+    }
+
+    const aggregated = [...buckets.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([bucketStart, bucket]) => {
+        const first = bucket[0]!;
+        const last = bucket[bucket.length - 1]!;
+        const high = Math.max(...bucket.map((row) => Number(row.high)));
+        const low = Math.min(...bucket.map((row) => Number(row.low)));
+        const volume = bucket.reduce((sum, row) => sum + Number(row.volume || '0'), 0);
+        const tickVolume = bucket.reduce((sum, row) => sum + Number(row.tickVolume || '0'), 0);
+        return {
+          ...first,
+          timestamp: new Date(bucketStart),
+          open: first.open,
+          high: high.toFixed(first.priceDigits ?? this.spec(symbol).digits),
+          low: low.toFixed(first.priceDigits ?? this.spec(symbol).digits),
+          close: last.close,
+          volume: String(volume),
+          tickVolume: String(tickVolume),
+          brokerTime: new Date(bucketStart).toISOString(),
+        };
+      });
+
+    return aggregated.slice(-Math.max(1, count));
   }
 
   now(): Date {

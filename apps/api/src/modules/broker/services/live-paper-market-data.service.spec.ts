@@ -35,6 +35,8 @@ describe('LivePaperMarketDataService', () => {
     expect(Number(eur.ask) - Number(eur.bid)).toBeCloseTo(0.0001, 5);
     expect(Number(jpy.ask) - Number(jpy.bid)).toBeCloseTo(0.01, 3);
     expect(service.getOHLCV('EURUSD', 'M5', 20)).toHaveLength(20);
+    expect(service.getOHLCV('EURUSD', 'M15', 20).length).toBeGreaterThan(0);
+    expect(service.getOHLCV('EURUSD', 'H1', 20).length).toBeGreaterThan(0);
     expect(service.instruments).toEqual([
       'EURUSD',
       'GBPUSD',
@@ -49,6 +51,6 @@ describe('LivePaperMarketDataService', () => {
     const service = new LivePaperMarketDataService();
     expect(() => service.getQuote('EURUSD')).toThrow(/No live PAPER quote/);
     service.updateClosedCandles('EURUSD', candles(1.1, 5));
-    expect(() => service.getOHLCV('EURUSD', 'M1', 10)).toThrow(/supports M5 candles only/);
+    expect(() => service.getOHLCV('EURUSD', 'M1', 10)).toThrow(/supports M5\/M15\/M30\/H1\/H4\/D1/);
   });
 });
