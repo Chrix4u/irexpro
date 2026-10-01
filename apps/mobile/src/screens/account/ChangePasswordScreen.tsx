@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import {
-  Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -9,7 +8,7 @@ import {
   Text,
 } from 'react-native';
 import { ApiClientError } from '@irexpro/api-client';
-import { ActionButton, Banner, Card, LabeledInput, palette } from '@/components/ui';
+import { ActionButton, ActionDialog, Banner, Card, LabeledInput, palette } from '@/components/ui';
 import { api } from '@/lib/api';
 import { accountSecurityError } from '@/lib/account-security';
 import {
@@ -49,6 +48,7 @@ export default function ChangePasswordScreen({
   const [actionError, setActionError] = useState<string | null>(null);
   const [networkFailed, setNetworkFailed] = useState(false);
   const [succeeded, setSucceeded] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const submissionError = validateChangePasswordSubmission({
     currentPassword,
@@ -73,15 +73,7 @@ export default function ChangePasswordScreen({
     if (!canSubmit) return;
     // Destructive-action confirmation BEFORE the call: changing the password
     // signs the user out of every device.
-    Alert.alert(
-      'Change password?',
-      'This signs you out of ALL devices.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Change Password', style: 'default', onPress: () => void handleSubmit() },
-      ],
-      { cancelable: true },
-    );
+    setConfirmOpen(true);
   }
 
   async function handleSubmit(): Promise<void> {
@@ -113,19 +105,6 @@ export default function ChangePasswordScreen({
     try {
       await api.changePassword({ currentPassword: current, newPassword: next });
       setSucceeded(true);
-      Alert.alert(
-        'Password changed',
-        'All sessions have been revoked. Please sign in again.',
-        [
-          {
-            text: 'Sign in',
-            onPress: () => {
-              void clearSession();
-            },
-          },
-        ],
-        { cancelable: false },
-      );
     } catch (error) {
       // 401 = wrong current password, 400 = weak new password: sanitized
       // banner; the fields stay empty for a clean retry. Network failures
@@ -145,7 +124,8 @@ export default function ChangePasswordScreen({
   }
 
   return (
-    <KeyboardAvoidingView
+    <>
+      <KeyboardAvoidingView
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
@@ -251,8 +231,31 @@ export default function ChangePasswordScreen({
             ) : null}
           </>
         )}
-      </ScrollView>
-    </KeyboardAvoidingView>
+        </ScrollView>
+      </KeyboardAvoidingView>
+      <ActionDialog
+        visible={confirmOpen}
+        kicker="ACCOUNT SECURITY"
+        title="Change password?"
+        message="Changing your password revokes every active session, including this device."
+        detailLines={[
+          'You will sign in again with the new password.',
+          'Other signed-in devices are revoked immediately.',
+          'The new password is sent only to the authenticated server endpoint and is never persisted by the app.',
+        ]}
+        confirmLabel="Change password"
+        cancelLabel="Keep current password"
+        onConfirm={() => {
+          setConfirmOpen(false);
+          void handleSubmit();
+        }}
+        onCancel={() => {
+          if (!busy) setConfirmOpen(false);
+        }}
+        busy={busy}
+        danger
+      />
+    </>
   );
 }
 

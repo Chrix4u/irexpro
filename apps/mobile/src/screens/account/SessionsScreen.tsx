@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { ApiClientError } from '@irexpro/api-client';
 import { useAuth } from '@/context/auth-context';
 import {
   ActionButton,
+  ActionDialog,
   Banner,
   Card,
   SectionHeader,
@@ -57,6 +58,7 @@ export default function SessionsScreen({ onBack }: { onBack: () => void }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [revokeFailedNetwork, setRevokeFailedNetwork] = useState(false);
+  const [dialog, setDialog] = useState<'revokeOthers' | 'logoutAll' | 'storageError' | null>(null);
 
   const cancelledRef = useRef(false);
 
@@ -93,19 +95,7 @@ export default function SessionsScreen({ onBack }: { onBack: () => void }) {
 
   function requestRevokeOthers(): void {
     if (busy) return;
-    Alert.alert(
-      'Sign out other devices?',
-      'Every other session will be signed out immediately.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Sign out others',
-          style: 'destructive',
-          onPress: () => void revokeOtherSessions(),
-        },
-      ],
-      { cancelable: true },
-    );
+    setDialog('revokeOthers');
   }
 
   async function revokeOtherSessions(): Promise<void> {
@@ -127,12 +117,8 @@ export default function SessionsScreen({ onBack }: { onBack: () => void }) {
         // sign-in rather than expose a session that cannot survive restart.
         setAccessToken(null);
         await clearTokens();
-        Alert.alert(
-          'Session storage unavailable',
-          REVOKE_STORAGE_ERROR,
-          [{ text: 'Sign in', onPress: () => { void clearSession(); } }],
-          { cancelable: false },
-        );
+        setActionError(REVOKE_STORAGE_ERROR);
+        setDialog('storageError');
         return;
       }
 
@@ -162,15 +148,7 @@ export default function SessionsScreen({ onBack }: { onBack: () => void }) {
 
   function requestSignOutEverywhere(): void {
     if (busy) return;
-    Alert.alert(
-      'Sign out everywhere?',
-      'You will be signed out on every device, including this one.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Sign out', style: 'destructive', onPress: () => void signOutEverywhere() },
-      ],
-      { cancelable: true },
-    );
+    setDialog('logoutAll');
   }
 
   async function signOutEverywhere(): Promise<void> {
@@ -190,8 +168,25 @@ export default function SessionsScreen({ onBack }: { onBack: () => void }) {
     onBack();
   }
 
+  async function confirmDialogAction(): Promise<void> {
+    const current = dialog;
+    if (!current) return;
+    if (current === 'storageError') {
+      setDialog(null);
+      await clearSession();
+      return;
+    }
+    setDialog(null);
+    if (current === 'revokeOthers') {
+      await revokeOtherSessions();
+      return;
+    }
+    await signOutEverywhere();
+  }
+
   return (
-    <ScrollView
+    <>
+      <ScrollView
       style={styles.container}
       contentContainerStyle={styles.content}
       keyboardShouldPersistTaps="handled"
@@ -295,7 +290,47 @@ export default function SessionsScreen({ onBack }: { onBack: () => void }) {
           follow-up.
         </Text>
       </Card>
-    </ScrollView>
+      </ScrollView>
+      <ActionDialog
+        visible={dialog != null}
+        kicker="SESSION SECURITY"
+        title={
+          dialog === 'revokeOthers'
+            ? 'Sign out other devices?'
+            : dialog === 'logoutAll'
+              ? 'Sign out everywhere?'
+              : 'Session storage unavailable'
+        }
+        message={
+          dialog === 'revokeOthers'
+            ? 'Every other session will be revoked immediately while this device receives a fresh session.'
+            : dialog === 'logoutAll'
+              ? 'Every active session will be revoked, including this device.'
+              : REVOKE_STORAGE_ERROR
+        }
+        detailLines={
+          dialog === 'revokeOthers'
+            ? [
+                'This device remains signed in with newly rotated credentials.',
+                'Other devices must sign in again.',
+              ]
+            : dialog === 'logoutAll'
+              ? [
+                  'This device will return to sign-in.',
+                  'Any other signed-in device must authenticate again.',
+                ]
+              : ['The local session cannot be stored safely and will be cleared.']
+        }
+        confirmLabel={dialog === 'storageError' ? 'Sign in again' : dialog === 'revokeOthers' ? 'Sign out others' : 'Sign out everywhere'}
+        cancelLabel={dialog === 'storageError' ? null : 'Cancel'}
+        onConfirm={() => void confirmDialogAction()}
+        onCancel={() => {
+          if (!busy && dialog !== 'storageError') setDialog(null);
+        }}
+        busy={busy !== null}
+        danger={dialog === 'revokeOthers' || dialog === 'logoutAll'}
+      />
+    </>
   );
 }
 

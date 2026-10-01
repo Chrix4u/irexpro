@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -20,7 +19,7 @@ import type {
   UserCapitalAllocationView,
 } from "@irexpro/types/execution";
 import { api } from "../lib/api";
-import { ActionDialog } from "../components/ui";
+import { ActionDialog, Banner } from "../components/ui";
 import {
   describeStopSummary,
   isAutomationRunning,
@@ -121,6 +120,9 @@ export default function AiTradingScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState<BusyAction>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<
+    { variant: "success" | "info" | "error"; message: string } | null
+  >(null);
   const [runtime, setRuntime] = useState<AiAutomationRuntimeStatusView | null>(null);
   const [runtimeWarning, setRuntimeWarning] = useState<string | null>(null);
   const [confirmations, setConfirmations] = useState<ExecutionConfirmationView[]>([]);
@@ -290,10 +292,10 @@ export default function AiTradingScreen() {
   const chooseBroker = useCallback(
     (connectionId: string) => {
       if (automationOn) {
-        Alert.alert(
-          "AI Trading is running",
-          "Stop AI Trading before switching broker accounts.",
-        );
+        setNotice({
+          variant: "info",
+          message: "AI Trading is running. Stop AI Trading before switching broker accounts.",
+        });
         return;
       }
 
@@ -307,23 +309,26 @@ export default function AiTradingScreen() {
 
   const saveAllocation = useCallback(async () => {
     if (!selectedBroker) {
-      Alert.alert("Broker required", "Connect and select a broker account first.");
+      setNotice({
+        variant: "info",
+        message: "Broker required. Connect and select a broker account first.",
+      });
       return;
     }
     if (automationOn) {
-      Alert.alert(
-        "AI Trading is running",
-        "Stop AI Trading before changing the capital allocation.",
-      );
+      setNotice({
+        variant: "info",
+        message: "AI Trading is running. Stop it before changing the capital allocation.",
+      });
       return;
     }
 
     const amount = allocationAmount.trim();
     if (!/^\d+(?:\.\d+)?$/.test(amount) || /^0+(?:\.0+)?$/.test(amount)) {
-      Alert.alert(
-        "Enter a valid amount",
-        "Use a positive decimal amount without currency symbols.",
-      );
+      setNotice({
+        variant: "info",
+        message: "Enter a positive decimal amount without currency symbols.",
+      });
       return;
     }
 
@@ -336,14 +341,13 @@ export default function AiTradingScreen() {
       });
       setAllocation(next);
       setAllocationAmount(next.allocatedCapital ?? amount);
-      Alert.alert(
-        "Capital allocated",
-        `${money(next.allocatedCapital, next.accountCurrency)} is available to AI Trading subject to server protections and committed exposure.`,
-      );
+      setNotice({
+        variant: "success",
+        message: `${money(next.allocatedCapital, next.accountCurrency)} is available to AI Trading, subject to server protections and committed exposure.`,
+      });
     } catch (requestError) {
       const message = safeMessage(requestError, "Failed to save capital allocation");
       setError(message);
-      Alert.alert("Allocation failed", message);
     } finally {
       setBusy(null);
     }
@@ -356,24 +360,25 @@ export default function AiTradingScreen() {
 
     setBusy("START");
     setError(null);
+    setNotice(null);
     try {
       await api.startTradingSession({
         brokerConnectionId: selectedBroker.id,
         executionMode: startExecutionModeFor(selectedBroker),
       });
-      Alert.alert(
-        "AI Trading started",
-        selectedBroker.brokerId === "paper-broker"
-          ? "AI Trading is running in the internal paper simulator."
-          : selectedBroker.accountType === "DEMO"
-            ? "AI Trading is running against this broker\'s DEMO environment. No live funds are used."
-            : "AI Trading is running for this verified live account.",
-      );
+      setNotice({
+        variant: "success",
+        message:
+          selectedBroker.brokerId === "paper-broker"
+            ? "AI Trading is running in the internal paper simulator."
+            : selectedBroker.accountType === "DEMO"
+              ? "AI Trading is running against this broker's DEMO environment. No live funds are used."
+              : "AI Trading is running for this verified live account.",
+      });
       await load();
     } catch (requestError) {
       const message = safeMessage(requestError, "Failed to start AI Trading");
       setError(message);
-      Alert.alert("Start failed", message);
     } finally {
       setBusy(null);
     }
@@ -381,24 +386,26 @@ export default function AiTradingScreen() {
 
   const stopTrading = useCallback(async () => {
     if (!session) {
-      Alert.alert("Already stopped", "AI Trading is already stopped.");
+      setNotice({ variant: "info", message: "AI Trading is already stopped." });
       return;
     }
 
     setBusy("STOP");
     setError(null);
+    setNotice(null);
     try {
       const result = await api.stopTradingSession(session.id);
       const presentation = describeStopSummary(result);
-      Alert.alert(presentation.title, presentation.message);
+      setNotice({
+        variant: "info",
+        message: `${presentation.title}: ${presentation.message}`,
+      });
       await load();
     } catch (requestError) {
       const message = safeMessage(requestError, "Failed to stop AI Trading");
-      setError(message);
-      Alert.alert(
-        "Stop failed",
+      setError(
         message +
-          "\n\nCheck Positions & Activity before assuming any AI-opened position is closed.",
+          " Check Positions & Activity before assuming any AI-opened position is closed.",
       );
     } finally {
       setBusy(null);
@@ -413,10 +420,10 @@ export default function AiTradingScreen() {
       try {
         const result = await api.confirmExecutionConfirmation(confirmation.id);
         if (result.status === "CONSUMED") {
-          Alert.alert(
-            "Order confirmation consumed",
-            `${confirmation.direction} ${confirmation.instrument} · ${confirmation.quantity} has been accepted by the server for the exact bound order payload. Final execution still depends on current server/broker protections.`,
-          );
+          setNotice({
+            variant: "success",
+            message: `${confirmation.direction} ${confirmation.instrument} · ${confirmation.quantity} was accepted for the exact bound server order payload. Final execution still depends on current server/broker protections.`,
+          });
         }
         await Promise.all([
           loadConfirmations(session),
@@ -427,11 +434,9 @@ export default function AiTradingScreen() {
           requestError,
           "The server rejected this order confirmation.",
         );
-        setConfirmationsWarning(message);
-        Alert.alert(
-          "Confirmation not accepted",
+        setConfirmationsWarning(
           message +
-            "\n\nNo approval has been assumed. Refresh AI Trading to verify the server state.",
+            " No approval has been assumed. Refresh AI Trading to verify the server state.",
         );
         await loadConfirmations(session);
       } finally {
@@ -480,26 +485,27 @@ export default function AiTradingScreen() {
     }
 
     if (!selectedBroker) {
-      Alert.alert(
-        "Broker required",
-        "Connect and select a broker account before starting AI Trading.",
-      );
+      setNotice({
+        variant: "info",
+        message: "Broker required. Connect and select a broker account before starting AI Trading.",
+      });
       return;
     }
 
     if (!isBrokerExecutionReady(selectedBroker)) {
-      Alert.alert(
-        "Broker not ready",
-        "This broker account must be CONNECTED with ACTIVE authorization before AI Trading can start.",
-      );
+      setNotice({
+        variant: "info",
+        message:
+          "Broker not ready. This account must be CONNECTED with ACTIVE authorization before AI Trading can start.",
+      });
       return;
     }
 
     if (!allocation?.hasAllocation || !allocation.allocatedCapital) {
-      Alert.alert(
-        "Allocate capital first",
-        "Choose how much broker capital the AI may use before starting AI Trading.",
-      );
+      setNotice({
+        variant: "info",
+        message: "Allocate capital first. Choose how much broker capital the AI may use before starting.",
+      });
       return;
     }
 
@@ -615,6 +621,8 @@ export default function AiTradingScreen() {
             </Pressable>
           </View>
         ) : null}
+
+        {notice ? <Banner variant={notice.variant}>{notice.message}</Banner> : null}
 
         {sessionBrokerDisconnected ? (
           <View style={styles.sessionBindingWarning} accessibilityRole="alert">

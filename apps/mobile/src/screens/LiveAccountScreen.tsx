@@ -12,7 +12,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -32,6 +31,7 @@ import type {
 } from "@irexpro/types";
 import type { TradeExecutionView, TradingSessionView } from "@irexpro/types/execution";
 import { api } from "../lib/api";
+import { ActionDialog, Banner } from "../components/ui";
 import { liveAccount } from "../lib/live-account";
 import { execution } from "../lib/execution";
 import { useRealtime } from "../context/realtime-context";
@@ -64,8 +64,16 @@ export default function LiveAccountScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [actionNotice, setActionNotice] = useState<
+    { variant: "success" | "info"; message: string } | null
+  >(null);
   const [closingPositionId, setClosingPositionId] = useState<string | null>(null);
   const [closingAllPositions, setClosingAllPositions] = useState(false);
+  const [closeDialog, setCloseDialog] = useState<
+    | { kind: "single"; position: LivePositionRowView }
+    | { kind: "all"; count: number }
+    | null
+  >(null);
   const {
     connected,
     stale,
@@ -162,28 +170,27 @@ export default function LiveAccountScreen() {
       if (closingPositionId || closingAllPositions) return;
       setClosingPositionId(position.id);
       setError(null);
+      setActionNotice(null);
       try {
         const result = await api.closePosition(position.id);
-        if (result.status === "CLOSED") {
-          Alert.alert(
-            "Position closed",
-            `${position.instrument} ${position.direction} is confirmed closed by the execution service.`,
-          );
-        } else {
-          Alert.alert(
-            "Closure requires reconciliation",
-            `${position.instrument} is now ${result.status}. Positions & Activity remains the authoritative view until the server confirms closure.`,
-          );
-        }
+        setActionNotice(
+          result.status === "CLOSED"
+            ? {
+                variant: "success",
+                message: `${position.instrument} ${position.direction} is confirmed closed by the execution service.`,
+              }
+            : {
+                variant: "info",
+                message: `${position.instrument} is now ${result.status}. The row remains authoritative until reconciliation confirms the broker state.`,
+              },
+        );
         await load();
       } catch (err) {
         const message =
           err instanceof Error ? err.message : "Failed to close position";
-        setError(message);
-        Alert.alert(
-          "Close failed",
+        setError(
           message +
-            "\n\nThe position has not been assumed closed. Refresh Positions & Activity to verify its authoritative server state.",
+            " The position has not been assumed closed. Refresh Positions & Activity to verify its authoritative server state.",
         );
       } finally {
         setClosingPositionId(null);
@@ -195,20 +202,9 @@ export default function LiveAccountScreen() {
   const requestClosePosition = useCallback(
     (position: LivePositionRowView) => {
       if (closingPositionId || closingAllPositions) return;
-      Alert.alert(
-        "Close this position?",
-        `${position.instrument} ${position.direction} · ${position.lotSize} lots\n\nThis requests immediate risk-reducing closure through the execution service. The broker-confirmed exit price may differ from the current displayed mark.`,
-        [
-          { text: "Keep Open", style: "cancel" },
-          {
-            text: "Close Position",
-            style: "destructive",
-            onPress: () => void closePosition(position),
-          },
-        ],
-      );
+      setCloseDialog({ kind: "single", position });
     },
-    [closePosition, closingAllPositions, closingPositionId],
+    [closingAllPositions, closingPositionId],
   );
 
   const closeAllPositions = useCallback(async () => {
@@ -223,34 +219,33 @@ export default function LiveAccountScreen() {
 
     setClosingAllPositions(true);
     setError(null);
+    setActionNotice(null);
     try {
       const results = await api.closeAllAiPositions();
       const closedCount = results.filter((result) => result.closed).length;
       const unresolved = results.filter((result) => !result.closed);
       if (unresolved.length === 0) {
-        Alert.alert(
-          "AI positions closed",
-          `Confirmed closed: ${closedCount} position${closedCount === 1 ? "" : "s"}.`,
-        );
+        setActionNotice({
+          variant: "success",
+          message: `Confirmed closed: ${closedCount} position${closedCount === 1 ? "" : "s"}.`,
+        });
       } else {
         const statusSummary = unresolved
           .slice(0, 3)
           .map((result) => `${result.tradeId.slice(0, 8)}… · ${result.status}`)
-          .join("\n");
-        Alert.alert(
-          "Some positions need reconciliation",
-          `${closedCount} confirmed closed; ${unresolved.length} unresolved.\n\n${statusSummary}\n\nRefresh Positions & Activity until the server confirms the final broker state.`,
-        );
+          .join(" · ");
+        setActionNotice({
+          variant: "info",
+          message: `${closedCount} confirmed closed; ${unresolved.length} unresolved. ${statusSummary}. Refresh until the server confirms the final broker state.`,
+        });
       }
       await load();
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Failed to close AI positions";
-      setError(message);
-      Alert.alert(
-        "Close all failed",
+      setError(
         message +
-          "\n\nNo position is assumed closed. Refresh Positions & Activity to verify the authoritative server state.",
+          " No position is assumed closed. Refresh Positions & Activity to verify the authoritative server state.",
       );
     } finally {
       setClosingAllPositions(false);
@@ -260,24 +255,8 @@ export default function LiveAccountScreen() {
   const requestCloseAllPositions = useCallback(() => {
     const count = positions?.positions.length ?? 0;
     if (count === 0 || closingPositionId || closingAllPositions) return;
-    Alert.alert(
-      "Close all AI-opened positions?",
-      `This requests immediate closure of every open position the server can prove was opened by iRexPro.\n\nVisible open positions: ${count}. Broker/manual positions without AI provenance are not swept.`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Close All AI Positions",
-          style: "destructive",
-          onPress: () => void closeAllPositions(),
-        },
-      ],
-    );
-  }, [
-    closeAllPositions,
-    closingAllPositions,
-    closingPositionId,
-    positions,
-  ]);
+    setCloseDialog({ kind: "all", count });
+  }, [closingAllPositions, closingPositionId, positions]);
 
   if (loading) {
     return (
@@ -295,8 +274,22 @@ export default function LiveAccountScreen() {
   const exitActivity = aiExitActivityRows(activity?.activity ?? []).slice(0, 8);
   const recentActivity = (activity?.activity ?? []).slice(0, 10);
 
+  async function confirmCloseDialog(): Promise<void> {
+    const current = closeDialog;
+    if (!current) return;
+    setCloseDialog(null);
+    if (current.kind === "single") {
+      await closePosition(current.position);
+      return;
+    }
+    await closeAllPositions();
+  }
+
+  const closeDialogBusy = closingAllPositions || closingPositionId !== null;
+
   return (
-    <ScrollView
+    <>
+      <ScrollView
       style={styles.flex}
       contentContainerStyle={styles.scrollContent}
       refreshControl={
@@ -415,6 +408,10 @@ export default function LiveAccountScreen() {
             <Text style={styles.retryButtonText}>Retry</Text>
           </Pressable>
         </View>
+      ) : null}
+
+      {actionNotice ? (
+        <Banner variant={actionNotice.variant}>{actionNotice.message}</Banner>
       ) : null}
 
       {tiles ? (
@@ -834,7 +831,47 @@ export default function LiveAccountScreen() {
           <Text style={styles.muted}>No recent activity.</Text>
         </View>
       )}
-    </ScrollView>
+      </ScrollView>
+      <ActionDialog
+        visible={closeDialog != null}
+        kicker="RISK-REDUCING ACTION"
+        title={
+          closeDialog?.kind === "single"
+            ? "Close this position?"
+            : "Close all AI-opened positions?"
+        }
+        message={
+          closeDialog?.kind === "single"
+            ? `${closeDialog.position.instrument} ${closeDialog.position.direction} · ${closeDialog.position.lotSize} lots`
+            : `Visible AI-opened positions: ${closeDialog?.count ?? 0}`
+        }
+        detailLines={
+          closeDialog?.kind === "single"
+            ? [
+                "Closure is requested immediately through the execution service.",
+                "The broker-confirmed exit price may differ from the currently displayed market mark.",
+                "The position remains shown until the server confirms the authoritative state.",
+              ]
+            : [
+                "Only positions the server can prove were opened by iRexPro are included.",
+                "Broker/manual positions without AI provenance are not swept.",
+                "Any unresolved broker closure remains visible for reconciliation.",
+              ]
+        }
+        confirmLabel={
+          closeDialog?.kind === "single"
+            ? "Close position"
+            : "Close all AI positions"
+        }
+        cancelLabel={closeDialog?.kind === "single" ? "Keep open" : "Cancel"}
+        onConfirm={() => void confirmCloseDialog()}
+        onCancel={() => {
+          if (!closeDialogBusy) setCloseDialog(null);
+        }}
+        busy={closeDialogBusy}
+        danger
+      />
+    </>
   );
 }
 
