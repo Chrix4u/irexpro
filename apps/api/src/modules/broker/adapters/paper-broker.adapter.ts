@@ -730,6 +730,10 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       const quote = this.liveMarketData!.getQuote(instrument);
       return { bid: quote.bid, ask: quote.ask };
     }
+    // Never value a durable position using another instrument's fallback feed.
+    // This is especially important across process restarts while a VPS-live
+    // PAPER position is still open and the in-memory live cache is rebuilding.
+    this.requireInstrument(instrument);
     return this._feed.quote();
   }
 

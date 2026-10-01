@@ -217,11 +217,54 @@ describe('VpsForexSignalCollectorService', () => {
       aiEngine,
     );
 
+    const fetchSpy = jest
+      .spyOn(global, 'fetch')
+      .mockResolvedValue({ ok: true, status: 200, json: async () => payload() } as Response);
+
     await collector.onModuleInit();
-    collector.onModuleDestroy();
 
     expect(aiEngine.notifySessionStopped).toHaveBeenCalledWith({ tradingSessionId: 'session-1' });
+    expect(live.isLiveConnection('conn-1')).toBe(true);
+    expect(live.status().cachedInstrumentCount).toBe(6);
+
+    collector.onModuleDestroy();
+    fetchSpy.mockRestore();
     expect(live.isLiveConnection('conn-1')).toBe(false);
+  });
+
+  it('reuses a successful six-pair provider batch within the same UTC minute', async () => {
+    const live = new LivePaperMarketDataService();
+    live.registerLiveConnection('conn-1');
+    const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
+    const heartbeat = jest.fn().mockResolvedValue({ bid: '1', ask: '1.1' });
+    const collector = new VpsForexSignalCollectorService(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+      }),
+      { receiveSignal } as unknown as AiSignalService,
+      {
+        getActiveSession: jest.fn().mockResolvedValue({
+          id: 'session-1',
+          brokerConnectionId: 'conn-1',
+          executionMode: ExecutionMode.PAPER_ONLY,
+        }),
+      } as unknown as ExecutionService,
+      { getCurrentPriceForConnection: heartbeat } as unknown as BrokerService,
+      live,
+      aiEngineClientMock(),
+    );
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => payload() });
+
+    await collector.collectOnce(fetchMock as unknown as typeof fetch);
+    await collector.collectOnce(fetchMock as unknown as typeof fetch);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(heartbeat).toHaveBeenCalledTimes(12);
   });
 
   it('rejects the shared Twelve Data demo key for production evidence', async () => {

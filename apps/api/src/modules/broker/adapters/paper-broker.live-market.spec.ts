@@ -76,5 +76,11 @@ describe('PaperBrokerAdapter — scoped VPS live market mode', () => {
     );
     const account = await adapter.getAccountInfo();
     expect(Number(account.equity)).toBeGreaterThan(0);
+
+    // Simulate a process-start gap where live ownership is not available yet.
+    // A durable USDJPY position must fail closed instead of being valued with
+    // the default EURUSD simulator quote.
+    live.unregisterLiveConnection('conn-live');
+    await expect(adapter.getAccountInfo()).rejects.toThrow(/supports EURUSD only/);
   });
 });

@@ -166,6 +166,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private lastSlot: string | null = null;
+  private lastProviderFetchMinute: string | null = null;
+  private lastProviderSeries: Map<string, LivePaperCandleInput[]> | null = null;
 
   constructor(
     private readonly config: ConfigService,
@@ -190,9 +192,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       );
       return;
     }
-    // Do not switch the PAPER adapter into live mode until a complete six-pair
-    // batch has been fetched. This prevents startup/health reads from seeing an
-    // empty live cache between API boot and the first scheduled collection.
+    // Claim the exact PAPER connection immediately so no restored live position
+    // can fall back to the historical/default simulator during boot. Until the
+    // cache is primed, quote reads fail closed with PROVIDER_UNAVAILABLE.
+    this.livePaperMarket.registerLiveConnection(connectionId);
 
     // API restarts can happen while a PAPER session already exists. Stop any
     // legacy Python scheduler job for the exact bound session before this
@@ -217,6 +220,17 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         `VPS scanner could not isolate legacy scheduler; scanner remains disabled: ${(error as Error).message}`,
       );
       return;
+    }
+
+    try {
+      await this.primeMarketData(apiKey);
+    } catch (error) {
+      // Keep live ownership registered so restored live positions fail closed
+      // rather than being valued against a mismatched simulator feed. The
+      // periodic scanner can recover on a later successful provider request.
+      this.logger.error(
+        `VPS startup market prime failed; live PAPER remains fail-closed: ${(error as Error).message}`,
+      );
     }
 
     this.logger.log(
@@ -313,7 +327,6 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         session.executionMode !== ExecutionMode.PAPER_ONLY ||
         session.brokerConnectionId !== connectionId
       ) {
-        this.livePaperMarket.unregisterLiveConnection(connectionId);
         this.logger.warn(
           'VPS live feed refreshed, but signal publication is blocked until the configured PAPER_ONLY session is active',
         );
@@ -398,10 +411,36 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     return now.getUTCMinutes() % 10 === 0;
   }
 
+  private async primeMarketData(apiKey: string, fetchImpl: typeof fetch = fetch): Promise<void> {
+    const seriesByInstrument = await this.fetchSixPairSeries(apiKey, fetchImpl);
+    for (const [instrument, candles] of seriesByInstrument.entries()) {
+      this.livePaperMarket.updateClosedCandles(instrument, candles);
+    }
+    const cacheStatus = this.livePaperMarket.status();
+    if (cacheStatus.cachedInstrumentCount !== SYMBOLS.length) {
+      throw new Error(
+        `startup live PAPER cache incomplete (${cacheStatus.cachedInstrumentCount}/${SYMBOLS.length})`,
+      );
+    }
+    this.logger.log(
+      `VPS startup market cache primed pairs=${cacheStatus.cachedInstrumentCount}/6 ` +
+        `latest=${cacheStatus.latestObservedAt?.toISOString() ?? 'unknown'}`,
+    );
+  }
+
   private async fetchSixPairSeries(
     apiKey: string,
     fetchImpl: typeof fetch,
   ): Promise<Map<string, LivePaperCandleInput[]>> {
+    // Twelve Data Basic permits 8 credits/minute while this six-symbol batch
+    // costs 6. Reuse one successful batch inside the same API-process minute
+    // so a startup prime + collection slot cannot accidentally spend 12.
+    const requestMinute = new Date().toISOString().slice(0, 16);
+    if (this.lastProviderFetchMinute === requestMinute && this.lastProviderSeries) {
+      this.logger.debug(`Reusing Twelve Data six-pair batch for minute=${requestMinute}`);
+      return this.lastProviderSeries;
+    }
+
     const now = Date.now();
     const lastClosedBoundary = Math.floor(now / BAR_MS) * BAR_MS - 1_000;
     const params = new URLSearchParams({
@@ -452,6 +491,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       }
       result.set(instrument, candles);
     }
+    this.lastProviderFetchMinute = requestMinute;
+    this.lastProviderSeries = result;
     return result;
   }
 
