@@ -1719,7 +1719,7 @@ export default function AiTradingPage() {
                         External signal evidence
                       </p>
                       <h2 id="provider-evidence-title">
-                        VPS · Twelve Data Six-Pair v2
+                        VPS · Twelve Data Six-Pair v3
                       </h2>
                       <p>
                         Live six-pair VPS signals are measured independently in

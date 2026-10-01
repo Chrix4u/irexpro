@@ -668,7 +668,7 @@ export class TradingService {
         last_confidence_score: null,
         last_confidence_at: null,
         confidence_threshold: 0.64,
-        model_version: 'external-provider/vps-twelvedata-six-pair-v2/paper-only-v1',
+        model_version: 'external-provider/vps-twelvedata-six-pair-v3/paper-only-v1',
         model_mode: 'PAPER_EVIDENCE',
         model_loaded: null,
         last_market_data_at: null,
