@@ -30,6 +30,7 @@ const NAV: Array<{ href: string; label: string; Icon: ComponentType<IconProps> }
   { href: '/admin/payments', label: 'Payments', Icon: PaymentsIcon },
   { href: '/admin/brokers', label: 'Brokers', Icon: PlugIcon },
   { href: '/admin/live-ops', label: 'Live Ops', Icon: PulseIcon },
+  { href: '/admin/system', label: 'System & Security', Icon: AuditIcon },
   { href: '/admin/audit', label: 'Audit Log', Icon: AuditIcon },
 ];
 

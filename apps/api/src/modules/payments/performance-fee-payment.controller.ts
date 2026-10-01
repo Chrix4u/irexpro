@@ -36,7 +36,7 @@ import { InitiatePerformanceFeeCheckoutDto } from './dto/initiate-performance-fe
  */
 @ApiTags('Performance Fee Payments')
 @ApiBearerAuth('access-token')
-@Controller('api/v1/performance-fees')
+@Controller('performance-fees')
 @UseGuards(RolesGuard)
 export class PerformanceFeePaymentController {
   constructor(private readonly svc: PerformanceFeePaymentService) {}
@@ -57,7 +57,7 @@ export class PerformanceFeePaymentController {
     if (!admin && queryUserId && queryUserId !== principal.userId) {
       throw new ForbiddenException('You can only view your own performance-fee invoices');
     }
-    const effectiveUserId = admin ? (queryUserId ?? principal.userId) : principal.userId;
+    const effectiveUserId = admin ? queryUserId : principal.userId;
     return this.svc.listUserPerformanceFeeInvoices(effectiveUserId, {
       status,
       limit: limit ? Number(limit) : undefined,

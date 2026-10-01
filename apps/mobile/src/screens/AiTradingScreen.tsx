@@ -20,6 +20,7 @@ import type {
   UserCapitalAllocationView,
 } from "@irexpro/types/execution";
 import { api } from "../lib/api";
+import { ActionDialog } from "../components/ui";
 import {
   describeStopSummary,
   isAutomationRunning,
@@ -29,6 +30,32 @@ import {
 } from "./ai-trading-screen.logic";
 
 type BusyAction = "ALLOCATE" | "START" | "STOP" | null;
+
+type AiActionDialog =
+  | {
+      kind: "START";
+      title: string;
+      message: string;
+      detailLines: string[];
+      confirmLabel: string;
+      danger?: false;
+    }
+  | {
+      kind: "STOP";
+      title: string;
+      message: string;
+      detailLines: string[];
+      confirmLabel: string;
+      danger: true;
+    }
+  | {
+      kind: "ORDER";
+      title: string;
+      message: string;
+      detailLines: string[];
+      confirmLabel: string;
+      confirmation: ExecutionConfirmationView;
+    };
 
 function brokerLabel(connection: BrokerConnectionView): string {
   return connection.displayName?.trim() || connection.brokerName;
@@ -99,6 +126,7 @@ export default function AiTradingScreen() {
   const [confirmations, setConfirmations] = useState<ExecutionConfirmationView[]>([]);
   const [confirmationsWarning, setConfirmationsWarning] = useState<string | null>(null);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [actionDialog, setActionDialog] = useState<AiActionDialog | null>(null);
 
   const automationOn = isAutomationRunning(session);
 
@@ -416,35 +444,38 @@ export default function AiTradingScreen() {
   const requestOrderConfirmation = useCallback(
     (confirmation: ExecutionConfirmationView) => {
       if (confirmingId) return;
-      Alert.alert(
-        "Confirm this AI order?",
-        `${confirmation.direction} ${confirmation.instrument} · ${confirmation.quantity}\nSL: ${confirmation.stopLoss ?? "—"} · TP: ${confirmation.takeProfit ?? "—"}\nExpires: ${formatRuntimeTime(confirmation.expiresAt)}\n\nPayload digest:\n${confirmation.orderPayloadDigest}\n\nThis confirmation is one-time and bound to this exact server order payload.`,
-        [
-          { text: "Cancel", style: "cancel" },
-          {
-            text: "Confirm Order",
-            onPress: () => void confirmPendingOrder(confirmation),
-          },
+      setActionDialog({
+        kind: "ORDER",
+        title: "Confirm this AI order?",
+        message: `${confirmation.direction} ${confirmation.instrument} · ${confirmation.quantity}`,
+        detailLines: [
+          `Stop loss: ${confirmation.stopLoss ?? "—"} · Take profit: ${confirmation.takeProfit ?? "—"}`,
+          `Expires: ${formatRuntimeTime(confirmation.expiresAt)}`,
+          `Payload digest: ${confirmation.orderPayloadDigest}`,
+          "This approval is one-time and bound to this exact server order payload.",
         ],
-      );
+        confirmLabel: "Confirm order",
+        confirmation,
+      });
     },
-    [confirmPendingOrder, confirmingId],
+    [confirmingId],
   );
 
   const requestAutomationAction = useCallback(() => {
     if (automationOn) {
-      Alert.alert(
-        "Stop AI Trading and close AI positions?",
-        "Confirming stops new AI trading first, then immediately requests closure of every currently open position that iRexPro can prove was opened by the AI. Broker market conditions determine the actual exit price. Unverified closures remain clearly reported for follow-up.",
-        [
-          { text: "Keep AI Trading Running", style: "cancel" },
-          {
-            text: "Stop & Close AI Positions",
-            style: "destructive",
-            onPress: () => void stopTrading(),
-          },
+      setActionDialog({
+        kind: "STOP",
+        title: "Stop AI Trading and close AI positions?",
+        message:
+          "New AI exposure will be stopped first, then iRexPro will request closure of every open position it can prove was opened by the AI.",
+        detailLines: [
+          "Broker market conditions determine each actual exit price.",
+          "Unverified closures remain visible for follow-up rather than being presented as closed.",
+          "Manual or externally opened positions are not included in the AI-owned close request.",
         ],
-      );
+        confirmLabel: "Stop & close AI positions",
+        danger: true,
+      });
       return;
     }
 
@@ -472,20 +503,18 @@ export default function AiTradingScreen() {
       return;
     }
 
-    Alert.alert(
-      "Start AI Trading?",
-      `Broker: ${brokerLabel(selectedBroker)} (${selectedBroker.accountType})\nAI allocation: ${money(
-        allocation.allocatedCapital,
-        allocation.accountCurrency,
-      )}\n\nOnce started, the AI may open, manage and close positions automatically within this allocation and the server-enforced protections until you stop AI Trading.`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Start AI Trading",
-          onPress: () => void startTrading(),
-        },
+    setActionDialog({
+      kind: "START",
+      title: "Start AI Trading?",
+      message:
+        "The AI may open, manage and close positions automatically until you stop it, within the capital allocation and server-enforced protections.",
+      detailLines: [
+        `Broker: ${brokerLabel(selectedBroker)} (${selectedBroker.accountType})`,
+        `AI allocation: ${money(allocation.allocatedCapital, allocation.accountCurrency)}`,
+        "Risk checks remain server-authoritative for every order.",
       ],
-    );
+      confirmLabel: "Start AI Trading",
+    });
   }, [
     allocation,
     automationOn,
@@ -493,6 +522,30 @@ export default function AiTradingScreen() {
     startTrading,
     stopTrading,
   ]);
+
+  const confirmActionDialog = useCallback(async () => {
+    const current = actionDialog;
+    if (!current) return;
+    setActionDialog(null);
+    if (current.kind === "START") {
+      await startTrading();
+      return;
+    }
+    if (current.kind === "STOP") {
+      await stopTrading();
+      return;
+    }
+    await confirmPendingOrder(current.confirmation);
+  }, [actionDialog, confirmPendingOrder, startTrading, stopTrading]);
+
+  const actionDialogBusy =
+    actionDialog == null
+      ? false
+      : actionDialog.kind === "START"
+        ? busy === "START"
+        : actionDialog.kind === "STOP"
+          ? busy === "STOP"
+          : confirmingId === actionDialog.confirmation.id;
 
   if (loading) {
     return (
@@ -504,7 +557,8 @@ export default function AiTradingScreen() {
   }
 
   return (
-    <KeyboardAvoidingView
+    <>
+      <KeyboardAvoidingView
       style={styles.flex}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
@@ -1013,7 +1067,29 @@ export default function AiTradingScreen() {
           </Text>
         </View>
       </ScrollView>
-    </KeyboardAvoidingView>
+      </KeyboardAvoidingView>
+      <ActionDialog
+        visible={actionDialog != null}
+        kicker={
+          actionDialog?.kind === "ORDER"
+            ? "SEMI-AUTO ORDER"
+            : actionDialog?.kind === "STOP"
+              ? "AI TRADING SAFETY"
+              : "AI TRADING"
+        }
+        title={actionDialog?.title ?? ""}
+        message={actionDialog?.message ?? ""}
+        detailLines={actionDialog?.detailLines ?? []}
+        confirmLabel={actionDialog?.confirmLabel ?? "Confirm"}
+        cancelLabel={actionDialog?.kind === "STOP" ? "Keep running" : "Cancel"}
+        onConfirm={() => void confirmActionDialog()}
+        onCancel={() => {
+          if (!actionDialogBusy) setActionDialog(null);
+        }}
+        busy={actionDialogBusy}
+        danger={actionDialog?.kind === "STOP" && actionDialog.danger === true}
+      />
+    </>
   );
 }
 

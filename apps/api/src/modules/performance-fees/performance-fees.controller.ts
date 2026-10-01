@@ -31,7 +31,7 @@ import { CreateLedgerEntryDto } from './dto/create-ledger-entry.dto';
  * - Invoicing creates a pending invoice; payment happens via verified webhook.
  * - No broker withdrawals. No live trading activation.
  */
-@Controller('api/v1/performance-fees')
+@Controller('performance-fees')
 @UseGuards(RolesGuard)
 export class PerformanceFeesController {
   constructor(private readonly svc: PerformanceFeeService) {}

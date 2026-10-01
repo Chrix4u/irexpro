@@ -41,6 +41,7 @@ import { AdminLiveAccountModule } from './modules/admin-live-account/admin-live-
 // instrumented services reach MetricsService lazily via ModuleRef (strict:
 // false) so no consumer module imports it.
 import { MetricsModule } from './modules/metrics/metrics.module';
+import { AdminSystemModule } from './modules/admin-system/admin-system.module';
 
 @Module({
   imports: [
@@ -118,6 +119,8 @@ import { MetricsModule } from './modules/metrics/metrics.module';
     // Sprint 50 PR-6 — admin live-operations + audit investigation read API
     // (Directive PHASE L §39). ADMIN/SUPER_ADMIN RBAC at the controllers.
     AdminLiveAccountModule,
+    // Admin-only operational readiness for MFA, email, SMS and payments.
+    AdminSystemModule,
     // Round 7 (P1 metrics — audit R7-audit-C A6): in-process counters/gauges
     // + the internal-key-guarded GET /api/v1/metrics Prometheus endpoint.
     MetricsModule,

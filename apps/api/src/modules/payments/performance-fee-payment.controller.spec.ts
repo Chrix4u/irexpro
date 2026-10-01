@@ -61,9 +61,9 @@ describe('listInvoices', () => {
     );
   });
 
-  it('admin with no userId defaults to own id', async () => {
+  it('admin with no userId receives the global bounded invoice workspace', async () => {
     await controller.listInvoices(adminUser(), undefined, undefined, undefined);
-    expect(svc.listUserPerformanceFeeInvoices).toHaveBeenCalledWith('admin-1', expect.anything());
+    expect(svc.listUserPerformanceFeeInvoices).toHaveBeenCalledWith(undefined, expect.anything());
   });
 });
 

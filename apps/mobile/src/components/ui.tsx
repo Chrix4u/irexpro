@@ -263,7 +263,7 @@ export function ActionDialog({
   message: string;
   detailLines?: string[];
   confirmLabel: string;
-  cancelLabel?: string;
+  cancelLabel?: string | null;
   onConfirm: () => void;
   onCancel: () => void;
   busy?: boolean;
@@ -363,15 +363,17 @@ export function ActionDialog({
           ) : null}
 
           <View style={styles.dialogActions}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={cancelLabel}
-              onPress={onCancel}
-              disabled={busy}
-              style={[styles.dialogButton, styles.dialogCancel, busy && styles.dialogDisabled]}
-            >
-              <Text style={styles.dialogCancelText}>{cancelLabel}</Text>
-            </Pressable>
+            {cancelLabel != null ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={cancelLabel}
+                onPress={onCancel}
+                disabled={busy}
+                style={[styles.dialogButton, styles.dialogCancel, busy && styles.dialogDisabled]}
+              >
+                <Text style={styles.dialogCancelText}>{cancelLabel}</Text>
+              </Pressable>
+            ) : null}
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={confirmLabel}

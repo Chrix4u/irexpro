@@ -478,5 +478,19 @@ describe('listUserPerformanceFeeInvoices', () => {
     const list = await service.listUserPerformanceFeeInvoices(OWNER, {});
     expect(list).toHaveLength(1);
     expect(list[0].invoiceId).toBe('inv-pf');
+    expect(list[0].userId).toBe(OWNER);
+  });
+
+  it('supports a bounded admin-wide listing when userId is omitted', async () => {
+    invoiceRepo.find.mockResolvedValueOnce([
+      makeInvoice({ id: 'inv-a', userId: 'user-a' }),
+      makeInvoice({ id: 'inv-b', userId: 'user-b' }),
+    ]);
+    const list = await service.listUserPerformanceFeeInvoices(undefined, {});
+    expect(invoiceRepo.find).toHaveBeenCalledWith(
+      expect.objectContaining({ order: { createdAt: 'DESC' }, take: 200 }),
+    );
+    expect(invoiceRepo.find.mock.calls[0][0]).not.toHaveProperty('where');
+    expect(list.map((row) => row.userId)).toEqual(['user-a', 'user-b']);
   });
 });

@@ -1,6 +1,65 @@
 import type { ApiClient } from '@irexpro/api-client';
 import { createApiClient } from '@irexpro/api-client';
-import type { BrokerRegistryCatalog } from '@irexpro/types';
+import type { BrokerRegistryCatalog, PaymentProviderInfo } from '@irexpro/types';
+
+export interface PerformanceFeeAccountPerformance {
+  id: string;
+  currency: string;
+  currentHighWaterMark: string;
+  totalRealisedProfit: string;
+  totalFeesCharged: string;
+  lastCalculationAt: string | null;
+}
+
+export interface PerformanceFeeAssessmentView {
+  id: string;
+  currency: string;
+  periodStart: string;
+  periodEnd: string;
+  startingHighWaterMark: string;
+  endingRealisedBalance: string;
+  realisedProfitForFee: string;
+  feePercent: string;
+  feeAmount: string;
+  status: 'DRAFT' | 'ASSESSED' | 'INVOICED' | 'WAIVED' | 'PAID' | 'CANCELLED';
+  invoiceId: string | null;
+  createdAt: string;
+}
+
+export interface PerformanceFeeSummaryView {
+  performance: PerformanceFeeAccountPerformance | null;
+  assessments: PerformanceFeeAssessmentView[];
+}
+
+export interface PerformanceFeeInvoiceView {
+  invoiceId: string;
+  userId: string;
+  invoiceNumber: string;
+  status: 'DRAFT' | 'ISSUED' | 'PAID' | 'VOID' | 'OVERDUE' | 'CANCELLED';
+  currency: string;
+  totalAmount: string;
+  dueDate: string | null;
+  paidAt: string | null;
+  assessmentId: string | null;
+  assessmentStatus: PerformanceFeeAssessmentView['status'] | null;
+  paymentStatus: 'PENDING' | 'PROCESSING' | 'SUCCEEDED' | 'FAILED' | 'REFUNDED' | 'CANCELLED' | 'NONE';
+  provider: string | null;
+  checkoutSessionId: string | null;
+  manual: boolean;
+  createdAt: string;
+}
+
+export interface PerformanceFeeCheckoutResult {
+  invoiceId: string;
+  invoiceNumber: string;
+  transactionId: string;
+  provider: string;
+  paymentStatus: string;
+  checkoutUrl?: string;
+  sessionId?: string;
+  providerReference?: string;
+  reusedExistingSession: boolean;
+}
 
 /**
  * Shared API client for the mobile app.
@@ -37,6 +96,16 @@ export function getAccessTokenValue(): string | null {
 export interface MobileApiClient extends ApiClient {
   /** GET /broker/registry → server-authoritative catalog wrapper. */
   getBrokerRegistry(): Promise<BrokerRegistryCatalog>;
+  /** User-owned high-water-mark and performance-fee assessment summary. */
+  getPerformanceFeeSummary(): Promise<PerformanceFeeSummaryView>;
+  /** User-owned performance-fee invoices. */
+  listPerformanceFeeInvoices(): Promise<PerformanceFeeInvoiceView[]>;
+  /** Start provider checkout; verified webhook remains payment truth. */
+  checkoutPerformanceFeeInvoice(invoiceId: string): Promise<PerformanceFeeCheckoutResult>;
+  /** Read provider-verified payment status for one invoice. */
+  getPerformanceFeePaymentStatus(invoiceId: string): Promise<PerformanceFeeInvoiceView>;
+  /** Public provider capabilities, authenticated so routing state is user-visible. */
+  listPaymentProviders(): Promise<PaymentProviderInfo[]>;
 }
 
 /**
@@ -54,6 +123,24 @@ export function createMobileApiClient(apiBaseUrl: string): MobileApiClient {
   return Object.assign(baseApi, {
     getBrokerRegistry: () =>
       baseApi.request<BrokerRegistryCatalog>('/broker/registry'),
+    getPerformanceFeeSummary: () =>
+      baseApi.request<PerformanceFeeSummaryView>('/performance-fees/me/summary'),
+    listPerformanceFeeInvoices: () =>
+      baseApi.request<PerformanceFeeInvoiceView[]>('/performance-fees/invoices'),
+    checkoutPerformanceFeeInvoice: (invoiceId: string) =>
+      baseApi.request<PerformanceFeeCheckoutResult>(
+        `/performance-fees/invoices/${encodeURIComponent(invoiceId)}/checkout`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        },
+      ),
+    getPerformanceFeePaymentStatus: (invoiceId: string) =>
+      baseApi.request<PerformanceFeeInvoiceView>(
+        `/performance-fees/invoices/${encodeURIComponent(invoiceId)}/payment-status`,
+      ),
+    listPaymentProviders: () => baseApi.listProviders(),
   });
 }
 
