@@ -1,6 +1,6 @@
 # VPS-native six-pair PAPER evidence collector
 
-Provider evidence key: **`vps-twelvedata-six-pair-v4`**.
+Provider evidence key: **`vps-twelvedata-six-pair-v5`**.
 
 Status: **PAPER evidence collection only.** This path does not grant DEMO or LIVE execution authority.
 
@@ -86,13 +86,17 @@ Other users and broker connections keep the existing AI scheduler behavior.
 
 ## v3 qualification boundary
 
-The v4 scorecard is keyed only by `vps-twelvedata-six-pair-v4`; v1/v2/v3 trades cannot contribute to its signal, execution, closed-trade or performance counts. Historical durable trades are retained for audit rather than deleted.
+The v5 scorecard is keyed only by `vps-twelvedata-six-pair-v5`; v1/v2/v3/v4 trades cannot contribute to its signal, execution, closed-trade or performance counts. Historical durable trades are retained for audit rather than deleted.
 
 The underlying PAPER account still enforces same-day account safety across versions. In particular, PAPER/DEMO daily-loss checks use exact realised P&L scoped to the logical broker account and USD currency, while the v3 session opening balance is 10,000.00 USD. This conservative safety carry-over does **not** enter the v3 provider-performance scorecard.
 
 ## Position-count policy
 
 For v4, position COUNT and daily trade COUNT are unbounded. Distinct confirmed signals may open multiple positions on the same instrument, including opposite BUY and SELL directions. Exact duplicate delivery of the same signal event remains idempotently suppressed. Monetary/risk controls (margin, allocation, per-trade risk, total exposure, loss, drawdown, SL/TP, market safety and kill switch) remain authoritative.
+
+## v5 position sizing
+
+v1-v4 unintentionally supplied `0.01` as the signal lot upper bound, so the risk-based sizing engine could never choose more than a micro lot. v5 changes only this economic sizing seam: the scanner supplies an upper bound of `0.10` lot, while `PositionSizingService` remains authoritative and may size lower based on equity, stop distance, max trade risk, the profile maximum, broker lot constraints, free margin, capital allocation and execution controls. Signal direction, confidence, EMA/RSI qualification and 1.5 ATR / 2.5 ATR protection geometry are unchanged.
 
 ## Evidence gates
 

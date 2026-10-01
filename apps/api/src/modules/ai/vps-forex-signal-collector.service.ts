@@ -11,7 +11,7 @@ import {
   LivePaperMarketDataService,
 } from '../broker/services/live-paper-market-data.service';
 
-const PROVIDER_CODE = 'vps-twelvedata-six-pair-v4';
+const PROVIDER_CODE = 'vps-twelvedata-six-pair-v5';
 const SIGNAL_NAMESPACE = '802e16f8-8209-4e1f-aa7e-a6a46387081c';
 const SYMBOLS = Object.freeze([
   ['EURUSD', 'EUR/USD'],
@@ -24,6 +24,7 @@ const SYMBOLS = Object.freeze([
 const CONFIDENCE_FLOOR = 0.64;
 const STOP_ATR_MULTIPLIER = 1.5;
 const TARGET_ATR_MULTIPLIER = 2.5;
+const SCANNER_LOT_UPPER_BOUND = 0.1;
 const MIN_STOP_LOSS_PIPS = 5;
 const STOP_FLOOR_BUFFER_PIPS = 0.1;
 const BAR_MS = 5 * 60_000;
@@ -380,7 +381,11 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         suggestedEntryPrice: Number(best.entry.toFixed(digits)),
         suggestedStopLoss: Number(best.stopLoss.toFixed(digits)),
         suggestedTakeProfit: Number(best.takeProfit.toFixed(digits)),
-        suggestedVolume: 0.01,
+        // This is only an upper bound. PositionSizingService still computes the
+        // actual lot from equity, stop distance, risk %, broker min/max/step,
+        // available margin, allocation and the user's profile max. v1-v4 used
+        // 0.01 here, unintentionally forcing every valid trade to micro-lot size.
+        suggestedVolume: SCANNER_LOT_UPPER_BOUND,
         timeframe: 'M5',
         strategyCode: `external-${PROVIDER_CODE}`,
         marketRegime: 'TRENDING',
@@ -395,6 +400,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           source_reference: 'Twelve Data Basic real-time forex M5 closed candles',
           market_data_bar_time: best.barTime.toISOString(),
           market_data_execution_model: 'closed-candle-mid-with-conservative-fixed-paper-spread',
+          position_sizing_policy: 'risk-managed-up-to-0.10-lot-scanner-bound',
         },
       });
       this.logger.log(

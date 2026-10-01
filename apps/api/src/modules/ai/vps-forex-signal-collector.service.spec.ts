@@ -156,12 +156,14 @@ describe('VpsForexSignalCollectorService', () => {
         direction: 'BUY',
         timeframe: 'M5',
         brokerConnectionId: 'conn-1',
-        modelVersion: 'external-provider/vps-twelvedata-six-pair-v4/paper-only-v1',
+        suggestedVolume: 0.1,
+        modelVersion: 'external-provider/vps-twelvedata-six-pair-v5/paper-only-v1',
         metadata: expect.objectContaining({
           signal_source: 'EXTERNAL_PROVIDER',
-          external_provider_code: 'vps-twelvedata-six-pair-v4',
+          external_provider_code: 'vps-twelvedata-six-pair-v5',
           external_provider_paper_only: true,
           production_eligible: false,
+          position_sizing_policy: 'risk-managed-up-to-0.10-lot-scanner-bound',
         }),
       }),
     );
