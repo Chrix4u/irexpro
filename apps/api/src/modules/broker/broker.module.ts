@@ -36,6 +36,7 @@ import { ExecutionAuthorityModule } from '../execution-authority/execution-autho
 import { BrokerAccountSnapshotService } from './services/broker-account-snapshot.service';
 import { PaperBrokerStateService } from './services/paper-broker-state.service';
 import { LivePaperMarketDataService } from './services/live-paper-market-data.service';
+import { TwelveDataFastMarkStreamService } from './services/twelve-data-fast-mark-stream.service';
 
 /**
  * BrokerModule — Pluggable broker integration layer with health monitoring.
@@ -94,6 +95,7 @@ import { LivePaperMarketDataService } from './services/live-paper-market-data.se
     BrokerAccountSnapshotService,
     PaperBrokerStateService,
     LivePaperMarketDataService,
+    TwelveDataFastMarkStreamService,
     PortfolioReadService,
     // Sprint 56 / Task 48-D — evidence-based write path for
     // BrokerConnection.demoValidated
@@ -140,6 +142,7 @@ import { LivePaperMarketDataService } from './services/live-paper-market-data.se
     BrokerAccountSnapshotService,
     PaperBrokerStateService,
     LivePaperMarketDataService,
+    TwelveDataFastMarkStreamService,
     PortfolioReadService,
     BrokerAdapterRegistry,
     BrokerProviderRegistryService,

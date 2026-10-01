@@ -365,7 +365,21 @@ function PositionCard({
         </div>
         <div>
           <dt>Current</dt>
-          <dd>{position.currentPrice ?? "Awaiting broker mark"}</dd>
+          <dd>
+            {position.currentPrice ?? "Awaiting broker mark"}
+            {position.markSource ? (
+              <small>
+                {position.markSource === "STREAM"
+                  ? "Live stream"
+                  : position.markSource === "REST_M5"
+                    ? "M5 fallback"
+                    : "Broker mark"}
+                {position.markObservedAt
+                  ? ` · ${formatTimestamp(position.markObservedAt)}`
+                  : ""}
+              </small>
+            ) : null}
+          </dd>
         </div>
         <div>
           <dt>Stop loss</dt>
@@ -455,7 +469,21 @@ function PositionTable({
               </td>
               <td>{position.lotSize}</td>
               <td>{position.fillPrice ?? position.requestedEntryPrice}</td>
-              <td>{position.currentPrice ?? "—"}</td>
+              <td>
+                <strong>{position.currentPrice ?? "—"}</strong>
+                {position.markSource ? (
+                  <small>
+                    {position.markSource === "STREAM"
+                      ? "Live stream"
+                      : position.markSource === "REST_M5"
+                        ? "M5 fallback"
+                        : "Broker mark"}
+                    {position.markObservedAt
+                      ? ` · ${formatTimestamp(position.markObservedAt)}`
+                      : ""}
+                  </small>
+                ) : null}
+              </td>
               <td>
                 <Badge variant={pnlBadge(position.unrealisedPnl)}>
                   {position.unrealisedPnl === null

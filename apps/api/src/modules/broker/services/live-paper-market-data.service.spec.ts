@@ -47,6 +47,25 @@ describe('LivePaperMarketDataService', () => {
     ]);
   });
 
+  it('prefers a fresh streaming mark without mutating closed-candle evidence', () => {
+    const service = new LivePaperMarketDataService();
+    service.updateClosedCandles('EURUSD', candles(1.1, 5));
+    const before = service.getOHLCV('EURUSD', 'M5', 2);
+    service.updateStreamingMidQuote('EURUSD', 1.23456, new Date());
+
+    const quote = service.getQuote('EURUSD');
+    expect(quote.source).toBe('STREAM');
+    expect(Number(quote.ask) - Number(quote.bid)).toBeCloseTo(0.0001, 5);
+    expect(service.status().streamingInstruments).toEqual(['EURUSD']);
+    expect(service.getOHLCV('EURUSD', 'M5', 2)).toEqual(before);
+  });
+
+  it('falls back to the closed-candle quote when no streaming mark exists', () => {
+    const service = new LivePaperMarketDataService();
+    service.updateClosedCandles('USDJPY', candles(157, 3));
+    expect(service.getQuote('USDJPY').source).toBe('REST_M5');
+  });
+
   it('fails closed on unsupported timeframes and missing quotes', () => {
     const service = new LivePaperMarketDataService();
     expect(() => service.getQuote('EURUSD')).toThrow(/No live PAPER quote/);

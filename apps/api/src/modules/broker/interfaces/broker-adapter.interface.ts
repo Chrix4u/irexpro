@@ -80,7 +80,10 @@ export interface IBrokerAdapter {
   // ─── Market data ──────────────────────────────────────────────────────────
 
   getInstrumentList(): Promise<BrokerInstrument[]>;
-  getCurrentPrice(instrument: string, options?: { advanceSimulation?: boolean }): Promise<BrokerPrice>;
+  getCurrentPrice(
+    instrument: string,
+    options?: { advanceSimulation?: boolean },
+  ): Promise<BrokerPrice>;
   getOHLCV(instrument: string, timeframe: string, count: number, before?: Date): Promise<OHLCV[]>;
 
   // ─── Order management ─────────────────────────────────────────────────────
@@ -359,6 +362,8 @@ export interface BrokerPosition {
   lotSize: string;
   openPrice: string;
   currentPrice: string;
+  markObservedAt?: Date | null;
+  markSource?: 'STREAM' | 'REST_M5' | 'PROVIDER' | null;
   stopLoss: string;
   takeProfit: string;
   unrealisedPnl: string;

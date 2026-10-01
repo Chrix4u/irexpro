@@ -6,6 +6,7 @@ export interface LivePaperQuote {
   bid: string;
   ask: string;
   timestamp: Date;
+  source: 'REST_M5' | 'STREAM';
 }
 
 export interface LivePaperCandleInput {
@@ -45,8 +46,10 @@ const SPECS: Record<string, InstrumentSpec> = {
 export class LivePaperMarketDataService {
   private readonly liveConnections = new Set<string>();
   private readonly candles = new Map<string, OHLCV[]>();
-  private readonly quotes = new Map<string, LivePaperQuote>();
+  private readonly candleQuotes = new Map<string, LivePaperQuote>();
+  private readonly streamingQuotes = new Map<string, LivePaperQuote>();
   private latestObservedAt: Date | null = null;
+  private latestQuoteObservedAt: Date | null = null;
 
   readonly instruments = Object.freeze(Object.keys(SPECS));
 
@@ -101,32 +104,60 @@ export class LivePaperMarketDataService {
     const halfSpread = spec.spread / 2;
     const quoteTimestamp = new Date(latest.timestamp.getTime() + 5 * 60_000);
     this.candles.set(symbol, normalized.slice(-500));
-    this.quotes.set(symbol, {
+    this.candleQuotes.set(symbol, {
       bid: (mid - halfSpread).toFixed(spec.digits),
       ask: (mid + halfSpread).toFixed(spec.digits),
       timestamp: quoteTimestamp,
+      source: 'REST_M5',
     });
     if (!this.latestObservedAt || quoteTimestamp > this.latestObservedAt) {
       this.latestObservedAt = quoteTimestamp;
+    }
+    if (!this.latestQuoteObservedAt || quoteTimestamp > this.latestQuoteObservedAt) {
+      this.latestQuoteObservedAt = quoteTimestamp;
+    }
+  }
+
+  updateStreamingMidQuote(instrument: string, price: number | string, observedAt: Date): void {
+    const symbol = this.requireSupported(instrument);
+    const spec = SPECS[symbol]!;
+    const mid = Number(price);
+    const timestamp = new Date(observedAt);
+    if (!Number.isFinite(mid) || mid <= 0 || !Number.isFinite(timestamp.getTime())) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.INVALID_PRICE,
+        `Invalid streaming PAPER quote for ${symbol}.`,
+      );
+    }
+    const halfSpread = spec.spread / 2;
+    const quote: LivePaperQuote = {
+      bid: (mid - halfSpread).toFixed(spec.digits),
+      ask: (mid + halfSpread).toFixed(spec.digits),
+      timestamp,
+      source: 'STREAM',
+    };
+    const current = this.streamingQuotes.get(symbol);
+    if (!current || timestamp.getTime() >= current.timestamp.getTime()) {
+      this.streamingQuotes.set(symbol, quote);
+    }
+    if (!this.latestQuoteObservedAt || timestamp > this.latestQuoteObservedAt) {
+      this.latestQuoteObservedAt = timestamp;
     }
   }
 
   getQuote(instrument: string, maxAgeMs = 20 * 60_000): LivePaperQuote {
     const symbol = this.requireSupported(instrument);
-    const quote = this.quotes.get(symbol);
+    const candidates = [this.streamingQuotes.get(symbol), this.candleQuotes.get(symbol)]
+      .filter((quote): quote is LivePaperQuote => Boolean(quote))
+      .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+    const quote = candidates.find((candidate) => {
+      const age = Date.now() - candidate.timestamp.getTime();
+      return Number.isFinite(age) && age <= maxAgeMs;
+    });
     if (!quote) {
       throw new BrokerAdapterError(
         BrokerErrorCode.PROVIDER_UNAVAILABLE,
         `No live PAPER quote is cached yet for ${symbol}.`,
-        undefined,
-        true,
-      );
-    }
-    const age = Date.now() - quote.timestamp.getTime();
-    if (!Number.isFinite(age) || age > maxAgeMs) {
-      throw new BrokerAdapterError(
-        BrokerErrorCode.PROVIDER_UNAVAILABLE,
-        `Live PAPER quote for ${symbol} is stale (${Math.max(0, Math.round(age / 1000))}s old).`,
         undefined,
         true,
       );
@@ -207,14 +238,21 @@ export class LivePaperMarketDataService {
   }
 
   now(): Date {
-    return this.latestObservedAt ? new Date(this.latestObservedAt) : new Date();
+    const latest = this.latestQuoteObservedAt ?? this.latestObservedAt;
+    return latest ? new Date(latest) : new Date();
   }
 
   status() {
+    const cached = new Set([...this.candleQuotes.keys(), ...this.streamingQuotes.keys()]);
     return {
-      cachedInstruments: [...this.quotes.keys()].sort(),
-      cachedInstrumentCount: this.quotes.size,
+      cachedInstruments: [...cached].sort(),
+      cachedInstrumentCount: cached.size,
+      streamingInstruments: [...this.streamingQuotes.keys()].sort(),
+      streamingInstrumentCount: this.streamingQuotes.size,
       latestObservedAt: this.latestObservedAt ? new Date(this.latestObservedAt) : null,
+      latestQuoteObservedAt: this.latestQuoteObservedAt
+        ? new Date(this.latestQuoteObservedAt)
+        : null,
     };
   }
 

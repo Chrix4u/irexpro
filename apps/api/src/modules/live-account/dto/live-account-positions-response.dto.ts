@@ -49,6 +49,12 @@ export class LivePositionRowViewDto {
   @ApiPropertyOptional({ nullable: true, description: 'Provider-reported current position price.' })
   currentPrice: string | null;
 
+  @ApiPropertyOptional({ nullable: true, enum: ['STREAM', 'REST_M5', 'PROVIDER'] })
+  markSource: 'STREAM' | 'REST_M5' | 'PROVIDER' | null;
+
+  @ApiPropertyOptional({ nullable: true, type: String, format: 'date-time' })
+  markObservedAt: string | null;
+
   @ApiPropertyOptional({
     nullable: true,
     description: 'Provider-reported unrealized P&L in account currency.',
@@ -129,6 +135,8 @@ export function toLivePositionRowView(
     fillPrice: trade.fillPrice ?? null,
     accountCurrency: trade.accountCurrency ?? null,
     currentPrice: providerPosition?.currentPrice ?? null,
+    markSource: providerPosition?.markSource ?? (providerPosition ? 'PROVIDER' : null),
+    markObservedAt: toIsoString(providerPosition?.markObservedAt ?? null),
     unrealisedPnl: trade.accountCurrency ? (providerPosition?.unrealisedPnl ?? null) : null,
     commission: trade.accountCurrency
       ? (providerPosition?.commission ?? trade.commission ?? null)

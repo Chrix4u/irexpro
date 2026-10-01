@@ -398,6 +398,11 @@ function isLivePositionRowView(value: unknown): value is LivePositionRowView {
     isNullableString(value.fillPrice) &&
     isNullableString(value.accountCurrency) &&
     isNullableString(value.currentPrice) &&
+    (value.markSource === null ||
+      value.markSource === 'STREAM' ||
+      value.markSource === 'REST_M5' ||
+      value.markSource === 'PROVIDER') &&
+    isNullableIsoDateString(value.markObservedAt) &&
     isNullableString(value.unrealisedPnl) &&
     isNullableString(value.commission) &&
     isNullableString(value.swap) &&

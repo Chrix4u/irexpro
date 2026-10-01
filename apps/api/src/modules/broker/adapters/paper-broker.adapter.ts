@@ -1000,7 +1000,12 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   }
 
   private mapPosition(position: PaperPosition): BrokerPosition {
-    const quote = this.quoteForInstrument(position.instrument);
+    const liveQuote = this.isLiveMarketMode()
+      ? this.liveMarketData!.getQuote(position.instrument)
+      : null;
+    const quote: PaperQuote = liveQuote
+      ? { bid: liveQuote.bid, ask: liveQuote.ask }
+      : this.quoteForInstrument(position.instrument);
     const exitPrice = position.direction === 'BUY' ? quote.bid : quote.ask;
     return {
       externalOrderId: position.positionId,
@@ -1011,6 +1016,8 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       // Exit-side quote: the price at which the position would close — the
       // same side the SL/TP triggers and the unrealized valuation use.
       currentPrice: exitPrice,
+      markObservedAt: liveQuote?.timestamp ?? null,
+      markSource: liveQuote?.source ?? null,
       stopLoss: position.stopLoss,
       takeProfit: position.takeProfit,
       unrealisedPnl: toMoney(this.unrealisedPnlExact(position, quote)),

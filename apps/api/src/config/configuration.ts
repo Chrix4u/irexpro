@@ -137,6 +137,7 @@ export default () => ({
     apiKey: process.env.TWELVEDATA_API_KEY,
     userId: process.env.VPS_FOREX_SCANNER_USER_ID,
     brokerConnectionId: process.env.VPS_FOREX_SCANNER_BROKER_CONNECTION_ID,
+    fastMarkStreamEnabled: process.env.TWELVEDATA_FAST_MARK_STREAM_ENABLED !== 'false',
   },
   aiEngine: {
     baseUrl: process.env.AI_ENGINE_BASE_URL ?? 'http://localhost:8001/api/v1',
