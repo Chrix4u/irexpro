@@ -1,17 +1,29 @@
-import type { AiDecisionOutcome } from './ai-decision-explorer';
+import type { AiDecisionOutcome } from "./ai-decision-explorer";
 
-export const AI_COPILOT_TIMEFRAMES = ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'] as const;
+export const AI_COPILOT_TIMEFRAMES = [
+  "M1",
+  "M5",
+  "M15",
+  "M30",
+  "H1",
+  "H4",
+  "D1",
+] as const;
 export type AiCopilotTimeframe = (typeof AI_COPILOT_TIMEFRAMES)[number];
-export type AiCopilotStatus = 'READY' | 'PARTIAL';
-export type AiCopilotPosture = 'NORMAL' | 'CAUTION' | 'BLOCKED';
+export type AiCopilotStatus = "READY" | "PARTIAL";
+export type AiCopilotPosture = "NORMAL" | "CAUTION" | "BLOCKED";
 export type AiCopilotEvidenceState =
-  | 'FRESH'
-  | 'STALE'
-  | 'AVAILABLE'
-  | 'NONE'
-  | 'UNAVAILABLE'
-  | 'BLOCKED';
-export type AiCopilotEvidenceSource = 'MARKET' | 'RISK' | 'AI_DECISION' | 'STRATEGY_RESEARCH';
+  | "FRESH"
+  | "STALE"
+  | "AVAILABLE"
+  | "NONE"
+  | "UNAVAILABLE"
+  | "BLOCKED";
+export type AiCopilotEvidenceSource =
+  | "MARKET"
+  | "RISK"
+  | "AI_DECISION"
+  | "STRATEGY_RESEARCH";
 
 export interface AiCopilotRequest {
   instrument: string;
@@ -19,7 +31,7 @@ export interface AiCopilotRequest {
 }
 
 export interface AiCopilotMarketView {
-  freshness: 'FRESH' | 'STALE';
+  freshness: "FRESH" | "STALE";
   bid: string;
   ask: string;
   spread: string;
@@ -31,9 +43,10 @@ export interface AiCopilotRiskView {
   killSwitchActive: boolean;
   brokerConnected: boolean;
   riskAcknowledgementAccepted: boolean;
-  openPositionSlotsRemaining: number;
+  openPositions: number;
+  positionCountPolicy: "UNBOUNDED";
   todayTrades: number;
-  dailyTradeCountPolicy: 'UNBOUNDED';
+  dailyTradeCountPolicy: "UNBOUNDED";
   stalePortfolioSnapshots: number;
   unavailablePortfolioSnapshots: number;
   recentViolationCount: number;
@@ -42,13 +55,13 @@ export interface AiCopilotRiskView {
 export interface AiCopilotDecisionView {
   signalId: string;
   outcome: AiDecisionOutcome;
-  direction: 'BUY' | 'SELL' | null;
+  direction: "BUY" | "SELL" | null;
   confidenceScore: number | null;
   strategyCode: string | null;
   modelVersion: string | null;
   marketRegime: string | null;
   receivedAt: string;
-  riskDecision: 'APPROVED' | 'REJECTED' | 'UNKNOWN';
+  riskDecision: "APPROVED" | "REJECTED" | "UNKNOWN";
   executionStatus: string | null;
 }
 

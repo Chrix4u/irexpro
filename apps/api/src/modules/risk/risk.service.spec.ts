@@ -997,30 +997,30 @@ describe('RiskService', () => {
     });
   });
 
-  // ─── Step 4a: concurrent trades fail-closed (#296) ───────────────────────
+  // ─── Step 4a: concurrent position count is unbounded ────────────────────
 
-  describe('Step 4a — Max concurrent trades', () => {
-    it('REJECTS with MAX_CONCURRENT_TRADES at the limit', async () => {
-      executionService.countOpenTrades.mockResolvedValue(3);
+  describe('Step 4a — Unbounded concurrent position count', () => {
+    it('approves a qualified trade regardless of existing position count and never queries a slot cap', async () => {
+      executionService.countOpenTrades.mockResolvedValue(999);
 
       const result = await service.validateProposedTrade('user-1', validTrade());
 
-      expect(result.decision).toBe('REJECTED');
-      if (result.decision === 'REJECTED') {
-        expect(result.rejectionCode).toBe(RiskRejectionCode.MAX_CONCURRENT_TRADES);
+      expect(result.decision).toBe('APPROVED');
+      expect(executionService.countOpenTrades).not.toHaveBeenCalled();
+      if (result.decision === 'APPROVED') {
+        expect(result.appliedRules).toContain('CONCURRENT_POSITION_COUNT:UNBOUNDED');
       }
     });
 
-    it('REJECTS with RISK_ENGINE_QUERY_FAILED when the count query throws (never SKIPPED, #296)', async () => {
-      executionService.countOpenTrades.mockRejectedValue(new Error('pool exhausted'));
+    it('does not depend on the legacy open-position count query', async () => {
+      executionService.countOpenTrades.mockRejectedValue(
+        new Error('legacy count path must not run'),
+      );
 
       const result = await service.validateProposedTrade('user-1', validTrade());
 
-      expect(result.decision).toBe('REJECTED');
-      if (result.decision === 'REJECTED') {
-        expect(result.rejectionCode).toBe(RiskRejectionCode.RISK_ENGINE_QUERY_FAILED);
-        expect(result.rejectionReason).not.toContain('pool exhausted');
-      }
+      expect(result.decision).toBe('APPROVED');
+      expect(executionService.countOpenTrades).not.toHaveBeenCalled();
     });
   });
 

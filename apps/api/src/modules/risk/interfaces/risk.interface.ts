@@ -119,9 +119,9 @@ export enum RiskRejectionCode {
   MAX_DRAWDOWN_REACHED = 'MAX_DRAWDOWN_REACHED',
   INSUFFICIENT_MARGIN = 'INSUFFICIENT_MARGIN',
 
-  // Position-level limits
+  // Historical compatibility codes only. New decisions no longer enforce
+  // raw concurrent-position or daily trade-count caps.
   MAX_CONCURRENT_TRADES = 'MAX_CONCURRENT_TRADES',
-  /** Historical compatibility only. New decisions no longer enforce a daily trade-count cap. */
   MAX_DAILY_TRADES = 'MAX_DAILY_TRADES',
   POSITION_SIZE_EXCEEDED = 'POSITION_SIZE_EXCEEDED',
 

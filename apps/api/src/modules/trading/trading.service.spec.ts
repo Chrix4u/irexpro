@@ -1034,7 +1034,7 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
           timeframe: 'M5',
           interval_seconds: 600,
           last_reason: 'vps_forex_scanner_owns_session',
-          model_version: 'external-provider/vps-twelvedata-six-pair-v3/paper-only-v1',
+          model_version: 'external-provider/vps-twelvedata-six-pair-v4/paper-only-v1',
         }),
       );
       expect(status.instruments).toEqual([

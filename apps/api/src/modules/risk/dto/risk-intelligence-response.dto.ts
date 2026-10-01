@@ -11,7 +11,7 @@ export class RiskViolationSummaryResponseDto {
 export class RiskPolicyLimitsResponseDto {
   maxDailyLossPercent: string;
   maxDrawdownPercent: string;
-  maxOpenTrades: number;
+  positionCountPolicy: 'UNBOUNDED';
   maxPositionSizeLot: string;
   minStopLossPips: string;
   maxVolatilityScore: string;
@@ -34,8 +34,7 @@ export class RiskEngineSummaryResponseDto {
 
 export class RiskExecutionCapacityResponseDto {
   openPositions: number;
-  maxOpenPositions: number;
-  openPositionSlotsRemaining: number;
+  positionCountPolicy: 'UNBOUNDED';
   todayTrades: number;
   dailyTradeCountPolicy: 'UNBOUNDED';
 }

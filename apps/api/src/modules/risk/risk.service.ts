@@ -846,43 +846,15 @@ export class RiskService {
 
     // ── Step 4: Position-level checks ──────────────────────────────────────
 
-    // 4a. Max concurrent trades — Round 5 (#296): a failed count query
-    // REJECTS (sanitized); the rule is never SKIPPED.
-    let openCount: number;
-    try {
-      openCount = await this.executionService.countOpenTrades(userId);
-    } catch (err) {
-      this.logger.error(
-        `Open-trades count query failed for user ${userId}: ${(err as Error).message}`,
-      );
-      appliedRules.push('CONCURRENT_TRADES:QUERY_FAILED');
-      return this.rejectAndRecord(
-        userId,
-        trade,
-        RiskRejectionCode.RISK_ENGINE_QUERY_FAILED,
-        'Risk Engine could not verify the open-trade count — rejecting (fail-closed)',
-        contextSnapshot as RiskContextSnapshot,
-        evaluatedAt,
-      );
-    }
-    contextSnapshot.openTradesCount = openCount;
-    if (openCount >= profile.maxOpenTrades) {
-      appliedRules.push('CONCURRENT_TRADES');
-      return this.rejectAndRecord(
-        userId,
-        trade,
-        RiskRejectionCode.MAX_CONCURRENT_TRADES,
-        `Open trades (${openCount}) has reached maxOpenTrades limit (${profile.maxOpenTrades})`,
-        contextSnapshot as RiskContextSnapshot,
-        evaluatedAt,
-      );
-    }
-    appliedRules.push('CONCURRENT_TRADES:OK');
+    // 4a. Concurrent position COUNT is intentionally uncapped. Distinct,
+    // confirmed opportunities may open additional positions even on the same
+    // instrument and even in opposite directions. Safety is governed by real
+    // capital/risk constraints (margin, per-trade risk, total exposure, loss,
+    // drawdown, market safety and the kill switch), not an arbitrary slot count.
+    // The legacy maxOpenTrades database column is compatibility-only.
+    appliedRules.push('CONCURRENT_POSITION_COUNT:UNBOUNDED');
 
-    // 4b. Daily trade COUNT is intentionally uncapped.
-    // The AI may take every qualified opportunity. Safety is governed by
-    // concurrent-position limits, per-trade risk, margin/capital allocation,
-    // daily LOSS, drawdown, concentration, market safety and the kill switch.
+    // 4b. Daily trade COUNT is intentionally uncapped for the same reason.
     // Do not reintroduce a raw trade-count throttle here.
     appliedRules.push('DAILY_TRADE_COUNT:UNBOUNDED');
 
@@ -1390,7 +1362,8 @@ export class RiskService {
           userId,
           trade,
           RiskRejectionCode.ACCOUNT_STATE_UNAVAILABLE,
-          'Cannot prove FX base/quote and account-currency units for ' + trade.instrument +
+          'Cannot prove FX base/quote and account-currency units for ' +
+            trade.instrument +
             ' — rejecting (fail-closed)',
           contextSnapshot,
           evaluatedAt,
@@ -1418,7 +1391,9 @@ export class RiskService {
           userId,
           trade,
           RiskRejectionCode.ACCOUNT_STATE_UNAVAILABLE,
-          'Account currency ' + accountCurrency + ' matches neither leg of ' +
+          'Account currency ' +
+            accountCurrency +
+            ' matches neither leg of ' +
             normalizedInstrument +
             '; a trusted third-currency FX conversion is unavailable — rejecting (fail-closed)',
           contextSnapshot,
@@ -1566,7 +1541,6 @@ export class RiskService {
     const riskProfileHash = await digestCanonicalPayload({
       maxDailyLossPercent: normalizeDecimalStringForDigest(profile.maxDailyLossPercent),
       maxDrawdownPercent: normalizeDecimalStringForDigest(profile.maxDrawdownPercent),
-      maxOpenTrades: profile.maxOpenTrades,
       maxPositionSizeLot: normalizeDecimalStringForDigest(profile.maxPositionSizeLot),
       minStopLossPips: normalizeDecimalStringForDigest(profile.minStopLossPips),
       allowedInstruments: profile.allowedInstruments ?? null,
@@ -1730,8 +1704,7 @@ export class RiskService {
       // Account-level limits
       maxDailyLossPercent: profile.maxDailyLossPercent,
       maxDrawdownPercent: profile.maxDrawdownPercent,
-      // Position-level limits
-      maxOpenTrades: profile.maxOpenTrades,
+      // Position-level monetary limits (position COUNT is unbounded)
       maxPositionSizeLot: profile.maxPositionSizeLot,
       minStopLossPips: profile.minStopLossPips,
       // Instrument / volatility controls
@@ -1840,7 +1813,8 @@ export class RiskService {
       profile.maxDailyLossPercent = dto.maxDailyLossPercent.toFixed(2);
     if (dto.maxDrawdownPercent !== undefined)
       profile.maxDrawdownPercent = dto.maxDrawdownPercent.toFixed(2);
-    if (dto.maxOpenTrades !== undefined) profile.maxOpenTrades = dto.maxOpenTrades;
+    // dto.maxOpenTrades is a legacy compatibility input and intentionally has
+    // no effect: concurrent position count is unbounded.
     if (dto.maxPositionSizeLot !== undefined)
       profile.maxPositionSizeLot = dto.maxPositionSizeLot.toFixed(4);
     if (dto.minStopLossPips !== undefined) profile.minStopLossPips = dto.minStopLossPips.toFixed(2);
@@ -1872,7 +1846,6 @@ export class RiskService {
     const materialFields: (keyof UpdateRiskProfileDto)[] = [
       'maxDailyLossPercent',
       'maxDrawdownPercent',
-      'maxOpenTrades',
       'maxPositionSizeLot',
       'allowedInstruments',
       'maxTradeRiskPercent',

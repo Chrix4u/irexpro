@@ -156,10 +156,10 @@ describe('VpsForexSignalCollectorService', () => {
         direction: 'BUY',
         timeframe: 'M5',
         brokerConnectionId: 'conn-1',
-        modelVersion: 'external-provider/vps-twelvedata-six-pair-v3/paper-only-v1',
+        modelVersion: 'external-provider/vps-twelvedata-six-pair-v4/paper-only-v1',
         metadata: expect.objectContaining({
           signal_source: 'EXTERNAL_PROVIDER',
-          external_provider_code: 'vps-twelvedata-six-pair-v3',
+          external_provider_code: 'vps-twelvedata-six-pair-v4',
           external_provider_paper_only: true,
           production_eligible: false,
         }),

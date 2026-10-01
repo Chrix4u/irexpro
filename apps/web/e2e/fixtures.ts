@@ -1,5 +1,5 @@
-import type { Page, Locator } from '@playwright/test';
-import { expect } from '@playwright/test';
+import type { Page, Locator } from "@playwright/test";
+import { expect } from "@playwright/test";
 import type {
   AuthUser,
   OnboardingStatus,
@@ -7,8 +7,8 @@ import type {
   BrokerConnectionView,
   SupportedBroker,
   BrokerRegistryCatalog,
-} from '@irexpro/types';
-import type { EligibilityStatusView } from '@irexpro/types/eligibility';
+} from "@irexpro/types";
+import type { EligibilityStatusView } from "@irexpro/types/eligibility";
 
 /**
  * Shared E2E fixtures for the iRexPro web Playwright suite.
@@ -27,22 +27,22 @@ import type { EligibilityStatusView } from '@irexpro/types/eligibility';
 // ── Mock data ────────────────────────────────────────────────────────────────
 
 export const mockAuthUser: AuthUser = {
-  id: 'usr_00000000-0000-0000-0000-000000000001',
-  email: 'adaezi.okafor@example.com',
-  phone: '+233241234567',
-  firstName: 'Adaezi',
-  lastName: 'Okafor',
-  countryCode: 'GH',
-  status: 'ACTIVE',
-  roles: ['USER'],
+  id: "usr_00000000-0000-0000-0000-000000000001",
+  email: "adaezi.okafor@example.com",
+  phone: "+233241234567",
+  firstName: "Adaezi",
+  lastName: "Okafor",
+  countryCode: "GH",
+  status: "ACTIVE",
+  roles: ["USER"],
   mfaEnabled: false,
-  lastLoginAt: '2025-01-15T10:00:00.000Z',
-  createdAt: '2024-09-01T08:00:00.000Z',
+  lastLoginAt: "2025-01-15T10:00:00.000Z",
+  createdAt: "2024-09-01T08:00:00.000Z",
 };
 
 export const mockAuthTokens = {
-  accessToken: 'mock-access-token-for-e2e-tests-not-a-real-jwt',
-  refreshToken: 'mock-refresh-token-for-e2e-tests-not-a-real-jwt',
+  accessToken: "mock-access-token-for-e2e-tests-not-a-real-jwt",
+  refreshToken: "mock-refresh-token-for-e2e-tests-not-a-real-jwt",
 };
 
 export const mockUserProfile = {
@@ -50,58 +50,58 @@ export const mockUserProfile = {
   email: mockAuthUser.email,
   phone: mockAuthUser.phone,
   status: mockAuthUser.status,
-  emailVerifiedAt: '2026-08-01T08:00:00.000Z',
-  phoneVerifiedAt: '2026-08-02T08:00:00.000Z',
+  emailVerifiedAt: "2026-08-01T08:00:00.000Z",
+  phoneVerifiedAt: "2026-08-02T08:00:00.000Z",
   countryCode: mockAuthUser.countryCode,
-  timezone: 'Africa/Accra',
-  preferredCurrency: 'USD',
+  timezone: "Africa/Accra",
+  preferredCurrency: "USD",
   mfaEnabled: false,
   lastLoginAt: mockAuthUser.lastLoginAt,
   createdAt: mockAuthUser.createdAt,
   profile: {
     firstName: mockAuthUser.firstName,
     lastName: mockAuthUser.lastName,
-    dateOfBirth: '1990-05-15',
-    tradingExperienceLevel: 'INTERMEDIATE' as const,
-    kycStatus: 'APPROVED' as const,
+    dateOfBirth: "1990-05-15",
+    tradingExperienceLevel: "INTERMEDIATE" as const,
+    kycStatus: "APPROVED" as const,
   },
 };
 
-const eligibilityHash = 'a'.repeat(64);
-const eligibilityPolicyFingerprint = 'f'.repeat(64);
+const eligibilityHash = "a".repeat(64);
+const eligibilityPolicyFingerprint = "f".repeat(64);
 const eligibilityDisclosureKeys = [
-  'AUTOMATED_TRADING_RISK',
-  'NO_PROFIT_GUARANTEE',
-  'BROKER_EXECUTION_AUTHORITY',
-  'LEGAL_ELIGIBILITY_ATTESTATION',
+  "AUTOMATED_TRADING_RISK",
+  "NO_PROFIT_GUARANTEE",
+  "BROKER_EXECUTION_AUTHORITY",
+  "LEGAL_ELIGIBILITY_ATTESTATION",
 ] as const;
 
 export const mockEligibilityStatus: EligibilityStatusView = {
-  policyVersion: 'eligibility.e2e',
+  policyVersion: "eligibility.e2e",
   policyFingerprint: eligibilityPolicyFingerprint,
-  countryCode: 'GH',
-  jurisdictionStatus: 'ELIGIBLE',
-  decisionSource: 'POLICY',
-  reasonCode: 'POLICY_ALLOWED',
+  countryCode: "GH",
+  jurisdictionStatus: "ELIGIBLE",
+  decisionSource: "POLICY",
+  reasonCode: "POLICY_ALLOWED",
   reviewedAt: null,
-  ageStatus: 'ADULT',
-  kycStatus: 'APPROVED',
-  identityReasonCode: 'IDENTITY_APPROVED',
+  ageStatus: "ADULT",
+  kycStatus: "APPROVED",
+  identityReasonCode: "IDENTITY_APPROVED",
   disclosures: eligibilityDisclosureKeys.map((key) => ({
     key,
-    version: '1.0',
-    title: key.replaceAll('_', ' '),
+    version: "1.0",
+    title: key.replaceAll("_", " "),
     body: `E2E disclosure for ${key}.`,
     contentSha256: eligibilityHash,
     required: true as const,
   })),
   consents: eligibilityDisclosureKeys.map((key) => ({
-    policyVersion: 'eligibility.e2e',
+    policyVersion: "eligibility.e2e",
     policyFingerprint: eligibilityPolicyFingerprint,
     key,
-    version: '1.0',
+    version: "1.0",
     contentSha256: eligibilityHash,
-    acceptedAt: '2026-08-03T08:00:00.000Z',
+    acceptedAt: "2026-08-03T08:00:00.000Z",
   })),
   missingConsentKeys: [],
   canProceed: true,
@@ -112,44 +112,43 @@ export const mockOnboardingStatus: OnboardingStatus = {
   eligibilityCompleted: true,
   riskProfileCompleted: true,
   brokerConnected: true,
-  brokerConnectionStatus: 'CONNECTED',
+  brokerConnectionStatus: "CONNECTED",
   canStartTrading: true,
   missingSteps: [],
-  nextStep: 'READY',
+  nextStep: "READY",
 };
 
 export const mockRiskProfile: RiskProfile = {
-  id: 'rp_00000000-0000-0000-0000-000000000001',
+  id: "rp_00000000-0000-0000-0000-000000000001",
   userId: mockAuthUser.id,
   killSwitchActive: false,
   killSwitchReason: null,
-  maxDailyLossPercent: '5',
-  maxDrawdownPercent: '10',
-  maxOpenTrades: 3,
-  maxPositionSizeLot: '1.00',
-  minStopLossPips: '10',
+  maxDailyLossPercent: "5",
+  maxDrawdownPercent: "10",
+  maxPositionSizeLot: "1.00",
+  minStopLossPips: "10",
   allowedInstruments: null,
-  maxVolatilityScore: '7',
+  maxVolatilityScore: "7",
   rejectLowLiquidity: true,
   riskAcknowledgementAccepted: false,
   riskAcknowledgementAcceptedAt: null,
-  maxTradeRiskPercent: '2',
+  maxTradeRiskPercent: "2",
   maxLeverageAllowed: 30,
-  allowedTradingModes: 'PAPER_ONLY',
-  createdAt: '2025-01-10T08:00:00.000Z',
-  updatedAt: '2025-01-10T08:00:00.000Z',
+  allowedTradingModes: "PAPER_ONLY",
+  createdAt: "2025-01-10T08:00:00.000Z",
+  updatedAt: "2025-01-10T08:00:00.000Z",
 };
 
 export const mockSupportedBrokers: SupportedBroker[] = [
   {
-    brokerId: 'paper-broker',
-    brokerName: 'Paper Broker',
+    brokerId: "paper-broker",
+    brokerName: "Paper Broker",
     supportsDemo: true,
     supportsLive: false,
   },
   {
-    brokerId: 'metatrader5',
-    brokerName: 'MetaTrader 5',
+    brokerId: "metatrader5",
+    brokerName: "MetaTrader 5",
     supportsDemo: true,
     supportsLive: true,
   },
@@ -162,47 +161,47 @@ export const mockSupportedBrokers: SupportedBroker[] = [
  * environment availability, adapter availability, and verification labels.
  */
 export const mockBrokerRegistry: BrokerRegistryCatalog = {
-  catalogVersion: 'e2e-deterministic-v1',
+  catalogVersion: "e2e-deterministic-v1",
   brokers: [
     {
-      id: 'paper-broker',
-      name: 'Paper Broker',
-      description: 'Deterministic in-platform PAPER execution fixture.',
-      status: 'SUPPORTED',
-      connectionRoutes: ['PAPER'],
+      id: "paper-broker",
+      name: "Paper Broker",
+      description: "Deterministic in-platform PAPER execution fixture.",
+      status: "SUPPORTED",
+      connectionRoutes: ["PAPER"],
       capabilities: [
-        'ACCOUNT_READ',
-        'BALANCE_READ',
-        'SESSION_AUTH',
-        'DEMO',
-        'ORDER_PLACEMENT',
+        "ACCOUNT_READ",
+        "BALANCE_READ",
+        "SESSION_AUTH",
+        "DEMO",
+        "ORDER_PLACEMENT",
       ],
-      authenticationType: 'SESSION_AUTH',
-      environments: ['DEMO'],
+      authenticationType: "SESSION_AUTH",
+      environments: ["DEMO"],
       regions: [],
       adapterAvailable: true,
     },
     {
-      id: 'metatrader5',
-      name: 'MetaTrader 5',
-      description: 'MetaTrader 5 deterministic E2E catalog fixture.',
-      status: 'SUPPORTED',
+      id: "metatrader5",
+      name: "MetaTrader 5",
+      description: "MetaTrader 5 deterministic E2E catalog fixture.",
+      status: "SUPPORTED",
       productionLiveVerification: {
-        status: 'VERIFIED',
+        status: "VERIFIED",
         verifiedAt: null,
-        evidenceRef: 'e2e-fixture',
+        evidenceRef: "e2e-fixture",
       },
-      connectionRoutes: ['METATRADER'],
+      connectionRoutes: ["METATRADER"],
       capabilities: [
-        'ACCOUNT_READ',
-        'BALANCE_READ',
-        'API_TOKEN',
-        'DEMO',
-        'LIVE',
-        'ORDER_PLACEMENT',
+        "ACCOUNT_READ",
+        "BALANCE_READ",
+        "API_TOKEN",
+        "DEMO",
+        "LIVE",
+        "ORDER_PLACEMENT",
       ],
-      authenticationType: 'API_TOKEN',
-      environments: ['DEMO', 'LIVE'],
+      authenticationType: "API_TOKEN",
+      environments: ["DEMO", "LIVE"],
       regions: [],
       adapterAvailable: true,
     },
@@ -211,30 +210,30 @@ export const mockBrokerRegistry: BrokerRegistryCatalog = {
 
 export const mockBrokerConnections: BrokerConnectionView[] = [
   {
-    id: 'bconn_00000000-0000-0000-0000-000000000001',
+    id: "bconn_00000000-0000-0000-0000-000000000001",
     userId: mockAuthUser.id,
-    brokerId: 'paper-broker',
-    brokerName: 'Paper Broker',
-    displayName: 'Demo paper account',
-    accountId: 'paper-acc-001',
-    accountType: 'DEMO',
-    accountCurrency: 'USD',
+    brokerId: "paper-broker",
+    brokerName: "Paper Broker",
+    displayName: "Demo paper account",
+    accountId: "paper-acc-001",
+    accountType: "DEMO",
+    accountCurrency: "USD",
     accountLeverage: 1,
-    status: 'CONNECTED',
+    status: "CONNECTED",
     // Sprint 50 authorization state machine: a demo connection that has
     // completed its handshake is AUTHORIZED (automation gate is only ACTIVE
     // after explicit live-trading enablement, which this mock has not done).
-    authorizationStatus: 'AUTHORIZED',
-    credentialStatus: 'VERIFIED',
-    authorizedAt: '2025-01-15T09:55:00.000Z',
+    authorizationStatus: "AUTHORIZED",
+    credentialStatus: "VERIFIED",
+    authorizedAt: "2025-01-15T09:55:00.000Z",
     authorizationRevokedAt: null,
     demoValidated: true,
     liveTradingEnabled: false,
-    lastHealthCheckAt: '2025-01-15T09:55:00.000Z',
-    lastSyncAt: '2025-01-15T09:55:00.000Z',
+    lastHealthCheckAt: "2025-01-15T09:55:00.000Z",
+    lastSyncAt: "2025-01-15T09:55:00.000Z",
     lastErrorMessage: null,
-    createdAt: '2025-01-05T08:00:00.000Z',
-    updatedAt: '2025-01-15T09:55:00.000Z',
+    createdAt: "2025-01-05T08:00:00.000Z",
+    updatedAt: "2025-01-15T09:55:00.000Z",
   },
 ];
 
@@ -243,7 +242,7 @@ export const mockBrokerConnections: BrokerConnectionView[] = [
 function jsonFulfill(status: number, body: unknown) {
   return {
     status,
-    contentType: 'application/json' as const,
+    contentType: "application/json" as const,
     body: JSON.stringify(body),
   };
 }
@@ -262,7 +261,7 @@ function parseBody(postData: string | null): Record<string, unknown> {
  * NEXT_PUBLIC_API_BASE_URL (e.g. "http://localhost:3999/api/v1") with a path
  * like "/auth/refresh". We match on the path that follows the base.
  */
-const API_PATH_PREFIX = '/api/v1/';
+const API_PATH_PREFIX = "/api/v1/";
 
 /**
  * Extract the API path (without the /api/v1/ prefix and without query string)
@@ -271,8 +270,8 @@ const API_PATH_PREFIX = '/api/v1/';
  */
 function extractApiPath(fullUrl: string): string {
   const idx = fullUrl.indexOf(API_PATH_PREFIX);
-  if (idx < 0) return '';
-  return fullUrl.slice(idx + API_PATH_PREFIX.length).split('?')[0];
+  if (idx < 0) return "";
+  return fullUrl.slice(idx + API_PATH_PREFIX.length).split("?")[0];
 }
 
 /**
@@ -282,58 +281,66 @@ function extractApiPath(fullUrl: string): string {
  * route-registration-order ambiguities.
  */
 export async function setupAuthInterception(page: Page): Promise<void> {
-  await page.route('**/api/v1/**', (route) => {
+  await page.route("**/api/v1/**", (route) => {
     const request = route.request();
     const method = request.method();
     const apiPath = extractApiPath(request.url());
 
     // ── Auth ────────────────────────────────────────────────────────────
-    if (apiPath === 'auth/refresh') {
+    if (apiPath === "auth/refresh") {
       return route.fulfill(jsonFulfill(200, mockAuthTokens));
     }
-    if (apiPath === 'auth/me') {
+    if (apiPath === "auth/me") {
       return route.fulfill(jsonFulfill(200, mockAuthUser));
     }
-    if (apiPath === 'auth/logout') {
-      return route.fulfill(jsonFulfill(200, { message: 'Logged out' }));
+    if (apiPath === "auth/logout") {
+      return route.fulfill(jsonFulfill(200, { message: "Logged out" }));
     }
-    if (apiPath === 'auth/change-password' && method === 'POST') {
-      return route.fulfill(jsonFulfill(200, { message: 'Password changed successfully' }));
+    if (apiPath === "auth/change-password" && method === "POST") {
+      return route.fulfill(
+        jsonFulfill(200, { message: "Password changed successfully" }),
+      );
     }
 
     // ── Users / onboarding ──────────────────────────────────────────────
-    if (apiPath === 'users/me/onboarding-status') {
+    if (apiPath === "users/me/onboarding-status") {
       return route.fulfill(jsonFulfill(200, mockOnboardingStatus));
     }
-    if (apiPath === 'users/me/eligibility/kyc-submission' && method === 'POST') {
+    if (
+      apiPath === "users/me/eligibility/kyc-submission" &&
+      method === "POST"
+    ) {
       return route.fulfill(
         jsonFulfill(200, {
           ...mockEligibilityStatus,
-          kycStatus: 'PENDING',
-          identityReasonCode: 'KYC_PENDING',
+          kycStatus: "PENDING",
+          identityReasonCode: "KYC_PENDING",
           canProceed: false,
         }),
       );
     }
-    if (apiPath === 'users/me/eligibility') {
+    if (apiPath === "users/me/eligibility") {
       return route.fulfill(jsonFulfill(200, mockEligibilityStatus));
     }
-    if (apiPath === 'users/me') {
-      if (method === 'PATCH') {
+    if (apiPath === "users/me") {
+      if (method === "PATCH") {
         const body = parseBody(request.postData());
         return route.fulfill(
           jsonFulfill(200, {
             ...mockUserProfile,
             countryCode: body.countryCode ?? mockUserProfile.countryCode,
             timezone: body.timezone ?? mockUserProfile.timezone,
-            preferredCurrency: body.preferredCurrency ?? mockUserProfile.preferredCurrency,
+            preferredCurrency:
+              body.preferredCurrency ?? mockUserProfile.preferredCurrency,
             profile: {
               ...mockUserProfile.profile,
               firstName: body.firstName ?? mockUserProfile.profile.firstName,
               lastName: body.lastName ?? mockUserProfile.profile.lastName,
-              dateOfBirth: body.dateOfBirth ?? mockUserProfile.profile.dateOfBirth,
+              dateOfBirth:
+                body.dateOfBirth ?? mockUserProfile.profile.dateOfBirth,
               tradingExperienceLevel:
-                body.tradingExperienceLevel ?? mockUserProfile.profile.tradingExperienceLevel,
+                body.tradingExperienceLevel ??
+                mockUserProfile.profile.tradingExperienceLevel,
             },
           }),
         );
@@ -342,8 +349,8 @@ export async function setupAuthInterception(page: Page): Promise<void> {
     }
 
     // ── Risk ────────────────────────────────────────────────────────────
-    if (apiPath === 'risk/profile') {
-      if (method === 'PATCH') {
+    if (apiPath === "risk/profile") {
+      if (method === "PATCH") {
         return route.fulfill(
           jsonFulfill(200, {
             ...mockRiskProfile,
@@ -358,62 +365,72 @@ export async function setupAuthInterception(page: Page): Promise<void> {
 
     // ── Broker ──────────────────────────────────────────────────────────
     // Static segments must be checked before the dynamic :id segment.
-    if (apiPath === 'broker/registry') {
+    if (apiPath === "broker/registry") {
       return route.fulfill(jsonFulfill(200, mockBrokerRegistry));
     }
-    if (apiPath === 'broker/connections/supported') {
+    if (apiPath === "broker/connections/supported") {
       return route.fulfill(jsonFulfill(200, mockSupportedBrokers));
     }
-    if (apiPath === 'broker/connections/test') {
-      return route.fulfill(jsonFulfill(200, { success: true, accountId: 'paper-acc-001' }));
+    if (apiPath === "broker/connections/test") {
+      return route.fulfill(
+        jsonFulfill(200, { success: true, accountId: "paper-acc-001" }),
+      );
     }
-    if (apiPath === 'broker/connections') {
-      if (method === 'POST') {
+    if (apiPath === "broker/connections") {
+      if (method === "POST") {
         return route.fulfill(jsonFulfill(201, mockBrokerConnections[0]));
       }
       return route.fulfill(jsonFulfill(200, mockBrokerConnections));
     }
     // Dynamic :id sub-routes.
-    const brokerConnMatch = apiPath.match(/^broker\/connections\/([^/]+)(?:\/(connect|disconnect))?$/);
+    const brokerConnMatch = apiPath.match(
+      /^broker\/connections\/([^/]+)(?:\/(connect|disconnect))?$/,
+    );
     if (brokerConnMatch) {
       const [, , action] = brokerConnMatch;
-      if (action === 'connect') {
+      if (action === "connect") {
         return route.fulfill(
-          jsonFulfill(200, { ...mockBrokerConnections[0], status: 'CONNECTED' }),
+          jsonFulfill(200, {
+            ...mockBrokerConnections[0],
+            status: "CONNECTED",
+          }),
         );
       }
-      if (action === 'disconnect') {
+      if (action === "disconnect") {
         return route.fulfill(
-          jsonFulfill(200, { ...mockBrokerConnections[0], status: 'DISCONNECTED' }),
+          jsonFulfill(200, {
+            ...mockBrokerConnections[0],
+            status: "DISCONNECTED",
+          }),
         );
       }
       // No action → the connection :id itself.
-      if (method === 'DELETE') {
-        return route.fulfill({ status: 204, body: '' });
+      if (method === "DELETE") {
+        return route.fulfill({ status: 204, body: "" });
       }
       return route.fulfill(jsonFulfill(200, mockBrokerConnections[0]));
     }
 
     // ── Live account activity ──────────────────────────────────────────
-    if (apiPath === 'live-account/activity') {
+    if (apiPath === "live-account/activity") {
       return route.fulfill(
         jsonFulfill(200, {
           activity: [
             {
-              id: 'audit_00000000-0000-0000-0000-000000000001',
-              action: 'ORDER_FILLED',
-              resourceType: 'TradeOrder',
-              resourceId: 'order_00000000-0000-0000-0000-000000000001',
-              severity: 'INFO',
-              createdAt: '2026-09-26T20:15:00.000Z',
+              id: "audit_00000000-0000-0000-0000-000000000001",
+              action: "ORDER_FILLED",
+              resourceType: "TradeOrder",
+              resourceId: "order_00000000-0000-0000-0000-000000000001",
+              severity: "INFO",
+              createdAt: "2026-09-26T20:15:00.000Z",
             },
             {
-              id: 'audit_00000000-0000-0000-0000-000000000002',
-              action: 'AI_SESSION_STARTED',
-              resourceType: 'TradingSession',
-              resourceId: 'sess_00000000-0000-0000-0000-000000000001',
-              severity: 'INFO',
-              createdAt: '2026-09-26T20:10:00.000Z',
+              id: "audit_00000000-0000-0000-0000-000000000002",
+              action: "AI_SESSION_STARTED",
+              resourceType: "TradingSession",
+              resourceId: "sess_00000000-0000-0000-0000-000000000001",
+              severity: "INFO",
+              createdAt: "2026-09-26T20:10:00.000Z",
             },
           ],
           total: 2,
@@ -424,15 +441,15 @@ export async function setupAuthInterception(page: Page): Promise<void> {
     }
 
     // ── Trading ─────────────────────────────────────────────────────────
-    if (apiPath === 'trading/sessions/start') {
+    if (apiPath === "trading/sessions/start") {
       // TradingController returns TradingSessionResponseDto directly.
       return route.fulfill(
         jsonFulfill(201, {
-          id: 'sess_00000000-0000-0000-0000-000000000001',
+          id: "sess_00000000-0000-0000-0000-000000000001",
           brokerConnectionId: mockBrokerConnections[0].id,
-          executionMode: 'PAPER_ONLY',
+          executionMode: "PAPER_ONLY",
           authorityGeneration: 1,
-          status: 'ACTIVE',
+          status: "ACTIVE",
           openingBalance: null,
           peakEquity: null,
           startedAt: new Date().toISOString(),
@@ -441,10 +458,10 @@ export async function setupAuthInterception(page: Page): Promise<void> {
     }
 
     // ── Subscriptions / payments (defensive — not exercised by target pages) ──
-    if (apiPath.startsWith('subscriptions/') || apiPath === 'subscriptions') {
+    if (apiPath.startsWith("subscriptions/") || apiPath === "subscriptions") {
       return route.fulfill(jsonFulfill(200, []));
     }
-    if (apiPath.startsWith('payments/') || apiPath === 'payments') {
+    if (apiPath.startsWith("payments/") || apiPath === "payments") {
       return route.fulfill(jsonFulfill(200, []));
     }
 
@@ -454,8 +471,8 @@ export async function setupAuthInterception(page: Page): Promise<void> {
   });
 
   // Silence favicon 404s so they don't show up as failed requests.
-  await page.route('**/favicon.ico', (route) =>
-    route.fulfill({ status: 204, body: '' }),
+  await page.route("**/favicon.ico", (route) =>
+    route.fulfill({ status: 204, body: "" }),
   );
 }
 
@@ -464,12 +481,16 @@ export async function setupAuthInterception(page: Page): Promise<void> {
  * "no httpOnly refresh cookie" / "expired session" state the AuthProvider treats
  * as "user is unauthenticated".
  */
-export async function setupUnauthenticatedInterception(page: Page): Promise<void> {
-  await page.route('**/api/v1/**', (route) =>
-    route.fulfill(jsonFulfill(401, { statusCode: 401, message: 'Unauthorized' })),
+export async function setupUnauthenticatedInterception(
+  page: Page,
+): Promise<void> {
+  await page.route("**/api/v1/**", (route) =>
+    route.fulfill(
+      jsonFulfill(401, { statusCode: 401, message: "Unauthorized" }),
+    ),
   );
-  await page.route('**/favicon.ico', (route) =>
-    route.fulfill({ status: 204, body: '' }),
+  await page.route("**/favicon.ico", (route) =>
+    route.fulfill({ status: 204, body: "" }),
   );
 }
 
@@ -517,38 +538,44 @@ const IGNORED_FAILURE_PATTERNS = [/favicon\.ico/i];
  * `assertNoFailedRequests(page)` at the end.
  */
 export function setupErrorCollectors(page: Page): void {
-  const collector: ErrorCollector = { consoleErrors: [], failedRequests: [], allRequestHosts: new Set() };
+  const collector: ErrorCollector = {
+    consoleErrors: [],
+    failedRequests: [],
+    allRequestHosts: new Set(),
+  };
   pageCollectors.set(page, collector);
 
-  page.on('console', (msg) => {
-    if (msg.type() !== 'error') return;
+  page.on("console", (msg) => {
+    if (msg.type() !== "error") return;
     const text = msg.text();
     collector.consoleErrors.push(`[console.error] ${text}`);
   });
 
-  page.on('pageerror', (err) => {
+  page.on("pageerror", (err) => {
     collector.consoleErrors.push(`[pageerror] ${err.message}`);
   });
 
-  page.on('response', (response) => {
+  page.on("response", (response) => {
     const status = response.status();
     const url = response.url();
     if (status < 400) return;
     if (IGNORED_FAILURE_PATTERNS.some((re) => re.test(url))) return;
-    collector.failedRequests.push(`${status} ${response.request().method()} ${url}`);
+    collector.failedRequests.push(
+      `${status} ${response.request().method()} ${url}`,
+    );
   });
 
-  page.on('requestfailed', (request) => {
+  page.on("requestfailed", (request) => {
     const url = request.url();
     if (IGNORED_FAILURE_PATTERNS.some((re) => re.test(url))) return;
     collector.failedRequests.push(
-      `FAILED ${request.method()} ${url} — ${request.failure()?.errorText ?? 'unknown'}`,
+      `FAILED ${request.method()} ${url} — ${request.failure()?.errorText ?? "unknown"}`,
     );
   });
 
   // Track every request's host so assertNoExternalRequests() can prove no
   // production/staging/broker/payment/AI host was ever contacted.
-  page.on('request', (request) => {
+  page.on("request", (request) => {
     try {
       const u = new URL(request.url());
       collector.allRequestHosts.add(u.host);
@@ -565,11 +592,13 @@ export function setupErrorCollectors(page: Page): void {
 export function assertNoConsoleErrors(page: Page): void {
   const collector = pageCollectors.get(page);
   if (!collector) {
-    throw new Error('assertNoConsoleErrors: call setupErrorCollectors(page) first');
+    throw new Error(
+      "assertNoConsoleErrors: call setupErrorCollectors(page) first",
+    );
   }
   if (collector.consoleErrors.length > 0) {
     throw new Error(
-      `Unexpected console errors (${collector.consoleErrors.length}):\n${collector.consoleErrors.join('\n')}`,
+      `Unexpected console errors (${collector.consoleErrors.length}):\n${collector.consoleErrors.join("\n")}`,
     );
   }
 }
@@ -581,11 +610,13 @@ export function assertNoConsoleErrors(page: Page): void {
 export function assertNoFailedRequests(page: Page): void {
   const collector = pageCollectors.get(page);
   if (!collector) {
-    throw new Error('assertNoFailedRequests: call setupErrorCollectors(page) first');
+    throw new Error(
+      "assertNoFailedRequests: call setupErrorCollectors(page) first",
+    );
   }
   if (collector.failedRequests.length > 0) {
     throw new Error(
-      `Unexpected failed requests (${collector.failedRequests.length}):\n${collector.failedRequests.join('\n')}`,
+      `Unexpected failed requests (${collector.failedRequests.length}):\n${collector.failedRequests.join("\n")}`,
     );
   }
 }
@@ -602,7 +633,9 @@ export function assertNoFailedRequests(page: Page): void {
 export function assertNoExternalRequests(page: Page): void {
   const collector = pageCollectors.get(page);
   if (!collector) {
-    throw new Error('assertNoExternalRequests: call setupErrorCollectors(page) first');
+    throw new Error(
+      "assertNoExternalRequests: call setupErrorCollectors(page) first",
+    );
   }
   const violations: string[] = [];
   for (const host of collector.allRequestHosts) {
@@ -612,8 +645,8 @@ export function assertNoExternalRequests(page: Page): void {
   }
   if (violations.length > 0) {
     throw new Error(
-      `Deterministic E2E suite contacted a forbidden external host(s):\n${violations.join('\n')}\n` +
-        `All hosts contacted: ${Array.from(collector.allRequestHosts).join(', ')}`,
+      `Deterministic E2E suite contacted a forbidden external host(s):\n${violations.join("\n")}\n` +
+        `All hosts contacted: ${Array.from(collector.allRequestHosts).join(", ")}`,
     );
   }
 }
@@ -648,7 +681,9 @@ export async function assertNoHorizontalOverflow(page: Page): Promise<void> {
  * mid-reflow (e.g. `scrollIntoViewIfNeeded` resolves on scroll-command ack,
  * but under load the actual scroll may still be animating). No fixed sleeps.
  */
-export async function assertBoundingBoxInViewport(locator: Locator): Promise<void> {
+export async function assertBoundingBoxInViewport(
+  locator: Locator,
+): Promise<void> {
   const page = locator.page();
 
   // 1. Wait for the page scroll position to stabilize. We attach a one-shot
@@ -688,7 +723,8 @@ export async function assertBoundingBoxInViewport(locator: Locator): Promise<voi
   // 2. Wait for the bounding box to be stable across two consecutive reads.
   //    This proves layout has settled (no in-flight reflow) before we assert.
   const deadline = Date.now() + 3000;
-  let box: { x: number; y: number; width: number; height: number } | null = null;
+  let box: { x: number; y: number; width: number; height: number } | null =
+    null;
   while (Date.now() < deadline) {
     const first = await locator.boundingBox();
     if (!first) break; // element not visible — handled by the null check below
@@ -710,16 +746,22 @@ export async function assertBoundingBoxInViewport(locator: Locator): Promise<voi
   if (!box) {
     box = await locator.boundingBox();
   }
-  expect(box, 'Element has no bounding box (not visible)').not.toBeNull();
+  expect(box, "Element has no bounding box (not visible)").not.toBeNull();
   if (!box) return;
 
   const viewport = page.viewportSize();
-  expect(viewport, 'Page has no viewport size').not.toBeNull();
+  expect(viewport, "Page has no viewport size").not.toBeNull();
   if (!viewport) return;
 
   // 1px tolerance for subpixel rounding
-  expect(box.x, `Element left=${box.x} is outside viewport left=0`).toBeGreaterThanOrEqual(-1);
-  expect(box.y, `Element top=${box.y} is outside viewport top=0`).toBeGreaterThanOrEqual(-1);
+  expect(
+    box.x,
+    `Element left=${box.x} is outside viewport left=0`,
+  ).toBeGreaterThanOrEqual(-1);
+  expect(
+    box.y,
+    `Element top=${box.y} is outside viewport top=0`,
+  ).toBeGreaterThanOrEqual(-1);
   expect(
     box.x + box.width,
     `Element right=${box.x + box.width} overflows viewport width=${viewport.width}`,
@@ -749,11 +791,13 @@ export async function gotoAsAuthenticated(
   // Wait for the AuthProvider to flip `restoring` to false. The dashboard
   // shell renders an <h1> once authenticated — wait for it.
   if (waitFor.heading) {
-    await expect(page.getByRole('heading', { level: 1, name: waitFor.heading })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { level: 1, name: waitFor.heading }),
+    ).toBeVisible();
   } else {
     // Generic wait: the "Restoring session…" placeholder disappears and an <h1>
     // appears once the page has rendered its auth-gated content.
-    await expect(page.getByText('Restoring session…')).toHaveCount(0);
-    await expect(page.getByRole('heading', { level: 1 }).first()).toBeVisible();
+    await expect(page.getByText("Restoring session…")).toHaveCount(0);
+    await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible();
   }
 }

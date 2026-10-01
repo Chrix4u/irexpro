@@ -123,6 +123,49 @@ describe('PaperBrokerAdapter — scoped VPS live market mode', () => {
     await expect(adapter.getAccountInfo()).rejects.toThrow(/supports EURUSD only/);
   });
 
+  it('allows multiple distinct positions on the same instrument in both directions', async () => {
+    const live = new LivePaperMarketDataService();
+    live.registerLiveConnection('conn-multi');
+    const bars = protectionBars();
+    live.updateClosedCandles('EURUSD', bars.initial);
+    const adapter = new PaperBrokerAdapter(undefined, undefined, undefined, 'conn-multi', live);
+    await adapter.connect({} as any);
+
+    await adapter.placeOrder({
+      idempotencyKey: 'same-pair-sell-1',
+      instrument: 'EURUSD',
+      direction: 'SELL',
+      lotSize: '0.01',
+      stopLoss: '1.10150',
+      takeProfit: '1.09850',
+      orderKind: 'MARKET',
+    });
+    await adapter.placeOrder({
+      idempotencyKey: 'same-pair-sell-2',
+      instrument: 'EURUSD',
+      direction: 'SELL',
+      lotSize: '0.01',
+      stopLoss: '1.10150',
+      takeProfit: '1.09850',
+      orderKind: 'MARKET',
+    });
+    await adapter.placeOrder({
+      idempotencyKey: 'same-pair-buy-1',
+      instrument: 'EURUSD',
+      direction: 'BUY',
+      lotSize: '0.01',
+      stopLoss: '1.09850',
+      takeProfit: '1.10150',
+      orderKind: 'MARKET',
+    });
+
+    const positions = await adapter.getOpenPositions();
+    expect(positions).toHaveLength(3);
+    expect(positions.filter((p) => p.direction === 'SELL')).toHaveLength(2);
+    expect(positions.filter((p) => p.direction === 'BUY')).toHaveLength(1);
+    expect(new Set(positions.map((p) => p.externalOrderId)).size).toBe(3);
+  });
+
   it('closes at TP when a closed M5 candle touches target between polling points', async () => {
     const live = new LivePaperMarketDataService();
     const adapter = await openProtectedBuy(live);

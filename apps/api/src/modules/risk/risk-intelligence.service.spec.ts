@@ -106,11 +106,11 @@ describe('RiskIntelligenceService', () => {
     expect(result.engine).toEqual({ killSwitchActive: false, brokerConnected: true });
     expect(result.execution).toEqual({
       openPositions: 2,
-      maxOpenPositions: 3,
-      openPositionSlotsRemaining: 1,
+      positionCountPolicy: 'UNBOUNDED',
       todayTrades: 7,
       dailyTradeCountPolicy: 'UNBOUNDED',
     });
+    expect(result.policy.limits.positionCountPolicy).toBe('UNBOUNDED');
     expect(result.portfolio).toEqual({
       totalAccounts: 3,
       connectedAccounts: 2,
@@ -135,7 +135,7 @@ describe('RiskIntelligenceService', () => {
     expect(serialized).not.toContain('brokerEquity');
   });
 
-  it('never returns negative capacity when usage is already above a configured limit', async () => {
+  it('reports open positions informationally without a configured position-slot capacity', async () => {
     const riskService = {
       getOrCreateProfile: jest.fn().mockResolvedValue({
         riskAcknowledgementAccepted: true,
@@ -169,7 +169,8 @@ describe('RiskIntelligenceService', () => {
 
     const result = await service.getIntelligence(USER_ID);
 
-    expect(result.execution.openPositionSlotsRemaining).toBe(0);
+    expect(result.execution.openPositions).toBe(4);
+    expect(result.execution.positionCountPolicy).toBe('UNBOUNDED');
     expect(result.execution.todayTrades).toBe(8);
     expect(result.execution.dailyTradeCountPolicy).toBe('UNBOUNDED');
   });

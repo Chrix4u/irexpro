@@ -22,7 +22,8 @@ export interface AiCopilotRiskContextDto {
   killSwitchActive: boolean;
   brokerConnected: boolean;
   riskAcknowledgementAccepted: boolean;
-  openPositionSlotsRemaining: number;
+  openPositions: number;
+  positionCountPolicy: 'UNBOUNDED';
   todayTrades: number;
   dailyTradeCountPolicy: 'UNBOUNDED';
   stalePortfolioSnapshots: number;
