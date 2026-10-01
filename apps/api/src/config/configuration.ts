@@ -129,6 +129,15 @@ export default () => ({
     enabled: process.env.TRADINGVIEW_WEBHOOK_ENABLED === 'true',
     userId: process.env.TRADINGVIEW_WEBHOOK_USER_ID,
   },
+  vpsForexScanner: {
+    // Server-native six-pair PAPER evidence collector. Fail-closed unless an
+    // explicit production Twelve Data key + exact user/paper connection are
+    // configured. The public 'demo' key is never accepted for evidence.
+    enabled: process.env.VPS_FOREX_SCANNER_ENABLED === 'true',
+    apiKey: process.env.TWELVEDATA_API_KEY,
+    userId: process.env.VPS_FOREX_SCANNER_USER_ID,
+    brokerConnectionId: process.env.VPS_FOREX_SCANNER_BROKER_CONNECTION_ID,
+  },
   aiEngine: {
     baseUrl: process.env.AI_ENGINE_BASE_URL ?? 'http://localhost:8001/api/v1',
     schedulerEnabled: process.env.AI_ENGINE_SCHEDULER_ENABLED === 'true',

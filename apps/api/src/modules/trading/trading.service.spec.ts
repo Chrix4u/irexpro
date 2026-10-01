@@ -21,6 +21,7 @@ import { TradeCloseReason, TradeStatus } from '../execution/entities/trade.entit
 import { AuthService } from '../auth/auth.service';
 import { AiRuntimePreference } from './entities/ai-runtime-preference.entity';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
 
 /**
  * TradingService tests — Sprint 29 amendment + free-access regression +
@@ -101,6 +102,7 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
   let brokerAccountSnapshotService: Record<string, jest.Mock>;
   let authService: Record<string, jest.Mock>;
   let aiRuntimePreferenceRepo: Record<string, jest.Mock>;
+  let configService: { get: jest.Mock };
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -185,6 +187,10 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
 
     auditService = { log: jest.fn().mockResolvedValue(undefined) };
     eventBus = { publish: jest.fn(), subscribe: jest.fn().mockReturnValue(() => {}) };
+    configService = {
+      get: jest.fn((_key: string, fallback?: unknown) => fallback),
+    };
+
     aiEngineClient = {
       isSchedulerIntegrationEnabled: jest.fn().mockReturnValue(true),
       notifySessionStarted: jest.fn().mockResolvedValue({
@@ -239,6 +245,7 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
         { provide: AuditService, useValue: auditService },
         { provide: DomainEventBus, useValue: eventBus },
         { provide: AiEngineClient, useValue: aiEngineClient },
+        { provide: ConfigService, useValue: configService },
         { provide: OnboardingService, useValue: onboardingService },
         { provide: BrokerAccountSnapshotService, useValue: brokerAccountSnapshotService },
         { provide: AuthService, useValue: authService },
@@ -353,6 +360,24 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       expect(session.id).toBe('session-1');
       expect(subscriptionsService.canUserStartAiAutoTrading).not.toHaveBeenCalled();
       expect(executionService.startSession).toHaveBeenCalled();
+    });
+
+    it('does not register the legacy AI scheduler when the exact VPS scanner binding owns the PAPER session', async () => {
+      const values: Record<string, unknown> = {
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+      };
+      configService.get.mockImplementation((key: string, fallback?: unknown) =>
+        key in values ? values[key] : fallback,
+      );
+
+      const session = await service.startTradingSession('user-1', 'conn-1');
+
+      expect(session.id).toBe('session-1');
+      expect(executionService.startSession).toHaveBeenCalled();
+      expect(aiEngineClient.notifySessionStarted).not.toHaveBeenCalled();
     });
 
     it('keeps PAPER execution bound while using a connected MT5 DEMO account for market data', async () => {

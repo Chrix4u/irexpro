@@ -128,6 +128,35 @@ export const validationSchema = Joi.object({
       .allow(''),
   }),
 
+  // VPS-native six-pair PAPER evidence. A real Twelve Data key is required
+  // when enabled; the shared demo key is intentionally rejected.
+  VPS_FOREX_SCANNER_ENABLED: Joi.string().valid('true', 'false').optional().allow(''),
+  TWELVEDATA_API_KEY: Joi.when('VPS_FOREX_SCANNER_ENABLED', {
+    is: 'true',
+    then: Joi.string().min(8).invalid('demo').required(),
+    otherwise: Joi.string().min(4).optional().allow(''),
+  }),
+  VPS_FOREX_SCANNER_USER_ID: Joi.when('VPS_FOREX_SCANNER_ENABLED', {
+    is: 'true',
+    then: Joi.string()
+      .guid({ version: ['uuidv4'] })
+      .required(),
+    otherwise: Joi.string()
+      .guid({ version: ['uuidv4'] })
+      .optional()
+      .allow(''),
+  }),
+  VPS_FOREX_SCANNER_BROKER_CONNECTION_ID: Joi.when('VPS_FOREX_SCANNER_ENABLED', {
+    is: 'true',
+    then: Joi.string()
+      .guid({ version: ['uuidv4'] })
+      .required(),
+    otherwise: Joi.string()
+      .guid({ version: ['uuidv4'] })
+      .optional()
+      .allow(''),
+  }),
+
   // Python AI engine scheduler coordination (NestJS → AI engine)
   AI_ENGINE_BASE_URL: Joi.string().default('http://localhost:8001/api/v1'),
   AI_ENGINE_SCHEDULER_ENABLED: Joi.boolean().default(false),

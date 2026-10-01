@@ -24,6 +24,7 @@ import type { OrderCapabilityDeclaration } from '../interfaces/order-capability'
 import { BrokerAdapterError, BrokerErrorCode } from '../interfaces/broker-adapter.errors';
 import { ProviderDispatchCertainty } from '../interfaces/provider-dispatch-certainty';
 import { PaperBrokerStateService } from '../services/paper-broker-state.service';
+import { LivePaperMarketDataService } from '../services/live-paper-market-data.service';
 
 /**
  * PaperBrokerAdapter — safe simulated broker for paper trading only.
@@ -701,8 +702,11 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     @Optional() clock?: PaperClock,
     @Optional() stateStore?: PaperBrokerStateService,
     @Optional() connectionId?: string,
+    @Optional() private readonly liveMarketData?: LivePaperMarketDataService,
   ) {
-    const replayPath = !priceFeed ? (process.env.PAPER_REPLAY_M1_CSV ?? '').trim() : '';
+    const liveMode = Boolean(liveMarketData?.isLiveConnection(connectionId));
+    const replayPath =
+      !priceFeed && !liveMode ? (process.env.PAPER_REPLAY_M1_CSV ?? '').trim() : '';
     const replayStart = (process.env.PAPER_REPLAY_START ?? '').trim();
     this._replayFeed =
       replayPath && replayStart ? new CsvReplayPaperPriceFeed(replayPath, replayStart) : null;
@@ -712,8 +716,21 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     this._connectionId = connectionId;
   }
 
+  private isLiveMarketMode(): boolean {
+    return this.liveMarketData?.isLiveConnection(this._connectionId) ?? false;
+  }
+
   private currentTime(): Date {
+    if (this.isLiveMarketMode()) return this.liveMarketData!.now();
     return this._replayFeed ? this._replayFeed.now() : this._clock.now();
+  }
+
+  private quoteForInstrument(instrument: string): PaperQuote {
+    if (this.isLiveMarketMode()) {
+      const quote = this.liveMarketData!.getQuote(instrument);
+      return { bid: quote.bid, ask: quote.ask };
+    }
+    return this._feed.quote();
   }
 
   setMode(mode: BrokerMode): void {
@@ -782,9 +799,16 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     }
   }
 
-  /** The default simulator is EURUSD; Research UAT replay is USDJPY-only. */
+  /**
+   * Default simulator: EURUSD. Research replay: USDJPY. VPS live-paper mode:
+   * fixed six-major universe, validated by LivePaperMarketDataService.
+   */
   private requireInstrument(instrument: string): string {
     const symbol = instrument.trim().toUpperCase();
+    if (this.isLiveMarketMode()) {
+      this.liveMarketData!.spec(symbol);
+      return symbol;
+    }
     const supported = this._replayFeed ? this._replayFeed.instrument : PAPER_INSTRUMENT;
     if (symbol !== supported) {
       throw new BrokerAdapterError(
@@ -861,7 +885,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         return null;
       }
 
-      const quote = this._feed.quote();
+      const quote = this.quoteForInstrument(params.instrument);
       const mid = quoteMid(quote);
       const product = multiplyDecimalStrings(
         multiplyDecimalStrings(params.lotSize.trim(), PAPER_CONTRACT_SIZE),
@@ -891,10 +915,10 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     freeMargin: string;
     marginLevel: string;
   } {
-    const quote = this._feed.quote();
     let equity = this._balance;
     let margin = '0.00';
     for (const position of this._positions.values()) {
+      const quote = this.quoteForInstrument(position.instrument);
       equity = addDecimalStrings(equity, toMoney(this.unrealisedPnlExact(position, quote)));
       margin = addDecimalStrings(margin, toMoney(this.positionMarginExact(position)));
     }
@@ -947,10 +971,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     units: bigint,
     entryPrice: string,
   ): string {
-    const quoteMargin = divideByPowerOfTen(
-      multiplyDecimalStrings(units.toString(), entryPrice),
-      2,
-    );
+    const quoteMargin = divideByPowerOfTen(multiplyDecimalStrings(units.toString(), entryPrice), 2);
     return this.quoteAmountToAccountCurrencyExact(instrument, quoteMargin, entryPrice);
   }
 
@@ -975,7 +996,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   }
 
   private mapPosition(position: PaperPosition): BrokerPosition {
-    const quote = this._feed.quote();
+    const quote = this.quoteForInstrument(position.instrument);
     const exitPrice = position.direction === 'BUY' ? quote.bid : quote.ask;
     return {
       externalOrderId: position.positionId,
@@ -1045,6 +1066,20 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
 
   async getInstrumentList(): Promise<BrokerInstrument[]> {
     this.assertConnected();
+    if (this.isLiveMarketMode()) {
+      return this.liveMarketData!.instruments.map((symbol) => {
+        const spec = this.liveMarketData!.spec(symbol);
+        return {
+          symbol,
+          description: `${spec.description} (VPS Live PAPER)`,
+          digits: spec.digits,
+          minLot: PAPER_MIN_LOT,
+          maxLot: PAPER_MAX_LOT,
+          lotStep: '0.01',
+          contractSize: PAPER_CONTRACT_SIZE,
+        };
+      });
+    }
     const symbol = this._replayFeed ? this._replayFeed.instrument : PAPER_INSTRUMENT;
     return [
       {
@@ -1072,14 +1107,31 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     options?: { advanceSimulation?: boolean },
   ): Promise<BrokerPrice> {
     this.assertConnected();
-    this.requireInstrument(instrument);
+    const symbol = this.requireInstrument(instrument);
+    if (this.isLiveMarketMode()) {
+      const liveQuote = this.liveMarketData!.getQuote(symbol);
+      const quote: PaperQuote = { bid: liveQuote.bid, ask: liveQuote.ask };
+      // External market time moves independently. A read evaluates protection
+      // and resting orders for THIS instrument only; it never fabricates a tick.
+      this._marketTickCounter += 1;
+      this.evaluatePositions(quote, symbol);
+      this.evaluateWorkingOrders(quote, symbol);
+      await this.persistDurableState();
+      return {
+        instrument: symbol,
+        bid: quote.bid,
+        ask: quote.ask,
+        spread: subtractDecimalStrings(quote.ask, quote.bid),
+        timestamp: liveQuote.timestamp,
+      };
+    }
     const shouldAdvance = !this._replayFeed || options?.advanceSimulation === true;
     const quote = shouldAdvance ? this.advanceMarket() : this._feed.quote();
     if (shouldAdvance) {
       await this.persistDurableState();
     }
     return {
-      instrument: this.requireInstrument(instrument),
+      instrument: symbol,
       bid: quote.bid,
       ask: quote.ask,
       spread: subtractDecimalStrings(quote.ask, quote.bid),
@@ -1098,6 +1150,10 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         BrokerErrorCode.INVALID_REQUEST,
         `Unsupported paper-market timeframe: ${timeframe}`,
       );
+    }
+
+    if (this.isLiveMarketMode()) {
+      return this.liveMarketData!.getOHLCV(instrument, normalizedTimeframe, count);
     }
 
     if (this._replayFeed) {
@@ -1298,12 +1354,10 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     takeProfit: string,
     comment: string,
   ): BrokerOrderResult {
-    const quote = this._feed.quote();
+    const quote = this.quoteForInstrument(instrument);
     const fillPrice = quoteMid(quote);
     const units = lotSizeToUnits(order.lotSize);
-    const requiredMargin = toMoney(
-      this.marginInAccountCurrencyExact(instrument, units, fillPrice),
-    );
+    const requiredMargin = toMoney(this.marginInAccountCurrencyExact(instrument, units, fillPrice));
     if (compareDecimalStrings(requiredMargin, this.freeMargin()) > 0) {
       throw new BrokerAdapterError(
         BrokerErrorCode.INSUFFICIENT_MARGIN,
@@ -1470,7 +1524,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
 
       // Manual closes execute at the quote mid (zero-slippage paper model —
       // an open-and-close without an intervening tick books exactly flat).
-      const quote = this._feed.quote();
+      const quote = this.quoteForInstrument(position.instrument);
       const closePrice = quoteMid(quote);
 
       const closedTrade = this.closePositionUnits(
@@ -1556,13 +1610,13 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   async closeAllOrders(): Promise<BrokerCloseAllResult> {
     try {
       this.assertConnected();
-      const quote = this._feed.quote();
       let closedCount = 0;
       let failedCount = 0;
       const errors: string[] = [];
 
       for (const position of Array.from(this._positions.values())) {
         try {
+          const quote = this.quoteForInstrument(position.instrument);
           const closePrice = quoteMid(quote);
           this.closePositionUnits(position, position.units, position.lotSize, closePrice, 'SYSTEM');
           closedCount++;
@@ -1637,8 +1691,9 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
    * Position SL/TP (SL checked before TP — conservative). SL/TP close exactly
    * at their level (resting protection orders; no gap slippage modeled).
    */
-  private evaluatePositions(quote: PaperQuote): void {
+  private evaluatePositions(quote: PaperQuote, instrumentFilter?: string): void {
     for (const position of Array.from(this._positions.values())) {
+      if (instrumentFilter && position.instrument !== instrumentFilter) continue;
       if (position.direction === 'BUY') {
         if (
           !isZeroLevel(position.stopLoss) &&
@@ -1696,8 +1751,9 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   }
 
   /** Working orders in placement order; fills may create positions (evaluated next tick). */
-  private evaluateWorkingOrders(quote: PaperQuote): void {
+  private evaluateWorkingOrders(quote: PaperQuote, instrumentFilter?: string): void {
     for (const order of Array.from(this._working)) {
+      if (instrumentFilter && order.instrument !== instrumentFilter) continue;
       const fillPrice = this.workingFillPrice(order, quote);
       if (fillPrice !== undefined) {
         this.fillWorkingOrder(order, fillPrice);

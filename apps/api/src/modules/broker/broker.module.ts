@@ -35,6 +35,7 @@ import { AuditModule } from '../audit/audit.module';
 import { ExecutionAuthorityModule } from '../execution-authority/execution-authority.module';
 import { BrokerAccountSnapshotService } from './services/broker-account-snapshot.service';
 import { PaperBrokerStateService } from './services/paper-broker-state.service';
+import { LivePaperMarketDataService } from './services/live-paper-market-data.service';
 
 /**
  * BrokerModule — Pluggable broker integration layer with health monitoring.
@@ -92,6 +93,7 @@ import { PaperBrokerStateService } from './services/paper-broker-state.service';
     // legacy current-view projection guarded by generation).
     BrokerAccountSnapshotService,
     PaperBrokerStateService,
+    LivePaperMarketDataService,
     PortfolioReadService,
     // Sprint 56 / Task 48-D — evidence-based write path for
     // BrokerConnection.demoValidated
@@ -137,6 +139,7 @@ import { PaperBrokerStateService } from './services/paper-broker-state.service';
     // can resolve fresh exact-connection snapshots for NEW-exposure authority.
     BrokerAccountSnapshotService,
     PaperBrokerStateService,
+    LivePaperMarketDataService,
     PortfolioReadService,
     BrokerAdapterRegistry,
     BrokerProviderRegistryService,
@@ -164,6 +167,7 @@ export class BrokerModule implements OnModuleInit {
     private metaApiClient: MetaApiClientService,
     private configService: ConfigService,
     private cTraderClient: CTraderClientService,
+    private livePaperMarketData: LivePaperMarketDataService,
     @Optional() private paperBrokerStateService?: PaperBrokerStateService,
   ) {}
 
@@ -177,7 +181,13 @@ export class BrokerModule implements OnModuleInit {
     this.registry.register(
       this.paperBrokerAdapter,
       (_requestedBrokerId, connectionId) =>
-        new PaperBrokerAdapter(undefined, undefined, this.paperBrokerStateService, connectionId),
+        new PaperBrokerAdapter(
+          undefined,
+          undefined,
+          this.paperBrokerStateService,
+          connectionId,
+          this.livePaperMarketData,
+        ),
     );
     // Sprint 51 PR-7 — OANDA v20 REST native adapter (BETA: implemented +
     // contract-tested; live verification pending — see

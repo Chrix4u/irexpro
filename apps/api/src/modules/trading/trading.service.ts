@@ -7,6 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
 import { Repository } from 'typeorm';
 import { BrokerService } from '../broker/broker.service';
 import { RiskService } from '../risk/risk.service';
@@ -105,6 +106,7 @@ export class TradingService {
     private readonly auditService: AuditService,
     private readonly eventBus: DomainEventBus,
     private readonly aiEngineClient: AiEngineClient,
+    private readonly configService: ConfigService,
     // Round 6 (§6/#297/#312): the durable account-snapshot authority the
     // session's opening financial state binds to (fail-closed — never `?? '0'`).
     private readonly brokerAccountSnapshotService: BrokerAccountSnapshotService,
@@ -337,56 +339,62 @@ export class TradingService {
       `Trading session started: userId=${userId} sessionId=${session.id} mode=${session.executionMode}`,
     );
 
-    // Notify AI engine scheduler after resolving the effective watchlist from
-    // the bound broker's proven instrument capabilities. Unsupported symbols
-    // are never sent to the AI engine, so a single constrained adapter (such
-    // as the deterministic paper broker) cannot poison the whole scan cycle.
-    try {
-      const instruments = await this.resolveAiSchedulerInstruments(userId, connection.id);
-      if (instruments.length > 0) {
-        const marketDataConnectionId = await this.resolveAiSchedulerMarketDataConnectionId(
-          userId,
-          connection,
-        );
-        void this.aiEngineClient
-          .notifySessionStarted({
+    // Notify the legacy Python AI scheduler only when this session is not
+    // owned by the VPS-native external-evidence scanner. Exact binding keeps
+    // research/replay signals from contaminating the live-provider evidence
+    // stream while leaving every other user/account unchanged.
+    const vpsScannerOwnsSession = this.isVpsForexScannerBinding(userId, connection.id);
+    if (vpsScannerOwnsSession) {
+      this.logger.log(
+        `Legacy AI scheduler registration skipped session=${session.id}: VPS forex scanner owns this PAPER binding`,
+      );
+    } else
+      try {
+        const instruments = await this.resolveAiSchedulerInstruments(userId, connection.id);
+        if (instruments.length > 0) {
+          const marketDataConnectionId = await this.resolveAiSchedulerMarketDataConnectionId(
             userId,
-            tradingSessionId: session.id,
-            brokerConnectionId: connection.id,
-            marketDataConnectionId,
-            instruments,
-            timeframe: 'H1',
-            source: 'broker',
-            accountType: connection.accountType,
-            mode: session.executionMode,
-            brokerId: connection.brokerId,
-            researchUat:
-              connection.brokerId === 'paper-broker' &&
-              session.executionMode === ExecutionMode.PAPER_ONLY,
-            workflowProbeEnabled: false,
-            replayStepsPerCycle: this.getResearchReplayStepsPerCycle(),
-            confidenceThresholdOverride: await this.getExecutionConfidenceFloor(userId),
-            intervalSeconds:
-              connection.brokerId === 'paper-broker' &&
-              session.executionMode === ExecutionMode.PAPER_ONLY
-                ? 10
-                : undefined,
-          })
-          .catch((err: Error) =>
-            this.logger.warn(
-              `AI engine start notification failed session=${session.id}: ${err.message}`,
-            ),
+            connection,
           );
-      } else {
+          void this.aiEngineClient
+            .notifySessionStarted({
+              userId,
+              tradingSessionId: session.id,
+              brokerConnectionId: connection.id,
+              marketDataConnectionId,
+              instruments,
+              timeframe: 'H1',
+              source: 'broker',
+              accountType: connection.accountType,
+              mode: session.executionMode,
+              brokerId: connection.brokerId,
+              researchUat:
+                connection.brokerId === 'paper-broker' &&
+                session.executionMode === ExecutionMode.PAPER_ONLY,
+              workflowProbeEnabled: false,
+              replayStepsPerCycle: this.getResearchReplayStepsPerCycle(),
+              confidenceThresholdOverride: await this.getExecutionConfidenceFloor(userId),
+              intervalSeconds:
+                connection.brokerId === 'paper-broker' &&
+                session.executionMode === ExecutionMode.PAPER_ONLY
+                  ? 10
+                  : undefined,
+            })
+            .catch((err: Error) =>
+              this.logger.warn(
+                `AI engine start notification failed session=${session.id}: ${err.message}`,
+              ),
+            );
+        } else {
+          this.logger.warn(
+            `AI engine scheduler not registered session=${session.id}: broker exposes none of the preferred instruments`,
+          );
+        }
+      } catch (err) {
         this.logger.warn(
-          `AI engine scheduler not registered session=${session.id}: broker exposes none of the preferred instruments`,
+          `AI engine watchlist resolution failed session=${session.id}: ${(err as Error).message}`,
         );
       }
-    } catch (err) {
-      this.logger.warn(
-        `AI engine watchlist resolution failed session=${session.id}: ${(err as Error).message}`,
-      );
-    }
 
     return session;
   }
@@ -715,6 +723,21 @@ export class TradingService {
     }
 
     return executionConnection.id;
+  }
+
+  private isVpsForexScannerBinding(userId: string, brokerConnectionId: string): boolean {
+    if (this.configService.get<boolean>('vpsForexScanner.enabled', false) !== true) return false;
+    const configuredUserId = this.configService.get<string>('vpsForexScanner.userId', '').trim();
+    const configuredConnectionId = this.configService
+      .get<string>('vpsForexScanner.brokerConnectionId', '')
+      .trim();
+    const key = this.configService.get<string>('vpsForexScanner.apiKey', '').trim();
+    return Boolean(
+      key &&
+      key.toLowerCase() !== 'demo' &&
+      configuredUserId === userId &&
+      configuredConnectionId === brokerConnectionId,
+    );
   }
 
   private getResearchReplayStepsPerCycle(): number {

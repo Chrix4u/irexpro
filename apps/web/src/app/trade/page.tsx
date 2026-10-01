@@ -118,6 +118,31 @@ function compactBrokerLabel(value: string | null | undefined): string {
     .trim();
 }
 
+interface VpsForexScannerStatusView {
+  providerCode: string;
+  enabled: boolean;
+  configured: boolean;
+  activePaperSession: boolean;
+  cadenceMinutes: number;
+  timeframe: string;
+  skippedUtcHours: number[];
+  confidenceFloor: number;
+  paperOnly: boolean;
+  automaticDemoPromotion: boolean;
+  automaticLivePromotion: boolean;
+  marketCache: {
+    cachedInstruments: string[];
+    cachedInstrumentCount: number;
+    latestObservedAt: string | null;
+  };
+  state:
+    | "WAITING_FOR_CONFIGURATION"
+    | "DISABLED"
+    | "WAITING_FOR_PAPER_SESSION"
+    | "WAITING_FOR_MARKET_DATA"
+    | "ACTIVE";
+}
+
 interface ExternalProviderPerformanceView {
   providerCode: string;
   executionAuthority: "PAPER_ONLY";
@@ -714,6 +739,8 @@ export default function AiTradingPage() {
     useState<AiAutomationRuntimeStatus | null>(null);
   const [providerEvidence, setProviderEvidence] =
     useState<ExternalProviderPerformanceView | null>(null);
+  const [vpsScannerStatus, setVpsScannerStatus] =
+    useState<VpsForexScannerStatusView | null>(null);
   const [automationRuntimeWarning, setAutomationRuntimeWarning] = useState<
     string | null
   >(null);
@@ -854,17 +881,24 @@ export default function AiTradingPage() {
         const status = await loadTraderTerminalStatus();
         setTerminal(status);
 
-        // External strategy evidence is deliberately secondary: a scorecard
-        // read can never disable Start/Stop or broker controls. The real
-        // TradingView feed is versioned separately from local integration probes
-        // so qualification begins from a clean zero-evidence baseline.
+        // External strategy evidence is deliberately secondary: scorecard/status
+        // reads can never disable Start/Stop or broker controls. The VPS feed
+        // has its own versioned evidence stream.
         try {
           const evidence = await api.request<ExternalProviderPerformanceView>(
-            "/ai/external/providers/performance?providerCode=tradingview-six-pair-v1",
+            "/ai/external/providers/performance?providerCode=vps-twelvedata-six-pair-v1",
           );
           setProviderEvidence(evidence);
         } catch {
           setProviderEvidence(null);
+        }
+        try {
+          const scannerStatus = await api.request<VpsForexScannerStatusView>(
+            "/ai/external/vps-forex/status",
+          );
+          setVpsScannerStatus(scannerStatus);
+        } catch {
+          setVpsScannerStatus(null);
         }
 
         // Keep secondary market-intelligence context aligned with the actual
@@ -1679,16 +1713,39 @@ export default function AiTradingPage() {
                         External signal evidence
                       </p>
                       <h2 id="provider-evidence-title">
-                        TradingView · Six-Pair v1
+                        VPS · Twelve Data Six-Pair v1
                       </h2>
                       <p>
-                        Genuine TradingView alerts are measured independently in
-                        PAPER before any DEMO review. Integration probes are
-                        excluded from this versioned evidence stream.
+                        Live six-pair VPS signals are measured independently in
+                        PAPER before any DEMO review. Closed M5 market candles
+                        drive both setup selection and simulated PAPER fills.
                       </p>
                     </div>
                     <div className="ai-provider-evidence__badges">
                       <Badge variant="warning">PAPER ONLY</Badge>
+                      <Badge
+                        variant={
+                          vpsScannerStatus?.state === "ACTIVE"
+                            ? "success"
+                            : vpsScannerStatus?.state ===
+                                "WAITING_FOR_CONFIGURATION"
+                              ? "warning"
+                              : "info"
+                        }
+                      >
+                        {vpsScannerStatus?.state === "ACTIVE"
+                          ? "LIVE FEED ACTIVE"
+                          : vpsScannerStatus?.state ===
+                              "WAITING_FOR_CONFIGURATION"
+                            ? "DATA KEY REQUIRED"
+                            : vpsScannerStatus?.state ===
+                                "WAITING_FOR_PAPER_SESSION"
+                              ? "START PAPER SESSION"
+                              : vpsScannerStatus?.state ===
+                                  "WAITING_FOR_MARKET_DATA"
+                                ? "WAITING FOR MARKET DATA"
+                                : "SCANNER DISABLED"}
+                      </Badge>
                       <Badge
                         variant={
                           providerEvidence?.demoReviewEligible
@@ -1704,6 +1761,26 @@ export default function AiTradingPage() {
                   </div>
 
                   <div className="ai-provider-evidence__metrics">
+                    <div>
+                      <span>Scanner state</span>
+                      <strong>
+                        {vpsScannerStatus?.state ?? "Unavailable"}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Live pairs cached</span>
+                      <strong>
+                        {vpsScannerStatus?.marketCache.cachedInstrumentCount ??
+                          0}{" "}
+                        / 6
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Scan cadence</span>
+                      <strong>
+                        {vpsScannerStatus?.cadenceMinutes ?? 10} min
+                      </strong>
+                    </div>
                     <div>
                       <span>Signals received</span>
                       <strong>

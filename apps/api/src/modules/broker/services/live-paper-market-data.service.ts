@@ -1,0 +1,197 @@
+import { Injectable } from '@nestjs/common';
+import { BrokerAdapterError, BrokerErrorCode } from '../interfaces/broker-adapter.errors';
+import type { OHLCV } from '../interfaces/broker-adapter.interface';
+
+export interface LivePaperQuote {
+  bid: string;
+  ask: string;
+  timestamp: Date;
+}
+
+export interface LivePaperCandleInput {
+  timestamp: Date;
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+}
+
+interface InstrumentSpec {
+  digits: number;
+  spread: number;
+  description: string;
+}
+
+const SPECS: Record<string, InstrumentSpec> = {
+  EURUSD: { digits: 5, spread: 0.0001, description: 'Euro vs US Dollar' },
+  GBPUSD: { digits: 5, spread: 0.00012, description: 'British Pound vs US Dollar' },
+  USDJPY: { digits: 3, spread: 0.01, description: 'US Dollar vs Japanese Yen' },
+  AUDUSD: { digits: 5, spread: 0.0001, description: 'Australian Dollar vs US Dollar' },
+  USDCAD: { digits: 5, spread: 0.00012, description: 'US Dollar vs Canadian Dollar' },
+  USDCHF: { digits: 5, spread: 0.00012, description: 'US Dollar vs Swiss Franc' },
+};
+
+/**
+ * In-memory market cache used only by the PAPER broker when the VPS-native
+ * forex evidence collector is explicitly enabled for one paper connection.
+ *
+ * Twelve Data's Basic time-series endpoint supplies mid OHLC rather than
+ * executable bid/ask. PAPER execution therefore applies a conservative,
+ * documented fixed spread per pair around the latest fully CLOSED candle.
+ * This is a simulation assumption and is never represented as broker-live
+ * execution evidence.
+ */
+@Injectable()
+export class LivePaperMarketDataService {
+  private readonly liveConnections = new Set<string>();
+  private readonly candles = new Map<string, OHLCV[]>();
+  private readonly quotes = new Map<string, LivePaperQuote>();
+  private latestObservedAt: Date | null = null;
+
+  readonly instruments = Object.freeze(Object.keys(SPECS));
+
+  registerLiveConnection(connectionId: string): void {
+    if (connectionId.trim()) this.liveConnections.add(connectionId.trim());
+  }
+
+  unregisterLiveConnection(connectionId: string): void {
+    this.liveConnections.delete(connectionId.trim());
+  }
+
+  isLiveConnection(connectionId?: string): boolean {
+    return Boolean(connectionId && this.liveConnections.has(connectionId));
+  }
+
+  updateClosedCandles(instrument: string, rows: LivePaperCandleInput[]): void {
+    const symbol = this.requireSupported(instrument);
+    if (rows.length < 2) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.INVALID_REQUEST,
+        `Live paper market data requires at least two closed candles for ${symbol}.`,
+      );
+    }
+    const spec = SPECS[symbol]!;
+    const normalized = rows
+      .map((row) => ({
+        timestamp: new Date(row.timestamp),
+        open: this.decimal(row.open, spec.digits),
+        high: this.decimal(row.high, spec.digits),
+        low: this.decimal(row.low, spec.digits),
+        close: this.decimal(row.close, spec.digits),
+        volume: '0',
+        tickVolume: '0',
+        priceDigits: spec.digits,
+        brokerTime: new Date(row.timestamp).toISOString(),
+      }))
+      .filter((row) => Number.isFinite(row.timestamp.getTime()))
+      .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+
+    if (normalized.length < 2) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.INVALID_REQUEST,
+        `Live paper market data contains insufficient valid timestamps for ${symbol}.`,
+      );
+    }
+
+    const latest = normalized[normalized.length - 1]!;
+    const mid = Number(latest.close);
+    if (!Number.isFinite(mid) || mid <= 0) {
+      throw new BrokerAdapterError(BrokerErrorCode.INVALID_PRICE, `Invalid ${symbol} close price.`);
+    }
+    const halfSpread = spec.spread / 2;
+    const quoteTimestamp = new Date(latest.timestamp.getTime() + 5 * 60_000);
+    this.candles.set(symbol, normalized.slice(-500));
+    this.quotes.set(symbol, {
+      bid: (mid - halfSpread).toFixed(spec.digits),
+      ask: (mid + halfSpread).toFixed(spec.digits),
+      timestamp: quoteTimestamp,
+    });
+    if (!this.latestObservedAt || quoteTimestamp > this.latestObservedAt) {
+      this.latestObservedAt = quoteTimestamp;
+    }
+  }
+
+  getQuote(instrument: string, maxAgeMs = 20 * 60_000): LivePaperQuote {
+    const symbol = this.requireSupported(instrument);
+    const quote = this.quotes.get(symbol);
+    if (!quote) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.PROVIDER_UNAVAILABLE,
+        `No live PAPER quote is cached yet for ${symbol}.`,
+        undefined,
+        true,
+      );
+    }
+    const age = Date.now() - quote.timestamp.getTime();
+    if (!Number.isFinite(age) || age > maxAgeMs) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.PROVIDER_UNAVAILABLE,
+        `Live PAPER quote for ${symbol} is stale (${Math.max(0, Math.round(age / 1000))}s old).`,
+        undefined,
+        true,
+      );
+    }
+    return { ...quote, timestamp: new Date(quote.timestamp) };
+  }
+
+  getOHLCV(instrument: string, timeframe: string, count: number): OHLCV[] {
+    const symbol = this.requireSupported(instrument);
+    const tf = timeframe.trim().toUpperCase();
+    if (tf !== 'M5') {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.INVALID_REQUEST,
+        `VPS live PAPER evidence currently supports M5 candles only (requested ${timeframe}).`,
+      );
+    }
+    const rows = this.candles.get(symbol) ?? [];
+    if (!rows.length) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.PROVIDER_UNAVAILABLE,
+        `No live PAPER candles are cached yet for ${symbol}.`,
+        undefined,
+        true,
+      );
+    }
+    return rows
+      .slice(-Math.max(1, count))
+      .map((row) => ({ ...row, timestamp: new Date(row.timestamp) }));
+  }
+
+  now(): Date {
+    return this.latestObservedAt ? new Date(this.latestObservedAt) : new Date();
+  }
+
+  status() {
+    return {
+      cachedInstruments: [...this.quotes.keys()].sort(),
+      cachedInstrumentCount: this.quotes.size,
+      latestObservedAt: this.latestObservedAt ? new Date(this.latestObservedAt) : null,
+    };
+  }
+
+  spec(instrument: string): InstrumentSpec {
+    return SPECS[this.requireSupported(instrument)]!;
+  }
+
+  private requireSupported(instrument: string): string {
+    const symbol = instrument.trim().toUpperCase();
+    if (!SPECS[symbol]) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.INVALID_INSTRUMENT,
+        `Live PAPER market data supports ${Object.keys(SPECS).join(', ')} (received "${instrument}").`,
+      );
+    }
+    return symbol;
+  }
+
+  private decimal(value: string, digits: number): string {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.INVALID_PRICE,
+        `Invalid live PAPER price: ${value}`,
+      );
+    }
+    return n.toFixed(digits);
+  }
+}

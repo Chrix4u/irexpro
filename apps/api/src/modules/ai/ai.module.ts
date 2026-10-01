@@ -17,6 +17,9 @@ import { AuditModule } from '../audit/audit.module';
 import { ExecutionModule } from '../execution/execution.module';
 import { MarketDataModule } from '../market-data/market-data.module';
 import { RiskModule } from '../risk/risk.module';
+import { BrokerModule } from '../broker/broker.module';
+import { VpsForexSignalCollectorService } from './vps-forex-signal-collector.service';
+import { VpsForexSignalCollectorController } from './vps-forex-signal-collector.controller';
 import { InternalApiKeyGuard } from '../../common/guards/internal-api-key.guard';
 import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-api-key.guard';
 
@@ -40,6 +43,7 @@ import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-a
     ExecutionModule,
     MarketDataModule,
     RiskModule,
+    BrokerModule,
   ],
   controllers: [
     AiController,
@@ -47,6 +51,7 @@ import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-a
     AiCopilotController,
     ExternalSignalPerformanceController,
     TradingViewWebhookController,
+    VpsForexSignalCollectorController,
   ],
   providers: [
     AiService,
@@ -58,6 +63,7 @@ import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-a
     ExternalSignalPerformanceService,
     TradingViewWebhookService,
     TradingViewWebhookGuard,
+    VpsForexSignalCollectorService,
   ],
   exports: [AiService, AiSignalService],
 })
