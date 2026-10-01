@@ -133,7 +133,10 @@ interface VpsForexScannerStatusView {
   marketCache: {
     cachedInstruments: string[];
     cachedInstrumentCount: number;
+    streamingInstruments: string[];
+    streamingInstrumentCount: number;
     latestObservedAt: string | null;
+    latestQuoteObservedAt: string | null;
   };
   state:
     | "WAITING_FOR_CONFIGURATION"
@@ -1803,12 +1806,14 @@ export default function AiTradingPage() {
                         External signal evidence
                       </p>
                       <h2 id="provider-evidence-title">
-                        VPS · Twelve Data Six-Pair v3
+                        VPS · Twelve Data Six-Pair v5
                       </h2>
                       <p>
                         Live six-pair VPS signals are measured independently in
                         PAPER before any DEMO review. Closed M5 market candles
-                        drive both setup selection and simulated PAPER fills.
+                        remain authoritative for v5 setup, fills and exits;
+                        available WebSocket ticks are mark-only for faster
+                        Current/P&amp;L display.
                       </p>
                     </div>
                     <div className="ai-provider-evidence__badges">
@@ -1869,6 +1874,21 @@ export default function AiTradingPage() {
                       <span>Scan cadence</span>
                       <strong>
                         {vpsScannerStatus?.cadenceMinutes ?? 10} min
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Fast position marks</span>
+                      <strong>
+                        {vpsScannerStatus?.marketCache
+                          .streamingInstrumentCount ?? 0}{" "}
+                        stream ·{" "}
+                        {Math.max(
+                          0,
+                          6 -
+                            (vpsScannerStatus?.marketCache
+                              .streamingInstrumentCount ?? 0),
+                        )}{" "}
+                        M5 fallback
                       </strong>
                     </div>
                     <div>

@@ -145,24 +145,53 @@ export class LivePaperMarketDataService {
     }
   }
 
+  /**
+   * Execution/evidence quote: ALWAYS the latest fully closed M5 REST candle.
+   * Streaming ticks must never alter v5 fills, margin/risk, or SL/TP evidence.
+   */
   getQuote(instrument: string, maxAgeMs = 20 * 60_000): LivePaperQuote {
     const symbol = this.requireSupported(instrument);
-    const candidates = [this.streamingQuotes.get(symbol), this.candleQuotes.get(symbol)]
-      .filter((quote): quote is LivePaperQuote => Boolean(quote))
-      .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
-    const quote = candidates.find((candidate) => {
-      const age = Date.now() - candidate.timestamp.getTime();
-      return Number.isFinite(age) && age <= maxAgeMs;
-    });
+    const quote = this.candleQuotes.get(symbol);
     if (!quote) {
       throw new BrokerAdapterError(
         BrokerErrorCode.PROVIDER_UNAVAILABLE,
-        `No live PAPER quote is cached yet for ${symbol}.`,
+        `No live PAPER execution quote is cached yet for ${symbol}.`,
+        undefined,
+        true,
+      );
+    }
+    const age = Date.now() - quote.timestamp.getTime();
+    if (!Number.isFinite(age) || age > maxAgeMs) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.PROVIDER_UNAVAILABLE,
+        `Live PAPER execution quote for ${symbol} is stale (${Math.max(0, Math.round(age / 1000))}s old).`,
         undefined,
         true,
       );
     }
     return { ...quote, timestamp: new Date(quote.timestamp) };
+  }
+
+  /**
+   * Read-only position mark: prefer a genuinely fresh streaming tick, otherwise
+   * fall back to the same closed-M5 execution quote. This path is intentionally
+   * excluded from order fills, risk sizing, margin authority and protection
+   * evaluation so v5 evidence semantics remain unchanged.
+   */
+  getMarkQuote(
+    instrument: string,
+    streamMaxAgeMs = 60_000,
+    fallbackMaxAgeMs = 20 * 60_000,
+  ): LivePaperQuote {
+    const symbol = this.requireSupported(instrument);
+    const stream = this.streamingQuotes.get(symbol);
+    if (stream) {
+      const age = Date.now() - stream.timestamp.getTime();
+      if (Number.isFinite(age) && age >= -5_000 && age <= streamMaxAgeMs) {
+        return { ...stream, timestamp: new Date(stream.timestamp) };
+      }
+    }
+    return this.getQuote(symbol, fallbackMaxAgeMs);
   }
 
   getOHLCV(instrument: string, timeframe: string, count: number): OHLCV[] {
@@ -238,17 +267,25 @@ export class LivePaperMarketDataService {
   }
 
   now(): Date {
-    const latest = this.latestQuoteObservedAt ?? this.latestObservedAt;
-    return latest ? new Date(latest) : new Date();
+    // v5 execution clock is anchored to the closed-candle evidence stream.
+    return this.latestObservedAt ? new Date(this.latestObservedAt) : new Date();
   }
 
   status() {
     const cached = new Set([...this.candleQuotes.keys(), ...this.streamingQuotes.keys()]);
+    const now = Date.now();
+    const streamingInstruments = [...this.streamingQuotes.entries()]
+      .filter(([, quote]) => {
+        const age = now - quote.timestamp.getTime();
+        return Number.isFinite(age) && age >= -5_000 && age <= 60_000;
+      })
+      .map(([symbol]) => symbol)
+      .sort();
     return {
       cachedInstruments: [...cached].sort(),
       cachedInstrumentCount: cached.size,
-      streamingInstruments: [...this.streamingQuotes.keys()].sort(),
-      streamingInstrumentCount: this.streamingQuotes.size,
+      streamingInstruments,
+      streamingInstrumentCount: streamingInstruments.length,
       latestObservedAt: this.latestObservedAt ? new Date(this.latestObservedAt) : null,
       latestQuoteObservedAt: this.latestQuoteObservedAt
         ? new Date(this.latestQuoteObservedAt)

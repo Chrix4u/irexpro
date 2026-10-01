@@ -68,6 +68,7 @@ VPS_FOREX_SCANNER_ENABLED=true
 TWELVEDATA_API_KEY=<server-secret>
 VPS_FOREX_SCANNER_USER_ID=<user UUID>
 VPS_FOREX_SCANNER_BROKER_CONNECTION_ID=<paper-broker connection UUID>
+TWELVEDATA_FAST_MARK_STREAM_ENABLED=true
 ```
 
 The scanner fails closed unless all four values are valid. `TWELVEDATA_API_KEY=demo` is explicitly rejected when enabled.
@@ -84,7 +85,7 @@ When this scanner owns an exact user + paper connection binding:
 
 Other users and broker connections keep the existing AI scheduler behavior.
 
-## v3 qualification boundary
+## Current qualification boundary
 
 The v5 scorecard is keyed only by `vps-twelvedata-six-pair-v5`; v1/v2/v3/v4 trades cannot contribute to its signal, execution, closed-trade or performance counts. Historical durable trades are retained for audit rather than deleted.
 
@@ -97,6 +98,12 @@ For v4, position COUNT and daily trade COUNT are unbounded. Distinct confirmed s
 ## v5 position sizing
 
 v1-v4 unintentionally supplied `0.01` as the signal lot upper bound, so the risk-based sizing engine could never choose more than a micro lot. v5 changes only this economic sizing seam: the scanner supplies an upper bound of `0.10` lot, while `PositionSizingService` remains authoritative and may size lower based on equity, stop distance, max trade risk, the profile maximum, broker lot constraints, free margin, capital allocation and execution controls. Signal direction, confidence, EMA/RSI qualification and 1.5 ATR / 2.5 ATR protection geometry are unchanged.
+
+## Fast position marks (mark-only)
+
+The v5 strategy/evidence feed and the UI mark feed are deliberately separated. The M5 strategy scanner keeps the same 10-minute Twelve Data REST cadence and v5 signal logic. A dedicated Twelve Data WebSocket may supply fresher **read-only position marks** for Current Price and unrealized P&L when the account entitlement permits the symbol. Streaming ticks do **not** alter v5 order fills, margin/risk authority, account-risk calculations, manual/system close prices, SL/TP evaluation, or closed-candle evidence. If a streaming symbol is unavailable or its tick is stale, the position row falls back to the existing M5 mark and labels that source explicitly.
+
+Direct VPS verification on the current Basic/trial entitlement accepted EUR/USD for WebSocket streaming and rejected GBP/USD, USD/JPY, AUD/USD, USD/CAD and USD/CHF, so those five remain on M5 fallback. This mark-only enhancement does not reset or mix the v5 qualification scorecard.
 
 ## Evidence gates
 

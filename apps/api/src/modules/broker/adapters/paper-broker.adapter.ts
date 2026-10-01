@@ -171,6 +171,10 @@ const PAPER_ORDER_KINDS: readonly PaperOrderKind[] = ['MARKET', 'LIMIT', 'STOP',
 export interface PaperQuote {
   bid: string;
   ask: string;
+  /** Mark observation metadata when known. */
+  timestamp?: Date;
+  /** Mark provenance for live, candle-fallback, or deterministic simulation. */
+  source?: 'STREAM' | 'REST_M5' | 'SIMULATED';
 }
 
 /**
@@ -728,13 +732,22 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   private quoteForInstrument(instrument: string): PaperQuote {
     if (this.isLiveMarketMode()) {
       const quote = this.liveMarketData!.getQuote(instrument);
-      return { bid: quote.bid, ask: quote.ask };
+      return {
+        bid: quote.bid,
+        ask: quote.ask,
+        timestamp: quote.timestamp,
+        source: quote.source,
+      };
     }
     // Never value a durable position using another instrument's fallback feed.
     // This is especially important across process restarts while a VPS-live
     // PAPER position is still open and the in-memory live cache is rebuilding.
     this.requireInstrument(instrument);
-    return this._feed.quote();
+    return {
+      ...this._feed.quote(),
+      timestamp: this.currentTime(),
+      source: 'SIMULATED',
+    };
   }
 
   setMode(mode: BrokerMode): void {
@@ -1001,10 +1014,15 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
 
   private mapPosition(position: PaperPosition): BrokerPosition {
     const liveQuote = this.isLiveMarketMode()
-      ? this.liveMarketData!.getQuote(position.instrument)
+      ? this.liveMarketData!.getMarkQuote(position.instrument)
       : null;
     const quote: PaperQuote = liveQuote
-      ? { bid: liveQuote.bid, ask: liveQuote.ask }
+      ? {
+          bid: liveQuote.bid,
+          ask: liveQuote.ask,
+          timestamp: liveQuote.timestamp,
+          source: liveQuote.source,
+        }
       : this.quoteForInstrument(position.instrument);
     const exitPrice = position.direction === 'BUY' ? quote.bid : quote.ask;
     return {
@@ -1127,8 +1145,9 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       // polls only every 10 minutes. If both levels were touched in the same
       // candle we conservatively count the stop first (unknown intrabar path).
       this.evaluateLiveCandleProtection(symbol);
-      // External market time moves independently. The close quote then handles
-      // any exact prevailing-price trigger and resting order for this instrument.
+      // getQuote() is deliberately the closed-M5 execution/evidence quote.
+      // Streaming ticks are consumed only by getMarkQuote() for Current/P&L,
+      // so all six pairs keep identical v5 SL/TP and resting-order semantics.
       this._marketTickCounter += 1;
       this.evaluatePositions(quote, symbol);
       this.evaluateWorkingOrders(quote, symbol);

@@ -1,6 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { BrokerService } from '../broker.service';
 import { LivePaperMarketDataService } from './live-paper-market-data.service';
 
 type WsEvent = { data?: unknown; code?: number };
@@ -26,12 +25,10 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectDelayMs = 5_000;
   private destroyed = false;
-  private readonly lastHeartbeatByInstrument = new Map<string, number>();
 
   constructor(
     private readonly config: ConfigService,
     private readonly market: LivePaperMarketDataService,
-    private readonly brokerService: BrokerService,
   ) {}
 
   onModuleInit(): void {
@@ -143,27 +140,10 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
       this.logger.warn(`Rejected fast mark for ${instrument}: ${(error as Error).message}`);
       return;
     }
-    void this.heartbeatPaperPosition(instrument);
-  }
-
-  private async heartbeatPaperPosition(instrument: string): Promise<void> {
-    const now = Date.now();
-    const last = this.lastHeartbeatByInstrument.get(instrument) ?? 0;
-    if (now - last < 1_000) return;
-    this.lastHeartbeatByInstrument.set(instrument, now);
-    const userId = this.config.get<string>('vpsForexScanner.userId', '').trim();
-    const connectionId = this.config.get<string>('vpsForexScanner.brokerConnectionId', '').trim();
-    if (!userId || !connectionId) return;
-    try {
-      await this.brokerService.getCurrentPriceForConnection(userId, connectionId, instrument);
-    } catch (error) {
-      // A stream tick may arrive during startup before the PAPER adapter is fully
-      // registered/connected. The next tick retries naturally; never disconnect
-      // or suspend the PAPER broker because of this transient seam.
-      this.logger.debug(
-        `Fast-mark heartbeat deferred for ${instrument}: ${(error as Error).message}`,
-      );
-    }
+    // Mark-only by design: position reads consume this fresher quote and
+    // recalculate unrealized P&L. v5 PAPER SL/TP remains governed by the
+    // closed-M5 evidence path; tick-level exits require a separately
+    // versioned execution model once a six-pair broker-grade stream exists.
   }
 
   private startHeartbeat(): void {

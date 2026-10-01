@@ -291,7 +291,14 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       automaticLivePromotion: false,
       marketCache: ownsBinding
         ? this.livePaperMarket.status()
-        : { cachedInstruments: [], cachedInstrumentCount: 0, latestObservedAt: null },
+        : {
+            cachedInstruments: [],
+            cachedInstrumentCount: 0,
+            streamingInstruments: [],
+            streamingInstrumentCount: 0,
+            latestObservedAt: null,
+            latestQuoteObservedAt: null,
+          },
       state:
         !ownsBinding || !configured
           ? 'WAITING_FOR_CONFIGURATION'

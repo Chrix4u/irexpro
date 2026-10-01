@@ -47,28 +47,33 @@ describe('LivePaperMarketDataService', () => {
     ]);
   });
 
-  it('prefers a fresh streaming mark without mutating closed-candle evidence', () => {
+  it('prefers a fresh streaming mark without changing the M5 execution quote or candle evidence', () => {
     const service = new LivePaperMarketDataService();
     service.updateClosedCandles('EURUSD', candles(1.1, 5));
     const before = service.getOHLCV('EURUSD', 'M5', 2);
+    const executionBefore = service.getQuote('EURUSD');
     service.updateStreamingMidQuote('EURUSD', 1.23456, new Date());
 
-    const quote = service.getQuote('EURUSD');
-    expect(quote.source).toBe('STREAM');
-    expect(Number(quote.ask) - Number(quote.bid)).toBeCloseTo(0.0001, 5);
+    const executionAfter = service.getQuote('EURUSD');
+    const mark = service.getMarkQuote('EURUSD');
+    expect(executionBefore.source).toBe('REST_M5');
+    expect(executionAfter).toEqual(executionBefore);
+    expect(mark.source).toBe('STREAM');
+    expect(Number(mark.ask) - Number(mark.bid)).toBeCloseTo(0.0001, 5);
     expect(service.status().streamingInstruments).toEqual(['EURUSD']);
     expect(service.getOHLCV('EURUSD', 'M5', 2)).toEqual(before);
   });
 
-  it('falls back to the closed-candle quote when no streaming mark exists', () => {
+  it('falls back to the closed-candle quote when no fresh streaming mark exists', () => {
     const service = new LivePaperMarketDataService();
     service.updateClosedCandles('USDJPY', candles(157, 3));
     expect(service.getQuote('USDJPY').source).toBe('REST_M5');
+    expect(service.getMarkQuote('USDJPY').source).toBe('REST_M5');
   });
 
   it('fails closed on unsupported timeframes and missing quotes', () => {
     const service = new LivePaperMarketDataService();
-    expect(() => service.getQuote('EURUSD')).toThrow(/No live PAPER quote/);
+    expect(() => service.getQuote('EURUSD')).toThrow(/No live PAPER execution quote/);
     service.updateClosedCandles('EURUSD', candles(1.1, 5));
     expect(() => service.getOHLCV('EURUSD', 'M1', 10)).toThrow(/supports M5\/M15\/M30\/H1\/H4\/D1/);
   });

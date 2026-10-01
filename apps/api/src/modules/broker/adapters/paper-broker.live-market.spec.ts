@@ -123,6 +123,37 @@ describe('PaperBrokerAdapter — scoped VPS live market mode', () => {
     await expect(adapter.getAccountInfo()).rejects.toThrow(/supports EURUSD only/);
   });
 
+  it('uses streaming ticks for position marks but not for v5 PAPER fills', async () => {
+    const live = new LivePaperMarketDataService();
+    live.registerLiveConnection('conn-mark-only');
+    const bars = protectionBars();
+    live.updateClosedCandles('EURUSD', bars.initial);
+    const executionQuote = live.getQuote('EURUSD');
+    const executionMid = ((Number(executionQuote.bid) + Number(executionQuote.ask)) / 2).toFixed(5);
+
+    live.updateStreamingMidQuote('EURUSD', 1.105, new Date());
+    expect(live.getMarkQuote('EURUSD').source).toBe('STREAM');
+    expect(live.getQuote('EURUSD').source).toBe('REST_M5');
+
+    const adapter = new PaperBrokerAdapter(undefined, undefined, undefined, 'conn-mark-only', live);
+    await adapter.connect({} as any);
+    const result = await adapter.placeOrder({
+      idempotencyKey: 'mark-only-fill',
+      instrument: 'EURUSD',
+      direction: 'SELL',
+      lotSize: '0.01',
+      stopLoss: '1.11000',
+      takeProfit: '1.09000',
+      orderKind: 'MARKET',
+    });
+
+    expect(result.filledPrice).toBe(executionMid);
+    const [position] = await adapter.getOpenPositions();
+    expect(position!.markSource).toBe('STREAM');
+    expect(Number(position!.currentPrice)).toBeCloseTo(1.10505, 5);
+    expect(position!.currentPrice).not.toBe(result.filledPrice);
+  });
+
   it('allows multiple distinct positions on the same instrument in both directions', async () => {
     const live = new LivePaperMarketDataService();
     live.registerLiveConnection('conn-multi');
