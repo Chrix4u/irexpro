@@ -9,6 +9,14 @@ export interface LivePaperQuote {
   source: 'REST_M5' | 'STREAM';
 }
 
+export interface LivePaperPositionMark extends LivePaperQuote {
+  /**
+   * Informational freshness only. A stale mark may be shown in the UI, but it
+   * must never be used by execution, risk sizing, margin authority or SL/TP.
+   */
+  isStale: boolean;
+}
+
 export interface LivePaperCandleInput {
   timestamp: Date;
   open: string;
@@ -192,6 +200,52 @@ export class LivePaperMarketDataService {
       }
     }
     return this.getQuote(symbol, fallbackMaxAgeMs);
+  }
+
+  /**
+   * Read-only position valuation mark.
+   *
+   * Unlike getQuote()/getMarkQuote(), this method may return the newest cached
+   * quote even when it is stale. That is intentional: the Live Account UI can
+   * keep displaying the last known market valuation with an explicit STALE
+   * marker during provider gaps/rollover, while every trading decision remains
+   * fail-closed on the freshness-enforcing methods above.
+   */
+  getPositionMarkQuote(
+    instrument: string,
+    streamMaxAgeMs = 60_000,
+    fallbackMaxAgeMs = 20 * 60_000,
+  ): LivePaperPositionMark {
+    const symbol = this.requireSupported(instrument);
+    const now = Date.now();
+    const stream = this.streamingQuotes.get(symbol);
+    const candle = this.candleQuotes.get(symbol);
+
+    if (stream) {
+      const age = now - stream.timestamp.getTime();
+      if (Number.isFinite(age) && age >= -5_000 && age <= streamMaxAgeMs) {
+        return { ...stream, timestamp: new Date(stream.timestamp), isStale: false };
+      }
+    }
+
+    if (candle) {
+      const age = now - candle.timestamp.getTime();
+      if (Number.isFinite(age) && age >= -5_000 && age <= fallbackMaxAgeMs) {
+        return { ...candle, timestamp: new Date(candle.timestamp), isStale: false };
+      }
+    }
+
+    const candidates = [stream, candle].filter((quote): quote is LivePaperQuote => Boolean(quote));
+    const latest = candidates.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())[0];
+    if (!latest) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.PROVIDER_UNAVAILABLE,
+        `No live PAPER position mark is cached yet for ${symbol}.`,
+        undefined,
+        true,
+      );
+    }
+    return { ...latest, timestamp: new Date(latest.timestamp), isStale: true };
   }
 
   getOHLCV(instrument: string, timeframe: string, count: number): OHLCV[] {

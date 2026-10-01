@@ -1014,7 +1014,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
 
   private mapPosition(position: PaperPosition): BrokerPosition {
     const liveQuote = this.isLiveMarketMode()
-      ? this.liveMarketData!.getMarkQuote(position.instrument)
+      ? this.liveMarketData!.getPositionMarkQuote(position.instrument)
       : null;
     const quote: PaperQuote = liveQuote
       ? {
@@ -1036,6 +1036,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       currentPrice: exitPrice,
       markObservedAt: liveQuote?.timestamp ?? null,
       markSource: liveQuote?.source ?? null,
+      markIsStale: liveQuote?.isStale ?? false,
       stopLoss: position.stopLoss,
       takeProfit: position.takeProfit,
       unrealisedPnl: toMoney(this.unrealisedPnlExact(position, quote)),

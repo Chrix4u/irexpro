@@ -55,6 +55,13 @@ export class LivePositionRowViewDto {
   @ApiPropertyOptional({ nullable: true, type: String, format: 'date-time' })
   markObservedAt: string | null;
 
+  @ApiProperty({
+    description:
+      'True when currentPrice/P&L are based on the last known informational mark rather than execution-fresh market data.',
+    default: false,
+  })
+  markIsStale: boolean;
+
   @ApiPropertyOptional({
     nullable: true,
     description: 'Provider-reported unrealized P&L in account currency.',
@@ -137,6 +144,7 @@ export function toLivePositionRowView(
     currentPrice: providerPosition?.currentPrice ?? null,
     markSource: providerPosition?.markSource ?? (providerPosition ? 'PROVIDER' : null),
     markObservedAt: toIsoString(providerPosition?.markObservedAt ?? null),
+    markIsStale: providerPosition?.markIsStale ?? false,
     unrealisedPnl: trade.accountCurrency ? (providerPosition?.unrealisedPnl ?? null) : null,
     commission: trade.accountCurrency
       ? (providerPosition?.commission ?? trade.commission ?? null)

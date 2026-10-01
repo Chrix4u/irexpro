@@ -364,7 +364,7 @@ function PositionCard({
         <Badge variant={pnlBadge(position.unrealisedPnl)}>
           {position.unrealisedPnl === null
             ? "P&L awaiting broker"
-            : `${position.unrealisedPnl.startsWith("-") ? "" : "+"}${money(position.unrealisedPnl, position.accountCurrency)}`}
+            : `${position.markIsStale ? "Last known · " : ""}${position.unrealisedPnl.startsWith("-") ? "" : "+"}${money(position.unrealisedPnl, position.accountCurrency)}`}
         </Badge>
       </div>
       <dl className="ai-trade-metrics">
@@ -383,6 +383,7 @@ function PositionCard({
                   : position.markSource === "REST_M5"
                     ? "M5 fallback"
                     : "Broker mark"}
+                {position.markIsStale ? " · STALE" : ""}
                 {position.markObservedAt
                   ? ` · ${formatTimestamp(position.markObservedAt)}`
                   : ""}
@@ -487,6 +488,7 @@ function PositionTable({
                       : position.markSource === "REST_M5"
                         ? "M5 fallback"
                         : "Broker mark"}
+                    {position.markIsStale ? " · STALE" : ""}
                     {position.markObservedAt
                       ? ` · ${formatTimestamp(position.markObservedAt)}`
                       : ""}
@@ -497,7 +499,7 @@ function PositionTable({
                 <Badge variant={pnlBadge(position.unrealisedPnl)}>
                   {position.unrealisedPnl === null
                     ? "Awaiting mark"
-                    : `${position.unrealisedPnl.startsWith("-") ? "" : "+"}${money(position.unrealisedPnl, position.accountCurrency)}`}
+                    : `${position.markIsStale ? "Last known · " : ""}${position.unrealisedPnl.startsWith("-") ? "" : "+"}${money(position.unrealisedPnl, position.accountCurrency)}`}
                 </Badge>
               </td>
               <td>{position.stopLoss}</td>

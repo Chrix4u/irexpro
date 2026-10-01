@@ -69,6 +69,24 @@ describe('LivePaperMarketDataService', () => {
     service.updateClosedCandles('USDJPY', candles(157, 3));
     expect(service.getQuote('USDJPY').source).toBe('REST_M5');
     expect(service.getMarkQuote('USDJPY').source).toBe('REST_M5');
+    expect(service.getPositionMarkQuote('USDJPY').isStale).toBe(false);
+  });
+
+  it('keeps stale last-known marks available for read-only position valuation while execution fails closed', () => {
+    const service = new LivePaperMarketDataService();
+    service.updateClosedCandles('USDJPY', candles(157, 3));
+    const observedAt = service.getQuote('USDJPY').timestamp.getTime();
+    const now = jest.spyOn(Date, 'now').mockReturnValue(observedAt + 21 * 60_000);
+    try {
+      expect(() => service.getQuote('USDJPY')).toThrow(/stale/);
+      expect(() => service.getMarkQuote('USDJPY')).toThrow(/stale/);
+      const mark = service.getPositionMarkQuote('USDJPY');
+      expect(mark.source).toBe('REST_M5');
+      expect(mark.isStale).toBe(true);
+      expect(mark.timestamp.getTime()).toBe(observedAt);
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it('fails closed on unsupported timeframes and missing quotes', () => {

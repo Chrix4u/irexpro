@@ -281,6 +281,8 @@ export interface LivePositionRowView {
   currentPrice: string | null;
   markSource: 'STREAM' | 'REST_M5' | 'PROVIDER' | null;
   markObservedAt: string | null;
+  /** Informational last-known mark. True means do not interpret it as execution-fresh market data. */
+  markIsStale: boolean;
   unrealisedPnl: string | null;
   commission: string | null;
   swap: string | null;

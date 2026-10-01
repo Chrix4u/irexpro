@@ -364,6 +364,8 @@ export interface BrokerPosition {
   currentPrice: string;
   markObservedAt?: Date | null;
   markSource?: 'STREAM' | 'REST_M5' | 'PROVIDER' | null;
+  /** True only for informational last-known marks; stale marks must never authorize execution. */
+  markIsStale?: boolean;
   stopLoss: string;
   takeProfit: string;
   unrealisedPnl: string;
