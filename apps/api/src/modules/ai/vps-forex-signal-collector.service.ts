@@ -224,12 +224,21 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
 
     try {
       await this.primeMarketData(apiKey);
+      const activeAfterPrime = await this.executionService.getActiveSession(userId);
+      if (
+        activeAfterPrime &&
+        activeAfterPrime.executionMode === ExecutionMode.PAPER_ONLY &&
+        activeAfterPrime.brokerConnectionId === connectionId
+      ) {
+        await this.heartbeatLivePaper(userId, connectionId);
+        this.logger.log('VPS startup live PAPER protection heartbeat completed for 6/6 pairs');
+      }
     } catch (error) {
       // Keep live ownership registered so restored live positions fail closed
       // rather than being valued against a mismatched simulator feed. The
       // periodic scanner can recover on a later successful provider request.
       this.logger.error(
-        `VPS startup market prime failed; live PAPER remains fail-closed: ${(error as Error).message}`,
+        `VPS startup market prime/heartbeat failed; live PAPER remains fail-closed: ${(error as Error).message}`,
       );
     }
 
@@ -345,9 +354,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       // Heartbeat every instrument after the cache refresh. This makes the
       // PAPER adapter evaluate SL/TP/resting orders against the SAME live
       // closed-candle quote set used by the strategy.
-      for (const [instrument] of SYMBOLS) {
-        await this.brokerService.getCurrentPriceForConnection(userId, connectionId, instrument);
-      }
+      await this.heartbeatLivePaper(userId, connectionId);
 
       const candidates = [...seriesByInstrument.entries()]
         .map(([instrument, candles]) => buildCandidate(instrument, candles))
@@ -409,6 +416,12 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     // under the published 800-credit daily allowance.
     if (hour >= 21) return false;
     return now.getUTCMinutes() % 10 === 0;
+  }
+
+  private async heartbeatLivePaper(userId: string, connectionId: string): Promise<void> {
+    for (const [instrument] of SYMBOLS) {
+      await this.brokerService.getCurrentPriceForConnection(userId, connectionId, instrument);
+    }
   }
 
   private async primeMarketData(apiKey: string, fetchImpl: typeof fetch = fetch): Promise<void> {

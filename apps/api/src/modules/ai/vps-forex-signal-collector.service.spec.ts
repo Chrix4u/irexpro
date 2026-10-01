@@ -203,6 +203,7 @@ describe('VpsForexSignalCollectorService', () => {
         executionMode: ExecutionMode.PAPER_ONLY,
       }),
     } as unknown as ExecutionService;
+    const startupHeartbeat = jest.fn().mockResolvedValue({ bid: '1', ask: '1.1' });
     const collector = new VpsForexSignalCollectorService(
       config({
         'vpsForexScanner.enabled': true,
@@ -212,7 +213,7 @@ describe('VpsForexSignalCollectorService', () => {
       }),
       { receiveSignal: jest.fn() } as unknown as AiSignalService,
       execution,
-      { getCurrentPriceForConnection: jest.fn() } as unknown as BrokerService,
+      { getCurrentPriceForConnection: startupHeartbeat } as unknown as BrokerService,
       live,
       aiEngine,
     );
@@ -226,6 +227,7 @@ describe('VpsForexSignalCollectorService', () => {
     expect(aiEngine.notifySessionStopped).toHaveBeenCalledWith({ tradingSessionId: 'session-1' });
     expect(live.isLiveConnection('conn-1')).toBe(true);
     expect(live.status().cachedInstrumentCount).toBe(6);
+    expect(startupHeartbeat).toHaveBeenCalledTimes(6);
 
     collector.onModuleDestroy();
     fetchSpy.mockRestore();

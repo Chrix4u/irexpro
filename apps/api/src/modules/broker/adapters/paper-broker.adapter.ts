@@ -1115,8 +1115,13 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     if (this.isLiveMarketMode()) {
       const liveQuote = this.liveMarketData!.getQuote(symbol);
       const quote: PaperQuote = { bid: liveQuote.bid, ask: liveQuote.ask };
-      // External market time moves independently. A read evaluates protection
-      // and resting orders for THIS instrument only; it never fabricates a tick.
+      // First replay every fully closed M5 candle since each position opened.
+      // This captures an SL/TP touched inside a candle even when the scanner
+      // polls only every 10 minutes. If both levels were touched in the same
+      // candle we conservatively count the stop first (unknown intrabar path).
+      this.evaluateLiveCandleProtection(symbol);
+      // External market time moves independently. The close quote then handles
+      // any exact prevailing-price trigger and resting order for this instrument.
       this._marketTickCounter += 1;
       this.evaluatePositions(quote, symbol);
       this.evaluateWorkingOrders(quote, symbol);
@@ -1692,6 +1697,98 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   }
 
   /**
+   * Live PAPER M5 protection path. Twelve Data supplies closed-candle MID OHLC,
+   * while this simulator executes against a documented fixed bid/ask spread.
+   * Convert candle extremes to the relevant executable side and conservatively
+   * evaluate SL before TP when both were touched in one candle.
+   */
+  private evaluateLiveCandleProtection(instrument: string): void {
+    if (!this.isLiveMarketMode()) return;
+    const symbol = this.requireInstrument(instrument);
+    const spec = this.liveMarketData!.spec(symbol);
+    const candles = this.liveMarketData!.getOHLCV(symbol, 'M5', 500);
+    const halfSpread = spec.spread / 2;
+
+    for (const position of Array.from(this._positions.values())) {
+      if (position.instrument !== symbol) continue;
+      for (const candle of candles) {
+        // Candle timestamps are bar-open times; only bars that CLOSED after
+        // the fill can contain post-entry price action.
+        const candleClosedAt = new Date(candle.timestamp.getTime() + 5 * 60_000);
+        if (candleClosedAt.getTime() <= position.openedAt.getTime()) continue;
+
+        const high = Number(candle.high);
+        const low = Number(candle.low);
+        if (!Number.isFinite(high) || !Number.isFinite(low)) continue;
+
+        if (position.direction === 'BUY') {
+          const bidLow = (low - halfSpread).toFixed(spec.digits);
+          const bidHigh = (high - halfSpread).toFixed(spec.digits);
+          if (
+            !isZeroLevel(position.stopLoss) &&
+            compareDecimalStrings(bidLow, position.stopLoss) <= 0
+          ) {
+            this.closePositionUnits(
+              position,
+              position.units,
+              position.lotSize,
+              position.stopLoss,
+              'SL',
+              candleClosedAt,
+            );
+            break;
+          }
+          if (
+            !isZeroLevel(position.takeProfit) &&
+            compareDecimalStrings(bidHigh, position.takeProfit) >= 0
+          ) {
+            this.closePositionUnits(
+              position,
+              position.units,
+              position.lotSize,
+              position.takeProfit,
+              'TP',
+              candleClosedAt,
+            );
+            break;
+          }
+        } else {
+          const askHigh = (high + halfSpread).toFixed(spec.digits);
+          const askLow = (low + halfSpread).toFixed(spec.digits);
+          if (
+            !isZeroLevel(position.stopLoss) &&
+            compareDecimalStrings(askHigh, position.stopLoss) >= 0
+          ) {
+            this.closePositionUnits(
+              position,
+              position.units,
+              position.lotSize,
+              position.stopLoss,
+              'SL',
+              candleClosedAt,
+            );
+            break;
+          }
+          if (
+            !isZeroLevel(position.takeProfit) &&
+            compareDecimalStrings(askLow, position.takeProfit) <= 0
+          ) {
+            this.closePositionUnits(
+              position,
+              position.units,
+              position.lotSize,
+              position.takeProfit,
+              'TP',
+              candleClosedAt,
+            );
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  /**
    * Position SL/TP (SL checked before TP — conservative). SL/TP close exactly
    * at their level (resting protection orders; no gap slippage modeled).
    */
@@ -1883,6 +1980,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     closedLot: string,
     closePrice: string,
     closeReason: PaperClosedTrade['closeReason'],
+    closedAtOverride?: Date,
   ): PaperClosedTrade {
     const diff =
       position.direction === 'BUY'
@@ -1905,7 +2003,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       takeProfit: position.takeProfit,
       realisedPnl,
       openedAt: position.openedAt,
-      closedAt: this.currentTime(),
+      closedAt: closedAtOverride ? new Date(closedAtOverride) : this.currentTime(),
       commission: '0',
       swap: '0',
       closeReason,

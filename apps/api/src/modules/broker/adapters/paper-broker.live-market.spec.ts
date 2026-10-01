@@ -15,6 +15,45 @@ function series(base: number, digits: number) {
   });
 }
 
+function protectionBars(options?: { high?: number; low?: number; close?: number }) {
+  const floor = Math.floor(Date.now() / 300000) * 300000;
+  const firstOpen = floor - 15 * 60_000;
+  const secondOpen = floor - 10 * 60_000;
+  const thirdOpen = floor - 5 * 60_000;
+  const row = (timestamp: number, open: number, high: number, low: number, close: number) => ({
+    timestamp: new Date(timestamp),
+    open: open.toFixed(5),
+    high: high.toFixed(5),
+    low: low.toFixed(5),
+    close: close.toFixed(5),
+  });
+  return {
+    initial: [row(firstOpen, 1.1, 1.1002, 1.0998, 1.1), row(secondOpen, 1.1, 1.1002, 1.0998, 1.1)],
+    advanced: [
+      row(secondOpen, 1.1, 1.1002, 1.0998, 1.1),
+      row(thirdOpen, 1.1, options?.high ?? 1.1003, options?.low ?? 1.0997, options?.close ?? 1.1),
+    ],
+  };
+}
+
+async function openProtectedBuy(live: LivePaperMarketDataService) {
+  live.registerLiveConnection('conn-protection');
+  const bars = protectionBars();
+  live.updateClosedCandles('EURUSD', bars.initial);
+  const adapter = new PaperBrokerAdapter(undefined, undefined, undefined, 'conn-protection', live);
+  await adapter.connect({} as any);
+  await adapter.placeOrder({
+    idempotencyKey: 'protected-buy',
+    instrument: 'EURUSD',
+    direction: 'BUY',
+    lotSize: '0.01',
+    stopLoss: '1.09900',
+    takeProfit: '1.10100',
+    orderKind: 'MARKET',
+  });
+  return adapter;
+}
+
 describe('PaperBrokerAdapter — scoped VPS live market mode', () => {
   it('supports six live instruments without changing a non-live paper connection', async () => {
     const live = new LivePaperMarketDataService();
@@ -82,5 +121,48 @@ describe('PaperBrokerAdapter — scoped VPS live market mode', () => {
     // the default EURUSD simulator quote.
     live.unregisterLiveConnection('conn-live');
     await expect(adapter.getAccountInfo()).rejects.toThrow(/supports EURUSD only/);
+  });
+
+  it('closes at TP when a closed M5 candle touches target between polling points', async () => {
+    const live = new LivePaperMarketDataService();
+    const adapter = await openProtectedBuy(live);
+    const bars = protectionBars({ high: 1.1012, low: 1.0996, close: 1.1002 });
+    live.updateClosedCandles('EURUSD', bars.advanced);
+
+    await adapter.getCurrentPrice('EURUSD');
+
+    expect(await adapter.getOpenPositions()).toHaveLength(0);
+    const closed = await adapter.getClosedTrades(new Date(0), new Date(Date.now() + 60 * 60_000));
+    expect(closed).toHaveLength(1);
+    expect(closed[0]!.closeReason).toBe('TP');
+    expect(closed[0]!.closePrice).toBe('1.10100');
+  });
+
+  it('closes at SL when a closed M5 candle touches stop between polling points', async () => {
+    const live = new LivePaperMarketDataService();
+    const adapter = await openProtectedBuy(live);
+    const bars = protectionBars({ high: 1.1004, low: 1.0988, close: 1.0994 });
+    live.updateClosedCandles('EURUSD', bars.advanced);
+
+    await adapter.getCurrentPrice('EURUSD');
+
+    const closed = await adapter.getClosedTrades(new Date(0), new Date(Date.now() + 60 * 60_000));
+    expect(closed).toHaveLength(1);
+    expect(closed[0]!.closeReason).toBe('SL');
+    expect(closed[0]!.closePrice).toBe('1.09900');
+  });
+
+  it('uses conservative SL-first resolution when one M5 candle touches both SL and TP', async () => {
+    const live = new LivePaperMarketDataService();
+    const adapter = await openProtectedBuy(live);
+    const bars = protectionBars({ high: 1.1013, low: 1.0987, close: 1.1 });
+    live.updateClosedCandles('EURUSD', bars.advanced);
+
+    await adapter.getCurrentPrice('EURUSD');
+
+    const closed = await adapter.getClosedTrades(new Date(0), new Date(Date.now() + 60 * 60_000));
+    expect(closed).toHaveLength(1);
+    expect(closed[0]!.closeReason).toBe('SL');
+    expect(closed[0]!.closePrice).toBe('1.09900');
   });
 });
