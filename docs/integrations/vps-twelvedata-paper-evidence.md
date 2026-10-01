@@ -4,7 +4,13 @@ Provider evidence key: **`vps-twelvedata-six-pair-v3`**.
 
 Status: **PAPER evidence collection only.** This path does not grant DEMO or LIVE execution authority.
 
-Version note: v1 produced one genuine USDCAD candidate during activation, but the Risk Engine rejected it before execution because its ATR stop was 4.7 pips versus the 5-pip structural minimum. v2 starts a clean evidence stream and floors candidate stop geometry at 5.1 pips (5-pip platform minimum plus a 0.1-pip rounding buffer) while preserving the 2.5:1.5 target/stop ratio. The Risk Engine remains independently authoritative.
+Version history:
+
+- **v1** produced one genuine USDCAD candidate during activation, but the Risk Engine rejected it before execution because its ATR stop was 4.7 pips versus the 5-pip structural minimum.
+- **v2** introduced the 5.1-pip candidate stop floor and produced genuine forward PAPER evidence while the live-feed execution path was being hardened. Its results remain historical evidence but are excluded from the qualification scorecard because execution semantics changed during that campaign.
+- **v3** is the clean qualification stream. It began on **2026-10-01 09:56:45 UTC** with a fresh **10,000.00 USD** PAPER balance, zero open positions, zero committed AI capital and zero v3 evidence. The first scheduled v3 candidate executed at 10:00 UTC.
+
+The 5.1-pip floor is the 5-pip platform minimum plus a 0.1-pip rounding buffer. The 2.5:1.5 target/stop ratio is preserved, and the Risk Engine remains independently authoritative.
 
 ## Purpose
 
@@ -29,7 +35,7 @@ The collector uses Twelve Data's `/time_series` endpoint with one batched six-sy
 
 - timeframe: M5
 - only fully closed candles
-- 70 bars requested per pair
+- 500 bars requested per pair
 - timezone: UTC
 - cadence: every 10 minutes
 - Monday–Friday only
@@ -39,7 +45,19 @@ A shared `demo` key is rejected for production evidence. The production collecto
 
 Twelve Data OHLC is treated as a market-data mid, not as an executable broker bid/ask. The PAPER broker applies a documented conservative fixed spread per pair around the latest fully closed M5 candle. This is a simulation assumption and must never be represented as broker-live execution evidence.
 
-The same cached market data drives both strategy selection and PAPER fills/SL/TP evaluation so live-data signals are never executed against the historical replay feed.
+The same cached market data drives both strategy selection and PAPER fills/SL/TP evaluation so live-data signals are never executed against the historical replay feed. The live PAPER adapter claims the configured connection before startup priming; if the six-pair cache is unavailable, price reads fail closed rather than falling back to a single-instrument simulator.
+
+### Closed-candle protection semantics
+
+Every newly available fully closed M5 candle after a position opens is evaluated for protective exits using its **high/low**, not only its closing price. Twelve Data supplies mid OHLC, so the PAPER engine converts candle extremes to the relevant executable bid/ask side using the documented pair spread. This prevents a stop or target touched between 10-minute scanner polls from being missed.
+
+If one M5 candle touches **both** stop loss and take profit, the intrabar ordering is unknowable from OHLC alone; the simulator therefore resolves the candle **SL-first**. This deliberately conservative rule prevents ambiguous candles from receiving favorable hindsight treatment.
+
+On API restart, the scanner primes all six pairs and heartbeats every instrument immediately so restored positions are checked across any closed M5 bars that arrived during downtime.
+
+### Basic-plan credit guard
+
+One six-pair request consumes six symbol credits. The scanner caches the successful batch for the current UTC minute and reuses it if another internal collection path runs during that minute, preventing a startup-prime plus scheduled scan from spending 12 credits and exceeding an 8-credit/minute Basic allowance.
 
 ## Required server configuration
 
@@ -65,6 +83,12 @@ When this scanner owns an exact user + paper connection binding:
 5. automatic DEMO and LIVE promotion remain disabled.
 
 Other users and broker connections keep the existing AI scheduler behavior.
+
+## v3 qualification boundary
+
+The v3 scorecard is keyed only by `vps-twelvedata-six-pair-v3`; v1/v2 trades cannot contribute to its signal, execution, closed-trade or performance counts. Historical durable trades are retained for audit rather than deleted.
+
+The underlying PAPER account still enforces same-day account safety across versions. In particular, PAPER/DEMO daily-loss checks use exact realised P&L scoped to the logical broker account and USD currency, while the v3 session opening balance is 10,000.00 USD. This conservative safety carry-over does **not** enter the v3 provider-performance scorecard.
 
 ## Evidence gates
 
