@@ -81,6 +81,40 @@ describe('TwelveDataFastMarkStreamService', () => {
     expect(socket.closed).toBe(true);
   });
 
+
+  it('falls back to EUR/USD when the selected pair is rejected by the entitlement', () => {
+    (globalThis as unknown as { WebSocket?: unknown }).WebSocket = FakeWebSocket;
+    const config = {
+      get: jest.fn((key: string, fallback?: unknown) => {
+        const values: Record<string, unknown> = {
+          'vpsForexScanner.enabled': true,
+          'vpsForexScanner.fastMarkStreamEnabled': true,
+          'vpsForexScanner.apiKey': 'test-key',
+        };
+        return key in values ? values[key] : fallback;
+      }),
+    } as unknown as ConfigService;
+    const market = { updateStreamingMidQuote: jest.fn() } as unknown as LivePaperMarketDataService;
+    const paperState = { load: jest.fn() } as unknown as PaperBrokerStateService;
+    const service = new TwelveDataFastMarkStreamService(config, market, paperState);
+    (service as unknown as { preferredProviderSymbol: string }).preferredProviderSymbol = 'USD/JPY';
+
+    (service as unknown as { connect(): void }).connect();
+    const socket = FakeWebSocket.last!;
+    socket.emit('open');
+    expect(JSON.parse(socket.sent[0]!).params.symbols).toBe('USD/JPY');
+
+    socket.emit('message', {
+      data: JSON.stringify({
+        event: 'subscribe-status',
+        success: [],
+        fails: [{ symbol: 'USD/JPY' }],
+      }),
+    });
+    expect(JSON.parse(socket.sent[1]!).params.symbols).toBe('EUR/USD');
+    service.onModuleDestroy();
+  });
+
   it('does not connect when fast marks are disabled', () => {
     (globalThis as unknown as { WebSocket?: unknown }).WebSocket = FakeWebSocket;
     const config = {

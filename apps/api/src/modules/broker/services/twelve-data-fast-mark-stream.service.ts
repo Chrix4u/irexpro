@@ -143,6 +143,19 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
       this.logger.log(
         `Twelve Data fast-mark subscription accepted=${success.join(',') || 'none'} fallback=${fails.join(',') || 'none'}`,
       );
+      if (
+        success.length === 0 &&
+        fails.includes(this.preferredProviderSymbol) &&
+        this.preferredProviderSymbol !== 'EUR/USD' &&
+        this.socket?.readyState === 1
+      ) {
+        this.logger.warn(
+          `Fast-mark entitlement rejected ${this.preferredProviderSymbol}; falling back to EUR/USD`,
+        );
+        this.socket.send(
+          JSON.stringify({ action: 'subscribe', params: { symbols: 'EUR/USD' } }),
+        );
+      }
       return;
     }
 
