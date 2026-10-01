@@ -314,6 +314,11 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       // Atomic handoff: only after all six series were parsed and cached AND
       // the exact PAPER authority is active do broker reads switch to live mode.
       this.livePaperMarket.registerLiveConnection(connectionId);
+      const cacheStatus = this.livePaperMarket.status();
+      this.logger.log(
+        `VPS live market cache primed pairs=${cacheStatus.cachedInstrumentCount}/6 ` +
+          `latest=${cacheStatus.latestObservedAt?.toISOString() ?? 'unknown'}`,
+      );
 
       // Heartbeat every instrument after the cache refresh. This makes the
       // PAPER adapter evaluate SL/TP/resting orders against the SAME live
@@ -328,7 +333,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         .sort((a, b) => b.score - a.score);
       const best = candidates[0];
       if (!best) {
-        this.logger.debug('VPS six-pair scan: no qualifying setup');
+        this.logger.log('VPS six-pair scan: no qualifying setup');
         return;
       }
 
