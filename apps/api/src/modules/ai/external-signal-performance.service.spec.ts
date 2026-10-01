@@ -16,7 +16,9 @@ function strongEvidenceRows() {
     const actualUp = losing ? !predictedBuy : predictedBuy;
     const exit = actualUp ? 1.001 : 0.999;
     rows.push({
-      signal_generated_at: new Date(start + i * 5 * 60_000),
+      signal_generated_at: new Date(start + i * 5 * 60_000 + 7_000),
+      market_data_bar_time: new Date(start + i * 5 * 60_000),
+      intent_status: 'EXECUTED',
       instrument: instruments[i % instruments.length],
       direction: predictedBuy ? 'BUY' : 'SELL',
       confidence_score: '0.72',
@@ -81,11 +83,17 @@ describe('ExternalSignalPerformanceService', () => {
     );
 
     expect(report.observed.closedTrades).toBe(120);
+    expect(report.observed.buySignals).toBe(60);
+    expect(report.observed.sellSignals).toBe(60);
+    expect(report.observed.buyExecutedTrades).toBe(60);
+    expect(report.observed.sellExecutedTrades).toBe(60);
+    expect(report.observed.rejectedSignals).toBe(0);
+    expect(report.observed.strategyRealisedPnl).toBeCloseTo(1020, 10);
     expect(report.observed.latestSubmittedConfidence).toBeCloseTo(0.72, 10);
     expect(report.observed.latestSignalInstrument).toBe('USDCHF');
     expect(report.observed.latestSignalDirection).toBe('SELL');
     expect(report.observed.latestSignalAt).toBe(
-      new Date(Date.UTC(2026, 8, 1, 0, 0, 0) + 119 * 5 * 60_000).toISOString(),
+      new Date(Date.UTC(2026, 8, 1, 0, 0, 0) + 119 * 5 * 60_000 + 7_000).toISOString(),
     );
     expect(report.observed.balancedAccuracy).toBeGreaterThanOrEqual(
       EXTERNAL_PROVIDER_REVIEW_GATES.minBalancedAccuracy,
@@ -275,6 +283,43 @@ describe('ExternalSignalPerformanceService', () => {
     expect(report.observed.interruptedClosedTrades).toBe(1);
     expect(report.observed.totalNormalizedReturn).toBeCloseTo(0.001, 10);
     expect(report.checks.evidence).toBe(false);
+  });
+
+  it('measures signal cadence from market-data bar time instead of scheduler processing jitter', async () => {
+    const start = new Date('2026-09-01T00:00:00.000Z');
+    const rows = [0, 1, 2].map((i) => ({
+      signal_generated_at: new Date(start.getTime() + i * 10 * 60_000 + (i + 1) * 7_000),
+      market_data_bar_time: new Date(start.getTime() + i * 10 * 60_000),
+      intent_status: 'REJECTED',
+      instrument: 'EURUSD',
+      direction: 'SELL',
+      confidence_score: '0.70',
+      trade_id: null,
+      trade_status: null,
+      fill_price: null,
+      exit_price: null,
+      realised_pnl: null,
+      close_reason: null,
+      closed_at: null,
+      allocated_capital: null,
+      broker_connection_id: '11111111-1111-4111-8111-111111111111',
+      session_opening_balance: '10000',
+      session_started_at: start,
+    }));
+    const dataSource = {
+      query: jest
+        .fn()
+        .mockImplementation((sql: string) =>
+          Promise.resolve(sql.includes('broker.broker_account_snapshots') ? [] : rows),
+        ),
+    } as unknown as DataSource;
+    const report = await new ExternalSignalPerformanceService(dataSource).getProviderPerformance(
+      'user-1',
+      'provider-a',
+    );
+    expect(report.observed.medianMinutesBetweenSignals).toBe(10);
+    expect(report.checks.frequency).toBe(true);
+    expect(report.observed.rejectedSignals).toBe(3);
   });
 
   it('scopes the SQL query to the exact user and provider code', async () => {

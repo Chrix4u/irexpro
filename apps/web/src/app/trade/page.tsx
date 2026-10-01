@@ -152,9 +152,15 @@ interface ExternalProviderPerformanceView {
   automaticLivePromotion: boolean;
   observed: {
     receivedSignals: number;
+    buySignals: number;
+    sellSignals: number;
     executedTrades: number;
+    buyExecutedTrades: number;
+    sellExecutedTrades: number;
+    rejectedSignals: number;
     closedTrades: number;
     interruptedClosedTrades: number;
+    strategyRealisedPnl: number;
     balancedAccuracy: number | null;
     profitFactor: number | null;
     evidenceWindowSharpeRatio: number | null;
@@ -1808,9 +1814,38 @@ export default function AiTradingPage() {
                       </strong>
                     </div>
                     <div>
+                      <span>Signal mix</span>
+                      <strong>
+                        {providerEvidence?.observed.buySignals ?? 0} BUY ·{" "}
+                        {providerEvidence?.observed.sellSignals ?? 0} SELL
+                      </strong>
+                    </div>
+                    <div>
                       <span>Executed</span>
                       <strong>
                         {providerEvidence?.observed.executedTrades ?? 0}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Executed mix</span>
+                      <strong>
+                        {providerEvidence?.observed.buyExecutedTrades ?? 0} BUY
+                        · {providerEvidence?.observed.sellExecutedTrades ?? 0}{" "}
+                        SELL
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Risk rejected</span>
+                      <strong>
+                        {providerEvidence?.observed.rejectedSignals ?? 0}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Completed strategy P&amp;L</span>
+                      <strong>
+                        {providerEvidence == null
+                          ? "—"
+                          : `${providerEvidence.observed.strategyRealisedPnl >= 0 ? "+" : ""}${providerEvidence.observed.strategyRealisedPnl.toFixed(2)} USD`}
                       </strong>
                     </div>
                     <div>

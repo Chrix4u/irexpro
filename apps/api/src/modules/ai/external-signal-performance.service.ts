@@ -18,6 +18,8 @@ export const EXTERNAL_PROVIDER_REVIEW_GATES = Object.freeze({
 
 type EvidenceRow = {
   signal_generated_at: Date | string;
+  market_data_bar_time: Date | string | null;
+  intent_status: string | null;
   instrument: string;
   direction: 'BUY' | 'SELL';
   confidence_score: string | number | null;
@@ -123,6 +125,8 @@ export class ExternalSignalPerformanceService {
       `
         SELECT
           ti.signal_generated_at,
+          ti.metadata->>'market_data_bar_time' AS market_data_bar_time,
+          ti.status AS intent_status,
           ti.instrument,
           ti.direction,
           ti.metadata->>'confidenceScore' AS confidence_score,
@@ -150,7 +154,12 @@ export class ExternalSignalPerformanceService {
     )) as EvidenceRow[];
 
     const signalTimes = rows
-      .map((row) => new Date(row.signal_generated_at).getTime())
+      .map((row) => {
+        const marketBar = row.market_data_bar_time
+          ? new Date(row.market_data_bar_time).getTime()
+          : Number.NaN;
+        return Number.isFinite(marketBar) ? marketBar : new Date(row.signal_generated_at).getTime();
+      })
       .filter(Number.isFinite)
       .sort((a, b) => a - b);
     const signalGaps: number[] = [];
@@ -172,6 +181,16 @@ export class ExternalSignalPerformanceService {
     const interruptedClosedTrades = allEconomicallyClosed.length - closed.length;
 
     const realisedPnls = closed.map((row) => finite(row.realised_pnl) ?? 0);
+    const strategyRealisedPnl = realisedPnls.reduce((a, b) => a + b, 0);
+    const buySignals = rows.filter((row) => row.direction === 'BUY').length;
+    const sellSignals = rows.filter((row) => row.direction === 'SELL').length;
+    const buyExecutedTrades = rows.filter(
+      (row) => row.direction === 'BUY' && row.trade_id != null,
+    ).length;
+    const sellExecutedTrades = rows.filter(
+      (row) => row.direction === 'SELL' && row.trade_id != null,
+    ).length;
+    const rejectedSignals = rows.filter((row) => row.intent_status === 'REJECTED').length;
     const tradeReturns = closed.map(
       (row, index) => realisedPnls[index] / (finite(row.session_opening_balance) as number),
     );
@@ -263,9 +282,15 @@ export class ExternalSignalPerformanceService {
 
     const observed = {
       receivedSignals: rows.length,
+      buySignals,
+      sellSignals,
       executedTrades: rows.filter((row) => row.trade_id != null).length,
+      buyExecutedTrades,
+      sellExecutedTrades,
+      rejectedSignals,
       closedTrades: closed.length,
       interruptedClosedTrades,
+      strategyRealisedPnl,
       balancedAccuracy: ba,
       profitFactor: pf,
       evidenceWindowSharpeRatio: sharpe,
