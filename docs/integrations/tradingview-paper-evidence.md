@@ -1,5 +1,7 @@
 # TradingView → iRexPro PAPER evidence
 
+Provider evidence key: **`tradingview-six-pair-v1`**.
+
 Status: **PAPER evidence collection only.** This integration does not grant DEMO or LIVE authority.
 
 ## Webhook URL

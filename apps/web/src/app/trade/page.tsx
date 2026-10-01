@@ -1,38 +1,52 @@
-'use client';
+"use client";
 
-import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   startExecutionModeForBroker,
   type UserCapitalAllocationView,
   type TradeExecutionView,
-} from '@irexpro/types/execution';
-import type { LivePositionRowView } from '@irexpro/types/live-account';
-import type { MarketCandleView, MarketIntelligenceView } from '@irexpro/types/market-intelligence';
-import { Alert, Badge, Button, Card, DashboardShell, Input, LoadingSpinner } from '@/components/ui';
-import { useAuth } from '@/context/auth-context';
-import { useNotification } from '@/hooks/useNotification';
-import { MotionStatusOrb } from '@/components/ui/motion-status-orb';
-import { api } from '@/lib/api';
-import { formatAgeSeconds } from '@/lib/duration';
-import { mapApiError } from '@/lib/error-mapping';
-import { loadLiveAccountPositions } from '@/lib/live-account';
-import { loadMarketIntelligence } from '@/lib/market-intelligence';
-import { loadTraderExecutionSnapshot, type TraderExecutionSnapshot } from '@/lib/trader-execution';
+} from "@irexpro/types/execution";
+import type { LivePositionRowView } from "@irexpro/types/live-account";
+import type {
+  MarketCandleView,
+  MarketIntelligenceView,
+} from "@irexpro/types/market-intelligence";
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  DashboardShell,
+  Input,
+  LoadingSpinner,
+} from "@/components/ui";
+import { useAuth } from "@/context/auth-context";
+import { useNotification } from "@/hooks/useNotification";
+import { MotionStatusOrb } from "@/components/ui/motion-status-orb";
+import { api } from "@/lib/api";
+import { formatAgeSeconds } from "@/lib/duration";
+import { mapApiError } from "@/lib/error-mapping";
+import { loadLiveAccountPositions } from "@/lib/live-account";
+import { loadMarketIntelligence } from "@/lib/market-intelligence";
+import {
+  loadTraderExecutionSnapshot,
+  type TraderExecutionSnapshot,
+} from "@/lib/trader-execution";
 import {
   loadTraderTerminalStatus,
   type TraderTerminalStatus,
   type TerminalBrokerView,
-} from '@/lib/trader-terminal-status';
-import './ai-trader.css';
+} from "@/lib/trader-terminal-status";
+import "./ai-trader.css";
 
 function formatTimestamp(value: string | null | undefined): string {
-  if (!value) return 'Not available';
+  if (!value) return "Not available";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return 'Not available';
+  if (Number.isNaN(date.getTime())) return "Not available";
   return new Intl.DateTimeFormat(undefined, {
-    dateStyle: 'medium',
-    timeStyle: 'short',
+    dateStyle: "medium",
+    timeStyle: "short",
   }).format(date);
 }
 
@@ -40,64 +54,113 @@ function formatFixedDecimal(
   value: string | null | undefined,
   fractionDigits = 2,
 ): string {
-  if (!value) return '—';
+  if (!value) return "—";
 
   const normalized = value.trim();
   const match = /^([+-]?)(\d+)(?:\.(\d+))?$/.exec(normalized);
   if (!match) return normalized;
 
-  const negative = match[1] === '-';
+  const negative = match[1] === "-";
   const integerPart = match[2];
-  const fractionalPart = match[3] ?? '';
+  const fractionalPart = match[3] ?? "";
   const scale = 10n ** BigInt(fractionDigits);
-  const paddedFraction = fractionalPart.padEnd(fractionDigits + 1, '0');
-  const keptFraction = paddedFraction.slice(0, fractionDigits) || '0';
+  const paddedFraction = fractionalPart.padEnd(fractionDigits + 1, "0");
+  const keptFraction = paddedFraction.slice(0, fractionDigits) || "0";
 
   let scaled =
     BigInt(integerPart) * scale +
     (fractionDigits > 0 ? BigInt(keptFraction) : 0n);
 
-  const roundDigit = paddedFraction[fractionDigits] ?? '0';
-  if (roundDigit >= '5') {
+  const roundDigit = paddedFraction[fractionDigits] ?? "0";
+  if (roundDigit >= "5") {
     scaled += 1n;
   }
 
   const whole = scaled / scale;
-  const fraction = fractionDigits > 0
-    ? (scaled % scale).toString().padStart(fractionDigits, '0')
-    : '';
-  const groupedWhole = whole.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  const sign = negative && scaled !== 0n ? '-' : '';
+  const fraction =
+    fractionDigits > 0
+      ? (scaled % scale).toString().padStart(fractionDigits, "0")
+      : "";
+  const groupedWhole = whole.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  const sign = negative && scaled !== 0n ? "-" : "";
 
   return fractionDigits > 0
     ? `${sign}${groupedWhole}.${fraction}`
     : `${sign}${groupedWhole}`;
 }
 
-function money(value: string | null | undefined, currency: string | null | undefined): string {
+function money(
+  value: string | null | undefined,
+  currency: string | null | undefined,
+): string {
   const formatted = formatFixedDecimal(value, 2);
-  if (formatted === '—') return formatted;
+  if (formatted === "—") return formatted;
   return currency ? `${formatted} ${currency}` : formatted;
 }
 
-function pnlBadge(value: string | null): 'success' | 'error' | 'info' {
-  if (!value) return 'info';
-  if (value.startsWith('-')) return 'error';
-  if (value === '0' || /^0(?:\.0+)?$/.test(value)) return 'info';
-  return 'success';
+function pnlBadge(value: string | null): "success" | "error" | "info" {
+  if (!value) return "info";
+  if (value.startsWith("-")) return "error";
+  if (value === "0" || /^0(?:\.0+)?$/.test(value)) return "info";
+  return "success";
 }
 
 function connectionLabel(broker: TerminalBrokerView | null): string {
-  if (!broker) return 'No broker connected';
+  if (!broker) return "No broker connected";
   return broker.displayName || broker.brokerName;
 }
 
 function compactBrokerLabel(value: string | null | undefined): string {
-  if (!value) return 'Broker';
+  if (!value) return "Broker";
   return value
-    .replace(/\s*\(Simulated\s*[—-]\s*PAPER_ONLY\)\s*/gi, ' ')
-    .replace(/\s+/g, ' ')
+    .replace(/\s*\(Simulated\s*[—-]\s*PAPER_ONLY\)\s*/gi, " ")
+    .replace(/\s+/g, " ")
     .trim();
+}
+
+interface ExternalProviderPerformanceView {
+  providerCode: string;
+  executionAuthority: "PAPER_ONLY";
+  certificationStatus: "PAPER_EVIDENCE_ONLY" | "ELIGIBLE_FOR_DEMO_REVIEW";
+  demoReviewEligible: boolean;
+  automaticDemoPromotion: boolean;
+  automaticLivePromotion: boolean;
+  observed: {
+    receivedSignals: number;
+    executedTrades: number;
+    closedTrades: number;
+    balancedAccuracy: number | null;
+    profitFactor: number | null;
+    evidenceWindowSharpeRatio: number | null;
+    maxDrawdown: number;
+    positiveWeeklyWindowFraction: number;
+    positiveInstrumentFraction: number;
+    minSubmittedConfidence: number | null;
+    medianMinutesBetweenSignals: number | null;
+    totalNormalizedReturn: number;
+    evaluatedWeeklyWindows: number;
+  };
+  checks: {
+    balancedAccuracy: boolean;
+    sharpeRatio: boolean;
+    profitFactor: boolean;
+    maxDrawdown: boolean;
+    positiveWindowFraction: boolean;
+    positiveInstrumentFraction: boolean;
+    confidence: boolean;
+    evidence: boolean;
+    frequency: boolean;
+  };
+}
+
+function providerMetric(value: number | null | undefined, digits = 2): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  return value.toFixed(digits);
+}
+
+function providerPercent(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  return `${(value * 100).toFixed(1)}%`;
 }
 
 interface AiAutomationRuntimeStatus {
@@ -137,90 +200,101 @@ interface AiAutomationRuntimeStatus {
 }
 
 function runtimeReasonLabel(reason: string | null | undefined): string {
-  if (!reason) return 'Waiting for first market scan';
+  if (!reason) return "Waiting for first market scan";
   const labels: Record<string, string> = {
-    confidence_below_threshold: 'Market setup did not meet the confidence threshold',
-    confidence_threshold_passed: 'Signal passed the confidence threshold and was published',
+    confidence_below_threshold:
+      "Market setup did not meet the confidence threshold",
+    confidence_threshold_passed:
+      "Signal passed the confidence threshold and was published",
     market_data_unchanged:
-      'No new market-data revision was available, so no duplicate signal was published',
-    scheduler_integration_disabled: 'AI scheduler integration is disabled',
+      "No new market-data revision was available, so no duplicate signal was published",
+    scheduler_integration_disabled: "AI scheduler integration is disabled",
     model_not_approved_for_live:
-      'Current AI model is not yet approved for live-money automation',
+      "Current AI model is not yet approved for live-money automation",
     MarketDataError:
-      'Market data is unavailable or invalid; this scan was skipped and no confidence was evaluated',
+      "Market data is unavailable or invalid; this scan was skipped and no confidence was evaluated",
     research_uat_replay_budget_exhausted:
-      'Research PAPER replay completed its bounded market steps without an eligible signal',
+      "Research PAPER replay completed its bounded market steps without an eligible signal",
     uat_workflow_probe_published:
-      'Synthetic Research PAPER workflow probe published. The model did not pass the normal confidence gate.',
+      "Synthetic Research PAPER workflow probe published. The model did not pass the normal confidence gate.",
   };
-  return labels[reason] ?? reason.replaceAll('_', ' ');
+  return labels[reason] ?? reason.replaceAll("_", " ");
 }
 
 function formatConfidence(value: number | null | undefined): string {
-  if (value == null) return '—';
+  if (value == null) return "—";
   return `${(value * 100).toFixed(2)}%`;
 }
 
 function modelModeLabel(mode: string | null | undefined): string {
-  if (!mode) return 'Unknown';
-  if (mode === 'heuristic_placeholder') return 'Heuristic scaffold';
-  if (mode === 'trained_xgboost_mtf') return 'Trained MTF XGBoost';
-  if (mode === 'trained_xgboost' || mode === 'real') return 'Trained XGBoost';
-  return mode.replaceAll('_', ' ');
+  if (!mode) return "Unknown";
+  if (mode === "heuristic_placeholder") return "Heuristic scaffold";
+  if (mode === "trained_xgboost_mtf") return "Trained MTF XGBoost";
+  if (mode === "trained_xgboost" || mode === "real") return "Trained XGBoost";
+  return mode.replaceAll("_", " ");
 }
 
 function executionReasonLabel(code: string | null | undefined): string | null {
   if (!code) return null;
   const labels: Record<string, string> = {
     MARKET_SAFETY_MARKET_DATA_UNAVAILABLE:
-      'Execution blocked because a current paper-market quote could not be proven.',
+      "Execution blocked because a current paper-market quote could not be proven.",
     MARKET_SAFETY_STALE_PRICE:
-      'Execution blocked because the provider quote was outside the allowed freshness window.',
+      "Execution blocked because the provider quote was outside the allowed freshness window.",
     MARKET_SAFETY_ABNORMAL_SPREAD:
-      'Execution blocked because the current spread exceeded the market-safety limit.',
+      "Execution blocked because the current spread exceeded the market-safety limit.",
     MARKET_SAFETY_PRICE_DEVIATION_EXCESSIVE:
-      'Execution blocked because the execution quote was too far from the risk-validated reference price.',
+      "Execution blocked because the execution quote was too far from the risk-validated reference price.",
     DISPATCH_BOUNDARY_BLOCKED:
-      'Execution authority changed before provider dispatch, so the order was blocked safely.',
+      "Execution authority changed before provider dispatch, so the order was blocked safely.",
     EXECUTION_UNRESOLVED:
-      'Provider outcome is not yet proven; reconciliation is still required.',
+      "Provider outcome is not yet proven; reconciliation is still required.",
     EXECUTION_CANCELLED:
-      'The order was cancelled before an active position was established.',
+      "The order was cancelled before an active position was established.",
     EXECUTION_REJECTED:
-      'The order was rejected before an active position was established.',
+      "The order was rejected before an active position was established.",
   };
-  return labels[code] ?? 'Execution did not establish an active position.';
+  return labels[code] ?? "Execution did not establish an active position.";
 }
 
-function sumDecimalStrings(values: Array<string | null | undefined>): string | null {
-  if (values.length === 0) return '0';
+function sumDecimalStrings(
+  values: Array<string | null | undefined>,
+): string | null {
+  if (values.length === 0) return "0";
   if (values.some((value) => !value?.trim())) return null;
 
   const parsed = values.map((value) => {
     const match = /^([+-]?)(\d+)(?:\.(\d+))?$/.exec(value!.trim());
     if (!match) return null;
     return {
-      negative: match[1] === '-',
+      negative: match[1] === "-",
       whole: match[2],
-      fraction: match[3] ?? '',
+      fraction: match[3] ?? "",
     };
   });
   if (parsed.some((value) => value === null)) return null;
 
-  const decimals = parsed as Array<{ negative: boolean; whole: string; fraction: string }>;
+  const decimals = parsed as Array<{
+    negative: boolean;
+    whole: string;
+    fraction: string;
+  }>;
   const scale = Math.max(...decimals.map((value) => value.fraction.length), 0);
   const factor = 10n ** BigInt(scale);
   const total = decimals.reduce((acc, value) => {
-    const fraction = value.fraction.padEnd(scale, '0') || '0';
-    const scaled = BigInt(value.whole) * factor + (scale ? BigInt(fraction) : 0n);
+    const fraction = value.fraction.padEnd(scale, "0") || "0";
+    const scaled =
+      BigInt(value.whole) * factor + (scale ? BigInt(fraction) : 0n);
     return acc + (value.negative ? -scaled : scaled);
   }, 0n);
 
   const negative = total < 0n;
   const absolute = negative ? -total : total;
   const whole = absolute / factor;
-  const fraction = scale ? (absolute % factor).toString().padStart(scale, '0').replace(/0+$/, '') : '';
-  return `${negative ? '-' : ''}${whole.toString()}${fraction ? `.${fraction}` : ''}`;
+  const fraction = scale
+    ? (absolute % factor).toString().padStart(scale, "0").replace(/0+$/, "")
+    : "";
+  return `${negative ? "-" : ""}${whole.toString()}${fraction ? `.${fraction}` : ""}`;
 }
 
 function PositionCard({
@@ -237,24 +311,47 @@ function PositionCard({
       <div className="ai-position-card__head">
         <div>
           <strong>{position.instrument}</strong>
-          <span>{position.direction} · {position.lotSize} lot · {position.status.replaceAll('_', ' ')}</span>
+          <span>
+            {position.direction} · {position.lotSize} lot ·{" "}
+            {position.status.replaceAll("_", " ")}
+          </span>
         </div>
         <Badge variant={pnlBadge(position.unrealisedPnl)}>
           {position.unrealisedPnl === null
-            ? 'P&L awaiting broker'
-            : `${position.unrealisedPnl.startsWith('-') ? '' : '+'}${money(position.unrealisedPnl, position.accountCurrency)}`}
+            ? "P&L awaiting broker"
+            : `${position.unrealisedPnl.startsWith("-") ? "" : "+"}${money(position.unrealisedPnl, position.accountCurrency)}`}
         </Badge>
       </div>
       <dl className="ai-trade-metrics">
-        <div><dt>Entry</dt><dd>{position.fillPrice ?? position.requestedEntryPrice}</dd></div>
-        <div><dt>Current</dt><dd>{position.currentPrice ?? 'Awaiting broker mark'}</dd></div>
-        <div><dt>Stop loss</dt><dd>{position.stopLoss}</dd></div>
-        <div><dt>Take profit</dt><dd>{position.takeProfit}</dd></div>
-        <div><dt>Commission</dt><dd>{money(position.commission, position.accountCurrency)}</dd></div>
-        <div><dt>Swap</dt><dd>{money(position.swap, position.accountCurrency)}</dd></div>
+        <div>
+          <dt>Entry</dt>
+          <dd>{position.fillPrice ?? position.requestedEntryPrice}</dd>
+        </div>
+        <div>
+          <dt>Current</dt>
+          <dd>{position.currentPrice ?? "Awaiting broker mark"}</dd>
+        </div>
+        <div>
+          <dt>Stop loss</dt>
+          <dd>{position.stopLoss}</dd>
+        </div>
+        <div>
+          <dt>Take profit</dt>
+          <dd>{position.takeProfit}</dd>
+        </div>
+        <div>
+          <dt>Commission</dt>
+          <dd>{money(position.commission, position.accountCurrency)}</dd>
+        </div>
+        <div>
+          <dt>Swap</dt>
+          <dd>{money(position.swap, position.accountCurrency)}</dd>
+        </div>
       </dl>
       <div className="ai-position-card__foot">
-        <span>{compactBrokerLabel(position.brokerName)} · {position.environment}</span>
+        <span>
+          {compactBrokerLabel(position.brokerName)} · {position.environment}
+        </span>
         <span>{formatTimestamp(position.openedAt ?? position.createdAt)}</span>
       </div>
       <Button
@@ -265,7 +362,7 @@ function PositionCard({
         disabled={closing}
         onClick={() => onClose(position.id)}
       >
-        {closing ? 'Closing…' : 'Close position'}
+        {closing ? "Closing…" : "Close position"}
       </Button>
     </article>
   );
@@ -282,7 +379,10 @@ function PositionTable({
 }) {
   return (
     <div className="ai-data-table-wrap">
-      <table className="ai-data-table" aria-label="Open positions live performance">
+      <table
+        className="ai-data-table"
+        aria-label="Open positions live performance"
+      >
         <thead>
           <tr>
             <th>Instrument</th>
@@ -305,25 +405,36 @@ function PositionTable({
             <tr key={position.id}>
               <td>
                 <strong>{position.instrument}</strong>
-                <small>{compactBrokerLabel(position.brokerName)} · {position.environment}</small>
+                <small>
+                  {compactBrokerLabel(position.brokerName)} ·{" "}
+                  {position.environment}
+                </small>
               </td>
-              <td><Badge variant={position.direction === 'BUY' ? 'success' : 'warning'}>{position.direction}</Badge></td>
+              <td>
+                <Badge
+                  variant={position.direction === "BUY" ? "success" : "warning"}
+                >
+                  {position.direction}
+                </Badge>
+              </td>
               <td>{position.lotSize}</td>
               <td>{position.fillPrice ?? position.requestedEntryPrice}</td>
-              <td>{position.currentPrice ?? '—'}</td>
+              <td>{position.currentPrice ?? "—"}</td>
               <td>
                 <Badge variant={pnlBadge(position.unrealisedPnl)}>
                   {position.unrealisedPnl === null
-                    ? 'Awaiting mark'
-                    : `${position.unrealisedPnl.startsWith('-') ? '' : '+'}${money(position.unrealisedPnl, position.accountCurrency)}`}
+                    ? "Awaiting mark"
+                    : `${position.unrealisedPnl.startsWith("-") ? "" : "+"}${money(position.unrealisedPnl, position.accountCurrency)}`}
                 </Badge>
               </td>
               <td>{position.stopLoss}</td>
               <td>{position.takeProfit}</td>
               <td>{money(position.commission, position.accountCurrency)}</td>
               <td>{money(position.swap, position.accountCurrency)}</td>
-              <td>{position.status.replaceAll('_', ' ')}</td>
-              <td>{formatTimestamp(position.openedAt ?? position.createdAt)}</td>
+              <td>{position.status.replaceAll("_", " ")}</td>
+              <td>
+                {formatTimestamp(position.openedAt ?? position.createdAt)}
+              </td>
               <td>
                 <Button
                   type="button"
@@ -333,7 +444,7 @@ function PositionTable({
                   disabled={closingTradeId !== null}
                   onClick={() => onClose(position.id)}
                 >
-                  {closingTradeId === position.id ? 'Closing…' : 'Close'}
+                  {closingTradeId === position.id ? "Closing…" : "Close"}
                 </Button>
               </td>
             </tr>
@@ -345,56 +456,92 @@ function PositionTable({
 }
 
 function ExecutionRow({ trade }: { trade: TradeExecutionView }) {
-  const realized = trade.status === 'CLOSED' ? trade.realisedPnl : null;
+  const realized = trade.status === "CLOSED" ? trade.realisedPnl : null;
   const executionReason = executionReasonLabel(trade.executionReasonCode);
   return (
     <article className="ai-activity-row">
       <div className="ai-activity-row__symbol">
         <strong>{trade.instrument}</strong>
-        <span>{trade.direction} · {trade.lotSize} lot</span>
+        <span>
+          {trade.direction} · {trade.lotSize} lot
+        </span>
       </div>
       <div className="ai-activity-row__state">
         <Badge
           variant={
-            trade.status === 'CLOSED' || trade.status === 'OPEN'
-              ? 'success'
-              : trade.status === 'REJECTED' || trade.status === 'CANCELLED'
-                ? 'error'
-                : 'warning'
+            trade.status === "CLOSED" || trade.status === "OPEN"
+              ? "success"
+              : trade.status === "REJECTED" || trade.status === "CANCELLED"
+                ? "error"
+                : "warning"
           }
         >
-          {trade.status.replaceAll('_', ' ')}
+          {trade.status.replaceAll("_", " ")}
         </Badge>
         {realized !== null && (
           <Badge variant={pnlBadge(realized)}>
-            {realized.startsWith('-') ? '' : '+'}{money(realized, trade.accountCurrency)}
+            {realized.startsWith("-") ? "" : "+"}
+            {money(realized, trade.accountCurrency)}
           </Badge>
         )}
       </div>
       <div className="ai-order-detail-grid">
-        <div><span>Entry</span><strong>{trade.fillPrice ?? trade.requestedEntryPrice}</strong></div>
-        <div><span>Exit</span><strong>{trade.exitPrice ?? '—'}</strong></div>
-        <div><span>Realized P&amp;L</span><strong>{trade.realisedPnl === null ? '—' : money(trade.realisedPnl, trade.accountCurrency)}</strong></div>
-        <div><span>Commission</span><strong>{money(trade.commission, trade.accountCurrency)}</strong></div>
-        <div><span>Swap</span><strong>{money(trade.swap, trade.accountCurrency)}</strong></div>
-        <div><span>Stop loss</span><strong>{trade.stopLoss}</strong></div>
-        <div><span>Take profit</span><strong>{trade.takeProfit}</strong></div>
-        <div><span>Closed by</span><strong>{trade.closeReason ? trade.closeReason.replaceAll('_', ' ') : '—'}</strong></div>
+        <div>
+          <span>Entry</span>
+          <strong>{trade.fillPrice ?? trade.requestedEntryPrice}</strong>
+        </div>
+        <div>
+          <span>Exit</span>
+          <strong>{trade.exitPrice ?? "—"}</strong>
+        </div>
+        <div>
+          <span>Realized P&amp;L</span>
+          <strong>
+            {trade.realisedPnl === null
+              ? "—"
+              : money(trade.realisedPnl, trade.accountCurrency)}
+          </strong>
+        </div>
+        <div>
+          <span>Commission</span>
+          <strong>{money(trade.commission, trade.accountCurrency)}</strong>
+        </div>
+        <div>
+          <span>Swap</span>
+          <strong>{money(trade.swap, trade.accountCurrency)}</strong>
+        </div>
+        <div>
+          <span>Stop loss</span>
+          <strong>{trade.stopLoss}</strong>
+        </div>
+        <div>
+          <span>Take profit</span>
+          <strong>{trade.takeProfit}</strong>
+        </div>
+        <div>
+          <span>Closed by</span>
+          <strong>
+            {trade.closeReason ? trade.closeReason.replaceAll("_", " ") : "—"}
+          </strong>
+        </div>
       </div>
-      {executionReason && <div className="ai-activity-row__reason">{executionReason}</div>}
+      {executionReason && (
+        <div className="ai-activity-row__reason">{executionReason}</div>
+      )}
       <div className="ai-activity-row__time">
         Opened {formatTimestamp(trade.openedAt ?? trade.createdAt)}
-        {trade.closedAt ? ` · Closed ${formatTimestamp(trade.closedAt)}` : ''}
+        {trade.closedAt ? ` · Closed ${formatTimestamp(trade.closedAt)}` : ""}
       </div>
     </article>
   );
 }
 
-
 function MarketPriceChart({ candles }: { candles: MarketCandleView[] }) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   if (!candles.length) {
-    return <div className="ai-market-chart__empty">Waiting for market candles…</div>;
+    return (
+      <div className="ai-market-chart__empty">Waiting for market candles…</div>
+    );
   }
 
   const parsed = candles
@@ -406,8 +553,13 @@ function MarketPriceChart({ candles }: { candles: MarketCandleView[] }) {
       closeN: Number(candle.close),
       volumeN: Number(candle.volume),
     }))
-    .filter((candle) => [candle.openN, candle.highN, candle.lowN, candle.closeN].every(Number.isFinite));
-  if (!parsed.length) return <div className="ai-market-chart__empty">Chart unavailable</div>;
+    .filter((candle) =>
+      [candle.openN, candle.highN, candle.lowN, candle.closeN].every(
+        Number.isFinite,
+      ),
+    );
+  if (!parsed.length)
+    return <div className="ai-market-chart__empty">Chart unavailable</div>;
 
   const width = 820;
   const height = 320;
@@ -420,7 +572,8 @@ function MarketPriceChart({ candles }: { candles: MarketCandleView[] }) {
   const maxVolume = Math.max(...parsed.map((candle) => candle.volumeN), 1);
   const slot = (width - padX * 2) / Math.max(parsed.length, 1);
   const bodyWidth = Math.max(2.2, Math.min(8, slot * 0.58));
-  const y = (value: number) => 14 + ((max - value) / range) * (priceBottom - 28);
+  const y = (value: number) =>
+    14 + ((max - value) / range) * (priceBottom - 28);
   const activeIndex = hoveredIndex == null ? parsed.length - 1 : hoveredIndex;
   const active = parsed[Math.max(0, Math.min(activeIndex, parsed.length - 1))];
 
@@ -435,11 +588,21 @@ function MarketPriceChart({ candles }: { candles: MarketCandleView[] }) {
     <div className="ai-market-chart">
       <div className="ai-market-chart__ohlc">
         <span>{new Date(active.timestamp).toLocaleString()}</span>
-        <span>O <strong>{active.open}</strong></span>
-        <span>H <strong>{active.high}</strong></span>
-        <span>L <strong>{active.low}</strong></span>
-        <span>C <strong>{active.close}</strong></span>
-        <span>Vol <strong>{active.volume}</strong></span>
+        <span>
+          O <strong>{active.open}</strong>
+        </span>
+        <span>
+          H <strong>{active.high}</strong>
+        </span>
+        <span>
+          L <strong>{active.low}</strong>
+        </span>
+        <span>
+          C <strong>{active.close}</strong>
+        </span>
+        <span>
+          Vol <strong>{active.volume}</strong>
+        </span>
       </div>
       <svg
         viewBox={`0 0 ${width} ${height}`}
@@ -465,8 +628,17 @@ function MarketPriceChart({ candles }: { candles: MarketCandleView[] }) {
           const bottom = y(Math.min(candle.openN, candle.closeN));
           const volumeHeight = Math.max(2, (candle.volumeN / maxVolume) * 42);
           return (
-            <g key={`${candle.timestamp}-${index}`} className={isUp ? 'is-up' : 'is-down'}>
-              <line className="ai-market-chart__wick" x1={x} x2={x} y1={y(candle.highN)} y2={y(candle.lowN)} />
+            <g
+              key={`${candle.timestamp}-${index}`}
+              className={isUp ? "is-up" : "is-down"}
+            >
+              <line
+                className="ai-market-chart__wick"
+                x1={x}
+                x2={x}
+                y1={y(candle.highN)}
+                y2={y(candle.lowN)}
+              />
               <rect
                 className="ai-market-chart__candle"
                 x={x - bodyWidth / 2}
@@ -486,12 +658,24 @@ function MarketPriceChart({ candles }: { candles: MarketCandleView[] }) {
             </g>
           );
         })}
-        {hoveredIndex != null && (() => {
-          const x = padX + slot * activeIndex + slot / 2;
-          return <line className="ai-market-chart__crosshair" x1={x} x2={x} y1="8" y2={height - 10} />;
-        })()}
+        {hoveredIndex != null &&
+          (() => {
+            const x = padX + slot * activeIndex + slot / 2;
+            return (
+              <line
+                className="ai-market-chart__crosshair"
+                x1={x}
+                x2={x}
+                y1="8"
+                y2={height - 10}
+              />
+            );
+          })()}
       </svg>
-      <div className="ai-market-chart__range"><span>{min.toFixed(3)}</span><span>{max.toFixed(3)}</span></div>
+      <div className="ai-market-chart__range">
+        <span>{min.toFixed(3)}</span>
+        <span>{max.toFixed(3)}</span>
+      </div>
     </div>
   );
 }
@@ -501,25 +685,39 @@ export default function AiTradingPage() {
   const notify = useNotification();
 
   const [terminal, setTerminal] = useState<TraderTerminalStatus | null>(null);
-  const [execution, setExecution] = useState<TraderExecutionSnapshot | null>(null);
+  const [execution, setExecution] = useState<TraderExecutionSnapshot | null>(
+    null,
+  );
   const [livePositions, setLivePositions] = useState<LivePositionRowView[]>([]);
   const [market, setMarket] = useState<MarketIntelligenceView | null>(null);
-  const [chartInstrument, setChartInstrument] = useState('USDJPY');
-  const [chartTimeframe, setChartTimeframe] = useState<'M1' | 'M5' | 'M15' | 'H1' | 'H4'>('M1');
+  const [chartInstrument, setChartInstrument] = useState("USDJPY");
+  const [chartTimeframe, setChartTimeframe] = useState<
+    "M1" | "M5" | "M15" | "H1" | "H4"
+  >("M1");
   const [chartLoading, setChartLoading] = useState(false);
-  const [allocation, setAllocation] = useState<UserCapitalAllocationView | null>(null);
-  const [selectedBrokerId, setSelectedBrokerId] = useState<string>('');
-  const [allocationAmount, setAllocationAmount] = useState('');
+  const [allocation, setAllocation] =
+    useState<UserCapitalAllocationView | null>(null);
+  const [selectedBrokerId, setSelectedBrokerId] = useState<string>("");
+  const [allocationAmount, setAllocationAmount] = useState("");
   const [loading, setLoading] = useState(true);
   const [savingAllocation, setSavingAllocation] = useState(false);
   const [togglingAutomation, setTogglingAutomation] = useState(false);
-  const [pendingAutomationAction, setPendingAutomationAction] = useState<'START' | 'STOP' | null>(null);
+  const [pendingAutomationAction, setPendingAutomationAction] = useState<
+    "START" | "STOP" | null
+  >(null);
   const [error, setError] = useState<string | null>(null);
-  const [allocationWarning, setAllocationWarning] = useState<string | null>(null);
+  const [allocationWarning, setAllocationWarning] = useState<string | null>(
+    null,
+  );
   const [activityWarning, setActivityWarning] = useState<string | null>(null);
-  const [automationRuntime, setAutomationRuntime] = useState<AiAutomationRuntimeStatus | null>(null);
-  const [automationRuntimeWarning, setAutomationRuntimeWarning] = useState<string | null>(null);
-  const [positionView, setPositionView] = useState<'table' | 'grid'>('table');
+  const [automationRuntime, setAutomationRuntime] =
+    useState<AiAutomationRuntimeStatus | null>(null);
+  const [providerEvidence, setProviderEvidence] =
+    useState<ExternalProviderPerformanceView | null>(null);
+  const [automationRuntimeWarning, setAutomationRuntimeWarning] = useState<
+    string | null
+  >(null);
+  const [positionView, setPositionView] = useState<"table" | "grid">("table");
   const [closingTradeId, setClosingTradeId] = useState<string | null>(null);
   const [closingAllPositions, setClosingAllPositions] = useState(false);
 
@@ -527,39 +725,55 @@ export default function AiTradingPage() {
   const seenPositionIds = useRef<Set<string>>(new Set());
   const seenExecutionStates = useRef<Map<string, string>>(new Map());
 
-  const controlStateReady = Boolean(terminal?.risk && terminal?.sessionStateKnown);
+  const controlStateReady = Boolean(
+    terminal?.risk && terminal?.sessionStateKnown,
+  );
   const automationOn =
     terminal?.sessionStateKnown === true &&
-    (terminal.session?.status === 'ACTIVE' || terminal.session?.status === 'PAUSED');
+    (terminal.session?.status === "ACTIVE" ||
+      terminal.session?.status === "PAUSED");
   const aiVisualState = !automationOn
-    ? 'stopped'
-    : automationRuntime?.last_decision === 'ERROR'
-      ? 'error'
-      : automationRuntime?.last_decision === 'BLOCKED'
-        ? 'blocked'
-        : automationRuntime?.last_decision === 'SIGNAL_PUBLISHED' ||
-            automationRuntime?.last_strategy_outcome === 'EXECUTION_SUCCEEDED'
-          ? 'signal'
-          : automationRuntime?.last_decision === 'NO_TRADE' ||
-              automationRuntime?.last_decision === 'NO_NEW_MARKET_DATA'
-            ? 'scanning'
-            : 'running';
+    ? "stopped"
+    : automationRuntime?.last_decision === "ERROR"
+      ? "error"
+      : automationRuntime?.last_decision === "BLOCKED"
+        ? "blocked"
+        : automationRuntime?.last_decision === "SIGNAL_PUBLISHED" ||
+            automationRuntime?.last_strategy_outcome === "EXECUTION_SUCCEEDED"
+          ? "signal"
+          : automationRuntime?.last_decision === "NO_TRADE" ||
+              automationRuntime?.last_decision === "NO_NEW_MARKET_DATA"
+            ? "scanning"
+            : "running";
 
   const confidenceValue = automationRuntime?.last_confidence_score ?? 0;
   const confidencePercent = Math.max(0, Math.min(100, confidenceValue * 100));
   const confidenceTone =
-    confidencePercent >= 70 ? 'strong' : confidencePercent >= 60 ? 'ready' : confidencePercent >= 45 ? 'building' : 'weak';
+    confidencePercent >= 70
+      ? "strong"
+      : confidencePercent >= 60
+        ? "ready"
+        : confidencePercent >= 45
+          ? "building"
+          : "weak";
   const watchedInstruments = automationRuntime?.instruments?.length
     ? automationRuntime.instruments
     : [chartInstrument];
   const latestChartCandle = market?.candles?.at(-1) ?? null;
-  const previousChartCandle = market?.candles && market.candles.length > 1 ? market.candles.at(-2) ?? null : null;
-  const chartMove = latestChartCandle && previousChartCandle
-    ? Number(latestChartCandle.close) - Number(previousChartCandle.close)
-    : null;
-  const chartMovePercent = chartMove != null && previousChartCandle && Number(previousChartCandle.close) !== 0
-    ? (chartMove / Number(previousChartCandle.close)) * 100
-    : null;
+  const previousChartCandle =
+    market?.candles && market.candles.length > 1
+      ? (market.candles.at(-2) ?? null)
+      : null;
+  const chartMove =
+    latestChartCandle && previousChartCandle
+      ? Number(latestChartCandle.close) - Number(previousChartCandle.close)
+      : null;
+  const chartMovePercent =
+    chartMove != null &&
+    previousChartCandle &&
+    Number(previousChartCandle.close) !== 0
+      ? (chartMove / Number(previousChartCandle.close)) * 100
+      : null;
 
   // The ACTIVE session is the execution authority. While it exists, the
   // workspace must stay visibly pinned to that exact broker account instead
@@ -576,7 +790,9 @@ export default function AiTradingPage() {
   const emitActivityToasts = useCallback(
     (positions: LivePositionRowView[], snapshot: TraderExecutionSnapshot) => {
       if (!initializedActivity.current) {
-        seenPositionIds.current = new Set(positions.map((position) => position.id));
+        seenPositionIds.current = new Set(
+          positions.map((position) => position.id),
+        );
         seenExecutionStates.current = new Map(
           snapshot.recentExecutions.map((trade) => [trade.id, trade.status]),
         );
@@ -595,20 +811,29 @@ export default function AiTradingPage() {
       for (const trade of snapshot.recentExecutions) {
         const previous = seenExecutionStates.current.get(trade.id);
         if (previous && previous !== trade.status) {
-          if (trade.status === 'CLOSED') {
+          if (trade.status === "CLOSED") {
             const pnl = trade.realisedPnl
-              ? ` · ${trade.realisedPnl.startsWith('-') ? '' : '+'}${money(trade.realisedPnl, trade.accountCurrency)}`
-              : '';
+              ? ` · ${trade.realisedPnl.startsWith("-") ? "" : "+"}${money(trade.realisedPnl, trade.accountCurrency)}`
+              : "";
             notify.success(`${trade.instrument} position closed${pnl}`);
-          } else if (trade.status === 'OPEN') {
-            notify.info(`${trade.instrument} order filled — position is now open`);
-          } else if (trade.status === 'REJECTED' || trade.status === 'CANCELLED') {
-            notify.warning(`${trade.instrument} order ${trade.status.toLowerCase()}`);
+          } else if (trade.status === "OPEN") {
+            notify.info(
+              `${trade.instrument} order filled — position is now open`,
+            );
+          } else if (
+            trade.status === "REJECTED" ||
+            trade.status === "CANCELLED"
+          ) {
+            notify.warning(
+              `${trade.instrument} order ${trade.status.toLowerCase()}`,
+            );
           }
         }
       }
 
-      seenPositionIds.current = new Set(positions.map((position) => position.id));
+      seenPositionIds.current = new Set(
+        positions.map((position) => position.id),
+      );
       seenExecutionStates.current = new Map(
         snapshot.recentExecutions.map((trade) => [trade.id, trade.status]),
       );
@@ -616,100 +841,122 @@ export default function AiTradingPage() {
     [notify],
   );
 
-  const refreshTradingData = useCallback(async (showSpinner = false) => {
-    if (!user) return;
-    if (showSpinner) setLoading(true);
-    setError(null);
-    try {
-      // Core trading controls depend only on the authoritative terminal state.
-      // Activity/position read models are useful context but must never make
-      // the Start/Stop workspace unavailable when one of those secondary
-      // endpoints has a transient server-side failure.
-      const status = await loadTraderTerminalStatus();
-      setTerminal(status);
+  const refreshTradingData = useCallback(
+    async (showSpinner = false) => {
+      if (!user) return;
+      if (showSpinner) setLoading(true);
+      setError(null);
+      try {
+        // Core trading controls depend only on the authoritative terminal state.
+        // Activity/position read models are useful context but must never make
+        // the Start/Stop workspace unavailable when one of those secondary
+        // endpoints has a transient server-side failure.
+        const status = await loadTraderTerminalStatus();
+        setTerminal(status);
 
-      // Keep secondary market-intelligence context aligned with the actual
-      // scheduler universe. Falling back to EURUSD preserves the ordinary
-      // non-research workspace before a runtime is registered.
-      let marketInstrument = 'EURUSD';
-
-      if (status.session) {
+        // External strategy evidence is deliberately secondary: a scorecard
+        // read can never disable Start/Stop or broker controls. The real
+        // TradingView feed is versioned separately from local integration probes
+        // so qualification begins from a clean zero-evidence baseline.
         try {
-          const runtime = await api.request<AiAutomationRuntimeStatus>(
-            `/trading/sessions/${encodeURIComponent(status.session.id)}/automation-status`,
+          const evidence = await api.request<ExternalProviderPerformanceView>(
+            "/ai/external/providers/performance?providerCode=tradingview-six-pair-v1",
           );
-          setAutomationRuntime(runtime);
-          setAutomationRuntimeWarning(null);
-          const runtimeInstrument = runtime.instruments.find((value) =>
-            /^[A-Z0-9._-]{3,24}$/.test(value),
-          );
-          if (runtimeInstrument) marketInstrument = runtimeInstrument;
+          setProviderEvidence(evidence);
         } catch {
-          setAutomationRuntime(null);
-          setAutomationRuntimeWarning(
-            'AI Trading is running, but the AI engine runtime status could not be verified yet.',
-          );
+          setProviderEvidence(null);
         }
-      } else {
-        setAutomationRuntime(null);
-        setAutomationRuntimeWarning(null);
-      }
 
-      const [executionResult, positionsResult] = await Promise.allSettled([
-        loadTraderExecutionSnapshot(),
-        loadLiveAccountPositions(),
-      ]);
+        // Keep secondary market-intelligence context aligned with the actual
+        // scheduler universe. Falling back to EURUSD preserves the ordinary
+        // non-research workspace before a runtime is registered.
+        let marketInstrument = "EURUSD";
 
-      const snapshot =
-        executionResult.status === 'fulfilled' ? executionResult.value : null;
-      const positions =
-        positionsResult.status === 'fulfilled' ? positionsResult.value.positions : [];
-
-      setExecution(snapshot);
-      setLivePositions(positions);
-
-      if (snapshot) {
-        emitActivityToasts(positions, snapshot);
-      }
-
-      if (executionResult.status === 'rejected' || positionsResult.status === 'rejected') {
-        setActivityWarning(
-          'AI Trading controls are available, but recent activity or position details could not be loaded. You can continue using Start/Stop; refresh this page to retry the activity feed.',
-        );
-      } else {
-        setActivityWarning(null);
-      }
-
-      const brokerId =
-        status.sessionBroker?.id ||
-        selectedBrokerId ||
-        status.primaryBroker?.id ||
-        '';
-      if (brokerId) {
-        setSelectedBrokerId((current) => status.sessionBroker?.id || current || brokerId);
-        try {
-          const nextAllocation = await api.getCapitalAllocation(brokerId);
-          setAllocation(nextAllocation);
-          setAllocationWarning(null);
-          if (nextAllocation.allocatedCapital) {
-            setAllocationAmount(nextAllocation.allocatedCapital);
+        if (status.session) {
+          try {
+            const runtime = await api.request<AiAutomationRuntimeStatus>(
+              `/trading/sessions/${encodeURIComponent(status.session.id)}/automation-status`,
+            );
+            setAutomationRuntime(runtime);
+            setAutomationRuntimeWarning(null);
+            const runtimeInstrument = runtime.instruments.find((value) =>
+              /^[A-Z0-9._-]{3,24}$/.test(value),
+            );
+            if (runtimeInstrument) marketInstrument = runtimeInstrument;
+          } catch {
+            setAutomationRuntime(null);
+            setAutomationRuntimeWarning(
+              "AI Trading is running, but the AI engine runtime status could not be verified yet.",
+            );
           }
-        } catch {
-          setAllocation(null);
-          setAllocationWarning(
-            'Your broker account is connected, but its AI capital allocation could not be loaded. Trading controls remain disabled until this data is available.',
-          );
+        } else {
+          setAutomationRuntime(null);
+          setAutomationRuntimeWarning(null);
         }
-      } else {
-        setAllocation(null);
-      }
 
-    } catch (requestError) {
-      setError(mapApiError(requestError).message);
-    } finally {
-      if (showSpinner) setLoading(false);
-    }
-  }, [user, selectedBrokerId, emitActivityToasts]);
+        const [executionResult, positionsResult] = await Promise.allSettled([
+          loadTraderExecutionSnapshot(),
+          loadLiveAccountPositions(),
+        ]);
+
+        const snapshot =
+          executionResult.status === "fulfilled" ? executionResult.value : null;
+        const positions =
+          positionsResult.status === "fulfilled"
+            ? positionsResult.value.positions
+            : [];
+
+        setExecution(snapshot);
+        setLivePositions(positions);
+
+        if (snapshot) {
+          emitActivityToasts(positions, snapshot);
+        }
+
+        if (
+          executionResult.status === "rejected" ||
+          positionsResult.status === "rejected"
+        ) {
+          setActivityWarning(
+            "AI Trading controls are available, but recent activity or position details could not be loaded. You can continue using Start/Stop; refresh this page to retry the activity feed.",
+          );
+        } else {
+          setActivityWarning(null);
+        }
+
+        const brokerId =
+          status.sessionBroker?.id ||
+          selectedBrokerId ||
+          status.primaryBroker?.id ||
+          "";
+        if (brokerId) {
+          setSelectedBrokerId(
+            (current) => status.sessionBroker?.id || current || brokerId,
+          );
+          try {
+            const nextAllocation = await api.getCapitalAllocation(brokerId);
+            setAllocation(nextAllocation);
+            setAllocationWarning(null);
+            if (nextAllocation.allocatedCapital) {
+              setAllocationAmount(nextAllocation.allocatedCapital);
+            }
+          } catch {
+            setAllocation(null);
+            setAllocationWarning(
+              "Your broker account is connected, but its AI capital allocation could not be loaded. Trading controls remain disabled until this data is available.",
+            );
+          }
+        } else {
+          setAllocation(null);
+        }
+      } catch (requestError) {
+        setError(mapApiError(requestError).message);
+      } finally {
+        if (showSpinner) setLoading(false);
+      }
+    },
+    [user, selectedBrokerId, emitActivityToasts],
+  );
 
   useEffect(() => {
     if (!user) return;
@@ -751,7 +998,10 @@ export default function AiTradingPage() {
     };
     void refreshChart();
     const timer = window.setInterval(() => void refreshChart(), 10000);
-    return () => { cancelled = true; window.clearInterval(timer); };
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
   }, [user, selectedBrokerId, chartInstrument, chartTimeframe]);
 
   useEffect(() => {
@@ -779,15 +1029,15 @@ export default function AiTradingPage() {
   useEffect(() => {
     if (!pendingAutomationAction) return;
     const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    document.body.style.overflow = "hidden";
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !togglingAutomation) {
+      if (event.key === "Escape" && !togglingAutomation) {
         setPendingAutomationAction(null);
       }
     };
-    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener("keydown", onKeyDown);
     return () => {
-      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener("keydown", onKeyDown);
       document.body.style.overflow = previousOverflow;
     };
   }, [pendingAutomationAction, togglingAutomation]);
@@ -795,27 +1045,27 @@ export default function AiTradingPage() {
   async function handleBrokerChange(nextId: string) {
     setSelectedBrokerId(nextId);
     setAllocation(null);
-    setAllocationAmount('');
+    setAllocationAmount("");
     try {
       const nextAllocation = await api.getCapitalAllocation(nextId);
       setAllocation(nextAllocation);
       setAllocationWarning(null);
-      setAllocationAmount(nextAllocation.allocatedCapital ?? '');
+      setAllocationAmount(nextAllocation.allocatedCapital ?? "");
     } catch {
       setAllocation(null);
       setAllocationWarning(
-        'This broker is connected, but its AI capital allocation could not be loaded yet.',
+        "This broker is connected, but its AI capital allocation could not be loaded yet.",
       );
     }
   }
 
   async function saveAllocation() {
     if (!selectedBroker) {
-      notify.warning('Connect a broker account first.');
+      notify.warning("Connect a broker account first.");
       return;
     }
     if (!allocationAmount.trim()) {
-      notify.warning('Enter the capital amount the AI may use.');
+      notify.warning("Enter the capital amount the AI may use.");
       return;
     }
     setSavingAllocation(true);
@@ -827,7 +1077,9 @@ export default function AiTradingPage() {
       });
       setAllocation(next);
       setAllocationAmount(next.allocatedCapital ?? allocationAmount.trim());
-      notify.success(`AI capital allocated: ${money(next.allocatedCapital, next.accountCurrency)}`);
+      notify.success(
+        `AI capital allocated: ${money(next.allocatedCapital, next.accountCurrency)}`,
+      );
     } catch (requestError) {
       const message = mapApiError(requestError).message;
       setError(message);
@@ -839,20 +1091,23 @@ export default function AiTradingPage() {
 
   function requestAutomationAction() {
     if (!selectedBroker) {
-      notify.warning('Connect a broker account first.');
+      notify.warning("Connect a broker account first.");
       return;
     }
     if (!controlStateReady) {
       notify.warning(
-        'AI Trading controls are temporarily unavailable while risk protection and session status are being verified.',
+        "AI Trading controls are temporarily unavailable while risk protection and session status are being verified.",
       );
       return;
     }
-    if (!automationOn && (!allocation?.hasAllocation || !allocation.allocatedCapital)) {
-      notify.warning('Allocate capital before starting AI Trading.');
+    if (
+      !automationOn &&
+      (!allocation?.hasAllocation || !allocation.allocatedCapital)
+    ) {
+      notify.warning("Allocate capital before starting AI Trading.");
       return;
     }
-    setPendingAutomationAction(automationOn ? 'STOP' : 'START');
+    setPendingAutomationAction(automationOn ? "STOP" : "START");
   }
 
   async function confirmAutomationAction() {
@@ -862,9 +1117,9 @@ export default function AiTradingPage() {
     setTogglingAutomation(true);
     setError(null);
     try {
-      if (action === 'STOP') {
+      if (action === "STOP") {
         if (!terminal?.session) {
-          notify.warning('AI Trading is already stopped.');
+          notify.warning("AI Trading is already stopped.");
           setPendingAutomationAction(null);
           return;
         }
@@ -877,7 +1132,7 @@ export default function AiTradingPage() {
         // every displayed position for this broker was part of the confirmed close.
         // Otherwise unresolved/manual-looking rows stay visible until the
         // authoritative positions endpoint says they are gone.
-        if (summary.state === 'COMPLETE' && summary.targetCount !== null) {
+        if (summary.state === "COMPLETE" && summary.targetCount !== null) {
           setLivePositions((current) => {
             const brokerPositions = current.filter(
               (position) => position.brokerConnectionId === selectedBroker.id,
@@ -898,7 +1153,7 @@ export default function AiTradingPage() {
             (position) => position.brokerConnectionId === selectedBroker.id,
           );
           const closureShouldBeComplete =
-            summary.state === 'COMPLETE' && summary.unresolvedCount === 0;
+            summary.state === "COMPLETE" && summary.unresolvedCount === 0;
 
           if (!closureShouldBeComplete || remainingForBroker.length === 0) {
             setLivePositions(immediate.positions);
@@ -914,36 +1169,38 @@ export default function AiTradingPage() {
           // polling loop will reconcile against the server on its next pass.
         }
 
-        if (summary.state === 'COMPLETE') {
+        if (summary.state === "COMPLETE") {
           if (summary.closedCount > 0) {
             notify.success(
-              'AI Trading stopped. ' +
+              "AI Trading stopped. " +
                 summary.closedCount +
-                ' AI position' +
-                (summary.closedCount === 1 ? '' : 's') +
-                ' confirmed closed.',
+                " AI position" +
+                (summary.closedCount === 1 ? "" : "s") +
+                " confirmed closed.",
             );
           } else {
-            notify.info('AI Trading stopped. No AI-opened positions were open.');
+            notify.info(
+              "AI Trading stopped. No AI-opened positions were open.",
+            );
           }
-        } else if (summary.state === 'PARTIAL') {
+        } else if (summary.state === "PARTIAL") {
           notify.warning(
-            'AI Trading stopped. ' +
+            "AI Trading stopped. " +
               summary.closedCount +
-              ' of ' +
-              (summary.targetCount ?? 'the') +
-              ' AI positions were confirmed closed; ' +
-              (summary.unresolvedCount ?? 'some') +
-              ' require follow-up.',
+              " of " +
+              (summary.targetCount ?? "the") +
+              " AI positions were confirmed closed; " +
+              (summary.unresolvedCount ?? "some") +
+              " require follow-up.",
           );
         } else {
           notify.warning(
-            'AI Trading stopped, but position closure could not be verified. Check Positions & Activity now.',
+            "AI Trading stopped, but position closure could not be verified. Check Positions & Activity now.",
           );
         }
       } else {
         if (!allocation?.hasAllocation || !allocation.allocatedCapital) {
-          notify.warning('Allocate capital before starting AI Trading.');
+          notify.warning("Allocate capital before starting AI Trading.");
           setPendingAutomationAction(null);
           return;
         }
@@ -953,11 +1210,11 @@ export default function AiTradingPage() {
           executionMode,
         });
         notify.success(
-          selectedBroker.brokerId === 'paper-broker'
-            ? 'Research PAPER UAT started in the internal simulator. No live broker funds are reachable.'
-            : selectedBroker.accountType === 'DEMO'
+          selectedBroker.brokerId === "paper-broker"
+            ? "Research PAPER UAT started in the internal simulator. No live broker funds are reachable."
+            : selectedBroker.accountType === "DEMO"
               ? "AI Trading started against this broker's DEMO environment. No live funds are used."
-              : 'AI Trading started for the verified live account.',
+              : "AI Trading started for the verified live account.",
         );
       }
 
@@ -977,11 +1234,16 @@ export default function AiTradingPage() {
     setClosingTradeId(tradeId);
     setError(null);
     try {
-      await api.request(`/execution/positions/${encodeURIComponent(tradeId)}/close`, {
-        method: 'POST',
-        body: JSON.stringify({}),
-      });
-      notify.success('Position close submitted and confirmed by the execution service.');
+      await api.request(
+        `/execution/positions/${encodeURIComponent(tradeId)}/close`,
+        {
+          method: "POST",
+          body: JSON.stringify({}),
+        },
+      );
+      notify.success(
+        "Position close submitted and confirmed by the execution service.",
+      );
       await refreshTradingData(false);
     } catch (requestError) {
       const message = mapApiError(requestError).message;
@@ -993,23 +1255,26 @@ export default function AiTradingPage() {
   }
 
   async function closeAllPositionsNow() {
-    if (livePositions.length === 0 || closingTradeId || closingAllPositions) return;
+    if (livePositions.length === 0 || closingTradeId || closingAllPositions)
+      return;
     setClosingAllPositions(true);
     setError(null);
     try {
-      const results = await api.request<Array<{ tradeId: string; closed: boolean; status: string }>>(
-        '/execution/positions/close-all',
-        { method: 'POST', body: JSON.stringify({}) },
-      );
+      const results = await api.request<
+        Array<{ tradeId: string; closed: boolean; status: string }>
+      >("/execution/positions/close-all", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
       const closedCount = results.filter((result) => result.closed).length;
       const unresolvedCount = results.length - closedCount;
       if (unresolvedCount === 0) {
         notify.success(
-          `Closed ${closedCount} AI position${closedCount === 1 ? '' : 's'} successfully.`,
+          `Closed ${closedCount} AI position${closedCount === 1 ? "" : "s"} successfully.`,
         );
       } else {
         notify.warning(
-          `${closedCount} position${closedCount === 1 ? '' : 's'} closed; ${unresolvedCount} require reconciliation.`,
+          `${closedCount} position${closedCount === 1 ? "" : "s"} closed; ${unresolvedCount} require reconciliation.`,
         );
       }
       await refreshTradingData(false);
@@ -1024,65 +1289,84 @@ export default function AiTradingPage() {
 
   const recentClosedTrades = execution?.closedExecutions.slice(0, 10) ?? [];
   const positionCurrencies = Array.from(
-    new Set(livePositions.map((position) => position.accountCurrency ?? '').filter(Boolean)),
+    new Set(
+      livePositions
+        .map((position) => position.accountCurrency ?? "")
+        .filter(Boolean),
+    ),
   );
-  const positionCurrency = positionCurrencies.length === 1 ? positionCurrencies[0] : null;
+  const positionCurrency =
+    positionCurrencies.length === 1 ? positionCurrencies[0] : null;
   const totalUnrealisedPnl =
     livePositions.length > 0 && positionCurrencies.length === 1
-      ? sumDecimalStrings(livePositions.map((position) => position.unrealisedPnl))
+      ? sumDecimalStrings(
+          livePositions.map((position) => position.unrealisedPnl),
+        )
       : null;
   const totalUnrealisedPnlUnavailable =
     livePositions.length > 0 &&
     (positionCurrencies.length !== 1 || totalUnrealisedPnl === null);
 
   if (restoring) {
-    return <div style={{ padding: '3rem' }}><LoadingSpinner text="Restoring trading workspace…" /></div>;
+    return (
+      <div style={{ padding: "3rem" }}>
+        <LoadingSpinner text="Restoring trading workspace…" />
+      </div>
+    );
   }
 
   if (!user) {
     return (
-      <div style={{ padding: '3rem', maxWidth: '680px', margin: '0 auto' }}>
+      <div style={{ padding: "3rem", maxWidth: "680px", margin: "0 auto" }}>
         <Card title="Not signed in">
           <p className="muted">Sign in to access AI Trading.</p>
-          <Link href="/login" className="btn btn--primary mt-4">Go to login</Link>
+          <Link href="/login" className="btn btn--primary mt-4">
+            Go to login
+          </Link>
         </Card>
       </div>
     );
   }
 
   return (
-    <DashboardShell user={user} onLogout={logout} activeRoute="/trade" title="AI Trading">
+    <DashboardShell
+      user={user}
+      onLogout={logout}
+      activeRoute="/trade"
+      title="AI Trading"
+    >
       <main className="ai-trader" data-testid="ai-trader-workspace">
         <section className="ai-trader__hero">
           <div>
             <p className="workspace-hero__eyebrow">AI trading made simple</p>
             <h1>AI Trader</h1>
             <p>
-              Connect your broker, choose how much capital the AI may use, then start AI Trading.
-              Strategy selection, position sizing and risk checks run automatically on the server.
+              Connect your broker, choose how much capital the AI may use, then
+              start AI Trading. Strategy selection, position sizing and risk
+              checks run automatically on the server.
             </p>
           </div>
           <div className="ai-trader__hero-state" data-ai-state={aiVisualState}>
             <span>AI Trading</span>
             <MotionStatusOrb
               tone={
-                aiVisualState === 'error'
-                  ? 'error'
-                  : aiVisualState === 'blocked'
-                    ? 'warning'
-                    : aiVisualState === 'signal'
-                      ? 'info'
+                aiVisualState === "error"
+                  ? "error"
+                  : aiVisualState === "blocked"
+                    ? "warning"
+                    : aiVisualState === "signal"
+                      ? "info"
                       : automationOn
-                        ? 'success'
-                        : 'neutral'
+                        ? "success"
+                        : "neutral"
               }
               active={automationOn}
-              label={`AI Trading ${automationOn ? 'running' : 'stopped'}`}
+              label={`AI Trading ${automationOn ? "running" : "stopped"}`}
             />
-            <Badge variant={automationOn ? 'success' : 'info'}>
-              {automationOn ? 'RUNNING' : 'STOPPED'}
+            <Badge variant={automationOn ? "success" : "info"}>
+              {automationOn ? "RUNNING" : "STOPPED"}
             </Badge>
-            {selectedBroker?.brokerId === 'paper-broker' && (
+            {selectedBroker?.brokerId === "paper-broker" && (
               <Badge variant="warning">RESEARCH PAPER</Badge>
             )}
           </div>
@@ -1090,19 +1374,26 @@ export default function AiTradingPage() {
 
         {error && <Alert variant="error">{error}</Alert>}
         {terminal?.controlWarnings.map((warning) => (
-          <Alert key={warning} variant="warning">{warning}</Alert>
+          <Alert key={warning} variant="warning">
+            {warning}
+          </Alert>
         ))}
-        {allocationWarning && <Alert variant="warning">{allocationWarning}</Alert>}
+        {allocationWarning && (
+          <Alert variant="warning">{allocationWarning}</Alert>
+        )}
         {activityWarning && <Alert variant="warning">{activityWarning}</Alert>}
-        {automationRuntimeWarning && <Alert variant="warning">{automationRuntimeWarning}</Alert>}
-        {selectedBroker?.brokerId === 'paper-broker' && (
+        {automationRuntimeWarning && (
+          <Alert variant="warning">{automationRuntimeWarning}</Alert>
+        )}
+        {selectedBroker?.brokerId === "paper-broker" && (
           <Alert variant="info">
             <div className="ai-research-uat-copy">
               <strong>Research PAPER UAT · simulated execution only.</strong>
               <span>
-                Accelerated replay may advance multiple simulated market steps per cycle so the
-                end-to-end AI, risk, execution, position and P&amp;L workflow can be tested faster.
-                No live broker funds are reachable, and model promotion gates remain unchanged.
+                Accelerated replay may advance multiple simulated market steps
+                per cycle so the end-to-end AI, risk, execution, position and
+                P&amp;L workflow can be tested faster. No live broker funds are
+                reachable, and model promotion gates remain unchanged.
               </span>
             </div>
           </Alert>
@@ -1114,35 +1405,50 @@ export default function AiTradingPage() {
           </Card>
         ) : (
           <>
-            <section className="ai-control-deck" aria-label="AI trading controls">
+            <section
+              className="ai-control-deck"
+              aria-label="AI trading controls"
+            >
               <Card className="ai-control-card ai-control-card--broker">
                 <span className="ai-control-card__label">Broker account</span>
                 {terminal?.brokers.length ? (
                   <>
                     <select
                       className="input"
-                      value={selectedBroker?.id ?? ''}
-                      onChange={(event) => void handleBrokerChange(event.target.value)}
+                      value={selectedBroker?.id ?? ""}
+                      onChange={(event) =>
+                        void handleBrokerChange(event.target.value)
+                      }
                       aria-label="Broker account"
                       disabled={automationOn}
                     >
                       {terminal.brokers.map((broker) => (
                         <option key={broker.id} value={broker.id}>
-                          {broker.displayName || broker.brokerName} · {broker.accountType}
+                          {broker.displayName || broker.brokerName} ·{" "}
+                          {broker.accountType}
                         </option>
                       ))}
                     </select>
                     <div className="ai-control-card__meta">
-                      <Badge variant={selectedBroker?.status === 'CONNECTED' ? 'success' : 'warning'}>
-                        {selectedBroker?.status ?? 'Not connected'}
+                      <Badge
+                        variant={
+                          selectedBroker?.status === "CONNECTED"
+                            ? "success"
+                            : "warning"
+                        }
+                      >
+                        {selectedBroker?.status ?? "Not connected"}
                       </Badge>
-                      <span>{selectedBroker?.accountType ?? '—'}</span>
+                      <span>{selectedBroker?.accountType ?? "—"}</span>
                     </div>
                   </>
                 ) : (
                   <>
                     <strong>No broker connected</strong>
-                    <Link href="/onboarding/broker" className="btn btn--primary btn--sm mt-4">
+                    <Link
+                      href="/onboarding/broker"
+                      className="btn btn--primary btn--sm mt-4"
+                    >
                       Connect broker
                     </Link>
                   </>
@@ -1154,19 +1460,30 @@ export default function AiTradingPage() {
                 <strong className="ai-control-card__value">
                   {money(allocation?.brokerEquity, allocation?.accountCurrency)}
                 </strong>
-                <span className="ai-control-card__hint">Authoritative broker account snapshot</span>
+                <span className="ai-control-card__hint">
+                  Authoritative broker account snapshot
+                </span>
               </Card>
 
               <Card className="ai-control-card ai-control-card--allocation">
-                <span className="ai-control-card__label">AI capital allocation</span>
+                <span className="ai-control-card__label">
+                  AI capital allocation
+                </span>
                 <div className="ai-allocation-row">
                   <Input
                     aria-label="AI capital allocation amount"
                     inputMode="decimal"
                     value={allocationAmount}
-                    onChange={(event) => setAllocationAmount(event.target.value)}
-                    placeholder={formatFixedDecimal(allocation?.brokerEquity, 2)}
-                    disabled={!selectedBroker || savingAllocation || automationOn}
+                    onChange={(event) =>
+                      setAllocationAmount(event.target.value)
+                    }
+                    placeholder={formatFixedDecimal(
+                      allocation?.brokerEquity,
+                      2,
+                    )}
+                    disabled={
+                      !selectedBroker || savingAllocation || automationOn
+                    }
                   />
                   <Button
                     type="button"
@@ -1179,35 +1496,47 @@ export default function AiTradingPage() {
                   </Button>
                 </div>
                 <span className="ai-control-card__hint">
-                  Shared across multiple AI trades. Available now: {money(allocation?.availableCapital, allocation?.accountCurrency)}
+                  Shared across multiple AI trades. Available now:{" "}
+                  {money(
+                    allocation?.availableCapital,
+                    allocation?.accountCurrency,
+                  )}
                 </span>
               </Card>
 
               <Card className="ai-control-card ai-control-card--automation">
                 <div className="ai-control-card__status-row">
                   <span className="ai-control-card__label">AI Trading</span>
-                  <Badge variant={automationOn ? 'success' : 'info'}>
-                    {automationOn ? 'Running' : 'Stopped'}
+                  <Badge variant={automationOn ? "success" : "info"}>
+                    {automationOn ? "Running" : "Stopped"}
                   </Badge>
                 </div>
                 <Button
                   type="button"
-                  variant={automationOn ? 'danger' : 'primary'}
+                  variant={automationOn ? "danger" : "primary"}
                   size="lg"
                   block
                   className="ai-automation-action"
-                  aria-label={automationOn ? 'Stop AI Trading' : 'Start AI Trading'}
-                  disabled={!selectedBroker || !controlStateReady || togglingAutomation}
+                  aria-label={
+                    automationOn ? "Stop AI Trading" : "Start AI Trading"
+                  }
+                  disabled={
+                    !selectedBroker || !controlStateReady || togglingAutomation
+                  }
                   onClick={requestAutomationAction}
                 >
                   {togglingAutomation
-                    ? automationOn ? 'Stopping…' : 'Starting…'
-                    : automationOn ? 'Stop AI Trading' : 'Start AI Trading'}
+                    ? automationOn
+                      ? "Stopping…"
+                      : "Starting…"
+                    : automationOn
+                      ? "Stop AI Trading"
+                      : "Start AI Trading"}
                 </Button>
                 <span className="ai-control-card__hint">
                   {automationOn
-                    ? 'AI Trading may open and manage positions within your allocation. Stop requires confirmation and closes AI-opened positions.'
-                    : 'AI Trading cannot create new positions while stopped.'}
+                    ? "AI Trading may open and manage positions within your allocation. Stop requires confirmation and closes AI-opened positions."
+                    : "AI Trading cannot create new positions while stopped."}
                 </span>
               </Card>
             </section>
@@ -1216,86 +1545,282 @@ export default function AiTradingPage() {
               <Card className="ai-overview-card ai-overview-card--allocation-pool">
                 <span className="ai-control-card__label">AI capital pool</span>
                 <strong className="ai-overview-card__value">
-                  {money(allocation?.allocatedCapital, allocation?.accountCurrency)}
+                  {money(
+                    allocation?.allocatedCapital,
+                    allocation?.accountCurrency,
+                  )}
                 </strong>
                 <span className="muted text-sm">
-                  Shared across multiple trades — each trade commits only its broker-required margin.
+                  Shared across multiple trades — each trade commits only its
+                  broker-required margin.
                 </span>
-                <dl className="ai-allocation-breakdown" aria-label="AI capital pool breakdown">
+                <dl
+                  className="ai-allocation-breakdown"
+                  aria-label="AI capital pool breakdown"
+                >
                   <div>
                     <dt>Available</dt>
-                    <dd>{money(allocation?.availableCapital, allocation?.accountCurrency)}</dd>
+                    <dd>
+                      {money(
+                        allocation?.availableCapital,
+                        allocation?.accountCurrency,
+                      )}
+                    </dd>
                   </div>
                   <div>
                     <dt>Committed now</dt>
-                    <dd>{money(allocation?.committedCapital, allocation?.accountCurrency)}</dd>
+                    <dd>
+                      {money(
+                        allocation?.committedCapital,
+                        allocation?.accountCurrency,
+                      )}
+                    </dd>
                   </div>
                   <div>
                     <dt>Open positions</dt>
-                    <dd>{money(allocation?.openPositionCommitments, allocation?.accountCurrency)}</dd>
+                    <dd>
+                      {money(
+                        allocation?.openPositionCommitments,
+                        allocation?.accountCurrency,
+                      )}
+                    </dd>
                   </div>
                   <div>
                     <dt>Pending orders</dt>
-                    <dd>{money(allocation?.pendingOrderCommitments, allocation?.accountCurrency)}</dd>
+                    <dd>
+                      {money(
+                        allocation?.pendingOrderCommitments,
+                        allocation?.accountCurrency,
+                      )}
+                    </dd>
                   </div>
                   <div>
                     <dt>Broker equity</dt>
-                    <dd>{money(allocation?.brokerEquity, allocation?.accountCurrency)}</dd>
+                    <dd>
+                      {money(
+                        allocation?.brokerEquity,
+                        allocation?.accountCurrency,
+                      )}
+                    </dd>
                   </div>
                   <div>
                     <dt>In-flight decisions</dt>
-                    <dd>{money(allocation?.inFlightCommitments, allocation?.accountCurrency)}</dd>
+                    <dd>
+                      {money(
+                        allocation?.inFlightCommitments,
+                        allocation?.accountCurrency,
+                      )}
+                    </dd>
                   </div>
                 </dl>
               </Card>
 
-              <div className="ai-overview-summary-stack" aria-label="Trading snapshot">
+              <div
+                className="ai-overview-summary-stack"
+                aria-label="Trading snapshot"
+              >
                 <Card className="ai-overview-card ai-overview-card--compact">
                   <span className="ai-control-card__label">Open positions</span>
-                  <strong className="ai-overview-card__value">{livePositions.length}</strong>
-                  <span className="muted text-sm">Provider-enriched position state</span>
+                  <strong className="ai-overview-card__value">
+                    {livePositions.length}
+                  </strong>
+                  <span className="muted text-sm">
+                    Provider-enriched position state
+                  </span>
                 </Card>
                 <Card className="ai-overview-card ai-overview-card--compact">
                   <span className="ai-control-card__label">AI session</span>
                   <strong className="ai-overview-card__value">
                     {!terminal?.sessionStateKnown
-                      ? 'UNAVAILABLE'
-                      : terminal.session?.status ?? 'STOPPED'}
+                      ? "UNAVAILABLE"
+                      : (terminal.session?.status ?? "STOPPED")}
                   </strong>
                   <span className="muted text-sm">
                     {!terminal?.sessionStateKnown
-                      ? 'Session status is being verified'
+                      ? "Session status is being verified"
                       : terminal.session
                         ? `Started ${formatTimestamp(terminal.session.startedAt)}`
-                        : 'Start AI Trading to begin'}
+                        : "Start AI Trading to begin"}
                   </span>
                 </Card>
                 <Card className="ai-overview-card ai-overview-card--compact">
                   <span className="ai-control-card__label">
                     {automationRuntime?.instruments?.length
-                      ? `${automationRuntime.instruments.join(' · ')} · ${automationRuntime.timeframe ?? 'MTF'}`
-                      : 'Market snapshot'}
+                      ? `${automationRuntime.instruments.join(" · ")} · ${automationRuntime.timeframe ?? "MTF"}`
+                      : "Market snapshot"}
                   </span>
                   <strong className="ai-overview-card__value">
                     {automationRuntime?.research_uat
-                      ? automationRuntime.last_market_data_close ?? '—'
-                      : market?.quote.bid ?? '—'}
+                      ? (automationRuntime.last_market_data_close ?? "—")
+                      : (market?.quote.bid ?? "—")}
                   </strong>
                   <span className="muted text-sm">
                     {automationRuntime?.research_uat
                       ? automationRuntime.last_market_data_close
                         ? `Replay close · ${formatTimestamp(automationRuntime.last_market_data_at)}`
-                        : 'Awaiting first replay market evaluation'
+                        : "Awaiting first replay market evaluation"
                       : market
                         ? `Spread ${market.quote.spread} · ${market.status}`
-                        : 'Market snapshot unavailable'}
+                        : "Market snapshot unavailable"}
                   </span>
                 </Card>
               </div>
             </section>
 
+            {selectedBroker?.brokerId === "paper-broker" && (
+              <section
+                className="ai-provider-evidence"
+                aria-labelledby="provider-evidence-title"
+              >
+                <Card className="ai-provider-evidence__card">
+                  <div className="ai-provider-evidence__head">
+                    <div>
+                      <p className="workspace-hero__eyebrow">
+                        External signal evidence
+                      </p>
+                      <h2 id="provider-evidence-title">
+                        TradingView · Six-Pair v1
+                      </h2>
+                      <p>
+                        Genuine TradingView alerts are measured independently in
+                        PAPER before any DEMO review. Integration probes are
+                        excluded from this versioned evidence stream.
+                      </p>
+                    </div>
+                    <div className="ai-provider-evidence__badges">
+                      <Badge variant="warning">PAPER ONLY</Badge>
+                      <Badge
+                        variant={
+                          providerEvidence?.demoReviewEligible
+                            ? "success"
+                            : "info"
+                        }
+                      >
+                        {providerEvidence?.demoReviewEligible
+                          ? "DEMO REVIEW ELIGIBLE"
+                          : "COLLECTING EVIDENCE"}
+                      </Badge>
+                    </div>
+                  </div>
+
+                  <div className="ai-provider-evidence__metrics">
+                    <div>
+                      <span>Signals received</span>
+                      <strong>
+                        {providerEvidence?.observed.receivedSignals ?? 0}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Executed</span>
+                      <strong>
+                        {providerEvidence?.observed.executedTrades ?? 0}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Closed evidence</span>
+                      <strong>
+                        {providerEvidence?.observed.closedTrades ?? 0} / 100
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Balanced accuracy</span>
+                      <strong>
+                        {providerPercent(
+                          providerEvidence?.observed.balancedAccuracy,
+                        )}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Profit factor</span>
+                      <strong>
+                        {providerMetric(
+                          providerEvidence?.observed.profitFactor,
+                          3,
+                        )}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Evidence Sharpe</span>
+                      <strong>
+                        {providerMetric(
+                          providerEvidence?.observed.evidenceWindowSharpeRatio,
+                          3,
+                        )}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Max drawdown</span>
+                      <strong>
+                        {providerPercent(
+                          providerEvidence?.observed.maxDrawdown,
+                        )}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Positive pairs</span>
+                      <strong>
+                        {providerPercent(
+                          providerEvidence?.observed.positiveInstrumentFraction,
+                        )}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Median signal gap</span>
+                      <strong>
+                        {providerEvidence?.observed
+                          .medianMinutesBetweenSignals == null
+                          ? "—"
+                          : `${providerEvidence.observed.medianMinutesBetweenSignals.toFixed(1)} min`}
+                      </strong>
+                    </div>
+                  </div>
+
+                  <div
+                    className="ai-provider-evidence__gates"
+                    aria-label="TradingView promotion gates"
+                  >
+                    {[
+                      ["BA ≥ 0.52", providerEvidence?.checks.balancedAccuracy],
+                      ["Sharpe ≥ 1.0", providerEvidence?.checks.sharpeRatio],
+                      ["PF ≥ 1.15", providerEvidence?.checks.profitFactor],
+                      ["DD ≤ 12%", providerEvidence?.checks.maxDrawdown],
+                      [
+                        "Positive weeks ≥ 60%",
+                        providerEvidence?.checks.positiveWindowFraction,
+                      ],
+                      [
+                        "Positive pairs ≥ 67%",
+                        providerEvidence?.checks.positiveInstrumentFraction,
+                      ],
+                      ["Confidence ≥ 60%", providerEvidence?.checks.confidence],
+                      [
+                        "Closed trades ≥ 100",
+                        providerEvidence?.checks.evidence,
+                      ],
+                      ["Median gap ≤ 10m", providerEvidence?.checks.frequency],
+                    ].map(([label, passed]) => (
+                      <span
+                        key={String(label)}
+                        className={passed ? "is-passed" : "is-pending"}
+                      >
+                        {passed ? "✓" : "·"} {String(label)}
+                      </span>
+                    ))}
+                  </div>
+                  <p className="ai-provider-evidence__footnote">
+                    Passing every gate only permits a separate DEMO review.
+                    Automatic DEMO and LIVE promotion remain disabled.
+                  </p>
+                </Card>
+              </section>
+            )}
+
             {automationOn && (
-              <section className="ai-runtime-panel ai-cockpit" data-ai-state={aiVisualState} aria-label="AI trading cockpit">
+              <section
+                className="ai-runtime-panel ai-cockpit"
+                data-ai-state={aiVisualState}
+                aria-label="AI trading cockpit"
+              >
                 <div className="ai-cockpit__topbar">
                   <div>
                     <p className="workspace-hero__eyebrow">AI market cockpit</p>
@@ -1303,21 +1828,48 @@ export default function AiTradingPage() {
                   </div>
                   <div className="ai-cockpit__status">
                     <MotionStatusOrb
-                      tone={aiVisualState === 'error' ? 'error' : aiVisualState === 'blocked' ? 'warning' : aiVisualState === 'signal' ? 'info' : 'success'}
+                      tone={
+                        aiVisualState === "error"
+                          ? "error"
+                          : aiVisualState === "blocked"
+                            ? "warning"
+                            : aiVisualState === "signal"
+                              ? "info"
+                              : "success"
+                      }
                       active={automationOn}
                     />
-                    <Badge variant={aiVisualState === 'error' ? 'error' : aiVisualState === 'blocked' ? 'warning' : 'success'}>
-                      {aiVisualState === 'signal' ? 'SIGNAL READY' : aiVisualState === 'blocked' ? 'WAITING' : aiVisualState === 'error' ? 'DATA ISSUE' : 'SCANNING'}
+                    <Badge
+                      variant={
+                        aiVisualState === "error"
+                          ? "error"
+                          : aiVisualState === "blocked"
+                            ? "warning"
+                            : "success"
+                      }
+                    >
+                      {aiVisualState === "signal"
+                        ? "SIGNAL READY"
+                        : aiVisualState === "blocked"
+                          ? "WAITING"
+                          : aiVisualState === "error"
+                            ? "DATA ISSUE"
+                            : "SCANNING"}
                     </Badge>
                   </div>
                 </div>
 
-                <div className="ai-cockpit__instruments" aria-label="Watched instruments">
+                <div
+                  className="ai-cockpit__instruments"
+                  aria-label="Watched instruments"
+                >
                   {watchedInstruments.map((instrument) => (
                     <button
                       key={instrument}
                       type="button"
-                      className={instrument === chartInstrument ? 'is-active' : ''}
+                      className={
+                        instrument === chartInstrument ? "is-active" : ""
+                      }
                       onClick={() => setChartInstrument(instrument)}
                     >
                       {instrument}
@@ -1329,62 +1881,108 @@ export default function AiTradingPage() {
                   <div className="ai-cockpit__chart-card">
                     <div className="ai-cockpit__chart-head">
                       <div>
-                        <span className="ai-cockpit__label">{chartInstrument}</span>
-                        <strong>{automationRuntime?.research_uat ? automationRuntime.last_market_data_close ?? market?.quote.bid ?? '—' : market?.quote.bid ?? '—'}</strong>
-                        <small>{chartLoading ? 'Updating chart…' : `${chartTimeframe} market view`}</small>
+                        <span className="ai-cockpit__label">
+                          {chartInstrument}
+                        </span>
+                        <strong>
+                          {automationRuntime?.research_uat
+                            ? (automationRuntime.last_market_data_close ??
+                              market?.quote.bid ??
+                              "—")
+                            : (market?.quote.bid ?? "—")}
+                        </strong>
+                        <small>
+                          {chartLoading
+                            ? "Updating chart…"
+                            : `${chartTimeframe} market view`}
+                        </small>
                       </div>
                       <div className="ai-cockpit__timeframes">
-                        {(['M1', 'M5', 'M15', 'H1', 'H4'] as const).map((timeframe) => (
-                          <button
-                            key={timeframe}
-                            type="button"
-                            className={chartTimeframe === timeframe ? 'is-active' : ''}
-                            onClick={() => setChartTimeframe(timeframe)}
-                          >
-                            {timeframe}
-                          </button>
-                        ))}
+                        {(["M1", "M5", "M15", "H1", "H4"] as const).map(
+                          (timeframe) => (
+                            <button
+                              key={timeframe}
+                              type="button"
+                              className={
+                                chartTimeframe === timeframe ? "is-active" : ""
+                              }
+                              onClick={() => setChartTimeframe(timeframe)}
+                            >
+                              {timeframe}
+                            </button>
+                          ),
+                        )}
                       </div>
                     </div>
                     <div className="ai-cockpit__market-stats">
-                      <div><span>Open</span><strong>{latestChartCandle?.open ?? '—'}</strong></div>
-                      <div><span>High</span><strong>{latestChartCandle?.high ?? '—'}</strong></div>
-                      <div><span>Low</span><strong>{latestChartCandle?.low ?? '—'}</strong></div>
-                      <div><span>Spread</span><strong>{market?.quote.spread ?? '—'}</strong></div>
-                      <div className={chartMove != null && chartMove < 0 ? 'is-down' : 'is-up'}>
+                      <div>
+                        <span>Open</span>
+                        <strong>{latestChartCandle?.open ?? "—"}</strong>
+                      </div>
+                      <div>
+                        <span>High</span>
+                        <strong>{latestChartCandle?.high ?? "—"}</strong>
+                      </div>
+                      <div>
+                        <span>Low</span>
+                        <strong>{latestChartCandle?.low ?? "—"}</strong>
+                      </div>
+                      <div>
+                        <span>Spread</span>
+                        <strong>{market?.quote.spread ?? "—"}</strong>
+                      </div>
+                      <div
+                        className={
+                          chartMove != null && chartMove < 0
+                            ? "is-down"
+                            : "is-up"
+                        }
+                      >
                         <span>Last move</span>
                         <strong>
                           {chartMove == null || chartMovePercent == null
-                            ? '—'
-                            : `${chartMove >= 0 ? '+' : ''}${chartMove.toFixed(3)} (${chartMovePercent >= 0 ? '+' : ''}${chartMovePercent.toFixed(3)}%)`}
+                            ? "—"
+                            : `${chartMove >= 0 ? "+" : ""}${chartMove.toFixed(3)} (${chartMovePercent >= 0 ? "+" : ""}${chartMovePercent.toFixed(3)}%)`}
                         </strong>
                       </div>
                     </div>
                     <MarketPriceChart candles={market?.candles ?? []} />
                   </div>
 
-                  <aside className={`ai-confidence ai-confidence--${confidenceTone}`}>
+                  <aside
+                    className={`ai-confidence ai-confidence--${confidenceTone}`}
+                  >
                     <span className="ai-cockpit__label">
-                      {automationRuntime?.last_decision === 'NO_NEW_MARKET_DATA'
-                        ? 'Last evaluated confidence'
-                        : 'AI confidence'}
+                      {automationRuntime?.last_decision === "NO_NEW_MARKET_DATA"
+                        ? "Last evaluated confidence"
+                        : "AI confidence"}
                     </span>
-                    <strong className="ai-confidence__value">{formatConfidence(automationRuntime?.last_confidence_score)}</strong>
+                    <strong className="ai-confidence__value">
+                      {formatConfidence(
+                        automationRuntime?.last_confidence_score,
+                      )}
+                    </strong>
                     <div className="ai-confidence__track" aria-hidden="true">
                       <span style={{ width: `${confidencePercent}%` }} />
                     </div>
                     <div className="ai-confidence__meta">
                       <span>
-                        {automationRuntime?.last_decision === 'NO_NEW_MARKET_DATA'
-                          ? 'Waiting for new market data'
+                        {automationRuntime?.last_decision ===
+                        "NO_NEW_MARKET_DATA"
+                          ? "Waiting for new market data"
                           : confidencePercent >= 60
-                            ? 'Qualified strength'
-                            : 'Building conviction'}
+                            ? "Qualified strength"
+                            : "Building conviction"}
                       </span>
-                      <span>{formatConfidence(automationRuntime?.confidence_threshold)} gate</span>
+                      <span>
+                        {formatConfidence(
+                          automationRuntime?.confidence_threshold,
+                        )}{" "}
+                        gate
+                      </span>
                     </div>
                     <p>
-                      {automationRuntime?.last_decision === 'NO_NEW_MARKET_DATA'
+                      {automationRuntime?.last_decision === "NO_NEW_MARKET_DATA"
                         ? `No new candle after ${formatTimestamp(automationRuntime?.last_market_data_at)}. Confidence will update when a new market revision is evaluated.`
                         : runtimeReasonLabel(automationRuntime?.last_reason)}
                     </p>
@@ -1394,14 +1992,58 @@ export default function AiTradingPage() {
                 <details className="ai-cockpit__technical">
                   <summary>Technical details</summary>
                   <div className="ai-cockpit__technical-grid">
-                    <div><span>Model</span><strong>{automationRuntime?.model_version ?? 'Awaiting model'}</strong></div>
-                    <div><span>Timeframes</span><strong>{automationRuntime?.timeframe ?? 'MTF'}</strong></div>
-                    <div><span>Last scan</span><strong>{formatTimestamp(automationRuntime?.last_run_at)}</strong></div>
-                    <div><span>Next scan</span><strong>{formatTimestamp(automationRuntime?.next_run_at)}</strong></div>
-                    <div><span>Replay steps</span><strong>{automationRuntime?.replay_steps_total ?? 0}</strong></div>
-                    <div><span>Executions</span><strong>{automationRuntime?.executions_succeeded_total ?? 0} succeeded</strong></div>
-                    <div><span>Last decision</span><strong>{automationRuntime?.last_decision?.replaceAll('_', ' ') ?? 'WAITING'}</strong></div>
-                    <div><span>Market timestamp</span><strong>{formatTimestamp(automationRuntime?.last_market_data_at)}</strong></div>
+                    <div>
+                      <span>Model</span>
+                      <strong>
+                        {automationRuntime?.model_version ?? "Awaiting model"}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Timeframes</span>
+                      <strong>{automationRuntime?.timeframe ?? "MTF"}</strong>
+                    </div>
+                    <div>
+                      <span>Last scan</span>
+                      <strong>
+                        {formatTimestamp(automationRuntime?.last_run_at)}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Next scan</span>
+                      <strong>
+                        {formatTimestamp(automationRuntime?.next_run_at)}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Replay steps</span>
+                      <strong>
+                        {automationRuntime?.replay_steps_total ?? 0}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Executions</span>
+                      <strong>
+                        {automationRuntime?.executions_succeeded_total ?? 0}{" "}
+                        succeeded
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Last decision</span>
+                      <strong>
+                        {automationRuntime?.last_decision?.replaceAll(
+                          "_",
+                          " ",
+                        ) ?? "WAITING"}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Market timestamp</span>
+                      <strong>
+                        {formatTimestamp(
+                          automationRuntime?.last_market_data_at,
+                        )}
+                      </strong>
+                    </div>
                   </div>
                 </details>
               </section>
@@ -1417,46 +2059,53 @@ export default function AiTradingPage() {
                   <h2 id="open-positions-title">Open Positions</h2>
                 </div>
                 <div className="ai-position-toolbar">
-                  <div className="ai-position-total" aria-label="Total unrealized profit or loss">
+                  <div
+                    className="ai-position-total"
+                    aria-label="Total unrealized profit or loss"
+                  >
                     <span>Total unrealized P&amp;L</span>
                     <strong
                       className={
                         totalUnrealisedPnlUnavailable
-                          ? ''
-                          : totalUnrealisedPnl?.startsWith('-')
-                            ? 'is-negative'
-                            : 'is-positive'
+                          ? ""
+                          : totalUnrealisedPnl?.startsWith("-")
+                            ? "is-negative"
+                            : "is-positive"
                       }
                     >
                       {livePositions.length === 0
-                        ? money('0', allocation?.accountCurrency)
+                        ? money("0", allocation?.accountCurrency)
                         : totalUnrealisedPnlUnavailable
-                          ? 'Awaiting complete broker marks'
-                          : `${totalUnrealisedPnl!.startsWith('-') ? '' : '+'}${money(
+                          ? "Awaiting complete broker marks"
+                          : `${totalUnrealisedPnl!.startsWith("-") ? "" : "+"}${money(
                               totalUnrealisedPnl,
                               positionCurrency ?? allocation?.accountCurrency,
                             )}`}
                     </strong>
                   </div>
-                  <div className="ai-view-toggle" role="group" aria-label="Open position display">
+                  <div
+                    className="ai-view-toggle"
+                    role="group"
+                    aria-label="Open position display"
+                  >
                     <button
                       type="button"
-                      className={positionView === 'table' ? 'is-active' : ''}
-                      aria-pressed={positionView === 'table'}
-                      onClick={() => setPositionView('table')}
+                      className={positionView === "table" ? "is-active" : ""}
+                      aria-pressed={positionView === "table"}
+                      onClick={() => setPositionView("table")}
                     >
                       Table
                     </button>
                     <button
                       type="button"
-                      className={positionView === 'grid' ? 'is-active' : ''}
-                      aria-pressed={positionView === 'grid'}
-                      onClick={() => setPositionView('grid')}
+                      className={positionView === "grid" ? "is-active" : ""}
+                      aria-pressed={positionView === "grid"}
+                      onClick={() => setPositionView("grid")}
                     >
                       Grid
                     </button>
                   </div>
-                  <Badge variant={livePositions.length ? 'success' : 'info'}>
+                  <Badge variant={livePositions.length ? "success" : "info"}>
                     {livePositions.length} open
                   </Badge>
                   {livePositions.length > 0 && (
@@ -1468,7 +2117,7 @@ export default function AiTradingPage() {
                       disabled={closingAllPositions || closingTradeId !== null}
                       onClick={() => void closeAllPositionsNow()}
                     >
-                      {closingAllPositions ? 'Closing all…' : 'Close all'}
+                      {closingAllPositions ? "Closing all…" : "Close all"}
                     </Button>
                   )}
                 </div>
@@ -1477,12 +2126,13 @@ export default function AiTradingPage() {
                 <Card className="ai-empty-card">
                   <strong>No open positions</strong>
                   <p className="muted">
-                    Current unrealized P&amp;L: {money('0', allocation?.accountCurrency)}. When AI
-                    automation opens a trade, its entry, current price, costs and live unrealized
-                    P&amp;L will appear here.
+                    Current unrealized P&amp;L:{" "}
+                    {money("0", allocation?.accountCurrency)}. When AI
+                    automation opens a trade, its entry, current price, costs
+                    and live unrealized P&amp;L will appear here.
                   </p>
                 </Card>
-              ) : positionView === 'table' ? (
+              ) : positionView === "table" ? (
                 <PositionTable
                   positions={livePositions}
                   closingTradeId={closingTradeId}
@@ -1512,18 +2162,27 @@ export default function AiTradingPage() {
               >
                 <div className="ai-section__heading">
                   <div>
-                    <p className="workspace-hero__eyebrow">Completed positions</p>
-                    <h2 id="closed-trades-title">Closed Trades &amp; Realized P&amp;L</h2>
+                    <p className="workspace-hero__eyebrow">
+                      Completed positions
+                    </p>
+                    <h2 id="closed-trades-title">
+                      Closed Trades &amp; Realized P&amp;L
+                    </h2>
                   </div>
-                  <Badge variant={recentClosedTrades.length ? 'success' : 'info'}>
+                  <Badge
+                    variant={recentClosedTrades.length ? "success" : "info"}
+                  >
                     {recentClosedTrades.length} recent
                   </Badge>
                 </div>
                 {recentClosedTrades.length === 0 ? (
                   <Card className="ai-empty-card ai-empty-card--compact">
-                    <strong>No closed trades in the latest execution history</strong>
+                    <strong>
+                      No closed trades in the latest execution history
+                    </strong>
                     <p className="muted">
-                      Closed positions stay separate so realized profit or loss remains easy to audit.
+                      Closed positions stay separate so realized profit or loss
+                      remains easy to audit.
                     </p>
                   </Card>
                 ) : (
@@ -1541,16 +2200,21 @@ export default function AiTradingPage() {
               >
                 <div className="ai-section__heading">
                   <div>
-                    <p className="workspace-hero__eyebrow">Orders &amp; decisions</p>
+                    <p className="workspace-hero__eyebrow">
+                      Orders &amp; decisions
+                    </p>
                     <h2 id="recent-ai-activity-title">Recent AI Activity</h2>
                   </div>
-                  <Link href="/live-account" className="ai-text-link">View all</Link>
+                  <Link href="/live-account" className="ai-text-link">
+                    View all
+                  </Link>
                 </div>
                 {!execution || execution.recentExecutions.length === 0 ? (
                   <Card className="ai-empty-card ai-empty-card--compact">
                     <strong>No execution activity yet</strong>
                     <p className="muted">
-                      Orders, fills, execution outcomes and AI workflow decisions will appear here.
+                      Orders, fills, execution outcomes and AI workflow
+                      decisions will appear here.
                     </p>
                   </Card>
                 ) : (
@@ -1563,39 +2227,113 @@ export default function AiTradingPage() {
               </section>
             </section>
 
-            <section className="ai-simple-note" aria-label="Automatic risk protection">
+            <section
+              className="ai-simple-note"
+              aria-label="Automatic risk protection"
+            >
               <div>
                 <strong>Automatic risk protection is active</strong>
                 <span>
-                  There is no fixed trades-per-day cap. The AI may take every qualified opportunity while daily loss, drawdown, concurrent-position, margin, market-safety and kill-switch protections remain enforced by the server.
+                  There is no fixed trades-per-day cap. The AI may take every
+                  qualified opportunity while daily loss, drawdown,
+                  concurrent-position, margin, market-safety and kill-switch
+                  protections remain enforced by the server.
                 </span>
               </div>
-              <Link href="/onboarding/risk" className="ai-text-link">View protection</Link>
+              <Link href="/onboarding/risk" className="ai-text-link">
+                View protection
+              </Link>
             </section>
           </>
         )}
 
-
         <style jsx global>{`
-          .ai-trader__hero, .ai-runtime-panel, .ai-control-card, .ai-overview-card, .ai-history-card {
-            transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease, background 180ms ease;
+          .ai-trader__hero,
+          .ai-runtime-panel,
+          .ai-control-card,
+          .ai-overview-card,
+          .ai-history-card {
+            transition:
+              transform 180ms ease,
+              border-color 180ms ease,
+              box-shadow 180ms ease,
+              background 180ms ease;
           }
-          .ai-runtime-panel { position: relative; overflow: hidden; }
+          .ai-runtime-panel {
+            position: relative;
+            overflow: hidden;
+          }
           .ai-runtime-panel::after {
-            content: ''; position: absolute; top: 0; left: -38%; width: 38%; height: 1px;
-            background: linear-gradient(90deg, transparent, rgba(56,189,248,.9), transparent); opacity: 0; pointer-events: none;
+            content: "";
+            position: absolute;
+            top: 0;
+            left: -38%;
+            width: 38%;
+            height: 1px;
+            background: linear-gradient(
+              90deg,
+              transparent,
+              rgba(56, 189, 248, 0.9),
+              transparent
+            );
+            opacity: 0;
+            pointer-events: none;
           }
-          .ai-runtime-panel[data-ai-state='running'], .ai-runtime-panel[data-ai-state='scanning'] {
-            border-color: rgba(34,197,94,.28); box-shadow: 0 18px 50px rgba(2,6,23,.18), inset 0 0 30px rgba(34,197,94,.025);
+          .ai-runtime-panel[data-ai-state="running"],
+          .ai-runtime-panel[data-ai-state="scanning"] {
+            border-color: rgba(34, 197, 94, 0.28);
+            box-shadow:
+              0 18px 50px rgba(2, 6, 23, 0.18),
+              inset 0 0 30px rgba(34, 197, 94, 0.025);
           }
-          .ai-runtime-panel[data-ai-state='running']::after, .ai-runtime-panel[data-ai-state='scanning']::after { opacity: .72; animation: irexSweep 3.2s linear infinite; }
-          .ai-runtime-panel[data-ai-state='signal'] { border-color: rgba(56,189,248,.42); box-shadow: 0 20px 56px rgba(14,165,233,.12); }
-          .ai-runtime-panel[data-ai-state='signal']::after { opacity: .95; animation: irexSweep 1.35s linear infinite; }
-          .ai-runtime-panel[data-ai-state='blocked'] { border-color: rgba(245,158,11,.34); }
-          .ai-runtime-panel[data-ai-state='error'] { border-color: rgba(239,68,68,.36); }
-          @media (hover:hover) { .ai-control-card:hover, .ai-overview-card:hover, .ai-history-card:hover, .ai-runtime-grid > div:hover { transform: translateY(-2px); box-shadow: 0 14px 32px rgba(2,6,23,.18); } }
-          @keyframes irexSweep { from { transform: translateX(0); } to { transform: translateX(365%); } }
-          @media (prefers-reduced-motion: reduce) { .ai-runtime-panel::after { animation: none !important; } .ai-trader__hero, .ai-runtime-panel, .ai-control-card, .ai-overview-card, .ai-history-card { transition: none !important; } }
+          .ai-runtime-panel[data-ai-state="running"]::after,
+          .ai-runtime-panel[data-ai-state="scanning"]::after {
+            opacity: 0.72;
+            animation: irexSweep 3.2s linear infinite;
+          }
+          .ai-runtime-panel[data-ai-state="signal"] {
+            border-color: rgba(56, 189, 248, 0.42);
+            box-shadow: 0 20px 56px rgba(14, 165, 233, 0.12);
+          }
+          .ai-runtime-panel[data-ai-state="signal"]::after {
+            opacity: 0.95;
+            animation: irexSweep 1.35s linear infinite;
+          }
+          .ai-runtime-panel[data-ai-state="blocked"] {
+            border-color: rgba(245, 158, 11, 0.34);
+          }
+          .ai-runtime-panel[data-ai-state="error"] {
+            border-color: rgba(239, 68, 68, 0.36);
+          }
+          @media (hover: hover) {
+            .ai-control-card:hover,
+            .ai-overview-card:hover,
+            .ai-history-card:hover,
+            .ai-runtime-grid > div:hover {
+              transform: translateY(-2px);
+              box-shadow: 0 14px 32px rgba(2, 6, 23, 0.18);
+            }
+          }
+          @keyframes irexSweep {
+            from {
+              transform: translateX(0);
+            }
+            to {
+              transform: translateX(365%);
+            }
+          }
+          @media (prefers-reduced-motion: reduce) {
+            .ai-runtime-panel::after {
+              animation: none !important;
+            }
+            .ai-trader__hero,
+            .ai-runtime-panel,
+            .ai-control-card,
+            .ai-overview-card,
+            .ai-history-card {
+              transition: none !important;
+            }
+          }
         `}</style>
 
         {pendingAutomationAction && (
@@ -1616,29 +2354,42 @@ export default function AiTradingPage() {
             >
               <div className="ai-confirm-dialog__header">
                 <span className="ai-control-card__label">
-                  {pendingAutomationAction === 'STOP' ? 'Confirmation required' : 'Ready to start'}
+                  {pendingAutomationAction === "STOP"
+                    ? "Confirmation required"
+                    : "Ready to start"}
                 </span>
                 <h2 id="ai-confirm-title">
-                  {pendingAutomationAction === 'STOP'
-                    ? 'Stop AI Trading and close AI positions?'
-                    : 'Start AI Trading?'}
+                  {pendingAutomationAction === "STOP"
+                    ? "Stop AI Trading and close AI positions?"
+                    : "Start AI Trading?"}
                 </h2>
               </div>
 
-              <p id="ai-confirm-description" className="ai-confirm-dialog__description">
-                {pendingAutomationAction === 'STOP'
-                  ? 'Confirming will stop new AI trading first, then immediately request closure of every currently open position that iRexPro can prove was opened by the AI.'
-                  : 'Confirm that you want iRexPro AI to begin trading this broker account automatically using the capital you allocated.'}
+              <p
+                id="ai-confirm-description"
+                className="ai-confirm-dialog__description"
+              >
+                {pendingAutomationAction === "STOP"
+                  ? "Confirming will stop new AI trading first, then immediately request closure of every currently open position that iRexPro can prove was opened by the AI."
+                  : "Confirm that you want iRexPro AI to begin trading this broker account automatically using the capital you allocated."}
               </p>
 
-              <div className="ai-confirm-facts" aria-label="AI Trading confirmation details">
+              <div
+                className="ai-confirm-facts"
+                aria-label="AI Trading confirmation details"
+              >
                 <div>
                   <span>Broker</span>
                   <strong>{connectionLabel(selectedBroker)}</strong>
                 </div>
                 <div>
                   <span>AI allocation</span>
-                  <strong>{money(allocation?.allocatedCapital, allocation?.accountCurrency)}</strong>
+                  <strong>
+                    {money(
+                      allocation?.allocatedCapital,
+                      allocation?.accountCurrency,
+                    )}
+                  </strong>
                 </div>
                 <div>
                   <span>Open positions shown</span>
@@ -1646,14 +2397,19 @@ export default function AiTradingPage() {
                 </div>
               </div>
 
-              {pendingAutomationAction === 'STOP' ? (
+              {pendingAutomationAction === "STOP" ? (
                 <Alert variant="warning">
-                  <strong>Stopping also closes AI-opened positions.</strong>{' '}
-                  Broker market conditions determine the actual exit price. If a broker cannot immediately prove a closure, iRexPro will report it as unresolved/reconciliation pending instead of pretending it is closed.
+                  <strong>Stopping also closes AI-opened positions.</strong>{" "}
+                  Broker market conditions determine the actual exit price. If a
+                  broker cannot immediately prove a closure, iRexPro will report
+                  it as unresolved/reconciliation pending instead of pretending
+                  it is closed.
                 </Alert>
               ) : (
                 <Alert variant="info">
-                  Once started, the AI may open, manage and close positions automatically within your allocation and server-enforced protections until you stop AI Trading.
+                  Once started, the AI may open, manage and close positions
+                  automatically within your allocation and server-enforced
+                  protections until you stop AI Trading.
                 </Alert>
               )}
 
@@ -1664,18 +2420,22 @@ export default function AiTradingPage() {
                   disabled={togglingAutomation}
                   onClick={() => setPendingAutomationAction(null)}
                 >
-                  {pendingAutomationAction === 'STOP' ? 'Keep AI Trading Running' : 'Cancel'}
+                  {pendingAutomationAction === "STOP"
+                    ? "Keep AI Trading Running"
+                    : "Cancel"}
                 </Button>
                 <Button
                   type="button"
-                  variant={pendingAutomationAction === 'STOP' ? 'danger' : 'primary'}
+                  variant={
+                    pendingAutomationAction === "STOP" ? "danger" : "primary"
+                  }
                   loading={togglingAutomation}
                   autoFocus
                   onClick={() => void confirmAutomationAction()}
                 >
-                  {pendingAutomationAction === 'STOP'
-                    ? 'Stop & Close AI Positions'
-                    : 'Start AI Trading'}
+                  {pendingAutomationAction === "STOP"
+                    ? "Stop & Close AI Positions"
+                    : "Start AI Trading"}
                 </Button>
               </div>
             </section>

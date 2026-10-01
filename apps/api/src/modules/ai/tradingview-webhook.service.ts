@@ -65,10 +65,10 @@ export class TradingViewWebhookService {
       marketRegime: dto.marketRegime,
       volatilityScore: dto.volatilityScore,
       generatedAt,
-      modelVersion: 'external-provider/tradingview/paper-only-v1',
+      modelVersion: 'external-provider/tradingview-six-pair-v1/paper-only-v1',
       metadata: {
         signal_source: 'EXTERNAL_PROVIDER',
-        external_provider_code: 'tradingview',
+        external_provider_code: 'tradingview-six-pair-v1',
         external_provider_paper_only: true,
         production_eligible: false,
         tradingview_event_id: dto.eventId,
