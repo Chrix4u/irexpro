@@ -1,6 +1,7 @@
 import { ConfigService } from '@nestjs/config';
 import { TwelveDataFastMarkStreamService } from './twelve-data-fast-mark-stream.service';
 import { LivePaperMarketDataService } from './live-paper-market-data.service';
+import { PaperBrokerStateService } from './paper-broker-state.service';
 
 type Listener = (event: { data?: unknown; code?: number }) => void;
 
@@ -42,7 +43,7 @@ describe('TwelveDataFastMarkStreamService', () => {
     jest.restoreAllMocks();
   });
 
-  it('subscribes to six pairs and routes a price event into the mark-only cache', () => {
+  it('subscribes only to the selected fast-mark pair and routes its price', () => {
     (globalThis as unknown as { WebSocket?: unknown }).WebSocket = FakeWebSocket;
     const config = {
       get: jest.fn((key: string, fallback?: unknown) => {
@@ -55,7 +56,8 @@ describe('TwelveDataFastMarkStreamService', () => {
       }),
     } as unknown as ConfigService;
     const market = { updateStreamingMidQuote: jest.fn() } as unknown as LivePaperMarketDataService;
-    const service = new TwelveDataFastMarkStreamService(config, market);
+    const paperState = { load: jest.fn() } as unknown as PaperBrokerStateService;
+    const service = new TwelveDataFastMarkStreamService(config, market, paperState);
 
     (service as unknown as { connect(): void }).connect();
     const socket = FakeWebSocket.last!;
@@ -65,14 +67,7 @@ describe('TwelveDataFastMarkStreamService', () => {
       params: { symbols: string };
     };
     expect(subscribe.action).toBe('subscribe');
-    expect(subscribe.params.symbols.split(',')).toEqual([
-      'EUR/USD',
-      'GBP/USD',
-      'USD/JPY',
-      'AUD/USD',
-      'USD/CAD',
-      'USD/CHF',
-    ]);
+    expect(subscribe.params.symbols).toBe('EUR/USD');
 
     socket.emit('message', {
       data: JSON.stringify({ symbol: 'EUR/USD', price: '1.12345', timestamp: 1790875800 }),
@@ -99,7 +94,8 @@ describe('TwelveDataFastMarkStreamService', () => {
       }),
     } as unknown as ConfigService;
     const market = { updateStreamingMidQuote: jest.fn() } as unknown as LivePaperMarketDataService;
-    const service = new TwelveDataFastMarkStreamService(config, market);
+    const paperState = { load: jest.fn() } as unknown as PaperBrokerStateService;
+    const service = new TwelveDataFastMarkStreamService(config, market, paperState);
     (service as unknown as { connect(): void }).connect();
     expect(FakeWebSocket.last).toBeNull();
     service.onModuleDestroy();

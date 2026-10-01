@@ -87,11 +87,19 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
 
     socket.addEventListener('open', () => {
       this.reconnectDelayMs = 5_000;
-      const symbols = this.orderedProviderSymbols();
-      socket.send(JSON.stringify({ action: 'subscribe', params: { symbols: symbols.join(',') } }));
+      // Twelve Data Basic currently accepts only one forex WebSocket symbol.
+      // Request the selected exposure-aware symbol explicitly; sending all six
+      // lets the provider choose a different symbol (observed: EUR/USD), which
+      // defeats the fast-mark preference logic.
+      socket.send(
+        JSON.stringify({
+          action: 'subscribe',
+          params: { symbols: this.preferredProviderSymbol },
+        }),
+      );
       this.startHeartbeat();
       this.logger.log(
-        `Twelve Data fast-mark WebSocket connected; primary=${this.preferredProviderSymbol} subscription requested for 6 pairs`,
+        `Twelve Data fast-mark WebSocket connected; primary=${this.preferredProviderSymbol} subscription requested`,
       );
     });
     socket.addEventListener('message', (event) => this.onMessage(event.data));
@@ -157,13 +165,6 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
     // recalculate unrealized P&L. v5 PAPER SL/TP remains governed by the
     // closed-M5 evidence path; tick-level exits require a separately
     // versioned execution model once a six-pair broker-grade stream exists.
-  }
-
-  private orderedProviderSymbols(): string[] {
-    return [
-      this.preferredProviderSymbol,
-      ...PROVIDER_SYMBOLS.filter((symbol) => symbol !== this.preferredProviderSymbol),
-    ];
   }
 
   private async refreshPreferredSymbol(reconnectOnChange: boolean): Promise<void> {
