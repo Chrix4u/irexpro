@@ -3,6 +3,7 @@ import { AiSignalService } from './ai-signal.service';
 import {
   VpsForexSignalCollectorService,
   buildCandidate,
+  isFreshOpportunity,
 } from './vps-forex-signal-collector.service';
 import { ExecutionService } from '../execution/execution.service';
 import { ExecutionMode } from '../execution/interfaces/execution-authority';
@@ -111,6 +112,36 @@ describe('VpsForexSignalCollectorService', () => {
     expect(rewardRisk).toBeCloseTo(2.5 / 1.5, 6);
   });
 
+  it('blocks a repeated unchanged setup but permits genuinely fresh same-side evidence', () => {
+    const candidate = buildCandidate('EURUSD', trendCandles());
+    expect(candidate).not.toBeNull();
+    const current = candidate!;
+    const previous = {
+      direction: current.direction,
+      confidence: current.confidence,
+      entry: current.entry,
+      atr: current.atr,
+      barTimeMs: current.barTime.getTime() - 10 * 60_000,
+    };
+
+    expect(isFreshOpportunity(current, previous)).toBe(false);
+    expect(
+      isFreshOpportunity(
+        {
+          ...current,
+          entry:
+            current.direction === 'BUY'
+              ? current.entry + current.atr * 0.6
+              : current.entry - current.atr * 0.6,
+        },
+        previous,
+      ),
+    ).toBe(true);
+    expect(
+      isFreshOpportunity({ ...current, confidence: current.confidence + 0.03 }, previous),
+    ).toBe(true);
+  });
+
   it('refreshes all six live PAPER feeds and publishes only the strongest PAPER candidate', async () => {
     const live = new LivePaperMarketDataService();
     expect(live.isLiveConnection('conn-1')).toBe(false);
@@ -157,13 +188,15 @@ describe('VpsForexSignalCollectorService', () => {
         timeframe: 'M5',
         brokerConnectionId: 'conn-1',
         suggestedVolume: 0.1,
-        modelVersion: 'external-provider/vps-twelvedata-six-pair-v5/paper-only-v1',
+        modelVersion: 'external-provider/vps-twelvedata-six-pair-v6/paper-only-v1',
         metadata: expect.objectContaining({
           signal_source: 'EXTERNAL_PROVIDER',
-          external_provider_code: 'vps-twelvedata-six-pair-v5',
+          external_provider_code: 'vps-twelvedata-six-pair-v6',
           external_provider_paper_only: true,
           production_eligible: false,
           position_sizing_policy: 'risk-managed-up-to-0.10-lot-scanner-bound',
+          opportunity_freshness_policy:
+            'new-cycle-or-0.5atr-directional-extension-or-0.02-confidence-expansion',
         }),
       }),
     );

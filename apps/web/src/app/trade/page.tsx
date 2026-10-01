@@ -940,7 +940,7 @@ export default function AiTradingPage() {
         // has its own versioned evidence stream.
         try {
           const evidence = await api.request<ExternalProviderPerformanceView>(
-            "/ai/external/providers/performance?providerCode=vps-twelvedata-six-pair-v5",
+            "/ai/external/providers/performance?providerCode=vps-twelvedata-six-pair-v6",
           );
           setProviderEvidence(evidence);
         } catch {
@@ -2208,7 +2208,7 @@ export default function AiTradingPage() {
                       {vpsConfidenceActive
                         ? providerEvidence?.observed
                             .latestSubmittedConfidence != null
-                          ? `${providerEvidence.observed.latestSignalInstrument ?? "Signal"} ${providerEvidence.observed.latestSignalDirection ?? ""} · VPS Twelve Data v5 · ${formatTimestamp(providerEvidence.observed.latestSignalAt)}`
+                          ? `${providerEvidence.observed.latestSignalInstrument ?? "Signal"} ${providerEvidence.observed.latestSignalDirection ?? ""} · VPS Twelve Data v6 · ${formatTimestamp(providerEvidence.observed.latestSignalAt)}`
                           : "The VPS scanner is active. Confidence will appear when the next setup clears the scanner floor."
                         : automationRuntime?.last_decision ===
                             "NO_NEW_MARKET_DATA"

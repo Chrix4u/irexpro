@@ -11,7 +11,7 @@ import {
   LivePaperMarketDataService,
 } from '../broker/services/live-paper-market-data.service';
 
-const PROVIDER_CODE = 'vps-twelvedata-six-pair-v5';
+const PROVIDER_CODE = 'vps-twelvedata-six-pair-v6';
 const SIGNAL_NAMESPACE = '802e16f8-8209-4e1f-aa7e-a6a46387081c';
 const SYMBOLS = Object.freeze([
   ['EURUSD', 'EUR/USD'],
@@ -28,6 +28,9 @@ const SCANNER_LOT_UPPER_BOUND = 0.1;
 const MIN_STOP_LOSS_PIPS = 5;
 const STOP_FLOOR_BUFFER_PIPS = 0.1;
 const BAR_MS = 5 * 60_000;
+const FRESH_BREAKOUT_ATR = 0.5;
+const FRESH_CONFIDENCE_DELTA = 0.02;
+const MAX_CONFIDENCE_DECAY_ON_BREAKOUT = 0.015;
 
 interface TwelveDataValue {
   datetime: string;
@@ -55,6 +58,34 @@ interface Candidate {
   takeProfit: number;
   barTime: Date;
   score: number;
+  atr: number;
+}
+
+interface PublishedOpportunity {
+  direction: 'BUY' | 'SELL';
+  confidence: number;
+  entry: number;
+  atr: number;
+  barTimeMs: number;
+}
+
+export function isFreshOpportunity(
+  candidate: Candidate,
+  previous: PublishedOpportunity | undefined,
+): boolean {
+  if (!previous || previous.direction !== candidate.direction) return true;
+
+  const directionalMove =
+    candidate.direction === 'BUY'
+      ? candidate.entry - previous.entry
+      : previous.entry - candidate.entry;
+  const breakout =
+    directionalMove >= Math.max(candidate.atr, previous.atr) * FRESH_BREAKOUT_ATR &&
+    candidate.confidence >= previous.confidence - MAX_CONFIDENCE_DECAY_ON_BREAKOUT;
+  const confidenceExpansion =
+    candidate.confidence >= previous.confidence + FRESH_CONFIDENCE_DELTA;
+
+  return breakout || confidenceExpansion;
 }
 
 export function ema(values: number[], period: number): number {
@@ -158,6 +189,7 @@ export function buildCandidate(
     takeProfit: direction === 'BUY' ? px + targetDistance : px - targetDistance,
     barTime,
     score,
+    atr: atr14,
   };
 }
 
@@ -169,6 +201,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
   private lastSlot: string | null = null;
   private lastProviderFetchMinute: string | null = null;
   private lastProviderSeries: Map<string, LivePaperCandleInput[]> | null = null;
+  private readonly lastPublishedOpportunity = new Map<string, PublishedOpportunity>();
 
   constructor(
     private readonly config: ConfigService,
@@ -366,11 +399,29 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
 
       const candidates = [...seriesByInstrument.entries()]
         .map(([instrument, candles]) => buildCandidate(instrument, candles))
-        .filter((candidate): candidate is Candidate => candidate !== null)
+        .filter((candidate): candidate is Candidate => candidate !== null);
+
+      const currentDirectionByInstrument = new Map(
+        candidates.map((candidate) => [candidate.instrument, candidate.direction] as const),
+      );
+      for (const [instrument, previous] of this.lastPublishedOpportunity.entries()) {
+        if (currentDirectionByInstrument.get(instrument) !== previous.direction) {
+          this.lastPublishedOpportunity.delete(instrument);
+        }
+      }
+
+      const freshCandidates = candidates
+        .filter((candidate) =>
+          isFreshOpportunity(candidate, this.lastPublishedOpportunity.get(candidate.instrument)),
+        )
         .sort((a, b) => b.score - a.score);
-      const best = candidates[0];
+      const best = freshCandidates[0];
       if (!best) {
-        this.logger.log('VPS six-pair scan: no qualifying setup');
+        this.logger.log(
+          candidates.length
+            ? 'VPS six-pair scan: qualifying trend persists but no fresh opportunity evidence'
+            : 'VPS six-pair scan: no qualifying setup',
+        );
         return;
       }
 
@@ -408,11 +459,20 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           market_data_bar_time: best.barTime.toISOString(),
           market_data_execution_model: 'closed-candle-mid-with-conservative-fixed-paper-spread',
           position_sizing_policy: 'risk-managed-up-to-0.10-lot-scanner-bound',
+          opportunity_freshness_policy:
+            'new-cycle-or-0.5atr-directional-extension-or-0.02-confidence-expansion',
         },
+      });
+      this.lastPublishedOpportunity.set(best.instrument, {
+        direction: best.direction,
+        confidence: best.confidence,
+        entry: best.entry,
+        atr: best.atr,
+        barTimeMs: best.barTime.getTime(),
       });
       this.logger.log(
         `VPS six-pair candidate ${best.instrument} ${best.direction} confidence=${best.confidence.toFixed(4)} ` +
-          `outcome=${outcome.outcome} signal=${signalId}`,
+          `outcome=${outcome.outcome} signal=${signalId} freshness=new-evidence`,
       );
     } finally {
       this.running = false;
