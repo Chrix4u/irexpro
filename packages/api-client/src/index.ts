@@ -378,10 +378,15 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
+    const method = (init?.method ?? 'GET').toUpperCase();
+    const cache =
+      init?.cache ?? (method === 'GET' || method === 'HEAD' ? 'no-store' : undefined);
+
     let res: Response;
     try {
       res = await fetch(url, {
         ...init,
+        ...(cache ? { cache } : {}),
         headers,
         credentials: includeCredentials ? 'include' : 'same-origin',
       });

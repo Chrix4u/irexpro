@@ -762,6 +762,8 @@ export default function AiTradingPage() {
   const initializedActivity = useRef(false);
   const seenPositionIds = useRef<Set<string>>(new Set());
   const seenExecutionStates = useRef<Map<string, string>>(new Map());
+  const tradingRefreshInFlight = useRef(false);
+  const positionsRefreshInFlight = useRef(false);
 
   const controlStateReady = Boolean(
     terminal?.risk && terminal?.sessionStateKnown,
@@ -890,7 +892,8 @@ export default function AiTradingPage() {
 
   const refreshTradingData = useCallback(
     async (showSpinner = false) => {
-      if (!user) return;
+      if (!user || tradingRefreshInFlight.current) return;
+      tradingRefreshInFlight.current = true;
       if (showSpinner) setLoading(true);
       setError(null);
       try {
@@ -1006,6 +1009,7 @@ export default function AiTradingPage() {
       } catch (requestError) {
         setError(mapApiError(requestError).message);
       } finally {
+        tradingRefreshInFlight.current = false;
         if (showSpinner) setLoading(false);
       }
     },
@@ -1021,8 +1025,24 @@ export default function AiTradingPage() {
     if (!user) return;
     const timer = window.setInterval(() => {
       void refreshTradingData(false);
-    }, 8000);
+    }, 4000);
     return () => window.clearInterval(timer);
+  }, [user, refreshTradingData]);
+
+  useEffect(() => {
+    if (!user) return;
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") {
+        void refreshTradingData(false);
+      }
+    };
+    const refreshOnFocus = () => void refreshTradingData(false);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    window.addEventListener("focus", refreshOnFocus);
+    return () => {
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      window.removeEventListener("focus", refreshOnFocus);
+    };
   }, [user, refreshTradingData]);
 
   useEffect(() => {
@@ -1041,8 +1061,9 @@ export default function AiTradingPage() {
   useEffect(() => {
     if (!user || !selectedBrokerId) return;
     let cancelled = false;
+    let firstLoad = true;
     const refreshChart = async () => {
-      setChartLoading(true);
+      if (firstLoad) setChartLoading(true);
       try {
         const snapshot = await loadMarketIntelligence({
           instrument: chartInstrument,
@@ -1053,11 +1074,14 @@ export default function AiTradingPage() {
       } catch {
         if (!cancelled) setMarket(null);
       } finally {
-        if (!cancelled) setChartLoading(false);
+        if (!cancelled && firstLoad) {
+          setChartLoading(false);
+          firstLoad = false;
+        }
       }
     };
     void refreshChart();
-    const timer = window.setInterval(() => void refreshChart(), 10000);
+    const timer = window.setInterval(() => void refreshChart(), 5000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
@@ -1068,21 +1092,33 @@ export default function AiTradingPage() {
     if (!user) return;
     let disposed = false;
     const refreshPositions = async () => {
+      if (positionsRefreshInFlight.current) return;
+      positionsRefreshInFlight.current = true;
       try {
         const next = await loadLiveAccountPositions();
         if (!disposed) setLivePositions(next.positions);
       } catch {
-        // The broader 8-second workspace refresh owns the user-facing warning.
-        // Keep the last authoritative position snapshot rather than flashing
-        // empty/zero state on a transient provider read failure.
+        // The broader workspace refresh owns the user-facing warning. Keep the
+        // last authoritative snapshot instead of flashing empty/zero state.
+      } finally {
+        positionsRefreshInFlight.current = false;
       }
     };
+    void refreshPositions();
     const timer = window.setInterval(() => {
       void refreshPositions();
-    }, 3000);
+    }, 2000);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void refreshPositions();
+    };
+    const refreshOnFocus = () => void refreshPositions();
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    window.addEventListener("focus", refreshOnFocus);
     return () => {
       disposed = true;
       window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      window.removeEventListener("focus", refreshOnFocus);
     };
   }, [user]);
 
