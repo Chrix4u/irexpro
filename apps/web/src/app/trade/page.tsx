@@ -127,6 +127,12 @@ interface VpsForexScannerStatusView {
   timeframe: string;
   skippedUtcHours: number[];
   confidenceFloor: number;
+  lastEvaluatedConfidence: number | null;
+  lastEvaluatedInstrument: string | null;
+  lastEvaluatedDirection: "BUY" | "SELL" | null;
+  lastEvaluatedAt: string | null;
+  lastEvaluationQualified: boolean;
+  lastEvaluationReason: "QUALIFYING_SETUP" | "NO_QUALIFYING_SETUP";
   paperOnly: boolean;
   automaticDemoPromotion: boolean;
   automaticLivePromotion: boolean;
@@ -818,8 +824,12 @@ export default function AiTradingPage() {
             : "running";
 
   const vpsConfidenceActive = vpsScannerStatus?.enabled === true;
+  const submittedVpsConfidence =
+    providerEvidence?.observed.latestSubmittedConfidence ?? null;
   const displayedConfidence = vpsConfidenceActive
-    ? (providerEvidence?.observed.latestSubmittedConfidence ?? null)
+    ? (submittedVpsConfidence ??
+      vpsScannerStatus?.lastEvaluatedConfidence ??
+      null)
     : (automationRuntime?.last_confidence_score ?? null);
   const displayedConfidenceThreshold = vpsConfidenceActive
     ? (vpsScannerStatus?.confidenceFloor ?? 0.64)
@@ -1806,12 +1816,12 @@ export default function AiTradingPage() {
                         External signal evidence
                       </p>
                       <h2 id="provider-evidence-title">
-                        VPS · Twelve Data Six-Pair v5
+                        VPS · Twelve Data Six-Pair {vpsScannerStatus?.providerCode.match(/-v(\d+)$/)?.[1] ? `v${vpsScannerStatus.providerCode.match(/-v(\d+)$/)?.[1]}` : "Active"}
                       </h2>
                       <p>
                         Live six-pair VPS signals are measured independently in
                         PAPER before any DEMO review. Closed M5 market candles
-                        remain authoritative for v5 setup, fills and exits;
+                        remain authoritative for the active scanner setup, fills and exits;
                         available WebSocket ticks are mark-only for faster
                         Current/P&amp;L display.
                       </p>
@@ -2171,7 +2181,9 @@ export default function AiTradingPage() {
                   >
                     <span className="ai-cockpit__label">
                       {vpsConfidenceActive
-                        ? "Last signal confidence"
+                        ? submittedVpsConfidence != null
+                          ? "Last signal confidence"
+                          : "Latest scanner confidence"
                         : automationRuntime?.last_decision ===
                             "NO_NEW_MARKET_DATA"
                           ? "Last evaluated confidence"
@@ -2187,8 +2199,10 @@ export default function AiTradingPage() {
                       <span>
                         {vpsConfidenceActive
                           ? displayedConfidence == null
-                            ? "Waiting for first qualifying v3 signal"
-                            : confidencePercent >=
+                            ? "No qualifying v7 setup on latest scan"
+                            : submittedVpsConfidence == null
+                              ? "Latest v7 setup evaluation"
+                              : confidencePercent >=
                                 (displayedConfidenceThreshold ?? 0) * 100
                               ? "Qualified VPS signal"
                               : "Below scanner floor"
@@ -2206,10 +2220,11 @@ export default function AiTradingPage() {
                     </div>
                     <p>
                       {vpsConfidenceActive
-                        ? providerEvidence?.observed
-                            .latestSubmittedConfidence != null
-                          ? `${providerEvidence.observed.latestSignalInstrument ?? "Signal"} ${providerEvidence.observed.latestSignalDirection ?? ""} · VPS Twelve Data v7 · ${formatTimestamp(providerEvidence.observed.latestSignalAt)}`
-                          : "The VPS scanner is active. Confidence will appear when the next setup clears the scanner floor."
+                        ? submittedVpsConfidence != null
+                          ? `${providerEvidence?.observed.latestSignalInstrument ?? "Signal"} ${providerEvidence?.observed.latestSignalDirection ?? ""} · VPS Twelve Data v7 · ${formatTimestamp(providerEvidence?.observed.latestSignalAt)}`
+                          : vpsScannerStatus?.lastEvaluatedConfidence != null
+                            ? `${vpsScannerStatus.lastEvaluatedInstrument ?? "Setup"} ${vpsScannerStatus.lastEvaluatedDirection ?? ""} · evaluated ${formatTimestamp(vpsScannerStatus.lastEvaluatedAt)} · waiting for fresh qualified submission`
+                            : `V7 scanner evaluated the latest market state at ${formatTimestamp(vpsScannerStatus?.lastEvaluatedAt)} and found no qualifying setup.`
                         : automationRuntime?.last_decision ===
                             "NO_NEW_MARKET_DATA"
                           ? `No new candle after ${formatTimestamp(automationRuntime?.last_market_data_at)}. Confidence will update when a new market revision is evaluated.`

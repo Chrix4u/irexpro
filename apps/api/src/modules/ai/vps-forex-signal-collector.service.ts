@@ -252,6 +252,21 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
   private lastProviderFetchMinute: string | null = null;
   private lastProviderSeries: Map<string, LivePaperCandleInput[]> | null = null;
   private readonly lastPublishedOpportunity = new Map<string, PublishedOpportunity>();
+  private lastEvaluation: {
+    confidence: number | null;
+    instrument: string | null;
+    direction: 'BUY' | 'SELL' | null;
+    evaluatedAt: Date | null;
+    qualified: boolean;
+    reason: 'QUALIFYING_SETUP' | 'NO_QUALIFYING_SETUP';
+  } = {
+    confidence: null,
+    instrument: null,
+    direction: null,
+    evaluatedAt: null,
+    qualified: false,
+    reason: 'NO_QUALIFYING_SETUP',
+  };
 
   constructor(
     private readonly config: ConfigService,
@@ -369,6 +384,12 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       timeframe: 'M5',
       skippedUtcHours: [21, 22, 23],
       confidenceFloor: CONFIDENCE_FLOOR,
+      lastEvaluatedConfidence: this.lastEvaluation.confidence,
+      lastEvaluatedInstrument: this.lastEvaluation.instrument,
+      lastEvaluatedDirection: this.lastEvaluation.direction,
+      lastEvaluatedAt: this.lastEvaluation.evaluatedAt?.toISOString() ?? null,
+      lastEvaluationQualified: this.lastEvaluation.qualified,
+      lastEvaluationReason: this.lastEvaluation.reason,
       paperOnly: true,
       automaticDemoPromotion: false,
       automaticLivePromotion: false,
@@ -450,6 +471,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       const candidates = [...seriesByInstrument.entries()]
         .map(([instrument, candles]) => buildCandidate(instrument, candles))
         .filter((candidate): candidate is Candidate => candidate !== null);
+      this.recordEvaluation(candidates);
 
       const currentDirectionByInstrument = new Map(
         candidates.map((candidate) => [candidate.instrument, candidate.direction] as const),
@@ -541,6 +563,27 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     return now.getUTCMinutes() % 10 === 0;
   }
 
+  private recordEvaluation(candidates: Candidate[]): void {
+    const best = [...candidates].sort((a, b) => b.score - a.score)[0];
+    this.lastEvaluation = best
+      ? {
+          confidence: best.confidence,
+          instrument: best.instrument,
+          direction: best.direction,
+          evaluatedAt: new Date(),
+          qualified: true,
+          reason: 'QUALIFYING_SETUP',
+        }
+      : {
+          confidence: null,
+          instrument: null,
+          direction: null,
+          evaluatedAt: new Date(),
+          qualified: false,
+          reason: 'NO_QUALIFYING_SETUP',
+        };
+  }
+
   private async heartbeatLivePaper(userId: string, connectionId: string): Promise<void> {
     for (const [instrument] of SYMBOLS) {
       await this.brokerService.getCurrentPriceForConnection(userId, connectionId, instrument);
@@ -552,6 +595,11 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     for (const [instrument, candles] of seriesByInstrument.entries()) {
       this.livePaperMarket.updateClosedCandles(instrument, candles);
     }
+    this.recordEvaluation(
+      [...seriesByInstrument.entries()]
+        .map(([instrument, candles]) => buildCandidate(instrument, candles))
+        .filter((candidate): candidate is Candidate => candidate !== null),
+    );
     const cacheStatus = this.livePaperMarket.status();
     if (cacheStatus.cachedInstrumentCount !== SYMBOLS.length) {
       throw new Error(
