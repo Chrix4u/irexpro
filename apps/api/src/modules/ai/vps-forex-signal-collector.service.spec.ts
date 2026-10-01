@@ -103,6 +103,12 @@ describe('VpsForexSignalCollectorService', () => {
     expect(candidate!.confidence).toBeLessThanOrEqual(0.8);
     expect(candidate!.takeProfit).toBeGreaterThan(candidate!.entry);
     expect(candidate!.stopLoss).toBeLessThan(candidate!.entry);
+    const stopPips = Math.abs(candidate!.entry - candidate!.stopLoss) / 0.0001;
+    const rewardRisk =
+      Math.abs(candidate!.takeProfit - candidate!.entry) /
+      Math.abs(candidate!.entry - candidate!.stopLoss);
+    expect(stopPips).toBeGreaterThanOrEqual(5);
+    expect(rewardRisk).toBeCloseTo(2.5 / 1.5, 6);
   });
 
   it('refreshes all six live PAPER feeds and publishes only the strongest PAPER candidate', async () => {
@@ -150,10 +156,10 @@ describe('VpsForexSignalCollectorService', () => {
         direction: 'BUY',
         timeframe: 'M5',
         brokerConnectionId: 'conn-1',
-        modelVersion: 'external-provider/vps-twelvedata-six-pair-v1/paper-only-v1',
+        modelVersion: 'external-provider/vps-twelvedata-six-pair-v2/paper-only-v1',
         metadata: expect.objectContaining({
           signal_source: 'EXTERNAL_PROVIDER',
-          external_provider_code: 'vps-twelvedata-six-pair-v1',
+          external_provider_code: 'vps-twelvedata-six-pair-v2',
           external_provider_paper_only: true,
           production_eligible: false,
         }),

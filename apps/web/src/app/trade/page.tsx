@@ -886,7 +886,7 @@ export default function AiTradingPage() {
         // has its own versioned evidence stream.
         try {
           const evidence = await api.request<ExternalProviderPerformanceView>(
-            "/ai/external/providers/performance?providerCode=vps-twelvedata-six-pair-v1",
+            "/ai/external/providers/performance?providerCode=vps-twelvedata-six-pair-v2",
           );
           setProviderEvidence(evidence);
         } catch {
@@ -1719,7 +1719,7 @@ export default function AiTradingPage() {
                         External signal evidence
                       </p>
                       <h2 id="provider-evidence-title">
-                        VPS · Twelve Data Six-Pair v1
+                        VPS · Twelve Data Six-Pair v2
                       </h2>
                       <p>
                         Live six-pair VPS signals are measured independently in

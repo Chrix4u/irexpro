@@ -1,8 +1,10 @@
 # VPS-native six-pair PAPER evidence collector
 
-Provider evidence key: **`vps-twelvedata-six-pair-v1`**.
+Provider evidence key: **`vps-twelvedata-six-pair-v2`**.
 
 Status: **PAPER evidence collection only.** This path does not grant DEMO or LIVE execution authority.
+
+Version note: v1 produced one genuine USDCAD candidate during activation, but the Risk Engine rejected it before execution because its ATR stop was 4.7 pips versus the 5-pip structural minimum. v2 starts a clean evidence stream and floors candidate stop geometry at 5.1 pips (5-pip platform minimum plus a 0.1-pip rounding buffer) while preserving the 2.5:1.5 target/stop ratio. The Risk Engine remains independently authoritative.
 
 ## Purpose
 

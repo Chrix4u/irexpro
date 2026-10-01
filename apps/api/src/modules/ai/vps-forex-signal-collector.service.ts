@@ -11,7 +11,7 @@ import {
   LivePaperMarketDataService,
 } from '../broker/services/live-paper-market-data.service';
 
-const PROVIDER_CODE = 'vps-twelvedata-six-pair-v1';
+const PROVIDER_CODE = 'vps-twelvedata-six-pair-v2';
 const SIGNAL_NAMESPACE = '802e16f8-8209-4e1f-aa7e-a6a46387081c';
 const SYMBOLS = Object.freeze([
   ['EURUSD', 'EUR/USD'],
@@ -24,6 +24,8 @@ const SYMBOLS = Object.freeze([
 const CONFIDENCE_FLOOR = 0.64;
 const STOP_ATR_MULTIPLIER = 1.5;
 const TARGET_ATR_MULTIPLIER = 2.5;
+const MIN_STOP_LOSS_PIPS = 5;
+const STOP_FLOOR_BUFFER_PIPS = 0.1;
 const BAR_MS = 5 * 60_000;
 
 interface TwelveDataValue {
@@ -135,6 +137,15 @@ export function buildCandidate(
   if (confidence < CONFIDENCE_FLOOR) return null;
   const score = confidence + 0.05 * emaSeparation - 0.02 * volatilityScore;
   const barTime = new Date(candles[candles.length - 1]!.timestamp);
+  const pipSize = instrument.endsWith('JPY') ? 0.01 : 0.0001;
+  // Candidate geometry should satisfy the platform's structural 5-pip minimum
+  // before the independent Risk Engine evaluates it. This does NOT weaken or
+  // bypass Risk; it prevents a low-ATR setup from being malformed by design.
+  const stopDistance = Math.max(
+    atr14 * STOP_ATR_MULTIPLIER,
+    (MIN_STOP_LOSS_PIPS + STOP_FLOOR_BUFFER_PIPS) * pipSize,
+  );
+  const targetDistance = stopDistance * (TARGET_ATR_MULTIPLIER / STOP_ATR_MULTIPLIER);
 
   return {
     instrument,
@@ -142,10 +153,8 @@ export function buildCandidate(
     confidence,
     volatilityScore,
     entry: px,
-    stopLoss:
-      direction === 'BUY' ? px - atr14 * STOP_ATR_MULTIPLIER : px + atr14 * STOP_ATR_MULTIPLIER,
-    takeProfit:
-      direction === 'BUY' ? px + atr14 * TARGET_ATR_MULTIPLIER : px - atr14 * TARGET_ATR_MULTIPLIER,
+    stopLoss: direction === 'BUY' ? px - stopDistance : px + stopDistance,
+    takeProfit: direction === 'BUY' ? px + targetDistance : px - targetDistance,
     barTime,
     score,
   };
@@ -353,7 +362,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         suggestedTakeProfit: Number(best.takeProfit.toFixed(digits)),
         suggestedVolume: 0.01,
         timeframe: 'M5',
-        strategyCode: 'external-vps-twelvedata-six-pair-v1',
+        strategyCode: `external-${PROVIDER_CODE}`,
         marketRegime: 'TRENDING',
         volatilityScore: best.volatilityScore,
         generatedAt: new Date(),
