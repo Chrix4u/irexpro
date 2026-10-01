@@ -11,7 +11,7 @@ import {
   LivePaperMarketDataService,
 } from '../broker/services/live-paper-market-data.service';
 
-const PROVIDER_CODE = 'vps-twelvedata-six-pair-v2';
+const PROVIDER_CODE = 'vps-twelvedata-six-pair-v3';
 const SIGNAL_NAMESPACE = '802e16f8-8209-4e1f-aa7e-a6a46387081c';
 const SYMBOLS = Object.freeze([
   ['EURUSD', 'EUR/USD'],

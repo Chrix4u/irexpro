@@ -15,6 +15,39 @@ export class PaperBrokerStateService {
     return row?.state ?? null;
   }
 
+  /**
+   * Explicit qualification-campaign reset. Unlike save(), this intentionally
+   * replaces monotonic simulator state after the trading session has been
+   * stopped and flattened. Durable trading.trades evidence lives elsewhere
+   * and is never deleted by this operation.
+   */
+  async resetForQualification(connectionId: string): Promise<void> {
+    const pristine = {
+      version: 1,
+      orderCounter: 0,
+      marketTickCounter: 0,
+      balance: '10000.00',
+      working: [],
+      positions: [],
+      closedTrades: [],
+      orderStates: [],
+      resultsByDedupeKey: [],
+    };
+    await this.repository.query(
+      `
+        INSERT INTO broker.paper_broker_states
+          (connection_id, state_version, state, created_at, updated_at)
+        VALUES ($1, 1, $2::jsonb, now(), now())
+        ON CONFLICT (connection_id)
+        DO UPDATE SET
+          state_version = 1,
+          state = EXCLUDED.state,
+          updated_at = now()
+      `,
+      [connectionId, JSON.stringify(pristine)],
+    );
+  }
+
   async save(connectionId: string, state: Record<string, unknown>): Promise<void> {
     await this.repository.query(
       `

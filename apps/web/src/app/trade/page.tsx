@@ -886,7 +886,7 @@ export default function AiTradingPage() {
         // has its own versioned evidence stream.
         try {
           const evidence = await api.request<ExternalProviderPerformanceView>(
-            "/ai/external/providers/performance?providerCode=vps-twelvedata-six-pair-v2",
+            "/ai/external/providers/performance?providerCode=vps-twelvedata-six-pair-v3",
           );
           setProviderEvidence(evidence);
         } catch {

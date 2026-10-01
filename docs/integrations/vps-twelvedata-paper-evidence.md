@@ -1,6 +1,6 @@
 # VPS-native six-pair PAPER evidence collector
 
-Provider evidence key: **`vps-twelvedata-six-pair-v2`**.
+Provider evidence key: **`vps-twelvedata-six-pair-v3`**.
 
 Status: **PAPER evidence collection only.** This path does not grant DEMO or LIVE execution authority.
 

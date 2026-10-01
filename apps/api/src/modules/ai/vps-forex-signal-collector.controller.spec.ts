@@ -4,7 +4,7 @@ import { VpsForexSignalCollectorService } from './vps-forex-signal-collector.ser
 describe('VpsForexSignalCollectorController', () => {
   it('scopes status to the authenticated user and exposes no configuration secrets', async () => {
     const getStatus = jest.fn().mockResolvedValue({
-      providerCode: 'vps-twelvedata-six-pair-v2',
+      providerCode: 'vps-twelvedata-six-pair-v3',
       enabled: false,
       configured: false,
       state: 'WAITING_FOR_CONFIGURATION',
