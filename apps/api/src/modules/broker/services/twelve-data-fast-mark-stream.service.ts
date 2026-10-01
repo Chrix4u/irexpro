@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { LivePaperMarketDataService } from './live-paper-market-data.service';
+import { PaperBrokerStateService } from './paper-broker-state.service';
 
 type WsEvent = { data?: unknown; code?: number };
 type NativeWebSocketLike = {
@@ -16,6 +17,9 @@ type NativeWebSocketCtor = new (url: string) => NativeWebSocketLike;
 
 const PROVIDER_SYMBOLS = ['EUR/USD', 'GBP/USD', 'USD/JPY', 'AUD/USD', 'USD/CAD', 'USD/CHF'];
 const SYMBOL_MAP = new Map(PROVIDER_SYMBOLS.map((symbol) => [symbol, symbol.replace('/', '')]));
+const PROVIDER_BY_INSTRUMENT = new Map(
+  [...SYMBOL_MAP.entries()].map(([provider, instrument]) => [instrument, provider]),
+);
 
 @Injectable()
 export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDestroy {
@@ -23,25 +27,35 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
   private socket: NativeWebSocketLike | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
+  private preferenceTimer: NodeJS.Timeout | null = null;
   private reconnectDelayMs = 5_000;
   private destroyed = false;
+  private preferredProviderSymbol = PROVIDER_SYMBOLS[0]!;
 
   constructor(
     private readonly config: ConfigService,
     private readonly market: LivePaperMarketDataService,
+    private readonly paperState: PaperBrokerStateService,
   ) {}
 
-  onModuleInit(): void {
+  async onModuleInit(): Promise<void> {
     if (process.env.NODE_ENV === 'test' || !this.enabled()) return;
+    await this.refreshPreferredSymbol(false);
     this.connect();
+    this.preferenceTimer = setInterval(() => {
+      void this.refreshPreferredSymbol(true);
+    }, 30_000);
+    this.preferenceTimer.unref?.();
   }
 
   onModuleDestroy(): void {
     this.destroyed = true;
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    if (this.preferenceTimer) clearInterval(this.preferenceTimer);
     this.heartbeatTimer = null;
     this.reconnectTimer = null;
+    this.preferenceTimer = null;
     try {
       this.socket?.close();
     } catch {
@@ -73,12 +87,11 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
 
     socket.addEventListener('open', () => {
       this.reconnectDelayMs = 5_000;
-      socket.send(
-        JSON.stringify({ action: 'subscribe', params: { symbols: PROVIDER_SYMBOLS.join(',') } }),
-      );
+      const symbols = this.orderedProviderSymbols();
+      socket.send(JSON.stringify({ action: 'subscribe', params: { symbols: symbols.join(',') } }));
       this.startHeartbeat();
       this.logger.log(
-        'Twelve Data fast-mark WebSocket connected; subscription requested for 6 pairs',
+        `Twelve Data fast-mark WebSocket connected; primary=${this.preferredProviderSymbol} subscription requested for 6 pairs`,
       );
     });
     socket.addEventListener('message', (event) => this.onMessage(event.data));
@@ -144,6 +157,57 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
     // recalculate unrealized P&L. v5 PAPER SL/TP remains governed by the
     // closed-M5 evidence path; tick-level exits require a separately
     // versioned execution model once a six-pair broker-grade stream exists.
+  }
+
+  private orderedProviderSymbols(): string[] {
+    return [
+      this.preferredProviderSymbol,
+      ...PROVIDER_SYMBOLS.filter((symbol) => symbol !== this.preferredProviderSymbol),
+    ];
+  }
+
+  private async refreshPreferredSymbol(reconnectOnChange: boolean): Promise<void> {
+    const connectionId = this.config.get<string>('vpsForexScanner.brokerConnectionId', '').trim();
+    if (!connectionId) return;
+    let state: Record<string, unknown> | null = null;
+    try {
+      state = await this.paperState.load(connectionId);
+    } catch (error) {
+      this.logger.debug(`Fast-mark preference lookup deferred: ${(error as Error).message}`);
+      return;
+    }
+    const positions = Array.isArray(state?.positions) ? state.positions : [];
+    const score = new Map<string, { count: number; latest: number }>();
+    for (const raw of positions) {
+      if (!raw || typeof raw !== 'object') continue;
+      const position = raw as { instrument?: unknown; openedAt?: unknown };
+      const instrument =
+        typeof position.instrument === 'string' ? position.instrument.trim().toUpperCase() : '';
+      const provider = PROVIDER_BY_INSTRUMENT.get(instrument);
+      if (!provider) continue;
+      const openedAt = new Date(String(position.openedAt ?? '')).getTime();
+      const current = score.get(provider) ?? { count: 0, latest: 0 };
+      current.count += 1;
+      if (Number.isFinite(openedAt)) current.latest = Math.max(current.latest, openedAt);
+      score.set(provider, current);
+    }
+    const preferred =
+      [...score.entries()]
+        .sort((a, b) => b[1].count - a[1].count || b[1].latest - a[1].latest)
+        .map(([provider]) => provider)[0] ?? PROVIDER_SYMBOLS[0]!;
+    if (preferred === this.preferredProviderSymbol) return;
+    const previous = this.preferredProviderSymbol;
+    this.preferredProviderSymbol = preferred;
+    this.logger.log(
+      `Fast-mark primary changed ${previous} -> ${preferred} based on open PAPER exposure`,
+    );
+    if (reconnectOnChange && this.socket) {
+      try {
+        this.socket.close();
+      } catch {
+        // close/reconnect handler owns recovery
+      }
+    }
   }
 
   private startHeartbeat(): void {
