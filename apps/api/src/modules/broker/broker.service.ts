@@ -36,7 +36,7 @@ import {
   BrokerAccountSnapshotService,
   type ProviderAccountObservation,
 } from './services/broker-account-snapshot.service';
-import { BrokerAdapterError } from './interfaces/broker-adapter.errors';
+import { BrokerAdapterError, BrokerErrorCode } from './interfaces/broker-adapter.errors';
 import {
   BrokerAuthorizationStatus,
   BrokerAuthorizationStateMachine,
@@ -1469,6 +1469,30 @@ export class BrokerService {
 
       return true;
     } catch (err) {
+      // The internal PAPER broker can be healthy while its external market-data
+      // cache is temporarily unavailable (for example a Twelve Data 429 during
+      // API restart). That is a MARKET-DATA degradation, not a broker/credential
+      // failure. Keep the connection CONNECTED so exits/marks can recover as soon
+      // as the cache refills; NEW exposure still fails closed at the fresh-quote
+      // and market-safety gates. Never apply this exemption to real providers.
+      const isTransientLivePaperMarketDataGap =
+        connection.brokerId === 'paper-broker' &&
+        err instanceof BrokerAdapterError &&
+        err.code === BrokerErrorCode.PROVIDER_UNAVAILABLE &&
+        err.isRetryable === true;
+      if (isTransientLivePaperMarketDataGap) {
+        await this.connectionRepo.update(connectionId, {
+          consecutiveFailureCount: 0,
+          lastErrorMessage: (err as Error).message,
+          lastHealthCheckAt: new Date(),
+        });
+        this.logger.warn(
+          `PAPER connection ${connectionId} market data temporarily unavailable; ` +
+            'retaining CONNECTED status while exposure remains fail-closed until quotes recover',
+        );
+        return false;
+      }
+
       const failureCount = (connection.consecutiveFailureCount ?? 0) + 1;
       const SUSPEND_THRESHOLD = 3;
 

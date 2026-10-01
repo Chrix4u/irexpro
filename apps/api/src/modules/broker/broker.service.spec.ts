@@ -25,6 +25,7 @@ import { AuditAction } from '../../common/enums/audit-action.enum';
 import { BrokerConnectionStatus, BrokerMode } from './interfaces/broker-adapter.interface';
 import { BrokerAuthorizationStatus } from './authorization/broker-authorization-status';
 import { DomainEventBus } from '../events/event-bus.service';
+import { BrokerAdapterError, BrokerErrorCode } from './interfaces/broker-adapter.errors';
 
 // ─── Mock factories ───────────────────────────────────────────────────────────
 
@@ -992,6 +993,46 @@ describe('BrokerService', () => {
       // Status must NOT be set to SUSPENDED on success
       const updateCall = (connectionRepo.update as jest.Mock).mock.calls[0][1];
       expect(updateCall.status).toBeUndefined();
+    });
+
+    it('keeps the internal PAPER connection CONNECTED when only live market data is temporarily unavailable', async () => {
+      const adapter = {
+        setMode: jest.fn(),
+        connect: jest.fn().mockResolvedValue({ success: true, accountType: BrokerMode.DEMO }),
+        getAccountInfo: jest
+          .fn()
+          .mockRejectedValue(
+            new BrokerAdapterError(
+              BrokerErrorCode.PROVIDER_UNAVAILABLE,
+              'No live PAPER quote is cached yet for USDJPY.',
+              undefined,
+              true,
+            ),
+          ),
+      };
+      registry.getAdapter.mockReturnValue(adapter);
+      connectionRepo.findOne.mockResolvedValue(
+        connectedConnection({ brokerId: 'paper-broker', consecutiveFailureCount: 2 }),
+      );
+
+      const result = await service.healthCheck('conn-1');
+
+      expect(result).toBe(false);
+      expect(connectionRepo.update).toHaveBeenCalledWith(
+        'conn-1',
+        expect.objectContaining({
+          consecutiveFailureCount: 0,
+          lastErrorMessage: 'No live PAPER quote is cached yet for USDJPY.',
+        }),
+      );
+      expect(connectionRepo.update).not.toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.objectContaining({ status: BrokerConnectionStatus.SUSPENDED }),
+      );
+      expect(registry.releaseAdapterForConnection).not.toHaveBeenCalled();
+      expect(auditService.log).not.toHaveBeenCalledWith(
+        expect.objectContaining({ action: AuditAction.BROKER_SUSPENDED_HEALTH_FAILURE }),
+      );
     });
 
     it('1st failure: increments failureCount to 1 — does NOT suspend', async () => {
