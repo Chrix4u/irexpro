@@ -154,6 +154,7 @@ interface ExternalProviderPerformanceView {
     receivedSignals: number;
     executedTrades: number;
     closedTrades: number;
+    interruptedClosedTrades: number;
     balancedAccuracy: number | null;
     profitFactor: number | null;
     evidenceWindowSharpeRatio: number | null;
@@ -161,6 +162,10 @@ interface ExternalProviderPerformanceView {
     positiveWeeklyWindowFraction: number;
     positiveInstrumentFraction: number;
     minSubmittedConfidence: number | null;
+    latestSubmittedConfidence: number | null;
+    latestSignalAt: string | null;
+    latestSignalInstrument: string | null;
+    latestSignalDirection: "BUY" | "SELL" | null;
     medianMinutesBetweenSignals: number | null;
     totalNormalizedReturn: number;
     evaluatedWeeklyWindows: number;
@@ -773,8 +778,17 @@ export default function AiTradingPage() {
             ? "scanning"
             : "running";
 
-  const confidenceValue = automationRuntime?.last_confidence_score ?? 0;
-  const confidencePercent = Math.max(0, Math.min(100, confidenceValue * 100));
+  const vpsConfidenceActive = vpsScannerStatus?.enabled === true;
+  const displayedConfidence = vpsConfidenceActive
+    ? (providerEvidence?.observed.latestSubmittedConfidence ?? null)
+    : (automationRuntime?.last_confidence_score ?? null);
+  const displayedConfidenceThreshold = vpsConfidenceActive
+    ? (vpsScannerStatus?.confidenceFloor ?? 0.64)
+    : (automationRuntime?.confidence_threshold ?? null);
+  const confidencePercent = Math.max(
+    0,
+    Math.min(100, (displayedConfidence ?? 0) * 100),
+  );
   const confidenceTone =
     confidencePercent >= 70
       ? "strong"
@@ -2037,38 +2051,50 @@ export default function AiTradingPage() {
                     className={`ai-confidence ai-confidence--${confidenceTone}`}
                   >
                     <span className="ai-cockpit__label">
-                      {automationRuntime?.last_decision === "NO_NEW_MARKET_DATA"
-                        ? "Last evaluated confidence"
-                        : "AI confidence"}
+                      {vpsConfidenceActive
+                        ? "Last signal confidence"
+                        : automationRuntime?.last_decision ===
+                            "NO_NEW_MARKET_DATA"
+                          ? "Last evaluated confidence"
+                          : "AI confidence"}
                     </span>
                     <strong className="ai-confidence__value">
-                      {formatConfidence(
-                        automationRuntime?.last_confidence_score,
-                      )}
+                      {formatConfidence(displayedConfidence)}
                     </strong>
                     <div className="ai-confidence__track" aria-hidden="true">
                       <span style={{ width: `${confidencePercent}%` }} />
                     </div>
                     <div className="ai-confidence__meta">
                       <span>
-                        {automationRuntime?.last_decision ===
-                        "NO_NEW_MARKET_DATA"
-                          ? "Waiting for new market data"
-                          : confidencePercent >= 60
-                            ? "Qualified strength"
-                            : "Building conviction"}
+                        {vpsConfidenceActive
+                          ? displayedConfidence == null
+                            ? "Waiting for first qualifying v3 signal"
+                            : confidencePercent >=
+                                (displayedConfidenceThreshold ?? 0) * 100
+                              ? "Qualified VPS signal"
+                              : "Below scanner floor"
+                          : automationRuntime?.last_decision ===
+                              "NO_NEW_MARKET_DATA"
+                            ? "Waiting for new market data"
+                            : confidencePercent >= 60
+                              ? "Qualified strength"
+                              : "Building conviction"}
                       </span>
                       <span>
-                        {formatConfidence(
-                          automationRuntime?.confidence_threshold,
-                        )}{" "}
-                        gate
+                        {formatConfidence(displayedConfidenceThreshold)}{" "}
+                        {vpsConfidenceActive ? "scanner floor" : "gate"}
                       </span>
                     </div>
                     <p>
-                      {automationRuntime?.last_decision === "NO_NEW_MARKET_DATA"
-                        ? `No new candle after ${formatTimestamp(automationRuntime?.last_market_data_at)}. Confidence will update when a new market revision is evaluated.`
-                        : runtimeReasonLabel(automationRuntime?.last_reason)}
+                      {vpsConfidenceActive
+                        ? providerEvidence?.observed
+                            .latestSubmittedConfidence != null
+                          ? `${providerEvidence.observed.latestSignalInstrument ?? "Signal"} ${providerEvidence.observed.latestSignalDirection ?? ""} · VPS Twelve Data v3 · ${formatTimestamp(providerEvidence.observed.latestSignalAt)}`
+                          : "The VPS scanner is active. Confidence will appear when the next setup clears the scanner floor."
+                        : automationRuntime?.last_decision ===
+                            "NO_NEW_MARKET_DATA"
+                          ? `No new candle after ${formatTimestamp(automationRuntime?.last_market_data_at)}. Confidence will update when a new market revision is evaluated.`
+                          : runtimeReasonLabel(automationRuntime?.last_reason)}
                     </p>
                   </aside>
                 </div>

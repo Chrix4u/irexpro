@@ -26,6 +26,7 @@ type EvidenceRow = {
   fill_price: string | number | null;
   exit_price: string | number | null;
   realised_pnl: string | number | null;
+  close_reason: string | null;
   closed_at: Date | string | null;
   allocated_capital: string | number | null;
   broker_connection_id: string | null;
@@ -130,6 +131,7 @@ export class ExternalSignalPerformanceService {
           t.fill_price,
           t.exit_price,
           t.realised_pnl,
+          t.close_reason,
           t.closed_at,
           ca.allocated_capital,
           ti.broker_connection_id,
@@ -156,7 +158,7 @@ export class ExternalSignalPerformanceService {
       signalGaps.push((signalTimes[i] - signalTimes[i - 1]) / 60000);
     }
 
-    const closed = rows.filter(
+    const allEconomicallyClosed = rows.filter(
       (row) =>
         row.trade_status === 'CLOSED' &&
         row.closed_at != null &&
@@ -164,6 +166,10 @@ export class ExternalSignalPerformanceService {
         finite(row.session_opening_balance) !== null &&
         (finite(row.session_opening_balance) ?? 0) > 0,
     );
+    const closed = allEconomicallyClosed.filter(
+      (row) => row.close_reason === 'STOP_LOSS_HIT' || row.close_reason === 'TAKE_PROFIT_HIT',
+    );
+    const interruptedClosedTrades = allEconomicallyClosed.length - closed.length;
 
     const realisedPnls = closed.map((row) => finite(row.realised_pnl) ?? 0);
     const tradeReturns = closed.map(
@@ -250,12 +256,16 @@ export class ExternalSignalPerformanceService {
       .map((row) => finite(row.confidence_score))
       .filter((value): value is number => value !== null);
     const minConfidence = confidences.length ? Math.min(...confidences) : null;
+    const latestRow = rows.length ? rows[rows.length - 1]! : null;
+    const latestSubmittedConfidence = latestRow ? finite(latestRow.confidence_score) : null;
+    const latestSignalAt = latestRow ? new Date(latestRow.signal_generated_at) : null;
     const medianGap = median(signalGaps);
 
     const observed = {
       receivedSignals: rows.length,
       executedTrades: rows.filter((row) => row.trade_id != null).length,
       closedTrades: closed.length,
+      interruptedClosedTrades,
       balancedAccuracy: ba,
       profitFactor: pf,
       evidenceWindowSharpeRatio: sharpe,
@@ -263,6 +273,13 @@ export class ExternalSignalPerformanceService {
       positiveWeeklyWindowFraction: positiveWindowFraction,
       positiveInstrumentFraction,
       minSubmittedConfidence: minConfidence,
+      latestSubmittedConfidence,
+      latestSignalAt:
+        latestSignalAt && Number.isFinite(latestSignalAt.getTime())
+          ? latestSignalAt.toISOString()
+          : null,
+      latestSignalInstrument: latestRow?.instrument ?? null,
+      latestSignalDirection: latestRow?.direction ?? null,
       medianMinutesBetweenSignals: medianGap,
       totalNormalizedReturn: tradeReturns.reduce((a, b) => a + b, 0),
       instrumentNormalizedReturns: instrumentReturns,
@@ -298,8 +315,10 @@ export class ExternalSignalPerformanceService {
       observed,
       checks,
       methodology: {
+        completedTradeEvidence:
+          'Qualification metrics count only PAPER trades durably closed by STOP_LOSS_HIT or TAKE_PROFIT_HIT. Manual, kill-switch, reconciliation and unknown broker closes are censored/interrupted and do not count toward the 100-trade gate.',
         balancedAccuracy:
-          'Executed-trade direction vs fill-to-exit price direction; flat exits are excluded.',
+          'Completed-trade direction vs fill-to-exit price direction; flat exits are excluded.',
         profitFactor:
           'Conventional gross realised profit divided by gross realised loss across closed PAPER trades.',
         maxDrawdown:

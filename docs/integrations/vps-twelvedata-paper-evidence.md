@@ -108,7 +108,8 @@ Passing every gate only makes the provider eligible for a separate DEMO review. 
 
 ### Scorecard economics
 
-- **Balanced accuracy** compares the submitted BUY/SELL direction with fill-to-exit price direction on closed trades; flat exits are excluded.
+- **Completed strategy evidence** counts only trades durably closed as `STOP_LOSS_HIT` or `TAKE_PROFIT_HIT`. Manual Stop, kill-switch, reconciliation or unknown broker closes are retained as interrupted/censored records but do not count toward the 100 closed-trade gate or performance metrics.
+- **Balanced accuracy** compares the submitted BUY/SELL direction with fill-to-exit price direction on completed strategy trades; flat exits are excluded.
 - **Profit Factor** is conventional gross realised USD profit divided by gross realised USD loss. Broker-required margin is not used as the PF denominator.
 - **Evidence Sharpe** is `sqrt(N) × mean / sample SD` of per-trade account returns, where each return is realised P&L divided by that trade's session opening balance. It is deliberately labelled evidence-window Sharpe and is not annualized.
 - **Max drawdown** is peak-to-trough drawdown from authoritative PAPER account equity snapshots beginning with the provider campaign's first bound session. This includes unrealised equity movement and fails closed if snapshot evidence is unavailable.
