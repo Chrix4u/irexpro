@@ -11,7 +11,7 @@ import {
   LivePaperMarketDataService,
 } from '../broker/services/live-paper-market-data.service';
 
-const PROVIDER_CODE = 'vps-twelvedata-six-pair-v6';
+const PROVIDER_CODE = 'vps-twelvedata-six-pair-v7';
 const SIGNAL_NAMESPACE = '802e16f8-8209-4e1f-aa7e-a6a46387081c';
 const SYMBOLS = Object.freeze([
   ['EURUSD', 'EUR/USD'],
@@ -117,6 +117,31 @@ export function rsi(values: number[], period = 14): number {
   return 100 - 100 / (1 + rs);
 }
 
+export function aggregateCandles(
+  candles: LivePaperCandleInput[],
+  bucketMinutes: number,
+): LivePaperCandleInput[] {
+  const bucketMs = bucketMinutes * 60_000;
+  const groups = new Map<number, LivePaperCandleInput[]>();
+  for (const candle of candles) {
+    const ts = new Date(candle.timestamp).getTime();
+    if (!Number.isFinite(ts)) continue;
+    const bucket = Math.floor(ts / bucketMs) * bucketMs;
+    const rows = groups.get(bucket) ?? [];
+    rows.push(candle);
+    groups.set(bucket, rows);
+  }
+  return [...groups.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([bucket, rows]) => ({
+      timestamp: new Date(bucket),
+      open: rows[0]!.open,
+      high: String(Math.max(...rows.map((r) => Number(r.high)))),
+      low: String(Math.min(...rows.map((r) => Number(r.low)))),
+      close: rows[rows.length - 1]!.close,
+    }));
+}
+
 export function atr(candles: LivePaperCandleInput[], period = 14): number {
   if (candles.length <= period) return NaN;
   const trs: number[] = [];
@@ -145,14 +170,30 @@ export function buildCandidate(
   const ema50 = ema(closes, 50);
   const rsi14 = rsi(closes, 14);
   const atr14 = atr(candles, 14);
+  const m15 = aggregateCandles(candles, 15);
+  const h1 = aggregateCandles(candles, 60);
+  if (m15.length < 30 || h1.length < 24) return null;
+  const m15Closes = m15.map((c) => Number(c.close));
+  const h1Closes = h1.map((c) => Number(c.close));
+  const m15Ema9 = ema(m15Closes, 9);
+  const m15Ema21 = ema(m15Closes, 21);
+  const h1Ema21 = ema(h1Closes, 21);
   if (![ema9, ema21, ema50, rsi14, atr14].every(Number.isFinite) || atr14 <= 0) return null;
 
   const longTrend = ema9 > ema21 && ema21 > ema50;
   const shortTrend = ema9 < ema21 && ema21 < ema50;
-  const longSetup = longTrend && rsi14 >= 55 && rsi14 <= 72;
-  const shortSetup = shortTrend && rsi14 <= 45 && rsi14 >= 28;
+  const longMtf = m15Ema9 > m15Ema21 && px > h1Ema21;
+  const shortMtf = m15Ema9 < m15Ema21 && px < h1Ema21;
+  const longSetup = longTrend && longMtf && rsi14 >= 55 && rsi14 <= 72;
+  const shortSetup = shortTrend && shortMtf && rsi14 <= 45 && rsi14 >= 28;
   if (!longSetup && !shortSetup) return null;
   const direction: 'BUY' | 'SELL' = longSetup ? 'BUY' : 'SELL';
+
+  // Avoid entering after price has already stretched too far from the M5
+  // mean. Persistent trends can still be traded, but late chasing tends to
+  // compress remaining upside/downside while leaving the full stop exposed.
+  const extensionAtr = Math.abs(px - ema21) / atr14;
+  if (!Number.isFinite(extensionAtr) || extensionAtr > 1.5) return null;
 
   const relativeAtr = atr14 / px;
   const volatilityScore = Math.max(0, Math.min(1, relativeAtr / 0.0015));
@@ -167,7 +208,16 @@ export function buildCandidate(
       : Math.max(0, Math.min(1, (50 - rsi14) / 22));
   const confidence = Math.max(0.6, Math.min(0.8, 0.6 + 0.12 * emaSeparation + 0.08 * rsiStrength));
   if (confidence < CONFIDENCE_FLOOR) return null;
-  const score = confidence + 0.05 * emaSeparation - 0.02 * volatilityScore;
+  const mtfStrength =
+    direction === 'BUY'
+      ? Math.min(1, Math.max(0, (m15Ema9 - m15Ema21) / atr14))
+      : Math.min(1, Math.max(0, (m15Ema21 - m15Ema9) / atr14));
+  const score =
+    confidence +
+    0.05 * emaSeparation +
+    0.03 * mtfStrength -
+    0.02 * volatilityScore -
+    0.02 * Math.min(1.5, extensionAtr);
   const barTime = new Date(candles[candles.length - 1]!.timestamp);
   const pipSize = instrument.endsWith('JPY') ? 0.01 : 0.0001;
   // Candidate geometry should satisfy the platform's structural 5-pip minimum

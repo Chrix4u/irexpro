@@ -21,11 +21,11 @@ const PAIRS = [
 
 function trendCandles(base = 1.1, digits = 5, drift = 0.00001, amp = 0.0001) {
   const latestOpen = Math.floor(Date.now() / 300000) * 300000 - 300000;
-  return Array.from({ length: 70 }, (_, i) => {
+  return Array.from({ length: 360 }, (_, i) => {
     const close = base + i * drift + Math.sin(i / 2) * amp;
     const range = base > 10 ? 0.01 : 0.00008;
     return {
-      timestamp: new Date(latestOpen - (69 - i) * 300000),
+      timestamp: new Date(latestOpen - (359 - i) * 300000),
       open: close.toFixed(digits),
       high: (close + range).toFixed(digits),
       low: (close - range).toFixed(digits),
@@ -36,11 +36,11 @@ function trendCandles(base = 1.1, digits = 5, drift = 0.00001, amp = 0.0001) {
 
 function flatCandles(base: number, digits: number) {
   const latestOpen = Math.floor(Date.now() / 300000) * 300000 - 300000;
-  return Array.from({ length: 70 }, (_, i) => {
+  return Array.from({ length: 360 }, (_, i) => {
     const close = base + Math.sin(i / 2) * (base > 10 ? 0.005 : 0.00003);
     const range = base > 10 ? 0.01 : 0.00008;
     return {
-      timestamp: new Date(latestOpen - (69 - i) * 300000),
+      timestamp: new Date(latestOpen - (359 - i) * 300000),
       open: close.toFixed(digits),
       high: (close + range).toFixed(digits),
       low: (close - range).toFixed(digits),
@@ -188,10 +188,10 @@ describe('VpsForexSignalCollectorService', () => {
         timeframe: 'M5',
         brokerConnectionId: 'conn-1',
         suggestedVolume: 0.1,
-        modelVersion: 'external-provider/vps-twelvedata-six-pair-v6/paper-only-v1',
+        modelVersion: 'external-provider/vps-twelvedata-six-pair-v7/paper-only-v1',
         metadata: expect.objectContaining({
           signal_source: 'EXTERNAL_PROVIDER',
-          external_provider_code: 'vps-twelvedata-six-pair-v6',
+          external_provider_code: 'vps-twelvedata-six-pair-v7',
           external_provider_paper_only: true,
           production_eligible: false,
           position_sizing_policy: 'risk-managed-up-to-0.10-lot-scanner-bound',
