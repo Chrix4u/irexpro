@@ -992,6 +992,61 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       expect(aiEngineClient.getSessionStatus).toHaveBeenCalledWith('session-1');
     });
 
+    it('keeps the legacy scheduler stopped when the VPS scanner owns the exact PAPER binding', async () => {
+      const values: Record<string, unknown> = {
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+      };
+      configService.get.mockImplementation((key: string, fallback?: unknown) =>
+        key in values ? values[key] : fallback,
+      );
+      aiEngineClient.getSessionStatus.mockResolvedValue({
+        enabled: true,
+        registered: true,
+        trading_session_id: 'session-1',
+        active: true,
+        instruments: ['USDJPY'],
+        timeframe: 'M1',
+        interval_seconds: 10,
+        source: 'broker',
+        last_run_at: null,
+        next_run_at: null,
+        last_decision: null,
+        last_reason: null,
+        last_confidence_score: null,
+        confidence_threshold: 0.6,
+        last_publish_failed: false,
+      });
+
+      const status = await service.getAutomationRuntimeStatus('user-1', 'session-1');
+
+      expect(aiEngineClient.notifySessionStopped).toHaveBeenCalledWith({
+        tradingSessionId: 'session-1',
+      });
+      expect(aiEngineClient.notifySessionStarted).not.toHaveBeenCalled();
+      expect(status).toEqual(
+        expect.objectContaining({
+          registered: true,
+          active: true,
+          source: 'vps-twelvedata',
+          timeframe: 'M5',
+          interval_seconds: 600,
+          last_reason: 'vps_forex_scanner_owns_session',
+          model_version: 'external-provider/vps-twelvedata-six-pair-v2/paper-only-v1',
+        }),
+      );
+      expect(status.instruments).toEqual([
+        'EURUSD',
+        'GBPUSD',
+        'USDJPY',
+        'AUDUSD',
+        'USDCAD',
+        'USDCHF',
+      ]);
+    });
+
     it('self-heals a missing scheduler job for an ACTIVE paper session', async () => {
       aiEngineClient.getSessionStatus
         .mockResolvedValueOnce({

@@ -643,6 +643,51 @@ export class TradingService {
       };
     }
 
+    // The VPS-native Twelve Data scanner is the sole signal authority for its
+    // exact PAPER binding. The legacy Python scheduler must neither run nor be
+    // self-healed for this session. If a stale job somehow exists, stop it
+    // before reporting the external scanner runtime to the UI.
+    if (this.isVpsForexScannerBinding(userId, session.brokerConnectionId)) {
+      const legacyRuntime = await this.aiEngineClient.getSessionStatus(sessionId);
+      if (legacyRuntime.registered) {
+        await this.aiEngineClient.notifySessionStopped({ tradingSessionId: sessionId });
+      }
+      return {
+        enabled: true,
+        registered: true,
+        trading_session_id: sessionId,
+        active: session.status === TradingSessionStatus.ACTIVE,
+        instruments: [...TradingService.AI_PREFERRED_INSTRUMENTS],
+        timeframe: 'M5',
+        interval_seconds: 600,
+        source: 'vps-twelvedata',
+        last_run_at: null,
+        next_run_at: null,
+        last_decision: 'EXTERNAL_PROVIDER_ACTIVE',
+        last_reason: 'vps_forex_scanner_owns_session',
+        last_confidence_score: null,
+        last_confidence_at: null,
+        confidence_threshold: 0.64,
+        model_version: 'external-provider/vps-twelvedata-six-pair-v2/paper-only-v1',
+        model_mode: 'PAPER_EVIDENCE',
+        model_loaded: null,
+        last_market_data_at: null,
+        market_data_age_seconds: null,
+        market_data_cache_bypassed: false,
+        last_publish_failed: false,
+        research_uat: false,
+        replay_steps_per_cycle: 0,
+        replay_steps_last_cycle: 0,
+        replay_steps_total: 0,
+        signals_published_total: 0,
+        last_strategy_outcome: null,
+        last_strategy_reason: null,
+        last_trade_id: null,
+        executions_succeeded_total: 0,
+        downstream_rejected_total: 0,
+      };
+    }
+
     const runtime = await this.aiEngineClient.getSessionStatus(sessionId);
 
     // AI scheduler jobs are intentionally in-memory. If the Python service was
