@@ -75,6 +75,7 @@ export class ReconciliationResolutionService {
     const commission = closedTrade?.commission ?? null;
     const swap = closedTrade?.swap ?? null;
     const closedAt = closedTrade?.closedAt ?? new Date();
+    const closeReason = this.mapProviderCloseReason(closedTrade?.closeReason);
 
     const result = await this.tradeRepo.update({ id: trade.id, status: trade.status }, {
       status: TradeStatus.CLOSED,
@@ -83,7 +84,7 @@ export class ReconciliationResolutionService {
       commission,
       swap,
       closedAt,
-      closeReason: TradeCloseReason.BROKER_CLOSE,
+      closeReason,
     } as never);
 
     if (!result.affected) {
@@ -99,7 +100,8 @@ export class ReconciliationResolutionService {
       resourceId: trade.id,
       severity: AuditSeverity.WARNING,
       metadata: {
-        closeReason: TradeCloseReason.BROKER_CLOSE,
+        closeReason,
+        providerCloseReason: closedTrade?.closeReason ?? null,
         exitPrice,
         realisedPnl,
         commission,
@@ -126,6 +128,16 @@ export class ReconciliationResolutionService {
     });
 
     return true;
+  }
+
+  private mapProviderCloseReason(
+    providerReason: BrokerClosedTrade['closeReason'] | undefined,
+  ): TradeCloseReason {
+    if (providerReason === 'TP') return TradeCloseReason.TAKE_PROFIT_HIT;
+    if (providerReason === 'SL') return TradeCloseReason.STOP_LOSS_HIT;
+    // MANUAL/SYSTEM/UNKNOWN from a provider observation cannot prove who or
+    // what initiated the close. Keep the durable reason conservative.
+    return TradeCloseReason.BROKER_CLOSE;
   }
 
   /**

@@ -1,6 +1,6 @@
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { Trade, TradeStatus } from '../entities/trade.entity';
+import { Trade, TradeCloseReason, TradeStatus } from '../entities/trade.entity';
 import { Order } from '../orders/order.entity';
 import { OrderStatus } from '../orders/order.enums';
 import { OrderService } from '../orders/order.service';
@@ -155,8 +155,31 @@ describe('ReconciliationResolutionService', () => {
           status: TradeStatus.CLOSED,
           exitPrice: '1.12000',
           realisedPnl: '20.00',
-          closeReason: 'BROKER_CLOSE',
+          closeReason: 'TAKE_PROFIT_HIT',
         }),
+      );
+    });
+
+    it('preserves provider SL provenance as STOP_LOSS_HIT', async () => {
+      await service.closeTradeFromProvider(baseTrade(), {
+        externalOrderId: 'pos-1',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        lotSize: '1.0000',
+        openPrice: '1.10000',
+        closePrice: '1.09000',
+        stopLoss: '1.09000',
+        takeProfit: '1.12000',
+        realisedPnl: '-10.00',
+        openedAt: new Date(),
+        closedAt: new Date(),
+        commission: '0.00',
+        swap: '0.00',
+        closeReason: 'SL',
+      });
+      expect(tradeRepo.update).toHaveBeenCalledWith(
+        { id: 'trade-1', status: TradeStatus.OPEN },
+        expect.objectContaining({ closeReason: TradeCloseReason.STOP_LOSS_HIT }),
       );
     });
 
