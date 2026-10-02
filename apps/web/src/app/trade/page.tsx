@@ -196,6 +196,49 @@ interface ExternalProviderPerformanceView {
     evidence: boolean;
     frequency: boolean;
   };
+  shadowCalibration: {
+    mode: "DIAGNOSTIC_ONLY";
+    modifiesExecution: false;
+    resetsProviderEvidence: false;
+    closedTradesEvaluated: number;
+    brierScore: number | null;
+    expectedCalibrationError: number | null;
+    confidencePnlCorrelation: number | null;
+    minimumEvidenceBeforeAdaptiveUse: {
+      globalClosedTrades: number;
+      pairDirectionClosedTrades: number;
+      minimumWins: number;
+      minimumLosses: number;
+    };
+    confidenceBins: Array<{
+      lower: number;
+      upper: number;
+      count: number;
+      wins: number;
+      losses: number;
+      avgConfidence: number | null;
+      observedWinRate: number | null;
+      calibrationGap: number | null;
+      averagePnl: number | null;
+      profitFactor: number | null;
+    }>;
+    pairDirection: Array<{
+      instrument: string;
+      direction: "BUY" | "SELL";
+      closedTrades: number;
+      wins: number;
+      losses: number;
+      winRate: number | null;
+      smoothedWinRate: number;
+      realisedPnl: number;
+      averagePnl: number | null;
+      averageWin: number | null;
+      averageLoss: number | null;
+      profitFactor: number | null;
+      averageConfidence: number | null;
+      evidenceStatus: "OBSERVE" | "EARLY_ACTIONABLE";
+    }>;
+  };
 }
 
 function providerMetric(value: number | null | undefined, digits = 2): string {
@@ -2035,6 +2078,186 @@ export default function AiTradingPage() {
                       </span>
                     ))}
                   </div>
+                  {providerEvidence?.shadowCalibration ? (
+                    <div className="ai-shadow-calibration">
+                      <div className="ai-shadow-calibration__header">
+                        <div>
+                          <span className="workspace-hero__eyebrow">
+                            Shadow calibration
+                          </span>
+                          <h3>Confidence &amp; pair diagnostics</h3>
+                        </div>
+                        <span className="badge badge--info">
+                          DIAGNOSTIC ONLY · v7 UNCHANGED
+                        </span>
+                      </div>
+
+                      <p className="muted">
+                        This layer observes v7 without changing signal admission,
+                        confidence thresholds, position sizing, SL/TP, or the v7
+                        evidence counter. Pair/side adaptations remain locked until
+                        the minimum evidence requirements are met.
+                      </p>
+
+                      <div className="ai-provider-evidence__metrics">
+                        <div>
+                          <span>Brier score</span>
+                          <strong>
+                            {providerMetric(
+                              providerEvidence.shadowCalibration.brierScore,
+                              3,
+                            )}
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Calibration error</span>
+                          <strong>
+                            {providerPercent(
+                              providerEvidence.shadowCalibration
+                                .expectedCalibrationError,
+                            )}
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Confidence ↔ P&amp;L</span>
+                          <strong>
+                            {providerMetric(
+                              providerEvidence.shadowCalibration
+                                .confidencePnlCorrelation,
+                              3,
+                            )}
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Adaptive-use gate</span>
+                          <strong>
+                            {
+                              providerEvidence.shadowCalibration
+                                .minimumEvidenceBeforeAdaptiveUse
+                                .globalClosedTrades
+                            }{" "}
+                            closed
+                          </strong>
+                        </div>
+                      </div>
+
+                      <div className="ai-calibration-table-scroll">
+                        <table className="ai-calibration-table">
+                          <thead>
+                            <tr>
+                              <th>Pair / side</th>
+                              <th>Closed</th>
+                              <th>W / L</th>
+                              <th>Win rate</th>
+                              <th>P&amp;L</th>
+                              <th>PF</th>
+                              <th>Avg conf.</th>
+                              <th>Shadow status</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {providerEvidence.shadowCalibration.pairDirection
+                              .filter((row) => row.closedTrades > 0)
+                              .map((row) => (
+                                <tr
+                                  key={`${row.instrument}-${row.direction}`}
+                                >
+                                  <td>
+                                    <strong>
+                                      {row.instrument} {row.direction}
+                                    </strong>
+                                  </td>
+                                  <td>{row.closedTrades}</td>
+                                  <td>
+                                    {row.wins} / {row.losses}
+                                  </td>
+                                  <td>{providerPercent(row.winRate)}</td>
+                                  <td>
+                                    <strong>
+                                      {row.realisedPnl > 0 ? "+" : ""}
+                                      {row.realisedPnl.toFixed(2)} USD
+                                    </strong>
+                                  </td>
+                                  <td>
+                                    {providerMetric(row.profitFactor, 3)}
+                                  </td>
+                                  <td>
+                                    {providerPercent(row.averageConfidence)}
+                                  </td>
+                                  <td>
+                                    <span
+                                      className={
+                                        row.evidenceStatus === "EARLY_ACTIONABLE"
+                                          ? "badge badge--warning"
+                                          : "badge badge--info"
+                                      }
+                                    >
+                                      {row.evidenceStatus ===
+                                      "EARLY_ACTIONABLE"
+                                        ? "EARLY ACTIONABLE"
+                                        : "OBSERVE"}
+                                    </span>
+                                  </td>
+                                </tr>
+                              ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      <div className="ai-calibration-table-scroll">
+                        <table className="ai-calibration-table">
+                          <thead>
+                            <tr>
+                              <th>Confidence band</th>
+                              <th>Closed</th>
+                              <th>Observed win rate</th>
+                              <th>Avg confidence</th>
+                              <th>Calibration gap</th>
+                              <th>Avg P&amp;L</th>
+                              <th>PF</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {providerEvidence.shadowCalibration.confidenceBins
+                              .filter((bin) => bin.count > 0)
+                              .map((bin) => (
+                                <tr key={`${bin.lower}-${bin.upper}`}>
+                                  <td>
+                                    {(bin.lower * 100).toFixed(0)}–
+                                    {(bin.upper * 100).toFixed(0)}%
+                                  </td>
+                                  <td>{bin.count}</td>
+                                  <td>
+                                    {providerPercent(bin.observedWinRate)}
+                                  </td>
+                                  <td>
+                                    {providerPercent(bin.avgConfidence)}
+                                  </td>
+                                  <td>
+                                    {bin.calibrationGap == null
+                                      ? "—"
+                                      : `${bin.calibrationGap >= 0 ? "+" : ""}${(
+                                          bin.calibrationGap * 100
+                                        ).toFixed(1)} pp`}
+                                  </td>
+                                  <td>
+                                    {bin.averagePnl == null
+                                      ? "—"
+                                      : `${bin.averagePnl >= 0 ? "+" : ""}${bin.averagePnl.toFixed(
+                                          2,
+                                        )} USD`}
+                                  </td>
+                                  <td>
+                                    {providerMetric(bin.profitFactor, 3)}
+                                  </td>
+                                </tr>
+                              ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  ) : null}
+
                   <p className="ai-provider-evidence__footnote">
                     Passing every gate only permits a separate DEMO review.
                     Automatic DEMO and LIVE promotion remain disabled.

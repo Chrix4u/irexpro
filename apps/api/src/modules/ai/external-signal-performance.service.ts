@@ -116,6 +116,180 @@ function maxEquityDrawdown(equities: number[]): number | null {
   return worst;
 }
 
+function pearsonCorrelation(xs: number[], ys: number[]): number | null {
+  if (xs.length !== ys.length || xs.length < 2) return null;
+  const meanX = xs.reduce((a, b) => a + b, 0) / xs.length;
+  const meanY = ys.reduce((a, b) => a + b, 0) / ys.length;
+  let numerator = 0;
+  let varianceX = 0;
+  let varianceY = 0;
+  for (let i = 0; i < xs.length; i += 1) {
+    const dx = xs[i]! - meanX;
+    const dy = ys[i]! - meanY;
+    numerator += dx * dy;
+    varianceX += dx * dx;
+    varianceY += dy * dy;
+  }
+  const denominator = Math.sqrt(varianceX * varianceY);
+  return denominator > 0 ? numerator / denominator : null;
+}
+
+export function buildShadowCalibrationDiagnostics(rows: EvidenceRow[]) {
+  const completed = rows
+    .map((row) => ({
+      instrument: row.instrument,
+      direction: row.direction,
+      confidence: finite(row.confidence_score),
+      pnl: finite(row.realised_pnl),
+      closedAt: row.closed_at ? new Date(row.closed_at) : null,
+    }))
+    .filter(
+      (
+        row,
+      ): row is {
+        instrument: string;
+        direction: 'BUY' | 'SELL';
+        confidence: number;
+        pnl: number;
+        closedAt: Date;
+      } =>
+        row.confidence !== null &&
+        row.pnl !== null &&
+        row.closedAt !== null &&
+        Number.isFinite(row.closedAt.getTime()),
+    );
+
+  const scored = completed.map((row) => ({
+    ...row,
+    win: row.pnl > 0 ? 1 : 0,
+  }));
+  const brierScore = scored.length
+    ? scored.reduce((sum, row) => sum + (row.confidence - row.win) ** 2, 0) /
+      scored.length
+    : null;
+  const confidencePnlCorrelation = pearsonCorrelation(
+    scored.map((row) => row.confidence),
+    scored.map((row) => row.pnl),
+  );
+
+  const binEdges = [0.6, 0.64, 0.68, 0.72, 0.76, 0.8, 1.000001];
+  const bins = binEdges.slice(0, -1).map((lower, index) => {
+    const upper = binEdges[index + 1]!;
+    const bucket = scored.filter(
+      (row) =>
+        row.confidence >= lower &&
+        (index === binEdges.length - 2 ? row.confidence <= upper : row.confidence < upper),
+    );
+    const wins = bucket.filter((row) => row.win === 1).length;
+    const avgConfidence = bucket.length
+      ? bucket.reduce((sum, row) => sum + row.confidence, 0) / bucket.length
+      : null;
+    const observedWinRate = bucket.length ? wins / bucket.length : null;
+    const pnls = bucket.map((row) => row.pnl);
+    return {
+      lower,
+      upper: Math.min(1, upper),
+      count: bucket.length,
+      wins,
+      losses: bucket.length - wins,
+      avgConfidence,
+      observedWinRate,
+      calibrationGap:
+        avgConfidence !== null && observedWinRate !== null
+          ? observedWinRate - avgConfidence
+          : null,
+      averagePnl: bucket.length
+        ? pnls.reduce((sum, value) => sum + value, 0) / bucket.length
+        : null,
+      profitFactor: bucket.length ? profitFactor(pnls) : null,
+    };
+  });
+  const expectedCalibrationError = scored.length
+    ? bins.reduce((sum, bin) => {
+        if (
+          bin.count === 0 ||
+          bin.avgConfidence === null ||
+          bin.observedWinRate === null
+        ) {
+          return sum;
+        }
+        return (
+          sum +
+          (bin.count / scored.length) *
+            Math.abs(bin.observedWinRate - bin.avgConfidence)
+        );
+      }, 0)
+    : null;
+
+  const pairDirection = INSTRUMENTS.flatMap((instrument) =>
+    (['BUY', 'SELL'] as const).map((direction) => {
+      const bucket = scored.filter(
+        (row) => row.instrument === instrument && row.direction === direction,
+      );
+      const pnls = bucket.map((row) => row.pnl);
+      const wins = pnls.filter((value) => value > 0).length;
+      const losses = pnls.filter((value) => value < 0).length;
+      const grossProfit = pnls
+        .filter((value) => value > 0)
+        .reduce((a, b) => a + b, 0);
+      const grossLoss = -pnls
+        .filter((value) => value < 0)
+        .reduce((a, b) => a + b, 0);
+      const averageConfidence = bucket.length
+        ? bucket.reduce((sum, row) => sum + row.confidence, 0) / bucket.length
+        : null;
+      return {
+        instrument,
+        direction,
+        closedTrades: bucket.length,
+        wins,
+        losses,
+        winRate: bucket.length ? wins / bucket.length : null,
+        smoothedWinRate: (wins + 2) / (bucket.length + 4),
+        realisedPnl: pnls.reduce((a, b) => a + b, 0),
+        averagePnl: bucket.length
+          ? pnls.reduce((a, b) => a + b, 0) / bucket.length
+          : null,
+        averageWin: wins
+          ? grossProfit / wins
+          : null,
+        averageLoss: losses
+          ? -(grossLoss / losses)
+          : null,
+        profitFactor:
+          bucket.length && grossLoss > 0
+            ? grossProfit / grossLoss
+            : grossProfit > 0
+              ? 1_000_000
+              : null,
+        averageConfidence,
+        evidenceStatus:
+          bucket.length >= 20 && wins >= 5 && losses >= 5
+            ? ('EARLY_ACTIONABLE' as const)
+            : ('OBSERVE' as const),
+      };
+    }),
+  );
+
+  return {
+    mode: 'DIAGNOSTIC_ONLY' as const,
+    modifiesExecution: false,
+    resetsProviderEvidence: false,
+    closedTradesEvaluated: scored.length,
+    brierScore,
+    expectedCalibrationError,
+    confidencePnlCorrelation,
+    minimumEvidenceBeforeAdaptiveUse: {
+      globalClosedTrades: 100,
+      pairDirectionClosedTrades: 20,
+      minimumWins: 5,
+      minimumLosses: 5,
+    },
+    confidenceBins: bins,
+    pairDirection,
+  };
+}
+
 @Injectable()
 export class ExternalSignalPerformanceService {
   constructor(private readonly dataSource: DataSource) {}
@@ -279,6 +453,7 @@ export class ExternalSignalPerformanceService {
     const latestSubmittedConfidence = latestRow ? finite(latestRow.confidence_score) : null;
     const latestSignalAt = latestRow ? new Date(latestRow.signal_generated_at) : null;
     const medianGap = median(signalGaps);
+    const shadowCalibration = buildShadowCalibrationDiagnostics(closed);
 
     const observed = {
       receivedSignals: rows.length,
@@ -339,6 +514,7 @@ export class ExternalSignalPerformanceService {
       gates: EXTERNAL_PROVIDER_REVIEW_GATES,
       observed,
       checks,
+      shadowCalibration,
       methodology: {
         completedTradeEvidence:
           'Qualification metrics count only PAPER trades durably closed by STOP_LOSS_HIT or TAKE_PROFIT_HIT. Manual, kill-switch, reconciliation and unknown broker closes are censored/interrupted and do not count toward the 100-trade gate.',

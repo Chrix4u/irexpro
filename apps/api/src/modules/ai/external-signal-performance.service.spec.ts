@@ -105,6 +105,14 @@ describe('ExternalSignalPerformanceService', () => {
     expect(report.certificationStatus).toBe('ELIGIBLE_FOR_DEMO_REVIEW');
     expect(report.automaticDemoPromotion).toBe(false);
     expect(report.automaticLivePromotion).toBe(false);
+    expect(report.shadowCalibration.mode).toBe('DIAGNOSTIC_ONLY');
+    expect(report.shadowCalibration.modifiesExecution).toBe(false);
+    expect(report.shadowCalibration.resetsProviderEvidence).toBe(false);
+    expect(report.shadowCalibration.closedTradesEvaluated).toBe(120);
+    expect(report.shadowCalibration.confidenceBins.some((bin) => bin.count > 0)).toBe(true);
+    expect(
+      report.shadowCalibration.pairDirection.filter((row) => row.closedTrades > 0),
+    ).toHaveLength(6);
   });
 
   it('uses conventional realised-P&L profit factor rather than margin-normalized PF', async () => {
