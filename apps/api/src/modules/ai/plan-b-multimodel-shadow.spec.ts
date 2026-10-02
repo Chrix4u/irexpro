@@ -50,6 +50,9 @@ describe('Plan B multimodel prospective shadow', () => {
     for (const value of [
       score.directionQuality,
       score.tradeQuality,
+      score.exitQuality,
+      score.pairSideQuality,
+      score.sessionQuality,
       score.portfolioQuality,
       score.portfolioRiskScore,
       score.metaProbability,
@@ -59,6 +62,21 @@ describe('Plan B multimodel prospective shadow', () => {
       expect(value).toBeLessThanOrEqual(1);
     }
     expect(score.reasons.length).toBeGreaterThan(0);
+  });
+
+  it('requires broad model consensus and rejects rollover-quality sessions', () => {
+    const normal = scorePlanBMultimodelShadow(base);
+    expect(normal.consensusRequired).toBe(7);
+    expect(normal.consensusPassed).toBeGreaterThanOrEqual(0);
+    expect(normal.consensusPassed).toBeLessThanOrEqual(8);
+
+    const rollover = scorePlanBMultimodelShadow({
+      ...base,
+      scanTime: new Date('2026-10-02T22:20:00.000Z'),
+    });
+    expect(rollover.sessionQuality).toBeLessThan(0.5);
+    expect(rollover.admitted).toBe(false);
+    expect(rollover.reasons).toContain('SESSION_QUALITY');
   });
 
   it('reduces portfolio quality for concentrated same-direction exposure', () => {

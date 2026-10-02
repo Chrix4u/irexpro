@@ -58,6 +58,11 @@ type EvidenceRow = {
   plan_b_ensemble_regime?: string | null;
   plan_b_ensemble_direction_quality?: string | number | null;
   plan_b_ensemble_trade_quality?: string | number | null;
+  plan_b_ensemble_exit_quality?: string | number | null;
+  plan_b_ensemble_pair_side_quality?: string | number | null;
+  plan_b_ensemble_session_quality?: string | number | null;
+  plan_b_ensemble_consensus_passed?: string | number | null;
+  plan_b_ensemble_consensus_required?: string | number | null;
   plan_b_ensemble_portfolio_quality?: string | number | null;
   plan_b_ensemble_portfolio_risk_score?: string | number | null;
   plan_b_ensemble_open_position_count?: string | number | null;
@@ -469,6 +474,11 @@ export class ExternalSignalPerformanceService {
           ti.metadata->>'plan_b_ensemble_regime' AS plan_b_ensemble_regime,
           ti.metadata->>'plan_b_ensemble_direction_quality' AS plan_b_ensemble_direction_quality,
           ti.metadata->>'plan_b_ensemble_trade_quality' AS plan_b_ensemble_trade_quality,
+          ti.metadata->>'plan_b_ensemble_exit_quality' AS plan_b_ensemble_exit_quality,
+          ti.metadata->>'plan_b_ensemble_pair_side_quality' AS plan_b_ensemble_pair_side_quality,
+          ti.metadata->>'plan_b_ensemble_session_quality' AS plan_b_ensemble_session_quality,
+          ti.metadata->>'plan_b_ensemble_consensus_passed' AS plan_b_ensemble_consensus_passed,
+          ti.metadata->>'plan_b_ensemble_consensus_required' AS plan_b_ensemble_consensus_required,
           ti.metadata->>'plan_b_ensemble_portfolio_quality' AS plan_b_ensemble_portfolio_quality,
           ti.metadata->>'plan_b_ensemble_portfolio_risk_score' AS plan_b_ensemble_portfolio_risk_score,
           ti.metadata->>'plan_b_ensemble_open_position_count' AS plan_b_ensemble_open_position_count,
@@ -836,6 +846,11 @@ export class ExternalSignalPerformanceService {
       regimeCounts: ensembleRegimes,
       averageDirectionQuality: ensembleAverage('plan_b_ensemble_direction_quality'),
       averageTradeQuality: ensembleAverage('plan_b_ensemble_trade_quality'),
+      averageExitQuality: ensembleAverage('plan_b_ensemble_exit_quality'),
+      averagePairSideQuality: ensembleAverage('plan_b_ensemble_pair_side_quality'),
+      averageSessionQuality: ensembleAverage('plan_b_ensemble_session_quality'),
+      averageConsensusPassed: ensembleAverage('plan_b_ensemble_consensus_passed'),
+      averageConsensusRequired: ensembleAverage('plan_b_ensemble_consensus_required'),
       averagePortfolioQuality: ensembleAverage('plan_b_ensemble_portfolio_quality'),
       averagePortfolioRiskScore: ensembleAverage('plan_b_ensemble_portfolio_risk_score'),
       averageOpenPositionCount: ensembleAverage('plan_b_ensemble_open_position_count'),

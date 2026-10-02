@@ -485,6 +485,11 @@ interface ExternalProviderPerformanceView {
     regimeCounts: Record<string, number>;
     averageDirectionQuality: number | null;
     averageTradeQuality: number | null;
+    averageExitQuality: number | null;
+    averagePairSideQuality: number | null;
+    averageSessionQuality: number | null;
+    averageConsensusPassed: number | null;
+    averageConsensusRequired: number | null;
     averagePortfolioQuality: number | null;
     averagePortfolioRiskScore: number | null;
     averageOpenPositionCount: number | null;
@@ -3143,6 +3148,30 @@ export default function AiTradingPage() {
                           <span>Avg trade quality</span>
                           <strong>
                             {providerPercent(providerEvidence.planBEnsembleShadow.averageTradeQuality)}
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Avg exit quality</span>
+                          <strong>
+                            {providerPercent(providerEvidence.planBEnsembleShadow.averageExitQuality)}
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Avg pair/side quality</span>
+                          <strong>
+                            {providerPercent(providerEvidence.planBEnsembleShadow.averagePairSideQuality)}
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Avg session quality</span>
+                          <strong>
+                            {providerPercent(providerEvidence.planBEnsembleShadow.averageSessionQuality)}
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Model consensus</span>
+                          <strong>
+                            {providerMetric(providerEvidence.planBEnsembleShadow.averageConsensusPassed, 1)} / {providerMetric(providerEvidence.planBEnsembleShadow.averageConsensusRequired, 1)}
                           </strong>
                         </div>
                         <div>
