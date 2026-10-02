@@ -150,7 +150,7 @@ function workspaceRouteTitle(activeRoute: string | undefined): string {
   }
   if (activeRoute === '/onboarding/broker') return 'Broker Account';
   if (activeRoute === '/security') return 'Security';
-  if (activeRoute === '/payments/success' || activeRoute?.startsWith('/payments/success/')) {
+  if (activeRoute === '/payments' || activeRoute?.startsWith('/payments/')) {
     return 'Fees & Payments';
   }
   return 'Dashboard';

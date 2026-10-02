@@ -44,7 +44,7 @@ const WORKSPACE_NAV: WorkspaceNavGroup[] = [
       { href: '/profile', label: 'My Profile', Icon: UserIcon },
       { href: '/onboarding/broker', label: 'Broker Account', Icon: PlugIcon },
       { href: '/security', label: 'Security', Icon: ShieldIcon },
-      { href: '/payments/success', label: 'Fees & Payments', Icon: PaymentsIcon, matchPrefix: true },
+      { href: '/payments', label: 'Fees & Payments', Icon: PaymentsIcon, matchPrefix: true },
     ],
   },
 ];

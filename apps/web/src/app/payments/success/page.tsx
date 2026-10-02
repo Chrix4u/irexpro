@@ -20,9 +20,10 @@ function statusLabel(status: VerifyStatus): string {
 }
 
 /**
- * Fees & Payments workspace / provider return surface.
+ * Provider return surface for performance-fee checkout.
  *
- * DISPLAY-ONLY. Landing here does not prove that a provider payment settled.
+ * DISPLAY-ONLY. The normal billing workspace lives at /payments. Landing here
+ * does not prove that a provider payment settled.
  * Verified webhook evidence remains the payment source of truth.
  */
 export default function PaymentSuccessPage() {
@@ -65,14 +66,14 @@ export default function PaymentSuccessPage() {
   }
 
   return (
-    <DashboardShell user={user} onLogout={logout} activeRoute="/payments/success" title="Fees & Payments">
+    <DashboardShell user={user} onLogout={logout} activeRoute="/payments/success" title="Payment verification">
       <main className="workspace-page" aria-labelledby="fees-payments-title">
         <section className="workspace-hero">
           <div className="workspace-hero__copy">
-            <p className="workspace-hero__eyebrow">Billing & settlement</p>
-            <h1 id="fees-payments-title" className="workspace-hero__title">Fees & Payments</h1>
+            <p className="workspace-hero__eyebrow">Provider return</p>
+            <h1 id="fees-payments-title" className="workspace-hero__title">Payment verification</h1>
             <p className="workspace-hero__description">
-              Review provider verification state and the performance-fee model. Payment settlement is accepted only from verified server-side provider evidence; this browser never marks a charge as paid by itself.
+              This page only reports the provider-return state. A browser redirect never proves settlement; iRexPro waits for verified server-side provider evidence before an invoice becomes paid.
             </p>
           </div>
           <div className="workspace-hero__actions">
@@ -124,7 +125,7 @@ export default function PaymentSuccessPage() {
               </>
             ) : (
               <Alert variant="info">
-                No provider checkout reference is attached to this visit. This is your general fees and payments workspace.
+                No provider checkout reference is attached to this visit. Open the Fees & Payments workspace to review invoices and fee history.
               </Alert>
             )}
           </Card>
@@ -146,6 +147,12 @@ export default function PaymentSuccessPage() {
         </section>
 
         <section className="workspace-grid-2">
+          <Card title="Fees & Payments">
+            <p className="muted">
+              Review your high-water mark, fee assessments, outstanding invoices and verified payment history.
+            </p>
+            <Link href="/payments" className="btn btn--secondary mt-4">Open Fees & Payments</Link>
+          </Card>
           <Card title="Trading activity">
             <p className="muted">
               Open positions, closed executions and server-authoritative trading activity are available in the Trading Workspace.

@@ -2375,3 +2375,47 @@ select.input {
   word-break: break-word;
   min-width: 0;
 }
+
+
+/* Fees & Payments — responsive invoice table. The container, never the page, scrolls. */
+.payments-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  margin-top: var(--space-3);
+}
+
+.payments-table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+  font-size: 0.86rem;
+}
+
+.payments-table th {
+  padding: var(--space-3);
+  text-align: left;
+  white-space: nowrap;
+  color: var(--text-muted);
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.payments-table td {
+  padding: var(--space-3);
+  vertical-align: middle;
+  border-bottom: 1px solid var(--border);
+}
+
+.payments-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.payments-table tbody tr:hover {
+  background: color-mix(in srgb, var(--brand) 5%, transparent);
+}

@@ -162,7 +162,7 @@ export default function DashboardPage() {
             <p className="text-sm muted" style={{ lineHeight: 1.65 }}>
               Performance fees apply only to qualifying realised profit above the applicable high-water mark. No subscription is required.
             </p>
-            <Link href="/payments/success" className="btn btn--secondary btn--sm mt-4">Review fees & payments</Link>
+            <Link href="/payments" className="btn btn--secondary btn--sm mt-4">Review fees & payments</Link>
           </Card>
         </section>
 
