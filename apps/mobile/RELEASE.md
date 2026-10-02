@@ -12,7 +12,8 @@ This document covers repository-owned release configuration for the Expo mobile 
 - Production build-number policy: `cli.appVersionSource=remote` and `production.autoIncrement=true`
 - Production Android artifact: Android App Bundle (`.aab`)
 - Signing credential source: EAS remote credentials
-- Production API base URL: `https://irexpro.lightworldtech.com/api/v1`
+- Preview/staging API base URL: `https://irexpro.lightworldtech.com/api/v1`
+- Production API base URL: intentionally externalized to the EAS `production` environment and must use a distinct production hostname
 
 `eas.json` defines three release-facing profiles:
 
@@ -32,7 +33,7 @@ From the repository root:
 pnpm --filter @irexpro/mobile validate:release-config
 ```
 
-This is the CI-safe validation mode. It verifies profile structure, stable package identifiers, version seeds, production API configuration, public-only build environment values, and EAS project metadata if present.
+This is the CI-safe validation mode. It verifies profile structure, stable package identifiers, version seeds, preview/staging API configuration, public-only build environment values, and EAS project metadata if present. The production API URL is intentionally not committed; strict release preflight validates the runtime value supplied by the EAS production environment.
 
 An absent `extra.eas.projectId` is accepted in source validation because it means the repository is explicitly **not linked yet**. An empty, placeholder, or malformed project ID is rejected.
 
@@ -60,13 +61,16 @@ Choose the intended organization/account and the correct EAS project. `eas init`
 
 Do not commit Expo access tokens, session credentials, signing secrets, Apple credentials, Google service-account keys, or backend secrets. Only the non-secret EAS project UUID belongs in repository configuration.
 
-After linkage, run the strict preflight:
+After linkage, configure `EXPO_PUBLIC_API_BASE_URL` in the authorized EAS **production environment** to the real production API endpoint. It must be an absolute HTTPS URL and must not use the staging hostname `irexpro.lightworldtech.com`.
+
+Then run the strict preflight with the same production runtime value available to the process:
 
 ```bash
-pnpm --filter @irexpro/mobile release:preflight
+EXPO_PUBLIC_API_BASE_URL=https://api.<production-domain>/api/v1 \
+  pnpm --filter @irexpro/mobile release:preflight
 ```
 
-This command fails unless `extra.eas.projectId` is a valid UUID and all source-level release requirements still pass.
+This command fails unless `extra.eas.projectId` is a valid UUID, the production API is distinct from staging, and all source-level release requirements still pass.
 
 ## Build commands
 

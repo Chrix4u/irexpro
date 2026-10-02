@@ -49,6 +49,17 @@ export const BROKER_OAUTH_HANDOFF_PATH = "broker/oauth/handoff";
  */
 export const BROKER_OAUTH_AWAIT_TIMEOUT_MS = 10 * 60 * 1000;
 
+/** Cold-start restore accepts only a recently-created, parseable pending flow. */
+export function isPendingBrokerOAuthContextFresh(
+  createdAt: string,
+  nowMs = Date.now(),
+): boolean {
+  const createdAtMs = Date.parse(createdAt);
+  if (!Number.isFinite(createdAtMs)) return false;
+  const ageMs = nowMs - createdAtMs;
+  return ageMs >= -5_000 && ageMs <= BROKER_OAUTH_AWAIT_TIMEOUT_MS;
+}
+
 /** The handoff deep-link base (tests + documentation of the boundary). */
 export function brokerOAuthHandoffLinkBase(): string {
   return `${BROKER_APP_SCHEME}://${BROKER_OAUTH_HANDOFF_PATH}`;

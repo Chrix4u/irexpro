@@ -1,5 +1,5 @@
-import { useCallback, useRef, useState } from 'react';
-import { Animated, Easing, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Animated, Easing, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { AuthProvider, useAuth } from '@/context/auth-context';
 import { RealtimeProvider } from '@/context/realtime-context';
@@ -16,6 +16,7 @@ import LiveAccountScreen from './src/screens/LiveAccountScreen';
 import AiTradingScreen from './src/screens/AiTradingScreen';
 import OnboardingProfileScreen from './src/screens/OnboardingProfileScreen';
 import OnboardingEligibilityScreen from './src/screens/OnboardingEligibilityScreen';
+import { parseBrokerOAuthHandoffLink } from './src/screens/broker-screen-oauth.logic';
 
 /**
  * iRexPro mobile app entry (Expo + React Native + TypeScript).
@@ -68,6 +69,7 @@ function AppShell() {
   const [tab, setTab] = useState<Tab>('dashboard');
   const screenProgress = useRef(new Animated.Value(1)).current;
   const navigationBusy = useRef(false);
+  const initialDeepLinkHandled = useRef(false);
   const [authScreen, setAuthScreen] = useState<AuthScreen>('login');
   const [phoneResetIdentifier, setPhoneResetIdentifier] = useState<string | null>(null);
 
@@ -92,6 +94,19 @@ function AppShell() {
       });
     });
   }, [screenProgress, tab]);
+
+  useEffect(() => {
+    if (!user || initialDeepLinkHandled.current) return;
+    let cancelled = false;
+    void Linking.getInitialURL().then((url) => {
+      if (cancelled || !url || !parseBrokerOAuthHandoffLink(url)) return;
+      initialDeepLinkHandled.current = true;
+      navigateTab('brokers');
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [navigateTab, user]);
 
   if (phoneResetIdentifier) {
     return (

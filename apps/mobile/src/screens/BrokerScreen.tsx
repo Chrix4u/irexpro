@@ -12,7 +12,7 @@
  * through the encrypted broker-credential flow (test → create → connect),
  * and never rendered back.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -30,6 +30,7 @@ import {
 import type {
   BrokerConnectionView,
   BrokerOAuthAccount,
+  BrokerOAuthAccountsResult,
   BrokerRegistryEntry,
   CreateBrokerConnectionRequest,
 } from "@irexpro/types";
@@ -50,10 +51,16 @@ import {
 import {
   BROKER_OAUTH_AWAIT_TIMEOUT_MS,
   buildOAuthLinkRequest,
+  isPendingBrokerOAuthContextFresh,
   oauthAccountOptions,
   parseBrokerOAuthHandoffLink,
 } from "./broker-screen-oauth.logic";
 import { ActionDialog, Banner, palette } from "../components/ui";
+import {
+  clearPendingBrokerOAuth,
+  getPendingBrokerOAuth,
+  savePendingBrokerOAuth,
+} from "../lib/secure-storage";
 
 const ENVIRONMENT_OPTIONS: ReadonlyArray<"DEMO" | "LIVE"> = ["DEMO", "LIVE"];
 
@@ -70,6 +77,11 @@ export default function BrokerScreen() {
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [restoredOAuth, setRestoredOAuth] = useState<{
+    brokerId: string;
+    result: BrokerOAuthAccountsResult;
+  } | null>(null);
+  const coldStartHandled = useRef(false);
 
   const load = useCallback(async () => {
     try {
@@ -93,6 +105,74 @@ export default function BrokerScreen() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (loading || registry.length === 0 || coldStartHandled.current) return;
+    let cancelled = false;
+
+    void (async () => {
+      const [initialUrl, pending] = await Promise.all([
+        Linking.getInitialURL(),
+        getPendingBrokerOAuth(),
+      ]);
+      if (cancelled || !initialUrl || !pending) return;
+
+      const parsed = parseBrokerOAuthHandoffLink(initialUrl);
+      if (!parsed) return;
+
+      coldStartHandled.current = true;
+      const contextFresh = isPendingBrokerOAuthContextFresh(pending.createdAt);
+      const entry = registry.find((candidate) => candidate.id === pending.brokerId);
+
+      if (!contextFresh || !entry || entry.authenticationType !== "OAUTH") {
+        await clearPendingBrokerOAuth();
+        if (!cancelled) {
+          setNotice(
+            "The saved broker authorization context expired or is no longer valid. Start Connect again.",
+          );
+        }
+        return;
+      }
+
+      if ("error" in parsed) {
+        await clearPendingBrokerOAuth();
+        if (!cancelled) {
+          setNotice(
+            `Broker authorization was not completed (${parsed.error}). Start Connect again.`,
+          );
+        }
+        return;
+      }
+
+      try {
+        const result = await api.exchangeBrokerOAuthHandoff({
+          handoffToken: parsed.token,
+        });
+        await clearPendingBrokerOAuth();
+        if (cancelled) return;
+        if (result.flowId !== pending.flowId) {
+          setError("Broker authorization could not be matched to the saved mobile flow.");
+          return;
+        }
+        setRestoredOAuth({ brokerId: pending.brokerId, result });
+        setConnectTarget(entry);
+        setNotice("Broker authorization restored after app relaunch. Choose an account to link.");
+      } catch (requestError) {
+        await clearPendingBrokerOAuth();
+        if (!cancelled) {
+          setError(
+            requestError instanceof Error
+              ? requestError.message
+              : "Broker authorization could not be restored.",
+          );
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loading, registry]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -472,9 +552,16 @@ export default function BrokerScreen() {
       {connectTarget ? (
         <ConnectFlowModal
           entry={connectTarget}
-          onClose={() => setConnectTarget(null)}
+          restoredOAuthResult={
+            restoredOAuth?.brokerId === connectTarget.id ? restoredOAuth.result : null
+          }
+          onClose={() => {
+            setConnectTarget(null);
+            setRestoredOAuth(null);
+          }}
           onConnected={async () => {
             setConnectTarget(null);
+            setRestoredOAuth(null);
             await load();
           }}
         />
@@ -486,10 +573,12 @@ export default function BrokerScreen() {
 /** Test → create → connect flow (§AE). Secrets are cleared after submit. */
 function ConnectFlowModal({
   entry,
+  restoredOAuthResult,
   onClose,
   onConnected,
 }: {
   entry: BrokerRegistryEntry;
+  restoredOAuthResult?: BrokerOAuthAccountsResult | null;
   onClose: () => void;
   onConnected: () => Promise<void>;
 }) {
@@ -514,7 +603,11 @@ function ConnectFlowModal({
   const [feedback, setFeedback] = useState<{
     ok: boolean;
     message: string;
-  } | null>(null);
+  } | null>(
+    restoredOAuthResult
+      ? { ok: true, message: "Authorization restored — choose an account to link." }
+      : null,
+  );
 
   // ── cTrader OAuth flow state (Sprint 56 correction round 2 / architect
   // finding 4) — replaces the credential form for OAUTH brokers. The
@@ -526,11 +619,20 @@ function ConnectFlowModal({
   const [oauthBusy, setOauthBusy] = useState<
     "start" | "complete" | "link" | null
   >(null);
-  const [oauthFlowId, setOauthFlowId] = useState<string | null>(null);
+  const [oauthFlowId, setOauthFlowId] = useState<string | null>(
+    restoredOAuthResult?.flowId ?? null,
+  );
   const [oauthAwaitingReturn, setOauthAwaitingReturn] = useState(false);
   const [oauthAccounts, setOauthAccounts] = useState<
     BrokerOAuthAccount[] | null
-  >(null);
+  >(restoredOAuthResult?.accounts ?? null);
+
+  const closeFlow = useCallback(() => {
+    if (isOAuthBroker) {
+      void clearPendingBrokerOAuth();
+    }
+    onClose();
+  }, [isOAuthBroker, onClose]);
 
   const handoffOAuth = useCallback(
     async (flowId: string, handoffToken: string) => {
@@ -543,6 +645,16 @@ function ConnectFlowModal({
         const result = await api.exchangeBrokerOAuthHandoff({
           handoffToken,
         });
+        await clearPendingBrokerOAuth();
+        if (result.flowId !== flowId) {
+          setOauthFlowId(null);
+          setOauthAccounts(null);
+          setFeedback({
+            ok: false,
+            message: "Authorization return did not match the active broker flow. Start Connect again.",
+          });
+          return;
+        }
         setOauthFlowId(result.flowId);
         setOauthAccounts(result.accounts);
         setFeedback({
@@ -550,6 +662,7 @@ function ConnectFlowModal({
           message: "Authorized — choose an account to link.",
         });
       } catch (err) {
+        await clearPendingBrokerOAuth();
         // Clean the flow state for THIS attempt only — a newly started
         // authorization must not be clobbered by a stale handoff failure.
         setOauthFlowId((current) => (current === flowId ? null : current));
@@ -582,6 +695,7 @@ function ConnectFlowModal({
       // ?error=<reason> — the server reported failure/cancel to the app.
       setOauthAwaitingReturn(false);
       setOauthFlowId((current) => (current === flowId ? null : current));
+      void clearPendingBrokerOAuth();
       setFeedback({
         ok: false,
         message: `Authorization was not completed (${parsed.error}). Tap Connect to try again.`,
@@ -598,6 +712,7 @@ function ConnectFlowModal({
     const timer = setTimeout(() => {
       setOauthAwaitingReturn(false);
       setOauthFlowId(null);
+      void clearPendingBrokerOAuth();
       setFeedback({
         ok: false,
         message:
@@ -616,6 +731,11 @@ function ConnectFlowModal({
       const start = await api.startBrokerOAuth(entry.id, {
         channel: "mobile",
       });
+      await savePendingBrokerOAuth({
+        brokerId: entry.id,
+        flowId: start.flowId,
+        createdAt: new Date().toISOString(),
+      });
       setOauthFlowId(start.flowId);
       setOauthAwaitingReturn(true);
       await Linking.openURL(start.authorizationUrl);
@@ -625,6 +745,7 @@ function ConnectFlowModal({
           "Complete the authorization in your browser, then return to the app.",
       });
     } catch (err) {
+      await clearPendingBrokerOAuth();
       setOauthFlowId(null);
       setOauthAwaitingReturn(false);
       setFeedback({
@@ -644,6 +765,7 @@ function ConnectFlowModal({
         await api.linkBrokerOAuth(
           buildOAuthLinkRequest(oauthFlowId, account),
         );
+        await clearPendingBrokerOAuth();
         setFeedback({ ok: true, message: "Account linked" });
         await onConnected();
       } catch (err) {
@@ -713,7 +835,7 @@ function ConnectFlowModal({
       visible
       animationType="slide"
       transparent={false}
-      onRequestClose={onClose}
+      onRequestClose={closeFlow}
     >
       <KeyboardAvoidingView
         style={styles.flex}
@@ -844,7 +966,7 @@ function ConnectFlowModal({
                 accessibilityRole="button"
                 accessibilityLabel="Cancel broker connection"
                 style={styles.secondaryButton}
-                onPress={onClose}
+                onPress={closeFlow}
                 disabled={oauthBusy !== null}
               >
                 <Text style={styles.secondaryButtonText}>Cancel</Text>
@@ -946,7 +1068,7 @@ function ConnectFlowModal({
                 accessibilityRole="button"
                 accessibilityLabel="Cancel broker connection"
                 style={styles.secondaryButton}
-                onPress={onClose}
+                onPress={closeFlow}
                 disabled={busy !== null}
               >
                 <Text style={styles.secondaryButtonText}>Cancel</Text>
