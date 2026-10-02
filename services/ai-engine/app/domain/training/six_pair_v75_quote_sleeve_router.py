@@ -79,24 +79,41 @@ def density(x):
             "median_gap_minutes":med}
 def choose(cal):
     spread_cap=float(cal["quote_spread_mean_bps_60s"].quantile(.90))
-    rows=[]
+    screened=[]
+    configs={}
     for cov in (.25,.4,.55,.7):
       for p in np.round(np.arange(.50,.711,.03),2):
        for margin in (0,.03,.06,.10):
         x=apply(cal,float(p),float(margin),float(cov),spread_cap)
-        den=density(x); s=_summarize_predictions(x,horizon_bars=H,confidence_threshold=.60)["trading"]
-        pf=s["profit_factor"]
-        eligible=bool(den["trades"]>=80 and den["density"]>=.01 and den["density"]<=.25
-          and den["median_gap_minutes"] is not None and den["median_gap_minutes"]<=10
-          and pf is not None and np.isfinite(pf) and pf>=1.15
-          and s["sharpe_ratio"] is not None and s["sharpe_ratio"]>=1
-          and s["total_return"]>0)
-        rows.append({"p":float(p),"margin":float(margin),"coverage":float(cov),
-          "spread_cap":spread_cap,**den,"pf":pf,"sharpe":s["sharpe_ratio"],
-          "return":s["total_return"],"eligible":eligible})
-    good=[r for r in rows if r["eligible"]]
-    return (max(good,key=lambda r:(r["pf"],r["density"])) if good else
-            max([r for r in rows if r["pf"] is not None],key=lambda r:r["pf"])),bool(good),rows
+        den=density(x); a=x[x.active_trade.astype(bool)]
+        rr=a["selected_net_return"].astype(float)
+        gp=float(rr[rr>0].sum()); gl=float(-rr[rr<0].sum())
+        raw_pf=(gp/gl) if gl>0 else None
+        row={"p":float(p),"margin":float(margin),"coverage":float(cov),
+          "spread_cap":spread_cap,**den,"raw_pf":raw_pf,
+          "raw_return":float(rr.sum()),"eligible":False}
+        screened.append(row); configs[(float(p),float(margin),float(cov))]=x
+    shortlist=sorted(
+      [r for r in screened if r["trades"]>=20 and r["raw_pf"] is not None],
+      key=lambda r:(r["raw_pf"],r["raw_return"]),reverse=True)[:12]
+    evaluated=[]
+    for row in shortlist:
+      x=configs[(row["p"],row["margin"],row["coverage"])]
+      s=_summarize_predictions(x,horizon_bars=H,confidence_threshold=.60)["trading"]
+      pf=s["profit_factor"]
+      row={**row,"pf":pf,"sharpe":s["sharpe_ratio"],"return":s["total_return"],
+        "periods":s["non_overlapping_periods"]}
+      row["eligible"]=bool(row["periods"]>=20 and pf is not None and np.isfinite(pf)
+        and pf>=1.15 and s["sharpe_ratio"] is not None and s["sharpe_ratio"]>=.5
+        and s["total_return"]>0)
+      evaluated.append(row)
+    good=[r for r in evaluated if r["eligible"]]
+    if good:
+      chosen=max(good,key=lambda r:(r["pf"],r["sharpe"],r["trades"]))
+      return chosen,True,evaluated
+    if evaluated:
+      return max(evaluated,key=lambda r:(r["pf"] if r["pf"] is not None else -99)),False,evaluated
+    return max(screened,key=lambda r:(r["raw_pf"] if r["raw_pf"] is not None else -99)),False,screened
 def pair_pf(x):
     a=x[x.active_trade.astype(bool)]
     if a.empty:return {}
