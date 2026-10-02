@@ -13,6 +13,7 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUserId } from '../../common/decorators/current-user.decorator';
 import { RoleName } from '../users/entities/role.entity';
 import { PerformanceFeeService } from './services/performance-fee.service';
+import { PerformanceFeeSimulationService } from './services/performance-fee-simulation.service';
 import { CreatePolicyDto } from './dto/create-policy.dto';
 import { CalculateAssessmentDto } from './dto/calculate-assessment.dto';
 import { CreateLedgerEntryDto } from './dto/create-ledger-entry.dto';
@@ -23,8 +24,8 @@ import { CreateLedgerEntryDto } from './dto/create-ledger-entry.dto';
  * Provides admin/internal endpoints for the performance fee engine.
  *
  * Access rules:
- * - GET /me/summary — authenticated user (own data only)
- * - All other endpoints — ADMIN or SUPER_ADMIN only
+ * - /me/summary and /me/simulation/* — authenticated user, own data only
+ * - Policy, assessment and ledger administration — ADMIN or SUPER_ADMIN only
  *
  * IMPORTANT:
  * - No automatic charging occurs here.
@@ -34,7 +35,10 @@ import { CreateLedgerEntryDto } from './dto/create-ledger-entry.dto';
 @Controller('performance-fees')
 @UseGuards(RolesGuard)
 export class PerformanceFeesController {
-  constructor(private readonly svc: PerformanceFeeService) {}
+  constructor(
+    private readonly svc: PerformanceFeeService,
+    private readonly simulation: PerformanceFeeSimulationService,
+  ) {}
 
   // ── Policy endpoints (admin only) ──────────────────────────────────────────
 
@@ -50,11 +54,43 @@ export class PerformanceFeesController {
     return this.svc.createPolicy(dto, adminId);
   }
 
+  @Post('policies/:id/deactivate')
+  @Roles(RoleName.ADMIN, RoleName.SUPER_ADMIN)
+  deactivatePolicy(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUserId() adminId: string,
+  ) {
+    return this.svc.deactivatePolicy(id, adminId);
+  }
+
   // ── User summary (own data) ────────────────────────────────────────────────
 
   @Get('me/summary')
   getMyPerformanceSummary(@CurrentUserId() userId: string) {
     return this.svc.getUserSummary(userId);
+  }
+
+  // ── PAPER / DEMO billing simulation (user-owned, never payable) ───────────
+
+  @Get('me/simulation')
+  getMySimulation(@CurrentUserId() userId: string) {
+    return this.simulation.getUserSimulation(userId);
+  }
+
+  @Post('me/simulation/:brokerConnectionId/refresh')
+  refreshMySimulation(
+    @CurrentUserId() userId: string,
+    @Param('brokerConnectionId', ParseUUIDPipe) brokerConnectionId: string,
+  ) {
+    return this.simulation.refresh(userId, brokerConnectionId);
+  }
+
+  @Post('me/simulation/charges/:chargeId/settle')
+  settleMySimulationCharge(
+    @CurrentUserId() userId: string,
+    @Param('chargeId', ParseUUIDPipe) chargeId: string,
+  ) {
+    return this.simulation.settleTestCharge(userId, chargeId);
   }
 
   // ── Assessment endpoints ───────────────────────────────────────────────────

@@ -16,6 +16,17 @@ type PaymentStatus =
   | 'CANCELLED'
   | 'NONE';
 
+interface PerformanceFeePolicyView {
+  id: string;
+  name: string;
+  feePercent: string;
+  billingFrequency: 'MONTHLY' | 'QUARTERLY' | 'ANNUAL' | 'ON_PROFIT_EVENT';
+  calculationMode: 'HIGH_WATER_MARK';
+  appliesTo: 'REALISED_PROFIT_ONLY';
+  isActive: boolean;
+  createdAt: string;
+}
+
 interface PerformanceFeeInvoiceView {
   invoiceId: string;
   userId: string;
@@ -90,6 +101,14 @@ export default function AdminPaymentsPage() {
   const { hasAdminRole } = useAuth();
   const [invoices, setInvoices] = useState<PerformanceFeeInvoiceView[]>([]);
   const [providers, setProviders] = useState<PaymentProviderInfo[]>([]);
+  const [policies, setPolicies] = useState<PerformanceFeePolicyView[]>([]);
+  const [policyName, setPolicyName] = useState('Global Performance Fee');
+  const [feePercent, setFeePercent] = useState('20');
+  const [billingFrequency, setBillingFrequency] =
+    useState<PerformanceFeePolicyView['billingFrequency']>('ON_PROFIT_EVENT');
+  const [policyBusy, setPolicyBusy] = useState(false);
+  const [policyNotice, setPolicyNotice] = useState<string | null>(null);
+  const [deactivateTarget, setDeactivateTarget] = useState<PerformanceFeePolicyView | null>(null);
   const [filter, setFilter] = useState<Filter>('ALL');
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
@@ -101,12 +120,14 @@ export default function AdminPaymentsPage() {
     refresh ? setRefreshing(true) : setLoading(true);
     setError(null);
     try {
-      const [nextInvoices, nextProviders] = await Promise.all([
+      const [nextInvoices, nextProviders, nextPolicies] = await Promise.all([
         api.request<PerformanceFeeInvoiceView[]>('/performance-fees/invoices?limit=200'),
         api.listProviders(),
+        api.request<PerformanceFeePolicyView[]>('/performance-fees/policies'),
       ]);
       setInvoices(nextInvoices);
       setProviders(nextProviders);
+      setPolicies(nextPolicies);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to load payment operations.');
     } finally {
@@ -144,6 +165,59 @@ export default function AdminPaymentsPage() {
   const overdue = invoices.filter((invoice) => invoice.status === 'OVERDUE').length;
   const processing = invoices.filter((invoice) => invoice.paymentStatus === 'PROCESSING').length;
   const paid = invoices.filter((invoice) => invoice.status === 'PAID').length;
+  const activePolicy = policies[0] ?? null;
+
+  async function createPolicy(): Promise<void> {
+    const parsedPercent = Number(feePercent);
+    if (
+      policyBusy ||
+      activePolicy ||
+      !policyName.trim() ||
+      !Number.isFinite(parsedPercent) ||
+      parsedPercent < 0 ||
+      parsedPercent > 100
+    ) {
+      return;
+    }
+    setPolicyBusy(true);
+    setPolicyNotice(null);
+    try {
+      await api.request('/performance-fees/policies', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: policyName.trim(),
+          feePercent: parsedPercent,
+          billingFrequency,
+        }),
+      });
+      setPolicyNotice('Performance-fee policy activated.');
+      await load(true);
+    } catch (err) {
+      setPolicyNotice(err instanceof Error ? err.message : 'Policy could not be created.');
+    } finally {
+      setPolicyBusy(false);
+    }
+  }
+
+  async function deactivatePolicy(): Promise<void> {
+    if (!deactivateTarget || policyBusy) return;
+    const target = deactivateTarget;
+    setPolicyBusy(true);
+    setPolicyNotice(null);
+    try {
+      await api.request(`/performance-fees/policies/${encodeURIComponent(target.id)}/deactivate`, {
+        method: 'POST',
+      });
+      setDeactivateTarget(null);
+      setPolicyNotice('Policy deactivated. Create the replacement policy before LIVE billing.');
+      await load(true);
+    } catch (err) {
+      setPolicyNotice(err instanceof Error ? err.message : 'Policy could not be deactivated.');
+    } finally {
+      setPolicyBusy(false);
+    }
+  }
 
   if (!hasAdminRole) {
     return (
@@ -205,6 +279,109 @@ export default function AdminPaymentsPage() {
           <div className="stat-card__hint">Webhook verified</div>
         </div>
       </div>
+
+      <Card title="Performance-fee policy">
+        <p className="muted" style={{ marginBottom: '1rem' }}>
+          One global policy is authoritative for both the PAPER/DEMO fee simulator and future LIVE
+          performance-fee assessments. Changing the policy requires deactivating the current one
+          and creating a replacement, preserving the audit trail.
+        </p>
+
+        {policyNotice ? <Alert variant={policyNotice.toLowerCase().includes('could not') ? 'error' : 'info'}>{policyNotice}</Alert> : null}
+
+        {activePolicy ? (
+          <>
+            <div className="stats-grid" style={{ marginBottom: '1rem' }}>
+              <div className="stat-card stat-card--success">
+                <div className="stat-card__label">Active rate</div>
+                <div className="stat-card__value">{Number(activePolicy.feePercent).toFixed(2)}%</div>
+                <div className="stat-card__hint">{activePolicy.name}</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-card__label">Frequency</div>
+                <div className="stat-card__value" style={{ fontSize: '1rem' }}>
+                  {activePolicy.billingFrequency.replaceAll('_', ' ')}
+                </div>
+                <div className="stat-card__hint">High-water-mark · realised profit only</div>
+              </div>
+            </div>
+            {deactivateTarget ? (
+              <Alert variant="warning">
+                Deactivate <strong>{deactivateTarget.name}</strong>? PAPER/DEMO simulation and LIVE
+                assessment will stop until a replacement policy is activated.
+                <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.85rem', flexWrap: 'wrap' }}>
+                  <Button variant="secondary" size="sm" disabled={policyBusy} onClick={() => setDeactivateTarget(null)}>
+                    Keep policy
+                  </Button>
+                  <Button variant="danger" size="sm" loading={policyBusy} onClick={() => void deactivatePolicy()}>
+                    Deactivate policy
+                  </Button>
+                </div>
+              </Alert>
+            ) : (
+              <Button variant="secondary" size="sm" onClick={() => setDeactivateTarget(activePolicy)}>
+                Change policy
+              </Button>
+            )}
+          </>
+        ) : (
+          <>
+            <Alert variant="warning">
+              No active performance-fee policy exists. Fee simulation can show trading P&amp;L,
+              but it cannot calculate a charge until a rate is configured.
+            </Alert>
+            <div className="admin-audit-filter-form" style={{ marginTop: '1rem' }}>
+              <div className="admin-audit-filter-form__fields">
+                <Input
+                  label="Policy name"
+                  value={policyName}
+                  onChange={(event) => setPolicyName(event.target.value)}
+                />
+                <Input
+                  label="Performance fee (%)"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.01"
+                  value={feePercent}
+                  onChange={(event) => setFeePercent(event.target.value)}
+                />
+                <div className="input-group">
+                  <label className="input-label" htmlFor="performance-fee-frequency">
+                    Billing frequency
+                  </label>
+                  <select
+                    id="performance-fee-frequency"
+                    className="input"
+                    value={billingFrequency}
+                    onChange={(event) =>
+                      setBillingFrequency(event.target.value as PerformanceFeePolicyView['billingFrequency'])
+                    }
+                  >
+                    <option value="ON_PROFIT_EVENT">On profit event</option>
+                    <option value="MONTHLY">Monthly</option>
+                    <option value="QUARTERLY">Quarterly</option>
+                    <option value="ANNUAL">Annual</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+            <Button
+              loading={policyBusy}
+              disabled={
+                policyBusy ||
+                !policyName.trim() ||
+                !Number.isFinite(Number(feePercent)) ||
+                Number(feePercent) < 0 ||
+                Number(feePercent) > 100
+              }
+              onClick={() => void createPolicy()}
+            >
+              Activate policy
+            </Button>
+          </>
+        )}
+      </Card>
 
       <Card title="Payment provider readiness">
         <p className="muted" style={{ marginBottom: '1rem' }}>

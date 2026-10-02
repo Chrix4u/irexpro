@@ -9,6 +9,11 @@ import { PaymentTransaction } from '../payments/entities/payment-transaction.ent
 import { AuditModule } from '../audit/audit.module';
 import { PerformanceFeeService } from './services/performance-fee.service';
 import { PerformanceFeesController } from './performance-fees.controller';
+import { PerformanceFeeSimulationState } from './entities/performance-fee-simulation-state.entity';
+import { PerformanceFeeSimulationCharge } from './entities/performance-fee-simulation-charge.entity';
+import { PerformanceFeeSimulationService } from './services/performance-fee-simulation.service';
+import { BrokerConnection } from '../broker/entities/broker-connection.entity';
+import { Trade } from '../execution/entities/trade.entity';
 
 @Module({
   imports: [
@@ -19,11 +24,15 @@ import { PerformanceFeesController } from './performance-fees.controller';
       PerformanceFeeLedgerEntry,
       Invoice,
       PaymentTransaction,
+      PerformanceFeeSimulationState,
+      PerformanceFeeSimulationCharge,
+      BrokerConnection,
+      Trade,
     ]),
     AuditModule,
   ],
   controllers: [PerformanceFeesController],
-  providers: [PerformanceFeeService],
-  exports: [PerformanceFeeService],
+  providers: [PerformanceFeeService, PerformanceFeeSimulationService],
+  exports: [PerformanceFeeService, PerformanceFeeSimulationService],
 })
 export class PerformanceFeesModule {}

@@ -58,6 +58,56 @@ interface CheckoutResult {
   reusedExistingSession: boolean;
 }
 
+interface SimulationCharge {
+  id: string;
+  sourceMode: 'PAPER' | 'DEMO';
+  currency: string;
+  tradeCount: number;
+  startingHighWaterMark: string;
+  endingRealisedBalance: string;
+  realisedProfitForFee: string;
+  feePercent: string;
+  feeAmount: string;
+  status: 'DUE_TEST' | 'SETTLED_TEST' | 'CANCELLED';
+  simulatedSettledAt: string | null;
+  createdAt: string;
+}
+
+interface FeeSimulationAccount {
+  brokerConnectionId: string;
+  brokerId: string;
+  brokerName: string;
+  displayName: string | null;
+  sourceMode: 'PAPER' | 'DEMO';
+  currency: string;
+  simulationActive: boolean;
+  simulationStartedAt: string | null;
+  closedTradeCount: number;
+  firstClosedAt: string | null;
+  lastClosedAt: string | null;
+  cumulativeRealisedMinor: string;
+  currentHighWaterMarkMinor: string;
+  profitAboveHighWaterMarkMinor: string;
+  currentSimulatedFeeMinor: string;
+  totalFeesSimulatedMinor: string;
+  policy: {
+    id: string;
+    name: string;
+    feePercent: string;
+    billingFrequency: string;
+    calculationMode: string;
+  } | null;
+  currentCharge: SimulationCharge | null;
+  recentCharges: SimulationCharge[];
+  nonPayable: true;
+}
+
+interface FeeSimulationResponse {
+  mode: 'TEST_ONLY';
+  paymentEnabled: false;
+  accounts: FeeSimulationAccount[];
+}
+
 function minorDigits(currency: string): number {
   const code = currency.toUpperCase();
   if (['JPY', 'KRW'].includes(code)) return 0;
@@ -102,6 +152,12 @@ export default function PaymentsPage() {
   const [summary, setSummary] = useState<PerformanceSummary | null>(null);
   const [invoices, setInvoices] = useState<PerformanceInvoice[]>([]);
   const [providers, setProviders] = useState<PaymentProviderInfo[]>([]);
+  const [simulation, setSimulation] = useState<FeeSimulationResponse | null>(null);
+  const [simulationBusyId, setSimulationBusyId] = useState<string | null>(null);
+  const [settleCharge, setSettleCharge] = useState<{
+    account: FeeSimulationAccount;
+    charge: SimulationCharge;
+  } | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [checkoutInvoice, setCheckoutInvoice] = useState<PerformanceInvoice | null>(null);
@@ -112,14 +168,16 @@ export default function PaymentsPage() {
     refresh ? setRefreshing(true) : setLoading(true);
     setNotice(null);
     try {
-      const [nextSummary, nextInvoices, nextProviders] = await Promise.all([
+      const [nextSummary, nextInvoices, nextProviders, nextSimulation] = await Promise.all([
         api.request<PerformanceSummary>('/performance-fees/me/summary'),
         api.request<PerformanceInvoice[]>('/performance-fees/invoices'),
         api.listProviders(),
+        api.request<FeeSimulationResponse>('/performance-fees/me/simulation'),
       ]);
       setSummary(nextSummary);
       setInvoices(nextInvoices);
       setProviders(nextProviders);
+      setSimulation(nextSimulation);
     } catch (error) {
       setNotice({
         variant: 'error',
@@ -141,6 +199,58 @@ export default function PaymentsPage() {
     [invoices],
   );
   const latestAssessment = summary?.assessments?.[0] ?? null;
+
+  async function runSimulation(account: FeeSimulationAccount): Promise<void> {
+    if (simulationBusyId) return;
+    setSimulationBusyId(account.brokerConnectionId);
+    setNotice(null);
+    try {
+      await api.request(
+        `/performance-fees/me/simulation/${encodeURIComponent(account.brokerConnectionId)}/refresh`,
+        { method: 'POST' },
+      );
+      setNotice({
+        variant: 'success',
+        message:
+          'PAPER/DEMO fee simulation refreshed. This is test-only and cannot create a real payment obligation.',
+      });
+      await load(true);
+    } catch (error) {
+      setNotice({
+        variant: 'error',
+        message: error instanceof Error ? error.message : 'Fee simulation could not be refreshed.',
+      });
+    } finally {
+      setSimulationBusyId(null);
+    }
+  }
+
+  async function settleSimulation(): Promise<void> {
+    if (!settleCharge || simulationBusyId) return;
+    const target = settleCharge;
+    setSimulationBusyId(target.charge.id);
+    setNotice(null);
+    try {
+      await api.request(
+        `/performance-fees/me/simulation/charges/${encodeURIComponent(target.charge.id)}/settle`,
+        { method: 'POST' },
+      );
+      setSettleCharge(null);
+      setNotice({
+        variant: 'success',
+        message:
+          'Test settlement recorded. No money moved; the simulated high-water mark advanced exactly as LIVE would after verified payment.',
+      });
+      await load(true);
+    } catch (error) {
+      setNotice({
+        variant: 'error',
+        message: error instanceof Error ? error.message : 'Test settlement could not be recorded.',
+      });
+    } finally {
+      setSimulationBusyId(null);
+    }
+  }
 
   async function beginCheckout(): Promise<void> {
     if (!checkoutInvoice || checkoutBusy) return;
@@ -208,6 +318,216 @@ export default function PaymentsPage() {
         </section>
 
         {notice ? <Alert variant={notice.variant}>{notice.message}</Alert> : null}
+
+        <Card
+          title="PAPER / DEMO fee simulation"
+          subtitle="Exercises the same high-water-mark fee formula without creating a real invoice, debt or payment transaction."
+        >
+          <Alert variant="warning">
+            TEST MODE ONLY — PAPER/DEMO charges are non-payable. “Simulate settlement” moves no
+            money; it only advances the test high-water mark so we can verify the next fee cycle.
+          </Alert>
+
+          {(simulation?.accounts ?? []).length === 0 ? (
+            <EmptyState
+              title="No PAPER/DEMO account available"
+              description="Connect a PAPER or DEMO broker account to test performance-fee charging."
+            />
+          ) : (
+            <div className="workspace-form-section" style={{ marginTop: '1rem' }}>
+              {simulation!.accounts.map((account) => (
+                <div
+                  key={account.brokerConnectionId}
+                  className="card"
+                  style={{ margin: 0, padding: '1rem' }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      gap: '1rem',
+                      alignItems: 'flex-start',
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <div>
+                      <strong>{account.displayName ?? account.brokerName}</strong>
+                      <div className="muted text-sm" style={{ marginTop: '0.25rem' }}>
+                        {account.closedTradeCount} closed trades · last close{' '}
+                        {shortDate(account.lastClosedAt)}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                      <Badge variant="warning">{account.sourceMode}</Badge>
+                      <Badge variant="info">TEST · NON-PAYABLE</Badge>
+                    </div>
+                  </div>
+
+                  <div className="workspace-grid-3" style={{ marginTop: '1rem' }}>
+                    <div className="workspace-metric">
+                      <span className="workspace-metric__label">Realised P&amp;L</span>
+                      <strong className="workspace-metric__value">
+                        {money(account.cumulativeRealisedMinor, account.currency)}
+                      </strong>
+                      <span className="workspace-metric__hint">Closed PAPER/DEMO trades only.</span>
+                    </div>
+                    <div className="workspace-metric">
+                      <span className="workspace-metric__label">Simulated HWM</span>
+                      <strong className="workspace-metric__value">
+                        {money(account.currentHighWaterMarkMinor, account.currency)}
+                      </strong>
+                      <span className="workspace-metric__hint">
+                        {account.simulationActive
+                          ? `Test baseline started ${shortDate(account.simulationStartedAt)}; advances after simulated settlement.`
+                          : 'Will baseline at the current realised P&L when the test starts.'}
+                      </span>
+                    </div>
+                    <div className="workspace-metric">
+                      <span className="workspace-metric__label">Would charge now</span>
+                      <strong className="workspace-metric__value">
+                        {!account.simulationActive
+                          ? 'Not started'
+                          : account.policy
+                            ? money(account.currentSimulatedFeeMinor, account.currency)
+                            : 'Policy required'}
+                      </strong>
+                      <span className="workspace-metric__hint">
+                        Fee basis {money(account.profitAboveHighWaterMarkMinor, account.currency)}
+                        {account.policy
+                          ? ` · ${Number(account.policy.feePercent).toFixed(2)}%`
+                          : ''}
+                      </span>
+                    </div>
+                  </div>
+
+                  {account.policy ? (
+                    <Alert variant="info">
+                      Policy: <strong>{account.policy.name}</strong> ·{' '}
+                      {Number(account.policy.feePercent).toFixed(2)}% ·{' '}
+                      {account.policy.billingFrequency.replaceAll('_', ' ')}. The simulator and LIVE
+                      engine share the same integer high-water-mark calculation.
+                    </Alert>
+                  ) : (
+                    <Alert variant="warning">
+                      No active performance-fee policy is configured. An admin must set the rate
+                      before a simulated charge can be created.
+                    </Alert>
+                  )}
+
+                  {account.currentCharge ? (
+                    <div
+                      style={{
+                        border: '1px solid var(--border)',
+                        borderRadius: 'var(--radius-md)',
+                        padding: '1rem',
+                        marginTop: '0.9rem',
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          gap: '1rem',
+                          alignItems: 'center',
+                          flexWrap: 'wrap',
+                        }}
+                      >
+                        <div>
+                          <div className="muted text-sm">TEST INVOICE</div>
+                          <strong>
+                            {money(account.currentCharge.feeAmount, account.currency)}
+                          </strong>
+                          <div className="muted text-sm">
+                            Basis{' '}
+                            {money(account.currentCharge.realisedProfitForFee, account.currency)} ·{' '}
+                            {Number(account.currentCharge.feePercent).toFixed(2)}%
+                          </div>
+                        </div>
+                        <Badge variant="warning">DUE TEST · NO PAYMENT</Badge>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        loading={simulationBusyId === account.currentCharge.id}
+                        disabled={Boolean(simulationBusyId)}
+                        onClick={() =>
+                          setSettleCharge({ account, charge: account.currentCharge! })
+                        }
+                        style={{ marginTop: '0.8rem' }}
+                      >
+                        Simulate settlement
+                      </Button>
+                    </div>
+                  ) : null}
+
+                  <div
+                    style={{
+                      display: 'flex',
+                      gap: '0.75rem',
+                      marginTop: '1rem',
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <Button
+                      size="sm"
+                      loading={simulationBusyId === account.brokerConnectionId}
+                      disabled={Boolean(simulationBusyId) || !account.policy}
+                      onClick={() => void runSimulation(account)}
+                    >
+                      {account.simulationActive
+                        ? 'Run fee simulation'
+                        : 'Start fee simulation'}
+                    </Button>
+                    <span className="muted text-sm" style={{ alignSelf: 'center' }}>
+                      Total simulated fees:{' '}
+                      {money(account.totalFeesSimulatedMinor, account.currency)}
+                    </span>
+                  </div>
+
+                  {account.recentCharges.length > 0 ? (
+                    <div style={{ marginTop: '1rem' }}>
+                      <div className="muted text-sm" style={{ marginBottom: '0.5rem' }}>
+                        Recent test charge cycles
+                      </div>
+                      <div className="payments-table-scroll">
+                        <table className="payments-table" aria-label="Simulated fee charge history">
+                          <thead>
+                            <tr>
+                              <th>Created</th>
+                              <th>Fee basis</th>
+                              <th>Test fee</th>
+                              <th>Status</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {account.recentCharges.slice(0, 5).map((charge) => (
+                              <tr key={charge.id}>
+                                <td>{shortDate(charge.createdAt)}</td>
+                                <td>
+                                  {money(charge.realisedProfitForFee, account.currency)}
+                                </td>
+                                <td>{money(charge.feeAmount, account.currency)}</td>
+                                <td>
+                                  <Badge
+                                    variant={
+                                      charge.status === 'SETTLED_TEST' ? 'success' : 'warning'
+                                    }
+                                  >
+                                    {charge.status.replaceAll('_', ' ')}
+                                  </Badge>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
 
         <section className="workspace-grid-3" aria-label="Performance fee summary">
           <Card>
@@ -358,6 +678,33 @@ export default function PaymentsPage() {
           </Alert>
         ) : null}
       </main>
+
+      <ConfirmDialog
+        open={settleCharge !== null}
+        title="Simulate fee settlement?"
+        description={
+          settleCharge
+            ? `Record a TEST settlement of ${money(
+                settleCharge.charge.feeAmount,
+                settleCharge.account.currency,
+              )}. No payment provider is contacted and no money moves. This only advances the PAPER/DEMO high-water mark to ${money(
+                settleCharge.charge.endingRealisedBalance,
+                settleCharge.account.currency,
+              )} so the next charge cycle can be tested.`
+            : ''
+        }
+        confirmLabel={
+          settleCharge && simulationBusyId === settleCharge.charge.id
+            ? 'Recording…'
+            : 'Record test settlement'
+        }
+        cancelLabel="Keep test invoice due"
+        tone="warning"
+        onCancel={() => {
+          if (!simulationBusyId) setSettleCharge(null);
+        }}
+        onConfirm={() => void settleSimulation()}
+      />
 
       <ConfirmDialog
         open={checkoutInvoice !== null}
