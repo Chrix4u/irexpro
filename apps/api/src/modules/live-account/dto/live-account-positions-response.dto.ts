@@ -9,6 +9,9 @@ export class LiveTradePathDiagnosticsDto {
   @ApiProperty() latestUnrealisedPnl: string;
   @ApiProperty() profitGiveback: string;
   @ApiProperty({ minimum: 0 }) observationCount: number;
+  @ApiProperty({ minimum: 0 }) sameBarProtectionAmbiguityCount: number;
+  @ApiPropertyOptional({ nullable: true, type: String, format: 'date-time' })
+  lastSameBarProtectionAmbiguityAt: string | null;
   @ApiPropertyOptional({ nullable: true, type: String, format: 'date-time' })
   peakObservedAt: string | null;
   @ApiPropertyOptional({ nullable: true, type: String, format: 'date-time' })
@@ -173,6 +176,11 @@ export function toLivePositionRowView(
           latestUnrealisedPnl: providerPosition.pathDiagnostics.latestUnrealisedPnl,
           profitGiveback: providerPosition.pathDiagnostics.profitGiveback,
           observationCount: providerPosition.pathDiagnostics.observationCount,
+          sameBarProtectionAmbiguityCount:
+            providerPosition.pathDiagnostics.sameBarProtectionAmbiguityCount,
+          lastSameBarProtectionAmbiguityAt: toIsoString(
+            providerPosition.pathDiagnostics.lastSameBarProtectionAmbiguityAt,
+          ),
           peakObservedAt: toIsoString(providerPosition.pathDiagnostics.peakObservedAt),
           lastObservedAt: toIsoString(providerPosition.pathDiagnostics.lastObservedAt),
         }

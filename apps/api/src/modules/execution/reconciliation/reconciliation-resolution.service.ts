@@ -92,6 +92,8 @@ export class ReconciliationResolutionService {
             maxAdversePnl: pathDiagnostics.maxAdversePnl,
             profitGiveback: pathDiagnostics.profitGiveback,
             pathObservationCount: pathDiagnostics.observationCount,
+            sameBarProtectionAmbiguityCount: pathDiagnostics.sameBarProtectionAmbiguityCount,
+            lastSameBarProtectionAmbiguityAt: pathDiagnostics.lastSameBarProtectionAmbiguityAt,
             pathPeakObservedAt: pathDiagnostics.peakObservedAt,
             pathLastObservedAt: pathDiagnostics.lastObservedAt,
           }
@@ -125,6 +127,10 @@ export class ReconciliationResolutionService {
               maxAdversePnl: pathDiagnostics.maxAdversePnl,
               profitGiveback: pathDiagnostics.profitGiveback,
               observationCount: pathDiagnostics.observationCount,
+              sameBarProtectionAmbiguityCount:
+                pathDiagnostics.sameBarProtectionAmbiguityCount,
+              lastSameBarProtectionAmbiguityAt:
+                pathDiagnostics.lastSameBarProtectionAmbiguityAt?.toISOString() ?? null,
               peakObservedAt: pathDiagnostics.peakObservedAt?.toISOString() ?? null,
               lastObservedAt: pathDiagnostics.lastObservedAt?.toISOString() ?? null,
             }

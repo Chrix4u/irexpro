@@ -290,6 +290,8 @@ export interface LivePositionRowView {
     latestUnrealisedPnl: string;
     profitGiveback: string;
     observationCount: number;
+    sameBarProtectionAmbiguityCount: number;
+    lastSameBarProtectionAmbiguityAt: string | null;
     peakObservedAt: string | null;
     lastObservedAt: string | null;
   } | null;

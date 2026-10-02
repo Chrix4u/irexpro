@@ -50,7 +50,7 @@ interface TwelveDataSeries {
 }
 type TwelveDataResponse = TwelveDataSeries | Record<string, TwelveDataSeries>;
 
-interface Candidate {
+export interface Candidate {
   instrument: string;
   direction: 'BUY' | 'SELL';
   confidence: number;
@@ -67,7 +67,7 @@ interface Candidate {
   rsi14: number;
 }
 
-interface PublishedOpportunity {
+export interface PublishedOpportunity {
   direction: 'BUY' | 'SELL';
   confidence: number;
   entry: number;
@@ -334,7 +334,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
 
     try {
       await this.restorePublishedOpportunities(userId, connectionId);
-      await this.primeMarketData(apiKey);
+      await this.primeMarketData(apiKey, connectionId);
       const activeAfterPrime = await this.executionService.getActiveSession(userId);
       if (
         activeAfterPrime &&
@@ -406,7 +406,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       automaticDemoPromotion: false,
       automaticLivePromotion: false,
       marketCache: ownsBinding
-        ? this.livePaperMarket.status()
+        ? this.livePaperMarket.status(this.connectionId())
         : {
             cachedInstruments: [],
             cachedInstrumentCount: 0,
@@ -422,7 +422,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             ? 'DISABLED'
             : !activePaperSession
               ? 'WAITING_FOR_PAPER_SESSION'
-              : this.livePaperMarket.status().cachedInstrumentCount < SYMBOLS.length
+              : this.livePaperMarket.status(this.connectionId()).cachedInstrumentCount < SYMBOLS.length
                 ? 'WAITING_FOR_MARKET_DATA'
                 : 'ACTIVE',
     };
@@ -451,7 +451,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
 
       const seriesByInstrument = await this.fetchSixPairSeries(apiKey, fetchImpl);
       for (const [instrument, candles] of seriesByInstrument.entries()) {
-        this.livePaperMarket.updateClosedCandles(instrument, candles);
+        this.livePaperMarket.updateClosedCandles(instrument, candles, connectionId);
       }
 
       const session = await this.executionService.getActiveSession(userId);
@@ -469,7 +469,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       // Atomic handoff: only after all six series were parsed and cached AND
       // the exact PAPER authority is active do broker reads switch to live mode.
       this.livePaperMarket.registerLiveConnection(connectionId);
-      const cacheStatus = this.livePaperMarket.status();
+      const cacheStatus = this.livePaperMarket.status(connectionId);
       this.logger.log(
         `VPS live market cache primed pairs=${cacheStatus.cachedInstrumentCount}/6 ` +
           `latest=${cacheStatus.latestObservedAt?.toISOString() ?? 'unknown'}`,
@@ -712,17 +712,21 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     }
   }
 
-  private async primeMarketData(apiKey: string, fetchImpl: typeof fetch = fetch): Promise<void> {
+  private async primeMarketData(
+    apiKey: string,
+    connectionId: string,
+    fetchImpl: typeof fetch = fetch,
+  ): Promise<void> {
     const seriesByInstrument = await this.fetchSixPairSeries(apiKey, fetchImpl);
     for (const [instrument, candles] of seriesByInstrument.entries()) {
-      this.livePaperMarket.updateClosedCandles(instrument, candles);
+      this.livePaperMarket.updateClosedCandles(instrument, candles, connectionId);
     }
     this.recordEvaluation(
       [...seriesByInstrument.entries()]
         .map(([instrument, candles]) => buildCandidate(instrument, candles))
         .filter((candidate): candidate is Candidate => candidate !== null),
     );
-    const cacheStatus = this.livePaperMarket.status();
+    const cacheStatus = this.livePaperMarket.status(connectionId);
     if (cacheStatus.cachedInstrumentCount !== SYMBOLS.length) {
       throw new Error(
         `startup live PAPER cache incomplete (${cacheStatus.cachedInstrumentCount}/${SYMBOLS.length})`,

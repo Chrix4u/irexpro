@@ -36,6 +36,12 @@ type EvidenceRow = {
   realised_pnl: string | number | null;
   close_reason: string | null;
   closed_at: Date | string | null;
+  same_bar_protection_ambiguity_count: string | number | null;
+  last_same_bar_protection_ambiguity_at: Date | string | null;
+  max_favorable_pnl: string | number | null;
+  max_adverse_pnl: string | number | null;
+  profit_giveback: string | number | null;
+  path_observation_count: string | number | null;
   allocated_capital: string | number | null;
   broker_connection_id: string | null;
   session_opening_balance: string | number | null;
@@ -111,6 +117,102 @@ function sampleSharpe(returns: number[]): number | null {
   // annualized market Sharpe; the API labels it explicitly to avoid implying
   // a time-scale that the provider's varying holding periods do not support.
   return (Math.sqrt(returns.length) * mean) / sd;
+}
+
+function buildDriftDiagnostics(rows: EvidenceRow[]) {
+  const recentWindowSize = 20;
+  const minimumClosedTrades = recentWindowSize * 2;
+  const summary = (bucket: EvidenceRow[]) => {
+    const pnls = bucket.map((row) => finite(row.realised_pnl) ?? 0);
+    const wins = pnls.filter((value) => value > 0).length;
+    return {
+      closedTrades: bucket.length,
+      realisedPnl: pnls.reduce((sum, value) => sum + value, 0),
+      averagePnl: bucket.length
+        ? pnls.reduce((sum, value) => sum + value, 0) / bucket.length
+        : null,
+      winRate: bucket.length ? wins / bucket.length : null,
+      profitFactor: bucket.length ? profitFactor(pnls) : null,
+    };
+  };
+
+  const recent = rows.slice(-recentWindowSize);
+  const reference = rows.slice(0, Math.max(0, rows.length - recentWindowSize));
+  const recentSummary = summary(recent);
+  const referenceSummary = summary(reference);
+  const pfRatio =
+    recentSummary.profitFactor !== null &&
+    referenceSummary.profitFactor !== null &&
+    referenceSummary.profitFactor > 0
+      ? recentSummary.profitFactor / referenceSummary.profitFactor
+      : null;
+
+  let status: 'INSUFFICIENT_EVIDENCE' | 'STABLE' | 'WATCH' | 'DEGRADED' =
+    'INSUFFICIENT_EVIDENCE';
+  if (rows.length >= minimumClosedTrades) {
+    const recentNegative = recentSummary.realisedPnl < 0;
+    if (
+      recentNegative &&
+      ((recentSummary.profitFactor !== null && recentSummary.profitFactor < 0.8) ||
+        (pfRatio !== null && pfRatio < 0.7))
+    ) {
+      status = 'DEGRADED';
+    } else if (
+      recentNegative ||
+      (recentSummary.profitFactor !== null && recentSummary.profitFactor < 1.0) ||
+      (pfRatio !== null && pfRatio < 0.85)
+    ) {
+      status = 'WATCH';
+    } else {
+      status = 'STABLE';
+    }
+  }
+
+  return {
+    mode: 'DIAGNOSTIC_ONLY' as const,
+    modifiesExecution: false as const,
+    recentWindowSize,
+    minimumClosedTrades,
+    status,
+    recent: recentSummary,
+    reference: referenceSummary,
+    recentToReferenceProfitFactorRatio: pfRatio,
+    methodology:
+      'Compares the latest 20 qualification-closed trades with all earlier qualification-closed trades. It is operational drift telemetry only and never changes admission, sizing, exits, or promotion gates.',
+  };
+}
+
+function buildProfitProtectionShadow(rows: EvidenceRow[]) {
+  const observed = rows.filter(
+    (row) => (finite(row.path_observation_count) ?? 0) > 0 && finite(row.max_favorable_pnl) !== null,
+  );
+  const losers = observed.filter((row) => (finite(row.realised_pnl) ?? 0) < 0);
+  const losersWithPositiveMfe = losers.filter((row) => (finite(row.max_favorable_pnl) ?? 0) > 0);
+  const average = (values: number[]) =>
+    values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+  const mfe = observed.map((row) => finite(row.max_favorable_pnl) ?? 0);
+  const mae = observed.map((row) => finite(row.max_adverse_pnl) ?? 0);
+  const giveback = observed.map((row) => finite(row.profit_giveback) ?? 0);
+  const loserMfe = losers.map((row) => finite(row.max_favorable_pnl) ?? 0);
+
+  return {
+    mode: 'DIAGNOSTIC_ONLY' as const,
+    modifiesExecution: false as const,
+    observedClosedTrades: observed.length,
+    losingTradesObserved: losers.length,
+    losersWithPositiveMfe: losersWithPositiveMfe.length,
+    loserPositiveMfeFraction: losers.length ? losersWithPositiveMfe.length / losers.length : null,
+    averageMaxFavorablePnl: average(mfe),
+    averageMaxAdversePnl: average(mae),
+    averageProfitGiveback: average(giveback),
+    losingTradesThatReached: {
+      usd3: loserMfe.filter((value) => value >= 3).length,
+      usd5: loserMfe.filter((value) => value >= 5).length,
+      usd10: loserMfe.filter((value) => value >= 10).length,
+    },
+    methodology:
+      'Prospective path telemetry only. It measures observed MFE, MAE and profit give-back on the unchanged strategy and does not move stops, take partial profit, or close positions.',
+  };
 }
 
 function maxEquityDrawdown(equities: number[]): number | null {
@@ -334,6 +436,12 @@ export class ExternalSignalPerformanceService {
           t.realised_pnl,
           t.close_reason,
           t.closed_at,
+          t.same_bar_protection_ambiguity_count,
+          t.last_same_bar_protection_ambiguity_at,
+          t.max_favorable_pnl,
+          t.max_adverse_pnl,
+          t.profit_giveback,
+          t.path_observation_count,
           ca.allocated_capital,
           ti.broker_connection_id,
           ts.opening_balance AS session_opening_balance,
@@ -381,6 +489,13 @@ export class ExternalSignalPerformanceService {
       (row) => row.close_reason === 'STOP_LOSS_HIT' || row.close_reason === 'TAKE_PROFIT_HIT',
     );
     const interruptedClosedTrades = allEconomicallyClosed.length - closed.length;
+    const sameBarProtectionAmbiguityCount = closed.reduce(
+      (sum, row) => sum + Math.max(0, finite(row.same_bar_protection_ambiguity_count) ?? 0),
+      0,
+    );
+    const ambiguousClosedTrades = closed.filter(
+      (row) => (finite(row.same_bar_protection_ambiguity_count) ?? 0) > 0,
+    ).length;
 
     const realisedPnls = closed.map((row) => finite(row.realised_pnl) ?? 0);
     const strategyRealisedPnl = realisedPnls.reduce((a, b) => a + b, 0);
@@ -482,6 +597,8 @@ export class ExternalSignalPerformanceService {
     const latestSignalAt = latestRow ? new Date(latestRow.signal_generated_at) : null;
     const medianGap = median(signalGaps);
     const shadowCalibration = buildShadowCalibrationDiagnostics(closed);
+    const driftDiagnostics = buildDriftDiagnostics(closed);
+    const profitProtectionShadow = buildProfitProtectionShadow(closed);
 
     // v8 is a frozen prospective SHADOW filter layered over v7. It does not
     // alter v7 admission, sizing, SL/TP or execution. Only signals tagged
@@ -669,6 +786,8 @@ export class ExternalSignalPerformanceService {
       rejectedSignals,
       closedTrades: closed.length,
       interruptedClosedTrades,
+      ambiguousClosedTrades,
+      sameBarProtectionAmbiguityCount,
       strategyRealisedPnl,
       balancedAccuracy: ba,
       profitFactor: pf,
@@ -739,6 +858,8 @@ export class ExternalSignalPerformanceService {
       observed,
       checks,
       shadowCalibration,
+      driftDiagnostics,
+      profitProtectionShadow,
       v8ProspectiveShadow,
       methodology: {
         completedTradeEvidence:
@@ -755,6 +876,8 @@ export class ExternalSignalPerformanceService {
           'Fraction of UTC calendar weeks with positive summed per-trade account return.',
         positiveInstrumentFraction:
           'Fraction of the fixed six-pair universe with positive summed per-trade account return.',
+        sameBarProtectionAmbiguity:
+          'Count of closed M5 bars where both SL and TP were reachable but OHLC could not prove hit order. PAPER resolves these conservatively SL-first and reports the ambiguity instead of hiding it.',
       },
     };
   }

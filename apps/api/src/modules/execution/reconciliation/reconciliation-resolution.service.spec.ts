@@ -152,6 +152,8 @@ describe('ReconciliationResolutionService', () => {
           latestUnrealisedPnl: '20.00',
           profitGiveback: '11.00',
           observationCount: 17,
+          sameBarProtectionAmbiguityCount: 1,
+          lastSameBarProtectionAmbiguityAt: new Date('2026-10-02T12:34:00.000Z'),
           peakObservedAt: new Date('2026-10-02T12:30:00.000Z'),
           lastObservedAt: new Date('2026-10-02T12:35:00.000Z'),
         },
@@ -169,6 +171,8 @@ describe('ReconciliationResolutionService', () => {
           maxAdversePnl: '-4.00',
           profitGiveback: '11.00',
           pathObservationCount: 17,
+          sameBarProtectionAmbiguityCount: 1,
+          lastSameBarProtectionAmbiguityAt: new Date('2026-10-02T12:34:00.000Z'),
         }),
       );
     });

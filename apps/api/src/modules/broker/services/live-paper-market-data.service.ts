@@ -31,6 +31,16 @@ interface InstrumentSpec {
   description: string;
 }
 
+interface LivePaperMarketState {
+  candles: Map<string, OHLCV[]>;
+  candleQuotes: Map<string, LivePaperQuote>;
+  streamingQuotes: Map<string, LivePaperQuote>;
+  latestObservedAt: Date | null;
+  latestQuoteObservedAt: Date | null;
+}
+
+const DEFAULT_MARKET_SCOPE = '__default__';
+
 const SPECS: Record<string, InstrumentSpec> = {
   EURUSD: { digits: 5, spread: 0.0001, description: 'Euro vs US Dollar' },
   GBPUSD: { digits: 5, spread: 0.00012, description: 'British Pound vs US Dollar' },
@@ -53,13 +63,25 @@ const SPECS: Record<string, InstrumentSpec> = {
 @Injectable()
 export class LivePaperMarketDataService {
   private readonly liveConnections = new Set<string>();
-  private readonly candles = new Map<string, OHLCV[]>();
-  private readonly candleQuotes = new Map<string, LivePaperQuote>();
-  private readonly streamingQuotes = new Map<string, LivePaperQuote>();
-  private latestObservedAt: Date | null = null;
-  private latestQuoteObservedAt: Date | null = null;
+  private readonly states = new Map<string, LivePaperMarketState>();
 
   readonly instruments = Object.freeze(Object.keys(SPECS));
+
+  private marketState(connectionId?: string): LivePaperMarketState {
+    const key = connectionId?.trim() || DEFAULT_MARKET_SCOPE;
+    let state = this.states.get(key);
+    if (!state) {
+      state = {
+        candles: new Map<string, OHLCV[]>(),
+        candleQuotes: new Map<string, LivePaperQuote>(),
+        streamingQuotes: new Map<string, LivePaperQuote>(),
+        latestObservedAt: null,
+        latestQuoteObservedAt: null,
+      };
+      this.states.set(key, state);
+    }
+    return state;
+  }
 
   registerLiveConnection(connectionId: string): void {
     if (connectionId.trim()) this.liveConnections.add(connectionId.trim());
@@ -73,7 +95,12 @@ export class LivePaperMarketDataService {
     return Boolean(connectionId && this.liveConnections.has(connectionId));
   }
 
-  updateClosedCandles(instrument: string, rows: LivePaperCandleInput[]): void {
+  updateClosedCandles(
+    instrument: string,
+    rows: LivePaperCandleInput[],
+    connectionId?: string,
+  ): void {
+    const state = this.marketState(connectionId);
     const symbol = this.requireSupported(instrument);
     if (rows.length < 2) {
       throw new BrokerAdapterError(
@@ -111,22 +138,28 @@ export class LivePaperMarketDataService {
     }
     const halfSpread = spec.spread / 2;
     const quoteTimestamp = new Date(latest.timestamp.getTime() + 5 * 60_000);
-    this.candles.set(symbol, normalized.slice(-500));
-    this.candleQuotes.set(symbol, {
+    state.candles.set(symbol, normalized.slice(-500));
+    state.candleQuotes.set(symbol, {
       bid: (mid - halfSpread).toFixed(spec.digits),
       ask: (mid + halfSpread).toFixed(spec.digits),
       timestamp: quoteTimestamp,
       source: 'REST_M5',
     });
-    if (!this.latestObservedAt || quoteTimestamp > this.latestObservedAt) {
-      this.latestObservedAt = quoteTimestamp;
+    if (!state.latestObservedAt || quoteTimestamp > state.latestObservedAt) {
+      state.latestObservedAt = quoteTimestamp;
     }
-    if (!this.latestQuoteObservedAt || quoteTimestamp > this.latestQuoteObservedAt) {
-      this.latestQuoteObservedAt = quoteTimestamp;
+    if (!state.latestQuoteObservedAt || quoteTimestamp > state.latestQuoteObservedAt) {
+      state.latestQuoteObservedAt = quoteTimestamp;
     }
   }
 
-  updateStreamingMidQuote(instrument: string, price: number | string, observedAt: Date): void {
+  updateStreamingMidQuote(
+    instrument: string,
+    price: number | string,
+    observedAt: Date,
+    connectionId?: string,
+  ): void {
+    const state = this.marketState(connectionId);
     const symbol = this.requireSupported(instrument);
     const spec = SPECS[symbol]!;
     const mid = Number(price);
@@ -144,12 +177,12 @@ export class LivePaperMarketDataService {
       timestamp,
       source: 'STREAM',
     };
-    const current = this.streamingQuotes.get(symbol);
+    const current = state.streamingQuotes.get(symbol);
     if (!current || timestamp.getTime() >= current.timestamp.getTime()) {
-      this.streamingQuotes.set(symbol, quote);
+      state.streamingQuotes.set(symbol, quote);
     }
-    if (!this.latestQuoteObservedAt || timestamp > this.latestQuoteObservedAt) {
-      this.latestQuoteObservedAt = timestamp;
+    if (!state.latestQuoteObservedAt || timestamp > state.latestQuoteObservedAt) {
+      state.latestQuoteObservedAt = timestamp;
     }
   }
 
@@ -157,9 +190,14 @@ export class LivePaperMarketDataService {
    * Execution/evidence quote: ALWAYS the latest fully closed M5 REST candle.
    * Streaming ticks must never alter v5 fills, margin/risk, or SL/TP evidence.
    */
-  getQuote(instrument: string, maxAgeMs = 20 * 60_000): LivePaperQuote {
+  getQuote(
+    instrument: string,
+    maxAgeMs = 20 * 60_000,
+    connectionId?: string,
+  ): LivePaperQuote {
+    const state = this.marketState(connectionId);
     const symbol = this.requireSupported(instrument);
-    const quote = this.candleQuotes.get(symbol);
+    const quote = state.candleQuotes.get(symbol);
     if (!quote) {
       throw new BrokerAdapterError(
         BrokerErrorCode.PROVIDER_UNAVAILABLE,
@@ -190,16 +228,18 @@ export class LivePaperMarketDataService {
     instrument: string,
     streamMaxAgeMs = 60_000,
     fallbackMaxAgeMs = 20 * 60_000,
+    connectionId?: string,
   ): LivePaperQuote {
+    const state = this.marketState(connectionId);
     const symbol = this.requireSupported(instrument);
-    const stream = this.streamingQuotes.get(symbol);
+    const stream = state.streamingQuotes.get(symbol);
     if (stream) {
       const age = Date.now() - stream.timestamp.getTime();
       if (Number.isFinite(age) && age >= -5_000 && age <= streamMaxAgeMs) {
         return { ...stream, timestamp: new Date(stream.timestamp) };
       }
     }
-    return this.getQuote(symbol, fallbackMaxAgeMs);
+    return this.getQuote(symbol, fallbackMaxAgeMs, connectionId);
   }
 
   /**
@@ -215,11 +255,13 @@ export class LivePaperMarketDataService {
     instrument: string,
     streamMaxAgeMs = 60_000,
     fallbackMaxAgeMs = 20 * 60_000,
+    connectionId?: string,
   ): LivePaperPositionMark {
+    const state = this.marketState(connectionId);
     const symbol = this.requireSupported(instrument);
     const now = Date.now();
-    const stream = this.streamingQuotes.get(symbol);
-    const candle = this.candleQuotes.get(symbol);
+    const stream = state.streamingQuotes.get(symbol);
+    const candle = state.candleQuotes.get(symbol);
 
     if (stream) {
       const age = now - stream.timestamp.getTime();
@@ -248,7 +290,13 @@ export class LivePaperMarketDataService {
     return { ...latest, timestamp: new Date(latest.timestamp), isStale: true };
   }
 
-  getOHLCV(instrument: string, timeframe: string, count: number): OHLCV[] {
+  getOHLCV(
+    instrument: string,
+    timeframe: string,
+    count: number,
+    connectionId?: string,
+  ): OHLCV[] {
+    const state = this.marketState(connectionId);
     const symbol = this.requireSupported(instrument);
     const tf = timeframe.trim().toUpperCase();
     const timeframeMinutes: Record<string, number> = {
@@ -266,7 +314,7 @@ export class LivePaperMarketDataService {
         `VPS live PAPER market data supports M5/M15/M30/H1/H4/D1 (requested ${timeframe}).`,
       );
     }
-    const rows = this.candles.get(symbol) ?? [];
+    const rows = state.candles.get(symbol) ?? [];
     if (!rows.length) {
       throw new BrokerAdapterError(
         BrokerErrorCode.PROVIDER_UNAVAILABLE,
@@ -282,7 +330,7 @@ export class LivePaperMarketDataService {
     }
 
     const bucketMs = minutes * 60_000;
-    const latestClosedAt = this.latestObservedAt?.getTime() ?? 0;
+    const latestClosedAt = state.latestObservedAt?.getTime() ?? 0;
     const buckets = new Map<number, OHLCV[]>();
     for (const row of rows) {
       const ts = row.timestamp.getTime();
@@ -320,15 +368,17 @@ export class LivePaperMarketDataService {
     return aggregated.slice(-Math.max(1, count));
   }
 
-  now(): Date {
-    // v5 execution clock is anchored to the closed-candle evidence stream.
-    return this.latestObservedAt ? new Date(this.latestObservedAt) : new Date();
+  now(connectionId?: string): Date {
+    // PAPER execution clocks are anchored to each connection's own evidence stream.
+    const state = this.marketState(connectionId);
+    return state.latestObservedAt ? new Date(state.latestObservedAt) : new Date();
   }
 
-  status() {
-    const cached = new Set([...this.candleQuotes.keys(), ...this.streamingQuotes.keys()]);
+  status(connectionId?: string) {
+    const state = this.marketState(connectionId);
+    const cached = new Set([...state.candleQuotes.keys(), ...state.streamingQuotes.keys()]);
     const now = Date.now();
-    const streamingInstruments = [...this.streamingQuotes.entries()]
+    const streamingInstruments = [...state.streamingQuotes.entries()]
       .filter(([, quote]) => {
         const age = now - quote.timestamp.getTime();
         return Number.isFinite(age) && age >= -5_000 && age <= 60_000;
@@ -340,9 +390,9 @@ export class LivePaperMarketDataService {
       cachedInstrumentCount: cached.size,
       streamingInstruments,
       streamingInstrumentCount: streamingInstruments.length,
-      latestObservedAt: this.latestObservedAt ? new Date(this.latestObservedAt) : null,
-      latestQuoteObservedAt: this.latestQuoteObservedAt
-        ? new Date(this.latestQuoteObservedAt)
+      latestObservedAt: state.latestObservedAt ? new Date(state.latestObservedAt) : null,
+      latestQuoteObservedAt: state.latestQuoteObservedAt
+        ? new Date(state.latestQuoteObservedAt)
         : null,
     };
   }

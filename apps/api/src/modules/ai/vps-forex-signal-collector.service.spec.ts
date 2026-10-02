@@ -252,7 +252,7 @@ describe('VpsForexSignalCollectorService', () => {
         }),
       }),
     );
-    expect(live.getOHLCV('EURUSD', 'M5', 70)).toHaveLength(70);
+    expect(live.getOHLCV('EURUSD', 'M5', 70, 'conn-1')).toHaveLength(70);
   });
 
   it('refreshes market data but does not publish without the exact active PAPER session', async () => {
@@ -276,7 +276,7 @@ describe('VpsForexSignalCollectorService', () => {
       .mockResolvedValue({ ok: true, status: 200, json: async () => payload() });
     await collector.collectOnce(fetchMock as unknown as typeof fetch);
     expect(receiveSignal).not.toHaveBeenCalled();
-    expect(live.getQuote('EURUSD').bid).toBeTruthy();
+    expect(live.getQuote('EURUSD', 20 * 60_000, 'conn-1').bid).toBeTruthy();
     expect(live.isLiveConnection('conn-1')).toBe(false);
   });
 
@@ -313,7 +313,7 @@ describe('VpsForexSignalCollectorService', () => {
 
     expect(aiEngine.notifySessionStopped).toHaveBeenCalledWith({ tradingSessionId: 'session-1' });
     expect(live.isLiveConnection('conn-1')).toBe(true);
-    expect(live.status().cachedInstrumentCount).toBe(6);
+    expect(live.status('conn-1').cachedInstrumentCount).toBe(6);
     expect(startupHeartbeat).toHaveBeenCalledTimes(6);
 
     collector.onModuleDestroy();

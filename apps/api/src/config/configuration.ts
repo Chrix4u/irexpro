@@ -139,6 +139,25 @@ export default () => ({
     brokerConnectionId: process.env.VPS_FOREX_SCANNER_BROKER_CONNECTION_ID,
     fastMarkStreamEnabled: process.env.TWELVEDATA_FAST_MARK_STREAM_ENABLED !== 'false',
   },
+  brokerParityV7: {
+    // Separate broker-native PAPER cohort. It is disabled by default and will
+    // never publish signals unless a formally frozen artifact digest and the
+    // second explicit execution switch are present.
+    enabled: process.env.BROKER_PARITY_V7_ENABLED === 'true',
+    signalExecutionEnabled: process.env.BROKER_PARITY_V7_SIGNAL_EXECUTION_ENABLED === 'true',
+    userId: process.env.BROKER_PARITY_V7_USER_ID,
+    sourceConnectionId: process.env.BROKER_PARITY_V7_SOURCE_CONNECTION_ID,
+    paperConnectionId: process.env.BROKER_PARITY_V7_PAPER_CONNECTION_ID,
+    artifactDigest: process.env.BROKER_PARITY_V7_ARTIFACT_DIGEST,
+  },
+  v8DedicatedPaper: {
+    // Preparation gate only. No v8 dedicated PAPER campaign can start from
+    // this configuration until prospective screening and artifact checks pass.
+    enabled: process.env.V8_DEDICATED_PAPER_ENABLED === 'true',
+    userId: process.env.V8_DEDICATED_PAPER_USER_ID,
+    paperConnectionId: process.env.V8_DEDICATED_PAPER_CONNECTION_ID,
+    artifactDigest: process.env.V8_DEDICATED_PAPER_ARTIFACT_DIGEST,
+  },
   aiEngine: {
     baseUrl: process.env.AI_ENGINE_BASE_URL ?? 'http://localhost:8001/api/v1',
     schedulerEnabled: process.env.AI_ENGINE_SCHEDULER_ENABLED === 'true',

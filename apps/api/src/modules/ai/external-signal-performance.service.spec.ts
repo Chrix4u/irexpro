@@ -117,6 +117,11 @@ describe('ExternalSignalPerformanceService', () => {
     expect(
       report.shadowCalibration.pairDirection.filter((row) => row.closedTrades > 0),
     ).toHaveLength(6);
+    expect(report.driftDiagnostics.mode).toBe('DIAGNOSTIC_ONLY');
+    expect(report.driftDiagnostics.modifiesExecution).toBe(false);
+    expect(report.driftDiagnostics.status).toBe('STABLE');
+    expect(report.profitProtectionShadow.mode).toBe('DIAGNOSTIC_ONLY');
+    expect(report.profitProtectionShadow.modifiesExecution).toBe(false);
   });
 
   it('uses conventional realised-P&L profit factor rather than margin-normalized PF', async () => {

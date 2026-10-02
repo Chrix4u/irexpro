@@ -89,6 +89,21 @@ describe('LivePaperMarketDataService', () => {
     }
   });
 
+  it('isolates market caches by PAPER connection so research and broker-parity feeds cannot mix', () => {
+    const service = new LivePaperMarketDataService();
+    service.updateClosedCandles('EURUSD', candles(1.1, 5), 'research-paper');
+    service.updateClosedCandles('EURUSD', candles(1.2, 5), 'broker-parity-paper');
+
+    const research = service.getQuote('EURUSD', 20 * 60_000, 'research-paper');
+    const parity = service.getQuote('EURUSD', 20 * 60_000, 'broker-parity-paper');
+    expect(research.bid).not.toBe(parity.bid);
+    expect(service.status('research-paper').cachedInstrumentCount).toBe(1);
+    expect(service.status('broker-parity-paper').cachedInstrumentCount).toBe(1);
+    expect(() => service.getQuote('GBPUSD', 20 * 60_000, 'research-paper')).toThrow(
+      /No live PAPER execution quote/,
+    );
+  });
+
   it('fails closed on unsupported timeframes and missing quotes', () => {
     const service = new LivePaperMarketDataService();
     expect(() => service.getQuote('EURUSD')).toThrow(/No live PAPER execution quote/);

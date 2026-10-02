@@ -620,6 +620,8 @@ interface PaperPosition {
   pathLastMarkObservedAt: Date | null;
   pathLastCandleClosedAt: Date | null;
   pathObservationCount: number;
+  pathSameBarProtectionAmbiguityCount: number;
+  pathLastSameBarProtectionAmbiguityAt: Date | null;
 }
 
 interface PaperClosedTrade {
@@ -644,6 +646,8 @@ interface PaperClosedTrade {
   pathPeakObservedAt: Date;
   pathLastObservedAt: Date;
   pathObservationCount: number;
+  pathSameBarProtectionAmbiguityCount: number;
+  pathLastSameBarProtectionAmbiguityAt: Date | null;
 }
 
 type SerializedPaperWorkingOrder = Omit<PaperWorkingOrder, 'placedAt'> & {
@@ -658,6 +662,7 @@ type SerializedPaperPosition = Omit<
   | 'pathLastObservedAt'
   | 'pathLastMarkObservedAt'
   | 'pathLastCandleClosedAt'
+  | 'pathLastSameBarProtectionAmbiguityAt'
 > & {
   units: string;
   openedAt: string;
@@ -665,16 +670,22 @@ type SerializedPaperPosition = Omit<
   pathLastObservedAt: string;
   pathLastMarkObservedAt: string | null;
   pathLastCandleClosedAt: string | null;
+  pathLastSameBarProtectionAmbiguityAt: string | null;
 };
 
 type SerializedPaperClosedTrade = Omit<
   PaperClosedTrade,
-  'openedAt' | 'closedAt' | 'pathPeakObservedAt' | 'pathLastObservedAt'
+  | 'openedAt'
+  | 'closedAt'
+  | 'pathPeakObservedAt'
+  | 'pathLastObservedAt'
+  | 'pathLastSameBarProtectionAmbiguityAt'
 > & {
   openedAt: string;
   closedAt: string;
   pathPeakObservedAt: string;
   pathLastObservedAt: string;
+  pathLastSameBarProtectionAmbiguityAt: string | null;
 };
 
 type SerializedBrokerOrderState = Omit<BrokerOrderState, 'placedAt' | 'updatedAt' | 'raw'> & {
@@ -758,13 +769,13 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   }
 
   private currentTime(): Date {
-    if (this.isLiveMarketMode()) return this.liveMarketData!.now();
+    if (this.isLiveMarketMode()) return this.liveMarketData!.now(this._connectionId);
     return this._replayFeed ? this._replayFeed.now() : this._clock.now();
   }
 
   private quoteForInstrument(instrument: string): PaperQuote {
     if (this.isLiveMarketMode()) {
-      const quote = this.liveMarketData!.getQuote(instrument);
+      const quote = this.liveMarketData!.getQuote(instrument, 20 * 60_000, this._connectionId);
       return {
         bid: quote.bid,
         ask: quote.ask,
@@ -1081,6 +1092,10 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         position.pathLatestUnrealisedPnl,
       ),
       observationCount: position.pathObservationCount,
+      sameBarProtectionAmbiguityCount: position.pathSameBarProtectionAmbiguityCount,
+      lastSameBarProtectionAmbiguityAt: position.pathLastSameBarProtectionAmbiguityAt
+        ? new Date(position.pathLastSameBarProtectionAmbiguityAt)
+        : null,
       peakObservedAt: new Date(position.pathPeakObservedAt),
       lastObservedAt: new Date(position.pathLastObservedAt),
     };
@@ -1108,7 +1123,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
 
   private mapPosition(position: PaperPosition): BrokerPosition {
     const liveQuote = this.isLiveMarketMode()
-      ? this.liveMarketData!.getPositionMarkQuote(position.instrument)
+      ? this.liveMarketData!.getPositionMarkQuote(position.instrument, 60_000, 20 * 60_000, this._connectionId)
       : null;
     const quote: PaperQuote = liveQuote
       ? {
@@ -1244,7 +1259,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     this.assertConnected();
     const symbol = this.requireInstrument(instrument);
     if (this.isLiveMarketMode()) {
-      const liveQuote = this.liveMarketData!.getQuote(symbol);
+      const liveQuote = this.liveMarketData!.getQuote(symbol, 20 * 60_000, this._connectionId);
       const quote: PaperQuote = { bid: liveQuote.bid, ask: liveQuote.ask };
       // First replay every fully closed M5 candle since each position opened.
       // This captures an SL/TP touched inside a candle even when the scanner
@@ -1294,7 +1309,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     }
 
     if (this.isLiveMarketMode()) {
-      return this.liveMarketData!.getOHLCV(instrument, normalizedTimeframe, count);
+      return this.liveMarketData!.getOHLCV(instrument, normalizedTimeframe, count, this._connectionId);
     }
 
     if (this._replayFeed) {
@@ -1576,6 +1591,8 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       pathLastMarkObservedAt: null,
       pathLastCandleClosedAt: null,
       pathObservationCount: 0,
+      pathSameBarProtectionAmbiguityCount: 0,
+      pathLastSameBarProtectionAmbiguityAt: null,
     };
     this._positions.set(orderId, position);
     return position;
@@ -1842,6 +1859,10 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
           latestUnrealisedPnl: trade.pathLatestUnrealisedPnl,
           profitGiveback: trade.pathProfitGiveback,
           observationCount: trade.pathObservationCount,
+          sameBarProtectionAmbiguityCount: trade.pathSameBarProtectionAmbiguityCount,
+          lastSameBarProtectionAmbiguityAt: trade.pathLastSameBarProtectionAmbiguityAt
+            ? new Date(trade.pathLastSameBarProtectionAmbiguityAt)
+            : null,
           peakObservedAt: new Date(trade.pathPeakObservedAt),
           lastObservedAt: new Date(trade.pathLastObservedAt),
         },
@@ -1870,7 +1891,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     if (!this.isLiveMarketMode()) return;
     const symbol = this.requireInstrument(instrument);
     const spec = this.liveMarketData!.spec(symbol);
-    const candles = this.liveMarketData!.getOHLCV(symbol, 'M5', 500);
+    const candles = this.liveMarketData!.getOHLCV(symbol, 'M5', 500, this._connectionId);
     const halfSpread = spec.spread / 2;
 
     for (const position of Array.from(this._positions.values())) {
@@ -1906,10 +1927,17 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
             bidLow,
           );
           position.pathLastCandleClosedAt = new Date(candleClosedAt);
-          if (
+          const stopTouched =
             !isZeroLevel(position.stopLoss) &&
-            compareDecimalStrings(bidLow, position.stopLoss) <= 0
-          ) {
+            compareDecimalStrings(bidLow, position.stopLoss) <= 0;
+          const takeProfitTouched =
+            !isZeroLevel(position.takeProfit) &&
+            compareDecimalStrings(bidHigh, position.takeProfit) >= 0;
+          if (stopTouched && takeProfitTouched) {
+            position.pathSameBarProtectionAmbiguityCount += 1;
+            position.pathLastSameBarProtectionAmbiguityAt = new Date(candleClosedAt);
+          }
+          if (stopTouched) {
             this.closePositionUnits(
               position,
               position.units,
@@ -1920,10 +1948,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
             );
             break;
           }
-          if (
-            !isZeroLevel(position.takeProfit) &&
-            compareDecimalStrings(bidHigh, position.takeProfit) >= 0
-          ) {
+          if (takeProfitTouched) {
             this.closePositionUnits(
               position,
               position.units,
@@ -1946,10 +1971,17 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
             askHigh,
           );
           position.pathLastCandleClosedAt = new Date(candleClosedAt);
-          if (
+          const stopTouched =
             !isZeroLevel(position.stopLoss) &&
-            compareDecimalStrings(askHigh, position.stopLoss) >= 0
-          ) {
+            compareDecimalStrings(askHigh, position.stopLoss) >= 0;
+          const takeProfitTouched =
+            !isZeroLevel(position.takeProfit) &&
+            compareDecimalStrings(askLow, position.takeProfit) <= 0;
+          if (stopTouched && takeProfitTouched) {
+            position.pathSameBarProtectionAmbiguityCount += 1;
+            position.pathLastSameBarProtectionAmbiguityAt = new Date(candleClosedAt);
+          }
+          if (stopTouched) {
             this.closePositionUnits(
               position,
               position.units,
@@ -1960,10 +1992,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
             );
             break;
           }
-          if (
-            !isZeroLevel(position.takeProfit) &&
-            compareDecimalStrings(askLow, position.takeProfit) <= 0
-          ) {
+          if (takeProfitTouched) {
             this.closePositionUnits(
               position,
               position.units,
@@ -2234,6 +2263,10 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       pathPeakObservedAt: new Date(position.pathPeakObservedAt),
       pathLastObservedAt: new Date(closedAt),
       pathObservationCount: position.pathObservationCount,
+      pathSameBarProtectionAmbiguityCount: position.pathSameBarProtectionAmbiguityCount,
+      pathLastSameBarProtectionAmbiguityAt: position.pathLastSameBarProtectionAmbiguityAt
+        ? new Date(position.pathLastSameBarProtectionAmbiguityAt)
+        : null,
     };
     this._closedTrades.push(trade);
 
@@ -2319,6 +2352,8 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         pathLastObservedAt: position.pathLastObservedAt.toISOString(),
         pathLastMarkObservedAt: position.pathLastMarkObservedAt?.toISOString() ?? null,
         pathLastCandleClosedAt: position.pathLastCandleClosedAt?.toISOString() ?? null,
+        pathLastSameBarProtectionAmbiguityAt:
+          position.pathLastSameBarProtectionAmbiguityAt?.toISOString() ?? null,
       })),
       closedTrades: this._closedTrades.map((trade) => ({
         ...trade,
@@ -2326,6 +2361,8 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         closedAt: trade.closedAt.toISOString(),
         pathPeakObservedAt: trade.pathPeakObservedAt.toISOString(),
         pathLastObservedAt: trade.pathLastObservedAt.toISOString(),
+        pathLastSameBarProtectionAmbiguityAt:
+          trade.pathLastSameBarProtectionAmbiguityAt?.toISOString() ?? null,
       })),
       orderStates,
       resultsByDedupeKey,
@@ -2403,6 +2440,14 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         pathObservationCount: Number.isSafeInteger(position.pathObservationCount)
           ? position.pathObservationCount
           : 0,
+        pathSameBarProtectionAmbiguityCount: Number.isSafeInteger(
+          position.pathSameBarProtectionAmbiguityCount,
+        )
+          ? position.pathSameBarProtectionAmbiguityCount
+          : 0,
+        pathLastSameBarProtectionAmbiguityAt: position.pathLastSameBarProtectionAmbiguityAt
+          ? new Date(position.pathLastSameBarProtectionAmbiguityAt)
+          : null,
       });
     }
 
@@ -2447,6 +2492,14 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
           pathObservationCount: Number.isSafeInteger(trade.pathObservationCount)
             ? trade.pathObservationCount
             : 0,
+          pathSameBarProtectionAmbiguityCount: Number.isSafeInteger(
+            trade.pathSameBarProtectionAmbiguityCount,
+          )
+            ? trade.pathSameBarProtectionAmbiguityCount
+            : 0,
+          pathLastSameBarProtectionAmbiguityAt: trade.pathLastSameBarProtectionAmbiguityAt
+            ? new Date(trade.pathLastSameBarProtectionAmbiguityAt)
+            : null,
         };
       }),
     );

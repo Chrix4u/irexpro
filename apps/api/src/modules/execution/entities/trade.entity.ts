@@ -231,6 +231,13 @@ export class Trade {
   @Column({ name: 'path_last_observed_at', type: 'timestamptz', nullable: true })
   pathLastObservedAt: Date | null;
 
+  /** Closed-candle observations where both SL and TP were reachable in the same bar. */
+  @Column({ name: 'same_bar_protection_ambiguity_count', type: 'integer', nullable: true })
+  sameBarProtectionAmbiguityCount: number | null;
+
+  @Column({ name: 'last_same_bar_protection_ambiguity_at', type: 'timestamptz', nullable: true })
+  lastSameBarProtectionAmbiguityAt: Date | null;
+
   @Column({
     name: 'close_reason',
     type: 'enum',

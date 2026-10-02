@@ -365,6 +365,10 @@ export interface BrokerTradePathDiagnostics {
   /** maxFavorablePnl minus the latest/realised P&L; never negative. */
   profitGiveback: string;
   observationCount: number;
+  /** Closed M5 candles where both SL and TP were reachable, so OHLC cannot prove hit order. */
+  sameBarProtectionAmbiguityCount: number;
+  /** Most recent ambiguous protection candle close time, when one was observed. */
+  lastSameBarProtectionAmbiguityAt: Date | null;
   peakObservedAt: Date | null;
   lastObservedAt: Date | null;
 }

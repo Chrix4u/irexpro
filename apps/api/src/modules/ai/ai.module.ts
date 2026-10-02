@@ -20,6 +20,8 @@ import { RiskModule } from '../risk/risk.module';
 import { BrokerModule } from '../broker/broker.module';
 import { VpsForexSignalCollectorService } from './vps-forex-signal-collector.service';
 import { VpsForexSignalCollectorController } from './vps-forex-signal-collector.controller';
+import { BrokerParityV7Service } from './broker-parity-v7.service';
+import { V8DedicatedPaperReadinessService } from './v8-dedicated-paper-readiness.service';
 import { InternalApiKeyGuard } from '../../common/guards/internal-api-key.guard';
 import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-api-key.guard';
 
@@ -64,6 +66,8 @@ import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-a
     TradingViewWebhookService,
     TradingViewWebhookGuard,
     VpsForexSignalCollectorService,
+    BrokerParityV7Service,
+    V8DedicatedPaperReadinessService,
   ],
   exports: [AiService, AiSignalService],
 })

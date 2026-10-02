@@ -223,6 +223,62 @@ interface VpsForexScannerStatusView {
     | "ACTIVE";
 }
 
+interface BrokerParityRuntimeStatusView {
+  providerCode: string;
+  modelVersion: string;
+  enabled: boolean;
+  configured: boolean;
+  brokerNativeOnly: boolean;
+  twelveDataFallback: false;
+  frozenArtifactRequired: boolean;
+  frozenArtifactConfigured: boolean;
+  signalExecutionEnabled: boolean;
+  activeTargetSession: boolean;
+  state:
+    | "DISABLED"
+    | "WAITING_FOR_CONFIGURATION"
+    | "WAITING_FOR_FROZEN_ARTIFACT"
+    | "WAITING_FOR_BROKER_DATA"
+    | "READ_ONLY_READY"
+    | "WAITING_FOR_PAPER_SESSION"
+    | "ACTIVE_PAPER";
+  marketCache: VpsForexScannerStatusView["marketCache"];
+  lastCollectedAt: string | null;
+  lastError: string | null;
+}
+
+interface V8DedicatedPaperStatusView {
+  providerCode: string;
+  modelVersion: string;
+  enabled: boolean;
+  configured: boolean;
+  isolatedTarget: boolean;
+  targetPaperConnection: boolean;
+  requiredFreshBaselineUsd: number;
+  v7EvidencePreserved: boolean;
+  shadowEvidencePreservedButNotQualification: boolean;
+  formalQualificationStartsAtZero: boolean;
+  frozenArtifactRequired: boolean;
+  frozenArtifactConfigured: boolean;
+  activeTargetSession: boolean;
+  state:
+    | "DISABLED"
+    | "WAITING_FOR_CONFIGURATION"
+    | "TARGET_NOT_ISOLATED"
+    | "COLLECTING_PROSPECTIVE_SHADOW"
+    | "WAITING_FOR_FROZEN_ARTIFACT"
+    | "READY_FOR_FRESH_PAPER"
+    | "ACTIVE_PAPER";
+  prospectiveShadow: {
+    artifact: string;
+    taggedSignals: number;
+    admittedSignals: number;
+    closedTrades: number;
+    screeningReadyForDedicatedPaper: boolean;
+  } | null;
+  activationPolicy: string;
+}
+
 interface ExternalProviderPerformanceView {
   providerCode: string;
   strategyIdentity: {
@@ -255,6 +311,8 @@ interface ExternalProviderPerformanceView {
     rejectedSignals: number;
     closedTrades: number;
     interruptedClosedTrades: number;
+    ambiguousClosedTrades: number;
+    sameBarProtectionAmbiguityCount: number;
     strategyRealisedPnl: number;
     balancedAccuracy: number | null;
     profitFactor: number | null;
@@ -325,6 +383,46 @@ interface ExternalProviderPerformanceView {
       averageConfidence: number | null;
       evidenceStatus: "OBSERVE" | "EARLY_ACTIONABLE";
     }>;
+  };
+  profitProtectionShadow: {
+    mode: "DIAGNOSTIC_ONLY";
+    modifiesExecution: false;
+    observedClosedTrades: number;
+    losingTradesObserved: number;
+    losersWithPositiveMfe: number;
+    loserPositiveMfeFraction: number | null;
+    averageMaxFavorablePnl: number | null;
+    averageMaxAdversePnl: number | null;
+    averageProfitGiveback: number | null;
+    losingTradesThatReached: {
+      usd3: number;
+      usd5: number;
+      usd10: number;
+    };
+    methodology: string;
+  };
+  driftDiagnostics: {
+    mode: "DIAGNOSTIC_ONLY";
+    modifiesExecution: false;
+    recentWindowSize: number;
+    minimumClosedTrades: number;
+    status: "INSUFFICIENT_EVIDENCE" | "STABLE" | "WATCH" | "DEGRADED";
+    recent: {
+      closedTrades: number;
+      realisedPnl: number;
+      averagePnl: number | null;
+      winRate: number | null;
+      profitFactor: number | null;
+    };
+    reference: {
+      closedTrades: number;
+      realisedPnl: number;
+      averagePnl: number | null;
+      winRate: number | null;
+      profitFactor: number | null;
+    };
+    recentToReferenceProfitFactorRatio: number | null;
+    methodology: string;
   };
   v8ProspectiveShadow: {
     artifact: string;
@@ -1022,6 +1120,10 @@ export default function AiTradingPage() {
     useState<ExternalProviderPerformanceView | null>(null);
   const [vpsScannerStatus, setVpsScannerStatus] =
     useState<VpsForexScannerStatusView | null>(null);
+  const [brokerParityRuntime, setBrokerParityRuntime] =
+    useState<BrokerParityRuntimeStatusView | null>(null);
+  const [v8DedicatedPaperStatus, setV8DedicatedPaperStatus] =
+    useState<V8DedicatedPaperStatusView | null>(null);
   const [automationRuntimeWarning, setAutomationRuntimeWarning] = useState<
     string | null
   >(null);
@@ -1205,6 +1307,21 @@ export default function AiTradingPage() {
           setVpsScannerStatus(scannerStatus);
         } catch {
           setVpsScannerStatus(null);
+        }
+        try {
+          const [parityStatus, v8Status] = await Promise.all([
+            api.request<BrokerParityRuntimeStatusView>(
+              "/ai/external/vps-forex/broker-parity/status",
+            ),
+            api.request<V8DedicatedPaperStatusView>(
+              "/ai/external/vps-forex/v8-dedicated-paper/status",
+            ),
+          ]);
+          setBrokerParityRuntime(parityStatus);
+          setV8DedicatedPaperStatus(v8Status);
+        } catch {
+          setBrokerParityRuntime(null);
+          setV8DedicatedPaperStatus(null);
         }
 
         // Keep secondary market-intelligence context aligned with the actual
@@ -2327,6 +2444,18 @@ export default function AiTradingPage() {
                       </strong>
                     </div>
                     <div>
+                      <span>Ambiguous M5 closes</span>
+                      <strong>
+                        {providerEvidence?.observed.ambiguousClosedTrades ?? 0}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>SL/TP same-bar events</span>
+                      <strong>
+                        {providerEvidence?.observed.sameBarProtectionAmbiguityCount ?? 0}
+                      </strong>
+                    </div>
+                    <div>
                       <span>Balanced accuracy</span>
                       <strong>
                         {providerPercent(
@@ -2415,6 +2544,89 @@ export default function AiTradingPage() {
                       </span>
                     ))}
                   </div>
+                  {providerEvidence?.profitProtectionShadow ? (
+                    <div className="ai-shadow-calibration">
+                      <div className="ai-shadow-calibration__header">
+                        <div>
+                          <span className="workspace-hero__eyebrow">Profit path shadow</span>
+                          <h3>MFE / MAE / give-back telemetry</h3>
+                        </div>
+                        <span className="badge badge--info">OBSERVE ONLY · EXITS UNCHANGED</span>
+                      </div>
+                      <p className="muted">
+                        This measures how much profit trades reached and later gave back. It does not move v7 stops,
+                        take partial profit, or close positions.
+                      </p>
+                      <div className="ai-provider-evidence__metrics">
+                        <div><span>Path-observed closed</span><strong>{providerEvidence.profitProtectionShadow.observedClosedTrades}</strong></div>
+                        <div><span>Losing trades observed</span><strong>{providerEvidence.profitProtectionShadow.losingTradesObserved}</strong></div>
+                        <div><span>Losers previously positive</span><strong>{providerEvidence.profitProtectionShadow.losersWithPositiveMfe}</strong></div>
+                        <div><span>Positive-MFE loser rate</span><strong>{providerPercent(providerEvidence.profitProtectionShadow.loserPositiveMfeFraction)}</strong></div>
+                        <div><span>Avg peak profit</span><strong>{providerMetric(providerEvidence.profitProtectionShadow.averageMaxFavorablePnl, 2)} USD</strong></div>
+                        <div><span>Avg adverse path</span><strong>{providerMetric(providerEvidence.profitProtectionShadow.averageMaxAdversePnl, 2)} USD</strong></div>
+                        <div><span>Avg give-back</span><strong>{providerMetric(providerEvidence.profitProtectionShadow.averageProfitGiveback, 2)} USD</strong></div>
+                        <div><span>Losers reached +$3 / +$5 / +$10</span><strong>{providerEvidence.profitProtectionShadow.losingTradesThatReached.usd3} / {providerEvidence.profitProtectionShadow.losingTradesThatReached.usd5} / {providerEvidence.profitProtectionShadow.losingTradesThatReached.usd10}</strong></div>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {providerEvidence?.driftDiagnostics ? (
+                    <div className="ai-shadow-calibration">
+                      <div className="ai-shadow-calibration__header">
+                        <div>
+                          <span className="workspace-hero__eyebrow">
+                            Model drift monitor
+                          </span>
+                          <h3>Recent edge vs earlier evidence</h3>
+                        </div>
+                        <span
+                          className={
+                            providerEvidence.driftDiagnostics.status === "STABLE"
+                              ? "badge badge--success"
+                              : providerEvidence.driftDiagnostics.status === "DEGRADED"
+                                ? "badge badge--warning"
+                                : "badge badge--info"
+                          }
+                        >
+                          {providerEvidence.driftDiagnostics.status.replaceAll("_", " ")}
+                        </span>
+                      </div>
+                      <p className="muted">
+                        Diagnostic only. This compares the latest {providerEvidence.driftDiagnostics.recentWindowSize}
+                        {" "}qualification-closed trades with the earlier v7 cohort and never changes execution.
+                      </p>
+                      <div className="ai-provider-evidence__metrics">
+                        <div>
+                          <span>Recent P&amp;L</span>
+                          <strong>
+                            {providerEvidence.driftDiagnostics.recent.realisedPnl >= 0 ? "+" : ""}
+                            {providerEvidence.driftDiagnostics.recent.realisedPnl.toFixed(2)} USD
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Recent PF</span>
+                          <strong>{providerMetric(providerEvidence.driftDiagnostics.recent.profitFactor, 3)}</strong>
+                        </div>
+                        <div>
+                          <span>Recent win rate</span>
+                          <strong>{providerPercent(providerEvidence.driftDiagnostics.recent.winRate)}</strong>
+                        </div>
+                        <div>
+                          <span>Reference PF</span>
+                          <strong>{providerMetric(providerEvidence.driftDiagnostics.reference.profitFactor, 3)}</strong>
+                        </div>
+                        <div>
+                          <span>PF ratio</span>
+                          <strong>{providerMetric(providerEvidence.driftDiagnostics.recentToReferenceProfitFactorRatio, 3)}</strong>
+                        </div>
+                        <div>
+                          <span>Reference trades</span>
+                          <strong>{providerEvidence.driftDiagnostics.reference.closedTrades}</strong>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+
                   {providerEvidence?.shadowCalibration ? (
                     <div className="ai-shadow-calibration">
                       <div className="ai-shadow-calibration__header">

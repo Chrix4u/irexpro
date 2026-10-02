@@ -39,7 +39,7 @@ function protectionBars(options?: { high?: number; low?: number; close?: number 
 async function openProtectedBuy(live: LivePaperMarketDataService) {
   live.registerLiveConnection('conn-protection');
   const bars = protectionBars();
-  live.updateClosedCandles('EURUSD', bars.initial);
+  live.updateClosedCandles('EURUSD', bars.initial, 'conn-protection');
   const adapter = new PaperBrokerAdapter(undefined, undefined, undefined, 'conn-protection', live);
   await adapter.connect({} as any);
   await adapter.placeOrder({
@@ -58,8 +58,8 @@ describe('PaperBrokerAdapter — scoped VPS live market mode', () => {
   it('supports six live instruments without changing a non-live paper connection', async () => {
     const live = new LivePaperMarketDataService();
     live.registerLiveConnection('conn-live');
-    live.updateClosedCandles('EURUSD', series(1.1, 5));
-    live.updateClosedCandles('USDJPY', series(157.3, 3));
+    live.updateClosedCandles('EURUSD', series(1.1, 5), 'conn-live');
+    live.updateClosedCandles('USDJPY', series(157.3, 3), 'conn-live');
 
     const liveAdapter = new PaperBrokerAdapter(undefined, undefined, undefined, 'conn-live', live);
     await liveAdapter.connect({} as any);
@@ -81,8 +81,8 @@ describe('PaperBrokerAdapter — scoped VPS live market mode', () => {
   it('fills and values EURUSD and USDJPY independently in one PAPER account', async () => {
     const live = new LivePaperMarketDataService();
     live.registerLiveConnection('conn-live');
-    live.updateClosedCandles('EURUSD', series(1.1, 5));
-    live.updateClosedCandles('USDJPY', series(157.3, 3));
+    live.updateClosedCandles('EURUSD', series(1.1, 5), 'conn-live');
+    live.updateClosedCandles('USDJPY', series(157.3, 3), 'conn-live');
     const adapter = new PaperBrokerAdapter(undefined, undefined, undefined, 'conn-live', live);
     await adapter.connect({} as any);
 
@@ -127,13 +127,13 @@ describe('PaperBrokerAdapter — scoped VPS live market mode', () => {
     const live = new LivePaperMarketDataService();
     live.registerLiveConnection('conn-mark-only');
     const bars = protectionBars();
-    live.updateClosedCandles('EURUSD', bars.initial);
-    const executionQuote = live.getQuote('EURUSD');
+    live.updateClosedCandles('EURUSD', bars.initial, 'conn-mark-only');
+    const executionQuote = live.getQuote('EURUSD', 20 * 60_000, 'conn-mark-only');
     const executionMid = ((Number(executionQuote.bid) + Number(executionQuote.ask)) / 2).toFixed(5);
 
-    live.updateStreamingMidQuote('EURUSD', 1.105, new Date());
-    expect(live.getMarkQuote('EURUSD').source).toBe('STREAM');
-    expect(live.getQuote('EURUSD').source).toBe('REST_M5');
+    live.updateStreamingMidQuote('EURUSD', 1.105, new Date(), 'conn-mark-only');
+    expect(live.getMarkQuote('EURUSD', 60_000, 20 * 60_000, 'conn-mark-only').source).toBe('STREAM');
+    expect(live.getQuote('EURUSD', 20 * 60_000, 'conn-mark-only').source).toBe('REST_M5');
 
     const adapter = new PaperBrokerAdapter(undefined, undefined, undefined, 'conn-mark-only', live);
     await adapter.connect({} as any);
@@ -158,7 +158,7 @@ describe('PaperBrokerAdapter — scoped VPS live market mode', () => {
     const live = new LivePaperMarketDataService();
     live.registerLiveConnection('conn-multi');
     const bars = protectionBars();
-    live.updateClosedCandles('EURUSD', bars.initial);
+    live.updateClosedCandles('EURUSD', bars.initial, 'conn-multi');
     const adapter = new PaperBrokerAdapter(undefined, undefined, undefined, 'conn-multi', live);
     await adapter.connect({} as any);
 
@@ -201,7 +201,7 @@ describe('PaperBrokerAdapter — scoped VPS live market mode', () => {
     const live = new LivePaperMarketDataService();
     const adapter = await openProtectedBuy(live);
     const bars = protectionBars({ high: 1.1012, low: 1.0996, close: 1.1002 });
-    live.updateClosedCandles('EURUSD', bars.advanced);
+    live.updateClosedCandles('EURUSD', bars.advanced, 'conn-protection');
 
     await adapter.getCurrentPrice('EURUSD');
 
@@ -216,7 +216,7 @@ describe('PaperBrokerAdapter — scoped VPS live market mode', () => {
     const live = new LivePaperMarketDataService();
     const adapter = await openProtectedBuy(live);
     const bars = protectionBars({ high: 1.1004, low: 1.0988, close: 1.0994 });
-    live.updateClosedCandles('EURUSD', bars.advanced);
+    live.updateClosedCandles('EURUSD', bars.advanced, 'conn-protection');
 
     await adapter.getCurrentPrice('EURUSD');
 
@@ -230,7 +230,7 @@ describe('PaperBrokerAdapter — scoped VPS live market mode', () => {
     const live = new LivePaperMarketDataService();
     const adapter = await openProtectedBuy(live);
     const bars = protectionBars({ high: 1.1013, low: 1.0987, close: 1.1 });
-    live.updateClosedCandles('EURUSD', bars.advanced);
+    live.updateClosedCandles('EURUSD', bars.advanced, 'conn-protection');
 
     await adapter.getCurrentPrice('EURUSD');
 
@@ -238,5 +238,7 @@ describe('PaperBrokerAdapter — scoped VPS live market mode', () => {
     expect(closed).toHaveLength(1);
     expect(closed[0]!.closeReason).toBe('SL');
     expect(closed[0]!.closePrice).toBe('1.09900');
+    expect(closed[0]!.pathDiagnostics?.sameBarProtectionAmbiguityCount).toBe(1);
+    expect(closed[0]!.pathDiagnostics?.lastSameBarProtectionAmbiguityAt).toBeInstanceOf(Date);
   });
 });

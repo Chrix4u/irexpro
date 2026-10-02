@@ -209,6 +209,10 @@ export class ClosedTradeNormalizerService {
             maxAdversePnl: raw.pathDiagnostics.maxAdversePnl,
             profitGiveback: raw.pathDiagnostics.profitGiveback,
             observationCount: raw.pathDiagnostics.observationCount,
+            sameBarProtectionAmbiguityCount:
+              raw.pathDiagnostics.sameBarProtectionAmbiguityCount,
+            lastSameBarProtectionAmbiguityAt:
+              raw.pathDiagnostics.lastSameBarProtectionAmbiguityAt?.toISOString() ?? null,
             peakObservedAt: raw.pathDiagnostics.peakObservedAt?.toISOString() ?? null,
             lastObservedAt: raw.pathDiagnostics.lastObservedAt?.toISOString() ?? null,
           }
