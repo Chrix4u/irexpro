@@ -12,6 +12,7 @@ import {
   LivePaperMarketDataService,
 } from '../broker/services/live-paper-market-data.service';
 import { scorePlanBShadowMeta, scoreV8ShadowMeta } from './v8-shadow-meta-scorer';
+import { scorePlanBMultimodelShadow } from './plan-b-multimodel-shadow';
 
 const PROVIDER_CODE = 'vps-twelvedata-six-pair-v7';
 const SIGNAL_NAMESPACE = '802e16f8-8209-4e1f-aa7e-a6a46387081c';
@@ -536,6 +537,17 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         rsi14: best.rsi14,
         scanTime: new Date(best.barTime.getTime() + BAR_MS),
       });
+      const planBEnsemble = scorePlanBMultimodelShadow({
+        instrument: best.instrument,
+        direction: best.direction,
+        confidence: best.confidence,
+        extensionAtr: best.extensionAtr,
+        volatilityScore: best.volatilityScore,
+        emaSeparation: best.emaSeparation,
+        mtfStrength: best.mtfStrength,
+        rsi14: best.rsi14,
+        scanTime: new Date(best.barTime.getTime() + BAR_MS),
+      });
       const outcome = await this.aiSignalService.receiveSignal({
         signalId,
         userId,
@@ -598,6 +610,18 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           plan_b_shadow_training_evidence:
             'PREEXISTING_WALK_FORWARD_THRESHOLD_NOT_TODAYS_PROSPECTIVE_RESULTS',
           plan_b_shadow_modifies_execution: false,
+          plan_b_ensemble_artifact: planBEnsemble.artifact,
+          plan_b_ensemble_mode: planBEnsemble.mode,
+          plan_b_ensemble_modifies_execution: false,
+          plan_b_ensemble_regime: planBEnsemble.regime,
+          plan_b_ensemble_regime_allowed: planBEnsemble.regimeAllowed,
+          plan_b_ensemble_direction_quality: planBEnsemble.directionQuality,
+          plan_b_ensemble_expected_r: planBEnsemble.expectedR,
+          plan_b_ensemble_trade_quality: planBEnsemble.tradeQuality,
+          plan_b_ensemble_meta_probability: planBEnsemble.metaProbability,
+          plan_b_ensemble_score: planBEnsemble.ensembleScore,
+          plan_b_ensemble_admitted: planBEnsemble.admitted,
+          plan_b_ensemble_reasons: planBEnsemble.reasons,
           position_sizing_policy: 'risk-managed-up-to-0.10-lot-scanner-bound',
           opportunity_freshness_policy:
             'new-cycle-or-0.5atr-directional-extension-or-0.02-confidence-expansion',

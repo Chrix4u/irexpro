@@ -469,6 +469,26 @@ interface ExternalProviderPerformanceView {
     nextStage: "DEDICATED_V8_PAPER_REQUIRED" | "COLLECTING_PROSPECTIVE_SHADOW";
     methodology: string;
   };
+  planBEnsembleShadow?: {
+    artifact: string;
+    mode: "PROSPECTIVE_SHADOW_ONLY";
+    modifiesExecution: false;
+    taggedSignals: number;
+    admittedSignals: number;
+    rejectedSignals: number;
+    admittedFraction: number;
+    closedTrades: number;
+    wins: number;
+    losses: number;
+    realisedPnl: number;
+    profitFactor: number | null;
+    regimeCounts: Record<string, number>;
+    averageDirectionQuality: number | null;
+    averageTradeQuality: number | null;
+    averageMetaProbability: number | null;
+    averageEnsembleScore: number | null;
+    methodology: string;
+  };
 }
 
 function providerMetric(value: number | null | undefined, digits = 2): string {
@@ -3042,6 +3062,111 @@ export default function AiTradingPage() {
                         v7 still owns execution. If every screening check matures,
                         the next step is a separate v8 PAPER cohort starting from
                         zero evidence.
+                      </p>
+                    </div>
+                  ) : null}
+
+                  {providerEvidence?.planBEnsembleShadow ? (
+                    <div className="ai-v8-shadow">
+                      <div className="ai-shadow-calibration__header">
+                        <div>
+                          <span className="workspace-hero__eyebrow">
+                            Plan B multimodel ensemble
+                          </span>
+                          <h3>Regime-aware prospective screening</h3>
+                        </div>
+                        <span className="badge badge--info">
+                          SHADOW ONLY · NO EXECUTION CHANGES
+                        </span>
+                      </div>
+
+                      <p className="muted">
+                        The ensemble separates regime, direction quality,
+                        expected-return economics and trade quality before
+                        producing one shadow decision. Every component is stored
+                        so weak decisions can be diagnosed instead of hidden
+                        behind a single confidence number.
+                      </p>
+
+                      <div className="ai-provider-evidence__metrics">
+                        <div>
+                          <span>Tagged</span>
+                          <strong>{providerEvidence.planBEnsembleShadow.taggedSignals}</strong>
+                        </div>
+                        <div>
+                          <span>Would admit</span>
+                          <strong>{providerEvidence.planBEnsembleShadow.admittedSignals}</strong>
+                        </div>
+                        <div>
+                          <span>Would reject</span>
+                          <strong>{providerEvidence.planBEnsembleShadow.rejectedSignals}</strong>
+                        </div>
+                        <div>
+                          <span>Admission rate</span>
+                          <strong>{providerPercent(providerEvidence.planBEnsembleShadow.admittedFraction)}</strong>
+                        </div>
+                        <div>
+                          <span>Closed evidence</span>
+                          <strong>{providerEvidence.planBEnsembleShadow.closedTrades}</strong>
+                        </div>
+                        <div>
+                          <span>W / L</span>
+                          <strong>
+                            {providerEvidence.planBEnsembleShadow.wins} /{" "}
+                            {providerEvidence.planBEnsembleShadow.losses}
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Shadow P&amp;L</span>
+                          <strong>
+                            {providerEvidence.planBEnsembleShadow.realisedPnl >= 0 ? "+" : ""}
+                            {providerEvidence.planBEnsembleShadow.realisedPnl.toFixed(2)} USD
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Profit factor</span>
+                          <strong>
+                            {providerMetric(providerEvidence.planBEnsembleShadow.profitFactor, 3)}
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Avg direction quality</span>
+                          <strong>
+                            {providerPercent(providerEvidence.planBEnsembleShadow.averageDirectionQuality)}
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Avg trade quality</span>
+                          <strong>
+                            {providerPercent(providerEvidence.planBEnsembleShadow.averageTradeQuality)}
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Avg meta probability</span>
+                          <strong>
+                            {providerPercent(providerEvidence.planBEnsembleShadow.averageMetaProbability)}
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Avg ensemble score</span>
+                          <strong>
+                            {providerPercent(providerEvidence.planBEnsembleShadow.averageEnsembleScore)}
+                          </strong>
+                        </div>
+                      </div>
+
+                      <div className="ai-provider-evidence__gates">
+                        {Object.entries(providerEvidence.planBEnsembleShadow.regimeCounts).map(
+                          ([regime, count]) => (
+                            <span key={regime} className="is-pending">
+                              {regime.replaceAll("_", " ")} · {count}
+                            </span>
+                          ),
+                        )}
+                      </div>
+
+                      <p className="ai-provider-evidence__footnote">
+                        {providerEvidence.planBEnsembleShadow.methodology}
                       </p>
                     </div>
                   ) : null}

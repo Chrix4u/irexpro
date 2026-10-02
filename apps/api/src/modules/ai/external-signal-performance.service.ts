@@ -5,6 +5,10 @@ import {
   V8_SHADOW_ARTIFACT,
   V8_SHADOW_MODE,
 } from './v8-shadow-meta-scorer';
+import {
+  PLAN_B_ENSEMBLE_ARTIFACT,
+  PLAN_B_ENSEMBLE_MODE,
+} from './plan-b-multimodel-shadow';
 
 const INSTRUMENTS = ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF'] as const;
 const MIN_CLOSED_TRADES = 100;
@@ -50,6 +54,13 @@ type EvidenceRow = {
   v8_shadow_probability?: string | number | null;
   v8_shadow_admitted?: string | boolean | null;
   v8_shadow_expected_r?: string | number | null;
+  plan_b_ensemble_artifact?: string | null;
+  plan_b_ensemble_regime?: string | null;
+  plan_b_ensemble_direction_quality?: string | number | null;
+  plan_b_ensemble_trade_quality?: string | number | null;
+  plan_b_ensemble_meta_probability?: string | number | null;
+  plan_b_ensemble_score?: string | number | null;
+  plan_b_ensemble_admitted?: string | boolean | null;
 };
 
 type EquitySnapshotRow = {
@@ -449,7 +460,14 @@ export class ExternalSignalPerformanceService {
           ti.metadata->>'v8_shadow_artifact' AS v8_shadow_artifact,
           ti.metadata->>'v8_shadow_probability' AS v8_shadow_probability,
           ti.metadata->>'v8_shadow_admitted' AS v8_shadow_admitted,
-          ti.metadata->>'v8_shadow_expected_r' AS v8_shadow_expected_r
+          ti.metadata->>'v8_shadow_expected_r' AS v8_shadow_expected_r,
+          ti.metadata->>'plan_b_ensemble_artifact' AS plan_b_ensemble_artifact,
+          ti.metadata->>'plan_b_ensemble_regime' AS plan_b_ensemble_regime,
+          ti.metadata->>'plan_b_ensemble_direction_quality' AS plan_b_ensemble_direction_quality,
+          ti.metadata->>'plan_b_ensemble_trade_quality' AS plan_b_ensemble_trade_quality,
+          ti.metadata->>'plan_b_ensemble_meta_probability' AS plan_b_ensemble_meta_probability,
+          ti.metadata->>'plan_b_ensemble_score' AS plan_b_ensemble_score,
+          ti.metadata->>'plan_b_ensemble_admitted' AS plan_b_ensemble_admitted
         FROM trading.trade_intents ti
         LEFT JOIN trading.trades t ON t.trade_intent_id = ti.id
         LEFT JOIN trading.capital_allocations ca ON ca.trade_intent_id = ti.id
@@ -759,6 +777,63 @@ export class ExternalSignalPerformanceService {
         'Prospective counterfactual screening only. v7 continues to execute unchanged; v8-shadow results use only post-freeze tagged v7 trades that the frozen v8 filter would have admitted. A separate dedicated v8 PAPER cohort is required before qualification.',
     };
 
+    const ensembleTaggedRows = rows.filter(
+      (row) => row.plan_b_ensemble_artifact === PLAN_B_ENSEMBLE_ARTIFACT,
+    );
+    const ensembleAdmittedRows = ensembleTaggedRows.filter(
+      (row) => String(row.plan_b_ensemble_admitted) === 'true',
+    );
+    const ensembleRejectedRows = ensembleTaggedRows.filter(
+      (row) => String(row.plan_b_ensemble_admitted) === 'false',
+    );
+    const ensembleClosedRows = ensembleAdmittedRows.filter(
+      (row) =>
+        row.trade_status === 'CLOSED' &&
+        row.closed_at != null &&
+        finite(row.realised_pnl) !== null &&
+        (row.close_reason === 'STOP_LOSS_HIT' || row.close_reason === 'TAKE_PROFIT_HIT'),
+    );
+    const ensemblePnls = ensembleClosedRows.map((row) => finite(row.realised_pnl) ?? 0);
+    const ensembleRegimes = ensembleTaggedRows.reduce<Record<string, number>>(
+      (acc, row) => {
+        const regime = row.plan_b_ensemble_regime ?? 'UNKNOWN';
+        acc[regime] = (acc[regime] ?? 0) + 1;
+        return acc;
+      },
+      {},
+    );
+    const ensembleAverage = (field: keyof EvidenceRow): number | null => {
+      const values = ensembleTaggedRows
+        .map((row) => finite(row[field]))
+        .filter((value): value is number => value !== null);
+      return values.length
+        ? values.reduce((sum, value) => sum + value, 0) / values.length
+        : null;
+    };
+    const planBEnsembleShadow = {
+      artifact: PLAN_B_ENSEMBLE_ARTIFACT,
+      mode: PLAN_B_ENSEMBLE_MODE,
+      modifiesExecution: false,
+      taggedSignals: ensembleTaggedRows.length,
+      admittedSignals: ensembleAdmittedRows.length,
+      rejectedSignals: ensembleRejectedRows.length,
+      admittedFraction: ensembleTaggedRows.length
+        ? ensembleAdmittedRows.length / ensembleTaggedRows.length
+        : 0,
+      closedTrades: ensembleClosedRows.length,
+      wins: ensemblePnls.filter((value) => value > 0).length,
+      losses: ensemblePnls.filter((value) => value < 0).length,
+      realisedPnl: ensemblePnls.reduce((sum, value) => sum + value, 0),
+      profitFactor: profitFactor(ensemblePnls),
+      regimeCounts: ensembleRegimes,
+      averageDirectionQuality: ensembleAverage('plan_b_ensemble_direction_quality'),
+      averageTradeQuality: ensembleAverage('plan_b_ensemble_trade_quality'),
+      averageMetaProbability: ensembleAverage('plan_b_ensemble_meta_probability'),
+      averageEnsembleScore: ensembleAverage('plan_b_ensemble_score'),
+      methodology:
+        'Prospective non-executing multimodel ensemble. Regime, direction, economic payoff and trade-quality models are evaluated independently and persisted for counterfactual review.',
+    };
+
     const observedMarketDataAuthorities = [
       ...new Set(
         rows
@@ -861,6 +936,7 @@ export class ExternalSignalPerformanceService {
       driftDiagnostics,
       profitProtectionShadow,
       v8ProspectiveShadow,
+      planBEnsembleShadow,
       methodology: {
         completedTradeEvidence:
           'Qualification metrics count only PAPER trades durably closed by STOP_LOSS_HIT or TAKE_PROFIT_HIT. Manual, kill-switch, reconciliation and unknown broker closes are censored/interrupted and do not count toward the 100-trade gate.',
