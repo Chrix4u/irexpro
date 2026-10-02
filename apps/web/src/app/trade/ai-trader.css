@@ -1458,6 +1458,14 @@
   font-size: 0.8rem;
 }
 
+.ai-v8-shadow {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1.25rem;
+  padding-top: 1.1rem;
+  border-top: 1px solid var(--border);
+}
+
 @media (max-width: 1200px) {
   .ai-provider-evidence__metrics {
     grid-template-columns: repeat(3, minmax(0, 1fr));

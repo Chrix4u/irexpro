@@ -326,6 +326,45 @@ interface ExternalProviderPerformanceView {
       evidenceStatus: "OBSERVE" | "EARLY_ACTIONABLE";
     }>;
   };
+  v8ProspectiveShadow: {
+    artifact: string;
+    mode: "PROSPECTIVE_SHADOW_ONLY";
+    modifiesExecution: false;
+    admissionThreshold: number;
+    trainingEvidence: string;
+    qualificationEvidence: false;
+    maxDrawdownIsolated: false;
+    taggedSignals: number;
+    admittedSignals: number;
+    admittedFraction: number;
+    executedTrades: number;
+    closedTrades: number;
+    wins: number;
+    losses: number;
+    realisedPnl: number;
+    profitFactor: number | null;
+    balancedAccuracy: number | null;
+    evidenceWindowSharpeRatio: number | null;
+    positiveWeeklyWindowFraction: number;
+    positiveInstrumentFraction: number;
+    medianMinutesBetweenSignals: number | null;
+    minUnderlyingConfidence: number | null;
+    latestProbability: number | null;
+    minProbability: number | null;
+    screeningChecks: {
+      balancedAccuracy: boolean;
+      sharpeRatio: boolean;
+      profitFactor: boolean;
+      positiveWindowFraction: boolean;
+      positiveInstrumentFraction: boolean;
+      confidence: boolean;
+      evidence: boolean;
+      frequency: boolean;
+    };
+    screeningReadyForDedicatedPaper: boolean;
+    nextStage: "DEDICATED_V8_PAPER_REQUIRED" | "COLLECTING_PROSPECTIVE_SHADOW";
+    methodology: string;
+  };
 }
 
 function providerMetric(value: number | null | undefined, digits = 2): string {
@@ -2494,8 +2533,213 @@ export default function AiTradingPage() {
                     </div>
                   ) : null}
 
+                  {providerEvidence?.v8ProspectiveShadow ? (
+                    <div className="ai-v8-shadow">
+                      <div className="ai-shadow-calibration__header">
+                        <div>
+                          <span className="workspace-hero__eyebrow">
+                            v8 prospective shadow
+                          </span>
+                          <h3>Frozen meta-filter screening</h3>
+                        </div>
+                        <span
+                          className={
+                            providerEvidence.v8ProspectiveShadow
+                              .screeningReadyForDedicatedPaper
+                              ? "badge badge--success"
+                              : "badge badge--info"
+                          }
+                        >
+                          {providerEvidence.v8ProspectiveShadow
+                            .screeningReadyForDedicatedPaper
+                            ? "READY FOR DEDICATED v8 PAPER"
+                            : "SHADOW ONLY · v7 UNCHANGED"}
+                        </span>
+                      </div>
+
+                      <p className="muted">
+                        Every newly tagged v7 opportunity is scored by the frozen
+                        <strong>
+                          {" "}
+                          {providerEvidence.v8ProspectiveShadow.artifact}
+                        </strong>
+                        . The score does not block, resize, close, or otherwise
+                        change v7 trades. Only post-freeze signals count in this
+                        prospective screen.
+                      </p>
+
+                      <div className="ai-provider-evidence__metrics">
+                        <div>
+                          <span>Tagged</span>
+                          <strong>
+                            {providerEvidence.v8ProspectiveShadow.taggedSignals}
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Would admit</span>
+                          <strong>
+                            {providerEvidence.v8ProspectiveShadow.admittedSignals}
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Admission rate</span>
+                          <strong>
+                            {providerPercent(
+                              providerEvidence.v8ProspectiveShadow.admittedFraction,
+                            )}
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Closed shadow evidence</span>
+                          <strong>
+                            {providerEvidence.v8ProspectiveShadow.closedTrades} / 100
+                          </strong>
+                        </div>
+                        <div>
+                          <span>W / L</span>
+                          <strong>
+                            {providerEvidence.v8ProspectiveShadow.wins} /{" "}
+                            {providerEvidence.v8ProspectiveShadow.losses}
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Shadow P&amp;L</span>
+                          <strong>
+                            {providerEvidence.v8ProspectiveShadow.realisedPnl >= 0
+                              ? "+"
+                              : ""}
+                            {providerEvidence.v8ProspectiveShadow.realisedPnl.toFixed(
+                              2,
+                            )}{" "}
+                            USD
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Profit factor</span>
+                          <strong>
+                            {providerMetric(
+                              providerEvidence.v8ProspectiveShadow.profitFactor,
+                              3,
+                            )}
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Balanced accuracy</span>
+                          <strong>
+                            {providerPercent(
+                              providerEvidence.v8ProspectiveShadow
+                                .balancedAccuracy,
+                            )}
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Evidence Sharpe</span>
+                          <strong>
+                            {providerMetric(
+                              providerEvidence.v8ProspectiveShadow
+                                .evidenceWindowSharpeRatio,
+                              3,
+                            )}
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Positive pairs</span>
+                          <strong>
+                            {providerPercent(
+                              providerEvidence.v8ProspectiveShadow
+                                .positiveInstrumentFraction,
+                            )}
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Median signal gap</span>
+                          <strong>
+                            {providerEvidence.v8ProspectiveShadow
+                              .medianMinutesBetweenSignals == null
+                              ? "—"
+                              : providerEvidence.v8ProspectiveShadow.medianMinutesBetweenSignals.toFixed(
+                                  1,
+                                ) + " min"}
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Latest v8 probability</span>
+                          <strong>
+                            {providerPercent(
+                              providerEvidence.v8ProspectiveShadow
+                                .latestProbability,
+                            )}
+                          </strong>
+                        </div>
+                      </div>
+
+                      <div
+                        className="ai-provider-evidence__gates"
+                        aria-label="v8 prospective shadow screening checks"
+                      >
+                        {[
+                          [
+                            "BA ≥ 0.52",
+                            providerEvidence.v8ProspectiveShadow.screeningChecks
+                              .balancedAccuracy,
+                          ],
+                          [
+                            "Sharpe ≥ 1.0",
+                            providerEvidence.v8ProspectiveShadow.screeningChecks
+                              .sharpeRatio,
+                          ],
+                          [
+                            "PF ≥ 1.15",
+                            providerEvidence.v8ProspectiveShadow.screeningChecks
+                              .profitFactor,
+                          ],
+                          [
+                            "Positive weeks ≥ 60%",
+                            providerEvidence.v8ProspectiveShadow.screeningChecks
+                              .positiveWindowFraction,
+                          ],
+                          [
+                            "Positive pairs ≥ 67%",
+                            providerEvidence.v8ProspectiveShadow.screeningChecks
+                              .positiveInstrumentFraction,
+                          ],
+                          [
+                            "Underlying confidence ≥ 60%",
+                            providerEvidence.v8ProspectiveShadow.screeningChecks
+                              .confidence,
+                          ],
+                          [
+                            "Closed shadow trades ≥ 100",
+                            providerEvidence.v8ProspectiveShadow.screeningChecks
+                              .evidence,
+                          ],
+                          [
+                            "Median gap ≤ 10m",
+                            providerEvidence.v8ProspectiveShadow.screeningChecks
+                              .frequency,
+                          ],
+                        ].map(([label, passed]) => (
+                          <span
+                            key={String(label)}
+                            className={passed ? "is-passed" : "is-pending"}
+                          >
+                            {passed ? "✓" : "·"} {String(label)}
+                          </span>
+                        ))}
+                      </div>
+
+                      <p className="ai-provider-evidence__footnote">
+                        This is screening evidence, not qualification evidence.
+                        v8 shadow has no isolated account-equity drawdown because
+                        v7 still owns execution. If every screening check matures,
+                        the next step is a separate v8 PAPER cohort starting from
+                        zero evidence.
+                      </p>
+                    </div>
+                  ) : null}
+
                   <p className="ai-provider-evidence__footnote">
-                    Passing every gate only permits a separate DEMO review.
+                    Passing every v7 gate only permits a separate DEMO review.
                     Automatic DEMO and LIVE promotion remain disabled.
                   </p>
                 </Card>

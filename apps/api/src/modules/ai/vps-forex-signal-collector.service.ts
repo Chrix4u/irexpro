@@ -11,6 +11,7 @@ import {
   LivePaperCandleInput,
   LivePaperMarketDataService,
 } from '../broker/services/live-paper-market-data.service';
+import { scoreV8ShadowMeta } from './v8-shadow-meta-scorer';
 
 const PROVIDER_CODE = 'vps-twelvedata-six-pair-v7';
 const SIGNAL_NAMESPACE = '802e16f8-8209-4e1f-aa7e-a6a46387081c';
@@ -511,6 +512,19 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       const eventId = `${PROVIDER_CODE}|${best.instrument}|${best.barTime.toISOString()}|${best.direction}`;
       const signalId = uuidv5(eventId, SIGNAL_NAMESPACE);
       const digits = this.livePaperMarket.spec(best.instrument).digits;
+      const v8Shadow = scoreV8ShadowMeta({
+        instrument: best.instrument,
+        direction: best.direction,
+        confidence: best.confidence,
+        extensionAtr: best.extensionAtr,
+        volatilityScore: best.volatilityScore,
+        emaSeparation: best.emaSeparation,
+        mtfStrength: best.mtfStrength,
+        rsi14: best.rsi14,
+        // Historical v7 events define scan_time as the close of the selected
+        // M5 bar. Keep the prospective shadow feature clock identical.
+        scanTime: new Date(best.barTime.getTime() + BAR_MS),
+      });
       const outcome = await this.aiSignalService.receiveSignal({
         signalId,
         userId,
@@ -553,6 +567,16 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           feature_volatility_score: best.volatilityScore,
           feature_atr: best.atr,
           feature_candidate_score: best.score,
+          v8_shadow_artifact: v8Shadow.artifact,
+          v8_shadow_mode: v8Shadow.mode,
+          v8_shadow_probability: v8Shadow.probability,
+          v8_shadow_admission_threshold: v8Shadow.admissionThreshold,
+          v8_shadow_expected_r: v8Shadow.expectedR,
+          v8_shadow_admitted: v8Shadow.admitted,
+          v8_shadow_reason: v8Shadow.reason,
+          v8_shadow_training_evidence:
+            'HISTORICAL_DEVELOPMENT_ONLY_ALREADY_INSPECTED_NOT_QUALIFICATION',
+          v8_shadow_modifies_execution: false,
           position_sizing_policy: 'risk-managed-up-to-0.10-lot-scanner-bound',
           opportunity_freshness_policy:
             'new-cycle-or-0.5atr-directional-extension-or-0.02-confidence-expansion',

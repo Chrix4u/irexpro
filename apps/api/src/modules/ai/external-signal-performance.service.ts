@@ -1,5 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import {
+  V8_SHADOW_ADMISSION_THRESHOLD,
+  V8_SHADOW_ARTIFACT,
+  V8_SHADOW_MODE,
+} from './v8-shadow-meta-scorer';
 
 const INSTRUMENTS = ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF'] as const;
 const MIN_CLOSED_TRADES = 100;
@@ -35,6 +40,10 @@ type EvidenceRow = {
   broker_connection_id: string | null;
   session_opening_balance: string | number | null;
   session_started_at: Date | string | null;
+  v8_shadow_artifact?: string | null;
+  v8_shadow_probability?: string | number | null;
+  v8_shadow_admitted?: string | boolean | null;
+  v8_shadow_expected_r?: string | number | null;
 };
 
 type EquitySnapshotRow = {
@@ -328,7 +337,11 @@ export class ExternalSignalPerformanceService {
           ca.allocated_capital,
           ti.broker_connection_id,
           ts.opening_balance AS session_opening_balance,
-          ts.started_at AS session_started_at
+          ts.started_at AS session_started_at,
+          ti.metadata->>'v8_shadow_artifact' AS v8_shadow_artifact,
+          ti.metadata->>'v8_shadow_probability' AS v8_shadow_probability,
+          ti.metadata->>'v8_shadow_admitted' AS v8_shadow_admitted,
+          ti.metadata->>'v8_shadow_expected_r' AS v8_shadow_expected_r
         FROM trading.trade_intents ti
         LEFT JOIN trading.trades t ON t.trade_intent_id = ti.id
         LEFT JOIN trading.capital_allocations ca ON ca.trade_intent_id = ti.id
@@ -469,6 +482,145 @@ export class ExternalSignalPerformanceService {
     const latestSignalAt = latestRow ? new Date(latestRow.signal_generated_at) : null;
     const medianGap = median(signalGaps);
     const shadowCalibration = buildShadowCalibrationDiagnostics(closed);
+
+    // v8 is a frozen prospective SHADOW filter layered over v7. It does not
+    // alter v7 admission, sizing, SL/TP or execution. Only signals tagged
+    // after the artifact was frozen are counted; historical rows are never
+    // backfilled into this prospective cohort.
+    const v8TaggedRows = rows.filter(
+      (row) => row.v8_shadow_artifact === V8_SHADOW_ARTIFACT,
+    );
+    const v8AdmittedRows = v8TaggedRows.filter(
+      (row) =>
+        row.v8_shadow_admitted === true ||
+        String(row.v8_shadow_admitted ?? '').toLowerCase() === 'true',
+    );
+    const v8Closed = v8AdmittedRows.filter(
+      (row) =>
+        row.trade_status === 'CLOSED' &&
+        row.closed_at != null &&
+        finite(row.realised_pnl) !== null &&
+        finite(row.session_opening_balance) !== null &&
+        (finite(row.session_opening_balance) ?? 0) > 0 &&
+        (row.close_reason === 'STOP_LOSS_HIT' || row.close_reason === 'TAKE_PROFIT_HIT'),
+    );
+    const v8Pnls = v8Closed.map((row) => finite(row.realised_pnl) ?? 0);
+    const v8Returns = v8Closed.map(
+      (row, index) => v8Pnls[index]! / (finite(row.session_opening_balance) as number),
+    );
+    const v8Ba = balancedAccuracy(v8Closed);
+    const v8Pf = profitFactor(v8Pnls);
+    const v8Sharpe = sampleSharpe(v8Returns);
+
+    const v8Weekly = new Map<string, number>();
+    for (let i = 0; i < v8Closed.length; i += 1) {
+      const key = isoWeekKey(new Date(v8Closed[i]!.closed_at as Date | string));
+      v8Weekly.set(key, (v8Weekly.get(key) ?? 0) + v8Returns[i]!);
+    }
+    const v8PositiveWindowFraction = v8Weekly.size
+      ? [...v8Weekly.values()].filter((value) => value > 0).length / v8Weekly.size
+      : 0;
+
+    const v8InstrumentReturns = Object.fromEntries(
+      INSTRUMENTS.map((instrument) => [instrument, 0]),
+    ) as Record<(typeof INSTRUMENTS)[number], number>;
+    for (let i = 0; i < v8Closed.length; i += 1) {
+      const instrument = v8Closed[i]!.instrument as (typeof INSTRUMENTS)[number];
+      if (INSTRUMENTS.includes(instrument)) {
+        v8InstrumentReturns[instrument] += v8Returns[i]!;
+      }
+    }
+    const v8PositiveInstrumentFraction =
+      INSTRUMENTS.filter((instrument) => v8InstrumentReturns[instrument] > 0).length /
+      INSTRUMENTS.length;
+
+    const v8SignalTimes = v8AdmittedRows
+      .map((row) => {
+        const marketBar = row.market_data_bar_time
+          ? new Date(row.market_data_bar_time).getTime()
+          : Number.NaN;
+        return Number.isFinite(marketBar)
+          ? marketBar
+          : new Date(row.signal_generated_at).getTime();
+      })
+      .filter(Number.isFinite)
+      .sort((a, b) => a - b);
+    const v8SignalGaps: number[] = [];
+    for (let i = 1; i < v8SignalTimes.length; i += 1) {
+      v8SignalGaps.push((v8SignalTimes[i]! - v8SignalTimes[i - 1]!) / 60000);
+    }
+    const v8MedianGap = median(v8SignalGaps);
+    const v8Probabilities = v8TaggedRows
+      .map((row) => finite(row.v8_shadow_probability))
+      .filter((value): value is number => value !== null);
+    const v8AdmittedConfidences = v8AdmittedRows
+      .map((row) => finite(row.confidence_score))
+      .filter((value): value is number => value !== null);
+    const v8MinUnderlyingConfidence = v8AdmittedConfidences.length
+      ? Math.min(...v8AdmittedConfidences)
+      : null;
+    const v8ScreeningChecks = {
+      balancedAccuracy:
+        v8Ba !== null && v8Ba >= EXTERNAL_PROVIDER_REVIEW_GATES.minBalancedAccuracy,
+      sharpeRatio:
+        v8Sharpe !== null && v8Sharpe >= EXTERNAL_PROVIDER_REVIEW_GATES.minSharpeRatio,
+      profitFactor:
+        v8Pf !== null && v8Pf >= EXTERNAL_PROVIDER_REVIEW_GATES.minProfitFactor,
+      positiveWindowFraction:
+        v8PositiveWindowFraction >= EXTERNAL_PROVIDER_REVIEW_GATES.minPositiveWindowFraction,
+      positiveInstrumentFraction:
+        v8PositiveInstrumentFraction >=
+        EXTERNAL_PROVIDER_REVIEW_GATES.minPositiveInstrumentFraction,
+      confidence:
+        v8MinUnderlyingConfidence !== null &&
+        v8MinUnderlyingConfidence >= EXTERNAL_PROVIDER_REVIEW_GATES.minConfidence,
+      evidence: v8Closed.length >= EXTERNAL_PROVIDER_REVIEW_GATES.minClosedTrades,
+      frequency:
+        v8MedianGap !== null &&
+        v8MedianGap <= EXTERNAL_PROVIDER_REVIEW_GATES.maxMedianMinutesBetweenSignals,
+    };
+    const v8ScreeningReadyForDedicatedPaper =
+      Object.values(v8ScreeningChecks).every(Boolean);
+
+    const v8ProspectiveShadow = {
+      artifact: V8_SHADOW_ARTIFACT,
+      mode: V8_SHADOW_MODE,
+      modifiesExecution: false,
+      admissionThreshold: V8_SHADOW_ADMISSION_THRESHOLD,
+      trainingEvidence:
+        'HISTORICAL_DEVELOPMENT_ONLY_ALREADY_INSPECTED_NOT_QUALIFICATION',
+      qualificationEvidence: false,
+      maxDrawdownIsolated: false,
+      taggedSignals: v8TaggedRows.length,
+      admittedSignals: v8AdmittedRows.length,
+      admittedFraction: v8TaggedRows.length
+        ? v8AdmittedRows.length / v8TaggedRows.length
+        : 0,
+      executedTrades: v8AdmittedRows.filter((row) => row.trade_id != null).length,
+      closedTrades: v8Closed.length,
+      wins: v8Pnls.filter((value) => value > 0).length,
+      losses: v8Pnls.filter((value) => value < 0).length,
+      realisedPnl: v8Pnls.reduce((sum, value) => sum + value, 0),
+      profitFactor: v8Pf,
+      balancedAccuracy: v8Ba,
+      evidenceWindowSharpeRatio: v8Sharpe,
+      positiveWeeklyWindowFraction: v8PositiveWindowFraction,
+      positiveInstrumentFraction: v8PositiveInstrumentFraction,
+      medianMinutesBetweenSignals: v8MedianGap,
+      minUnderlyingConfidence: v8MinUnderlyingConfidence,
+      latestProbability: v8Probabilities.length
+        ? v8Probabilities[v8Probabilities.length - 1]!
+        : null,
+      minProbability: v8Probabilities.length ? Math.min(...v8Probabilities) : null,
+      screeningChecks: v8ScreeningChecks,
+      screeningReadyForDedicatedPaper: v8ScreeningReadyForDedicatedPaper,
+      nextStage: v8ScreeningReadyForDedicatedPaper
+        ? 'DEDICATED_V8_PAPER_REQUIRED'
+        : 'COLLECTING_PROSPECTIVE_SHADOW',
+      methodology:
+        'Prospective counterfactual screening only. v7 continues to execute unchanged; v8-shadow results use only post-freeze tagged v7 trades that the frozen v8 filter would have admitted. A separate dedicated v8 PAPER cohort is required before qualification.',
+    };
+
     const observedMarketDataAuthorities = [
       ...new Set(
         rows
@@ -566,6 +718,7 @@ export class ExternalSignalPerformanceService {
       observed,
       checks,
       shadowCalibration,
+      v8ProspectiveShadow,
       methodology: {
         completedTradeEvidence:
           'Qualification metrics count only PAPER trades durably closed by STOP_LOSS_HIT or TAKE_PROFIT_HIT. Manual, kill-switch, reconciliation and unknown broker closes are censored/interrupted and do not count toward the 100-trade gate.',

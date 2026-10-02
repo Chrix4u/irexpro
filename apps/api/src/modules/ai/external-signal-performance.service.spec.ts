@@ -398,6 +398,45 @@ describe('ExternalSignalPerformanceService', () => {
     );
   });
 
+  it('counts only post-freeze tagged rows in the v8 prospective shadow cohort', async () => {
+    const rows = strongEvidenceRows().map((row, index) =>
+      index >= 110
+        ? {
+            ...row,
+            v8_shadow_artifact: 'v8-shadow-online-meta-v1',
+            v8_shadow_probability: index % 2 === 0 ? '0.51' : '0.42',
+            v8_shadow_admitted: index % 2 === 0 ? 'true' : 'false',
+            v8_shadow_expected_r: index % 2 === 0 ? '0.36' : '0.12',
+          }
+        : row,
+    );
+    const dataSource = {
+      query: jest
+        .fn()
+        .mockImplementation((sql: string) =>
+          Promise.resolve(
+            sql.includes('broker.broker_account_snapshots')
+              ? strongEquitySnapshots()
+              : rows,
+          ),
+        ),
+    } as unknown as DataSource;
+
+    const report = await new ExternalSignalPerformanceService(
+      dataSource,
+    ).getProviderPerformance('user-1', 'provider-a');
+
+    expect(report.v8ProspectiveShadow.modifiesExecution).toBe(false);
+    expect(report.v8ProspectiveShadow.qualificationEvidence).toBe(false);
+    expect(report.v8ProspectiveShadow.taggedSignals).toBe(10);
+    expect(report.v8ProspectiveShadow.admittedSignals).toBe(5);
+    expect(report.v8ProspectiveShadow.closedTrades).toBe(5);
+    expect(report.v8ProspectiveShadow.admissionThreshold).toBe(0.46);
+    expect(report.v8ProspectiveShadow.nextStage).toBe(
+      'COLLECTING_PROSPECTIVE_SHADOW',
+    );
+  });
+
   it('scopes the SQL query to the exact user and provider code', async () => {
     const query = jest.fn().mockResolvedValue([]);
     const service = new ExternalSignalPerformanceService({ query } as unknown as DataSource);
