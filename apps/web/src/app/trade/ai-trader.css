@@ -1507,12 +1507,19 @@
   }
 
   .ai-provider-evidence__metrics > div {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.55rem;
     width: 100%;
     min-width: 0;
   }
 
   .ai-provider-evidence__metrics strong {
+    justify-self: end;
+    max-width: 100%;
     overflow: visible;
+    text-align: right;
     text-overflow: clip;
     white-space: normal;
     overflow-wrap: anywhere;
@@ -1521,6 +1528,8 @@
   }
 
   .ai-provider-evidence__metrics span {
+    margin-bottom: 0;
+    min-width: 0;
     overflow-wrap: anywhere;
   }
 
