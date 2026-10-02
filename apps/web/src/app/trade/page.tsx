@@ -336,9 +336,15 @@ interface ExternalProviderPerformanceView {
     maxDrawdownIsolated: false;
     taggedSignals: number;
     admittedSignals: number;
+    rejectedSignals: number;
     admittedFraction: number;
     executedTrades: number;
     closedTrades: number;
+    rejectedClosedTrades: number;
+    rejectedWins: number;
+    rejectedLosses: number;
+    rejectedRealisedPnl: number;
+    rejectedProfitFactor: number | null;
     wins: number;
     losses: number;
     realisedPnl: number;
@@ -2638,6 +2644,12 @@ export default function AiTradingPage() {
                           </strong>
                         </div>
                         <div>
+                          <span>Would reject</span>
+                          <strong>
+                            {providerEvidence.v8ProspectiveShadow.rejectedSignals}
+                          </strong>
+                        </div>
+                        <div>
                           <span>Admission rate</span>
                           <strong>
                             {providerPercent(
@@ -2668,6 +2680,34 @@ export default function AiTradingPage() {
                               2,
                             )}{" "}
                             USD
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Rejected closed W / L</span>
+                          <strong>
+                            {providerEvidence.v8ProspectiveShadow.rejectedWins} /{" "}
+                            {providerEvidence.v8ProspectiveShadow.rejectedLosses}
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Rejected cohort P&amp;L</span>
+                          <strong>
+                            {providerEvidence.v8ProspectiveShadow.rejectedRealisedPnl >= 0
+                              ? "+"
+                              : ""}
+                            {providerEvidence.v8ProspectiveShadow.rejectedRealisedPnl.toFixed(
+                              2,
+                            )}{" "}
+                            USD
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Rejected cohort PF</span>
+                          <strong>
+                            {providerMetric(
+                              providerEvidence.v8ProspectiveShadow.rejectedProfitFactor,
+                              3,
+                            )}
                           </strong>
                         </div>
                         <div>

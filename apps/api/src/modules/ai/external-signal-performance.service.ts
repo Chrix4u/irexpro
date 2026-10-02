@@ -495,6 +495,13 @@ export class ExternalSignalPerformanceService {
         row.v8_shadow_admitted === true ||
         String(row.v8_shadow_admitted ?? '').toLowerCase() === 'true',
     );
+    const v8RejectedRows = v8TaggedRows.filter(
+      (row) =>
+        !(
+          row.v8_shadow_admitted === true ||
+          String(row.v8_shadow_admitted ?? '').toLowerCase() === 'true'
+        ),
+    );
     const v8Closed = v8AdmittedRows.filter(
       (row) =>
         row.trade_status === 'CLOSED' &&
@@ -505,6 +512,14 @@ export class ExternalSignalPerformanceService {
         (row.close_reason === 'STOP_LOSS_HIT' || row.close_reason === 'TAKE_PROFIT_HIT'),
     );
     const v8Pnls = v8Closed.map((row) => finite(row.realised_pnl) ?? 0);
+    const v8RejectedClosed = v8RejectedRows.filter(
+      (row) =>
+        row.trade_status === 'CLOSED' &&
+        row.closed_at != null &&
+        finite(row.realised_pnl) !== null &&
+        (row.close_reason === 'STOP_LOSS_HIT' || row.close_reason === 'TAKE_PROFIT_HIT'),
+    );
+    const v8RejectedPnls = v8RejectedClosed.map((row) => finite(row.realised_pnl) ?? 0);
     const v8Returns = v8Closed.map(
       (row, index) => v8Pnls[index]! / (finite(row.session_opening_balance) as number),
     );
@@ -593,11 +608,17 @@ export class ExternalSignalPerformanceService {
       maxDrawdownIsolated: false,
       taggedSignals: v8TaggedRows.length,
       admittedSignals: v8AdmittedRows.length,
+      rejectedSignals: v8RejectedRows.length,
       admittedFraction: v8TaggedRows.length
         ? v8AdmittedRows.length / v8TaggedRows.length
         : 0,
       executedTrades: v8AdmittedRows.filter((row) => row.trade_id != null).length,
       closedTrades: v8Closed.length,
+      rejectedClosedTrades: v8RejectedClosed.length,
+      rejectedWins: v8RejectedPnls.filter((value) => value > 0).length,
+      rejectedLosses: v8RejectedPnls.filter((value) => value < 0).length,
+      rejectedRealisedPnl: v8RejectedPnls.reduce((sum, value) => sum + value, 0),
+      rejectedProfitFactor: profitFactor(v8RejectedPnls),
       wins: v8Pnls.filter((value) => value > 0).length,
       losses: v8Pnls.filter((value) => value < 0).length,
       realisedPnl: v8Pnls.reduce((sum, value) => sum + value, 0),

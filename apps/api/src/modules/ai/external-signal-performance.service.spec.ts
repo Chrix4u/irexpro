@@ -430,7 +430,10 @@ describe('ExternalSignalPerformanceService', () => {
     expect(report.v8ProspectiveShadow.qualificationEvidence).toBe(false);
     expect(report.v8ProspectiveShadow.taggedSignals).toBe(10);
     expect(report.v8ProspectiveShadow.admittedSignals).toBe(5);
+    expect(report.v8ProspectiveShadow.rejectedSignals).toBe(5);
     expect(report.v8ProspectiveShadow.closedTrades).toBe(5);
+    expect(report.v8ProspectiveShadow.rejectedClosedTrades).toBe(5);
+    expect(report.v8ProspectiveShadow.rejectedRealisedPnl).toBeDefined();
     expect(report.v8ProspectiveShadow.admissionThreshold).toBe(0.46);
     expect(report.v8ProspectiveShadow.nextStage).toBe(
       'COLLECTING_PROSPECTIVE_SHADOW',
