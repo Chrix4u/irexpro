@@ -485,6 +485,10 @@ interface ExternalProviderPerformanceView {
     regimeCounts: Record<string, number>;
     averageDirectionQuality: number | null;
     averageTradeQuality: number | null;
+    averagePortfolioQuality: number | null;
+    averagePortfolioRiskScore: number | null;
+    averageOpenPositionCount: number | null;
+    averageSameInstrumentCount: number | null;
     averageMetaProbability: number | null;
     averageEnsembleScore: number | null;
     methodology: string;
@@ -3139,6 +3143,30 @@ export default function AiTradingPage() {
                           <span>Avg trade quality</span>
                           <strong>
                             {providerPercent(providerEvidence.planBEnsembleShadow.averageTradeQuality)}
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Avg portfolio quality</span>
+                          <strong>
+                            {providerPercent(providerEvidence.planBEnsembleShadow.averagePortfolioQuality)}
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Avg portfolio risk</span>
+                          <strong>
+                            {providerPercent(providerEvidence.planBEnsembleShadow.averagePortfolioRiskScore)}
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Avg open exposure</span>
+                          <strong>
+                            {providerMetric(providerEvidence.planBEnsembleShadow.averageOpenPositionCount, 1)} positions
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Avg same-instrument load</span>
+                          <strong>
+                            {providerMetric(providerEvidence.planBEnsembleShadow.averageSameInstrumentCount, 1)}
                           </strong>
                         </div>
                         <div>

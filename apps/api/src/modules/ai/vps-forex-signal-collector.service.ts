@@ -12,7 +12,10 @@ import {
   LivePaperMarketDataService,
 } from '../broker/services/live-paper-market-data.service';
 import { scorePlanBShadowMeta, scoreV8ShadowMeta } from './v8-shadow-meta-scorer';
-import { scorePlanBMultimodelShadow } from './plan-b-multimodel-shadow';
+import {
+  PlanBPortfolioPosition,
+  scorePlanBMultimodelShadow,
+} from './plan-b-multimodel-shadow';
 
 const PROVIDER_CODE = 'vps-twelvedata-six-pair-v7';
 const SIGNAL_NAMESPACE = '802e16f8-8209-4e1f-aa7e-a6a46387081c';
@@ -537,17 +540,42 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         rsi14: best.rsi14,
         scanTime: new Date(best.barTime.getTime() + BAR_MS),
       });
-      const planBEnsemble = scorePlanBMultimodelShadow({
-        instrument: best.instrument,
-        direction: best.direction,
-        confidence: best.confidence,
-        extensionAtr: best.extensionAtr,
-        volatilityScore: best.volatilityScore,
-        emaSeparation: best.emaSeparation,
-        mtfStrength: best.mtfStrength,
-        rsi14: best.rsi14,
-        scanTime: new Date(best.barTime.getTime() + BAR_MS),
-      });
+      const portfolioPositions: PlanBPortfolioPosition[] = [];
+      let portfolioSnapshotAvailable = false;
+      try {
+        const getPositions = this.brokerService.getOpenPositionsForConnection?.bind(
+          this.brokerService,
+        );
+        if (getPositions) {
+          const snapshot = await getPositions(connectionId, userId);
+          portfolioPositions.push(
+            ...snapshot.positions.map((position) => ({
+              instrument: position.instrument,
+              direction: position.direction,
+              lotSize: position.lotSize,
+            })),
+          );
+          portfolioSnapshotAvailable = true;
+        }
+      } catch (error) {
+        this.logger.warn(
+          `Plan B portfolio shadow snapshot unavailable: ${(error as Error).message}`,
+        );
+      }
+      const planBEnsemble = scorePlanBMultimodelShadow(
+        {
+          instrument: best.instrument,
+          direction: best.direction,
+          confidence: best.confidence,
+          extensionAtr: best.extensionAtr,
+          volatilityScore: best.volatilityScore,
+          emaSeparation: best.emaSeparation,
+          mtfStrength: best.mtfStrength,
+          rsi14: best.rsi14,
+          scanTime: new Date(best.barTime.getTime() + BAR_MS),
+        },
+        portfolioPositions,
+      );
       const outcome = await this.aiSignalService.receiveSignal({
         signalId,
         userId,
@@ -618,6 +646,11 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           plan_b_ensemble_direction_quality: planBEnsemble.directionQuality,
           plan_b_ensemble_expected_r: planBEnsemble.expectedR,
           plan_b_ensemble_trade_quality: planBEnsemble.tradeQuality,
+          plan_b_ensemble_portfolio_snapshot_available: portfolioSnapshotAvailable,
+          plan_b_ensemble_portfolio_quality: planBEnsemble.portfolioQuality,
+          plan_b_ensemble_portfolio_risk_score: planBEnsemble.portfolioRiskScore,
+          plan_b_ensemble_open_position_count: planBEnsemble.openPositionCount,
+          plan_b_ensemble_same_instrument_count: planBEnsemble.sameInstrumentCount,
           plan_b_ensemble_meta_probability: planBEnsemble.metaProbability,
           plan_b_ensemble_score: planBEnsemble.ensembleScore,
           plan_b_ensemble_admitted: planBEnsemble.admitted,

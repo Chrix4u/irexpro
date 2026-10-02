@@ -50,6 +50,8 @@ describe('Plan B multimodel prospective shadow', () => {
     for (const value of [
       score.directionQuality,
       score.tradeQuality,
+      score.portfolioQuality,
+      score.portfolioRiskScore,
       score.metaProbability,
       score.ensembleScore,
     ]) {
@@ -57,5 +59,18 @@ describe('Plan B multimodel prospective shadow', () => {
       expect(value).toBeLessThanOrEqual(1);
     }
     expect(score.reasons.length).toBeGreaterThan(0);
+  });
+
+  it('reduces portfolio quality for concentrated same-direction exposure', () => {
+    const unexposed = scorePlanBMultimodelShadow(base);
+    const concentrated = scorePlanBMultimodelShadow(base, [
+      { instrument: 'EURUSD', direction: 'BUY', lotSize: '0.10' },
+      { instrument: 'GBPUSD', direction: 'BUY', lotSize: '0.10' },
+      { instrument: 'EURUSD', direction: 'BUY', lotSize: '0.10' },
+    ]);
+    expect(concentrated.openPositionCount).toBe(3);
+    expect(concentrated.sameInstrumentCount).toBe(2);
+    expect(concentrated.portfolioRiskScore).toBeGreaterThan(unexposed.portfolioRiskScore);
+    expect(concentrated.portfolioQuality).toBeLessThan(unexposed.portfolioQuality);
   });
 });

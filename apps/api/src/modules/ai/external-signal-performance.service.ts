@@ -58,6 +58,10 @@ type EvidenceRow = {
   plan_b_ensemble_regime?: string | null;
   plan_b_ensemble_direction_quality?: string | number | null;
   plan_b_ensemble_trade_quality?: string | number | null;
+  plan_b_ensemble_portfolio_quality?: string | number | null;
+  plan_b_ensemble_portfolio_risk_score?: string | number | null;
+  plan_b_ensemble_open_position_count?: string | number | null;
+  plan_b_ensemble_same_instrument_count?: string | number | null;
   plan_b_ensemble_meta_probability?: string | number | null;
   plan_b_ensemble_score?: string | number | null;
   plan_b_ensemble_admitted?: string | boolean | null;
@@ -465,6 +469,10 @@ export class ExternalSignalPerformanceService {
           ti.metadata->>'plan_b_ensemble_regime' AS plan_b_ensemble_regime,
           ti.metadata->>'plan_b_ensemble_direction_quality' AS plan_b_ensemble_direction_quality,
           ti.metadata->>'plan_b_ensemble_trade_quality' AS plan_b_ensemble_trade_quality,
+          ti.metadata->>'plan_b_ensemble_portfolio_quality' AS plan_b_ensemble_portfolio_quality,
+          ti.metadata->>'plan_b_ensemble_portfolio_risk_score' AS plan_b_ensemble_portfolio_risk_score,
+          ti.metadata->>'plan_b_ensemble_open_position_count' AS plan_b_ensemble_open_position_count,
+          ti.metadata->>'plan_b_ensemble_same_instrument_count' AS plan_b_ensemble_same_instrument_count,
           ti.metadata->>'plan_b_ensemble_meta_probability' AS plan_b_ensemble_meta_probability,
           ti.metadata->>'plan_b_ensemble_score' AS plan_b_ensemble_score,
           ti.metadata->>'plan_b_ensemble_admitted' AS plan_b_ensemble_admitted
@@ -828,10 +836,14 @@ export class ExternalSignalPerformanceService {
       regimeCounts: ensembleRegimes,
       averageDirectionQuality: ensembleAverage('plan_b_ensemble_direction_quality'),
       averageTradeQuality: ensembleAverage('plan_b_ensemble_trade_quality'),
+      averagePortfolioQuality: ensembleAverage('plan_b_ensemble_portfolio_quality'),
+      averagePortfolioRiskScore: ensembleAverage('plan_b_ensemble_portfolio_risk_score'),
+      averageOpenPositionCount: ensembleAverage('plan_b_ensemble_open_position_count'),
+      averageSameInstrumentCount: ensembleAverage('plan_b_ensemble_same_instrument_count'),
       averageMetaProbability: ensembleAverage('plan_b_ensemble_meta_probability'),
       averageEnsembleScore: ensembleAverage('plan_b_ensemble_score'),
       methodology:
-        'Prospective non-executing multimodel ensemble. Regime, direction, economic payoff and trade-quality models are evaluated independently and persisted for counterfactual review.',
+        'Prospective non-executing multimodel ensemble. Regime, direction, expected-return economics, trade quality and portfolio/currency concentration are evaluated independently and persisted for counterfactual review.',
     };
 
     const observedMarketDataAuthorities = [
