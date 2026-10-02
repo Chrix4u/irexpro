@@ -483,6 +483,7 @@ interface ExternalProviderPerformanceView {
     realisedPnl: number;
     profitFactor: number | null;
     regimeCounts: Record<string, number>;
+    pairSideRouteCounts: Record<string, number>;
     averageDirectionQuality: number | null;
     averageTradeQuality: number | null;
     averageExitQuality: number | null;
@@ -3213,6 +3214,13 @@ export default function AiTradingPage() {
                       </div>
 
                       <div className="ai-provider-evidence__gates">
+                        {Object.entries(providerEvidence.planBEnsembleShadow.pairSideRouteCounts).map(
+                          ([route, count]) => (
+                            <span key={`pair-${route}`} className={route === "CORE" ? "is-pass" : "is-pending"}>
+                              Pair/side {route.toLowerCase()} · {count}
+                            </span>
+                          ),
+                        )}
                         {Object.entries(providerEvidence.planBEnsembleShadow.regimeCounts).map(
                           ([regime, count]) => (
                             <span key={regime} className="is-pending">

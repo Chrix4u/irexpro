@@ -659,6 +659,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           plan_b_ensemble_trade_quality: planBEnsemble.tradeQuality,
           plan_b_ensemble_exit_quality: planBEnsemble.exitQuality,
           plan_b_ensemble_pair_side_quality: planBEnsemble.pairSideQuality,
+          plan_b_ensemble_pair_side_route: planBEnsemble.pairSideRoute,
           plan_b_ensemble_session_quality: planBEnsemble.sessionQuality,
           plan_b_ensemble_consensus_passed: planBEnsemble.consensusPassed,
           plan_b_ensemble_consensus_required: planBEnsemble.consensusRequired,

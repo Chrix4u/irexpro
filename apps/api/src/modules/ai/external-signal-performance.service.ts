@@ -60,6 +60,7 @@ type EvidenceRow = {
   plan_b_ensemble_trade_quality?: string | number | null;
   plan_b_ensemble_exit_quality?: string | number | null;
   plan_b_ensemble_pair_side_quality?: string | number | null;
+  plan_b_ensemble_pair_side_route?: string | null;
   plan_b_ensemble_session_quality?: string | number | null;
   plan_b_ensemble_consensus_passed?: string | number | null;
   plan_b_ensemble_consensus_required?: string | number | null;
@@ -476,6 +477,7 @@ export class ExternalSignalPerformanceService {
           ti.metadata->>'plan_b_ensemble_trade_quality' AS plan_b_ensemble_trade_quality,
           ti.metadata->>'plan_b_ensemble_exit_quality' AS plan_b_ensemble_exit_quality,
           ti.metadata->>'plan_b_ensemble_pair_side_quality' AS plan_b_ensemble_pair_side_quality,
+          ti.metadata->>'plan_b_ensemble_pair_side_route' AS plan_b_ensemble_pair_side_route,
           ti.metadata->>'plan_b_ensemble_session_quality' AS plan_b_ensemble_session_quality,
           ti.metadata->>'plan_b_ensemble_consensus_passed' AS plan_b_ensemble_consensus_passed,
           ti.metadata->>'plan_b_ensemble_consensus_required' AS plan_b_ensemble_consensus_required,
@@ -820,6 +822,14 @@ export class ExternalSignalPerformanceService {
       },
       {},
     );
+    const pairSideRouteCounts = ensembleTaggedRows.reduce<Record<string, number>>(
+      (acc, row) => {
+        const route = row.plan_b_ensemble_pair_side_route ?? 'UNKNOWN';
+        acc[route] = (acc[route] ?? 0) + 1;
+        return acc;
+      },
+      {},
+    );
     const ensembleAverage = (field: keyof EvidenceRow): number | null => {
       const values = ensembleTaggedRows
         .map((row) => finite(row[field]))
@@ -844,6 +854,7 @@ export class ExternalSignalPerformanceService {
       realisedPnl: ensemblePnls.reduce((sum, value) => sum + value, 0),
       profitFactor: profitFactor(ensemblePnls),
       regimeCounts: ensembleRegimes,
+      pairSideRouteCounts,
       averageDirectionQuality: ensembleAverage('plan_b_ensemble_direction_quality'),
       averageTradeQuality: ensembleAverage('plan_b_ensemble_trade_quality'),
       averageExitQuality: ensembleAverage('plan_b_ensemble_exit_quality'),

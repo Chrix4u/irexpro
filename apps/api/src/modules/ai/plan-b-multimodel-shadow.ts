@@ -27,6 +27,7 @@ export interface PlanBEnsembleScore {
   tradeQuality: number;
   exitQuality: number;
   pairSideQuality: number;
+  pairSideRoute: 'CORE' | 'PROVISIONAL' | 'BLOCKED';
   sessionQuality: number;
   consensusPassed: number;
   consensusRequired: number;
@@ -77,23 +78,21 @@ function tradeQuality(input: V8ShadowMetaInput): number {
   );
 }
 
-const PAIR_SIDE_STABILITY: Record<string, number> = Object.freeze({
-  EURUSD_BUY: 0.72,
-  EURUSD_SELL: 0.60,
-  GBPUSD_BUY: 0.44,
-  GBPUSD_SELL: 0.52,
-  USDJPY_BUY: 0.56,
-  USDJPY_SELL: 0.42,
-  AUDUSD_BUY: 0.55,
-  AUDUSD_SELL: 0.47,
-  USDCAD_BUY: 0.63,
-  USDCAD_SELL: 0.76,
-  USDCHF_BUY: 0.45,
-  USDCHF_SELL: 0.49,
+const PAIR_SIDE_ROUTE: Record<string, 'CORE' | 'PROVISIONAL' | 'BLOCKED'> = Object.freeze({
+  AUDUSD_BUY: 'CORE',
+  EURUSD_SELL: 'CORE',
+  USDJPY_BUY: 'CORE',
+  USDCAD_SELL: 'CORE',
+  GBPUSD_SELL: 'PROVISIONAL',
 });
 
+function pairSideRoute(input: V8ShadowMetaInput): 'CORE' | 'PROVISIONAL' | 'BLOCKED' {
+  return PAIR_SIDE_ROUTE[`${input.instrument.trim().toUpperCase()}_${input.direction}`] ?? 'BLOCKED';
+}
+
 function pairSideQuality(input: V8ShadowMetaInput): number {
-  return PAIR_SIDE_STABILITY[`${input.instrument.trim().toUpperCase()}_${input.direction}`] ?? 0.5;
+  const route = pairSideRoute(input);
+  return route === 'CORE' ? 0.75 : route === 'PROVISIONAL' ? 0.52 : 0.25;
 }
 
 function sessionQuality(input: V8ShadowMetaInput): number {
@@ -158,6 +157,7 @@ export function scorePlanBMultimodelShadow(
   const direction = directionQuality(input);
   const quality = tradeQuality(input);
   const exit = exitQuality(input);
+  const pairSideRouteValue = pairSideRoute(input);
   const pairSide = pairSideQuality(input);
   const session = sessionQuality(input);
   const portfolio = portfolioQualityOf(input, positions);
@@ -179,7 +179,7 @@ export function scorePlanBMultimodelShadow(
   if (direction < 0.55) reasons.push('DIRECTION_QUALITY');
   if (quality < 0.48) reasons.push('TRADE_QUALITY');
   if (exit < 0.48) reasons.push('EXIT_FEASIBILITY');
-  if (pairSide < 0.48) reasons.push('PAIR_SIDE_STABILITY');
+  if (pairSideRouteValue !== 'CORE') reasons.push(`PAIR_SIDE_${pairSideRouteValue}`);
   if (session < 0.5) reasons.push('SESSION_QUALITY');
   if (meta.expectedR < 0.08) reasons.push('EXPECTED_R');
   if (portfolio.quality < 0.35) reasons.push('PORTFOLIO_CONCENTRATION');
@@ -199,6 +199,7 @@ export function scorePlanBMultimodelShadow(
 
   const admitted =
     regimeAllowed &&
+    pairSideRouteValue === 'CORE' &&
     consensusPassed >= consensusRequired &&
     meta.admitted &&
     meta.expectedR >= 0.08;
@@ -214,6 +215,7 @@ export function scorePlanBMultimodelShadow(
     tradeQuality: quality,
     exitQuality: exit,
     pairSideQuality: pairSide,
+    pairSideRoute: pairSideRouteValue,
     sessionQuality: session,
     consensusPassed,
     consensusRequired,
