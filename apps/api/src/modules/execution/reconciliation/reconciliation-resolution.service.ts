@@ -76,6 +76,7 @@ export class ReconciliationResolutionService {
     const swap = closedTrade?.swap ?? null;
     const closedAt = closedTrade?.closedAt ?? new Date();
     const closeReason = this.mapProviderCloseReason(closedTrade?.closeReason);
+    const pathDiagnostics = closedTrade?.pathDiagnostics ?? null;
 
     const result = await this.tradeRepo.update({ id: trade.id, status: trade.status }, {
       status: TradeStatus.CLOSED,
@@ -85,6 +86,16 @@ export class ReconciliationResolutionService {
       swap,
       closedAt,
       closeReason,
+      ...(pathDiagnostics
+        ? {
+            maxFavorablePnl: pathDiagnostics.maxFavorablePnl,
+            maxAdversePnl: pathDiagnostics.maxAdversePnl,
+            profitGiveback: pathDiagnostics.profitGiveback,
+            pathObservationCount: pathDiagnostics.observationCount,
+            pathPeakObservedAt: pathDiagnostics.peakObservedAt,
+            pathLastObservedAt: pathDiagnostics.lastObservedAt,
+          }
+        : {}),
     } as never);
 
     if (!result.affected) {
@@ -108,6 +119,16 @@ export class ReconciliationResolutionService {
         swap,
         providerClosedAt: closedAt.toISOString(),
         externalOrderId: trade.externalOrderId,
+        pathDiagnostics: pathDiagnostics
+          ? {
+              maxFavorablePnl: pathDiagnostics.maxFavorablePnl,
+              maxAdversePnl: pathDiagnostics.maxAdversePnl,
+              profitGiveback: pathDiagnostics.profitGiveback,
+              observationCount: pathDiagnostics.observationCount,
+              peakObservedAt: pathDiagnostics.peakObservedAt?.toISOString() ?? null,
+              lastObservedAt: pathDiagnostics.lastObservedAt?.toISOString() ?? null,
+            }
+          : null,
         source: 'state-reconciliation',
       },
     });

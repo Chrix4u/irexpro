@@ -561,6 +561,44 @@ function PositionCard({
           </dd>
         </div>
         <div>
+          <dt>Peak P&amp;L</dt>
+          <dd>
+            {position.pathDiagnostics
+              ? `${position.pathDiagnostics.maxFavorablePnl.startsWith("-") ? "" : "+"}${money(
+                  position.pathDiagnostics.maxFavorablePnl,
+                  position.accountCurrency,
+                )}`
+              : "—"}
+            {position.pathDiagnostics?.peakObservedAt ? (
+              <small>
+                Peak · {formatTimestamp(position.pathDiagnostics.peakObservedAt)}
+              </small>
+            ) : null}
+          </dd>
+        </div>
+        <div>
+          <dt>Profit give-back</dt>
+          <dd>
+            {position.pathDiagnostics
+              ? money(
+                  position.pathDiagnostics.profitGiveback,
+                  position.accountCurrency,
+                )
+              : "—"}
+          </dd>
+        </div>
+        <div>
+          <dt>Worst excursion</dt>
+          <dd>
+            {position.pathDiagnostics
+              ? money(
+                  position.pathDiagnostics.maxAdversePnl,
+                  position.accountCurrency,
+                )
+              : "—"}
+          </dd>
+        </div>
+        <div>
           <dt>Stop loss</dt>
           <dd>{position.stopLoss}</dd>
         </div>
@@ -620,6 +658,8 @@ function PositionTable({
             <th>Entry</th>
             <th>Current</th>
             <th>Unrealized P&amp;L</th>
+            <th>Peak P&amp;L</th>
+            <th>Give-back</th>
             <th>SL</th>
             <th>TP</th>
             <th>Commission</th>
@@ -670,6 +710,22 @@ function PositionTable({
                     ? "Awaiting mark"
                     : `${position.markIsStale ? "Last known · " : ""}${position.unrealisedPnl.startsWith("-") ? "" : "+"}${money(position.unrealisedPnl, position.accountCurrency)}`}
                 </Badge>
+              </td>
+              <td>
+                {position.pathDiagnostics
+                  ? `${position.pathDiagnostics.maxFavorablePnl.startsWith("-") ? "" : "+"}${money(
+                      position.pathDiagnostics.maxFavorablePnl,
+                      position.accountCurrency,
+                    )}`
+                  : "—"}
+              </td>
+              <td>
+                {position.pathDiagnostics
+                  ? money(
+                      position.pathDiagnostics.profitGiveback,
+                      position.accountCurrency,
+                    )
+                  : "—"}
               </td>
               <td>{position.stopLoss}</td>
               <td>{position.takeProfit}</td>

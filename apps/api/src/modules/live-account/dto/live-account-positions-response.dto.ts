@@ -3,6 +3,18 @@ import { Trade, TradeDirection, TradeStatus } from '../../execution/entities/tra
 import { BrokerMode, type BrokerPosition } from '../../broker/interfaces/broker-adapter.interface';
 import { LiveAccountEnvironment, LivePositionStatus } from './live-account.enums';
 
+export class LiveTradePathDiagnosticsDto {
+  @ApiProperty() maxFavorablePnl: string;
+  @ApiProperty() maxAdversePnl: string;
+  @ApiProperty() latestUnrealisedPnl: string;
+  @ApiProperty() profitGiveback: string;
+  @ApiProperty({ minimum: 0 }) observationCount: number;
+  @ApiPropertyOptional({ nullable: true, type: String, format: 'date-time' })
+  peakObservedAt: string | null;
+  @ApiPropertyOptional({ nullable: true, type: String, format: 'date-time' })
+  lastObservedAt: string | null;
+}
+
 /**
  * Live Account positions DTO (Sprint 50 PR-5 — Directive PHASE J).
  *
@@ -67,6 +79,14 @@ export class LivePositionRowViewDto {
     description: 'Provider-reported unrealized P&L in account currency.',
   })
   unrealisedPnl: string | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    type: LiveTradePathDiagnosticsDto,
+    description:
+      'Optional broker/PAPER trade-path diagnostics. PAPER reports peak profit, worst adverse excursion and profit give-back.',
+  })
+  pathDiagnostics: LiveTradePathDiagnosticsDto | null;
 
   @ApiPropertyOptional({
     nullable: true,
@@ -146,6 +166,17 @@ export function toLivePositionRowView(
     markObservedAt: toIsoString(providerPosition?.markObservedAt ?? null),
     markIsStale: providerPosition?.markIsStale ?? false,
     unrealisedPnl: trade.accountCurrency ? (providerPosition?.unrealisedPnl ?? null) : null,
+    pathDiagnostics: providerPosition?.pathDiagnostics
+      ? {
+          maxFavorablePnl: providerPosition.pathDiagnostics.maxFavorablePnl,
+          maxAdversePnl: providerPosition.pathDiagnostics.maxAdversePnl,
+          latestUnrealisedPnl: providerPosition.pathDiagnostics.latestUnrealisedPnl,
+          profitGiveback: providerPosition.pathDiagnostics.profitGiveback,
+          observationCount: providerPosition.pathDiagnostics.observationCount,
+          peakObservedAt: toIsoString(providerPosition.pathDiagnostics.peakObservedAt),
+          lastObservedAt: toIsoString(providerPosition.pathDiagnostics.lastObservedAt),
+        }
+      : null,
     commission: trade.accountCurrency
       ? (providerPosition?.commission ?? trade.commission ?? null)
       : null,

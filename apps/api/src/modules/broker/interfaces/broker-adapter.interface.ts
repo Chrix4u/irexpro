@@ -355,6 +355,20 @@ export interface BrokerOrderState {
   raw?: unknown;
 }
 
+export interface BrokerTradePathDiagnostics {
+  /** Best observed unrealized P&L in account currency since the position opened. */
+  maxFavorablePnl: string;
+  /** Worst observed unrealized P&L in account currency since the position opened. */
+  maxAdversePnl: string;
+  /** Most recently observed unrealized P&L in account currency. */
+  latestUnrealisedPnl: string;
+  /** maxFavorablePnl minus the latest/realised P&L; never negative. */
+  profitGiveback: string;
+  observationCount: number;
+  peakObservedAt: Date | null;
+  lastObservedAt: Date | null;
+}
+
 export interface BrokerPosition {
   externalOrderId: string;
   instrument: string;
@@ -372,6 +386,7 @@ export interface BrokerPosition {
   openedAt: Date;
   commission: string;
   swap: string;
+  pathDiagnostics?: BrokerTradePathDiagnostics;
 }
 
 export interface BrokerClosedTrade {
@@ -389,6 +404,7 @@ export interface BrokerClosedTrade {
   commission: string;
   swap: string;
   closeReason: 'TP' | 'SL' | 'MANUAL' | 'SYSTEM' | 'UNKNOWN';
+  pathDiagnostics?: BrokerTradePathDiagnostics;
 }
 
 // ─── Market data types ────────────────────────────────────────────────────────

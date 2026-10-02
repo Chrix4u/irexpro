@@ -284,6 +284,15 @@ export interface LivePositionRowView {
   /** Informational last-known mark. True means do not interpret it as execution-fresh market data. */
   markIsStale: boolean;
   unrealisedPnl: string | null;
+  pathDiagnostics?: {
+    maxFavorablePnl: string;
+    maxAdversePnl: string;
+    latestUnrealisedPnl: string;
+    profitGiveback: string;
+    observationCount: number;
+    peakObservedAt: string | null;
+    lastObservedAt: string | null;
+  } | null;
   commission: string | null;
   swap: string | null;
   stopLoss: string;

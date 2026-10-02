@@ -15,6 +15,7 @@ import {
   BrokerOrderState,
   BrokerPosition,
   BrokerPrice,
+  BrokerTradePathDiagnostics,
   DecryptedBrokerCredentials,
   IBrokerAdapter,
   OHLCV,
@@ -611,6 +612,14 @@ interface PaperPosition {
   stopLoss: string;
   takeProfit: string;
   openedAt: Date;
+  pathMaxFavorablePnl: string;
+  pathMaxAdversePnl: string;
+  pathLatestUnrealisedPnl: string;
+  pathPeakObservedAt: Date;
+  pathLastObservedAt: Date;
+  pathLastMarkObservedAt: Date | null;
+  pathLastCandleClosedAt: Date | null;
+  pathObservationCount: number;
 }
 
 interface PaperClosedTrade {
@@ -628,20 +637,44 @@ interface PaperClosedTrade {
   commission: string;
   swap: string;
   closeReason: 'TP' | 'SL' | 'MANUAL' | 'SYSTEM';
+  pathMaxFavorablePnl: string;
+  pathMaxAdversePnl: string;
+  pathLatestUnrealisedPnl: string;
+  pathProfitGiveback: string;
+  pathPeakObservedAt: Date;
+  pathLastObservedAt: Date;
+  pathObservationCount: number;
 }
 
 type SerializedPaperWorkingOrder = Omit<PaperWorkingOrder, 'placedAt'> & {
   placedAt: string;
 };
 
-type SerializedPaperPosition = Omit<PaperPosition, 'units' | 'openedAt'> & {
+type SerializedPaperPosition = Omit<
+  PaperPosition,
+  | 'units'
+  | 'openedAt'
+  | 'pathPeakObservedAt'
+  | 'pathLastObservedAt'
+  | 'pathLastMarkObservedAt'
+  | 'pathLastCandleClosedAt'
+> & {
   units: string;
   openedAt: string;
+  pathPeakObservedAt: string;
+  pathLastObservedAt: string;
+  pathLastMarkObservedAt: string | null;
+  pathLastCandleClosedAt: string | null;
 };
 
-type SerializedPaperClosedTrade = Omit<PaperClosedTrade, 'openedAt' | 'closedAt'> & {
+type SerializedPaperClosedTrade = Omit<
+  PaperClosedTrade,
+  'openedAt' | 'closedAt' | 'pathPeakObservedAt' | 'pathLastObservedAt'
+> & {
   openedAt: string;
   closedAt: string;
+  pathPeakObservedAt: string;
+  pathLastObservedAt: string;
 };
 
 type SerializedBrokerOrderState = Omit<BrokerOrderState, 'placedAt' | 'updatedAt' | 'raw'> & {
@@ -995,12 +1028,73 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   /** (currentPrice − entry) × units, converted into account currency. */
   private unrealisedPnlExact(position: PaperPosition, quote: PaperQuote): string {
     const exitPrice = position.direction === 'BUY' ? quote.bid : quote.ask;
+    return this.pnlAtExitPriceExact(position, exitPrice);
+  }
+
+  private pnlAtExitPriceExact(position: PaperPosition, exitPrice: string): string {
     const diff =
       position.direction === 'BUY'
         ? subtractDecimalStrings(exitPrice, position.entryPrice)
         : subtractDecimalStrings(position.entryPrice, exitPrice);
     const quotePnl = multiplyDecimalStrings(diff, position.units.toString());
     return this.quoteAmountToAccountCurrencyExact(position.instrument, quotePnl, exitPrice);
+  }
+
+  private recordPathObservation(
+    position: PaperPosition,
+    latestExitPrice: string,
+    observedAt: Date,
+    favorableExitPrice = latestExitPrice,
+    adverseExitPrice = latestExitPrice,
+  ): void {
+    const favorablePnl = toMoney(this.pnlAtExitPriceExact(position, favorableExitPrice));
+    const adversePnl = toMoney(this.pnlAtExitPriceExact(position, adverseExitPrice));
+    const latestPnl = toMoney(this.pnlAtExitPriceExact(position, latestExitPrice));
+
+    if (compareDecimalStrings(favorablePnl, position.pathMaxFavorablePnl) > 0) {
+      position.pathMaxFavorablePnl = favorablePnl;
+      position.pathPeakObservedAt = new Date(observedAt);
+    }
+    if (compareDecimalStrings(adversePnl, position.pathMaxAdversePnl) < 0) {
+      position.pathMaxAdversePnl = adversePnl;
+    }
+    position.pathLatestUnrealisedPnl = latestPnl;
+    position.pathLastObservedAt = new Date(observedAt);
+    position.pathObservationCount += 1;
+  }
+
+  private pathProfitGiveback(maxFavorablePnl: string, currentOrRealisedPnl: string): string {
+    // "Give-back" means previously available PROFIT that was surrendered.
+    // A trade that never moved above zero has no profit to give back.
+    if (compareDecimalStrings(maxFavorablePnl, '0') <= 0) return '0.00';
+    const difference = subtractDecimalStrings(maxFavorablePnl, currentOrRealisedPnl);
+    return compareDecimalStrings(difference, '0') > 0 ? toMoney(difference) : '0.00';
+  }
+
+  private pathDiagnostics(position: PaperPosition): BrokerTradePathDiagnostics {
+    return {
+      maxFavorablePnl: position.pathMaxFavorablePnl,
+      maxAdversePnl: position.pathMaxAdversePnl,
+      latestUnrealisedPnl: position.pathLatestUnrealisedPnl,
+      profitGiveback: this.pathProfitGiveback(
+        position.pathMaxFavorablePnl,
+        position.pathLatestUnrealisedPnl,
+      ),
+      observationCount: position.pathObservationCount,
+      peakObservedAt: new Date(position.pathPeakObservedAt),
+      lastObservedAt: new Date(position.pathLastObservedAt),
+    };
+  }
+
+  private scaledPathMoney(value: string, units: bigint, totalUnits: bigint): string {
+    if (totalUnits <= 0n || units >= totalUnits) return toMoney(value);
+    return toMoney(
+      divideDecimalStrings(
+        multiplyDecimalStrings(value, units.toString()),
+        totalUnits.toString(),
+        8,
+      ),
+    );
   }
 
   /** Margin locked at fill and denominated in the account currency. */
@@ -1025,6 +1119,16 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         }
       : this.quoteForInstrument(position.instrument);
     const exitPrice = position.direction === 'BUY' ? quote.bid : quote.ask;
+    const observedAt =
+      liveQuote?.timestamp ??
+      (quote.timestamp instanceof Date ? quote.timestamp : this.currentTime());
+    if (
+      position.pathLastMarkObservedAt === null ||
+      observedAt.getTime() > position.pathLastMarkObservedAt.getTime()
+    ) {
+      this.recordPathObservation(position, exitPrice, observedAt);
+      position.pathLastMarkObservedAt = new Date(observedAt);
+    }
     return {
       externalOrderId: position.positionId,
       instrument: position.instrument,
@@ -1043,6 +1147,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       openedAt: position.openedAt,
       commission: '0',
       swap: '0',
+      pathDiagnostics: this.pathDiagnostics(position),
     };
   }
 
@@ -1463,6 +1568,14 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       stopLoss,
       takeProfit,
       openedAt: this.currentTime(),
+      pathMaxFavorablePnl: '0.00',
+      pathMaxAdversePnl: '0.00',
+      pathLatestUnrealisedPnl: '0.00',
+      pathPeakObservedAt: this.currentTime(),
+      pathLastObservedAt: this.currentTime(),
+      pathLastMarkObservedAt: null,
+      pathLastCandleClosedAt: null,
+      pathObservationCount: 0,
     };
     this._positions.set(orderId, position);
     return position;
@@ -1708,7 +1821,31 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     const toMs = to.getTime();
     return this._closedTrades
       .filter((trade) => trade.closedAt.getTime() >= fromMs && trade.closedAt.getTime() <= toMs)
-      .map((trade) => ({ ...trade }));
+      .map((trade) => ({
+        externalOrderId: trade.externalOrderId,
+        instrument: trade.instrument,
+        direction: trade.direction,
+        lotSize: trade.lotSize,
+        openPrice: trade.openPrice,
+        closePrice: trade.closePrice,
+        stopLoss: trade.stopLoss,
+        takeProfit: trade.takeProfit,
+        realisedPnl: trade.realisedPnl,
+        openedAt: new Date(trade.openedAt),
+        closedAt: new Date(trade.closedAt),
+        commission: trade.commission,
+        swap: trade.swap,
+        closeReason: trade.closeReason,
+        pathDiagnostics: {
+          maxFavorablePnl: trade.pathMaxFavorablePnl,
+          maxAdversePnl: trade.pathMaxAdversePnl,
+          latestUnrealisedPnl: trade.pathLatestUnrealisedPnl,
+          profitGiveback: trade.pathProfitGiveback,
+          observationCount: trade.pathObservationCount,
+          peakObservedAt: new Date(trade.pathPeakObservedAt),
+          lastObservedAt: new Date(trade.pathLastObservedAt),
+        },
+      }));
   }
 
   // ─── Evaluation engine (runs on every market tick) ───────────────────────
@@ -1743,14 +1880,32 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         // the fill can contain post-entry price action.
         const candleClosedAt = new Date(candle.timestamp.getTime() + 5 * 60_000);
         if (candleClosedAt.getTime() <= position.openedAt.getTime()) continue;
+        if (
+          position.pathLastCandleClosedAt !== null &&
+          candleClosedAt.getTime() <= position.pathLastCandleClosedAt.getTime()
+        ) {
+          continue;
+        }
 
         const high = Number(candle.high);
         const low = Number(candle.low);
-        if (!Number.isFinite(high) || !Number.isFinite(low)) continue;
+        const close = Number(candle.close);
+        if (!Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close)) {
+          continue;
+        }
 
         if (position.direction === 'BUY') {
           const bidLow = (low - halfSpread).toFixed(spec.digits);
           const bidHigh = (high - halfSpread).toFixed(spec.digits);
+          const bidClose = (close - halfSpread).toFixed(spec.digits);
+          this.recordPathObservation(
+            position,
+            bidClose,
+            candleClosedAt,
+            bidHigh,
+            bidLow,
+          );
+          position.pathLastCandleClosedAt = new Date(candleClosedAt);
           if (
             !isZeroLevel(position.stopLoss) &&
             compareDecimalStrings(bidLow, position.stopLoss) <= 0
@@ -1782,6 +1937,15 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         } else {
           const askHigh = (high + halfSpread).toFixed(spec.digits);
           const askLow = (low + halfSpread).toFixed(spec.digits);
+          const askClose = (close + halfSpread).toFixed(spec.digits);
+          this.recordPathObservation(
+            position,
+            askClose,
+            candleClosedAt,
+            askLow,
+            askHigh,
+          );
+          position.pathLastCandleClosedAt = new Date(candleClosedAt);
           if (
             !isZeroLevel(position.stopLoss) &&
             compareDecimalStrings(askHigh, position.stopLoss) >= 0
@@ -1822,6 +1986,16 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   private evaluatePositions(quote: PaperQuote, instrumentFilter?: string): void {
     for (const position of Array.from(this._positions.values())) {
       if (instrumentFilter && position.instrument !== instrumentFilter) continue;
+      const observedAt =
+        quote.timestamp instanceof Date ? quote.timestamp : this.currentTime();
+      if (
+        position.pathLastMarkObservedAt === null ||
+        observedAt.getTime() > position.pathLastMarkObservedAt.getTime()
+      ) {
+        const exitPrice = position.direction === 'BUY' ? quote.bid : quote.ask;
+        this.recordPathObservation(position, exitPrice, observedAt);
+        position.pathLastMarkObservedAt = new Date(observedAt);
+      }
       if (position.direction === 'BUY') {
         if (
           !isZeroLevel(position.stopLoss) &&
@@ -2009,6 +2183,14 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     closeReason: PaperClosedTrade['closeReason'],
     closedAtOverride?: Date,
   ): PaperClosedTrade {
+    const totalUnitsBeforeClose = position.units;
+    const closedAt = closedAtOverride ? new Date(closedAtOverride) : this.currentTime();
+
+    // Always capture the actual close as the final path observation so the
+    // give-back figure compares the best observed open profit with what was
+    // ultimately banked on the closed units.
+    this.recordPathObservation(position, closePrice, closedAt);
+
     const diff =
       position.direction === 'BUY'
         ? subtractDecimalStrings(closePrice, position.entryPrice)
@@ -2018,6 +2200,17 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       this.quoteAmountToAccountCurrencyExact(position.instrument, quotePnl, closePrice),
     );
     this._balance = toMoney(addDecimalStrings(this._balance, realisedPnl));
+
+    const closedMaxFavorablePnl = this.scaledPathMoney(
+      position.pathMaxFavorablePnl,
+      closeUnits,
+      totalUnitsBeforeClose,
+    );
+    const closedMaxAdversePnl = this.scaledPathMoney(
+      position.pathMaxAdversePnl,
+      closeUnits,
+      totalUnitsBeforeClose,
+    );
 
     const trade: PaperClosedTrade = {
       externalOrderId: position.positionId,
@@ -2030,20 +2223,45 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       takeProfit: position.takeProfit,
       realisedPnl,
       openedAt: position.openedAt,
-      closedAt: closedAtOverride ? new Date(closedAtOverride) : this.currentTime(),
+      closedAt,
       commission: '0',
       swap: '0',
       closeReason,
+      pathMaxFavorablePnl: closedMaxFavorablePnl,
+      pathMaxAdversePnl: closedMaxAdversePnl,
+      pathLatestUnrealisedPnl: realisedPnl,
+      pathProfitGiveback: this.pathProfitGiveback(closedMaxFavorablePnl, realisedPnl),
+      pathPeakObservedAt: new Date(position.pathPeakObservedAt),
+      pathLastObservedAt: new Date(closedAt),
+      pathObservationCount: position.pathObservationCount,
     };
     this._closedTrades.push(trade);
 
-    if (closeUnits >= position.units) {
+    if (closeUnits >= totalUnitsBeforeClose) {
       this._positions.delete(position.positionId);
     } else {
-      position.units -= closeUnits;
+      const remainingUnits = totalUnitsBeforeClose - closeUnits;
+      position.units = remainingUnits;
       // Preserve the caller's lot spelling scale exactly ('1.0000' − '0.4'
       // → '0.6000' — never a reformatted 2dp shadow).
       position.lotSize = subtractDecimalStrings(position.lotSize, closedLot);
+      // Keep the surviving position's monetary path diagnostics on the same
+      // remaining-unit basis after a partial close.
+      position.pathMaxFavorablePnl = this.scaledPathMoney(
+        position.pathMaxFavorablePnl,
+        remainingUnits,
+        totalUnitsBeforeClose,
+      );
+      position.pathMaxAdversePnl = this.scaledPathMoney(
+        position.pathMaxAdversePnl,
+        remainingUnits,
+        totalUnitsBeforeClose,
+      );
+      position.pathLatestUnrealisedPnl = this.scaledPathMoney(
+        position.pathLatestUnrealisedPnl,
+        remainingUnits,
+        totalUnitsBeforeClose,
+      );
     }
     this.logger.log(
       `PaperBrokerAdapter: position id=${position.positionId} closed ` +
@@ -2097,11 +2315,17 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         ...position,
         units: position.units.toString(),
         openedAt: position.openedAt.toISOString(),
+        pathPeakObservedAt: position.pathPeakObservedAt.toISOString(),
+        pathLastObservedAt: position.pathLastObservedAt.toISOString(),
+        pathLastMarkObservedAt: position.pathLastMarkObservedAt?.toISOString() ?? null,
+        pathLastCandleClosedAt: position.pathLastCandleClosedAt?.toISOString() ?? null,
       })),
       closedTrades: this._closedTrades.map((trade) => ({
         ...trade,
         openedAt: trade.openedAt.toISOString(),
         closedAt: trade.closedAt.toISOString(),
+        pathPeakObservedAt: trade.pathPeakObservedAt.toISOString(),
+        pathLastObservedAt: trade.pathLastObservedAt.toISOString(),
       })),
       orderStates,
       resultsByDedupeKey,
@@ -2147,21 +2371,84 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
 
     this._positions.clear();
     for (const position of state.positions) {
+      const openedAt = new Date(position.openedAt);
       this._positions.set(position.positionId, {
         ...position,
         units: BigInt(position.units),
-        openedAt: new Date(position.openedAt),
+        openedAt,
+        pathMaxFavorablePnl:
+          typeof position.pathMaxFavorablePnl === 'string'
+            ? position.pathMaxFavorablePnl
+            : '0.00',
+        pathMaxAdversePnl:
+          typeof position.pathMaxAdversePnl === 'string'
+            ? position.pathMaxAdversePnl
+            : '0.00',
+        pathLatestUnrealisedPnl:
+          typeof position.pathLatestUnrealisedPnl === 'string'
+            ? position.pathLatestUnrealisedPnl
+            : '0.00',
+        pathPeakObservedAt: position.pathPeakObservedAt
+          ? new Date(position.pathPeakObservedAt)
+          : openedAt,
+        pathLastObservedAt: position.pathLastObservedAt
+          ? new Date(position.pathLastObservedAt)
+          : openedAt,
+        pathLastMarkObservedAt: position.pathLastMarkObservedAt
+          ? new Date(position.pathLastMarkObservedAt)
+          : null,
+        pathLastCandleClosedAt: position.pathLastCandleClosedAt
+          ? new Date(position.pathLastCandleClosedAt)
+          : null,
+        pathObservationCount: Number.isSafeInteger(position.pathObservationCount)
+          ? position.pathObservationCount
+          : 0,
       });
     }
 
     this._closedTrades.splice(
       0,
       this._closedTrades.length,
-      ...state.closedTrades.map((trade) => ({
-        ...trade,
-        openedAt: new Date(trade.openedAt),
-        closedAt: new Date(trade.closedAt),
-      })),
+      ...state.closedTrades.map((trade) => {
+        const openedAt = new Date(trade.openedAt);
+        const closedAt = new Date(trade.closedAt);
+        const realisedPnl =
+          typeof trade.realisedPnl === 'string' ? trade.realisedPnl : '0.00';
+        const fallbackMaxFavorable =
+          compareDecimalStrings(realisedPnl, '0') > 0 ? realisedPnl : '0.00';
+        const fallbackMaxAdverse =
+          compareDecimalStrings(realisedPnl, '0') < 0 ? realisedPnl : '0.00';
+        return {
+          ...trade,
+          openedAt,
+          closedAt,
+          pathMaxFavorablePnl:
+            typeof trade.pathMaxFavorablePnl === 'string'
+              ? trade.pathMaxFavorablePnl
+              : fallbackMaxFavorable,
+          pathMaxAdversePnl:
+            typeof trade.pathMaxAdversePnl === 'string'
+              ? trade.pathMaxAdversePnl
+              : fallbackMaxAdverse,
+          pathLatestUnrealisedPnl:
+            typeof trade.pathLatestUnrealisedPnl === 'string'
+              ? trade.pathLatestUnrealisedPnl
+              : realisedPnl,
+          pathProfitGiveback:
+            typeof trade.pathProfitGiveback === 'string'
+              ? trade.pathProfitGiveback
+              : '0.00',
+          pathPeakObservedAt: trade.pathPeakObservedAt
+            ? new Date(trade.pathPeakObservedAt)
+            : closedAt,
+          pathLastObservedAt: trade.pathLastObservedAt
+            ? new Date(trade.pathLastObservedAt)
+            : closedAt,
+          pathObservationCount: Number.isSafeInteger(trade.pathObservationCount)
+            ? trade.pathObservationCount
+            : 0,
+        };
+      }),
     );
 
     this._orderStates.clear();

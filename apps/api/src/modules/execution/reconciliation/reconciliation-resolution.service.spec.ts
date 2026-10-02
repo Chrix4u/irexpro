@@ -146,6 +146,15 @@ describe('ReconciliationResolutionService', () => {
         commission: '0.00',
         swap: '0.00',
         closeReason: 'TP',
+        pathDiagnostics: {
+          maxFavorablePnl: '31.00',
+          maxAdversePnl: '-4.00',
+          latestUnrealisedPnl: '20.00',
+          profitGiveback: '11.00',
+          observationCount: 17,
+          peakObservedAt: new Date('2026-10-02T12:30:00.000Z'),
+          lastObservedAt: new Date('2026-10-02T12:35:00.000Z'),
+        },
       });
 
       expect(closed).toBe(true);
@@ -156,6 +165,10 @@ describe('ReconciliationResolutionService', () => {
           exitPrice: '1.12000',
           realisedPnl: '20.00',
           closeReason: 'TAKE_PROFIT_HIT',
+          maxFavorablePnl: '31.00',
+          maxAdversePnl: '-4.00',
+          profitGiveback: '11.00',
+          pathObservationCount: 17,
         }),
       );
     });

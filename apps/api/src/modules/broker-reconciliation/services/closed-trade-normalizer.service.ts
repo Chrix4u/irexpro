@@ -203,6 +203,16 @@ export class ClosedTradeNormalizerService {
       closeReason: raw.closeReason,
       openedAt: raw.openedAt?.toISOString() ?? null,
       closedAt: raw.closedAt.toISOString(),
+      pathDiagnostics: raw.pathDiagnostics
+        ? {
+            maxFavorablePnl: raw.pathDiagnostics.maxFavorablePnl,
+            maxAdversePnl: raw.pathDiagnostics.maxAdversePnl,
+            profitGiveback: raw.pathDiagnostics.profitGiveback,
+            observationCount: raw.pathDiagnostics.observationCount,
+            peakObservedAt: raw.pathDiagnostics.peakObservedAt?.toISOString() ?? null,
+            lastObservedAt: raw.pathDiagnostics.lastObservedAt?.toISOString() ?? null,
+          }
+        : null,
     };
 
     return {

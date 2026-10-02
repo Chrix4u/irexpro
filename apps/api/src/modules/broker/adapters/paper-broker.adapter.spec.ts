@@ -1154,6 +1154,55 @@ describe('PaperBrokerAdapter', () => {
 
   // ─── closeOrder (full / partial) ──────────────────────────────────────────
 
+  it('tracks peak P&L and profit give-back without changing execution', async () => {
+    const sim = scriptedAdapter([
+      BASE,
+      { bid: '1.10100', ask: '1.10110' },
+      { bid: '1.10020', ask: '1.10030' },
+    ]);
+    await sim.placeOrder(order({ idempotencyKey: 'path-giveback' }));
+
+    await sim.getCurrentPrice('EURUSD');
+    let [position] = await sim.getOpenPositions();
+    expect(position.pathDiagnostics).toMatchObject({
+      maxFavorablePnl: '9.50',
+      maxAdversePnl: '0.00',
+      latestUnrealisedPnl: '9.50',
+      profitGiveback: '0.00',
+    });
+
+    await sim.getCurrentPrice('EURUSD');
+    [position] = await sim.getOpenPositions();
+    expect(position.unrealisedPnl).toBe('1.50');
+    expect(position.pathDiagnostics).toMatchObject({
+      maxFavorablePnl: '9.50',
+      latestUnrealisedPnl: '1.50',
+      profitGiveback: '8.00',
+    });
+
+    await sim.closeOrder('paper-order-000001');
+    const [closed] = await sim.getClosedTrades(new Date(0), new Date(CLOCK_BASE_MS + 60_000));
+    expect(closed.realisedPnl).toBe('2.00');
+    expect(closed.pathDiagnostics).toMatchObject({
+      maxFavorablePnl: '9.50',
+      latestUnrealisedPnl: '2.00',
+      profitGiveback: '7.50',
+    });
+  });
+
+  it('does not label an always-losing path as profit give-back', async () => {
+    const sim = scriptedAdapter([BASE, { bid: '1.09980', ask: '1.09990' }]);
+    await sim.placeOrder(order({ idempotencyKey: 'path-no-profit' }));
+    await sim.getCurrentPrice('EURUSD');
+    const [position] = await sim.getOpenPositions();
+    expect(position.pathDiagnostics).toMatchObject({
+      maxFavorablePnl: '0.00',
+      maxAdversePnl: '-2.50',
+      latestUnrealisedPnl: '-2.50',
+      profitGiveback: '0.00',
+    });
+  });
+
   it('closeOrder closes a BUY fully at the mid (closeReason MANUAL, flat P&L)', async () => {
     await adapter.connect(dummyCreds);
     await adapter.placeOrder(order({ idempotencyKey: 'close-full' }));
