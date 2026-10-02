@@ -19,6 +19,7 @@ export const EXTERNAL_PROVIDER_REVIEW_GATES = Object.freeze({
 type EvidenceRow = {
   signal_generated_at: Date | string;
   market_data_bar_time: Date | string | null;
+  market_data_authority: string | null;
   intent_status: string | null;
   instrument: string;
   direction: 'BUY' | 'SELL';
@@ -295,11 +296,24 @@ export class ExternalSignalPerformanceService {
   constructor(private readonly dataSource: DataSource) {}
 
   async getProviderPerformance(userId: string, providerCode: string) {
+    // One provider family may eventually have multiple execution/data-source
+    // cohorts. Qualification must never silently aggregate across them.
+    const modelVersion = `external-provider/${providerCode}/paper-only-v1`;
+    const expectedMarketDataAuthority = providerCode.startsWith('vps-twelvedata-six-pair-')
+      ? 'PAPER_RESEARCH_EXTERNAL_TWELVE_DATA'
+      : null;
+    const evidenceCohortKey = [
+      providerCode,
+      modelVersion,
+      expectedMarketDataAuthority ?? 'UNSPECIFIED_AUTHORITY',
+    ].join('|');
+
     const rows = (await this.dataSource.query(
       `
         SELECT
           ti.signal_generated_at,
           ti.metadata->>'market_data_bar_time' AS market_data_bar_time,
+          ti.metadata->>'market_data_authority' AS market_data_authority,
           ti.status AS intent_status,
           ti.instrument,
           ti.direction,
@@ -322,9 +336,10 @@ export class ExternalSignalPerformanceService {
         WHERE ti.user_id = $1
           AND ti.metadata->>'signal_source' = 'EXTERNAL_PROVIDER'
           AND ti.metadata->>'external_provider_code' = $2
+          AND ti.model_version = $3
         ORDER BY ti.signal_generated_at ASC, ti.id ASC
       `,
-      [userId, providerCode],
+      [userId, providerCode, modelVersion],
     )) as EvidenceRow[];
 
     const signalTimes = rows
@@ -454,6 +469,22 @@ export class ExternalSignalPerformanceService {
     const latestSignalAt = latestRow ? new Date(latestRow.signal_generated_at) : null;
     const medianGap = median(signalGaps);
     const shadowCalibration = buildShadowCalibrationDiagnostics(closed);
+    const observedMarketDataAuthorities = [
+      ...new Set(
+        rows
+          .map((row) => row.market_data_authority?.trim())
+          .filter((value): value is string => Boolean(value)),
+      ),
+    ];
+    const authorityTaggedSignals = rows.filter(
+      (row) => Boolean(row.market_data_authority?.trim()),
+    ).length;
+    const evidenceCohortIntegrity =
+      expectedMarketDataAuthority !== null
+        ? observedMarketDataAuthorities.every(
+            (authority) => authority === expectedMarketDataAuthority,
+          )
+        : observedMarketDataAuthorities.length <= 1;
 
     const observed = {
       receivedSignals: rows.length,
@@ -501,11 +532,31 @@ export class ExternalSignalPerformanceService {
       frequency:
         medianGap !== null &&
         medianGap <= EXTERNAL_PROVIDER_REVIEW_GATES.maxMedianMinutesBetweenSignals,
+      evidenceCohortIntegrity,
     };
     const demoReviewEligible = Object.values(checks).every(Boolean);
 
     return {
       providerCode,
+      strategyIdentity: {
+        displayName: providerCode.startsWith('vps-twelvedata-six-pair-v7')
+          ? 'Six-Pair Forex v7'
+          : providerCode,
+        modelVersion,
+        marketDataAuthority:
+          expectedMarketDataAuthority ?? 'EXTERNAL_PROVIDER_UNSPECIFIED',
+        evidenceCohortKey,
+        evidenceIsolationApplied: true,
+        evidenceCohortIntegrity,
+        authorityTaggedSignals,
+        authorityTagCoverage: rows.length ? authorityTaggedSignals / rows.length : 0,
+        observedMarketDataAuthorities,
+        strategyFrozen: false,
+        currentEnvironment: 'PAPER' as const,
+        currentExecution: 'SIMULATED_PAPER_BROKER' as const,
+        productionPromotionPolicy:
+          'Freeze the exact qualified strategy artifact, then validate it on broker-native data in Broker-Parity PAPER and DEMO before LIVE.',
+      },
       executionAuthority: 'PAPER_ONLY' as const,
       certificationStatus: demoReviewEligible ? 'ELIGIBLE_FOR_DEMO_REVIEW' : 'PAPER_EVIDENCE_ONLY',
       demoReviewEligible,

@@ -118,6 +118,77 @@ function compactBrokerLabel(value: string | null | undefined): string {
     .trim();
 }
 
+type BrokerParityPresentation = {
+  state: "READY" | "CONNECTING" | "BLOCKED" | "NOT_CONFIGURED";
+  label: string;
+  detail: string;
+  badgeVariant: "success" | "warning" | "info";
+};
+
+function brokerParityPresentation(
+  broker: TerminalBrokerView | null,
+): BrokerParityPresentation {
+  if (!broker) {
+    return {
+      state: "NOT_CONFIGURED",
+      label: "NOT CONFIGURED",
+      detail:
+        "Connect an MT4/MT5 DEMO account through MetaApi to compare v7 against broker-native prices without sending broker orders.",
+      badgeVariant: "info",
+    };
+  }
+
+  const authorization = String(broker.authorizationStatus ?? "");
+  if (
+    broker.status === "CONNECTED" &&
+    ["CONNECTED", "AUTHORIZED", "READY", "ACTIVE"].includes(authorization)
+  ) {
+    return {
+      state: "READY",
+      label: "BROKER FEED CONNECTED",
+      detail:
+        "Broker-native MetaTrader market data is available for read-only Broker-Parity PAPER. Order execution remains separately gated.",
+      badgeVariant: "success",
+    };
+  }
+
+  if (
+    broker.status === "CONNECTING" ||
+    ["CONNECTING", "VERIFYING"].includes(authorization)
+  ) {
+    return {
+      state: "CONNECTING",
+      label: "CONNECTING",
+      detail:
+        "MetaApi is establishing or verifying the broker connection. Parity comparison will remain read-only when available.",
+      badgeVariant: "info",
+    };
+  }
+
+  const providerError = String(broker.lastErrorMessage ?? "").toLowerCase();
+  if (
+    providerError.includes("top up") ||
+    providerError.includes("topped up") ||
+    providerError.includes("balance must be")
+  ) {
+    return {
+      state: "BLOCKED",
+      label: "METAAPI FUNDING REQUIRED",
+      detail:
+        "MetaApi cannot deploy the connected MetaTrader account until its MetaApi balance is topped up. Current v7 PAPER evidence continues independently.",
+      badgeVariant: "warning",
+    };
+  }
+
+  return {
+    state: "BLOCKED",
+    label: "BROKER FEED BLOCKED",
+    detail:
+      "The MetaTrader connection is not currently healthy enough for Broker-Parity PAPER. This does not change or reset the Twelve Data v7 PAPER run.",
+    badgeVariant: "warning",
+  };
+}
+
 interface VpsForexScannerStatusView {
   providerCode: string;
   enabled: boolean;
@@ -154,6 +225,21 @@ interface VpsForexScannerStatusView {
 
 interface ExternalProviderPerformanceView {
   providerCode: string;
+  strategyIdentity: {
+    displayName: string;
+    modelVersion: string;
+    marketDataAuthority: string;
+    evidenceCohortKey: string;
+    evidenceIsolationApplied: boolean;
+    evidenceCohortIntegrity: boolean;
+    authorityTaggedSignals: number;
+    authorityTagCoverage: number;
+    observedMarketDataAuthorities: string[];
+    strategyFrozen: boolean;
+    currentEnvironment: "PAPER";
+    currentExecution: "SIMULATED_PAPER_BROKER";
+    productionPromotionPolicy: string;
+  };
   executionAuthority: "PAPER_ONLY";
   certificationStatus: "PAPER_EVIDENCE_ONLY" | "ELIGIBLE_FOR_DEMO_REVIEW";
   demoReviewEligible: boolean;
@@ -195,6 +281,7 @@ interface ExternalProviderPerformanceView {
     confidence: boolean;
     evidence: boolean;
     frequency: boolean;
+    evidenceCohortIntegrity: boolean;
   };
   shadowCalibration: {
     mode: "DIAGNOSTIC_ONLY";
@@ -920,6 +1007,15 @@ export default function AiTradingPage() {
       terminal?.primaryBroker ??
       null,
     [terminal, selectedBrokerId],
+  );
+
+  const metaTraderBroker = useMemo(
+    () => terminal?.brokers.find((broker) => broker.brokerId === "metatrader5") ?? null,
+    [terminal],
+  );
+  const brokerParity = useMemo(
+    () => brokerParityPresentation(metaTraderBroker),
+    [metaTraderBroker],
   );
 
   const emitActivityToasts = useCallback(
@@ -1851,6 +1947,134 @@ export default function AiTradingPage() {
 
             {selectedBroker?.brokerId === "paper-broker" && (
               <section
+                className="ai-strategy-path"
+                aria-labelledby="strategy-promotion-title"
+              >
+                <Card className="ai-strategy-path__card">
+                  <div className="ai-provider-evidence__head">
+                    <div>
+                      <p className="workspace-hero__eyebrow">
+                        Strategy identity &amp; promotion path
+                      </p>
+                      <h2 id="strategy-promotion-title">
+                        {providerEvidence?.strategyIdentity.displayName ??
+                          "Six-Pair Forex v7"}
+                      </h2>
+                      <p>
+                        The same qualified strategy artifact moves forward. PAPER,
+                        Broker-Parity PAPER, DEMO and LIVE use separate evidence
+                        cohorts so changing the data/execution environment never
+                        rewrites the current v7 results.
+                      </p>
+                    </div>
+                    <div className="ai-provider-evidence__badges">
+                      <Badge variant="warning">PAPER · v7 ACTIVE</Badge>
+                      <Badge
+                        variant={
+                          providerEvidence?.strategyIdentity
+                            .evidenceCohortIntegrity === false
+                            ? "warning"
+                            : "success"
+                        }
+                      >
+                        {providerEvidence?.strategyIdentity
+                          .evidenceCohortIntegrity === false
+                          ? "EVIDENCE COHORT BLOCKED"
+                          : "EVIDENCE ISOLATED"}
+                      </Badge>
+                    </div>
+                  </div>
+
+                  <div className="ai-provider-evidence__metrics">
+                    <div>
+                      <span>Strategy artifact</span>
+                      <strong>
+                        {providerEvidence?.strategyIdentity.modelVersion ??
+                          "external-provider/vps-twelvedata-six-pair-v7/paper-only-v1"}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Current market authority</span>
+                      <strong>Twelve Data · closed M5</strong>
+                    </div>
+                    <div>
+                      <span>Current execution</span>
+                      <strong>Simulated PAPER broker</strong>
+                    </div>
+                    <div>
+                      <span>Strategy mutations</span>
+                      <strong>None · v7 unchanged</strong>
+                    </div>
+                    <div>
+                      <span>Authority telemetry</span>
+                      <strong>
+                        {providerEvidence
+                          ? providerEvidence.strategyIdentity.authorityTaggedSignals +
+                            "/" +
+                            providerEvidence.observed.receivedSignals +
+                            " tagged"
+                          : "Loading"}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Broker-Parity PAPER</span>
+                      <strong>{brokerParity.label}</strong>
+                    </div>
+                  </div>
+
+                  <div className="ai-promotion-path" aria-label="Strategy promotion path">
+                    <div className="ai-promotion-path__step is-current">
+                      <span>1</span>
+                      <div>
+                        <strong>Research PAPER</strong>
+                        <small>Twelve Data → v7 → simulated execution</small>
+                      </div>
+                    </div>
+                    <div
+                      className={
+                        "ai-promotion-path__step " +
+                        (brokerParity.state === "READY" ? "is-ready" : "is-blocked")
+                      }
+                    >
+                      <span>2</span>
+                      <div>
+                        <strong>Broker-Parity PAPER</strong>
+                        <small>MetaApi broker feed → same v7 → no broker orders</small>
+                      </div>
+                    </div>
+                    <div
+                      className={
+                        "ai-promotion-path__step " +
+                        (providerEvidence?.demoReviewEligible ? "is-ready" : "is-locked")
+                      }
+                    >
+                      <span>3</span>
+                      <div>
+                        <strong>DEMO</strong>
+                        <small>Frozen qualified v7 → MetaApi → broker DEMO execution</small>
+                      </div>
+                    </div>
+                    <div className="ai-promotion-path__step is-locked">
+                      <span>4</span>
+                      <div>
+                        <strong>LIVE</strong>
+                        <small>Same frozen artifact only after DEMO validation</small>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="ai-broker-parity-status">
+                    <Badge variant={brokerParity.badgeVariant}>
+                      {brokerParity.label}
+                    </Badge>
+                    <p>{brokerParity.detail}</p>
+                  </div>
+                </Card>
+              </section>
+            )}
+
+            {selectedBroker?.brokerId === "paper-broker" && (
+              <section
                 className="ai-provider-evidence"
                 aria-labelledby="provider-evidence-title"
               >
@@ -2069,6 +2293,10 @@ export default function AiTradingPage() {
                         providerEvidence?.checks.evidence,
                       ],
                       ["Median gap ≤ 10m", providerEvidence?.checks.frequency],
+                      [
+                        "Evidence cohort integrity",
+                        providerEvidence?.checks.evidenceCohortIntegrity,
+                      ],
                     ].map(([label, passed]) => (
                       <span
                         key={String(label)}

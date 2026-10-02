@@ -56,6 +56,10 @@ describe('ExternalSignalPerformanceService', () => {
       'provider-a',
     );
     expect(report.executionAuthority).toBe('PAPER_ONLY');
+    expect(report.strategyIdentity.evidenceIsolationApplied).toBe(true);
+    expect(report.strategyIdentity.modelVersion).toBe(
+      'external-provider/provider-a/paper-only-v1',
+    );
     expect(report.demoReviewEligible).toBe(false);
     expect(report.automaticDemoPromotion).toBe(false);
     expect(report.automaticLivePromotion).toBe(false);
@@ -330,6 +334,70 @@ describe('ExternalSignalPerformanceService', () => {
     expect(report.observed.rejectedSignals).toBe(3);
   });
 
+  it('preserves legacy v7 evidence but fails closed on a conflicting market-data authority', async () => {
+    const legacyRows = strongEvidenceRows();
+    const dataSourceLegacy = {
+      query: jest
+        .fn()
+        .mockImplementation((sql: string) =>
+          Promise.resolve(
+            sql.includes('broker.broker_account_snapshots')
+              ? strongEquitySnapshots()
+              : legacyRows,
+          ),
+        ),
+    } as unknown as DataSource;
+
+    const legacyReport = await new ExternalSignalPerformanceService(
+      dataSourceLegacy,
+    ).getProviderPerformance(
+      'user-1',
+      'vps-twelvedata-six-pair-v7',
+    );
+
+    expect(legacyReport.observed.closedTrades).toBe(120);
+    expect(legacyReport.strategyIdentity.marketDataAuthority).toBe(
+      'PAPER_RESEARCH_EXTERNAL_TWELVE_DATA',
+    );
+    expect(legacyReport.strategyIdentity.authorityTaggedSignals).toBe(0);
+    expect(legacyReport.checks.evidenceCohortIntegrity).toBe(true);
+
+    const conflictingRows = strongEvidenceRows().map((row, index) => ({
+      ...row,
+      market_data_authority:
+        index === 119
+          ? 'BROKER_NATIVE_METAAPI'
+          : 'PAPER_RESEARCH_EXTERNAL_TWELVE_DATA',
+    }));
+    const dataSourceConflict = {
+      query: jest
+        .fn()
+        .mockImplementation((sql: string) =>
+          Promise.resolve(
+            sql.includes('broker.broker_account_snapshots')
+              ? strongEquitySnapshots()
+              : conflictingRows,
+          ),
+        ),
+    } as unknown as DataSource;
+
+    const conflictReport = await new ExternalSignalPerformanceService(
+      dataSourceConflict,
+    ).getProviderPerformance(
+      'user-1',
+      'vps-twelvedata-six-pair-v7',
+    );
+
+    expect(conflictReport.checks.evidenceCohortIntegrity).toBe(false);
+    expect(conflictReport.demoReviewEligible).toBe(false);
+    expect(conflictReport.strategyIdentity.observedMarketDataAuthorities).toEqual(
+      expect.arrayContaining([
+        'PAPER_RESEARCH_EXTERNAL_TWELVE_DATA',
+        'BROKER_NATIVE_METAAPI',
+      ]),
+    );
+  });
+
   it('scopes the SQL query to the exact user and provider code', async () => {
     const query = jest.fn().mockResolvedValue([]);
     const service = new ExternalSignalPerformanceService({ query } as unknown as DataSource);
@@ -337,6 +405,7 @@ describe('ExternalSignalPerformanceService', () => {
     expect(query).toHaveBeenCalledWith(expect.stringContaining('external_provider_code'), [
       'user-1',
       'provider-b',
+      'external-provider/provider-b/paper-only-v1',
     ]);
   });
 });

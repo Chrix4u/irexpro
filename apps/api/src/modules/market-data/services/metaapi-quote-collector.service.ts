@@ -58,7 +58,7 @@ export class MetaApiQuoteCollectorService implements OnModuleInit, OnModuleDestr
         WHERE broker_id = 'metatrader5'
           AND account_type IN ('DEMO', 'LIVE')
           AND status = 'CONNECTED'
-          AND authorization_status IN ('AUTHORIZED', 'ACTIVE')
+          AND authorization_status IN ('CONNECTED', 'AUTHORIZED', 'READY', 'ACTIVE')
           AND deleted_at IS NULL
       `)) as CollectibleConnectionRow[];
 

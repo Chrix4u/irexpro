@@ -1473,3 +1473,103 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+
+/* Strategy identity and promotion-path truthfulness. */
+.ai-strategy-path {
+  margin-top: 1rem;
+}
+
+.ai-strategy-path__card {
+  display: grid;
+  gap: 1rem;
+}
+
+.ai-promotion-path {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.ai-promotion-path__step {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  min-width: 0;
+  padding: 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 0.85rem;
+  background: color-mix(in srgb, var(--card) 92%, transparent);
+}
+
+.ai-promotion-path__step > span {
+  display: grid;
+  flex: 0 0 1.7rem;
+  width: 1.7rem;
+  height: 1.7rem;
+  place-items: center;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.ai-promotion-path__step strong,
+.ai-promotion-path__step small {
+  display: block;
+}
+
+.ai-promotion-path__step small {
+  margin-top: 0.18rem;
+  color: var(--muted-foreground);
+  line-height: 1.35;
+}
+
+.ai-promotion-path__step.is-current {
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
+  background: color-mix(in srgb, var(--warning) 8%, var(--card));
+}
+
+.ai-promotion-path__step.is-ready {
+  border-color: color-mix(in srgb, var(--success) 45%, var(--border));
+  background: color-mix(in srgb, var(--success) 8%, var(--card));
+}
+
+.ai-promotion-path__step.is-blocked,
+.ai-promotion-path__step.is-locked {
+  color: var(--muted-foreground);
+}
+
+.ai-broker-parity-status {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 0.85rem;
+  background: color-mix(in srgb, var(--muted) 30%, transparent);
+}
+
+.ai-broker-parity-status p {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+@media (max-width: 1000px) {
+  .ai-promotion-path {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .ai-promotion-path {
+    grid-template-columns: 1fr;
+  }
+
+  .ai-broker-parity-status {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
