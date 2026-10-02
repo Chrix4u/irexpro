@@ -1985,40 +1985,48 @@ export default function AiTradingPage() {
                     </div>
                   </div>
 
-                  <div className="ai-provider-evidence__metrics">
-                    <div>
-                      <span>Strategy artifact</span>
-                      <strong>
-                        {providerEvidence?.strategyIdentity.modelVersion ??
-                          "external-provider/vps-twelvedata-six-pair-v7/paper-only-v1"}
-                      </strong>
+                  <div className="ai-strategy-details">
+                    <div className="ai-strategy-detail-group">
+                      <div className="ai-strategy-detail ai-strategy-detail--artifact">
+                        <span>Strategy artifact</span>
+                        <strong>
+                          {providerEvidence?.strategyIdentity.modelVersion ??
+                            "external-provider/vps-twelvedata-six-pair-v7/paper-only-v1"}
+                        </strong>
+                      </div>
+                      <div className="ai-strategy-detail">
+                        <span>Current market authority</span>
+                        <strong>Twelve Data · closed M5</strong>
+                      </div>
                     </div>
-                    <div>
-                      <span>Current market authority</span>
-                      <strong>Twelve Data · closed M5</strong>
+
+                    <div className="ai-strategy-detail-group">
+                      <div className="ai-strategy-detail">
+                        <span>Current execution</span>
+                        <strong>Simulated PAPER broker</strong>
+                      </div>
+                      <div className="ai-strategy-detail">
+                        <span>Strategy mutations</span>
+                        <strong>None · v7 unchanged</strong>
+                      </div>
                     </div>
-                    <div>
-                      <span>Current execution</span>
-                      <strong>Simulated PAPER broker</strong>
-                    </div>
-                    <div>
-                      <span>Strategy mutations</span>
-                      <strong>None · v7 unchanged</strong>
-                    </div>
-                    <div>
-                      <span>Authority telemetry</span>
-                      <strong>
-                        {providerEvidence
-                          ? providerEvidence.strategyIdentity.authorityTaggedSignals +
-                            "/" +
-                            providerEvidence.observed.receivedSignals +
-                            " tagged"
-                          : "Loading"}
-                      </strong>
-                    </div>
-                    <div>
-                      <span>Broker-Parity PAPER</span>
-                      <strong>{brokerParity.label}</strong>
+
+                    <div className="ai-strategy-detail-group">
+                      <div className="ai-strategy-detail">
+                        <span>Authority telemetry</span>
+                        <strong>
+                          {providerEvidence
+                            ? providerEvidence.strategyIdentity.authorityTaggedSignals +
+                              "/" +
+                              providerEvidence.observed.receivedSignals +
+                              " tagged"
+                            : "Loading"}
+                        </strong>
+                      </div>
+                      <div className="ai-strategy-detail">
+                        <span>Broker-Parity PAPER</span>
+                        <strong>{brokerParity.label}</strong>
+                      </div>
                     </div>
                   </div>
 

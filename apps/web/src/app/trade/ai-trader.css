@@ -1559,6 +1559,39 @@
   gap: 1rem;
 }
 
+.ai-strategy-details {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.ai-strategy-detail-group {
+  display: contents;
+}
+
+.ai-strategy-detail {
+  min-width: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.8rem;
+  background: color-mix(in srgb, var(--card) 92%, transparent);
+}
+
+.ai-strategy-detail span {
+  display: block;
+  margin-bottom: 0.25rem;
+  color: var(--muted-foreground);
+  font-size: 0.72rem;
+}
+
+.ai-strategy-detail strong {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 1rem;
+  line-height: 1.3;
+}
+
 .ai-promotion-path {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1634,6 +1667,65 @@
 @media (max-width: 1000px) {
   .ai-promotion-path {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .ai-strategy-details {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.65rem;
+  }
+
+  .ai-strategy-detail-group {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    overflow: hidden;
+    min-width: 0;
+    border: 1px solid var(--border);
+    border-radius: 0.8rem;
+    background: color-mix(in srgb, var(--card) 92%, transparent);
+  }
+
+  .ai-strategy-detail {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.55rem;
+    min-width: 0;
+    padding: 0.75rem;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .ai-strategy-detail + .ai-strategy-detail {
+    border-top: 1px solid var(--border);
+  }
+
+  .ai-strategy-detail span {
+    min-width: 0;
+    margin-bottom: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .ai-strategy-detail strong {
+    justify-self: end;
+    max-width: 100%;
+    text-align: right;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .ai-strategy-detail--artifact {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    gap: 0.35rem;
+  }
+
+  .ai-strategy-detail--artifact strong {
+    justify-self: start;
+    text-align: left;
   }
 }
 
