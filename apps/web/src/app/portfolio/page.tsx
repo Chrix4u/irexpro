@@ -287,28 +287,14 @@ export default function PortfolioRiskPage() {
                 ) : (
                   <div style={{ display: "grid", gap: "var(--space-3)" }}>
                     {snapshot.recentViolations.map((violation) => (
-                      <article
-                        key={violation.id}
-                        style={{
-                          border: "1px solid var(--border-subtle)",
-                          borderRadius: "var(--radius-lg)",
-                          padding: "var(--space-4)",
-                        }}
-                      >
-                        <div
-                          style={{
-                            display: "flex",
-                            justifyContent: "space-between",
-                            gap: "var(--space-3)",
-                            flexWrap: "wrap",
-                          }}
-                        >
+                      <article key={violation.id} className="risk-veto-card">
+                        <div className="risk-veto-card__head">
                           <strong>
                             {formatEnumLabel(violation.rejectionCode)}
                           </strong>
-                          <span className="text-sm muted">
+                          <time className="text-sm muted" dateTime={violation.evaluatedAt}>
                             {formatTimestamp(violation.evaluatedAt)}
-                          </span>
+                          </time>
                         </div>
                         <p className="mt-2">{violation.rejectionReason}</p>
                       </article>

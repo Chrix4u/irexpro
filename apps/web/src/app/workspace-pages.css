@@ -553,3 +553,139 @@
     transition: none !important;
   }
 }
+
+
+/* Responsive content pairs and compact mobile record alignment. */
+.responsive-copy-split {
+  display: grid;
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.45fr);
+  gap: 0.9rem 1.2rem;
+  width: 100%;
+  min-width: 0;
+}
+
+.responsive-copy-split > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.dashboard-activity-row {
+  display: grid;
+  gap: 0.4rem;
+  min-width: 0;
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.dashboard-activity-row__title,
+.dashboard-activity-row__meta,
+.risk-veto-card__head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: start;
+  min-width: 0;
+}
+
+.dashboard-activity-row__title .badge {
+  justify-self: end;
+  flex-shrink: 0;
+}
+
+.dashboard-activity-row__meta p,
+.risk-veto-card p {
+  min-width: 0;
+  margin-bottom: 0;
+  overflow-wrap: anywhere;
+}
+
+.dashboard-activity-row__meta time,
+.risk-veto-card__head time {
+  justify-self: end;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.risk-veto-card {
+  min-width: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+.risk-veto-card__head strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* AI Decision Explorer: long model/provenance tokens must never widen mobile. */
+.ai-explorer-motion {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.ai-explorer-motion__summary-card,
+.ai-explorer-motion__decision-card {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.ai-explorer-motion__decision-card :is(div, span, strong, p, li) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+@media (max-width: 700px) {
+  .responsive-copy-split {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.45rem;
+  }
+
+  .responsive-copy-split strong,
+  .responsive-copy-split span {
+    display: block;
+  }
+
+  .terminal-content .alert:has(> strong:first-child) {
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  .terminal-content .alert:has(> strong:first-child) > strong {
+    display: block;
+    width: 100%;
+  }
+
+  .dashboard-activity-row {
+    width: 100%;
+    margin-inline: 0;
+    padding-inline: 0;
+  }
+
+  .dashboard-activity-row__title,
+  .dashboard-activity-row__meta,
+  .risk-veto-card__head {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.55rem;
+  }
+
+  .dashboard-activity-row__meta time,
+  .risk-veto-card__head time {
+    font-size: 0.72rem;
+  }
+
+  .ai-explorer-motion {
+    width: 100%;
+    overflow-x: clip;
+  }
+
+  .ai-explorer-motion__actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .ai-explorer-motion__actions .btn {
+    max-width: 100%;
+  }
+}

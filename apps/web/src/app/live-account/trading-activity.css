@@ -320,10 +320,24 @@
 }
 
 @media (max-width: 760px) {
-  .trading-activity__hero,
-  .activity-section__head {
+  .trading-activity__hero {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .activity-section__head {
+    flex-direction: row;
+    align-items: flex-end;
+    gap: 0.45rem;
+  }
+
+  .activity-section__head > div {
+    min-width: 0;
+  }
+
+  .activity-section__head .badge {
+    flex-shrink: 0;
+    margin-left: auto;
   }
 
   .trading-activity__hero-actions {
@@ -331,17 +345,58 @@
     justify-content: flex-start;
   }
 
+  .activity-main-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.65rem;
+  }
+
   .activity-summary-grid,
-  .activity-position-grid,
   .activity-health-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .activity-position-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.55rem;
+  }
+
+  .activity-position {
+    gap: 0.65rem;
+    padding: 0.75rem;
+  }
+
   .activity-position__prices {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.4rem;
+  }
+
+  .activity-position__prices > div {
+    padding: 0.5rem;
+  }
+
+  .activity-position__top,
+  .activity-position__foot {
+    gap: 0.4rem;
+  }
+
+  .activity-position__top .badge {
+    max-width: 100%;
+    font-size: 0.62rem;
+    text-align: center;
+    white-space: normal;
+  }
+
+  .activity-position__foot {
+    display: grid;
     grid-template-columns: minmax(0, 1fr);
   }
 
   .activity-row {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.35rem 0.55rem;
+  }
+
+  .activity-row time {
+    grid-column: 1 / -1;
   }
 }

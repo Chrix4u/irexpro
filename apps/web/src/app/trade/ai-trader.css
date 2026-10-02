@@ -1573,3 +1573,29 @@
     flex-direction: column;
   }
 }
+
+
+/* Mobile width containment: no AI Trading panel may enlarge the viewport. */
+@media (max-width: 700px) {
+  .ai-trader {
+    max-width: 100%;
+    overflow-x: clip;
+  }
+
+  .ai-trader > *,
+  .ai-trader section,
+  .ai-trader article,
+  .ai-trader .card {
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .ai-trader :is(p, span, strong, small, dd, dt) {
+    overflow-wrap: anywhere;
+  }
+
+  .ai-trader__hero-state {
+    max-width: 100%;
+    white-space: normal;
+  }
+}

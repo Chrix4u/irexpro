@@ -295,29 +295,21 @@ function ActivityRow({ item }: { item: LiveActivityRowView }) {
   return (
     <div
       role="listitem"
-      className="dashboard-motion__activity-row"
-      style={{
-        display: 'grid',
-        gridTemplateColumns: 'minmax(0, 1fr) auto',
-        gap: 'var(--space-3)',
-        alignItems: 'center',
-        paddingBottom: 'var(--space-3)',
-        borderBottom: '1px solid var(--border-subtle)',
-      }}
+      className="dashboard-motion__activity-row dashboard-activity-row"
     >
-      <div style={{ minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
-          <strong>{label}</strong>
-          <Badge variant={badgeVariant}>{item.severity}</Badge>
-        </div>
-        <p className="text-sm muted mt-1">
+      <div className="dashboard-activity-row__title">
+        <strong>{label}</strong>
+        <Badge variant={badgeVariant}>{item.severity}</Badge>
+      </div>
+      <div className="dashboard-activity-row__meta">
+        <p className="text-sm muted">
           {item.resourceType ? item.resourceType : 'Account activity'}
           {item.resourceId ? ` · ${item.resourceId.slice(0, 8)}` : ''}
         </p>
+        <time className="text-sm muted" dateTime={item.createdAt}>
+          {timestamp}
+        </time>
       </div>
-      <time className="text-sm muted" dateTime={item.createdAt} style={{ whiteSpace: 'nowrap' }}>
-        {timestamp}
-      </time>
     </div>
   );
 }

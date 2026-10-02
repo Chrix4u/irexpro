@@ -154,7 +154,7 @@ export default function AiDecisionExplorerPage() {
               aria-label="Decision summary"
               style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(min(180px, 100%), 1fr))',
                 gap: 'var(--space-4)',
               }}
             >
@@ -223,7 +223,7 @@ export default function AiDecisionExplorerPage() {
                           className="mt-4"
                           style={{
                             display: 'grid',
-                            gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+                            gridTemplateColumns: 'repeat(auto-fit, minmax(min(160px, 100%), 1fr))',
                             gap: 'var(--space-3)',
                           }}
                         >
@@ -286,7 +286,7 @@ export default function AiDecisionExplorerPage() {
                                 className="mt-3"
                                 style={{
                                   display: 'grid',
-                                  gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                                  gridTemplateColumns: 'repeat(auto-fit, minmax(min(150px, 100%), 1fr))',
                                   gap: 'var(--space-3)',
                                 }}
                               >
@@ -345,7 +345,7 @@ export default function AiDecisionExplorerPage() {
                           className="mt-4"
                           style={{
                             display: 'grid',
-                            gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                            gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))',
                             gap: 'var(--space-3)',
                           }}
                         >

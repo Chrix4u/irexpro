@@ -237,8 +237,12 @@ export default function AdvancedAiControlsPage() {
             subtitle="Advanced controls stay locked until you acknowledge the risk and prove your identity again."
           >
             <Alert variant="warning">
-              <strong>Changing execution AI controls can materially change trade frequency, drawdown, and losses in every execution mode.</strong>{' '}
-              These controls do not change model qualification results and do not guarantee profitability. No setting on this page may weaken the active model&apos;s qualified production floor.
+              <div className="responsive-copy-split">
+                <strong>Changing execution AI controls can materially change trade frequency, drawdown, and losses in every execution mode.</strong>
+                <span>
+                  These controls do not change model qualification results and do not guarantee profitability. No setting on this page may weaken the active model&apos;s qualified production floor.
+                </span>
+              </div>
             </Alert>
 
             <label style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start', marginTop: '1rem' }}>
