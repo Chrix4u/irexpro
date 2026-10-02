@@ -142,6 +142,48 @@ describe('VpsForexSignalCollectorService', () => {
     ).toBe(true);
   });
 
+  it('restores freshness state from durable intents so a restart does not republish an unchanged setup', async () => {
+    const current = buildCandidate('EURUSD', trendCandles());
+    expect(current).not.toBeNull();
+
+    const query = jest.fn().mockResolvedValue([
+      {
+        instrument: 'EURUSD',
+        direction: current!.direction,
+        requested_entry_price: String(current!.entry),
+        stop_loss: String(current!.stopLoss),
+        confidence_score: String(current!.confidence),
+        market_data_bar_time: current!.barTime,
+        signal_generated_at: current!.barTime,
+      },
+    ]);
+
+    const collector = new VpsForexSignalCollectorService(
+      config({}),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      {} as unknown as ExecutionService,
+      {} as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+      { query } as any,
+    );
+
+    await (collector as any).restorePublishedOpportunities('user-1', 'conn-1');
+    const restored = (collector as any).lastPublishedOpportunity.get('EURUSD');
+
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('DISTINCT ON (instrument)'), [
+      'user-1',
+      'conn-1',
+      'vps-twelvedata-six-pair-v7',
+    ]);
+    expect(restored).toBeDefined();
+    expect(restored.direction).toBe(current!.direction);
+    expect(restored.confidence).toBeCloseTo(current!.confidence, 10);
+    expect(restored.entry).toBeCloseTo(current!.entry, 10);
+    expect(restored.atr).toBeGreaterThanOrEqual(current!.atr);
+    expect(isFreshOpportunity(current!, restored)).toBe(false);
+  });
+
   it('refreshes all six live PAPER feeds and publishes only the strongest PAPER candidate', async () => {
     const live = new LivePaperMarketDataService();
     expect(live.isLiveConnection('conn-1')).toBe(false);
@@ -194,6 +236,16 @@ describe('VpsForexSignalCollectorService', () => {
           external_provider_code: 'vps-twelvedata-six-pair-v7',
           external_provider_paper_only: true,
           production_eligible: false,
+          market_data_authority: 'PAPER_RESEARCH_EXTERNAL_TWELVE_DATA',
+          calibration_mode: 'SHADOW_DIAGNOSTIC_ONLY',
+          calibration_modifies_execution: false,
+          feature_extension_atr: expect.any(Number),
+          feature_ema_separation: expect.any(Number),
+          feature_mtf_strength: expect.any(Number),
+          feature_rsi14: expect.any(Number),
+          feature_volatility_score: expect.any(Number),
+          feature_atr: expect.any(Number),
+          feature_candidate_score: expect.any(Number),
           position_sizing_policy: 'risk-managed-up-to-0.10-lot-scanner-bound',
           opportunity_freshness_policy:
             'new-cycle-or-0.5atr-directional-extension-or-0.02-confidence-expansion',

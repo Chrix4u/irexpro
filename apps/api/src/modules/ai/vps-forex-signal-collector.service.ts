@@ -1,5 +1,6 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { DataSource } from 'typeorm';
 import { v5 as uuidv5 } from 'uuid';
 import { AiSignalService } from './ai-signal.service';
 import { ExecutionService } from '../execution/execution.service';
@@ -59,6 +60,10 @@ interface Candidate {
   barTime: Date;
   score: number;
   atr: number;
+  extensionAtr: number;
+  emaSeparation: number;
+  mtfStrength: number;
+  rsi14: number;
 }
 
 interface PublishedOpportunity {
@@ -240,6 +245,10 @@ export function buildCandidate(
     barTime,
     score,
     atr: atr14,
+    extensionAtr,
+    emaSeparation,
+    mtfStrength,
+    rsi14,
   };
 }
 
@@ -275,6 +284,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     private readonly brokerService: BrokerService,
     private readonly livePaperMarket: LivePaperMarketDataService,
     private readonly aiEngineClient: AiEngineClient,
+    @Optional() private readonly dataSource?: DataSource,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -322,6 +332,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     }
 
     try {
+      await this.restorePublishedOpportunities(userId, connectionId);
       await this.primeMarketData(apiKey);
       const activeAfterPrime = await this.executionService.getActiveSession(userId);
       if (
@@ -528,8 +539,20 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           external_provider_paper_only: true,
           production_eligible: false,
           source_reference: 'Twelve Data Basic real-time forex M5 closed candles',
+          market_data_authority: 'PAPER_RESEARCH_EXTERNAL_TWELVE_DATA',
+          live_market_data_policy:
+            'DEMO/LIVE decisions must use broker-native market data via the active broker adapter; MetaTrader uses MetaApi as the broker-access bridge',
           market_data_bar_time: best.barTime.toISOString(),
           market_data_execution_model: 'closed-candle-mid-with-conservative-fixed-paper-spread',
+          calibration_mode: 'SHADOW_DIAGNOSTIC_ONLY',
+          calibration_modifies_execution: false,
+          feature_extension_atr: best.extensionAtr,
+          feature_ema_separation: best.emaSeparation,
+          feature_mtf_strength: best.mtfStrength,
+          feature_rsi14: best.rsi14,
+          feature_volatility_score: best.volatilityScore,
+          feature_atr: best.atr,
+          feature_candidate_score: best.score,
           position_sizing_policy: 'risk-managed-up-to-0.10-lot-scanner-bound',
           opportunity_freshness_policy:
             'new-cycle-or-0.5atr-directional-extension-or-0.02-confidence-expansion',
@@ -582,6 +605,81 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           qualified: false,
           reason: 'NO_QUALIFYING_SETUP',
         };
+  }
+
+  private async restorePublishedOpportunities(
+    userId: string,
+    connectionId: string,
+  ): Promise<void> {
+    if (!this.dataSource) return;
+
+    const rows = (await this.dataSource.query(
+      `
+        SELECT DISTINCT ON (instrument)
+          instrument,
+          direction,
+          requested_entry_price,
+          stop_loss,
+          metadata->>'confidenceScore' AS confidence_score,
+          metadata->>'market_data_bar_time' AS market_data_bar_time,
+          signal_generated_at
+        FROM trading.trade_intents
+        WHERE user_id = $1
+          AND broker_connection_id = $2
+          AND metadata->>'external_provider_code' = $3
+          AND requested_entry_price IS NOT NULL
+          AND stop_loss IS NOT NULL
+        ORDER BY instrument ASC, signal_generated_at DESC, id DESC
+      `,
+      [userId, connectionId, PROVIDER_CODE],
+    )) as Array<{
+      instrument: string;
+      direction: 'BUY' | 'SELL';
+      requested_entry_price: string | number;
+      stop_loss: string | number;
+      confidence_score: string | number | null;
+      market_data_bar_time: string | Date | null;
+      signal_generated_at: string | Date;
+    }>;
+
+    this.lastPublishedOpportunity.clear();
+    for (const row of rows) {
+      if (!SYMBOLS.some(([instrument]) => instrument === row.instrument)) continue;
+      const entry = Number(row.requested_entry_price);
+      const stopLoss = Number(row.stop_loss);
+      const confidence = Number(row.confidence_score);
+      const barTime = new Date(row.market_data_bar_time ?? row.signal_generated_at);
+      const inferredAtr = Math.abs(entry - stopLoss) / STOP_ATR_MULTIPLIER;
+
+      if (
+        !Number.isFinite(entry) ||
+        !Number.isFinite(stopLoss) ||
+        !Number.isFinite(confidence) ||
+        !Number.isFinite(barTime.getTime()) ||
+        !Number.isFinite(inferredAtr) ||
+        inferredAtr <= 0 ||
+        (row.direction !== 'BUY' && row.direction !== 'SELL')
+      ) {
+        continue;
+      }
+
+      // stopDistance = max(1.5 * ATR, structural 5.1-pip floor). Therefore
+      // stopDistance / 1.5 is either the exact historical ATR or a conservative
+      // over-estimate when the structural floor bound the stop. Using it for
+      // freshness recovery can only make a post-restart breakout requirement
+      // stricter, never looser.
+      this.lastPublishedOpportunity.set(row.instrument, {
+        direction: row.direction,
+        confidence,
+        entry,
+        atr: inferredAtr,
+        barTimeMs: barTime.getTime(),
+      });
+    }
+
+    this.logger.log(
+      `VPS freshness state restored from durable intents instruments=${this.lastPublishedOpportunity.size}/6`,
+    );
   }
 
   private async heartbeatLivePaper(userId: string, connectionId: string): Promise<void> {

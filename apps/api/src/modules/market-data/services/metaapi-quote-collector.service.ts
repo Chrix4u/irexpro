@@ -56,7 +56,7 @@ export class MetaApiQuoteCollectorService implements OnModuleInit, OnModuleDestr
         SELECT id, user_id
         FROM broker.broker_connections
         WHERE broker_id = 'metatrader5'
-          AND account_type = 'DEMO'
+          AND account_type IN ('DEMO', 'LIVE')
           AND status = 'CONNECTED'
           AND authorization_status IN ('AUTHORIZED', 'ACTIVE')
           AND deleted_at IS NULL
@@ -89,7 +89,7 @@ export class MetaApiQuoteCollectorService implements OnModuleInit, OnModuleDestr
   private instruments(): string[] {
     const configured = this.config.get<string>(
       'METAAPI_QUOTE_COLLECTION_INSTRUMENTS',
-      'USDJPY',
+      'EURUSD,GBPUSD,USDJPY,AUDUSD,USDCAD,USDCHF',
     );
     return configured
       .split(',')
