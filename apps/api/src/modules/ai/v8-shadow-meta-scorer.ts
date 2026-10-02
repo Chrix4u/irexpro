@@ -2,6 +2,9 @@ export const V8_SHADOW_ARTIFACT = 'v8-shadow-online-meta-v1';
 export const V8_SHADOW_MODE = 'PROSPECTIVE_SHADOW_ONLY';
 export const V8_SHADOW_ADMISSION_THRESHOLD = 0.46;
 export const V8_SHADOW_TARGET_R_MULTIPLE = 2.5 / 1.5;
+export const PLAN_B_SHADOW_ARTIFACT = 'plan-b-online-meta-v1';
+export const PLAN_B_SHADOW_MODE = 'PROSPECTIVE_SHADOW_ONLY';
+export const PLAN_B_SHADOW_ADMISSION_THRESHOLD = 0.40828402366863903;
 
 export interface V8ShadowMetaInput {
   instrument: string;
@@ -13,6 +16,16 @@ export interface V8ShadowMetaInput {
   mtfStrength: number;
   rsi14: number;
   scanTime: Date;
+}
+
+export interface PlanBShadowMetaScore {
+  artifact: typeof PLAN_B_SHADOW_ARTIFACT;
+  mode: typeof PLAN_B_SHADOW_MODE;
+  probability: number;
+  admissionThreshold: number;
+  expectedR: number;
+  admitted: boolean;
+  reason: 'ADMIT' | 'REJECT_EXPECTED_VALUE';
 }
 
 export interface V8ShadowMetaScore {
@@ -117,6 +130,20 @@ export function scoreV8ShadowMeta(input: V8ShadowMetaInput): V8ShadowMetaScore {
     probability,
     admissionThreshold: V8_SHADOW_ADMISSION_THRESHOLD,
     expectedR,
+    admitted,
+    reason: admitted ? 'ADMIT' : 'REJECT_EXPECTED_VALUE',
+  };
+}
+
+export function scorePlanBShadowMeta(input: V8ShadowMetaInput): PlanBShadowMetaScore {
+  const base = scoreV8ShadowMeta(input);
+  const admitted = base.probability >= PLAN_B_SHADOW_ADMISSION_THRESHOLD;
+  return {
+    artifact: PLAN_B_SHADOW_ARTIFACT,
+    mode: PLAN_B_SHADOW_MODE,
+    probability: base.probability,
+    admissionThreshold: PLAN_B_SHADOW_ADMISSION_THRESHOLD,
+    expectedR: base.expectedR,
     admitted,
     reason: admitted ? 'ADMIT' : 'REJECT_EXPECTED_VALUE',
   };

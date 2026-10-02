@@ -11,7 +11,7 @@ import {
   LivePaperCandleInput,
   LivePaperMarketDataService,
 } from '../broker/services/live-paper-market-data.service';
-import { scoreV8ShadowMeta } from './v8-shadow-meta-scorer';
+import { scorePlanBShadowMeta, scoreV8ShadowMeta } from './v8-shadow-meta-scorer';
 
 const PROVIDER_CODE = 'vps-twelvedata-six-pair-v7';
 const SIGNAL_NAMESPACE = '802e16f8-8209-4e1f-aa7e-a6a46387081c';
@@ -525,6 +525,17 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         // M5 bar. Keep the prospective shadow feature clock identical.
         scanTime: new Date(best.barTime.getTime() + BAR_MS),
       });
+      const planBShadow = scorePlanBShadowMeta({
+        instrument: best.instrument,
+        direction: best.direction,
+        confidence: best.confidence,
+        extensionAtr: best.extensionAtr,
+        volatilityScore: best.volatilityScore,
+        emaSeparation: best.emaSeparation,
+        mtfStrength: best.mtfStrength,
+        rsi14: best.rsi14,
+        scanTime: new Date(best.barTime.getTime() + BAR_MS),
+      });
       const outcome = await this.aiSignalService.receiveSignal({
         signalId,
         userId,
@@ -577,6 +588,16 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           v8_shadow_training_evidence:
             'HISTORICAL_DEVELOPMENT_ONLY_ALREADY_INSPECTED_NOT_QUALIFICATION',
           v8_shadow_modifies_execution: false,
+          plan_b_shadow_artifact: planBShadow.artifact,
+          plan_b_shadow_mode: planBShadow.mode,
+          plan_b_shadow_probability: planBShadow.probability,
+          plan_b_shadow_admission_threshold: planBShadow.admissionThreshold,
+          plan_b_shadow_expected_r: planBShadow.expectedR,
+          plan_b_shadow_admitted: planBShadow.admitted,
+          plan_b_shadow_reason: planBShadow.reason,
+          plan_b_shadow_training_evidence:
+            'PREEXISTING_WALK_FORWARD_THRESHOLD_NOT_TODAYS_PROSPECTIVE_RESULTS',
+          plan_b_shadow_modifies_execution: false,
           position_sizing_policy: 'risk-managed-up-to-0.10-lot-scanner-bound',
           opportunity_freshness_policy:
             'new-cycle-or-0.5atr-directional-extension-or-0.02-confidence-expansion',
