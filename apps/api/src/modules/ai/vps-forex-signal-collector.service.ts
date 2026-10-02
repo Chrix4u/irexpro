@@ -265,6 +265,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
   private lastSlot: string | null = null;
   private lastProviderFetchMinute: string | null = null;
   private lastProviderSeries: Map<string, LivePaperCandleInput[]> | null = null;
+  private providerCooldownUntil: Date | null = null;
+  private providerCooldownReason: 'DAILY_CREDIT_LIMIT' | null = null;
   private readonly lastPublishedOpportunity = new Map<string, PublishedOpportunity>();
   private lastEvaluation: {
     confidence: number | null;
@@ -409,6 +411,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       paperOnly: true,
       automaticDemoPromotion: false,
       automaticLivePromotion: false,
+      providerCooldownReason: this.providerCooldownReason,
+      providerCooldownUntil: this.providerCooldownUntil?.toISOString() ?? null,
       marketCache: ownsBinding
         ? this.livePaperMarket.status(this.connectionId())
         : {
@@ -426,13 +430,20 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             ? 'DISABLED'
             : !activePaperSession
               ? 'WAITING_FOR_PAPER_SESSION'
-              : this.livePaperMarket.status(this.connectionId()).cachedInstrumentCount < SYMBOLS.length
-                ? 'WAITING_FOR_MARKET_DATA'
-                : 'ACTIVE',
+              : this.providerCooldownUntil && this.providerCooldownUntil.getTime() > Date.now()
+                ? 'WAITING_FOR_PROVIDER_QUOTA'
+                : this.livePaperMarket.status(this.connectionId()).cachedInstrumentCount < SYMBOLS.length
+                  ? 'WAITING_FOR_MARKET_DATA'
+                  : 'ACTIVE',
     };
   }
 
   async maybeCollect(now = new Date()): Promise<void> {
+    if (this.providerCooldownUntil && this.providerCooldownUntil.getTime() <= now.getTime()) {
+      this.providerCooldownUntil = null;
+      this.providerCooldownReason = null;
+    }
+    if (this.providerCooldownUntil && this.providerCooldownUntil.getTime() > now.getTime()) return;
     if (!this.enabled() || this.running || !this.isCollectionSlot(now)) return;
     const slot = now.toISOString().slice(0, 16);
     if (this.lastSlot === slot) return;
@@ -823,7 +834,23 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     // Twelve Data Basic permits 8 credits/minute while this six-symbol batch
     // costs 6. Reuse one successful batch inside the same API-process minute
     // so a startup prime + collection slot cannot accidentally spend 12.
-    const requestMinute = new Date().toISOString().slice(0, 16);
+    const requestNow = new Date();
+    if (
+      this.providerCooldownUntil &&
+      this.providerCooldownUntil.getTime() > requestNow.getTime()
+    ) {
+      throw new Error(
+        `Twelve Data daily credit cooldown active until ${this.providerCooldownUntil.toISOString()}`,
+      );
+    }
+    if (
+      this.providerCooldownUntil &&
+      this.providerCooldownUntil.getTime() <= requestNow.getTime()
+    ) {
+      this.providerCooldownUntil = null;
+      this.providerCooldownReason = null;
+    }
+    const requestMinute = requestNow.toISOString().slice(0, 16);
     if (this.lastProviderFetchMinute === requestMinute && this.lastProviderSeries) {
       this.logger.debug(`Reusing Twelve Data six-pair batch for minute=${requestMinute}`);
       return this.lastProviderSeries;
@@ -850,7 +877,21 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     const payload = (await response.json()) as TwelveDataResponse;
     if (!response.ok) {
       const root = payload as TwelveDataSeries;
-      throw new Error(`Twelve Data HTTP ${response.status}: ${root.message ?? 'request failed'}`);
+      const message = root.message ?? 'request failed';
+      if (
+        response.status === 429 &&
+        /run out of API credits for the day|current limit being/i.test(message)
+      ) {
+        const reset = new Date();
+        reset.setUTCDate(reset.getUTCDate() + 1);
+        reset.setUTCHours(0, 5, 0, 0);
+        this.providerCooldownUntil = reset;
+        this.providerCooldownReason = 'DAILY_CREDIT_LIMIT';
+        throw new Error(
+          `Twelve Data daily credit limit reached; scanner paused until ${reset.toISOString()}`,
+        );
+      }
+      throw new Error(`Twelve Data HTTP ${response.status}: ${message}`);
     }
 
     const result = new Map<string, LivePaperCandleInput[]>();

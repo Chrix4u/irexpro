@@ -356,6 +356,88 @@ describe('VpsForexSignalCollectorService', () => {
     expect(heartbeat).toHaveBeenCalledTimes(12);
   });
 
+  it('enters a daily provider cooldown after Twelve Data exhausts the account quota', async () => {
+    const live = new LivePaperMarketDataService();
+    const execution = {
+      getActiveSession: jest.fn().mockResolvedValue({
+        id: 'session-1',
+        brokerConnectionId: 'conn-1',
+        executionMode: ExecutionMode.PAPER_ONLY,
+      }),
+    } as unknown as ExecutionService;
+    const collector = new VpsForexSignalCollectorService(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+      }),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      execution,
+      { getCurrentPriceForConnection: jest.fn() } as unknown as BrokerService,
+      live,
+      aiEngineClientMock(),
+    );
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      json: async () => ({
+        status: 'error',
+        message:
+          'You have run out of API credits for the day. The current limit being 800 API credits per day.',
+      }),
+    });
+
+    await expect(collector.collectOnce(fetchMock as unknown as typeof fetch)).rejects.toThrow(
+      /daily credit limit reached; scanner paused until/,
+    );
+    const status = await collector.getStatus('user-1');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(status.providerCooldownReason).toBe('DAILY_CREDIT_LIMIT');
+    expect(status.providerCooldownUntil).toBeTruthy();
+    expect(status.state).toBe('WAITING_FOR_PROVIDER_QUOTA');
+  });
+
+  it('does not call Twelve Data again while the same-process daily quota cooldown is active', async () => {
+    const collector = new VpsForexSignalCollectorService(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+      }),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      {
+        getActiveSession: jest.fn().mockResolvedValue({
+          id: 'session-1',
+          brokerConnectionId: 'conn-1',
+          executionMode: ExecutionMode.PAPER_ONLY,
+        }),
+      } as unknown as ExecutionService,
+      { getCurrentPriceForConnection: jest.fn() } as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+    );
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      json: async () => ({
+        status: 'error',
+        message: 'You have run out of API credits for the day.',
+      }),
+    });
+
+    await expect(collector.collectOnce(fetchMock as unknown as typeof fetch)).rejects.toThrow(
+      /daily credit limit reached/,
+    );
+    await expect(collector.collectOnce(fetchMock as unknown as typeof fetch)).rejects.toThrow(
+      /daily credit cooldown active/,
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects the shared Twelve Data demo key for production evidence', async () => {
     const collector = new VpsForexSignalCollectorService(
       config({
