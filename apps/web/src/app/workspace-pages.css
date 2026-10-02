@@ -607,10 +607,18 @@
 }
 
 .risk-veto-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.5rem;
   min-width: 0;
   padding: var(--space-4);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
+}
+
+.risk-veto-card > p {
+  grid-column: 1 / -1;
+  width: 100%;
 }
 
 .risk-veto-card__head strong {
@@ -687,5 +695,19 @@
 
   .ai-explorer-motion__actions .btn {
     max-width: 100%;
+  }
+}
+
+
+.advanced-ai-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+@media (max-width: 700px) {
+  .advanced-ai-actions {
+    gap: 0.75rem;
   }
 }

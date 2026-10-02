@@ -346,8 +346,8 @@
   }
 
   .activity-main-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.65rem;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1rem;
   }
 
   .activity-summary-grid,
@@ -355,8 +355,9 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .activity-position-grid {
-    grid-template-columns: minmax(0, 1fr);
+  .activity-position-grid,
+  .activity-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0.55rem;
   }
 
@@ -392,11 +393,17 @@
   }
 
   .activity-row {
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 0.35rem 0.55rem;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.35rem;
+    align-content: start;
+  }
+
+  .activity-row .badge {
+    justify-self: start;
   }
 
   .activity-row time {
-    grid-column: 1 / -1;
+    grid-column: 1;
+    white-space: normal;
   }
 }

@@ -284,7 +284,7 @@ export default function AdvancedAiControlsPage() {
               )}
             </div>
 
-            <div className="workspace-actions mt-4">
+            <div className="workspace-actions advanced-ai-actions mt-4">
               <Button
                 type="button"
                 variant="primary"
@@ -362,7 +362,7 @@ export default function AdvancedAiControlsPage() {
                 Demo, PAPER and LIVE all use this same user preference and the same lower bound.
               </Alert>
 
-              <div className="workspace-actions mt-4">
+              <div className="workspace-actions advanced-ai-actions mt-4">
                 <Button type="button" variant="primary" loading={saving} onClick={() => void save()}>
                   Save Execution Preference
                 </Button>
