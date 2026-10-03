@@ -109,8 +109,13 @@ def run(
     quote_b: Path,
     output: Path,
     max_splits: int = OUTER_FOLDS_REQUIRED,
+    selected_pairs: tuple[str, ...] | None = None,
 ) -> dict:
-    datasets = {pair: corpus_dir / f"{pair}_MTF.csv" for pair in PAIRS}
+    pairs = selected_pairs or PAIRS
+    unknown = [pair for pair in pairs if pair not in PAIRS]
+    if unknown:
+        raise ValueError(f"unsupported pair specialists requested: {unknown}")
+    datasets = {pair: corpus_dir / f"{pair}_MTF.csv" for pair in pairs}
     pool, _ = load_and_prepare_corpora(
         datasets,
         horizon_bars=H,
@@ -120,7 +125,7 @@ def run(
     )
 
     quotes = []
-    for pair in PAIRS:
+    for pair in pairs:
         root = quote_a if pair in ("AUDUSD", "EURUSD", "GBPUSD") else quote_b
         frame = pd.read_csv(root / f"{pair}_1S_M1_BOUNDARY.csv")
         frame["decision_time"] = pd.to_datetime(frame.decision_time, utc=True)
@@ -141,7 +146,11 @@ def run(
     )
 
     results: dict[str, dict] = {}
-    for pair_index, pair in enumerate(PAIRS):
+    for pair in pairs:
+        # Preserve the original six-pair seed assignment even when running a
+        # subset, so pair-by-pair execution is methodology-identical to the
+        # full experiment rather than a new stochastic candidate.
+        pair_index = PAIRS.index(pair)
         frame = (
             joined[joined.instrument == pair]
             .sort_values("decision_time")
@@ -256,6 +265,7 @@ def run(
         "production_eligible": False,
         "promotion_gates_unchanged": True,
         "joined_rows": len(joined),
+        "selected_pairs": list(pairs),
         "required_outer_folds": OUTER_FOLDS_REQUIRED,
         "thresholds": {
             "min_outer_trades": MIN_OUTER_TRADES,
@@ -293,11 +303,20 @@ if __name__ == "__main__":
     parser.add_argument("--quote-b", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--max-splits", type=int, default=OUTER_FOLDS_REQUIRED)
+    parser.add_argument(
+        "--pairs",
+        default="",
+        help="Optional comma-separated subset of the six research pairs",
+    )
     args = parser.parse_args()
+    selected_pairs = tuple(
+        value.strip().upper() for value in args.pairs.split(",") if value.strip()
+    ) or None
     run(
         args.corpus_dir,
         args.quote_a,
         args.quote_b,
         args.output,
         max_splits=args.max_splits,
+        selected_pairs=selected_pairs,
     )
