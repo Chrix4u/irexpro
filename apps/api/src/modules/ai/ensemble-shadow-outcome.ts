@@ -157,7 +157,7 @@ export function summarizeEnsembleSleeveOutcomes(
   const returns = resolved.map((outcome) => outcome.netR as number);
   const grossProfit = returns.filter((value) => value > 0).reduce((a, b) => a + b, 0);
   const grossLoss = Math.abs(returns.filter((value) => value < 0).reduce((a, b) => a + b, 0));
-  const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Infinity : null;
+  const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : null;
 
   let sharpe: number | null = null;
   if (returns.length >= 2) {
@@ -165,7 +165,7 @@ export function summarizeEnsembleSleeveOutcomes(
     const variance =
       returns.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (returns.length - 1);
     const sd = Math.sqrt(variance);
-    sharpe = sd > 0 ? (Math.sqrt(returns.length) * mean) / sd : mean > 0 ? Infinity : 0;
+    sharpe = sd > 0 ? (Math.sqrt(returns.length) * mean) / sd : null;
   }
 
   // Normalized risk equity: 100 units, 1R = 1 unit. This is a sleeve-health

@@ -219,6 +219,40 @@ interface VpsForexScannerStatusView {
     reason: "WEEKEND" | "ROLLOVER_LOW_LIQUIDITY" | null;
     nextEligibleScanAt: string;
   };
+  ensembleCampaign: {
+    decisions: number;
+    admitted: number;
+    rejected: number;
+    resolved: number;
+    evaluableResolved: number;
+    wins: number;
+    losses: number;
+    expired: number;
+    ambiguous: number;
+    netR: number;
+    profitFactor: number | null;
+    sharpe: number | null;
+    maxDrawdown: number | null;
+    positiveWindowFraction: number | null;
+    firstEvaluatedAt: string | null;
+    lastEvaluatedAt: string | null;
+    blockerCounts: Record<string, number>;
+    sleeves: Array<{
+      instrument: string;
+      direction: "BUY" | "SELL";
+      decisions: number;
+      admitted: number;
+      resolved: number;
+      state: "COLLECTING" | "CORE" | "PROBATION" | "BLOCKED";
+      evidence: {
+        closedTrades: number;
+        profitFactor: number | null;
+        sharpe: number | null;
+        maxDrawdown: number | null;
+        positiveWindowFraction: number | null;
+      };
+    }>;
+  };
   lastEnsembleDecision: {
     evaluatedAt: string | null;
     instrument: string | null;
@@ -2553,6 +2587,52 @@ export default function AiTradingPage() {
                     <div>
                       <span>Scan cadence</span>
                       <strong>{vpsScannerStatus?.cadenceMinutes ?? 10} min</strong>
+                    </div>
+                    <div>
+                      <span>Ensemble decisions</span>
+                      <strong>{vpsScannerStatus?.ensembleCampaign.decisions ?? 0}</strong>
+                    </div>
+                    <div>
+                      <span>Would admit</span>
+                      <strong>
+                        {vpsScannerStatus?.ensembleCampaign.admitted ?? 0} / {vpsScannerStatus?.ensembleCampaign.decisions ?? 0}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Resolved outcomes</span>
+                      <strong>
+                        {vpsScannerStatus?.ensembleCampaign.evaluableResolved ?? 0} / 100
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Outcome mix</span>
+                      <strong>
+                        {vpsScannerStatus?.ensembleCampaign.wins ?? 0} W · {vpsScannerStatus?.ensembleCampaign.losses ?? 0} L · {vpsScannerStatus?.ensembleCampaign.expired ?? 0} EXP
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Shadow net R</span>
+                      <strong>
+                        {providerMetric(vpsScannerStatus?.ensembleCampaign.netR ?? null, 2)} R
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Shadow PF / Sharpe</span>
+                      <strong>
+                        {providerMetric(vpsScannerStatus?.ensembleCampaign.profitFactor ?? null, 2)} / {providerMetric(vpsScannerStatus?.ensembleCampaign.sharpe ?? null, 2)}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Campaign stability</span>
+                      <strong>
+                        DD {providerPercent(vpsScannerStatus?.ensembleCampaign.maxDrawdown ?? null)} · +weeks {providerPercent(vpsScannerStatus?.ensembleCampaign.positiveWindowFraction ?? null)}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>CORE sleeves</span>
+                      <strong>
+                        {vpsScannerStatus?.ensembleCampaign.sleeves.filter((sleeve) => sleeve.state === "CORE").length ?? 0} / {vpsScannerStatus?.ensembleCampaign.sleeves.length ?? 0}
+                      </strong>
                     </div>
                     <div>
                       <span>Legacy v7 signals</span>

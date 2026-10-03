@@ -126,7 +126,9 @@ function driftOf(input: EnsembleGovernanceInput): { state: EnsembleDriftState; q
   return { state: 'NORMAL', quality: 1 };
 }
 
-function sleeveStateOf(evidence?: EnsembleSleeveEvidence | null): EnsembleSleeveState {
+export function classifyEnsembleSleeveEvidence(
+  evidence?: EnsembleSleeveEvidence | null,
+): EnsembleSleeveState {
   if (!evidence || evidence.closedTrades < 100) return 'COLLECTING';
   if (
     evidence.profitFactor == null ||
@@ -172,7 +174,7 @@ export function evaluateEnsembleGovernance(
   const netExpectedRPassed = Number.isFinite(netExpectedR) && netExpectedR >= 0.08;
   const drift = driftOf(input);
   const driftPassed = drift.state === 'NORMAL';
-  const sleeveState = sleeveStateOf(input.sleeveEvidence);
+  const sleeveState = classifyEnsembleSleeveEvidence(input.sleeveEvidence);
   const eventRisk = input.eventRisk ?? 'UNVERIFIED';
 
   const blockers: string[] = [];

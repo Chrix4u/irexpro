@@ -17,7 +17,11 @@ import {
   PlanBPortfolioPosition,
   scorePlanBMultimodelShadow,
 } from './plan-b-multimodel-shadow';
-import { EnsembleGovernanceDecision, evaluateEnsembleGovernance } from './ensemble-governance';
+import {
+  EnsembleGovernanceDecision,
+  classifyEnsembleSleeveEvidence,
+  evaluateEnsembleGovernance,
+} from './ensemble-governance';
 import { MacroEventRiskAssessment, MacroEventRiskService } from './macro-event-risk.service';
 import {
   EnsembleShadowOutcome,
@@ -432,7 +436,13 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     );
     const ownsBinding = Boolean(configuredUserId && configuredUserId === requestingUserId);
     let activePaperSession = false;
-    if (ownsBinding) {
+    let ensembleCampaign = await this.loadEnsembleCampaignStatus('', '');
+    const configuredConnectionId = this.connectionId();
+    if (ownsBinding && configuredConnectionId) {
+      ensembleCampaign = await this.loadEnsembleCampaignStatus(
+        requestingUserId,
+        configuredConnectionId,
+      );
       const session = await this.executionService.getActiveSession(requestingUserId);
       activePaperSession = Boolean(
         session &&
@@ -466,6 +476,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       automaticDemoPromotion: false,
       automaticLivePromotion: false,
       marketSchedule,
+      ensembleCampaign,
       lastEnsembleDecision: {
         evaluatedAt: this.lastEnsembleDecision.evaluatedAt?.toISOString() ?? null,
         instrument: this.lastEnsembleDecision.instrument,
@@ -931,6 +942,154 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           qualified: false,
           reason: 'NO_QUALIFYING_SETUP',
         };
+  }
+
+  private async loadEnsembleCampaignStatus(userId: string, connectionId: string) {
+    const empty = {
+      decisions: 0,
+      admitted: 0,
+      rejected: 0,
+      resolved: 0,
+      evaluableResolved: 0,
+      wins: 0,
+      losses: 0,
+      expired: 0,
+      ambiguous: 0,
+      netR: 0,
+      profitFactor: null as number | null,
+      sharpe: null as number | null,
+      maxDrawdown: null as number | null,
+      positiveWindowFraction: null as number | null,
+      firstEvaluatedAt: null as string | null,
+      lastEvaluatedAt: null as string | null,
+      blockerCounts: {} as Record<string, number>,
+      sleeves: [] as Array<{
+        instrument: string;
+        direction: 'BUY' | 'SELL';
+        decisions: number;
+        admitted: number;
+        resolved: number;
+        state: ReturnType<typeof classifyEnsembleSleeveEvidence>;
+        evidence: ReturnType<typeof summarizeEnsembleSleeveOutcomes>;
+      }>,
+    };
+    if (!this.dataSource || !userId || !connectionId) return empty;
+
+    const rows = (await this.dataSource.query(
+      `
+        SELECT instrument, direction, admitted, evaluated_at, components
+        FROM trading.ensemble_shadow_decisions
+        WHERE user_id = $1
+          AND broker_connection_id = $2
+          AND engine_code = $3
+        ORDER BY evaluated_at ASC
+        LIMIT 10000
+      `,
+      [userId, connectionId, ACTIVE_ENGINE_CODE],
+    )) as Array<{
+      instrument: string;
+      direction: 'BUY' | 'SELL';
+      admitted: boolean;
+      evaluated_at: string | Date;
+      components: Record<string, unknown> | null;
+    }>;
+    if (!rows.length) return empty;
+
+    const allOutcomes: EnsembleShadowOutcome[] = [];
+    const blockerCounts: Record<string, number> = {};
+    const sleeveMap = new Map<
+      string,
+      {
+        instrument: string;
+        direction: 'BUY' | 'SELL';
+        decisions: number;
+        admitted: number;
+        outcomes: EnsembleShadowOutcome[];
+      }
+    >();
+
+    for (const row of rows) {
+      const key = `${row.instrument}|${row.direction}`;
+      const sleeve = sleeveMap.get(key) ?? {
+        instrument: row.instrument,
+        direction: row.direction,
+        decisions: 0,
+        admitted: 0,
+        outcomes: [],
+      };
+      sleeve.decisions += 1;
+      if (row.admitted) sleeve.admitted += 1;
+
+      const components = row.components;
+      if (components && typeof components === 'object') {
+        const outcome = components.outcome;
+        if (
+          outcome &&
+          typeof outcome === 'object' &&
+          typeof (outcome as Record<string, unknown>).status === 'string'
+        ) {
+          const parsed = outcome as unknown as EnsembleShadowOutcome;
+          sleeve.outcomes.push(parsed);
+          allOutcomes.push(parsed);
+        }
+
+        const governance = components.governance;
+        if (governance && typeof governance === 'object') {
+          const blockers = (governance as Record<string, unknown>).blockers;
+          if (Array.isArray(blockers)) {
+            for (const blocker of blockers) {
+              if (typeof blocker !== 'string') continue;
+              blockerCounts[blocker] = (blockerCounts[blocker] ?? 0) + 1;
+            }
+          }
+        }
+      }
+      sleeveMap.set(key, sleeve);
+    }
+
+    const evidence = summarizeEnsembleSleeveOutcomes(allOutcomes);
+    const validOutcomes = allOutcomes.filter(
+      (outcome) => outcome.status !== 'AMBIGUOUS' && outcome.netR != null,
+    );
+    const sleeves = [...sleeveMap.values()]
+      .map((sleeve) => {
+        const sleeveEvidence = summarizeEnsembleSleeveOutcomes(sleeve.outcomes);
+        return {
+          instrument: sleeve.instrument,
+          direction: sleeve.direction,
+          decisions: sleeve.decisions,
+          admitted: sleeve.admitted,
+          resolved: sleeve.outcomes.length,
+          state: classifyEnsembleSleeveEvidence(sleeveEvidence),
+          evidence: sleeveEvidence,
+        };
+      })
+      .sort((a, b) =>
+        a.instrument === b.instrument
+          ? a.direction.localeCompare(b.direction)
+          : a.instrument.localeCompare(b.instrument),
+      );
+
+    return {
+      decisions: rows.length,
+      admitted: rows.filter((row) => row.admitted).length,
+      rejected: rows.filter((row) => !row.admitted).length,
+      resolved: allOutcomes.length,
+      evaluableResolved: validOutcomes.length,
+      wins: allOutcomes.filter((outcome) => outcome.status === 'WIN').length,
+      losses: allOutcomes.filter((outcome) => outcome.status === 'LOSS').length,
+      expired: allOutcomes.filter((outcome) => outcome.status === 'EXPIRED').length,
+      ambiguous: allOutcomes.filter((outcome) => outcome.status === 'AMBIGUOUS').length,
+      netR: validOutcomes.reduce((sum, outcome) => sum + (outcome.netR ?? 0), 0),
+      profitFactor: evidence.profitFactor,
+      sharpe: evidence.sharpe,
+      maxDrawdown: evidence.maxDrawdown,
+      positiveWindowFraction: evidence.positiveWindowFraction,
+      firstEvaluatedAt: new Date(rows[0]!.evaluated_at).toISOString(),
+      lastEvaluatedAt: new Date(rows[rows.length - 1]!.evaluated_at).toISOString(),
+      blockerCounts,
+      sleeves,
+    };
   }
 
   private async resolvePendingEnsembleShadowOutcomes(
