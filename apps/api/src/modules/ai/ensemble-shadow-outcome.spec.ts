@@ -43,6 +43,27 @@ describe('ensemble shadow outcome', () => {
     expect(result?.netR).toBeCloseTo(-1.1, 8);
   });
 
+  it('records conservative profit giveback before a later stop loss', () => {
+    const result = resolveEnsembleShadowOutcome(base, [
+      candle(5, 1.0998, 1.1007, 1.1006),
+      candle(10, 1.0989, 1.1004, 1.099),
+    ]);
+
+    expect(result?.status).toBe('LOSS');
+    expect(result?.postEntryTelemetry?.maxFavorableR).toBeCloseTo(0.7, 8);
+    expect(result?.postEntryTelemetry?.gaveBackHalfRToLoss).toBe(true);
+    expect(result?.postEntryTelemetry?.gaveBackOneRToLoss).toBe(false);
+    expect(result?.postEntryTelemetry?.maxCloseGivebackR).toBeCloseTo(1.7, 8);
+  });
+
+  it('does not count unknown exit-bar favorable excursion before a stop', () => {
+    const result = resolveEnsembleShadowOutcome(base, [candle(5, 1.0989, 1.1008, 1.099)]);
+
+    expect(result?.status).toBe('LOSS');
+    expect(result?.postEntryTelemetry?.maxFavorableR).toBe(0);
+    expect(result?.postEntryTelemetry?.gaveBackHalfRToLoss).toBe(false);
+  });
+
   it('marks same-bar SL and TP as ambiguous', () => {
     const result = resolveEnsembleShadowOutcome(base, [candle(5, 1.0988, 1.1017)]);
     expect(result?.status).toBe('AMBIGUOUS');
@@ -68,7 +89,7 @@ describe('ensemble shadow outcome', () => {
   it('summarizes only non-ambiguous net-R outcomes', () => {
     const summary = summarizeEnsembleSleeveOutcomes([
       {
-        version: 'm5-first-hit-72bar-net-r-v1',
+        version: 'm5-first-hit-72bar-net-r-path-v2',
         status: 'WIN',
         resolvedAt: '2026-10-05T10:10:00Z',
         barsObserved: 2,
@@ -76,9 +97,10 @@ describe('ensemble shadow outcome', () => {
         grossR: 1.5,
         netR: 1.4,
         reason: 'TAKE_PROFIT_HIT',
+        postEntryTelemetry: null,
       },
       {
-        version: 'm5-first-hit-72bar-net-r-v1',
+        version: 'm5-first-hit-72bar-net-r-path-v2',
         status: 'LOSS',
         resolvedAt: '2026-10-06T10:10:00Z',
         barsObserved: 2,
@@ -86,9 +108,10 @@ describe('ensemble shadow outcome', () => {
         grossR: -1,
         netR: -1.1,
         reason: 'STOP_LOSS_HIT',
+        postEntryTelemetry: null,
       },
       {
-        version: 'm5-first-hit-72bar-net-r-v1',
+        version: 'm5-first-hit-72bar-net-r-path-v2',
         status: 'AMBIGUOUS',
         resolvedAt: '2026-10-07T10:10:00Z',
         barsObserved: 1,
@@ -96,6 +119,7 @@ describe('ensemble shadow outcome', () => {
         grossR: null,
         netR: null,
         reason: 'SAME_BAR_SL_TP',
+        postEntryTelemetry: null,
       },
     ]);
     expect(summary.closedTrades).toBe(2);

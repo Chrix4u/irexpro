@@ -265,6 +265,15 @@ interface VpsForexScannerStatusView {
     firstEvaluatedAt: string | null;
     lastEvaluatedAt: string | null;
     blockerCounts: Record<string, number>;
+    profitProtection: {
+      pathResolved: number;
+      lossesWithPath: number;
+      positiveMfeThenLosses: number;
+      lossesAfterHalfR: number;
+      lossesAfterOneR: number;
+      averageMaxFavorableR: number | null;
+      averageMaxCloseGivebackR: number | null;
+    };
     sleeves: Array<{
       instrument: string;
       direction: "BUY" | "SELL";
@@ -2698,6 +2707,30 @@ export default function AiTradingPage() {
                       <span>CORE sleeves</span>
                       <strong>
                         {vpsScannerStatus?.ensembleCampaign.sleeves.filter((sleeve) => sleeve.state === "CORE").length ?? 0} / {vpsScannerStatus?.ensembleCampaign.sleeves.length ?? 0}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Profit-path evidence</span>
+                      <strong>{vpsScannerStatus?.ensembleCampaign.profitProtection.pathResolved ?? 0} resolved</strong>
+                    </div>
+                    <div>
+                      <span>Positive MFE → loss</span>
+                      <strong>
+                        {vpsScannerStatus?.ensembleCampaign.profitProtection.positiveMfeThenLosses ?? 0} / {vpsScannerStatus?.ensembleCampaign.profitProtection.lossesWithPath ?? 0} losses
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Reached +0.5R → loss</span>
+                      <strong>{vpsScannerStatus?.ensembleCampaign.profitProtection.lossesAfterHalfR ?? 0}</strong>
+                    </div>
+                    <div>
+                      <span>Reached +1R → loss</span>
+                      <strong>{vpsScannerStatus?.ensembleCampaign.profitProtection.lossesAfterOneR ?? 0}</strong>
+                    </div>
+                    <div>
+                      <span>Avg MFE / give-back</span>
+                      <strong>
+                        {providerMetric(vpsScannerStatus?.ensembleCampaign.profitProtection.averageMaxFavorableR ?? null, 2)} R / {providerMetric(vpsScannerStatus?.ensembleCampaign.profitProtection.averageMaxCloseGivebackR ?? null, 2)} R
                       </strong>
                     </div>
                     <div>

@@ -1,6 +1,6 @@
 import { EnsembleSleeveEvidence } from './ensemble-governance';
 
-export const ENSEMBLE_OUTCOME_MODEL_VERSION = 'm5-first-hit-72bar-net-r-v1';
+export const ENSEMBLE_OUTCOME_MODEL_VERSION = 'm5-first-hit-72bar-net-r-path-v2';
 export const ENSEMBLE_OUTCOME_HORIZON_BARS = 72;
 
 export interface EnsembleShadowCandle {
@@ -19,6 +19,18 @@ export interface EnsembleShadowDecisionGeometry {
   estimatedExecutionCostR: number;
 }
 
+export interface EnsemblePostEntryTelemetry {
+  maxFavorableR: number;
+  maxAdverseR: number;
+  maxCloseGivebackR: number;
+  peakFavorableAt: string | null;
+  reachedHalfR: boolean;
+  reachedOneR: boolean;
+  gaveBackHalfRToLoss: boolean;
+  gaveBackOneRToLoss: boolean;
+  methodology: 'COMPLETED_M5_BARS_BEFORE_EXIT_CONSERVATIVE_V1';
+}
+
 export interface EnsembleShadowOutcome {
   version: typeof ENSEMBLE_OUTCOME_MODEL_VERSION;
   status: 'WIN' | 'LOSS' | 'EXPIRED' | 'AMBIGUOUS';
@@ -28,6 +40,7 @@ export interface EnsembleShadowOutcome {
   grossR: number | null;
   netR: number | null;
   reason: 'TAKE_PROFIT_HIT' | 'STOP_LOSS_HIT' | 'HORIZON_EXPIRED' | 'SAME_BAR_SL_TP';
+  postEntryTelemetry: EnsemblePostEntryTelemetry | null;
 }
 
 function finiteNumber(value: unknown): number | null {
@@ -86,6 +99,37 @@ export function resolveEnsembleShadowOutcome(
     .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
     .slice(0, horizonBars);
 
+  let maxFavorableR = 0;
+  let maxAdverseR = 0;
+  let maxCloseGivebackR = 0;
+  let peakFavorableAt: string | null = null;
+
+  const updateCompletedBarPath = (candle: (typeof future)[number]) => {
+    const favorablePrice = decision.direction === 'BUY' ? candle.high! : candle.low!;
+    const adversePrice = decision.direction === 'BUY' ? candle.low! : candle.high!;
+    const favorableR = directionalR(decision.direction, entry, favorablePrice, riskDistance);
+    const adverseR = directionalR(decision.direction, entry, adversePrice, riskDistance);
+    const closeR = directionalR(decision.direction, entry, candle.close!, riskDistance);
+    if (favorableR > maxFavorableR) {
+      maxFavorableR = favorableR;
+      peakFavorableAt = candle.timestamp.toISOString();
+    }
+    maxAdverseR = Math.min(maxAdverseR, adverseR);
+    maxCloseGivebackR = Math.max(maxCloseGivebackR, maxFavorableR - closeR);
+  };
+
+  const telemetry = (status: EnsembleShadowOutcome['status']): EnsemblePostEntryTelemetry => ({
+    maxFavorableR,
+    maxAdverseR,
+    maxCloseGivebackR,
+    peakFavorableAt,
+    reachedHalfR: maxFavorableR >= 0.5,
+    reachedOneR: maxFavorableR >= 1,
+    gaveBackHalfRToLoss: status === 'LOSS' && maxFavorableR >= 0.5,
+    gaveBackOneRToLoss: status === 'LOSS' && maxFavorableR >= 1,
+    methodology: 'COMPLETED_M5_BARS_BEFORE_EXIT_CONSERVATIVE_V1',
+  });
+
   for (let index = 0; index < future.length; index += 1) {
     const candle = future[index]!;
     const stopTouched = decision.direction === 'BUY' ? candle.low! <= stop : candle.high! >= stop;
@@ -102,23 +146,38 @@ export function resolveEnsembleShadowOutcome(
         grossR: null,
         netR: null,
         reason: 'SAME_BAR_SL_TP',
+        postEntryTelemetry: null,
       };
     }
 
     if (stopTouched || targetTouched) {
       const exitPrice = targetTouched ? target : stop;
       const grossR = directionalR(decision.direction, entry, exitPrice, riskDistance);
+      // Do not use the full exit-bar high/low for path telemetry: without tick
+      // ordering we cannot know whether that excursion occurred before exit.
+      if (targetTouched && grossR > maxFavorableR) {
+        maxFavorableR = grossR;
+        peakFavorableAt = candle.timestamp.toISOString();
+      }
+      if (stopTouched) {
+        maxAdverseR = Math.min(maxAdverseR, grossR);
+        maxCloseGivebackR = Math.max(maxCloseGivebackR, maxFavorableR - grossR);
+      }
+      const status: EnsembleShadowOutcome['status'] = targetTouched ? 'WIN' : 'LOSS';
       return {
         version: ENSEMBLE_OUTCOME_MODEL_VERSION,
-        status: targetTouched ? 'WIN' : 'LOSS',
+        status,
         resolvedAt: candle.timestamp.toISOString(),
         barsObserved: index + 1,
         exitPrice,
         grossR,
         netR: grossR - costR,
         reason: targetTouched ? 'TAKE_PROFIT_HIT' : 'STOP_LOSS_HIT',
+        postEntryTelemetry: telemetry(status),
       };
     }
+
+    updateCompletedBarPath(candle);
   }
 
   if (future.length < horizonBars) return null;
@@ -134,6 +193,7 @@ export function resolveEnsembleShadowOutcome(
     grossR,
     netR: grossR - costR,
     reason: 'HORIZON_EXPIRED',
+    postEntryTelemetry: telemetry('EXPIRED'),
   };
 }
 

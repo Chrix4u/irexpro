@@ -1009,6 +1009,15 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       firstEvaluatedAt: null as string | null,
       lastEvaluatedAt: null as string | null,
       blockerCounts: {} as Record<string, number>,
+      profitProtection: {
+        pathResolved: 0,
+        lossesWithPath: 0,
+        positiveMfeThenLosses: 0,
+        lossesAfterHalfR: 0,
+        lossesAfterOneR: 0,
+        averageMaxFavorableR: null as number | null,
+        averageMaxCloseGivebackR: null as number | null,
+      },
       sleeves: [] as Array<{
         instrument: string;
         direction: 'BUY' | 'SELL';
@@ -1097,6 +1106,29 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     const validOutcomes = allOutcomes.filter(
       (outcome) => outcome.status !== 'AMBIGUOUS' && outcome.netR != null,
     );
+    const pathOutcomes = validOutcomes.filter((outcome) => outcome.postEntryTelemetry != null);
+    const lossesWithPath = pathOutcomes.filter((outcome) => outcome.status === 'LOSS');
+    const average = (values: number[]): number | null =>
+      values.length > 0 ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+    const profitProtection = {
+      pathResolved: pathOutcomes.length,
+      lossesWithPath: lossesWithPath.length,
+      positiveMfeThenLosses: lossesWithPath.filter(
+        (outcome) => (outcome.postEntryTelemetry?.maxFavorableR ?? 0) > 0,
+      ).length,
+      lossesAfterHalfR: lossesWithPath.filter(
+        (outcome) => outcome.postEntryTelemetry?.gaveBackHalfRToLoss,
+      ).length,
+      lossesAfterOneR: lossesWithPath.filter(
+        (outcome) => outcome.postEntryTelemetry?.gaveBackOneRToLoss,
+      ).length,
+      averageMaxFavorableR: average(
+        pathOutcomes.map((outcome) => outcome.postEntryTelemetry!.maxFavorableR),
+      ),
+      averageMaxCloseGivebackR: average(
+        pathOutcomes.map((outcome) => outcome.postEntryTelemetry!.maxCloseGivebackR),
+      ),
+    };
     const sleeves = [...sleeveMap.values()]
       .map((sleeve) => {
         const sleeveEvidence = summarizeEnsembleSleeveOutcomes(sleeve.outcomes);
@@ -1134,6 +1166,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       firstEvaluatedAt: new Date(rows[0]!.evaluated_at).toISOString(),
       lastEvaluatedAt: new Date(rows[rows.length - 1]!.evaluated_at).toISOString(),
       blockerCounts,
+      profitProtection,
       sleeves,
     };
   }
