@@ -290,6 +290,33 @@ interface VpsForexScannerStatusView {
       };
     }>;
   };
+  expertRegistry: {
+    policy: "EXPLICIT_PROVENANCE_V1";
+    trainedModelCount: number;
+    heuristicPolicyCount: number;
+    riskGuardCount: number;
+    frozenBaselineCount: number;
+    entries: Array<{
+      code: string;
+      label: string;
+      kind: "TRAINED_MODEL" | "HEURISTIC_POLICY" | "RISK_GUARD" | "FROZEN_BASELINE";
+      lifecycle:
+        | "SHADOW"
+        | "READY_ARTIFACT"
+        | "WAITING_FOR_DATA"
+        | "COLLECTING"
+        | "ACTIVE_GUARD"
+        | "FROZEN"
+        | "REJECTED";
+      trained: boolean;
+      artifact: string | null;
+      dataAuthority: string;
+      executionAuthority: "NONE";
+      modifiesExecution: false;
+      prospectiveEvidenceRequired: boolean;
+      description: string;
+    }>;
+  };
   lastEnsembleDecision: {
     evaluatedAt: string | null;
     instrument: string | null;
@@ -2440,10 +2467,30 @@ export default function AiTradingPage() {
 
                     <div className="ai-strategy-detail-group">
                       <div className="ai-strategy-detail">
-                        <span>Ensemble consensus</span>
+                        <span>Decision policy checks</span>
                         <strong>
                           {vpsScannerStatus?.lastEnsembleDecision.consensusPassed ?? 0}/
-                          {vpsScannerStatus?.lastEnsembleDecision.consensusRequired ?? 0} models
+                          {vpsScannerStatus?.lastEnsembleDecision.consensusRequired ?? 0} checks
+                        </strong>
+                      </div>
+                      <div className="ai-strategy-detail">
+                        <span>Expert provenance</span>
+                        <strong>
+                          {vpsScannerStatus?.expertRegistry
+                            ? `${vpsScannerStatus.expertRegistry.trainedModelCount} trained · ${vpsScannerStatus.expertRegistry.heuristicPolicyCount} policies · ${vpsScannerStatus.expertRegistry.riskGuardCount} guards · ${vpsScannerStatus.expertRegistry.frozenBaselineCount} frozen`
+                            : "Loading provenance"}
+                        </strong>
+                      </div>
+                    </div>
+
+                    <div className="ai-strategy-detail-group">
+                      <div className="ai-strategy-detail">
+                        <span>Trained-model authority</span>
+                        <strong>
+                          {vpsScannerStatus?.expertRegistry.entries
+                            .filter((entry) => entry.kind === "TRAINED_MODEL")
+                            .map((entry) => `${entry.label} · ${entry.lifecycle}`)
+                            .join(" · ") || "No trained model registered"}
                         </strong>
                       </div>
                       <div className="ai-strategy-detail">

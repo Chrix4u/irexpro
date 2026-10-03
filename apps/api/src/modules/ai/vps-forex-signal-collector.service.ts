@@ -28,6 +28,7 @@ import {
   resolveEnsembleShadowOutcome,
   summarizeEnsembleSleeveOutcomes,
 } from './ensemble-shadow-outcome';
+import { buildEnsembleExpertRegistry } from './ensemble-expert-registry';
 
 const LEGACY_PROVIDER_CODE = 'vps-twelvedata-six-pair-v7';
 const ACTIVE_ENGINE_CODE = 'irexpro-multimodel-ensemble-v1';
@@ -492,6 +493,17 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         session.brokerConnectionId === this.connectionId(),
       );
     }
+    const expertRegistry = buildEnsembleExpertRegistry({
+      highConvictionArtifact:
+        typeof highConvictionChallenger.artifact === 'string'
+          ? highConvictionChallenger.artifact
+          : null,
+      highConvictionLoaded: highConvictionChallenger.loaded === true,
+      highConvictionBrokerDataReady: highConvictionChallenger.prospectiveScoringState === 'READY',
+      macroEventConfigured: Boolean(this.macroEventRisk?.isConfigured()),
+      sleeveResolvedOutcomes: ensembleCampaign.evaluableResolved,
+      legacyBaselineFrozen: LEGACY_V7_EXECUTION_FROZEN,
+    });
     return {
       providerCode: PROVIDER_CODE,
       activeEngineCode: ACTIVE_ENGINE_CODE,
@@ -520,6 +532,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       marketSchedule,
       ensembleCampaign,
       highConvictionChallenger,
+      expertRegistry,
       lastEnsembleDecision: {
         evaluatedAt: this.lastEnsembleDecision.evaluatedAt?.toISOString() ?? null,
         instrument: this.lastEnsembleDecision.instrument,
