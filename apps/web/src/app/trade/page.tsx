@@ -229,6 +229,29 @@ interface VpsForexScannerStatusView {
     consensusRequired: number | null;
     regime: string | null;
     reasons: string[];
+    governance: {
+      version: string;
+      costModelVersion: string;
+      driftModelVersion: string;
+      grossExpectedR: number;
+      estimatedExecutionCostR: number;
+      netExpectedR: number;
+      netExpectedRPassed: boolean;
+      driftState: "NORMAL" | "STRESSED" | "OUT_OF_DISTRIBUTION";
+      driftQuality: number;
+      driftPassed: boolean;
+      sleeveState: "COLLECTING" | "CORE" | "PROBATION" | "BLOCKED";
+      sleeveEvidence: {
+        closedTrades: number;
+        profitFactor: number | null;
+        sharpe: number | null;
+        maxDrawdown: number | null;
+        positiveWindowFraction: number | null;
+      } | null;
+      eventRisk: "CLEAR" | "HIGH_IMPACT_BLOCK" | "UNVERIFIED";
+      paperPromotionEligible: boolean;
+      blockers: string[];
+    } | null;
   };
   components: Record<string, string>;
   marketCache: {
@@ -2312,6 +2335,65 @@ export default function AiTradingPage() {
                         <strong>
                           {vpsScannerStatus?.lastEnsembleDecision.consensusPassed ?? 0}/
                           {vpsScannerStatus?.lastEnsembleDecision.consensusRequired ?? 0} models
+                        </strong>
+                      </div>
+                      <div className="ai-strategy-detail">
+                        <span>Net expected R</span>
+                        <strong>
+                          {vpsScannerStatus?.lastEnsembleDecision.governance
+                            ? `${providerMetric(vpsScannerStatus.lastEnsembleDecision.governance.netExpectedR, 3)} R`
+                            : "Awaiting fresh decision"}
+                        </strong>
+                      </div>
+                    </div>
+
+                    <div className="ai-strategy-detail-group">
+                      <div className="ai-strategy-detail">
+                        <span>Drift / sleeve</span>
+                        <strong>
+                          {vpsScannerStatus?.lastEnsembleDecision.governance
+                            ? `${vpsScannerStatus.lastEnsembleDecision.governance.driftState} · ${vpsScannerStatus.lastEnsembleDecision.governance.sleeveState} · ${vpsScannerStatus.lastEnsembleDecision.governance.sleeveEvidence?.closedTrades ?? 0}/100`
+                            : "COLLECTING · 0/100"}
+                        </strong>
+                      </div>
+                      <div className="ai-strategy-detail">
+                        <span>Macro-event guard</span>
+                        <strong>
+                          {vpsScannerStatus?.lastEnsembleDecision.governance?.eventRisk === "CLEAR"
+                            ? "CLEAR"
+                            : vpsScannerStatus?.lastEnsembleDecision.governance?.eventRisk === "HIGH_IMPACT_BLOCK"
+                              ? "BLOCKED · HIGH IMPACT"
+                              : "PROVIDER REQUIRED · FAIL CLOSED"}
+                        </strong>
+                      </div>
+                    </div>
+
+                    <div className="ai-strategy-detail-group">
+                      <div className="ai-strategy-detail">
+                        <span>Sleeve PF / Sharpe</span>
+                        <strong>
+                          {vpsScannerStatus?.lastEnsembleDecision.governance?.sleeveEvidence
+                            ? `${providerMetric(vpsScannerStatus.lastEnsembleDecision.governance.sleeveEvidence.profitFactor, 2)} / ${providerMetric(vpsScannerStatus.lastEnsembleDecision.governance.sleeveEvidence.sharpe, 2)}`
+                            : "Awaiting resolved outcomes"}
+                        </strong>
+                      </div>
+                      <div className="ai-strategy-detail">
+                        <span>Sleeve stability</span>
+                        <strong>
+                          {vpsScannerStatus?.lastEnsembleDecision.governance?.sleeveEvidence
+                            ? `DD ${providerPercent(vpsScannerStatus.lastEnsembleDecision.governance.sleeveEvidence.maxDrawdown)} · +weeks ${providerPercent(vpsScannerStatus.lastEnsembleDecision.governance.sleeveEvidence.positiveWindowFraction)}`
+                            : "COLLECTING"}
+                        </strong>
+                      </div>
+                    </div>
+
+                    <div className="ai-strategy-detail-group">
+                      <div className="ai-strategy-detail">
+                        <span>PAPER promotion</span>
+                        <strong>
+                          {vpsScannerStatus?.lastEnsembleDecision.governance?.paperPromotionEligible
+                            ? "ELIGIBLE"
+                            : "LOCKED BY GOVERNANCE"}
                         </strong>
                       </div>
                       <div className="ai-strategy-detail">

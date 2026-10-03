@@ -22,6 +22,7 @@ import { VpsForexSignalCollectorService } from './vps-forex-signal-collector.ser
 import { VpsForexSignalCollectorController } from './vps-forex-signal-collector.controller';
 import { BrokerParityV7Service } from './broker-parity-v7.service';
 import { V8DedicatedPaperReadinessService } from './v8-dedicated-paper-readiness.service';
+import { MacroEventRiskService } from './macro-event-risk.service';
 import { InternalApiKeyGuard } from '../../common/guards/internal-api-key.guard';
 import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-api-key.guard';
 
@@ -68,6 +69,7 @@ import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-a
     VpsForexSignalCollectorService,
     BrokerParityV7Service,
     V8DedicatedPaperReadinessService,
+    MacroEventRiskService,
   ],
   exports: [AiService, AiSignalService],
 })

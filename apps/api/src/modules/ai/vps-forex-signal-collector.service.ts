@@ -17,6 +17,13 @@ import {
   PlanBPortfolioPosition,
   scorePlanBMultimodelShadow,
 } from './plan-b-multimodel-shadow';
+import { EnsembleGovernanceDecision, evaluateEnsembleGovernance } from './ensemble-governance';
+import { MacroEventRiskAssessment, MacroEventRiskService } from './macro-event-risk.service';
+import {
+  EnsembleShadowOutcome,
+  resolveEnsembleShadowOutcome,
+  summarizeEnsembleSleeveOutcomes,
+} from './ensemble-shadow-outcome';
 
 const LEGACY_PROVIDER_CODE = 'vps-twelvedata-six-pair-v7';
 const ACTIVE_ENGINE_CODE = 'irexpro-multimodel-ensemble-v1';
@@ -97,8 +104,7 @@ export function isFreshOpportunity(
   const breakout =
     directionalMove >= Math.max(candidate.atr, previous.atr) * FRESH_BREAKOUT_ATR &&
     candidate.confidence >= previous.confidence - MAX_CONFIDENCE_DECAY_ON_BREAKOUT;
-  const confidenceExpansion =
-    candidate.confidence >= previous.confidence + FRESH_CONFIDENCE_DELTA;
+  const confidenceExpansion = candidate.confidence >= previous.confidence + FRESH_CONFIDENCE_DELTA;
 
   return breakout || confidenceExpansion;
 }
@@ -283,6 +289,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     consensusRequired: number | null;
     regime: string | null;
     reasons: string[];
+    governance: EnsembleGovernanceDecision | null;
   } = {
     evaluatedAt: null,
     instrument: null,
@@ -293,6 +300,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     consensusRequired: null,
     regime: null,
     reasons: ['WAITING_FOR_MARKET_SCAN'],
+    governance: null,
   };
   private lastEvaluation: {
     confidence: number | null;
@@ -318,6 +326,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     private readonly livePaperMarket: LivePaperMarketDataService,
     private readonly aiEngineClient: AiEngineClient,
     @Optional() private readonly dataSource?: DataSource,
+    @Optional() private readonly macroEventRisk?: MacroEventRiskService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -380,7 +389,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           activeAfterPrime.brokerConnectionId === connectionId
         ) {
           await this.heartbeatLivePaper(userId, connectionId);
-          this.logger.log('Multi-model startup live PAPER protection heartbeat completed for 6/6 pairs');
+          this.logger.log(
+            'Multi-model startup live PAPER protection heartbeat completed for 6/6 pairs',
+          );
         }
       }
     } catch (error) {
@@ -465,6 +476,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         consensusRequired: this.lastEnsembleDecision.consensusRequired,
         regime: this.lastEnsembleDecision.regime,
         reasons: this.lastEnsembleDecision.reasons,
+        governance: this.lastEnsembleDecision.governance,
       },
       components: {
         regimeRouter: 'IMPLEMENTED',
@@ -477,9 +489,12 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         portfolioCorrelation: 'IMPLEMENTED',
         highConvictionExpert: 'CHALLENGER_VALIDATION',
         fastMicrostructureSpecialists: 'RESEARCH_VALIDATION',
-        newsEventRisk: 'NEXT_IMPLEMENTATION',
-        driftSleeveHealth: 'NEXT_IMPLEMENTATION',
-        postEntryExitModel: 'NEXT_IMPLEMENTATION',
+        newsEventRisk: this.macroEventRisk?.isConfigured()
+          ? 'IMPLEMENTED'
+          : 'GUARD_IMPLEMENTED_PROVIDER_REQUIRED',
+        netExecutionEconomics: 'IMPLEMENTED',
+        driftSleeveHealth: 'IMPLEMENTED_COLLECTING',
+        postEntryExitModel: 'TELEMETRY_IMPLEMENTED_POLICY_RESEARCH',
       },
       providerCooldownReason: this.providerCooldownReason,
       providerCooldownUntil: this.providerCooldownUntil?.toISOString() ?? null,
@@ -504,7 +519,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
                 ? 'WAITING_FOR_PAPER_SESSION'
                 : this.providerCooldownUntil && this.providerCooldownUntil.getTime() > Date.now()
                   ? 'WAITING_FOR_PROVIDER_QUOTA'
-                  : this.livePaperMarket.status(this.connectionId()).cachedInstrumentCount < SYMBOLS.length
+                  : this.livePaperMarket.status(this.connectionId()).cachedInstrumentCount <
+                      SYMBOLS.length
                     ? 'WAITING_FOR_MARKET_DATA'
                     : MULTI_MODEL_PAPER_EXECUTION_ENABLED
                       ? 'ACTIVE'
@@ -542,6 +558,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       for (const [instrument, candles] of seriesByInstrument.entries()) {
         this.livePaperMarket.updateClosedCandles(instrument, candles, connectionId);
       }
+      await this.resolvePendingEnsembleShadowOutcomes(userId, connectionId, seriesByInstrument);
 
       const session = await this.executionService.getActiveSession(userId);
       if (
@@ -661,6 +678,44 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         },
         portfolioPositions,
       );
+      const sleeveEvidence = await this.loadEnsembleSleeveEvidence(
+        userId,
+        connectionId,
+        best.instrument,
+        best.direction,
+      );
+      const macroEventAssessment: MacroEventRiskAssessment = this.macroEventRisk
+        ? await this.macroEventRisk.assess(
+            best.instrument,
+            new Date(best.barTime.getTime() + BAR_MS),
+          )
+        : {
+            state: 'UNVERIFIED',
+            provider: 'TRADING_ECONOMICS',
+            configured: false,
+            checkedAt: new Date().toISOString(),
+            instrument: best.instrument,
+            relevantCountries: [],
+            blockWindowMinutesBefore: 30,
+            blockWindowMinutesAfter: 30,
+            blockingEvents: [],
+            reason: 'SERVICE_NOT_AVAILABLE',
+          };
+      const ensembleGovernance = evaluateEnsembleGovernance({
+        ensemble: planBEnsemble,
+        instrument: best.instrument,
+        entryPrice: best.entry,
+        stopLoss: best.stopLoss,
+        takeProfit: best.takeProfit,
+        confidence: best.confidence,
+        extensionAtr: best.extensionAtr,
+        volatilityScore: best.volatilityScore,
+        emaSeparation: best.emaSeparation,
+        mtfStrength: best.mtfStrength,
+        rsi14: best.rsi14,
+        eventRisk: macroEventAssessment.state,
+        sleeveEvidence,
+      });
       this.lastEnsembleDecision = {
         evaluatedAt: new Date(),
         instrument: best.instrument,
@@ -671,6 +726,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         consensusRequired: planBEnsemble.consensusRequired,
         regime: planBEnsemble.regime,
         reasons: planBEnsemble.reasons,
+        governance: ensembleGovernance,
       };
       await this.persistEnsembleShadowDecision(
         userId,
@@ -680,6 +736,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         best,
         planBEnsemble,
         portfolioSnapshotAvailable,
+        ensembleGovernance,
+        macroEventAssessment,
       );
       this.lastPublishedOpportunity.set(best.instrument, {
         direction: best.direction,
@@ -688,11 +746,18 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         atr: best.atr,
         barTimeMs: best.barTime.getTime(),
       });
-      if (!MULTI_MODEL_PAPER_EXECUTION_ENABLED || !planBEnsemble.admitted) {
+      if (
+        !MULTI_MODEL_PAPER_EXECUTION_ENABLED ||
+        !planBEnsemble.admitted ||
+        !ensembleGovernance.paperPromotionEligible
+      ) {
         this.logger.log(
           `Multi-model ensemble ${best.instrument} ${best.direction} ` +
             `admitted=${planBEnsemble.admitted} consensus=${planBEnsemble.consensusPassed}/${planBEnsemble.consensusRequired} ` +
             `execution=SHADOW_ONLY legacyV7Frozen=${LEGACY_V7_EXECUTION_FROZEN} ` +
+            `netExpectedR=${ensembleGovernance.netExpectedR.toFixed(4)} ` +
+            `drift=${ensembleGovernance.driftState} sleeve=${ensembleGovernance.sleeveState} ` +
+            `governance=${ensembleGovernance.blockers.join(',') || 'PASS'} ` +
             `reasons=${planBEnsemble.reasons.join(',')}`,
         );
         return;
@@ -778,6 +843,18 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           plan_b_ensemble_consensus_required: planBEnsemble.consensusRequired,
           plan_b_ensemble_portfolio_snapshot_available: portfolioSnapshotAvailable,
           plan_b_ensemble_portfolio_quality: planBEnsemble.portfolioQuality,
+          plan_b_governance_version: ensembleGovernance.version,
+          plan_b_governance_cost_model_version: ensembleGovernance.costModelVersion,
+          plan_b_governance_drift_model_version: ensembleGovernance.driftModelVersion,
+          plan_b_governance_execution_cost_r: ensembleGovernance.estimatedExecutionCostR,
+          plan_b_governance_net_expected_r: ensembleGovernance.netExpectedR,
+          plan_b_governance_net_expected_r_passed: ensembleGovernance.netExpectedRPassed,
+          plan_b_governance_drift_state: ensembleGovernance.driftState,
+          plan_b_governance_drift_quality: ensembleGovernance.driftQuality,
+          plan_b_governance_sleeve_state: ensembleGovernance.sleeveState,
+          plan_b_governance_event_risk: ensembleGovernance.eventRisk,
+          plan_b_governance_paper_promotion_eligible: ensembleGovernance.paperPromotionEligible,
+          plan_b_governance_blockers: ensembleGovernance.blockers,
           plan_b_ensemble_portfolio_risk_score: planBEnsemble.portfolioRiskScore,
           plan_b_ensemble_open_position_count: planBEnsemble.openPositionCount,
           plan_b_ensemble_same_instrument_count: planBEnsemble.sameInstrumentCount,
@@ -807,11 +884,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     const day = now.getUTCDay();
     const hour = now.getUTCHours();
     const paused = day === 0 || day === 6 || hour >= 21;
-    const reason = day === 0 || day === 6
-      ? 'WEEKEND'
-      : hour >= 21
-        ? 'ROLLOVER_LOW_LIQUIDITY'
-        : null;
+    const reason =
+      day === 0 || day === 6 ? 'WEEKEND' : hour >= 21 ? 'ROLLOVER_LOW_LIQUIDITY' : null;
     return {
       paused,
       reason,
@@ -859,6 +933,125 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         };
   }
 
+  private async resolvePendingEnsembleShadowOutcomes(
+    userId: string,
+    connectionId: string,
+    seriesByInstrument: Map<string, LivePaperCandleInput[]>,
+  ): Promise<void> {
+    if (!this.dataSource) return;
+
+    const rows = (await this.dataSource.query(
+      `
+        SELECT
+          id,
+          instrument,
+          direction,
+          market_bar_time,
+          entry_price,
+          components
+        FROM trading.ensemble_shadow_decisions
+        WHERE user_id = $1
+          AND broker_connection_id = $2
+          AND engine_code = $3
+          AND admitted = true
+          AND NOT (components ? 'outcome')
+        ORDER BY evaluated_at ASC
+        LIMIT 500
+      `,
+      [userId, connectionId, ACTIVE_ENGINE_CODE],
+    )) as Array<{
+      id: string;
+      instrument: string;
+      direction: 'BUY' | 'SELL';
+      market_bar_time: string | Date;
+      entry_price: string | number;
+      components: Record<string, unknown> | null;
+    }>;
+
+    let resolvedCount = 0;
+    for (const row of rows) {
+      const candles = seriesByInstrument.get(row.instrument);
+      const components = row.components;
+      if (!candles || !components || typeof components !== 'object') continue;
+
+      const stopLoss = Number(components.stopLoss);
+      const takeProfit = Number(components.takeProfit);
+      const governance =
+        components.governance && typeof components.governance === 'object'
+          ? (components.governance as Record<string, unknown>)
+          : null;
+      const estimatedExecutionCostR = Number(governance?.estimatedExecutionCostR ?? 0);
+      if (
+        !Number.isFinite(stopLoss) ||
+        !Number.isFinite(takeProfit) ||
+        !Number.isFinite(estimatedExecutionCostR)
+      ) {
+        continue;
+      }
+
+      const outcome = resolveEnsembleShadowOutcome(
+        {
+          direction: row.direction,
+          marketBarTime: row.market_bar_time,
+          entryPrice: Number(row.entry_price),
+          stopLoss,
+          takeProfit,
+          estimatedExecutionCostR,
+        },
+        candles,
+      );
+      if (!outcome) continue;
+
+      await this.dataSource.query(
+        `
+          UPDATE trading.ensemble_shadow_decisions
+          SET components = jsonb_set(components, '{outcome}', $2::jsonb, true)
+          WHERE id = $1
+            AND NOT (components ? 'outcome')
+        `,
+        [row.id, JSON.stringify(outcome)],
+      );
+      resolvedCount += 1;
+    }
+
+    if (resolvedCount > 0) {
+      this.logger.log(`Multi-model shadow outcomes resolved count=${resolvedCount}`);
+    }
+  }
+
+  private async loadEnsembleSleeveEvidence(
+    userId: string,
+    connectionId: string,
+    instrument: string,
+    direction: 'BUY' | 'SELL',
+  ) {
+    if (!this.dataSource) return null;
+
+    const rows = (await this.dataSource.query(
+      `
+        SELECT components->'outcome' AS outcome
+        FROM trading.ensemble_shadow_decisions
+        WHERE user_id = $1
+          AND broker_connection_id = $2
+          AND engine_code = $3
+          AND instrument = $4
+          AND direction = $5
+          AND admitted = true
+          AND components ? 'outcome'
+        ORDER BY evaluated_at ASC
+      `,
+      [userId, connectionId, ACTIVE_ENGINE_CODE, instrument, direction],
+    )) as Array<{ outcome: EnsembleShadowOutcome | null }>;
+
+    const outcomes = rows
+      .map((row) => row.outcome)
+      .filter(
+        (outcome): outcome is EnsembleShadowOutcome =>
+          outcome != null && typeof outcome === 'object' && typeof outcome.status === 'string',
+      );
+    return summarizeEnsembleSleeveOutcomes(outcomes);
+  }
+
   private async persistEnsembleShadowDecision(
     userId: string,
     tradingSessionId: string,
@@ -867,6 +1060,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     candidate: Candidate,
     ensemble: PlanBEnsembleScore,
     portfolioSnapshotAvailable: boolean,
+    governance: EnsembleGovernanceDecision,
+    macroEventAssessment: MacroEventRiskAssessment,
   ): Promise<void> {
     if (!this.dataSource) return;
 
@@ -945,15 +1140,16 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           mtfStrength: candidate.mtfStrength,
           rsi14: candidate.rsi14,
           candidateScore: candidate.score,
+          stopLoss: candidate.stopLoss,
+          takeProfit: candidate.takeProfit,
+          governance,
+          macroEventRisk: macroEventAssessment,
         }),
       ],
     );
   }
 
-  private async restorePublishedOpportunities(
-    userId: string,
-    connectionId: string,
-  ): Promise<void> {
+  private async restorePublishedOpportunities(userId: string, connectionId: string): Promise<void> {
     if (!this.dataSource) return;
 
     const rows = (await this.dataSource.query(
@@ -971,7 +1167,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           consensus_passed,
           consensus_required,
           regime,
-          reasons
+          reasons,
+          components
         FROM trading.ensemble_shadow_decisions
         WHERE user_id = $1
           AND broker_connection_id = $2
@@ -993,6 +1190,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       consensus_required: number;
       regime: string;
       reasons: string[] | null;
+      components: Record<string, unknown> | null;
     }>;
 
     this.lastPublishedOpportunity.clear();
@@ -1041,6 +1239,13 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         consensusRequired: Number(latest.consensus_required),
         regime: latest.regime,
         reasons: Array.isArray(latest.reasons) ? latest.reasons : [],
+        governance:
+          latest.components &&
+          typeof latest.components === 'object' &&
+          latest.components.governance &&
+          typeof latest.components.governance === 'object'
+            ? (latest.components.governance as unknown as EnsembleGovernanceDecision)
+            : null,
       };
     }
 
@@ -1089,10 +1294,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     // costs 6. Reuse one successful batch inside the same API-process minute
     // so a startup prime + collection slot cannot accidentally spend 12.
     const requestNow = new Date();
-    if (
-      this.providerCooldownUntil &&
-      this.providerCooldownUntil.getTime() > requestNow.getTime()
-    ) {
+    if (this.providerCooldownUntil && this.providerCooldownUntil.getTime() > requestNow.getTime()) {
       throw new Error(
         `Twelve Data daily credit cooldown active until ${this.providerCooldownUntil.toISOString()}`,
       );
