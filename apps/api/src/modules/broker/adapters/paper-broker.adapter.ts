@@ -615,6 +615,8 @@ interface PaperPosition {
   pathMaxFavorablePnl: string;
   pathMaxAdversePnl: string;
   pathLatestUnrealisedPnl: string;
+  /** Last observed executable exit-side mark; read-only fallback after restart. */
+  pathLastMarkPrice: string | null;
   pathPeakObservedAt: Date;
   pathLastObservedAt: Date;
   pathLastMarkObservedAt: Date | null;
@@ -1070,6 +1072,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       position.pathMaxAdversePnl = adversePnl;
     }
     position.pathLatestUnrealisedPnl = latestPnl;
+    position.pathLastMarkPrice = latestExitPrice;
     position.pathLastObservedAt = new Date(observedAt);
     position.pathObservationCount += 1;
   }
@@ -1122,9 +1125,41 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   }
 
   private mapPosition(position: PaperPosition): BrokerPosition {
-    const liveQuote = this.isLiveMarketMode()
-      ? this.liveMarketData!.getPositionMarkQuote(position.instrument, 60_000, 20 * 60_000, this._connectionId)
-      : null;
+    let liveQuote: ReturnType<LivePaperMarketDataService['getPositionMarkQuote']> | null = null;
+    if (this.isLiveMarketMode()) {
+      try {
+        liveQuote = this.liveMarketData!.getPositionMarkQuote(
+          position.instrument,
+          60_000,
+          20 * 60_000,
+          this._connectionId,
+        );
+      } catch (error) {
+        // Read-only restart/weekend fallback. Never route this durable mark
+        // through getQuote(), getCurrentPrice(), risk, fills, or protection.
+        if (position.pathLastMarkPrice && position.pathLastMarkObservedAt) {
+          return {
+            externalOrderId: position.positionId,
+            instrument: position.instrument,
+            direction: position.direction,
+            lotSize: position.lotSize,
+            openPrice: position.entryPrice,
+            currentPrice: position.pathLastMarkPrice,
+            markObservedAt: new Date(position.pathLastMarkObservedAt),
+            markSource: null,
+            markIsStale: true,
+            stopLoss: position.stopLoss,
+            takeProfit: position.takeProfit,
+            unrealisedPnl: position.pathLatestUnrealisedPnl,
+            openedAt: position.openedAt,
+            commission: '0',
+            swap: '0',
+            pathDiagnostics: this.pathDiagnostics(position),
+          };
+        }
+        throw error;
+      }
+    }
     const quote: PaperQuote = liveQuote
       ? {
           bid: liveQuote.bid,
@@ -1309,7 +1344,12 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     }
 
     if (this.isLiveMarketMode()) {
-      return this.liveMarketData!.getOHLCV(instrument, normalizedTimeframe, count, this._connectionId);
+      return this.liveMarketData!.getOHLCV(
+        instrument,
+        normalizedTimeframe,
+        count,
+        this._connectionId,
+      );
     }
 
     if (this._replayFeed) {
@@ -1586,6 +1626,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       pathMaxFavorablePnl: '0.00',
       pathMaxAdversePnl: '0.00',
       pathLatestUnrealisedPnl: '0.00',
+      pathLastMarkPrice: null,
       pathPeakObservedAt: this.currentTime(),
       pathLastObservedAt: this.currentTime(),
       pathLastMarkObservedAt: null,
@@ -1919,13 +1960,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
           const bidLow = (low - halfSpread).toFixed(spec.digits);
           const bidHigh = (high - halfSpread).toFixed(spec.digits);
           const bidClose = (close - halfSpread).toFixed(spec.digits);
-          this.recordPathObservation(
-            position,
-            bidClose,
-            candleClosedAt,
-            bidHigh,
-            bidLow,
-          );
+          this.recordPathObservation(position, bidClose, candleClosedAt, bidHigh, bidLow);
           position.pathLastCandleClosedAt = new Date(candleClosedAt);
           const stopTouched =
             !isZeroLevel(position.stopLoss) &&
@@ -1963,13 +1998,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
           const askHigh = (high + halfSpread).toFixed(spec.digits);
           const askLow = (low + halfSpread).toFixed(spec.digits);
           const askClose = (close + halfSpread).toFixed(spec.digits);
-          this.recordPathObservation(
-            position,
-            askClose,
-            candleClosedAt,
-            askLow,
-            askHigh,
-          );
+          this.recordPathObservation(position, askClose, candleClosedAt, askLow, askHigh);
           position.pathLastCandleClosedAt = new Date(candleClosedAt);
           const stopTouched =
             !isZeroLevel(position.stopLoss) &&
@@ -2015,8 +2044,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   private evaluatePositions(quote: PaperQuote, instrumentFilter?: string): void {
     for (const position of Array.from(this._positions.values())) {
       if (instrumentFilter && position.instrument !== instrumentFilter) continue;
-      const observedAt =
-        quote.timestamp instanceof Date ? quote.timestamp : this.currentTime();
+      const observedAt = quote.timestamp instanceof Date ? quote.timestamp : this.currentTime();
       if (
         position.pathLastMarkObservedAt === null ||
         observedAt.getTime() > position.pathLastMarkObservedAt.getTime()
@@ -2414,17 +2442,15 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         units: BigInt(position.units),
         openedAt,
         pathMaxFavorablePnl:
-          typeof position.pathMaxFavorablePnl === 'string'
-            ? position.pathMaxFavorablePnl
-            : '0.00',
+          typeof position.pathMaxFavorablePnl === 'string' ? position.pathMaxFavorablePnl : '0.00',
         pathMaxAdversePnl:
-          typeof position.pathMaxAdversePnl === 'string'
-            ? position.pathMaxAdversePnl
-            : '0.00',
+          typeof position.pathMaxAdversePnl === 'string' ? position.pathMaxAdversePnl : '0.00',
         pathLatestUnrealisedPnl:
           typeof position.pathLatestUnrealisedPnl === 'string'
             ? position.pathLatestUnrealisedPnl
             : '0.00',
+        pathLastMarkPrice:
+          typeof position.pathLastMarkPrice === 'string' ? position.pathLastMarkPrice : null,
         pathPeakObservedAt: position.pathPeakObservedAt
           ? new Date(position.pathPeakObservedAt)
           : openedAt,
@@ -2457,8 +2483,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       ...state.closedTrades.map((trade) => {
         const openedAt = new Date(trade.openedAt);
         const closedAt = new Date(trade.closedAt);
-        const realisedPnl =
-          typeof trade.realisedPnl === 'string' ? trade.realisedPnl : '0.00';
+        const realisedPnl = typeof trade.realisedPnl === 'string' ? trade.realisedPnl : '0.00';
         const fallbackMaxFavorable =
           compareDecimalStrings(realisedPnl, '0') > 0 ? realisedPnl : '0.00';
         const fallbackMaxAdverse =
@@ -2480,9 +2505,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
               ? trade.pathLatestUnrealisedPnl
               : realisedPnl,
           pathProfitGiveback:
-            typeof trade.pathProfitGiveback === 'string'
-              ? trade.pathProfitGiveback
-              : '0.00',
+            typeof trade.pathProfitGiveback === 'string' ? trade.pathProfitGiveback : '0.00',
           pathPeakObservedAt: trade.pathPeakObservedAt
             ? new Date(trade.pathPeakObservedAt)
             : closedAt,

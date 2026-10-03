@@ -1,5 +1,18 @@
 import { PaperBrokerAdapter } from './paper-broker.adapter';
 import { LivePaperMarketDataService } from '../services/live-paper-market-data.service';
+import { PaperBrokerStateService } from '../services/paper-broker-state.service';
+
+class InMemoryLivePaperStateStore {
+  private state: Record<string, unknown> | null = null;
+
+  async load(): Promise<Record<string, unknown> | null> {
+    return this.state ? JSON.parse(JSON.stringify(this.state)) : null;
+  }
+
+  async save(_connectionId: string, state: Record<string, unknown>): Promise<void> {
+    this.state = JSON.parse(JSON.stringify(state));
+  }
+}
 
 function series(base: number, digits: number) {
   const end = Math.floor(Date.now() / 300000) * 300000 - 300000;
@@ -123,6 +136,63 @@ describe('PaperBrokerAdapter — scoped VPS live market mode', () => {
     await expect(adapter.getAccountInfo()).rejects.toThrow(/supports EURUSD only/);
   });
 
+  it('restores the last known read-only mark after restart while fresh execution remains fail-closed', async () => {
+    const connectionId = 'conn-durable-mark';
+    const store = new InMemoryLivePaperStateStore();
+
+    const firstMarket = new LivePaperMarketDataService();
+    firstMarket.registerLiveConnection(connectionId);
+    firstMarket.updateClosedCandles('EURUSD', series(1.1, 5), connectionId);
+    const first = new PaperBrokerAdapter(
+      undefined,
+      undefined,
+      store as unknown as PaperBrokerStateService,
+      connectionId,
+      firstMarket,
+    );
+    await first.connect({} as any);
+    await first.placeOrder({
+      idempotencyKey: 'durable-mark-buy',
+      instrument: 'EURUSD',
+      direction: 'BUY',
+      lotSize: '0.01',
+      stopLoss: '1.09000',
+      takeProfit: '1.12000',
+      orderKind: 'MARKET',
+    });
+    const [beforeRestart] = await first.getOpenPositions();
+    expect(beforeRestart?.currentPrice).toBeDefined();
+    expect(beforeRestart?.markIsStale).toBe(false);
+    await first.disconnect();
+
+    // Simulate an API process restart: live ownership is restored immediately,
+    // but the in-memory quote cache has not been primed yet.
+    const restartedMarket = new LivePaperMarketDataService();
+    restartedMarket.registerLiveConnection(connectionId);
+    const restarted = new PaperBrokerAdapter(
+      undefined,
+      undefined,
+      store as unknown as PaperBrokerStateService,
+      connectionId,
+      restartedMarket,
+    );
+    await restarted.connect({} as any);
+
+    const [afterRestart] = await restarted.getOpenPositions();
+    expect(afterRestart?.currentPrice).toBe(beforeRestart?.currentPrice);
+    expect(afterRestart?.unrealisedPnl).toBe(beforeRestart?.unrealisedPnl);
+    expect(afterRestart?.markObservedAt?.toISOString()).toBe(
+      beforeRestart?.markObservedAt?.toISOString(),
+    );
+    expect(afterRestart?.markIsStale).toBe(true);
+
+    // The fallback is informational only. Execution/evidence quotes still
+    // require a fresh provider cache and therefore fail closed.
+    await expect(restarted.getCurrentPrice('EURUSD')).rejects.toThrow(
+      /No live PAPER execution quote is cached yet/,
+    );
+  });
+
   it('uses streaming ticks for position marks but not for v5 PAPER fills', async () => {
     const live = new LivePaperMarketDataService();
     live.registerLiveConnection('conn-mark-only');
@@ -132,7 +202,9 @@ describe('PaperBrokerAdapter — scoped VPS live market mode', () => {
     const executionMid = ((Number(executionQuote.bid) + Number(executionQuote.ask)) / 2).toFixed(5);
 
     live.updateStreamingMidQuote('EURUSD', 1.105, new Date(), 'conn-mark-only');
-    expect(live.getMarkQuote('EURUSD', 60_000, 20 * 60_000, 'conn-mark-only').source).toBe('STREAM');
+    expect(live.getMarkQuote('EURUSD', 60_000, 20 * 60_000, 'conn-mark-only').source).toBe(
+      'STREAM',
+    );
     expect(live.getQuote('EURUSD', 20 * 60_000, 'conn-mark-only').source).toBe('REST_M5');
 
     const adapter = new PaperBrokerAdapter(undefined, undefined, undefined, 'conn-mark-only', live);
