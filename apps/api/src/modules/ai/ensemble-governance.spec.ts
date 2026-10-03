@@ -2,7 +2,7 @@ import { evaluateEnsembleGovernance } from './ensemble-governance';
 import { PlanBEnsembleScore } from './plan-b-multimodel-shadow';
 
 const ensemble: PlanBEnsembleScore = {
-  artifact: 'plan-b-multimodel-shadow-v2',
+  artifact: 'plan-b-multimodel-shadow-v3',
   mode: 'PROSPECTIVE_SHADOW_ONLY',
   modifiesExecution: false,
   regime: 'TREND_HEALTHY',
@@ -11,11 +11,11 @@ const ensemble: PlanBEnsembleScore = {
   expectedR: 0.32,
   tradeQuality: 0.7,
   exitQuality: 0.7,
-  pairSideQuality: 0.75,
-  pairSideRoute: 'CORE',
+  pairSideQuality: 0.5,
+  pairSideRoute: 'GOVERNANCE',
   sessionQuality: 0.9,
-  consensusPassed: 8,
-  consensusRequired: 7,
+  consensusPassed: 7,
+  consensusRequired: 6,
   portfolioQuality: 0.9,
   portfolioRiskScore: 0.1,
   openPositionCount: 0,

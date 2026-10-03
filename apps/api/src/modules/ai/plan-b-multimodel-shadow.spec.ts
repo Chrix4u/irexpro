@@ -64,11 +64,18 @@ describe('Plan B multimodel prospective shadow', () => {
     expect(score.reasons.length).toBeGreaterThan(0);
   });
 
+  it('defers pair-side authority to prospective sleeve governance', () => {
+    const score = scorePlanBMultimodelShadow(base);
+    expect(score.pairSideRoute).toBe('GOVERNANCE');
+    expect(score.pairSideQuality).toBe(0.5);
+    expect(score.reasons.some((reason) => reason.startsWith('PAIR_SIDE_'))).toBe(false);
+  });
+
   it('requires broad model consensus and rejects rollover-quality sessions', () => {
     const normal = scorePlanBMultimodelShadow(base);
-    expect(normal.consensusRequired).toBe(7);
+    expect(normal.consensusRequired).toBe(6);
     expect(normal.consensusPassed).toBeGreaterThanOrEqual(0);
-    expect(normal.consensusPassed).toBeLessThanOrEqual(8);
+    expect(normal.consensusPassed).toBeLessThanOrEqual(7);
 
     const rollover = scorePlanBMultimodelShadow({
       ...base,
