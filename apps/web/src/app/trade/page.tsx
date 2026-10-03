@@ -219,6 +219,34 @@ interface VpsForexScannerStatusView {
     reason: "WEEKEND" | "ROLLOVER_LOW_LIQUIDITY" | null;
     nextEligibleScanAt: string;
   };
+  highConvictionChallenger: {
+    state: "UNAVAILABLE" | "NOT_CONFIGURED" | "ERROR" | "ARTIFACT_READY_BROKER_MTF_REQUIRED";
+    artifact: string | null;
+    loaded: boolean;
+    featureCount: number | null;
+    qualificationCutoff: string | null;
+    sealedFutureHoldoutTouched: boolean | null;
+    frozenConsensus: {
+      opp_floor: number;
+      margin_floor: number;
+      votes_required: number;
+    } | null;
+    historicalValidation: {
+      n: number | null;
+      profit_factor: number | null;
+      sharpe: number | null;
+      balanced_accuracy: number | null;
+      max_drawdown: number | null;
+      positive_fold_fraction: number | null;
+      positive_instrument_fraction: number | null;
+      median_gap_minutes: number | null;
+    } | null;
+    executionAuthority: "NONE";
+    paperPromotionEligible: boolean;
+    brokerNativeRequired: boolean;
+    prospectiveScoringState: "WAITING_FOR_BROKER_DATA";
+    error: string | null;
+  };
   ensembleCampaign: {
     decisions: number;
     admitted: number;
@@ -2348,7 +2376,7 @@ export default function AiTradingPage() {
                       </div>
                       <div className="ai-strategy-detail">
                         <span>Current market authority</span>
-                        <strong>Twelve Data M5 · Dukascopy tick research · broker parity pending</strong>
+                        <strong>Twelve Data M5 ensemble · frozen broker-MTF challenger awaiting native feed</strong>
                       </div>
                     </div>
 
@@ -2360,6 +2388,44 @@ export default function AiTradingPage() {
                       <div className="ai-strategy-detail">
                         <span>Strategy lifecycle</span>
                         <strong>Ensemble challengers evolving · v7 frozen</strong>
+                      </div>
+                    </div>
+
+                    <div className="ai-strategy-detail-group">
+                      <div className="ai-strategy-detail">
+                        <span>High-conviction expert</span>
+                        <strong>
+                          {vpsScannerStatus?.highConvictionChallenger.state === "ARTIFACT_READY_BROKER_MTF_REQUIRED"
+                            ? "ARTIFACT READY · BROKER MTF REQUIRED"
+                            : vpsScannerStatus?.highConvictionChallenger.state ?? "UNAVAILABLE"}
+                        </strong>
+                      </div>
+                      <div className="ai-strategy-detail">
+                        <span>Frozen challenger rule</span>
+                        <strong>
+                          {vpsScannerStatus?.highConvictionChallenger.frozenConsensus
+                            ? `${vpsScannerStatus.highConvictionChallenger.frozenConsensus.votes_required}/3 votes · opp ≥ ${(vpsScannerStatus.highConvictionChallenger.frozenConsensus.opp_floor * 100).toFixed(0)}%`
+                            : "Awaiting artifact status"}
+                        </strong>
+                      </div>
+                    </div>
+
+                    <div className="ai-strategy-detail-group">
+                      <div className="ai-strategy-detail">
+                        <span>Challenger historical validation</span>
+                        <strong>
+                          {vpsScannerStatus?.highConvictionChallenger.historicalValidation
+                            ? `n ${vpsScannerStatus.highConvictionChallenger.historicalValidation.n ?? 0} · PF ${providerMetric(vpsScannerStatus.highConvictionChallenger.historicalValidation.profit_factor, 2)} · Sharpe ${providerMetric(vpsScannerStatus.highConvictionChallenger.historicalValidation.sharpe, 2)}`
+                            : "Research evidence unavailable"}
+                        </strong>
+                      </div>
+                      <div className="ai-strategy-detail">
+                        <span>Challenger cadence</span>
+                        <strong>
+                          {vpsScannerStatus?.highConvictionChallenger.historicalValidation?.median_gap_minutes != null
+                            ? `Median ${providerMetric(vpsScannerStatus.highConvictionChallenger.historicalValidation.median_gap_minutes, 0)} min · sparse specialist only`
+                            : "Prospective broker-MTF evidence pending"}
+                        </strong>
                       </div>
                     </div>
 

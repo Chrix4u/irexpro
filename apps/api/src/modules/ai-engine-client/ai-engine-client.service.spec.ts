@@ -108,6 +108,47 @@ describe('AiEngineClient', () => {
     );
   });
 
+  it('reads the frozen high-conviction challenger status', async () => {
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: jest.fn().mockResolvedValue({
+        artifact: 'plan-b-v4-oof-three-expert-consensus-challenger',
+        mode: 'PROSPECTIVE_SHADOW_ONLY',
+        configured: true,
+        loaded: true,
+        load_error: null,
+        manifest_path: '/research/manifest.json',
+        feature_count: 128,
+        frozen_consensus: { opp_floor: 0.55, margin_floor: 0, votes_required: 3 },
+        qualification_cutoff: '2026-09-02T19:59:00+00:00',
+        sealed_future_holdout_touched: false,
+        historical_validation: {
+          n: 30,
+          profit_factor: 2.15,
+          sharpe: 1.4,
+          balanced_accuracy: 0.525,
+          max_drawdown: 0.0015,
+          positive_fold_fraction: 1,
+          positive_instrument_fraction: 2 / 3,
+          median_gap_minutes: 245,
+        },
+        execution_authority: 'NONE',
+        paper_promotion_eligible: false,
+      }),
+    });
+
+    const status = await client.getPlanBV4ChallengerStatus();
+
+    expect(status.loaded).toBe(true);
+    expect(status.feature_count).toBe(128);
+    expect(status.execution_authority).toBe('NONE');
+    expect(global.fetch).toHaveBeenCalledWith(
+      'http://localhost:8001/api/v1/models/challengers/plan-b-v4/status',
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
   it('fails closed when the internal API key is missing', async () => {
     (configService.get as jest.Mock).mockImplementation((key: string) => {
       if (key === 'aiEngine.schedulerEnabled') return true;

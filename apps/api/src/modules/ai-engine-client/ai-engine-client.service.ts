@@ -10,6 +10,35 @@ import {
 const INTERNAL_API_KEY_HEADER = 'x-irexpro-internal-api-key';
 const REQUEST_TIMEOUT_MS = 5000;
 
+export interface PlanBV4ChallengerStatus {
+  artifact: string;
+  mode: 'PROSPECTIVE_SHADOW_ONLY';
+  configured: boolean;
+  loaded: boolean;
+  load_error: string | null;
+  manifest_path: string | null;
+  feature_count: number;
+  frozen_consensus: {
+    opp_floor: number;
+    margin_floor: number;
+    votes_required: number;
+  } | null;
+  qualification_cutoff: string | null;
+  sealed_future_holdout_touched: boolean | null;
+  historical_validation: {
+    n: number | null;
+    profit_factor: number | null;
+    sharpe: number | null;
+    balanced_accuracy: number | null;
+    max_drawdown: number | null;
+    positive_fold_fraction: number | null;
+    positive_instrument_fraction: number | null;
+    median_gap_minutes: number | null;
+  };
+  execution_authority: 'NONE';
+  paper_promotion_eligible: false;
+}
+
 export interface AiActiveModelMetadata {
   version?: string;
   mode?: string;
@@ -112,6 +141,11 @@ export class AiEngineClient {
   async getActiveModelMetadata(): Promise<AiActiveModelMetadata> {
     const url = `${this.getBaseUrl()}/models/active`;
     return this.get<AiActiveModelMetadata>(url, 'active-model');
+  }
+
+  async getPlanBV4ChallengerStatus(): Promise<PlanBV4ChallengerStatus> {
+    const url = `${this.getBaseUrl()}/models/challengers/plan-b-v4/status`;
+    return this.get<PlanBV4ChallengerStatus>(url, 'plan-b-v4-challenger');
   }
 
   private async get<T>(url: string, context: string): Promise<T> {

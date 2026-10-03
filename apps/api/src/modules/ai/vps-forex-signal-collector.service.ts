@@ -437,6 +437,48 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     const ownsBinding = Boolean(configuredUserId && configuredUserId === requestingUserId);
     let activePaperSession = false;
     let ensembleCampaign = await this.loadEnsembleCampaignStatus('', '');
+    let highConvictionChallenger: Record<string, unknown> = {
+      state: 'UNAVAILABLE',
+      artifact: null,
+      loaded: false,
+      featureCount: null,
+      qualificationCutoff: null,
+      sealedFutureHoldoutTouched: null,
+      frozenConsensus: null,
+      historicalValidation: null,
+      executionAuthority: 'NONE',
+      paperPromotionEligible: false,
+      brokerNativeRequired: true,
+      prospectiveScoringState: 'WAITING_FOR_BROKER_DATA',
+      error: null,
+    };
+    try {
+      const challenger = await this.aiEngineClient.getPlanBV4ChallengerStatus();
+      highConvictionChallenger = {
+        state: !challenger.configured
+          ? 'NOT_CONFIGURED'
+          : challenger.loaded
+            ? 'ARTIFACT_READY_BROKER_MTF_REQUIRED'
+            : 'ERROR',
+        artifact: challenger.artifact,
+        loaded: challenger.loaded,
+        featureCount: challenger.feature_count,
+        qualificationCutoff: challenger.qualification_cutoff,
+        sealedFutureHoldoutTouched: challenger.sealed_future_holdout_touched,
+        frozenConsensus: challenger.frozen_consensus,
+        historicalValidation: challenger.historical_validation,
+        executionAuthority: challenger.execution_authority,
+        paperPromotionEligible: challenger.paper_promotion_eligible,
+        brokerNativeRequired: true,
+        prospectiveScoringState: 'WAITING_FOR_BROKER_DATA',
+        error: challenger.load_error,
+      };
+    } catch (error) {
+      highConvictionChallenger = {
+        ...highConvictionChallenger,
+        error: (error as Error).message,
+      };
+    }
     const configuredConnectionId = this.connectionId();
     if (ownsBinding && configuredConnectionId) {
       ensembleCampaign = await this.loadEnsembleCampaignStatus(
@@ -477,6 +519,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       automaticLivePromotion: false,
       marketSchedule,
       ensembleCampaign,
+      highConvictionChallenger,
       lastEnsembleDecision: {
         evaluatedAt: this.lastEnsembleDecision.evaluatedAt?.toISOString() ?? null,
         instrument: this.lastEnsembleDecision.instrument,
@@ -498,7 +541,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         pairSideRouter: 'IMPLEMENTED',
         sessionQuality: 'IMPLEMENTED',
         portfolioCorrelation: 'IMPLEMENTED',
-        highConvictionExpert: 'CHALLENGER_VALIDATION',
+        highConvictionExpert:
+          highConvictionChallenger.state === 'ARTIFACT_READY_BROKER_MTF_REQUIRED'
+            ? 'ARTIFACT_READY_BROKER_MTF_REQUIRED'
+            : 'CHALLENGER_VALIDATION',
         fastMicrostructureSpecialists: 'RESEARCH_VALIDATION',
         newsEventRisk: this.macroEventRisk?.isConfigured()
           ? 'IMPLEMENTED'
