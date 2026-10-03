@@ -45,7 +45,8 @@ async def lifespan(app: FastAPI):
 
     # Frozen high-conviction challenger is shadow-only and cannot execute.
     app_state["plan_b_v4_challenger"] = PlanBV4HighConvictionChallenger(
-        settings.plan_b_v4_challenger_manifest or None
+        settings.plan_b_v4_challenger_manifest or None,
+        settings.plan_b_v4_challenger_manifest_sha256 or None,
     )
 
     # Attempt Redis connection (non-fatal)

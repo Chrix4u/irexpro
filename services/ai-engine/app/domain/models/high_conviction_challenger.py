@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -36,8 +37,18 @@ def _sha256(path: Path) -> str:
 class PlanBV4HighConvictionChallenger:
     """Integrity-checked three-expert model bundle for prospective shadow scoring."""
 
-    def __init__(self, manifest_path: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        manifest_path: str | Path | None = None,
+        expected_manifest_sha256: str | None = None,
+    ) -> None:
         self._manifest_path = Path(manifest_path).expanduser() if manifest_path else None
+        self._expected_manifest_sha256 = (
+            str(expected_manifest_sha256).strip().lower()
+            if expected_manifest_sha256
+            else None
+        )
+        self._manifest_sha256_verified = False
         self._manifest: dict[str, Any] = {}
         self._features: list[str] = []
         self._models: dict[str, Any] = {}
@@ -64,6 +75,8 @@ class PlanBV4HighConvictionChallenger:
             "loaded": self._loaded,
             "load_error": self._load_error,
             "manifest_path": str(self._manifest_path) if self._manifest_path else None,
+            "manifest_sha256_pinned": self._expected_manifest_sha256 is not None,
+            "manifest_sha256_verified": self._manifest_sha256_verified,
             "feature_count": len(self._features),
             "frozen_consensus": self._manifest.get("frozen_consensus"),
             "qualification_cutoff": self._manifest.get("qualification_cutoff"),
@@ -90,6 +103,14 @@ class PlanBV4HighConvictionChallenger:
         try:
             if self._manifest_path is None or not self._manifest_path.is_file():
                 raise ValueError("challenger manifest is not configured or missing")
+            if not self._expected_manifest_sha256:
+                raise ValueError("challenger manifest SHA-256 pin is required")
+            if not re.fullmatch(r"[0-9a-f]{64}", self._expected_manifest_sha256):
+                raise ValueError("challenger manifest SHA-256 pin is malformed")
+            actual_manifest_sha256 = _sha256(self._manifest_path)
+            if actual_manifest_sha256 != self._expected_manifest_sha256:
+                raise ValueError("challenger manifest SHA-256 mismatch")
+            self._manifest_sha256_verified = True
             manifest = json.loads(self._manifest_path.read_text(encoding="utf-8"))
             if manifest.get("artifact") != EXPECTED_ARTIFACT:
                 raise ValueError("unexpected challenger artifact")
@@ -176,6 +197,7 @@ class PlanBV4HighConvictionChallenger:
             return True
         except Exception as exc:
             self._loaded = False
+            self._manifest_sha256_verified = False
             self._load_error = str(exc)
             return False
 

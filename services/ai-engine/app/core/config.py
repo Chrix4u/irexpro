@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     ai_signal_mode: Literal["paper", "sandbox", "live"] = "paper"
     ai_allow_mock_market_data: bool = False
     plan_b_v4_challenger_manifest: str = ""
+    plan_b_v4_challenger_manifest_sha256: str = ""
 
     # ─── Scheduler ────────────────────────────────────────────────────────
     ai_scheduler_enabled: bool = False
