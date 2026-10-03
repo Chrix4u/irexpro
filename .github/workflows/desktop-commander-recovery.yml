@@ -72,7 +72,7 @@ jobs:
             -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
             "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
-            "/usr/local/sbin/dc-recovery '${{ inputs.action }}'"
+            "if [ \"\$(id -u)\" -eq 0 ]; then exec /usr/local/sbin/dc-recovery '${{ inputs.action }}'; else exec sudo -n /usr/local/sbin/dc-recovery '${{ inputs.action }}'; fi"
 
       - name: Show account-pairing instructions
         if: ${{ inputs.action == 'switch-account' }}
@@ -87,7 +87,7 @@ jobs:
             -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
             "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
-            "journalctl -u desktop-commander-account-switch.service --since '2 minutes ago' --no-pager | grep -Ei 'https://|verification|code|authoriz|authenticate|sign.?in|login' | tail -30 || true"
+            "if [ \"\$(id -u)\" -eq 0 ]; then journalctl -u desktop-commander-account-switch.service --since '2 minutes ago' --no-pager; else sudo -n journalctl -u desktop-commander-account-switch.service --since '2 minutes ago' --no-pager; fi | grep -Ei 'https://|verification|code|authoriz|authenticate|sign.?in|login' | tail -30 || true"
 
       - name: Remove ephemeral SSH material
         if: always()
