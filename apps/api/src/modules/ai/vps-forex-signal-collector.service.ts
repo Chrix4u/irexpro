@@ -558,7 +558,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           highConvictionChallenger.state === 'ARTIFACT_READY_BROKER_MTF_REQUIRED'
             ? 'ARTIFACT_READY_BROKER_MTF_REQUIRED'
             : 'CHALLENGER_VALIDATION',
-        fastMicrostructureSpecialists: 'RESEARCH_VALIDATION',
+        fastMicrostructureSpecialists: 'REJECTED_NO_QUALIFIED_SPECIALIST',
         newsEventRisk: this.macroEventRisk?.isConfigured()
           ? 'IMPLEMENTED'
           : 'GUARD_IMPLEMENTED_PROVIDER_REQUIRED',
