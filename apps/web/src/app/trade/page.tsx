@@ -1517,6 +1517,19 @@ export default function AiTradingPage() {
 
   useEffect(() => {
     if (!user || !selectedBrokerId) return;
+
+    // The PAPER scanner owns the authoritative market schedule. Do not hammer
+    // market intelligence every five seconds while the FX market is
+    // deliberately paused (weekend/rollover), or before that schedule status
+    // has loaded. Position polling remains independent for exposure safety.
+    if (
+      selectedBroker?.brokerId === "paper-broker" &&
+      (!vpsScannerStatus || vpsScannerStatus.marketSchedule.paused)
+    ) {
+      setChartLoading(false);
+      return;
+    }
+
     let cancelled = false;
     let firstLoad = true;
     const refreshChart = async () => {
@@ -1543,7 +1556,14 @@ export default function AiTradingPage() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [user, selectedBrokerId, chartInstrument, chartTimeframe]);
+  }, [
+    user,
+    selectedBrokerId,
+    selectedBroker?.brokerId,
+    chartInstrument,
+    chartTimeframe,
+    vpsScannerStatus,
+  ]);
 
   useEffect(() => {
     if (!user) return;
