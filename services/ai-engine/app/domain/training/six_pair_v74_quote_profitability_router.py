@@ -95,8 +95,22 @@ def choose(cal):
           "spread_cap":spread_cap,**den,"pf":pf,"sharpe":s["sharpe_ratio"],
           "return":s["total_return"],"eligible":eligible})
     good=[r for r in rows if r["eligible"]]
-    return (max(good,key=lambda r:(r["pf"],r["density"])) if good else
-            max([r for r in rows if r["pf"] is not None],key=lambda r:r["pf"])),bool(good),rows
+    if good:
+        return max(good,key=lambda r:(r["pf"],r["density"])),True,rows
+    finite_pf=[r for r in rows if r["pf"] is not None and np.isfinite(r["pf"])]
+    if finite_pf:
+        return max(finite_pf,key=lambda r:r["pf"]),False,rows
+    # Fail closed when calibration produces no finite profit factor.  A
+    # probability/margin floor above one guarantees apply() admits zero rows,
+    # preserving the outer fold as negative calibration evidence instead of
+    # crashing or inventing a permissive threshold.
+    fallback={
+        "p":1.01,"margin":1.01,"coverage":0.7,"spread_cap":spread_cap,
+        "rows":len(cal),"trades":0,"density":0.0,"median_gap_minutes":None,
+        "pf":None,"sharpe":None,"return":0.0,"eligible":False,
+        "fallback_reason":"NO_FINITE_CALIBRATION_PROFIT_FACTOR",
+    }
+    return fallback,False,rows
 def pair_pf(x):
     a=x[x.active_trade.astype(bool)]
     if a.empty:return {}
