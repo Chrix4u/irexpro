@@ -1,14 +1,10 @@
 import { scorePlanBShadowMeta, V8ShadowMetaInput } from './v8-shadow-meta-scorer';
 
-export const PLAN_B_ENSEMBLE_ARTIFACT = 'plan-b-multimodel-shadow-v2';
+export const PLAN_B_ENSEMBLE_ARTIFACT = 'plan-b-multimodel-shadow-v3';
 export const PLAN_B_ENSEMBLE_MODE = 'PROSPECTIVE_SHADOW_ONLY';
 
 export type PlanBRegime =
-  | 'TREND_HEALTHY'
-  | 'TREND_EXTENDED'
-  | 'TREND_WEAK'
-  | 'VOLATILE'
-  | 'ROLLOVER_RISK';
+  'TREND_HEALTHY' | 'TREND_EXTENDED' | 'TREND_WEAK' | 'VOLATILE' | 'ROLLOVER_RISK';
 
 export interface PlanBPortfolioPosition {
   instrument: string;
@@ -27,7 +23,7 @@ export interface PlanBEnsembleScore {
   tradeQuality: number;
   exitQuality: number;
   pairSideQuality: number;
-  pairSideRoute: 'CORE' | 'PROVISIONAL' | 'BLOCKED';
+  pairSideRoute: 'GOVERNANCE';
   sessionQuality: number;
   consensusPassed: number;
   consensusRequired: number;
@@ -55,9 +51,7 @@ function regimeOf(input: V8ShadowMetaInput): PlanBRegime {
 
 function directionQuality(input: V8ShadowMetaInput): number {
   const rsiDirectional =
-    input.direction === 'BUY'
-      ? clamp01((input.rsi14 - 50) / 22)
-      : clamp01((50 - input.rsi14) / 22);
+    input.direction === 'BUY' ? clamp01((input.rsi14 - 50) / 22) : clamp01((50 - input.rsi14) / 22);
   return clamp01(
     0.42 * clamp01((input.confidence - 0.6) / 0.2) +
       0.25 * clamp01(input.emaSeparation) +
@@ -68,31 +62,21 @@ function directionQuality(input: V8ShadowMetaInput): number {
 function tradeQuality(input: V8ShadowMetaInput): number {
   const extensionQuality = 1 - clamp01(input.extensionAtr / 1.5);
   const volatilityQuality = 1 - clamp01(input.volatilityScore / 0.75);
-  const structureQuality = clamp01(
-    0.55 * input.emaSeparation + 0.45 * input.mtfStrength,
-  );
-  return clamp01(
-    0.38 * extensionQuality +
-      0.27 * volatilityQuality +
-      0.35 * structureQuality,
-  );
+  const structureQuality = clamp01(0.55 * input.emaSeparation + 0.45 * input.mtfStrength);
+  return clamp01(0.38 * extensionQuality + 0.27 * volatilityQuality + 0.35 * structureQuality);
 }
 
-const PAIR_SIDE_ROUTE: Record<string, 'CORE' | 'PROVISIONAL' | 'BLOCKED'> = Object.freeze({
-  AUDUSD_BUY: 'CORE',
-  EURUSD_SELL: 'CORE',
-  USDJPY_BUY: 'CORE',
-  USDCAD_SELL: 'CORE',
-  GBPUSD_SELL: 'PROVISIONAL',
-});
-
-function pairSideRoute(input: V8ShadowMetaInput): 'CORE' | 'PROVISIONAL' | 'BLOCKED' {
-  return PAIR_SIDE_ROUTE[`${input.instrument.trim().toUpperCase()}_${input.direction}`] ?? 'BLOCKED';
+function pairSideRoute(): 'GOVERNANCE' {
+  // Pair/side eligibility is deliberately not hard-coded from development
+  // results. The authoritative route is assigned by the prospective sleeve
+  // health ledger in ensemble-governance.ts after enough resolved outcomes.
+  return 'GOVERNANCE';
 }
 
-function pairSideQuality(input: V8ShadowMetaInput): number {
-  const route = pairSideRoute(input);
-  return route === 'CORE' ? 0.75 : route === 'PROVISIONAL' ? 0.52 : 0.25;
+function pairSideQuality(): number {
+  // Neutral diagnostic weight only. This value is not a vote and cannot
+  // authorize PAPER; governance requires the prospective sleeve to be CORE.
+  return 0.5;
 }
 
 function sessionQuality(input: V8ShadowMetaInput): number {
@@ -133,10 +117,11 @@ function portfolioQualityOf(
     [instrument.slice(0, 3), sign * candidateLot] as const,
     [instrument.slice(3, 6), -sign * candidateLot] as const,
   ];
-  const sameSignOverlap = candidate.reduce((sum, [currency, delta]) => {
-    const current = exposure.get(currency) ?? 0;
-    return sum + (current * delta > 0 ? Math.min(1, Math.abs(current) / candidateLot) : 0);
-  }, 0) / 2;
+  const sameSignOverlap =
+    candidate.reduce((sum, [currency, delta]) => {
+      const current = exposure.get(currency) ?? 0;
+      return sum + (current * delta > 0 ? Math.min(1, Math.abs(current) / candidateLot) : 0);
+    }, 0) / 2;
   const sameInstrumentCount = positions.filter(
     (position) =>
       position.instrument.trim().toUpperCase() === instrument &&
@@ -157,8 +142,8 @@ export function scorePlanBMultimodelShadow(
   const direction = directionQuality(input);
   const quality = tradeQuality(input);
   const exit = exitQuality(input);
-  const pairSideRouteValue = pairSideRoute(input);
-  const pairSide = pairSideQuality(input);
+  const pairSideRouteValue = pairSideRoute();
+  const pairSide = pairSideQuality();
   const session = sessionQuality(input);
   const portfolio = portfolioQualityOf(input, positions);
   const economicQuality = clamp01((meta.expectedR + 0.25) / 0.75);
@@ -167,9 +152,9 @@ export function scorePlanBMultimodelShadow(
       0.15 * direction +
       0.12 * quality +
       0.11 * exit +
-      0.10 * pairSide +
+      0.1 * pairSide +
       0.08 * session +
-      0.10 * economicQuality +
+      0.1 * economicQuality +
       0.12 * portfolio.quality,
   );
 
@@ -179,7 +164,6 @@ export function scorePlanBMultimodelShadow(
   if (direction < 0.55) reasons.push('DIRECTION_QUALITY');
   if (quality < 0.48) reasons.push('TRADE_QUALITY');
   if (exit < 0.48) reasons.push('EXIT_FEASIBILITY');
-  if (pairSideRouteValue !== 'CORE') reasons.push(`PAIR_SIDE_${pairSideRouteValue}`);
   if (session < 0.5) reasons.push('SESSION_QUALITY');
   if (meta.expectedR < 0.08) reasons.push('EXPECTED_R');
   if (portfolio.quality < 0.35) reasons.push('PORTFOLIO_CONCENTRATION');
@@ -189,17 +173,18 @@ export function scorePlanBMultimodelShadow(
     direction >= 0.55,
     quality >= 0.48,
     exit >= 0.48,
-    pairSide >= 0.48,
     session >= 0.5,
     meta.expectedR >= 0.08,
     portfolio.quality >= 0.35,
   ];
   const consensusPassed = votes.filter(Boolean).length;
-  const consensusRequired = 7;
+  // Equivalent strictness to the previous 7-of-8 rule after removing the
+  // always-development-derived pair/side vote: at most one non-pair gate may
+  // fail, while meta admission and expected-R remain mandatory below.
+  const consensusRequired = 6;
 
   const admitted =
     regimeAllowed &&
-    pairSideRouteValue === 'CORE' &&
     consensusPassed >= consensusRequired &&
     meta.admitted &&
     meta.expectedR >= 0.08;
