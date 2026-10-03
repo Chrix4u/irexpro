@@ -17,7 +17,11 @@ import {
   scorePlanBMultimodelShadow,
 } from './plan-b-multimodel-shadow';
 
-const PROVIDER_CODE = 'vps-twelvedata-six-pair-v7';
+const LEGACY_PROVIDER_CODE = 'vps-twelvedata-six-pair-v7';
+const ACTIVE_ENGINE_CODE = 'irexpro-multimodel-ensemble-v1';
+const LEGACY_V7_EXECUTION_FROZEN = true;
+const MULTI_MODEL_PAPER_EXECUTION_ENABLED = false;
+const PROVIDER_CODE = LEGACY_PROVIDER_CODE;
 const SIGNAL_NAMESPACE = '802e16f8-8209-4e1f-aa7e-a6a46387081c';
 const SYMBOLS = Object.freeze([
   ['EURUSD', 'EUR/USD'],
@@ -268,6 +272,27 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
   private providerCooldownUntil: Date | null = null;
   private providerCooldownReason: 'DAILY_CREDIT_LIMIT' | null = null;
   private readonly lastPublishedOpportunity = new Map<string, PublishedOpportunity>();
+  private lastEnsembleDecision: {
+    evaluatedAt: Date | null;
+    instrument: string | null;
+    direction: 'BUY' | 'SELL' | null;
+    admitted: boolean;
+    ensembleScore: number | null;
+    consensusPassed: number | null;
+    consensusRequired: number | null;
+    regime: string | null;
+    reasons: string[];
+  } = {
+    evaluatedAt: null,
+    instrument: null,
+    direction: null,
+    admitted: false,
+    ensembleScore: null,
+    consensusPassed: null,
+    consensusRequired: null,
+    regime: null,
+    reasons: ['WAITING_FOR_MARKET_SCAN'],
+  };
   private lastEvaluation: {
     confidence: number | null;
     instrument: string | null;
@@ -340,15 +365,22 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
 
     try {
       await this.restorePublishedOpportunities(userId, connectionId);
-      await this.primeMarketData(apiKey, connectionId);
-      const activeAfterPrime = await this.executionService.getActiveSession(userId);
-      if (
-        activeAfterPrime &&
-        activeAfterPrime.executionMode === ExecutionMode.PAPER_ONLY &&
-        activeAfterPrime.brokerConnectionId === connectionId
-      ) {
-        await this.heartbeatLivePaper(userId, connectionId);
-        this.logger.log('VPS startup live PAPER protection heartbeat completed for 6/6 pairs');
+      const schedule = this.marketSchedule(new Date());
+      if (schedule.paused) {
+        this.logger.log(
+          `Multi-model market collection paused reason=${schedule.reason} next=${schedule.nextEligibleScanAt}`,
+        );
+      } else {
+        await this.primeMarketData(apiKey, connectionId);
+        const activeAfterPrime = await this.executionService.getActiveSession(userId);
+        if (
+          activeAfterPrime &&
+          activeAfterPrime.executionMode === ExecutionMode.PAPER_ONLY &&
+          activeAfterPrime.brokerConnectionId === connectionId
+        ) {
+          await this.heartbeatLivePaper(userId, connectionId);
+          this.logger.log('Multi-model startup live PAPER protection heartbeat completed for 6/6 pairs');
+        }
       }
     } catch (error) {
       // Keep live ownership registered so restored live positions fail closed
@@ -360,8 +392,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     }
 
     this.logger.log(
-      `VPS six-pair forex scanner enabled provider=${PROVIDER_CODE} cadence=10m timeframe=M5 ` +
-        'skipUtcHours=21,22,23 PAPER_ONLY',
+      `iRexPro multi-model engine enabled engine=${ACTIVE_ENGINE_CODE} legacyProvider=${LEGACY_PROVIDER_CODE} ` +
+        `legacyExecutionFrozen=${LEGACY_V7_EXECUTION_FROZEN} paperExecution=${MULTI_MODEL_PAPER_EXECUTION_ENABLED} ` +
+        'cadence=10m timeframe=M5 skipUtcHours=21,22,23',
     );
     this.timer = setInterval(() => void this.maybeCollect(), 15_000);
     this.timer.unref?.();
@@ -376,6 +409,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
   }
 
   async getStatus(requestingUserId: string) {
+    const now = new Date();
+    const marketSchedule = this.marketSchedule(now);
     const configuredUserId = this.userId();
     const configured = Boolean(
       this.apiKey() &&
@@ -395,6 +430,13 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     }
     return {
       providerCode: PROVIDER_CODE,
+      activeEngineCode: ACTIVE_ENGINE_CODE,
+      activeEngineDisplayName: 'iRexPro Multi-Model Ensemble',
+      engineArchitecture: 'MULTI_MODEL_ENSEMBLE',
+      legacyBaselineProviderCode: LEGACY_PROVIDER_CODE,
+      legacyBaselineFrozen: LEGACY_V7_EXECUTION_FROZEN,
+      multiModelPaperExecutionEnabled: MULTI_MODEL_PAPER_EXECUTION_ENABLED,
+      executionAuthority: MULTI_MODEL_PAPER_EXECUTION_ENABLED ? 'PAPER_ONLY' : 'SHADOW_ONLY',
       enabled: this.enabled(),
       configured: configured && ownsBinding,
       activePaperSession,
@@ -411,6 +453,33 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       paperOnly: true,
       automaticDemoPromotion: false,
       automaticLivePromotion: false,
+      marketSchedule,
+      lastEnsembleDecision: {
+        evaluatedAt: this.lastEnsembleDecision.evaluatedAt?.toISOString() ?? null,
+        instrument: this.lastEnsembleDecision.instrument,
+        direction: this.lastEnsembleDecision.direction,
+        admitted: this.lastEnsembleDecision.admitted,
+        ensembleScore: this.lastEnsembleDecision.ensembleScore,
+        consensusPassed: this.lastEnsembleDecision.consensusPassed,
+        consensusRequired: this.lastEnsembleDecision.consensusRequired,
+        regime: this.lastEnsembleDecision.regime,
+        reasons: this.lastEnsembleDecision.reasons,
+      },
+      components: {
+        regimeRouter: 'IMPLEMENTED',
+        directionExpert: 'IMPLEMENTED',
+        expectedValueMeta: 'IMPLEMENTED',
+        tradeQuality: 'IMPLEMENTED',
+        exitFeasibility: 'IMPLEMENTED',
+        pairSideRouter: 'IMPLEMENTED',
+        sessionQuality: 'IMPLEMENTED',
+        portfolioCorrelation: 'IMPLEMENTED',
+        highConvictionExpert: 'CHALLENGER_VALIDATION',
+        fastMicrostructureSpecialists: 'RESEARCH_VALIDATION',
+        newsEventRisk: 'NEXT_IMPLEMENTATION',
+        driftSleeveHealth: 'NEXT_IMPLEMENTATION',
+        postEntryExitModel: 'NEXT_IMPLEMENTATION',
+      },
       providerCooldownReason: this.providerCooldownReason,
       providerCooldownUntil: this.providerCooldownUntil?.toISOString() ?? null,
       marketCache: ownsBinding
@@ -428,13 +497,17 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           ? 'WAITING_FOR_CONFIGURATION'
           : !this.enabled()
             ? 'DISABLED'
-            : !activePaperSession
-              ? 'WAITING_FOR_PAPER_SESSION'
-              : this.providerCooldownUntil && this.providerCooldownUntil.getTime() > Date.now()
-                ? 'WAITING_FOR_PROVIDER_QUOTA'
-                : this.livePaperMarket.status(this.connectionId()).cachedInstrumentCount < SYMBOLS.length
-                  ? 'WAITING_FOR_MARKET_DATA'
-                  : 'ACTIVE',
+            : marketSchedule.paused
+              ? 'MARKET_PAUSED'
+              : !activePaperSession
+                ? 'WAITING_FOR_PAPER_SESSION'
+                : this.providerCooldownUntil && this.providerCooldownUntil.getTime() > Date.now()
+                  ? 'WAITING_FOR_PROVIDER_QUOTA'
+                  : this.livePaperMarket.status(this.connectionId()).cachedInstrumentCount < SYMBOLS.length
+                    ? 'WAITING_FOR_MARKET_DATA'
+                    : MULTI_MODEL_PAPER_EXECUTION_ENABLED
+                      ? 'ACTIVE'
+                      : 'MULTI_MODEL_SHADOW',
     };
   }
 
@@ -524,7 +597,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         return;
       }
 
-      const eventId = `${PROVIDER_CODE}|${best.instrument}|${best.barTime.toISOString()}|${best.direction}`;
+      const eventId = `${ACTIVE_ENGINE_CODE}|${best.instrument}|${best.barTime.toISOString()}|${best.direction}`;
       const signalId = uuidv5(eventId, SIGNAL_NAMESPACE);
       const digits = this.livePaperMarket.spec(best.instrument).digits;
       const v8Shadow = scoreV8ShadowMeta({
@@ -587,6 +660,33 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         },
         portfolioPositions,
       );
+      this.lastEnsembleDecision = {
+        evaluatedAt: new Date(),
+        instrument: best.instrument,
+        direction: best.direction,
+        admitted: planBEnsemble.admitted,
+        ensembleScore: planBEnsemble.ensembleScore,
+        consensusPassed: planBEnsemble.consensusPassed,
+        consensusRequired: planBEnsemble.consensusRequired,
+        regime: planBEnsemble.regime,
+        reasons: planBEnsemble.reasons,
+      };
+      this.lastPublishedOpportunity.set(best.instrument, {
+        direction: best.direction,
+        confidence: best.confidence,
+        entry: best.entry,
+        atr: best.atr,
+        barTimeMs: best.barTime.getTime(),
+      });
+      if (!MULTI_MODEL_PAPER_EXECUTION_ENABLED || !planBEnsemble.admitted) {
+        this.logger.log(
+          `Multi-model ensemble ${best.instrument} ${best.direction} ` +
+            `admitted=${planBEnsemble.admitted} consensus=${planBEnsemble.consensusPassed}/${planBEnsemble.consensusRequired} ` +
+            `execution=SHADOW_ONLY legacyV7Frozen=${LEGACY_V7_EXECUTION_FROZEN} ` +
+            `reasons=${planBEnsemble.reasons.join(',')}`,
+        );
+        return;
+      }
       const outcome = await this.aiSignalService.receiveSignal({
         signalId,
         userId,
@@ -604,14 +704,17 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         // 0.01 here, unintentionally forcing every valid trade to micro-lot size.
         suggestedVolume: SCANNER_LOT_UPPER_BOUND,
         timeframe: 'M5',
-        strategyCode: `external-${PROVIDER_CODE}`,
+        strategyCode: `external-${ACTIVE_ENGINE_CODE}`,
         marketRegime: 'TRENDING',
         volatilityScore: best.volatilityScore,
         generatedAt: new Date(),
-        modelVersion: `external-provider/${PROVIDER_CODE}/paper-only-v1`,
+        modelVersion: `external-provider/${ACTIVE_ENGINE_CODE}/paper-only-v1`,
         metadata: {
           signal_source: 'EXTERNAL_PROVIDER',
-          external_provider_code: PROVIDER_CODE,
+          external_provider_code: ACTIVE_ENGINE_CODE,
+          legacy_baseline_provider_code: LEGACY_PROVIDER_CODE,
+          legacy_v7_execution_frozen: LEGACY_V7_EXECUTION_FROZEN,
+          multi_model_execution_authority: MULTI_MODEL_PAPER_EXECUTION_ENABLED,
           external_provider_paper_only: true,
           production_eligible: false,
           source_reference: 'Twelve Data Basic real-time forex M5 closed candles',
@@ -677,15 +780,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             'new-cycle-or-0.5atr-directional-extension-or-0.02-confidence-expansion',
         },
       });
-      this.lastPublishedOpportunity.set(best.instrument, {
-        direction: best.direction,
-        confidence: best.confidence,
-        entry: best.entry,
-        atr: best.atr,
-        barTimeMs: best.barTime.getTime(),
-      });
       this.logger.log(
-        `VPS six-pair candidate ${best.instrument} ${best.direction} confidence=${best.confidence.toFixed(4)} ` +
+        `Multi-model PAPER candidate ${best.instrument} ${best.direction} confidence=${best.confidence.toFixed(4)} ` +
           `outcome=${outcome.outcome} signal=${signalId} freshness=new-evidence`,
       );
     } finally {
@@ -693,15 +789,42 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     }
   }
 
-  private isCollectionSlot(now: Date): boolean {
+  private marketSchedule(now: Date): {
+    paused: boolean;
+    reason: 'WEEKEND' | 'ROLLOVER_LOW_LIQUIDITY' | null;
+    nextEligibleScanAt: string;
+  } {
     const day = now.getUTCDay();
-    if (day === 0 || day === 6) return false;
     const hour = now.getUTCHours();
-    // 21:00-23:59 UTC deliberately excluded: rollover/low-liquidity window.
-    // This also keeps Basic-plan consumption <= 756 credits/day (6 symbols,
-    // one batch every 10 minutes for 21 active hours), leaving restart cushion
-    // under the published 800-credit daily allowance.
-    if (hour >= 21) return false;
+    const paused = day === 0 || day === 6 || hour >= 21;
+    const reason = day === 0 || day === 6
+      ? 'WEEKEND'
+      : hour >= 21
+        ? 'ROLLOVER_LOW_LIQUIDITY'
+        : null;
+    return {
+      paused,
+      reason,
+      nextEligibleScanAt: this.nextEligibleScanAt(now).toISOString(),
+    };
+  }
+
+  private nextEligibleScanAt(now: Date): Date {
+    const candidate = new Date(now);
+    candidate.setUTCSeconds(0, 0);
+    const remainder = candidate.getUTCMinutes() % 10;
+    candidate.setUTCMinutes(candidate.getUTCMinutes() + (remainder === 0 ? 10 : 10 - remainder));
+    for (let i = 0; i < 7 * 24 * 6 + 12; i += 1) {
+      const day = candidate.getUTCDay();
+      const hour = candidate.getUTCHours();
+      if (day !== 0 && day !== 6 && hour < 21) return candidate;
+      candidate.setUTCMinutes(candidate.getUTCMinutes() + 10);
+    }
+    return candidate;
+  }
+
+  private isCollectionSlot(now: Date): boolean {
+    if (this.marketSchedule(now).paused) return false;
     return now.getUTCMinutes() % 10 === 0;
   }
 
@@ -750,7 +873,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           AND stop_loss IS NOT NULL
         ORDER BY instrument ASC, signal_generated_at DESC, id DESC
       `,
-      [userId, connectionId, PROVIDER_CODE],
+      [userId, connectionId, ACTIVE_ENGINE_CODE],
     )) as Array<{
       instrument: string;
       direction: 'BUY' | 'SELL';
@@ -797,7 +920,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     }
 
     this.logger.log(
-      `VPS freshness state restored from durable intents instruments=${this.lastPublishedOpportunity.size}/6`,
+      `Multi-model freshness state restored from durable intents instruments=${this.lastPublishedOpportunity.size}/6`,
     );
   }
 

@@ -175,7 +175,7 @@ function brokerParityPresentation(
       state: "BLOCKED",
       label: "METAAPI FUNDING REQUIRED",
       detail:
-        "MetaApi cannot deploy the connected MetaTrader account until its MetaApi balance is topped up. Current v7 PAPER evidence continues independently.",
+        "MetaApi cannot deploy the connected MetaTrader account until its MetaApi balance is topped up. The multi-model research engine remains independent; legacy v7 evidence stays preserved.",
       badgeVariant: "warning",
     };
   }
@@ -184,13 +184,20 @@ function brokerParityPresentation(
     state: "BLOCKED",
     label: "BROKER FEED BLOCKED",
     detail:
-      "The MetaTrader connection is not currently healthy enough for Broker-Parity PAPER. This does not change or reset the Twelve Data v7 PAPER run.",
+      "The MetaTrader connection is not currently healthy enough for broker-parity validation. This does not alter the multi-model shadow engine or the preserved legacy v7 evidence.",
     badgeVariant: "warning",
   };
 }
 
 interface VpsForexScannerStatusView {
   providerCode: string;
+  activeEngineCode: string;
+  activeEngineDisplayName: string;
+  engineArchitecture: "MULTI_MODEL_ENSEMBLE";
+  legacyBaselineProviderCode: string;
+  legacyBaselineFrozen: boolean;
+  multiModelPaperExecutionEnabled: boolean;
+  executionAuthority: "SHADOW_ONLY" | "PAPER_ONLY";
   enabled: boolean;
   configured: boolean;
   activePaperSession: boolean;
@@ -207,6 +214,23 @@ interface VpsForexScannerStatusView {
   paperOnly: boolean;
   automaticDemoPromotion: boolean;
   automaticLivePromotion: boolean;
+  marketSchedule: {
+    paused: boolean;
+    reason: "WEEKEND" | "ROLLOVER_LOW_LIQUIDITY" | null;
+    nextEligibleScanAt: string;
+  };
+  lastEnsembleDecision: {
+    evaluatedAt: string | null;
+    instrument: string | null;
+    direction: "BUY" | "SELL" | null;
+    admitted: boolean;
+    ensembleScore: number | null;
+    consensusPassed: number | null;
+    consensusRequired: number | null;
+    regime: string | null;
+    reasons: string[];
+  };
+  components: Record<string, string>;
   marketCache: {
     cachedInstruments: string[];
     cachedInstrumentCount: number;
@@ -219,7 +243,10 @@ interface VpsForexScannerStatusView {
     | "WAITING_FOR_CONFIGURATION"
     | "DISABLED"
     | "WAITING_FOR_PAPER_SESSION"
+    | "WAITING_FOR_PROVIDER_QUOTA"
     | "WAITING_FOR_MARKET_DATA"
+    | "MARKET_PAUSED"
+    | "MULTI_MODEL_SHADOW"
     | "ACTIVE";
 }
 
@@ -1192,12 +1219,12 @@ export default function AiTradingPage() {
   const submittedVpsConfidence =
     providerEvidence?.observed.latestSubmittedConfidence ?? null;
   const displayedConfidence = vpsConfidenceActive
-    ? (submittedVpsConfidence ??
+    ? (vpsScannerStatus?.lastEnsembleDecision.ensembleScore ??
       vpsScannerStatus?.lastEvaluatedConfidence ??
       null)
     : (automationRuntime?.last_confidence_score ?? null);
   const displayedConfidenceThreshold = vpsConfidenceActive
-    ? (vpsScannerStatus?.confidenceFloor ?? 0.64)
+    ? null
     : (automationRuntime?.confidence_threshold ?? null);
   const confidencePercent = Math.max(
     0,
@@ -2205,18 +2232,17 @@ export default function AiTradingPage() {
                         Strategy identity &amp; promotion path
                       </p>
                       <h2 id="strategy-promotion-title">
-                        {providerEvidence?.strategyIdentity.displayName ??
-                          "Six-Pair Forex v7"}
+                        {vpsScannerStatus?.activeEngineDisplayName ?? "iRexPro Multi-Model Ensemble"}
                       </h2>
                       <p>
-                        The same qualified strategy artifact moves forward. PAPER,
-                        Broker-Parity PAPER, DEMO and LIVE use separate evidence
-                        cohorts so changing the data/execution environment never
-                        rewrites the current v7 results.
+                        The multi-model engine is now the active strategy architecture. Legacy v7 is frozen as a
+                        benchmark only. Specialists progress independently through research, shadow and qualification;
+                        only a frozen ensemble artifact may advance to dedicated PAPER, DEMO and LIVE.
                       </p>
                     </div>
                     <div className="ai-provider-evidence__badges">
-                      <Badge variant="warning">PAPER · v7 ACTIVE</Badge>
+                      <Badge variant="info">MULTI-MODEL · SHADOW</Badge>
+                      <Badge variant="warning">V7 · FROZEN BASELINE</Badge>
                       <Badge
                         variant={
                           providerEvidence?.strategyIdentity
@@ -2238,42 +2264,39 @@ export default function AiTradingPage() {
                       <div className="ai-strategy-detail ai-strategy-detail--artifact">
                         <span>Strategy artifact</span>
                         <strong>
-                          {providerEvidence?.strategyIdentity.modelVersion ??
-                            "external-provider/vps-twelvedata-six-pair-v7/paper-only-v1"}
+                          {vpsScannerStatus?.activeEngineCode
+                            ? `${vpsScannerStatus.activeEngineCode}/research-shadow-v1`
+                            : "irexpro-multimodel-ensemble-v1/research-shadow-v1"}
                         </strong>
                       </div>
                       <div className="ai-strategy-detail">
                         <span>Current market authority</span>
-                        <strong>Twelve Data · closed M5</strong>
+                        <strong>Twelve Data M5 · Dukascopy tick research · broker parity pending</strong>
                       </div>
                     </div>
 
                     <div className="ai-strategy-detail-group">
                       <div className="ai-strategy-detail">
                         <span>Current execution</span>
-                        <strong>Simulated PAPER broker</strong>
+                        <strong>Shadow only · no new ensemble orders</strong>
                       </div>
                       <div className="ai-strategy-detail">
-                        <span>Strategy mutations</span>
-                        <strong>None · v7 unchanged</strong>
+                        <span>Strategy lifecycle</span>
+                        <strong>Ensemble challengers evolving · v7 frozen</strong>
                       </div>
                     </div>
 
                     <div className="ai-strategy-detail-group">
                       <div className="ai-strategy-detail">
-                        <span>Authority telemetry</span>
+                        <span>Ensemble consensus</span>
                         <strong>
-                          {providerEvidence
-                            ? providerEvidence.strategyIdentity.authorityTaggedSignals +
-                              "/" +
-                              providerEvidence.observed.receivedSignals +
-                              " tagged"
-                            : "Loading"}
+                          {vpsScannerStatus?.lastEnsembleDecision.consensusPassed ?? 0}/
+                          {vpsScannerStatus?.lastEnsembleDecision.consensusRequired ?? 0} models
                         </strong>
                       </div>
                       <div className="ai-strategy-detail">
-                        <span>Broker-Parity PAPER</span>
-                        <strong>{brokerParity.label}</strong>
+                        <span>Legacy evidence</span>
+                        <strong>{providerEvidence ? `${providerEvidence.observed.closedTrades} closed v7 trades preserved` : "Loading"}</strong>
                       </div>
                     </div>
                   </div>
@@ -2282,39 +2305,34 @@ export default function AiTradingPage() {
                     <div className="ai-promotion-path__step is-current">
                       <span>1</span>
                       <div>
-                        <strong>Research PAPER</strong>
-                        <small>Twelve Data → v7 → simulated execution</small>
+                        <strong>Research Shadow</strong>
+                        <small>Regime + specialists + net-EV + portfolio consensus · no orders</small>
                       </div>
                     </div>
                     <div
                       className={
                         "ai-promotion-path__step " +
-                        (brokerParity.state === "READY" ? "is-ready" : "is-blocked")
+                        (vpsScannerStatus?.multiModelPaperExecutionEnabled ? "is-ready" : "is-locked")
                       }
                     >
                       <span>2</span>
                       <div>
-                        <strong>Broker-Parity PAPER</strong>
-                        <small>MetaApi broker feed → same v7 → no broker orders</small>
+                        <strong>Dedicated Ensemble PAPER</strong>
+                        <small>Fresh isolated $10,000 cohort only after all promotion gates pass</small>
                       </div>
                     </div>
-                    <div
-                      className={
-                        "ai-promotion-path__step " +
-                        (providerEvidence?.demoReviewEligible ? "is-ready" : "is-locked")
-                      }
-                    >
+                    <div className="ai-promotion-path__step is-locked">
                       <span>3</span>
                       <div>
                         <strong>DEMO</strong>
-                        <small>Frozen qualified v7 → MetaApi → broker DEMO execution</small>
+                        <small>Same frozen ensemble artifact · broker-native market data and execution</small>
                       </div>
                     </div>
                     <div className="ai-promotion-path__step is-locked">
                       <span>4</span>
                       <div>
                         <strong>LIVE</strong>
-                        <small>Same frozen artifact only after DEMO validation</small>
+                        <small>Only after DEMO validation · no automatic promotion</small>
                       </div>
                     </div>
                   </div>
@@ -2341,41 +2359,48 @@ export default function AiTradingPage() {
                         External signal evidence
                       </p>
                       <h2 id="provider-evidence-title">
-                        VPS · Twelve Data Six-Pair {vpsScannerStatus?.providerCode.match(/-v(\d+)$/)?.[1] ? `v${vpsScannerStatus.providerCode.match(/-v(\d+)$/)?.[1]}` : "Active"}
+                        {vpsScannerStatus?.activeEngineDisplayName ?? "iRexPro Multi-Model Ensemble"}
                       </h2>
                       <p>
-                        Live six-pair VPS signals are measured independently in
-                        PAPER before any DEMO review. Closed M5 market candles
-                        remain authoritative for the active scanner setup, fills and exits;
-                        available WebSocket ticks are mark-only for faster
-                        Current/P&amp;L display.
+                        The legacy v7 single-model execution path is frozen and retained only as
+                        historical evidence. New market opportunities are evaluated by the multi-model
+                        ensemble; PAPER execution remains disabled until the ensemble specialists earn
+                        qualification. Closed M5 context and quote/microstructure research remain causal inputs.
                       </p>
                     </div>
                     <div className="ai-provider-evidence__badges">
-                      <Badge variant="warning">PAPER ONLY</Badge>
+                      <Badge variant="info">
+                        {vpsScannerStatus?.executionAuthority === "PAPER_ONLY" ? "PAPER AUTHORITY" : "SHADOW ONLY"}
+                      </Badge>
                       <Badge
                         variant={
                           vpsScannerStatus?.state === "ACTIVE"
                             ? "success"
-                            : vpsScannerStatus?.state ===
-                                "WAITING_FOR_CONFIGURATION"
+                            : vpsScannerStatus?.state === "MARKET_PAUSED" ||
+                                vpsScannerStatus?.state === "WAITING_FOR_CONFIGURATION"
                               ? "warning"
                               : "info"
                         }
                       >
                         {vpsScannerStatus?.state === "ACTIVE"
-                          ? "LIVE FEED ACTIVE"
-                          : vpsScannerStatus?.state ===
-                              "WAITING_FOR_CONFIGURATION"
-                            ? "DATA KEY REQUIRED"
-                            : vpsScannerStatus?.state ===
-                                "WAITING_FOR_PAPER_SESSION"
-                              ? "START PAPER SESSION"
-                              : vpsScannerStatus?.state ===
-                                  "WAITING_FOR_MARKET_DATA"
-                                ? "WAITING FOR MARKET DATA"
-                                : "SCANNER DISABLED"}
+                          ? "MULTI-MODEL PAPER ACTIVE"
+                          : vpsScannerStatus?.state === "MULTI_MODEL_SHADOW"
+                            ? "MULTI-MODEL SHADOW"
+                            : vpsScannerStatus?.state === "MARKET_PAUSED"
+                              ? vpsScannerStatus.marketSchedule.reason === "WEEKEND"
+                                ? "MARKET PAUSED · WEEKEND"
+                                : "MARKET PAUSED · ROLLOVER"
+                              : vpsScannerStatus?.state === "WAITING_FOR_CONFIGURATION"
+                                ? "DATA KEY REQUIRED"
+                                : vpsScannerStatus?.state === "WAITING_FOR_PAPER_SESSION"
+                                  ? "WAITING FOR PAPER SESSION"
+                                  : vpsScannerStatus?.state === "WAITING_FOR_PROVIDER_QUOTA"
+                                    ? "PROVIDER QUOTA PAUSED"
+                                    : vpsScannerStatus?.state === "WAITING_FOR_MARKET_DATA"
+                                      ? "WAITING FOR MARKET DATA"
+                                      : "ENGINE DISABLED"}
                       </Badge>
+                      <Badge variant="warning">LEGACY V7 FROZEN</Badge>
                       <Badge
                         variant={
                           providerEvidence?.demoReviewEligible
@@ -2383,70 +2408,71 @@ export default function AiTradingPage() {
                             : "info"
                         }
                       >
-                        {providerEvidence?.demoReviewEligible
-                          ? "DEMO REVIEW ELIGIBLE"
-                          : "COLLECTING EVIDENCE"}
+                        LEGACY EVIDENCE PRESERVED
                       </Badge>
                     </div>
                   </div>
 
                   <div className="ai-provider-evidence__metrics">
                     <div>
-                      <span>Scanner state</span>
+                      <span>Engine state</span>
+                      <strong>{vpsScannerStatus?.state ?? "Unavailable"}</strong>
+                    </div>
+                    <div>
+                      <span>Active engine</span>
+                      <strong>{vpsScannerStatus?.activeEngineCode ?? "irexpro-multimodel-ensemble-v1"}</strong>
+                    </div>
+                    <div>
+                      <span>Execution authority</span>
+                      <strong>{vpsScannerStatus?.executionAuthority ?? "SHADOW_ONLY"}</strong>
+                    </div>
+                    <div>
+                      <span>Market schedule</span>
                       <strong>
-                        {vpsScannerStatus?.state ?? "Unavailable"}
+                        {vpsScannerStatus?.marketSchedule.paused
+                          ? vpsScannerStatus.marketSchedule.reason === "WEEKEND"
+                            ? "PAUSED · WEEKEND"
+                            : "PAUSED · ROLLOVER"
+                          : "OPEN"}
                       </strong>
+                    </div>
+                    <div>
+                      <span>Next eligible scan</span>
+                      <strong>{formatTimestamp(vpsScannerStatus?.marketSchedule.nextEligibleScanAt)}</strong>
+                    </div>
+                    <div>
+                      <span>Legacy v7</span>
+                      <strong>{vpsScannerStatus?.legacyBaselineFrozen ? "FROZEN · EVIDENCE ONLY" : "ACTIVE"}</strong>
                     </div>
                     <div>
                       <span>Live pairs cached</span>
-                      <strong>
-                        {vpsScannerStatus?.marketCache.cachedInstrumentCount ??
-                          0}{" "}
-                        / 6
-                      </strong>
+                      <strong>{vpsScannerStatus?.marketCache.cachedInstrumentCount ?? 0} / 6</strong>
                     </div>
                     <div>
                       <span>Scan cadence</span>
-                      <strong>
-                        {vpsScannerStatus?.cadenceMinutes ?? 10} min
-                      </strong>
+                      <strong>{vpsScannerStatus?.cadenceMinutes ?? 10} min</strong>
                     </div>
                     <div>
-                      <span>Fast position marks</span>
-                      <strong>
-                        {vpsScannerStatus?.marketCache
-                          .streamingInstrumentCount ?? 0}{" "}
-                        stream ·{" "}
-                        {Math.max(
-                          0,
-                          6 -
-                            (vpsScannerStatus?.marketCache
-                              .streamingInstrumentCount ?? 0),
-                        )}{" "}
-                        M5 fallback
-                      </strong>
-                    </div>
-                    <div>
-                      <span>Signals received</span>
+                      <span>Legacy v7 signals</span>
                       <strong>
                         {providerEvidence?.observed.receivedSignals ?? 0}
                       </strong>
                     </div>
                     <div>
-                      <span>Signal mix</span>
+                      <span>Legacy v7 signal mix</span>
                       <strong>
                         {providerEvidence?.observed.buySignals ?? 0} BUY ·{" "}
                         {providerEvidence?.observed.sellSignals ?? 0} SELL
                       </strong>
                     </div>
                     <div>
-                      <span>Executed</span>
+                      <span>Legacy v7 executed</span>
                       <strong>
                         {providerEvidence?.observed.executedTrades ?? 0}
                       </strong>
                     </div>
                     <div>
-                      <span>Executed mix</span>
+                      <span>Legacy v7 executed mix</span>
                       <strong>
                         {providerEvidence?.observed.buyExecutedTrades ?? 0} BUY
                         · {providerEvidence?.observed.sellExecutedTrades ?? 0}{" "}
@@ -2454,13 +2480,13 @@ export default function AiTradingPage() {
                       </strong>
                     </div>
                     <div>
-                      <span>Risk rejected</span>
+                      <span>Legacy v7 risk rejected</span>
                       <strong>
                         {providerEvidence?.observed.rejectedSignals ?? 0}
                       </strong>
                     </div>
                     <div>
-                      <span>Completed strategy P&amp;L</span>
+                      <span>Legacy v7 realised P&amp;L</span>
                       <strong>
                         {providerEvidence == null
                           ? "—"
@@ -2468,7 +2494,7 @@ export default function AiTradingPage() {
                       </strong>
                     </div>
                     <div>
-                      <span>Closed evidence</span>
+                      <span>Legacy v7 closed evidence</span>
                       <strong>
                         {providerEvidence?.observed.closedTrades ?? 0} / 100
                       </strong>
@@ -2842,7 +2868,7 @@ export default function AiTradingPage() {
                       <div className="ai-shadow-calibration__header">
                         <div>
                           <span className="workspace-hero__eyebrow">
-                            v8 prospective shadow
+                            Legacy v8 shadow archive
                           </span>
                           <h3>Frozen meta-filter screening</h3>
                         </div>
@@ -2856,20 +2882,16 @@ export default function AiTradingPage() {
                         >
                           {providerEvidence.v8ProspectiveShadow
                             .screeningReadyForDedicatedPaper
-                            ? "READY FOR DEDICATED v8 PAPER"
-                            : "SHADOW ONLY · v7 UNCHANGED"}
+                            ? "LEGACY SCREEN PASSED · ARCHIVED"
+                            : "ARCHIVED SHADOW EVIDENCE"}
                         </span>
                       </div>
 
                       <p className="muted">
-                        Every newly tagged v7 opportunity is scored by the frozen
-                        <strong>
-                          {" "}
-                          {providerEvidence.v8ProspectiveShadow.artifact}
-                        </strong>
-                        . The score does not block, resize, close, or otherwise
-                        change v7 trades. Only post-freeze signals count in this
-                        prospective screen.
+                        This preserves the earlier v8 meta-filter experiment against
+                        legacy v7 opportunities for audit and comparison. It no longer has
+                        execution authority and is not the active strategy architecture.
+                        The active research path is the iRexPro Multi-Model Ensemble.
                       </p>
 
                       <div className="ai-provider-evidence__metrics">
@@ -3383,14 +3405,7 @@ export default function AiTradingPage() {
                     className={`ai-confidence ai-confidence--${confidenceTone}`}
                   >
                     <span className="ai-cockpit__label">
-                      {vpsConfidenceActive
-                        ? submittedVpsConfidence != null
-                          ? "Last signal confidence"
-                          : "Latest scanner confidence"
-                        : automationRuntime?.last_decision ===
-                            "NO_NEW_MARKET_DATA"
-                          ? "Last evaluated confidence"
-                          : "AI confidence"}
+                      {vpsConfidenceActive ? "Multi-model ensemble score" : "AI confidence"}
                     </span>
                     <strong className="ai-confidence__value">
                       {formatConfidence(displayedConfidence)}
@@ -3401,35 +3416,31 @@ export default function AiTradingPage() {
                     <div className="ai-confidence__meta">
                       <span>
                         {vpsConfidenceActive
-                          ? displayedConfidence == null
-                            ? "No qualifying v7 setup on latest scan"
-                            : submittedVpsConfidence == null
-                              ? "Latest v7 setup evaluation"
-                              : confidencePercent >=
-                                (displayedConfidenceThreshold ?? 0) * 100
-                              ? "Qualified VPS signal"
-                              : "Below scanner floor"
-                          : automationRuntime?.last_decision ===
-                              "NO_NEW_MARKET_DATA"
+                          ? vpsScannerStatus?.marketSchedule.paused
+                            ? "No new decision while market is paused"
+                            : vpsScannerStatus?.lastEnsembleDecision.admitted
+                              ? "Ensemble would admit this setup"
+                              : "Ensemble decision · NO TRADE"
+                          : automationRuntime?.last_decision === "NO_NEW_MARKET_DATA"
                             ? "Waiting for new market data"
                             : confidencePercent >= 60
                               ? "Qualified strength"
                               : "Building conviction"}
                       </span>
                       <span>
-                        {formatConfidence(displayedConfidenceThreshold)}{" "}
-                        {vpsConfidenceActive ? "scanner floor" : "gate"}
+                        {vpsConfidenceActive
+                          ? `${vpsScannerStatus?.lastEnsembleDecision.consensusPassed ?? 0}/${vpsScannerStatus?.lastEnsembleDecision.consensusRequired ?? 0} model votes`
+                          : `${formatConfidence(displayedConfidenceThreshold)} gate`}
                       </span>
                     </div>
                     <p>
                       {vpsConfidenceActive
-                        ? submittedVpsConfidence != null
-                          ? `${providerEvidence?.observed.latestSignalInstrument ?? "Signal"} ${providerEvidence?.observed.latestSignalDirection ?? ""} · VPS Twelve Data v7 · ${formatTimestamp(providerEvidence?.observed.latestSignalAt)}`
-                          : vpsScannerStatus?.lastEvaluatedConfidence != null
-                            ? `${vpsScannerStatus.lastEvaluatedInstrument ?? "Setup"} ${vpsScannerStatus.lastEvaluatedDirection ?? ""} · evaluated ${formatTimestamp(vpsScannerStatus.lastEvaluatedAt)} · waiting for fresh qualified submission`
-                            : `V7 scanner evaluated the latest market state at ${formatTimestamp(vpsScannerStatus?.lastEvaluatedAt)} and found no qualifying setup.`
-                        : automationRuntime?.last_decision ===
-                            "NO_NEW_MARKET_DATA"
+                        ? vpsScannerStatus?.marketSchedule.paused
+                          ? `Market paused: ${vpsScannerStatus.marketSchedule.reason === "WEEKEND" ? "weekend closure" : "rollover / low-liquidity window"}. Next eligible scan ${formatTimestamp(vpsScannerStatus.marketSchedule.nextEligibleScanAt)}.`
+                          : vpsScannerStatus?.lastEnsembleDecision.evaluatedAt
+                            ? `${vpsScannerStatus.lastEnsembleDecision.instrument ?? "Setup"} ${vpsScannerStatus.lastEnsembleDecision.direction ?? ""} · ${vpsScannerStatus.lastEnsembleDecision.regime ?? "regime pending"} · ${vpsScannerStatus.lastEnsembleDecision.reasons.join(", ") || "ADMIT"} · evaluated ${formatTimestamp(vpsScannerStatus.lastEnsembleDecision.evaluatedAt)}`
+                            : "Multi-model ensemble is waiting for its first eligible market scan. Legacy v7 cannot execute during this transition."
+                        : automationRuntime?.last_decision === "NO_NEW_MARKET_DATA"
                           ? `No new candle after ${formatTimestamp(automationRuntime?.last_market_data_at)}. Confidence will update when a new market revision is evaluated.`
                           : runtimeReasonLabel(automationRuntime?.last_reason)}
                     </p>

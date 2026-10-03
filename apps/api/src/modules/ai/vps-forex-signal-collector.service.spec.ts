@@ -174,7 +174,7 @@ describe('VpsForexSignalCollectorService', () => {
     expect(query).toHaveBeenCalledWith(expect.stringContaining('DISTINCT ON (instrument)'), [
       'user-1',
       'conn-1',
-      'vps-twelvedata-six-pair-v7',
+      'irexpro-multimodel-ensemble-v1',
     ]);
     expect(restored).toBeDefined();
     expect(restored.direction).toBe(current!.direction);
@@ -184,7 +184,7 @@ describe('VpsForexSignalCollectorService', () => {
     expect(isFreshOpportunity(current!, restored)).toBe(false);
   });
 
-  it('refreshes all six live PAPER feeds and publishes only the strongest PAPER candidate', async () => {
+  it('refreshes all six live PAPER feeds but freezes legacy v7 execution during multi-model cutover', async () => {
     const live = new LivePaperMarketDataService();
     expect(live.isLiveConnection('conn-1')).toBe(false);
     const receiveSignal = jest
@@ -222,36 +222,10 @@ describe('VpsForexSignalCollectorService', () => {
     );
     expect(heartbeat).toHaveBeenCalledTimes(6);
     expect(live.isLiveConnection('conn-1')).toBe(true);
-    expect(receiveSignal).toHaveBeenCalledTimes(1);
-    expect(receiveSignal).toHaveBeenCalledWith(
-      expect.objectContaining({
-        instrument: 'EURUSD',
-        direction: 'BUY',
-        timeframe: 'M5',
-        brokerConnectionId: 'conn-1',
-        suggestedVolume: 0.1,
-        modelVersion: 'external-provider/vps-twelvedata-six-pair-v7/paper-only-v1',
-        metadata: expect.objectContaining({
-          signal_source: 'EXTERNAL_PROVIDER',
-          external_provider_code: 'vps-twelvedata-six-pair-v7',
-          external_provider_paper_only: true,
-          production_eligible: false,
-          market_data_authority: 'PAPER_RESEARCH_EXTERNAL_TWELVE_DATA',
-          calibration_mode: 'SHADOW_DIAGNOSTIC_ONLY',
-          calibration_modifies_execution: false,
-          feature_extension_atr: expect.any(Number),
-          feature_ema_separation: expect.any(Number),
-          feature_mtf_strength: expect.any(Number),
-          feature_rsi14: expect.any(Number),
-          feature_volatility_score: expect.any(Number),
-          feature_atr: expect.any(Number),
-          feature_candidate_score: expect.any(Number),
-          position_sizing_policy: 'risk-managed-up-to-0.10-lot-scanner-bound',
-          opportunity_freshness_policy:
-            'new-cycle-or-0.5atr-directional-extension-or-0.02-confidence-expansion',
-        }),
-      }),
-    );
+    expect(receiveSignal).not.toHaveBeenCalled();
+    expect((collector as any).lastEnsembleDecision.evaluatedAt).toBeInstanceOf(Date);
+    expect((collector as any).lastEnsembleDecision.instrument).toBe('EURUSD');
+    expect((collector as any).lastEnsembleDecision.consensusRequired).toBeGreaterThan(0);
     expect(live.getOHLCV('EURUSD', 'M5', 70, 'conn-1')).toHaveLength(70);
   });
 
@@ -305,6 +279,11 @@ describe('VpsForexSignalCollectorService', () => {
       aiEngine,
     );
 
+    jest.spyOn(collector as any, 'marketSchedule').mockReturnValue({
+      paused: false,
+      reason: null,
+      nextEligibleScanAt: '2026-10-02T20:30:00.000Z',
+    });
     const fetchSpy = jest
       .spyOn(global, 'fetch')
       .mockResolvedValue({ ok: true, status: 200, json: async () => payload() } as Response);
@@ -356,6 +335,23 @@ describe('VpsForexSignalCollectorService', () => {
     expect(heartbeat).toHaveBeenCalledTimes(12);
   });
 
+  it('reports weekend pause and the next eligible Monday scan deterministically', () => {
+    const collector = new VpsForexSignalCollectorService(
+      config({}),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      {} as unknown as ExecutionService,
+      {} as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+    );
+    const schedule = (collector as any).marketSchedule(new Date('2026-10-03T00:21:00.000Z'));
+    expect(schedule).toEqual({
+      paused: true,
+      reason: 'WEEKEND',
+      nextEligibleScanAt: '2026-10-05T00:00:00.000Z',
+    });
+  });
+
   it('enters a daily provider cooldown after Twelve Data exhausts the account quota', async () => {
     const live = new LivePaperMarketDataService();
     const execution = {
@@ -396,7 +392,9 @@ describe('VpsForexSignalCollectorService', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(status.providerCooldownReason).toBe('DAILY_CREDIT_LIMIT');
     expect(status.providerCooldownUntil).toBeTruthy();
-    expect(status.state).toBe('WAITING_FOR_PROVIDER_QUOTA');
+    expect(status.state).toBe(
+      status.marketSchedule.paused ? 'MARKET_PAUSED' : 'WAITING_FOR_PROVIDER_QUOTA',
+    );
   });
 
   it('does not call Twelve Data again while the same-process daily quota cooldown is active', async () => {
