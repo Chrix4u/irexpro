@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     ai_min_confidence_score: float = 0.60
     ai_signal_mode: Literal["paper", "sandbox", "live"] = "paper"
     ai_allow_mock_market_data: bool = False
+    plan_b_v4_challenger_manifest: str = ""
 
     # ─── Scheduler ────────────────────────────────────────────────────────
     ai_scheduler_enabled: bool = False
