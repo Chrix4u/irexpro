@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+
 from app.domain.models.high_conviction_challenger import PlanBV4HighConvictionChallenger
 from app.domain.models.multitimeframe_features import MULTITIMEFRAME_FEATURE_COLUMNS
 
@@ -130,3 +132,25 @@ def test_untrained_regime_uses_pair_fallback():
     regime_expert = result["experts"][2]
     assert regime_expert["regime"] == "calm"
     assert regime_expert["used_fallback"] is True
+
+
+def test_manifest_requires_sha256_pin(tmp_path):
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text("{}", encoding="utf-8")
+    model = PlanBV4HighConvictionChallenger(manifest)
+    assert model.loaded is False
+    assert model.status()["manifest_sha256_pinned"] is False
+    assert model.status()["manifest_sha256_verified"] is False
+    assert model.load_error == "challenger manifest SHA-256 pin is required"
+
+
+def test_manifest_rejects_wrong_sha256_pin_before_parsing_contract(tmp_path):
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text("{}", encoding="utf-8")
+    wrong = "0" * 64
+    assert hashlib.sha256(manifest.read_bytes()).hexdigest() != wrong
+    model = PlanBV4HighConvictionChallenger(manifest, wrong)
+    assert model.loaded is False
+    assert model.status()["manifest_sha256_pinned"] is True
+    assert model.status()["manifest_sha256_verified"] is False
+    assert model.load_error == "challenger manifest SHA-256 mismatch"
