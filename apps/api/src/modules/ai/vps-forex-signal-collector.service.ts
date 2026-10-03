@@ -13,6 +13,7 @@ import {
 } from '../broker/services/live-paper-market-data.service';
 import { scorePlanBShadowMeta, scoreV8ShadowMeta } from './v8-shadow-meta-scorer';
 import {
+  PlanBEnsembleScore,
   PlanBPortfolioPosition,
   scorePlanBMultimodelShadow,
 } from './plan-b-multimodel-shadow';
@@ -671,6 +672,15 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         regime: planBEnsemble.regime,
         reasons: planBEnsemble.reasons,
       };
+      await this.persistEnsembleShadowDecision(
+        userId,
+        session.id,
+        connectionId,
+        eventId,
+        best,
+        planBEnsemble,
+        portfolioSnapshotAvailable,
+      );
       this.lastPublishedOpportunity.set(best.instrument, {
         direction: best.direction,
         confidence: best.confidence,
@@ -849,6 +859,97 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         };
   }
 
+  private async persistEnsembleShadowDecision(
+    userId: string,
+    tradingSessionId: string,
+    connectionId: string,
+    opportunityKey: string,
+    candidate: Candidate,
+    ensemble: PlanBEnsembleScore,
+    portfolioSnapshotAvailable: boolean,
+  ): Promise<void> {
+    if (!this.dataSource) return;
+
+    await this.dataSource.query(
+      `
+        INSERT INTO trading.ensemble_shadow_decisions (
+          user_id,
+          trading_session_id,
+          broker_connection_id,
+          engine_code,
+          model_version,
+          opportunity_key,
+          instrument,
+          direction,
+          market_bar_time,
+          evaluated_at,
+          confidence,
+          entry_price,
+          atr,
+          regime,
+          regime_allowed,
+          ensemble_score,
+          meta_probability,
+          expected_r,
+          consensus_passed,
+          consensus_required,
+          admitted,
+          execution_authority,
+          reasons,
+          components
+        )
+        VALUES (
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23::jsonb,$24::jsonb
+        )
+        ON CONFLICT (user_id, engine_code, opportunity_key) DO NOTHING
+      `,
+      [
+        userId,
+        tradingSessionId,
+        connectionId,
+        ACTIVE_ENGINE_CODE,
+        ensemble.artifact,
+        opportunityKey,
+        candidate.instrument,
+        candidate.direction,
+        candidate.barTime,
+        this.lastEnsembleDecision.evaluatedAt ?? new Date(),
+        candidate.confidence,
+        candidate.entry,
+        candidate.atr,
+        ensemble.regime,
+        ensemble.regimeAllowed,
+        ensemble.ensembleScore,
+        ensemble.metaProbability,
+        ensemble.expectedR,
+        ensemble.consensusPassed,
+        ensemble.consensusRequired,
+        ensemble.admitted,
+        MULTI_MODEL_PAPER_EXECUTION_ENABLED ? 'PAPER_ONLY' : 'SHADOW_ONLY',
+        JSON.stringify(ensemble.reasons),
+        JSON.stringify({
+          directionQuality: ensemble.directionQuality,
+          tradeQuality: ensemble.tradeQuality,
+          exitQuality: ensemble.exitQuality,
+          pairSideQuality: ensemble.pairSideQuality,
+          pairSideRoute: ensemble.pairSideRoute,
+          sessionQuality: ensemble.sessionQuality,
+          portfolioQuality: ensemble.portfolioQuality,
+          portfolioRiskScore: ensemble.portfolioRiskScore,
+          openPositionCount: ensemble.openPositionCount,
+          sameInstrumentCount: ensemble.sameInstrumentCount,
+          portfolioSnapshotAvailable,
+          extensionAtr: candidate.extensionAtr,
+          volatilityScore: candidate.volatilityScore,
+          emaSeparation: candidate.emaSeparation,
+          mtfStrength: candidate.mtfStrength,
+          rsi14: candidate.rsi14,
+          candidateScore: candidate.score,
+        }),
+      ],
+    );
+  }
+
   private async restorePublishedOpportunities(
     userId: string,
     connectionId: string,
@@ -860,67 +961,91 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         SELECT DISTINCT ON (instrument)
           instrument,
           direction,
-          requested_entry_price,
-          stop_loss,
-          metadata->>'confidenceScore' AS confidence_score,
-          metadata->>'market_data_bar_time' AS market_data_bar_time,
-          signal_generated_at
-        FROM trading.trade_intents
+          entry_price,
+          atr,
+          confidence,
+          market_bar_time,
+          evaluated_at,
+          admitted,
+          ensemble_score,
+          consensus_passed,
+          consensus_required,
+          regime,
+          reasons
+        FROM trading.ensemble_shadow_decisions
         WHERE user_id = $1
           AND broker_connection_id = $2
-          AND metadata->>'external_provider_code' = $3
-          AND requested_entry_price IS NOT NULL
-          AND stop_loss IS NOT NULL
-        ORDER BY instrument ASC, signal_generated_at DESC, id DESC
+          AND engine_code = $3
+        ORDER BY instrument ASC, evaluated_at DESC, id DESC
       `,
       [userId, connectionId, ACTIVE_ENGINE_CODE],
     )) as Array<{
       instrument: string;
       direction: 'BUY' | 'SELL';
-      requested_entry_price: string | number;
-      stop_loss: string | number;
-      confidence_score: string | number | null;
-      market_data_bar_time: string | Date | null;
-      signal_generated_at: string | Date;
+      entry_price: string | number;
+      atr: string | number;
+      confidence: string | number;
+      market_bar_time: string | Date;
+      evaluated_at: string | Date;
+      admitted: boolean;
+      ensemble_score: string | number;
+      consensus_passed: number;
+      consensus_required: number;
+      regime: string;
+      reasons: string[] | null;
     }>;
 
     this.lastPublishedOpportunity.clear();
+    let latest: (typeof rows)[number] | null = null;
     for (const row of rows) {
       if (!SYMBOLS.some(([instrument]) => instrument === row.instrument)) continue;
-      const entry = Number(row.requested_entry_price);
-      const stopLoss = Number(row.stop_loss);
-      const confidence = Number(row.confidence_score);
-      const barTime = new Date(row.market_data_bar_time ?? row.signal_generated_at);
-      const inferredAtr = Math.abs(entry - stopLoss) / STOP_ATR_MULTIPLIER;
+      const entry = Number(row.entry_price);
+      const atrValue = Number(row.atr);
+      const confidence = Number(row.confidence);
+      const barTime = new Date(row.market_bar_time);
+      const evaluatedAt = new Date(row.evaluated_at);
 
       if (
         !Number.isFinite(entry) ||
-        !Number.isFinite(stopLoss) ||
+        !Number.isFinite(atrValue) ||
+        atrValue <= 0 ||
         !Number.isFinite(confidence) ||
         !Number.isFinite(barTime.getTime()) ||
-        !Number.isFinite(inferredAtr) ||
-        inferredAtr <= 0 ||
+        !Number.isFinite(evaluatedAt.getTime()) ||
         (row.direction !== 'BUY' && row.direction !== 'SELL')
       ) {
         continue;
       }
 
-      // stopDistance = max(1.5 * ATR, structural 5.1-pip floor). Therefore
-      // stopDistance / 1.5 is either the exact historical ATR or a conservative
-      // over-estimate when the structural floor bound the stop. Using it for
-      // freshness recovery can only make a post-restart breakout requirement
-      // stricter, never looser.
       this.lastPublishedOpportunity.set(row.instrument, {
         direction: row.direction,
         confidence,
         entry,
-        atr: inferredAtr,
+        atr: atrValue,
         barTimeMs: barTime.getTime(),
       });
+
+      if (!latest || evaluatedAt.getTime() > new Date(latest.evaluated_at).getTime()) {
+        latest = row;
+      }
+    }
+
+    if (latest) {
+      this.lastEnsembleDecision = {
+        evaluatedAt: new Date(latest.evaluated_at),
+        instrument: latest.instrument,
+        direction: latest.direction,
+        admitted: latest.admitted,
+        ensembleScore: Number(latest.ensemble_score),
+        consensusPassed: Number(latest.consensus_passed),
+        consensusRequired: Number(latest.consensus_required),
+        regime: latest.regime,
+        reasons: Array.isArray(latest.reasons) ? latest.reasons : [],
+      };
     }
 
     this.logger.log(
-      `Multi-model freshness state restored from durable intents instruments=${this.lastPublishedOpportunity.size}/6`,
+      `Multi-model shadow state restored instruments=${this.lastPublishedOpportunity.size}/6 latest=${this.lastEnsembleDecision.evaluatedAt?.toISOString() ?? 'none'}`,
     );
   }
 

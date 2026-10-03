@@ -142,7 +142,7 @@ describe('VpsForexSignalCollectorService', () => {
     ).toBe(true);
   });
 
-  it('restores freshness state from durable intents so a restart does not republish an unchanged setup', async () => {
+  it('restores freshness and last ensemble state from the durable shadow ledger', async () => {
     const current = buildCandidate('EURUSD', trendCandles());
     expect(current).not.toBeNull();
 
@@ -150,11 +150,17 @@ describe('VpsForexSignalCollectorService', () => {
       {
         instrument: 'EURUSD',
         direction: current!.direction,
-        requested_entry_price: String(current!.entry),
-        stop_loss: String(current!.stopLoss),
-        confidence_score: String(current!.confidence),
-        market_data_bar_time: current!.barTime,
-        signal_generated_at: current!.barTime,
+        entry_price: String(current!.entry),
+        atr: String(current!.atr),
+        confidence: String(current!.confidence),
+        market_bar_time: current!.barTime,
+        evaluated_at: new Date(current!.barTime.getTime() + 5 * 60_000),
+        admitted: false,
+        ensemble_score: '0.41250000',
+        consensus_passed: 4,
+        consensus_required: 7,
+        regime: 'TREND_WEAK',
+        reasons: ['REGIME_TREND_WEAK'],
       },
     ]);
 
@@ -171,17 +177,28 @@ describe('VpsForexSignalCollectorService', () => {
     await (collector as any).restorePublishedOpportunities('user-1', 'conn-1');
     const restored = (collector as any).lastPublishedOpportunity.get('EURUSD');
 
-    expect(query).toHaveBeenCalledWith(expect.stringContaining('DISTINCT ON (instrument)'), [
-      'user-1',
-      'conn-1',
-      'irexpro-multimodel-ensemble-v1',
-    ]);
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('FROM trading.ensemble_shadow_decisions'),
+      ['user-1', 'conn-1', 'irexpro-multimodel-ensemble-v1'],
+    );
     expect(restored).toBeDefined();
     expect(restored.direction).toBe(current!.direction);
     expect(restored.confidence).toBeCloseTo(current!.confidence, 10);
     expect(restored.entry).toBeCloseTo(current!.entry, 10);
-    expect(restored.atr).toBeGreaterThanOrEqual(current!.atr);
+    expect(restored.atr).toBeCloseTo(current!.atr, 10);
     expect(isFreshOpportunity(current!, restored)).toBe(false);
+    expect((collector as any).lastEnsembleDecision).toEqual(
+      expect.objectContaining({
+        instrument: 'EURUSD',
+        direction: current!.direction,
+        admitted: false,
+        ensembleScore: 0.4125,
+        consensusPassed: 4,
+        consensusRequired: 7,
+        regime: 'TREND_WEAK',
+        reasons: ['REGIME_TREND_WEAK'],
+      }),
+    );
   });
 
   it('refreshes all six live PAPER feeds but freezes legacy v7 execution during multi-model cutover', async () => {
@@ -191,6 +208,7 @@ describe('VpsForexSignalCollectorService', () => {
       .fn()
       .mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED', signalId: 'x' });
     const heartbeat = jest.fn().mockResolvedValue({ bid: '1', ask: '1.1' });
+    const shadowQuery = jest.fn().mockResolvedValue([]);
     const collector = new VpsForexSignalCollectorService(
       config({
         'vpsForexScanner.enabled': true,
@@ -209,6 +227,7 @@ describe('VpsForexSignalCollectorService', () => {
       { getCurrentPriceForConnection: heartbeat } as unknown as BrokerService,
       live,
       aiEngineClientMock(),
+      { query: shadowQuery } as any,
     );
     const fetchMock = jest
       .fn()
@@ -223,6 +242,15 @@ describe('VpsForexSignalCollectorService', () => {
     expect(heartbeat).toHaveBeenCalledTimes(6);
     expect(live.isLiveConnection('conn-1')).toBe(true);
     expect(receiveSignal).not.toHaveBeenCalled();
+    expect(shadowQuery).toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO trading.ensemble_shadow_decisions'),
+      expect.arrayContaining([
+        'user-1',
+        'session-1',
+        'conn-1',
+        'irexpro-multimodel-ensemble-v1',
+      ]),
+    );
     expect((collector as any).lastEnsembleDecision.evaluatedAt).toBeInstanceOf(Date);
     expect((collector as any).lastEnsembleDecision.instrument).toBe('EURUSD');
     expect((collector as any).lastEnsembleDecision.consensusRequired).toBeGreaterThan(0);
