@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import hashlib
-import json
 from datetime import UTC, datetime
 from pathlib import Path
+
+import pytest
 
 from app.api.v1.routes.models import (
     PostEntryBrokerScoreRequest,
@@ -78,6 +78,7 @@ def test_protect_shadow_never_claims_execution_authority():
     assert result["paper_promotion_eligible"] is False
 
 
+@pytest.mark.asyncio
 async def test_future_checkpoint_returns_without_fetching_market_data():
     challenger = _manual_challenger()
 
