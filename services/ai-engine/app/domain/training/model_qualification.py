@@ -89,7 +89,7 @@ STRUCTURE_GLOBAL_FEATURES = (
 )
 ExperimentCalibration = Literal["none", "platt", "isotonic"]
 SampleWeightPolicy = Literal["economic", "class_balance"]
-FeaturePolicy = Literal["all", "drop_volume", "drop_structure"]
+FeaturePolicy = Literal["all", "drop_volume", "drop_structure", "twelve_ohlc"]
 ExperimentMode = Literal[
     "directional",
     "two_stage_actionable",
@@ -464,6 +464,13 @@ def _feature_columns(policy: FeaturePolicy) -> list[str]:
             column
             for column in MULTITIMEFRAME_FEATURE_COLUMNS
             if not any(column.endswith(suffix) for suffix in VOLUME_FEATURE_SUFFIXES)
+        ]
+    elif policy == "twelve_ohlc":
+        columns = [
+            column
+            for column in MULTITIMEFRAME_FEATURE_COLUMNS
+            if column not in {"m1_spread_bps", "spread_to_atr_ratio"}
+            and not any(column.endswith(suffix) for suffix in VOLUME_FEATURE_SUFFIXES)
         ]
     elif policy == "drop_structure":
         columns = [
