@@ -3,6 +3,11 @@ import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
 import { BrokerService } from '../../broker/broker.service';
 import { ProviderQuoteCandleStoreService } from './provider-quote-candle-store.service';
+import {
+  METAAPI_PROVIDER_QUOTA_COOLDOWN_MS,
+  isMetaApiQuotaError,
+} from '../../broker/utils/metaapi-quota';
+export { isMetaApiQuotaError } from '../../broker/utils/metaapi-quota';
 
 interface CollectibleConnectionRow {
   id: string;
@@ -11,24 +16,10 @@ interface CollectibleConnectionRow {
 
 const DEFAULT_COLLECTION_INTERVAL_MS = 30_000;
 const MIN_COLLECTION_INTERVAL_MS = 30_000;
-const RATE_LIMIT_COOLDOWN_MS = 30 * 60_000;
-
 export function isMetaApiQuoteCollectionWindow(now: Date): boolean {
   const day = now.getUTCDay();
   const hour = now.getUTCHours();
   return day !== 0 && day !== 6 && hour < 21;
-}
-
-export function isMetaApiQuotaError(error: unknown): boolean {
-  const message = (error as Error)?.message?.toLowerCase?.() ?? String(error).toLowerCase();
-  return (
-    message.includes('rate limit') ||
-    message.includes('rate-limit') ||
-    message.includes('too many requests') ||
-    message.includes('cpu credits') ||
-    message.includes('quota') ||
-    message.includes('429')
-  );
 }
 
 @Injectable()
@@ -115,7 +106,7 @@ export class MetaApiQuoteCollectorService implements OnModuleInit, OnModuleDestr
             }
           } catch (error) {
             if (isMetaApiQuotaError(error)) {
-              const nextAttempt = currentTime + RATE_LIMIT_COOLDOWN_MS;
+              const nextAttempt = currentTime + METAAPI_PROVIDER_QUOTA_COOLDOWN_MS;
               this.cooldownUntilByConnection.set(connection.id, nextAttempt);
               this.warnThrottled(
                 connection.id + ':quota',
