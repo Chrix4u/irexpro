@@ -89,6 +89,41 @@ def _broker_candles(
 
 
 @pytest.mark.asyncio
+async def test_broker_cache_is_scoped_by_connection_id():
+    broker = AsyncMock()
+    broker.get_ohlcv = AsyncMock(
+        return_value=_broker_candles(datetime.now(UTC) - timedelta(minutes=30))
+    )
+    cache = AsyncMock()
+    cache.get_cached_ohlcv = AsyncMock(return_value=None)
+    cache.cache_ohlcv = AsyncMock(return_value=True)
+    service = OHLCVService(
+        broker_provider=broker,
+        cache=cache,
+    )
+
+    await service.get_ohlcv(
+        "broker",
+        "EURUSD",
+        "H1",
+        user_id="user-1",
+        broker_connection_id="conn-a",
+    )
+    await service.get_ohlcv(
+        "broker",
+        "EURUSD",
+        "H1",
+        user_id="user-1",
+        broker_connection_id="conn-b",
+    )
+
+    assert cache.get_cached_ohlcv.await_args_list[0].args[0] == "broker:conn-a"
+    assert cache.get_cached_ohlcv.await_args_list[1].args[0] == "broker:conn-b"
+    assert cache.cache_ohlcv.await_args_list[0].args[0] == "broker:conn-a"
+    assert cache.cache_ohlcv.await_args_list[1].args[0] == "broker:conn-b"
+
+
+@pytest.mark.asyncio
 async def test_broker_source_rejects_years_stale_candles_before_inference():
     broker = AsyncMock()
     broker.get_ohlcv = AsyncMock(

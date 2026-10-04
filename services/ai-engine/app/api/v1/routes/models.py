@@ -99,7 +99,7 @@ async def score_plan_b_v4_broker(
                 limit=100,
                 user_id=request.user_id,
                 broker_connection_id=request.broker_connection_id,
-                bypass_cache=True,
+                bypass_cache=False,
                 advance_simulation=False,
             )
 
