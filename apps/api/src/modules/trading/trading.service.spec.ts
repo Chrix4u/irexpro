@@ -380,6 +380,35 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       expect(aiEngineClient.notifySessionStarted).not.toHaveBeenCalled();
     });
 
+    it('does not register the legacy scheduler for a different DEMO broker owned by the multi-model user', async () => {
+      const values: Record<string, unknown> = {
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'paper-evidence-1',
+      };
+      configService.get.mockImplementation((key: string, fallback?: unknown) =>
+        key in values ? values[key] : fallback,
+      );
+      brokerService.findConnectionById.mockResolvedValue(
+        buildHealthyConnection({
+          id: 'conn-1',
+          brokerId: 'metatrader5',
+          brokerName: 'MetaTrader 5',
+        }),
+      );
+
+      const session = await service.startTradingSession(
+        'user-1',
+        'conn-1',
+        ExecutionMode.FULL_AUTO,
+      );
+
+      expect(session.id).toBe('session-1');
+      expect(executionService.startSession).toHaveBeenCalled();
+      expect(aiEngineClient.notifySessionStarted).not.toHaveBeenCalled();
+    });
+
     it('keeps PAPER execution bound while using a connected MT5 DEMO account for market data', async () => {
       brokerService.findConnectionsByUser.mockResolvedValue([
         buildHealthyConnection(),
@@ -1033,8 +1062,10 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
           source: 'vps-twelvedata',
           timeframe: 'M5',
           interval_seconds: 600,
-          last_reason: 'vps_forex_scanner_owns_session',
-          model_version: 'external-provider/vps-twelvedata-six-pair-v7/paper-only-v1',
+          last_decision: 'MULTI_MODEL_SHADOW',
+          last_reason: 'multimodel_evidence_binding_owns_session',
+          model_version: 'irexpro-multimodel-ensemble-v1',
+          model_mode: 'PROSPECTIVE_SHADOW_ONLY',
         }),
       );
       expect(status.instruments).toEqual([
@@ -1045,6 +1076,53 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
         'USDCAD',
         'USDCHF',
       ]);
+    });
+
+    it('reports multi-model shadow and suppresses legacy self-heal on a non-evidence DEMO broker session', async () => {
+      const values: Record<string, unknown> = {
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'paper-evidence-1',
+      };
+      configService.get.mockImplementation((key: string, fallback?: unknown) =>
+        key in values ? values[key] : fallback,
+      );
+      brokerService.findConnectionById.mockResolvedValue(
+        buildHealthyConnection({ brokerId: 'metatrader5', brokerName: 'MetaTrader 5' }),
+      );
+      aiEngineClient.getSessionStatus.mockResolvedValue({
+        enabled: true,
+        registered: false,
+        trading_session_id: 'session-1',
+        active: false,
+        instruments: [],
+        timeframe: null,
+        interval_seconds: null,
+        source: null,
+        last_run_at: null,
+        next_run_at: null,
+        last_decision: null,
+        last_reason: null,
+        last_confidence_score: null,
+        confidence_threshold: null,
+        last_publish_failed: false,
+      });
+
+      const status = await service.getAutomationRuntimeStatus('user-1', 'session-1');
+
+      expect(aiEngineClient.notifySessionStarted).not.toHaveBeenCalled();
+      expect(status).toEqual(
+        expect.objectContaining({
+          registered: true,
+          active: true,
+          source: 'vps-twelvedata+broker-mtf',
+          last_decision: 'MULTI_MODEL_SHADOW',
+          last_reason: 'multimodel_user_owns_broker_session',
+          model_version: 'irexpro-multimodel-ensemble-v1',
+          model_mode: 'PROSPECTIVE_SHADOW_ONLY',
+        }),
+      );
     });
 
     it('self-heals a missing scheduler job for an ACTIVE paper session', async () => {

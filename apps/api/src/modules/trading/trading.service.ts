@@ -343,10 +343,10 @@ export class TradingService {
     // owned by the VPS-native external-evidence scanner. Exact binding keeps
     // research/replay signals from contaminating the live-provider evidence
     // stream while leaving every other user/account unchanged.
-    const vpsScannerOwnsSession = this.isVpsForexScannerBinding(userId, connection.id);
-    if (vpsScannerOwnsSession) {
+    const multiModelOwnsUser = this.isVpsForexScannerUser(userId);
+    if (multiModelOwnsUser) {
       this.logger.log(
-        `Legacy AI scheduler registration skipped session=${session.id}: VPS forex scanner owns this PAPER binding`,
+        `Legacy AI scheduler registration skipped session=${session.id}: iRexPro multi-model engine owns user=${userId}`,
       );
     } else
       try {
@@ -643,11 +643,16 @@ export class TradingService {
       };
     }
 
-    // The VPS-native Twelve Data scanner is the sole signal authority for its
-    // exact PAPER binding. The legacy Python scheduler must neither run nor be
-    // self-healed for this session. If a stale job somehow exists, stop it
-    // before reporting the external scanner runtime to the UI.
-    if (this.isVpsForexScannerBinding(userId, session.brokerConnectionId)) {
+    // Once a user is assigned to the VPS-native multi-model engine, the
+    // legacy Python scheduler must neither run nor self-heal on ANY broker
+    // connection for that user. The exact PAPER binding remains the evidence
+    // ledger; a real-provider DEMO connection may simultaneously supply
+    // broker-native MTF data without regaining legacy signal authority.
+    if (this.isVpsForexScannerUser(userId)) {
+      const exactEvidenceBinding = this.isVpsForexScannerBinding(
+        userId,
+        session.brokerConnectionId,
+      );
       const legacyRuntime = await this.aiEngineClient.getSessionStatus(sessionId);
       if (legacyRuntime.registered) {
         await this.aiEngineClient.notifySessionStopped({ tradingSessionId: sessionId });
@@ -660,17 +665,19 @@ export class TradingService {
         instruments: [...TradingService.AI_PREFERRED_INSTRUMENTS],
         timeframe: 'M5',
         interval_seconds: 600,
-        source: 'vps-twelvedata',
+        source: exactEvidenceBinding ? 'vps-twelvedata' : 'vps-twelvedata+broker-mtf',
         last_run_at: null,
         next_run_at: null,
-        last_decision: 'EXTERNAL_PROVIDER_ACTIVE',
-        last_reason: 'vps_forex_scanner_owns_session',
+        last_decision: 'MULTI_MODEL_SHADOW',
+        last_reason: exactEvidenceBinding
+          ? 'multimodel_evidence_binding_owns_session'
+          : 'multimodel_user_owns_broker_session',
         last_confidence_score: null,
         last_confidence_at: null,
-        confidence_threshold: 0.64,
-        model_version: 'external-provider/vps-twelvedata-six-pair-v7/paper-only-v1',
-        model_mode: 'PAPER_EVIDENCE',
-        model_loaded: null,
+        confidence_threshold: null,
+        model_version: 'irexpro-multimodel-ensemble-v1',
+        model_mode: 'PROSPECTIVE_SHADOW_ONLY',
+        model_loaded: true,
         last_market_data_at: null,
         market_data_age_seconds: null,
         market_data_cache_bypassed: false,
@@ -770,19 +777,19 @@ export class TradingService {
     return executionConnection.id;
   }
 
-  private isVpsForexScannerBinding(userId: string, brokerConnectionId: string): boolean {
+  private isVpsForexScannerUser(userId: string): boolean {
     if (this.configService.get<boolean>('vpsForexScanner.enabled', false) !== true) return false;
     const configuredUserId = this.configService.get<string>('vpsForexScanner.userId', '').trim();
+    const key = this.configService.get<string>('vpsForexScanner.apiKey', '').trim();
+    return Boolean(key && key.toLowerCase() !== 'demo' && configuredUserId === userId);
+  }
+
+  private isVpsForexScannerBinding(userId: string, brokerConnectionId: string): boolean {
+    if (!this.isVpsForexScannerUser(userId)) return false;
     const configuredConnectionId = this.configService
       .get<string>('vpsForexScanner.brokerConnectionId', '')
       .trim();
-    const key = this.configService.get<string>('vpsForexScanner.apiKey', '').trim();
-    return Boolean(
-      key &&
-      key.toLowerCase() !== 'demo' &&
-      configuredUserId === userId &&
-      configuredConnectionId === brokerConnectionId,
-    );
+    return configuredConnectionId === brokerConnectionId;
   }
 
   private getResearchReplayStepsPerCycle(): number {
