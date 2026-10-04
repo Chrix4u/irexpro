@@ -1569,7 +1569,10 @@ export class ExecutionService {
       throw new BrokerConnectionNotConnectedException(connection.status);
     }
     if (!this.brokerService.isConnectionExecutable(connection)) {
-      throw new BrokerConnectionNotExecutableException(connection.authorizationStatus);
+      throw new BrokerConnectionNotExecutableException(
+        connection.authorizationStatus,
+        connection.accountType,
+      );
     }
 
     // ── 3+4: idempotency / typed conflict against an existing ACTIVE session ─

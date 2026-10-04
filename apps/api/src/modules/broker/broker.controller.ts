@@ -189,6 +189,28 @@ export class BrokerController {
     return this.demoValidationService.validateDemoConnection(connectionId, userId);
   }
 
+  // ─── DEMO automation gate ──────────────────────────────────────────────────
+
+  @Post(':connectionId/enable-demo-trading')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Enable automated execution for a validated DEMO connection',
+    description:
+      'Activates automation only inside the broker DEMO environment. ' +
+      'Requires CONNECTED + demoValidated and never enables LIVE trading.',
+  })
+  @ApiParam({ name: 'connectionId', description: 'Broker connection UUID (DEMO)' })
+  @ApiResponse({ status: 204, description: 'DEMO automation enabled' })
+  @ApiResponse({ status: 400, description: 'Connection is not DEMO' })
+  @ApiResponse({ status: 403, description: 'DEMO is not connected/validated/supported' })
+  @ApiResponse({ status: 409, description: 'Authorization state cannot become ACTIVE' })
+  async enableDemoTrading(
+    @Param('connectionId', ParseUUIDPipe) connectionId: string,
+    @CurrentUserId() userId: string,
+  ): Promise<void> {
+    await this.brokerService.enableDemoTrading(connectionId, userId);
+  }
+
   // ─── Live trading gate ─────────────────────────────────────────────────────
 
   @Post(':connectionId/enable-live-trading')

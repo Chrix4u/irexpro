@@ -1000,6 +1000,78 @@ export class BrokerService {
     return evidence;
   }
 
+  /**
+   * Enable automated execution for an already-validated DEMO connection.
+   *
+   * This is deliberately separate from enableLiveTrading(): it never changes
+   * accountType, never grants LIVE authority, and keeps liveTradingEnabled=false.
+   */
+  async enableDemoTrading(connectionId: string, userId: string, ipAddress?: string): Promise<void> {
+    const connection = await this.findConnectionById(connectionId, userId);
+
+    if (connection.accountType !== BrokerMode.DEMO) {
+      throw new BadRequestException(
+        'Only DEMO account connections can have DEMO automation enabled',
+      );
+    }
+    if (connection.status !== BrokerConnectionStatus.CONNECTED) {
+      throw new ForbiddenException('DEMO automation requires a CONNECTED broker connection');
+    }
+    if (!connection.demoValidated) {
+      throw new ForbiddenException(
+        'DEMO validation must pass before automated DEMO execution can be enabled',
+      );
+    }
+    if (!this.providerRegistry.supportsEnvironment(connection.brokerId, BrokerMode.DEMO)) {
+      throw new ForbiddenException(`Broker ${connection.brokerId} does not support DEMO execution`);
+    }
+
+    if (connection.authorizationStatus === BrokerAuthorizationStatus.ACTIVE) {
+      return;
+    }
+
+    if (!this.canTransitionTo(connection, BrokerAuthorizationStatus.ACTIVE)) {
+      throw new ConflictException(
+        `Connection authorization state ${connection.authorizationStatus} cannot become ACTIVE for DEMO automation`,
+      );
+    }
+
+    await this.applyGuardedAuthorizationUpdate(
+      connectionId,
+      connection.authorizationStatus,
+      {
+        authorizationStatus: BrokerAuthorizationStatus.ACTIVE,
+        authorizedAt: connection.authorizedAt ?? new Date(),
+        authorizationRevokedAt: null,
+        liveTradingEnabled: false,
+      },
+      'enableDemoTrading ACTIVE transition',
+    );
+
+    this.eventBus.publish(DomainEventType.BROKER_AUTHORIZATION_CHANGED, userId, {
+      userId,
+      connectionId,
+      brokerId: connection.brokerId,
+      previousStatus: connection.authorizationStatus,
+      status: BrokerAuthorizationStatus.ACTIVE,
+      environment: BrokerMode.DEMO,
+    });
+
+    await this.auditService.log({
+      actorUserId: userId,
+      action: AuditAction.BROKER_DEMO_TRADING_ENABLED,
+      resourceType: 'BrokerConnection',
+      resourceId: connectionId,
+      ipAddress,
+      metadata: {
+        brokerId: connection.brokerId,
+        accountType: BrokerMode.DEMO,
+        authorizationStatus: BrokerAuthorizationStatus.ACTIVE,
+      },
+      severity: AuditSeverity.INFO,
+    });
+  }
+
   async enableLiveTrading(connectionId: string, userId: string, ipAddress?: string): Promise<void> {
     const connection = await this.findConnectionById(connectionId, userId);
 
