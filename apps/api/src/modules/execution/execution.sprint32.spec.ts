@@ -443,6 +443,68 @@ describe('ExecutionService — Sprint 32 Idempotency', () => {
     expect(mockOrchestratorInstance.dispatchOrder).toHaveBeenCalledTimes(2);
   });
 
+  it('same-pair opposite-direction signals remain independent when signal ids differ', async () => {
+    const baseDecision = approvedDecision() as RiskDecision & { decision: 'APPROVED' };
+    const buyDecision = {
+      ...baseDecision,
+      signalId: 'sig-hedge-buy',
+      validatedOrder: {
+        ...baseDecision.validatedOrder,
+        direction: 'BUY' as const,
+        idempotencyKey: 'idem-hedge-buy',
+      },
+    } as RiskDecision;
+    const sellDecision = {
+      ...baseDecision,
+      signalId: 'sig-hedge-sell',
+      validatedOrder: {
+        ...baseDecision.validatedOrder,
+        direction: 'SELL' as const,
+        idempotencyKey: 'idem-hedge-sell',
+      },
+    } as RiskDecision;
+
+    let reservationSequence = 0;
+    const ds = (service as unknown as { dataSource: { transaction: jest.Mock } }).dataSource;
+    ds.transaction.mockImplementation(
+      async (cb: (manager: { query: jest.Mock }) => Promise<unknown>) => {
+        const sequence = ++reservationSequence;
+        const mgr = {
+          query: jest.fn().mockImplementation((sql: string) => {
+            if (sql.includes('pg_advisory_xact_lock')) return Promise.resolve([]);
+            if (sql.includes('SELECT * FROM trading.trades WHERE idempotency_key'))
+              return Promise.resolve([]);
+            if (sql.includes('INSERT INTO trading.trades'))
+              return Promise.resolve([
+                {
+                  id: `hedge-trade-${sequence}`,
+                  status: 'PENDING',
+                  signal_id: sequence === 1 ? 'sig-hedge-buy' : 'sig-hedge-sell',
+                  instrument: 'EURUSD',
+                  direction: sequence === 1 ? 'BUY' : 'SELL',
+                  lot_size: '0.05',
+                },
+              ]);
+            return Promise.resolve([]);
+          }),
+        };
+        return cb(mgr);
+      },
+    );
+
+    const results = await Promise.all([
+      service.executeTrade('user-1', buyDecision),
+      service.executeTrade('user-1', sellDecision),
+    ]);
+
+    expect(results).toHaveLength(2);
+    expect(mockOrchestratorInstance.dispatchOrder).toHaveBeenCalledTimes(2);
+    const directions = mockOrchestratorInstance.dispatchOrder.mock.calls.map(
+      (call) => call[0].direction,
+    );
+    expect(directions).toEqual(expect.arrayContaining(['BUY', 'SELL']));
+  });
+
   // ── Concurrent SAME-signal idempotency ────────────────────────────────────
 
   it('concurrent SAME signal: only one execution, duplicate suppressed', async () => {
