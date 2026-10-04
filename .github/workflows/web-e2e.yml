@@ -37,10 +37,61 @@ env:
   NODE_VERSION: '22'
   PNPM_VERSION: '10.34.5'
   CANDIDATE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+  BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
 
 jobs:
+  changes:
+    name: Detect affected UI app
+    runs-on: ubuntu-24.04
+    outputs:
+      web: ${{ steps.scope.outputs.web }}
+      admin: ${{ steps.scope.outputs.admin }}
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Detect affected app
+        id: scope
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "web=true" >> "$GITHUB_OUTPUT"
+            echo "admin=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          base="$BASE_SHA"
+          if [[ -z "$base" || "$base" =~ ^0+$ ]] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            base="$(git rev-parse HEAD^)"
+          fi
+
+          web=false
+          admin=false
+          while IFS= read -r file; do
+            case "$file" in
+              apps/web/*) web=true ;;
+              apps/admin/*) admin=true ;;
+              packages/api-client/*|packages/types/*|pnpm-lock.yaml|pnpm-workspace.yaml|package.json)
+                web=true
+                admin=true
+                ;;
+            esac
+          done < <(git diff --name-only --diff-filter=ACMR "$base" "$CANDIDATE_SHA")
+
+          echo "web=$web" >> "$GITHUB_OUTPUT"
+          echo "admin=$admin" >> "$GITHUB_OUTPUT"
+          echo "UI E2E scope: web=$web admin=$admin"
+
   web-e2e:
     name: Web Playwright (9 viewports)
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -143,6 +194,8 @@ jobs:
 
   admin-e2e:
     name: Admin Playwright (9 viewports)
+    needs: changes
+    if: needs.changes.outputs.admin == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
