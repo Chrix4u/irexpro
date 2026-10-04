@@ -91,6 +91,8 @@ export class TradeReconciliationJob extends WorkerHost {
 
     this.logger.log(`Reconciling ${connections.length} connection(s)`);
 
+    let connectionsReconciled = 0;
+    let providerQuotaDeferredConnections = 0;
     let discrepanciesDetected = 0;
     let discrepanciesNew = 0;
     let discrepanciesAutoResolved = 0;
@@ -103,20 +105,32 @@ export class TradeReconciliationJob extends WorkerHost {
 
     // Sequential per connection (stateful adapter model — see class docs).
     for (const connection of connections) {
-      try {
-        const outcome: ReconciliationRunOutcome =
-          await this.stateReconciliation.runForConnection(connection);
-        discrepanciesDetected += outcome.discrepanciesDetected;
-        discrepanciesNew += outcome.discrepanciesNew;
-        discrepanciesAutoResolved += outcome.discrepanciesAutoResolved;
-        discrepanciesOpen += outcome.discrepanciesOpen;
-        if (outcome.status === 'FAILED') failedConnections++;
-      } catch (err) {
-        // runForConnection handles its own failures; this guards the loop.
-        failedConnections++;
-        this.logger.error(
-          `Reconciliation run threw for connection ${connection.id}: ${(err as Error).message}`,
+      const quotaCooldownUntil = this.stateReconciliation.getProviderQuotaCooldownUntil(
+        connection.id,
+      );
+      if (quotaCooldownUntil) {
+        providerQuotaDeferredConnections++;
+        this.logger.warn(
+          `Deferring full reconciliation sweep for connection ${connection.id} ` +
+            `until ${quotaCooldownUntil.toISOString()} because provider quota is cooling down`,
         );
+      } else {
+        connectionsReconciled++;
+        try {
+          const outcome: ReconciliationRunOutcome =
+            await this.stateReconciliation.runForConnection(connection);
+          discrepanciesDetected += outcome.discrepanciesDetected;
+          discrepanciesNew += outcome.discrepanciesNew;
+          discrepanciesAutoResolved += outcome.discrepanciesAutoResolved;
+          discrepanciesOpen += outcome.discrepanciesOpen;
+          if (outcome.status === 'FAILED') failedConnections++;
+        } catch (err) {
+          // runForConnection handles its own failures; this guards the loop.
+          failedConnections++;
+          this.logger.error(
+            `Reconciliation run threw for connection ${connection.id}: ${(err as Error).message}`,
+          );
+        }
       }
 
       // A provider dispatch can cross the final commitment immediately before
@@ -150,7 +164,8 @@ export class TradeReconciliationJob extends WorkerHost {
     }
 
     this.logger.log(
-      `Reconciliation cycle complete: ${connections.length} connections, ` +
+      `Reconciliation cycle complete: ${connectionsReconciled} reconciled, ` +
+        `${providerQuotaDeferredConnections} provider-quota deferred, ` +
         `${discrepanciesDetected} detected (${discrepanciesNew} new), ` +
         `${discrepanciesAutoResolved} auto-resolved, ${discrepanciesOpen} open, ` +
         `${failedConnections} failed; protective orders: ${protectiveOrdersChecked} ` +
@@ -159,7 +174,7 @@ export class TradeReconciliationJob extends WorkerHost {
     );
 
     return {
-      connectionsReconciled: connections.length,
+      connectionsReconciled,
       discrepanciesDetected,
       discrepanciesNew,
       discrepanciesAutoResolved,

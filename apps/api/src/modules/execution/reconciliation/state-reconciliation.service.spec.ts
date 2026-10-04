@@ -329,6 +329,37 @@ describe('StateReconciliationService', () => {
     service = module.get(StateReconciliationService);
   });
 
+  it('starts a MetaAPI reconciliation cooldown after a provider quota failure', async () => {
+    const metaConnection = {
+      ...connection(),
+      brokerId: 'metatrader5',
+      accountId: 'meta-account-1',
+    } as unknown as BrokerConnection;
+    adapter.connect.mockRejectedValueOnce(
+      new Error('The API allows 180000 cpu credits per 1h to avoid overloading our servers'),
+    );
+
+    const outcome = await service.runForConnection(metaConnection);
+    const cooldownUntil = service.getProviderQuotaCooldownUntil(metaConnection.id);
+
+    expect(outcome.status).toBe(ReconciliationRunStatus.FAILED);
+    expect(cooldownUntil).toBeInstanceOf(Date);
+    expect(cooldownUntil!.getTime()).toBeGreaterThan(Date.now());
+    expect(persistence.failRun).toHaveBeenCalledWith(
+      'run-1',
+      expect.stringContaining('cpu credits'),
+    );
+    expect(auditService.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: AuditAction.RECONCILIATION_RUN_FAILED,
+        severity: 'WARNING',
+        metadata: expect.objectContaining({
+          providerQuotaCooldownUntil: expect.any(String),
+        }),
+      }),
+    );
+  });
+
   describe('runForConnection — clean state', () => {
     it('completes with COMPLETED status and zero discrepancies', async () => {
       // Provider and internal agree: one position each.
