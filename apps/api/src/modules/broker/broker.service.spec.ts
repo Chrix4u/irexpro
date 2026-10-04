@@ -870,6 +870,82 @@ describe('BrokerService', () => {
     });
   });
 
+  // ─── enableDemoTrading ────────────────────────────────────────────────────
+
+  describe('enableDemoTrading()', () => {
+    it('activates a connected validated MetaTrader DEMO connection without enabling LIVE', async () => {
+      connectionRepo.findOne.mockResolvedValueOnce({
+        id: 'conn-demo',
+        userId: 'user-1',
+        accountType: BrokerMode.DEMO,
+        brokerId: 'metatrader5',
+        status: BrokerConnectionStatus.CONNECTED,
+        demoValidated: true,
+        authorizationStatus: BrokerAuthorizationStatus.AUTHORIZED,
+        authorizedAt: new Date('2026-10-04T12:00:00Z'),
+      });
+      connectionRepo.update.mockResolvedValue({ affected: 1 });
+
+      await expect(service.enableDemoTrading('conn-demo', 'user-1')).resolves.not.toThrow();
+
+      expect(connectionRepo.update).toHaveBeenCalledWith(
+        { id: 'conn-demo', authorizationStatus: BrokerAuthorizationStatus.AUTHORIZED },
+        expect.objectContaining({
+          authorizationStatus: BrokerAuthorizationStatus.ACTIVE,
+          liveTradingEnabled: false,
+          authorizationRevokedAt: null,
+        }),
+      );
+    });
+
+    it('rejects LIVE rows from the DEMO activation endpoint', async () => {
+      connectionRepo.findOne.mockResolvedValueOnce({
+        id: 'conn-live',
+        userId: 'user-1',
+        accountType: BrokerMode.LIVE,
+        brokerId: 'metatrader5',
+        status: BrokerConnectionStatus.CONNECTED,
+        demoValidated: true,
+        authorizationStatus: BrokerAuthorizationStatus.AUTHORIZED,
+      });
+
+      await expect(service.enableDemoTrading('conn-live', 'user-1')).rejects.toThrow(
+        'Only DEMO account connections can have DEMO automation enabled',
+      );
+    });
+
+    it('rejects an unvalidated DEMO connection', async () => {
+      connectionRepo.findOne.mockResolvedValueOnce({
+        id: 'conn-demo',
+        userId: 'user-1',
+        accountType: BrokerMode.DEMO,
+        brokerId: 'metatrader5',
+        status: BrokerConnectionStatus.CONNECTED,
+        demoValidated: false,
+        authorizationStatus: BrokerAuthorizationStatus.AUTHORIZED,
+      });
+
+      await expect(service.enableDemoTrading('conn-demo', 'user-1')).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('is idempotent when DEMO automation is already ACTIVE', async () => {
+      connectionRepo.findOne.mockResolvedValueOnce({
+        id: 'conn-demo',
+        userId: 'user-1',
+        accountType: BrokerMode.DEMO,
+        brokerId: 'metatrader5',
+        status: BrokerConnectionStatus.CONNECTED,
+        demoValidated: true,
+        authorizationStatus: BrokerAuthorizationStatus.ACTIVE,
+      });
+
+      await expect(service.enableDemoTrading('conn-demo', 'user-1')).resolves.not.toThrow();
+      expect(connectionRepo.update).not.toHaveBeenCalled();
+    });
+  });
+
   // ─── enableLiveTrading ────────────────────────────────────────────────────
 
   describe('enableLiveTrading()', () => {

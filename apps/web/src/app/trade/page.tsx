@@ -1959,6 +1959,16 @@ export default function AiTradingPage() {
           return;
         }
         const executionMode = startExecutionModeForBroker(selectedBroker);
+        if (
+          selectedBroker.accountType === "DEMO" &&
+          selectedBroker.brokerId !== "paper-broker" &&
+          selectedBroker.authorizationStatus !== "ACTIVE"
+        ) {
+          await api.request<void>(
+            `/broker/connections/${encodeURIComponent(selectedBroker.id)}/enable-demo-trading`,
+            { method: "POST" },
+          );
+        }
         await api.startTradingSession({
           brokerConnectionId: selectedBroker.id,
           executionMode,
