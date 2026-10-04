@@ -9,6 +9,7 @@ import { CTraderAdapter } from './ctrader/ctrader.adapter';
 import { CTraderClientService } from './ctrader/ctrader-client.service';
 import { OandaAdapter } from './oanda/oanda.adapter';
 import { MetaApiClientService } from '../services/metaapi-client.service';
+import { LivePaperMarketDataService } from '../services/live-paper-market-data.service';
 
 const makeAdapter = (brokerId: string, brokerName: string): IBrokerAdapter => ({
   brokerId,
@@ -411,6 +412,7 @@ describe('BrokerModule — connection-scoped cTrader adapter factory wiring', ()
       metaApiClient,
       configService,
       ctraderClientStub,
+      new LivePaperMarketDataService(),
     );
     brokerModule.onModuleInit();
   });

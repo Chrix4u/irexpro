@@ -76,11 +76,11 @@ describe('TwelveDataFastMarkStreamService', () => {
       'EURUSD',
       1.12345,
       new Date(1790875800 * 1000),
+      undefined,
     );
     service.onModuleDestroy();
     expect(socket.closed).toBe(true);
   });
-
 
   it('falls back to EUR/USD when the selected pair is rejected by the entitlement', () => {
     (globalThis as unknown as { WebSocket?: unknown }).WebSocket = FakeWebSocket;

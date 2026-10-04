@@ -14,6 +14,10 @@ import { AllowedTradingMode } from '../risk/entities/risk-profile.entity';
 import { TradingSession, TradingSessionStatus } from '../execution/entities/trading-session.entity';
 import { ExecutionMode } from '../execution/interfaces/execution-authority';
 import { BrokerAccountSnapshotService } from '../broker/services/broker-account-snapshot.service';
+import { ConfigService } from '@nestjs/config';
+import { AuthService } from '../auth/auth.service';
+import { AiRuntimePreference } from './entities/ai-runtime-preference.entity';
+import { getRepositoryToken } from '@nestjs/typeorm';
 
 /**
  * Sprint 32 — Risk Profile Snapshot Immutability.
@@ -156,6 +160,10 @@ describe('TradingService — Sprint 32 Snapshot Immutability', () => {
           },
         },
         {
+          provide: ConfigService,
+          useValue: { get: jest.fn((_key: string, fallback?: unknown) => fallback) },
+        },
+        {
           provide: OnboardingService,
           useValue: {
             canStartTrading: jest.fn().mockResolvedValue({ allowed: true, missingSteps: [] }),
@@ -168,6 +176,18 @@ describe('TradingService — Sprint 32 Snapshot Immutability', () => {
           useValue: {
             readLatestAcceptedSnapshot: jest.fn().mockResolvedValue(null),
             resolveFreshSnapshotForNewExposure: jest.fn(),
+          },
+        },
+        {
+          provide: AuthService,
+          useValue: { verifyAdvancedControlsStepUpToken: jest.fn().mockResolvedValue(undefined) },
+        },
+        {
+          provide: getRepositoryToken(AiRuntimePreference),
+          useValue: {
+            findOne: jest.fn().mockResolvedValue(null),
+            create: jest.fn((value) => value),
+            save: jest.fn(async (value) => value),
           },
         },
         { provide: Logger, useValue: { log: jest.fn(), warn: jest.fn(), error: jest.fn() } },
