@@ -256,6 +256,38 @@ def _route_predict(
     return out
 
 
+def _prediction_diagnostics(frame: pd.DataFrame) -> dict[str, Any]:
+    def quantiles(column: str) -> dict[str, float | None]:
+        values = frame[column].astype(float).to_numpy()
+        values = values[np.isfinite(values)]
+        if not len(values):
+            return {key: None for key in ("min", "p10", "p50", "p90", "p99", "max")}
+        q = np.quantile(values, [0.0, 0.10, 0.50, 0.90, 0.99, 1.0])
+        return {
+            "min": float(q[0]),
+            "p10": float(q[1]),
+            "p50": float(q[2]),
+            "p90": float(q[3]),
+            "p99": float(q[4]),
+            "max": float(q[5]),
+        }
+
+    return {
+        "rows": int(len(frame)),
+        "horizon_agreement_fraction": (
+            float(frame["_horizon_agreement"].astype(bool).mean()) if len(frame) else None
+        ),
+        "conservative_ev": quantiles("_conservative_ev"),
+        "direction_margin": quantiles("_direction_margin"),
+        "pred_ev_h5": quantiles("_ev_h5"),
+        "pred_ev_h10": quantiles("_ev_h10"),
+        "realized_long_h5": quantiles("long_h5"),
+        "realized_short_h5": quantiles("short_h5"),
+        "realized_long_h10": quantiles("long_h10"),
+        "realized_short_h10": quantiles("short_h10"),
+    }
+
+
 def _apply(frame: pd.DataFrame, config: dict[str, float]) -> pd.DataFrame:
     out = frame.copy()
     ev_floor = float(config["ev_floor_bps"]) / 10000.0
@@ -633,9 +665,11 @@ def run_pair(
         )
 
         calibration_scored = _route_predict(calibration, models, thresholds)
+        calibration_diagnostics = _prediction_diagnostics(calibration_scored)
         chosen, calibration_passed, candidates = _choose(calibration_scored)
 
         outer_scored = _route_predict(outer_valid, models, thresholds)
+        outer_diagnostics = _prediction_diagnostics(outer_scored)
         outer = _apply(outer_scored, chosen)
         outer["fold"] = fold_index
         predictions.append(outer)
@@ -657,6 +691,8 @@ def run_pair(
                     "spread_atr_cap",
                 )
             },
+            "calibration_diagnostics": calibration_diagnostics,
+            "outer_diagnostics": outer_diagnostics,
             "calibration_metrics": {
                 key: chosen.get(key)
                 for key in (
