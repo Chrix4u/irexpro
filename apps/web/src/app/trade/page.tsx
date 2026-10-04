@@ -413,6 +413,14 @@ interface VpsForexScannerStatusView {
       paperPromotionEligible: boolean;
       blockers: string[];
     } | null;
+    macroEventAssessment: {
+      provider: "TRADING_ECONOMICS" | "FINANCE_CALENDAR" | "NONE";
+      reason: string;
+      attribution: {
+        label: string;
+        url: string;
+      } | null;
+    } | null;
     highConvictionOverlay: {
       state: "CONFIRM" | "CONFLICT" | "ABSTAIN" | "STALE" | "UNAVAILABLE";
       reason: string | null;
@@ -2670,10 +2678,22 @@ export default function AiTradingPage() {
                         <span>Macro-event guard</span>
                         <strong>
                           {vpsScannerStatus?.lastEnsembleDecision.governance?.eventRisk === "CLEAR"
-                            ? "CLEAR"
+                            ? `CLEAR · ${(vpsScannerStatus.lastEnsembleDecision.macroEventAssessment?.provider ?? "NONE").replaceAll("_", " ")}`
                             : vpsScannerStatus?.lastEnsembleDecision.governance?.eventRisk === "HIGH_IMPACT_BLOCK"
-                              ? "BLOCKED · HIGH IMPACT"
-                              : "PROVIDER REQUIRED · FAIL CLOSED"}
+                              ? `BLOCKED · HIGH IMPACT · ${(vpsScannerStatus.lastEnsembleDecision.macroEventAssessment?.provider ?? "NONE").replaceAll("_", " ")}`
+                              : "UNVERIFIED · FAIL CLOSED"}
+                          {vpsScannerStatus?.lastEnsembleDecision.macroEventAssessment?.attribution ? (
+                            <>
+                              {" · "}
+                              <a
+                                href={vpsScannerStatus.lastEnsembleDecision.macroEventAssessment.attribution.url}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                {vpsScannerStatus.lastEnsembleDecision.macroEventAssessment.attribution.label}
+                              </a>
+                            </>
+                          ) : null}
                         </strong>
                       </div>
                     </div>

@@ -303,6 +303,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     regime: string | null;
     reasons: string[];
     governance: EnsembleGovernanceDecision | null;
+    macroEventAssessment: MacroEventRiskAssessment | null;
     highConvictionOverlay: HighConvictionOverlay | null;
   } = {
     evaluatedAt: null,
@@ -315,6 +316,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     regime: null,
     reasons: ['WAITING_FOR_MARKET_SCAN'],
     governance: null,
+    macroEventAssessment: null,
     highConvictionOverlay: null,
   };
   private lastEvaluation: {
@@ -598,6 +600,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         regime: this.lastEnsembleDecision.regime,
         reasons: this.lastEnsembleDecision.reasons,
         governance: this.lastEnsembleDecision.governance,
+        macroEventAssessment: this.lastEnsembleDecision.macroEventAssessment,
         highConvictionOverlay: this.lastEnsembleDecision.highConvictionOverlay,
       },
       components: {
@@ -827,7 +830,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           )
         : {
             state: 'UNVERIFIED',
-            provider: 'TRADING_ECONOMICS',
+            provider: 'NONE',
             configured: false,
             checkedAt: new Date().toISOString(),
             instrument: best.instrument,
@@ -836,6 +839,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             blockWindowMinutesAfter: 30,
             blockingEvents: [],
             reason: 'SERVICE_NOT_AVAILABLE',
+            attribution: null,
           };
       const ensembleGovernance = evaluateEnsembleGovernance({
         ensemble: planBEnsemble,
@@ -863,6 +867,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         regime: planBEnsemble.regime,
         reasons: planBEnsemble.reasons,
         governance: ensembleGovernance,
+        macroEventAssessment,
         highConvictionOverlay,
       };
       await this.persistEnsembleShadowDecision(
@@ -1700,6 +1705,13 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           latest.components.governance &&
           typeof latest.components.governance === 'object'
             ? (latest.components.governance as unknown as EnsembleGovernanceDecision)
+            : null,
+        macroEventAssessment:
+          latest.components &&
+          typeof latest.components === 'object' &&
+          latest.components.macroEventRisk &&
+          typeof latest.components.macroEventRisk === 'object'
+            ? (latest.components.macroEventRisk as unknown as MacroEventRiskAssessment)
             : null,
         highConvictionOverlay:
           latest.components &&
