@@ -4,17 +4,14 @@ import { TradingController } from './trading.controller';
 import { TradingService } from './trading.service';
 import { StartSessionDto } from './dto/start-session.dto';
 import { ExecutionMode } from '../execution/interfaces/execution-authority';
-import {
-  TradingSession,
-  TradingSessionStatus,
-} from '../execution/entities/trading-session.entity';
+import { TradingSessionStatus } from '../execution/entities/trading-session.entity';
 
 const PAPER_CONNECTION_ID = '11111111-1111-4111-8111-111111111111';
 const METAAPI_CONNECTION_ID = '22222222-2222-4222-8222-222222222222';
 const SESSION_ID = '33333333-3333-4333-8333-333333333333';
 const RESEARCH_USER_ID = 'research-user';
 
-function session(overrides: Record<string, unknown> = {}): TradingSession {
+function session(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   const now = new Date('2026-10-04T21:00:00.000Z');
   return {
     id: SESSION_ID,
@@ -31,7 +28,7 @@ function session(overrides: Record<string, unknown> = {}): TradingSession {
     createdAt: now,
     updatedAt: now,
     ...overrides,
-  } as unknown as TradingSession;
+  };
 }
 
 function buildController(configOverrides: Record<string, unknown> = {}) {
