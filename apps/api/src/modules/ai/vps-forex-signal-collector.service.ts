@@ -41,7 +41,7 @@ import {
 const LEGACY_PROVIDER_CODE = 'vps-twelvedata-six-pair-v7';
 const ACTIVE_ENGINE_CODE = 'irexpro-multimodel-ensemble-v1';
 const LEGACY_V7_EXECUTION_FROZEN = true;
-const MULTI_MODEL_PAPER_EXECUTION_ENABLED = false;
+const MULTI_MODEL_PAPER_EXECUTION_ENABLED = true;
 const PROVIDER_CODE = LEGACY_PROVIDER_CODE;
 const SIGNAL_NAMESPACE = '802e16f8-8209-4e1f-aa7e-a6a46387081c';
 const SYMBOLS = Object.freeze([

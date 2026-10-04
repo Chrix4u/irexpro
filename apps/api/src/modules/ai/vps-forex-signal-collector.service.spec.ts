@@ -370,7 +370,7 @@ describe('VpsForexSignalCollectorService', () => {
     expect(heartbeat).toHaveBeenCalledTimes(12);
   });
 
-  it('reports MULTI_MODEL_SHADOW without a PAPER session when observation data is ready', async () => {
+  it('reports PAPER authority waiting for a PAPER session when observation data is ready', async () => {
     const live = new LivePaperMarketDataService();
     for (const [instrument] of PAIRS) {
       const base =
@@ -414,8 +414,8 @@ describe('VpsForexSignalCollectorService', () => {
 
     expect(status.activePaperSession).toBe(false);
     expect(status.marketCache.cachedInstrumentCount).toBe(6);
-    expect(status.executionAuthority).toBe('SHADOW_ONLY');
-    expect(status.state).toBe('MULTI_MODEL_SHADOW');
+    expect(status.executionAuthority).toBe('PAPER_ONLY');
+    expect(status.state).toBe('WAITING_FOR_PAPER_SESSION');
   });
 
   it('reports weekend pause and the next eligible Monday scan deterministically', () => {
