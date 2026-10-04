@@ -80,13 +80,19 @@ def test_rank_gate_is_independent_of_raw_probability_scale():
 
 
 def test_calibration_stability_requires_both_halves_positive():
-    stable = _ranked_rows().copy()
+    first = _ranked_rows().copy()
+    second = _ranked_rows().copy()
+    second["decision_time"] = second["decision_time"] + pd.Timedelta(hours=1)
+    stable = pd.concat([first, second], ignore_index=True)
     stable["active_trade"] = True
-    stable["selected_net_return"] = [0.002, 0.001, 0.002, 0.001]
+    stable["selected_net_return"] = [
+        0.0020, -0.0010, 0.0010, -0.0005,
+        0.0020, -0.0010, 0.0010, -0.0005,
+    ]
     stable_result = _calibration_stability(stable)
     assert stable_result["passed"] is True
 
     unstable = stable.copy()
-    unstable.loc[2:, "selected_net_return"] = [-0.003, -0.002]
+    unstable.loc[4:, "selected_net_return"] = [-0.003, 0.001, -0.002, 0.0005]
     unstable_result = _calibration_stability(unstable)
     assert unstable_result["passed"] is False
