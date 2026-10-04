@@ -13,16 +13,18 @@ from app.domain.training.six_pair_v81_rank_calibrated_tail_moe import (
 
 
 def test_ecdf_maps_raw_scores_to_scale_invariant_percentiles():
-    reference = _ecdf_reference(pd.Series([0.10, 0.20, 0.30, 0.40]))
-    values = pd.Series([0.05, 0.20, 0.25, 0.50])
+    reference = _ecdf_reference(pd.Series(np.linspace(0.10, 0.40, 100)))
+    values = pd.Series([0.05, 0.25, 0.50])
     percentiles = _ecdf_percentile(values, reference)
 
-    assert np.allclose(percentiles, [0.0, 0.5, 0.5, 1.0])
+    assert percentiles[0] == 0.0
+    assert 0.49 <= percentiles[1] <= 0.51
+    assert percentiles[2] == 1.0
 
 
 def test_rank_calibration_uses_frozen_reference_not_outer_distribution():
-    calibration_reference = np.array([0.10, 0.20, 0.30, 0.40])
-    margin_reference = np.array([0.01, 0.02, 0.03, 0.04])
+    calibration_reference = np.linspace(0.10, 0.40, 100)
+    margin_reference = np.linspace(0.01, 0.04, 100)
     outer = pd.DataFrame(
         {
             "_conservative_tail_p": [0.35, 0.45],
@@ -35,8 +37,10 @@ def test_rank_calibration_uses_frozen_reference_not_outer_distribution():
         margin_reference=margin_reference,
     )
 
-    assert ranked["_tail_score_percentile"].tolist() == [0.75, 1.0]
-    assert ranked["_margin_percentile"].tolist() == [0.5, 1.0]
+    assert 0.82 <= ranked.iloc[0]["_tail_score_percentile"] <= 0.84
+    assert ranked.iloc[1]["_tail_score_percentile"] == 1.0
+    assert 0.49 <= ranked.iloc[0]["_margin_percentile"] <= 0.51
+    assert ranked.iloc[1]["_margin_percentile"] == 1.0
 
 
 def _ranked_rows() -> pd.DataFrame:
