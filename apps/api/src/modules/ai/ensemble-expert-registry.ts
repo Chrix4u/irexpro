@@ -31,6 +31,9 @@ export interface EnsembleExpertRegistryInput {
   highConvictionArtifact: string | null;
   highConvictionLoaded: boolean;
   highConvictionBrokerDataReady: boolean;
+  postEntryArtifactReady: boolean;
+  postEntryBrokerDataReady: boolean;
+  postEntryShadowObservations: number;
   macroEventConfigured: boolean;
   sleeveResolvedOutcomes: number;
   legacyBaselineFrozen: boolean;
@@ -53,6 +56,13 @@ export function buildEnsembleExpertRegistry(
     : input.highConvictionBrokerDataReady
       ? 'READY_ARTIFACT'
       : 'WAITING_FOR_DATA';
+  const postEntryLifecycle: EnsembleExpertLifecycle = !input.postEntryArtifactReady
+    ? 'WAITING_FOR_DATA'
+    : !input.postEntryBrokerDataReady
+      ? 'WAITING_FOR_DATA'
+      : input.postEntryShadowObservations > 0
+        ? 'COLLECTING'
+        : 'READY_ARTIFACT';
 
   const entries: EnsembleExpertDescriptor[] = [
     {
@@ -68,6 +78,20 @@ export function buildEnsembleExpertRegistry(
       prospectiveEvidenceRequired: true,
       description:
         'Frozen XGBoost challenger with a verified 128-feature broker-native multi-timeframe contract.',
+    },
+    {
+      code: 'plan-b-v85-post-entry',
+      label: 'v8.5 trained profit-protection challenger',
+      kind: 'TRAINED_MODEL',
+      lifecycle: postEntryLifecycle,
+      trained: true,
+      artifact: 'plan-b-v85-profitable-state-giveback-classifier-v1',
+      dataAuthority: 'BROKER_NATIVE_M1_M5_M15_H1_H4_AT_FIXED_CHECKPOINTS',
+      executionAuthority: 'NONE',
+      modifiesExecution: false,
+      prospectiveEvidenceRequired: true,
+      description:
+        'Frozen 41-feature trained give-back classifier scored on virtual ensemble positions at causal broker-native checkpoints.',
     },
     {
       code: 'plan-b-multimodel-shadow-v3',
@@ -141,7 +165,7 @@ export function buildEnsembleExpertRegistry(
     },
     {
       code: 'post-entry-path-telemetry',
-      label: 'Post-entry path telemetry',
+      label: 'M5 post-entry counterfactual telemetry',
       kind: 'RISK_GUARD',
       lifecycle: 'COLLECTING',
       trained: false,
@@ -151,7 +175,7 @@ export function buildEnsembleExpertRegistry(
       modifiesExecution: false,
       prospectiveEvidenceRequired: true,
       description:
-        'Measures MFE, MAE and profit give-back for exit-policy research without changing open-position management.',
+        'Measures MFE, MAE and fixed protection counterfactuals on completed M5 bars as a non-trained comparison baseline.',
     },
     {
       code: 'legacy-v7-baseline',
