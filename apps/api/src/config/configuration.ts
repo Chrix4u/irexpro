@@ -150,6 +150,12 @@ export default () => ({
     paperConnectionId: process.env.BROKER_PARITY_V7_PAPER_CONNECTION_ID,
     artifactDigest: process.env.BROKER_PARITY_V7_ARTIFACT_DIGEST,
   },
+  multimodelBrokerExpert: {
+    // Read-only broker-native MTF source for the frozen high-conviction
+    // challenger. This overlay never receives execution authority.
+    enabled: process.env.MULTIMODEL_BROKER_EXPERT_ENABLED === 'true',
+    sourceConnectionId: process.env.MULTIMODEL_BROKER_EXPERT_SOURCE_CONNECTION_ID,
+  },
   v8DedicatedPaper: {
     // Preparation gate only. No v8 dedicated PAPER campaign can start from
     // this configuration until prospective screening and artifact checks pass.

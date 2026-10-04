@@ -157,6 +157,20 @@ export const validationSchema = Joi.object({
       .allow(''),
   }),
 
+  // Read-only MetaTrader broker-native MTF source for the frozen
+  // high-conviction overlay. Enabling this never grants trade authority.
+  MULTIMODEL_BROKER_EXPERT_ENABLED: Joi.string().valid('true', 'false').optional().allow(''),
+  MULTIMODEL_BROKER_EXPERT_SOURCE_CONNECTION_ID: Joi.when('MULTIMODEL_BROKER_EXPERT_ENABLED', {
+    is: 'true',
+    then: Joi.string()
+      .guid({ version: ['uuidv4'] })
+      .required(),
+    otherwise: Joi.string()
+      .guid({ version: ['uuidv4'] })
+      .optional()
+      .allow(''),
+  }),
+
   // Python AI engine scheduler coordination (NestJS → AI engine)
   AI_ENGINE_BASE_URL: Joi.string().default('http://localhost:8001/api/v1'),
   AI_ENGINE_SCHEDULER_ENABLED: Joi.boolean().default(false),

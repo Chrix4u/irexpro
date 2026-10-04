@@ -149,6 +149,64 @@ describe('AiEngineClient', () => {
     );
   });
 
+  it('scores the frozen challenger from broker-native MTF data', async () => {
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: jest.fn().mockResolvedValue({
+        state: 'READY',
+        reason: null,
+        decision_time: '2026-10-05T10:00:00Z',
+        market_data_sources: {
+          M1: 'broker',
+          M5: 'broker',
+          M15: 'broker',
+          H1: 'broker',
+          H4: 'broker',
+        },
+        status: {},
+        score: {
+          artifact: 'plan-b-v4-oof-three-expert-consensus-challenger',
+          mode: 'PROSPECTIVE_SHADOW_ONLY',
+          modifies_execution: false,
+          instrument: 'EURUSD',
+          direction: 'BUY',
+          admitted: true,
+          ensemble_confidence: 0.72,
+          mean_opportunity_probability: 0.61,
+          mean_direction_confidence: 0.69,
+          long_votes: 3,
+          short_votes: 0,
+          vote_margin: 1,
+          votes_required: 3,
+          opportunity_floor: 0.55,
+          regime: 'calm',
+          paper_promotion_eligible: false,
+        },
+      }),
+    });
+
+    const result = await client.scorePlanBV4ChallengerBroker({
+      userId: 'user-1',
+      brokerConnectionId: 'broker-native-1',
+      instrument: 'EURUSD',
+    });
+
+    expect(result.state).toBe('READY');
+    expect(result.score?.admitted).toBe(true);
+    expect(global.fetch).toHaveBeenCalledWith(
+      'http://localhost:8001/api/v1/models/challengers/plan-b-v4/score-broker',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          user_id: 'user-1',
+          broker_connection_id: 'broker-native-1',
+          instrument: 'EURUSD',
+        }),
+      }),
+    );
+  });
+
   it('fails closed when the internal API key is missing', async () => {
     (configService.get as jest.Mock).mockImplementation((key: string) => {
       if (key === 'aiEngine.schedulerEnabled') return true;

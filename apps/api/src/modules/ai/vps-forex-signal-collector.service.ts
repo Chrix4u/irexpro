@@ -29,6 +29,7 @@ import {
   summarizeEnsembleSleeveOutcomes,
 } from './ensemble-shadow-outcome';
 import { buildEnsembleExpertRegistry } from './ensemble-expert-registry';
+import { HighConvictionOverlay, classifyHighConvictionOverlay } from './high-conviction-overlay';
 
 const LEGACY_PROVIDER_CODE = 'vps-twelvedata-six-pair-v7';
 const ACTIVE_ENGINE_CODE = 'irexpro-multimodel-ensemble-v1';
@@ -295,6 +296,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     regime: string | null;
     reasons: string[];
     governance: EnsembleGovernanceDecision | null;
+    highConvictionOverlay: HighConvictionOverlay | null;
   } = {
     evaluatedAt: null,
     instrument: null,
@@ -306,6 +308,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     regime: null,
     reasons: ['WAITING_FOR_MARKET_SCAN'],
     governance: null,
+    highConvictionOverlay: null,
   };
   private lastEvaluation: {
     confidence: number | null;
@@ -438,6 +441,20 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     const ownsBinding = Boolean(configuredUserId && configuredUserId === requestingUserId);
     let activePaperSession = false;
     let ensembleCampaign = await this.loadEnsembleCampaignStatus('', '');
+    const brokerExpertConfigured =
+      ownsBinding && this.brokerExpertEnabled() && Boolean(this.brokerExpertSourceConnectionId());
+    const lastOverlay = this.lastEnsembleDecision.highConvictionOverlay;
+    const overlayScoringState = !brokerExpertConfigured
+      ? 'BROKER_SOURCE_NOT_CONFIGURED'
+      : marketSchedule.paused
+        ? 'READY_WAITING_FRESH_MARKET'
+        : lastOverlay?.state === 'CONFIRM' ||
+            lastOverlay?.state === 'CONFLICT' ||
+            lastOverlay?.state === 'ABSTAIN'
+          ? 'READY'
+          : lastOverlay?.state === 'STALE'
+            ? 'STALE'
+            : 'READY_WAITING_FRESH_SCORE';
     let highConvictionChallenger: Record<string, unknown> = {
       state: 'UNAVAILABLE',
       artifact: null,
@@ -450,7 +467,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       executionAuthority: 'NONE',
       paperPromotionEligible: false,
       brokerNativeRequired: true,
-      prospectiveScoringState: 'WAITING_FOR_BROKER_DATA',
+      brokerSourceConfigured: brokerExpertConfigured,
+      prospectiveScoringState: overlayScoringState,
+      lastOverlay,
       error: null,
     };
     try {
@@ -458,9 +477,11 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       highConvictionChallenger = {
         state: !challenger.configured
           ? 'NOT_CONFIGURED'
-          : challenger.loaded
-            ? 'ARTIFACT_READY_BROKER_MTF_REQUIRED'
-            : 'ERROR',
+          : !challenger.loaded
+            ? 'ERROR'
+            : brokerExpertConfigured
+              ? 'BROKER_MTF_OVERLAY_READY'
+              : 'ARTIFACT_READY_BROKER_MTF_REQUIRED',
         artifact: challenger.artifact,
         loaded: challenger.loaded,
         featureCount: challenger.feature_count,
@@ -471,7 +492,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         executionAuthority: challenger.execution_authority,
         paperPromotionEligible: challenger.paper_promotion_eligible,
         brokerNativeRequired: true,
-        prospectiveScoringState: 'WAITING_FOR_BROKER_DATA',
+        brokerSourceConfigured: brokerExpertConfigured,
+        prospectiveScoringState: overlayScoringState,
+        lastOverlay,
         error: challenger.load_error,
       };
     } catch (error) {
@@ -544,6 +567,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         regime: this.lastEnsembleDecision.regime,
         reasons: this.lastEnsembleDecision.reasons,
         governance: this.lastEnsembleDecision.governance,
+        highConvictionOverlay: this.lastEnsembleDecision.highConvictionOverlay,
       },
       components: {
         regimeRouter: 'IMPLEMENTED',
@@ -555,9 +579,11 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         sessionQuality: 'IMPLEMENTED',
         portfolioCorrelation: 'IMPLEMENTED',
         highConvictionExpert:
-          highConvictionChallenger.state === 'ARTIFACT_READY_BROKER_MTF_REQUIRED'
-            ? 'ARTIFACT_READY_BROKER_MTF_REQUIRED'
-            : 'CHALLENGER_VALIDATION',
+          highConvictionChallenger.state === 'BROKER_MTF_OVERLAY_READY'
+            ? 'BROKER_MTF_OVERLAY_READY_SHADOW_ONLY'
+            : highConvictionChallenger.state === 'ARTIFACT_READY_BROKER_MTF_REQUIRED'
+              ? 'ARTIFACT_READY_BROKER_MTF_REQUIRED'
+              : 'CHALLENGER_VALIDATION',
         fastMicrostructureSpecialists: 'REJECTED_NO_QUALIFIED_SPECIALIST',
         newsEventRisk: this.macroEventRisk?.isConfigured()
           ? 'IMPLEMENTED'
@@ -748,6 +774,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         },
         portfolioPositions,
       );
+      const highConvictionOverlay = await this.evaluateHighConvictionOverlay(userId, best);
       const sleeveEvidence = await this.loadEnsembleSleeveEvidence(
         userId,
         connectionId,
@@ -797,6 +824,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         regime: planBEnsemble.regime,
         reasons: planBEnsemble.reasons,
         governance: ensembleGovernance,
+        highConvictionOverlay,
       };
       await this.persistEnsembleShadowDecision(
         userId,
@@ -808,6 +836,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         portfolioSnapshotAvailable,
         ensembleGovernance,
         macroEventAssessment,
+        highConvictionOverlay,
       );
       this.lastPublishedOpportunity.set(best.instrument, {
         direction: best.direction,
@@ -827,6 +856,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             `execution=SHADOW_ONLY legacyV7Frozen=${LEGACY_V7_EXECUTION_FROZEN} ` +
             `netExpectedR=${ensembleGovernance.netExpectedR.toFixed(4)} ` +
             `drift=${ensembleGovernance.driftState} sleeve=${ensembleGovernance.sleeveState} ` +
+            `highConviction=${highConvictionOverlay.state} ` +
             `governance=${ensembleGovernance.blockers.join(',') || 'PASS'} ` +
             `reasons=${planBEnsemble.reasons.join(',')}`,
         );
@@ -1022,6 +1052,13 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       firstEvaluatedAt: null as string | null,
       lastEvaluatedAt: null as string | null,
       blockerCounts: {} as Record<string, number>,
+      highConvictionOverlayCounts: {
+        CONFIRM: 0,
+        CONFLICT: 0,
+        ABSTAIN: 0,
+        STALE: 0,
+        UNAVAILABLE: 0,
+      } as Record<HighConvictionOverlay['state'], number>,
       profitProtection: {
         pathResolved: 0,
         lossesWithPath: 0,
@@ -1065,6 +1102,13 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
 
     const allOutcomes: EnsembleShadowOutcome[] = [];
     const blockerCounts: Record<string, number> = {};
+    const highConvictionOverlayCounts: Record<HighConvictionOverlay['state'], number> = {
+      CONFIRM: 0,
+      CONFLICT: 0,
+      ABSTAIN: 0,
+      STALE: 0,
+      UNAVAILABLE: 0,
+    };
     const sleeveMap = new Map<
       string,
       {
@@ -1099,6 +1143,20 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           const parsed = outcome as unknown as EnsembleShadowOutcome;
           sleeve.outcomes.push(parsed);
           allOutcomes.push(parsed);
+        }
+
+        const overlay = components.highConvictionOverlay;
+        if (overlay && typeof overlay === 'object') {
+          const state = (overlay as Record<string, unknown>).state;
+          if (
+            state === 'CONFIRM' ||
+            state === 'CONFLICT' ||
+            state === 'ABSTAIN' ||
+            state === 'STALE' ||
+            state === 'UNAVAILABLE'
+          ) {
+            highConvictionOverlayCounts[state] += 1;
+          }
         }
 
         const governance = components.governance;
@@ -1179,6 +1237,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       firstEvaluatedAt: new Date(rows[0]!.evaluated_at).toISOString(),
       lastEvaluatedAt: new Date(rows[rows.length - 1]!.evaluated_at).toISOString(),
       blockerCounts,
+      highConvictionOverlayCounts,
       profitProtection,
       sleeves,
     };
@@ -1313,6 +1372,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     portfolioSnapshotAvailable: boolean,
     governance: EnsembleGovernanceDecision,
     macroEventAssessment: MacroEventRiskAssessment,
+    highConvictionOverlay: HighConvictionOverlay,
   ): Promise<void> {
     if (!this.dataSource) return;
 
@@ -1395,6 +1455,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           takeProfit: candidate.takeProfit,
           governance,
           macroEventRisk: macroEventAssessment,
+          highConvictionOverlay,
         }),
       ],
     );
@@ -1497,6 +1558,13 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           typeof latest.components.governance === 'object'
             ? (latest.components.governance as unknown as EnsembleGovernanceDecision)
             : null,
+        highConvictionOverlay:
+          latest.components &&
+          typeof latest.components === 'object' &&
+          latest.components.highConvictionOverlay &&
+          typeof latest.components.highConvictionOverlay === 'object'
+            ? (latest.components.highConvictionOverlay as unknown as HighConvictionOverlay)
+            : null,
       };
     }
 
@@ -1535,6 +1603,59 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       `VPS startup market cache primed pairs=${cacheStatus.cachedInstrumentCount}/6 ` +
         `latest=${cacheStatus.latestObservedAt?.toISOString() ?? 'unknown'}`,
     );
+  }
+
+  private highConvictionUnavailable(reason: string): HighConvictionOverlay {
+    return {
+      state: 'UNAVAILABLE',
+      reason,
+      decisionTime: null,
+      freshnessSeconds: null,
+      allBrokerNative: false,
+      direction: null,
+      admitted: null,
+      ensembleConfidence: null,
+      meanOpportunityProbability: null,
+      longVotes: null,
+      shortVotes: null,
+      regime: null,
+      modifiesExecution: false,
+    };
+  }
+
+  private async evaluateHighConvictionOverlay(
+    userId: string,
+    candidate: Candidate,
+  ): Promise<HighConvictionOverlay> {
+    if (!this.brokerExpertEnabled()) {
+      return this.highConvictionUnavailable('BROKER_EXPERT_DISABLED');
+    }
+    const sourceConnectionId = this.brokerExpertSourceConnectionId();
+    if (!sourceConnectionId) {
+      return this.highConvictionUnavailable('BROKER_SOURCE_NOT_CONFIGURED');
+    }
+
+    try {
+      const source = await this.brokerService.findConnectionById(sourceConnectionId, userId);
+      if (!['metatrader4', 'metatrader5'].includes(source.brokerId)) {
+        return this.highConvictionUnavailable('BROKER_SOURCE_NOT_METATRADER');
+      }
+      const response = await this.aiEngineClient.scorePlanBV4ChallengerBroker({
+        userId,
+        brokerConnectionId: sourceConnectionId,
+        instrument: candidate.instrument,
+      });
+      return classifyHighConvictionOverlay(
+        response,
+        candidate.direction,
+        new Date(candidate.barTime.getTime() + BAR_MS),
+      );
+    } catch {
+      this.logger.warn(
+        'High-conviction broker overlay unavailable; base shadow decision remains observational',
+      );
+      return this.highConvictionUnavailable('BROKER_EXPERT_REQUEST_FAILED');
+    }
   }
 
   private async fetchSixPairSeries(
@@ -1652,5 +1773,11 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
   }
   private connectionId(): string {
     return this.config.get<string>('vpsForexScanner.brokerConnectionId', '').trim();
+  }
+  private brokerExpertEnabled(): boolean {
+    return this.config.get<boolean>('multimodelBrokerExpert.enabled', false) === true;
+  }
+  private brokerExpertSourceConnectionId(): string {
+    return this.config.get<string>('multimodelBrokerExpert.sourceConnectionId', '').trim();
   }
 }

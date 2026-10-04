@@ -39,6 +39,34 @@ export interface PlanBV4ChallengerStatus {
   paper_promotion_eligible: false;
 }
 
+export interface PlanBV4BrokerScore {
+  artifact: string;
+  mode: 'PROSPECTIVE_SHADOW_ONLY';
+  modifies_execution: false;
+  instrument: string;
+  direction: 'BUY' | 'SELL';
+  admitted: boolean;
+  ensemble_confidence: number;
+  mean_opportunity_probability: number;
+  mean_direction_confidence: number;
+  long_votes: number;
+  short_votes: number;
+  vote_margin: number;
+  votes_required: number;
+  opportunity_floor: number;
+  regime: string;
+  paper_promotion_eligible: false;
+}
+
+export interface PlanBV4BrokerScoreResponse {
+  state: 'READY' | 'WAITING_FOR_BROKER_DATA' | 'ERROR';
+  reason: string | null;
+  status: PlanBV4ChallengerStatus;
+  decision_time?: string | null;
+  market_data_sources?: Record<string, string> | null;
+  score?: PlanBV4BrokerScore | null;
+}
+
 export interface AiActiveModelMetadata {
   version?: string;
   mode?: string;
@@ -148,6 +176,24 @@ export class AiEngineClient {
     return this.get<PlanBV4ChallengerStatus>(url, 'plan-b-v4-challenger');
   }
 
+  async scorePlanBV4ChallengerBroker(payload: {
+    userId: string;
+    brokerConnectionId: string;
+    instrument: string;
+  }): Promise<PlanBV4BrokerScoreResponse> {
+    const url = `${this.getBaseUrl()}/models/challengers/plan-b-v4/score-broker`;
+    return this.post<PlanBV4BrokerScoreResponse>(
+      url,
+      {
+        user_id: payload.userId,
+        broker_connection_id: payload.brokerConnectionId,
+        instrument: payload.instrument,
+      },
+      `plan-b-v4:${payload.instrument}`,
+      30_000,
+    );
+  }
+
   private async get<T>(url: string, context: string): Promise<T> {
     const apiKey = this.getInternalApiKey();
     if (!apiKey) {
@@ -178,7 +224,12 @@ export class AiEngineClient {
     }
   }
 
-  private async post<T>(url: string, body: Record<string, unknown>, sessionId: string): Promise<T> {
+  private async post<T>(
+    url: string,
+    body: Record<string, unknown>,
+    sessionId: string,
+    timeoutMs = REQUEST_TIMEOUT_MS,
+  ): Promise<T> {
     const apiKey = this.getInternalApiKey();
     if (!apiKey) {
       this.logger.warn(
@@ -188,7 +239,7 @@ export class AiEngineClient {
     }
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const response = await fetch(url, {

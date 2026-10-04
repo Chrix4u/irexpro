@@ -220,7 +220,12 @@ interface VpsForexScannerStatusView {
     nextEligibleScanAt: string;
   };
   highConvictionChallenger: {
-    state: "UNAVAILABLE" | "NOT_CONFIGURED" | "ERROR" | "ARTIFACT_READY_BROKER_MTF_REQUIRED";
+    state:
+      | "UNAVAILABLE"
+      | "NOT_CONFIGURED"
+      | "ERROR"
+      | "ARTIFACT_READY_BROKER_MTF_REQUIRED"
+      | "BROKER_MTF_OVERLAY_READY";
     artifact: string | null;
     loaded: boolean;
     featureCount: number | null;
@@ -244,7 +249,28 @@ interface VpsForexScannerStatusView {
     executionAuthority: "NONE";
     paperPromotionEligible: boolean;
     brokerNativeRequired: boolean;
-    prospectiveScoringState: "WAITING_FOR_BROKER_DATA";
+    brokerSourceConfigured: boolean;
+    prospectiveScoringState:
+      | "BROKER_SOURCE_NOT_CONFIGURED"
+      | "READY_WAITING_FRESH_MARKET"
+      | "READY_WAITING_FRESH_SCORE"
+      | "READY"
+      | "STALE";
+    lastOverlay: {
+      state: "CONFIRM" | "CONFLICT" | "ABSTAIN" | "STALE" | "UNAVAILABLE";
+      reason: string | null;
+      decisionTime: string | null;
+      freshnessSeconds: number | null;
+      allBrokerNative: boolean;
+      direction: "BUY" | "SELL" | null;
+      admitted: boolean | null;
+      ensembleConfidence: number | null;
+      meanOpportunityProbability: number | null;
+      longVotes: number | null;
+      shortVotes: number | null;
+      regime: string | null;
+      modifiesExecution: false;
+    } | null;
     error: string | null;
   };
   ensembleCampaign: {
@@ -265,6 +291,13 @@ interface VpsForexScannerStatusView {
     firstEvaluatedAt: string | null;
     lastEvaluatedAt: string | null;
     blockerCounts: Record<string, number>;
+    highConvictionOverlayCounts: {
+      CONFIRM: number;
+      CONFLICT: number;
+      ABSTAIN: number;
+      STALE: number;
+      UNAVAILABLE: number;
+    };
     profitProtection: {
       pathResolved: number;
       lossesWithPath: number;
@@ -349,6 +382,21 @@ interface VpsForexScannerStatusView {
       eventRisk: "CLEAR" | "HIGH_IMPACT_BLOCK" | "UNVERIFIED";
       paperPromotionEligible: boolean;
       blockers: string[];
+    } | null;
+    highConvictionOverlay: {
+      state: "CONFIRM" | "CONFLICT" | "ABSTAIN" | "STALE" | "UNAVAILABLE";
+      reason: string | null;
+      decisionTime: string | null;
+      freshnessSeconds: number | null;
+      allBrokerNative: boolean;
+      direction: "BUY" | "SELL" | null;
+      admitted: boolean | null;
+      ensembleConfidence: number | null;
+      meanOpportunityProbability: number | null;
+      longVotes: number | null;
+      shortVotes: number | null;
+      regime: string | null;
+      modifiesExecution: false;
     } | null;
   };
   components: Record<string, string>;
@@ -2412,7 +2460,11 @@ export default function AiTradingPage() {
                       </div>
                       <div className="ai-strategy-detail">
                         <span>Current market authority</span>
-                        <strong>Twelve Data M5 ensemble · frozen broker-MTF challenger awaiting native feed</strong>
+                        <strong>
+                          {vpsScannerStatus?.highConvictionChallenger.brokerSourceConfigured
+                            ? "Twelve Data M5 base · MetaApi broker M1/M5/M15/H1/H4 overlay"
+                            : "Twelve Data M5 base · broker-MTF challenger source not configured"}
+                        </strong>
                       </div>
                     </div>
 
@@ -2431,9 +2483,11 @@ export default function AiTradingPage() {
                       <div className="ai-strategy-detail">
                         <span>High-conviction expert</span>
                         <strong>
-                          {vpsScannerStatus?.highConvictionChallenger.state === "ARTIFACT_READY_BROKER_MTF_REQUIRED"
-                            ? "ARTIFACT READY · BROKER MTF REQUIRED"
-                            : vpsScannerStatus?.highConvictionChallenger.state ?? "UNAVAILABLE"}
+                          {vpsScannerStatus?.highConvictionChallenger.state === "BROKER_MTF_OVERLAY_READY"
+                            ? `BROKER MTF OVERLAY READY · ${vpsScannerStatus.highConvictionChallenger.prospectiveScoringState.replaceAll("_", " ")}`
+                            : vpsScannerStatus?.highConvictionChallenger.state === "ARTIFACT_READY_BROKER_MTF_REQUIRED"
+                              ? "ARTIFACT READY · BROKER MTF REQUIRED"
+                              : vpsScannerStatus?.highConvictionChallenger.state ?? "UNAVAILABLE"}
                         </strong>
                       </div>
                       <div className="ai-strategy-detail">
@@ -2461,6 +2515,27 @@ export default function AiTradingPage() {
                           {vpsScannerStatus?.highConvictionChallenger.historicalValidation?.median_gap_minutes != null
                             ? `Median ${providerMetric(vpsScannerStatus.highConvictionChallenger.historicalValidation.median_gap_minutes, 0)} min · sparse specialist only`
                             : "Prospective broker-MTF evidence pending"}
+                        </strong>
+                      </div>
+                    </div>
+
+                    <div className="ai-strategy-detail-group">
+                      <div className="ai-strategy-detail">
+                        <span>Latest trained-model overlay</span>
+                        <strong>
+                          {vpsScannerStatus?.lastEnsembleDecision.highConvictionOverlay
+                            ? `${vpsScannerStatus.lastEnsembleDecision.highConvictionOverlay.state} · ${vpsScannerStatus.lastEnsembleDecision.highConvictionOverlay.direction ?? "no direction"} · shadow only`
+                            : vpsScannerStatus?.marketSchedule.paused
+                              ? "Waiting for fresh market reopen"
+                              : "Waiting for first fresh broker-MTF score"}
+                        </strong>
+                      </div>
+                      <div className="ai-strategy-detail">
+                        <span>Overlay cohort</span>
+                        <strong>
+                          {vpsScannerStatus
+                            ? `${vpsScannerStatus.ensembleCampaign.highConvictionOverlayCounts.CONFIRM} confirm · ${vpsScannerStatus.ensembleCampaign.highConvictionOverlayCounts.CONFLICT} conflict · ${vpsScannerStatus.ensembleCampaign.highConvictionOverlayCounts.ABSTAIN} abstain`
+                            : "0 confirm · 0 conflict · 0 abstain"}
                         </strong>
                       </div>
                     </div>
