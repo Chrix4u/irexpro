@@ -29,7 +29,12 @@ import {
   summarizeEnsembleSleeveOutcomes,
 } from './ensemble-shadow-outcome';
 import { buildEnsembleExpertRegistry } from './ensemble-expert-registry';
-import { HighConvictionOverlay, classifyHighConvictionOverlay } from './high-conviction-overlay';
+import {
+  HighConvictionOverlay,
+  HighConvictionOverlayState,
+  classifyHighConvictionOverlay,
+  summarizeHighConvictionOverlayCohort,
+} from './high-conviction-overlay';
 
 const LEGACY_PROVIDER_CODE = 'vps-twelvedata-six-pair-v7';
 const ACTIVE_ENGINE_CODE = 'irexpro-multimodel-ensemble-v1';
@@ -1070,6 +1075,16 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         STALE: 0,
         UNAVAILABLE: 0,
       } as Record<HighConvictionOverlay['state'], number>,
+      highConvictionOverlayPerformance: {
+        CONFIRM: summarizeHighConvictionOverlayCohort('CONFIRM', 0, []),
+        CONFLICT: summarizeHighConvictionOverlayCohort('CONFLICT', 0, []),
+        ABSTAIN: summarizeHighConvictionOverlayCohort('ABSTAIN', 0, []),
+        STALE: summarizeHighConvictionOverlayCohort('STALE', 0, []),
+        UNAVAILABLE: summarizeHighConvictionOverlayCohort('UNAVAILABLE', 0, []),
+      } as Record<
+        HighConvictionOverlayState,
+        ReturnType<typeof summarizeHighConvictionOverlayCohort>
+      >,
       profitProtection: {
         pathResolved: 0,
         lossesWithPath: 0,
@@ -1132,6 +1147,15 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       STALE: 0,
       UNAVAILABLE: 0,
     };
+    const highConvictionOverlayOutcomes = new Map<
+      HighConvictionOverlayState,
+      EnsembleShadowOutcome[]
+    >(
+      (['CONFIRM', 'CONFLICT', 'ABSTAIN', 'STALE', 'UNAVAILABLE'] as const).map((state) => [
+        state,
+        [],
+      ]),
+    );
     const sleeveMap = new Map<
       string,
       {
@@ -1157,15 +1181,16 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
 
       const components = row.components;
       if (components && typeof components === 'object') {
+        let parsedOutcome: EnsembleShadowOutcome | null = null;
         const outcome = components.outcome;
         if (
           outcome &&
           typeof outcome === 'object' &&
           typeof (outcome as Record<string, unknown>).status === 'string'
         ) {
-          const parsed = outcome as unknown as EnsembleShadowOutcome;
-          sleeve.outcomes.push(parsed);
-          allOutcomes.push(parsed);
+          parsedOutcome = outcome as unknown as EnsembleShadowOutcome;
+          sleeve.outcomes.push(parsedOutcome);
+          allOutcomes.push(parsedOutcome);
         }
 
         const overlay = components.highConvictionOverlay;
@@ -1179,6 +1204,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             state === 'UNAVAILABLE'
           ) {
             highConvictionOverlayCounts[state] += 1;
+            if (parsedOutcome) {
+              highConvictionOverlayOutcomes.get(state)?.push(parsedOutcome);
+            }
           }
         }
 
@@ -1195,6 +1223,20 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       }
       sleeveMap.set(key, sleeve);
     }
+
+    const highConvictionOverlayPerformance = Object.fromEntries(
+      (['CONFIRM', 'CONFLICT', 'ABSTAIN', 'STALE', 'UNAVAILABLE'] as const).map((state) => [
+        state,
+        summarizeHighConvictionOverlayCohort(
+          state,
+          highConvictionOverlayCounts[state],
+          highConvictionOverlayOutcomes.get(state) ?? [],
+        ),
+      ]),
+    ) as Record<
+      HighConvictionOverlayState,
+      ReturnType<typeof summarizeHighConvictionOverlayCohort>
+    >;
 
     const evidence = summarizeEnsembleSleeveOutcomes(allOutcomes);
     const validOutcomes = allOutcomes.filter(
@@ -1308,6 +1350,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       lastEvaluatedAt: new Date(rows[rows.length - 1]!.evaluated_at).toISOString(),
       blockerCounts,
       highConvictionOverlayCounts,
+      highConvictionOverlayPerformance,
       profitProtection,
       sleeves,
     };

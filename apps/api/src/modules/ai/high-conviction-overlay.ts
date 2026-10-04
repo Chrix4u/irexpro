@@ -1,4 +1,5 @@
 import type { PlanBV4BrokerScoreResponse } from '../ai-engine-client/ai-engine-client.service';
+import { EnsembleShadowOutcome, summarizeEnsembleSleeveOutcomes } from './ensemble-shadow-outcome';
 
 export type HighConvictionOverlayState =
   | 'CONFIRM'
@@ -97,5 +98,49 @@ export function classifyHighConvictionOverlay(
     shortVotes: response.score.short_votes,
     regime: response.score.regime,
     modifiesExecution: false,
+  };
+}
+
+export interface HighConvictionOverlayCohortEvidence {
+  state: HighConvictionOverlayState;
+  observations: number;
+  resolved: number;
+  evaluableResolved: number;
+  wins: number;
+  losses: number;
+  expired: number;
+  ambiguous: number;
+  netR: number;
+  profitFactor: number | null;
+  sharpe: number | null;
+  maxDrawdown: number | null;
+  positiveWindowFraction: number | null;
+}
+
+export function summarizeHighConvictionOverlayCohort(
+  state: HighConvictionOverlayState,
+  observations: number,
+  outcomes: EnsembleShadowOutcome[],
+): HighConvictionOverlayCohortEvidence {
+  const evidence = summarizeEnsembleSleeveOutcomes(outcomes);
+  const evaluable = outcomes.filter(
+    (outcome) =>
+      outcome.status !== 'AMBIGUOUS' && outcome.netR != null && Number.isFinite(outcome.netR),
+  );
+
+  return {
+    state,
+    observations,
+    resolved: outcomes.length,
+    evaluableResolved: evaluable.length,
+    wins: outcomes.filter((outcome) => outcome.status === 'WIN').length,
+    losses: outcomes.filter((outcome) => outcome.status === 'LOSS').length,
+    expired: outcomes.filter((outcome) => outcome.status === 'EXPIRED').length,
+    ambiguous: outcomes.filter((outcome) => outcome.status === 'AMBIGUOUS').length,
+    netR: evaluable.reduce((sum, outcome) => sum + (outcome.netR ?? 0), 0),
+    profitFactor: evidence.profitFactor,
+    sharpe: evidence.sharpe,
+    maxDrawdown: evidence.maxDrawdown,
+    positiveWindowFraction: evidence.positiveWindowFraction,
   };
 }

@@ -1,4 +1,7 @@
-import { classifyHighConvictionOverlay } from './high-conviction-overlay';
+import {
+  classifyHighConvictionOverlay,
+  summarizeHighConvictionOverlayCohort,
+} from './high-conviction-overlay';
 import type { PlanBV4BrokerScoreResponse } from '../ai-engine-client/ai-engine-client.service';
 
 function ready(overrides: Partial<PlanBV4BrokerScoreResponse> = {}): PlanBV4BrokerScoreResponse {
@@ -94,5 +97,63 @@ describe('classifyHighConvictionOverlay', () => {
     );
     expect(result.state).toBe('UNAVAILABLE');
     expect(result.reason).toBe('BROKER_NATIVE_REQUIRED');
+  });
+});
+
+describe('summarizeHighConvictionOverlayCohort', () => {
+  it('summarizes resolved net-R evidence without treating ambiguous bars as returns', () => {
+    const cohort = summarizeHighConvictionOverlayCohort('CONFIRM', 4, [
+      {
+        version: 'm5-first-hit-72bar-net-r-path-v3',
+        status: 'WIN',
+        resolvedAt: '2026-10-05T10:10:00Z',
+        barsObserved: 2,
+        exitPrice: 1.1,
+        grossR: 1.5,
+        netR: 1.4,
+        reason: 'TAKE_PROFIT_HIT',
+        postEntryTelemetry: null,
+      },
+      {
+        version: 'm5-first-hit-72bar-net-r-path-v3',
+        status: 'LOSS',
+        resolvedAt: '2026-10-06T10:10:00Z',
+        barsObserved: 3,
+        exitPrice: 1.0,
+        grossR: -1,
+        netR: -1.1,
+        reason: 'STOP_LOSS_HIT',
+        postEntryTelemetry: null,
+      },
+      {
+        version: 'm5-first-hit-72bar-net-r-path-v3',
+        status: 'AMBIGUOUS',
+        resolvedAt: '2026-10-07T10:10:00Z',
+        barsObserved: 1,
+        exitPrice: null,
+        grossR: null,
+        netR: null,
+        reason: 'SAME_BAR_SL_TP',
+        postEntryTelemetry: null,
+      },
+    ]);
+
+    expect(cohort.observations).toBe(4);
+    expect(cohort.resolved).toBe(3);
+    expect(cohort.evaluableResolved).toBe(2);
+    expect(cohort.wins).toBe(1);
+    expect(cohort.losses).toBe(1);
+    expect(cohort.ambiguous).toBe(1);
+    expect(cohort.netR).toBeCloseTo(0.3, 8);
+    expect(cohort.profitFactor).toBeCloseTo(1.4 / 1.1, 8);
+  });
+
+  it('keeps cohorts with no resolved outcomes statistically empty', () => {
+    const cohort = summarizeHighConvictionOverlayCohort('CONFLICT', 7, []);
+    expect(cohort.observations).toBe(7);
+    expect(cohort.resolved).toBe(0);
+    expect(cohort.profitFactor).toBeNull();
+    expect(cohort.sharpe).toBeNull();
+    expect(cohort.maxDrawdown).toBeNull();
   });
 });

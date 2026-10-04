@@ -298,6 +298,24 @@ interface VpsForexScannerStatusView {
       STALE: number;
       UNAVAILABLE: number;
     };
+    highConvictionOverlayPerformance: Record<
+      "CONFIRM" | "CONFLICT" | "ABSTAIN" | "STALE" | "UNAVAILABLE",
+      {
+        state: "CONFIRM" | "CONFLICT" | "ABSTAIN" | "STALE" | "UNAVAILABLE";
+        observations: number;
+        resolved: number;
+        evaluableResolved: number;
+        wins: number;
+        losses: number;
+        expired: number;
+        ambiguous: number;
+        netR: number;
+        profitFactor: number | null;
+        sharpe: number | null;
+        maxDrawdown: number | null;
+        positiveWindowFraction: number | null;
+      }
+    >;
     profitProtection: {
       pathResolved: number;
       lossesWithPath: number;
@@ -2559,6 +2577,44 @@ export default function AiTradingPage() {
                           {vpsScannerStatus
                             ? `${vpsScannerStatus.ensembleCampaign.highConvictionOverlayCounts.CONFIRM} confirm · ${vpsScannerStatus.ensembleCampaign.highConvictionOverlayCounts.CONFLICT} conflict · ${vpsScannerStatus.ensembleCampaign.highConvictionOverlayCounts.ABSTAIN} abstain`
                             : "0 confirm · 0 conflict · 0 abstain"}
+                        </strong>
+                      </div>
+                    </div>
+
+                    <div className="ai-strategy-detail-group">
+                      <div className="ai-strategy-detail">
+                        <span>CONFIRM cohort PF / net R</span>
+                        <strong>
+                          {vpsScannerStatus
+                            ? `${providerMetric(vpsScannerStatus.ensembleCampaign.highConvictionOverlayPerformance.CONFIRM.profitFactor, 2)} / ${providerMetric(vpsScannerStatus.ensembleCampaign.highConvictionOverlayPerformance.CONFIRM.netR, 2)} R · n ${vpsScannerStatus.ensembleCampaign.highConvictionOverlayPerformance.CONFIRM.evaluableResolved}`
+                            : "— / 0.00 R · n 0"}
+                        </strong>
+                      </div>
+                      <div className="ai-strategy-detail">
+                        <span>CONFLICT cohort PF / net R</span>
+                        <strong>
+                          {vpsScannerStatus
+                            ? `${providerMetric(vpsScannerStatus.ensembleCampaign.highConvictionOverlayPerformance.CONFLICT.profitFactor, 2)} / ${providerMetric(vpsScannerStatus.ensembleCampaign.highConvictionOverlayPerformance.CONFLICT.netR, 2)} R · n ${vpsScannerStatus.ensembleCampaign.highConvictionOverlayPerformance.CONFLICT.evaluableResolved}`
+                            : "— / 0.00 R · n 0"}
+                        </strong>
+                      </div>
+                    </div>
+
+                    <div className="ai-strategy-detail-group">
+                      <div className="ai-strategy-detail">
+                        <span>CONFIRM Sharpe / +weeks</span>
+                        <strong>
+                          {vpsScannerStatus
+                            ? `${providerMetric(vpsScannerStatus.ensembleCampaign.highConvictionOverlayPerformance.CONFIRM.sharpe, 2)} / ${providerPercent(vpsScannerStatus.ensembleCampaign.highConvictionOverlayPerformance.CONFIRM.positiveWindowFraction)}`
+                            : "— / —"}
+                        </strong>
+                      </div>
+                      <div className="ai-strategy-detail">
+                        <span>ABSTAIN cohort PF / net R</span>
+                        <strong>
+                          {vpsScannerStatus
+                            ? `${providerMetric(vpsScannerStatus.ensembleCampaign.highConvictionOverlayPerformance.ABSTAIN.profitFactor, 2)} / ${providerMetric(vpsScannerStatus.ensembleCampaign.highConvictionOverlayPerformance.ABSTAIN.netR, 2)} R · n ${vpsScannerStatus.ensembleCampaign.highConvictionOverlayPerformance.ABSTAIN.evaluableResolved}`
+                            : "— / 0.00 R · n 0"}
                         </strong>
                       </div>
                     </div>
