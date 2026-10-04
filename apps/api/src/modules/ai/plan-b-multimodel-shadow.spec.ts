@@ -95,7 +95,41 @@ describe('Plan B multimodel prospective shadow', () => {
     ]);
     expect(concentrated.openPositionCount).toBe(3);
     expect(concentrated.sameInstrumentCount).toBe(2);
+    expect(concentrated.sameInstrumentDirectionalLots).toBeCloseTo(0.2, 8);
     expect(concentrated.portfolioRiskScore).toBeGreaterThan(unexposed.portfolioRiskScore);
     expect(concentrated.portfolioQuality).toBeLessThan(unexposed.portfolioQuality);
+  });
+
+  it('scores equal lot exposure identically regardless of ticket count', () => {
+    const singleTicket = scorePlanBMultimodelShadow(base, [
+      { instrument: 'EURUSD', direction: 'BUY', lotSize: '0.30' },
+    ]);
+    const splitTickets = scorePlanBMultimodelShadow(base, [
+      { instrument: 'EURUSD', direction: 'BUY', lotSize: '0.10' },
+      { instrument: 'EURUSD', direction: 'BUY', lotSize: '0.10' },
+      { instrument: 'EURUSD', direction: 'BUY', lotSize: '0.10' },
+    ]);
+
+    expect(singleTicket.sameInstrumentCount).toBe(1);
+    expect(splitTickets.sameInstrumentCount).toBe(3);
+    expect(singleTicket.sameInstrumentDirectionalLots).toBeCloseTo(0.3, 8);
+    expect(splitTickets.sameInstrumentDirectionalLots).toBeCloseTo(0.3, 8);
+    expect(splitTickets.portfolioRiskScore).toBeCloseTo(singleTicket.portfolioRiskScore, 12);
+    expect(splitTickets.portfolioQuality).toBeCloseTo(singleTicket.portfolioQuality, 12);
+  });
+
+  it('uses net directional exposure so an opposite position offsets concentration', () => {
+    const longOnly = scorePlanBMultimodelShadow(base, [
+      { instrument: 'EURUSD', direction: 'BUY', lotSize: '0.20' },
+    ]);
+    const partiallyHedged = scorePlanBMultimodelShadow(base, [
+      { instrument: 'EURUSD', direction: 'BUY', lotSize: '0.20' },
+      { instrument: 'EURUSD', direction: 'SELL', lotSize: '0.10' },
+    ]);
+
+    expect(longOnly.sameInstrumentDirectionalLots).toBeCloseTo(0.2, 8);
+    expect(partiallyHedged.sameInstrumentDirectionalLots).toBeCloseTo(0.1, 8);
+    expect(partiallyHedged.portfolioRiskScore).toBeLessThan(longOnly.portfolioRiskScore);
+    expect(partiallyHedged.portfolioQuality).toBeGreaterThan(longOnly.portfolioQuality);
   });
 });

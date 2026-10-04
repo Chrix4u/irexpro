@@ -1021,6 +1021,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           plan_b_ensemble_portfolio_risk_score: planBEnsemble.portfolioRiskScore,
           plan_b_ensemble_open_position_count: planBEnsemble.openPositionCount,
           plan_b_ensemble_same_instrument_count: planBEnsemble.sameInstrumentCount,
+          plan_b_ensemble_same_instrument_directional_lots:
+            planBEnsemble.sameInstrumentDirectionalLots,
           plan_b_ensemble_meta_probability: planBEnsemble.metaProbability,
           plan_b_ensemble_score: planBEnsemble.ensembleScore,
           plan_b_ensemble_admitted: planBEnsemble.admitted,
@@ -1604,6 +1606,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           portfolioRiskScore: ensemble.portfolioRiskScore,
           openPositionCount: ensemble.openPositionCount,
           sameInstrumentCount: ensemble.sameInstrumentCount,
+          sameInstrumentDirectionalLots: ensemble.sameInstrumentDirectionalLots,
           portfolioSnapshotAvailable,
           extensionAtr: candidate.extensionAtr,
           volatilityScore: candidate.volatilityScore,
