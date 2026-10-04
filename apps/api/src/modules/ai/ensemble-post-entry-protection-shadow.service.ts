@@ -9,6 +9,8 @@ import { PLAN_B_ENSEMBLE_ARTIFACT } from './plan-b-multimodel-shadow';
 import { PLAN_B_V85_ARTIFACT, dueV85Checkpoints } from './post-entry-protection-shadow.service';
 
 const ACTIVE_ENGINE_CODE = 'irexpro-multimodel-ensemble-v1';
+export const POST_ENTRY_EVIDENCE_MIN_DISTINCT_DECISIONS = 100;
+export const POST_ENTRY_EVIDENCE_MIN_ELIGIBLE_PROFIT_DECISIONS = 30;
 
 interface ShadowDecisionRow {
   shadow_decision_id: string;
@@ -136,26 +138,83 @@ export class EnsemblePostEntryProtectionShadowService implements OnModuleInit, O
       lastScored: this.lastScored,
       lastCandidates: this.lastCandidates,
       observedCheckpoints: this.observedCheckpoints,
+      distinctDecisionsObserved: 0,
+      eligibleProfitDecisions: 0,
+      protectRecommendations: 0,
+      observeRecommendations: 0,
+      evidenceMinimums: {
+        distinctDecisions: POST_ENTRY_EVIDENCE_MIN_DISTINCT_DECISIONS,
+        eligibleProfitDecisions: POST_ENTRY_EVIDENCE_MIN_ELIGIBLE_PROFIT_DECISIONS,
+      },
+      sampleMinimumSatisfied: false,
+      evidenceState: 'COLLECTING_PROSPECTIVE_EVIDENCE' as
+        | 'COLLECTING_PROSPECTIVE_EVIDENCE'
+        | 'SAMPLE_FLOOR_MET_REVIEW_REQUIRED',
+      paperPromotionEligible: false as const,
+      promotionBlocker: 'MINIMUM_PROSPECTIVE_SAMPLE_NOT_MET' as
+        | 'MINIMUM_PROSPECTIVE_SAMPLE_NOT_MET'
+        | 'OUTCOME_QUALITY_REVIEW_REQUIRED',
       lastError: this.lastError,
     };
   }
 
   async getUserStatus(userId: string) {
     const status = this.getStatus();
-    if (!userId) return { ...status, observedCheckpoints: 0 };
+    if (!userId) return status;
     const rows = (await this.dataSource.query(
       `
-        SELECT count(*)::int AS count
+        SELECT
+          count(*) FILTER (
+            WHERE state IN ('READY', 'NOT_YET_ELIGIBLE')
+          )::int AS observed_checkpoints,
+          count(DISTINCT ensemble_shadow_decision_id) FILTER (
+            WHERE state IN ('READY', 'NOT_YET_ELIGIBLE')
+          )::int AS distinct_decisions_observed,
+          count(DISTINCT ensemble_shadow_decision_id) FILTER (
+            WHERE state = 'READY' AND eligible_profit_state IS TRUE
+          )::int AS eligible_profit_decisions,
+          count(*) FILTER (
+            WHERE state = 'READY' AND action = 'PROTECT_SHADOW'
+          )::int AS protect_recommendations,
+          count(*) FILTER (
+            WHERE state = 'READY' AND action = 'OBSERVE'
+          )::int AS observe_recommendations
         FROM trading.ensemble_post_entry_shadow_observations
         WHERE user_id = $1
           AND artifact = $2
-          AND state IN ('READY', 'NOT_YET_ELIGIBLE')
       `,
       [userId, PLAN_B_V85_ARTIFACT],
-    )) as Array<{ count: number | string }>;
+    )) as Array<{
+      observed_checkpoints: number | string;
+      distinct_decisions_observed: number | string;
+      eligible_profit_decisions: number | string;
+      protect_recommendations: number | string;
+      observe_recommendations: number | string;
+    }>;
+    const observedCheckpoints = Number(rows[0]?.observed_checkpoints ?? 0);
+    const distinctDecisionsObserved = Number(rows[0]?.distinct_decisions_observed ?? 0);
+    const eligibleProfitDecisions = Number(rows[0]?.eligible_profit_decisions ?? 0);
+    const protectRecommendations = Number(rows[0]?.protect_recommendations ?? 0);
+    const observeRecommendations = Number(rows[0]?.observe_recommendations ?? 0);
+    const sampleMinimumSatisfied =
+      distinctDecisionsObserved >= POST_ENTRY_EVIDENCE_MIN_DISTINCT_DECISIONS &&
+      eligibleProfitDecisions >= POST_ENTRY_EVIDENCE_MIN_ELIGIBLE_PROFIT_DECISIONS;
+
     return {
       ...status,
-      observedCheckpoints: Number(rows[0]?.count ?? 0),
+      observedCheckpoints,
+      distinctDecisionsObserved,
+      eligibleProfitDecisions,
+      protectRecommendations,
+      observeRecommendations,
+      sampleMinimumSatisfied,
+      evidenceState: sampleMinimumSatisfied
+        ? ('SAMPLE_FLOOR_MET_REVIEW_REQUIRED' as const)
+        : ('COLLECTING_PROSPECTIVE_EVIDENCE' as const),
+      paperPromotionEligible: false as const,
+      promotionBlocker: sampleMinimumSatisfied
+        ? ('OUTCOME_QUALITY_REVIEW_REQUIRED' as const)
+        : ('MINIMUM_PROSPECTIVE_SAMPLE_NOT_MET' as const),
     };
   }
 

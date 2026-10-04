@@ -185,7 +185,15 @@ describe('EnsemblePostEntryProtectionShadowService', () => {
   });
 
   it('scopes lifecycle observation counts to the requesting user', async () => {
-    const query = jest.fn().mockResolvedValueOnce([{ count: 7 }]);
+    const query = jest.fn().mockResolvedValueOnce([
+      {
+        observed_checkpoints: 7,
+        distinct_decisions_observed: 4,
+        eligible_profit_decisions: 2,
+        protect_recommendations: 1,
+        observe_recommendations: 3,
+      },
+    ]);
     const service = new EnsemblePostEntryProtectionShadowService(
       {
         get: jest.fn((key: string, defaultValue?: unknown) => defaultValue),
@@ -197,12 +205,57 @@ describe('EnsemblePostEntryProtectionShadowService', () => {
 
     const status = await service.getUserStatus('00000000-0000-0000-0000-000000000002');
 
-    expect(status.observedCheckpoints).toBe(7);
+    expect(status).toMatchObject({
+      observedCheckpoints: 7,
+      distinctDecisionsObserved: 4,
+      eligibleProfitDecisions: 2,
+      protectRecommendations: 1,
+      observeRecommendations: 3,
+      evidenceMinimums: { distinctDecisions: 100, eligibleProfitDecisions: 30 },
+      sampleMinimumSatisfied: false,
+      evidenceState: 'COLLECTING_PROSPECTIVE_EVIDENCE',
+      paperPromotionEligible: false,
+      promotionBlocker: 'MINIMUM_PROSPECTIVE_SAMPLE_NOT_MET',
+    });
+    expect(String(query.mock.calls[0]?.[0])).toContain(
+      'count(DISTINCT ensemble_shadow_decision_id)',
+    );
     expect(String(query.mock.calls[0]?.[0])).toContain('WHERE user_id = $1');
     expect(query.mock.calls[0]?.[1]).toEqual([
       '00000000-0000-0000-0000-000000000002',
       'plan-b-v85-profitable-state-giveback-classifier-v1',
     ]);
+  });
+
+  it('meets the sample floor without granting PAPER execution authority', async () => {
+    const query = jest.fn().mockResolvedValueOnce([
+      {
+        observed_checkpoints: 240,
+        distinct_decisions_observed: 100,
+        eligible_profit_decisions: 30,
+        protect_recommendations: 18,
+        observe_recommendations: 52,
+      },
+    ]);
+    const service = new EnsemblePostEntryProtectionShadowService(
+      {
+        get: jest.fn((key: string, defaultValue?: unknown) => defaultValue),
+      } as unknown as ConfigService,
+      { query } as unknown as DataSource,
+      {} as AiEngineClient,
+    );
+    (service as unknown as { artifactReady: boolean }).artifactReady = true;
+
+    const status = await service.getUserStatus('00000000-0000-0000-0000-000000000002');
+
+    expect(status).toMatchObject({
+      sampleMinimumSatisfied: true,
+      evidenceState: 'SAMPLE_FLOOR_MET_REVIEW_REQUIRED',
+      paperPromotionEligible: false,
+      promotionBlocker: 'OUTCOME_QUALITY_REVIEW_REQUIRED',
+      executionAuthority: 'NONE',
+      modifiesExecution: false,
+    });
   });
 
   it('persists retryable waiting evidence when broker-native source is not configured', async () => {
