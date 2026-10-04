@@ -13,6 +13,7 @@ import {
 } from '../broker/services/live-paper-market-data.service';
 import { scorePlanBShadowMeta, scoreV8ShadowMeta } from './v8-shadow-meta-scorer';
 import {
+  PLAN_B_ENSEMBLE_ARTIFACT,
   PlanBEnsembleScore,
   PlanBPortfolioPosition,
   scorePlanBMultimodelShadow,
@@ -29,6 +30,7 @@ import {
   summarizeEnsembleSleeveOutcomes,
 } from './ensemble-shadow-outcome';
 import { buildEnsembleExpertRegistry } from './ensemble-expert-registry';
+import { EnsemblePostEntryProtectionShadowService } from './ensemble-post-entry-protection-shadow.service';
 import {
   HighConvictionOverlay,
   HighConvictionOverlayState,
@@ -340,6 +342,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     private readonly aiEngineClient: AiEngineClient,
     @Optional() private readonly dataSource?: DataSource,
     @Optional() private readonly macroEventRisk?: MacroEventRiskService,
+    @Optional()
+    private readonly ensemblePostEntryProtection?: EnsemblePostEntryProtectionShadowService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -521,6 +525,24 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         session.brokerConnectionId === this.connectionId(),
       );
     }
+    const postEntryShadow = this.ensemblePostEntryProtection
+      ? await this.ensemblePostEntryProtection.getUserStatus(requestingUserId)
+      : {
+          artifact: 'plan-b-v85-profitable-state-giveback-classifier-v1',
+          enabled: false,
+          cohort: 'ENSEMBLE_SHADOW_DECISIONS' as const,
+          sourceArtifact: PLAN_B_ENSEMBLE_ARTIFACT,
+          executionAuthority: 'NONE' as const,
+          modifiesExecution: false,
+          cadenceSeconds: 60,
+          checkpointsMinutes: [5, 10, 15, 30, 60, 120, 240],
+          brokerSourceConfigured: false,
+          lastRunAt: null,
+          lastScored: 0,
+          lastCandidates: 0,
+          observedCheckpoints: 0,
+          lastError: 'SERVICE_NOT_AVAILABLE',
+        };
     const expertRegistry = buildEnsembleExpertRegistry({
       highConvictionArtifact:
         typeof highConvictionChallenger.artifact === 'string'
@@ -528,6 +550,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           : null,
       highConvictionLoaded: highConvictionChallenger.loaded === true,
       highConvictionBrokerDataReady: highConvictionChallenger.prospectiveScoringState === 'READY',
+      postEntryArtifactReady: postEntryShadow.enabled,
+      postEntryBrokerDataReady: postEntryShadow.brokerSourceConfigured,
+      postEntryShadowObservations: postEntryShadow.observedCheckpoints,
       macroEventConfigured: Boolean(this.macroEventRisk?.isConfigured()),
       sleeveResolvedOutcomes: ensembleCampaign.evaluableResolved,
       legacyBaselineFrozen: LEGACY_V7_EXECUTION_FROZEN,
@@ -560,6 +585,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       marketSchedule,
       ensembleCampaign,
       highConvictionChallenger,
+      postEntryShadow,
       expertRegistry,
       lastEnsembleDecision: {
         evaluatedAt: this.lastEnsembleDecision.evaluatedAt?.toISOString() ?? null,
@@ -595,7 +621,11 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           : 'GUARD_IMPLEMENTED_PROVIDER_REQUIRED',
         netExecutionEconomics: 'IMPLEMENTED',
         driftSleeveHealth: 'IMPLEMENTED_COLLECTING',
-        postEntryExitModel: 'TELEMETRY_IMPLEMENTED_POLICY_RESEARCH',
+        postEntryExitModel: postEntryShadow.enabled
+          ? postEntryShadow.brokerSourceConfigured
+            ? 'TRAINED_V85_VIRTUAL_COHORT_COLLECTING'
+            : 'TRAINED_V85_ARTIFACT_READY_BROKER_SOURCE_REQUIRED'
+          : 'TELEMETRY_IMPLEMENTED_POLICY_RESEARCH',
       },
       providerCooldownReason: this.providerCooldownReason,
       providerCooldownUntil: this.providerCooldownUntil?.toISOString() ?? null,

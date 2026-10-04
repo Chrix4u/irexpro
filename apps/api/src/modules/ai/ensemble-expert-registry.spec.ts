@@ -6,13 +6,16 @@ describe('buildEnsembleExpertRegistry', () => {
       highConvictionArtifact: 'plan-b-v4-oof-three-expert-consensus-challenger',
       highConvictionLoaded: true,
       highConvictionBrokerDataReady: false,
+      postEntryArtifactReady: true,
+      postEntryBrokerDataReady: false,
+      postEntryShadowObservations: 0,
       macroEventConfigured: false,
       sleeveResolvedOutcomes: 0,
       legacyBaselineFrozen: true,
     });
 
     expect(registry.policy).toBe('EXPLICIT_PROVENANCE_V1');
-    expect(registry.trainedModelCount).toBe(1);
+    expect(registry.trainedModelCount).toBe(2);
     expect(registry.heuristicPolicyCount).toBe(2);
     expect(registry.riskGuardCount).toBe(4);
     expect(registry.frozenBaselineCount).toBe(1);
@@ -42,6 +45,9 @@ describe('buildEnsembleExpertRegistry', () => {
       highConvictionArtifact: 'plan-b-v4-oof-three-expert-consensus-challenger',
       highConvictionLoaded: true,
       highConvictionBrokerDataReady: true,
+      postEntryArtifactReady: true,
+      postEntryBrokerDataReady: true,
+      postEntryShadowObservations: 12,
       macroEventConfigured: true,
       sleeveResolvedOutcomes: 100,
       legacyBaselineFrozen: true,
@@ -50,6 +56,9 @@ describe('buildEnsembleExpertRegistry', () => {
     expect(
       registry.entries.find((entry) => entry.code === 'plan-b-v4-high-conviction')?.lifecycle,
     ).toBe('READY_ARTIFACT');
+    expect(
+      registry.entries.find((entry) => entry.code === 'plan-b-v85-post-entry')?.lifecycle,
+    ).toBe('COLLECTING');
     expect(
       registry.entries.find((entry) => entry.code === 'macro-event-risk-guard')?.lifecycle,
     ).toBe('ACTIVE_GUARD');

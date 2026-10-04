@@ -24,6 +24,7 @@ import { BrokerParityV7Service } from './broker-parity-v7.service';
 import { V8DedicatedPaperReadinessService } from './v8-dedicated-paper-readiness.service';
 import { MacroEventRiskService } from './macro-event-risk.service';
 import { PostEntryProtectionShadowService } from './post-entry-protection-shadow.service';
+import { EnsemblePostEntryProtectionShadowService } from './ensemble-post-entry-protection-shadow.service';
 import { InternalApiKeyGuard } from '../../common/guards/internal-api-key.guard';
 import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-api-key.guard';
 
@@ -72,6 +73,7 @@ import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-a
     V8DedicatedPaperReadinessService,
     MacroEventRiskService,
     PostEntryProtectionShadowService,
+    EnsemblePostEntryProtectionShadowService,
   ],
   exports: [AiService, AiSignalService],
 })
