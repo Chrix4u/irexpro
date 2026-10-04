@@ -353,6 +353,34 @@ interface VpsForexScannerStatusView {
       };
     }>;
   };
+  postEntryShadow: {
+    artifact: string;
+    enabled: boolean;
+    cohort: "ENSEMBLE_SHADOW_DECISIONS";
+    sourceArtifact: string;
+    executionAuthority: "NONE";
+    modifiesExecution: false;
+    cadenceSeconds: number;
+    checkpointsMinutes: number[];
+    brokerSourceConfigured: boolean;
+    lastRunAt: string | null;
+    lastScored: number;
+    lastCandidates: number;
+    observedCheckpoints: number;
+    distinctDecisionsObserved: number;
+    eligibleProfitDecisions: number;
+    protectRecommendations: number;
+    observeRecommendations: number;
+    evidenceMinimums: {
+      distinctDecisions: number;
+      eligibleProfitDecisions: number;
+    };
+    sampleMinimumSatisfied: boolean;
+    evidenceState: "COLLECTING_PROSPECTIVE_EVIDENCE" | "SAMPLE_FLOOR_MET_REVIEW_REQUIRED";
+    paperPromotionEligible: false;
+    promotionBlocker: "MINIMUM_PROSPECTIVE_SAMPLE_NOT_MET" | "OUTCOME_QUALITY_REVIEW_REQUIRED";
+    lastError: string | null;
+  };
   expertRegistry: {
     policy: "EXPLICIT_PROVENANCE_V1";
     trainedModelCount: number;
@@ -2980,6 +3008,32 @@ export default function AiTradingPage() {
                         {vpsScannerStatus?.ensembleCampaign.profitProtection.counterfactuals[0]
                           ? `${vpsScannerStatus.ensembleCampaign.profitProtection.counterfactuals[0].exitedEarly}/${vpsScannerStatus.ensembleCampaign.profitProtection.counterfactuals[0].observations} exits · ${vpsScannerStatus.ensembleCampaign.profitProtection.counterfactuals[0].improved} helped · ${vpsScannerStatus.ensembleCampaign.profitProtection.counterfactuals[0].worsened} hurt`
                           : "COLLECTING"}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>v8.5 evidence cohort</span>
+                      <strong>
+                        {vpsScannerStatus?.postEntryShadow?.distinctDecisionsObserved ?? 0} / {vpsScannerStatus?.postEntryShadow?.evidenceMinimums.distinctDecisions ?? 100} decisions
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Profit-eligible cohort</span>
+                      <strong>
+                        {vpsScannerStatus?.postEntryShadow?.eligibleProfitDecisions ?? 0} / {vpsScannerStatus?.postEntryShadow?.evidenceMinimums.eligibleProfitDecisions ?? 30} decisions
+                      </strong>
+                    </div>
+                    <div>
+                      <span>v8.5 checkpoint advice</span>
+                      <strong>
+                        {vpsScannerStatus?.postEntryShadow?.protectRecommendations ?? 0} PROTECT · {vpsScannerStatus?.postEntryShadow?.observeRecommendations ?? 0} OBSERVE
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Exit-model promotion</span>
+                      <strong>
+                        {vpsScannerStatus?.postEntryShadow?.sampleMinimumSatisfied
+                          ? "SAMPLE FLOOR MET · REVIEW REQUIRED"
+                          : "COLLECTING · EXECUTION BLOCKED"}
                       </strong>
                     </div>
                     <div>

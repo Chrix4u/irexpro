@@ -543,6 +543,18 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           lastScored: 0,
           lastCandidates: 0,
           observedCheckpoints: 0,
+          distinctDecisionsObserved: 0,
+          eligibleProfitDecisions: 0,
+          protectRecommendations: 0,
+          observeRecommendations: 0,
+          evidenceMinimums: {
+            distinctDecisions: 100,
+            eligibleProfitDecisions: 30,
+          },
+          sampleMinimumSatisfied: false,
+          evidenceState: 'COLLECTING_PROSPECTIVE_EVIDENCE' as const,
+          paperPromotionEligible: false as const,
+          promotionBlocker: 'MINIMUM_PROSPECTIVE_SAMPLE_NOT_MET' as const,
           lastError: 'SERVICE_NOT_AVAILABLE',
         };
     const expertRegistry = buildEnsembleExpertRegistry({
