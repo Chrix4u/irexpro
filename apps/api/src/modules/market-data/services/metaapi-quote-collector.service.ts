@@ -9,12 +9,35 @@ interface CollectibleConnectionRow {
   user_id: string;
 }
 
+const DEFAULT_COLLECTION_INTERVAL_MS = 30_000;
+const MIN_COLLECTION_INTERVAL_MS = 30_000;
+const RATE_LIMIT_COOLDOWN_MS = 30 * 60_000;
+
+export function isMetaApiQuoteCollectionWindow(now: Date): boolean {
+  const day = now.getUTCDay();
+  const hour = now.getUTCHours();
+  return day !== 0 && day !== 6 && hour < 21;
+}
+
+export function isMetaApiQuotaError(error: unknown): boolean {
+  const message = (error as Error)?.message?.toLowerCase?.() ?? String(error).toLowerCase();
+  return (
+    message.includes('rate limit') ||
+    message.includes('rate-limit') ||
+    message.includes('too many requests') ||
+    message.includes('cpu credits') ||
+    message.includes('quota') ||
+    message.includes('429')
+  );
+}
+
 @Injectable()
 export class MetaApiQuoteCollectorService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(MetaApiQuoteCollectorService.name);
   private timer: NodeJS.Timeout | null = null;
   private busy = false;
   private readonly warnedAt = new Map<string, number>();
+  private readonly cooldownUntilByConnection = new Map<string, number>();
 
   constructor(
     private readonly config: ConfigService,
@@ -30,11 +53,23 @@ export class MetaApiQuoteCollectorService implements OnModuleInit, OnModuleDestr
     }
 
     const intervalMs = Math.max(
-      2_000,
-      Number(this.config.get<string>('METAAPI_QUOTE_COLLECTION_INTERVAL_MS', '5000')) || 5000,
+      MIN_COLLECTION_INTERVAL_MS,
+      Number(
+        this.config.get<string>(
+          'METAAPI_QUOTE_COLLECTION_INTERVAL_MS',
+          String(DEFAULT_COLLECTION_INTERVAL_MS),
+        ),
+      ) || DEFAULT_COLLECTION_INTERVAL_MS,
     );
     this.logger.log(
-      `MetaApi quote collection enabled interval=${intervalMs}ms instruments=${this.instruments().join(',')}`,
+      'MetaApi quote collection enabled ' +
+        'interval=' +
+        intervalMs +
+        'ms ' +
+        'instruments=' +
+        this.instruments().join(',') +
+        ' ' +
+        'schedule=Mon-Fri<21UTC quotaCooldown=30m',
     );
 
     const initial = setTimeout(() => void this.collectOnce(), 2_000);
@@ -48,8 +83,8 @@ export class MetaApiQuoteCollectorService implements OnModuleInit, OnModuleDestr
     this.timer = null;
   }
 
-  async collectOnce(): Promise<void> {
-    if (this.busy) return;
+  async collectOnce(now = new Date()): Promise<void> {
+    if (this.busy || !isMetaApiQuoteCollectionWindow(now)) return;
     this.busy = true;
     try {
       const connections = (await this.dataSource.query(`
@@ -62,7 +97,12 @@ export class MetaApiQuoteCollectorService implements OnModuleInit, OnModuleDestr
           AND deleted_at IS NULL
       `)) as CollectibleConnectionRow[];
 
+      const currentTime = now.getTime();
       for (const connection of connections) {
+        const cooldownUntil = this.cooldownUntilByConnection.get(connection.id) ?? 0;
+        if (cooldownUntil > currentTime) continue;
+        if (cooldownUntil) this.cooldownUntilByConnection.delete(connection.id);
+
         for (const instrument of this.instruments()) {
           try {
             const quote = await this.brokerService.getCurrentPriceForConnection(
@@ -74,9 +114,29 @@ export class MetaApiQuoteCollectorService implements OnModuleInit, OnModuleDestr
               await this.store.upsertM1Sample(connection.id, instrument, quote);
             }
           } catch (error) {
+            if (isMetaApiQuotaError(error)) {
+              const nextAttempt = currentTime + RATE_LIMIT_COOLDOWN_MS;
+              this.cooldownUntilByConnection.set(connection.id, nextAttempt);
+              this.warnThrottled(
+                connection.id + ':quota',
+                'MetaApi quote collection cooling down connection=' +
+                  connection.id +
+                  ' until=' +
+                  new Date(nextAttempt).toISOString() +
+                  ' reason=' +
+                  (error as Error).message,
+              );
+              break;
+            }
+
             this.warnThrottled(
-              `${connection.id}:${instrument}`,
-              `Quote collection failed connection=${connection.id} instrument=${instrument}: ${(error as Error).message}`,
+              connection.id + ':' + instrument,
+              'Quote collection failed connection=' +
+                connection.id +
+                ' instrument=' +
+                instrument +
+                ': ' +
+                (error as Error).message,
             );
           }
         }

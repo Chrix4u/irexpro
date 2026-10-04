@@ -1,7 +1,11 @@
 import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
 import { BrokerService } from '../../broker/broker.service';
-import { MetaApiQuoteCollectorService } from './metaapi-quote-collector.service';
+import {
+  isMetaApiQuoteCollectionWindow,
+  isMetaApiQuotaError,
+  MetaApiQuoteCollectorService,
+} from './metaapi-quote-collector.service';
 import { ProviderQuoteCandleStoreService } from './provider-quote-candle-store.service';
 
 function config(values: Record<string, string> = {}) {
@@ -32,7 +36,7 @@ describe('MetaApiQuoteCollectorService', () => {
       { upsertM1Sample } as unknown as ProviderQuoteCandleStoreService,
     );
 
-    await service.collectOnce();
+    await service.collectOnce(new Date('2026-10-05T10:00:00Z'));
 
     expect(query).toHaveBeenCalledTimes(1);
     const sql = String(query.mock.calls[0][0]);
@@ -40,16 +44,8 @@ describe('MetaApiQuoteCollectorService', () => {
     expect(sql).toContain("account_type IN ('DEMO', 'LIVE')");
     expect(getCurrentPriceForConnection).toHaveBeenCalledTimes(12);
     for (const instrument of ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF']) {
-      expect(getCurrentPriceForConnection).toHaveBeenCalledWith(
-        'user-demo',
-        'demo-1',
-        instrument,
-      );
-      expect(getCurrentPriceForConnection).toHaveBeenCalledWith(
-        'user-live',
-        'live-1',
-        instrument,
-      );
+      expect(getCurrentPriceForConnection).toHaveBeenCalledWith('user-demo', 'demo-1', instrument);
+      expect(getCurrentPriceForConnection).toHaveBeenCalledWith('user-live', 'live-1', instrument);
     }
     expect(upsertM1Sample).toHaveBeenCalledTimes(12);
   });
@@ -72,7 +68,7 @@ describe('MetaApiQuoteCollectorService', () => {
       { upsertM1Sample } as unknown as ProviderQuoteCandleStoreService,
     );
 
-    await service.collectOnce();
+    await service.collectOnce(new Date('2026-10-05T10:00:00Z'));
 
     expect(getCurrentPriceForConnection).toHaveBeenCalledTimes(2);
     expect(getCurrentPriceForConnection).toHaveBeenNthCalledWith(
@@ -87,5 +83,63 @@ describe('MetaApiQuoteCollectorService', () => {
       'live-1',
       'USDJPY',
     );
+  });
+
+  it('skips weekends and rollover hours without touching MetaApi', async () => {
+    const query = jest.fn().mockResolvedValue([{ id: 'live-1', user_id: 'user-live' }]);
+    const getCurrentPriceForConnection = jest.fn();
+    const service = new MetaApiQuoteCollectorService(
+      config(),
+      { query } as unknown as DataSource,
+      { getCurrentPriceForConnection } as unknown as BrokerService,
+      { upsertM1Sample: jest.fn() } as unknown as ProviderQuoteCandleStoreService,
+    );
+
+    await service.collectOnce(new Date('2026-10-04T13:00:00Z'));
+    await service.collectOnce(new Date('2026-10-05T21:10:00Z'));
+
+    expect(query).not.toHaveBeenCalled();
+    expect(getCurrentPriceForConnection).not.toHaveBeenCalled();
+    expect(isMetaApiQuoteCollectionWindow(new Date('2026-10-05T20:59:00Z'))).toBe(true);
+    expect(isMetaApiQuoteCollectionWindow(new Date('2026-10-05T21:00:00Z'))).toBe(false);
+  });
+
+  it('recognizes MetaApi quota and CPU-credit failures', () => {
+    expect(isMetaApiQuotaError(new Error('API allows 180000 cpu credits per 1h'))).toBe(true);
+    expect(isMetaApiQuotaError(new Error('429 Too Many Requests'))).toBe(true);
+    expect(isMetaApiQuotaError(new Error('temporary broker timeout'))).toBe(false);
+  });
+
+  it('cools down a whole connection after a MetaApi quota failure', async () => {
+    const query = jest.fn().mockResolvedValue([{ id: 'live-1', user_id: 'user-live' }]);
+    const getCurrentPriceForConnection = jest
+      .fn()
+      .mockRejectedValueOnce(new Error('The API allows 180000 cpu credits per 1h'));
+    const upsertM1Sample = jest.fn();
+    const service = new MetaApiQuoteCollectorService(
+      config({ METAAPI_QUOTE_COLLECTION_INSTRUMENTS: 'EURUSD,USDJPY' }),
+      { query } as unknown as DataSource,
+      { getCurrentPriceForConnection } as unknown as BrokerService,
+      { upsertM1Sample } as unknown as ProviderQuoteCandleStoreService,
+    );
+
+    await service.collectOnce(new Date('2026-10-05T10:00:00Z'));
+    await service.collectOnce(new Date('2026-10-05T10:10:00Z'));
+
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(getCurrentPriceForConnection).toHaveBeenCalledTimes(1);
+    expect(upsertM1Sample).not.toHaveBeenCalled();
+
+    getCurrentPriceForConnection.mockResolvedValue({
+      instrument: 'EURUSD',
+      bid: '1.1000',
+      ask: '1.1001',
+      spread: '0.0001',
+      timestamp: new Date('2026-10-05T10:31:00Z'),
+    });
+    await service.collectOnce(new Date('2026-10-05T10:31:00Z'));
+
+    expect(getCurrentPriceForConnection).toHaveBeenCalledTimes(3);
+    expect(upsertM1Sample).toHaveBeenCalledTimes(2);
   });
 });
