@@ -58,41 +58,35 @@ function buildController(configOverrides: Record<string, unknown> = {}) {
 }
 
 describe('TradingController multi-model PAPER authority lock', () => {
-  it(
-    'allows the scanner-owned user to start the exact configured PAPER_ONLY binding',
-    async () => {
-      const { controller, tradingService } = buildController();
+  it('allows the scanner-owned user to start the exact configured PAPER_ONLY binding', async () => {
+    const { controller, tradingService } = buildController();
 
-      const result = await controller.startSession(RESEARCH_USER_ID, {
-        brokerConnectionId: PAPER_CONNECTION_ID,
-        executionMode: ExecutionMode.PAPER_ONLY,
-      } as StartSessionDto);
+    const result = await controller.startSession(RESEARCH_USER_ID, {
+      brokerConnectionId: PAPER_CONNECTION_ID,
+      executionMode: ExecutionMode.PAPER_ONLY,
+    } as StartSessionDto);
 
-      expect(tradingService.startTradingSession).toHaveBeenCalledWith(
-        RESEARCH_USER_ID,
-        PAPER_CONNECTION_ID,
-        ExecutionMode.PAPER_ONLY,
-      );
-      expect(result.brokerConnectionId).toBe(PAPER_CONNECTION_ID);
-      expect(result.executionMode).toBe(ExecutionMode.PAPER_ONLY);
-    },
-  );
+    expect(tradingService.startTradingSession).toHaveBeenCalledWith(
+      RESEARCH_USER_ID,
+      PAPER_CONNECTION_ID,
+      ExecutionMode.PAPER_ONLY,
+    );
+    expect(result.brokerConnectionId).toBe(PAPER_CONNECTION_ID);
+    expect(result.executionMode).toBe(ExecutionMode.PAPER_ONLY);
+  });
 
-  it(
-    'rejects an accidental MetaApi DEMO/FULL_AUTO start for the scanner-owned user',
-    async () => {
-      const { controller, tradingService } = buildController();
+  it('rejects an accidental MetaApi DEMO/FULL_AUTO start for the scanner-owned user', async () => {
+    const { controller, tradingService } = buildController();
 
-      await expect(
-        controller.startSession(RESEARCH_USER_ID, {
-          brokerConnectionId: METAAPI_CONNECTION_ID,
-          executionMode: ExecutionMode.FULL_AUTO,
-        } as StartSessionDto),
-      ).rejects.toThrow(ForbiddenException);
+    await expect(
+      controller.startSession(RESEARCH_USER_ID, {
+        brokerConnectionId: METAAPI_CONNECTION_ID,
+        executionMode: ExecutionMode.FULL_AUTO,
+      } as StartSessionDto),
+    ).rejects.toThrow(ForbiddenException);
 
-      expect(tradingService.startTradingSession).not.toHaveBeenCalled();
-    },
-  );
+    expect(tradingService.startTradingSession).not.toHaveBeenCalled();
+  });
 
   it('rejects another connection even when the request says PAPER_ONLY', async () => {
     const { controller, tradingService } = buildController();
@@ -107,45 +101,39 @@ describe('TradingController multi-model PAPER authority lock', () => {
     expect(tradingService.startTradingSession).not.toHaveBeenCalled();
   });
 
-  it(
-    'rejects execution-mode promotion while the research campaign owns the user',
-    async () => {
-      const { controller, tradingService } = buildController();
+  it('rejects execution-mode promotion while the research campaign owns the user', async () => {
+    const { controller, tradingService } = buildController();
 
-      await expect(
-        controller.changeExecutionMode(RESEARCH_USER_ID, SESSION_ID, {
-          executionMode: ExecutionMode.FULL_AUTO,
-        }),
-      ).rejects.toThrow(ForbiddenException);
+    await expect(
+      controller.changeExecutionMode(RESEARCH_USER_ID, SESSION_ID, {
+        executionMode: ExecutionMode.FULL_AUTO,
+      }),
+    ).rejects.toThrow(ForbiddenException);
 
-      expect(tradingService.changeExecutionMode).not.toHaveBeenCalled();
-    },
-  );
+    expect(tradingService.changeExecutionMode).not.toHaveBeenCalled();
+  });
 
-  it(
-    'does not change generic trading behavior for users outside the configured research campaign',
-    async () => {
-      const { controller, tradingService } = buildController();
-      const ordinaryUser = 'ordinary-user';
-      (tradingService.startTradingSession as jest.Mock).mockResolvedValue(
-        session({
-          userId: ordinaryUser,
-          brokerConnectionId: METAAPI_CONNECTION_ID,
-          executionMode: ExecutionMode.FULL_AUTO,
-        }),
-      );
-
-      const result = await controller.startSession(ordinaryUser, {
+  it('does not change generic trading behavior for users outside the configured research campaign', async () => {
+    const { controller, tradingService } = buildController();
+    const ordinaryUser = 'ordinary-user';
+    (tradingService.startTradingSession as jest.Mock).mockResolvedValue(
+      session({
+        userId: ordinaryUser,
         brokerConnectionId: METAAPI_CONNECTION_ID,
         executionMode: ExecutionMode.FULL_AUTO,
-      } as StartSessionDto);
+      }),
+    );
 
-      expect(tradingService.startTradingSession).toHaveBeenCalledWith(
-        ordinaryUser,
-        METAAPI_CONNECTION_ID,
-        ExecutionMode.FULL_AUTO,
-      );
-      expect(result.executionMode).toBe(ExecutionMode.FULL_AUTO);
-    },
-  );
+    const result = await controller.startSession(ordinaryUser, {
+      brokerConnectionId: METAAPI_CONNECTION_ID,
+      executionMode: ExecutionMode.FULL_AUTO,
+    } as StartSessionDto);
+
+    expect(tradingService.startTradingSession).toHaveBeenCalledWith(
+      ordinaryUser,
+      METAAPI_CONNECTION_ID,
+      ExecutionMode.FULL_AUTO,
+    );
+    expect(result.executionMode).toBe(ExecutionMode.FULL_AUTO);
+  });
 });
