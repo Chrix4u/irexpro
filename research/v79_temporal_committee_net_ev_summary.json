@@ -1,0 +1,185 @@
+{
+  "experiment": "v79_temporal_committee_net_ev_v1",
+  "frozen_commit": "396fc4cd",
+  "script_sha256": "005a1bae77831b3e20b95842d707e1688cd248f0a38ec4d350d1f945a311f5ac",
+  "research_cutoff": "2026-09-02T19:59:00Z",
+  "sealed_future_holdout_touched": false,
+  "promotion_gates_unchanged": true,
+  "qualified_pairs": [],
+  "qualified_pair_fraction": 0.0,
+  "verdict": "REJECT_ARCHITECTURE_NO_STABLE_PAIR",
+  "pairs": {
+    "AUDUSD": {
+      "early_eliminated": true,
+      "folds": [
+        {
+          "fold": 1,
+          "fold_gate_passed": false,
+          "trades": 16,
+          "profit_factor": 0.04239212489676762,
+          "sharpe": -5.168053636215989,
+          "balanced_accuracy": 0.20512820512820512,
+          "total_return": -0.00944910875874046,
+          "median_gap_minutes": 1.0
+        },
+        {
+          "fold": 2,
+          "fold_gate_passed": false,
+          "trades": 0,
+          "profit_factor": null,
+          "sharpe": null,
+          "balanced_accuracy": null,
+          "total_return": 0.0,
+          "median_gap_minutes": null
+        }
+      ],
+      "fold_gate_passes": 0,
+      "qualified": false
+    },
+    "EURUSD": {
+      "early_eliminated": true,
+      "folds": [
+        {
+          "fold": 1,
+          "fold_gate_passed": false,
+          "trades": 48,
+          "profit_factor": 0.4757219254448813,
+          "sharpe": -1.858812818187171,
+          "balanced_accuracy": 0.4695652173913043,
+          "total_return": -0.005354137200921172,
+          "median_gap_minutes": 1.0
+        },
+        {
+          "fold": 2,
+          "fold_gate_passed": false,
+          "trades": 32,
+          "profit_factor": 0.9525418498230708,
+          "sharpe": -0.11565155450758784,
+          "balanced_accuracy": 0.625,
+          "total_return": -0.00019678185738742412,
+          "median_gap_minutes": 1.0
+        }
+      ],
+      "fold_gate_passes": 0,
+      "qualified": false
+    },
+    "GBPUSD": {
+      "early_eliminated": true,
+      "folds": [
+        {
+          "fold": 1,
+          "fold_gate_passed": false,
+          "trades": 101,
+          "profit_factor": 0.6811643667406969,
+          "sharpe": -1.3997351849881339,
+          "balanced_accuracy": 0.5523255813953488,
+          "total_return": -0.007976629186368427,
+          "median_gap_minutes": 1.0
+        },
+        {
+          "fold": 2,
+          "fold_gate_passed": false,
+          "trades": 22,
+          "profit_factor": 0.7033703949856299,
+          "sharpe": -0.6715499156595165,
+          "balanced_accuracy": 0.5892857142857143,
+          "total_return": -0.0008310092087236642,
+          "median_gap_minutes": 1.0
+        }
+      ],
+      "fold_gate_passes": 0,
+      "qualified": false
+    },
+    "USDCAD": {
+      "early_eliminated": true,
+      "folds": [
+        {
+          "fold": 1,
+          "fold_gate_passed": false,
+          "trades": 18,
+          "profit_factor": 3.4125056352463625,
+          "sharpe": 2.0124172483098945,
+          "balanced_accuracy": 0.4666666666666667,
+          "total_return": 0.003060600879060384,
+          "median_gap_minutes": 1.0
+        },
+        {
+          "fold": 2,
+          "fold_gate_passed": false,
+          "trades": 10,
+          "profit_factor": 2.8436297943534,
+          "sharpe": 0.7835851850798302,
+          "balanced_accuracy": 0.625,
+          "total_return": 0.0030707470356419733,
+          "median_gap_minutes": 1.0
+        }
+      ],
+      "fold_gate_passes": 0,
+      "qualified": false
+    },
+    "USDCHF": {
+      "early_eliminated": true,
+      "folds": [
+        {
+          "fold": 1,
+          "fold_gate_passed": false,
+          "trades": 45,
+          "profit_factor": 0.6905813042780021,
+          "sharpe": -0.9137501878695773,
+          "balanced_accuracy": 0.4852941176470588,
+          "total_return": -0.003548851261074561,
+          "median_gap_minutes": 1.0
+        },
+        {
+          "fold": 2,
+          "fold_gate_passed": true,
+          "trades": 9,
+          "profit_factor": 47.545407865950814,
+          "sharpe": 4.044850640855815,
+          "balanced_accuracy": 1.0,
+          "total_return": 0.002896021658600825,
+          "median_gap_minutes": 2.5
+        },
+        {
+          "fold": 3,
+          "fold_gate_passed": false,
+          "trades": 155,
+          "profit_factor": 0.7692072926732237,
+          "sharpe": -1.2310458844085694,
+          "balanced_accuracy": 0.4850634802091113,
+          "total_return": -0.004865202221534367,
+          "median_gap_minutes": 1.0
+        }
+      ],
+      "fold_gate_passes": 1,
+      "qualified": false
+    },
+    "USDJPY": {
+      "early_eliminated": true,
+      "folds": [
+        {
+          "fold": 1,
+          "fold_gate_passed": false,
+          "trades": 549,
+          "profit_factor": 0.7678274416549968,
+          "sharpe": -1.684249581405122,
+          "balanced_accuracy": 0.4977360411531454,
+          "total_return": -0.04844137212292574,
+          "median_gap_minutes": 1.0
+        },
+        {
+          "fold": 2,
+          "fold_gate_passed": false,
+          "trades": 0,
+          "profit_factor": null,
+          "sharpe": null,
+          "balanced_accuracy": null,
+          "total_return": 0.0,
+          "median_gap_minutes": null
+        }
+      ],
+      "fold_gate_passes": 0,
+      "qualified": false
+    }
+  }
+}
