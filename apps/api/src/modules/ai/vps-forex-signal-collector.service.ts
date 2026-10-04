@@ -1067,6 +1067,18 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         lossesAfterOneR: 0,
         averageMaxFavorableR: null as number | null,
         averageMaxCloseGivebackR: null as number | null,
+        counterfactuals: [] as Array<{
+          code: string;
+          observations: number;
+          activated: number;
+          exitedEarly: number;
+          baselineNetR: number;
+          policyNetR: number;
+          deltaNetR: number;
+          improved: number;
+          worsened: number;
+          unchanged: number;
+        }>,
       },
       sleeves: [] as Array<{
         instrument: string;
@@ -1181,6 +1193,52 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     const lossesWithPath = pathOutcomes.filter((outcome) => outcome.status === 'LOSS');
     const average = (values: number[]): number | null =>
       values.length > 0 ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+    const counterfactualMap = new Map<
+      string,
+      {
+        code: string;
+        observations: number;
+        activated: number;
+        exitedEarly: number;
+        baselineNetR: number;
+        policyNetR: number;
+        deltaNetR: number;
+        improved: number;
+        worsened: number;
+        unchanged: number;
+      }
+    >();
+    for (const outcome of pathOutcomes) {
+      const baselineNetR = outcome.netR ?? 0;
+      for (const policy of outcome.postEntryTelemetry?.profitProtectionCounterfactuals ?? []) {
+        const summary = counterfactualMap.get(policy.code) ?? {
+          code: policy.code,
+          observations: 0,
+          activated: 0,
+          exitedEarly: 0,
+          baselineNetR: 0,
+          policyNetR: 0,
+          deltaNetR: 0,
+          improved: 0,
+          worsened: 0,
+          unchanged: 0,
+        };
+        summary.observations += 1;
+        if (policy.activated) summary.activated += 1;
+        if (policy.exitedEarly) summary.exitedEarly += 1;
+        summary.baselineNetR += baselineNetR;
+        summary.policyNetR += policy.netR;
+        summary.deltaNetR += policy.deltaNetRVsBase;
+        if (policy.deltaNetRVsBase > 1e-9) summary.improved += 1;
+        else if (policy.deltaNetRVsBase < -1e-9) summary.worsened += 1;
+        else summary.unchanged += 1;
+        counterfactualMap.set(policy.code, summary);
+      }
+    }
+    const protectionCounterfactuals = [...counterfactualMap.values()].sort(
+      (a, b) => b.deltaNetR - a.deltaNetR || a.code.localeCompare(b.code),
+    );
+
     const profitProtection = {
       pathResolved: pathOutcomes.length,
       lossesWithPath: lossesWithPath.length,
@@ -1199,6 +1257,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       averageMaxCloseGivebackR: average(
         pathOutcomes.map((outcome) => outcome.postEntryTelemetry!.maxCloseGivebackR),
       ),
+      counterfactuals: protectionCounterfactuals,
     };
     const sleeves = [...sleeveMap.values()]
       .map((sleeve) => {

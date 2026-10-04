@@ -1,6 +1,6 @@
 import { EnsembleSleeveEvidence } from './ensemble-governance';
 
-export const ENSEMBLE_OUTCOME_MODEL_VERSION = 'm5-first-hit-72bar-net-r-path-v2';
+export const ENSEMBLE_OUTCOME_MODEL_VERSION = 'm5-first-hit-72bar-net-r-path-v3';
 export const ENSEMBLE_OUTCOME_HORIZON_BARS = 72;
 
 export interface EnsembleShadowCandle {
@@ -19,6 +19,22 @@ export interface EnsembleShadowDecisionGeometry {
   estimatedExecutionCostR: number;
 }
 
+export interface EnsembleProfitProtectionCounterfactual {
+  code:
+    | 'CLOSE_LOCK_050_GIVEBACK_040'
+    | 'CLOSE_LOCK_075_GIVEBACK_050'
+    | 'CLOSE_LOCK_100_GIVEBACK_050';
+  activationThresholdR: number;
+  givebackTriggerR: number;
+  activated: boolean;
+  activationAt: string | null;
+  exitedEarly: boolean;
+  exitAt: string | null;
+  grossR: number;
+  netR: number;
+  deltaNetRVsBase: number;
+}
+
 export interface EnsemblePostEntryTelemetry {
   maxFavorableR: number;
   maxAdverseR: number;
@@ -28,6 +44,7 @@ export interface EnsemblePostEntryTelemetry {
   reachedOneR: boolean;
   gaveBackHalfRToLoss: boolean;
   gaveBackOneRToLoss: boolean;
+  profitProtectionCounterfactuals: EnsembleProfitProtectionCounterfactual[];
   methodology: 'COMPLETED_M5_BARS_BEFORE_EXIT_CONSERVATIVE_V1';
 }
 
@@ -103,6 +120,39 @@ export function resolveEnsembleShadowOutcome(
   let maxAdverseR = 0;
   let maxCloseGivebackR = 0;
   let peakFavorableAt: string | null = null;
+  let maxCompletedCloseR = 0;
+  const protectionTrackers = [
+    {
+      code: 'CLOSE_LOCK_050_GIVEBACK_040' as const,
+      activationThresholdR: 0.5,
+      givebackTriggerR: 0.4,
+      activated: false,
+      activationAt: null as string | null,
+      exitedEarly: false,
+      exitAt: null as string | null,
+      grossR: null as number | null,
+    },
+    {
+      code: 'CLOSE_LOCK_075_GIVEBACK_050' as const,
+      activationThresholdR: 0.75,
+      givebackTriggerR: 0.5,
+      activated: false,
+      activationAt: null as string | null,
+      exitedEarly: false,
+      exitAt: null as string | null,
+      grossR: null as number | null,
+    },
+    {
+      code: 'CLOSE_LOCK_100_GIVEBACK_050' as const,
+      activationThresholdR: 1,
+      givebackTriggerR: 0.5,
+      activated: false,
+      activationAt: null as string | null,
+      exitedEarly: false,
+      exitAt: null as string | null,
+      grossR: null as number | null,
+    },
+  ];
 
   const updateCompletedBarPath = (candle: (typeof future)[number]) => {
     const favorablePrice = decision.direction === 'BUY' ? candle.high! : candle.low!;
@@ -116,9 +166,28 @@ export function resolveEnsembleShadowOutcome(
     }
     maxAdverseR = Math.min(maxAdverseR, adverseR);
     maxCloseGivebackR = Math.max(maxCloseGivebackR, maxFavorableR - closeR);
+    maxCompletedCloseR = Math.max(maxCompletedCloseR, closeR);
+
+    for (const tracker of protectionTrackers) {
+      if (tracker.exitedEarly) continue;
+      if (!tracker.activated && maxCompletedCloseR >= tracker.activationThresholdR) {
+        tracker.activated = true;
+        tracker.activationAt = candle.timestamp.toISOString();
+      }
+      if (tracker.activated && maxCompletedCloseR - closeR >= tracker.givebackTriggerR) {
+        tracker.exitedEarly = true;
+        tracker.exitAt = candle.timestamp.toISOString();
+        // Conservative close-bar counterfactual: assume exit at the observed
+        // completed-bar close, never at an unobserved trailing-stop fill.
+        tracker.grossR = closeR;
+      }
+    }
   };
 
-  const telemetry = (status: EnsembleShadowOutcome['status']): EnsemblePostEntryTelemetry => ({
+  const telemetry = (
+    status: EnsembleShadowOutcome['status'],
+    baseGrossR: number,
+  ): EnsemblePostEntryTelemetry => ({
     maxFavorableR,
     maxAdverseR,
     maxCloseGivebackR,
@@ -127,6 +196,23 @@ export function resolveEnsembleShadowOutcome(
     reachedOneR: maxFavorableR >= 1,
     gaveBackHalfRToLoss: status === 'LOSS' && maxFavorableR >= 0.5,
     gaveBackOneRToLoss: status === 'LOSS' && maxFavorableR >= 1,
+    profitProtectionCounterfactuals: protectionTrackers.map((tracker) => {
+      const grossR = tracker.grossR ?? baseGrossR;
+      const netR = grossR - costR;
+      const baseNetR = baseGrossR - costR;
+      return {
+        code: tracker.code,
+        activationThresholdR: tracker.activationThresholdR,
+        givebackTriggerR: tracker.givebackTriggerR,
+        activated: tracker.activated,
+        activationAt: tracker.activationAt,
+        exitedEarly: tracker.exitedEarly,
+        exitAt: tracker.exitAt,
+        grossR,
+        netR,
+        deltaNetRVsBase: netR - baseNetR,
+      };
+    }),
     methodology: 'COMPLETED_M5_BARS_BEFORE_EXIT_CONSERVATIVE_V1',
   });
 
@@ -173,7 +259,7 @@ export function resolveEnsembleShadowOutcome(
         grossR,
         netR: grossR - costR,
         reason: targetTouched ? 'TAKE_PROFIT_HIT' : 'STOP_LOSS_HIT',
-        postEntryTelemetry: telemetry(status),
+        postEntryTelemetry: telemetry(status, grossR),
       };
     }
 
@@ -193,7 +279,7 @@ export function resolveEnsembleShadowOutcome(
     grossR,
     netR: grossR - costR,
     reason: 'HORIZON_EXPIRED',
-    postEntryTelemetry: telemetry('EXPIRED'),
+    postEntryTelemetry: telemetry('EXPIRED', grossR),
   };
 }
 

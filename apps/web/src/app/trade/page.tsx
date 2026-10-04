@@ -306,6 +306,18 @@ interface VpsForexScannerStatusView {
       lossesAfterOneR: number;
       averageMaxFavorableR: number | null;
       averageMaxCloseGivebackR: number | null;
+      counterfactuals: Array<{
+        code: string;
+        observations: number;
+        activated: number;
+        exitedEarly: number;
+        baselineNetR: number;
+        policyNetR: number;
+        deltaNetR: number;
+        improved: number;
+        worsened: number;
+        unchanged: number;
+      }>;
     };
     sleeves: Array<{
       instrument: string;
@@ -2853,6 +2865,22 @@ export default function AiTradingPage() {
                       <span>Avg MFE / give-back</span>
                       <strong>
                         {providerMetric(vpsScannerStatus?.ensembleCampaign.profitProtection.averageMaxFavorableR ?? null, 2)} R / {providerMetric(vpsScannerStatus?.ensembleCampaign.profitProtection.averageMaxCloseGivebackR ?? null, 2)} R
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Best protection shadow</span>
+                      <strong>
+                        {vpsScannerStatus?.ensembleCampaign.profitProtection.counterfactuals[0]
+                          ? `${vpsScannerStatus.ensembleCampaign.profitProtection.counterfactuals[0].code.replaceAll("_", " ")} · Δ ${vpsScannerStatus.ensembleCampaign.profitProtection.counterfactuals[0].deltaNetR >= 0 ? "+" : ""}${providerMetric(vpsScannerStatus.ensembleCampaign.profitProtection.counterfactuals[0].deltaNetR, 2)} R`
+                          : "Awaiting resolved outcomes"}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Protection shadow impact</span>
+                      <strong>
+                        {vpsScannerStatus?.ensembleCampaign.profitProtection.counterfactuals[0]
+                          ? `${vpsScannerStatus.ensembleCampaign.profitProtection.counterfactuals[0].exitedEarly}/${vpsScannerStatus.ensembleCampaign.profitProtection.counterfactuals[0].observations} exits · ${vpsScannerStatus.ensembleCampaign.profitProtection.counterfactuals[0].improved} helped · ${vpsScannerStatus.ensembleCampaign.profitProtection.counterfactuals[0].worsened} hurt`
+                          : "COLLECTING"}
                       </strong>
                     </div>
                     <div>

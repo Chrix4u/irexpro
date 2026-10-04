@@ -56,6 +56,32 @@ describe('ensemble shadow outcome', () => {
     expect(result?.postEntryTelemetry?.maxCloseGivebackR).toBeCloseTo(1.7, 8);
   });
 
+  it('scores conservative close-bar profit-protection counterfactuals without changing the base outcome', () => {
+    const result = resolveEnsembleShadowOutcome(base, [
+      candle(5, 1.0998, 1.1008, 1.1006),
+      candle(10, 1.0999, 1.1005, 1.10015),
+      candle(15, 1.0989, 1.1002, 1.099),
+    ]);
+
+    expect(result?.status).toBe('LOSS');
+    expect(result?.netR).toBeCloseTo(-1.1, 8);
+
+    const policies = result?.postEntryTelemetry?.profitProtectionCounterfactuals ?? [];
+    const halfR = policies.find((policy) => policy.code === 'CLOSE_LOCK_050_GIVEBACK_040');
+    const threeQuarterR = policies.find((policy) => policy.code === 'CLOSE_LOCK_075_GIVEBACK_050');
+
+    expect(halfR?.activated).toBe(true);
+    expect(halfR?.exitedEarly).toBe(true);
+    expect(halfR?.grossR).toBeCloseTo(0.15, 8);
+    expect(halfR?.netR).toBeCloseTo(0.05, 8);
+    expect(halfR?.deltaNetRVsBase).toBeCloseTo(1.15, 8);
+
+    expect(threeQuarterR?.activated).toBe(false);
+    expect(threeQuarterR?.exitedEarly).toBe(false);
+    expect(threeQuarterR?.netR).toBeCloseTo(-1.1, 8);
+    expect(threeQuarterR?.deltaNetRVsBase).toBeCloseTo(0, 8);
+  });
+
   it('does not count unknown exit-bar favorable excursion before a stop', () => {
     const result = resolveEnsembleShadowOutcome(base, [candle(5, 1.0989, 1.1008, 1.099)]);
 
@@ -89,7 +115,7 @@ describe('ensemble shadow outcome', () => {
   it('summarizes only non-ambiguous net-R outcomes', () => {
     const summary = summarizeEnsembleSleeveOutcomes([
       {
-        version: 'm5-first-hit-72bar-net-r-path-v2',
+        version: 'm5-first-hit-72bar-net-r-path-v3',
         status: 'WIN',
         resolvedAt: '2026-10-05T10:10:00Z',
         barsObserved: 2,
@@ -100,7 +126,7 @@ describe('ensemble shadow outcome', () => {
         postEntryTelemetry: null,
       },
       {
-        version: 'm5-first-hit-72bar-net-r-path-v2',
+        version: 'm5-first-hit-72bar-net-r-path-v3',
         status: 'LOSS',
         resolvedAt: '2026-10-06T10:10:00Z',
         barsObserved: 2,
@@ -111,7 +137,7 @@ describe('ensemble shadow outcome', () => {
         postEntryTelemetry: null,
       },
       {
-        version: 'm5-first-hit-72bar-net-r-path-v2',
+        version: 'm5-first-hit-72bar-net-r-path-v3',
         status: 'AMBIGUOUS',
         resolvedAt: '2026-10-07T10:10:00Z',
         barsObserved: 1,
