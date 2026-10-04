@@ -44,7 +44,9 @@ describe('MetaTraderAdapter — account-scoped margin and order routing', () => 
 
   it('maps BUY margin using ask on explicit account', async () => {
     await expect(adapter.getRequiredMargin(params('BUY'))).resolves.toBe('125.50');
-    expect(getOrCreateConnection).toHaveBeenCalledWith('metaapi-account-A');
+    expect(getOrCreateConnection).toHaveBeenCalledWith('metaapi-account-A', {
+      requireSynchronization: true,
+    });
     expect(calculateMargin).toHaveBeenCalledWith(
       'metaapi-account-A',
       expect.objectContaining({
@@ -64,7 +66,9 @@ describe('MetaTraderAdapter — account-scoped margin and order routing', () => 
   it('ignores mutable currentAccountId for margin', async () => {
     (adapter as unknown as { currentAccountId: string }).currentAccountId = 'other-account';
     await adapter.getRequiredMargin(params('BUY'));
-    expect(getOrCreateConnection).toHaveBeenCalledWith('metaapi-account-A');
+    expect(getOrCreateConnection).toHaveBeenCalledWith('metaapi-account-A', {
+      requireSynchronization: true,
+    });
   });
   it('routes placeOrder using explicit account even when singleton state points elsewhere', async () => {
     (adapter as unknown as { currentAccountId: string }).currentAccountId = 'other-account';

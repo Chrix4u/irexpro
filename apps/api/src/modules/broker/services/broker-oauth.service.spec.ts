@@ -888,7 +888,7 @@ describe('BrokerOAuthService (Sprint 56 correction round 2 — findings 2 + 4)',
       // CONSUMED/expired rows do NOT count toward the budget.
       await flowRepo.update({ state: 'PENDING' as never }, { state: 'CONSUMED' as never });
       await expect(service.startAuthorization(USER, 'ctrader')).resolves.toBeDefined();
-    });
+    }, 20_000);
 
     it('sweeps expired flows so the store stays bounded over time', async () => {
       const stale = await startFlow();

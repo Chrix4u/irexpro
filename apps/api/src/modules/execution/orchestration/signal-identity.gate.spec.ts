@@ -192,7 +192,11 @@ describe('AiSignalIdentityGate generatedAt identity binding + deterministic dupl
     const rows = await allRows();
     expect(rows).toHaveLength(1);
     expect(rows[0].signal_id).toBe('sig-dup-001');
-    expect(new Date(rows[0].generated_at).getTime()).toBe(generatedAt.getTime());
+    // Hydrate through TypeORM instead of parsing sqlite's timezone-less raw
+    // datetime string in the host timezone. Production PostgreSQL uses
+    // timestamptz; this sqlite mirror only exists for the unit harness.
+    const persisted = await repo.findOneByOrFail({ signalId: 'sig-dup-001' });
+    expect(persisted.generatedAt.getTime()).toBe(generatedAt.getTime());
   });
 
   // ─── NEW generatedAt on the same signalId → SECURITY EVENT ─────────────────

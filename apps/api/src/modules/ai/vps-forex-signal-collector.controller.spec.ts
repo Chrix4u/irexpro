@@ -1,5 +1,7 @@
 import { VpsForexSignalCollectorController } from './vps-forex-signal-collector.controller';
 import { VpsForexSignalCollectorService } from './vps-forex-signal-collector.service';
+import { BrokerParityV7Service } from './broker-parity-v7.service';
+import { V8DedicatedPaperReadinessService } from './v8-dedicated-paper-readiness.service';
 
 describe('VpsForexSignalCollectorController', () => {
   it('scopes status to the authenticated user and exposes no configuration secrets', async () => {
@@ -10,9 +12,11 @@ describe('VpsForexSignalCollectorController', () => {
       state: 'WAITING_FOR_CONFIGURATION',
       paperOnly: true,
     });
-    const controller = new VpsForexSignalCollectorController({
-      getStatus,
-    } as unknown as VpsForexSignalCollectorService);
+    const controller = new VpsForexSignalCollectorController(
+      { getStatus } as unknown as VpsForexSignalCollectorService,
+      {} as BrokerParityV7Service,
+      {} as V8DedicatedPaperReadinessService,
+    );
 
     const result = await controller.getStatus('user-1');
 

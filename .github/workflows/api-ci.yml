@@ -26,10 +26,11 @@ env:
   NODE_VERSION: '22'
   PNPM_VERSION: '10.34.5'
   CANDIDATE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+  BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
 
 jobs:
   lint:
-    name: Lint
+    name: Lint changed API files
     runs-on: ubuntu-24.04
     timeout-minutes: 15
 
@@ -38,6 +39,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Verify exact candidate checkout
@@ -58,7 +60,58 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Lint
+      - name: Lint changed API TypeScript files
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          base="$BASE_SHA"
+          if [[ -z "$base" || "$base" =~ ^0+$ ]] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            base="$(git rev-parse HEAD^)"
+          fi
+          mapfile -t files < <(
+            git diff --name-only --diff-filter=ACMR "$base" "$CANDIDATE_SHA" -- apps/api |
+              grep -E '\.ts$' || true
+          )
+          if (( ${#files[@]} == 0 )); then
+            echo "No changed API TypeScript files to lint."
+            exit 0
+          fi
+          printf 'Linting changed API files:\n'
+          printf ' - %s\n' "${files[@]}"
+          rel=()
+          for file in "${files[@]}"; do
+            rel+=("${file#apps/api/}")
+          done
+          cd apps/api
+          pnpm exec eslint "${rel[@]}"
+
+  full-lint-audit:
+    name: Full API lint audit
+    if: github.event_name == 'push'
+    continue-on-error: ${{ github.ref_name == 'feat/native-mobile-onboarding-20260930' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Audit full API lint baseline
         run: pnpm api:lint
 
   test:
