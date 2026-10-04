@@ -1,6 +1,7 @@
 import { EnsembleSleeveEvidence } from './ensemble-governance';
 
 export const ENSEMBLE_OUTCOME_MODEL_VERSION = 'm5-first-hit-72bar-net-r-path-v3';
+export const ENSEMBLE_PATH_MODEL_VERSION = 'm5-preexit-path-state-v1';
 export const ENSEMBLE_OUTCOME_HORIZON_BARS = 72;
 
 export interface EnsembleShadowCandle {
@@ -60,6 +61,24 @@ export interface EnsembleShadowOutcome {
   postEntryTelemetry: EnsemblePostEntryTelemetry | null;
 }
 
+export interface EnsembleShadowPathObservation {
+  version: typeof ENSEMBLE_PATH_MODEL_VERSION;
+  observedAt: string;
+  barIndex: number;
+  closePrice: number;
+  closeR: number;
+  favorableR: number;
+  adverseR: number;
+  runningMfeR: number;
+  runningMaeR: number;
+  peakCloseR: number;
+  closeGivebackR: number;
+  maxCloseGivebackR: number;
+  stopCushionR: number;
+  targetDistanceR: number;
+  barRangeR: number;
+}
+
 function finiteNumber(value: unknown): number | null {
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
@@ -73,6 +92,102 @@ function directionalR(
 ): number {
   const delta = direction === 'BUY' ? exit - entry : entry - exit;
   return delta / riskDistance;
+}
+
+export function buildEnsembleShadowPathObservations(
+  decision: EnsembleShadowDecisionGeometry,
+  candles: EnsembleShadowCandle[],
+  horizonBars = ENSEMBLE_OUTCOME_HORIZON_BARS,
+): EnsembleShadowPathObservation[] {
+  const marketBarTime = new Date(decision.marketBarTime);
+  const entry = finiteNumber(decision.entryPrice);
+  const stop = finiteNumber(decision.stopLoss);
+  const target = finiteNumber(decision.takeProfit);
+  if (
+    !Number.isFinite(marketBarTime.getTime()) ||
+    entry == null ||
+    stop == null ||
+    target == null ||
+    horizonBars < 1
+  ) {
+    return [];
+  }
+
+  const riskDistance = Math.abs(entry - stop);
+  if (riskDistance <= 0) return [];
+
+  const future = candles
+    .map((candle) => ({
+      timestamp: new Date(candle.timestamp),
+      high: finiteNumber(candle.high),
+      low: finiteNumber(candle.low),
+      close: finiteNumber(candle.close),
+    }))
+    .filter(
+      (candle) =>
+        Number.isFinite(candle.timestamp.getTime()) &&
+        candle.timestamp.getTime() > marketBarTime.getTime() &&
+        candle.high != null &&
+        candle.low != null &&
+        candle.close != null,
+    )
+    .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
+    .slice(0, horizonBars);
+
+  let runningMfeR = 0;
+  let runningMaeR = 0;
+  let peakCloseR = 0;
+  let maxCloseGivebackR = 0;
+  const observations: EnsembleShadowPathObservation[] = [];
+
+  for (let index = 0; index < future.length; index += 1) {
+    const candle = future[index]!;
+    const stopTouched = decision.direction === 'BUY' ? candle.low! <= stop : candle.high! >= stop;
+    const targetTouched =
+      decision.direction === 'BUY' ? candle.high! >= target : candle.low! <= target;
+
+    // Exit-bar ordering is unknowable from OHLC. Persist completed bars only.
+    if (stopTouched || targetTouched) break;
+
+    const favorablePrice = decision.direction === 'BUY' ? candle.high! : candle.low!;
+    const adversePrice = decision.direction === 'BUY' ? candle.low! : candle.high!;
+    const favorableR = directionalR(decision.direction, entry, favorablePrice, riskDistance);
+    const adverseR = directionalR(decision.direction, entry, adversePrice, riskDistance);
+    const closeR = directionalR(decision.direction, entry, candle.close!, riskDistance);
+    runningMfeR = Math.max(runningMfeR, favorableR);
+    runningMaeR = Math.min(runningMaeR, adverseR);
+    peakCloseR = Math.max(peakCloseR, closeR);
+    const closeGivebackR = Math.max(0, peakCloseR - closeR);
+    maxCloseGivebackR = Math.max(maxCloseGivebackR, closeGivebackR);
+    const stopCushionR =
+      decision.direction === 'BUY'
+        ? (candle.close! - stop) / riskDistance
+        : (stop - candle.close!) / riskDistance;
+    const targetDistanceR =
+      decision.direction === 'BUY'
+        ? (target - candle.close!) / riskDistance
+        : (candle.close! - target) / riskDistance;
+
+    observations.push({
+      version: ENSEMBLE_PATH_MODEL_VERSION,
+      observedAt: candle.timestamp.toISOString(),
+      barIndex: index + 1,
+      closePrice: candle.close!,
+      closeR,
+      favorableR,
+      adverseR,
+      runningMfeR,
+      runningMaeR,
+      peakCloseR,
+      closeGivebackR,
+      maxCloseGivebackR,
+      stopCushionR,
+      targetDistanceR,
+      barRangeR: (candle.high! - candle.low!) / riskDistance,
+    });
+  }
+
+  return observations;
 }
 
 export function resolveEnsembleShadowOutcome(

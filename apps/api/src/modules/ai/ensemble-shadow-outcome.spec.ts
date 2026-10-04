@@ -1,4 +1,5 @@
 import {
+  buildEnsembleShadowPathObservations,
   resolveEnsembleShadowOutcome,
   summarizeEnsembleSleeveOutcomes,
 } from './ensemble-shadow-outcome';
@@ -22,6 +23,48 @@ function candle(minute: number, low: number, high: number, close = (low + high) 
 }
 
 describe('ensemble shadow outcome', () => {
+  it('builds causal pre-exit bar-level path states and excludes the exit bar', () => {
+    const path = buildEnsembleShadowPathObservations(base, [
+      candle(5, 1.0998, 1.1008, 1.1006),
+      candle(10, 1.0999, 1.1005, 1.10015),
+      candle(15, 1.0989, 1.1002, 1.099),
+    ]);
+
+    expect(path).toHaveLength(2);
+    expect(path[0]).toEqual(
+      expect.objectContaining({
+        version: 'm5-preexit-path-state-v1',
+        barIndex: 1,
+      }),
+    );
+    expect(path[0]!.closeR).toBeCloseTo(0.6, 8);
+    expect(path[0]!.runningMfeR).toBeCloseTo(0.8, 8);
+    expect(path[0]!.runningMaeR).toBeCloseTo(-0.2, 8);
+    expect(path[0]!.stopCushionR).toBeCloseTo(1.6, 8);
+    expect(path[0]!.targetDistanceR).toBeCloseTo(0.9, 8);
+    expect(path[1]!.closeR).toBeCloseTo(0.15, 8);
+    expect(path[1]!.peakCloseR).toBeCloseTo(0.6, 8);
+    expect(path[1]!.closeGivebackR).toBeCloseTo(0.45, 8);
+    expect(path[1]!.maxCloseGivebackR).toBeCloseTo(0.45, 8);
+  });
+
+  it('computes SELL path-state distances in R-space', () => {
+    const sell = {
+      ...base,
+      direction: 'SELL' as const,
+      entryPrice: 1.1,
+      stopLoss: 1.101,
+      takeProfit: 1.0985,
+    };
+    const path = buildEnsembleShadowPathObservations(sell, [candle(5, 1.0992, 1.1002, 1.0995)]);
+    expect(path).toHaveLength(1);
+    expect(path[0]!.closeR).toBeCloseTo(0.5, 8);
+    expect(path[0]!.runningMfeR).toBeCloseTo(0.8, 8);
+    expect(path[0]!.runningMaeR).toBeCloseTo(-0.2, 8);
+    expect(path[0]!.stopCushionR).toBeCloseTo(1.5, 8);
+    expect(path[0]!.targetDistanceR).toBeCloseTo(1.0, 8);
+  });
+
   it('resolves first-hit take profit and deducts cost R', () => {
     const result = resolveEnsembleShadowOutcome(base, [
       candle(5, 1.0998, 1.1008),

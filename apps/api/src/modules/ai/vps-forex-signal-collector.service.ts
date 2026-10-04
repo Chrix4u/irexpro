@@ -24,6 +24,7 @@ import {
 } from './ensemble-governance';
 import { MacroEventRiskAssessment, MacroEventRiskService } from './macro-event-risk.service';
 import {
+  buildEnsembleShadowPathObservations,
   EnsembleShadowOutcome,
   resolveEnsembleShadowOutcome,
   summarizeEnsembleSleeveOutcomes,
@@ -654,6 +655,11 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       for (const [instrument, candles] of seriesByInstrument.entries()) {
         this.livePaperMarket.updateClosedCandles(instrument, candles, connectionId);
       }
+      await this.persistPendingEnsembleShadowPathObservations(
+        userId,
+        connectionId,
+        seriesByInstrument,
+      );
       await this.resolvePendingEnsembleShadowOutcomes(userId, connectionId, seriesByInstrument);
 
       const activeSession = await this.executionService.getActiveSession(userId);
@@ -1049,6 +1055,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       decisions: 0,
       admitted: 0,
       rejected: 0,
+      pathObservationCount: 0,
+      pathDecisionCount: 0,
       resolved: 0,
       evaluableResolved: 0,
       wins: 0,
@@ -1122,6 +1130,21 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       components: Record<string, unknown> | null;
     }>;
     if (!rows.length) return empty;
+
+    const [pathCoverage] = (await this.dataSource.query(
+      `
+        SELECT
+          count(*)::int AS observation_count,
+          count(DISTINCT decision_id)::int AS decision_count
+        FROM trading.ensemble_shadow_path_observations
+        WHERE user_id = $1
+          AND broker_connection_id = $2
+          AND engine_code = $3
+      `,
+      [userId, connectionId, ACTIVE_ENGINE_CODE],
+    )) as Array<{ observation_count: number | string; decision_count: number | string }>;
+    const pathObservationCount = Number(pathCoverage?.observation_count ?? 0);
+    const pathDecisionCount = Number(pathCoverage?.decision_count ?? 0);
 
     const allOutcomes: EnsembleShadowOutcome[] = [];
     const blockerCounts: Record<string, number> = {};
@@ -1293,6 +1316,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       decisions: rows.length,
       admitted: rows.filter((row) => row.admitted).length,
       rejected: rows.filter((row) => !row.admitted).length,
+      pathObservationCount,
+      pathDecisionCount,
       resolved: allOutcomes.length,
       evaluableResolved: validOutcomes.length,
       wins: allOutcomes.filter((outcome) => outcome.status === 'WIN').length,
@@ -1311,6 +1336,186 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       profitProtection,
       sleeves,
     };
+  }
+
+  private async persistPendingEnsembleShadowPathObservations(
+    userId: string,
+    connectionId: string,
+    seriesByInstrument: Map<string, LivePaperCandleInput[]>,
+  ): Promise<void> {
+    if (!this.dataSource) return;
+
+    const rows = (await this.dataSource.query(
+      `
+        SELECT
+          id,
+          model_version,
+          instrument,
+          direction,
+          market_bar_time,
+          entry_price,
+          components
+        FROM trading.ensemble_shadow_decisions
+        WHERE user_id = $1
+          AND broker_connection_id = $2
+          AND engine_code = $3
+          AND admitted = true
+          AND NOT (components ? 'outcome')
+        ORDER BY evaluated_at ASC
+        LIMIT 500
+      `,
+      [userId, connectionId, ACTIVE_ENGINE_CODE],
+    )) as Array<{
+      id: string;
+      model_version: string;
+      instrument: string;
+      direction: 'BUY' | 'SELL';
+      market_bar_time: string | Date;
+      entry_price: string | number;
+      components: Record<string, unknown> | null;
+    }>;
+
+    let insertedCandidates = 0;
+    let observedBars = 0;
+    for (const row of rows) {
+      const candles = seriesByInstrument.get(row.instrument);
+      const components = row.components;
+      if (!candles || !components || typeof components !== 'object') continue;
+
+      const stopLoss = Number(components.stopLoss);
+      const takeProfit = Number(components.takeProfit);
+      const governance =
+        components.governance && typeof components.governance === 'object'
+          ? (components.governance as Record<string, unknown>)
+          : null;
+      const estimatedExecutionCostR = Number(governance?.estimatedExecutionCostR ?? 0);
+      if (
+        !Number.isFinite(stopLoss) ||
+        !Number.isFinite(takeProfit) ||
+        !Number.isFinite(estimatedExecutionCostR)
+      ) {
+        continue;
+      }
+
+      const observations = buildEnsembleShadowPathObservations(
+        {
+          direction: row.direction,
+          marketBarTime: row.market_bar_time,
+          entryPrice: Number(row.entry_price),
+          stopLoss,
+          takeProfit,
+          estimatedExecutionCostR,
+        },
+        candles,
+      );
+      if (!observations.length) continue;
+
+      const records = observations.map((observation) => ({
+        observed_bar_time: observation.observedAt,
+        bar_index: observation.barIndex,
+        path_version: observation.version,
+        close_price: observation.closePrice,
+        close_r: observation.closeR,
+        favorable_r: observation.favorableR,
+        adverse_r: observation.adverseR,
+        running_mfe_r: observation.runningMfeR,
+        running_mae_r: observation.runningMaeR,
+        peak_close_r: observation.peakCloseR,
+        close_giveback_r: observation.closeGivebackR,
+        max_close_giveback_r: observation.maxCloseGivebackR,
+        stop_cushion_r: observation.stopCushionR,
+        target_distance_r: observation.targetDistanceR,
+        bar_range_r: observation.barRangeR,
+      }));
+
+      const result = (await this.dataSource.query(
+        `
+          INSERT INTO trading.ensemble_shadow_path_observations (
+            decision_id,
+            user_id,
+            broker_connection_id,
+            engine_code,
+            model_version,
+            instrument,
+            direction,
+            market_bar_time,
+            observed_bar_time,
+            bar_index,
+            path_version,
+            close_price,
+            close_r,
+            favorable_r,
+            adverse_r,
+            running_mfe_r,
+            running_mae_r,
+            peak_close_r,
+            close_giveback_r,
+            max_close_giveback_r,
+            stop_cushion_r,
+            target_distance_r,
+            bar_range_r
+          )
+          SELECT
+            $1,$2,$3,$4,$5,$6,$7,$8,
+            record.observed_bar_time,
+            record.bar_index,
+            record.path_version,
+            record.close_price,
+            record.close_r,
+            record.favorable_r,
+            record.adverse_r,
+            record.running_mfe_r,
+            record.running_mae_r,
+            record.peak_close_r,
+            record.close_giveback_r,
+            record.max_close_giveback_r,
+            record.stop_cushion_r,
+            record.target_distance_r,
+            record.bar_range_r
+          FROM jsonb_to_recordset($9::jsonb) AS record(
+            observed_bar_time timestamptz,
+            bar_index integer,
+            path_version text,
+            close_price numeric,
+            close_r numeric,
+            favorable_r numeric,
+            adverse_r numeric,
+            running_mfe_r numeric,
+            running_mae_r numeric,
+            peak_close_r numeric,
+            close_giveback_r numeric,
+            max_close_giveback_r numeric,
+            stop_cushion_r numeric,
+            target_distance_r numeric,
+            bar_range_r numeric
+          )
+          ON CONFLICT (decision_id, observed_bar_time) DO NOTHING
+          RETURNING id
+        `,
+        [
+          row.id,
+          userId,
+          connectionId,
+          ACTIVE_ENGINE_CODE,
+          row.model_version,
+          row.instrument,
+          row.direction,
+          row.market_bar_time,
+          JSON.stringify(records),
+        ],
+      )) as Array<{ id: string }>;
+
+      if (result.length > 0) {
+        insertedCandidates += 1;
+        observedBars += result.length;
+      }
+    }
+
+    if (observedBars > 0) {
+      this.logger.log(
+        `Multi-model shadow path observations persisted decisions=${insertedCandidates} bars=${observedBars}`,
+      );
+    }
   }
 
   private async resolvePendingEnsembleShadowOutcomes(
