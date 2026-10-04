@@ -20,6 +20,7 @@ const ensemble: PlanBEnsembleScore = {
   portfolioRiskScore: 0.1,
   openPositionCount: 0,
   sameInstrumentCount: 0,
+  sameInstrumentDirectionalLots: 0,
   metaProbability: 0.6,
   ensembleScore: 0.7,
   admitted: true,

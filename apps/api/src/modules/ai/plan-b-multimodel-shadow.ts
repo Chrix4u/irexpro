@@ -4,7 +4,11 @@ export const PLAN_B_ENSEMBLE_ARTIFACT = 'plan-b-multimodel-shadow-v3';
 export const PLAN_B_ENSEMBLE_MODE = 'PROSPECTIVE_SHADOW_ONLY';
 
 export type PlanBRegime =
-  'TREND_HEALTHY' | 'TREND_EXTENDED' | 'TREND_WEAK' | 'VOLATILE' | 'ROLLOVER_RISK';
+  | 'TREND_HEALTHY'
+  | 'TREND_EXTENDED'
+  | 'TREND_WEAK'
+  | 'VOLATILE'
+  | 'ROLLOVER_RISK';
 
 export interface PlanBPortfolioPosition {
   instrument: string;
@@ -31,6 +35,7 @@ export interface PlanBEnsembleScore {
   portfolioRiskScore: number;
   openPositionCount: number;
   sameInstrumentCount: number;
+  sameInstrumentDirectionalLots: number;
   metaProbability: number;
   ensembleScore: number;
   admitted: boolean;
@@ -97,7 +102,12 @@ function exitQuality(input: V8ShadowMetaInput): number {
 function portfolioQualityOf(
   input: V8ShadowMetaInput,
   positions: PlanBPortfolioPosition[],
-): { quality: number; risk: number; sameInstrumentCount: number } {
+): {
+  quality: number;
+  risk: number;
+  sameInstrumentCount: number;
+  sameInstrumentDirectionalLots: number;
+} {
   const exposure = new Map<string, number>();
   const add = (currency: string, value: number) =>
     exposure.set(currency, (exposure.get(currency) ?? 0) + value);
@@ -127,9 +137,24 @@ function portfolioQualityOf(
       position.instrument.trim().toUpperCase() === instrument &&
       position.direction === input.direction,
   ).length;
-  const directionalLoad = clamp01(sameInstrumentCount / 3);
+  const netInstrumentLots = positions.reduce((sum, position) => {
+    if (position.instrument.trim().toUpperCase() !== instrument) return sum;
+    const lots = Number(position.lotSize);
+    if (!Number.isFinite(lots) || lots <= 0) return sum;
+    return sum + (position.direction === 'BUY' ? lots : -lots);
+  }, 0);
+  // Ticket count is diagnostic only. Concentration is based on net aligned
+  // lots so splitting one exposure into multiple orders cannot change the
+  // portfolio risk score, while opposite-direction exposure offsets it.
+  const sameInstrumentDirectionalLots = Math.max(0, sign * netInstrumentLots);
+  const directionalLoad = clamp01(sameInstrumentDirectionalLots / (candidateLot * 3));
   const risk = clamp01(0.72 * sameSignOverlap + 0.28 * directionalLoad);
-  return { quality: 1 - risk, risk, sameInstrumentCount };
+  return {
+    quality: 1 - risk,
+    risk,
+    sameInstrumentCount,
+    sameInstrumentDirectionalLots,
+  };
 }
 
 export function scorePlanBMultimodelShadow(
@@ -208,6 +233,7 @@ export function scorePlanBMultimodelShadow(
     portfolioRiskScore: portfolio.risk,
     openPositionCount: positions.length,
     sameInstrumentCount: portfolio.sameInstrumentCount,
+    sameInstrumentDirectionalLots: portfolio.sameInstrumentDirectionalLots,
     metaProbability: meta.probability,
     ensembleScore,
     admitted,
