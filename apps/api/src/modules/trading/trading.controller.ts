@@ -169,7 +169,7 @@ export class TradingController {
    */
   private assertVpsScannerPaperAuthority(
     userId: string,
-    brokerConnectionId: string,
+    brokerConnectionId: string | undefined,
     executionMode: ExecutionMode,
   ): void {
     if (this.configService.get<boolean>('vpsForexScanner.enabled', false) !== true) return;
