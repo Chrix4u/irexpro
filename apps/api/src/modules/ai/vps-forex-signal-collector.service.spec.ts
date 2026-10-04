@@ -244,12 +244,7 @@ describe('VpsForexSignalCollectorService', () => {
     expect(receiveSignal).not.toHaveBeenCalled();
     expect(shadowQuery).toHaveBeenCalledWith(
       expect.stringContaining('INSERT INTO trading.ensemble_shadow_decisions'),
-      expect.arrayContaining([
-        'user-1',
-        'session-1',
-        'conn-1',
-        'irexpro-multimodel-ensemble-v1',
-      ]),
+      expect.arrayContaining(['user-1', 'session-1', 'conn-1', 'irexpro-multimodel-ensemble-v1']),
     );
     expect((collector as any).lastEnsembleDecision.evaluatedAt).toBeInstanceOf(Date);
     expect((collector as any).lastEnsembleDecision.instrument).toBe('EURUSD');
@@ -257,9 +252,11 @@ describe('VpsForexSignalCollectorService', () => {
     expect(live.getOHLCV('EURUSD', 'M5', 70, 'conn-1')).toHaveLength(70);
   });
 
-  it('refreshes market data but does not publish without the exact active PAPER session', async () => {
+  it('persists shadow evidence without an active PAPER session and keeps execution disabled', async () => {
     const live = new LivePaperMarketDataService();
     const receiveSignal = jest.fn();
+    const heartbeat = jest.fn();
+    const shadowQuery = jest.fn().mockResolvedValue([]);
     const collector = new VpsForexSignalCollectorService(
       config({
         'vpsForexScanner.enabled': true,
@@ -269,17 +266,27 @@ describe('VpsForexSignalCollectorService', () => {
       }),
       { receiveSignal } as unknown as AiSignalService,
       { getActiveSession: jest.fn().mockResolvedValue(null) } as unknown as ExecutionService,
-      { getCurrentPriceForConnection: jest.fn() } as unknown as BrokerService,
+      { getCurrentPriceForConnection: heartbeat } as unknown as BrokerService,
       live,
       aiEngineClientMock(),
+      { query: shadowQuery } as any,
     );
     const fetchMock = jest
       .fn()
       .mockResolvedValue({ ok: true, status: 200, json: async () => payload() });
+
     await collector.collectOnce(fetchMock as unknown as typeof fetch);
+
     expect(receiveSignal).not.toHaveBeenCalled();
+    expect(heartbeat).not.toHaveBeenCalled();
     expect(live.getQuote('EURUSD', 20 * 60_000, 'conn-1').bid).toBeTruthy();
     expect(live.isLiveConnection('conn-1')).toBe(false);
+    expect(shadowQuery).toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO trading.ensemble_shadow_decisions'),
+      expect.arrayContaining(['user-1', null, 'conn-1', 'irexpro-multimodel-ensemble-v1']),
+    );
+    expect((collector as any).lastEnsembleDecision.evaluatedAt).toBeInstanceOf(Date);
+    expect((collector as any).lastEnsembleDecision.instrument).toBe('EURUSD');
   });
 
   it('stops a legacy scheduler job for the exact active PAPER session on scanner startup', async () => {
@@ -361,6 +368,54 @@ describe('VpsForexSignalCollectorService', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(heartbeat).toHaveBeenCalledTimes(12);
+  });
+
+  it('reports MULTI_MODEL_SHADOW without a PAPER session when observation data is ready', async () => {
+    const live = new LivePaperMarketDataService();
+    for (const [instrument] of PAIRS) {
+      const base =
+        instrument === 'USDJPY'
+          ? 157
+          : instrument === 'GBPUSD'
+            ? 1.34
+            : instrument === 'USDCAD'
+              ? 1.37
+              : instrument === 'USDCHF'
+                ? 0.8
+                : instrument === 'AUDUSD'
+                  ? 0.66
+                  : 1.1;
+      live.updateClosedCandles(
+        instrument,
+        trendCandles(base, instrument === 'USDJPY' ? 3 : 5),
+        'conn-1',
+      );
+    }
+    const collector = new VpsForexSignalCollectorService(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+      }),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      { getActiveSession: jest.fn().mockResolvedValue(null) } as unknown as ExecutionService,
+      {} as unknown as BrokerService,
+      live,
+      aiEngineClientMock(),
+    );
+    jest.spyOn(collector as any, 'marketSchedule').mockReturnValue({
+      paused: false,
+      reason: null,
+      nextEligibleScanAt: '2026-10-05T10:10:00.000Z',
+    });
+
+    const status = await collector.getStatus('user-1');
+
+    expect(status.activePaperSession).toBe(false);
+    expect(status.marketCache.cachedInstrumentCount).toBe(6);
+    expect(status.executionAuthority).toBe('SHADOW_ONLY');
+    expect(status.state).toBe('MULTI_MODEL_SHADOW');
   });
 
   it('reports weekend pause and the next eligible Monday scan deterministically', () => {

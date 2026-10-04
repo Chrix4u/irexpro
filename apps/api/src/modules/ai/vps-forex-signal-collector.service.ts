@@ -611,16 +611,16 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             ? 'DISABLED'
             : marketSchedule.paused
               ? 'MARKET_PAUSED'
-              : !activePaperSession
-                ? 'WAITING_FOR_PAPER_SESSION'
-                : this.providerCooldownUntil && this.providerCooldownUntil.getTime() > Date.now()
-                  ? 'WAITING_FOR_PROVIDER_QUOTA'
-                  : this.livePaperMarket.status(this.connectionId()).cachedInstrumentCount <
-                      SYMBOLS.length
-                    ? 'WAITING_FOR_MARKET_DATA'
-                    : MULTI_MODEL_PAPER_EXECUTION_ENABLED
+              : this.providerCooldownUntil && this.providerCooldownUntil.getTime() > Date.now()
+                ? 'WAITING_FOR_PROVIDER_QUOTA'
+                : this.livePaperMarket.status(this.connectionId()).cachedInstrumentCount <
+                    SYMBOLS.length
+                  ? 'WAITING_FOR_MARKET_DATA'
+                  : MULTI_MODEL_PAPER_EXECUTION_ENABLED
+                    ? activePaperSession
                       ? 'ACTIVE'
-                      : 'MULTI_MODEL_SHADOW',
+                      : 'WAITING_FOR_PAPER_SESSION'
+                    : 'MULTI_MODEL_SHADOW',
     };
   }
 
@@ -656,31 +656,35 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       }
       await this.resolvePendingEnsembleShadowOutcomes(userId, connectionId, seriesByInstrument);
 
-      const session = await this.executionService.getActiveSession(userId);
-      if (
-        !session ||
-        session.executionMode !== ExecutionMode.PAPER_ONLY ||
-        session.brokerConnectionId !== connectionId
-      ) {
-        this.logger.warn(
-          'VPS live feed refreshed, but signal publication is blocked until the configured PAPER_ONLY session is active',
+      const activeSession = await this.executionService.getActiveSession(userId);
+      const paperSession =
+        activeSession &&
+        activeSession.executionMode === ExecutionMode.PAPER_ONLY &&
+        activeSession.brokerConnectionId === connectionId
+          ? activeSession
+          : null;
+
+      // Shadow observation is independent of execution authority. A PAPER
+      // session is required only to hand market ownership to the PAPER broker
+      // and to permit any future execution path. This lets the prospective
+      // campaign collect clean evidence while every old trading session is ended.
+      if (paperSession) {
+        this.livePaperMarket.registerLiveConnection(connectionId);
+        const cacheStatus = this.livePaperMarket.status(connectionId);
+        this.logger.log(
+          `VPS live market cache primed pairs=${cacheStatus.cachedInstrumentCount}/6 ` +
+            `latest=${cacheStatus.latestObservedAt?.toISOString() ?? 'unknown'}`,
         );
-        return;
+
+        // Heartbeat every instrument after the cache refresh. This makes the
+        // PAPER adapter evaluate SL/TP/resting orders against the SAME live
+        // closed-candle quote set used by the strategy.
+        await this.heartbeatLivePaper(userId, connectionId);
+      } else {
+        this.logger.debug(
+          'Multi-model shadow observation continues without active PAPER execution authority',
+        );
       }
-
-      // Atomic handoff: only after all six series were parsed and cached AND
-      // the exact PAPER authority is active do broker reads switch to live mode.
-      this.livePaperMarket.registerLiveConnection(connectionId);
-      const cacheStatus = this.livePaperMarket.status(connectionId);
-      this.logger.log(
-        `VPS live market cache primed pairs=${cacheStatus.cachedInstrumentCount}/6 ` +
-          `latest=${cacheStatus.latestObservedAt?.toISOString() ?? 'unknown'}`,
-      );
-
-      // Heartbeat every instrument after the cache refresh. This makes the
-      // PAPER adapter evaluate SL/TP/resting orders against the SAME live
-      // closed-candle quote set used by the strategy.
-      await this.heartbeatLivePaper(userId, connectionId);
 
       const candidates = [...seriesByInstrument.entries()]
         .map(([instrument, candles]) => buildCandidate(instrument, candles))
@@ -828,7 +832,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       };
       await this.persistEnsembleShadowDecision(
         userId,
-        session.id,
+        paperSession?.id ?? null,
         connectionId,
         eventId,
         best,
@@ -862,10 +866,17 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         );
         return;
       }
+      if (!paperSession) {
+        this.logger.warn(
+          'Multi-model candidate passed model governance but PAPER execution authority is unavailable; retaining shadow-only decision',
+        );
+        return;
+      }
+
       const outcome = await this.aiSignalService.receiveSignal({
         signalId,
         userId,
-        tradingSessionId: session.id,
+        tradingSessionId: paperSession.id,
         brokerConnectionId: connectionId,
         instrument: best.instrument,
         direction: best.direction,
@@ -1423,7 +1434,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
 
   private async persistEnsembleShadowDecision(
     userId: string,
-    tradingSessionId: string,
+    tradingSessionId: string | null,
     connectionId: string,
     opportunityKey: string,
     candidate: Candidate,
@@ -1490,7 +1501,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         ensemble.consensusPassed,
         ensemble.consensusRequired,
         ensemble.admitted,
-        MULTI_MODEL_PAPER_EXECUTION_ENABLED ? 'PAPER_ONLY' : 'SHADOW_ONLY',
+        MULTI_MODEL_PAPER_EXECUTION_ENABLED && tradingSessionId ? 'PAPER_ONLY' : 'SHADOW_ONLY',
         JSON.stringify(ensemble.reasons),
         JSON.stringify({
           directionQuality: ensemble.directionQuality,
