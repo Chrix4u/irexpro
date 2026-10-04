@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     ai_allow_mock_market_data: bool = False
     plan_b_v4_challenger_manifest: str = ""
     plan_b_v4_challenger_manifest_sha256: str = ""
+    plan_b_v85_post_entry_manifest: str = ""
+    plan_b_v85_post_entry_manifest_sha256: str = ""
 
     # ─── Scheduler ────────────────────────────────────────────────────────
     ai_scheduler_enabled: bool = False
