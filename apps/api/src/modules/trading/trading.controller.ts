@@ -174,9 +174,7 @@ export class TradingController {
   ): void {
     if (this.configService.get<boolean>('vpsForexScanner.enabled', false) !== true) return;
 
-    const configuredUserId = this.configService
-      .get<string>('vpsForexScanner.userId', '')
-      .trim();
+    const configuredUserId = this.configService.get<string>('vpsForexScanner.userId', '').trim();
     const apiKey = this.configService.get<string>('vpsForexScanner.apiKey', '').trim();
     if (!apiKey || apiKey.toLowerCase() === 'demo' || configuredUserId !== userId) return;
 
@@ -200,9 +198,7 @@ export class TradingController {
   private assertVpsScannerPaperMode(userId: string, executionMode: ExecutionMode): void {
     if (this.configService.get<boolean>('vpsForexScanner.enabled', false) !== true) return;
 
-    const configuredUserId = this.configService
-      .get<string>('vpsForexScanner.userId', '')
-      .trim();
+    const configuredUserId = this.configService.get<string>('vpsForexScanner.userId', '').trim();
     const apiKey = this.configService.get<string>('vpsForexScanner.apiKey', '').trim();
     if (!apiKey || apiKey.toLowerCase() === 'demo' || configuredUserId !== userId) return;
 
