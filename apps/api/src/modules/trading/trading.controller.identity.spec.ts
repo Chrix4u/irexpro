@@ -49,10 +49,7 @@ describe('TradingController (Hotfix — UUID identity regression)', () => {
       get: jest.fn((_key: string, fallback?: unknown) => fallback),
     } as unknown as ConfigService;
 
-    controller = new TradingController(
-      tradingService as unknown as TradingService,
-      configService,
-    );
+    controller = new TradingController(tradingService as unknown as TradingService, configService);
   });
 
   describe('passes only UUID string to TradingService', () => {
