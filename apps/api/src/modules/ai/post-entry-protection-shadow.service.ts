@@ -214,7 +214,7 @@ export class PostEntryProtectionShadowService implements OnModuleInit, OnModuleD
 
     const terminal = new Set(
       existing
-        .filter((item) => item.state === 'READY')
+        .filter((item) => item.state === 'READY' || item.state === 'NOT_YET_ELIGIBLE')
         .map((item) => Number(item.checkpoint_minutes)),
     );
     const due = dueV85Checkpoints(openedAt, observationEnd, terminal);

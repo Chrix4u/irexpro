@@ -178,4 +178,52 @@ describe('PostEntryProtectionShadowService', () => {
     expect(persistArgs).toContain('BROKER_SOURCE_NOT_CONFIGURED');
     expect(service.getStatus().lastScored).toBe(0);
   });
+
+  it('does not retry a checkpoint that was already observed below the trained profit-state floor', async () => {
+    const now = new Date('2026-10-05T10:06:00Z');
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([
+        {
+          trade_id: '00000000-0000-0000-0000-000000000001',
+          user_id: '00000000-0000-0000-0000-000000000002',
+          trade_intent_id: '00000000-0000-0000-0000-000000000003',
+          execution_broker_connection_id: '00000000-0000-0000-0000-000000000004',
+          instrument: 'EURUSD',
+          direction: 'BUY',
+          entry_price: '1.10000000',
+          stop_loss: '1.09900000',
+          opened_at: '2026-10-05T10:00:00Z',
+          closed_at: null,
+          metadata: {
+            confidenceScore: 0.68,
+            feature_candidate_score: 0.72,
+            feature_extension_atr: 0.8,
+            feature_volatility_score: 0.3,
+            feature_ema_separation: 0.2,
+            feature_mtf_strength: 0.6,
+            feature_rsi14: 61,
+          },
+        },
+      ])
+      .mockResolvedValueOnce([{ checkpoint_minutes: 5, state: 'NOT_YET_ELIGIBLE' }]);
+    const dataSource = { query } as unknown as DataSource;
+    const config = {
+      get: jest.fn((key: string, defaultValue?: unknown) => {
+        if (key === 'multimodelBrokerExpert.enabled') return true;
+        if (key === 'multimodelBrokerExpert.sourceConnectionId') return 'broker-native-1';
+        return defaultValue;
+      }),
+    } as unknown as ConfigService;
+    const aiEngineClient = {
+      scorePlanBV85PostEntryBrokerCheckpoint: jest.fn(),
+    } as unknown as AiEngineClient;
+
+    const service = new PostEntryProtectionShadowService(config, dataSource, aiEngineClient);
+    (service as unknown as { artifactReady: boolean }).artifactReady = true;
+    await service.runOnce(now);
+
+    expect(aiEngineClient.scorePlanBV85PostEntryBrokerCheckpoint).not.toHaveBeenCalled();
+    expect(query).toHaveBeenCalledTimes(2);
+  });
 });
