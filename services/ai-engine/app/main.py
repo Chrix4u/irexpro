@@ -19,6 +19,7 @@ from app.core.logging import configure_logging, get_logger
 from app.domain.agents.context_service import AgentContextService
 from app.domain.models.registry import build_default_registry
 from app.domain.models.high_conviction_challenger import PlanBV4HighConvictionChallenger
+from app.domain.models.post_entry_protection_challenger import PlanBV85PostEntryProtectionChallenger
 from app.domain.scheduler.signal_scheduler import SignalScheduler
 from app.integrations.redis_client import close_redis_client, get_redis_client
 
@@ -47,6 +48,10 @@ async def lifespan(app: FastAPI):
     app_state["plan_b_v4_challenger"] = PlanBV4HighConvictionChallenger(
         settings.plan_b_v4_challenger_manifest or None,
         settings.plan_b_v4_challenger_manifest_sha256 or None,
+    )
+    app_state["plan_b_v85_post_entry"] = PlanBV85PostEntryProtectionChallenger(
+        settings.plan_b_v85_post_entry_manifest or None,
+        settings.plan_b_v85_post_entry_manifest_sha256 or None,
     )
 
     # Attempt Redis connection (non-fatal)
