@@ -2447,8 +2447,9 @@ export default function AiTradingPage() {
                       </h2>
                       <p>
                         The multi-model engine is now the active strategy architecture. Legacy v7 is frozen as a
-                        benchmark only. Specialists progress independently through research, shadow and qualification;
-                        only a frozen ensemble artifact may advance to dedicated PAPER, DEMO and LIVE.
+                        benchmark only. Shadow observation runs automatically from market data and does not require an
+                        active PAPER execution session. Specialists progress independently through research, shadow and
+                        qualification; only a frozen ensemble artifact may advance to dedicated PAPER, DEMO and LIVE.
                       </p>
                     </div>
                     <div className="ai-provider-evidence__badges">
@@ -2780,6 +2781,18 @@ export default function AiTradingPage() {
                     <div>
                       <span>Execution authority</span>
                       <strong>{vpsScannerStatus?.executionAuthority ?? "SHADOW_ONLY"}</strong>
+                    </div>
+                    <div>
+                      <span>Shadow observer</span>
+                      <strong>AUTO · PAPER SESSION NOT REQUIRED</strong>
+                    </div>
+                    <div>
+                      <span>PAPER execution session</span>
+                      <strong>
+                        {vpsScannerStatus?.activePaperSession
+                          ? "ACTIVE"
+                          : "INACTIVE · EXPECTED IN SHADOW"}
+                      </strong>
                     </div>
                     <div>
                       <span>Market schedule</span>
