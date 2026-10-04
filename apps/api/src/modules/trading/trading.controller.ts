@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  ForbiddenException,
   Get,
   Headers,
   Logger,
@@ -10,6 +11,7 @@ import {
   ParseUUIDPipe,
   Post,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { TradingService, type StopTradingSessionResult } from './trading.service';
 import { StartSessionDto } from './dto/start-session.dto';
@@ -58,7 +60,10 @@ import { ExecutionMode } from '../execution/interfaces/execution-authority';
 export class TradingController {
   private readonly logger = new Logger(TradingController.name);
 
-  constructor(private readonly tradingService: TradingService) {}
+  constructor(
+    private readonly tradingService: TradingService,
+    private readonly configService: ConfigService,
+  ) {}
 
   @Get('advanced-controls')
   @ApiOperation({ summary: 'Read step-up-protected Advanced AI Controls' })
@@ -115,10 +120,13 @@ export class TradingController {
     @CurrentUserId() userId: string,
     @Body() dto: StartSessionDto,
   ): Promise<TradingSessionResponseDto> {
+    const executionMode = this.resolveExecutionMode(dto);
+    this.assertVpsScannerPaperAuthority(userId, dto.brokerConnectionId, executionMode);
+
     const session = await this.tradingService.startTradingSession(
       userId,
       dto.brokerConnectionId,
-      this.resolveExecutionMode(dto),
+      executionMode,
     );
     return toTradingSessionResponse(session);
   }
@@ -146,6 +154,64 @@ export class TradingController {
       (dto.requestedMode as ExecutionMode | undefined) ??
       ExecutionMode.PAPER_ONLY
     );
+  }
+
+  /**
+   * Research authority lock for the VPS-native multi-model campaign.
+   *
+   * A real-provider DEMO connection may stay connected for broker-native MTF
+   * market data and parity validation, but it must not become an execution
+   * target merely because a user selects it in the generic trading UI. While
+   * the configured research user is owned by vpsForexScanner, session starts
+   * are fail-closed to the exact configured PAPER connection in PAPER_ONLY.
+   * DEMO/LIVE promotion therefore requires an explicit future promotion
+   * change rather than an accidental generic Start or mode-change request.
+   */
+  private assertVpsScannerPaperAuthority(
+    userId: string,
+    brokerConnectionId: string | undefined,
+    executionMode: ExecutionMode,
+  ): void {
+    if (this.configService.get<boolean>('vpsForexScanner.enabled', false) !== true) return;
+
+    const configuredUserId = this.configService
+      .get<string>('vpsForexScanner.userId', '')
+      .trim();
+    const apiKey = this.configService.get<string>('vpsForexScanner.apiKey', '').trim();
+    if (!apiKey || apiKey.toLowerCase() === 'demo' || configuredUserId !== userId) return;
+
+    const configuredPaperConnectionId = this.configService
+      .get<string>('vpsForexScanner.brokerConnectionId', '')
+      .trim();
+    const exactPaperAuthority =
+      Boolean(configuredPaperConnectionId) &&
+      brokerConnectionId === configuredPaperConnectionId &&
+      executionMode === ExecutionMode.PAPER_ONLY;
+
+    if (exactPaperAuthority) return;
+
+    throw new ForbiddenException(
+      'The iRexPro multi-model research campaign is PAPER-only. Keep MetaApi connected ' +
+        'for broker-native data and parity validation; DEMO/LIVE execution remains locked ' +
+        'until an explicit strategy promotion.',
+    );
+  }
+
+  private assertVpsScannerPaperMode(userId: string, executionMode: ExecutionMode): void {
+    if (this.configService.get<boolean>('vpsForexScanner.enabled', false) !== true) return;
+
+    const configuredUserId = this.configService
+      .get<string>('vpsForexScanner.userId', '')
+      .trim();
+    const apiKey = this.configService.get<string>('vpsForexScanner.apiKey', '').trim();
+    if (!apiKey || apiKey.toLowerCase() === 'demo' || configuredUserId !== userId) return;
+
+    if (executionMode !== ExecutionMode.PAPER_ONLY) {
+      throw new ForbiddenException(
+        'The iRexPro multi-model research campaign is locked to PAPER_ONLY. ' +
+          'DEMO/LIVE execution requires an explicit strategy promotion.',
+      );
+    }
   }
 
   /**
@@ -201,6 +267,8 @@ export class TradingController {
     @Param('id', ParseUUIDPipe) sessionId: string,
     @Body() dto: ChangeExecutionModeDto,
   ): Promise<TradingSessionResponseDto> {
+    this.assertVpsScannerPaperMode(userId, dto.executionMode);
+
     const session = await this.tradingService.changeExecutionMode(
       userId,
       sessionId,
