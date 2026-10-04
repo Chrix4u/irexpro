@@ -1,3 +1,4 @@
+import { ConfigService } from '@nestjs/config';
 import { TradingController } from './trading.controller';
 import { TradingService } from './trading.service';
 import { TradingSessionStatus } from '../execution/entities/trading-session.entity';
@@ -39,6 +40,12 @@ describe('TradingController frontend-safe session response', () => {
     updatedAt: now,
   };
 
+  function disabledScannerConfig() {
+    return {
+      get: jest.fn((_key: string, fallback?: unknown) => fallback),
+    } as unknown as ConfigService;
+  }
+
   function buildController() {
     const tradingService = {
       startTradingSession: jest.fn().mockResolvedValue(internalSession),
@@ -53,7 +60,10 @@ describe('TradingController frontend-safe session response', () => {
     };
 
     return {
-      controller: new TradingController(tradingService as unknown as TradingService),
+      controller: new TradingController(
+        tradingService as unknown as TradingService,
+        disabledScannerConfig(),
+      ),
       tradingService,
     };
   }
@@ -93,7 +103,10 @@ describe('TradingController frontend-safe session response', () => {
     const tradingService = {
       getActiveSession: jest.fn().mockResolvedValue(null),
     };
-    const controller = new TradingController(tradingService as unknown as TradingService);
+    const controller = new TradingController(
+      tradingService as unknown as TradingService,
+      disabledScannerConfig(),
+    );
 
     await expect(controller.getActive(USER_ID)).resolves.toEqual({ session: null });
   });
