@@ -1,0 +1,119 @@
+{
+  "experiment": "v80_cross_sectional_conformal_ev_v1",
+  "frozen_commit": "1aa6219b",
+  "script_sha256": "9203522ba75c6a029949a0206b0ca4620b158dfe5ff48af1bc3b16f9db73b1b3",
+  "research_cutoff": "2026-09-02T19:59:00Z",
+  "sealed_future_holdout_touched": false,
+  "promotion_gates_unchanged": true,
+  "complete": false,
+  "early_eliminated": true,
+  "verdict": "REJECT_ARCHITECTURE_STABILITY_GATES_UNREACHABLE",
+  "folds": [
+    {
+      "fold": 1,
+      "fold_gate_passed": false,
+      "metrics": {
+        "trades": 543,
+        "profit_factor": 0.6228476649360747,
+        "sharpe": -3.133689109220626,
+        "max_drawdown": 0.07509555021105095,
+        "balanced_accuracy": 0.4467416158536585,
+        "total_return": -0.0665975902357069,
+        "mean_return_bps": -1.2264749583003112,
+        "win_rate": 0.3720073664825046,
+        "median_gap_minutes": 1.0,
+        "long_trades": 67,
+        "short_trades": 476,
+        "instrument_trade_coverage_fraction": 0.5,
+        "positive_instrument_fraction": 0.0,
+        "instrument_metrics": {
+          "EURUSD": {
+            "trades": 75,
+            "total_return": -0.0033346858067648056,
+            "win_rate": 0.56
+          },
+          "GBPUSD": {
+            "trades": 19,
+            "total_return": -0.0029783250311633857,
+            "win_rate": 0.21052631578947367
+          },
+          "USDJPY": {
+            "trades": 449,
+            "total_return": -0.06028457939777872,
+            "win_rate": 0.34743875278396436
+          },
+          "AUDUSD": {
+            "trades": 0,
+            "total_return": 0.0,
+            "win_rate": null
+          },
+          "USDCAD": {
+            "trades": 0,
+            "total_return": 0.0,
+            "win_rate": null
+          },
+          "USDCHF": {
+            "trades": 0,
+            "total_return": 0.0,
+            "win_rate": null
+          }
+        }
+      },
+      "global_long_radius_bps": 1.881327886667577,
+      "global_short_radius_bps": 1.8816298956452993
+    },
+    {
+      "fold": 2,
+      "fold_gate_passed": false,
+      "metrics": {
+        "trades": 8,
+        "profit_factor": 2.306480210574753,
+        "sharpe": 0.9118915379615135,
+        "max_drawdown": 0.000560711199820374,
+        "balanced_accuracy": 0.5,
+        "total_return": 0.0007325580864128918,
+        "mean_return_bps": 0.9156976080161148,
+        "win_rate": 0.875,
+        "median_gap_minutes": 1.0,
+        "long_trades": 0,
+        "short_trades": 8,
+        "instrument_trade_coverage_fraction": 0.16666666666666666,
+        "positive_instrument_fraction": 0.16666666666666666,
+        "instrument_metrics": {
+          "EURUSD": {
+            "trades": 8,
+            "total_return": 0.0007325580864128918,
+            "win_rate": 0.875
+          },
+          "GBPUSD": {
+            "trades": 0,
+            "total_return": 0.0,
+            "win_rate": null
+          },
+          "USDJPY": {
+            "trades": 0,
+            "total_return": 0.0,
+            "win_rate": null
+          },
+          "AUDUSD": {
+            "trades": 0,
+            "total_return": 0.0,
+            "win_rate": null
+          },
+          "USDCAD": {
+            "trades": 0,
+            "total_return": 0.0,
+            "win_rate": null
+          },
+          "USDCHF": {
+            "trades": 0,
+            "total_return": 0.0,
+            "win_rate": null
+          }
+        }
+      },
+      "global_long_radius_bps": 2.5269759942590326,
+      "global_short_radius_bps": 2.539548881821874
+    }
+  ]
+}
