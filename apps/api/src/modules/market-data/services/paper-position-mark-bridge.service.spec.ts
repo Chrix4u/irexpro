@@ -1,5 +1,4 @@
 import { ConfigService } from '@nestjs/config';
-import { BrokerService } from '../../broker/broker.service';
 import { LivePaperMarketDataService } from '../../broker/services/live-paper-market-data.service';
 import { PaperBrokerStateService } from '../../broker/services/paper-broker-state.service';
 import { PaperPositionMarkBridgeService } from './paper-position-mark-bridge.service';
@@ -27,9 +26,6 @@ describe('PaperPositionMarkBridgeService', () => {
         positions: [{ instrument: 'USDCAD' }, { instrument: 'USDCAD' }, { instrument: 'USDJPY' }],
       }),
     } as unknown as PaperBrokerStateService;
-    const broker = {
-      getStreamingPricesForInternalConnection: jest.fn().mockResolvedValue([]),
-    } as unknown as BrokerService;
     const store = {
       getLatestQuote: jest
         .fn()
@@ -44,13 +40,7 @@ describe('PaperPositionMarkBridgeService', () => {
     const livePaper = {
       updateProviderQuote: jest.fn(),
     } as unknown as LivePaperMarketDataService;
-    const service = new PaperPositionMarkBridgeService(
-      config(),
-      paperState,
-      broker,
-      store,
-      livePaper,
-    );
+    const service = new PaperPositionMarkBridgeService(config(), paperState, store, livePaper);
 
     await service.collectOnce(now);
     await service.collectOnce(new Date('2026-10-05T10:55:35.000Z'));
@@ -71,58 +61,10 @@ describe('PaperPositionMarkBridgeService', () => {
     );
   });
 
-  it('prefers a fresh MetaApi streaming terminal-state quote and skips the sampled fallback', async () => {
-    const now = new Date('2026-10-05T10:55:30.000Z');
-    const paperState = {
-      load: jest.fn().mockResolvedValue({ positions: [{ instrument: 'USDJPY' }] }),
-    } as unknown as PaperBrokerStateService;
-    const broker = {
-      getStreamingPricesForInternalConnection: jest.fn().mockResolvedValue([
-        {
-          instrument: 'USDJPY',
-          bid: '158.281',
-          ask: '158.283',
-          spread: '0.002',
-          timestamp: new Date('2026-10-05T10:55:29.000Z'),
-        },
-      ]),
-    } as unknown as BrokerService;
-    const store = {
-      getLatestQuote: jest.fn(),
-    } as unknown as ProviderQuoteCandleStoreService;
-    const livePaper = {
-      updateProviderQuote: jest.fn(),
-    } as unknown as LivePaperMarketDataService;
-    const service = new PaperPositionMarkBridgeService(
-      config(),
-      paperState,
-      broker,
-      store,
-      livePaper,
-    );
-
-    await service.collectOnce(now);
-
-    expect(broker.getStreamingPricesForInternalConnection).toHaveBeenCalledWith('metaapi-1', [
-      'USDJPY',
-    ]);
-    expect(store.getLatestQuote).not.toHaveBeenCalled();
-    expect(livePaper.updateProviderQuote).toHaveBeenCalledWith(
-      'USDJPY',
-      '158.281',
-      '158.283',
-      new Date('2026-10-05T10:55:29.000Z'),
-      'paper-1',
-    );
-  });
-
   it('ignores stale sampled quotes instead of presenting them as live marks', async () => {
     const paperState = {
       load: jest.fn().mockResolvedValue({ positions: [{ instrument: 'USDCAD' }] }),
     } as unknown as PaperBrokerStateService;
-    const broker = {
-      getStreamingPricesForInternalConnection: jest.fn().mockResolvedValue([]),
-    } as unknown as BrokerService;
     const store = {
       getLatestQuote: jest.fn().mockResolvedValue({
         instrument: 'USDCAD',
@@ -135,13 +77,7 @@ describe('PaperPositionMarkBridgeService', () => {
     const livePaper = {
       updateProviderQuote: jest.fn(),
     } as unknown as LivePaperMarketDataService;
-    const service = new PaperPositionMarkBridgeService(
-      config(),
-      paperState,
-      broker,
-      store,
-      livePaper,
-    );
+    const service = new PaperPositionMarkBridgeService(config(), paperState, store, livePaper);
 
     await service.collectOnce(new Date('2026-10-05T10:55:00.000Z'));
 

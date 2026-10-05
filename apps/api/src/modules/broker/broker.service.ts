@@ -2162,51 +2162,6 @@ export class BrokerService {
   }
 
   /**
-   * Internal, server-configured streaming market-data seam. This is never a
-   * user-authorized execution path: it can only read provider quotes through
-   * an already CONNECTED persisted broker connection. Used by PAPER valuation
-   * so mark-to-market can consume MetaApi's terminal-state stream without
-   * exposing decrypted credentials or granting order authority.
-   */
-  async getStreamingPricesForInternalConnection(
-    brokerConnectionId: string,
-    instruments: string[],
-  ): Promise<BrokerPrice[]> {
-    const connection = await this.connectionRepo.findOne({ where: { id: brokerConnectionId } });
-    if (!connection || connection.status !== BrokerConnectionStatus.CONNECTED) return [];
-    if (connection.brokerId !== 'metatrader5') return [];
-    if (!connection.encryptedCredentials || !connection.credentialIv || !connection.credentialTag)
-      return [];
-    this.assertCredentialsUsable(connection, 'getStreamingPricesForInternalConnection');
-
-    const adapter = this.adapterRegistry.getAdapterForConnection(
-      connection.id,
-      connection.brokerId,
-    );
-    if (typeof adapter.getStreamingPrices !== 'function') return [];
-    const credentials = this.encryptionService.decrypt({
-      ciphertext: connection.encryptedCredentials,
-      iv: connection.credentialIv,
-      tag: connection.credentialTag,
-      keyId: connection.encryptionKeyId ?? 'env-key-v1',
-    });
-    adapter.setMode(connection.accountType);
-    try {
-      await adapter.connect(credentials);
-      const prices = await adapter.getStreamingPrices(instruments);
-      return prices.filter(
-        (price) =>
-          Boolean(price?.instrument && price?.bid && price?.ask && price?.timestamp) &&
-          Number.isFinite(new Date(price.timestamp).getTime()),
-      );
-    } finally {
-      Object.keys(credentials).forEach((key) => {
-        (credentials as unknown as Record<string, unknown>)[key] = null;
-      });
-    }
-  }
-
-  /**
    * Sprint 32 Gate 2: get required margin for a proposed order through the
    * broker adapter abstraction. Delegates to the adapter's
    * getRequiredMargin() which uses broker-specific margin rules.

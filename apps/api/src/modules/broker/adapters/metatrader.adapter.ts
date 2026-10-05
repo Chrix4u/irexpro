@@ -450,34 +450,6 @@ export class MetaTraderAdapter implements IBrokerAdapter {
     }
   }
 
-  async getStreamingPrices(instruments: string[]): Promise<BrokerPrice[]> {
-    if (!this.currentAccountId) {
-      throw new BrokerAdapterError(
-        BrokerErrorCode.NOT_CONNECTED,
-        'No active connection. Call connect() first.',
-        undefined,
-        false,
-      );
-    }
-    try {
-      const prices = await this.metaApiClient.getStreamingPrices(
-        this.currentAccountId,
-        instruments,
-      );
-      return prices.map((price: any) => ({
-        instrument: String(price.symbol ?? '')
-          .trim()
-          .toUpperCase(),
-        bid: this.toDecimalString(price.bid),
-        ask: this.toDecimalString(price.ask),
-        spread: this.toDecimalString(Number(price.ask) - Number(price.bid)),
-        timestamp: price.time ?? new Date(),
-      }));
-    } catch (err) {
-      throw this.mapError(err);
-    }
-  }
-
   async getOHLCV(
     instrument: string,
     timeframe: string,

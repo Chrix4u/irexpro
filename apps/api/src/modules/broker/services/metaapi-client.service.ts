@@ -36,18 +36,6 @@ export class MetaApiClientService implements OnModuleDestroy {
   private readonly logger = new Logger(MetaApiClientService.name);
   private readonly metaApi: InstanceType<typeof MetaApi> | null;
   private readonly connectionPool = new Map<string, MetaApiConnectionEntry>();
-  private readonly streamingConnectionPool = new Map<
-    string,
-    {
-      account: any;
-      connection: any;
-      connectedAt: Date;
-      accountId: string;
-      subscribedSymbols: Set<string>;
-    }
-  >();
-  private readonly streamingInitByAccount = new Map<string, Promise<any>>();
-  private readonly streamingSubscriptionPromises = new Map<string, Promise<void>>();
 
   /** Synchronisation timeout — 60s for initial sync, 10s for re-checks */
   private readonly SYNC_TIMEOUT_SECONDS = 60;
@@ -120,104 +108,6 @@ export class MetaApiClientService implements OnModuleDestroy {
 
     this.logger.log(`MetaAPI connection established for account: ${metaApiAccountId}`);
     return connection;
-  }
-
-  /**
-   * Return provider-native streaming prices from MetaApi's local terminal-state cache.
-   * A dedicated streaming connection is maintained per account alongside the RPC pool.
-   * Subscriptions are idempotent and only created for requested symbols.
-   */
-  async getStreamingPrices(metaApiAccountId: string, instruments: string[]): Promise<any[]> {
-    const symbols = [...new Set(instruments.map((v) => v.trim().toUpperCase()).filter(Boolean))];
-    if (symbols.length === 0) return [];
-    const connection = await this.getOrCreateStreamingConnection(metaApiAccountId);
-    const entry = this.streamingConnectionPool.get(metaApiAccountId);
-    if (!entry) return [];
-
-    await Promise.allSettled(
-      symbols.map((symbol) => this.ensureStreamingSubscription(entry, symbol)),
-    );
-
-    return symbols
-      .map((symbol) => connection.terminalState?.price?.(symbol))
-      .filter(
-        (price: any) =>
-          price &&
-          Number.isFinite(Number(price.bid)) &&
-          Number.isFinite(Number(price.ask)) &&
-          Number(price.bid) > 0 &&
-          Number(price.ask) > 0,
-      );
-  }
-
-  private async getOrCreateStreamingConnection(metaApiAccountId: string): Promise<any> {
-    this.assertAvailable();
-    const existing = this.streamingConnectionPool.get(metaApiAccountId);
-    if (existing) return existing.connection;
-
-    const inFlight = this.streamingInitByAccount.get(metaApiAccountId);
-    if (inFlight) return inFlight;
-
-    const init = (async () => {
-      this.logger.log(`Creating MetaAPI streaming connection for account: ${metaApiAccountId}`);
-      const account = await this.metaApi!.metatraderAccountApi.getAccount(metaApiAccountId);
-      if (!['DEPLOYED', 'DEPLOYING'].includes(account.state)) {
-        await account.deploy();
-      }
-      await account.waitDeployed();
-      const connection = account.getStreamingConnection();
-      await connection.connect();
-      await connection.waitSynchronized({ timeoutInSeconds: this.SYNC_TIMEOUT_SECONDS });
-      this.streamingConnectionPool.set(metaApiAccountId, {
-        account,
-        connection,
-        connectedAt: new Date(),
-        accountId: metaApiAccountId,
-        subscribedSymbols: new Set<string>(),
-      });
-      this.logger.log(`MetaAPI streaming connection established for account: ${metaApiAccountId}`);
-      return connection;
-    })();
-
-    this.streamingInitByAccount.set(metaApiAccountId, init);
-    try {
-      return await init;
-    } finally {
-      this.streamingInitByAccount.delete(metaApiAccountId);
-    }
-  }
-
-  private async ensureStreamingSubscription(
-    entry: { accountId: string; connection: any; subscribedSymbols: Set<string> },
-    symbol: string,
-  ): Promise<void> {
-    if (entry.subscribedSymbols.has(symbol)) return;
-    const key = `${entry.accountId}:${symbol}`;
-    const existing = this.streamingSubscriptionPromises.get(key);
-    if (existing) return existing;
-
-    const subscribe = (async () => {
-      try {
-        await entry.connection.subscribeToMarketData(
-          symbol,
-          [{ type: 'quotes', intervalInMilliseconds: 2_000 }],
-          15,
-        );
-        entry.subscribedSymbols.add(symbol);
-        this.logger.log(`MetaAPI streaming quote subscription active symbol=${symbol}`);
-      } catch (error) {
-        this.logger.warn(
-          `MetaAPI streaming quote subscription failed symbol=${symbol}: ${(error as Error).message}`,
-        );
-        throw error;
-      }
-    })();
-    this.streamingSubscriptionPromises.set(key, subscribe);
-    try {
-      await subscribe;
-    } finally {
-      this.streamingSubscriptionPromises.delete(key);
-    }
   }
 
   /**
@@ -311,25 +201,16 @@ export class MetaApiClientService implements OnModuleDestroy {
    * Close and remove a connection from the pool.
    */
   async removeConnection(metaApiAccountId: string): Promise<void> {
-    const entries = [
-      this.connectionPool.get(metaApiAccountId)?.connection,
-      this.streamingConnectionPool.get(metaApiAccountId)?.connection,
-    ].filter(Boolean);
-    for (const connection of entries) {
+    const entry = this.connectionPool.get(metaApiAccountId);
+    if (entry) {
       try {
-        await connection.close();
+        await entry.connection.close();
       } catch (err) {
         this.logger.warn(
           `Error closing connection for ${metaApiAccountId}: ${(err as Error).message}`,
         );
       }
-    }
-    this.connectionPool.delete(metaApiAccountId);
-    this.streamingConnectionPool.delete(metaApiAccountId);
-    for (const key of this.streamingSubscriptionPromises.keys()) {
-      if (key.startsWith(`${metaApiAccountId}:`)) this.streamingSubscriptionPromises.delete(key);
-    }
-    if (entries.length > 0) {
+      this.connectionPool.delete(metaApiAccountId);
       this.logger.log(`Removed MetaAPI connection for account: ${metaApiAccountId}`);
     }
   }
@@ -349,30 +230,18 @@ export class MetaApiClientService implements OnModuleDestroy {
   }
 
   async onModuleDestroy() {
-    const entries = [
-      ...Array.from(this.connectionPool.entries()).map(([accountId, entry]) => ({
-        accountId,
-        connection: entry.connection,
-      })),
-      ...Array.from(this.streamingConnectionPool.entries()).map(([accountId, entry]) => ({
-        accountId,
-        connection: entry.connection,
-      })),
-    ];
-    this.logger.log(`Closing ${entries.length} MetaAPI connection(s) on module destroy`);
-    await Promise.allSettled(
-      entries.map(async ({ accountId, connection }) => {
+    this.logger.log(`Closing ${this.connectionPool.size} MetaAPI connection(s) on module destroy`);
+    const closePromises = Array.from(this.connectionPool.entries()).map(
+      async ([accountId, entry]) => {
         try {
-          await connection.close();
+          await entry.connection.close();
         } catch (err) {
           this.logger.warn(`Error closing ${accountId}: ${(err as Error).message}`);
         }
-      }),
+      },
     );
+    await Promise.allSettled(closePromises);
     this.connectionPool.clear();
-    this.streamingConnectionPool.clear();
-    this.streamingInitByAccount.clear();
-    this.streamingSubscriptionPromises.clear();
   }
 
   private assertAvailable(): void {
