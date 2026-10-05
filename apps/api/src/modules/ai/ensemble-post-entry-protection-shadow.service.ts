@@ -165,25 +165,29 @@ export class EnsemblePostEntryProtectionShadowService implements OnModuleInit, O
       `
         SELECT
           count(*) FILTER (
-            WHERE state IN ('READY', 'NOT_YET_ELIGIBLE')
+            WHERE observation.state IN ('READY', 'NOT_YET_ELIGIBLE')
           )::int AS observed_checkpoints,
-          count(DISTINCT ensemble_shadow_decision_id) FILTER (
-            WHERE state IN ('READY', 'NOT_YET_ELIGIBLE')
+          count(DISTINCT observation.ensemble_shadow_decision_id) FILTER (
+            WHERE observation.state IN ('READY', 'NOT_YET_ELIGIBLE')
           )::int AS distinct_decisions_observed,
-          count(DISTINCT ensemble_shadow_decision_id) FILTER (
-            WHERE state = 'READY' AND eligible_profit_state IS TRUE
+          count(DISTINCT observation.ensemble_shadow_decision_id) FILTER (
+            WHERE observation.state = 'READY' AND observation.eligible_profit_state IS TRUE
           )::int AS eligible_profit_decisions,
           count(*) FILTER (
-            WHERE state = 'READY' AND action = 'PROTECT_SHADOW'
+            WHERE observation.state = 'READY' AND observation.action = 'PROTECT_SHADOW'
           )::int AS protect_recommendations,
           count(*) FILTER (
-            WHERE state = 'READY' AND action = 'OBSERVE'
+            WHERE observation.state = 'READY' AND observation.action = 'OBSERVE'
           )::int AS observe_recommendations
-        FROM trading.ensemble_post_entry_shadow_observations
-        WHERE user_id = $1
-          AND artifact = $2
+        FROM trading.ensemble_post_entry_shadow_observations AS observation
+        INNER JOIN trading.ensemble_shadow_decisions AS decision
+          ON decision.id = observation.ensemble_shadow_decision_id
+        WHERE observation.user_id = $1
+          AND observation.artifact = $2
+          AND decision.engine_code = $3
+          AND decision.model_version = $4
       `,
-      [userId, PLAN_B_V85_ARTIFACT],
+      [userId, PLAN_B_V85_ARTIFACT, ACTIVE_ENGINE_CODE, PLAN_B_ENSEMBLE_ARTIFACT],
     )) as Array<{
       observed_checkpoints: number | string;
       distinct_decisions_observed: number | string;
@@ -433,11 +437,15 @@ export class EnsemblePostEntryProtectionShadowService implements OnModuleInit, O
     const rows = (await this.dataSource.query(
       `
         SELECT count(*)::int AS count
-        FROM trading.ensemble_post_entry_shadow_observations
-        WHERE artifact = $1
-          AND state IN ('READY', 'NOT_YET_ELIGIBLE')
+        FROM trading.ensemble_post_entry_shadow_observations AS observation
+        INNER JOIN trading.ensemble_shadow_decisions AS decision
+          ON decision.id = observation.ensemble_shadow_decision_id
+        WHERE observation.artifact = $1
+          AND decision.engine_code = $2
+          AND decision.model_version = $3
+          AND observation.state IN ('READY', 'NOT_YET_ELIGIBLE')
       `,
-      [PLAN_B_V85_ARTIFACT],
+      [PLAN_B_V85_ARTIFACT, ACTIVE_ENGINE_CODE, PLAN_B_ENSEMBLE_ARTIFACT],
     )) as Array<{ count: number | string }>;
     this.observedCheckpoints = Number(rows[0]?.count ?? 0);
   }
