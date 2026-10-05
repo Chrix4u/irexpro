@@ -82,7 +82,7 @@ export interface IBrokerAdapter {
   getInstrumentList(): Promise<BrokerInstrument[]>;
   getCurrentPrice(
     instrument: string,
-    options?: { advanceSimulation?: boolean; keepSubscription?: boolean },
+    options?: { advanceSimulation?: boolean },
   ): Promise<BrokerPrice>;
   getOHLCV(instrument: string, timeframe: string, count: number, before?: Date): Promise<OHLCV[]>;
 

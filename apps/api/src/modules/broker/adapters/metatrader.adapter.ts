@@ -430,18 +430,14 @@ export class MetaTraderAdapter implements IBrokerAdapter {
     return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
   }
 
-  async getCurrentPrice(
-    instrument: string,
-    options?: { keepSubscription?: boolean },
-  ): Promise<BrokerPrice> {
+  async getCurrentPrice(instrument: string): Promise<BrokerPrice> {
     const conn = await this.getActiveConnection();
     try {
-      // RPC connections expose direct quote reads. For recurring broker-native
-      // sampling we keep MetaApi's symbol subscription alive so subsequent
-      // reads can return the already-maintained quote instead of repeatedly
-      // warming a short-lived subscription. One-off safety-gate reads retain
-      // the SDK default unless the caller explicitly opts in.
-      const price = await conn.getSymbolPrice(instrument, options?.keepSubscription === true);
+      // RPC quote reads use MetaApi's default short-lived subscription. The
+      // keepSubscription=true variant proved unreliable on this broker account
+      // ("Specified symbol price not found"), so recurring collection keeps
+      // the proven RPC semantics and relies on bounded concurrency/timeouts.
+      const price = await conn.getSymbolPrice(instrument);
       return {
         instrument,
         bid: this.toDecimalString(price.bid),

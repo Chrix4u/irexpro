@@ -2104,7 +2104,6 @@ export class BrokerService {
     instrument: string,
     options?: {
       advanceSimulation?: boolean;
-      keepSubscription?: boolean;
       propagateProviderError?: boolean;
     },
   ): Promise<BrokerPrice | null> {
@@ -2137,7 +2136,6 @@ export class BrokerService {
       await adapter.connect(credentials);
       const price = await adapter.getCurrentPrice(instrument, {
         advanceSimulation: options?.advanceSimulation,
-        keepSubscription: options?.keepSubscription,
       });
       if (
         !price ||

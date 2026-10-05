@@ -45,11 +45,9 @@ describe('MetaApiQuoteCollectorService', () => {
     expect(getCurrentPriceForConnection).toHaveBeenCalledTimes(12);
     for (const instrument of ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF']) {
       expect(getCurrentPriceForConnection).toHaveBeenCalledWith('user-demo', 'demo-1', instrument, {
-        keepSubscription: true,
         propagateProviderError: true,
       });
       expect(getCurrentPriceForConnection).toHaveBeenCalledWith('user-live', 'live-1', instrument, {
-        keepSubscription: true,
         propagateProviderError: true,
       });
     }
@@ -82,14 +80,14 @@ describe('MetaApiQuoteCollectorService', () => {
       'user-live',
       'live-1',
       'EURUSD',
-      { keepSubscription: true, propagateProviderError: true },
+      { propagateProviderError: true },
     );
     expect(getCurrentPriceForConnection).toHaveBeenNthCalledWith(
       2,
       'user-live',
       'live-1',
       'USDJPY',
-      { keepSubscription: true, propagateProviderError: true },
+      { propagateProviderError: true },
     );
   });
 

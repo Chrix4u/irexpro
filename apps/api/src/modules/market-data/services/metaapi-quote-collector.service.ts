@@ -138,7 +138,7 @@ export class MetaApiQuoteCollectorService implements OnModuleInit, OnModuleDestr
                     connection.user_id,
                     connection.id,
                     instrument,
-                    { keepSubscription: true, propagateProviderError: true },
+                    { propagateProviderError: true },
                   ),
                   this.requestTimeoutMs(),
                   instrument,
