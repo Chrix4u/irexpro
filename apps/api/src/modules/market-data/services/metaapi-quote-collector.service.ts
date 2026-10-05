@@ -18,6 +18,9 @@ const DEFAULT_COLLECTION_INTERVAL_MS = 30_000;
 const MIN_COLLECTION_INTERVAL_MS = 30_000;
 const DEFAULT_COLLECTION_CONCURRENCY = 3;
 const MAX_COLLECTION_CONCURRENCY = 6;
+const DEFAULT_REQUEST_TIMEOUT_MS = 35_000;
+const MIN_REQUEST_TIMEOUT_MS = 10_000;
+const MAX_REQUEST_TIMEOUT_MS = 60_000;
 export function isMetaApiQuoteCollectionWindow(now: Date): boolean {
   const day = now.getUTCDay();
   const hour = now.getUTCHours();
@@ -64,7 +67,9 @@ export class MetaApiQuoteCollectorService implements OnModuleInit, OnModuleDestr
         ' ' +
         'concurrency=' +
         this.collectionConcurrency() +
-        ' ' +
+        ' requestTimeout=' +
+        this.requestTimeoutMs() +
+        'ms ' +
         'schedule=Mon-Fri<21UTC quotaCooldown=30m',
     );
 
@@ -106,11 +111,15 @@ export class MetaApiQuoteCollectorService implements OnModuleInit, OnModuleDestr
           const results = await Promise.all(
             batch.map(async (instrument) => {
               try {
-                const quote = await this.brokerService.getCurrentPriceForConnection(
-                  connection.user_id,
-                  connection.id,
+                const quote = await this.withTimeout(
+                  this.brokerService.getCurrentPriceForConnection(
+                    connection.user_id,
+                    connection.id,
+                    instrument,
+                    { keepSubscription: true, propagateProviderError: true },
+                  ),
+                  this.requestTimeoutMs(),
                   instrument,
-                  { propagateProviderError: true },
                 );
                 if (quote) {
                   await this.store.upsertM1Sample(connection.id, instrument, quote);
@@ -152,6 +161,47 @@ export class MetaApiQuoteCollectorService implements OnModuleInit, OnModuleDestr
       }
     } finally {
       this.busy = false;
+    }
+  }
+
+  private requestTimeoutMs(): number {
+    const configured = Number(
+      this.config.get<string>(
+        'METAAPI_QUOTE_REQUEST_TIMEOUT_MS',
+        String(DEFAULT_REQUEST_TIMEOUT_MS),
+      ),
+    );
+    if (!Number.isFinite(configured)) return DEFAULT_REQUEST_TIMEOUT_MS;
+    return Math.min(
+      MAX_REQUEST_TIMEOUT_MS,
+      Math.max(MIN_REQUEST_TIMEOUT_MS, Math.floor(configured)),
+    );
+  }
+
+  private async withTimeout<T>(
+    promise: Promise<T>,
+    timeoutMs: number,
+    instrument: string,
+  ): Promise<T> {
+    let timer: NodeJS.Timeout | null = null;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<T>((_resolve, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new Error(
+                  `MetaApi quote request timed out instrument=${instrument} after=${timeoutMs}ms`,
+                ),
+              ),
+            timeoutMs,
+          );
+          timer.unref?.();
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 

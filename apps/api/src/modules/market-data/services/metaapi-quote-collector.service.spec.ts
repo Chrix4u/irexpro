@@ -45,9 +45,11 @@ describe('MetaApiQuoteCollectorService', () => {
     expect(getCurrentPriceForConnection).toHaveBeenCalledTimes(12);
     for (const instrument of ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF']) {
       expect(getCurrentPriceForConnection).toHaveBeenCalledWith('user-demo', 'demo-1', instrument, {
+        keepSubscription: true,
         propagateProviderError: true,
       });
       expect(getCurrentPriceForConnection).toHaveBeenCalledWith('user-live', 'live-1', instrument, {
+        keepSubscription: true,
         propagateProviderError: true,
       });
     }
@@ -80,14 +82,14 @@ describe('MetaApiQuoteCollectorService', () => {
       'user-live',
       'live-1',
       'EURUSD',
-      { propagateProviderError: true },
+      { keepSubscription: true, propagateProviderError: true },
     );
     expect(getCurrentPriceForConnection).toHaveBeenNthCalledWith(
       2,
       'user-live',
       'live-1',
       'USDJPY',
-      { propagateProviderError: true },
+      { keepSubscription: true, propagateProviderError: true },
     );
   });
 
@@ -123,6 +125,50 @@ describe('MetaApiQuoteCollectorService', () => {
     expect(getCurrentPriceForConnection).toHaveBeenCalledTimes(6);
     expect(upsertM1Sample).toHaveBeenCalledTimes(6);
     expect(maxActive).toBe(3);
+  });
+
+  it('releases a collection batch when one provider quote hangs', async () => {
+    jest.useFakeTimers();
+    try {
+      const query = jest.fn().mockResolvedValue([{ id: 'live-1', user_id: 'user-live' }]);
+      const getCurrentPriceForConnection = jest
+        .fn()
+        .mockImplementationOnce(() => new Promise(() => undefined))
+        .mockResolvedValueOnce({
+          instrument: 'USDJPY',
+          bid: '150.000',
+          ask: '150.010',
+          spread: '0.010',
+          timestamp: new Date('2026-10-05T10:00:00Z'),
+        });
+      const upsertM1Sample = jest.fn().mockResolvedValue(undefined);
+      const service = new MetaApiQuoteCollectorService(
+        config({
+          METAAPI_QUOTE_COLLECTION_INSTRUMENTS: 'EURUSD,USDJPY',
+          METAAPI_QUOTE_COLLECTION_CONCURRENCY: '2',
+          METAAPI_QUOTE_REQUEST_TIMEOUT_MS: '10000',
+        }),
+        { query } as unknown as DataSource,
+        { getCurrentPriceForConnection } as unknown as BrokerService,
+        { upsertM1Sample } as unknown as ProviderQuoteCandleStoreService,
+      );
+
+      const pending = service.collectOnce(new Date('2026-10-05T10:00:00Z'));
+      await Promise.resolve();
+      await Promise.resolve();
+      jest.advanceTimersByTime(10_000);
+      await pending;
+
+      expect(getCurrentPriceForConnection).toHaveBeenCalledTimes(2);
+      expect(upsertM1Sample).toHaveBeenCalledTimes(1);
+      expect(upsertM1Sample).toHaveBeenCalledWith(
+        'live-1',
+        'USDJPY',
+        expect.objectContaining({ bid: '150.000', ask: '150.010' }),
+      );
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('skips weekends and rollover hours without touching MetaApi', async () => {

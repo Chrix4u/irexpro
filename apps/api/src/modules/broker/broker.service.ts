@@ -2102,7 +2102,11 @@ export class BrokerService {
     userId: string,
     brokerConnectionId: string,
     instrument: string,
-    options?: { advanceSimulation?: boolean; propagateProviderError?: boolean },
+    options?: {
+      advanceSimulation?: boolean;
+      keepSubscription?: boolean;
+      propagateProviderError?: boolean;
+    },
   ): Promise<BrokerPrice | null> {
     const connection = await this.findConnectionById(brokerConnectionId, userId);
 
@@ -2133,6 +2137,7 @@ export class BrokerService {
       await adapter.connect(credentials);
       const price = await adapter.getCurrentPrice(instrument, {
         advanceSimulation: options?.advanceSimulation,
+        keepSubscription: options?.keepSubscription,
       });
       if (
         !price ||
