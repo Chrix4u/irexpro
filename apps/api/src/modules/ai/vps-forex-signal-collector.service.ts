@@ -310,6 +310,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
   private lastProviderSeries: Map<string, LivePaperCandleInput[]> | null = null;
   private providerCooldownUntil: Date | null = null;
   private providerCooldownReason: 'DAILY_CREDIT_LIMIT' | null = null;
+  private lastMarketDataAuthority: 'NONE' | 'TWELVE_DATA' | 'METAAPI_BROKER_FALLBACK' = 'NONE';
   private readonly lastPublishedOpportunity = new Map<string, PublishedOpportunity>();
   private lastEnsembleDecision: {
     evaluatedAt: Date | null;
@@ -683,6 +684,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       },
       providerCooldownReason: this.providerCooldownReason,
       providerCooldownUntil: this.providerCooldownUntil?.toISOString() ?? null,
+      marketDataAuthority: this.lastMarketDataAuthority,
+      providerFallbackActive: this.lastMarketDataAuthority === 'METAAPI_BROKER_FALLBACK',
       marketCache: ownsBinding
         ? this.livePaperMarket.status(this.connectionId())
         : {
@@ -700,7 +703,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             ? 'DISABLED'
             : marketSchedule.paused
               ? 'MARKET_PAUSED'
-              : this.providerCooldownUntil && this.providerCooldownUntil.getTime() > Date.now()
+              : this.providerCooldownUntil &&
+                  this.providerCooldownUntil.getTime() > Date.now() &&
+                  this.lastMarketDataAuthority !== 'METAAPI_BROKER_FALLBACK'
                 ? 'WAITING_FOR_PROVIDER_QUOTA'
                 : this.livePaperMarket.status(this.connectionId()).cachedInstrumentCount <
                     SYMBOLS.length
@@ -718,7 +723,6 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       this.providerCooldownUntil = null;
       this.providerCooldownReason = null;
     }
-    if (this.providerCooldownUntil && this.providerCooldownUntil.getTime() > now.getTime()) return;
     if (!this.enabled() || this.running || !this.isCollectionSlot(now)) return;
     const slot = now.toISOString().slice(0, 16);
     if (this.lastSlot === slot) return;
@@ -1003,8 +1007,14 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             multi_model_execution_authority: MULTI_MODEL_PAPER_EXECUTION_ENABLED,
             external_provider_paper_only: true,
             production_eligible: false,
-            source_reference: 'Twelve Data Basic real-time forex M5 closed candles',
-            market_data_authority: 'PAPER_RESEARCH_EXTERNAL_TWELVE_DATA',
+            source_reference:
+              this.lastMarketDataAuthority === 'METAAPI_BROKER_FALLBACK'
+                ? 'MetaTrader broker-native M5 closed candles via MetaApi fallback'
+                : 'Twelve Data Basic real-time forex M5 closed candles',
+            market_data_authority:
+              this.lastMarketDataAuthority === 'METAAPI_BROKER_FALLBACK'
+                ? 'PAPER_RESEARCH_BROKER_NATIVE_METAAPI_FALLBACK'
+                : 'PAPER_RESEARCH_EXTERNAL_TWELVE_DATA',
             live_market_data_policy:
               'DEMO/LIVE decisions must use broker-native market data via the active broker adapter; MetaTrader uses MetaApi as the broker-access bridge',
             market_data_bar_time: best.barTime.toISOString(),
@@ -1901,9 +1911,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     // so a startup prime + collection slot cannot accidentally spend 12.
     const requestNow = new Date();
     if (this.providerCooldownUntil && this.providerCooldownUntil.getTime() > requestNow.getTime()) {
-      throw new Error(
-        `Twelve Data daily credit cooldown active until ${this.providerCooldownUntil.toISOString()}`,
-      );
+      return this.fetchBrokerNativeFallbackSeries('TWELVE_DATA_DAILY_CREDIT_COOLDOWN');
     }
     if (
       this.providerCooldownUntil &&
@@ -1949,9 +1957,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         reset.setUTCHours(0, 5, 0, 0);
         this.providerCooldownUntil = reset;
         this.providerCooldownReason = 'DAILY_CREDIT_LIMIT';
-        throw new Error(
-          `Twelve Data daily credit limit reached; scanner paused until ${reset.toISOString()}`,
+        this.logger.warn(
+          `Twelve Data daily credit limit reached; switching scanner to broker-native MetaTrader fallback until ${reset.toISOString()}`,
         );
+        return this.fetchBrokerNativeFallbackSeries('TWELVE_DATA_DAILY_CREDIT_LIMIT');
       }
       throw new Error(`Twelve Data HTTP ${response.status}: ${message}`);
     }
@@ -1984,7 +1993,88 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     }
     this.lastProviderFetchMinute = requestMinute;
     this.lastProviderSeries = result;
+    this.lastMarketDataAuthority = 'TWELVE_DATA';
     return result;
+  }
+
+  private async fetchBrokerNativeFallbackSeries(
+    reason: string,
+  ): Promise<Map<string, LivePaperCandleInput[]>> {
+    const userId = this.userId();
+    const sourceConnectionId = this.brokerExpertSourceConnectionId();
+    if (!this.brokerExpertEnabled() || !userId || !sourceConnectionId) {
+      this.lastMarketDataAuthority = 'NONE';
+      throw new Error(
+        `Twelve Data unavailable (${reason}) and broker-native fallback is not configured`,
+      );
+    }
+
+    const source = await this.brokerService.findConnectionById(sourceConnectionId, userId);
+    if (!['metatrader4', 'metatrader5'].includes(source.brokerId)) {
+      this.lastMarketDataAuthority = 'NONE';
+      throw new Error(
+        `Twelve Data unavailable (${reason}) and configured fallback is not MetaTrader`,
+      );
+    }
+
+    const now = Date.now();
+    try {
+      const rows = await Promise.all(
+        SYMBOLS.map(async ([instrument]) => {
+          const raw = await this.brokerService.getOhlcvForConnection(
+            userId,
+            sourceConnectionId,
+            instrument,
+            'M5',
+            500,
+          );
+          const candles = raw
+            .map((candle) => ({
+              timestamp:
+                candle.timestamp instanceof Date
+                  ? new Date(candle.timestamp)
+                  : new Date(candle.timestamp),
+              open: candle.open,
+              high: candle.high,
+              low: candle.low,
+              close: candle.close,
+            }))
+            .filter(
+              (candle) =>
+                Number.isFinite(candle.timestamp.getTime()) &&
+                candle.timestamp.getTime() + BAR_MS <= now,
+            )
+            .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+
+          if (candles.length < 55) {
+            throw new Error(
+              `MetaTrader fallback returned only ${candles.length} ${instrument} fully closed M5 bars`,
+            );
+          }
+          const latest = candles[candles.length - 1]!;
+          const latestClose = latest.timestamp.getTime() + BAR_MS;
+          if (now - latestClose > 20 * 60_000) {
+            throw new Error(
+              `MetaTrader fallback ${instrument} latest fully closed M5 bar is stale`,
+            );
+          }
+          return [instrument, candles] as const;
+        }),
+      );
+      const result = new Map<string, LivePaperCandleInput[]>(rows);
+      this.lastProviderFetchMinute = new Date(now).toISOString().slice(0, 16);
+      this.lastProviderSeries = result;
+      this.lastMarketDataAuthority = 'METAAPI_BROKER_FALLBACK';
+      this.logger.warn(
+        `Broker-native MetaTrader M5 fallback active for 6/6 pairs reason=${reason}; execution authority remains PAPER_ONLY`,
+      );
+      return result;
+    } catch (error) {
+      this.lastMarketDataAuthority = 'NONE';
+      throw new Error(
+        `Twelve Data unavailable (${reason}) and broker-native fallback failed: ${(error as Error).message}`,
+      );
+    }
   }
 
   private resolveSeries(payload: TwelveDataResponse, symbol: string): TwelveDataSeries | null {

@@ -532,25 +532,41 @@ describe('VpsForexSignalCollectorService', () => {
     });
   });
 
-  it('enters a daily provider cooldown after Twelve Data exhausts the account quota', async () => {
+  it('fails over to broker-native MetaTrader candles after Twelve Data exhausts the daily quota', async () => {
     const live = new LivePaperMarketDataService();
-    const execution = {
-      getActiveSession: jest.fn().mockResolvedValue({
-        id: 'session-1',
-        brokerConnectionId: 'conn-1',
-        executionMode: ExecutionMode.PAPER_ONLY,
-      }),
-    } as unknown as ExecutionService;
+    const broker = {
+      findConnectionById: jest.fn().mockResolvedValue({ brokerId: 'metatrader5' }),
+      getOhlcvForConnection: jest
+        .fn()
+        .mockImplementation(async (_userId: string, _connectionId: string, instrument: string) => {
+          const base =
+            instrument === 'USDJPY'
+              ? 157
+              : instrument === 'GBPUSD'
+                ? 1.34
+                : instrument === 'USDCAD'
+                  ? 1.37
+                  : instrument === 'USDCHF'
+                    ? 0.8
+                    : instrument === 'AUDUSD'
+                      ? 0.66
+                      : 1.1;
+          const digits = instrument === 'USDJPY' ? 3 : 5;
+          return trendCandles(base, digits).map((row) => ({ ...row, volume: '0' }));
+        }),
+    } as unknown as BrokerService;
     const collector = new VpsForexSignalCollectorService(
       config({
         'vpsForexScanner.enabled': true,
         'vpsForexScanner.apiKey': 'real-key-123456',
         'vpsForexScanner.userId': 'user-1',
         'vpsForexScanner.brokerConnectionId': 'conn-1',
+        'multimodelBrokerExpert.enabled': true,
+        'multimodelBrokerExpert.sourceConnectionId': 'metaapi-demo-1',
       }),
       { receiveSignal: jest.fn() } as unknown as AiSignalService,
-      execution,
-      { getCurrentPriceForConnection: jest.fn() } as unknown as BrokerService,
+      { getActiveSession: jest.fn().mockResolvedValue(null) } as unknown as ExecutionService,
+      broker,
       live,
       aiEngineClientMock(),
     );
@@ -564,36 +580,44 @@ describe('VpsForexSignalCollectorService', () => {
       }),
     });
 
-    await expect(collector.collectOnce(fetchMock as unknown as typeof fetch)).rejects.toThrow(
-      /daily credit limit reached; scanner paused until/,
+    const series = await (collector as any).fetchSixPairSeries(
+      'real-key-123456',
+      fetchMock as unknown as typeof fetch,
     );
     const status = await collector.getStatus('user-1');
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(series.size).toBe(6);
+    expect((broker as any).getOhlcvForConnection).toHaveBeenCalledTimes(6);
     expect(status.providerCooldownReason).toBe('DAILY_CREDIT_LIMIT');
     expect(status.providerCooldownUntil).toBeTruthy();
-    expect(status.state).toBe(
-      status.marketSchedule.paused ? 'MARKET_PAUSED' : 'WAITING_FOR_PROVIDER_QUOTA',
-    );
+    expect(status.marketDataAuthority).toBe('METAAPI_BROKER_FALLBACK');
+    expect(status.providerFallbackActive).toBe(true);
   });
 
-  it('does not call Twelve Data again while the same-process daily quota cooldown is active', async () => {
+  it('uses broker-native fallback without retrying Twelve Data while daily cooldown is active', async () => {
+    const broker = {
+      findConnectionById: jest.fn().mockResolvedValue({ brokerId: 'metatrader5' }),
+      getOhlcvForConnection: jest
+        .fn()
+        .mockImplementation(async (_userId: string, _connectionId: string, instrument: string) => {
+          const base = instrument === 'USDJPY' ? 157 : 1.1;
+          const digits = instrument === 'USDJPY' ? 3 : 5;
+          return trendCandles(base, digits).map((row) => ({ ...row, volume: '0' }));
+        }),
+    } as unknown as BrokerService;
     const collector = new VpsForexSignalCollectorService(
       config({
         'vpsForexScanner.enabled': true,
         'vpsForexScanner.apiKey': 'real-key-123456',
         'vpsForexScanner.userId': 'user-1',
         'vpsForexScanner.brokerConnectionId': 'conn-1',
+        'multimodelBrokerExpert.enabled': true,
+        'multimodelBrokerExpert.sourceConnectionId': 'metaapi-demo-1',
       }),
       { receiveSignal: jest.fn() } as unknown as AiSignalService,
-      {
-        getActiveSession: jest.fn().mockResolvedValue({
-          id: 'session-1',
-          brokerConnectionId: 'conn-1',
-          executionMode: ExecutionMode.PAPER_ONLY,
-        }),
-      } as unknown as ExecutionService,
-      { getCurrentPriceForConnection: jest.fn() } as unknown as BrokerService,
+      { getActiveSession: jest.fn().mockResolvedValue(null) } as unknown as ExecutionService,
+      broker,
       new LivePaperMarketDataService(),
       aiEngineClientMock(),
     );
@@ -606,14 +630,54 @@ describe('VpsForexSignalCollectorService', () => {
       }),
     });
 
-    await expect(collector.collectOnce(fetchMock as unknown as typeof fetch)).rejects.toThrow(
-      /daily credit limit reached/,
+    await (collector as any).fetchSixPairSeries(
+      'real-key-123456',
+      fetchMock as unknown as typeof fetch,
     );
-    await expect(collector.collectOnce(fetchMock as unknown as typeof fetch)).rejects.toThrow(
-      /daily credit cooldown active/,
+    await (collector as any).fetchSixPairSeries(
+      'real-key-123456',
+      fetchMock as unknown as typeof fetch,
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect((broker as any).getOhlcvForConnection).toHaveBeenCalledTimes(12);
+  });
+
+  it('fails closed when both Twelve Data quota and broker-native fallback are unavailable', async () => {
+    const broker = {
+      findConnectionById: jest.fn().mockResolvedValue({ brokerId: 'metatrader5' }),
+      getOhlcvForConnection: jest.fn().mockRejectedValue(new Error('broker candles unavailable')),
+    } as unknown as BrokerService;
+    const collector = new VpsForexSignalCollectorService(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+        'multimodelBrokerExpert.enabled': true,
+        'multimodelBrokerExpert.sourceConnectionId': 'metaapi-demo-1',
+      }),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      { getActiveSession: jest.fn().mockResolvedValue(null) } as unknown as ExecutionService,
+      broker,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+    );
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      json: async () => ({
+        status: 'error',
+        message: 'You have run out of API credits for the day.',
+      }),
+    });
+
+    await expect(
+      (collector as any).fetchSixPairSeries(
+        'real-key-123456',
+        fetchMock as unknown as typeof fetch,
+      ),
+    ).rejects.toThrow(/broker-native fallback failed/);
   });
 
   it('rejects the shared Twelve Data demo key for production evidence', async () => {
