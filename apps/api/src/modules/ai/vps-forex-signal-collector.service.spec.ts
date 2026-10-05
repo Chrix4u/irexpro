@@ -259,6 +259,105 @@ describe('VpsForexSignalCollectorService', () => {
     );
   });
 
+  it('resolves outcomes for PAPER-executable decisions even when strict promotion admission is false', async () => {
+    const query = jest.fn().mockImplementation(async (sql: string) => {
+      if (String(sql).includes('SELECT') && String(sql).includes('ensemble_shadow_decisions')) {
+        return [
+          {
+            id: 'paper-only-decision',
+            instrument: 'EURUSD',
+            direction: 'BUY',
+            market_bar_time: new Date('2026-10-05T10:00:00.000Z'),
+            entry_price: '1.1000',
+            components: {
+              stopLoss: 1.099,
+              takeProfit: 1.102,
+              governance: {
+                paperExecutionEligible: true,
+                estimatedExecutionCostR: 0.1,
+              },
+            },
+          },
+        ];
+      }
+      return [];
+    });
+    const collector = new VpsForexSignalCollectorService(
+      config({}),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      {} as unknown as ExecutionService,
+      {} as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+      { query } as any,
+    );
+    const candles = new Map([
+      [
+        'EURUSD',
+        [
+          {
+            timestamp: new Date('2026-10-05T10:05:00.000Z'),
+            open: '1.1000',
+            high: '1.1005',
+            low: '1.0988',
+            close: '1.0991',
+          },
+        ],
+      ],
+    ]);
+
+    await (collector as any).resolvePendingEnsembleShadowOutcomes(
+      'user-1',
+      'conn-1',
+      candles,
+    );
+
+    const selectSql = String(query.mock.calls[0][0]);
+    expect(selectSql).toContain('admitted = true');
+    expect(selectSql).toContain("paperExecutionEligible");
+    expect(selectSql).toContain('OR COALESCE');
+    const updateCall = query.mock.calls.find(([sql]) =>
+      String(sql).includes('UPDATE trading.ensemble_shadow_decisions'),
+    );
+    expect(updateCall).toBeDefined();
+    expect(updateCall?.[1]?.[0]).toBe('paper-only-decision');
+    expect(JSON.parse(updateCall?.[1]?.[1] as string)).toMatchObject({
+      status: 'LOSS',
+      reason: 'STOP_LOSS_HIT',
+    });
+  });
+
+  it('builds sleeve qualification evidence from the actual PAPER execution policy cohort', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const collector = new VpsForexSignalCollectorService(
+      config({}),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      {} as unknown as ExecutionService,
+      {} as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+      { query } as any,
+    );
+
+    await (collector as any).loadEnsembleSleeveEvidence(
+      'user-1',
+      'conn-1',
+      'USDJPY',
+      'BUY',
+    );
+
+    const sql = String(query.mock.calls[0][0]);
+    expect(sql).toContain("paperExecutionEligible");
+    expect(sql).not.toContain('AND admitted = true');
+    expect(query).toHaveBeenCalledWith(expect.any(String), [
+      'user-1',
+      'conn-1',
+      'irexpro-multimodel-ensemble-v1',
+      'USDJPY',
+      'BUY',
+    ]);
+  });
+
   it('refreshes all six live PAPER feeds but freezes legacy v7 execution during multi-model cutover', async () => {
     const live = new LivePaperMarketDataService();
     expect(live.isLiveConnection('conn-1')).toBe(false);

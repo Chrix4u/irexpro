@@ -1485,7 +1485,13 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         WHERE user_id = $1
           AND broker_connection_id = $2
           AND engine_code = $3
-          AND admitted = true
+          AND (
+            admitted = true
+            OR COALESCE(
+              (components->'governance'->>'paperExecutionEligible')::boolean,
+              false
+            ) = true
+          )
           AND NOT (components ? 'outcome')
         ORDER BY evaluated_at ASC
         LIMIT 500
@@ -1568,7 +1574,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           AND engine_code = $3
           AND instrument = $4
           AND direction = $5
-          AND admitted = true
+          AND COALESCE(
+            (components->'governance'->>'paperExecutionEligible')::boolean,
+            false
+          ) = true
           AND components ? 'outcome'
         ORDER BY evaluated_at ASC
       `,
