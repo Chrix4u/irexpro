@@ -83,6 +83,41 @@ function payload() {
   return data;
 }
 
+function allTrendPayload() {
+  const data: Record<string, any> = {};
+  for (const [instrument, provider] of PAIRS) {
+    const base =
+      instrument === 'USDJPY'
+        ? 157
+        : instrument === 'GBPUSD'
+          ? 1.34
+          : instrument === 'USDCAD'
+            ? 1.37
+            : instrument === 'USDCHF'
+              ? 0.8
+              : instrument === 'AUDUSD'
+                ? 0.66
+                : 1.1;
+    const digits = instrument === 'USDJPY' ? 3 : 5;
+    const rows =
+      instrument === 'USDJPY'
+        ? trendCandles(base, digits, 0.001, 0.01)
+        : trendCandles(base, digits);
+    data[provider] = {
+      status: 'ok',
+      meta: { symbol: provider },
+      values: rows.map((row) => ({
+        datetime: row.timestamp.toISOString().slice(0, 19).replace('T', ' '),
+        open: row.open,
+        high: row.high,
+        low: row.low,
+        close: row.close,
+      })),
+    };
+  }
+  return data;
+}
+
 function aiEngineClientMock() {
   return {
     isSchedulerIntegrationEnabled: jest.fn().mockReturnValue(true),
@@ -130,7 +165,7 @@ describe('VpsForexSignalCollectorService', () => {
     expect(rewardRisk).toBeCloseTo(2.5 / 1.5, 6);
   });
 
-  it('blocks a repeated unchanged setup but permits genuinely fresh same-side evidence', () => {
+  it('classifies repeated unchanged setup as stale telemetry while detecting fresh same-side evidence', () => {
     const candidate = buildCandidate('EURUSD', trendCandles());
     expect(candidate).not.toBeNull();
     const current = candidate!;
@@ -273,6 +308,45 @@ describe('VpsForexSignalCollectorService', () => {
     expect((collector as any).lastEnsembleDecision.instrument).toBe('EURUSD');
     expect((collector as any).lastEnsembleDecision.consensusRequired).toBeGreaterThan(0);
     expect(live.getOHLCV('EURUSD', 'M5', 70, 'conn-1')).toHaveLength(70);
+  });
+
+  it('evaluates every qualifying pair in the same scan instead of only the top-ranked pair', async () => {
+    const live = new LivePaperMarketDataService();
+    const shadowQuery = jest.fn().mockResolvedValue([]);
+    const collector = new VpsForexSignalCollectorService(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+      }),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      {
+        getActiveSession: jest.fn().mockResolvedValue({
+          id: 'session-1',
+          brokerConnectionId: 'conn-1',
+          executionMode: ExecutionMode.PAPER_ONLY,
+        }),
+      } as unknown as ExecutionService,
+      {
+        getCurrentPriceForConnection: jest.fn().mockResolvedValue({ bid: '1', ask: '1.1' }),
+      } as unknown as BrokerService,
+      live,
+      aiEngineClientMock(),
+      { query: shadowQuery } as any,
+    );
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => allTrendPayload() });
+
+    await collector.collectOnce(fetchMock as unknown as typeof fetch);
+
+    const insertCalls = shadowQuery.mock.calls.filter(([sql]) =>
+      String(sql).includes('INSERT INTO trading.ensemble_shadow_decisions'),
+    );
+    expect(insertCalls.length).toBeGreaterThan(1);
+    const persistedInstruments = new Set(insertCalls.map(([, params]) => params[6]));
+    expect(persistedInstruments.size).toBe(insertCalls.length);
   });
 
   it('persists shadow evidence without an active PAPER session and keeps execution disabled', async () => {
