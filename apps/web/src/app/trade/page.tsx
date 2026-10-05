@@ -54,6 +54,17 @@ function formatTimestamp(value: string | null | undefined): string {
   }).format(date);
 }
 
+function formatMarkFreshness(value: string | null | undefined): string {
+  if (!value) return "mark time unavailable";
+  const observedAt = new Date(value).getTime();
+  if (!Number.isFinite(observedAt)) return "mark time unavailable";
+  const ageSeconds = Math.max(0, Math.floor((Date.now() - observedAt) / 1000));
+  if (ageSeconds < 60) return `${ageSeconds}s ago`;
+  const ageMinutes = Math.floor(ageSeconds / 60);
+  if (ageMinutes < 60) return `${ageMinutes}m ago`;
+  return formatTimestamp(value);
+}
+
 function formatFixedDecimal(
   value: string | null | undefined,
   fractionDigits = 2,
@@ -970,7 +981,7 @@ function PositionCard({
                     : "Broker mark"}
                 {position.markIsStale ? " · STALE" : ""}
                 {position.markObservedAt
-                  ? ` · ${formatTimestamp(position.markObservedAt)}`
+                  ? ` · ${formatMarkFreshness(position.markObservedAt)}`
                   : ""}
               </small>
             ) : null}
@@ -1115,7 +1126,7 @@ function PositionTable({
                         : "Broker mark"}
                     {position.markIsStale ? " · STALE" : ""}
                     {position.markObservedAt
-                      ? ` · ${formatTimestamp(position.markObservedAt)}`
+                      ? ` · ${formatMarkFreshness(position.markObservedAt)}`
                       : ""}
                   </small>
                 ) : null}
