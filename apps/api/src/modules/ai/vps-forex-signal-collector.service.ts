@@ -52,11 +52,13 @@ const LEGACY_V7_EXECUTION_FROZEN = true;
 const MULTI_MODEL_PAPER_EXECUTION_ENABLED = true;
 
 export function canExecuteMultiModelPaper(
-  ensemble: Pick<PlanBEnsembleScore, 'admitted'>,
+  ensemble: Pick<PlanBEnsembleScore, 'paperAdmitted'>,
   governance: Pick<EnsembleGovernanceDecision, 'paperExecutionEligible'>,
 ): boolean {
   return (
-    MULTI_MODEL_PAPER_EXECUTION_ENABLED && ensemble.admitted && governance.paperExecutionEligible
+    MULTI_MODEL_PAPER_EXECUTION_ENABLED &&
+    ensemble.paperAdmitted &&
+    governance.paperExecutionEligible
   );
 }
 const PROVIDER_CODE = LEGACY_PROVIDER_CODE;
@@ -313,6 +315,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     evaluatedAt: Date | null;
     instrument: string | null;
     direction: 'BUY' | 'SELL' | null;
+    paperAdmitted: boolean;
     admitted: boolean;
     candidateConfidence: number | null;
     ensembleScore: number | null;
@@ -329,6 +332,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     evaluatedAt: null,
     instrument: null,
     direction: null,
+    paperAdmitted: false,
     admitted: false,
     candidateConfidence: null,
     ensembleScore: null,
@@ -636,6 +640,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         evaluatedAt: this.lastEnsembleDecision.evaluatedAt?.toISOString() ?? null,
         instrument: this.lastEnsembleDecision.instrument,
         direction: this.lastEnsembleDecision.direction,
+        paperAdmitted: this.lastEnsembleDecision.paperAdmitted,
         admitted: this.lastEnsembleDecision.admitted,
         candidateConfidence: this.lastEnsembleDecision.candidateConfidence,
         ensembleScore: this.lastEnsembleDecision.ensembleScore,
@@ -796,6 +801,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         return;
       }
 
+      let representativeSet = false;
+      let representativeIsPaperEligible = false;
       for (const best of rankedCandidates) {
         const eventId = `${ACTIVE_ENGINE_CODE}|${best.instrument}|${best.barTime.toISOString()}|${best.direction}`;
         const signalId = uuidv5(eventId, SIGNAL_NAMESPACE);
@@ -900,10 +907,11 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           eventRisk: macroEventAssessment.state,
           sleeveEvidence,
         });
-        this.lastEnsembleDecision = {
+        const decision = {
           evaluatedAt: new Date(),
           instrument: best.instrument,
           direction: best.direction,
+          paperAdmitted: planBEnsemble.paperAdmitted,
           admitted: planBEnsemble.admitted,
           candidateConfidence: best.confidence,
           ensembleScore: planBEnsemble.ensembleScore,
@@ -917,6 +925,14 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           macroEventAssessment,
           highConvictionOverlay,
         };
+        if (
+          !representativeSet ||
+          (!representativeIsPaperEligible && ensembleGovernance.paperExecutionEligible)
+        ) {
+          this.lastEnsembleDecision = decision;
+          representativeSet = true;
+          representativeIsPaperEligible = ensembleGovernance.paperExecutionEligible;
+        }
         await this.persistEnsembleShadowDecision(
           userId,
           paperSession?.id ?? null,
@@ -939,7 +955,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         if (!canExecuteMultiModelPaper(planBEnsemble, ensembleGovernance)) {
           this.logger.log(
             `Multi-model ensemble ${best.instrument} ${best.direction} ` +
-              `admitted=${planBEnsemble.admitted} consensus=${planBEnsemble.consensusPassed}/${planBEnsemble.consensusRequired} ` +
+              `paperAdmitted=${planBEnsemble.paperAdmitted} admitted=${planBEnsemble.admitted} consensus=${planBEnsemble.consensusPassed}/${planBEnsemble.consensusRequired} ` +
               `execution=SHADOW_ONLY legacyV7Frozen=${LEGACY_V7_EXECUTION_FROZEN} ` +
               `netExpectedR=${ensembleGovernance.netExpectedR.toFixed(4)} ` +
               `drift=${ensembleGovernance.driftState} sleeve=${ensembleGovernance.sleeveState} ` +
@@ -992,7 +1008,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             live_market_data_policy:
               'DEMO/LIVE decisions must use broker-native market data via the active broker adapter; MetaTrader uses MetaApi as the broker-access bridge',
             market_data_bar_time: best.barTime.toISOString(),
-            market_data_execution_model: 'closed-candle-mid-with-conservative-fixed-paper-spread',
+            market_data_execution_model:
+              'closed-candle-mid-derived-bid-ask-with-conservative-fixed-paper-spread',
             calibration_mode: 'SHADOW_DIAGNOSTIC_ONLY',
             calibration_modifies_execution: false,
             feature_extension_atr: best.extensionAtr,
@@ -1057,6 +1074,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
               planBEnsemble.sameInstrumentDirectionalLots,
             plan_b_ensemble_meta_probability: planBEnsemble.metaProbability,
             plan_b_ensemble_score: planBEnsemble.ensembleScore,
+            plan_b_ensemble_paper_admitted: planBEnsemble.paperAdmitted,
             plan_b_ensemble_admitted: planBEnsemble.admitted,
             plan_b_ensemble_reasons: planBEnsemble.reasons,
             position_sizing_policy: 'risk-managed-up-to-0.10-lot-scanner-bound',
@@ -1613,7 +1631,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         candidate.instrument,
         candidate.direction,
         candidate.barTime,
-        this.lastEnsembleDecision.evaluatedAt ?? new Date(),
+        new Date(),
         candidate.confidence,
         candidate.entry,
         candidate.atr,
@@ -1640,6 +1658,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           sameInstrumentCount: ensemble.sameInstrumentCount,
           sameInstrumentDirectionalLots: ensemble.sameInstrumentDirectionalLots,
           portfolioSnapshotAvailable,
+          paperAdmitted: ensemble.paperAdmitted,
           extensionAtr: candidate.extensionAtr,
           volatilityScore: candidate.volatilityScore,
           emaSeparation: candidate.emaSeparation,
@@ -1744,6 +1763,12 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         evaluatedAt: new Date(latest.evaluated_at),
         instrument: latest.instrument,
         direction: latest.direction,
+        paperAdmitted:
+          latest.components &&
+          typeof latest.components === 'object' &&
+          typeof latest.components.paperAdmitted === 'boolean'
+            ? latest.components.paperAdmitted
+            : latest.admitted,
         admitted: latest.admitted,
         candidateConfidence: Number(latest.confidence),
         ensembleScore: Number(latest.ensemble_score),

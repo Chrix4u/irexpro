@@ -44,6 +44,8 @@ export function hasVpsScannerUiShape(value: unknown): boolean {
     !isNullableRecord(lastDecision.governance) ||
     !isNullableRecord(lastDecision.macroEventAssessment) ||
     !isNullableRecord(lastDecision.highConvictionOverlay) ||
+    (lastDecision.paperAdmitted !== undefined &&
+      typeof lastDecision.paperAdmitted !== "boolean") ||
     !isRecord(campaign) ||
     !Array.isArray(campaign.sleeves) ||
     !isRecord(campaign.highConvictionOverlayCounts) ||
@@ -66,6 +68,8 @@ export function hasVpsScannerUiShape(value: unknown): boolean {
   if (isRecord(lastDecision.governance)) {
     if (
       typeof lastDecision.governance.paperNetExpectedRPassed !== "boolean" ||
+      (lastDecision.governance.paperDriftPassed !== undefined &&
+        typeof lastDecision.governance.paperDriftPassed !== "boolean") ||
       typeof lastDecision.governance.paperExecutionEligible !== "boolean" ||
       !Array.isArray(lastDecision.governance.paperExecutionBlockers) ||
       typeof lastDecision.governance.paperPromotionEligible !== "boolean"

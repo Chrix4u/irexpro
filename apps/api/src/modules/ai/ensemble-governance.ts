@@ -46,6 +46,7 @@ export interface EnsembleGovernanceDecision {
   netExpectedRPassed: boolean;
   driftState: EnsembleDriftState;
   driftQuality: number;
+  paperDriftPassed: boolean;
   driftPassed: boolean;
   sleeveState: EnsembleSleeveState;
   sleeveEvidence: EnsembleSleeveEvidence | null;
@@ -183,6 +184,10 @@ export function evaluateEnsembleGovernance(
   const netExpectedRPassed =
     Number.isFinite(netExpectedR) && netExpectedR >= ENSEMBLE_NET_EXPECTED_R_FLOOR;
   const drift = driftOf(input);
+  // PAPER may collect evidence inside the frozen development envelope even
+  // when one feature is stressed. Out-of-distribution states remain blocked.
+  // Promotion remains NORMAL-only.
+  const paperDriftPassed = drift.state !== 'OUT_OF_DISTRIBUTION';
   const driftPassed = drift.state === 'NORMAL';
   const sleeveState = classifyEnsembleSleeveEvidence(input.sleeveEvidence);
   const eventRisk = input.eventRisk ?? 'UNVERIFIED';
@@ -192,9 +197,9 @@ export function evaluateEnsembleGovernance(
   // execution evidence, but an empirically BLOCKED sleeve must not execute.
   // CORE remains mandatory for promotion beyond PAPER.
   const paperExecutionBlockers: string[] = [];
-  if (!input.ensemble.admitted) paperExecutionBlockers.push('ENSEMBLE_NOT_ADMITTED');
+  if (!input.ensemble.paperAdmitted) paperExecutionBlockers.push('ENSEMBLE_NOT_PAPER_ADMITTED');
   if (!paperNetExpectedRPassed) paperExecutionBlockers.push('PAPER_NET_EXPECTED_R');
-  if (!driftPassed) paperExecutionBlockers.push(`DRIFT_${drift.state}`);
+  if (!paperDriftPassed) paperExecutionBlockers.push(`DRIFT_${drift.state}`);
   if (sleeveState === 'BLOCKED') paperExecutionBlockers.push('SLEEVE_BLOCKED');
   if (eventRisk !== 'CLEAR') paperExecutionBlockers.push(`EVENT_RISK_${eventRisk}`);
 
@@ -216,6 +221,7 @@ export function evaluateEnsembleGovernance(
     netExpectedRPassed,
     driftState: drift.state,
     driftQuality: drift.quality,
+    paperDriftPassed,
     driftPassed,
     sleeveState,
     sleeveEvidence: input.sleeveEvidence ?? null,

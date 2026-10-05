@@ -39,6 +39,7 @@ export interface PlanBEnsembleScore {
   sameInstrumentDirectionalLots: number;
   metaProbability: number;
   ensembleScore: number;
+  paperAdmitted: boolean;
   admitted: boolean;
   reasons: string[];
 }
@@ -209,11 +210,16 @@ export function scorePlanBMultimodelShadow(
   // fail, while meta admission and expected-R remain mandatory below.
   const consensusRequired = 6;
 
-  const admitted =
-    regimeAllowed &&
+  const coreAdmissionPassed =
     consensusPassed >= consensusRequired &&
     meta.admitted &&
     meta.expectedR >= PLAN_B_GROSS_EXPECTED_R_FLOOR;
+  // PAPER may collect evidence from a stretched but otherwise strongly
+  // qualified trend. Volatile, weak and rollover regimes remain fail-closed.
+  // Promotion keeps the original TREND_HEALTHY-only admission below.
+  const paperRegimeAllowed = regime === 'TREND_HEALTHY' || regime === 'TREND_EXTENDED';
+  const paperAdmitted = paperRegimeAllowed && coreAdmissionPassed;
+  const admitted = regimeAllowed && coreAdmissionPassed;
 
   return {
     artifact: PLAN_B_ENSEMBLE_ARTIFACT,
@@ -237,6 +243,7 @@ export function scorePlanBMultimodelShadow(
     sameInstrumentDirectionalLots: portfolio.sameInstrumentDirectionalLots,
     metaProbability: meta.probability,
     ensembleScore,
+    paperAdmitted,
     admitted,
     reasons: admitted ? ['ADMIT'] : reasons,
   };

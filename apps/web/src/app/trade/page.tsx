@@ -424,6 +424,7 @@ interface VpsForexScannerStatusView {
     evaluatedAt: string | null;
     instrument: string | null;
     direction: "BUY" | "SELL" | null;
+    paperAdmitted?: boolean;
     admitted: boolean;
     candidateConfidence: number | null;
     ensembleScore: number | null;
@@ -444,6 +445,7 @@ interface VpsForexScannerStatusView {
       netExpectedRPassed: boolean;
       driftState: "NORMAL" | "STRESSED" | "OUT_OF_DISTRIBUTION";
       driftQuality: number;
+      paperDriftPassed?: boolean;
       driftPassed: boolean;
       sleeveState: "COLLECTING" | "CORE" | "PROBATION" | "BLOCKED";
       sleeveEvidence: {
@@ -4073,11 +4075,15 @@ export default function AiTradingPage() {
                         {vpsConfidenceActive
                           ? vpsScannerStatus?.marketSchedule.paused
                             ? "No new decision while market is paused"
-                            : vpsScannerStatus?.lastEnsembleDecision.admitted
+                            : vpsScannerStatus?.lastEnsembleDecision.governance?.paperExecutionEligible
                               ? vpsScannerStatus.executionAuthority === "PAPER_ONLY"
-                                ? "Ensemble admitted this setup"
-                                : "Ensemble would admit this setup"
-                              : "Ensemble decision · NO TRADE"
+                                ? "PAPER signal eligible"
+                                : "PAPER signal would be eligible"
+                              : vpsScannerStatus?.lastEnsembleDecision.paperAdmitted
+                                ? "PAPER model admitted · governance blocked"
+                                : vpsScannerStatus?.lastEnsembleDecision.admitted
+                                  ? "Promotion model admitted · PAPER governance blocked"
+                                  : "Ensemble decision · NO TRADE"
                           : automationRuntime?.last_decision === "NO_NEW_MARKET_DATA"
                             ? "Waiting for new market data"
                             : confidencePercent >= 60
