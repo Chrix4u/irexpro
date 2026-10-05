@@ -3,6 +3,7 @@ import { PlanBEnsembleScore } from './plan-b-multimodel-shadow';
 export const ENSEMBLE_GOVERNANCE_VERSION = 'ensemble-governance-v1';
 export const ENSEMBLE_COST_MODEL_VERSION = 'paper-spread-plus-25pct-slippage-v1';
 export const ENSEMBLE_DRIFT_MODEL_VERSION = 'development-envelope-4599-v1';
+export const ENSEMBLE_PAPER_NET_EXPECTED_R_FLOOR = 0;
 export const ENSEMBLE_NET_EXPECTED_R_FLOOR = 0.08;
 export const ENSEMBLE_SLEEVE_CORE_MIN_CLOSED_TRADES = 100;
 
@@ -41,6 +42,7 @@ export interface EnsembleGovernanceDecision {
   grossExpectedR: number;
   estimatedExecutionCostR: number;
   netExpectedR: number;
+  paperNetExpectedRPassed: boolean;
   netExpectedRPassed: boolean;
   driftState: EnsembleDriftState;
   driftQuality: number;
@@ -166,7 +168,7 @@ function executionCostR(input: EnsembleGovernanceInput): number {
     return Number.POSITIVE_INFINITY;
   }
   // PAPER enters/exits across bid/ask. A 25% buffer above the fixed spread
-  // represents conservative slippage/quote uncertainty for promotion checks.
+  // represents conservative slippage/quote uncertainty for execution and promotion checks.
   return (1.25 * spread) / stopDistance;
 }
 
@@ -176,6 +178,8 @@ export function evaluateEnsembleGovernance(
   const grossExpectedR = input.ensemble.expectedR;
   const estimatedExecutionCostR = executionCostR(input);
   const netExpectedR = grossExpectedR - estimatedExecutionCostR;
+  const paperNetExpectedRPassed =
+    Number.isFinite(netExpectedR) && netExpectedR > ENSEMBLE_PAPER_NET_EXPECTED_R_FLOOR;
   const netExpectedRPassed =
     Number.isFinite(netExpectedR) && netExpectedR >= ENSEMBLE_NET_EXPECTED_R_FLOOR;
   const drift = driftOf(input);
@@ -189,15 +193,17 @@ export function evaluateEnsembleGovernance(
   // CORE remains mandatory for promotion beyond PAPER.
   const paperExecutionBlockers: string[] = [];
   if (!input.ensemble.admitted) paperExecutionBlockers.push('ENSEMBLE_NOT_ADMITTED');
-  if (!netExpectedRPassed) paperExecutionBlockers.push('NET_EXPECTED_R');
+  if (!paperNetExpectedRPassed) paperExecutionBlockers.push('PAPER_NET_EXPECTED_R');
   if (!driftPassed) paperExecutionBlockers.push(`DRIFT_${drift.state}`);
   if (sleeveState === 'BLOCKED') paperExecutionBlockers.push('SLEEVE_BLOCKED');
   if (eventRisk !== 'CLEAR') paperExecutionBlockers.push(`EVENT_RISK_${eventRisk}`);
 
-  const blockers = [...paperExecutionBlockers];
-  if (sleeveState !== 'CORE' && sleeveState !== 'BLOCKED') {
-    blockers.push(`SLEEVE_${sleeveState}`);
-  }
+  const blockers: string[] = [];
+  if (!input.ensemble.admitted) blockers.push('ENSEMBLE_NOT_ADMITTED');
+  if (!netExpectedRPassed) blockers.push('NET_EXPECTED_R');
+  if (!driftPassed) blockers.push(`DRIFT_${drift.state}`);
+  if (sleeveState !== 'CORE') blockers.push(`SLEEVE_${sleeveState}`);
+  if (eventRisk !== 'CLEAR') blockers.push(`EVENT_RISK_${eventRisk}`);
 
   return {
     version: ENSEMBLE_GOVERNANCE_VERSION,
@@ -206,6 +212,7 @@ export function evaluateEnsembleGovernance(
     grossExpectedR,
     estimatedExecutionCostR,
     netExpectedR,
+    paperNetExpectedRPassed,
     netExpectedRPassed,
     driftState: drift.state,
     driftQuality: drift.quality,

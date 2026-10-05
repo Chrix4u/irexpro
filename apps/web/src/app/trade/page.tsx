@@ -213,7 +213,8 @@ interface VpsForexScannerStatusView {
     candidateConfidenceFloor: number;
     metaProbabilityFloor: number;
     grossExpectedRFloor: number;
-    netExpectedRFloor: number;
+    paperNetExpectedRFloor: number;
+    promotionNetExpectedRFloor: number;
     sleeveCoreMinClosedTrades: number;
   };
   lastEvaluatedConfidence: number | null;
@@ -439,6 +440,7 @@ interface VpsForexScannerStatusView {
       grossExpectedR: number;
       estimatedExecutionCostR: number;
       netExpectedR: number;
+      paperNetExpectedRPassed: boolean;
       netExpectedRPassed: boolean;
       driftState: "NORMAL" | "STRESSED" | "OUT_OF_DISTRIBUTION";
       driftQuality: number;
@@ -4090,7 +4092,7 @@ export default function AiTradingPage() {
                     </div>
                     {vpsConfidenceActive && vpsScannerStatus?.lastEnsembleDecision.evaluatedAt ? (
                       <p>
-                        Candidate {formatConfidence(vpsScannerStatus.lastEnsembleDecision.candidateConfidence)} / {formatConfidence(vpsScannerStatus.ensembleThresholds.candidateConfidenceFloor)} floor · Meta {formatConfidence(vpsScannerStatus.lastEnsembleDecision.metaProbability)} / {formatConfidence(vpsScannerStatus.ensembleThresholds.metaProbabilityFloor)} gate · Gross EV {providerMetric(vpsScannerStatus.lastEnsembleDecision.expectedR, 3)} R / {providerMetric(vpsScannerStatus.ensembleThresholds.grossExpectedRFloor, 3)} R · Net EV {providerMetric(vpsScannerStatus.lastEnsembleDecision.governance?.netExpectedR ?? null, 3)} R / {providerMetric(vpsScannerStatus.ensembleThresholds.netExpectedRFloor, 3)} R · Sleeve {vpsScannerStatus.lastEnsembleDecision.governance?.sleeveState ?? "UNKNOWN"} {vpsScannerStatus.lastEnsembleDecision.governance?.sleeveEvidence?.closedTrades ?? 0}/{vpsScannerStatus.ensembleThresholds.sleeveCoreMinClosedTrades}
+                        Candidate {formatConfidence(vpsScannerStatus.lastEnsembleDecision.candidateConfidence)} / {formatConfidence(vpsScannerStatus.ensembleThresholds.candidateConfidenceFloor)} floor · Meta {formatConfidence(vpsScannerStatus.lastEnsembleDecision.metaProbability)} / {formatConfidence(vpsScannerStatus.ensembleThresholds.metaProbabilityFloor)} gate · Gross EV {providerMetric(vpsScannerStatus.lastEnsembleDecision.expectedR, 3)} R / {providerMetric(vpsScannerStatus.ensembleThresholds.grossExpectedRFloor, 3)} R · Net EV {providerMetric(vpsScannerStatus.lastEnsembleDecision.governance?.netExpectedR ?? null, 3)} R / &gt; {providerMetric(vpsScannerStatus.ensembleThresholds.paperNetExpectedRFloor, 3)} R PAPER · {providerMetric(vpsScannerStatus.ensembleThresholds.promotionNetExpectedRFloor, 3)} R promotion · Sleeve {vpsScannerStatus.lastEnsembleDecision.governance?.sleeveState ?? "UNKNOWN"} {vpsScannerStatus.lastEnsembleDecision.governance?.sleeveEvidence?.closedTrades ?? 0}/{vpsScannerStatus.ensembleThresholds.sleeveCoreMinClosedTrades}
                       </p>
                     ) : null}
                     <p>

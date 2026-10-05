@@ -25,6 +25,7 @@ import {
 } from './plan-b-multimodel-shadow';
 import {
   ENSEMBLE_NET_EXPECTED_R_FLOOR,
+  ENSEMBLE_PAPER_NET_EXPECTED_R_FLOOR,
   ENSEMBLE_SLEEVE_CORE_MIN_CLOSED_TRADES,
   EnsembleGovernanceDecision,
   classifyEnsembleSleeveEvidence,
@@ -613,7 +614,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         candidateConfidenceFloor: CONFIDENCE_FLOOR,
         metaProbabilityFloor: PLAN_B_SHADOW_ADMISSION_THRESHOLD,
         grossExpectedRFloor: PLAN_B_GROSS_EXPECTED_R_FLOOR,
-        netExpectedRFloor: ENSEMBLE_NET_EXPECTED_R_FLOOR,
+        paperNetExpectedRFloor: ENSEMBLE_PAPER_NET_EXPECTED_R_FLOOR,
+        promotionNetExpectedRFloor: ENSEMBLE_NET_EXPECTED_R_FLOOR,
         sleeveCoreMinClosedTrades: ENSEMBLE_SLEEVE_CORE_MIN_CLOSED_TRADES,
       },
       lastEvaluatedConfidence: this.lastEvaluation.confidence,

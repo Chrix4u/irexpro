@@ -11,7 +11,8 @@ const VALID_STATUS = {
     candidateConfidenceFloor: 0.64,
     metaProbabilityFloor: 0.40828402366863903,
     grossExpectedRFloor: 0.08,
-    netExpectedRFloor: 0.08,
+    paperNetExpectedRFloor: 0,
+    promotionNetExpectedRFloor: 0.08,
     sleeveCoreMinClosedTrades: 100,
   },
   marketSchedule: {
@@ -22,6 +23,7 @@ const VALID_STATUS = {
   lastEnsembleDecision: {
     reasons: [],
     governance: {
+      paperNetExpectedRPassed: false,
       paperExecutionEligible: false,
       paperExecutionBlockers: ["ENSEMBLE_NOT_ADMITTED"],
       paperPromotionEligible: false,
@@ -62,7 +64,6 @@ describe("VPS scanner UI status runtime guard", () => {
   it("rejects an empty rolling-deployment payload instead of letting the page crash", () => {
     expect(hasVpsScannerUiShape({})).toBe(false);
   });
-
 
   it("rejects an older payload without authoritative ensemble thresholds", () => {
     const { ensembleThresholds: _ignored, ...oldStatus } = VALID_STATUS;

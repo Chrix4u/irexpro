@@ -34,7 +34,8 @@ export function hasVpsScannerUiShape(value: unknown): boolean {
     typeof thresholds.candidateConfidenceFloor !== "number" ||
     typeof thresholds.metaProbabilityFloor !== "number" ||
     typeof thresholds.grossExpectedRFloor !== "number" ||
-    typeof thresholds.netExpectedRFloor !== "number" ||
+    typeof thresholds.paperNetExpectedRFloor !== "number" ||
+    typeof thresholds.promotionNetExpectedRFloor !== "number" ||
     typeof thresholds.sleeveCoreMinClosedTrades !== "number" ||
     typeof marketSchedule.paused !== "boolean" ||
     typeof marketSchedule.nextEligibleScanAt !== "string" ||
@@ -62,9 +63,9 @@ export function hasVpsScannerUiShape(value: unknown): boolean {
     return false;
   }
 
-
   if (isRecord(lastDecision.governance)) {
     if (
+      typeof lastDecision.governance.paperNetExpectedRPassed !== "boolean" ||
       typeof lastDecision.governance.paperExecutionEligible !== "boolean" ||
       !Array.isArray(lastDecision.governance.paperExecutionBlockers) ||
       typeof lastDecision.governance.paperPromotionEligible !== "boolean"
