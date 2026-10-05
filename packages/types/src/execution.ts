@@ -22,6 +22,7 @@ export type TradeExecutionCloseReason =
   | 'AI_CLOSE_SIGNAL'
   | 'KILL_SWITCH_FORCE_CLOSE'
   | 'BROKER_CLOSE'
+  | 'STRATEGY_CUTOVER'
   | 'RECONCILIATION';
 
 export interface UserCapitalAllocationView {
