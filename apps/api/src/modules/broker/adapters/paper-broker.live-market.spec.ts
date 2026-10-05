@@ -199,7 +199,6 @@ describe('PaperBrokerAdapter — scoped VPS live market mode', () => {
     const bars = protectionBars();
     live.updateClosedCandles('EURUSD', bars.initial, 'conn-mark-only');
     const executionQuote = live.getQuote('EURUSD', 20 * 60_000, 'conn-mark-only');
-    const executionMid = ((Number(executionQuote.bid) + Number(executionQuote.ask)) / 2).toFixed(5);
 
     live.updateStreamingMidQuote('EURUSD', 1.105, new Date(), 'conn-mark-only');
     expect(live.getMarkQuote('EURUSD', 60_000, 20 * 60_000, 'conn-mark-only').source).toBe(
@@ -219,7 +218,9 @@ describe('PaperBrokerAdapter — scoped VPS live market mode', () => {
       orderKind: 'MARKET',
     });
 
-    expect(result.filledPrice).toBe(executionMid);
+    // SELL execution is intentionally spread-aware and fills at the closed-M5 bid.
+    // The streaming tick is valuation-only and must never alter the fill price.
+    expect(result.filledPrice).toBe(executionQuote.bid);
     const [position] = await adapter.getOpenPositions();
     expect(position!.markSource).toBe('STREAM');
     expect(Number(position!.currentPrice)).toBeCloseTo(1.10505, 5);
