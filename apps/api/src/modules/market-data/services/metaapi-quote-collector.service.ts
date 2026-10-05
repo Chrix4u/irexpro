@@ -32,6 +32,7 @@ export class MetaApiQuoteCollectorService implements OnModuleInit, OnModuleDestr
   private readonly logger = new Logger(MetaApiQuoteCollectorService.name);
   private timer: NodeJS.Timeout | null = null;
   private busy = false;
+  private stopping = false;
   private readonly warnedAt = new Map<string, number>();
   private readonly cooldownUntilByConnection = new Map<string, number>();
 
@@ -73,15 +74,36 @@ export class MetaApiQuoteCollectorService implements OnModuleInit, OnModuleDestr
         'schedule=Mon-Fri<21UTC quotaCooldown=30m',
     );
 
-    const initial = setTimeout(() => void this.collectOnce(), 2_000);
-    initial.unref?.();
-    this.timer = setInterval(() => void this.collectOnce(), intervalMs);
-    this.timer.unref?.();
+    this.stopping = false;
+    this.scheduleCollection(intervalMs, 2_000);
   }
 
   onModuleDestroy(): void {
-    if (this.timer) clearInterval(this.timer);
+    this.stopping = true;
+    if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+  }
+
+  private scheduleCollection(intervalMs: number, delayMs: number): void {
+    if (this.stopping) return;
+    this.timer = setTimeout(
+      async () => {
+        const startedAt = Date.now();
+        try {
+          await this.collectOnce();
+        } finally {
+          if (this.stopping) return;
+          // Preserve the configured start-to-start cadence without overlapping
+          // provider work. setInterval + the busy gate used to quantize a
+          // 31-second cycle into ~60 seconds by skipping the next 30-second tick.
+          const elapsedMs = Date.now() - startedAt;
+          const nextDelayMs = Math.max(1_000, intervalMs - elapsedMs);
+          this.scheduleCollection(intervalMs, nextDelayMs);
+        }
+      },
+      Math.max(0, delayMs),
+    );
+    this.timer.unref?.();
   }
 
   async collectOnce(now = new Date()): Promise<void> {
