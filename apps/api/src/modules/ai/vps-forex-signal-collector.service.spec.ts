@@ -2,6 +2,7 @@ import { ConfigService } from '@nestjs/config';
 import { AiSignalService } from './ai-signal.service';
 import {
   VpsForexSignalCollectorService,
+  canExecuteMultiModelPaper,
   buildCandidate,
   isFreshOpportunity,
 } from './vps-forex-signal-collector.service';
@@ -95,6 +96,32 @@ function config(values: Record<string, unknown>) {
   } as unknown as ConfigService;
 }
 
+describe('multi-model PAPER execution gate', () => {
+  it('allows an admitted setup when PAPER governance passes even while promotion remains separate', () => {
+    expect(
+      canExecuteMultiModelPaper(
+        { admitted: true },
+        { paperExecutionEligible: true },
+      ),
+    ).toBe(true);
+  });
+
+  it('fails closed when model admission or PAPER governance fails', () => {
+    expect(
+      canExecuteMultiModelPaper(
+        { admitted: false },
+        { paperExecutionEligible: true },
+      ),
+    ).toBe(false);
+    expect(
+      canExecuteMultiModelPaper(
+        { admitted: true },
+        { paperExecutionEligible: false },
+      ),
+    ).toBe(false);
+  });
+});
+
 describe('VpsForexSignalCollectorService', () => {
   it('builds a deterministic qualifying trend candidate without claiming model qualification', () => {
     const candidate = buildCandidate('EURUSD', trendCandles());
@@ -157,8 +184,10 @@ describe('VpsForexSignalCollectorService', () => {
         evaluated_at: new Date(current!.barTime.getTime() + 5 * 60_000),
         admitted: false,
         ensemble_score: '0.41250000',
+        meta_probability: '0.40125000',
+        expected_r: '0.07000000',
         consensus_passed: 4,
-        consensus_required: 7,
+        consensus_required: 6,
         regime: 'TREND_WEAK',
         reasons: ['REGIME_TREND_WEAK'],
       },
@@ -192,9 +221,12 @@ describe('VpsForexSignalCollectorService', () => {
         instrument: 'EURUSD',
         direction: current!.direction,
         admitted: false,
+        candidateConfidence: current!.confidence,
         ensembleScore: 0.4125,
+        metaProbability: 0.40125,
+        expectedR: 0.07,
         consensusPassed: 4,
-        consensusRequired: 7,
+        consensusRequired: 6,
         regime: 'TREND_WEAK',
         reasons: ['REGIME_TREND_WEAK'],
       }),

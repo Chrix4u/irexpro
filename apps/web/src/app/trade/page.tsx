@@ -209,6 +209,13 @@ interface VpsForexScannerStatusView {
   timeframe: string;
   skippedUtcHours: number[];
   confidenceFloor: number;
+  ensembleThresholds: {
+    candidateConfidenceFloor: number;
+    metaProbabilityFloor: number;
+    grossExpectedRFloor: number;
+    netExpectedRFloor: number;
+    sleeveCoreMinClosedTrades: number;
+  };
   lastEvaluatedConfidence: number | null;
   lastEvaluatedInstrument: string | null;
   lastEvaluatedDirection: "BUY" | "SELL" | null;
@@ -417,7 +424,10 @@ interface VpsForexScannerStatusView {
     instrument: string | null;
     direction: "BUY" | "SELL" | null;
     admitted: boolean;
+    candidateConfidence: number | null;
     ensembleScore: number | null;
+    metaProbability: number | null;
+    expectedR: number | null;
     consensusPassed: number | null;
     consensusRequired: number | null;
     regime: string | null;
@@ -442,6 +452,8 @@ interface VpsForexScannerStatusView {
         positiveWindowFraction: number | null;
       } | null;
       eventRisk: "CLEAR" | "HIGH_IMPACT_BLOCK" | "UNVERIFIED";
+      paperExecutionEligible: boolean;
+      paperExecutionBlockers: string[];
       paperPromotionEligible: boolean;
       blockers: string[];
     } | null;
@@ -1469,8 +1481,13 @@ export default function AiTradingPage() {
     0,
     Math.min(100, (displayedConfidence ?? 0) * 100),
   );
-  const confidenceTone =
-    confidencePercent >= 70
+  const confidenceTone = vpsConfidenceActive
+    ? vpsScannerStatus?.lastEnsembleDecision.governance?.paperExecutionEligible
+      ? "strong"
+      : vpsScannerStatus?.lastEnsembleDecision.admitted
+        ? "ready"
+        : "building"
+    : confidencePercent >= 70
       ? "strong"
       : confidencePercent >= 60
         ? "ready"
@@ -2519,13 +2536,19 @@ export default function AiTradingPage() {
                       </h2>
                       <p>
                         The multi-model engine is now the active strategy architecture. Legacy v7 is frozen as a
-                        benchmark only. Shadow observation runs automatically from market data and does not require an
-                        active PAPER execution session. Specialists progress independently through research, shadow and
-                        qualification; only a frozen ensemble artifact may advance to dedicated PAPER, DEMO and LIVE.
+                        benchmark only. The ensemble continues prospective evidence collection while admitted, governed
+                        opportunities may execute only through the internal PAPER session. Specialist challengers remain
+                        shadow-only until separately qualified. DEMO and LIVE remain blocked until promotion gates pass.
                       </p>
                     </div>
                     <div className="ai-provider-evidence__badges">
-                      <Badge variant="info">MULTI-MODEL · SHADOW</Badge>
+                      <Badge
+                        variant={vpsScannerStatus?.executionAuthority === "PAPER_ONLY" ? "success" : "info"}
+                      >
+                        {vpsScannerStatus?.executionAuthority === "PAPER_ONLY"
+                          ? "MULTI-MODEL · PAPER"
+                          : "MULTI-MODEL · SHADOW"}
+                      </Badge>
                       <Badge variant="warning">V7 · FROZEN BASELINE</Badge>
                       <Badge
                         variant={
@@ -2548,9 +2571,11 @@ export default function AiTradingPage() {
                       <div className="ai-strategy-detail ai-strategy-detail--artifact">
                         <span>Strategy artifact</span>
                         <strong>
-                          {vpsScannerStatus?.activeEngineCode
-                            ? `${vpsScannerStatus.activeEngineCode}/research-shadow-v1`
-                            : "irexpro-multimodel-ensemble-v1/research-shadow-v1"}
+                          {`${vpsScannerStatus?.activeEngineCode ?? "irexpro-multimodel-ensemble-v1"}/${
+                            vpsScannerStatus?.executionAuthority === "PAPER_ONLY"
+                              ? "paper-governed-v1"
+                              : "research-shadow-v1"
+                          }`}
                         </strong>
                       </div>
                       <div className="ai-strategy-detail">
@@ -2566,7 +2591,13 @@ export default function AiTradingPage() {
                     <div className="ai-strategy-detail-group">
                       <div className="ai-strategy-detail">
                         <span>Current execution</span>
-                        <strong>Shadow only · no new ensemble orders</strong>
+                        <strong>
+                          {vpsScannerStatus?.executionAuthority === "PAPER_ONLY"
+                            ? vpsScannerStatus.activePaperSession
+                              ? "Internal PAPER · governed ensemble orders"
+                              : "PAPER authority · waiting for PAPER session"
+                            : "Shadow only · no new ensemble orders"}
+                        </strong>
                       </div>
                       <div className="ai-strategy-detail">
                         <span>Strategy lifecycle</span>
@@ -2765,11 +2796,11 @@ export default function AiTradingPage() {
 
                     <div className="ai-strategy-detail-group">
                       <div className="ai-strategy-detail">
-                        <span>PAPER promotion</span>
+                        <span>PAPER execution gate</span>
                         <strong>
-                          {vpsScannerStatus?.lastEnsembleDecision.governance?.paperPromotionEligible
-                            ? "ELIGIBLE"
-                            : "LOCKED BY GOVERNANCE"}
+                          {vpsScannerStatus?.lastEnsembleDecision.governance?.paperExecutionEligible
+                            ? "CURRENT SETUP ELIGIBLE"
+                            : "CURRENT SETUP BLOCKED"}
                         </strong>
                       </div>
                       <div className="ai-strategy-detail">
@@ -2780,23 +2811,36 @@ export default function AiTradingPage() {
                   </div>
 
                   <div className="ai-promotion-path" aria-label="Strategy promotion path">
-                    <div className="ai-promotion-path__step is-current">
+                    <div
+                      className={
+                        "ai-promotion-path__step " +
+                        (vpsScannerStatus?.executionAuthority === "PAPER_ONLY" ? "is-ready" : "is-current")
+                      }
+                    >
                       <span>1</span>
                       <div>
                         <strong>Research Shadow</strong>
-                        <small>Regime + specialists + net-EV + portfolio consensus · no orders</small>
+                        <small>Prospective evidence continues independently · shadow observations never send orders</small>
                       </div>
                     </div>
                     <div
                       className={
                         "ai-promotion-path__step " +
-                        (vpsScannerStatus?.multiModelPaperExecutionEnabled ? "is-ready" : "is-locked")
+                        (vpsScannerStatus?.executionAuthority === "PAPER_ONLY"
+                          ? "is-current"
+                          : vpsScannerStatus?.multiModelPaperExecutionEnabled
+                            ? "is-ready"
+                            : "is-locked")
                       }
                     >
                       <span>2</span>
                       <div>
-                        <strong>Dedicated Ensemble PAPER</strong>
-                        <small>Fresh isolated $10,000 cohort only after all promotion gates pass</small>
+                        <strong>Governed Ensemble PAPER</strong>
+                        <small>
+                          {vpsScannerStatus?.executionAuthority === "PAPER_ONLY"
+                            ? "Current execution stage · collecting evidence while safety gates stay active"
+                            : "Dedicated PAPER only after execution governance is enabled"}
+                        </small>
                       </div>
                     </div>
                     <div className="ai-promotion-path__step is-locked">
@@ -2840,10 +2884,11 @@ export default function AiTradingPage() {
                         {vpsScannerStatus?.activeEngineDisplayName ?? "iRexPro Multi-Model Ensemble"}
                       </h2>
                       <p>
-                        The legacy v7 single-model execution path is frozen and retained only as
-                        historical evidence. New market opportunities are evaluated by the multi-model
-                        ensemble; PAPER execution remains disabled until the ensemble specialists earn
-                        qualification. Closed M5 context and quote/microstructure research remain causal inputs.
+                        The legacy v7 single-model execution path is frozen and retained only as historical
+                        evidence. New market opportunities are evaluated by the multi-model ensemble. Under PAPER
+                        authority, only admitted setups that pass PAPER execution governance may execute through the
+                        exact internal PAPER session. DEMO and LIVE remain disabled until promotion gates pass. Closed
+                        M5 context and quote/microstructure research remain causal inputs.
                       </p>
                     </div>
                     <div className="ai-provider-evidence__badges">
@@ -2906,14 +2951,16 @@ export default function AiTradingPage() {
                     </div>
                     <div>
                       <span>Shadow observer</span>
-                      <strong>AUTO · PAPER SESSION NOT REQUIRED</strong>
+                      <strong>AUTO · EVIDENCE COLLECTION CONTINUES</strong>
                     </div>
                     <div>
                       <span>PAPER execution session</span>
                       <strong>
                         {vpsScannerStatus?.activePaperSession
                           ? "ACTIVE"
-                          : "INACTIVE · EXPECTED IN SHADOW"}
+                          : vpsScannerStatus?.executionAuthority === "PAPER_ONLY"
+                            ? "INACTIVE · EXECUTION WAITING"
+                            : "INACTIVE · EXPECTED IN SHADOW"}
                       </strong>
                     </div>
                     <div>
@@ -2947,7 +2994,9 @@ export default function AiTradingPage() {
                       <strong>{vpsScannerStatus?.ensembleCampaign.decisions ?? 0}</strong>
                     </div>
                     <div>
-                      <span>Would admit</span>
+                      <span>
+                        {vpsScannerStatus?.executionAuthority === "PAPER_ONLY" ? "Admitted" : "Would admit"}
+                      </span>
                       <strong>
                         {vpsScannerStatus?.ensembleCampaign.admitted ?? 0} / {vpsScannerStatus?.ensembleCampaign.decisions ?? 0}
                       </strong>
@@ -4007,7 +4056,9 @@ export default function AiTradingPage() {
                     className={`ai-confidence ai-confidence--${confidenceTone}`}
                   >
                     <span className="ai-cockpit__label">
-                      {vpsConfidenceActive ? "Multi-model ensemble score" : "AI confidence"}
+                      {vpsConfidenceActive
+                        ? "Multi-model ensemble score · diagnostic"
+                        : "AI confidence"}
                     </span>
                     <strong className="ai-confidence__value">
                       {formatConfidence(displayedConfidence)}
@@ -4021,7 +4072,9 @@ export default function AiTradingPage() {
                           ? vpsScannerStatus?.marketSchedule.paused
                             ? "No new decision while market is paused"
                             : vpsScannerStatus?.lastEnsembleDecision.admitted
-                              ? "Ensemble would admit this setup"
+                              ? vpsScannerStatus.executionAuthority === "PAPER_ONLY"
+                                ? "Ensemble admitted this setup"
+                                : "Ensemble would admit this setup"
                               : "Ensemble decision · NO TRADE"
                           : automationRuntime?.last_decision === "NO_NEW_MARKET_DATA"
                             ? "Waiting for new market data"
@@ -4031,16 +4084,21 @@ export default function AiTradingPage() {
                       </span>
                       <span>
                         {vpsConfidenceActive
-                          ? `${vpsScannerStatus?.lastEnsembleDecision.consensusPassed ?? 0}/${vpsScannerStatus?.lastEnsembleDecision.consensusRequired ?? 0} model votes`
+                          ? `${vpsScannerStatus?.lastEnsembleDecision.consensusPassed ?? 0}/${vpsScannerStatus?.lastEnsembleDecision.consensusRequired ?? 0} policy checks`
                           : `${formatConfidence(displayedConfidenceThreshold)} gate`}
                       </span>
                     </div>
+                    {vpsConfidenceActive && vpsScannerStatus?.lastEnsembleDecision.evaluatedAt ? (
+                      <p>
+                        Candidate {formatConfidence(vpsScannerStatus.lastEnsembleDecision.candidateConfidence)} / {formatConfidence(vpsScannerStatus.ensembleThresholds.candidateConfidenceFloor)} floor · Meta {formatConfidence(vpsScannerStatus.lastEnsembleDecision.metaProbability)} / {formatConfidence(vpsScannerStatus.ensembleThresholds.metaProbabilityFloor)} gate · Gross EV {providerMetric(vpsScannerStatus.lastEnsembleDecision.expectedR, 3)} R / {providerMetric(vpsScannerStatus.ensembleThresholds.grossExpectedRFloor, 3)} R · Net EV {providerMetric(vpsScannerStatus.lastEnsembleDecision.governance?.netExpectedR ?? null, 3)} R / {providerMetric(vpsScannerStatus.ensembleThresholds.netExpectedRFloor, 3)} R · Sleeve {vpsScannerStatus.lastEnsembleDecision.governance?.sleeveState ?? "UNKNOWN"} {vpsScannerStatus.lastEnsembleDecision.governance?.sleeveEvidence?.closedTrades ?? 0}/{vpsScannerStatus.ensembleThresholds.sleeveCoreMinClosedTrades}
+                      </p>
+                    ) : null}
                     <p>
                       {vpsConfidenceActive
                         ? vpsScannerStatus?.marketSchedule.paused
                           ? `Market paused: ${vpsScannerStatus.marketSchedule.reason === "WEEKEND" ? "weekend closure" : "rollover / low-liquidity window"}. Next eligible scan ${formatTimestamp(vpsScannerStatus.marketSchedule.nextEligibleScanAt)}.`
                           : vpsScannerStatus?.lastEnsembleDecision.evaluatedAt
-                            ? `${vpsScannerStatus.lastEnsembleDecision.instrument ?? "Setup"} ${vpsScannerStatus.lastEnsembleDecision.direction ?? ""} · ${vpsScannerStatus.lastEnsembleDecision.regime ?? "regime pending"} · ${vpsScannerStatus.lastEnsembleDecision.reasons.join(", ") || "ADMIT"} · evaluated ${formatTimestamp(vpsScannerStatus.lastEnsembleDecision.evaluatedAt)}`
+                            ? `${vpsScannerStatus.lastEnsembleDecision.instrument ?? "Setup"} ${vpsScannerStatus.lastEnsembleDecision.direction ?? ""} · ${vpsScannerStatus.lastEnsembleDecision.regime ?? "regime pending"} · ${vpsScannerStatus.lastEnsembleDecision.reasons.join(", ") || "ADMIT"} · PAPER ${vpsScannerStatus.lastEnsembleDecision.governance?.paperExecutionEligible ? "eligible" : `blocked: ${vpsScannerStatus.lastEnsembleDecision.governance?.paperExecutionBlockers.join(", ") || "MODEL"}`} · DEMO/LIVE promotion ${vpsScannerStatus.lastEnsembleDecision.governance?.paperPromotionEligible ? "eligible for review" : "locked"} · evaluated ${formatTimestamp(vpsScannerStatus.lastEnsembleDecision.evaluatedAt)}`
                             : "Multi-model ensemble is waiting for its first eligible market scan. Legacy v7 cannot execute during this transition."
                         : automationRuntime?.last_decision === "NO_NEW_MARKET_DATA"
                           ? `No new candle after ${formatTimestamp(automationRuntime?.last_market_data_at)}. Confidence will update when a new market revision is evaluated.`

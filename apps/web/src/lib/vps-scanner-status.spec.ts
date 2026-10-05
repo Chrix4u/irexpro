@@ -7,6 +7,13 @@ const VALID_STATUS = {
   enabled: true,
   activeEngineCode: "irexpro-multimodel-ensemble-v1",
   executionAuthority: "PAPER_ONLY",
+  ensembleThresholds: {
+    candidateConfidenceFloor: 0.64,
+    metaProbabilityFloor: 0.40828402366863903,
+    grossExpectedRFloor: 0.08,
+    netExpectedRFloor: 0.08,
+    sleeveCoreMinClosedTrades: 100,
+  },
   marketSchedule: {
     paused: false,
     reason: null,
@@ -14,7 +21,11 @@ const VALID_STATUS = {
   },
   lastEnsembleDecision: {
     reasons: [],
-    governance: null,
+    governance: {
+      paperExecutionEligible: false,
+      paperExecutionBlockers: ["ENSEMBLE_NOT_ADMITTED"],
+      paperPromotionEligible: false,
+    },
     macroEventAssessment: null,
     highConvictionOverlay: null,
   },
@@ -50,6 +61,24 @@ describe("VPS scanner UI status runtime guard", () => {
 
   it("rejects an empty rolling-deployment payload instead of letting the page crash", () => {
     expect(hasVpsScannerUiShape({})).toBe(false);
+  });
+
+
+  it("rejects an older payload without authoritative ensemble thresholds", () => {
+    const { ensembleThresholds: _ignored, ...oldStatus } = VALID_STATUS;
+    expect(hasVpsScannerUiShape(oldStatus)).toBe(false);
+  });
+
+  it("rejects governance without the PAPER execution split", () => {
+    expect(
+      hasVpsScannerUiShape({
+        ...VALID_STATUS,
+        lastEnsembleDecision: {
+          ...VALID_STATUS.lastEnsembleDecision,
+          governance: { paperPromotionEligible: false },
+        },
+      }),
+    ).toBe(false);
   });
 
   it("rejects a malformed nested market schedule", () => {

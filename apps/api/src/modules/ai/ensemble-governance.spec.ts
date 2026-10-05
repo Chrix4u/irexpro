@@ -45,12 +45,25 @@ describe('evaluateEnsembleGovernance', () => {
   it('keeps shadow admission separate from PAPER promotion governance', () => {
     const result = evaluateEnsembleGovernance(base);
     expect(ensemble.admitted).toBe(true);
+    expect(result.paperExecutionEligible).toBe(false);
     expect(result.paperPromotionEligible).toBe(false);
     expect(result.sleeveState).toBe('COLLECTING');
     expect(result.eventRisk).toBe('UNVERIFIED');
     expect(result.blockers).toEqual(
       expect.arrayContaining(['SLEEVE_COLLECTING', 'EVENT_RISK_UNVERIFIED']),
     );
+  });
+
+  it('allows safe PAPER execution while sleeve evidence is still collecting', () => {
+    const result = evaluateEnsembleGovernance({
+      ...base,
+      eventRisk: 'CLEAR',
+    });
+    expect(result.sleeveState).toBe('COLLECTING');
+    expect(result.paperExecutionEligible).toBe(true);
+    expect(result.paperExecutionBlockers).toEqual([]);
+    expect(result.paperPromotionEligible).toBe(false);
+    expect(result.blockers).toContain('SLEEVE_COLLECTING');
   });
 
   it('deducts conservative execution friction from expected R', () => {
@@ -92,6 +105,7 @@ describe('evaluateEnsembleGovernance', () => {
       },
     });
     expect(result.sleeveState).toBe('CORE');
+    expect(result.paperExecutionEligible).toBe(true);
     expect(result.paperPromotionEligible).toBe(true);
     expect(result.blockers).toEqual([]);
   });
@@ -109,6 +123,7 @@ describe('evaluateEnsembleGovernance', () => {
       },
     });
     expect(probation.sleeveState).toBe('PROBATION');
+    expect(probation.paperExecutionEligible).toBe(true);
     expect(probation.paperPromotionEligible).toBe(false);
 
     const blocked = evaluateEnsembleGovernance({
@@ -123,6 +138,8 @@ describe('evaluateEnsembleGovernance', () => {
       },
     });
     expect(blocked.sleeveState).toBe('BLOCKED');
+    expect(blocked.paperExecutionEligible).toBe(false);
+    expect(blocked.paperExecutionBlockers).toContain('SLEEVE_BLOCKED');
     expect(blocked.paperPromotionEligible).toBe(false);
   });
 });

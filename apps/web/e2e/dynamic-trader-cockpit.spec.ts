@@ -61,9 +61,6 @@ const rejectedExecution = {
   updatedAt: "2026-08-31T00:50:00.000Z",
 };
 
-const defaultBrokerLabel =
-  mockBrokerConnections[0].displayName ?? mockBrokerConnections[0].brokerName;
-
 const livePosition = {
   id: executionPosition.id,
   brokerConnectionId: mockBrokerConnections[0].id,
@@ -313,8 +310,8 @@ test.describe("AI Trader novice workflow", () => {
     await gotoAiTrader(page);
 
     await expect(
-      page.getByText(defaultBrokerLabel, { exact: false }).first(),
-    ).toBeVisible();
+      page.getByRole("combobox", { name: "Broker account" }),
+    ).toHaveValue(mockBrokerConnections[0].id);
 
     const researchUat = page.locator(".ai-research-uat-copy");
     const researchUatHeading = researchUat.getByText(
@@ -587,10 +584,8 @@ test.describe("AI Trader novice workflow", () => {
     });
 
     await expect(
-      page
-        .getByText(historicalConnectedBroker.brokerName, { exact: false })
-        .first(),
-    ).toBeVisible();
+      page.getByRole("combobox", { name: "Broker account" }),
+    ).toHaveValue(mockBrokerConnections[0].id);
     await expect(
       page.getByText("No broker connected", { exact: true }),
     ).toHaveCount(0);
@@ -613,8 +608,8 @@ test.describe("AI Trader novice workflow", () => {
     });
 
     await expect(
-      page.getByText(defaultBrokerLabel, { exact: false }).first(),
-    ).toBeVisible();
+      page.getByRole("combobox", { name: "Broker account" }),
+    ).toHaveValue(mockBrokerConnections[0].id);
     await expect(
       page.getByText("No broker connected", { exact: true }),
     ).toHaveCount(0);
@@ -645,8 +640,8 @@ test.describe("AI Trader novice workflow", () => {
     await gotoAiTrader(page, { active: false, failAllocationRead: true });
 
     await expect(
-      page.getByText(defaultBrokerLabel, { exact: false }).first(),
-    ).toBeVisible();
+      page.getByRole("combobox", { name: "Broker account" }),
+    ).toHaveValue(mockBrokerConnections[0].id);
     await expect(
       page.getByText("No broker connected", { exact: true }),
     ).toHaveCount(0);
@@ -701,8 +696,8 @@ test.describe("AI Trader novice workflow", () => {
     // Wait for a broker-backed control so the assertion proves the one-shot
     // network retry actually completed.
     await expect(
-      page.getByText(defaultBrokerLabel, { exact: false }).first(),
-    ).toBeVisible();
+      page.getByRole("combobox", { name: "Broker account" }),
+    ).toHaveValue(mockBrokerConnections[0].id);
     await expect(
       page.getByRole("button", { name: "Stop AI Trading" }),
     ).toBeVisible();

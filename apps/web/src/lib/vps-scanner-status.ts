@@ -21,6 +21,7 @@ export function hasVpsScannerUiShape(value: unknown): boolean {
   if (!isRecord(value)) return false;
 
   const marketSchedule = value.marketSchedule;
+  const thresholds = value.ensembleThresholds;
   const lastDecision = value.lastEnsembleDecision;
   const campaign = value.ensembleCampaign;
   const challenger = value.highConvictionChallenger;
@@ -29,6 +30,12 @@ export function hasVpsScannerUiShape(value: unknown): boolean {
 
   if (
     !isRecord(marketSchedule) ||
+    !isRecord(thresholds) ||
+    typeof thresholds.candidateConfidenceFloor !== "number" ||
+    typeof thresholds.metaProbabilityFloor !== "number" ||
+    typeof thresholds.grossExpectedRFloor !== "number" ||
+    typeof thresholds.netExpectedRFloor !== "number" ||
+    typeof thresholds.sleeveCoreMinClosedTrades !== "number" ||
     typeof marketSchedule.paused !== "boolean" ||
     typeof marketSchedule.nextEligibleScanAt !== "string" ||
     !isRecord(lastDecision) ||
@@ -53,6 +60,17 @@ export function hasVpsScannerUiShape(value: unknown): boolean {
     !isRecord(marketCache)
   ) {
     return false;
+  }
+
+
+  if (isRecord(lastDecision.governance)) {
+    if (
+      typeof lastDecision.governance.paperExecutionEligible !== "boolean" ||
+      !Array.isArray(lastDecision.governance.paperExecutionBlockers) ||
+      typeof lastDecision.governance.paperPromotionEligible !== "boolean"
+    ) {
+      return false;
+    }
   }
 
   if (value.postEntryShadow !== undefined) {

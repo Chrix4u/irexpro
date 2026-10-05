@@ -2,6 +2,7 @@ import { scorePlanBShadowMeta, V8ShadowMetaInput } from './v8-shadow-meta-scorer
 
 export const PLAN_B_ENSEMBLE_ARTIFACT = 'plan-b-multimodel-shadow-v3';
 export const PLAN_B_ENSEMBLE_MODE = 'PROSPECTIVE_SHADOW_ONLY';
+export const PLAN_B_GROSS_EXPECTED_R_FLOOR = 0.08;
 
 export type PlanBRegime =
   | 'TREND_HEALTHY'
@@ -190,7 +191,7 @@ export function scorePlanBMultimodelShadow(
   if (quality < 0.48) reasons.push('TRADE_QUALITY');
   if (exit < 0.48) reasons.push('EXIT_FEASIBILITY');
   if (session < 0.5) reasons.push('SESSION_QUALITY');
-  if (meta.expectedR < 0.08) reasons.push('EXPECTED_R');
+  if (meta.expectedR < PLAN_B_GROSS_EXPECTED_R_FLOOR) reasons.push('EXPECTED_R');
   if (portfolio.quality < 0.35) reasons.push('PORTFOLIO_CONCENTRATION');
 
   const votes = [
@@ -199,7 +200,7 @@ export function scorePlanBMultimodelShadow(
     quality >= 0.48,
     exit >= 0.48,
     session >= 0.5,
-    meta.expectedR >= 0.08,
+    meta.expectedR >= PLAN_B_GROSS_EXPECTED_R_FLOOR,
     portfolio.quality >= 0.35,
   ];
   const consensusPassed = votes.filter(Boolean).length;
@@ -212,7 +213,7 @@ export function scorePlanBMultimodelShadow(
     regimeAllowed &&
     consensusPassed >= consensusRequired &&
     meta.admitted &&
-    meta.expectedR >= 0.08;
+    meta.expectedR >= PLAN_B_GROSS_EXPECTED_R_FLOOR;
 
   return {
     artifact: PLAN_B_ENSEMBLE_ARTIFACT,

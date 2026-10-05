@@ -3,6 +3,8 @@ import { PlanBEnsembleScore } from './plan-b-multimodel-shadow';
 export const ENSEMBLE_GOVERNANCE_VERSION = 'ensemble-governance-v1';
 export const ENSEMBLE_COST_MODEL_VERSION = 'paper-spread-plus-25pct-slippage-v1';
 export const ENSEMBLE_DRIFT_MODEL_VERSION = 'development-envelope-4599-v1';
+export const ENSEMBLE_NET_EXPECTED_R_FLOOR = 0.08;
+export const ENSEMBLE_SLEEVE_CORE_MIN_CLOSED_TRADES = 100;
 
 export type EnsembleDriftState = 'NORMAL' | 'STRESSED' | 'OUT_OF_DISTRIBUTION';
 export type EnsembleSleeveState = 'COLLECTING' | 'CORE' | 'PROBATION' | 'BLOCKED';
@@ -46,6 +48,8 @@ export interface EnsembleGovernanceDecision {
   sleeveState: EnsembleSleeveState;
   sleeveEvidence: EnsembleSleeveEvidence | null;
   eventRisk: EnsembleEventRiskState;
+  paperExecutionEligible: boolean;
+  paperExecutionBlockers: string[];
   paperPromotionEligible: boolean;
   blockers: string[];
 }
@@ -129,7 +133,7 @@ function driftOf(input: EnsembleGovernanceInput): { state: EnsembleDriftState; q
 export function classifyEnsembleSleeveEvidence(
   evidence?: EnsembleSleeveEvidence | null,
 ): EnsembleSleeveState {
-  if (!evidence || evidence.closedTrades < 100) return 'COLLECTING';
+  if (!evidence || evidence.closedTrades < ENSEMBLE_SLEEVE_CORE_MIN_CLOSED_TRADES) return 'COLLECTING';
   if (
     evidence.profitFactor == null ||
     evidence.sharpe == null ||
@@ -171,18 +175,28 @@ export function evaluateEnsembleGovernance(
   const grossExpectedR = input.ensemble.expectedR;
   const estimatedExecutionCostR = executionCostR(input);
   const netExpectedR = grossExpectedR - estimatedExecutionCostR;
-  const netExpectedRPassed = Number.isFinite(netExpectedR) && netExpectedR >= 0.08;
+  const netExpectedRPassed =
+    Number.isFinite(netExpectedR) && netExpectedR >= ENSEMBLE_NET_EXPECTED_R_FLOOR;
   const drift = driftOf(input);
   const driftPassed = drift.state === 'NORMAL';
   const sleeveState = classifyEnsembleSleeveEvidence(input.sleeveEvidence);
   const eventRisk = input.eventRisk ?? 'UNVERIFIED';
 
-  const blockers: string[] = [];
-  if (!input.ensemble.admitted) blockers.push('ENSEMBLE_NOT_ADMITTED');
-  if (!netExpectedRPassed) blockers.push('NET_EXPECTED_R');
-  if (!driftPassed) blockers.push(`DRIFT_${drift.state}`);
-  if (sleeveState !== 'CORE') blockers.push(`SLEEVE_${sleeveState}`);
-  if (eventRisk !== 'CLEAR') blockers.push(`EVENT_RISK_${eventRisk}`);
+  // PAPER is the evidence-collection environment. A sleeve that is still
+  // COLLECTING (or on PROBATION) may continue generating real simulated
+  // execution evidence, but an empirically BLOCKED sleeve must not execute.
+  // CORE remains mandatory for promotion beyond PAPER.
+  const paperExecutionBlockers: string[] = [];
+  if (!input.ensemble.admitted) paperExecutionBlockers.push('ENSEMBLE_NOT_ADMITTED');
+  if (!netExpectedRPassed) paperExecutionBlockers.push('NET_EXPECTED_R');
+  if (!driftPassed) paperExecutionBlockers.push(`DRIFT_${drift.state}`);
+  if (sleeveState === 'BLOCKED') paperExecutionBlockers.push('SLEEVE_BLOCKED');
+  if (eventRisk !== 'CLEAR') paperExecutionBlockers.push(`EVENT_RISK_${eventRisk}`);
+
+  const blockers = [...paperExecutionBlockers];
+  if (sleeveState !== 'CORE' && sleeveState !== 'BLOCKED') {
+    blockers.push(`SLEEVE_${sleeveState}`);
+  }
 
   return {
     version: ENSEMBLE_GOVERNANCE_VERSION,
@@ -198,6 +212,8 @@ export function evaluateEnsembleGovernance(
     sleeveState,
     sleeveEvidence: input.sleeveEvidence ?? null,
     eventRisk,
+    paperExecutionEligible: paperExecutionBlockers.length === 0,
+    paperExecutionBlockers,
     paperPromotionEligible: blockers.length === 0,
     blockers,
   };
