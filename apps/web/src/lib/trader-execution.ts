@@ -43,6 +43,7 @@ function isCloseReason(value: unknown): value is TradeExecutionCloseReason | nul
     value === 'AI_CLOSE_SIGNAL' ||
     value === 'KILL_SWITCH_FORCE_CLOSE' ||
     value === 'BROKER_CLOSE' ||
+    value === 'STRATEGY_CUTOVER' ||
     value === 'RECONCILIATION'
   );
 }
