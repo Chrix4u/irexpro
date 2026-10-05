@@ -453,7 +453,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     this.logger.log(
       `iRexPro multi-model engine enabled engine=${ACTIVE_ENGINE_CODE} legacyProvider=${LEGACY_PROVIDER_CODE} ` +
         `legacyExecutionFrozen=${LEGACY_V7_EXECUTION_FROZEN} paperExecution=${MULTI_MODEL_PAPER_EXECUTION_ENABLED} ` +
-        'cadence=10m timeframe=M5 skipUtcHours=21,22,23',
+        'cadence=10m timeframe=M5 marketHours=FX_24X5_SUN21_FRI21_UTC',
     );
     this.timer = setInterval(() => void this.maybeCollect(), 15_000);
     this.timer.unref?.();
@@ -1108,9 +1108,15 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
   } {
     const day = now.getUTCDay();
     const hour = now.getUTCHours();
-    const paused = day === 0 || day === 6 || hour >= 21;
-    const reason =
-      day === 0 || day === 6 ? 'WEEKEND' : hour >= 21 ? 'ROLLOVER_LOW_LIQUIDITY' : null;
+    // FX session: Sunday >=21:00 UTC, Monday-Thursday 24h, Friday <21:00 UTC.
+    // Do not impose a blanket nightly shutdown; spread, regime and governance
+    // gates decide whether low-liquidity rollover conditions are tradable.
+    const marketOpen =
+      (day === 0 && hour >= 21) ||
+      (day >= 1 && day <= 4) ||
+      (day === 5 && hour < 21);
+    const paused = !marketOpen;
+    const reason = paused ? 'WEEKEND' : null;
     return {
       paused,
       reason,
@@ -1126,7 +1132,11 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     for (let i = 0; i < 7 * 24 * 6 + 12; i += 1) {
       const day = candidate.getUTCDay();
       const hour = candidate.getUTCHours();
-      if (day !== 0 && day !== 6 && hour < 21) return candidate;
+      const marketOpen =
+        (day === 0 && hour >= 21) ||
+        (day >= 1 && day <= 4) ||
+        (day === 5 && hour < 21);
+      if (marketOpen) return candidate;
       candidate.setUTCMinutes(candidate.getUTCMinutes() + 10);
     }
     return candidate;

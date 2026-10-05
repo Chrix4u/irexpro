@@ -646,7 +646,7 @@ describe('VpsForexSignalCollectorService', () => {
     expect(status.state).toBe('WAITING_FOR_PAPER_SESSION');
   });
 
-  it('reports weekend pause and the next eligible Monday scan deterministically', () => {
+  it('uses the full FX 24x5 session instead of pausing every weekday night', () => {
     const collector = new VpsForexSignalCollectorService(
       config({}),
       { receiveSignal: jest.fn() } as unknown as AiSignalService,
@@ -655,12 +655,19 @@ describe('VpsForexSignalCollectorService', () => {
       new LivePaperMarketDataService(),
       aiEngineClientMock(),
     );
-    const schedule = (collector as any).marketSchedule(new Date('2026-10-03T00:21:00.000Z'));
-    expect(schedule).toEqual({
+
+    const saturday = (collector as any).marketSchedule(new Date('2026-10-03T00:21:00.000Z'));
+    expect(saturday).toEqual({
       paused: true,
       reason: 'WEEKEND',
-      nextEligibleScanAt: '2026-10-05T00:00:00.000Z',
+      nextEligibleScanAt: '2026-10-04T21:00:00.000Z',
     });
+
+    expect((collector as any).marketSchedule(new Date('2026-10-04T20:50:00.000Z')).paused).toBe(true);
+    expect((collector as any).marketSchedule(new Date('2026-10-04T21:00:00.000Z')).paused).toBe(false);
+    expect((collector as any).marketSchedule(new Date('2026-10-05T22:10:00.000Z')).paused).toBe(false);
+    expect((collector as any).marketSchedule(new Date('2026-10-09T20:50:00.000Z')).paused).toBe(false);
+    expect((collector as any).marketSchedule(new Date('2026-10-09T21:00:00.000Z')).paused).toBe(true);
   });
 
   it('fails over to broker-native MetaTrader candles after Twelve Data exhausts the daily quota', async () => {
