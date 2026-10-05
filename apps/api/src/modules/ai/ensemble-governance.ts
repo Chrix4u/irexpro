@@ -133,7 +133,8 @@ function driftOf(input: EnsembleGovernanceInput): { state: EnsembleDriftState; q
 export function classifyEnsembleSleeveEvidence(
   evidence?: EnsembleSleeveEvidence | null,
 ): EnsembleSleeveState {
-  if (!evidence || evidence.closedTrades < ENSEMBLE_SLEEVE_CORE_MIN_CLOSED_TRADES) return 'COLLECTING';
+  if (!evidence || evidence.closedTrades < ENSEMBLE_SLEEVE_CORE_MIN_CLOSED_TRADES)
+    return 'COLLECTING';
   if (
     evidence.profitFactor == null ||
     evidence.sharpe == null ||

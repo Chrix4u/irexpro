@@ -55,9 +55,7 @@ export function canExecuteMultiModelPaper(
   governance: Pick<EnsembleGovernanceDecision, 'paperExecutionEligible'>,
 ): boolean {
   return (
-    MULTI_MODEL_PAPER_EXECUTION_ENABLED &&
-    ensemble.admitted &&
-    governance.paperExecutionEligible
+    MULTI_MODEL_PAPER_EXECUTION_ENABLED && ensemble.admitted && governance.paperExecutionEligible
   );
 }
 const PROVIDER_CODE = LEGACY_PROVIDER_CODE;

@@ -98,27 +98,18 @@ function config(values: Record<string, unknown>) {
 
 describe('multi-model PAPER execution gate', () => {
   it('allows an admitted setup when PAPER governance passes even while promotion remains separate', () => {
-    expect(
-      canExecuteMultiModelPaper(
-        { admitted: true },
-        { paperExecutionEligible: true },
-      ),
-    ).toBe(true);
+    expect(canExecuteMultiModelPaper({ admitted: true }, { paperExecutionEligible: true })).toBe(
+      true,
+    );
   });
 
   it('fails closed when model admission or PAPER governance fails', () => {
-    expect(
-      canExecuteMultiModelPaper(
-        { admitted: false },
-        { paperExecutionEligible: true },
-      ),
-    ).toBe(false);
-    expect(
-      canExecuteMultiModelPaper(
-        { admitted: true },
-        { paperExecutionEligible: false },
-      ),
-    ).toBe(false);
+    expect(canExecuteMultiModelPaper({ admitted: false }, { paperExecutionEligible: true })).toBe(
+      false,
+    );
+    expect(canExecuteMultiModelPaper({ admitted: true }, { paperExecutionEligible: false })).toBe(
+      false,
+    );
   });
 });
 
