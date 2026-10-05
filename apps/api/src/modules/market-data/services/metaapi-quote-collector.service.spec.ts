@@ -169,7 +169,7 @@ describe('MetaApiQuoteCollectorService', () => {
     }
   });
 
-  it('skips weekends and rollover hours without touching MetaApi', async () => {
+  it('collects across the full FX 24/5 session and skips only the weekend closure', async () => {
     const query = jest.fn().mockResolvedValue([{ id: 'live-1', user_id: 'user-live' }]);
     const getCurrentPriceForConnection = jest.fn();
     const service = new MetaApiQuoteCollectorService(
@@ -180,12 +180,17 @@ describe('MetaApiQuoteCollectorService', () => {
     );
 
     await service.collectOnce(new Date('2026-10-04T13:00:00Z'));
-    await service.collectOnce(new Date('2026-10-05T21:10:00Z'));
+    await service.collectOnce(new Date('2026-10-03T13:00:00Z'));
 
     expect(query).not.toHaveBeenCalled();
     expect(getCurrentPriceForConnection).not.toHaveBeenCalled();
-    expect(isMetaApiQuoteCollectionWindow(new Date('2026-10-05T20:59:00Z'))).toBe(true);
-    expect(isMetaApiQuoteCollectionWindow(new Date('2026-10-05T21:00:00Z'))).toBe(false);
+    expect(isMetaApiQuoteCollectionWindow(new Date('2026-10-04T20:59:00Z'))).toBe(false);
+    expect(isMetaApiQuoteCollectionWindow(new Date('2026-10-04T21:00:00Z'))).toBe(true);
+    expect(isMetaApiQuoteCollectionWindow(new Date('2026-10-05T21:10:00Z'))).toBe(true);
+    expect(isMetaApiQuoteCollectionWindow(new Date('2026-10-08T23:59:00Z'))).toBe(true);
+    expect(isMetaApiQuoteCollectionWindow(new Date('2026-10-09T20:59:00Z'))).toBe(true);
+    expect(isMetaApiQuoteCollectionWindow(new Date('2026-10-09T21:00:00Z'))).toBe(false);
+    expect(isMetaApiQuoteCollectionWindow(new Date('2026-10-10T12:00:00Z'))).toBe(false);
   });
 
   it('recognizes MetaApi quota and CPU-credit failures', () => {
