@@ -1,6 +1,6 @@
 import { scorePlanBShadowMeta, V8ShadowMetaInput } from './v8-shadow-meta-scorer';
 
-export const PLAN_B_ENSEMBLE_ARTIFACT = 'plan-b-multimodel-shadow-v3';
+export const PLAN_B_ENSEMBLE_ARTIFACT = 'plan-b-multimodel-shadow-v4';
 export const PLAN_B_ENSEMBLE_MODE = 'PROSPECTIVE_SHADOW_ONLY';
 export const PLAN_B_GROSS_EXPECTED_R_FLOOR = 0.08;
 
@@ -214,12 +214,12 @@ export function scorePlanBMultimodelShadow(
     consensusPassed >= consensusRequired &&
     meta.admitted &&
     meta.expectedR >= PLAN_B_GROSS_EXPECTED_R_FLOOR;
-  // PAPER may collect evidence from a stretched but otherwise strongly
-  // qualified trend. Volatile, weak and rollover regimes remain fail-closed.
-  // Promotion keeps the original TREND_HEALTHY-only admission below.
-  const paperRegimeAllowed = regime === 'TREND_HEALTHY' || regime === 'TREND_EXTENDED';
-  const paperAdmitted = paperRegimeAllowed && coreAdmissionPassed;
   const admitted = regimeAllowed && coreAdmissionPassed;
+  // PAPER execution must exercise a model-level decision that could later be
+  // promoted to DEMO/LIVE. Research-only stretched regimes remain observable
+  // in shadow outcomes, but they must never gain execution authority merely to
+  // collect evidence. Sleeve maturity is handled separately by governance.
+  const paperAdmitted = admitted;
 
   return {
     artifact: PLAN_B_ENSEMBLE_ARTIFACT,

@@ -36,7 +36,7 @@ describe('Plan B multimodel prospective shadow', () => {
     expect(score.reasons).toContain('REGIME_TREND_EXTENDED');
   });
 
-  it('allows a fully-qualified extended trend into PAPER evidence only', () => {
+  it('keeps a fully-qualified extended trend shadow-only because it is not promotable', () => {
     const score = scorePlanBMultimodelShadow({
       instrument: 'AUDUSD',
       direction: 'BUY',
@@ -50,7 +50,7 @@ describe('Plan B multimodel prospective shadow', () => {
     });
     expect(score.regime).toBe('TREND_EXTENDED');
     expect(score.consensusPassed).toBeGreaterThanOrEqual(score.consensusRequired);
-    expect(score.paperAdmitted).toBe(true);
+    expect(score.paperAdmitted).toBe(false);
     expect(score.admitted).toBe(false);
     expect(score.reasons).toContain('REGIME_TREND_EXTENDED');
   });

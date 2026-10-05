@@ -1234,10 +1234,11 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         WHERE user_id = $1
           AND broker_connection_id = $2
           AND engine_code = $3
+          AND model_version = $4
         ORDER BY evaluated_at ASC
         LIMIT 10000
       `,
-      [userId, connectionId, ACTIVE_ENGINE_CODE],
+      [userId, connectionId, ACTIVE_ENGINE_CODE, PLAN_B_ENSEMBLE_ARTIFACT],
     )) as Array<{
       instrument: string;
       direction: 'BUY' | 'SELL';
@@ -1572,6 +1573,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         WHERE user_id = $1
           AND broker_connection_id = $2
           AND engine_code = $3
+          AND model_version = $6
           AND instrument = $4
           AND direction = $5
           AND COALESCE(
@@ -1581,7 +1583,14 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           AND components ? 'outcome'
         ORDER BY evaluated_at ASC
       `,
-      [userId, connectionId, ACTIVE_ENGINE_CODE, instrument, direction],
+      [
+        userId,
+        connectionId,
+        ACTIVE_ENGINE_CODE,
+        instrument,
+        direction,
+        PLAN_B_ENSEMBLE_ARTIFACT,
+      ],
     )) as Array<{ outcome: EnsembleShadowOutcome | null }>;
 
     const outcomes = rows
@@ -1720,9 +1729,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         WHERE user_id = $1
           AND broker_connection_id = $2
           AND engine_code = $3
+          AND model_version = $4
         ORDER BY instrument ASC, evaluated_at DESC, id DESC
       `,
-      [userId, connectionId, ACTIVE_ENGINE_CODE],
+      [userId, connectionId, ACTIVE_ENGINE_CODE, PLAN_B_ENSEMBLE_ARTIFACT],
     )) as Array<{
       instrument: string;
       direction: 'BUY' | 'SELL';

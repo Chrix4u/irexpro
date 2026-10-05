@@ -2,7 +2,7 @@ import { evaluateEnsembleGovernance } from './ensemble-governance';
 import { PlanBEnsembleScore } from './plan-b-multimodel-shadow';
 
 const ensemble: PlanBEnsembleScore = {
-  artifact: 'plan-b-multimodel-shadow-v3',
+  artifact: 'plan-b-multimodel-shadow-v4',
   mode: 'PROSPECTIVE_SHADOW_ONLY',
   modifiesExecution: false,
   regime: 'TREND_HEALTHY',
@@ -67,21 +67,22 @@ describe('evaluateEnsembleGovernance', () => {
     expect(result.blockers).toContain('SLEEVE_COLLECTING');
   });
 
-  it('allows positive-net PAPER evidence below the stricter promotion net-R floor', () => {
+  it('requires the same net expected-R floor for PAPER execution and promotion', () => {
     const result = evaluateEnsembleGovernance({
       ...base,
       ensemble: { ...ensemble, expectedR: 0.1 },
       eventRisk: 'CLEAR',
     });
     expect(result.netExpectedR).toBeCloseTo(0.0375, 6);
-    expect(result.paperNetExpectedRPassed).toBe(true);
+    expect(result.paperNetExpectedRPassed).toBe(false);
     expect(result.netExpectedRPassed).toBe(false);
-    expect(result.paperExecutionEligible).toBe(true);
+    expect(result.paperExecutionEligible).toBe(false);
     expect(result.paperPromotionEligible).toBe(false);
+    expect(result.paperExecutionBlockers).toContain('PAPER_NET_EXPECTED_R');
     expect(result.blockers).toContain('NET_EXPECTED_R');
   });
 
-  it('allows a strong extended/stressed setup to collect PAPER evidence but not promote', () => {
+  it('keeps a strong extended/stressed setup shadow-only because it is not promotable', () => {
     const result = evaluateEnsembleGovernance({
       ...base,
       ensemble: {
@@ -106,11 +107,16 @@ describe('evaluateEnsembleGovernance', () => {
       eventRisk: 'CLEAR',
     });
     expect(result.driftState).toBe('STRESSED');
-    expect(result.paperDriftPassed).toBe(true);
+    expect(result.paperDriftPassed).toBe(false);
     expect(result.driftPassed).toBe(false);
     expect(result.netExpectedR).toBeGreaterThan(0.08);
-    expect(result.paperExecutionEligible).toBe(true);
-    expect(result.paperExecutionBlockers).toEqual([]);
+    expect(result.paperExecutionEligible).toBe(false);
+    expect(result.paperExecutionBlockers).toEqual(
+      expect.arrayContaining([
+        'ENSEMBLE_NOT_PROMOTABLE_ADMISSION',
+        'DRIFT_STRESSED',
+      ]),
+    );
     expect(result.paperPromotionEligible).toBe(false);
     expect(result.blockers).toEqual(
       expect.arrayContaining(['ENSEMBLE_NOT_ADMITTED', 'DRIFT_STRESSED', 'SLEEVE_COLLECTING']),

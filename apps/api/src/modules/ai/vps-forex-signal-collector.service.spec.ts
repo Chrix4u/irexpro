@@ -233,8 +233,13 @@ describe('VpsForexSignalCollectorService', () => {
     const restored = (collector as any).lastPublishedOpportunity.get('EURUSD');
 
     expect(query).toHaveBeenCalledWith(
-      expect.stringContaining('FROM trading.ensemble_shadow_decisions'),
-      ['user-1', 'conn-1', 'irexpro-multimodel-ensemble-v1'],
+      expect.stringContaining('model_version = $4'),
+      [
+        'user-1',
+        'conn-1',
+        'irexpro-multimodel-ensemble-v1',
+        'plan-b-multimodel-shadow-v4',
+      ],
     );
     expect(restored).toBeDefined();
     expect(restored.direction).toBe(current!.direction);
@@ -256,6 +261,31 @@ describe('VpsForexSignalCollectorService', () => {
         regime: 'TREND_WEAK',
         reasons: ['REGIME_TREND_WEAK'],
       }),
+    );
+  });
+
+  it('isolates campaign statistics to the current model policy version', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const collector = new VpsForexSignalCollectorService(
+      config({}),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      {} as unknown as ExecutionService,
+      {} as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+      { query } as any,
+    );
+
+    await (collector as any).loadEnsembleCampaignStatus('user-1', 'conn-1');
+
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('model_version = $4'),
+      [
+        'user-1',
+        'conn-1',
+        'irexpro-multimodel-ensemble-v1',
+        'plan-b-multimodel-shadow-v4',
+      ],
     );
   });
 
@@ -349,12 +379,14 @@ describe('VpsForexSignalCollectorService', () => {
     const sql = String(query.mock.calls[0][0]);
     expect(sql).toContain("paperExecutionEligible");
     expect(sql).not.toContain('AND admitted = true');
+    expect(sql).toContain('model_version = $6');
     expect(query).toHaveBeenCalledWith(expect.any(String), [
       'user-1',
       'conn-1',
       'irexpro-multimodel-ensemble-v1',
       'USDJPY',
       'BUY',
+      'plan-b-multimodel-shadow-v4',
     ]);
   });
 
