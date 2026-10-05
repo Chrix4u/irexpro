@@ -84,6 +84,8 @@ export interface IBrokerAdapter {
     instrument: string,
     options?: { advanceSimulation?: boolean },
   ): Promise<BrokerPrice>;
+  /** Optional provider-native streaming quote cache. Read-only market data only. */
+  getStreamingPrices?(instruments: string[]): Promise<BrokerPrice[]>;
   getOHLCV(instrument: string, timeframe: string, count: number, before?: Date): Promise<OHLCV[]>;
 
   // ─── Order management ─────────────────────────────────────────────────────

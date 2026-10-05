@@ -1,11 +1,15 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { BrokerService } from '../../broker/broker.service';
+import { BrokerPrice } from '../../broker/interfaces/broker-adapter.interface';
 import { LivePaperMarketDataService } from '../../broker/services/live-paper-market-data.service';
 import { PaperBrokerStateService } from '../../broker/services/paper-broker-state.service';
 import { ProviderQuoteCandleStoreService } from './provider-quote-candle-store.service';
 
 const DEFAULT_BRIDGE_INTERVAL_MS = 5_000;
 const MAX_PROVIDER_MARK_AGE_MS = 90_000;
+const MAX_STREAM_MARK_AGE_MS = 15_000;
+const STREAM_READ_TIMEOUT_MS = 4_000;
 
 /**
  * Read-only valuation bridge for PAPER positions.
@@ -30,6 +34,7 @@ export class PaperPositionMarkBridgeService implements OnModuleInit, OnModuleDes
   constructor(
     private readonly config: ConfigService,
     private readonly paperState: PaperBrokerStateService,
+    private readonly broker: BrokerService,
     private readonly store: ProviderQuoteCandleStoreService,
     private readonly livePaperMarket: LivePaperMarketDataService,
   ) {}
@@ -40,7 +45,9 @@ export class PaperPositionMarkBridgeService implements OnModuleInit, OnModuleDes
     initial.unref?.();
     this.timer = setInterval(() => void this.collectOnce(), DEFAULT_BRIDGE_INTERVAL_MS);
     this.timer.unref?.();
-    this.logger.log('PAPER position mark bridge enabled source=MetaApi sampled quotes cadence=5s');
+    this.logger.log(
+      'PAPER position mark bridge enabled source=MetaApi streaming+sampled-fallback cadence=5s',
+    );
   }
 
   onModuleDestroy(): void {
@@ -72,35 +79,79 @@ export class PaperPositionMarkBridgeService implements OnModuleInit, OnModuleDes
         ),
       ];
 
+      const applied = new Set<string>();
+      try {
+        const streamQuotes = await this.withTimeout(
+          this.broker.getStreamingPricesForInternalConnection(sourceConnectionId, instruments),
+          STREAM_READ_TIMEOUT_MS,
+        );
+        for (const quote of streamQuotes) {
+          if (this.applyQuote(quote, now, MAX_STREAM_MARK_AGE_MS, paperConnectionId, 'streaming')) {
+            applied.add(quote.instrument.trim().toUpperCase());
+          }
+        }
+      } catch {
+        // Streaming is an optimization only. Persisted broker-native samples
+        // remain the fail-safe valuation source while the stream initializes
+        // or reconnects; never weaken execution/evidence semantics.
+      }
+
       for (const instrument of instruments) {
+        if (applied.has(instrument)) continue;
         const quote = await this.store.getLatestQuote(sourceConnectionId, instrument);
         if (!quote) continue;
-        const observedAt = new Date(quote.timestamp);
-        const ageMs = now.getTime() - observedAt.getTime();
-        if (!Number.isFinite(ageMs) || ageMs < -5_000 || ageMs > MAX_PROVIDER_MARK_AGE_MS) continue;
-
-        const lastApplied = this.lastSourceTimestampByInstrument.get(instrument) ?? 0;
-        if (observedAt.getTime() <= lastApplied) continue;
-
-        this.livePaperMarket.updateProviderQuote(
-          instrument,
-          quote.bid,
-          quote.ask,
-          observedAt,
-          paperConnectionId,
-        );
-        this.lastSourceTimestampByInstrument.set(instrument, observedAt.getTime());
-        if (!this.announcedInstruments.has(instrument)) {
-          this.announcedInstruments.add(instrument);
-          this.logger.log(
-            `PAPER position mark bridge active instrument=${instrument} sourceObservedAt=${observedAt.toISOString()}`,
-          );
-        }
+        this.applyQuote(quote, now, MAX_PROVIDER_MARK_AGE_MS, paperConnectionId, 'sampled');
       }
     } catch (error) {
       this.logger.warn(`PAPER position mark bridge deferred: ${(error as Error).message}`);
     } finally {
       this.busy = false;
+    }
+  }
+
+  private applyQuote(
+    quote: BrokerPrice,
+    now: Date,
+    maxAgeMs: number,
+    paperConnectionId: string,
+    sourceLabel: 'streaming' | 'sampled',
+  ): boolean {
+    const instrument = quote.instrument.trim().toUpperCase();
+    const observedAt = new Date(quote.timestamp);
+    const ageMs = now.getTime() - observedAt.getTime();
+    if (!instrument || !Number.isFinite(ageMs) || ageMs < -5_000 || ageMs > maxAgeMs) return false;
+
+    const lastApplied = this.lastSourceTimestampByInstrument.get(instrument) ?? 0;
+    if (observedAt.getTime() <= lastApplied) return false;
+    this.livePaperMarket.updateProviderQuote(
+      instrument,
+      quote.bid,
+      quote.ask,
+      observedAt,
+      paperConnectionId,
+    );
+    this.lastSourceTimestampByInstrument.set(instrument, observedAt.getTime());
+    if (!this.announcedInstruments.has(instrument)) {
+      this.announcedInstruments.add(instrument);
+      this.logger.log(
+        `PAPER position mark bridge active instrument=${instrument} source=${sourceLabel} sourceObservedAt=${observedAt.toISOString()}`,
+      );
+    }
+    return true;
+  }
+
+  private async withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+    let timer: NodeJS.Timeout | null = null;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<T>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error('streaming mark read timed out')), timeoutMs);
+          timer.unref?.();
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 

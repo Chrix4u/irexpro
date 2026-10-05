@@ -230,6 +230,14 @@ const mockAccount = {
 const mockMetaApiClientService = () => ({
   isAvailable: jest.fn().mockReturnValue(true),
   getOrCreateConnection: jest.fn().mockResolvedValue(mockConnection),
+  getStreamingPrices: jest.fn().mockResolvedValue([
+    {
+      symbol: 'USDJPY',
+      bid: 158.281,
+      ask: 158.283,
+      time: new Date('2026-10-05T10:55:29.000Z'),
+    },
+  ]),
   testAccountAccess: jest
     .fn()
     .mockResolvedValue({ success: true, accountType: 'DEMO', currency: 'USD' }),
@@ -292,7 +300,9 @@ describe('MetaTraderAdapter', () => {
       expect(result.success).toBe(true);
       expect(result.currency).toBe('USD');
       expect(result.accountType).toBe(BrokerMode.DEMO);
-      expect(metaApiClient.getOrCreateConnection).toHaveBeenCalledWith('acc-uuid-123', { requireSynchronization: false });
+      expect(metaApiClient.getOrCreateConnection).toHaveBeenCalledWith('acc-uuid-123', {
+        requireSynchronization: false,
+      });
     });
 
     it('resolves DEMO account type from MetaAPI mode string', async () => {
@@ -1016,5 +1026,18 @@ describe('MetaTraderAdapter', () => {
       expect(result.isRetryable).toBe(false);
       expect(result.dispatchCertainty).toBe(ProviderDispatchCertainty.MAY_HAVE_REACHED_PROVIDER);
     });
+  });
+  it('normalizes provider-native streaming quotes without changing execution state', async () => {
+    await adapter.connect({ accountId: 'acc-uuid-123' } as any);
+    const quotes = await adapter.getStreamingPrices(['USDJPY']);
+    expect(metaApiClient.getStreamingPrices).toHaveBeenCalledWith('acc-uuid-123', ['USDJPY']);
+    expect(quotes[0]).toEqual(
+      expect.objectContaining({
+        instrument: 'USDJPY',
+        bid: '158.28100000',
+        ask: '158.28300000',
+        spread: '0.00200000',
+      }),
+    );
   });
 });
