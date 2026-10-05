@@ -57,6 +57,41 @@ export class ProviderQuoteCandleStoreService {
     );
   }
 
+  async getLatestQuote(connectionId: string, instrument: string): Promise<BrokerPrice | null> {
+    const rows = await this.dataSource.query(
+      `
+      SELECT bid_close, ask_close, spread_close, last_sample_at
+      FROM market_data.provider_quote_candles
+      WHERE connection_id = $1 AND instrument = $2 AND timeframe = 'M1'
+      ORDER BY last_sample_at DESC
+      LIMIT 1
+      `,
+      [connectionId, instrument],
+    );
+    const row = rows?.[0];
+    if (!row) return null;
+    const bid = Number(row.bid_close);
+    const ask = Number(row.ask_close);
+    const timestamp = new Date(row.last_sample_at);
+    if (
+      !Number.isFinite(bid) ||
+      !Number.isFinite(ask) ||
+      bid <= 0 ||
+      ask <= 0 ||
+      ask < bid ||
+      !Number.isFinite(timestamp.getTime())
+    ) {
+      return null;
+    }
+    return {
+      instrument,
+      bid: String(row.bid_close),
+      ask: String(row.ask_close),
+      spread: String(row.spread_close ?? ask - bid),
+      timestamp,
+    };
+  }
+
   async getM1Candles(connectionId: string, instrument: string, count: number): Promise<OHLCV[]> {
     const rows = await this.dataSource.query(
       `

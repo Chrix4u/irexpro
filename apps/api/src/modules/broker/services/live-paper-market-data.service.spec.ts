@@ -64,6 +64,24 @@ describe('LivePaperMarketDataService', () => {
     expect(service.getOHLCV('EURUSD', 'M5', 2)).toEqual(before);
   });
 
+  it('uses exact broker-native provider bid/ask for read-only position marks without changing execution evidence', () => {
+    const service = new LivePaperMarketDataService();
+    service.updateClosedCandles('USDCAD', candles(1.42, 5));
+    const executionBefore = service.getQuote('USDCAD');
+    const observedAt = new Date();
+
+    service.updateProviderQuote('USDCAD', '1.42480', '1.42492', observedAt);
+
+    const executionAfter = service.getQuote('USDCAD');
+    const mark = service.getPositionMarkQuote('USDCAD');
+    expect(executionAfter).toEqual(executionBefore);
+    expect(mark.source).toBe('PROVIDER');
+    expect(mark.bid).toBe('1.42480');
+    expect(mark.ask).toBe('1.42492');
+    expect(mark.timestamp).toEqual(observedAt);
+    expect(mark.isStale).toBe(false);
+  });
+
   it('falls back to the closed-candle quote when no fresh streaming mark exists', () => {
     const service = new LivePaperMarketDataService();
     service.updateClosedCandles('USDJPY', candles(157, 3));

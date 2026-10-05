@@ -175,7 +175,7 @@ export interface PaperQuote {
   /** Mark observation metadata when known. */
   timestamp?: Date;
   /** Mark provenance for live, candle-fallback, or deterministic simulation. */
-  source?: 'STREAM' | 'REST_M5' | 'SIMULATED';
+  source?: 'STREAM' | 'REST_M5' | 'PROVIDER' | 'SIMULATED';
 }
 
 /**
