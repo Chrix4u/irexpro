@@ -1541,7 +1541,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     }
   }
 
-  /** Immediate MARKET fill at the quote mid (the deterministic '1.10005'). */
+  /** Immediate MARKET fill on the executable side: BUY at ask, SELL at bid. */
   private executeMarketOrder(
     orderId: string,
     order: BrokerOrderRequest,
@@ -1551,7 +1551,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     comment: string,
   ): BrokerOrderResult {
     const quote = this.quoteForInstrument(instrument);
-    const fillPrice = quoteMid(quote);
+    const fillPrice = order.direction === 'BUY' ? quote.ask : quote.bid;
     const units = lotSizeToUnits(order.lotSize);
     const requiredMargin = toMoney(this.marginInAccountCurrencyExact(instrument, units, fillPrice));
     if (compareDecimalStrings(requiredMargin, this.freeMargin()) > 0) {
@@ -1729,10 +1729,10 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         closedLot = lotSize.trim();
       }
 
-      // Manual closes execute at the quote mid (zero-slippage paper model —
-      // an open-and-close without an intervening tick books exactly flat).
+      // Close on the executable side so PAPER pays the same bid/ask spread
+      // model used by protective exits: BUY exits at bid, SELL exits at ask.
       const quote = this.quoteForInstrument(position.instrument);
-      const closePrice = quoteMid(quote);
+      const closePrice = position.direction === 'BUY' ? quote.bid : quote.ask;
 
       const closedTrade = this.closePositionUnits(
         position,
@@ -1824,7 +1824,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       for (const position of Array.from(this._positions.values())) {
         try {
           const quote = this.quoteForInstrument(position.instrument);
-          const closePrice = quoteMid(quote);
+          const closePrice = position.direction === 'BUY' ? quote.bid : quote.ask;
           this.closePositionUnits(position, position.units, position.lotSize, closePrice, 'SYSTEM');
           closedCount++;
         } catch (err) {
