@@ -1844,6 +1844,24 @@ describe('BrokerService', () => {
       ).resolves.toBeNull();
     });
 
+    it('can propagate a provider failure for internal quota-aware collectors only', async () => {
+      connectionRepo.findOne.mockResolvedValue(connectedConn);
+      const providerError = new Error('429 Too Many Requests');
+      const adapter = {
+        setMode: jest.fn(),
+        connect: jest.fn().mockResolvedValue(undefined),
+        getCurrentPrice: jest.fn().mockRejectedValue(providerError),
+      };
+      registry.getAdapterForConnection.mockReturnValue(adapter);
+      encryption.decrypt.mockReturnValue({ accountId: 'acc-1' });
+
+      await expect(
+        service.getCurrentPriceForConnection('user-1', 'conn-1', 'EURUSD', {
+          propagateProviderError: true,
+        }),
+      ).rejects.toBe(providerError);
+    });
+
     it('returns null for a quote with an unparseable timestamp (unprovable is unprovable)', async () => {
       connectionRepo.findOne.mockResolvedValue(connectedConn);
       const adapter = {

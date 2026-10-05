@@ -2102,7 +2102,7 @@ export class BrokerService {
     userId: string,
     brokerConnectionId: string,
     instrument: string,
-    options?: { advanceSimulation?: boolean },
+    options?: { advanceSimulation?: boolean; propagateProviderError?: boolean },
   ): Promise<BrokerPrice | null> {
     const connection = await this.findConnectionById(brokerConnectionId, userId);
 
@@ -2131,7 +2131,9 @@ export class BrokerService {
 
     try {
       await adapter.connect(credentials);
-      const price = await adapter.getCurrentPrice(instrument, options);
+      const price = await adapter.getCurrentPrice(instrument, {
+        advanceSimulation: options?.advanceSimulation,
+      });
       if (
         !price ||
         !price.bid ||
@@ -2142,13 +2144,16 @@ export class BrokerService {
         return null; // §18 — unprovable is unprovable; never invented.
       }
       return price;
-    } catch {
-      // Quote failures are the gate's typed MARKET_DATA_UNAVAILABLE — a null
-      // return keeps the seam honest without swallowing the reason.
+    } catch (error) {
+      // Quote failures normally collapse to MARKET_DATA_UNAVAILABLE for the
+      // live safety gate. Internal collectors may opt into the original
+      // provider error so quota/cooldown protection can react to 429/CPU
+      // credit failures instead of accidentally retrying through them.
       this.logger.warn(
         `Fresh quote unavailable for ${instrument} on connection ${brokerConnectionId} — ` +
           'the market-safety gate will fail closed',
       );
+      if (options?.propagateProviderError) throw error;
       return null;
     }
   }

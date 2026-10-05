@@ -16,6 +16,8 @@ interface CollectibleConnectionRow {
 
 const DEFAULT_COLLECTION_INTERVAL_MS = 30_000;
 const MIN_COLLECTION_INTERVAL_MS = 30_000;
+const DEFAULT_COLLECTION_CONCURRENCY = 3;
+const MAX_COLLECTION_CONCURRENCY = 6;
 export function isMetaApiQuoteCollectionWindow(now: Date): boolean {
   const day = now.getUTCDay();
   const hour = now.getUTCHours();
@@ -60,6 +62,9 @@ export class MetaApiQuoteCollectorService implements OnModuleInit, OnModuleDestr
         'instruments=' +
         this.instruments().join(',') +
         ' ' +
+        'concurrency=' +
+        this.collectionConcurrency() +
+        ' ' +
         'schedule=Mon-Fri<21UTC quotaCooldown=30m',
     );
 
@@ -94,47 +99,71 @@ export class MetaApiQuoteCollectorService implements OnModuleInit, OnModuleDestr
         if (cooldownUntil > currentTime) continue;
         if (cooldownUntil) this.cooldownUntilByConnection.delete(connection.id);
 
-        for (const instrument of this.instruments()) {
-          try {
-            const quote = await this.brokerService.getCurrentPriceForConnection(
-              connection.user_id,
-              connection.id,
-              instrument,
-            );
-            if (quote) {
-              await this.store.upsertM1Sample(connection.id, instrument, quote);
-            }
-          } catch (error) {
-            if (isMetaApiQuotaError(error)) {
-              const nextAttempt = currentTime + METAAPI_PROVIDER_QUOTA_COOLDOWN_MS;
-              this.cooldownUntilByConnection.set(connection.id, nextAttempt);
-              this.warnThrottled(
-                connection.id + ':quota',
-                'MetaApi quote collection cooling down connection=' +
-                  connection.id +
-                  ' until=' +
-                  new Date(nextAttempt).toISOString() +
-                  ' reason=' +
-                  (error as Error).message,
-              );
-              break;
-            }
+        const instruments = this.instruments();
+        const concurrency = this.collectionConcurrency();
+        for (let offset = 0; offset < instruments.length; offset += concurrency) {
+          const batch = instruments.slice(offset, offset + concurrency);
+          const results = await Promise.all(
+            batch.map(async (instrument) => {
+              try {
+                const quote = await this.brokerService.getCurrentPriceForConnection(
+                  connection.user_id,
+                  connection.id,
+                  instrument,
+                  { propagateProviderError: true },
+                );
+                if (quote) {
+                  await this.store.upsertM1Sample(connection.id, instrument, quote);
+                }
+                return null;
+              } catch (error) {
+                if (!isMetaApiQuotaError(error)) {
+                  this.warnThrottled(
+                    connection.id + ':' + instrument,
+                    'Quote collection failed connection=' +
+                      connection.id +
+                      ' instrument=' +
+                      instrument +
+                      ': ' +
+                      (error as Error).message,
+                  );
+                }
+                return error;
+              }
+            }),
+          );
 
+          const quotaError = results.find((error) => error && isMetaApiQuotaError(error));
+          if (quotaError) {
+            const nextAttempt = currentTime + METAAPI_PROVIDER_QUOTA_COOLDOWN_MS;
+            this.cooldownUntilByConnection.set(connection.id, nextAttempt);
             this.warnThrottled(
-              connection.id + ':' + instrument,
-              'Quote collection failed connection=' +
+              connection.id + ':quota',
+              'MetaApi quote collection cooling down connection=' +
                 connection.id +
-                ' instrument=' +
-                instrument +
-                ': ' +
-                (error as Error).message,
+                ' until=' +
+                new Date(nextAttempt).toISOString() +
+                ' reason=' +
+                (quotaError as Error).message,
             );
+            break;
           }
         }
       }
     } finally {
       this.busy = false;
     }
+  }
+
+  private collectionConcurrency(): number {
+    const configured = Number(
+      this.config.get<string>(
+        'METAAPI_QUOTE_COLLECTION_CONCURRENCY',
+        String(DEFAULT_COLLECTION_CONCURRENCY),
+      ),
+    );
+    if (!Number.isFinite(configured)) return DEFAULT_COLLECTION_CONCURRENCY;
+    return Math.min(MAX_COLLECTION_CONCURRENCY, Math.max(1, Math.floor(configured)));
   }
 
   private instruments(): string[] {
