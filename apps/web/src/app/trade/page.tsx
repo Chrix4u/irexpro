@@ -30,6 +30,10 @@ import { mapApiError } from "@/lib/error-mapping";
 import { loadLiveAccountPositions } from "@/lib/live-account";
 import { loadMarketIntelligence } from "@/lib/market-intelligence";
 import {
+  hasExternalProviderPerformanceUiShape,
+  hasVpsScannerUiShape,
+} from "@/lib/vps-scanner-status";
+import {
   loadTraderExecutionSnapshot,
   type TraderExecutionSnapshot,
 } from "@/lib/trader-execution";
@@ -1585,18 +1589,24 @@ export default function AiTradingPage() {
         // reads can never disable Start/Stop or broker controls. The VPS feed
         // has its own versioned evidence stream.
         try {
-          const evidence = await api.request<ExternalProviderPerformanceView>(
+          const evidence = await api.request<unknown>(
             "/ai/external/providers/performance?providerCode=vps-twelvedata-six-pair-v7",
           );
-          setProviderEvidence(evidence);
+          if (!hasExternalProviderPerformanceUiShape(evidence)) {
+            throw new Error("Provider performance contract mismatch");
+          }
+          setProviderEvidence(evidence as ExternalProviderPerformanceView);
         } catch {
           setProviderEvidence(null);
         }
         try {
-          const scannerStatus = await api.request<VpsForexScannerStatusView>(
+          const scannerStatus = await api.request<unknown>(
             "/ai/external/vps-forex/status",
           );
-          setVpsScannerStatus(scannerStatus);
+          if (!hasVpsScannerUiShape(scannerStatus)) {
+            throw new Error("VPS scanner status contract mismatch");
+          }
+          setVpsScannerStatus(scannerStatus as VpsForexScannerStatusView);
         } catch {
           setVpsScannerStatus(null);
         }
@@ -1653,21 +1663,29 @@ export default function AiTradingPage() {
         const positions =
           positionsResult.status === "fulfilled"
             ? positionsResult.value.positions
-            : [];
+            : null;
 
-        setExecution(snapshot);
-        setLivePositions(positions);
+        // Secondary read failures must never erase the last authoritative UI
+        // snapshot. Keep the previous data on screen and let the existing
+        // polling loops retry automatically.
+        if (snapshot) setExecution(snapshot);
+        if (positions) setLivePositions(positions);
 
-        if (snapshot) {
+        if (snapshot && positions) {
           emitActivityToasts(positions, snapshot);
         }
 
-        if (
-          executionResult.status === "rejected" ||
-          positionsResult.status === "rejected"
-        ) {
+        const executionReadFailed = executionResult.status === "rejected";
+        const positionsReadFailed = positionsResult.status === "rejected";
+        if (executionReadFailed || positionsReadFailed) {
+          const failedFeed =
+            executionReadFailed && positionsReadFailed
+              ? "Recent activity and open position details"
+              : executionReadFailed
+                ? "Recent activity"
+                : "Open position details";
           setActivityWarning(
-            "AI Trading controls are available, but recent activity or position details could not be loaded. You can continue using Start/Stop; refresh this page to retry the activity feed.",
+            `${failedFeed} could not be refreshed. Existing data remains on screen when available. Start/Stop remains available, and the page will retry automatically.`,
           );
         } else {
           setActivityWarning(null);

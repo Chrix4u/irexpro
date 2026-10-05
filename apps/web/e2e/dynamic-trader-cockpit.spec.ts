@@ -61,6 +61,9 @@ const rejectedExecution = {
   updatedAt: "2026-08-31T00:50:00.000Z",
 };
 
+const defaultBrokerLabel =
+  mockBrokerConnections[0].displayName ?? mockBrokerConnections[0].brokerName;
+
 const livePosition = {
   id: executionPosition.id,
   brokerConnectionId: mockBrokerConnections[0].id,
@@ -310,7 +313,7 @@ test.describe("AI Trader novice workflow", () => {
     await gotoAiTrader(page);
 
     await expect(
-      page.getByText("Paper Trading Broker", { exact: false }).first(),
+      page.getByText(defaultBrokerLabel, { exact: false }).first(),
     ).toBeVisible();
 
     const researchUat = page.locator(".ai-research-uat-copy");
@@ -584,7 +587,9 @@ test.describe("AI Trader novice workflow", () => {
     });
 
     await expect(
-      page.getByText("Paper Trading Broker", { exact: false }).first(),
+      page
+        .getByText(historicalConnectedBroker.brokerName, { exact: false })
+        .first(),
     ).toBeVisible();
     await expect(
       page.getByText("No broker connected", { exact: true }),
@@ -608,7 +613,7 @@ test.describe("AI Trader novice workflow", () => {
     });
 
     await expect(
-      page.getByText("Paper Trading Broker", { exact: false }).first(),
+      page.getByText(defaultBrokerLabel, { exact: false }).first(),
     ).toBeVisible();
     await expect(
       page.getByText("No broker connected", { exact: true }),
@@ -640,7 +645,7 @@ test.describe("AI Trader novice workflow", () => {
     await gotoAiTrader(page, { active: false, failAllocationRead: true });
 
     await expect(
-      page.getByText("Paper Trading Broker", { exact: false }).first(),
+      page.getByText(defaultBrokerLabel, { exact: false }).first(),
     ).toBeVisible();
     await expect(
       page.getByText("No broker connected", { exact: true }),
@@ -668,7 +673,7 @@ test.describe("AI Trader novice workflow", () => {
 
     await expect(
       page.getByText(
-        /AI Trading controls are available, but recent activity or position details could not be loaded/i,
+        /Recent activity and open position details could not be refreshed/i,
       ),
     ).toBeVisible();
     await expect(
@@ -696,7 +701,7 @@ test.describe("AI Trader novice workflow", () => {
     // Wait for a broker-backed control so the assertion proves the one-shot
     // network retry actually completed.
     await expect(
-      page.getByText("Paper Trading Broker", { exact: false }).first(),
+      page.getByText(defaultBrokerLabel, { exact: false }).first(),
     ).toBeVisible();
     await expect(
       page.getByRole("button", { name: "Stop AI Trading" }),
