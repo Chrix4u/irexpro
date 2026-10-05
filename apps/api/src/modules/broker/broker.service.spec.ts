@@ -563,6 +563,40 @@ describe('BrokerService', () => {
       );
     });
 
+    it('keeps an automatic recovery probe SUSPENDED when the provider is still unavailable', async () => {
+      const mockAdapter = {
+        setMode: jest.fn(),
+        connect: jest.fn().mockRejectedValue(new Error('temporary MetaApi timeout')),
+      };
+      registry.getAdapter.mockReturnValue(mockAdapter);
+
+      const mockConn = connectedConnection({
+        status: BrokerConnectionStatus.SUSPENDED,
+        authorizationStatus: BrokerAuthorizationStatus.SUSPENDED,
+        consecutiveFailureCount: 3,
+        lastErrorMessage: 'previous MetaApi timeout',
+      });
+      connectionRepo.findOne.mockResolvedValue(mockConn);
+      connectionRepo.update.mockResolvedValue({ affected: 1 });
+
+      await expect(
+        service.connectBroker('conn-1', 'user-1', undefined, {
+          preserveSuspendedOnFailure: true,
+        }),
+      ).rejects.toThrow();
+
+      const patches = connectionRepo.update.mock.calls.map((call) => call[1]);
+      expect(patches.some((patch) => patch.status === BrokerConnectionStatus.ERROR)).toBe(false);
+      expect(patches[0]).toMatchObject({
+        status: BrokerConnectionStatus.SUSPENDED,
+        consecutiveFailureCount: 3,
+      });
+      expect(patches.at(-1)).toMatchObject({
+        status: BrokerConnectionStatus.SUSPENDED,
+        lastErrorMessage: 'temporary MetaApi timeout',
+      });
+    });
+
     it('calls decrypt and adapter.connect with decrypted credentials', async () => {
       const mockAdapter = {
         setMode: jest.fn(),

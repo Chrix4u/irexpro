@@ -55,6 +55,7 @@ import { BrokerConnectionStatus } from '../interfaces/broker-adapter.interface';
 
 const mockBrokerService = () => ({
   healthCheck: jest.fn(),
+  connectBroker: jest.fn(),
 });
 
 const mockConnectionRepo = () => ({
@@ -146,7 +147,7 @@ describe('BrokerHealthCheckJob', () => {
     jest.restoreAllMocks();
   });
 
-  it('queries only CONNECTED status connections', async () => {
+  it('queries CONNECTED connections plus fail-closed SUSPENDED recovery candidates', async () => {
     connectionRepo.find.mockResolvedValue([]);
     await job.process({ id: 'job-5' } as any);
 
@@ -155,5 +156,80 @@ describe('BrokerHealthCheckJob', () => {
         where: { status: BrokerConnectionStatus.CONNECTED },
       }),
     );
+    expect(connectionRepo.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { status: BrokerConnectionStatus.SUSPENDED },
+      }),
+    );
+  });
+
+  it('revalidates an aged transient health suspension without restoring execution authority directly', async () => {
+    connectionRepo.find
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          id: 'conn-suspended',
+          userId: 'user-1',
+          brokerId: 'metatrader5',
+          accountId: 'account-1234',
+          authorizationStatus: 'SUSPENDED',
+          consecutiveFailureCount: 3,
+          lastErrorMessage: 'MetaApi websocket request timed out',
+          updatedAt: new Date(Date.now() - 6 * 60_000),
+        },
+      ]);
+    brokerService.connectBroker.mockResolvedValue({ status: BrokerConnectionStatus.CONNECTED });
+
+    await job.process({ id: 'job-recover' } as any);
+
+    expect(brokerService.connectBroker).toHaveBeenCalledWith(
+      'conn-suspended',
+      'user-1',
+      undefined,
+      { preserveSuspendedOnFailure: true },
+    );
+    expect(brokerService.healthCheck).not.toHaveBeenCalled();
+  });
+
+  it('never auto-recovers an environment-mismatch security suspension', async () => {
+    connectionRepo.find
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          id: 'conn-security',
+          userId: 'user-1',
+          brokerId: 'metatrader5',
+          accountId: 'account-1234',
+          authorizationStatus: 'SUSPENDED',
+          consecutiveFailureCount: 3,
+          lastErrorMessage: 'Environment mismatch: provider reports LIVE but connection is DEMO',
+          updatedAt: new Date(Date.now() - 60 * 60_000),
+        },
+      ]);
+
+    await job.process({ id: 'job-security' } as any);
+
+    expect(brokerService.connectBroker).not.toHaveBeenCalled();
+  });
+
+  it('backs off recent suspensions instead of hammering the provider every minute', async () => {
+    connectionRepo.find
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          id: 'conn-recent',
+          userId: 'user-1',
+          brokerId: 'metatrader5',
+          accountId: 'account-1234',
+          authorizationStatus: 'SUSPENDED',
+          consecutiveFailureCount: 3,
+          lastErrorMessage: 'temporary provider timeout',
+          updatedAt: new Date(Date.now() - 60_000),
+        },
+      ]);
+
+    await job.process({ id: 'job-backoff' } as any);
+
+    expect(brokerService.connectBroker).not.toHaveBeenCalled();
   });
 });
