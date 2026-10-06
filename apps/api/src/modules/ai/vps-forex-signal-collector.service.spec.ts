@@ -599,6 +599,110 @@ describe('VpsForexSignalCollectorService', () => {
     expect((collector as any).lastEnsembleDecision.instrument).toBe('EURUSD');
   });
 
+  it('persists causal pre-exit path states without duplicating or leaking the exit bar', async () => {
+    const pendingDecision = {
+      id: 'decision-1',
+      model_version: 'plan-b-multimodel-shadow-v3',
+      instrument: 'EURUSD',
+      direction: 'BUY' as const,
+      market_bar_time: new Date('2026-10-05T10:00:00.000Z'),
+      entry_price: '1.10000000',
+      components: {
+        stopLoss: 1.099,
+        takeProfit: 1.1015,
+        governance: { estimatedExecutionCostR: 0.1 },
+      },
+    };
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([pendingDecision])
+      .mockResolvedValueOnce([{ id: 'path-1' }, { id: 'path-2' }]);
+
+    const collector = new VpsForexSignalCollectorService(
+      config({}),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      {} as unknown as ExecutionService,
+      {} as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+      { query } as any,
+    );
+    const candles = new Map([
+      [
+        'EURUSD',
+        [
+          {
+            timestamp: new Date('2026-10-05T10:05:00.000Z'),
+            open: '1.10000',
+            high: '1.10080',
+            low: '1.09980',
+            close: '1.10060',
+          },
+          {
+            timestamp: new Date('2026-10-05T10:10:00.000Z'),
+            open: '1.10060',
+            high: '1.10050',
+            low: '1.09990',
+            close: '1.10015',
+          },
+          {
+            timestamp: new Date('2026-10-05T10:15:00.000Z'),
+            open: '1.10015',
+            high: '1.10020',
+            low: '1.09890',
+            close: '1.09900',
+          },
+        ],
+      ],
+    ]);
+
+    await (collector as any).persistPendingEnsembleShadowPathObservations(
+      'user-1',
+      'conn-1',
+      candles,
+    );
+
+    expect(query).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining('FROM trading.ensemble_shadow_decisions'),
+      ['user-1', 'conn-1', 'irexpro-multimodel-ensemble-v1'],
+    );
+    expect(query).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('INSERT INTO trading.ensemble_shadow_path_observations'),
+      expect.arrayContaining([
+        'decision-1',
+        'user-1',
+        'conn-1',
+        'irexpro-multimodel-ensemble-v1',
+        'plan-b-multimodel-shadow-v3',
+        'EURUSD',
+        'BUY',
+      ]),
+    );
+
+    const records = JSON.parse(query.mock.calls[1][1][8]);
+    expect(records).toHaveLength(2);
+    expect(records.map((record: any) => record.observed_bar_time)).toEqual([
+      '2026-10-05T10:05:00.000Z',
+      '2026-10-05T10:10:00.000Z',
+    ]);
+    expect(records[0]).toEqual(
+      expect.objectContaining({
+        bar_index: 1,
+        path_version: 'm5-preexit-path-state-v1',
+        close_r: expect.any(Number),
+        running_mfe_r: expect.any(Number),
+        running_mae_r: expect.any(Number),
+        stop_cushion_r: expect.any(Number),
+        target_distance_r: expect.any(Number),
+      }),
+    );
+    expect(
+      records.some((record: any) => record.observed_bar_time === '2026-10-05T10:15:00.000Z'),
+    ).toBe(false);
+  });
+
   it('stops a legacy scheduler job for the exact active PAPER session on scanner startup', async () => {
     const live = new LivePaperMarketDataService();
     const aiEngine = aiEngineClientMock();

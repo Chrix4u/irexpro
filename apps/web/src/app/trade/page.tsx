@@ -300,6 +300,8 @@ interface VpsForexScannerStatusView {
     decisions: number;
     admitted: number;
     rejected: number;
+    pathObservationCount: number;
+    pathDecisionCount: number;
     resolved: number;
     evaluableResolved: number;
     wins: number;
@@ -3020,6 +3022,16 @@ export default function AiTradingPage() {
                       <span>Resolved outcomes</span>
                       <strong>
                         {vpsScannerStatus?.ensembleCampaign.evaluableResolved ?? 0} / 100
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Path-state observations</span>
+                      <strong>{vpsScannerStatus?.ensembleCampaign.pathObservationCount ?? 0}</strong>
+                    </div>
+                    <div>
+                      <span>Path-covered decisions</span>
+                      <strong>
+                        {vpsScannerStatus?.ensembleCampaign.pathDecisionCount ?? 0} / {vpsScannerStatus?.ensembleCampaign.admitted ?? 0}
                       </strong>
                     </div>
                     <div>
