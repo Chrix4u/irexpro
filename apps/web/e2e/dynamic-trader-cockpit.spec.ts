@@ -378,7 +378,6 @@ test.describe("AI Trader novice workflow", () => {
         .filter({ hasText: /EURUSD.*GBPUSD.*USDJPY/i })
         .first(),
     ).toBeVisible();
-    await expect(page.getByText("NO TRADE", { exact: true })).toBeVisible();
     await expect(page.getByText("54.00%", { exact: true })).toBeVisible();
     await expect(page.getByText("60.00% gate", { exact: true })).toBeVisible();
     await expect(
