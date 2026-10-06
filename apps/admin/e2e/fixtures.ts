@@ -142,6 +142,20 @@ export async function setupAdminAuthInterception(page: Page): Promise<void> {
       return route.fulfill(jsonFulfill(200, mockAdminOnboardingStatus));
     }
 
+    // ── Payments page ───────────────────────────────────────────────────
+    // The Payments screen is data-driven. Return contract-correct empty
+    // collections so responsive tests exercise the real empty-state UI
+    // instead of crashing when Array methods are called on the catch-all {}.
+    if (apiPath === 'performance-fees/invoices') {
+      return route.fulfill(jsonFulfill(200, []));
+    }
+    if (apiPath === 'performance-fees/policies') {
+      return route.fulfill(jsonFulfill(200, []));
+    }
+    if (apiPath === 'payments/providers') {
+      return route.fulfill(jsonFulfill(200, []));
+    }
+
     // ── Catch-all: empty 200 so no test produces a spurious failed request.
     return route.fulfill(jsonFulfill(200, {}));
   });
@@ -226,6 +240,17 @@ export async function assertBoundingBoxInViewport(locator: Locator): Promise<voi
   expect(box.y).toBeGreaterThanOrEqual(-1);
   expect(box.x + box.width).toBeLessThanOrEqual(viewport.width + 1);
   expect(box.y + box.height).toBeLessThanOrEqual(viewport.height + 1);
+}
+
+export async function assertBoundingBoxHorizontallyInViewport(locator: Locator): Promise<void> {
+  const box = await locator.boundingBox();
+  expect(box, 'Element has no bounding box (not visible)').not.toBeNull();
+  if (!box) return;
+  const viewport = locator.page().viewportSize();
+  expect(viewport, 'Page has no viewport size').not.toBeNull();
+  if (!viewport) return;
+  expect(box.x).toBeGreaterThanOrEqual(-1);
+  expect(box.x + box.width).toBeLessThanOrEqual(viewport.width + 1);
 }
 
 // ── Composite helpers ────────────────────────────────────────────────────────
