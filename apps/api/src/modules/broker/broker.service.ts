@@ -509,8 +509,13 @@ export class BrokerService {
     connectionId: string,
     userId: string,
     ipAddress?: string,
+    options: { preserveSuspendedOnFailure?: boolean } = {},
   ): Promise<BrokerConnection> {
     const connection = await this.findConnectionById(connectionId, userId);
+    const preserveSuspendedOnFailure =
+      options.preserveSuspendedOnFailure === true &&
+      connection.status === BrokerConnectionStatus.SUSPENDED &&
+      connection.authorizationStatus === BrokerAuthorizationStatus.SUSPENDED;
     // #291 / correction round 3: ONE mutable adapter context per persisted
     // BrokerConnection.id — concurrent operations on the same connection share
     // it; other connections can never observe its in-flight setMode/account
@@ -541,8 +546,15 @@ export class BrokerService {
       connectionId,
       connection.authorizationStatus,
       {
-        status: BrokerConnectionStatus.CONNECTING,
-        consecutiveFailureCount: 0,
+        // Automatic recovery probes must remain visibly SUSPENDED until the
+        // provider handshake actually succeeds. This prevents a transient
+        // retry from presenting an unsafe connection as CONNECTING/usable.
+        status: preserveSuspendedOnFailure
+          ? BrokerConnectionStatus.SUSPENDED
+          : BrokerConnectionStatus.CONNECTING,
+        consecutiveFailureCount: preserveSuspendedOnFailure
+          ? connection.consecutiveFailureCount
+          : 0,
         // State machine: CONNECTING is only valid from these states; when the
         // current state does not allow it (e.g. mid-reconnect), the existing
         // state is preserved and the terminal update below still applies.
@@ -608,10 +620,14 @@ export class BrokerService {
             connectionId,
             inFlightAuthorization,
             {
-              status: BrokerConnectionStatus.ERROR,
+              status: preserveSuspendedOnFailure
+                ? BrokerConnectionStatus.SUSPENDED
+                : BrokerConnectionStatus.ERROR,
               lastErrorMessage: failureError,
+              ...(preserveSuspendedOnFailure ? { lastHealthCheckAt: new Date() } : {}),
               consecutiveFailureCount: () => 'consecutive_failure_count + 1',
-              ...(BrokerAuthorizationStateMachine.canTransition(
+              ...(!preserveSuspendedOnFailure &&
+              BrokerAuthorizationStateMachine.canTransition(
                 inFlightAuthorization,
                 BrokerAuthorizationStatus.ERROR,
               )
@@ -804,10 +820,14 @@ export class BrokerService {
             connectionId,
             inFlightAuthorization,
             {
-              status: BrokerConnectionStatus.ERROR,
+              status: preserveSuspendedOnFailure
+                ? BrokerConnectionStatus.SUSPENDED
+                : BrokerConnectionStatus.ERROR,
               lastErrorMessage: failureError,
+              ...(preserveSuspendedOnFailure ? { lastHealthCheckAt: new Date() } : {}),
               consecutiveFailureCount: () => 'consecutive_failure_count + 1',
-              ...(BrokerAuthorizationStateMachine.canTransition(
+              ...(!preserveSuspendedOnFailure &&
+              BrokerAuthorizationStateMachine.canTransition(
                 inFlightAuthorization,
                 BrokerAuthorizationStatus.ERROR,
               )
@@ -2102,7 +2122,10 @@ export class BrokerService {
     userId: string,
     brokerConnectionId: string,
     instrument: string,
-    options?: { advanceSimulation?: boolean },
+    options?: {
+      advanceSimulation?: boolean;
+      propagateProviderError?: boolean;
+    },
   ): Promise<BrokerPrice | null> {
     const connection = await this.findConnectionById(brokerConnectionId, userId);
 
@@ -2131,7 +2154,9 @@ export class BrokerService {
 
     try {
       await adapter.connect(credentials);
-      const price = await adapter.getCurrentPrice(instrument, options);
+      const price = await adapter.getCurrentPrice(instrument, {
+        advanceSimulation: options?.advanceSimulation,
+      });
       if (
         !price ||
         !price.bid ||
@@ -2142,13 +2167,16 @@ export class BrokerService {
         return null; // §18 — unprovable is unprovable; never invented.
       }
       return price;
-    } catch {
-      // Quote failures are the gate's typed MARKET_DATA_UNAVAILABLE — a null
-      // return keeps the seam honest without swallowing the reason.
+    } catch (error) {
+      // Quote failures normally collapse to MARKET_DATA_UNAVAILABLE for the
+      // live safety gate. Internal collectors may opt into the original
+      // provider error so quota/cooldown protection can react to 429/CPU
+      // credit failures instead of accidentally retrying through them.
       this.logger.warn(
         `Fresh quote unavailable for ${instrument} on connection ${brokerConnectionId} — ` +
           'the market-safety gate will fail closed',
       );
+      if (options?.propagateProviderError) throw error;
       return null;
     }
   }

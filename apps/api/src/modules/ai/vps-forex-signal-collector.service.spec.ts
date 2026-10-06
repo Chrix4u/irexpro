@@ -4,12 +4,68 @@ import {
   VpsForexSignalCollectorService,
   canExecuteMultiModelPaper,
   buildCandidate,
+  dynamicPaperLotUpperBound,
   isFreshOpportunity,
 } from './vps-forex-signal-collector.service';
 import { ExecutionService } from '../execution/execution.service';
 import { ExecutionMode } from '../execution/interfaces/execution-authority';
 import { BrokerService } from '../broker/broker.service';
 import { LivePaperMarketDataService } from '../broker/services/live-paper-market-data.service';
+
+describe('dynamic PAPER lot ceiling', () => {
+  const base = {
+    confidence: 0.68,
+    metaProbability: 0.53,
+    netExpectedR: 0.2,
+    consensusPassed: 6,
+    consensusRequired: 6,
+    volatilityScore: 0.35,
+  };
+
+  it('keeps ordinary admitted signals at the 0.10 lot ceiling', () => {
+    expect(dynamicPaperLotUpperBound(base)).toEqual({ upperBound: 0.1, tier: 'BASE' });
+  });
+
+  it('permits larger PAPER ceilings only when confidence, meta probability, EV, consensus and volatility all qualify', () => {
+    expect(
+      dynamicPaperLotUpperBound({
+        ...base,
+        confidence: 0.71,
+        metaProbability: 0.57,
+        netExpectedR: 0.2,
+      }),
+    ).toEqual({ upperBound: 0.2, tier: 'STRONG' });
+    expect(
+      dynamicPaperLotUpperBound({
+        ...base,
+        confidence: 0.78,
+        metaProbability: 0.64,
+        netExpectedR: 0.31,
+      }),
+    ).toEqual({ upperBound: 0.3, tier: 'VERY_STRONG' });
+    expect(
+      dynamicPaperLotUpperBound({
+        ...base,
+        confidence: 0.84,
+        metaProbability: 0.7,
+        netExpectedR: 0.45,
+        volatilityScore: 0.5,
+      }),
+    ).toEqual({ upperBound: 0.5, tier: 'EXCEPTIONAL' });
+  });
+
+  it('does not upscale on confidence alone', () => {
+    expect(
+      dynamicPaperLotUpperBound({
+        ...base,
+        confidence: 0.91,
+        metaProbability: 0.52,
+        netExpectedR: 0.1,
+        consensusPassed: 5,
+      }),
+    ).toEqual({ upperBound: 0.1, tier: 'BASE' });
+  });
+});
 
 const PAIRS = [
   ['EURUSD', 'EUR/USD'],
@@ -83,6 +139,41 @@ function payload() {
   return data;
 }
 
+function allTrendPayload() {
+  const data: Record<string, any> = {};
+  for (const [instrument, provider] of PAIRS) {
+    const base =
+      instrument === 'USDJPY'
+        ? 157
+        : instrument === 'GBPUSD'
+          ? 1.34
+          : instrument === 'USDCAD'
+            ? 1.37
+            : instrument === 'USDCHF'
+              ? 0.8
+              : instrument === 'AUDUSD'
+                ? 0.66
+                : 1.1;
+    const digits = instrument === 'USDJPY' ? 3 : 5;
+    const rows =
+      instrument === 'USDJPY'
+        ? trendCandles(base, digits, 0.001, 0.01)
+        : trendCandles(base, digits);
+    data[provider] = {
+      status: 'ok',
+      meta: { symbol: provider },
+      values: rows.map((row) => ({
+        datetime: row.timestamp.toISOString().slice(0, 19).replace('T', ' '),
+        open: row.open,
+        high: row.high,
+        low: row.low,
+        close: row.close,
+      })),
+    };
+  }
+  return data;
+}
+
 function aiEngineClientMock() {
   return {
     isSchedulerIntegrationEnabled: jest.fn().mockReturnValue(true),
@@ -98,22 +189,58 @@ function config(values: Record<string, unknown>) {
 
 describe('multi-model PAPER execution gate', () => {
   it('allows an admitted setup when PAPER governance passes even while promotion remains separate', () => {
-    expect(canExecuteMultiModelPaper({ admitted: true }, { paperExecutionEligible: true })).toBe(
-      true,
-    );
+    expect(
+      canExecuteMultiModelPaper({ paperAdmitted: true }, { paperExecutionEligible: true }),
+    ).toBe(true);
   });
 
   it('fails closed when model admission or PAPER governance fails', () => {
-    expect(canExecuteMultiModelPaper({ admitted: false }, { paperExecutionEligible: true })).toBe(
-      false,
-    );
-    expect(canExecuteMultiModelPaper({ admitted: true }, { paperExecutionEligible: false })).toBe(
-      false,
-    );
+    expect(
+      canExecuteMultiModelPaper({ paperAdmitted: false }, { paperExecutionEligible: true }),
+    ).toBe(false);
+    expect(
+      canExecuteMultiModelPaper({ paperAdmitted: true }, { paperExecutionEligible: false }),
+    ).toBe(false);
   });
 });
 
 describe('VpsForexSignalCollectorService', () => {
+  it('collects every closed M5 slot across the FX 24x5 market week', async () => {
+    const collector = new VpsForexSignalCollectorService(
+      config({}),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      {} as unknown as ExecutionService,
+      {} as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+    );
+    const isCollectionSlot = (value: string) =>
+      (collector as any).isCollectionSlot(new Date(value)) as boolean;
+    const nextEligible = (value: string) =>
+      ((collector as any).nextEligibleScanAt(new Date(value)) as Date).toISOString();
+
+    expect(isCollectionSlot('2026-10-05T10:00:00.000Z')).toBe(true);
+    expect(isCollectionSlot('2026-10-05T10:05:00.000Z')).toBe(true);
+    expect(isCollectionSlot('2026-10-05T10:10:00.000Z')).toBe(true);
+    expect(isCollectionSlot('2026-10-05T10:03:00.000Z')).toBe(false);
+
+    expect(isCollectionSlot('2026-10-10T12:00:00.000Z')).toBe(false);
+    expect(isCollectionSlot('2026-10-11T20:55:00.000Z')).toBe(false);
+    expect(isCollectionSlot('2026-10-11T21:00:00.000Z')).toBe(true);
+    expect(isCollectionSlot('2026-10-09T20:55:00.000Z')).toBe(true);
+    expect(isCollectionSlot('2026-10-09T21:00:00.000Z')).toBe(false);
+
+    expect(nextEligible('2026-10-05T10:03:00.000Z')).toBe('2026-10-05T10:05:00.000Z');
+    expect(nextEligible('2026-10-05T10:05:00.000Z')).toBe('2026-10-05T10:10:00.000Z');
+    expect(nextEligible('2026-10-11T20:58:00.000Z')).toBe('2026-10-11T21:00:00.000Z');
+    expect(nextEligible('2026-10-09T20:58:00.000Z')).toBe('2026-10-11T21:00:00.000Z');
+
+    const status = await collector.getStatus('user-1');
+    expect(status.cadenceMinutes).toBe(5);
+    expect(status.timeframe).toBe('M5');
+    expect(status.skippedUtcHours).toEqual([]);
+  });
+
   it('builds a deterministic qualifying trend candidate without claiming model qualification', () => {
     const candidate = buildCandidate('EURUSD', trendCandles());
     expect(candidate).not.toBeNull();
@@ -130,7 +257,7 @@ describe('VpsForexSignalCollectorService', () => {
     expect(rewardRisk).toBeCloseTo(2.5 / 1.5, 6);
   });
 
-  it('blocks a repeated unchanged setup but permits genuinely fresh same-side evidence', () => {
+  it('classifies repeated unchanged setup as stale telemetry while detecting fresh same-side evidence', () => {
     const candidate = buildCandidate('EURUSD', trendCandles());
     expect(candidate).not.toBeNull();
     const current = candidate!;
@@ -197,10 +324,12 @@ describe('VpsForexSignalCollectorService', () => {
     await (collector as any).restorePublishedOpportunities('user-1', 'conn-1');
     const restored = (collector as any).lastPublishedOpportunity.get('EURUSD');
 
-    expect(query).toHaveBeenCalledWith(
-      expect.stringContaining('FROM trading.ensemble_shadow_decisions'),
-      ['user-1', 'conn-1', 'irexpro-multimodel-ensemble-v1'],
-    );
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('model_version = $4'), [
+      'user-1',
+      'conn-1',
+      'irexpro-multimodel-ensemble-v1',
+      'plan-b-multimodel-shadow-v4',
+    ]);
     expect(restored).toBeDefined();
     expect(restored.direction).toBe(current!.direction);
     expect(restored.confidence).toBeCloseTo(current!.confidence, 10);
@@ -222,6 +351,125 @@ describe('VpsForexSignalCollectorService', () => {
         reasons: ['REGIME_TREND_WEAK'],
       }),
     );
+  });
+
+  it('isolates campaign statistics to the current model policy version', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const collector = new VpsForexSignalCollectorService(
+      config({}),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      {} as unknown as ExecutionService,
+      {} as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+      { query } as any,
+    );
+
+    await (collector as any).loadEnsembleCampaignStatus('user-1', 'conn-1');
+
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('model_version = $4'), [
+      'user-1',
+      'conn-1',
+      'irexpro-multimodel-ensemble-v1',
+      'plan-b-multimodel-shadow-v4',
+    ]);
+  });
+
+  it('resolves outcomes for PAPER-executable decisions even when strict promotion admission is false', async () => {
+    const query = jest.fn().mockImplementation(async (sql: string) => {
+      if (String(sql).includes('SELECT') && String(sql).includes('ensemble_shadow_decisions')) {
+        return [
+          {
+            id: 'paper-only-decision',
+            instrument: 'EURUSD',
+            direction: 'BUY',
+            market_bar_time: new Date('2026-10-05T10:00:00.000Z'),
+            entry_price: '1.1000',
+            components: {
+              stopLoss: 1.099,
+              takeProfit: 1.102,
+              governance: {
+                paperExecutionEligible: true,
+                estimatedExecutionCostR: 0.1,
+              },
+            },
+          },
+        ];
+      }
+      return [];
+    });
+    const collector = new VpsForexSignalCollectorService(
+      config({}),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      {} as unknown as ExecutionService,
+      {} as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+      { query } as any,
+    );
+    const candles = new Map([
+      [
+        'EURUSD',
+        [
+          {
+            timestamp: new Date('2026-10-05T10:05:00.000Z'),
+            open: '1.1000',
+            high: '1.1005',
+            low: '1.0988',
+            close: '1.0991',
+          },
+        ],
+      ],
+    ]);
+
+    await (collector as any).resolvePendingEnsembleShadowOutcomes('user-1', 'conn-1', candles);
+
+    const selectSql = String(query.mock.calls[0][0]);
+    expect(selectSql).toContain('admitted = true');
+    expect(selectSql).toContain('paperExecutionEligible');
+    expect(selectSql).toContain('OR COALESCE');
+    expect(selectSql).toContain('highConvictionOverlay');
+    expect(selectSql).toContain('allBrokerNative');
+    expect(selectSql).toContain("'CONFIRM'");
+    expect(selectSql).toContain("'CONFLICT'");
+    expect(selectSql).toContain("'ABSTAIN'");
+    const updateCall = query.mock.calls.find(([sql]) =>
+      String(sql).includes('UPDATE trading.ensemble_shadow_decisions'),
+    );
+    expect(updateCall).toBeDefined();
+    expect(updateCall?.[1]?.[0]).toBe('paper-only-decision');
+    expect(JSON.parse(updateCall?.[1]?.[1] as string)).toMatchObject({
+      status: 'LOSS',
+      reason: 'STOP_LOSS_HIT',
+    });
+  });
+
+  it('builds sleeve qualification evidence from the actual PAPER execution policy cohort', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const collector = new VpsForexSignalCollectorService(
+      config({}),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      {} as unknown as ExecutionService,
+      {} as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+      { query } as any,
+    );
+
+    await (collector as any).loadEnsembleSleeveEvidence('user-1', 'conn-1', 'USDJPY', 'BUY');
+
+    const sql = String(query.mock.calls[0][0]);
+    expect(sql).toContain('paperExecutionEligible');
+    expect(sql).not.toContain('AND admitted = true');
+    expect(sql).toContain('model_version = $6');
+    expect(query).toHaveBeenCalledWith(expect.any(String), [
+      'user-1',
+      'conn-1',
+      'irexpro-multimodel-ensemble-v1',
+      'USDJPY',
+      'BUY',
+      'plan-b-multimodel-shadow-v4',
+    ]);
   });
 
   it('refreshes all six live PAPER feeds but freezes legacy v7 execution during multi-model cutover', async () => {
@@ -273,6 +521,45 @@ describe('VpsForexSignalCollectorService', () => {
     expect((collector as any).lastEnsembleDecision.instrument).toBe('EURUSD');
     expect((collector as any).lastEnsembleDecision.consensusRequired).toBeGreaterThan(0);
     expect(live.getOHLCV('EURUSD', 'M5', 70, 'conn-1')).toHaveLength(70);
+  });
+
+  it('evaluates every qualifying pair in the same scan instead of only the top-ranked pair', async () => {
+    const live = new LivePaperMarketDataService();
+    const shadowQuery = jest.fn().mockResolvedValue([]);
+    const collector = new VpsForexSignalCollectorService(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+      }),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      {
+        getActiveSession: jest.fn().mockResolvedValue({
+          id: 'session-1',
+          brokerConnectionId: 'conn-1',
+          executionMode: ExecutionMode.PAPER_ONLY,
+        }),
+      } as unknown as ExecutionService,
+      {
+        getCurrentPriceForConnection: jest.fn().mockResolvedValue({ bid: '1', ask: '1.1' }),
+      } as unknown as BrokerService,
+      live,
+      aiEngineClientMock(),
+      { query: shadowQuery } as any,
+    );
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => allTrendPayload() });
+
+    await collector.collectOnce(fetchMock as unknown as typeof fetch);
+
+    const insertCalls = shadowQuery.mock.calls.filter(([sql]) =>
+      String(sql).includes('INSERT INTO trading.ensemble_shadow_decisions'),
+    );
+    expect(insertCalls.length).toBeGreaterThan(1);
+    const persistedInstruments = new Set(insertCalls.map(([, params]) => params[6]));
+    expect(persistedInstruments.size).toBe(insertCalls.length);
   });
 
   it('persists shadow evidence without an active PAPER session and keeps execution disabled', async () => {
@@ -441,7 +728,7 @@ describe('VpsForexSignalCollectorService', () => {
     expect(status.state).toBe('WAITING_FOR_PAPER_SESSION');
   });
 
-  it('reports weekend pause and the next eligible Monday scan deterministically', () => {
+  it('uses the full FX 24x5 session instead of pausing every weekday night', () => {
     const collector = new VpsForexSignalCollectorService(
       config({}),
       { receiveSignal: jest.fn() } as unknown as AiSignalService,
@@ -450,33 +737,66 @@ describe('VpsForexSignalCollectorService', () => {
       new LivePaperMarketDataService(),
       aiEngineClientMock(),
     );
-    const schedule = (collector as any).marketSchedule(new Date('2026-10-03T00:21:00.000Z'));
-    expect(schedule).toEqual({
+
+    const saturday = (collector as any).marketSchedule(new Date('2026-10-03T00:21:00.000Z'));
+    expect(saturday).toEqual({
       paused: true,
       reason: 'WEEKEND',
-      nextEligibleScanAt: '2026-10-05T00:00:00.000Z',
+      nextEligibleScanAt: '2026-10-04T21:00:00.000Z',
     });
+
+    expect((collector as any).marketSchedule(new Date('2026-10-04T20:50:00.000Z')).paused).toBe(
+      true,
+    );
+    expect((collector as any).marketSchedule(new Date('2026-10-04T21:00:00.000Z')).paused).toBe(
+      false,
+    );
+    expect((collector as any).marketSchedule(new Date('2026-10-05T22:10:00.000Z')).paused).toBe(
+      false,
+    );
+    expect((collector as any).marketSchedule(new Date('2026-10-09T20:50:00.000Z')).paused).toBe(
+      false,
+    );
+    expect((collector as any).marketSchedule(new Date('2026-10-09T21:00:00.000Z')).paused).toBe(
+      true,
+    );
   });
 
-  it('enters a daily provider cooldown after Twelve Data exhausts the account quota', async () => {
+  it('fails over to broker-native MetaTrader candles after Twelve Data exhausts the daily quota', async () => {
     const live = new LivePaperMarketDataService();
-    const execution = {
-      getActiveSession: jest.fn().mockResolvedValue({
-        id: 'session-1',
-        brokerConnectionId: 'conn-1',
-        executionMode: ExecutionMode.PAPER_ONLY,
-      }),
-    } as unknown as ExecutionService;
+    const broker = {
+      findConnectionById: jest.fn().mockResolvedValue({ brokerId: 'metatrader5' }),
+      getOhlcvForConnection: jest
+        .fn()
+        .mockImplementation(async (_userId: string, _connectionId: string, instrument: string) => {
+          const base =
+            instrument === 'USDJPY'
+              ? 157
+              : instrument === 'GBPUSD'
+                ? 1.34
+                : instrument === 'USDCAD'
+                  ? 1.37
+                  : instrument === 'USDCHF'
+                    ? 0.8
+                    : instrument === 'AUDUSD'
+                      ? 0.66
+                      : 1.1;
+          const digits = instrument === 'USDJPY' ? 3 : 5;
+          return trendCandles(base, digits).map((row) => ({ ...row, volume: '0' }));
+        }),
+    } as unknown as BrokerService;
     const collector = new VpsForexSignalCollectorService(
       config({
         'vpsForexScanner.enabled': true,
         'vpsForexScanner.apiKey': 'real-key-123456',
         'vpsForexScanner.userId': 'user-1',
         'vpsForexScanner.brokerConnectionId': 'conn-1',
+        'multimodelBrokerExpert.enabled': true,
+        'multimodelBrokerExpert.sourceConnectionId': 'metaapi-demo-1',
       }),
       { receiveSignal: jest.fn() } as unknown as AiSignalService,
-      execution,
-      { getCurrentPriceForConnection: jest.fn() } as unknown as BrokerService,
+      { getActiveSession: jest.fn().mockResolvedValue(null) } as unknown as ExecutionService,
+      broker,
       live,
       aiEngineClientMock(),
     );
@@ -490,36 +810,44 @@ describe('VpsForexSignalCollectorService', () => {
       }),
     });
 
-    await expect(collector.collectOnce(fetchMock as unknown as typeof fetch)).rejects.toThrow(
-      /daily credit limit reached; scanner paused until/,
+    const series = await (collector as any).fetchSixPairSeries(
+      'real-key-123456',
+      fetchMock as unknown as typeof fetch,
     );
     const status = await collector.getStatus('user-1');
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(series.size).toBe(6);
+    expect((broker as any).getOhlcvForConnection).toHaveBeenCalledTimes(6);
     expect(status.providerCooldownReason).toBe('DAILY_CREDIT_LIMIT');
     expect(status.providerCooldownUntil).toBeTruthy();
-    expect(status.state).toBe(
-      status.marketSchedule.paused ? 'MARKET_PAUSED' : 'WAITING_FOR_PROVIDER_QUOTA',
-    );
+    expect(status.marketDataAuthority).toBe('METAAPI_BROKER_FALLBACK');
+    expect(status.providerFallbackActive).toBe(true);
   });
 
-  it('does not call Twelve Data again while the same-process daily quota cooldown is active', async () => {
+  it('uses broker-native fallback without retrying Twelve Data while daily cooldown is active', async () => {
+    const broker = {
+      findConnectionById: jest.fn().mockResolvedValue({ brokerId: 'metatrader5' }),
+      getOhlcvForConnection: jest
+        .fn()
+        .mockImplementation(async (_userId: string, _connectionId: string, instrument: string) => {
+          const base = instrument === 'USDJPY' ? 157 : 1.1;
+          const digits = instrument === 'USDJPY' ? 3 : 5;
+          return trendCandles(base, digits).map((row) => ({ ...row, volume: '0' }));
+        }),
+    } as unknown as BrokerService;
     const collector = new VpsForexSignalCollectorService(
       config({
         'vpsForexScanner.enabled': true,
         'vpsForexScanner.apiKey': 'real-key-123456',
         'vpsForexScanner.userId': 'user-1',
         'vpsForexScanner.brokerConnectionId': 'conn-1',
+        'multimodelBrokerExpert.enabled': true,
+        'multimodelBrokerExpert.sourceConnectionId': 'metaapi-demo-1',
       }),
       { receiveSignal: jest.fn() } as unknown as AiSignalService,
-      {
-        getActiveSession: jest.fn().mockResolvedValue({
-          id: 'session-1',
-          brokerConnectionId: 'conn-1',
-          executionMode: ExecutionMode.PAPER_ONLY,
-        }),
-      } as unknown as ExecutionService,
-      { getCurrentPriceForConnection: jest.fn() } as unknown as BrokerService,
+      { getActiveSession: jest.fn().mockResolvedValue(null) } as unknown as ExecutionService,
+      broker,
       new LivePaperMarketDataService(),
       aiEngineClientMock(),
     );
@@ -532,14 +860,54 @@ describe('VpsForexSignalCollectorService', () => {
       }),
     });
 
-    await expect(collector.collectOnce(fetchMock as unknown as typeof fetch)).rejects.toThrow(
-      /daily credit limit reached/,
+    await (collector as any).fetchSixPairSeries(
+      'real-key-123456',
+      fetchMock as unknown as typeof fetch,
     );
-    await expect(collector.collectOnce(fetchMock as unknown as typeof fetch)).rejects.toThrow(
-      /daily credit cooldown active/,
+    await (collector as any).fetchSixPairSeries(
+      'real-key-123456',
+      fetchMock as unknown as typeof fetch,
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect((broker as any).getOhlcvForConnection).toHaveBeenCalledTimes(12);
+  });
+
+  it('fails closed when both Twelve Data quota and broker-native fallback are unavailable', async () => {
+    const broker = {
+      findConnectionById: jest.fn().mockResolvedValue({ brokerId: 'metatrader5' }),
+      getOhlcvForConnection: jest.fn().mockRejectedValue(new Error('broker candles unavailable')),
+    } as unknown as BrokerService;
+    const collector = new VpsForexSignalCollectorService(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+        'multimodelBrokerExpert.enabled': true,
+        'multimodelBrokerExpert.sourceConnectionId': 'metaapi-demo-1',
+      }),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      { getActiveSession: jest.fn().mockResolvedValue(null) } as unknown as ExecutionService,
+      broker,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+    );
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      json: async () => ({
+        status: 'error',
+        message: 'You have run out of API credits for the day.',
+      }),
+    });
+
+    await expect(
+      (collector as any).fetchSixPairSeries(
+        'real-key-123456',
+        fetchMock as unknown as typeof fetch,
+      ),
+    ).rejects.toThrow(/broker-native fallback failed/);
   });
 
   it('rejects the shared Twelve Data demo key for production evidence', async () => {

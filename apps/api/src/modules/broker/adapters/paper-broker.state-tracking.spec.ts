@@ -87,10 +87,12 @@ describe('PaperBrokerAdapter — honest state tracking (PR-4)', () => {
 
     const history = await adapter.getClosedTrades(new Date(0), new Date());
     expect(history).toHaveLength(1);
+    // BUY opens at ask and closes at bid, so an immediate round trip honestly
+    // pays the simulated spread instead of receiving an optimistic midpoint fill.
     expect(history[0]).toMatchObject({
       externalOrderId: positionId,
-      closePrice: '1.10005',
-      realisedPnl: '0.00',
+      closePrice: '1.10000',
+      realisedPnl: '-10.00',
       closeReason: 'MANUAL',
     });
   });

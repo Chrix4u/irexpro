@@ -6,7 +6,7 @@ export interface LivePaperQuote {
   bid: string;
   ask: string;
   timestamp: Date;
-  source: 'REST_M5' | 'STREAM';
+  source: 'REST_M5' | 'STREAM' | 'PROVIDER';
 }
 
 export interface LivePaperPositionMark extends LivePaperQuote {
@@ -186,15 +186,52 @@ export class LivePaperMarketDataService {
     }
   }
 
+  updateProviderQuote(
+    instrument: string,
+    bid: number | string,
+    ask: number | string,
+    observedAt: Date,
+    connectionId?: string,
+  ): void {
+    const state = this.marketState(connectionId);
+    const symbol = this.requireSupported(instrument);
+    const spec = SPECS[symbol]!;
+    const bidNumber = Number(bid);
+    const askNumber = Number(ask);
+    const timestamp = new Date(observedAt);
+    if (
+      !Number.isFinite(bidNumber) ||
+      !Number.isFinite(askNumber) ||
+      bidNumber <= 0 ||
+      askNumber <= 0 ||
+      askNumber < bidNumber ||
+      !Number.isFinite(timestamp.getTime())
+    ) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.INVALID_PRICE,
+        `Invalid provider PAPER quote for ${symbol}.`,
+      );
+    }
+    const quote: LivePaperQuote = {
+      bid: bidNumber.toFixed(spec.digits),
+      ask: askNumber.toFixed(spec.digits),
+      timestamp,
+      source: 'PROVIDER',
+    };
+    const current = state.streamingQuotes.get(symbol);
+    if (!current || timestamp.getTime() >= current.timestamp.getTime()) {
+      state.streamingQuotes.set(symbol, quote);
+    }
+    if (!state.latestQuoteObservedAt || timestamp > state.latestQuoteObservedAt) {
+      state.latestQuoteObservedAt = timestamp;
+    }
+  }
+
   /**
    * Execution/evidence quote: ALWAYS the latest fully closed M5 REST candle.
    * Streaming ticks must never alter v5 fills, margin/risk, or SL/TP evidence.
    */
-  getQuote(
-    instrument: string,
-    maxAgeMs = 20 * 60_000,
-    connectionId?: string,
-  ): LivePaperQuote {
+  getQuote(instrument: string, maxAgeMs = 20 * 60_000, connectionId?: string): LivePaperQuote {
     const state = this.marketState(connectionId);
     const symbol = this.requireSupported(instrument);
     const quote = state.candleQuotes.get(symbol);
@@ -219,10 +256,10 @@ export class LivePaperMarketDataService {
   }
 
   /**
-   * Read-only position mark: prefer a genuinely fresh streaming tick, otherwise
-   * fall back to the same closed-M5 execution quote. This path is intentionally
-   * excluded from order fills, risk sizing, margin authority and protection
-   * evaluation so v5 evidence semantics remain unchanged.
+   * Fast position/protection mark: prefer a genuinely fresh streaming tick,
+   * otherwise fall back to the same closed-M5 execution quote. The PAPER broker
+   * may use fresh STREAM/PROVIDER marks to trigger SL/TP on already-open positions;
+   * entry fills, risk sizing, margin authority and model evidence remain M5-based.
    */
   getMarkQuote(
     instrument: string,
@@ -243,7 +280,7 @@ export class LivePaperMarketDataService {
   }
 
   /**
-   * Read-only position valuation mark.
+   * Position valuation/protection mark.
    *
    * Unlike getQuote()/getMarkQuote(), this method may return the newest cached
    * quote even when it is stale. That is intentional: the Live Account UI can
@@ -290,12 +327,7 @@ export class LivePaperMarketDataService {
     return { ...latest, timestamp: new Date(latest.timestamp), isStale: true };
   }
 
-  getOHLCV(
-    instrument: string,
-    timeframe: string,
-    count: number,
-    connectionId?: string,
-  ): OHLCV[] {
+  getOHLCV(instrument: string, timeframe: string, count: number, connectionId?: string): OHLCV[] {
     const state = this.marketState(connectionId);
     const symbol = this.requireSupported(instrument);
     const tf = timeframe.trim().toUpperCase();

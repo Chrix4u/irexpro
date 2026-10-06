@@ -563,6 +563,40 @@ describe('BrokerService', () => {
       );
     });
 
+    it('keeps an automatic recovery probe SUSPENDED when the provider is still unavailable', async () => {
+      const mockAdapter = {
+        setMode: jest.fn(),
+        connect: jest.fn().mockRejectedValue(new Error('temporary MetaApi timeout')),
+      };
+      registry.getAdapter.mockReturnValue(mockAdapter);
+
+      const mockConn = connectedConnection({
+        status: BrokerConnectionStatus.SUSPENDED,
+        authorizationStatus: BrokerAuthorizationStatus.SUSPENDED,
+        consecutiveFailureCount: 3,
+        lastErrorMessage: 'previous MetaApi timeout',
+      });
+      connectionRepo.findOne.mockResolvedValue(mockConn);
+      connectionRepo.update.mockResolvedValue({ affected: 1 });
+
+      await expect(
+        service.connectBroker('conn-1', 'user-1', undefined, {
+          preserveSuspendedOnFailure: true,
+        }),
+      ).rejects.toThrow();
+
+      const patches = connectionRepo.update.mock.calls.map((call) => call[1]);
+      expect(patches.some((patch) => patch.status === BrokerConnectionStatus.ERROR)).toBe(false);
+      expect(patches[0]).toMatchObject({
+        status: BrokerConnectionStatus.SUSPENDED,
+        consecutiveFailureCount: 3,
+      });
+      expect(patches.at(-1)).toMatchObject({
+        status: BrokerConnectionStatus.SUSPENDED,
+        lastErrorMessage: 'temporary MetaApi timeout',
+      });
+    });
+
     it('calls decrypt and adapter.connect with decrypted credentials', async () => {
       const mockAdapter = {
         setMode: jest.fn(),
@@ -1842,6 +1876,24 @@ describe('BrokerService', () => {
       await expect(
         service.getCurrentPriceForConnection('user-1', 'conn-1', 'EURUSD'),
       ).resolves.toBeNull();
+    });
+
+    it('can propagate a provider failure for internal quota-aware collectors only', async () => {
+      connectionRepo.findOne.mockResolvedValue(connectedConn);
+      const providerError = new Error('429 Too Many Requests');
+      const adapter = {
+        setMode: jest.fn(),
+        connect: jest.fn().mockResolvedValue(undefined),
+        getCurrentPrice: jest.fn().mockRejectedValue(providerError),
+      };
+      registry.getAdapterForConnection.mockReturnValue(adapter);
+      encryption.decrypt.mockReturnValue({ accountId: 'acc-1' });
+
+      await expect(
+        service.getCurrentPriceForConnection('user-1', 'conn-1', 'EURUSD', {
+          propagateProviderError: true,
+        }),
+      ).rejects.toBe(providerError);
     });
 
     it('returns null for a quote with an unparseable timestamp (unprovable is unprovable)', async () => {

@@ -175,7 +175,7 @@ export interface PaperQuote {
   /** Mark observation metadata when known. */
   timestamp?: Date;
   /** Mark provenance for live, candle-fallback, or deterministic simulation. */
-  source?: 'STREAM' | 'REST_M5' | 'SIMULATED';
+  source?: 'STREAM' | 'REST_M5' | 'PROVIDER' | 'SIMULATED';
 }
 
 /**
@@ -910,13 +910,65 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     };
   }
 
+  /**
+   * Apply genuinely fresh streaming/provider marks to PAPER protection orders.
+   * Entry fills, sizing, risk and model evidence remain on the closed-M5 quote
+   * path; only already-open position SL/TP becomes quote-responsive.
+   *
+   * Returns true when the durable position/path state changed.
+   */
+  private applyFreshLiveProtectionMarks(instrumentFilter?: string): boolean {
+    if (!this.isLiveMarketMode() || this._positions.size === 0) return false;
+
+    const positionsBefore = this._positions.size;
+    const observationsBefore = Array.from(this._positions.values()).reduce(
+      (sum, position) => sum + position.pathObservationCount,
+      0,
+    );
+    const instruments = [
+      ...new Set(
+        Array.from(this._positions.values())
+          .map((position) => position.instrument)
+          .filter((instrument) => !instrumentFilter || instrument === instrumentFilter),
+      ),
+    ];
+
+    for (const instrument of instruments) {
+      try {
+        const mark = this.liveMarketData!.getPositionMarkQuote(
+          instrument,
+          60_000,
+          20 * 60_000,
+          this._connectionId,
+        );
+        // Closed-M5 protection is already handled by evaluateLiveCandleProtection.
+        // Only a fresh independent STREAM/PROVIDER mark belongs on this fast path.
+        if (mark.isStale || mark.source === 'REST_M5') continue;
+        this.evaluatePositions(
+          { bid: mark.bid, ask: mark.ask, timestamp: mark.timestamp, source: mark.source },
+          instrument,
+        );
+      } catch {
+        // Missing/stale fast marks never disable the closed-candle safety path.
+      }
+    }
+
+    const observationsAfter = Array.from(this._positions.values()).reduce(
+      (sum, position) => sum + position.pathObservationCount,
+      0,
+    );
+    return this._positions.size !== positionsBefore || observationsAfter !== observationsBefore;
+  }
+
   async getOpenPositions(): Promise<BrokerPosition[]> {
     this.assertConnected();
+    if (this.applyFreshLiveProtectionMarks()) await this.persistDurableState();
     return Array.from(this._positions.values()).map((position) => this.mapPosition(position));
   }
 
   async getPositionById(externalOrderId: string): Promise<BrokerPosition | null> {
     this.assertConnected();
+    if (this.applyFreshLiveProtectionMarks()) await this.persistDurableState();
     const position = this._positions.get(externalOrderId);
     return position ? this.mapPosition(position) : null;
   }
@@ -1297,15 +1349,14 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       const liveQuote = this.liveMarketData!.getQuote(symbol, 20 * 60_000, this._connectionId);
       const quote: PaperQuote = { bid: liveQuote.bid, ask: liveQuote.ask };
       // First replay every fully closed M5 candle since each position opened.
-      // This captures an SL/TP touched inside a candle even when the scanner
-      // polls only every 10 minutes. If both levels were touched in the same
-      // candle we conservatively count the stop first (unknown intrabar path).
+      // This is the conservative recovery path for missed ticks/restarts. If
+      // both levels were touched in one unseen candle, stop-first is retained.
       this.evaluateLiveCandleProtection(symbol);
-      // getQuote() is deliberately the closed-M5 execution/evidence quote.
-      // Streaming ticks are consumed only by getMarkQuote() for Current/P&L,
-      // so all six pairs keep identical v5 SL/TP and resting-order semantics.
+      // Fresh STREAM/PROVIDER bid/ask marks are protection-authoritative for
+      // already-open positions, so TP/SL does not wait for M5 candle close.
+      // Entry fills/resting orders/model evidence remain closed-M5 based.
+      this.applyFreshLiveProtectionMarks(symbol);
       this._marketTickCounter += 1;
-      this.evaluatePositions(quote, symbol);
       this.evaluateWorkingOrders(quote, symbol);
       await this.persistDurableState();
       return {
@@ -1541,7 +1592,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     }
   }
 
-  /** Immediate MARKET fill at the quote mid (the deterministic '1.10005'). */
+  /** Immediate MARKET fill on the executable side: BUY at ask, SELL at bid. */
   private executeMarketOrder(
     orderId: string,
     order: BrokerOrderRequest,
@@ -1551,7 +1602,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     comment: string,
   ): BrokerOrderResult {
     const quote = this.quoteForInstrument(instrument);
-    const fillPrice = quoteMid(quote);
+    const fillPrice = order.direction === 'BUY' ? quote.ask : quote.bid;
     const units = lotSizeToUnits(order.lotSize);
     const requiredMargin = toMoney(this.marginInAccountCurrencyExact(instrument, units, fillPrice));
     if (compareDecimalStrings(requiredMargin, this.freeMargin()) > 0) {
@@ -1729,10 +1780,10 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         closedLot = lotSize.trim();
       }
 
-      // Manual closes execute at the quote mid (zero-slippage paper model —
-      // an open-and-close without an intervening tick books exactly flat).
+      // Close on the executable side so PAPER pays the same bid/ask spread
+      // model used by protective exits: BUY exits at bid, SELL exits at ask.
       const quote = this.quoteForInstrument(position.instrument);
-      const closePrice = quoteMid(quote);
+      const closePrice = position.direction === 'BUY' ? quote.bid : quote.ask;
 
       const closedTrade = this.closePositionUnits(
         position,
@@ -1824,7 +1875,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       for (const position of Array.from(this._positions.values())) {
         try {
           const quote = this.quoteForInstrument(position.instrument);
-          const closePrice = quoteMid(quote);
+          const closePrice = position.direction === 'BUY' ? quote.bid : quote.ask;
           this.closePositionUnits(position, position.units, position.lotSize, closePrice, 'SYSTEM');
           closedCount++;
         } catch (err) {
@@ -2045,6 +2096,8 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     for (const position of Array.from(this._positions.values())) {
       if (instrumentFilter && position.instrument !== instrumentFilter) continue;
       const observedAt = quote.timestamp instanceof Date ? quote.timestamp : this.currentTime();
+      // Never let a quote observed before the position existed close that position.
+      if (observedAt.getTime() < position.openedAt.getTime()) continue;
       if (
         position.pathLastMarkObservedAt === null ||
         observedAt.getTime() > position.pathLastMarkObservedAt.getTime()

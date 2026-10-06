@@ -433,9 +433,10 @@ export class MetaTraderAdapter implements IBrokerAdapter {
   async getCurrentPrice(instrument: string): Promise<BrokerPrice> {
     const conn = await this.getActiveConnection();
     try {
-      // RPC connections expose direct quote reads. Market-data subscription
-      // methods belong to the streaming connection API and are intentionally
-      // not required for DEMO/PAPER quote collection.
+      // RPC quote reads use MetaApi's default short-lived subscription. The
+      // keepSubscription=true variant proved unreliable on this broker account
+      // ("Specified symbol price not found"), so recurring collection keeps
+      // the proven RPC semantics and relies on bounded concurrency/timeouts.
       const price = await conn.getSymbolPrice(instrument);
       return {
         instrument,

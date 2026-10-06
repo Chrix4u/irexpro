@@ -54,6 +54,17 @@ function formatTimestamp(value: string | null | undefined): string {
   }).format(date);
 }
 
+function formatMarkFreshness(value: string | null | undefined): string {
+  if (!value) return "mark time unavailable";
+  const observedAt = new Date(value).getTime();
+  if (!Number.isFinite(observedAt)) return "mark time unavailable";
+  const ageSeconds = Math.max(0, Math.floor((Date.now() - observedAt) / 1000));
+  if (ageSeconds < 60) return `${ageSeconds}s ago`;
+  const ageMinutes = Math.floor(ageSeconds / 60);
+  if (ageMinutes < 60) return `${ageMinutes}m ago`;
+  return formatTimestamp(value);
+}
+
 function formatFixedDecimal(
   value: string | null | undefined,
   fractionDigits = 2,
@@ -424,6 +435,7 @@ interface VpsForexScannerStatusView {
     evaluatedAt: string | null;
     instrument: string | null;
     direction: "BUY" | "SELL" | null;
+    paperAdmitted?: boolean;
     admitted: boolean;
     candidateConfidence: number | null;
     ensembleScore: number | null;
@@ -444,6 +456,7 @@ interface VpsForexScannerStatusView {
       netExpectedRPassed: boolean;
       driftState: "NORMAL" | "STRESSED" | "OUT_OF_DISTRIBUTION";
       driftQuality: number;
+      paperDriftPassed?: boolean;
       driftPassed: boolean;
       sleeveState: "COLLECTING" | "CORE" | "PROBATION" | "BLOCKED";
       sleeveEvidence: {
@@ -968,7 +981,7 @@ function PositionCard({
                     : "Broker mark"}
                 {position.markIsStale ? " · STALE" : ""}
                 {position.markObservedAt
-                  ? ` · ${formatTimestamp(position.markObservedAt)}`
+                  ? ` · ${formatMarkFreshness(position.markObservedAt)}`
                   : ""}
               </small>
             ) : null}
@@ -1113,7 +1126,7 @@ function PositionTable({
                         : "Broker mark"}
                     {position.markIsStale ? " · STALE" : ""}
                     {position.markObservedAt
-                      ? ` · ${formatTimestamp(position.markObservedAt)}`
+                      ? ` · ${formatMarkFreshness(position.markObservedAt)}`
                       : ""}
                   </small>
                 ) : null}
@@ -4073,11 +4086,15 @@ export default function AiTradingPage() {
                         {vpsConfidenceActive
                           ? vpsScannerStatus?.marketSchedule.paused
                             ? "No new decision while market is paused"
-                            : vpsScannerStatus?.lastEnsembleDecision.admitted
+                            : vpsScannerStatus?.lastEnsembleDecision.governance?.paperExecutionEligible
                               ? vpsScannerStatus.executionAuthority === "PAPER_ONLY"
-                                ? "Ensemble admitted this setup"
-                                : "Ensemble would admit this setup"
-                              : "Ensemble decision · NO TRADE"
+                                ? "PAPER signal eligible"
+                                : "PAPER signal would be eligible"
+                              : vpsScannerStatus?.lastEnsembleDecision.paperAdmitted
+                                ? "PAPER model admitted · governance blocked"
+                                : vpsScannerStatus?.lastEnsembleDecision.admitted
+                                  ? "Promotion model admitted · PAPER governance blocked"
+                                  : "Ensemble decision · NO TRADE"
                           : automationRuntime?.last_decision === "NO_NEW_MARKET_DATA"
                             ? "Waiting for new market data"
                             : confidencePercent >= 60

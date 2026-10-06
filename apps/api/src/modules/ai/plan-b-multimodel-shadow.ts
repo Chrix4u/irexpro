@@ -1,6 +1,6 @@
 import { scorePlanBShadowMeta, V8ShadowMetaInput } from './v8-shadow-meta-scorer';
 
-export const PLAN_B_ENSEMBLE_ARTIFACT = 'plan-b-multimodel-shadow-v3';
+export const PLAN_B_ENSEMBLE_ARTIFACT = 'plan-b-multimodel-shadow-v4';
 export const PLAN_B_ENSEMBLE_MODE = 'PROSPECTIVE_SHADOW_ONLY';
 export const PLAN_B_GROSS_EXPECTED_R_FLOOR = 0.08;
 
@@ -39,6 +39,7 @@ export interface PlanBEnsembleScore {
   sameInstrumentDirectionalLots: number;
   metaProbability: number;
   ensembleScore: number;
+  paperAdmitted: boolean;
   admitted: boolean;
   reasons: string[];
 }
@@ -209,11 +210,16 @@ export function scorePlanBMultimodelShadow(
   // fail, while meta admission and expected-R remain mandatory below.
   const consensusRequired = 6;
 
-  const admitted =
-    regimeAllowed &&
+  const coreAdmissionPassed =
     consensusPassed >= consensusRequired &&
     meta.admitted &&
     meta.expectedR >= PLAN_B_GROSS_EXPECTED_R_FLOOR;
+  const admitted = regimeAllowed && coreAdmissionPassed;
+  // PAPER execution must exercise a model-level decision that could later be
+  // promoted to DEMO/LIVE. Research-only stretched regimes remain observable
+  // in shadow outcomes, but they must never gain execution authority merely to
+  // collect evidence. Sleeve maturity is handled separately by governance.
+  const paperAdmitted = admitted;
 
   return {
     artifact: PLAN_B_ENSEMBLE_ARTIFACT,
@@ -237,6 +243,7 @@ export function scorePlanBMultimodelShadow(
     sameInstrumentDirectionalLots: portfolio.sameInstrumentDirectionalLots,
     metaProbability: meta.probability,
     ensembleScore,
+    paperAdmitted,
     admitted,
     reasons: admitted ? ['ADMIT'] : reasons,
   };

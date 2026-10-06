@@ -36,12 +36,32 @@ describe('Plan B multimodel prospective shadow', () => {
     expect(score.reasons).toContain('REGIME_TREND_EXTENDED');
   });
 
+  it('keeps a fully-qualified extended trend shadow-only because it is not promotable', () => {
+    const score = scorePlanBMultimodelShadow({
+      instrument: 'AUDUSD',
+      direction: 'BUY',
+      confidence: 0.74892924,
+      extensionAtr: 1.4139681489950369,
+      volatilityScore: 0.2671723076211882,
+      emaSeparation: 0.755431308825067,
+      mtfStrength: 1,
+      rsi14: 66.02630845628374,
+      scanTime: new Date('2026-10-05T08:50:00.000Z'),
+    });
+    expect(score.regime).toBe('TREND_EXTENDED');
+    expect(score.consensusPassed).toBeGreaterThanOrEqual(score.consensusRequired);
+    expect(score.paperAdmitted).toBe(false);
+    expect(score.admitted).toBe(false);
+    expect(score.reasons).toContain('REGIME_TREND_EXTENDED');
+  });
+
   it('rejects high-volatility conditions independently of meta probability', () => {
     const score = scorePlanBMultimodelShadow({
       ...base,
       volatilityScore: 0.7,
     });
     expect(score.regime).toBe('VOLATILE');
+    expect(score.paperAdmitted).toBe(false);
     expect(score.admitted).toBe(false);
   });
 

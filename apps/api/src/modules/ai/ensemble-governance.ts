@@ -1,10 +1,10 @@
 import { PlanBEnsembleScore } from './plan-b-multimodel-shadow';
 
-export const ENSEMBLE_GOVERNANCE_VERSION = 'ensemble-governance-v1';
+export const ENSEMBLE_GOVERNANCE_VERSION = 'ensemble-governance-v2';
 export const ENSEMBLE_COST_MODEL_VERSION = 'paper-spread-plus-25pct-slippage-v1';
 export const ENSEMBLE_DRIFT_MODEL_VERSION = 'development-envelope-4599-v1';
-export const ENSEMBLE_PAPER_NET_EXPECTED_R_FLOOR = 0;
 export const ENSEMBLE_NET_EXPECTED_R_FLOOR = 0.08;
+export const ENSEMBLE_PAPER_NET_EXPECTED_R_FLOOR = ENSEMBLE_NET_EXPECTED_R_FLOOR;
 export const ENSEMBLE_SLEEVE_CORE_MIN_CLOSED_TRADES = 100;
 
 export type EnsembleDriftState = 'NORMAL' | 'STRESSED' | 'OUT_OF_DISTRIBUTION';
@@ -46,6 +46,7 @@ export interface EnsembleGovernanceDecision {
   netExpectedRPassed: boolean;
   driftState: EnsembleDriftState;
   driftQuality: number;
+  paperDriftPassed: boolean;
   driftPassed: boolean;
   sleeveState: EnsembleSleeveState;
   sleeveEvidence: EnsembleSleeveEvidence | null;
@@ -184,6 +185,10 @@ export function evaluateEnsembleGovernance(
     Number.isFinite(netExpectedR) && netExpectedR >= ENSEMBLE_NET_EXPECTED_R_FLOOR;
   const drift = driftOf(input);
   const driftPassed = drift.state === 'NORMAL';
+  // PAPER and eventual promotion share the same drift envelope. A stressed or
+  // out-of-distribution vector can still be observed in shadow mode, but it is
+  // not a valid simulated execution candidate.
+  const paperDriftPassed = driftPassed;
   const sleeveState = classifyEnsembleSleeveEvidence(input.sleeveEvidence);
   const eventRisk = input.eventRisk ?? 'UNVERIFIED';
 
@@ -192,9 +197,10 @@ export function evaluateEnsembleGovernance(
   // execution evidence, but an empirically BLOCKED sleeve must not execute.
   // CORE remains mandatory for promotion beyond PAPER.
   const paperExecutionBlockers: string[] = [];
-  if (!input.ensemble.admitted) paperExecutionBlockers.push('ENSEMBLE_NOT_ADMITTED');
+  if (!input.ensemble.paperAdmitted) paperExecutionBlockers.push('ENSEMBLE_NOT_PAPER_ADMITTED');
+  if (!input.ensemble.admitted) paperExecutionBlockers.push('ENSEMBLE_NOT_PROMOTABLE_ADMISSION');
   if (!paperNetExpectedRPassed) paperExecutionBlockers.push('PAPER_NET_EXPECTED_R');
-  if (!driftPassed) paperExecutionBlockers.push(`DRIFT_${drift.state}`);
+  if (!paperDriftPassed) paperExecutionBlockers.push(`DRIFT_${drift.state}`);
   if (sleeveState === 'BLOCKED') paperExecutionBlockers.push('SLEEVE_BLOCKED');
   if (eventRisk !== 'CLEAR') paperExecutionBlockers.push(`EVENT_RISK_${eventRisk}`);
 
@@ -216,6 +222,7 @@ export function evaluateEnsembleGovernance(
     netExpectedRPassed,
     driftState: drift.state,
     driftQuality: drift.quality,
+    paperDriftPassed,
     driftPassed,
     sleeveState,
     sleeveEvidence: input.sleeveEvidence ?? null,

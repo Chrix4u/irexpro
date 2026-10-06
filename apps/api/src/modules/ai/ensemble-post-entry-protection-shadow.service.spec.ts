@@ -117,6 +117,13 @@ describe('EnsemblePostEntryProtectionShadowService', () => {
       'INSERT INTO trading.ensemble_post_entry_shadow_observations',
     );
     expect(String(query.mock.calls[2]?.[0])).toContain("execution_authority = 'NONE'");
+    const refreshSql = String(query.mock.calls[3]?.[0]);
+    expect(refreshSql).toContain('decision.model_version = $3');
+    expect(query.mock.calls[3]?.[1]).toEqual([
+      'plan-b-v85-profitable-state-giveback-classifier-v1',
+      'irexpro-multimodel-ensemble-v1',
+      'plan-b-multimodel-shadow-v4',
+    ]);
     expect(service.getStatus()).toMatchObject({
       cohort: 'ENSEMBLE_SHADOW_DECISIONS',
       modifiesExecution: false,
@@ -218,12 +225,17 @@ describe('EnsemblePostEntryProtectionShadowService', () => {
       promotionBlocker: 'MINIMUM_PROSPECTIVE_SAMPLE_NOT_MET',
     });
     expect(String(query.mock.calls[0]?.[0])).toContain(
-      'count(DISTINCT ensemble_shadow_decision_id)',
+      'count(DISTINCT observation.ensemble_shadow_decision_id)',
     );
-    expect(String(query.mock.calls[0]?.[0])).toContain('WHERE user_id = $1');
+    const statusSql = String(query.mock.calls[0]?.[0]);
+    expect(statusSql).toContain('observation.user_id = $1');
+    expect(statusSql).toContain('decision.engine_code = $3');
+    expect(statusSql).toContain('decision.model_version = $4');
     expect(query.mock.calls[0]?.[1]).toEqual([
       '00000000-0000-0000-0000-000000000002',
       'plan-b-v85-profitable-state-giveback-classifier-v1',
+      'irexpro-multimodel-ensemble-v1',
+      'plan-b-multimodel-shadow-v4',
     ]);
   });
 

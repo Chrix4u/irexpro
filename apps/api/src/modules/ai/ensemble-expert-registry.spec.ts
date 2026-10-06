@@ -29,7 +29,7 @@ describe('buildEnsembleExpertRegistry', () => {
       modifiesExecution: false,
     });
 
-    const policy = registry.entries.find((entry) => entry.code === 'plan-b-multimodel-shadow-v3');
+    const policy = registry.entries.find((entry) => entry.code === 'plan-b-multimodel-shadow-v4');
     expect(policy).toMatchObject({
       kind: 'HEURISTIC_POLICY',
       trained: false,
