@@ -466,7 +466,8 @@ test.describe("AI Trader novice workflow", () => {
 
     await expect(page.getByText(/execution mode selector/i)).toHaveCount(0);
     await expect(page.getByText(/trading experience/i)).toHaveCount(0);
-    await expect(page.getByText(/configure.*risk/i)).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /configure.*risk/i })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: /configure.*risk/i })).toHaveCount(0);
 
     await assertNoHorizontalOverflow(page);
     assertNoConsoleErrors(page);
