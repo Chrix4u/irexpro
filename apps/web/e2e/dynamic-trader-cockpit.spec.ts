@@ -73,6 +73,8 @@ const livePosition = {
   fillPrice: "1.10010000",
   accountCurrency: "USD",
   currentPrice: "1.10420000",
+  markSource: "STREAM",
+  markObservedAt: "2026-08-31T01:00:15.000Z",
   unrealisedPnl: "41.00",
   commission: "0.20",
   swap: "0",
@@ -367,14 +369,13 @@ test.describe("AI Trader novice workflow", () => {
     ).toBeVisible();
 
     await expect(
-      page.getByRole("heading", { level: 2, name: "AI Engine Monitor" }),
+      page.getByRole("heading", { level: 2, name: "Live Market Intelligence" }),
     ).toBeVisible();
     await expect(page.getByText("SCANNING", { exact: true })).toBeVisible();
     await expect(page.getByText(/EURUSD.*GBPUSD.*USDJPY/i)).toBeVisible();
     await expect(page.getByText("NO TRADE", { exact: true })).toBeVisible();
-    await expect(
-      page.getByText("54.00% / 60.00% required", { exact: true }),
-    ).toBeVisible();
+    await expect(page.getByText("54.00%", { exact: true })).toBeVisible();
+    await expect(page.getByText("60.00% gate", { exact: true })).toBeVisible();
     await expect(
       page.getByText("Market setup did not meet the confidence threshold", {
         exact: true,
@@ -626,7 +627,11 @@ test.describe("AI Trader novice workflow", () => {
     const startButton = page.getByRole("button", { name: "Start AI Trading" });
     await expect(startButton).toBeVisible();
     await expect(startButton).toBeDisabled();
-    await expect(page.getByText("UNAVAILABLE", { exact: true })).toBeVisible();
+    await expect(
+      page
+        .getByLabel("Trading snapshot")
+        .getByText("UNAVAILABLE", { exact: true }),
+    ).toBeVisible();
     await expect(
       page.getByText(/Something went wrong\. Please try again\./i),
     ).toHaveCount(0);
@@ -722,6 +727,9 @@ test.describe("AI Trader novice workflow", () => {
       },
     });
 
+    await expect(
+      page.getByLabel("AI capital pool breakdown").getByText("2,250.00 USD", { exact: true }),
+    ).toBeVisible();
     await page.getByRole("button", { name: "Start AI Trading" }).click();
 
     const dialog = page.getByRole("alertdialog", { name: "Start AI Trading?" });
