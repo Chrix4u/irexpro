@@ -209,6 +209,7 @@ export class PositionSizingService {
       userId,
       brokerConnectionId,
       instrument,
+      direction: params.direction,
       needFreshQuote: params.entryType === 'MARKET',
     });
     const contractSize =

@@ -169,6 +169,13 @@ describe('PositionSizingService — deterministic fail-closed sizing (Round 6 §
       expect(sized.inputs.grossNotional).toBe('21700');
       expect(sized.inputs.requiredMargin).toBe('217');
       expect(sized.inputs.computedAt).toBeTruthy();
+      expect(orderGeometry.resolveOrderGeometry).toHaveBeenCalledWith(
+        expect.objectContaining({
+          instrument: 'EURUSD',
+          direction: 'BUY',
+          needFreshQuote: true,
+        }),
+      );
     });
 
     it('reserves margin rather than leveraged notional so a 1,000 USD AI allocation can admit normal FX sizing', async () => {

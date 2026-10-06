@@ -22,7 +22,7 @@ import type { BrokerPrice } from '../../broker/interfaces/broker-adapter.interfa
  *   - quote older than the execution window → STALE_PRICE
  *   - crossed/invalid bid-ask → MARKET_DATA_UNAVAILABLE
  *   - spread above the anomaly threshold → ABNORMAL_SPREAD
- *   - mid deviating from the risk-validated reference → PRICE_DEVIATION_EXCESSIVE
+ *   - executable side (BUY ask / SELL bid) deviating from the risk reference → PRICE_DEVIATION_EXCESSIVE
  *   - every failure terminally REJECTS the order (audited) BEFORE any
  *     provider call or commitment
  */
@@ -168,7 +168,7 @@ describe('MarketSafetyGateService — the final pre-commitment gate (Round 6 §5
   });
 
   it('PRICE_DEVIATION_EXCESSIVE when the market moved materially from the reference', async () => {
-    // reference 1.085 → mid ~1.10 is ~1.38% deviation (> 1%).
+    // BUY reference 1.085 → ask 1.10020 is ~1.40% deviation (> 1%).
     brokerService.getCurrentPriceForConnection.mockResolvedValue(
       quote({ bid: '1.09980', ask: '1.10020', spread: '0.00040' }),
     );
@@ -177,8 +177,21 @@ describe('MarketSafetyGateService — the final pre-commitment gate (Round 6 §5
     ).rejects.toMatchObject({ code: 'PRICE_DEVIATION_EXCESSIVE' });
   });
 
+  it('uses BID for SELL deviation checks (not midpoint or ask)', async () => {
+    brokerService.getCurrentPriceForConnection.mockResolvedValue(
+      quote({ bid: '1.08500', ask: '1.09700', spread: '0.01200' }),
+    );
+    await expect(
+      service.assertMarketSafeForDispatch(
+        intent({ direction: 'SELL', referencePrice: '1.08500' }),
+        {} as never,
+        'order-1',
+      ),
+    ).resolves.toBeUndefined();
+  });
+
   it('skips the deviation check when the intent carries no provable reference', async () => {
-    // Mid is far from any reference — but no reference is present, so only
+    // Executable side is far from any reference — but no reference is present, so only
     // freshness + spread apply and the gate passes.
     brokerService.getCurrentPriceForConnection.mockResolvedValue(
       quote({ bid: '1.09980', ask: '1.10020', spread: '0.00040' }),
