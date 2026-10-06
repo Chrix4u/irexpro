@@ -45,6 +45,7 @@ describe('evaluateEnsembleGovernance', () => {
   it('keeps shadow admission separate from PAPER promotion governance', () => {
     const result = evaluateEnsembleGovernance(base);
     expect(ensemble.admitted).toBe(true);
+    expect(result.paperExecutionEligible).toBe(false);
     expect(result.paperPromotionEligible).toBe(false);
     expect(result.sleeveState).toBe('COLLECTING');
     expect(result.eventRisk).toBe('UNVERIFIED');
@@ -53,19 +54,48 @@ describe('evaluateEnsembleGovernance', () => {
     );
   });
 
+  it('allows safe PAPER execution while sleeve evidence is still collecting', () => {
+    const result = evaluateEnsembleGovernance({
+      ...base,
+      eventRisk: 'CLEAR',
+    });
+    expect(result.sleeveState).toBe('COLLECTING');
+    expect(result.paperExecutionEligible).toBe(true);
+    expect(result.paperExecutionBlockers).toEqual([]);
+    expect(result.paperPromotionEligible).toBe(false);
+    expect(result.blockers).toContain('SLEEVE_COLLECTING');
+  });
+
+  it('allows positive-net PAPER evidence below the stricter promotion net-R floor', () => {
+    const result = evaluateEnsembleGovernance({
+      ...base,
+      ensemble: { ...ensemble, expectedR: 0.1 },
+      eventRisk: 'CLEAR',
+    });
+    expect(result.netExpectedR).toBeCloseTo(0.0375, 6);
+    expect(result.paperNetExpectedRPassed).toBe(true);
+    expect(result.netExpectedRPassed).toBe(false);
+    expect(result.paperExecutionEligible).toBe(true);
+    expect(result.paperPromotionEligible).toBe(false);
+    expect(result.blockers).toContain('NET_EXPECTED_R');
+  });
+
   it('deducts conservative execution friction from expected R', () => {
     const result = evaluateEnsembleGovernance(base);
     expect(result.estimatedExecutionCostR).toBeCloseTo(0.0625, 6);
     expect(result.netExpectedR).toBeCloseTo(0.2575, 6);
+    expect(result.paperNetExpectedRPassed).toBe(true);
     expect(result.netExpectedRPassed).toBe(true);
   });
 
   it('fails cost governance when the stop geometry is too tight', () => {
     const result = evaluateEnsembleGovernance({
       ...base,
-      stopLoss: 1.0996,
+      stopLoss: 1.09965,
     });
+    expect(result.paperNetExpectedRPassed).toBe(false);
     expect(result.netExpectedRPassed).toBe(false);
+    expect(result.paperExecutionBlockers).toContain('PAPER_NET_EXPECTED_R');
     expect(result.blockers).toContain('NET_EXPECTED_R');
   });
 
@@ -92,6 +122,7 @@ describe('evaluateEnsembleGovernance', () => {
       },
     });
     expect(result.sleeveState).toBe('CORE');
+    expect(result.paperExecutionEligible).toBe(true);
     expect(result.paperPromotionEligible).toBe(true);
     expect(result.blockers).toEqual([]);
   });
@@ -109,6 +140,7 @@ describe('evaluateEnsembleGovernance', () => {
       },
     });
     expect(probation.sleeveState).toBe('PROBATION');
+    expect(probation.paperExecutionEligible).toBe(true);
     expect(probation.paperPromotionEligible).toBe(false);
 
     const blocked = evaluateEnsembleGovernance({
@@ -123,6 +155,8 @@ describe('evaluateEnsembleGovernance', () => {
       },
     });
     expect(blocked.sleeveState).toBe('BLOCKED');
+    expect(blocked.paperExecutionEligible).toBe(false);
+    expect(blocked.paperExecutionBlockers).toContain('SLEEVE_BLOCKED');
     expect(blocked.paperPromotionEligible).toBe(false);
   });
 });

@@ -73,6 +73,8 @@ const livePosition = {
   fillPrice: "1.10010000",
   accountCurrency: "USD",
   currentPrice: "1.10420000",
+  markSource: "STREAM",
+  markObservedAt: "2026-08-31T01:00:15.000Z",
   unrealisedPnl: "41.00",
   commission: "0.20",
   swap: "0",
@@ -310,8 +312,8 @@ test.describe("AI Trader novice workflow", () => {
     await gotoAiTrader(page);
 
     await expect(
-      page.getByText("Paper Trading Broker", { exact: false }).first(),
-    ).toBeVisible();
+      page.getByRole("combobox", { name: "Broker account" }),
+    ).toHaveValue(mockBrokerConnections[0].id);
 
     const researchUat = page.locator(".ai-research-uat-copy");
     const researchUatHeading = researchUat.getByText(
@@ -367,14 +369,17 @@ test.describe("AI Trader novice workflow", () => {
     ).toBeVisible();
 
     await expect(
-      page.getByRole("heading", { level: 2, name: "AI Engine Monitor" }),
+      page.getByRole("heading", { level: 2, name: "Live Market Intelligence" }),
     ).toBeVisible();
     await expect(page.getByText("SCANNING", { exact: true })).toBeVisible();
-    await expect(page.getByText(/EURUSD.*GBPUSD.*USDJPY/i)).toBeVisible();
-    await expect(page.getByText("NO TRADE", { exact: true })).toBeVisible();
     await expect(
-      page.getByText("54.00% / 60.00% required", { exact: true }),
+      page
+        .locator(".ai-control-card__label")
+        .filter({ hasText: /EURUSD.*GBPUSD.*USDJPY/i })
+        .first(),
     ).toBeVisible();
+    await expect(page.getByText("54.00%", { exact: true })).toBeVisible();
+    await expect(page.getByText("60.00% gate", { exact: true })).toBeVisible();
     await expect(
       page.getByText("Market setup did not meet the confidence threshold", {
         exact: true,
@@ -461,7 +466,8 @@ test.describe("AI Trader novice workflow", () => {
 
     await expect(page.getByText(/execution mode selector/i)).toHaveCount(0);
     await expect(page.getByText(/trading experience/i)).toHaveCount(0);
-    await expect(page.getByText(/configure.*risk/i)).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /configure.*risk/i })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: /configure.*risk/i })).toHaveCount(0);
 
     await assertNoHorizontalOverflow(page);
     assertNoConsoleErrors(page);
@@ -486,10 +492,25 @@ test.describe("AI Trader novice workflow", () => {
     await expect(metrics).toBeVisible();
 
     const rows = metrics.locator(":scope > div");
-    await expect(rows).toHaveCount(6);
+    const metricLabels = [
+      "Entry",
+      "Current",
+      "Peak P&L",
+      "Profit give-back",
+      "Worst excursion",
+      "Stop loss",
+      "Take profit",
+      "Commission",
+      "Swap",
+    ];
+    for (const label of metricLabels) {
+      await expect(metrics.getByText(label, { exact: true })).toBeVisible();
+    }
 
+    const rowCount = await rows.count();
+    expect(rowCount).toBe(metricLabels.length);
     const boxes = await Promise.all(
-      Array.from({ length: 6 }, (_, index) => rows.nth(index).boundingBox()),
+      Array.from({ length: rowCount }, (_, index) => rows.nth(index).boundingBox()),
     );
     for (let index = 1; index < boxes.length; index += 1) {
       expect(boxes[index]).not.toBeNull();
@@ -584,8 +605,8 @@ test.describe("AI Trader novice workflow", () => {
     });
 
     await expect(
-      page.getByText("Paper Trading Broker", { exact: false }).first(),
-    ).toBeVisible();
+      page.getByRole("combobox", { name: "Broker account" }),
+    ).toHaveValue(mockBrokerConnections[0].id);
     await expect(
       page.getByText("No broker connected", { exact: true }),
     ).toHaveCount(0);
@@ -608,8 +629,8 @@ test.describe("AI Trader novice workflow", () => {
     });
 
     await expect(
-      page.getByText("Paper Trading Broker", { exact: false }).first(),
-    ).toBeVisible();
+      page.getByRole("combobox", { name: "Broker account" }),
+    ).toHaveValue(mockBrokerConnections[0].id);
     await expect(
       page.getByText("No broker connected", { exact: true }),
     ).toHaveCount(0);
@@ -626,7 +647,11 @@ test.describe("AI Trader novice workflow", () => {
     const startButton = page.getByRole("button", { name: "Start AI Trading" });
     await expect(startButton).toBeVisible();
     await expect(startButton).toBeDisabled();
-    await expect(page.getByText("UNAVAILABLE", { exact: true })).toBeVisible();
+    await expect(
+      page
+        .getByLabel("Trading snapshot")
+        .getByText("UNAVAILABLE", { exact: true }),
+    ).toBeVisible();
     await expect(
       page.getByText(/Something went wrong\. Please try again\./i),
     ).toHaveCount(0);
@@ -640,8 +665,8 @@ test.describe("AI Trader novice workflow", () => {
     await gotoAiTrader(page, { active: false, failAllocationRead: true });
 
     await expect(
-      page.getByText("Paper Trading Broker", { exact: false }).first(),
-    ).toBeVisible();
+      page.getByRole("combobox", { name: "Broker account" }),
+    ).toHaveValue(mockBrokerConnections[0].id);
     await expect(
       page.getByText("No broker connected", { exact: true }),
     ).toHaveCount(0);
@@ -668,7 +693,7 @@ test.describe("AI Trader novice workflow", () => {
 
     await expect(
       page.getByText(
-        /AI Trading controls are available, but recent activity or position details could not be loaded/i,
+        /Recent activity and open position details could not be refreshed/i,
       ),
     ).toBeVisible();
     await expect(
@@ -696,8 +721,8 @@ test.describe("AI Trader novice workflow", () => {
     // Wait for a broker-backed control so the assertion proves the one-shot
     // network retry actually completed.
     await expect(
-      page.getByText("Paper Trading Broker", { exact: false }).first(),
-    ).toBeVisible();
+      page.getByRole("combobox", { name: "Broker account" }),
+    ).toHaveValue(mockBrokerConnections[0].id);
     await expect(
       page.getByRole("button", { name: "Stop AI Trading" }),
     ).toBeVisible();
@@ -722,6 +747,9 @@ test.describe("AI Trader novice workflow", () => {
       },
     });
 
+    await expect(
+      page.getByLabel("AI capital pool breakdown").getByText("2,250.00 USD", { exact: true }),
+    ).toBeVisible();
     await page.getByRole("button", { name: "Start AI Trading" }).click();
 
     const dialog = page.getByRole("alertdialog", { name: "Start AI Trading?" });

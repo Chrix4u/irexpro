@@ -11,14 +11,22 @@ import {
   LivePaperCandleInput,
   LivePaperMarketDataService,
 } from '../broker/services/live-paper-market-data.service';
-import { scorePlanBShadowMeta, scoreV8ShadowMeta } from './v8-shadow-meta-scorer';
+import {
+  PLAN_B_SHADOW_ADMISSION_THRESHOLD,
+  scorePlanBShadowMeta,
+  scoreV8ShadowMeta,
+} from './v8-shadow-meta-scorer';
 import {
   PLAN_B_ENSEMBLE_ARTIFACT,
+  PLAN_B_GROSS_EXPECTED_R_FLOOR,
   PlanBEnsembleScore,
   PlanBPortfolioPosition,
   scorePlanBMultimodelShadow,
 } from './plan-b-multimodel-shadow';
 import {
+  ENSEMBLE_NET_EXPECTED_R_FLOOR,
+  ENSEMBLE_PAPER_NET_EXPECTED_R_FLOOR,
+  ENSEMBLE_SLEEVE_CORE_MIN_CLOSED_TRADES,
   EnsembleGovernanceDecision,
   classifyEnsembleSleeveEvidence,
   evaluateEnsembleGovernance,
@@ -42,6 +50,15 @@ const LEGACY_PROVIDER_CODE = 'vps-twelvedata-six-pair-v7';
 const ACTIVE_ENGINE_CODE = 'irexpro-multimodel-ensemble-v1';
 const LEGACY_V7_EXECUTION_FROZEN = true;
 const MULTI_MODEL_PAPER_EXECUTION_ENABLED = true;
+
+export function canExecuteMultiModelPaper(
+  ensemble: Pick<PlanBEnsembleScore, 'admitted'>,
+  governance: Pick<EnsembleGovernanceDecision, 'paperExecutionEligible'>,
+): boolean {
+  return (
+    MULTI_MODEL_PAPER_EXECUTION_ENABLED && ensemble.admitted && governance.paperExecutionEligible
+  );
+}
 const PROVIDER_CODE = LEGACY_PROVIDER_CODE;
 const SIGNAL_NAMESPACE = '802e16f8-8209-4e1f-aa7e-a6a46387081c';
 const SYMBOLS = Object.freeze([
@@ -297,7 +314,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     instrument: string | null;
     direction: 'BUY' | 'SELL' | null;
     admitted: boolean;
+    candidateConfidence: number | null;
     ensembleScore: number | null;
+    metaProbability: number | null;
+    expectedR: number | null;
     consensusPassed: number | null;
     consensusRequired: number | null;
     regime: string | null;
@@ -310,7 +330,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     instrument: null,
     direction: null,
     admitted: false,
+    candidateConfidence: null,
     ensembleScore: null,
+    metaProbability: null,
+    expectedR: null,
     consensusPassed: null,
     consensusRequired: null,
     regime: null,
@@ -587,6 +610,14 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       timeframe: 'M5',
       skippedUtcHours: [21, 22, 23],
       confidenceFloor: CONFIDENCE_FLOOR,
+      ensembleThresholds: {
+        candidateConfidenceFloor: CONFIDENCE_FLOOR,
+        metaProbabilityFloor: PLAN_B_SHADOW_ADMISSION_THRESHOLD,
+        grossExpectedRFloor: PLAN_B_GROSS_EXPECTED_R_FLOOR,
+        paperNetExpectedRFloor: ENSEMBLE_PAPER_NET_EXPECTED_R_FLOOR,
+        promotionNetExpectedRFloor: ENSEMBLE_NET_EXPECTED_R_FLOOR,
+        sleeveCoreMinClosedTrades: ENSEMBLE_SLEEVE_CORE_MIN_CLOSED_TRADES,
+      },
       lastEvaluatedConfidence: this.lastEvaluation.confidence,
       lastEvaluatedInstrument: this.lastEvaluation.instrument,
       lastEvaluatedDirection: this.lastEvaluation.direction,
@@ -606,7 +637,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         instrument: this.lastEnsembleDecision.instrument,
         direction: this.lastEnsembleDecision.direction,
         admitted: this.lastEnsembleDecision.admitted,
+        candidateConfidence: this.lastEnsembleDecision.candidateConfidence,
         ensembleScore: this.lastEnsembleDecision.ensembleScore,
+        metaProbability: this.lastEnsembleDecision.metaProbability,
+        expectedR: this.lastEnsembleDecision.expectedR,
         consensusPassed: this.lastEnsembleDecision.consensusPassed,
         consensusRequired: this.lastEnsembleDecision.consensusRequired,
         regime: this.lastEnsembleDecision.regime,
@@ -873,7 +907,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         instrument: best.instrument,
         direction: best.direction,
         admitted: planBEnsemble.admitted,
+        candidateConfidence: best.confidence,
         ensembleScore: planBEnsemble.ensembleScore,
+        metaProbability: planBEnsemble.metaProbability,
+        expectedR: planBEnsemble.expectedR,
         consensusPassed: planBEnsemble.consensusPassed,
         consensusRequired: planBEnsemble.consensusRequired,
         regime: planBEnsemble.regime,
@@ -901,11 +938,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         atr: best.atr,
         barTimeMs: best.barTime.getTime(),
       });
-      if (
-        !MULTI_MODEL_PAPER_EXECUTION_ENABLED ||
-        !planBEnsemble.admitted ||
-        !ensembleGovernance.paperPromotionEligible
-      ) {
+      if (!canExecuteMultiModelPaper(planBEnsemble, ensembleGovernance)) {
         this.logger.log(
           `Multi-model ensemble ${best.instrument} ${best.direction} ` +
             `admitted=${planBEnsemble.admitted} consensus=${planBEnsemble.consensusPassed}/${planBEnsemble.consensusRequired} ` +
@@ -913,7 +946,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             `netExpectedR=${ensembleGovernance.netExpectedR.toFixed(4)} ` +
             `drift=${ensembleGovernance.driftState} sleeve=${ensembleGovernance.sleeveState} ` +
             `highConviction=${highConvictionOverlay.state} ` +
-            `governance=${ensembleGovernance.blockers.join(',') || 'PASS'} ` +
+            `paperGovernance=${ensembleGovernance.paperExecutionBlockers.join(',') || 'PASS'} ` +
+            `promotionGovernance=${ensembleGovernance.blockers.join(',') || 'PASS'} ` +
             `reasons=${planBEnsemble.reasons.join(',')}`,
         );
         return;
@@ -1639,6 +1673,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           evaluated_at,
           admitted,
           ensemble_score,
+          meta_probability,
+          expected_r,
           consensus_passed,
           consensus_required,
           regime,
@@ -1661,6 +1697,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       evaluated_at: string | Date;
       admitted: boolean;
       ensemble_score: string | number;
+      meta_probability: string | number;
+      expected_r: string | number;
       consensus_passed: number;
       consensus_required: number;
       regime: string;
@@ -1709,7 +1747,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         instrument: latest.instrument,
         direction: latest.direction,
         admitted: latest.admitted,
+        candidateConfidence: Number(latest.confidence),
         ensembleScore: Number(latest.ensemble_score),
+        metaProbability: Number(latest.meta_probability),
+        expectedR: Number(latest.expected_r),
         consensusPassed: Number(latest.consensus_passed),
         consensusRequired: Number(latest.consensus_required),
         regime: latest.regime,

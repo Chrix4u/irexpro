@@ -457,7 +457,25 @@ export async function setupAuthInterception(page: Page): Promise<void> {
       );
     }
 
-    // ── Subscriptions / payments (defensive — not exercised by target pages) ──
+    // ── Performance fees / payments ─────────────────────────────────────
+    // The responsive Fees & Payments workspace consumes these read-only
+    // contracts on initial load. Keep the fixtures structurally truthful so
+    // the page exercises its normal empty state rather than the catch-all {}.
+    if (apiPath === "performance-fees/me/summary") {
+      return route.fulfill(
+        jsonFulfill(200, { performance: null, assessments: [] }),
+      );
+    }
+    if (apiPath === "performance-fees/invoices") {
+      return route.fulfill(jsonFulfill(200, []));
+    }
+    if (apiPath === "performance-fees/me/simulation") {
+      return route.fulfill(
+        jsonFulfill(200, { mode: "TEST_ONLY", paymentEnabled: false, accounts: [] }),
+      );
+    }
+
+    // ── Subscriptions / payments ─────────────────────────────────────────
     if (apiPath.startsWith("subscriptions/") || apiPath === "subscriptions") {
       return route.fulfill(jsonFulfill(200, []));
     }

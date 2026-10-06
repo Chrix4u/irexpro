@@ -3,6 +3,9 @@ import { PlanBEnsembleScore } from './plan-b-multimodel-shadow';
 export const ENSEMBLE_GOVERNANCE_VERSION = 'ensemble-governance-v1';
 export const ENSEMBLE_COST_MODEL_VERSION = 'paper-spread-plus-25pct-slippage-v1';
 export const ENSEMBLE_DRIFT_MODEL_VERSION = 'development-envelope-4599-v1';
+export const ENSEMBLE_PAPER_NET_EXPECTED_R_FLOOR = 0;
+export const ENSEMBLE_NET_EXPECTED_R_FLOOR = 0.08;
+export const ENSEMBLE_SLEEVE_CORE_MIN_CLOSED_TRADES = 100;
 
 export type EnsembleDriftState = 'NORMAL' | 'STRESSED' | 'OUT_OF_DISTRIBUTION';
 export type EnsembleSleeveState = 'COLLECTING' | 'CORE' | 'PROBATION' | 'BLOCKED';
@@ -39,6 +42,7 @@ export interface EnsembleGovernanceDecision {
   grossExpectedR: number;
   estimatedExecutionCostR: number;
   netExpectedR: number;
+  paperNetExpectedRPassed: boolean;
   netExpectedRPassed: boolean;
   driftState: EnsembleDriftState;
   driftQuality: number;
@@ -46,6 +50,8 @@ export interface EnsembleGovernanceDecision {
   sleeveState: EnsembleSleeveState;
   sleeveEvidence: EnsembleSleeveEvidence | null;
   eventRisk: EnsembleEventRiskState;
+  paperExecutionEligible: boolean;
+  paperExecutionBlockers: string[];
   paperPromotionEligible: boolean;
   blockers: string[];
 }
@@ -129,7 +135,8 @@ function driftOf(input: EnsembleGovernanceInput): { state: EnsembleDriftState; q
 export function classifyEnsembleSleeveEvidence(
   evidence?: EnsembleSleeveEvidence | null,
 ): EnsembleSleeveState {
-  if (!evidence || evidence.closedTrades < 100) return 'COLLECTING';
+  if (!evidence || evidence.closedTrades < ENSEMBLE_SLEEVE_CORE_MIN_CLOSED_TRADES)
+    return 'COLLECTING';
   if (
     evidence.profitFactor == null ||
     evidence.sharpe == null ||
@@ -161,7 +168,7 @@ function executionCostR(input: EnsembleGovernanceInput): number {
     return Number.POSITIVE_INFINITY;
   }
   // PAPER enters/exits across bid/ask. A 25% buffer above the fixed spread
-  // represents conservative slippage/quote uncertainty for promotion checks.
+  // represents conservative slippage/quote uncertainty for execution and promotion checks.
   return (1.25 * spread) / stopDistance;
 }
 
@@ -171,11 +178,25 @@ export function evaluateEnsembleGovernance(
   const grossExpectedR = input.ensemble.expectedR;
   const estimatedExecutionCostR = executionCostR(input);
   const netExpectedR = grossExpectedR - estimatedExecutionCostR;
-  const netExpectedRPassed = Number.isFinite(netExpectedR) && netExpectedR >= 0.08;
+  const paperNetExpectedRPassed =
+    Number.isFinite(netExpectedR) && netExpectedR > ENSEMBLE_PAPER_NET_EXPECTED_R_FLOOR;
+  const netExpectedRPassed =
+    Number.isFinite(netExpectedR) && netExpectedR >= ENSEMBLE_NET_EXPECTED_R_FLOOR;
   const drift = driftOf(input);
   const driftPassed = drift.state === 'NORMAL';
   const sleeveState = classifyEnsembleSleeveEvidence(input.sleeveEvidence);
   const eventRisk = input.eventRisk ?? 'UNVERIFIED';
+
+  // PAPER is the evidence-collection environment. A sleeve that is still
+  // COLLECTING (or on PROBATION) may continue generating real simulated
+  // execution evidence, but an empirically BLOCKED sleeve must not execute.
+  // CORE remains mandatory for promotion beyond PAPER.
+  const paperExecutionBlockers: string[] = [];
+  if (!input.ensemble.admitted) paperExecutionBlockers.push('ENSEMBLE_NOT_ADMITTED');
+  if (!paperNetExpectedRPassed) paperExecutionBlockers.push('PAPER_NET_EXPECTED_R');
+  if (!driftPassed) paperExecutionBlockers.push(`DRIFT_${drift.state}`);
+  if (sleeveState === 'BLOCKED') paperExecutionBlockers.push('SLEEVE_BLOCKED');
+  if (eventRisk !== 'CLEAR') paperExecutionBlockers.push(`EVENT_RISK_${eventRisk}`);
 
   const blockers: string[] = [];
   if (!input.ensemble.admitted) blockers.push('ENSEMBLE_NOT_ADMITTED');
@@ -191,6 +212,7 @@ export function evaluateEnsembleGovernance(
     grossExpectedR,
     estimatedExecutionCostR,
     netExpectedR,
+    paperNetExpectedRPassed,
     netExpectedRPassed,
     driftState: drift.state,
     driftQuality: drift.quality,
@@ -198,6 +220,8 @@ export function evaluateEnsembleGovernance(
     sleeveState,
     sleeveEvidence: input.sleeveEvidence ?? null,
     eventRisk,
+    paperExecutionEligible: paperExecutionBlockers.length === 0,
+    paperExecutionBlockers,
     paperPromotionEligible: blockers.length === 0,
     blockers,
   };

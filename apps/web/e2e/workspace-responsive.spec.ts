@@ -12,7 +12,7 @@ const WORKSPACE_ROUTES = [
   { path: '/onboarding/broker', heading: /broker connection/i, label: 'Broker Account' },
   { path: '/live-account', heading: /positions & activity/i, label: 'Positions & Activity' },
   { path: '/security', heading: /account security/i, label: 'Security' },
-  { path: '/payments/success', heading: /fees & payments/i, label: 'Fees & Payments' },
+  { path: '/payments', heading: /fees & payments/i, label: 'Fees & Payments' },
 ] as const;
 
 test.describe('Responsive workspace refresh', () => {

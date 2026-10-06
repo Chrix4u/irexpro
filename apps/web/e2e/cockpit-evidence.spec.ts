@@ -50,6 +50,8 @@ const livePosition = {
   fillPrice: "1.10010000",
   accountCurrency: "USD",
   currentPrice: "1.10420000",
+  markSource: "PROVIDER",
+  markObservedAt: "2026-09-18T13:05:15.000Z",
   unrealisedPnl: "41.00",
   commission: "0.20",
   swap: "0",
