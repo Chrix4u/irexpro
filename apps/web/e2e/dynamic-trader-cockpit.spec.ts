@@ -704,7 +704,7 @@ test.describe("AI Trader novice workflow", () => {
       page.getByRole("button", { name: "Start AI Trading" }),
     ).toBeVisible();
     await expect(page.getByText(/Unable to reach the server/i)).toHaveCount(0);
-    await expect(page.getByText(/No open positions/i)).toBeVisible();
+    await expect(page.getByText(/No positions open right now/i)).toBeVisible();
     await expect(page.getByText(/No execution activity yet/i)).toBeVisible();
 
     assertNoExternalRequests(page);
