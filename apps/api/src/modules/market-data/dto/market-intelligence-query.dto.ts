@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsIn, IsInt, IsString, Matches, Max, Min } from 'class-validator';
+import { IsIn, IsInt, IsOptional, IsString, IsUUID, Matches, Max, Min } from 'class-validator';
 
 export const MARKET_INTELLIGENCE_TIMEFRAMES = ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'] as const;
 
@@ -16,4 +16,8 @@ export class MarketIntelligenceQueryDto {
   @Min(20)
   @Max(300)
   limit: number = 120;
+
+  @IsOptional()
+  @IsUUID()
+  brokerConnectionId?: string;
 }

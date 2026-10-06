@@ -13,12 +13,13 @@ export function createMarketIntelligenceApi(
   client: Pick<ApiClient, 'request'>,
 ): MarketIntelligenceApi {
   return {
-    getSnapshot: ({ instrument, timeframe, limit = 120 }) => {
+    getSnapshot: ({ instrument, timeframe, limit = 120, brokerConnectionId }) => {
       const params = new URLSearchParams({
         instrument,
         timeframe,
         limit: String(limit),
       });
+      if (brokerConnectionId) params.set('brokerConnectionId', brokerConnectionId);
       return client.request<MarketIntelligenceView>(`/market-data/intelligence?${params.toString()}`);
     },
   };

@@ -1824,6 +1824,7 @@ export default function AiTradingPage() {
           instrument: chartInstrument,
           timeframe: chartTimeframe,
           limit: 90,
+          brokerConnectionId: selectedBrokerId,
         });
         if (!cancelled) setMarket(snapshot);
       } catch {
