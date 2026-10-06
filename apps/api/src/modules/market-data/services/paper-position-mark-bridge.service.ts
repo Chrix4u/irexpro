@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { BrokerAdapterRegistry } from '../../broker/adapters/broker-adapter.registry';
 import { LivePaperMarketDataService } from '../../broker/services/live-paper-market-data.service';
 import { PaperBrokerStateService } from '../../broker/services/paper-broker-state.service';
 import { ProviderQuoteCandleStoreService } from './provider-quote-candle-store.service';
@@ -13,11 +14,12 @@ const MAX_PROVIDER_MARK_AGE_MS = 90_000;
  * The MetaApi quote collector already samples the configured broker-native
  * source account into market_data.provider_quote_candles. This service reuses
  * those persisted bid/ask samples for PAPER mark-to-market so the Live Account
- * can refresh current price/P&L independently of the 10-minute strategy scan.
+ * can refresh current price/P&L independently of the strategy scan.
  *
- * Safety boundary: these PROVIDER marks may trigger SL/TP for already-open PAPER
- * positions, but they never drive entries, entry fills, sizing, margin authority
- * or model evidence. Closed-M5 replay remains the recovery path for missed ticks.
+ * Safety boundary: these PROVIDER/STREAM marks may trigger SL/TP for already-open
+ * PAPER positions, but they never drive entries, entry fills, sizing, margin
+ * authority or model evidence. Closed-M5 replay remains the recovery path for
+ * missed ticks/restarts.
  */
 @Injectable()
 export class PaperPositionMarkBridgeService implements OnModuleInit, OnModuleDestroy {
@@ -32,6 +34,7 @@ export class PaperPositionMarkBridgeService implements OnModuleInit, OnModuleDes
     private readonly paperState: PaperBrokerStateService,
     private readonly store: ProviderQuoteCandleStoreService,
     private readonly livePaperMarket: LivePaperMarketDataService,
+    private readonly brokerAdapters: BrokerAdapterRegistry,
   ) {}
 
   onModuleInit(): void {
@@ -40,7 +43,9 @@ export class PaperPositionMarkBridgeService implements OnModuleInit, OnModuleDes
     initial.unref?.();
     this.timer = setInterval(() => void this.collectOnce(), DEFAULT_BRIDGE_INTERVAL_MS);
     this.timer.unref?.();
-    this.logger.log('PAPER position mark bridge enabled source=MetaApi sampled quotes cadence=5s');
+    this.logger.log(
+      'PAPER position mark/protection bridge enabled source=STREAM/MetaApi sampled quotes cadence=5s',
+    );
   }
 
   onModuleDestroy(): void {
@@ -95,6 +100,25 @@ export class PaperPositionMarkBridgeService implements OnModuleInit, OnModuleDes
           this.logger.log(
             `PAPER position mark bridge active instrument=${instrument} sourceObservedAt=${observedAt.toISOString()}`,
           );
+        }
+      }
+
+      // Protection must never depend on a browser polling the open-positions
+      // endpoint. Every 5-second server heartbeat asks the connection-scoped
+      // PAPER adapter to evaluate whichever fresh STREAM/PROVIDER mark is
+      // currently available. getOpenPositions() applies and persists PAPER
+      // protection before returning. If the adapter is not connected yet
+      // during bootstrap, defer silently; the scanner will connect the same
+      // isolated session.
+      if (instruments.length > 0) {
+        try {
+          const adapter = this.brokerAdapters.getAdapterForConnection(
+            paperConnectionId,
+            'paper-broker',
+          );
+          await adapter.getOpenPositions();
+        } catch (error) {
+          this.logger.debug(`PAPER protection heartbeat deferred: ${(error as Error).message}`);
         }
       }
     } catch (error) {
