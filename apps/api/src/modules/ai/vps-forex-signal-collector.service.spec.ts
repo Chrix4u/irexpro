@@ -149,6 +149,42 @@ describe('multi-model PAPER execution gate', () => {
 });
 
 describe('VpsForexSignalCollectorService', () => {
+  it('collects every closed M5 slot across the FX 24x5 market week', async () => {
+    const collector = new VpsForexSignalCollectorService(
+      config({}),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      {} as unknown as ExecutionService,
+      {} as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+    );
+    const isCollectionSlot = (value: string) =>
+      (collector as any).isCollectionSlot(new Date(value)) as boolean;
+    const nextEligible = (value: string) =>
+      ((collector as any).nextEligibleScanAt(new Date(value)) as Date).toISOString();
+
+    expect(isCollectionSlot('2026-10-05T10:00:00.000Z')).toBe(true);
+    expect(isCollectionSlot('2026-10-05T10:05:00.000Z')).toBe(true);
+    expect(isCollectionSlot('2026-10-05T10:10:00.000Z')).toBe(true);
+    expect(isCollectionSlot('2026-10-05T10:03:00.000Z')).toBe(false);
+
+    expect(isCollectionSlot('2026-10-10T12:00:00.000Z')).toBe(false);
+    expect(isCollectionSlot('2026-10-11T20:55:00.000Z')).toBe(false);
+    expect(isCollectionSlot('2026-10-11T21:00:00.000Z')).toBe(true);
+    expect(isCollectionSlot('2026-10-09T20:55:00.000Z')).toBe(true);
+    expect(isCollectionSlot('2026-10-09T21:00:00.000Z')).toBe(false);
+
+    expect(nextEligible('2026-10-05T10:03:00.000Z')).toBe('2026-10-05T10:05:00.000Z');
+    expect(nextEligible('2026-10-05T10:05:00.000Z')).toBe('2026-10-05T10:10:00.000Z');
+    expect(nextEligible('2026-10-11T20:58:00.000Z')).toBe('2026-10-11T21:00:00.000Z');
+    expect(nextEligible('2026-10-09T20:58:00.000Z')).toBe('2026-10-11T21:00:00.000Z');
+
+    const status = await collector.getStatus('user-1');
+    expect(status.cadenceMinutes).toBe(5);
+    expect(status.timeframe).toBe('M5');
+    expect(status.skippedUtcHours).toEqual([]);
+  });
+
   it('builds a deterministic qualifying trend candidate without claiming model qualification', () => {
     const candidate = buildCandidate('EURUSD', trendCandles());
     expect(candidate).not.toBeNull();

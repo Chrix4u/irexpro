@@ -78,6 +78,7 @@ const SCANNER_LOT_UPPER_BOUND = 0.1;
 const MIN_STOP_LOSS_PIPS = 5;
 const STOP_FLOOR_BUFFER_PIPS = 0.1;
 const BAR_MS = 5 * 60_000;
+const COLLECTION_CADENCE_MINUTES = 5;
 const FRESH_BREAKOUT_ATR = 0.5;
 const FRESH_CONFIDENCE_DELTA = 0.02;
 const MAX_CONFIDENCE_DECAY_ON_BREAKOUT = 0.015;
@@ -453,7 +454,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     this.logger.log(
       `iRexPro multi-model engine enabled engine=${ACTIVE_ENGINE_CODE} legacyProvider=${LEGACY_PROVIDER_CODE} ` +
         `legacyExecutionFrozen=${LEGACY_V7_EXECUTION_FROZEN} paperExecution=${MULTI_MODEL_PAPER_EXECUTION_ENABLED} ` +
-        'cadence=10m timeframe=M5 marketHours=FX_24X5_SUN21_FRI21_UTC',
+        `cadence=${COLLECTION_CADENCE_MINUTES}m timeframe=M5 marketHours=FX_24X5_SUN21_FRI21_UTC`,
     );
     this.timer = setInterval(() => void this.maybeCollect(), 15_000);
     this.timer.unref?.();
@@ -611,9 +612,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       enabled: this.enabled(),
       configured: configured && ownsBinding,
       activePaperSession,
-      cadenceMinutes: 10,
+      cadenceMinutes: COLLECTION_CADENCE_MINUTES,
       timeframe: 'M5',
-      skippedUtcHours: [21, 22, 23],
+      skippedUtcHours: [],
       confidenceFloor: CONFIDENCE_FLOOR,
       ensembleThresholds: {
         candidateConfidenceFloor: CONFIDENCE_FLOOR,
@@ -1127,8 +1128,13 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
   private nextEligibleScanAt(now: Date): Date {
     const candidate = new Date(now);
     candidate.setUTCSeconds(0, 0);
-    const remainder = candidate.getUTCMinutes() % 10;
-    candidate.setUTCMinutes(candidate.getUTCMinutes() + (remainder === 0 ? 10 : 10 - remainder));
+    const remainder = candidate.getUTCMinutes() % COLLECTION_CADENCE_MINUTES;
+    candidate.setUTCMinutes(
+      candidate.getUTCMinutes() +
+        (remainder === 0
+          ? COLLECTION_CADENCE_MINUTES
+          : COLLECTION_CADENCE_MINUTES - remainder),
+    );
     for (let i = 0; i < 7 * 24 * 6 + 12; i += 1) {
       const day = candidate.getUTCDay();
       const hour = candidate.getUTCHours();
@@ -1137,14 +1143,16 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         (day >= 1 && day <= 4) ||
         (day === 5 && hour < 21);
       if (marketOpen) return candidate;
-      candidate.setUTCMinutes(candidate.getUTCMinutes() + 10);
+      candidate.setUTCMinutes(
+        candidate.getUTCMinutes() + COLLECTION_CADENCE_MINUTES,
+      );
     }
     return candidate;
   }
 
   private isCollectionSlot(now: Date): boolean {
     if (this.marketSchedule(now).paused) return false;
-    return now.getUTCMinutes() % 10 === 0;
+    return now.getUTCMinutes() % COLLECTION_CADENCE_MINUTES === 0;
   }
 
   private recordEvaluation(candidates: Candidate[]): void {
