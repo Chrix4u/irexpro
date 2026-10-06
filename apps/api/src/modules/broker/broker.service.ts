@@ -1713,7 +1713,12 @@ export class BrokerService {
     adapter.setMode(connection.accountType);
 
     try {
-      await adapter.connect(credentials);
+      // Hot market-data reads must not repeat the provider account handshake
+      // when this connection-scoped adapter is already live. The candle read
+      // itself remains provider-fresh; only the redundant connect() call is
+      // skipped. Periodic broker health checks still re-verify account state.
+      const alreadyConnected = typeof adapter.isConnected === 'function' && adapter.isConnected();
+      if (!alreadyConnected) await adapter.connect(credentials);
       return await adapter.getOHLCV(instrument, timeframe, limit, before);
     } catch (err) {
       this.logger.warn(
@@ -2153,7 +2158,11 @@ export class BrokerService {
     adapter.setMode(connection.accountType);
 
     try {
-      await adapter.connect(credentials);
+      // Keep the quote itself strictly fresh, but avoid an expensive provider
+      // account handshake before every quote when this scoped adapter is
+      // already connected. Health checks retain independent account/env checks.
+      const alreadyConnected = typeof adapter.isConnected === 'function' && adapter.isConnected();
+      if (!alreadyConnected) await adapter.connect(credentials);
       const price = await adapter.getCurrentPrice(instrument, {
         advanceSimulation: options?.advanceSimulation,
       });

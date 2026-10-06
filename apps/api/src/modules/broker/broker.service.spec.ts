@@ -1815,6 +1815,49 @@ describe('BrokerService', () => {
     });
   });
 
+  describe('getOhlcvForConnection() — broker historical market-data seam', () => {
+    it('reuses an already-connected adapter without repeating the provider handshake', async () => {
+      const connectedConn = {
+        id: 'conn-1',
+        userId: 'user-1',
+        brokerId: 'metatrader5',
+        status: BrokerConnectionStatus.CONNECTED,
+        accountType: BrokerMode.DEMO,
+        credentialStatus: 'VERIFIED',
+        encryptedCredentials: 'ciphertext',
+        credentialIv: 'iv',
+        credentialTag: 'tag',
+        encryptionKeyId: 'env-key-v1',
+      };
+      const candles = [
+        {
+          timestamp: new Date('2026-10-06T20:00:00Z'),
+          open: '1.1000',
+          high: '1.1010',
+          low: '1.0990',
+          close: '1.1005',
+          volume: '10',
+        },
+      ];
+      connectionRepo.findOne.mockResolvedValue(connectedConn);
+      const adapter = {
+        setMode: jest.fn(),
+        isConnected: jest.fn().mockReturnValue(true),
+        connect: jest.fn().mockResolvedValue(undefined),
+        getOHLCV: jest.fn().mockResolvedValue(candles),
+      };
+      registry.getAdapterForConnection.mockReturnValue(adapter);
+      encryption.decrypt.mockReturnValue({ accountId: 'acc-1' });
+
+      await expect(
+        service.getOhlcvForConnection('user-1', 'conn-1', 'EURUSD', 'M5', 10),
+      ).resolves.toEqual(candles);
+      expect(adapter.isConnected).toHaveBeenCalledTimes(1);
+      expect(adapter.connect).not.toHaveBeenCalled();
+      expect(adapter.getOHLCV).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('getCurrentPriceForConnection() — the fresh-quote seam (§5/§18 market safety)', () => {
     const connectedConn = {
       id: 'conn-1',
@@ -1850,6 +1893,25 @@ describe('BrokerService', () => {
       await expect(
         service.getCurrentPriceForConnection('user-1', 'conn-1', 'EURUSD'),
       ).resolves.toEqual(priceFixture);
+      expect(adapter.getCurrentPrice).toHaveBeenCalledTimes(1);
+    });
+
+    it('reuses an already-connected adapter without repeating the provider handshake', async () => {
+      connectionRepo.findOne.mockResolvedValue(connectedConn);
+      const adapter = {
+        setMode: jest.fn(),
+        isConnected: jest.fn().mockReturnValue(true),
+        connect: jest.fn().mockResolvedValue(undefined),
+        getCurrentPrice: jest.fn().mockResolvedValue(priceFixture),
+      };
+      registry.getAdapterForConnection.mockReturnValue(adapter);
+      encryption.decrypt.mockReturnValue({ accountId: 'acc-1' });
+
+      await expect(
+        service.getCurrentPriceForConnection('user-1', 'conn-1', 'EURUSD'),
+      ).resolves.toEqual(priceFixture);
+      expect(adapter.isConnected).toHaveBeenCalledTimes(1);
+      expect(adapter.connect).not.toHaveBeenCalled();
       expect(adapter.getCurrentPrice).toHaveBeenCalledTimes(1);
     });
 
