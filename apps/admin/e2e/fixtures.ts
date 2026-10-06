@@ -142,6 +142,20 @@ export async function setupAdminAuthInterception(page: Page): Promise<void> {
       return route.fulfill(jsonFulfill(200, mockAdminOnboardingStatus));
     }
 
+    // ── Payments page ───────────────────────────────────────────────────
+    // The Payments screen is data-driven. Return contract-correct empty
+    // collections so responsive tests exercise the real empty-state UI
+    // instead of crashing when Array methods are called on the catch-all {}.
+    if (apiPath === 'performance-fees/invoices') {
+      return route.fulfill(jsonFulfill(200, []));
+    }
+    if (apiPath === 'performance-fees/policies') {
+      return route.fulfill(jsonFulfill(200, []));
+    }
+    if (apiPath === 'payments/providers') {
+      return route.fulfill(jsonFulfill(200, []));
+    }
+
     // ── Catch-all: empty 200 so no test produces a spurious failed request.
     return route.fulfill(jsonFulfill(200, {}));
   });
