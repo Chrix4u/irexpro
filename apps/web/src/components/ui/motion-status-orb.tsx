@@ -23,6 +23,7 @@ export function MotionStatusOrb({
   return (
     <span
       className="motion-status-orb"
+      role={label ? 'img' : undefined}
       aria-label={label}
       aria-hidden={label ? undefined : true}
       style={{ '--motion-status-color': color } as React.CSSProperties}
