@@ -55,6 +55,9 @@ function makePolicy(overrides: Partial<PerformanceFeePolicy> = {}): PerformanceF
     billingFrequency: BillingFrequency.MONTHLY,
     calculationMode: 'HIGH_WATER_MARK' as any,
     appliesTo: 'REALISED_PROFIT_ONLY' as any,
+    version: 1,
+    effectiveFrom: new Date('2026-01-01T00:00:00Z'),
+    effectiveTo: null,
     isActive: true,
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -95,6 +98,56 @@ describe('PerformanceFeeService', () => {
     }).compile();
 
     service = module.get<PerformanceFeeService>(PerformanceFeeService);
+  });
+
+  describe('replaceActiveGlobalPolicy', () => {
+    it('closes the active version and creates the next version without rewriting history', async () => {
+      const previous = makePolicy({ id: 'policy-v2', version: 2, feePercent: '20.0000' });
+      mockPolicyRepo.find.mockResolvedValue([previous]);
+      mockPolicyRepo.save
+        .mockImplementationOnce(async (value) => value)
+        .mockImplementationOnce(async (value) => ({ ...value, id: 'policy-v3' }));
+      mockPolicyRepo.create.mockImplementation((value) => value);
+
+      const result = await service.replaceActiveGlobalPolicy(
+        {
+          name: 'Owner fee 25%',
+          feePercent: 25,
+          billingFrequency: BillingFrequency.MONTHLY,
+        },
+        'admin-1',
+      );
+
+      expect(previous.isActive).toBe(false);
+      expect(previous.effectiveTo).toBeInstanceOf(Date);
+      expect(result.version).toBe(3);
+      expect(result.feePercent).toBe('25.0000');
+      expect(result.isActive).toBe(true);
+      expect(mockAuditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actorUserId: 'admin-1',
+          resourceId: 'policy-v3',
+        }),
+      );
+    });
+
+    it('fails closed when multiple active global policies exist', async () => {
+      mockPolicyRepo.find.mockResolvedValue([
+        makePolicy({ id: 'policy-a' }),
+        makePolicy({ id: 'policy-b', version: 2 }),
+      ]);
+
+      await expect(
+        service.replaceActiveGlobalPolicy(
+          {
+            name: 'Owner fee',
+            feePercent: 15,
+            billingFrequency: BillingFrequency.QUARTERLY,
+          },
+          'admin-1',
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
   });
 
   // ─────────────────────────────────────────────────────────────────────────

@@ -2,13 +2,13 @@
  * Web UI primitives shared across the iRexPro trader application.
  */
 
-import { ButtonHTMLAttributes, ReactNode } from 'react';
-import MobileBottomNav from '@/components/mobile-bottom-nav';
-import WorkspaceSidebar from '@/components/workspace-sidebar';
-import { AutoRevealAlert } from '@/components/ui/AutoRevealAlert';
+import { ButtonHTMLAttributes, ReactNode } from "react";
+import MobileBottomNav from "@/components/mobile-bottom-nav";
+import WorkspaceSidebar from "@/components/workspace-sidebar";
+import { AutoRevealAlert } from "@/components/ui/AutoRevealAlert";
 // ── Button ───────────────────────────────────────────────────────────────────
-type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
-type ButtonSize = 'sm' | 'md' | 'lg';
+type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
+type ButtonSize = "sm" | "md" | "lg";
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;
@@ -18,9 +18,25 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   children: ReactNode;
 }
 
-export function Button({ variant = 'primary', size = 'md', block, loading, children, className = '', ...rest }: ButtonProps) {
-  const cls = ['btn', `btn--${variant}`, size === 'sm' && 'btn--sm', size === 'lg' && 'btn--lg', block && 'btn--block', className]
-    .filter(Boolean).join(' ');
+export function Button({
+  variant = "primary",
+  size = "md",
+  block,
+  loading,
+  children,
+  className = "",
+  ...rest
+}: ButtonProps) {
+  const cls = [
+    "btn",
+    `btn--${variant}`,
+    size === "sm" && "btn--sm",
+    size === "lg" && "btn--lg",
+    block && "btn--block",
+    className,
+  ]
+    .filter(Boolean)
+    .join(" ");
   return (
     <button className={cls} disabled={rest.disabled || loading} {...rest}>
       {loading && <span className="spinner" />}
@@ -35,21 +51,44 @@ interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
   error?: string;
 }
 
-export function Input({ label, error, id, className = '', ...rest }: InputProps) {
-  const inputId = id || (label ? label.toLowerCase().replace(/\s+/g, '-') : undefined);
+export function Input({
+  label,
+  error,
+  id,
+  className = "",
+  ...rest
+}: InputProps) {
+  const inputId =
+    id || (label ? label.toLowerCase().replace(/\s+/g, "-") : undefined);
   return (
     <div className="input-group">
-      {label && <label htmlFor={inputId} className="input-label">{label}</label>}
+      {label && (
+        <label htmlFor={inputId} className="input-label">
+          {label}
+        </label>
+      )}
       <input id={inputId} className={`input ${className}`} {...rest} />
-      {error && <p className="alert alert--error" style={{ marginTop: '0.5rem', marginBottom: 0 }}>{error}</p>}
+      {error && (
+        <p
+          className="alert alert--error"
+          style={{ marginTop: "0.5rem", marginBottom: 0 }}
+        >
+          {error}
+        </p>
+      )}
     </div>
   );
 }
 
 // ── Card ──────────────────────────────────────────────────────────────────────
-interface CardProps { title?: string; subtitle?: string; children: ReactNode; className?: string; }
+interface CardProps {
+  title?: string;
+  subtitle?: string;
+  children: ReactNode;
+  className?: string;
+}
 
-export function Card({ title, subtitle, children, className = '' }: CardProps) {
+export function Card({ title, subtitle, children, className = "" }: CardProps) {
   return (
     <div className={`card ${className}`}>
       {title && <h2 className="card__title">{title}</h2>}
@@ -60,31 +99,54 @@ export function Card({ title, subtitle, children, className = '' }: CardProps) {
 }
 
 // ── Alert ────────────────────────────────────────────────────────────────────
-type AlertVariant = 'error' | 'success' | 'warning' | 'info';
+type AlertVariant = "error" | "success" | "warning" | "info";
 
-export function Alert({ variant = 'info', children }: { variant?: AlertVariant; children: ReactNode }) {
+export function Alert({
+  variant = "info",
+  children,
+}: {
+  variant?: AlertVariant;
+  children: ReactNode;
+}) {
   return <AutoRevealAlert variant={variant}>{children}</AutoRevealAlert>;
 }
 
 // ── Badge ────────────────────────────────────────────────────────────────────
-type BadgeVariant = 'success' | 'error' | 'warning' | 'info';
+type BadgeVariant = "success" | "error" | "warning" | "info";
 
-export function Badge({ variant = 'info', children }: { variant?: BadgeVariant; children: ReactNode }) {
+export function Badge({
+  variant = "info",
+  children,
+}: {
+  variant?: BadgeVariant;
+  children: ReactNode;
+}) {
   return <span className={`badge badge--${variant}`}>{children}</span>;
 }
 
 // ── LoadingSpinner ────────────────────────────────────────────────────────────
-export function LoadingSpinner({ text = 'Loading…' }: { text?: string }) {
+export function LoadingSpinner({ text = "Loading…" }: { text?: string }) {
   return (
-    <div className="text-center" style={{ padding: '2rem' }}>
-      <span className="spinner" style={{ borderColor: 'var(--border)', borderTopColor: 'var(--brand)' }} />
+    <div className="text-center" style={{ padding: "2rem" }}>
+      <span
+        className="spinner"
+        style={{ borderColor: "var(--border)", borderTopColor: "var(--brand)" }}
+      />
       <p className="loading-text mt-4">{text}</p>
     </div>
   );
 }
 
 // ── EmptyState ────────────────────────────────────────────────────────────────
-export function EmptyState({ icon = '📭', title, description }: { icon?: string; title: string; description?: string }) {
+export function EmptyState({
+  icon = "📭",
+  title,
+  description,
+}: {
+  icon?: string;
+  title: string;
+  description?: string;
+}) {
   return (
     <div className="empty-state">
       <div className="empty-state__icon">{icon}</div>
@@ -95,7 +157,11 @@ export function EmptyState({ icon = '📭', title, description }: { icon?: strin
 }
 
 // ── AuthLayout ────────────────────────────────────────────────────────────────
-interface AuthLayoutProps { title: string; subtitle?: string; children: ReactNode; }
+interface AuthLayoutProps {
+  title: string;
+  subtitle?: string;
+  children: ReactNode;
+}
 
 export function AuthLayout({ title, subtitle, children }: AuthLayoutProps) {
   return (
@@ -106,10 +172,13 @@ export function AuthLayout({ title, subtitle, children }: AuthLayoutProps) {
             <span className="auth-layout__logo-mark">iR</span>
             iRexPro
           </div>
-          <h1 className="auth-layout__headline">AI-Powered Forex Trading Platform</h1>
+          <h1 className="auth-layout__headline">
+            AI-Powered Forex Trading Platform
+          </h1>
           <p className="auth-layout__subheadline">
-            Connect your regulated broker account and let iRexPro execute AI-driven
-            trades autonomously — with mandatory risk validation on every signal.
+            Connect your regulated broker account and let iRexPro execute
+            AI-driven trades autonomously — with mandatory risk validation on
+            every signal.
           </p>
           <ul className="auth-layout__features">
             <li>AI signal generation with risk-gated execution</li>
@@ -121,8 +190,12 @@ export function AuthLayout({ title, subtitle, children }: AuthLayoutProps) {
       </div>
       <div className="auth-layout__form-side">
         <div className="auth-layout__form-container">
-          <h1 style={{ marginBottom: '0.5rem' }}>{title}</h1>
-          {subtitle && <p className="muted" style={{ marginBottom: '1.5rem' }}>{subtitle}</p>}
+          <h1 style={{ marginBottom: "0.5rem" }}>{title}</h1>
+          {subtitle && (
+            <p className="muted" style={{ marginBottom: "1.5rem" }}>
+              {subtitle}
+            </p>
+          )}
           {children}
         </div>
       </div>
@@ -132,7 +205,12 @@ export function AuthLayout({ title, subtitle, children }: AuthLayoutProps) {
 
 // ── Trader workspace shell ───────────────────────────────────────────────────
 interface DashboardShellProps {
-  user: { email: string | null; firstName?: string | null; lastName?: string | null } | null;
+  user: {
+    email: string | null;
+    firstName?: string | null;
+    lastName?: string | null;
+    roles?: string[];
+  } | null;
   onLogout: () => void;
   activeRoute?: string;
   title?: string;
@@ -140,33 +218,60 @@ interface DashboardShellProps {
 }
 
 function workspaceRouteTitle(activeRoute: string | undefined): string {
-  if (activeRoute === '/dashboard') return 'Dashboard';
-  if (activeRoute === '/trade') return 'AI Trading';
-  if (activeRoute === '/trade/portfolio') return 'Portfolio';
-  if (activeRoute === '/portfolio') return 'Portfolio & Risk';
-  if (activeRoute === '/live-account' || activeRoute?.startsWith('/live-account/')) {
-    return 'Positions & Activity';
+  if (activeRoute === "/dashboard") return "Dashboard";
+  if (activeRoute === "/trade") return "AI Trading";
+  if (activeRoute === "/trade/portfolio") return "Portfolio";
+  if (activeRoute === "/portfolio") return "Portfolio & Risk";
+  if (
+    activeRoute === "/live-account" ||
+    activeRoute?.startsWith("/live-account/")
+  ) {
+    return "Positions & Activity";
   }
-  if (activeRoute === '/onboarding/broker') return 'Broker Account';
-  if (activeRoute === '/security') return 'Security';
-  if (activeRoute === '/payments/success' || activeRoute?.startsWith('/payments/success/')) {
-    return 'Fees & Payments';
+  if (activeRoute === "/onboarding/broker") return "Broker Account";
+  if (activeRoute === "/security") return "Security";
+  if (activeRoute === "/admin/performance-fees") return "Performance Fees";
+  if (
+    activeRoute === "/payments/success" ||
+    activeRoute?.startsWith("/payments/success/")
+  ) {
+    return "Fees & Payments";
   }
-  return 'Dashboard';
+  return "Dashboard";
 }
 
-export function DashboardShell({ user, onLogout, activeRoute, title, children }: DashboardShellProps) {
+export function DashboardShell({
+  user,
+  onLogout,
+  activeRoute,
+  title,
+  children,
+}: DashboardShellProps) {
   return (
-    <div className="dashboard-shell terminal-shell" data-active-route={activeRoute}>
-      <WorkspaceSidebar user={user} onLogout={onLogout} activeRoute={activeRoute} />
+    <div
+      className="dashboard-shell terminal-shell"
+      data-active-route={activeRoute}
+    >
+      <WorkspaceSidebar
+        user={user}
+        onLogout={onLogout}
+        activeRoute={activeRoute}
+      />
 
       <div className="dashboard-main terminal-main">
         <header className="dashboard-header terminal-header">
           <div>
-            <span className="terminal-header__eyebrow">AI trading workspace</span>
-            <span className="dashboard-header__title terminal-header__title">{title ?? workspaceRouteTitle(activeRoute)}</span>
+            <span className="terminal-header__eyebrow">
+              AI trading workspace
+            </span>
+            <span className="dashboard-header__title terminal-header__title">
+              {title ?? workspaceRouteTitle(activeRoute)}
+            </span>
           </div>
-          <div className="terminal-header__principle" aria-label="Execution safety principle">
+          <div
+            className="terminal-header__principle"
+            aria-label="Execution safety principle"
+          >
             AI automation · protected by server risk controls
           </div>
         </header>

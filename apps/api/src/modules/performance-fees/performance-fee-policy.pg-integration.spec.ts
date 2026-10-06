@@ -34,6 +34,9 @@ describe('PerformanceFeeService — real PostgreSQL global-policy singleton', ()
       billing_frequency VARCHAR(32) NOT NULL,
       calculation_mode VARCHAR(32) NOT NULL DEFAULT 'HIGH_WATER_MARK',
       applies_to VARCHAR(32) NOT NULL DEFAULT 'REALISED_PROFIT_ONLY',
+      version INTEGER NOT NULL DEFAULT 1,
+      effective_from TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      effective_to TIMESTAMPTZ NULL,
       is_active BOOLEAN NOT NULL DEFAULT true,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

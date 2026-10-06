@@ -74,6 +74,15 @@ export class PerformanceFeePolicy {
   })
   appliesTo: AppliesToMode;
 
+  @Column({ name: 'version', type: 'integer', default: 1 })
+  version: number;
+
+  @Column({ name: 'effective_from', type: 'timestamptz', default: () => 'NOW()' })
+  effectiveFrom: Date;
+
+  @Column({ name: 'effective_to', type: 'timestamptz', nullable: true })
+  effectiveTo: Date | null;
+
   @Column({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean;
 

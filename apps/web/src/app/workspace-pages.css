@@ -29,7 +29,11 @@
   border: 1px solid rgba(148, 163, 184, 0.16);
   border-radius: 18px;
   background:
-    radial-gradient(circle at top right, rgba(20, 184, 166, 0.11), transparent 34%),
+    radial-gradient(
+      circle at top right,
+      rgba(20, 184, 166, 0.11),
+      transparent 34%
+    ),
     linear-gradient(145deg, rgba(17, 24, 39, 0.92), rgba(10, 14, 26, 0.96));
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.18);
   overflow: hidden;
@@ -82,7 +86,11 @@
   overflow: hidden;
   border-color: rgba(148, 163, 184, 0.15);
   border-radius: 16px;
-  background: linear-gradient(160deg, rgba(21, 28, 44, 0.98), rgba(15, 23, 42, 0.94));
+  background: linear-gradient(
+    160deg,
+    rgba(21, 28, 44, 0.98),
+    rgba(15, 23, 42, 0.94)
+  );
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.14);
 }
 
@@ -251,25 +259,25 @@
   line-height: 1.5;
 }
 
-.onboarding-form [role='radiogroup'] {
+.onboarding-form [role="radiogroup"] {
   display: grid !important;
   grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
   gap: 0.8rem !important;
 }
 
-.onboarding-form [role='radiogroup'] > [role='radio'] {
+.onboarding-form [role="radiogroup"] > [role="radio"] {
   min-width: 0;
   min-height: 116px !important;
   border-radius: 14px !important;
   padding: 1rem !important;
 }
 
-.dashboard-content [id^='broker-connection-'] {
+.dashboard-content [id^="broker-connection-"] {
   gap: 0.9rem !important;
   border-radius: 14px !important;
 }
 
-.dashboard-content [id^='broker-connection-'] > div:last-child {
+.dashboard-content [id^="broker-connection-"] > div:last-child {
   justify-content: flex-end;
 }
 
@@ -287,18 +295,22 @@
   overflow-wrap: anywhere;
 }
 
-.terminal-content > main[style*='max-width: 900'] {
+.terminal-content > main[style*="max-width: 900"] {
   width: min(100%, 1240px) !important;
   max-width: 1240px !important;
   gap: 1.15rem !important;
 }
 
-.terminal-content > main[style*='max-width: 900'] > section:first-child {
+.terminal-content > main[style*="max-width: 900"] > section:first-child {
   padding: clamp(1.1rem, 2vw, 1.6rem);
   border: 1px solid rgba(148, 163, 184, 0.16);
   border-radius: 18px;
   background:
-    radial-gradient(circle at top right, rgba(20, 184, 166, 0.1), transparent 34%),
+    radial-gradient(
+      circle at top right,
+      rgba(20, 184, 166, 0.1),
+      transparent 34%
+    ),
     rgba(15, 23, 42, 0.72);
 }
 
@@ -312,18 +324,18 @@
 }
 
 .workspace-actions,
-.terminal-content form > div[style*='display: flex'] {
+.terminal-content form > div[style*="display: flex"] {
   min-width: 0;
 }
 
 .terminal-content .table-wrap,
-.terminal-content [class*='table-wrap'],
+.terminal-content [class*="table-wrap"],
 .terminal-content table {
   max-width: 100%;
 }
 
 .terminal-content .table-wrap,
-.terminal-content [class*='table-wrap'] {
+.terminal-content [class*="table-wrap"] {
   overflow-x: auto;
   overscroll-behavior-inline: contain;
 }
@@ -350,7 +362,7 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .onboarding-form [role='radiogroup'] {
+  .onboarding-form [role="radiogroup"] {
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
   }
 }
@@ -401,7 +413,7 @@
   .workspace-grid-2,
   .workspace-form-grid,
   .workspace-form-grid--3,
-  .onboarding-form [role='radiogroup'] {
+  .onboarding-form [role="radiogroup"] {
     grid-template-columns: minmax(0, 1fr) !important;
   }
 
@@ -415,21 +427,22 @@
     border-radius: 12px;
   }
 
-  .terminal-content .btn:not(.mobile-bottom-nav__item):not(.mobile-sheet__item) {
+  .terminal-content
+    .btn:not(.mobile-bottom-nav__item):not(.mobile-sheet__item) {
     max-width: 100%;
   }
 
-  .dashboard-content [id^='broker-connection-'] {
+  .dashboard-content [id^="broker-connection-"] {
     align-items: stretch !important;
   }
 
-  .dashboard-content [id^='broker-connection-'] > div:last-child {
+  .dashboard-content [id^="broker-connection-"] > div:last-child {
     width: 100%;
     display: grid !important;
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .dashboard-content [id^='broker-connection-'] > div:last-child .btn {
+  .dashboard-content [id^="broker-connection-"] > div:last-child .btn {
     width: 100%;
   }
 
@@ -444,12 +457,40 @@
 }
 
 @media (max-width: 420px) {
-  .dashboard-content [id^='broker-connection-'] > div:last-child {
+  .dashboard-content [id^="broker-connection-"] > div:last-child {
     grid-template-columns: minmax(0, 1fr);
   }
 
   .terminal-foundation__title,
   .workspace-hero__title {
     font-size: 1.45rem;
+  }
+}
+
+.performance-fee-admin__metric {
+  margin-top: var(--space-3);
+  font-size: clamp(2rem, 4vw, 3rem);
+  font-weight: 750;
+  letter-spacing: -0.04em;
+}
+
+.performance-fee-admin__metric--text {
+  font-size: clamp(1.35rem, 2.5vw, 2rem);
+}
+
+.performance-fee-admin__form {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.performance-fee-admin__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}
+
+@media (max-width: 720px) {
+  .performance-fee-admin__actions .btn {
+    width: 100%;
   }
 }

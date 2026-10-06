@@ -28,6 +28,7 @@ import { AuditService } from '../../audit/audit.service';
 import { AuditAction } from '../../../common/enums/audit-action.enum';
 import { AuditSeverity } from '../../audit/entities/audit-log.entity';
 import { CreatePolicyDto } from '../dto/create-policy.dto';
+import { ReplacePolicyDto } from '../dto/replace-policy.dto';
 import { CreateLedgerEntryDto } from '../dto/create-ledger-entry.dto';
 
 /**
@@ -114,7 +115,10 @@ export class PerformanceFeeService {
   // -------------------------------------------------------------------------
 
   async getPolicies(): Promise<PerformanceFeePolicy[]> {
-    return this.policyRepo.find({ where: { isActive: true }, order: { createdAt: 'ASC' } });
+    return this.policyRepo.find({
+      where: { planId: IsNull() },
+      order: { version: 'DESC', createdAt: 'DESC' },
+    });
   }
 
   async createPolicy(
@@ -146,8 +150,12 @@ export class PerformanceFeeService {
       const policy = policyRepo.create({
         planId: null,
         name: dto.name,
-        feePercent: dto.feePercent.toString(),
+        feePercent: dto.feePercent.toFixed(4),
         billingFrequency: dto.billingFrequency,
+        version: 1,
+        effectiveFrom: new Date(),
+        effectiveTo: null,
+        isActive: true,
       });
       return policyRepo.save(policy);
     });
@@ -169,6 +177,84 @@ export class PerformanceFeeService {
     });
 
     return saved;
+  }
+
+  /**
+   * Atomically replace the currently active global policy.
+   *
+   * Existing policy rows are never edited in place beyond closing their
+   * effective window. Historical assessments already snapshot feePercent and
+   * calculation metadata, so a replacement can never retroactively alter an
+   * assessment that has already been calculated.
+   */
+  async replaceActiveGlobalPolicy(
+    dto: ReplacePolicyDto,
+    adminId: string,
+    ipAddress?: string,
+  ): Promise<PerformanceFeePolicy> {
+    const changedAt = new Date();
+
+    const result = await this.policyRepo.manager.transaction(async (tx) => {
+      await tx.query('SELECT pg_advisory_xact_lock($1)', [GLOBAL_POLICY_CREATION_LOCK_KEY]);
+      const policyRepo = tx.getRepository(PerformanceFeePolicy);
+      const active = await policyRepo.find({
+        where: { planId: IsNull(), isActive: true },
+        order: { version: 'DESC' },
+      });
+
+      if (active.length > 1) {
+        throw new BadRequestException(
+          'Multiple active global performance fee policies found. Resolve the configuration before changing the fee.',
+        );
+      }
+
+      const previous = active[0] ?? null;
+      const previousVersion = previous?.version ?? 0;
+
+      if (previous) {
+        previous.isActive = false;
+        previous.effectiveTo = changedAt;
+        await policyRepo.save(previous);
+      }
+
+      const next = policyRepo.create({
+        planId: null,
+        name: dto.name.trim(),
+        feePercent: dto.feePercent.toFixed(4),
+        billingFrequency: dto.billingFrequency,
+        version: previousVersion + 1,
+        effectiveFrom: changedAt,
+        effectiveTo: null,
+        isActive: true,
+      });
+
+      return {
+        previous,
+        saved: await policyRepo.save(next),
+      };
+    });
+
+    await this.auditService.log({
+      actorUserId: adminId,
+      actorType: 'ADMIN',
+      action: AuditAction.PERFORMANCE_FEE_POLICY_REPLACED,
+      resourceType: 'PerformanceFeePolicy',
+      resourceId: result.saved.id,
+      ipAddress,
+      metadata: {
+        previousPolicyId: result.previous?.id ?? null,
+        previousVersion: result.previous?.version ?? null,
+        previousFeePercent: result.previous?.feePercent ?? null,
+        name: result.saved.name,
+        version: result.saved.version,
+        feePercent: result.saved.feePercent,
+        billingFrequency: result.saved.billingFrequency,
+        effectiveFrom: result.saved.effectiveFrom.toISOString(),
+      },
+      severity: AuditSeverity.INFO,
+    });
+
+    return result.saved;
   }
 
   // -------------------------------------------------------------------------
@@ -358,6 +444,8 @@ export class PerformanceFeeService {
       calculationMetadata: {
         policyId: policy.id,
         policyName: policy.name,
+        policyVersion: policy.version,
+        policyEffectiveFrom: policy.effectiveFrom.toISOString(),
         billingFrequency: policy.billingFrequency,
         calculationMode: policy.calculationMode,
         periodLedgerEntryCount: ledgerEntries.length,

@@ -14,6 +14,7 @@ import { CurrentUserId } from '../../common/decorators/current-user.decorator';
 import { RoleName } from '../users/entities/role.entity';
 import { PerformanceFeeService } from './services/performance-fee.service';
 import { CreatePolicyDto } from './dto/create-policy.dto';
+import { ReplacePolicyDto } from './dto/replace-policy.dto';
 import { CalculateAssessmentDto } from './dto/calculate-assessment.dto';
 import { CreateLedgerEntryDto } from './dto/create-ledger-entry.dto';
 
@@ -48,6 +49,12 @@ export class PerformanceFeesController {
   @Roles(RoleName.ADMIN, RoleName.SUPER_ADMIN)
   createPolicy(@Body() dto: CreatePolicyDto, @CurrentUserId() adminId: string) {
     return this.svc.createPolicy(dto, adminId);
+  }
+
+  @Post('policies/replace')
+  @Roles(RoleName.ADMIN, RoleName.SUPER_ADMIN)
+  replacePolicy(@Body() dto: ReplacePolicyDto, @CurrentUserId() adminId: string) {
+    return this.svc.replaceActiveGlobalPolicy(dto, adminId);
   }
 
   // ── User summary (own data) ────────────────────────────────────────────────
