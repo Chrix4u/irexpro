@@ -2157,6 +2157,7 @@ export default function AiTradingPage() {
   }
 
   const recentClosedTrades = execution?.closedExecutions.slice(0, 10) ?? [];
+  const latestClosedTrade = recentClosedTrades[0] ?? null;
   const positionCurrencies = Array.from(
     new Set(
       livePositions
@@ -4261,13 +4262,38 @@ export default function AiTradingPage() {
               </div>
               {livePositions.length === 0 ? (
                 <Card className="ai-empty-card">
-                  <strong>No open positions</strong>
+                  <strong>No positions open right now</strong>
                   <p className="muted">
                     Current unrealized P&amp;L:{" "}
-                    {money("0", allocation?.accountCurrency)}. When AI
-                    automation opens a trade, its entry, current price, costs
-                    and live unrealized P&amp;L will appear here.
+                    {money("0", allocation?.accountCurrency)}.
                   </p>
+                  {latestClosedTrade ? (
+                    <>
+                      <p className="muted">
+                        <strong>Latest completed AI trade:</strong>{" "}
+                        {latestClosedTrade.instrument} {latestClosedTrade.direction}
+                        {" · "}
+                        {latestClosedTrade.lotSize} lot
+                        {" · "}
+                        {latestClosedTrade.realisedPnl?.startsWith("-") ? "" : "+"}
+                        {money(
+                          latestClosedTrade.realisedPnl,
+                          latestClosedTrade.accountCurrency,
+                        )}
+                        {latestClosedTrade.closedAt
+                          ? ` · Closed ${formatTimestamp(latestClosedTrade.closedAt)}`
+                          : ""}
+                      </p>
+                      <p className="muted">
+                        See Closed Trades below for the full execution history.
+                      </p>
+                    </>
+                  ) : (
+                    <p className="muted">
+                      When AI automation opens a trade, its entry, current
+                      price, costs and live unrealized P&amp;L will appear here.
+                    </p>
+                  )}
                 </Card>
               ) : positionView === "table" ? (
                 <PositionTable

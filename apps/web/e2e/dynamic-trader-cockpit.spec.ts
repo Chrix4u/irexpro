@@ -120,6 +120,7 @@ async function gotoAiTrader(
     onStop?: () => void;
     failExecutionReads?: boolean;
     failPositionRead?: boolean;
+    noOpenPositions?: boolean;
     dropFirstRiskRead?: boolean;
     onRiskRead?: () => void;
     brokerPayload?: unknown[];
@@ -216,7 +217,10 @@ async function gotoAiTrader(
     if (apiPath === "live-account/positions") {
       return options.failPositionRead
         ? fulfill(500, { statusCode: 500, message: "Internal Server Error" })
-        : fulfill(200, { positions: [livePosition], total: 1 });
+        : fulfill(200, {
+            positions: options.noOpenPositions ? [] : [livePosition],
+            total: options.noOpenPositions ? 0 : 1,
+          });
     }
     if (apiPath === "execution/capital-allocation") {
       if (options.failAllocationRead) {
@@ -702,6 +706,31 @@ test.describe("AI Trader novice workflow", () => {
     await expect(page.getByText(/Unable to reach the server/i)).toHaveCount(0);
     await expect(page.getByText(/No open positions/i)).toBeVisible();
     await expect(page.getByText(/No execution activity yet/i)).toBeVisible();
+
+    assertNoExternalRequests(page);
+  });
+
+  test("surfaces the latest completed AI trade when there are no open positions", async ({
+    page,
+  }) => {
+    await gotoAiTrader(page, { noOpenPositions: true });
+
+    const emptyPositionCard = page
+      .locator(".ai-empty-card")
+      .filter({ hasText: "No positions open right now" });
+
+    await expect(emptyPositionCard).toBeVisible();
+    await expect(
+      emptyPositionCard.getByText(/Latest completed AI trade/i),
+    ).toBeVisible();
+    await expect(
+      emptyPositionCard.getByText(/EURUSD.*BUY.*0\.1000 lot.*\+?16\.70 USD/i),
+    ).toBeVisible();
+    await expect(
+      emptyPositionCard.getByText(
+        /See Closed Trades below for the full execution history/i,
+      ),
+    ).toBeVisible();
 
     assertNoExternalRequests(page);
   });
