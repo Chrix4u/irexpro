@@ -154,19 +154,20 @@ export class MarketSafetyGateService {
       }
     }
 
-    // 4. Entry deviation vs the risk-validated reference price (§5: the
-    //    final gate verifies CURRENT facts — the market must not have moved
-    //    materially since the risk evaluation). Runs only when the intent
-    //    carries a provable reference.
+    // 4. Entry deviation vs the risk-validated executable-side reference
+    //    (§5). BUY dispatches at ASK; SELL dispatches at BID. Comparing the
+    //    same side at both risk and final dispatch avoids midpoint/closed-bar
+    //    drift and keeps the 1% movement guard semantically exact.
     const reference = ExactDecimal.tryParse(intent.referencePrice ?? '');
-    if (reference && reference.isPositive() && mid.isPositive()) {
-      const deviation = mid.sub(reference).abs().div(reference, { scale: 10 });
+    const executableSide = intent.direction === 'BUY' ? ask : bid;
+    if (reference && reference.isPositive() && executableSide.isPositive()) {
+      const deviation = executableSide.sub(reference).abs().div(reference, { scale: 10 });
       if (deviation.gt(ExactDecimal.parse(MARKET_MAX_ENTRY_DEVIATION))) {
         await this.rejectForMarketSafety(orderId, intent, 'PRICE_DEVIATION_EXCESSIVE', (m) =>
           m(
-            `mid ${mid.toString()} deviates ${deviation.toFixed(6, 'DOWN')} from the ` +
-              `risk-validated reference ${reference.toString()} — above the ` +
-              `${MARKET_MAX_ENTRY_DEVIATION} threshold`,
+            `${intent.direction === 'BUY' ? 'ask' : 'bid'} ${executableSide.toString()} deviates ` +
+              `${deviation.toFixed(6, 'DOWN')} from the risk-validated reference ` +
+              `${reference.toString()} — above the ${MARKET_MAX_ENTRY_DEVIATION} threshold`,
           ),
         );
       }

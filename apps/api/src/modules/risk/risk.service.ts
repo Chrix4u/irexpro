@@ -935,35 +935,44 @@ export class RiskService {
     }
     appliedRules.push('MANDATORY_TP:OK');
 
-    // 5c. Stop-loss distance check (minimum pips from entry) — EXACT (#313).
-    const slDistanceCheck = this.checkStopLossDistance(trade, profile);
-    if (slDistanceCheck) {
-      appliedRules.push('SL_DISTANCE');
-      return this.rejectAndRecord(
-        userId,
-        trade,
-        RiskRejectionCode.INVALID_SL_DISTANCE,
-        slDistanceCheck,
-        contextSnapshot as RiskContextSnapshot,
-        evaluatedAt,
-      );
-    }
-    appliedRules.push('SL_DISTANCE:OK');
+    // 5c/5d. LIMIT-style entries can be checked immediately against their
+    // requested price. MARKET entries deliberately carry the '0' sentinel;
+    // their SL distance + TP direction MUST be checked against the fresh,
+    // direction-aware execution quote resolved at Step 6c below — never
+    // against zero and never against a stale model reference.
+    const marketEntry = isMarketEntryPrice(trade.entryPrice);
+    if (marketEntry) {
+      appliedRules.push('SL_DISTANCE:DEFERRED_MARKET_QUOTE');
+      appliedRules.push('TP_DIRECTION:DEFERRED_MARKET_QUOTE');
+    } else {
+      const slDistanceCheck = this.checkStopLossDistance(trade, profile);
+      if (slDistanceCheck) {
+        appliedRules.push('SL_DISTANCE');
+        return this.rejectAndRecord(
+          userId,
+          trade,
+          RiskRejectionCode.INVALID_SL_DISTANCE,
+          slDistanceCheck,
+          contextSnapshot as RiskContextSnapshot,
+          evaluatedAt,
+        );
+      }
+      appliedRules.push('SL_DISTANCE:OK');
 
-    // 5d. Take-profit direction validity — EXACT (#313).
-    const tpDirectionCheck = this.checkTakeProfitDirection(trade);
-    if (tpDirectionCheck) {
-      appliedRules.push('TP_DIRECTION');
-      return this.rejectAndRecord(
-        userId,
-        trade,
-        RiskRejectionCode.INVALID_TP_DIRECTION,
-        tpDirectionCheck,
-        contextSnapshot as RiskContextSnapshot,
-        evaluatedAt,
-      );
+      const tpDirectionCheck = this.checkTakeProfitDirection(trade);
+      if (tpDirectionCheck) {
+        appliedRules.push('TP_DIRECTION');
+        return this.rejectAndRecord(
+          userId,
+          trade,
+          RiskRejectionCode.INVALID_TP_DIRECTION,
+          tpDirectionCheck,
+          contextSnapshot as RiskContextSnapshot,
+          evaluatedAt,
+        );
+      }
+      appliedRules.push('TP_DIRECTION:OK');
     }
-    appliedRules.push('TP_DIRECTION:OK');
 
     // ── Step 6: Volatility, regime and per-trade control checks ────────────
 
@@ -1284,6 +1293,7 @@ export class RiskService {
       userId,
       brokerConnectionId: session.brokerConnectionId,
       instrument: trade.instrument,
+      direction: trade.direction,
       needFreshQuote: marketEntry,
     });
 
@@ -1315,6 +1325,45 @@ export class RiskService {
       }
     } else {
       entry = this.parseOrderDecimal(trade.entryPrice, 'entryPrice');
+    }
+
+    // MARKET order integrity is evaluated against the SAME fresh executable
+    // side used by risk geometry. This closes the historical SELL-vs-zero bug
+    // and prevents stale closed-bar references from approving invalid SL/TP.
+    if (marketEntry && entry) {
+      const slDistanceCheck = this.checkStopLossDistance(trade, profile, entry);
+      if (slDistanceCheck) {
+        appliedRules.push('SL_DISTANCE:MARKET_QUOTE_REJECTED');
+        return {
+          rejection: await this.rejectAndRecord(
+            userId,
+            trade,
+            RiskRejectionCode.INVALID_SL_DISTANCE,
+            slDistanceCheck,
+            contextSnapshot,
+            evaluatedAt,
+          ),
+          quoteRef: geometry.quoteRef,
+        };
+      }
+      appliedRules.push('SL_DISTANCE:MARKET_QUOTE_OK');
+
+      const tpDirectionCheck = this.checkTakeProfitDirection(trade, entry);
+      if (tpDirectionCheck) {
+        appliedRules.push('TP_DIRECTION:MARKET_QUOTE_REJECTED');
+        return {
+          rejection: await this.rejectAndRecord(
+            userId,
+            trade,
+            RiskRejectionCode.INVALID_TP_DIRECTION,
+            tpDirectionCheck,
+            contextSnapshot,
+            evaluatedAt,
+          ),
+          quoteRef: geometry.quoteRef,
+        };
+      }
+      appliedRules.push('TP_DIRECTION:MARKET_QUOTE_OK');
     }
 
     // ── contract size ─────────────────────────────────────────────────────
@@ -2045,12 +2094,23 @@ export class RiskService {
   }
 
   /** EXACT stop-loss distance check in pips (#313 — no float arithmetic). */
-  private checkStopLossDistance(trade: ProposedTrade, profile: RiskProfile): string | null {
-    if (!trade.stopLoss || !trade.entryPrice) return null;
+  private checkStopLossDistance(
+    trade: ProposedTrade,
+    profile: RiskProfile,
+    entryOverride?: ExactDecimal,
+  ): string | null {
+    if (!trade.stopLoss || (!trade.entryPrice && !entryOverride)) return null;
 
-    const entry = this.parseOrderDecimal(trade.entryPrice, 'entryPrice');
+    const entry = entryOverride ?? this.parseOrderDecimal(trade.entryPrice, 'entryPrice');
     const sl = this.parseOrderDecimal(trade.stopLoss, 'stopLoss');
     const minPips = this.parseProfileDecimal(profile.minStopLossPips, 'minStopLossPips');
+
+    if (trade.direction === 'BUY' && sl.gte(entry)) {
+      return `Stop-loss ${sl.toString()} must be below entry ${entry.toString()} for BUY direction`;
+    }
+    if (trade.direction === 'SELL' && sl.lte(entry)) {
+      return `Stop-loss ${sl.toString()} must be above entry ${entry.toString()} for SELL direction`;
+    }
     const pipSize = ExactDecimal.parse(
       trade.instrument.includes('JPY') ? JPY_PIP_SIZE : DEFAULT_PIP_SIZE,
     );
@@ -2067,10 +2127,13 @@ export class RiskService {
   }
 
   /** EXACT take-profit direction check (#313 — no float arithmetic). */
-  private checkTakeProfitDirection(trade: ProposedTrade): string | null {
-    if (!trade.takeProfit || !trade.entryPrice) return null;
+  private checkTakeProfitDirection(
+    trade: ProposedTrade,
+    entryOverride?: ExactDecimal,
+  ): string | null {
+    if (!trade.takeProfit || (!trade.entryPrice && !entryOverride)) return null;
 
-    const entry = this.parseOrderDecimal(trade.entryPrice, 'entryPrice');
+    const entry = entryOverride ?? this.parseOrderDecimal(trade.entryPrice, 'entryPrice');
     const tp = this.parseOrderDecimal(trade.takeProfit, 'takeProfit');
 
     if (trade.direction === 'BUY' && tp.lte(entry)) {

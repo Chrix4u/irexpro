@@ -366,7 +366,8 @@ describe('StrategyOrchestratorService', () => {
       );
       expect(sizingMock.sizePosition).toHaveBeenCalledWith(
         expect.objectContaining({
-          requestedEntryPrice: '1.10005',
+          entryType: 'MARKET',
+          requestedEntryPrice: null,
           stopLoss: '1.09855',
           requestedLotUpperBound: String(probeCandidate().suggestedVolume),
         }),
@@ -374,15 +375,17 @@ describe('StrategyOrchestratorService', () => {
       expect(riskService.validateProposedTrade).toHaveBeenCalledWith(
         'user-1',
         expect.objectContaining({
-          entryPrice: '1.10005',
+          entryPrice: '0',
           stopLoss: '1.09855',
           takeProfit: '1.10205',
         }),
       );
       expect(tradeIntentMock.recordOrReuseIntent).toHaveBeenCalledWith(
         expect.objectContaining({
-          requestedEntryPrice: '1.10005',
+          requestedEntryPrice: null,
           metadata: expect.objectContaining({
+            execution_entry_type: 'MARKET',
+            signal_suggested_entry_price: '1.2',
             uat_execution_probe_rebased: true,
             uat_replay_reference_price: '1.2',
             uat_execution_reference_price: '1.10005',
@@ -694,6 +697,37 @@ describe('StrategyOrchestratorService', () => {
       brokerId: 'metatrader',
       accountType: BrokerMode.LIVE,
       logicalAccountKey: 'metatrader::live::acct-1',
+    });
+
+    it('treats a model suggested entry as provenance while the executable signal remains MARKET', async () => {
+      const result = await service.processSignal(
+        validCandidate({
+          suggestedEntryPrice: 1.0845,
+          suggestedStopLoss: 1.075,
+          suggestedTakeProfit: 1.095,
+        }),
+      );
+
+      expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
+      expect(sizingMock.sizePosition).toHaveBeenCalledWith(
+        expect.objectContaining({
+          entryType: 'MARKET',
+          requestedEntryPrice: null,
+        }),
+      );
+      expect(riskService.validateProposedTrade).toHaveBeenCalledWith(
+        'user-1',
+        expect.objectContaining({ entryPrice: '0' }),
+      );
+      expect(tradeIntentMock.recordOrReuseIntent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requestedEntryPrice: null,
+          metadata: expect.objectContaining({
+            execution_entry_type: 'MARKET',
+            signal_suggested_entry_price: 1.0845,
+          }),
+        }),
+      );
     });
 
     it('the SIZED volume flows to the Risk Engine — never the AI suggestedVolume (mock-seam regression: the Round 7 P0 allocation bug hid behind this exact seam)', async () => {

@@ -142,11 +142,13 @@ export class StrategyOrchestratorService {
   }
 
   private async markSignalProcessed(userId: string, signalId: string): Promise<void> {
-    await this.signalIdentityGate.markProcessed(userId, signalId).catch((err) =>
-      this.logger.warn(
-        `Signal ${signalId}: identity could not be marked PROCESSED (${(err as Error).message})`,
-      ),
-    );
+    await this.signalIdentityGate
+      .markProcessed(userId, signalId)
+      .catch((err) =>
+        this.logger.warn(
+          `Signal ${signalId}: identity could not be marked PROCESSED (${(err as Error).message})`,
+        ),
+      );
   }
 
   /**
@@ -189,19 +191,14 @@ export class StrategyOrchestratorService {
     // signal metadata. The API independently clamps it to the LIVE-promotable
     // 0.60–0.70 contract so Demo/PAPER/LIVE share one enforcement path and a
     // downstream caller cannot weaken the production floor.
-    const metadataConfidenceThreshold = Number(
-      candidate.metadata?.model_confidence_threshold,
-    );
+    const metadataConfidenceThreshold = Number(candidate.metadata?.model_confidence_threshold);
     const effectiveConfidenceThreshold = Number.isFinite(metadataConfidenceThreshold)
       ? Math.min(0.7, Math.max(CONFIDENCE_THRESHOLD, metadataConfidenceThreshold))
       : CONFIDENCE_THRESHOLD;
 
     // Internal workflow probes are test evidence only; they never become
     // production-eligible signals and remain separately authority-checked.
-    if (
-      candidate.confidenceScore < effectiveConfidenceThreshold &&
-      !uatWorkflowProbeRequested
-    ) {
+    if (candidate.confidenceScore < effectiveConfidenceThreshold && !uatWorkflowProbeRequested) {
       const reason = `Confidence ${candidate.confidenceScore} below threshold ${effectiveConfidenceThreshold}`;
       this.logger.log(`Signal ${signalId} ignored: ${reason}`);
       await this.recordIgnored(
@@ -507,11 +504,11 @@ export class StrategyOrchestratorService {
         brokerConnectionId: session.brokerConnectionId,
         instrument: executionCandidate.instrument,
         direction: executionCandidate.direction,
-        entryType: executionCandidate.suggestedEntryPrice != null ? 'LIMIT' : 'MARKET',
-        requestedEntryPrice:
-          executionCandidate.suggestedEntryPrice != null
-            ? String(executionCandidate.suggestedEntryPrice)
-            : null,
+        // The automated AI signal path dispatches MARKET orders only
+        // (ExecutionService normalizes them to OrderKind.MARKET). The model's
+        // suggested entry is provenance, never a LIMIT instruction.
+        entryType: 'MARKET',
+        requestedEntryPrice: null,
         stopLoss:
           executionCandidate.suggestedStopLoss != null
             ? String(executionCandidate.suggestedStopLoss)
@@ -598,10 +595,9 @@ export class StrategyOrchestratorService {
       // Round 6 §4: the SIZED volume (risk-budget-derived, instrument-
       // normalized) — never the raw AI suggestion.
       requestedLotSize: sized.lots,
-      entryPrice:
-        executionCandidate.suggestedEntryPrice != null
-          ? String(executionCandidate.suggestedEntryPrice)
-          : '0',
+      // MARKET sentinel: RiskService resolves an independent fresh,
+      // direction-aware quote and the final dispatch gate rechecks again.
+      entryPrice: '0',
       stopLoss: String(executionCandidate.suggestedStopLoss),
       takeProfit: String(executionCandidate.suggestedTakeProfit),
       idempotencyKey: `${candidate.userId}:${candidate.signalId}`,
@@ -1045,8 +1041,10 @@ export class StrategyOrchestratorService {
       instrument: candidate.instrument,
       direction: candidate.direction,
       requestedLotSize: String(candidate.suggestedVolume),
-      requestedEntryPrice:
-        candidate.suggestedEntryPrice != null ? String(candidate.suggestedEntryPrice) : null,
+      // The signal pipeline always executes MARKET. Preserve any model
+      // suggested reference in metadata instead of misclassifying it as a
+      // LIMIT instruction in the durable intent.
+      requestedEntryPrice: null,
       stopLoss: candidate.suggestedStopLoss != null ? String(candidate.suggestedStopLoss) : null,
       takeProfit:
         candidate.suggestedTakeProfit != null ? String(candidate.suggestedTakeProfit) : null,
@@ -1056,6 +1054,11 @@ export class StrategyOrchestratorService {
         confidenceScore: candidate.confidenceScore,
         marketRegime: candidate.marketRegime ?? null,
         volatilityScore: candidate.volatilityScore ?? null,
+        execution_entry_type: 'MARKET',
+        signal_suggested_entry_price:
+          candidate.metadata?.['uat_replay_reference_price'] ??
+          candidate.suggestedEntryPrice ??
+          null,
         ...(candidate.metadata ?? {}),
       },
       authorityGeneration,
