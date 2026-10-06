@@ -346,6 +346,11 @@ describe('VpsForexSignalCollectorService', () => {
     expect(selectSql).toContain('admitted = true');
     expect(selectSql).toContain("paperExecutionEligible");
     expect(selectSql).toContain('OR COALESCE');
+    expect(selectSql).toContain("highConvictionOverlay");
+    expect(selectSql).toContain("allBrokerNative");
+    expect(selectSql).toContain("'CONFIRM'");
+    expect(selectSql).toContain("'CONFLICT'");
+    expect(selectSql).toContain("'ABSTAIN'");
     const updateCall = query.mock.calls.find(([sql]) =>
       String(sql).includes('UPDATE trading.ensemble_shadow_decisions'),
     );

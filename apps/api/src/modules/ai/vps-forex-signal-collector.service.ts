@@ -1502,6 +1502,17 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
               (components->'governance'->>'paperExecutionEligible')::boolean,
               false
             ) = true
+            OR (
+              COALESCE(
+                (components->'highConvictionOverlay'->>'allBrokerNative')::boolean,
+                false
+              ) = true
+              AND components->'highConvictionOverlay'->>'state' IN (
+                'CONFIRM',
+                'CONFLICT',
+                'ABSTAIN'
+              )
+            )
           )
           AND NOT (components ? 'outcome')
         ORDER BY evaluated_at ASC
