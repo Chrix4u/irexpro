@@ -32,4 +32,6 @@ export interface MarketIntelligenceRequest {
   instrument: string;
   timeframe: 'M1' | 'M5' | 'M15' | 'M30' | 'H1' | 'H4' | 'D1';
   limit?: number;
+  /** Optional exact broker connection selected by the trading workspace. */
+  brokerConnectionId?: string;
 }

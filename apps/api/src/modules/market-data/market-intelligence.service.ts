@@ -1,6 +1,7 @@
 import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { AuditAction } from '../../common/enums/audit-action.enum';
 import { BrokerService } from '../broker/broker.service';
+import { BrokerConnectionStatus } from '../broker/interfaces/broker-adapter.interface';
 import { CredentialEncryptionService } from '../broker/services/credential-encryption.service';
 import { BrokerCredentialLifecycle } from '../broker/authorization/broker-credential-status';
 import { AuditService } from '../audit/audit.service';
@@ -70,12 +71,32 @@ export class MarketIntelligenceService {
   ): Promise<MarketIntelligenceResponseDto> {
     const instrument = query.instrument.toUpperCase();
     const timeframe = query.timeframe.toUpperCase();
-    const connection = await this.brokerService.findActiveConnectionForUser(userId);
+
+    // The trading workspace knows the exact broker/session it is displaying.
+    // Honor that binding instead of selecting an arbitrary newest CONNECTED
+    // account (which could be an unrelated/disconnected MetaTrader account
+    // while PAPER is the active AI execution authority).
+    let connection = null;
+    if (query.brokerConnectionId) {
+      try {
+        const requested = await this.brokerService.findConnectionById(
+          query.brokerConnectionId,
+          userId,
+        );
+        connection = requested.status === BrokerConnectionStatus.CONNECTED ? requested : null;
+      } catch {
+        connection = null;
+      }
+    } else {
+      connection = await this.brokerService.findActiveConnectionForUser(userId);
+    }
 
     if (!connection) {
       throw new ServiceUnavailableException({
         code: 'MARKET_DATA_UNAVAILABLE',
-        message: 'Market data requires an active broker connection',
+        message: query.brokerConnectionId
+          ? 'Selected broker connection is not available for market data'
+          : 'Market data requires an active broker connection',
       });
     }
 
