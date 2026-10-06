@@ -164,20 +164,18 @@ describe('BrokerHealthCheckJob', () => {
   });
 
   it('revalidates an aged transient health suspension without restoring execution authority directly', async () => {
-    connectionRepo.find
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
-        {
-          id: 'conn-suspended',
-          userId: 'user-1',
-          brokerId: 'metatrader5',
-          accountId: 'account-1234',
-          authorizationStatus: 'SUSPENDED',
-          consecutiveFailureCount: 3,
-          lastErrorMessage: 'MetaApi websocket request timed out',
-          updatedAt: new Date(Date.now() - 6 * 60_000),
-        },
-      ]);
+    connectionRepo.find.mockResolvedValueOnce([]).mockResolvedValueOnce([
+      {
+        id: 'conn-suspended',
+        userId: 'user-1',
+        brokerId: 'metatrader5',
+        accountId: 'account-1234',
+        authorizationStatus: 'SUSPENDED',
+        consecutiveFailureCount: 3,
+        lastErrorMessage: 'MetaApi websocket request timed out',
+        updatedAt: new Date(Date.now() - 6 * 60_000),
+      },
+    ]);
     brokerService.connectBroker.mockResolvedValue({ status: BrokerConnectionStatus.CONNECTED });
 
     await job.process({ id: 'job-recover' } as any);
@@ -192,20 +190,18 @@ describe('BrokerHealthCheckJob', () => {
   });
 
   it('never auto-recovers an environment-mismatch security suspension', async () => {
-    connectionRepo.find
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
-        {
-          id: 'conn-security',
-          userId: 'user-1',
-          brokerId: 'metatrader5',
-          accountId: 'account-1234',
-          authorizationStatus: 'SUSPENDED',
-          consecutiveFailureCount: 3,
-          lastErrorMessage: 'Environment mismatch: provider reports LIVE but connection is DEMO',
-          updatedAt: new Date(Date.now() - 60 * 60_000),
-        },
-      ]);
+    connectionRepo.find.mockResolvedValueOnce([]).mockResolvedValueOnce([
+      {
+        id: 'conn-security',
+        userId: 'user-1',
+        brokerId: 'metatrader5',
+        accountId: 'account-1234',
+        authorizationStatus: 'SUSPENDED',
+        consecutiveFailureCount: 3,
+        lastErrorMessage: 'Environment mismatch: provider reports LIVE but connection is DEMO',
+        updatedAt: new Date(Date.now() - 60 * 60_000),
+      },
+    ]);
 
     await job.process({ id: 'job-security' } as any);
 
@@ -213,20 +209,18 @@ describe('BrokerHealthCheckJob', () => {
   });
 
   it('backs off recent suspensions instead of hammering the provider every minute', async () => {
-    connectionRepo.find
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
-        {
-          id: 'conn-recent',
-          userId: 'user-1',
-          brokerId: 'metatrader5',
-          accountId: 'account-1234',
-          authorizationStatus: 'SUSPENDED',
-          consecutiveFailureCount: 3,
-          lastErrorMessage: 'temporary provider timeout',
-          updatedAt: new Date(Date.now() - 60_000),
-        },
-      ]);
+    connectionRepo.find.mockResolvedValueOnce([]).mockResolvedValueOnce([
+      {
+        id: 'conn-recent',
+        userId: 'user-1',
+        brokerId: 'metatrader5',
+        accountId: 'account-1234',
+        authorizationStatus: 'SUSPENDED',
+        consecutiveFailureCount: 3,
+        lastErrorMessage: 'temporary provider timeout',
+        updatedAt: new Date(Date.now() - 60_000),
+      },
+    ]);
 
     await job.process({ id: 'job-backoff' } as any);
 

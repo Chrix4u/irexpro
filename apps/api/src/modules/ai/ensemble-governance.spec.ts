@@ -112,10 +112,7 @@ describe('evaluateEnsembleGovernance', () => {
     expect(result.netExpectedR).toBeGreaterThan(0.08);
     expect(result.paperExecutionEligible).toBe(false);
     expect(result.paperExecutionBlockers).toEqual(
-      expect.arrayContaining([
-        'ENSEMBLE_NOT_PROMOTABLE_ADMISSION',
-        'DRIFT_STRESSED',
-      ]),
+      expect.arrayContaining(['ENSEMBLE_NOT_PROMOTABLE_ADMISSION', 'DRIFT_STRESSED']),
     );
     expect(result.paperPromotionEligible).toBe(false);
     expect(result.blockers).toEqual(

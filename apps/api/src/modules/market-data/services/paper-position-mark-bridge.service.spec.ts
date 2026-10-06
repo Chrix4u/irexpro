@@ -20,7 +20,9 @@ describe('PaperPositionMarkBridgeService', () => {
     } as unknown as ConfigService;
   }
 
-  function brokerAdapters(getOpenPositions = jest.fn().mockResolvedValue([])): BrokerAdapterRegistry {
+  function brokerAdapters(
+    getOpenPositions = jest.fn().mockResolvedValue([]),
+  ): BrokerAdapterRegistry {
     return {
       getAdapterForConnection: jest.fn().mockReturnValue({ getOpenPositions }),
     } as unknown as BrokerAdapterRegistry;
@@ -140,7 +142,9 @@ describe('PaperPositionMarkBridgeService', () => {
       adapters,
     );
 
-    await expect(service.collectOnce(new Date('2026-10-05T10:55:30.000Z'))).resolves.toBeUndefined();
+    await expect(
+      service.collectOnce(new Date('2026-10-05T10:55:30.000Z')),
+    ).resolves.toBeUndefined();
     expect(livePaper.updateProviderQuote).toHaveBeenCalledTimes(1);
   });
 });
