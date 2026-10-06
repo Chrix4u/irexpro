@@ -193,7 +193,7 @@ describe('PaperBrokerAdapter — scoped VPS live market mode', () => {
     );
   });
 
-  it('uses streaming ticks for position marks but not for v5 PAPER fills', async () => {
+  it('uses streaming ticks for position marks/protection but not PAPER entry fills', async () => {
     const live = new LivePaperMarketDataService();
     live.registerLiveConnection('conn-mark-only');
     const bars = protectionBars();
@@ -219,12 +219,42 @@ describe('PaperBrokerAdapter — scoped VPS live market mode', () => {
     });
 
     // SELL execution is intentionally spread-aware and fills at the closed-M5 bid.
-    // The streaming tick is valuation-only and must never alter the fill price.
+    // The streaming tick must never alter the entry fill price.
     expect(result.filledPrice).toBe(executionQuote.bid);
     const [position] = await adapter.getOpenPositions();
     expect(position!.markSource).toBe('STREAM');
     expect(Number(position!.currentPrice)).toBeCloseTo(1.10505, 5);
     expect(position!.currentPrice).not.toBe(result.filledPrice);
+  });
+
+  it('closes a BUY at TP from a fresh streaming bid before the M5 candle closes', async () => {
+    const live = new LivePaperMarketDataService();
+    const adapter = await openProtectedBuy(live);
+
+    // 1.10110 mid with the fixed 1-pip spread => bid 1.10105, beyond 1.10100 TP.
+    live.updateStreamingMidQuote('EURUSD', 1.1011, new Date(), 'conn-protection');
+
+    // Open-position polling is a protection heartbeat; the trade must already
+    // be gone instead of remaining visible above its target until M5 close.
+    expect(await adapter.getOpenPositions()).toHaveLength(0);
+    const closed = await adapter.getClosedTrades(new Date(0), new Date(Date.now() + 60 * 60_000));
+    expect(closed).toHaveLength(1);
+    expect(closed[0]!.closeReason).toBe('TP');
+    expect(closed[0]!.closePrice).toBe('1.10100');
+    expect(Number(closed[0]!.pathDiagnostics?.maxFavorablePnl)).toBeGreaterThanOrEqual(1);
+  });
+
+  it('closes a BUY at SL from a fresh provider bid before the M5 candle closes', async () => {
+    const live = new LivePaperMarketDataService();
+    const adapter = await openProtectedBuy(live);
+
+    live.updateProviderQuote('EURUSD', '1.09895', '1.09905', new Date(), 'conn-protection');
+
+    expect(await adapter.getOpenPositions()).toHaveLength(0);
+    const closed = await adapter.getClosedTrades(new Date(0), new Date(Date.now() + 60 * 60_000));
+    expect(closed).toHaveLength(1);
+    expect(closed[0]!.closeReason).toBe('SL');
+    expect(closed[0]!.closePrice).toBe('1.09900');
   });
 
   it('allows multiple distinct positions on the same instrument in both directions', async () => {

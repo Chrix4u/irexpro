@@ -4,12 +4,68 @@ import {
   VpsForexSignalCollectorService,
   canExecuteMultiModelPaper,
   buildCandidate,
+  dynamicPaperLotUpperBound,
   isFreshOpportunity,
 } from './vps-forex-signal-collector.service';
 import { ExecutionService } from '../execution/execution.service';
 import { ExecutionMode } from '../execution/interfaces/execution-authority';
 import { BrokerService } from '../broker/broker.service';
 import { LivePaperMarketDataService } from '../broker/services/live-paper-market-data.service';
+
+describe('dynamic PAPER lot ceiling', () => {
+  const base = {
+    confidence: 0.68,
+    metaProbability: 0.53,
+    netExpectedR: 0.2,
+    consensusPassed: 6,
+    consensusRequired: 6,
+    volatilityScore: 0.35,
+  };
+
+  it('keeps ordinary admitted signals at the 0.10 lot ceiling', () => {
+    expect(dynamicPaperLotUpperBound(base)).toEqual({ upperBound: 0.1, tier: 'BASE' });
+  });
+
+  it('permits larger PAPER ceilings only when confidence, meta probability, EV, consensus and volatility all qualify', () => {
+    expect(
+      dynamicPaperLotUpperBound({
+        ...base,
+        confidence: 0.71,
+        metaProbability: 0.57,
+        netExpectedR: 0.2,
+      }),
+    ).toEqual({ upperBound: 0.2, tier: 'STRONG' });
+    expect(
+      dynamicPaperLotUpperBound({
+        ...base,
+        confidence: 0.78,
+        metaProbability: 0.64,
+        netExpectedR: 0.31,
+      }),
+    ).toEqual({ upperBound: 0.3, tier: 'VERY_STRONG' });
+    expect(
+      dynamicPaperLotUpperBound({
+        ...base,
+        confidence: 0.84,
+        metaProbability: 0.7,
+        netExpectedR: 0.45,
+        volatilityScore: 0.5,
+      }),
+    ).toEqual({ upperBound: 0.5, tier: 'EXCEPTIONAL' });
+  });
+
+  it('does not upscale on confidence alone', () => {
+    expect(
+      dynamicPaperLotUpperBound({
+        ...base,
+        confidence: 0.91,
+        metaProbability: 0.52,
+        netExpectedR: 0.1,
+        consensusPassed: 5,
+      }),
+    ).toEqual({ upperBound: 0.1, tier: 'BASE' });
+  });
+});
 
 const PAIRS = [
   ['EURUSD', 'EUR/USD'],
@@ -268,15 +324,12 @@ describe('VpsForexSignalCollectorService', () => {
     await (collector as any).restorePublishedOpportunities('user-1', 'conn-1');
     const restored = (collector as any).lastPublishedOpportunity.get('EURUSD');
 
-    expect(query).toHaveBeenCalledWith(
-      expect.stringContaining('model_version = $4'),
-      [
-        'user-1',
-        'conn-1',
-        'irexpro-multimodel-ensemble-v1',
-        'plan-b-multimodel-shadow-v4',
-      ],
-    );
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('model_version = $4'), [
+      'user-1',
+      'conn-1',
+      'irexpro-multimodel-ensemble-v1',
+      'plan-b-multimodel-shadow-v4',
+    ]);
     expect(restored).toBeDefined();
     expect(restored.direction).toBe(current!.direction);
     expect(restored.confidence).toBeCloseTo(current!.confidence, 10);
@@ -314,15 +367,12 @@ describe('VpsForexSignalCollectorService', () => {
 
     await (collector as any).loadEnsembleCampaignStatus('user-1', 'conn-1');
 
-    expect(query).toHaveBeenCalledWith(
-      expect.stringContaining('model_version = $4'),
-      [
-        'user-1',
-        'conn-1',
-        'irexpro-multimodel-ensemble-v1',
-        'plan-b-multimodel-shadow-v4',
-      ],
-    );
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('model_version = $4'), [
+      'user-1',
+      'conn-1',
+      'irexpro-multimodel-ensemble-v1',
+      'plan-b-multimodel-shadow-v4',
+    ]);
   });
 
   it('resolves outcomes for PAPER-executable decisions even when strict promotion admission is false', async () => {
@@ -372,18 +422,14 @@ describe('VpsForexSignalCollectorService', () => {
       ],
     ]);
 
-    await (collector as any).resolvePendingEnsembleShadowOutcomes(
-      'user-1',
-      'conn-1',
-      candles,
-    );
+    await (collector as any).resolvePendingEnsembleShadowOutcomes('user-1', 'conn-1', candles);
 
     const selectSql = String(query.mock.calls[0][0]);
     expect(selectSql).toContain('admitted = true');
-    expect(selectSql).toContain("paperExecutionEligible");
+    expect(selectSql).toContain('paperExecutionEligible');
     expect(selectSql).toContain('OR COALESCE');
-    expect(selectSql).toContain("highConvictionOverlay");
-    expect(selectSql).toContain("allBrokerNative");
+    expect(selectSql).toContain('highConvictionOverlay');
+    expect(selectSql).toContain('allBrokerNative');
     expect(selectSql).toContain("'CONFIRM'");
     expect(selectSql).toContain("'CONFLICT'");
     expect(selectSql).toContain("'ABSTAIN'");
@@ -410,15 +456,10 @@ describe('VpsForexSignalCollectorService', () => {
       { query } as any,
     );
 
-    await (collector as any).loadEnsembleSleeveEvidence(
-      'user-1',
-      'conn-1',
-      'USDJPY',
-      'BUY',
-    );
+    await (collector as any).loadEnsembleSleeveEvidence('user-1', 'conn-1', 'USDJPY', 'BUY');
 
     const sql = String(query.mock.calls[0][0]);
-    expect(sql).toContain("paperExecutionEligible");
+    expect(sql).toContain('paperExecutionEligible');
     expect(sql).not.toContain('AND admitted = true');
     expect(sql).toContain('model_version = $6');
     expect(query).toHaveBeenCalledWith(expect.any(String), [
@@ -704,11 +745,21 @@ describe('VpsForexSignalCollectorService', () => {
       nextEligibleScanAt: '2026-10-04T21:00:00.000Z',
     });
 
-    expect((collector as any).marketSchedule(new Date('2026-10-04T20:50:00.000Z')).paused).toBe(true);
-    expect((collector as any).marketSchedule(new Date('2026-10-04T21:00:00.000Z')).paused).toBe(false);
-    expect((collector as any).marketSchedule(new Date('2026-10-05T22:10:00.000Z')).paused).toBe(false);
-    expect((collector as any).marketSchedule(new Date('2026-10-09T20:50:00.000Z')).paused).toBe(false);
-    expect((collector as any).marketSchedule(new Date('2026-10-09T21:00:00.000Z')).paused).toBe(true);
+    expect((collector as any).marketSchedule(new Date('2026-10-04T20:50:00.000Z')).paused).toBe(
+      true,
+    );
+    expect((collector as any).marketSchedule(new Date('2026-10-04T21:00:00.000Z')).paused).toBe(
+      false,
+    );
+    expect((collector as any).marketSchedule(new Date('2026-10-05T22:10:00.000Z')).paused).toBe(
+      false,
+    );
+    expect((collector as any).marketSchedule(new Date('2026-10-09T20:50:00.000Z')).paused).toBe(
+      false,
+    );
+    expect((collector as any).marketSchedule(new Date('2026-10-09T21:00:00.000Z')).paused).toBe(
+      true,
+    );
   });
 
   it('fails over to broker-native MetaTrader candles after Twelve Data exhausts the daily quota', async () => {

@@ -8,16 +8,16 @@ const DEFAULT_BRIDGE_INTERVAL_MS = 5_000;
 const MAX_PROVIDER_MARK_AGE_MS = 90_000;
 
 /**
- * Read-only valuation bridge for PAPER positions.
+ * Fast valuation/protection-mark bridge for PAPER positions.
  *
  * The MetaApi quote collector already samples the configured broker-native
  * source account into market_data.provider_quote_candles. This service reuses
  * those persisted bid/ask samples for PAPER mark-to-market so the Live Account
  * can refresh current price/P&L independently of the 10-minute strategy scan.
  *
- * Safety boundary: these PROVIDER marks are written only to the in-memory
- * position-mark cache. PAPER execution, fills, margin, SL/TP and model evidence
- * continue to use the closed-M5 execution quote path.
+ * Safety boundary: these PROVIDER marks may trigger SL/TP for already-open PAPER
+ * positions, but they never drive entries, entry fills, sizing, margin authority
+ * or model evidence. Closed-M5 replay remains the recovery path for missed ticks.
  */
 @Injectable()
 export class PaperPositionMarkBridgeService implements OnModuleInit, OnModuleDestroy {

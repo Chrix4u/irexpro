@@ -74,7 +74,63 @@ const SYMBOLS = Object.freeze([
 const CONFIDENCE_FLOOR = 0.64;
 const STOP_ATR_MULTIPLIER = 1.5;
 const TARGET_ATR_MULTIPLIER = 2.5;
-const SCANNER_LOT_UPPER_BOUND = 0.1;
+const PAPER_BASE_LOT_UPPER_BOUND = 0.1;
+
+export interface DynamicPaperLotSizingInput {
+  confidence: number;
+  metaProbability: number;
+  netExpectedR: number;
+  consensusPassed: number;
+  consensusRequired: number;
+  volatilityScore: number;
+}
+
+export interface DynamicPaperLotSizingDecision {
+  upperBound: number;
+  tier: 'BASE' | 'STRONG' | 'VERY_STRONG' | 'EXCEPTIONAL';
+}
+
+/**
+ * PAPER-only confidence/quality ceiling. This never bypasses PositionSizingService:
+ * equity risk %, stop distance, profile max lots, broker margin, allocation and
+ * portfolio/risk gates can only reduce the final volume below this ceiling.
+ * Confidence alone is deliberately insufficient for larger size.
+ */
+export function dynamicPaperLotUpperBound(
+  input: DynamicPaperLotSizingInput,
+): DynamicPaperLotSizingDecision {
+  const fullConsensus =
+    input.consensusRequired > 0 && input.consensusPassed >= input.consensusRequired;
+
+  if (
+    fullConsensus &&
+    input.confidence >= 0.82 &&
+    input.metaProbability >= 0.68 &&
+    input.netExpectedR >= 0.4 &&
+    input.volatilityScore <= 0.55
+  ) {
+    return { upperBound: 0.5, tier: 'EXCEPTIONAL' };
+  }
+  if (
+    fullConsensus &&
+    input.confidence >= 0.76 &&
+    input.metaProbability >= 0.62 &&
+    input.netExpectedR >= 0.28 &&
+    input.volatilityScore <= 0.65
+  ) {
+    return { upperBound: 0.3, tier: 'VERY_STRONG' };
+  }
+  if (
+    fullConsensus &&
+    input.confidence >= 0.7 &&
+    input.metaProbability >= 0.56 &&
+    input.netExpectedR >= 0.18 &&
+    input.volatilityScore <= 0.75
+  ) {
+    return { upperBound: 0.2, tier: 'STRONG' };
+  }
+  return { upperBound: PAPER_BASE_LOT_UPPER_BOUND, tier: 'BASE' };
+}
 const MIN_STOP_LOSS_PIPS = 5;
 const STOP_FLOOR_BUFFER_PIPS = 0.1;
 const BAR_MS = 5 * 60_000;
@@ -978,6 +1034,15 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           continue;
         }
 
+        const dynamicLotSizing = dynamicPaperLotUpperBound({
+          confidence: best.confidence,
+          metaProbability: planBEnsemble.metaProbability,
+          netExpectedR: ensembleGovernance.netExpectedR,
+          consensusPassed: planBEnsemble.consensusPassed,
+          consensusRequired: planBEnsemble.consensusRequired,
+          volatilityScore: best.volatilityScore,
+        });
+
         const outcome = await this.aiSignalService.receiveSignal({
           signalId,
           userId,
@@ -989,11 +1054,11 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           suggestedEntryPrice: Number(best.entry.toFixed(digits)),
           suggestedStopLoss: Number(best.stopLoss.toFixed(digits)),
           suggestedTakeProfit: Number(best.takeProfit.toFixed(digits)),
-          // This is only an upper bound. PositionSizingService still computes the
-          // actual lot from equity, stop distance, risk %, broker min/max/step,
-          // available margin, allocation and the user's profile max. v1-v4 used
-          // 0.01 here, unintentionally forcing every valid trade to micro-lot size.
-          suggestedVolume: SCANNER_LOT_UPPER_BOUND,
+          // PAPER-only dynamic upper bound. PositionSizingService still computes
+          // the actual lot from equity, stop distance, risk %, broker min/max/step,
+          // available margin, allocation and the user's profile max. Stronger size
+          // therefore cannot bypass the authoritative risk engine.
+          suggestedVolume: dynamicLotSizing.upperBound,
           timeframe: 'M5',
           strategyCode: `external-${ACTIVE_ENGINE_CODE}`,
           marketRegime: 'TRENDING',
@@ -1088,12 +1153,18 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             plan_b_ensemble_paper_admitted: planBEnsemble.paperAdmitted,
             plan_b_ensemble_admitted: planBEnsemble.admitted,
             plan_b_ensemble_reasons: planBEnsemble.reasons,
-            position_sizing_policy: 'risk-managed-up-to-0.10-lot-scanner-bound',
+            position_sizing_policy: 'risk-managed-dynamic-paper-cap-v1',
+            position_sizing_tier: dynamicLotSizing.tier,
+            position_sizing_upper_bound_lots: dynamicLotSizing.upperBound,
+            position_sizing_confidence: best.confidence,
+            position_sizing_meta_probability: planBEnsemble.metaProbability,
+            position_sizing_net_expected_r: ensembleGovernance.netExpectedR,
             opportunity_freshness_policy: 'each-qualifying-closed-bar-evaluated-independently',
           },
         });
         this.logger.log(
           `Multi-model PAPER candidate ${best.instrument} ${best.direction} confidence=${best.confidence.toFixed(4)} ` +
+            `lotTier=${dynamicLotSizing.tier} lotCap=${dynamicLotSizing.upperBound.toFixed(2)} ` +
             `outcome=${outcome.outcome} signal=${signalId} cadence=independent-closed-bar`,
         );
       }
@@ -1113,9 +1184,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     // Do not impose a blanket nightly shutdown; spread, regime and governance
     // gates decide whether low-liquidity rollover conditions are tradable.
     const marketOpen =
-      (day === 0 && hour >= 21) ||
-      (day >= 1 && day <= 4) ||
-      (day === 5 && hour < 21);
+      (day === 0 && hour >= 21) || (day >= 1 && day <= 4) || (day === 5 && hour < 21);
     const paused = !marketOpen;
     const reason = paused ? 'WEEKEND' : null;
     return {
@@ -1131,21 +1200,15 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     const remainder = candidate.getUTCMinutes() % COLLECTION_CADENCE_MINUTES;
     candidate.setUTCMinutes(
       candidate.getUTCMinutes() +
-        (remainder === 0
-          ? COLLECTION_CADENCE_MINUTES
-          : COLLECTION_CADENCE_MINUTES - remainder),
+        (remainder === 0 ? COLLECTION_CADENCE_MINUTES : COLLECTION_CADENCE_MINUTES - remainder),
     );
     for (let i = 0; i < 7 * 24 * 6 + 12; i += 1) {
       const day = candidate.getUTCDay();
       const hour = candidate.getUTCHours();
       const marketOpen =
-        (day === 0 && hour >= 21) ||
-        (day >= 1 && day <= 4) ||
-        (day === 5 && hour < 21);
+        (day === 0 && hour >= 21) || (day >= 1 && day <= 4) || (day === 5 && hour < 21);
       if (marketOpen) return candidate;
-      candidate.setUTCMinutes(
-        candidate.getUTCMinutes() + COLLECTION_CADENCE_MINUTES,
-      );
+      candidate.setUTCMinutes(candidate.getUTCMinutes() + COLLECTION_CADENCE_MINUTES);
     }
     return candidate;
   }
@@ -1612,14 +1675,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           AND components ? 'outcome'
         ORDER BY evaluated_at ASC
       `,
-      [
-        userId,
-        connectionId,
-        ACTIVE_ENGINE_CODE,
-        instrument,
-        direction,
-        PLAN_B_ENSEMBLE_ARTIFACT,
-      ],
+      [userId, connectionId, ACTIVE_ENGINE_CODE, instrument, direction, PLAN_B_ENSEMBLE_ARTIFACT],
     )) as Array<{ outcome: EnsembleShadowOutcome | null }>;
 
     const outcomes = rows

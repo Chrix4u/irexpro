@@ -256,10 +256,10 @@ export class LivePaperMarketDataService {
   }
 
   /**
-   * Read-only position mark: prefer a genuinely fresh streaming tick, otherwise
-   * fall back to the same closed-M5 execution quote. This path is intentionally
-   * excluded from order fills, risk sizing, margin authority and protection
-   * evaluation so v5 evidence semantics remain unchanged.
+   * Fast position/protection mark: prefer a genuinely fresh streaming tick,
+   * otherwise fall back to the same closed-M5 execution quote. The PAPER broker
+   * may use fresh STREAM/PROVIDER marks to trigger SL/TP on already-open positions;
+   * entry fills, risk sizing, margin authority and model evidence remain M5-based.
    */
   getMarkQuote(
     instrument: string,
@@ -280,7 +280,7 @@ export class LivePaperMarketDataService {
   }
 
   /**
-   * Read-only position valuation mark.
+   * Position valuation/protection mark.
    *
    * Unlike getQuote()/getMarkQuote(), this method may return the newest cached
    * quote even when it is stale. That is intentional: the Live Account UI can
