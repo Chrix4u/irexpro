@@ -4,6 +4,7 @@
     "strict": true,
     "jsx": "react-jsx",
     "moduleResolution": "bundler",
+    "isolatedModules": true,
     "skipLibCheck": true,
     "noEmit": true,
     "paths": {
