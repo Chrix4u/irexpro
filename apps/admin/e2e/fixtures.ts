@@ -242,6 +242,17 @@ export async function assertBoundingBoxInViewport(locator: Locator): Promise<voi
   expect(box.y + box.height).toBeLessThanOrEqual(viewport.height + 1);
 }
 
+export async function assertBoundingBoxHorizontallyInViewport(locator: Locator): Promise<void> {
+  const box = await locator.boundingBox();
+  expect(box, 'Element has no bounding box (not visible)').not.toBeNull();
+  if (!box) return;
+  const viewport = locator.page().viewportSize();
+  expect(viewport, 'Page has no viewport size').not.toBeNull();
+  if (!viewport) return;
+  expect(box.x).toBeGreaterThanOrEqual(-1);
+  expect(box.x + box.width).toBeLessThanOrEqual(viewport.width + 1);
+}
+
 // ── Composite helpers ────────────────────────────────────────────────────────
 
 /**
