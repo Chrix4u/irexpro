@@ -348,10 +348,7 @@ export class PositionSizingService {
       );
     }
     const lotsBeforeStep = ExactDecimal.min(
-      ExactDecimal.min(
-        ExactDecimal.min(lotsByRiskBudget, profileMaxLots),
-        maxLot,
-      ),
+      ExactDecimal.min(ExactDecimal.min(lotsByRiskBudget, profileMaxLots), maxLot),
       requestedLotUpperBound,
     );
 

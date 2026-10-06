@@ -142,11 +142,13 @@ export class StrategyOrchestratorService {
   }
 
   private async markSignalProcessed(userId: string, signalId: string): Promise<void> {
-    await this.signalIdentityGate.markProcessed(userId, signalId).catch((err) =>
-      this.logger.warn(
-        `Signal ${signalId}: identity could not be marked PROCESSED (${(err as Error).message})`,
-      ),
-    );
+    await this.signalIdentityGate
+      .markProcessed(userId, signalId)
+      .catch((err) =>
+        this.logger.warn(
+          `Signal ${signalId}: identity could not be marked PROCESSED (${(err as Error).message})`,
+        ),
+      );
   }
 
   /**
@@ -189,19 +191,14 @@ export class StrategyOrchestratorService {
     // signal metadata. The API independently clamps it to the LIVE-promotable
     // 0.60–0.70 contract so Demo/PAPER/LIVE share one enforcement path and a
     // downstream caller cannot weaken the production floor.
-    const metadataConfidenceThreshold = Number(
-      candidate.metadata?.model_confidence_threshold,
-    );
+    const metadataConfidenceThreshold = Number(candidate.metadata?.model_confidence_threshold);
     const effectiveConfidenceThreshold = Number.isFinite(metadataConfidenceThreshold)
       ? Math.min(0.7, Math.max(CONFIDENCE_THRESHOLD, metadataConfidenceThreshold))
       : CONFIDENCE_THRESHOLD;
 
     // Internal workflow probes are test evidence only; they never become
     // production-eligible signals and remain separately authority-checked.
-    if (
-      candidate.confidenceScore < effectiveConfidenceThreshold &&
-      !uatWorkflowProbeRequested
-    ) {
+    if (candidate.confidenceScore < effectiveConfidenceThreshold && !uatWorkflowProbeRequested) {
       const reason = `Confidence ${candidate.confidenceScore} below threshold ${effectiveConfidenceThreshold}`;
       this.logger.log(`Signal ${signalId} ignored: ${reason}`);
       await this.recordIgnored(
