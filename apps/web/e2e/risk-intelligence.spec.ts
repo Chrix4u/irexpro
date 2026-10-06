@@ -92,11 +92,18 @@ test.describe("Portfolio & Risk Intelligence", () => {
     await gotoPortfolioRisk(page, safeSnapshot);
 
     await expect(page.getByText("Full Auto", { exact: true })).toBeVisible();
-    await expect(page.getByText("2 / 3", { exact: true })).toBeVisible();
-    await expect(page.getByText("7", { exact: true })).toBeVisible();
+    const executionCapacity = page
+      .getByRole("heading", { level: 2, name: "Execution Capacity" })
+      .locator("..");
     await expect(
-      page.getByText("AI-driven · no fixed cap", { exact: true }),
+      executionCapacity.getByText("2", { exact: true }),
     ).toBeVisible();
+    await expect(
+      executionCapacity.getByText("7", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      executionCapacity.getByText("AI-driven · no fixed cap", { exact: true }),
+    ).toHaveCount(2);
     await expect(page.getByText("1 / 1 / 0", { exact: true })).toBeVisible();
     await expect(
       page.getByText("Max Concurrent Trades", { exact: true }),
