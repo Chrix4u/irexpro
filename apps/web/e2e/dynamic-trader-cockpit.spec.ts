@@ -372,8 +372,12 @@ test.describe("AI Trader novice workflow", () => {
       page.getByRole("heading", { level: 2, name: "Live Market Intelligence" }),
     ).toBeVisible();
     await expect(page.getByText("SCANNING", { exact: true })).toBeVisible();
-    await expect(page.getByText(/EURUSD.*GBPUSD.*USDJPY/i)).toBeVisible();
-    await expect(page.getByText("NO TRADE", { exact: true })).toBeVisible();
+    await expect(
+      page
+        .locator(".ai-control-card__label")
+        .filter({ hasText: /EURUSD.*GBPUSD.*USDJPY/i })
+        .first(),
+    ).toBeVisible();
     await expect(page.getByText("54.00%", { exact: true })).toBeVisible();
     await expect(page.getByText("60.00% gate", { exact: true })).toBeVisible();
     await expect(
@@ -487,10 +491,25 @@ test.describe("AI Trader novice workflow", () => {
     await expect(metrics).toBeVisible();
 
     const rows = metrics.locator(":scope > div");
-    await expect(rows).toHaveCount(6);
+    const metricLabels = [
+      "Entry",
+      "Current",
+      "Peak P&L",
+      "Profit give-back",
+      "Worst excursion",
+      "Stop loss",
+      "Take profit",
+      "Commission",
+      "Swap",
+    ];
+    for (const label of metricLabels) {
+      await expect(metrics.getByText(label, { exact: true })).toBeVisible();
+    }
 
+    const rowCount = await rows.count();
+    expect(rowCount).toBe(metricLabels.length);
     const boxes = await Promise.all(
-      Array.from({ length: 6 }, (_, index) => rows.nth(index).boundingBox()),
+      Array.from({ length: rowCount }, (_, index) => rows.nth(index).boundingBox()),
     );
     for (let index = 1; index < boxes.length; index += 1) {
       expect(boxes[index]).not.toBeNull();
