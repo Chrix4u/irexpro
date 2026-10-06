@@ -36,6 +36,10 @@ export class MetaApiClientService implements OnModuleDestroy {
   private readonly logger = new Logger(MetaApiClientService.name);
   private readonly metaApi: InstanceType<typeof MetaApi> | null;
   private readonly connectionPool = new Map<string, MetaApiConnectionEntry>();
+  private readonly connectionCreationPool = new Map<
+    string,
+    Promise<MetaApiConnectionEntry['connection']>
+  >();
 
   /** Synchronisation timeout — 60s for initial sync, 10s for re-checks */
   private readonly SYNC_TIMEOUT_SECONDS = 60;
@@ -83,31 +87,55 @@ export class MetaApiClientService implements OnModuleDestroy {
       this.connectionPool.delete(metaApiAccountId);
     }
 
-    this.logger.log(`Creating MetaAPI connection for account: ${metaApiAccountId}`);
-
-    const account = await this.metaApi!.metatraderAccountApi.getAccount(metaApiAccountId);
-
-    if (!['DEPLOYED', 'DEPLOYING'].includes(account.state)) {
-      this.logger.log(`Deploying MetaAPI account ${metaApiAccountId}...`);
-      await account.deploy();
-    }
-    await account.waitDeployed();
-
-    const connection = account.getRPCConnection();
-    await connection.connect();
-    if (requireSynchronization) {
-      await connection.waitSynchronized(this.SYNC_TIMEOUT_SECONDS);
+    const inFlight = this.connectionCreationPool.get(metaApiAccountId);
+    if (inFlight) {
+      const connection = await inFlight;
+      if (
+        requireSynchronization &&
+        typeof connection.isSynchronized === 'function' &&
+        !connection.isSynchronized()
+      ) {
+        await connection.waitSynchronized(this.SYNC_TIMEOUT_SECONDS);
+      }
+      return connection;
     }
 
-    this.connectionPool.set(metaApiAccountId, {
-      account,
-      connection,
-      connectedAt: new Date(),
-      accountId: metaApiAccountId,
-    });
+    const creation = (async () => {
+      this.logger.log(`Creating MetaAPI connection for account: ${metaApiAccountId}`);
 
-    this.logger.log(`MetaAPI connection established for account: ${metaApiAccountId}`);
-    return connection;
+      const account = await this.metaApi!.metatraderAccountApi.getAccount(metaApiAccountId);
+
+      if (!['DEPLOYED', 'DEPLOYING'].includes(account.state)) {
+        this.logger.log(`Deploying MetaAPI account ${metaApiAccountId}...`);
+        await account.deploy();
+      }
+      await account.waitDeployed();
+
+      const connection = account.getRPCConnection();
+      await connection.connect();
+      if (requireSynchronization) {
+        await connection.waitSynchronized(this.SYNC_TIMEOUT_SECONDS);
+      }
+
+      this.connectionPool.set(metaApiAccountId, {
+        account,
+        connection,
+        connectedAt: new Date(),
+        accountId: metaApiAccountId,
+      });
+
+      this.logger.log(`MetaAPI connection established for account: ${metaApiAccountId}`);
+      return connection;
+    })();
+
+    this.connectionCreationPool.set(metaApiAccountId, creation);
+    try {
+      return await creation;
+    } finally {
+      if (this.connectionCreationPool.get(metaApiAccountId) === creation) {
+        this.connectionCreationPool.delete(metaApiAccountId);
+      }
+    }
   }
 
   /**
