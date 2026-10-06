@@ -1016,7 +1016,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         if (!canExecuteMultiModelPaper(planBEnsemble, ensembleGovernance)) {
           this.logger.log(
             `Multi-model ensemble ${best.instrument} ${best.direction} ` +
-              `paperAdmitted=${planBEnsemble.paperAdmitted} admitted=${planBEnsemble.admitted} consensus=${planBEnsemble.consensusPassed}/${planBEnsemble.consensusRequired} ` +
+              `paperAdmitted=${planBEnsemble.paperAdmitted} admitted=${planBEnsemble.admitted} ` +
+              `consensusPassed=${planBEnsemble.consensusPassed} consensusRequired=${planBEnsemble.consensusRequired} ` +
               `execution=SHADOW_ONLY legacyV7Frozen=${LEGACY_V7_EXECUTION_FROZEN} ` +
               `netExpectedR=${ensembleGovernance.netExpectedR.toFixed(4)} ` +
               `drift=${ensembleGovernance.driftState} sleeve=${ensembleGovernance.sleeveState} ` +

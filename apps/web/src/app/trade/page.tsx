@@ -2724,8 +2724,7 @@ export default function AiTradingPage() {
                       <div className="ai-strategy-detail">
                         <span>Decision policy checks</span>
                         <strong>
-                          {vpsScannerStatus?.lastEnsembleDecision.consensusPassed ?? 0}/
-                          {vpsScannerStatus?.lastEnsembleDecision.consensusRequired ?? 0} checks
+                          {vpsScannerStatus?.lastEnsembleDecision.consensusPassed ?? 0} passed · {vpsScannerStatus?.lastEnsembleDecision.consensusRequired ?? 0} required
                         </strong>
                       </div>
                       <div className="ai-strategy-detail">
@@ -4104,7 +4103,7 @@ export default function AiTradingPage() {
                       </span>
                       <span>
                         {vpsConfidenceActive
-                          ? `${vpsScannerStatus?.lastEnsembleDecision.consensusPassed ?? 0}/${vpsScannerStatus?.lastEnsembleDecision.consensusRequired ?? 0} policy checks`
+                          ? `${vpsScannerStatus?.lastEnsembleDecision.consensusPassed ?? 0} passed · ${vpsScannerStatus?.lastEnsembleDecision.consensusRequired ?? 0} required`
                           : `${formatConfidence(displayedConfidenceThreshold)} gate`}
                       </span>
                     </div>
