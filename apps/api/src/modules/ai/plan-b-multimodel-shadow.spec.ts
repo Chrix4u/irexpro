@@ -169,6 +169,8 @@ describe('Plan B multimodel prospective shadow', () => {
       scanTime: new Date('2026-10-07T22:20:00.000Z'),
     });
     expect(octoberAfterRollover.regime).not.toBe('ROLLOVER_RISK');
+    expect(octoberAfterRollover.sessionQuality).toBeGreaterThanOrEqual(0.5);
+    expect(octoberAfterRollover.reasons).not.toContain('SESSION_QUALITY');
 
     const decemberRollover = scorePlanBMultimodelShadow({
       ...base,
@@ -181,6 +183,8 @@ describe('Plan B multimodel prospective shadow', () => {
       scanTime: new Date('2026-12-02T23:20:00.000Z'),
     });
     expect(decemberAfterRollover.regime).not.toBe('ROLLOVER_RISK');
+    expect(decemberAfterRollover.sessionQuality).toBeGreaterThanOrEqual(0.5);
+    expect(decemberAfterRollover.reasons).not.toContain('SESSION_QUALITY');
   });
 
   it('reduces portfolio quality for concentrated same-direction exposure', () => {
