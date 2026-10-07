@@ -1,11 +1,13 @@
 import { PlanBEnsembleScore } from './plan-b-multimodel-shadow';
 
 export const ENSEMBLE_GOVERNANCE_VERSION = 'ensemble-governance-v2';
-export const ENSEMBLE_COST_MODEL_VERSION = 'paper-spread-plus-25pct-slippage-v1';
+export const ENSEMBLE_COST_MODEL_VERSION = 'paper-broker-p90-spread-plus-25pct-slippage-v2';
 export const ENSEMBLE_DRIFT_MODEL_VERSION = 'development-envelope-4599-v1';
 export const ENSEMBLE_NET_EXPECTED_R_FLOOR = 0.08;
 export const ENSEMBLE_PAPER_NET_EXPECTED_R_FLOOR = ENSEMBLE_NET_EXPECTED_R_FLOOR;
 export const ENSEMBLE_SLEEVE_CORE_MIN_CLOSED_TRADES = 100;
+export const ENSEMBLE_EXECUTION_SPREAD_MIN_SAMPLES = 10;
+export const ENSEMBLE_EXECUTION_SPREAD_MAX_AGE_MS = 5 * 60_000;
 
 export type EnsembleDriftState = 'NORMAL' | 'STRESSED' | 'OUT_OF_DISTRIBUTION';
 export type EnsembleSleeveState = 'COLLECTING' | 'CORE' | 'PROBATION' | 'BLOCKED';
@@ -17,6 +19,15 @@ export interface EnsembleSleeveEvidence {
   sharpe: number | null;
   maxDrawdown: number | null;
   positiveWindowFraction: number | null;
+}
+
+export interface ExecutionSpreadEvidence {
+  source: 'BROKER_OBSERVED_P90';
+  spreadPrice: number;
+  sampleCount: number;
+  percentile: number;
+  windowMinutes: number;
+  latestSampleAt: string;
 }
 
 export interface EnsembleGovernanceInput {
@@ -33,6 +44,8 @@ export interface EnsembleGovernanceInput {
   rsi14: number;
   eventRisk?: EnsembleEventRiskState;
   sleeveEvidence?: EnsembleSleeveEvidence | null;
+  evaluatedAt?: Date;
+  executionSpreadEvidence?: ExecutionSpreadEvidence | null;
 }
 
 export interface EnsembleGovernanceDecision {
@@ -41,6 +54,9 @@ export interface EnsembleGovernanceDecision {
   driftModelVersion: typeof ENSEMBLE_DRIFT_MODEL_VERSION;
   grossExpectedR: number;
   estimatedExecutionCostR: number;
+  executionCostSource: 'BROKER_OBSERVED_P90' | 'STATIC_DIAGNOSTIC_FALLBACK';
+  executionSpreadEvidenceValid: boolean;
+  executionSpreadEvidence: ExecutionSpreadEvidence | null;
   netExpectedR: number;
   paperNetExpectedRPassed: boolean;
   netExpectedRPassed: boolean;
@@ -157,8 +173,33 @@ export function classifyEnsembleSleeveEvidence(
   return 'CORE';
 }
 
-function executionCostR(input: EnsembleGovernanceInput): number {
-  const spread = SPREAD_PRICE[input.instrument.trim().toUpperCase()] ?? 0;
+function executionSpreadEvidenceValid(input: EnsembleGovernanceInput): boolean {
+  const evidence = input.executionSpreadEvidence;
+  if (!evidence) return false;
+  if (!Number.isFinite(evidence.spreadPrice) || evidence.spreadPrice <= 0) return false;
+  if (
+    !Number.isFinite(evidence.sampleCount) ||
+    evidence.sampleCount < ENSEMBLE_EXECUTION_SPREAD_MIN_SAMPLES
+  )
+    return false;
+  if (!Number.isFinite(evidence.percentile) || evidence.percentile < 0.5 || evidence.percentile > 1)
+    return false;
+  const latest = new Date(evidence.latestSampleAt).getTime();
+  const evaluatedAt = (input.evaluatedAt ?? new Date()).getTime();
+  if (!Number.isFinite(latest) || !Number.isFinite(evaluatedAt)) return false;
+  const ageMs = evaluatedAt - latest;
+  return ageMs >= 0 && ageMs <= ENSEMBLE_EXECUTION_SPREAD_MAX_AGE_MS;
+}
+
+function executionCostR(input: EnsembleGovernanceInput): {
+  costR: number;
+  source: 'BROKER_OBSERVED_P90' | 'STATIC_DIAGNOSTIC_FALLBACK';
+  evidenceValid: boolean;
+} {
+  const evidenceValid = executionSpreadEvidenceValid(input);
+  const spread = evidenceValid
+    ? input.executionSpreadEvidence!.spreadPrice
+    : (SPREAD_PRICE[input.instrument.trim().toUpperCase()] ?? 0);
   const stopDistance = Math.abs(input.entryPrice - input.stopLoss);
   if (
     !Number.isFinite(spread) ||
@@ -166,18 +207,28 @@ function executionCostR(input: EnsembleGovernanceInput): number {
     !Number.isFinite(stopDistance) ||
     stopDistance <= 0
   ) {
-    return Number.POSITIVE_INFINITY;
+    return {
+      costR: Number.POSITIVE_INFINITY,
+      source: evidenceValid ? 'BROKER_OBSERVED_P90' : 'STATIC_DIAGNOSTIC_FALLBACK',
+      evidenceValid,
+    };
   }
-  // PAPER enters/exits across bid/ask. A 25% buffer above the fixed spread
-  // represents conservative slippage/quote uncertainty for execution and promotion checks.
-  return (1.25 * spread) / stopDistance;
+  // PAPER enters/exits across bid/ask. The authoritative execution estimate is
+  // the broker-observed rolling P90 spread plus a 25% slippage/quote buffer.
+  // Static spreads remain diagnostic-only and can never authorize execution.
+  return {
+    costR: (1.25 * spread) / stopDistance,
+    source: evidenceValid ? 'BROKER_OBSERVED_P90' : 'STATIC_DIAGNOSTIC_FALLBACK',
+    evidenceValid,
+  };
 }
 
 export function evaluateEnsembleGovernance(
   input: EnsembleGovernanceInput,
 ): EnsembleGovernanceDecision {
   const grossExpectedR = input.ensemble.expectedR;
-  const estimatedExecutionCostR = executionCostR(input);
+  const executionCost = executionCostR(input);
+  const estimatedExecutionCostR = executionCost.costR;
   const netExpectedR = grossExpectedR - estimatedExecutionCostR;
   const paperNetExpectedRPassed =
     Number.isFinite(netExpectedR) && netExpectedR > ENSEMBLE_PAPER_NET_EXPECTED_R_FLOOR;
@@ -199,6 +250,7 @@ export function evaluateEnsembleGovernance(
   const paperExecutionBlockers: string[] = [];
   if (!input.ensemble.paperAdmitted) paperExecutionBlockers.push('ENSEMBLE_NOT_PAPER_ADMITTED');
   if (!input.ensemble.admitted) paperExecutionBlockers.push('ENSEMBLE_NOT_PROMOTABLE_ADMISSION');
+  if (!executionCost.evidenceValid) paperExecutionBlockers.push('EXECUTION_SPREAD_UNAVAILABLE');
   if (!paperNetExpectedRPassed) paperExecutionBlockers.push('PAPER_NET_EXPECTED_R');
   if (!paperDriftPassed) paperExecutionBlockers.push(`DRIFT_${drift.state}`);
   if (sleeveState === 'BLOCKED') paperExecutionBlockers.push('SLEEVE_BLOCKED');
@@ -206,6 +258,7 @@ export function evaluateEnsembleGovernance(
 
   const blockers: string[] = [];
   if (!input.ensemble.admitted) blockers.push('ENSEMBLE_NOT_ADMITTED');
+  if (!executionCost.evidenceValid) blockers.push('EXECUTION_SPREAD_UNAVAILABLE');
   if (!netExpectedRPassed) blockers.push('NET_EXPECTED_R');
   if (!driftPassed) blockers.push(`DRIFT_${drift.state}`);
   if (sleeveState !== 'CORE') blockers.push(`SLEEVE_${sleeveState}`);
@@ -217,6 +270,9 @@ export function evaluateEnsembleGovernance(
     driftModelVersion: ENSEMBLE_DRIFT_MODEL_VERSION,
     grossExpectedR,
     estimatedExecutionCostR,
+    executionCostSource: executionCost.source,
+    executionSpreadEvidenceValid: executionCost.evidenceValid,
+    executionSpreadEvidence: input.executionSpreadEvidence ?? null,
     netExpectedR,
     paperNetExpectedRPassed,
     netExpectedRPassed,

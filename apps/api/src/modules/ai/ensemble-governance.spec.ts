@@ -28,8 +28,18 @@ const ensemble: PlanBEnsembleScore = {
   reasons: ['ADMIT'],
 };
 
+const evaluatedAt = new Date('2026-10-07T12:00:00.000Z');
 const base = {
   ensemble,
+  evaluatedAt,
+  executionSpreadEvidence: {
+    source: 'BROKER_OBSERVED_P90' as const,
+    spreadPrice: 0.0001,
+    sampleCount: 40,
+    percentile: 0.9,
+    windowMinutes: 30,
+    latestSampleAt: '2026-10-07T11:59:00.000Z',
+  },
   instrument: 'EURUSD',
   entryPrice: 1.1,
   stopLoss: 1.098,
@@ -126,6 +136,49 @@ describe('evaluateEnsembleGovernance', () => {
     expect(result.netExpectedR).toBeCloseTo(0.2575, 6);
     expect(result.paperNetExpectedRPassed).toBe(true);
     expect(result.netExpectedRPassed).toBe(true);
+  });
+
+  it('uses fresh broker-observed P90 spread instead of the static diagnostic spread', () => {
+    const result = evaluateEnsembleGovernance({
+      ...base,
+      ensemble: { ...ensemble, expectedR: 0.12 },
+      eventRisk: 'CLEAR',
+      executionSpreadEvidence: {
+        ...base.executionSpreadEvidence,
+        spreadPrice: 0.00001,
+      },
+    });
+    expect(result.executionCostSource).toBe('BROKER_OBSERVED_P90');
+    expect(result.estimatedExecutionCostR).toBeCloseTo(0.00625, 6);
+    expect(result.netExpectedR).toBeCloseTo(0.11375, 6);
+    expect(result.paperNetExpectedRPassed).toBe(true);
+    expect(result.paperExecutionEligible).toBe(true);
+  });
+
+  it('fails PAPER execution closed when broker spread evidence is unavailable', () => {
+    const result = evaluateEnsembleGovernance({
+      ...base,
+      eventRisk: 'CLEAR',
+      executionSpreadEvidence: null,
+    });
+    expect(result.executionCostSource).toBe('STATIC_DIAGNOSTIC_FALLBACK');
+    expect(result.paperExecutionEligible).toBe(false);
+    expect(result.paperExecutionBlockers).toContain('EXECUTION_SPREAD_UNAVAILABLE');
+    expect(result.blockers).toContain('EXECUTION_SPREAD_UNAVAILABLE');
+  });
+
+  it('fails PAPER execution closed when broker spread evidence is stale', () => {
+    const result = evaluateEnsembleGovernance({
+      ...base,
+      eventRisk: 'CLEAR',
+      executionSpreadEvidence: {
+        ...base.executionSpreadEvidence,
+        latestSampleAt: '2026-10-07T11:50:00.000Z',
+      },
+    });
+    expect(result.executionCostSource).toBe('STATIC_DIAGNOSTIC_FALLBACK');
+    expect(result.paperExecutionEligible).toBe(false);
+    expect(result.paperExecutionBlockers).toContain('EXECUTION_SPREAD_UNAVAILABLE');
   });
 
   it('fails cost governance when the stop geometry is too tight', () => {
