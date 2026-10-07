@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.core.errors import MarketDataError
+from app.core.logging import get_logger
 from app.core.security import validate_internal_api_key
 from app.domain.market_data.ohlcv_service import OHLCVService
 from app.domain.market_data.redis_cache import OHLCVRedisCache
@@ -22,6 +23,7 @@ from app.domain.models.post_entry_protection_challenger import (
 from app.domain.models.registry import ModelRegistry
 
 router = APIRouter()
+logger = get_logger(__name__)
 INTERNAL_API_KEY_HEADER = "x-irexpro-internal-api-key"
 
 
@@ -112,7 +114,7 @@ async def score_plan_b_v4_broker(
     if not challenger.loaded:
         return {
             "state": "ERROR",
-            "reason": status.get("load_error") or "CHALLENGER_NOT_LOADED",
+            "reason": "CHALLENGER_NOT_LOADED",
             "status": status,
             "score": None,
         }
@@ -162,20 +164,29 @@ async def score_plan_b_v4_broker(
             "market_data_sources": latest_sources,
             "score": score,
         }
-    except MarketDataError as exc:
+    except MarketDataError:
+        logger.warning(
+            "plan_b_v4_broker_market_data_unavailable",
+            instrument=instrument,
+        )
         return {
             "state": "WAITING_FOR_BROKER_DATA",
-            "reason": str(exc),
+            "reason": "BROKER_MARKET_DATA_UNAVAILABLE",
             "status": status,
             "score": None,
         }
-    except (ValueError, RuntimeError) as exc:
+    except (ValueError, RuntimeError):
+        logger.exception(
+            "plan_b_v4_broker_scoring_failed",
+            instrument=instrument,
+        )
         return {
             "state": "ERROR",
-            "reason": str(exc),
+            "reason": "CHALLENGER_SCORING_FAILED",
             "status": status,
             "score": None,
         }
+
 
 @router.get(
     "/models/challengers/plan-b-v85/status",
@@ -206,7 +217,7 @@ async def score_plan_b_v85_broker_checkpoint(
     if not challenger.loaded:
         return {
             "state": "ERROR",
-            "reason": status.get("load_error") or "POST_ENTRY_CHALLENGER_NOT_LOADED",
+            "reason": "POST_ENTRY_CHALLENGER_NOT_LOADED",
             "status": status,
             "score": None,
         }
@@ -393,18 +404,28 @@ async def score_plan_b_v85_broker_checkpoint(
             "market_data_sources": latest_sources,
             "score": score,
         }
-    except MarketDataError as exc:
+    except MarketDataError:
+        logger.warning(
+            "plan_b_v85_broker_market_data_unavailable",
+            instrument=instrument,
+            checkpoint_minutes=request.checkpoint_minutes,
+        )
         return {
             "state": "WAITING_FOR_BROKER_DATA",
-            "reason": str(exc),
+            "reason": "BROKER_MARKET_DATA_UNAVAILABLE",
             "status": status,
             "checkpoint_at": checkpoint_at.isoformat(),
             "score": None,
         }
-    except (KeyError, ValueError, RuntimeError) as exc:
+    except (KeyError, ValueError, RuntimeError):
+        logger.exception(
+            "plan_b_v85_broker_scoring_failed",
+            instrument=instrument,
+            checkpoint_minutes=request.checkpoint_minutes,
+        )
         return {
             "state": "ERROR",
-            "reason": str(exc),
+            "reason": "POST_ENTRY_SCORING_FAILED",
             "status": status,
             "checkpoint_at": checkpoint_at.isoformat(),
             "score": None,
