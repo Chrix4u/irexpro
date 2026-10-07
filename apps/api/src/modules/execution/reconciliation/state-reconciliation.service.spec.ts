@@ -216,6 +216,7 @@ describe('StateReconciliationService', () => {
   let auditService: { log: jest.Mock };
   let eventBus: { publish: jest.Mock };
   let adapter: {
+    brokerId?: string;
     setMode: jest.Mock;
     connect: jest.Mock;
     listOrders: jest.Mock;
@@ -326,6 +327,37 @@ describe('StateReconciliationService', () => {
     }).compile();
 
     service = module.get(StateReconciliationService);
+  });
+
+  it('starts a MetaAPI reconciliation cooldown after a provider quota failure', async () => {
+    const metaConnection = {
+      ...connection(),
+      brokerId: 'metatrader5',
+      accountId: 'meta-account-1',
+    } as unknown as BrokerConnection;
+    adapter.connect.mockRejectedValueOnce(
+      new Error('The API allows 180000 cpu credits per 1h to avoid overloading our servers'),
+    );
+
+    const outcome = await service.runForConnection(metaConnection);
+    const cooldownUntil = service.getProviderQuotaCooldownUntil(metaConnection.id);
+
+    expect(outcome.status).toBe(ReconciliationRunStatus.FAILED);
+    expect(cooldownUntil).toBeInstanceOf(Date);
+    expect(cooldownUntil!.getTime()).toBeGreaterThan(Date.now());
+    expect(persistence.failRun).toHaveBeenCalledWith(
+      'run-1',
+      expect.stringContaining('cpu credits'),
+    );
+    expect(auditService.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: AuditAction.RECONCILIATION_RUN_FAILED,
+        severity: 'WARNING',
+        metadata: expect.objectContaining({
+          providerQuotaCooldownUntil: expect.any(String),
+        }),
+      }),
+    );
   });
 
   describe('runForConnection — clean state', () => {
@@ -497,6 +529,36 @@ describe('StateReconciliationService', () => {
         DomainEventType.RECONCILIATION_DISCREPANCY_RESOLVED,
         'user-1',
         expect.objectContaining({ discrepancyId: 'disc-1' }),
+      );
+    });
+
+    it('queries full durable close history for paper broker clocks', async () => {
+      adapter.brokerId = 'paper-broker';
+      tradeRepo.find.mockResolvedValue([openTrade()]);
+      adapter.getPositionById.mockResolvedValue(null);
+      adapter.getClosedTrades.mockResolvedValue([
+        {
+          externalOrderId: 'pos-1',
+          closePrice: '1.12000',
+          realisedPnl: '20.00',
+          commission: '0.00',
+          swap: '0.00',
+          closedAt: new Date('2024-01-02T03:05:00Z'),
+        },
+      ]);
+      persistence.resolveDiscrepanciesByRef.mockResolvedValue([]);
+
+      await service.runForConnection(connection());
+
+      expect(adapter.getClosedTrades).toHaveBeenCalledWith(new Date(0), expect.any(Date));
+      expect(resolution.closeTradeFromProvider).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'trade-1' }),
+        expect.objectContaining({
+          closePrice: '1.12000',
+          realisedPnl: '20.00',
+          commission: '0.00',
+          swap: '0.00',
+        }),
       );
     });
 

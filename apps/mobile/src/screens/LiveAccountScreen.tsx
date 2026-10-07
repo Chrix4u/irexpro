@@ -29,9 +29,11 @@ import type {
   LiveOrderStatusFilter,
   LivePositionRowView,
 } from "@irexpro/types";
-import type { TradingSessionView } from "@irexpro/types/execution";
+import type { TradeExecutionView, TradingSessionView } from "@irexpro/types/execution";
 import { api } from "../lib/api";
+import { ActionDialog, Banner } from "../components/ui";
 import { liveAccount } from "../lib/live-account";
+import { execution } from "../lib/execution";
 import { useRealtime } from "../context/realtime-context";
 import {
   activityPresentation,
@@ -52,6 +54,7 @@ export default function LiveAccountScreen() {
   );
   const [orders, setOrders] = useState<LiveAccountOrdersPage | null>(null);
   const [activity, setActivity] = useState<LiveAccountActivityPage | null>(null);
+  const [closedExecutions, setClosedExecutions] = useState<TradeExecutionView[]>([]);
   const [orderFilter, setOrderFilter] = useState<LiveOrderStatusFilter>("ALL");
   // ── Trading session authority (Sprint 56 correction round 5) ──
   // The session mode/status/generation ARE the authoritative trading state
@@ -61,6 +64,16 @@ export default function LiveAccountScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [actionNotice, setActionNotice] = useState<
+    { variant: "success" | "info"; message: string } | null
+  >(null);
+  const [closingPositionId, setClosingPositionId] = useState<string | null>(null);
+  const [closingAllPositions, setClosingAllPositions] = useState(false);
+  const [closeDialog, setCloseDialog] = useState<
+    | { kind: "single"; position: LivePositionRowView }
+    | { kind: "all"; count: number }
+    | null
+  >(null);
   const {
     connected,
     stale,
@@ -97,17 +110,19 @@ export default function LiveAccountScreen() {
         }
       })();
       try {
-        const [ov, pos, ord, act] = await Promise.all([
+        const [ov, pos, ord, act, closed] = await Promise.all([
           liveAccount.getOverview(),
           liveAccount.getPositions(),
           liveAccount.getOrders(filter),
           liveAccount.getActivity(30, 0),
+          execution.listClosedExecutions(20),
           loadSession,
         ]);
         setOverview(ov);
         setPositions(pos);
         setOrders(ord);
         setActivity(act);
+        setClosedExecutions(closed);
         setError(null);
       } catch (err) {
         setError(
@@ -150,6 +165,99 @@ export default function LiveAccountScreen() {
     [load],
   );
 
+  const closePosition = useCallback(
+    async (position: LivePositionRowView) => {
+      if (closingPositionId || closingAllPositions) return;
+      setClosingPositionId(position.id);
+      setError(null);
+      setActionNotice(null);
+      try {
+        const result = await api.closePosition(position.id);
+        setActionNotice(
+          result.status === "CLOSED"
+            ? {
+                variant: "success",
+                message: `${position.instrument} ${position.direction} is confirmed closed by the execution service.`,
+              }
+            : {
+                variant: "info",
+                message: `${position.instrument} is now ${result.status}. The row remains authoritative until reconciliation confirms the broker state.`,
+              },
+        );
+        await load();
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : "Failed to close position";
+        setError(
+          message +
+            " The position has not been assumed closed. Refresh Positions & Activity to verify its authoritative server state.",
+        );
+      } finally {
+        setClosingPositionId(null);
+      }
+    },
+    [closingAllPositions, closingPositionId, load],
+  );
+
+  const requestClosePosition = useCallback(
+    (position: LivePositionRowView) => {
+      if (closingPositionId || closingAllPositions) return;
+      setCloseDialog({ kind: "single", position });
+    },
+    [closingAllPositions, closingPositionId],
+  );
+
+  const closeAllPositions = useCallback(async () => {
+    if (
+      !positions ||
+      positions.positions.length === 0 ||
+      closingPositionId ||
+      closingAllPositions
+    ) {
+      return;
+    }
+
+    setClosingAllPositions(true);
+    setError(null);
+    setActionNotice(null);
+    try {
+      const results = await api.closeAllAiPositions();
+      const closedCount = results.filter((result) => result.closed).length;
+      const unresolved = results.filter((result) => !result.closed);
+      if (unresolved.length === 0) {
+        setActionNotice({
+          variant: "success",
+          message: `Confirmed closed: ${closedCount} position${closedCount === 1 ? "" : "s"}.`,
+        });
+      } else {
+        const statusSummary = unresolved
+          .slice(0, 3)
+          .map((result) => `${result.tradeId.slice(0, 8)}… · ${result.status}`)
+          .join(" · ");
+        setActionNotice({
+          variant: "info",
+          message: `${closedCount} confirmed closed; ${unresolved.length} unresolved. ${statusSummary}. Refresh until the server confirms the final broker state.`,
+        });
+      }
+      await load();
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Failed to close AI positions";
+      setError(
+        message +
+          " No position is assumed closed. Refresh Positions & Activity to verify the authoritative server state.",
+      );
+    } finally {
+      setClosingAllPositions(false);
+    }
+  }, [closingAllPositions, closingPositionId, load, positions]);
+
+  const requestCloseAllPositions = useCallback(() => {
+    const count = positions?.positions.length ?? 0;
+    if (count === 0 || closingPositionId || closingAllPositions) return;
+    setCloseDialog({ kind: "all", count });
+  }, [closingAllPositions, closingPositionId, positions]);
+
   if (loading) {
     return (
       <View style={styles.center}>
@@ -166,8 +274,22 @@ export default function LiveAccountScreen() {
   const exitActivity = aiExitActivityRows(activity?.activity ?? []).slice(0, 8);
   const recentActivity = (activity?.activity ?? []).slice(0, 10);
 
+  async function confirmCloseDialog(): Promise<void> {
+    const current = closeDialog;
+    if (!current) return;
+    setCloseDialog(null);
+    if (current.kind === "single") {
+      await closePosition(current.position);
+      return;
+    }
+    await closeAllPositions();
+  }
+
+  const closeDialogBusy = closingAllPositions || closingPositionId !== null;
+
   return (
-    <ScrollView
+    <>
+      <ScrollView
       style={styles.flex}
       contentContainerStyle={styles.scrollContent}
       refreshControl={
@@ -257,7 +379,7 @@ export default function LiveAccountScreen() {
               <Text style={styles.mutedSmall}>
                 Authority generation {session.authorityGeneration}
                 {session.executionMode === "SEMI_AUTO"
-                  ? " · confirmations are approved in the web workspace"
+                  ? " · pending confirmations are handled in AI Trading"
                   : ""}
               </Text>
             ) : null}
@@ -286,6 +408,10 @@ export default function LiveAccountScreen() {
             <Text style={styles.retryButtonText}>Retry</Text>
           </Pressable>
         </View>
+      ) : null}
+
+      {actionNotice ? (
+        <Banner variant={actionNotice.variant}>{actionNotice.message}</Banner>
       ) : null}
 
       {tiles ? (
@@ -420,7 +546,27 @@ export default function LiveAccountScreen() {
         </View>
       )}
 
-      <Text style={styles.sectionTitle}>Positions</Text>
+      <View style={styles.sectionHeadingRow}>
+        <Text style={styles.sectionTitle}>Positions</Text>
+        {positions && positions.positions.length > 0 ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Close all AI-opened positions"
+            disabled={closingAllPositions || closingPositionId !== null}
+            onPress={requestCloseAllPositions}
+            style={[
+              styles.closeAllButton,
+              (closingAllPositions || closingPositionId !== null) && styles.disabledControl,
+            ]}
+          >
+            {closingAllPositions ? (
+              <ActivityIndicator color="#ffffff" size="small" />
+            ) : (
+              <Text style={styles.closeAllButtonText}>Close all</Text>
+            )}
+          </Pressable>
+        ) : null}
+      </View>
       {positions && positions.positions.length > 0 ? (
         positions.positions.map((position: LivePositionRowView) => (
           <View
@@ -471,11 +617,119 @@ export default function LiveAccountScreen() {
             {position.brokerName ? (
               <Text style={styles.mutedSmall}>{position.brokerName}</Text>
             ) : null}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Close ${position.instrument} position`}
+              disabled={
+                closingAllPositions ||
+                (closingPositionId !== null && closingPositionId !== position.id)
+              }
+              onPress={() => requestClosePosition(position)}
+              style={[
+                styles.closePositionButton,
+                (closingAllPositions ||
+                  (closingPositionId !== null && closingPositionId !== position.id)) &&
+                  styles.disabledControl,
+              ]}
+            >
+              {closingPositionId === position.id ? (
+                <ActivityIndicator color="#be123c" size="small" />
+              ) : (
+                <Text style={styles.closePositionButtonText}>Close position</Text>
+              )}
+            </Pressable>
           </View>
         ))
       ) : (
         <View style={styles.card}>
           <Text style={styles.muted}>No open positions.</Text>
+        </View>
+      )}
+
+      <Text style={styles.sectionTitle}>Closed Trades & Realized P&L</Text>
+      {closedExecutions.length > 0 ? (
+        closedExecutions.map((trade) => {
+          const realisedLabel =
+            trade.realisedPnl && trade.accountCurrency
+              ? `${trade.accountCurrency} ${trade.realisedPnl}`
+              : "Realized P&L —";
+          const pnlTone =
+            trade.realisedPnl?.startsWith("-") === true
+              ? styles.realisedNegative
+              : styles.realisedPositive;
+
+          return (
+            <View
+              key={trade.id}
+              style={styles.card}
+              accessibilityLabel={`Closed ${trade.instrument} ${trade.direction} trade`}
+            >
+              <View style={styles.rowBetween}>
+                <View style={styles.rowWrap}>
+                  <Text
+                    style={[
+                      styles.directionBadge,
+                      trade.direction === "BUY"
+                        ? styles.directionBuy
+                        : styles.directionSell,
+                    ]}
+                  >
+                    {trade.direction}
+                  </Text>
+                  <Text style={styles.cardTitle}>{trade.instrument}</Text>
+                </View>
+                <Text style={[styles.realisedPnl, pnlTone]}>{realisedLabel}</Text>
+              </View>
+
+              <View style={styles.tradeEconomicsGrid}>
+                <View style={styles.tradeEconomicsCell}>
+                  <Text style={styles.mutedSmall}>Entry</Text>
+                  <Text style={styles.tradeEconomicsValue}>
+                    {trade.fillPrice ?? trade.requestedEntryPrice}
+                  </Text>
+                </View>
+                <View style={styles.tradeEconomicsCell}>
+                  <Text style={styles.mutedSmall}>Exit</Text>
+                  <Text style={styles.tradeEconomicsValue}>{trade.exitPrice ?? "—"}</Text>
+                </View>
+                <View style={styles.tradeEconomicsCell}>
+                  <Text style={styles.mutedSmall}>Commission</Text>
+                  <Text style={styles.tradeEconomicsValue}>
+                    {trade.commission && trade.accountCurrency
+                      ? `${trade.accountCurrency} ${trade.commission}`
+                      : "—"}
+                  </Text>
+                </View>
+                <View style={styles.tradeEconomicsCell}>
+                  <Text style={styles.mutedSmall}>Swap</Text>
+                  <Text style={styles.tradeEconomicsValue}>
+                    {trade.swap && trade.accountCurrency
+                      ? `${trade.accountCurrency} ${trade.swap}`
+                      : "—"}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.rowBetween}>
+                <Text style={styles.mutedSmall}>
+                  {trade.closeReason
+                    ? trade.closeReason.replaceAll("_", " ")
+                    : "Close reason —"}
+                </Text>
+                <Text style={styles.mutedSmall}>{trade.lotSize} lots</Text>
+              </View>
+              <Text style={styles.mutedSmall}>
+                Opened {trade.openedAt ? new Date(trade.openedAt).toLocaleString() : "—"}
+              </Text>
+              <Text style={styles.mutedSmall}>
+                Closed {trade.closedAt ? new Date(trade.closedAt).toLocaleString() : "—"}
+              </Text>
+            </View>
+          );
+        })
+      ) : (
+        <View style={styles.card}>
+          <Text style={styles.muted}>No closed trades recorded yet.</Text>
         </View>
       )}
 
@@ -577,7 +831,47 @@ export default function LiveAccountScreen() {
           <Text style={styles.muted}>No recent activity.</Text>
         </View>
       )}
-    </ScrollView>
+      </ScrollView>
+      <ActionDialog
+        visible={closeDialog != null}
+        kicker="RISK-REDUCING ACTION"
+        title={
+          closeDialog?.kind === "single"
+            ? "Close this position?"
+            : "Close all AI-opened positions?"
+        }
+        message={
+          closeDialog?.kind === "single"
+            ? `${closeDialog.position.instrument} ${closeDialog.position.direction} · ${closeDialog.position.lotSize} lots`
+            : `Visible AI-opened positions: ${closeDialog?.count ?? 0}`
+        }
+        detailLines={
+          closeDialog?.kind === "single"
+            ? [
+                "Closure is requested immediately through the execution service.",
+                "The broker-confirmed exit price may differ from the currently displayed market mark.",
+                "The position remains shown until the server confirms the authoritative state.",
+              ]
+            : [
+                "Only positions the server can prove were opened by iRexPro are included.",
+                "Broker/manual positions without AI provenance are not swept.",
+                "Any unresolved broker closure remains visible for reconciliation.",
+              ]
+        }
+        confirmLabel={
+          closeDialog?.kind === "single"
+            ? "Close position"
+            : "Close all AI positions"
+        }
+        cancelLabel={closeDialog?.kind === "single" ? "Keep open" : "Cancel"}
+        onConfirm={() => void confirmCloseDialog()}
+        onCancel={() => {
+          if (!closeDialogBusy) setCloseDialog(null);
+        }}
+        busy={closeDialogBusy}
+        danger
+      />
+    </>
   );
 }
 
@@ -637,6 +931,36 @@ const styles = StyleSheet.create({
     marginTop: 20,
     marginBottom: 8,
   },
+  sectionHeadingRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+  },
+  closeAllButton: {
+    marginTop: 12,
+    borderRadius: 9,
+    backgroundColor: "#be123c",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    minWidth: 84,
+    alignItems: "center",
+  },
+  closeAllButtonText: { color: "#ffffff", fontSize: 12, fontWeight: "800" },
+  closePositionButton: {
+    marginTop: 4,
+    alignSelf: "flex-start",
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: "#fecdd3",
+    backgroundColor: "#fff1f2",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    minWidth: 118,
+    alignItems: "center",
+  },
+  closePositionButtonText: { color: "#be123c", fontSize: 12, fontWeight: "800" },
+  disabledControl: { opacity: 0.45 },
   card: {
     backgroundColor: "#ffffff",
     borderRadius: 12,
@@ -684,6 +1008,24 @@ const styles = StyleSheet.create({
   muted: { color: "#64748b", fontSize: 13 },
   mutedSmall: { color: "#94a3b8", fontSize: 11 },
   positionPnl: { color: "#0f766e", fontSize: 11, fontWeight: "700" },
+  realisedPnl: { fontSize: 12, fontWeight: "800" },
+  realisedPositive: { color: "#047857" },
+  realisedNegative: { color: "#be123c" },
+  tradeEconomicsGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 2,
+  },
+  tradeEconomicsCell: {
+    flexBasis: "48%",
+    borderRadius: 8,
+    backgroundColor: "#f8fafc",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    gap: 2,
+  },
+  tradeEconomicsValue: { color: "#0f172a", fontSize: 12, fontWeight: "700" },
   sessionMode: { color: "#e2e8f0", fontSize: 14, fontWeight: "700" },
   sessionStatus: { fontSize: 12, fontWeight: "700" },
   filterOption: {

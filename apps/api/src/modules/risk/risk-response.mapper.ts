@@ -20,12 +20,19 @@ export function toRiskViolationSummary(violation: RiskViolation): RiskViolationS
 /**
  * Public risk-profile projection.
  *
- * maxDailyTrades is retained only as a legacy database column. It is not an
- * active risk control and must not be exposed as though the user has a daily
- * execution quota.
+ * maxDailyTrades and maxOpenTrades are retained only as legacy database
+ * columns. Neither is an active risk control and neither is exposed as though
+ * the user has a trade-count or position-slot quota.
  */
-export function toRiskProfileResponse(profile: RiskProfile): Omit<RiskProfile, 'maxDailyTrades'> {
-  const { maxDailyTrades: legacyDailyTradeCap, ...publicProfile } = profile;
+export function toRiskProfileResponse(
+  profile: RiskProfile,
+): Omit<RiskProfile, 'maxDailyTrades' | 'maxOpenTrades'> {
+  const {
+    maxDailyTrades: legacyDailyTradeCap,
+    maxOpenTrades: legacyOpenPositionCap,
+    ...publicProfile
+  } = profile;
   void legacyDailyTradeCap;
+  void legacyOpenPositionCap;
   return publicProfile;
 }

@@ -99,7 +99,12 @@ export class MetaTraderAdapter implements IBrokerAdapter {
 
   async connect(credentials: DecryptedBrokerCredentials): Promise<BrokerConnectionResult> {
     try {
-      const conn = await this.metaApiClient.getOrCreateConnection(credentials.accountId);
+      const conn = await this.metaApiClient.getOrCreateConnection(credentials.accountId, {
+        // DEMO market-data connections are allowed to use direct RPC reads
+        // without waiting for the streaming synchronization layer. LIVE
+        // connections retain the fail-closed synchronization requirement.
+        requireSynchronization: this.mode === BrokerMode.LIVE,
+      });
       this.currentAccountId = credentials.accountId;
 
       const info = await conn.getAccountInformation();
@@ -428,9 +433,11 @@ export class MetaTraderAdapter implements IBrokerAdapter {
   async getCurrentPrice(instrument: string): Promise<BrokerPrice> {
     const conn = await this.getActiveConnection();
     try {
-      await conn.subscribeToMarketData(instrument);
+      // RPC quote reads use MetaApi's default short-lived subscription. The
+      // keepSubscription=true variant proved unreliable on this broker account
+      // ("Specified symbol price not found"), so recurring collection keeps
+      // the proven RPC semantics and relies on bounded concurrency/timeouts.
       const price = await conn.getSymbolPrice(instrument);
-      await conn.unsubscribeFromMarketData(instrument);
       return {
         instrument,
         bid: this.toDecimalString(price.bid),
@@ -815,7 +822,9 @@ export class MetaTraderAdapter implements IBrokerAdapter {
       );
     }
     try {
-      return await this.metaApiClient.getOrCreateConnection(this.currentAccountId);
+      return await this.metaApiClient.getOrCreateConnection(this.currentAccountId, {
+        requireSynchronization: this.mode === BrokerMode.LIVE,
+      });
     } catch (err) {
       throw this.mapError(err);
     }
@@ -827,21 +836,16 @@ export class MetaTraderAdapter implements IBrokerAdapter {
     instrument: string,
     direction: string,
   ): Promise<number | null> {
-    const connection = await this.metaApiClient.getOrCreateConnection(accountId);
+    const connection = await this.metaApiClient.getOrCreateConnection(accountId, {
+      requireSynchronization: this.mode === BrokerMode.LIVE,
+    });
     try {
-      await connection.subscribeToMarketData(instrument);
       const price = await connection.getSymbolPrice(instrument);
       const priceValue = direction === 'BUY' ? Number(price?.ask) : Number(price?.bid);
       if (!Number.isFinite(priceValue) || priceValue <= 0) return null;
       return priceValue;
     } catch {
       return null;
-    } finally {
-      try {
-        await connection.unsubscribeFromMarketData(instrument);
-      } catch {
-        // Best-effort market-data cleanup; validation itself fails closed.
-      }
     }
   }
 

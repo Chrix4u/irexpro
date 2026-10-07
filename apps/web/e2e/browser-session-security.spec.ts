@@ -43,7 +43,7 @@ async function clickResponsiveLogout(page: Page) {
 
 test.describe('Sprint 49 browser session security — Web', () => {
   test('browser login requests cookie-only refresh transport and works with an access-only response', async ({ page }) => {
-    let loginUrl: URL | null = null;
+    let loginRefreshTransport: string | null = null;
     let loginBody: Record<string, unknown> | null = null;
 
     await silenceFavicon(page);
@@ -53,7 +53,7 @@ test.describe('Sprint 49 browser session security — Web', () => {
         return route.fulfill(json(401, { statusCode: 401, message: 'Unauthorized' }));
       }
       if (path === 'auth/login') {
-        loginUrl = new URL(route.request().url());
+        loginRefreshTransport = new URL(route.request().url()).searchParams.get('refreshTransport');
         loginBody = route.request().postDataJSON() as Record<string, unknown>;
         return route.fulfill(json(200, { accessToken: 'browser-login-access-only' }));
       }
@@ -69,7 +69,7 @@ test.describe('Sprint 49 browser session security — Web', () => {
     await page.getByRole('button', { name: /^log in$/i }).click();
 
     await expect(page).toHaveURL(/\/dashboard$/);
-    expect(loginUrl?.searchParams.get('refreshTransport')).toBe('cookie');
+    expect(loginRefreshTransport).toBe('cookie');
     expect(loginBody).toMatchObject({ identifier: 'browser-session@example.com' });
 
     const storage = await page.evaluate(() => `${JSON.stringify(localStorage)}${JSON.stringify(sessionStorage)}`);

@@ -33,7 +33,7 @@ import { RunReconciliationDto } from './dto/run-reconciliation.dto';
  * - No performance-fee assessments or invoices are created here.
  * - No credentials, secrets, or raw broker payloads in any response.
  */
-@Controller('api/v1/broker-reconciliation')
+@Controller('broker-reconciliation')
 @UseGuards(RolesGuard)
 export class BrokerReconciliationController {
   constructor(private readonly svc: BrokerTradeReconciliationService) {}

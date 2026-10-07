@@ -29,7 +29,7 @@ const riskSnapshot = {
     limits: {
       maxDailyLossPercent: '3',
       maxDrawdownPercent: '10',
-      maxOpenTrades: 5,
+      positionCountPolicy: 'UNBOUNDED' as const,
       maxPositionSizeLot: '1',
       minStopLossPips: '10',
       maxVolatilityScore: '0.8',
@@ -41,8 +41,7 @@ const riskSnapshot = {
   },
   execution: {
     openPositions: 1,
-    maxOpenPositions: 5,
-    openPositionSlotsRemaining: 4,
+    positionCountPolicy: 'UNBOUNDED' as const,
     todayTrades: 2,
     dailyTradeCountPolicy: 'UNBOUNDED' as const,
   },

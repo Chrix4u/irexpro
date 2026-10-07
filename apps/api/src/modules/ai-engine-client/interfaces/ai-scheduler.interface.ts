@@ -5,13 +5,17 @@ export interface AiSchedulerSessionStartPayload {
   userId: string;
   tradingSessionId: string;
   brokerConnectionId: string;
+  /** Read-only market-data connection. Defaults to brokerConnectionId. */
+  marketDataConnectionId?: string;
   instruments: string[];
   timeframe: string;
   intervalSeconds?: number;
   source: 'broker' | 'mock';
   brokerId?: string;
   researchUat?: boolean;
+  workflowProbeEnabled?: boolean;
   replayStepsPerCycle?: number;
+  confidenceThresholdOverride?: number;
   /**
    * Exact environment of the bound broker connection. FULL_AUTO on DEMO is
    * still demo execution; LIVE remains blocked by the paper-approved AI

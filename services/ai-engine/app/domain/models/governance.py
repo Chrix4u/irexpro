@@ -73,5 +73,6 @@ def create_trained_model_governance(
             "research_validation_policy": metadata.get(
                 "research_validation_policy"
             ),
+            "research_paper_uat_only": bool(metadata.get("research_paper_uat_only", False)),
         },
     )

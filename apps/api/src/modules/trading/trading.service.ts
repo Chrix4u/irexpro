@@ -6,6 +6,9 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
+import { Repository } from 'typeorm';
 import { BrokerService } from '../broker/broker.service';
 import { RiskService } from '../risk/risk.service';
 import { ExecutionService } from '../execution/execution.service';
@@ -27,6 +30,8 @@ import { BrokerAccountSnapshotService } from '../broker/services/broker-account-
 import { BrokerAccountSnapshot } from '../broker/entities/broker-account-snapshot.entity';
 import { ExactDecimal } from '../../common/utils/exact-decimal';
 import { TradeCloseReason } from '../execution/entities/trade.entity';
+import { AuthService } from '../auth/auth.service';
+import { AiRuntimePreference } from './entities/ai-runtime-preference.entity';
 
 export type AiStopPositionCloseState = 'COMPLETE' | 'PARTIAL' | 'UNKNOWN';
 
@@ -101,10 +106,110 @@ export class TradingService {
     private readonly auditService: AuditService,
     private readonly eventBus: DomainEventBus,
     private readonly aiEngineClient: AiEngineClient,
+    private readonly configService: ConfigService,
     // Round 6 (§6/#297/#312): the durable account-snapshot authority the
     // session's opening financial state binds to (fail-closed — never `?? '0'`).
     private readonly brokerAccountSnapshotService: BrokerAccountSnapshotService,
+    private readonly authService: AuthService,
+    @InjectRepository(AiRuntimePreference)
+    private readonly aiRuntimePreferenceRepo: Repository<AiRuntimePreference>,
   ) {}
+
+  async getAdvancedAiControls(userId: string, stepUpToken: string) {
+    await this.authService.verifyAdvancedControlsStepUpToken(userId, stepUpToken);
+
+    const preference = await this.aiRuntimePreferenceRepo.findOne({ where: { userId } });
+    const storedConfidenceFloor = Number(preference?.executionConfidenceFloor ?? '0.600');
+    const confidenceFloor =
+      Number.isFinite(storedConfidenceFloor) &&
+      storedConfidenceFloor >= 0.6 &&
+      storedConfidenceFloor <= 0.7
+        ? storedConfidenceFloor
+        : 0.6;
+
+    let modelMetadata = null;
+    try {
+      modelMetadata = await this.aiEngineClient.getActiveModelMetadata();
+    } catch (err) {
+      this.logger.warn(
+        `Advanced AI controls could not load model qualification: ${(err as Error).message}`,
+      );
+    }
+
+    const gate = modelMetadata?.research_gate ?? null;
+    return {
+      controls: {
+        executionConfidenceFloor: confidenceFloor,
+        executionConfidenceMin: 0.6,
+        executionConfidenceMax: 0.7,
+        qualifiedMinimumConfidence: 0.6,
+        appliesTo: 'ALL_EXECUTION_MODES',
+        revision: preference?.revision ?? 1,
+      },
+      modelQualification: gate
+        ? {
+            modelVersion: modelMetadata?.version ?? null,
+            passed: gate.research_gate_passed === true,
+            thresholds: gate.thresholds ?? {},
+            observed: gate.observed ?? {},
+            checks: gate.checks ?? {},
+            editable: false,
+          }
+        : null,
+    };
+  }
+
+  async updateAdvancedAiControls(
+    userId: string,
+    stepUpToken: string,
+    executionConfidenceFloor: number,
+  ) {
+    await this.authService.verifyAdvancedControlsStepUpToken(userId, stepUpToken);
+    if (
+      !Number.isFinite(executionConfidenceFloor) ||
+      executionConfidenceFloor < 0.6 ||
+      executionConfidenceFloor > 0.7
+    ) {
+      throw new ForbiddenException(
+        'Execution confidence must stay within the LIVE-promotable 0.60–0.70 range',
+      );
+    }
+
+    let preference = await this.aiRuntimePreferenceRepo.findOne({ where: { userId } });
+    if (!preference) {
+      preference = this.aiRuntimePreferenceRepo.create({
+        userId,
+        executionConfidenceFloor: executionConfidenceFloor.toFixed(3),
+        revision: 1,
+      });
+    } else {
+      preference.executionConfidenceFloor = executionConfidenceFloor.toFixed(3);
+      preference.revision += 1;
+    }
+    preference = await this.aiRuntimePreferenceRepo.save(preference);
+
+    await this.auditService.log({
+      actorUserId: userId,
+      action: AuditAction.ADVANCED_AI_CONTROLS_UPDATED,
+      severity: AuditSeverity.WARNING,
+      resourceType: 'AiRuntimePreference',
+      resourceId: preference.id,
+      metadata: {
+        revision: preference.revision,
+        executionConfidenceFloor: preference.executionConfidenceFloor,
+        appliesTo: 'ALL_EXECUTION_MODES',
+        qualifiedMinimumConfidence: 0.6,
+      },
+    });
+
+    return this.getAdvancedAiControls(userId, stepUpToken);
+  }
+
+  async getExecutionConfidenceFloor(userId: string): Promise<number> {
+    const preference = await this.aiRuntimePreferenceRepo.findOne({ where: { userId } });
+    const value = Number(preference?.executionConfidenceFloor ?? '0.600');
+    return Number.isFinite(value) && value >= 0.6 && value <= 0.7 ? value : 0.6;
+  }
 
   /**
    * Start a new trading session bound to the EXACT requested broker connection.
@@ -234,53 +339,62 @@ export class TradingService {
       `Trading session started: userId=${userId} sessionId=${session.id} mode=${session.executionMode}`,
     );
 
-    // Notify AI engine scheduler after resolving the effective watchlist from
-    // the bound broker's proven instrument capabilities. Unsupported symbols
-    // are never sent to the AI engine, so a single constrained adapter (such
-    // as the deterministic paper broker) cannot poison the whole scan cycle.
-    try {
-      const instruments = await this.resolveAiSchedulerInstruments(userId, connection.id);
-      if (instruments.length > 0) {
-        void this.aiEngineClient
-          .notifySessionStarted({
+    // Notify the legacy Python AI scheduler only when this session is not
+    // owned by the VPS-native external-evidence scanner. Exact binding keeps
+    // research/replay signals from contaminating the live-provider evidence
+    // stream while leaving every other user/account unchanged.
+    const multiModelOwnsUser = this.isVpsForexScannerUser(userId);
+    if (multiModelOwnsUser) {
+      this.logger.log(
+        `Legacy AI scheduler registration skipped session=${session.id}: iRexPro multi-model engine owns user=${userId}`,
+      );
+    } else
+      try {
+        const instruments = await this.resolveAiSchedulerInstruments(userId, connection.id);
+        if (instruments.length > 0) {
+          const marketDataConnectionId = await this.resolveAiSchedulerMarketDataConnectionId(
             userId,
-            tradingSessionId: session.id,
-            brokerConnectionId: connection.id,
-            instruments,
-            timeframe: 'H1',
-            source: 'broker',
-            accountType: connection.accountType,
-            mode: session.executionMode,
-            brokerId: connection.brokerId,
-            researchUat:
-              connection.brokerId === 'paper-broker' &&
-              session.executionMode === ExecutionMode.PAPER_ONLY,
-            replayStepsPerCycle:
-              connection.brokerId === 'paper-broker' &&
-              session.executionMode === ExecutionMode.PAPER_ONLY
-                ? 12
-                : 1,
-            intervalSeconds:
-              connection.brokerId === 'paper-broker' &&
-              session.executionMode === ExecutionMode.PAPER_ONLY
-                ? 10
-                : undefined,
-          })
-          .catch((err: Error) =>
-            this.logger.warn(
-              `AI engine start notification failed session=${session.id}: ${err.message}`,
-            ),
+            connection,
           );
-      } else {
+          void this.aiEngineClient
+            .notifySessionStarted({
+              userId,
+              tradingSessionId: session.id,
+              brokerConnectionId: connection.id,
+              marketDataConnectionId,
+              instruments,
+              timeframe: 'H1',
+              source: 'broker',
+              accountType: connection.accountType,
+              mode: session.executionMode,
+              brokerId: connection.brokerId,
+              researchUat:
+                connection.brokerId === 'paper-broker' &&
+                session.executionMode === ExecutionMode.PAPER_ONLY,
+              workflowProbeEnabled: false,
+              replayStepsPerCycle: this.getResearchReplayStepsPerCycle(),
+              confidenceThresholdOverride: await this.getExecutionConfidenceFloor(userId),
+              intervalSeconds:
+                connection.brokerId === 'paper-broker' &&
+                session.executionMode === ExecutionMode.PAPER_ONLY
+                  ? 10
+                  : undefined,
+            })
+            .catch((err: Error) =>
+              this.logger.warn(
+                `AI engine start notification failed session=${session.id}: ${err.message}`,
+              ),
+            );
+        } else {
+          this.logger.warn(
+            `AI engine scheduler not registered session=${session.id}: broker exposes none of the preferred instruments`,
+          );
+        }
+      } catch (err) {
         this.logger.warn(
-          `AI engine scheduler not registered session=${session.id}: broker exposes none of the preferred instruments`,
+          `AI engine watchlist resolution failed session=${session.id}: ${(err as Error).message}`,
         );
       }
-    } catch (err) {
-      this.logger.warn(
-        `AI engine watchlist resolution failed session=${session.id}: ${(err as Error).message}`,
-      );
-    }
 
     return session;
   }
@@ -529,6 +643,58 @@ export class TradingService {
       };
     }
 
+    // Once a user is assigned to the VPS-native multi-model engine, the
+    // legacy Python scheduler must neither run nor self-heal on ANY broker
+    // connection for that user. The exact PAPER binding remains the evidence
+    // ledger; a real-provider DEMO connection may simultaneously supply
+    // broker-native MTF data without regaining legacy signal authority.
+    if (this.isVpsForexScannerUser(userId)) {
+      const exactEvidenceBinding = this.isVpsForexScannerBinding(
+        userId,
+        session.brokerConnectionId,
+      );
+      const legacyRuntime = await this.aiEngineClient.getSessionStatus(sessionId);
+      if (legacyRuntime.registered) {
+        await this.aiEngineClient.notifySessionStopped({ tradingSessionId: sessionId });
+      }
+      return {
+        enabled: true,
+        registered: true,
+        trading_session_id: sessionId,
+        active: session.status === TradingSessionStatus.ACTIVE,
+        instruments: [...TradingService.AI_PREFERRED_INSTRUMENTS],
+        timeframe: 'M5',
+        interval_seconds: 600,
+        source: exactEvidenceBinding ? 'vps-twelvedata' : 'vps-twelvedata+broker-mtf',
+        last_run_at: null,
+        next_run_at: null,
+        last_decision: 'MULTI_MODEL_SHADOW',
+        last_reason: exactEvidenceBinding
+          ? 'multimodel_evidence_binding_owns_session'
+          : 'multimodel_user_owns_broker_session',
+        last_confidence_score: null,
+        last_confidence_at: null,
+        confidence_threshold: null,
+        model_version: 'irexpro-multimodel-ensemble-v1',
+        model_mode: 'PROSPECTIVE_SHADOW_ONLY',
+        model_loaded: true,
+        last_market_data_at: null,
+        market_data_age_seconds: null,
+        market_data_cache_bypassed: false,
+        last_publish_failed: false,
+        research_uat: false,
+        replay_steps_per_cycle: 0,
+        replay_steps_last_cycle: 0,
+        replay_steps_total: 0,
+        signals_published_total: 0,
+        last_strategy_outcome: null,
+        last_strategy_reason: null,
+        last_trade_id: null,
+        executions_succeeded_total: 0,
+        downstream_rejected_total: 0,
+      };
+    }
+
     const runtime = await this.aiEngineClient.getSessionStatus(sessionId);
 
     // AI scheduler jobs are intentionally in-memory. If the Python service was
@@ -548,10 +714,15 @@ export class TradingService {
         };
       }
 
+      const marketDataConnectionId = await this.resolveAiSchedulerMarketDataConnectionId(
+        userId,
+        connection,
+      );
       await this.aiEngineClient.notifySessionStarted({
         userId,
         tradingSessionId: session.id,
         brokerConnectionId: session.brokerConnectionId,
+        marketDataConnectionId,
         instruments,
         timeframe: 'H1',
         source: 'broker',
@@ -561,11 +732,9 @@ export class TradingService {
         researchUat:
           connection.brokerId === 'paper-broker' &&
           session.executionMode === ExecutionMode.PAPER_ONLY,
-        replayStepsPerCycle:
-          connection.brokerId === 'paper-broker' &&
-          session.executionMode === ExecutionMode.PAPER_ONLY
-            ? 12
-            : 1,
+        workflowProbeEnabled: false,
+        replayStepsPerCycle: this.getResearchReplayStepsPerCycle(),
+        confidenceThresholdOverride: await this.getExecutionConfidenceFloor(userId),
         intervalSeconds:
           connection.brokerId === 'paper-broker' &&
           session.executionMode === ExecutionMode.PAPER_ONLY
@@ -576,6 +745,57 @@ export class TradingService {
     }
 
     return runtime;
+  }
+
+  private async resolveAiSchedulerMarketDataConnectionId(
+    userId: string,
+    executionConnection: BrokerConnection,
+  ): Promise<string> {
+    if (executionConnection.brokerId !== 'paper-broker') {
+      return executionConnection.id;
+    }
+
+    const connections = await this.brokerService.findConnectionsByUser(userId);
+    const providerMarketDataConnection = connections.find(
+      (candidate) =>
+        candidate.id !== executionConnection.id &&
+        candidate.brokerId === 'metatrader5' &&
+        candidate.accountType === BrokerMode.DEMO &&
+        candidate.status === BrokerConnectionStatus.CONNECTED &&
+        Boolean(candidate.encryptedCredentials) &&
+        Boolean(candidate.credentialIv) &&
+        Boolean(candidate.credentialTag),
+    );
+
+    if (providerMarketDataConnection) {
+      this.logger.log(
+        `PAPER execution ${executionConnection.id} using provider market data ${providerMarketDataConnection.id}`,
+      );
+      return providerMarketDataConnection.id;
+    }
+
+    return executionConnection.id;
+  }
+
+  private isVpsForexScannerUser(userId: string): boolean {
+    if (this.configService.get<boolean>('vpsForexScanner.enabled', false) !== true) return false;
+    const configuredUserId = this.configService.get<string>('vpsForexScanner.userId', '').trim();
+    const key = this.configService.get<string>('vpsForexScanner.apiKey', '').trim();
+    return Boolean(key && key.toLowerCase() !== 'demo' && configuredUserId === userId);
+  }
+
+  private isVpsForexScannerBinding(userId: string, brokerConnectionId: string): boolean {
+    if (!this.isVpsForexScannerUser(userId)) return false;
+    const configuredConnectionId = this.configService
+      .get<string>('vpsForexScanner.brokerConnectionId', '')
+      .trim();
+    return configuredConnectionId === brokerConnectionId;
+  }
+
+  private getResearchReplayStepsPerCycle(): number {
+    const raw = Number(process.env.RESEARCH_PAPER_REPLAY_STEPS_PER_CYCLE ?? '1');
+    if (!Number.isSafeInteger(raw)) return 1;
+    return Math.min(30, Math.max(1, raw));
   }
 
   private async resolveAiSchedulerInstruments(

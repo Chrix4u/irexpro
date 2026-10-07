@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -13,6 +12,7 @@ import { ApiClientError } from '@irexpro/api-client';
 import type { MyProfileView } from '@irexpro/types';
 import {
   ActionButton,
+  ActionDialog,
   Banner,
   Card,
   LabeledInput,
@@ -67,6 +67,7 @@ export default function PersonalInformationScreen({
   const [notice, setNotice] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [saveFailedNetwork, setSaveFailedNetwork] = useState(false);
+  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
 
   const cancelledRef = useRef(false);
 
@@ -156,22 +157,15 @@ export default function PersonalInformationScreen({
   function requestBack(): void {
     if (saving) return;
     if (dirty) {
-      Alert.alert(
-        'Discard changes?',
-        'Your unsaved profile changes will be lost.',
-        [
-          { text: 'Keep editing', style: 'cancel' },
-          { text: 'Discard changes', style: 'destructive', onPress: onBack },
-        ],
-        { cancelable: true },
-      );
+      setDiscardConfirmOpen(true);
       return;
     }
     onBack();
   }
 
   return (
-    <KeyboardAvoidingView
+    <>
+      <KeyboardAvoidingView
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
@@ -390,8 +384,28 @@ export default function PersonalInformationScreen({
             ) : null}
           </>
         ) : null}
-      </ScrollView>
-    </KeyboardAvoidingView>
+        </ScrollView>
+      </KeyboardAvoidingView>
+      <ActionDialog
+        visible={discardConfirmOpen}
+        kicker="UNSAVED CHANGES"
+        title="Discard profile changes?"
+        message="Your unsaved profile changes will be lost if you leave this screen."
+        detailLines={[
+          'No server-side profile data has been changed yet.',
+          'Choose Keep editing to return to the form.',
+        ]}
+        confirmLabel="Discard changes"
+        cancelLabel="Keep editing"
+        onConfirm={() => {
+          setDiscardConfirmOpen(false);
+          onBack();
+        }}
+        onCancel={() => setDiscardConfirmOpen(false)}
+        busy={saving}
+        danger
+      />
+    </>
   );
 }
 

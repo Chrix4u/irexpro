@@ -137,14 +137,16 @@ export class BrokerConnectionNotConnectedException extends HttpException {
 
 /** Typed LIVE-authorization (fail-closed state machine) rejection. */
 export class BrokerConnectionNotExecutableException extends HttpException {
-  constructor(authorizationStatus: string) {
+  constructor(authorizationStatus: string, accountType?: string) {
     super(
       {
         statusCode: HttpStatus.FORBIDDEN,
         code: 'BROKER_CONNECTION_NOT_EXECUTABLE',
         message:
-          `Broker connection authorization status is ${authorizationStatus} — the connection is ` +
-          'not executable. Re-authorize the connection before starting a session.',
+          accountType === 'DEMO' && authorizationStatus === 'AUTHORIZED'
+            ? 'The DEMO broker connection is connected and validated, but automated DEMO execution is not active. Enable DEMO automation before starting a session.'
+            : `Broker connection authorization status is ${authorizationStatus} — the connection is ` +
+              'not executable. Re-authorize the connection before starting a session.',
       },
       HttpStatus.FORBIDDEN,
     );

@@ -6,6 +6,9 @@ import { MetaTraderMarketDataReaderService } from './meta-trader-market-data-rea
 import { BrokerModule } from '../broker/broker.module';
 import { AuditModule } from '../audit/audit.module';
 import { InternalApiKeyGuard } from '../../common/guards/internal-api-key.guard';
+import { ProviderQuoteCandleStoreService } from './services/provider-quote-candle-store.service';
+import { MetaApiQuoteCollectorService } from './services/metaapi-quote-collector.service';
+import { PaperPositionMarkBridgeService } from './services/paper-position-mark-bridge.service';
 
 @Module({
   imports: [BrokerModule, AuditModule],
@@ -15,7 +18,10 @@ import { InternalApiKeyGuard } from '../../common/guards/internal-api-key.guard'
     MarketIntelligenceService,
     MetaTraderMarketDataReaderService,
     InternalApiKeyGuard,
+    ProviderQuoteCandleStoreService,
+    MetaApiQuoteCollectorService,
+    PaperPositionMarkBridgeService,
   ],
-  exports: [MarketDataService, MarketIntelligenceService],
+  exports: [MarketDataService, MarketIntelligenceService, ProviderQuoteCandleStoreService],
 })
 export class MarketDataModule {}

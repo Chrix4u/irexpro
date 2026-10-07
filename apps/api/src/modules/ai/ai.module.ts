@@ -7,12 +7,26 @@ import { AiCopilotService } from './ai-copilot.service';
 import { AiController } from './ai.controller';
 import { AiDecisionExplorerController } from './ai-decision-explorer.controller';
 import { AiCopilotController } from './ai-copilot.controller';
+import { ExternalSignalPerformanceController } from './external-signal-performance.controller';
+import { ExternalSignalPerformanceService } from './external-signal-performance.service';
+import { TradingViewWebhookController } from './tradingview-webhook.controller';
+import { TradingViewWebhookService } from './tradingview-webhook.service';
+import { TradingViewWebhookGuard } from '../../common/guards/tradingview-webhook.guard';
 import { StrategyModule } from '../strategy/strategy.module';
 import { AuditModule } from '../audit/audit.module';
 import { ExecutionModule } from '../execution/execution.module';
 import { MarketDataModule } from '../market-data/market-data.module';
 import { RiskModule } from '../risk/risk.module';
+import { BrokerModule } from '../broker/broker.module';
+import { VpsForexSignalCollectorService } from './vps-forex-signal-collector.service';
+import { VpsForexSignalCollectorController } from './vps-forex-signal-collector.controller';
+import { BrokerParityV7Service } from './broker-parity-v7.service';
+import { V8DedicatedPaperReadinessService } from './v8-dedicated-paper-readiness.service';
+import { MacroEventRiskService } from './macro-event-risk.service';
+import { PostEntryProtectionShadowService } from './post-entry-protection-shadow.service';
+import { EnsemblePostEntryProtectionShadowService } from './ensemble-post-entry-protection-shadow.service';
 import { InternalApiKeyGuard } from '../../common/guards/internal-api-key.guard';
+import { ExternalSignalApiKeyGuard } from '../../common/guards/external-signal-api-key.guard';
 
 /**
  * AiModule — AI Signal Engine intake, routing, and browser-safe intelligence.
@@ -34,14 +48,32 @@ import { InternalApiKeyGuard } from '../../common/guards/internal-api-key.guard'
     ExecutionModule,
     MarketDataModule,
     RiskModule,
+    BrokerModule,
   ],
-  controllers: [AiController, AiDecisionExplorerController, AiCopilotController],
+  controllers: [
+    AiController,
+    AiDecisionExplorerController,
+    AiCopilotController,
+    ExternalSignalPerformanceController,
+    TradingViewWebhookController,
+    VpsForexSignalCollectorController,
+  ],
   providers: [
     AiService,
     AiSignalService,
     AiDecisionExplorerService,
     AiCopilotService,
     InternalApiKeyGuard,
+    ExternalSignalApiKeyGuard,
+    ExternalSignalPerformanceService,
+    TradingViewWebhookService,
+    TradingViewWebhookGuard,
+    VpsForexSignalCollectorService,
+    BrokerParityV7Service,
+    V8DedicatedPaperReadinessService,
+    MacroEventRiskService,
+    PostEntryProtectionShadowService,
+    EnsemblePostEntryProtectionShadowService,
   ],
   exports: [AiService, AiSignalService],
 })

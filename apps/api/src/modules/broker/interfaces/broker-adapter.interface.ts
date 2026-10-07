@@ -80,7 +80,10 @@ export interface IBrokerAdapter {
   // ─── Market data ──────────────────────────────────────────────────────────
 
   getInstrumentList(): Promise<BrokerInstrument[]>;
-  getCurrentPrice(instrument: string): Promise<BrokerPrice>;
+  getCurrentPrice(
+    instrument: string,
+    options?: { advanceSimulation?: boolean },
+  ): Promise<BrokerPrice>;
   getOHLCV(instrument: string, timeframe: string, count: number, before?: Date): Promise<OHLCV[]>;
 
   // ─── Order management ─────────────────────────────────────────────────────
@@ -352,6 +355,24 @@ export interface BrokerOrderState {
   raw?: unknown;
 }
 
+export interface BrokerTradePathDiagnostics {
+  /** Best observed unrealized P&L in account currency since the position opened. */
+  maxFavorablePnl: string;
+  /** Worst observed unrealized P&L in account currency since the position opened. */
+  maxAdversePnl: string;
+  /** Most recently observed unrealized P&L in account currency. */
+  latestUnrealisedPnl: string;
+  /** maxFavorablePnl minus the latest/realised P&L; never negative. */
+  profitGiveback: string;
+  observationCount: number;
+  /** Closed M5 candles where both SL and TP were reachable, so OHLC cannot prove hit order. */
+  sameBarProtectionAmbiguityCount: number;
+  /** Most recent ambiguous protection candle close time, when one was observed. */
+  lastSameBarProtectionAmbiguityAt: Date | null;
+  peakObservedAt: Date | null;
+  lastObservedAt: Date | null;
+}
+
 export interface BrokerPosition {
   externalOrderId: string;
   instrument: string;
@@ -359,12 +380,17 @@ export interface BrokerPosition {
   lotSize: string;
   openPrice: string;
   currentPrice: string;
+  markObservedAt?: Date | null;
+  markSource?: 'STREAM' | 'REST_M5' | 'PROVIDER' | null;
+  /** True only for informational last-known marks; stale marks must never authorize execution. */
+  markIsStale?: boolean;
   stopLoss: string;
   takeProfit: string;
   unrealisedPnl: string;
   openedAt: Date;
   commission: string;
   swap: string;
+  pathDiagnostics?: BrokerTradePathDiagnostics;
 }
 
 export interface BrokerClosedTrade {
@@ -382,6 +408,7 @@ export interface BrokerClosedTrade {
   commission: string;
   swap: string;
   closeReason: 'TP' | 'SL' | 'MANUAL' | 'SYSTEM' | 'UNKNOWN';
+  pathDiagnostics?: BrokerTradePathDiagnostics;
 }
 
 // ─── Market data types ────────────────────────────────────────────────────────

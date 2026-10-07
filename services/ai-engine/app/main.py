@@ -17,6 +17,8 @@ from app.api.v1.routes import backtests, health, market_data, models, scheduler,
 from app.core.config import get_settings
 from app.core.logging import configure_logging, get_logger
 from app.domain.agents.context_service import AgentContextService
+from app.domain.models.high_conviction_challenger import PlanBV4HighConvictionChallenger
+from app.domain.models.post_entry_protection_challenger import PlanBV85PostEntryProtectionChallenger
 from app.domain.models.registry import build_default_registry
 from app.domain.scheduler.signal_scheduler import SignalScheduler
 from app.integrations.redis_client import close_redis_client, get_redis_client
@@ -41,6 +43,16 @@ async def lifespan(app: FastAPI):
 
     # Initialise model registry
     app_state["registry"] = build_default_registry()
+
+    # Frozen high-conviction challenger is shadow-only and cannot execute.
+    app_state["plan_b_v4_challenger"] = PlanBV4HighConvictionChallenger(
+        settings.plan_b_v4_challenger_manifest or None,
+        settings.plan_b_v4_challenger_manifest_sha256 or None,
+    )
+    app_state["plan_b_v85_post_entry"] = PlanBV85PostEntryProtectionChallenger(
+        settings.plan_b_v85_post_entry_manifest or None,
+        settings.plan_b_v85_post_entry_manifest_sha256 or None,
+    )
 
     # Attempt Redis connection (non-fatal)
     app_state["redis"] = await get_redis_client()

@@ -1,5 +1,6 @@
 import { PerformanceFeesController } from './performance-fees.controller';
 import { PerformanceFeeService } from './services/performance-fee.service';
+import { PerformanceFeeSimulationService } from './services/performance-fee-simulation.service';
 import { BillingFrequency } from './entities/performance-fee-policy.entity';
 import { LedgerEntryType } from './entities/performance-fee-ledger-entry.entity';
 
@@ -17,13 +18,21 @@ describe('PerformanceFeesController (Hotfix — UUID identity contract)', () => 
     svc = {
       getPolicies: jest.fn().mockResolvedValue([]),
       createPolicy: jest.fn().mockResolvedValue({}),
+      deactivatePolicy: jest.fn().mockResolvedValue({}),
       getUserSummary: jest.fn().mockResolvedValue({}),
       getAssessments: jest.fn().mockResolvedValue([]),
       calculateAssessment: jest.fn().mockResolvedValue({}),
       invoiceAssessment: jest.fn().mockResolvedValue({}),
       recordLedgerEntry: jest.fn().mockResolvedValue({}),
     };
-    controller = new PerformanceFeesController(svc as unknown as PerformanceFeeService);
+    controller = new PerformanceFeesController(
+      svc as unknown as PerformanceFeeService,
+      {
+        getUserSimulation: jest.fn(),
+        refresh: jest.fn(),
+        settleTestCharge: jest.fn(),
+      } as unknown as PerformanceFeeSimulationService,
+    );
   });
 
   it('getMyPerformanceSummary passes UUID string', async () => {

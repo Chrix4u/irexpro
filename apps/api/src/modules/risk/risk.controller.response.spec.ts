@@ -5,7 +5,7 @@ import { RiskRejectionCode } from './interfaces/risk.interface';
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 
 describe('RiskController public response hardening', () => {
-  it('does not expose the legacy maxDailyTrades database field as an active profile limit', async () => {
+  it('does not expose legacy trade-count or position-count database fields as active profile limits', async () => {
     const riskService = {
       getOrCreateProfile: jest.fn().mockResolvedValue({
         id: 'profile-1',
@@ -23,10 +23,10 @@ describe('RiskController public response hardening', () => {
     const response = await controller.getRiskProfile(USER_ID);
 
     expect(response).not.toHaveProperty('maxDailyTrades');
+    expect(response).not.toHaveProperty('maxOpenTrades');
     expect(response).toMatchObject({
       maxDailyLossPercent: '5.00',
       maxDrawdownPercent: '10.00',
-      maxOpenTrades: 3,
       maxPositionSizeLot: '0.1000',
     });
   });

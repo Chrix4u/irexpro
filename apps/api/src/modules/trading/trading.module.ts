@@ -1,4 +1,5 @@
 import { forwardRef, Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
 import { TradingService } from './trading.service';
 import { TradingController } from './trading.controller';
 import { BrokerModule } from '../broker/broker.module';
@@ -6,6 +7,8 @@ import { RiskModule } from '../risk/risk.module';
 import { ExecutionModule } from '../execution/execution.module';
 import { AuditModule } from '../audit/audit.module';
 import { UsersModule } from '../users/users.module';
+import { AuthModule } from '../auth/auth.module';
+import { AiRuntimePreference } from './entities/ai-runtime-preference.entity';
 
 import { AiEngineClientModule } from '../ai-engine-client/ai-engine-client.module';
 
@@ -30,6 +33,8 @@ import { AiEngineClientModule } from '../ai-engine-client/ai-engine-client.modul
  */
 @Module({
   imports: [
+    TypeOrmModule.forFeature([AiRuntimePreference]),
+    AuthModule,
     BrokerModule,
     RiskModule,
     UsersModule,

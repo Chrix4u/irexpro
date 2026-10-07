@@ -1,7 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ExactDecimal } from '../../common/utils/exact-decimal';
 import { BrokerService } from '../broker/broker.service';
-import { OHLCV } from '../broker/interfaces/broker-adapter.interface';
 
 /**
  * RiskOrderGeometryService — resolves the EXACT market geometry a risk
@@ -13,12 +12,11 @@ import { OHLCV } from '../broker/interfaces/broker-adapter.interface';
  * ═══════════════════════════════════════════════════════════════════════
  * SEAM POLICY — existing broker seams ONLY, never invented constants:
  *
- *  1. FRESH QUOTE — the ONLY public connection-scoped market-data seam on
- *     BrokerService is getOhlcvForConnection(). The most recent M1 candle
- *     close is used as the fresh price. No pip-value formula, no cached
- *     signal price substitution, no fabrication when the seam fails — the
- *     caller decides the fail-closed policy (LIVE NEW exposure rejects with
- *     a typed code).
+ *  1. FRESH QUOTE — BrokerService.getCurrentPriceForConnection() is the
+ *     connection-scoped execution quote seam. MARKET BUY geometry uses the
+ *     executable ASK and MARKET SELL geometry uses the executable BID — never
+ *     an M1 candle close, midpoint, cached signal price, or fabricated value.
+ *     When the seam fails the caller applies the fail-closed policy.
  *
  *  2. CONTRACT SIZE — resolved through the public connection-scoped
  *     instrument seam BrokerService.getInstrumentSpecForConnection()
@@ -56,6 +54,7 @@ export class RiskOrderGeometryService {
     userId: string;
     brokerConnectionId: string;
     instrument: string;
+    direction: 'BUY' | 'SELL';
     needFreshQuote: boolean;
   }): Promise<{
     contractSize: ExactDecimal | null;
@@ -68,27 +67,27 @@ export class RiskOrderGeometryService {
 
     if (params.needFreshQuote) {
       try {
-        const candles = await this.brokerService.getOhlcvForConnection(
+        const quote = await this.brokerService.getCurrentPriceForConnection(
           params.userId,
           params.brokerConnectionId,
           params.instrument,
-          'M1',
-          1,
         );
-        const last =
-          Array.isArray(candles) && candles.length > 0 ? candles[candles.length - 1] : undefined;
-        freshQuote = this.parseCandleClose(last);
-        if (freshQuote) {
-          quoteRef = {
-            instrument: params.instrument,
-            timeframe: 'M1',
-            price: freshQuote.toString(),
-            observedAt:
-              last?.timestamp instanceof Date
-                ? last.timestamp.toISOString()
-                : new Date().toISOString(),
-            source: 'risk-order-geometry',
-          };
+        const bid = ExactDecimal.tryParse(quote?.bid ?? '');
+        const ask = ExactDecimal.tryParse(quote?.ask ?? '');
+        if (bid?.isPositive() && ask?.isPositive() && !ask.lt(bid)) {
+          const observedAt = quote?.timestamp instanceof Date ? quote.timestamp : null;
+          if (observedAt && Number.isFinite(observedAt.getTime())) {
+            freshQuote = params.direction === 'BUY' ? ask : bid;
+            quoteRef = {
+              instrument: params.instrument,
+              direction: params.direction,
+              price: freshQuote.toString(),
+              bid: bid.toString(),
+              ask: ask.toString(),
+              observedAt: observedAt.toISOString(),
+              source: 'broker-current-price',
+            };
+          }
         }
       } catch (err) {
         // Unavailable quote is a typed outcome, not an exception — the caller
@@ -131,13 +130,5 @@ export class RiskOrderGeometryService {
     }
 
     return { contractSize, freshQuote, quoteRef, instrumentSpec };
-  }
-
-  /** Strict-exact parse of a candle close; null on malformed/absent values. */
-  private parseCandleClose(candle: OHLCV | undefined): ExactDecimal | null {
-    if (!candle) return null;
-    const close = candle.close;
-    const parsed = ExactDecimal.tryParse(typeof close === 'string' ? close : String(close));
-    return parsed && parsed.isPositive() ? parsed : null;
   }
 }

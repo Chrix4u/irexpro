@@ -1,4 +1,5 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
+import { readFileSync } from 'node:fs';
 import {
   BrokerAccountInfo,
   BrokerBalance,
@@ -14,6 +15,7 @@ import {
   BrokerOrderState,
   BrokerPosition,
   BrokerPrice,
+  BrokerTradePathDiagnostics,
   DecryptedBrokerCredentials,
   IBrokerAdapter,
   OHLCV,
@@ -22,6 +24,8 @@ import {
 import type { OrderCapabilityDeclaration } from '../interfaces/order-capability';
 import { BrokerAdapterError, BrokerErrorCode } from '../interfaces/broker-adapter.errors';
 import { ProviderDispatchCertainty } from '../interfaces/provider-dispatch-certainty';
+import { PaperBrokerStateService } from '../services/paper-broker-state.service';
+import { LivePaperMarketDataService } from '../services/live-paper-market-data.service';
 
 /**
  * PaperBrokerAdapter — safe simulated broker for paper trading only.
@@ -168,6 +172,10 @@ const PAPER_ORDER_KINDS: readonly PaperOrderKind[] = ['MARKET', 'LIMIT', 'STOP',
 export interface PaperQuote {
   bid: string;
   ask: string;
+  /** Mark observation metadata when known. */
+  timestamp?: Date;
+  /** Mark provenance for live, candle-fallback, or deterministic simulation. */
+  source?: 'STREAM' | 'REST_M5' | 'PROVIDER' | 'SIMULATED';
 }
 
 /**
@@ -199,10 +207,162 @@ export class DeterministicPaperPriceFeed extends PaperPriceFeed {
     return this.format();
   }
 
+  restoreTickCounter(tickCounter: number): void {
+    if (!Number.isSafeInteger(tickCounter) || tickCounter < 0) {
+      throw new Error('Paper feed tick counter must be a non-negative safe integer');
+    }
+    const cycleLength = PAPER_TICK_STEPS_UNITS.length;
+    const cycleSum = PAPER_TICK_STEPS_UNITS.reduce((sum, step) => sum + step, 0n);
+    const completeCycles = Math.floor(tickCounter / cycleLength);
+    const remainder = tickCounter % cycleLength;
+    let bidUnits = 110_000n + cycleSum * BigInt(completeCycles);
+    for (let index = 0; index < remainder; index += 1) {
+      bidUnits += PAPER_TICK_STEPS_UNITS[index]!;
+    }
+    this.bidUnits = bidUnits;
+    this.stepIndex = tickCounter;
+  }
+
   private format(): PaperQuote {
     return {
       bid: formatScaledDecimal(this.bidUnits, PAPER_PRICE_SCALE),
       ask: formatScaledDecimal(this.bidUnits + PAPER_SPREAD_UNITS, PAPER_PRICE_SCALE),
+    };
+  }
+}
+
+interface PaperReplayRow {
+  timestamp: Date;
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+  volume: string;
+  tickVolume: string;
+  spreadPoints: string;
+  priceDigits: number;
+}
+
+/** Optional real-market USDJPY M1 replay for Research PAPER UAT only. */
+class CsvReplayPaperPriceFeed extends PaperPriceFeed {
+  readonly instrument = 'USDJPY';
+  private readonly rows: PaperReplayRow[];
+  private readonly startCursor: number;
+  private cursor: number;
+
+  constructor(path: string, replayStartIso: string) {
+    super();
+    const lines = readFileSync(path, 'utf8').trim().split(/\r?\n/);
+    if (lines.length < 3) throw new Error('Paper replay CSV has insufficient rows');
+    const headers = lines[0]!.split(',');
+    const idx = Object.fromEntries(headers.map((h, i) => [h.trim(), i]));
+    const required = [
+      'timestamp',
+      'open',
+      'high',
+      'low',
+      'close',
+      'volume',
+      'tick_volume',
+      'spread_points',
+      'price_digits',
+    ];
+    for (const name of required)
+      if (idx[name] === undefined) throw new Error(`Paper replay CSV missing ${name}`);
+    this.rows = lines
+      .slice(1)
+      .filter(Boolean)
+      .map((line) => {
+        const c = line.split(',');
+        return {
+          timestamp: new Date(c[idx.timestamp]!),
+          open: c[idx.open]!,
+          high: c[idx.high]!,
+          low: c[idx.low]!,
+          close: c[idx.close]!,
+          volume: c[idx.volume] || c[idx.tick_volume] || '0',
+          tickVolume: c[idx.tick_volume] || c[idx.volume] || '0',
+          spreadPoints: c[idx.spread_points] || '0',
+          priceDigits: Number(c[idx.price_digits] || '3'),
+        };
+      });
+    const replayStart = new Date(replayStartIso).getTime();
+    const first = this.rows.findIndex((row) => row.timestamp.getTime() >= replayStart);
+    if (first <= 0) throw new Error('Paper replay start requires prior context row');
+    this.cursor = first - 1;
+    this.startCursor = this.cursor;
+  }
+
+  quote(): PaperQuote {
+    return this.quoteFor(this.rows[this.cursor]!);
+  }
+  tick(): PaperQuote {
+    if (this.cursor < this.rows.length - 1) this.cursor += 1;
+    return this.quote();
+  }
+  restoreTickCounter(tickCounter: number): void {
+    if (!Number.isSafeInteger(tickCounter) || tickCounter < 0) {
+      throw new Error('Paper replay tick counter must be a non-negative safe integer');
+    }
+    this.cursor = Math.min(this.rows.length - 1, this.startCursor + tickCounter);
+  }
+  now(): Date {
+    return new Date(this.rows[this.cursor]!.timestamp);
+  }
+  digits(): number {
+    return this.rows[this.cursor]!.priceDigits;
+  }
+
+  ohlcv(timeframe: string, count: number): OHLCV[] {
+    const spacingMs = PAPER_TIMEFRAME_MS[timeframe];
+    if (!spacingMs)
+      throw new BrokerAdapterError(
+        BrokerErrorCode.INVALID_REQUEST,
+        `Unsupported paper-market timeframe: ${timeframe}`,
+      );
+    const source = this.rows.slice(0, this.cursor + 1);
+    const buckets = new Map<number, PaperReplayRow[]>();
+    for (const row of source) {
+      const key = Math.floor(row.timestamp.getTime() / spacingMs) * spacingMs;
+      const bucket = buckets.get(key) ?? [];
+      bucket.push(row);
+      buckets.set(key, bucket);
+    }
+    const requiredRows = Math.max(1, Math.trunc(spacingMs / 60_000));
+    return Array.from(buckets.entries())
+      .sort((a, b) => a[0] - b[0])
+      .filter(([, rows]) => rows.length === requiredRows)
+      .slice(-count)
+      .map(([key, rows]) => {
+        const first = rows[0]!,
+          last = rows[rows.length - 1]!;
+        const high = Math.max(...rows.map((r) => Number(r.high)));
+        const low = Math.min(...rows.map((r) => Number(r.low)));
+        const volume = rows.reduce((sum, r) => sum + Number(r.volume || 0), 0);
+        const ticks = rows.reduce((sum, r) => sum + Number(r.tickVolume || 0), 0);
+        return {
+          timestamp: new Date(key),
+          open: first.open,
+          high: high.toFixed(last.priceDigits),
+          low: low.toFixed(last.priceDigits),
+          close: last.close,
+          volume: String(volume),
+          tickVolume: String(ticks),
+          spreadPoints: last.spreadPoints,
+          priceDigits: last.priceDigits,
+          brokerTime: last.timestamp.toISOString(),
+        };
+      });
+  }
+
+  private quoteFor(row: PaperReplayRow): PaperQuote {
+    const digits = row.priceDigits;
+    const mid = Number(row.close);
+    const spread = Number(row.spreadPoints || '0') * 10 ** -digits;
+    const renderDigits = Math.min(8, digits + 1);
+    return {
+      bid: (mid - spread / 2).toFixed(renderDigits),
+      ask: (mid + spread / 2).toFixed(renderDigits),
     };
   }
 }
@@ -225,6 +385,13 @@ export class DeterministicPaperClock extends PaperClock {
 
   advance(ms: number): void {
     this.offsetMs += Math.max(0, Math.trunc(ms));
+  }
+
+  restoreTickCounter(tickCounter: number): void {
+    if (!Number.isSafeInteger(tickCounter) || tickCounter < 0) {
+      throw new Error('Paper clock tick counter must be a non-negative safe integer');
+    }
+    this.offsetMs = tickCounter * PAPER_TICK_DURATION_MS;
   }
 }
 
@@ -374,7 +541,11 @@ function toMoney(value: string): string {
 
 /** The mid of a quote — the paper engine's MARKET/manual-close fill price. */
 function quoteMid(quote: PaperQuote): string {
-  return divideDecimalStrings(addDecimalStrings(quote.bid, quote.ask), '2', PAPER_PRICE_SCALE);
+  const scale = Math.max(
+    (quote.bid.split('.')[1] ?? '').length,
+    (quote.ask.split('.')[1] ?? '').length,
+  );
+  return divideDecimalStrings(addDecimalStrings(quote.bid, quote.ask), '2', scale);
 }
 
 /**
@@ -441,6 +612,18 @@ interface PaperPosition {
   stopLoss: string;
   takeProfit: string;
   openedAt: Date;
+  pathMaxFavorablePnl: string;
+  pathMaxAdversePnl: string;
+  pathLatestUnrealisedPnl: string;
+  /** Last observed executable exit-side mark; read-only fallback after restart. */
+  pathLastMarkPrice: string | null;
+  pathPeakObservedAt: Date;
+  pathLastObservedAt: Date;
+  pathLastMarkObservedAt: Date | null;
+  pathLastCandleClosedAt: Date | null;
+  pathObservationCount: number;
+  pathSameBarProtectionAmbiguityCount: number;
+  pathLastSameBarProtectionAmbiguityAt: Date | null;
 }
 
 interface PaperClosedTrade {
@@ -458,6 +641,74 @@ interface PaperClosedTrade {
   commission: string;
   swap: string;
   closeReason: 'TP' | 'SL' | 'MANUAL' | 'SYSTEM';
+  pathMaxFavorablePnl: string;
+  pathMaxAdversePnl: string;
+  pathLatestUnrealisedPnl: string;
+  pathProfitGiveback: string;
+  pathPeakObservedAt: Date;
+  pathLastObservedAt: Date;
+  pathObservationCount: number;
+  pathSameBarProtectionAmbiguityCount: number;
+  pathLastSameBarProtectionAmbiguityAt: Date | null;
+}
+
+type SerializedPaperWorkingOrder = Omit<PaperWorkingOrder, 'placedAt'> & {
+  placedAt: string;
+};
+
+type SerializedPaperPosition = Omit<
+  PaperPosition,
+  | 'units'
+  | 'openedAt'
+  | 'pathPeakObservedAt'
+  | 'pathLastObservedAt'
+  | 'pathLastMarkObservedAt'
+  | 'pathLastCandleClosedAt'
+  | 'pathLastSameBarProtectionAmbiguityAt'
+> & {
+  units: string;
+  openedAt: string;
+  pathPeakObservedAt: string;
+  pathLastObservedAt: string;
+  pathLastMarkObservedAt: string | null;
+  pathLastCandleClosedAt: string | null;
+  pathLastSameBarProtectionAmbiguityAt: string | null;
+};
+
+type SerializedPaperClosedTrade = Omit<
+  PaperClosedTrade,
+  | 'openedAt'
+  | 'closedAt'
+  | 'pathPeakObservedAt'
+  | 'pathLastObservedAt'
+  | 'pathLastSameBarProtectionAmbiguityAt'
+> & {
+  openedAt: string;
+  closedAt: string;
+  pathPeakObservedAt: string;
+  pathLastObservedAt: string;
+  pathLastSameBarProtectionAmbiguityAt: string | null;
+};
+
+type SerializedBrokerOrderState = Omit<BrokerOrderState, 'placedAt' | 'updatedAt' | 'raw'> & {
+  placedAt?: string | null;
+  updatedAt?: string | null;
+};
+
+type SerializedBrokerOrderResult = Omit<BrokerOrderResult, 'filledAt' | 'rawResponse'> & {
+  filledAt?: string;
+};
+
+interface PaperBrokerDurableStateV1 {
+  version: 1;
+  orderCounter: number;
+  marketTickCounter: number;
+  balance: string;
+  working: SerializedPaperWorkingOrder[];
+  positions: SerializedPaperPosition[];
+  closedTrades: SerializedPaperClosedTrade[];
+  orderStates: Array<[string, SerializedBrokerOrderState]>;
+  resultsByDedupeKey: Array<[string, SerializedBrokerOrderResult]>;
 }
 
 // ─── Adapter ─────────────────────────────────────────────────────────────────
@@ -477,6 +728,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   private _balance = PAPER_STARTING_BALANCE;
 
   private readonly _feed: PaperPriceFeed;
+  private readonly _replayFeed: CsvReplayPaperPriceFeed | null;
   private readonly _clock: PaperClock;
   private readonly _working: PaperWorkingOrder[] = [];
   private readonly _positions = new Map<string, PaperPosition>();
@@ -485,15 +737,63 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   private readonly _orderStates = new Map<string, BrokerOrderState>();
   /** True-dedupe acknowledgement store, keyed by clientOrderId ?? idempotencyKey. */
   private readonly _resultsByDedupeKey = new Map<string, BrokerOrderResult>();
+  private readonly _stateStore?: PaperBrokerStateService;
+  private readonly _connectionId?: string;
+  private _stateLoaded = false;
+  private _persistQueue: Promise<void> = Promise.resolve();
 
   /**
    * The feed and clock are constructor-injectable determinism seams for specs
    * (scripted falling walks, fake clocks). Under Nest DI both are optional and
    * default to the deterministic implementations above.
    */
-  constructor(@Optional() priceFeed?: PaperPriceFeed, @Optional() clock?: PaperClock) {
-    this._feed = priceFeed ?? new DeterministicPaperPriceFeed();
+  constructor(
+    @Optional() priceFeed?: PaperPriceFeed,
+    @Optional() clock?: PaperClock,
+    @Optional() stateStore?: PaperBrokerStateService,
+    @Optional() connectionId?: string,
+    @Optional() private readonly liveMarketData?: LivePaperMarketDataService,
+  ) {
+    const liveMode = Boolean(liveMarketData?.isLiveConnection(connectionId));
+    const replayPath =
+      !priceFeed && !liveMode ? (process.env.PAPER_REPLAY_M1_CSV ?? '').trim() : '';
+    const replayStart = (process.env.PAPER_REPLAY_START ?? '').trim();
+    this._replayFeed =
+      replayPath && replayStart ? new CsvReplayPaperPriceFeed(replayPath, replayStart) : null;
+    this._feed = priceFeed ?? this._replayFeed ?? new DeterministicPaperPriceFeed();
     this._clock = clock ?? new DeterministicPaperClock();
+    this._stateStore = stateStore;
+    this._connectionId = connectionId;
+  }
+
+  private isLiveMarketMode(): boolean {
+    return this.liveMarketData?.isLiveConnection(this._connectionId) ?? false;
+  }
+
+  private currentTime(): Date {
+    if (this.isLiveMarketMode()) return this.liveMarketData!.now(this._connectionId);
+    return this._replayFeed ? this._replayFeed.now() : this._clock.now();
+  }
+
+  private quoteForInstrument(instrument: string): PaperQuote {
+    if (this.isLiveMarketMode()) {
+      const quote = this.liveMarketData!.getQuote(instrument, 20 * 60_000, this._connectionId);
+      return {
+        bid: quote.bid,
+        ask: quote.ask,
+        timestamp: quote.timestamp,
+        source: quote.source,
+      };
+    }
+    // Never value a durable position using another instrument's fallback feed.
+    // This is especially important across process restarts while a VPS-live
+    // PAPER position is still open and the in-memory live cache is rebuilding.
+    this.requireInstrument(instrument);
+    return {
+      ...this._feed.quote(),
+      timestamp: this.currentTime(),
+      source: 'SIMULATED',
+    };
   }
 
   setMode(mode: BrokerMode): void {
@@ -508,20 +808,29 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
 
   async connect(_credentials: DecryptedBrokerCredentials): Promise<BrokerConnectionResult> {
     // Credentials intentionally ignored — paper broker needs none.
-    // Account state PERSISTS across reconnects (health checks must never wipe
-    // orders/positions/history — the "preserve" contract).
+    // Preserve the historical synchronous-connect seam for isolated test/
+    // ephemeral adapters. Persisted connection adapters restore before use.
+    if (this._stateStore && this._connectionId) {
+      await this.restoreDurableState();
+    }
     this._connected = true;
-    this.logger.log('PaperBrokerAdapter connected (simulated)');
+    if (this._stateStore && this._connectionId) {
+      await this.persistDurableState();
+    }
+    this.logger.log(
+      `PaperBrokerAdapter connected (simulated)${this._connectionId ? ' [durable]' : ''}`,
+    );
     return {
       success: true,
       accountId: PAPER_ACCOUNT_ID,
       accountType: BrokerMode.DEMO,
       currency: PAPER_CURRENCY,
-      serverTime: this._clock.now(),
+      serverTime: this.currentTime(),
     };
   }
 
   async disconnect(): Promise<void> {
+    await this.persistDurableState();
     this._connected = false;
     this.logger.log('PaperBrokerAdapter disconnected');
   }
@@ -553,13 +862,21 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     }
   }
 
-  /** The single-instrument simulation only knows EURUSD. */
+  /**
+   * Default simulator: EURUSD. Research replay: USDJPY. VPS live-paper mode:
+   * fixed six-major universe, validated by LivePaperMarketDataService.
+   */
   private requireInstrument(instrument: string): string {
     const symbol = instrument.trim().toUpperCase();
-    if (symbol !== PAPER_INSTRUMENT) {
+    if (this.isLiveMarketMode()) {
+      this.liveMarketData!.spec(symbol);
+      return symbol;
+    }
+    const supported = this._replayFeed ? this._replayFeed.instrument : PAPER_INSTRUMENT;
+    if (symbol !== supported) {
       throw new BrokerAdapterError(
         BrokerErrorCode.INVALID_INSTRUMENT,
-        `Paper broker supports ${PAPER_INSTRUMENT} only (received "${instrument}").`,
+        `Paper broker supports ${supported} only in the active feed (received "${instrument}").`,
       );
     }
     return symbol;
@@ -589,17 +906,69 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       balance: snapshot.balance,
       equity: snapshot.equity,
       currency: PAPER_CURRENCY,
-      timestamp: this._clock.now(),
+      timestamp: this.currentTime(),
     };
+  }
+
+  /**
+   * Apply genuinely fresh streaming/provider marks to PAPER protection orders.
+   * Entry fills, sizing, risk and model evidence remain on the closed-M5 quote
+   * path; only already-open position SL/TP becomes quote-responsive.
+   *
+   * Returns true when the durable position/path state changed.
+   */
+  private applyFreshLiveProtectionMarks(instrumentFilter?: string): boolean {
+    if (!this.isLiveMarketMode() || this._positions.size === 0) return false;
+
+    const positionsBefore = this._positions.size;
+    const observationsBefore = Array.from(this._positions.values()).reduce(
+      (sum, position) => sum + position.pathObservationCount,
+      0,
+    );
+    const instruments = [
+      ...new Set(
+        Array.from(this._positions.values())
+          .map((position) => position.instrument)
+          .filter((instrument) => !instrumentFilter || instrument === instrumentFilter),
+      ),
+    ];
+
+    for (const instrument of instruments) {
+      try {
+        const mark = this.liveMarketData!.getPositionMarkQuote(
+          instrument,
+          60_000,
+          20 * 60_000,
+          this._connectionId,
+        );
+        // Closed-M5 protection is already handled by evaluateLiveCandleProtection.
+        // Only a fresh independent STREAM/PROVIDER mark belongs on this fast path.
+        if (mark.isStale || mark.source === 'REST_M5') continue;
+        this.evaluatePositions(
+          { bid: mark.bid, ask: mark.ask, timestamp: mark.timestamp, source: mark.source },
+          instrument,
+        );
+      } catch {
+        // Missing/stale fast marks never disable the closed-candle safety path.
+      }
+    }
+
+    const observationsAfter = Array.from(this._positions.values()).reduce(
+      (sum, position) => sum + position.pathObservationCount,
+      0,
+    );
+    return this._positions.size !== positionsBefore || observationsAfter !== observationsBefore;
   }
 
   async getOpenPositions(): Promise<BrokerPosition[]> {
     this.assertConnected();
+    if (this.applyFreshLiveProtectionMarks()) await this.persistDurableState();
     return Array.from(this._positions.values()).map((position) => this.mapPosition(position));
   }
 
   async getPositionById(externalOrderId: string): Promise<BrokerPosition | null> {
     this.assertConnected();
+    if (this.applyFreshLiveProtectionMarks()) await this.persistDurableState();
     const position = this._positions.get(externalOrderId);
     return position ? this.mapPosition(position) : null;
   }
@@ -617,7 +986,11 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   async getRequiredMargin(params: RequiredMarginParams): Promise<string | null> {
     this.assertConnected();
     try {
-      if (params.instrument.trim().toUpperCase() !== PAPER_INSTRUMENT) return null;
+      try {
+        this.requireInstrument(params.instrument);
+      } catch {
+        return null;
+      }
       const lot = parseScaledDecimal(params.lotSize, 'lotSize', BrokerErrorCode.INVALID_LOT_SIZE);
       if (lot.negative || lot.digits === 0n) return null;
       // Any exact lot-step spelling is calculable; non-step values are not.
@@ -627,14 +1000,19 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         return null;
       }
 
-      const quote = this._feed.quote();
+      const quote = this.quoteForInstrument(params.instrument);
       const mid = quoteMid(quote);
       const product = multiplyDecimalStrings(
         multiplyDecimalStrings(params.lotSize.trim(), PAPER_CONTRACT_SIZE),
         mid,
       );
-      // / leverage (100) → exact right shift by 2, rendered at 2dp half-up.
-      return roundHalfUpAtScale(divideByPowerOfTen(product, 2), PAPER_MONEY_SCALE);
+      const quoteMargin = divideByPowerOfTen(product, 2);
+      const accountMargin = this.quoteAmountToAccountCurrencyExact(
+        params.instrument,
+        quoteMargin,
+        mid,
+      );
+      return roundHalfUpAtScale(accountMargin, PAPER_MONEY_SCALE);
     } catch {
       return null;
     }
@@ -652,10 +1030,10 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     freeMargin: string;
     marginLevel: string;
   } {
-    const quote = this._feed.quote();
     let equity = this._balance;
     let margin = '0.00';
     for (const position of this._positions.values()) {
+      const quote = this.quoteForInstrument(position.instrument);
       equity = addDecimalStrings(equity, toMoney(this.unrealisedPnlExact(position, quote)));
       margin = addDecimalStrings(margin, toMoney(this.positionMarginExact(position)));
     }
@@ -672,27 +1050,187 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     return this.accountSnapshot().freeMargin;
   }
 
-  /** (currentPrice − entry) × units with the direction sign — exact strings. */
+  /**
+   * Convert an amount expressed in an FX instrument's quote currency into the
+   * PAPER account currency. The simulator is USD-denominated and supports
+   * either USD as quote (EURUSD) or USD as base (USDJPY Research UAT).
+   * Third-currency conversions are never invented.
+   */
+  private quoteAmountToAccountCurrencyExact(
+    instrument: string,
+    quoteAmount: string,
+    conversionPrice: string,
+  ): string {
+    const symbol = instrument.trim().toUpperCase();
+    if (!/^[A-Z]{6}$/.test(symbol)) {
+      throw new BrokerAdapterError(
+        BrokerErrorCode.INVALID_INSTRUMENT,
+        `Cannot prove FX base/quote currencies for ${instrument}.`,
+      );
+    }
+    const baseCurrency = symbol.slice(0, 3);
+    const quoteCurrency = symbol.slice(3, 6);
+    if (quoteCurrency === PAPER_CURRENCY) return quoteAmount;
+    if (baseCurrency === PAPER_CURRENCY) {
+      return divideDecimalStrings(quoteAmount, conversionPrice, 12);
+    }
+    throw new BrokerAdapterError(
+      BrokerErrorCode.INVALID_INSTRUMENT,
+      `Paper account currency ${PAPER_CURRENCY} matches neither leg of ${symbol}.`,
+    );
+  }
+
+  /** Required margin converted into the PAPER account currency. */
+  private marginInAccountCurrencyExact(
+    instrument: string,
+    units: bigint,
+    entryPrice: string,
+  ): string {
+    const quoteMargin = divideByPowerOfTen(multiplyDecimalStrings(units.toString(), entryPrice), 2);
+    return this.quoteAmountToAccountCurrencyExact(instrument, quoteMargin, entryPrice);
+  }
+
+  /** (currentPrice − entry) × units, converted into account currency. */
   private unrealisedPnlExact(position: PaperPosition, quote: PaperQuote): string {
     const exitPrice = position.direction === 'BUY' ? quote.bid : quote.ask;
+    return this.pnlAtExitPriceExact(position, exitPrice);
+  }
+
+  private pnlAtExitPriceExact(position: PaperPosition, exitPrice: string): string {
     const diff =
       position.direction === 'BUY'
         ? subtractDecimalStrings(exitPrice, position.entryPrice)
         : subtractDecimalStrings(position.entryPrice, exitPrice);
-    return multiplyDecimalStrings(diff, position.units.toString());
+    const quotePnl = multiplyDecimalStrings(diff, position.units.toString());
+    return this.quoteAmountToAccountCurrencyExact(position.instrument, quotePnl, exitPrice);
   }
 
-  /** units × entryPrice / leverage — margin locked at fill, exact strings. */
+  private recordPathObservation(
+    position: PaperPosition,
+    latestExitPrice: string,
+    observedAt: Date,
+    favorableExitPrice = latestExitPrice,
+    adverseExitPrice = latestExitPrice,
+  ): void {
+    const favorablePnl = toMoney(this.pnlAtExitPriceExact(position, favorableExitPrice));
+    const adversePnl = toMoney(this.pnlAtExitPriceExact(position, adverseExitPrice));
+    const latestPnl = toMoney(this.pnlAtExitPriceExact(position, latestExitPrice));
+
+    if (compareDecimalStrings(favorablePnl, position.pathMaxFavorablePnl) > 0) {
+      position.pathMaxFavorablePnl = favorablePnl;
+      position.pathPeakObservedAt = new Date(observedAt);
+    }
+    if (compareDecimalStrings(adversePnl, position.pathMaxAdversePnl) < 0) {
+      position.pathMaxAdversePnl = adversePnl;
+    }
+    position.pathLatestUnrealisedPnl = latestPnl;
+    position.pathLastMarkPrice = latestExitPrice;
+    position.pathLastObservedAt = new Date(observedAt);
+    position.pathObservationCount += 1;
+  }
+
+  private pathProfitGiveback(maxFavorablePnl: string, currentOrRealisedPnl: string): string {
+    // "Give-back" means previously available PROFIT that was surrendered.
+    // A trade that never moved above zero has no profit to give back.
+    if (compareDecimalStrings(maxFavorablePnl, '0') <= 0) return '0.00';
+    const difference = subtractDecimalStrings(maxFavorablePnl, currentOrRealisedPnl);
+    return compareDecimalStrings(difference, '0') > 0 ? toMoney(difference) : '0.00';
+  }
+
+  private pathDiagnostics(position: PaperPosition): BrokerTradePathDiagnostics {
+    return {
+      maxFavorablePnl: position.pathMaxFavorablePnl,
+      maxAdversePnl: position.pathMaxAdversePnl,
+      latestUnrealisedPnl: position.pathLatestUnrealisedPnl,
+      profitGiveback: this.pathProfitGiveback(
+        position.pathMaxFavorablePnl,
+        position.pathLatestUnrealisedPnl,
+      ),
+      observationCount: position.pathObservationCount,
+      sameBarProtectionAmbiguityCount: position.pathSameBarProtectionAmbiguityCount,
+      lastSameBarProtectionAmbiguityAt: position.pathLastSameBarProtectionAmbiguityAt
+        ? new Date(position.pathLastSameBarProtectionAmbiguityAt)
+        : null,
+      peakObservedAt: new Date(position.pathPeakObservedAt),
+      lastObservedAt: new Date(position.pathLastObservedAt),
+    };
+  }
+
+  private scaledPathMoney(value: string, units: bigint, totalUnits: bigint): string {
+    if (totalUnits <= 0n || units >= totalUnits) return toMoney(value);
+    return toMoney(
+      divideDecimalStrings(
+        multiplyDecimalStrings(value, units.toString()),
+        totalUnits.toString(),
+        8,
+      ),
+    );
+  }
+
+  /** Margin locked at fill and denominated in the account currency. */
   private positionMarginExact(position: PaperPosition): string {
-    return divideByPowerOfTen(
-      multiplyDecimalStrings(position.units.toString(), position.entryPrice),
-      2,
+    return this.marginInAccountCurrencyExact(
+      position.instrument,
+      position.units,
+      position.entryPrice,
     );
   }
 
   private mapPosition(position: PaperPosition): BrokerPosition {
-    const quote = this._feed.quote();
+    let liveQuote: ReturnType<LivePaperMarketDataService['getPositionMarkQuote']> | null = null;
+    if (this.isLiveMarketMode()) {
+      try {
+        liveQuote = this.liveMarketData!.getPositionMarkQuote(
+          position.instrument,
+          60_000,
+          20 * 60_000,
+          this._connectionId,
+        );
+      } catch (error) {
+        // Read-only restart/weekend fallback. Never route this durable mark
+        // through getQuote(), getCurrentPrice(), risk, fills, or protection.
+        if (position.pathLastMarkPrice && position.pathLastMarkObservedAt) {
+          return {
+            externalOrderId: position.positionId,
+            instrument: position.instrument,
+            direction: position.direction,
+            lotSize: position.lotSize,
+            openPrice: position.entryPrice,
+            currentPrice: position.pathLastMarkPrice,
+            markObservedAt: new Date(position.pathLastMarkObservedAt),
+            markSource: null,
+            markIsStale: true,
+            stopLoss: position.stopLoss,
+            takeProfit: position.takeProfit,
+            unrealisedPnl: position.pathLatestUnrealisedPnl,
+            openedAt: position.openedAt,
+            commission: '0',
+            swap: '0',
+            pathDiagnostics: this.pathDiagnostics(position),
+          };
+        }
+        throw error;
+      }
+    }
+    const quote: PaperQuote = liveQuote
+      ? {
+          bid: liveQuote.bid,
+          ask: liveQuote.ask,
+          timestamp: liveQuote.timestamp,
+          source: liveQuote.source,
+        }
+      : this.quoteForInstrument(position.instrument);
     const exitPrice = position.direction === 'BUY' ? quote.bid : quote.ask;
+    const observedAt =
+      liveQuote?.timestamp ??
+      (quote.timestamp instanceof Date ? quote.timestamp : this.currentTime());
+    if (
+      position.pathLastMarkObservedAt === null ||
+      observedAt.getTime() > position.pathLastMarkObservedAt.getTime()
+    ) {
+      this.recordPathObservation(position, exitPrice, observedAt);
+      position.pathLastMarkObservedAt = new Date(observedAt);
+    }
     return {
       externalOrderId: position.positionId,
       instrument: position.instrument,
@@ -702,12 +1240,16 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       // Exit-side quote: the price at which the position would close — the
       // same side the SL/TP triggers and the unrealized valuation use.
       currentPrice: exitPrice,
+      markObservedAt: liveQuote?.timestamp ?? null,
+      markSource: liveQuote?.source ?? null,
+      markIsStale: liveQuote?.isStale ?? false,
       stopLoss: position.stopLoss,
       takeProfit: position.takeProfit,
       unrealisedPnl: toMoney(this.unrealisedPnlExact(position, quote)),
       openedAt: position.openedAt,
       commission: '0',
       swap: '0',
+      pathDiagnostics: this.pathDiagnostics(position),
     };
   }
 
@@ -761,11 +1303,28 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
 
   async getInstrumentList(): Promise<BrokerInstrument[]> {
     this.assertConnected();
+    if (this.isLiveMarketMode()) {
+      return this.liveMarketData!.instruments.map((symbol) => {
+        const spec = this.liveMarketData!.spec(symbol);
+        return {
+          symbol,
+          description: `${spec.description} (VPS Live PAPER)`,
+          digits: spec.digits,
+          minLot: PAPER_MIN_LOT,
+          maxLot: PAPER_MAX_LOT,
+          lotStep: '0.01',
+          contractSize: PAPER_CONTRACT_SIZE,
+        };
+      });
+    }
+    const symbol = this._replayFeed ? this._replayFeed.instrument : PAPER_INSTRUMENT;
     return [
       {
-        symbol: PAPER_INSTRUMENT,
-        description: 'Euro vs US Dollar (Paper)',
-        digits: PAPER_PRICE_SCALE,
+        symbol,
+        description: this._replayFeed
+          ? 'US Dollar vs Japanese Yen (Real-data Paper Replay)'
+          : 'Euro vs US Dollar (Paper)',
+        digits: this._replayFeed ? this._replayFeed.digits() : PAPER_PRICE_SCALE,
         minLot: PAPER_MIN_LOT,
         maxLot: PAPER_MAX_LOT,
         lotStep: '0.01',
@@ -780,16 +1339,45 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
    * (position SL/TP first, then working orders). This is the only public
    * surface that moves the market.
    */
-  async getCurrentPrice(instrument: string): Promise<BrokerPrice> {
+  async getCurrentPrice(
+    instrument: string,
+    options?: { advanceSimulation?: boolean },
+  ): Promise<BrokerPrice> {
     this.assertConnected();
-    this.requireInstrument(instrument);
-    const quote = this.advanceMarket();
+    const symbol = this.requireInstrument(instrument);
+    if (this.isLiveMarketMode()) {
+      const liveQuote = this.liveMarketData!.getQuote(symbol, 20 * 60_000, this._connectionId);
+      const quote: PaperQuote = { bid: liveQuote.bid, ask: liveQuote.ask };
+      // First replay every fully closed M5 candle since each position opened.
+      // This is the conservative recovery path for missed ticks/restarts. If
+      // both levels were touched in one unseen candle, stop-first is retained.
+      this.evaluateLiveCandleProtection(symbol);
+      // Fresh STREAM/PROVIDER bid/ask marks are protection-authoritative for
+      // already-open positions, so TP/SL does not wait for M5 candle close.
+      // Entry fills/resting orders/model evidence remain closed-M5 based.
+      this.applyFreshLiveProtectionMarks(symbol);
+      this._marketTickCounter += 1;
+      this.evaluateWorkingOrders(quote, symbol);
+      await this.persistDurableState();
+      return {
+        instrument: symbol,
+        bid: quote.bid,
+        ask: quote.ask,
+        spread: subtractDecimalStrings(quote.ask, quote.bid),
+        timestamp: liveQuote.timestamp,
+      };
+    }
+    const shouldAdvance = !this._replayFeed || options?.advanceSimulation === true;
+    const quote = shouldAdvance ? this.advanceMarket() : this._feed.quote();
+    if (shouldAdvance) {
+      await this.persistDurableState();
+    }
     return {
-      instrument: PAPER_INSTRUMENT,
+      instrument: symbol,
       bid: quote.bid,
       ask: quote.ask,
       spread: subtractDecimalStrings(quote.ask, quote.bid),
-      timestamp: this._clock.now(),
+      timestamp: this.currentTime(),
     };
   }
 
@@ -806,12 +1394,25 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       );
     }
 
+    if (this.isLiveMarketMode()) {
+      return this.liveMarketData!.getOHLCV(
+        instrument,
+        normalizedTimeframe,
+        count,
+        this._connectionId,
+      );
+    }
+
+    if (this._replayFeed) {
+      return this._replayFeed.ohlcv(normalizedTimeframe, count);
+    }
+
     // Deterministic but EVOLVING candles. The market tick counter is advanced
     // by the explicit paper heartbeat (getCurrentPrice) once per AI scan; OHLCV
     // reads are pure snapshots so an MTF evaluation does not tick five times.
     const candles: OHLCV[] = [];
     const base = 1.1;
-    const now = this._clock.now();
+    const now = this.currentTime();
     const phaseNow = this._marketTickCounter;
 
     for (let i = count - 1; i >= 0; i--) {
@@ -912,7 +1513,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       if (orderKind === 'MARKET') {
         result = this.executeMarketOrder(orderId, order, instrument, stopLoss, takeProfit, comment);
       } else {
-        const placedAt = this._clock.now();
+        const placedAt = this.currentTime();
         const working: PaperWorkingOrder = {
           orderId,
           dedupeKey,
@@ -940,6 +1541,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       }
 
       this._resultsByDedupeKey.set(dedupeKey, result);
+      await this.persistDurableState();
       this.logger.log(
         `PaperBrokerAdapter: simulated order placed id=${orderId} ` +
           `instrument=${instrument} dir=${order.direction} lot=${order.lotSize} ` +
@@ -990,7 +1592,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     }
   }
 
-  /** Immediate MARKET fill at the quote mid (the deterministic '1.10005'). */
+  /** Immediate MARKET fill on the executable side: BUY at ask, SELL at bid. */
   private executeMarketOrder(
     orderId: string,
     order: BrokerOrderRequest,
@@ -999,12 +1601,10 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     takeProfit: string,
     comment: string,
   ): BrokerOrderResult {
-    const quote = this._feed.quote();
-    const fillPrice = quoteMid(quote);
+    const quote = this.quoteForInstrument(instrument);
+    const fillPrice = order.direction === 'BUY' ? quote.ask : quote.bid;
     const units = lotSizeToUnits(order.lotSize);
-    const requiredMargin = toMoney(
-      divideByPowerOfTen(multiplyDecimalStrings(units.toString(), fillPrice), 2),
-    );
+    const requiredMargin = toMoney(this.marginInAccountCurrencyExact(instrument, units, fillPrice));
     if (compareDecimalStrings(requiredMargin, this.freeMargin()) > 0) {
       throw new BrokerAdapterError(
         BrokerErrorCode.INSUFFICIENT_MARGIN,
@@ -1036,15 +1636,15 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       limitPrice: null,
       stopPrice: null,
       timeInForce: order.timeInForce ?? 'GTC',
-      placedAt: this._clock.now(),
-      updatedAt: this._clock.now(),
+      placedAt: this.currentTime(),
+      updatedAt: this.currentTime(),
     });
     return {
       success: true,
       externalOrderId: orderId,
       filledPrice: fillPrice,
       filledQuantity: order.lotSize.trim(),
-      filledAt: this._clock.now(),
+      filledAt: this.currentTime(),
       status: 'FILLED',
       brokerMessage: 'PAPER_ONLY simulated fill',
     };
@@ -1073,7 +1673,18 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       entryPrice,
       stopLoss,
       takeProfit,
-      openedAt: this._clock.now(),
+      openedAt: this.currentTime(),
+      pathMaxFavorablePnl: '0.00',
+      pathMaxAdversePnl: '0.00',
+      pathLatestUnrealisedPnl: '0.00',
+      pathLastMarkPrice: null,
+      pathPeakObservedAt: this.currentTime(),
+      pathLastObservedAt: this.currentTime(),
+      pathLastMarkObservedAt: null,
+      pathLastCandleClosedAt: null,
+      pathObservationCount: 0,
+      pathSameBarProtectionAmbiguityCount: 0,
+      pathLastSameBarProtectionAmbiguityAt: null,
     };
     this._positions.set(orderId, position);
     return position;
@@ -1123,6 +1734,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         if (stopLoss !== undefined) working.stopLoss = stopLoss;
         if (takeProfit !== undefined) working.takeProfit = takeProfit;
       }
+      await this.persistDurableState();
       return {
         success: true,
         externalOrderId,
@@ -1168,10 +1780,10 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         closedLot = lotSize.trim();
       }
 
-      // Manual closes execute at the quote mid (zero-slippage paper model —
-      // an open-and-close without an intervening tick books exactly flat).
-      const quote = this._feed.quote();
-      const closePrice = quoteMid(quote);
+      // Close on the executable side so PAPER pays the same bid/ask spread
+      // model used by protective exits: BUY exits at bid, SELL exits at ask.
+      const quote = this.quoteForInstrument(position.instrument);
+      const closePrice = position.direction === 'BUY' ? quote.bid : quote.ask;
 
       const closedTrade = this.closePositionUnits(
         position,
@@ -1180,6 +1792,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         closePrice,
         'MANUAL',
       );
+      await this.persistDurableState();
       return {
         success: true,
         externalOrderId,
@@ -1214,7 +1827,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         );
       }
       const [cancelled] = this._working.splice(index, 1);
-      const now = this._clock.now();
+      const now = this.currentTime();
       this._orderStates.set(externalOrderId, {
         providerOrderId: externalOrderId,
         clientOrderId: cancelled.dedupeKey,
@@ -1231,6 +1844,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         placedAt: cancelled.placedAt,
         updatedAt: now,
       });
+      await this.persistDurableState();
       this.logger.log(
         `PaperBrokerAdapter: cancelled working order id=${externalOrderId} ` +
           `kind=${cancelled.orderKind} [PAPER_ONLY]`,
@@ -1254,14 +1868,14 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   async closeAllOrders(): Promise<BrokerCloseAllResult> {
     try {
       this.assertConnected();
-      const quote = this._feed.quote();
       let closedCount = 0;
       let failedCount = 0;
       const errors: string[] = [];
 
       for (const position of Array.from(this._positions.values())) {
         try {
-          const closePrice = quoteMid(quote);
+          const quote = this.quoteForInstrument(position.instrument);
+          const closePrice = position.direction === 'BUY' ? quote.bid : quote.ask;
           this.closePositionUnits(position, position.units, position.lotSize, closePrice, 'SYSTEM');
           closedCount++;
         } catch (err) {
@@ -1270,6 +1884,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         }
       }
 
+      await this.persistDurableState();
       this.logger.log(
         `PaperBrokerAdapter: closeAllOrders closed=${closedCount} failed=${failedCount} ` +
           `(working orders left untouched: ${this._working.length}) [PAPER_ONLY]`,
@@ -1315,7 +1930,35 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     const toMs = to.getTime();
     return this._closedTrades
       .filter((trade) => trade.closedAt.getTime() >= fromMs && trade.closedAt.getTime() <= toMs)
-      .map((trade) => ({ ...trade }));
+      .map((trade) => ({
+        externalOrderId: trade.externalOrderId,
+        instrument: trade.instrument,
+        direction: trade.direction,
+        lotSize: trade.lotSize,
+        openPrice: trade.openPrice,
+        closePrice: trade.closePrice,
+        stopLoss: trade.stopLoss,
+        takeProfit: trade.takeProfit,
+        realisedPnl: trade.realisedPnl,
+        openedAt: new Date(trade.openedAt),
+        closedAt: new Date(trade.closedAt),
+        commission: trade.commission,
+        swap: trade.swap,
+        closeReason: trade.closeReason,
+        pathDiagnostics: {
+          maxFavorablePnl: trade.pathMaxFavorablePnl,
+          maxAdversePnl: trade.pathMaxAdversePnl,
+          latestUnrealisedPnl: trade.pathLatestUnrealisedPnl,
+          profitGiveback: trade.pathProfitGiveback,
+          observationCount: trade.pathObservationCount,
+          sameBarProtectionAmbiguityCount: trade.pathSameBarProtectionAmbiguityCount,
+          lastSameBarProtectionAmbiguityAt: trade.pathLastSameBarProtectionAmbiguityAt
+            ? new Date(trade.pathLastSameBarProtectionAmbiguityAt)
+            : null,
+          peakObservedAt: new Date(trade.pathPeakObservedAt),
+          lastObservedAt: new Date(trade.pathLastObservedAt),
+        },
+      }));
   }
 
   // ─── Evaluation engine (runs on every market tick) ───────────────────────
@@ -1324,18 +1967,145 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   private advanceMarket(): PaperQuote {
     const quote = this._feed.tick();
     this._marketTickCounter += 1;
-    this._clock.advance(PAPER_TICK_DURATION_MS);
+    if (!this._replayFeed) this._clock.advance(PAPER_TICK_DURATION_MS);
     this.evaluatePositions(quote);
     this.evaluateWorkingOrders(quote);
     return quote;
   }
 
   /**
+   * Live PAPER M5 protection path. Twelve Data supplies closed-candle MID OHLC,
+   * while this simulator executes against a documented fixed bid/ask spread.
+   * Convert candle extremes to the relevant executable side and conservatively
+   * evaluate SL before TP when both were touched in one candle.
+   */
+  private evaluateLiveCandleProtection(instrument: string): void {
+    if (!this.isLiveMarketMode()) return;
+    const symbol = this.requireInstrument(instrument);
+    const spec = this.liveMarketData!.spec(symbol);
+    const candles = this.liveMarketData!.getOHLCV(symbol, 'M5', 500, this._connectionId);
+    const halfSpread = spec.spread / 2;
+
+    for (const position of Array.from(this._positions.values())) {
+      if (position.instrument !== symbol) continue;
+      for (const candle of candles) {
+        // Candle timestamps are bar-open times; only bars that CLOSED after
+        // the fill can contain post-entry price action.
+        const candleClosedAt = new Date(candle.timestamp.getTime() + 5 * 60_000);
+        if (candleClosedAt.getTime() <= position.openedAt.getTime()) continue;
+        if (
+          position.pathLastCandleClosedAt !== null &&
+          candleClosedAt.getTime() <= position.pathLastCandleClosedAt.getTime()
+        ) {
+          continue;
+        }
+
+        const high = Number(candle.high);
+        const low = Number(candle.low);
+        const close = Number(candle.close);
+        if (!Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close)) {
+          continue;
+        }
+
+        if (position.direction === 'BUY') {
+          const bidLow = (low - halfSpread).toFixed(spec.digits);
+          const bidHigh = (high - halfSpread).toFixed(spec.digits);
+          const bidClose = (close - halfSpread).toFixed(spec.digits);
+          this.recordPathObservation(position, bidClose, candleClosedAt, bidHigh, bidLow);
+          position.pathLastCandleClosedAt = new Date(candleClosedAt);
+          const stopTouched =
+            !isZeroLevel(position.stopLoss) &&
+            compareDecimalStrings(bidLow, position.stopLoss) <= 0;
+          const takeProfitTouched =
+            !isZeroLevel(position.takeProfit) &&
+            compareDecimalStrings(bidHigh, position.takeProfit) >= 0;
+          if (stopTouched && takeProfitTouched) {
+            position.pathSameBarProtectionAmbiguityCount += 1;
+            position.pathLastSameBarProtectionAmbiguityAt = new Date(candleClosedAt);
+          }
+          if (stopTouched) {
+            this.closePositionUnits(
+              position,
+              position.units,
+              position.lotSize,
+              position.stopLoss,
+              'SL',
+              candleClosedAt,
+            );
+            break;
+          }
+          if (takeProfitTouched) {
+            this.closePositionUnits(
+              position,
+              position.units,
+              position.lotSize,
+              position.takeProfit,
+              'TP',
+              candleClosedAt,
+            );
+            break;
+          }
+        } else {
+          const askHigh = (high + halfSpread).toFixed(spec.digits);
+          const askLow = (low + halfSpread).toFixed(spec.digits);
+          const askClose = (close + halfSpread).toFixed(spec.digits);
+          this.recordPathObservation(position, askClose, candleClosedAt, askLow, askHigh);
+          position.pathLastCandleClosedAt = new Date(candleClosedAt);
+          const stopTouched =
+            !isZeroLevel(position.stopLoss) &&
+            compareDecimalStrings(askHigh, position.stopLoss) >= 0;
+          const takeProfitTouched =
+            !isZeroLevel(position.takeProfit) &&
+            compareDecimalStrings(askLow, position.takeProfit) <= 0;
+          if (stopTouched && takeProfitTouched) {
+            position.pathSameBarProtectionAmbiguityCount += 1;
+            position.pathLastSameBarProtectionAmbiguityAt = new Date(candleClosedAt);
+          }
+          if (stopTouched) {
+            this.closePositionUnits(
+              position,
+              position.units,
+              position.lotSize,
+              position.stopLoss,
+              'SL',
+              candleClosedAt,
+            );
+            break;
+          }
+          if (takeProfitTouched) {
+            this.closePositionUnits(
+              position,
+              position.units,
+              position.lotSize,
+              position.takeProfit,
+              'TP',
+              candleClosedAt,
+            );
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  /**
    * Position SL/TP (SL checked before TP — conservative). SL/TP close exactly
    * at their level (resting protection orders; no gap slippage modeled).
    */
-  private evaluatePositions(quote: PaperQuote): void {
+  private evaluatePositions(quote: PaperQuote, instrumentFilter?: string): void {
     for (const position of Array.from(this._positions.values())) {
+      if (instrumentFilter && position.instrument !== instrumentFilter) continue;
+      const observedAt = quote.timestamp instanceof Date ? quote.timestamp : this.currentTime();
+      // Never let a quote observed before the position existed close that position.
+      if (observedAt.getTime() < position.openedAt.getTime()) continue;
+      if (
+        position.pathLastMarkObservedAt === null ||
+        observedAt.getTime() > position.pathLastMarkObservedAt.getTime()
+      ) {
+        const exitPrice = position.direction === 'BUY' ? quote.bid : quote.ask;
+        this.recordPathObservation(position, exitPrice, observedAt);
+        position.pathLastMarkObservedAt = new Date(observedAt);
+      }
       if (position.direction === 'BUY') {
         if (
           !isZeroLevel(position.stopLoss) &&
@@ -1393,8 +2163,9 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   }
 
   /** Working orders in placement order; fills may create positions (evaluated next tick). */
-  private evaluateWorkingOrders(quote: PaperQuote): void {
+  private evaluateWorkingOrders(quote: PaperQuote, instrumentFilter?: string): void {
     for (const order of Array.from(this._working)) {
+      if (instrumentFilter && order.instrument !== instrumentFilter) continue;
       const fillPrice = this.workingFillPrice(order, quote);
       if (fillPrice !== undefined) {
         this.fillWorkingOrder(order, fillPrice);
@@ -1449,7 +2220,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   private fillWorkingOrder(order: PaperWorkingOrder, fillPrice: string): void {
     const units = lotSizeToUnits(order.lotSize);
     const requiredMargin = toMoney(
-      divideByPowerOfTen(multiplyDecimalStrings(units.toString(), fillPrice), 2),
+      this.marginInAccountCurrencyExact(order.instrument, units, fillPrice),
     );
     if (compareDecimalStrings(requiredMargin, this.freeMargin()) > 0) {
       // No caller to notify on a deferred fill — the order transitions to a
@@ -1458,7 +2229,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       this._orderStates.set(order.orderId, {
         ...this.workingOrderState(order),
         status: 'REJECTED',
-        updatedAt: this._clock.now(),
+        updatedAt: this.currentTime(),
       });
       this.logger.warn(
         `PaperBrokerAdapter: working order id=${order.orderId} REJECTED at fill time — ` +
@@ -1495,7 +2266,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       stopPrice: order.stopPrice ?? null,
       timeInForce: order.timeInForce,
       placedAt: order.placedAt,
-      updatedAt: this._clock.now(),
+      updatedAt: this.currentTime(),
     });
     this.logger.log(
       `PaperBrokerAdapter: working order id=${order.orderId} filled at ${fillPrice} ` +
@@ -1520,13 +2291,36 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     closedLot: string,
     closePrice: string,
     closeReason: PaperClosedTrade['closeReason'],
+    closedAtOverride?: Date,
   ): PaperClosedTrade {
+    const totalUnitsBeforeClose = position.units;
+    const closedAt = closedAtOverride ? new Date(closedAtOverride) : this.currentTime();
+
+    // Always capture the actual close as the final path observation so the
+    // give-back figure compares the best observed open profit with what was
+    // ultimately banked on the closed units.
+    this.recordPathObservation(position, closePrice, closedAt);
+
     const diff =
       position.direction === 'BUY'
         ? subtractDecimalStrings(closePrice, position.entryPrice)
         : subtractDecimalStrings(position.entryPrice, closePrice);
-    const realisedPnl = toMoney(multiplyDecimalStrings(diff, closeUnits.toString()));
+    const quotePnl = multiplyDecimalStrings(diff, closeUnits.toString());
+    const realisedPnl = toMoney(
+      this.quoteAmountToAccountCurrencyExact(position.instrument, quotePnl, closePrice),
+    );
     this._balance = toMoney(addDecimalStrings(this._balance, realisedPnl));
+
+    const closedMaxFavorablePnl = this.scaledPathMoney(
+      position.pathMaxFavorablePnl,
+      closeUnits,
+      totalUnitsBeforeClose,
+    );
+    const closedMaxAdversePnl = this.scaledPathMoney(
+      position.pathMaxAdversePnl,
+      closeUnits,
+      totalUnitsBeforeClose,
+    );
 
     const trade: PaperClosedTrade = {
       externalOrderId: position.positionId,
@@ -1539,20 +2333,49 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       takeProfit: position.takeProfit,
       realisedPnl,
       openedAt: position.openedAt,
-      closedAt: this._clock.now(),
+      closedAt,
       commission: '0',
       swap: '0',
       closeReason,
+      pathMaxFavorablePnl: closedMaxFavorablePnl,
+      pathMaxAdversePnl: closedMaxAdversePnl,
+      pathLatestUnrealisedPnl: realisedPnl,
+      pathProfitGiveback: this.pathProfitGiveback(closedMaxFavorablePnl, realisedPnl),
+      pathPeakObservedAt: new Date(position.pathPeakObservedAt),
+      pathLastObservedAt: new Date(closedAt),
+      pathObservationCount: position.pathObservationCount,
+      pathSameBarProtectionAmbiguityCount: position.pathSameBarProtectionAmbiguityCount,
+      pathLastSameBarProtectionAmbiguityAt: position.pathLastSameBarProtectionAmbiguityAt
+        ? new Date(position.pathLastSameBarProtectionAmbiguityAt)
+        : null,
     };
     this._closedTrades.push(trade);
 
-    if (closeUnits >= position.units) {
+    if (closeUnits >= totalUnitsBeforeClose) {
       this._positions.delete(position.positionId);
     } else {
-      position.units -= closeUnits;
+      const remainingUnits = totalUnitsBeforeClose - closeUnits;
+      position.units = remainingUnits;
       // Preserve the caller's lot spelling scale exactly ('1.0000' − '0.4'
       // → '0.6000' — never a reformatted 2dp shadow).
       position.lotSize = subtractDecimalStrings(position.lotSize, closedLot);
+      // Keep the surviving position's monetary path diagnostics on the same
+      // remaining-unit basis after a partial close.
+      position.pathMaxFavorablePnl = this.scaledPathMoney(
+        position.pathMaxFavorablePnl,
+        remainingUnits,
+        totalUnitsBeforeClose,
+      );
+      position.pathMaxAdversePnl = this.scaledPathMoney(
+        position.pathMaxAdversePnl,
+        remainingUnits,
+        totalUnitsBeforeClose,
+      );
+      position.pathLatestUnrealisedPnl = this.scaledPathMoney(
+        position.pathLatestUnrealisedPnl,
+        remainingUnits,
+        totalUnitsBeforeClose,
+      );
     }
     this.logger.log(
       `PaperBrokerAdapter: position id=${position.positionId} closed ` +
@@ -1560,6 +2383,252 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         `pnl=${realisedPnl} USD) [PAPER_ONLY]`,
     );
     return trade;
+  }
+
+  private durableSnapshot(): PaperBrokerDurableStateV1 {
+    const orderStates: Array<[string, SerializedBrokerOrderState]> = Array.from(
+      this._orderStates.entries(),
+      ([key, value]) => {
+        const { raw: ignoredRaw, placedAt, updatedAt, ...rest } = value;
+        void ignoredRaw;
+        return [
+          key,
+          {
+            ...rest,
+            placedAt: placedAt?.toISOString() ?? null,
+            updatedAt: updatedAt?.toISOString() ?? null,
+          },
+        ];
+      },
+    );
+    const resultsByDedupeKey: Array<[string, SerializedBrokerOrderResult]> = Array.from(
+      this._resultsByDedupeKey.entries(),
+      ([key, value]) => {
+        const { rawResponse: ignoredRawResponse, filledAt, ...rest } = value;
+        void ignoredRawResponse;
+        return [
+          key,
+          {
+            ...rest,
+            filledAt: filledAt?.toISOString(),
+          },
+        ];
+      },
+    );
+
+    return {
+      version: 1,
+      orderCounter: this._orderCounter,
+      marketTickCounter: this._marketTickCounter,
+      balance: this._balance,
+      working: this._working.map((order) => ({
+        ...order,
+        placedAt: order.placedAt.toISOString(),
+      })),
+      positions: Array.from(this._positions.values()).map((position) => ({
+        ...position,
+        units: position.units.toString(),
+        openedAt: position.openedAt.toISOString(),
+        pathPeakObservedAt: position.pathPeakObservedAt.toISOString(),
+        pathLastObservedAt: position.pathLastObservedAt.toISOString(),
+        pathLastMarkObservedAt: position.pathLastMarkObservedAt?.toISOString() ?? null,
+        pathLastCandleClosedAt: position.pathLastCandleClosedAt?.toISOString() ?? null,
+        pathLastSameBarProtectionAmbiguityAt:
+          position.pathLastSameBarProtectionAmbiguityAt?.toISOString() ?? null,
+      })),
+      closedTrades: this._closedTrades.map((trade) => ({
+        ...trade,
+        openedAt: trade.openedAt.toISOString(),
+        closedAt: trade.closedAt.toISOString(),
+        pathPeakObservedAt: trade.pathPeakObservedAt.toISOString(),
+        pathLastObservedAt: trade.pathLastObservedAt.toISOString(),
+        pathLastSameBarProtectionAmbiguityAt:
+          trade.pathLastSameBarProtectionAmbiguityAt?.toISOString() ?? null,
+      })),
+      orderStates,
+      resultsByDedupeKey,
+    };
+  }
+
+  private async restoreDurableState(): Promise<void> {
+    if (this._stateLoaded || !this._stateStore || !this._connectionId) return;
+
+    const raw = await this._stateStore.load(this._connectionId);
+    this._stateLoaded = true;
+    if (!raw) return;
+
+    const state = raw as unknown as PaperBrokerDurableStateV1;
+    if (
+      state.version !== 1 ||
+      !Number.isSafeInteger(state.orderCounter) ||
+      !Number.isSafeInteger(state.marketTickCounter) ||
+      state.orderCounter < 0 ||
+      state.marketTickCounter < 0 ||
+      typeof state.balance !== 'string' ||
+      !Array.isArray(state.working) ||
+      !Array.isArray(state.positions) ||
+      !Array.isArray(state.closedTrades) ||
+      !Array.isArray(state.orderStates) ||
+      !Array.isArray(state.resultsByDedupeKey)
+    ) {
+      throw new Error('Invalid durable paper broker state for connection ' + this._connectionId);
+    }
+
+    this._orderCounter = state.orderCounter;
+    this._marketTickCounter = state.marketTickCounter;
+    this._balance = state.balance;
+
+    this._working.splice(
+      0,
+      this._working.length,
+      ...state.working.map((order) => ({
+        ...order,
+        placedAt: new Date(order.placedAt),
+      })),
+    );
+
+    this._positions.clear();
+    for (const position of state.positions) {
+      const openedAt = new Date(position.openedAt);
+      this._positions.set(position.positionId, {
+        ...position,
+        units: BigInt(position.units),
+        openedAt,
+        pathMaxFavorablePnl:
+          typeof position.pathMaxFavorablePnl === 'string' ? position.pathMaxFavorablePnl : '0.00',
+        pathMaxAdversePnl:
+          typeof position.pathMaxAdversePnl === 'string' ? position.pathMaxAdversePnl : '0.00',
+        pathLatestUnrealisedPnl:
+          typeof position.pathLatestUnrealisedPnl === 'string'
+            ? position.pathLatestUnrealisedPnl
+            : '0.00',
+        pathLastMarkPrice:
+          typeof position.pathLastMarkPrice === 'string' ? position.pathLastMarkPrice : null,
+        pathPeakObservedAt: position.pathPeakObservedAt
+          ? new Date(position.pathPeakObservedAt)
+          : openedAt,
+        pathLastObservedAt: position.pathLastObservedAt
+          ? new Date(position.pathLastObservedAt)
+          : openedAt,
+        pathLastMarkObservedAt: position.pathLastMarkObservedAt
+          ? new Date(position.pathLastMarkObservedAt)
+          : null,
+        pathLastCandleClosedAt: position.pathLastCandleClosedAt
+          ? new Date(position.pathLastCandleClosedAt)
+          : null,
+        pathObservationCount: Number.isSafeInteger(position.pathObservationCount)
+          ? position.pathObservationCount
+          : 0,
+        pathSameBarProtectionAmbiguityCount: Number.isSafeInteger(
+          position.pathSameBarProtectionAmbiguityCount,
+        )
+          ? position.pathSameBarProtectionAmbiguityCount
+          : 0,
+        pathLastSameBarProtectionAmbiguityAt: position.pathLastSameBarProtectionAmbiguityAt
+          ? new Date(position.pathLastSameBarProtectionAmbiguityAt)
+          : null,
+      });
+    }
+
+    this._closedTrades.splice(
+      0,
+      this._closedTrades.length,
+      ...state.closedTrades.map((trade) => {
+        const openedAt = new Date(trade.openedAt);
+        const closedAt = new Date(trade.closedAt);
+        const realisedPnl = typeof trade.realisedPnl === 'string' ? trade.realisedPnl : '0.00';
+        const fallbackMaxFavorable =
+          compareDecimalStrings(realisedPnl, '0') > 0 ? realisedPnl : '0.00';
+        const fallbackMaxAdverse =
+          compareDecimalStrings(realisedPnl, '0') < 0 ? realisedPnl : '0.00';
+        return {
+          ...trade,
+          openedAt,
+          closedAt,
+          pathMaxFavorablePnl:
+            typeof trade.pathMaxFavorablePnl === 'string'
+              ? trade.pathMaxFavorablePnl
+              : fallbackMaxFavorable,
+          pathMaxAdversePnl:
+            typeof trade.pathMaxAdversePnl === 'string'
+              ? trade.pathMaxAdversePnl
+              : fallbackMaxAdverse,
+          pathLatestUnrealisedPnl:
+            typeof trade.pathLatestUnrealisedPnl === 'string'
+              ? trade.pathLatestUnrealisedPnl
+              : realisedPnl,
+          pathProfitGiveback:
+            typeof trade.pathProfitGiveback === 'string' ? trade.pathProfitGiveback : '0.00',
+          pathPeakObservedAt: trade.pathPeakObservedAt
+            ? new Date(trade.pathPeakObservedAt)
+            : closedAt,
+          pathLastObservedAt: trade.pathLastObservedAt
+            ? new Date(trade.pathLastObservedAt)
+            : closedAt,
+          pathObservationCount: Number.isSafeInteger(trade.pathObservationCount)
+            ? trade.pathObservationCount
+            : 0,
+          pathSameBarProtectionAmbiguityCount: Number.isSafeInteger(
+            trade.pathSameBarProtectionAmbiguityCount,
+          )
+            ? trade.pathSameBarProtectionAmbiguityCount
+            : 0,
+          pathLastSameBarProtectionAmbiguityAt: trade.pathLastSameBarProtectionAmbiguityAt
+            ? new Date(trade.pathLastSameBarProtectionAmbiguityAt)
+            : null,
+        };
+      }),
+    );
+
+    this._orderStates.clear();
+    for (const [key, value] of state.orderStates) {
+      this._orderStates.set(key, {
+        ...value,
+        placedAt: value.placedAt ? new Date(value.placedAt) : null,
+        updatedAt: value.updatedAt ? new Date(value.updatedAt) : null,
+      });
+    }
+
+    this._resultsByDedupeKey.clear();
+    for (const [key, value] of state.resultsByDedupeKey) {
+      this._resultsByDedupeKey.set(key, {
+        ...value,
+        filledAt: value.filledAt ? new Date(value.filledAt) : undefined,
+      });
+    }
+
+    if (this._feed instanceof DeterministicPaperPriceFeed) {
+      this._feed.restoreTickCounter(this._marketTickCounter);
+    }
+    if (this._replayFeed) {
+      this._replayFeed.restoreTickCounter(this._marketTickCounter);
+    }
+    if (this._clock instanceof DeterministicPaperClock) {
+      this._clock.restoreTickCounter(this._marketTickCounter);
+    }
+
+    this.logger.log(
+      'PaperBrokerAdapter restored durable state connection=' +
+        this._connectionId +
+        ' positions=' +
+        this._positions.size +
+        ' working=' +
+        this._working.length +
+        ' closed=' +
+        this._closedTrades.length +
+        ' tick=' +
+        this._marketTickCounter,
+    );
+  }
+
+  private async persistDurableState(): Promise<void> {
+    if (!this._stateStore || !this._connectionId) return;
+    const snapshot = this.durableSnapshot() as unknown as Record<string, unknown>;
+    const write = this._persistQueue.then(() =>
+      this._stateStore!.save(this._connectionId!, snapshot),
+    );
+    this._persistQueue = write.catch(() => undefined);
+    await write;
   }
 
   // ─── Request validation ───────────────────────────────────────────────────

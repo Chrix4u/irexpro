@@ -10,6 +10,7 @@ class SessionStartRequest(BaseModel):
     user_id: str = Field(..., alias="userId")
     trading_session_id: str = Field(..., alias="tradingSessionId")
     broker_connection_id: str = Field(..., alias="brokerConnectionId")
+    market_data_connection_id: str | None = Field(default=None, alias="marketDataConnectionId")
     instruments: list[str] = Field(..., min_length=1)
     timeframe: str = "H1"
     interval_seconds: int | None = Field(default=None, alias="intervalSeconds")
@@ -17,11 +18,18 @@ class SessionStartRequest(BaseModel):
     account_type: Literal["DEMO", "LIVE"] = Field(..., alias="accountType")
     broker_id: str | None = Field(default=None, alias="brokerId")
     research_uat: bool = Field(default=False, alias="researchUat")
+    workflow_probe_enabled: bool = Field(default=True, alias="workflowProbeEnabled")
     replay_steps_per_cycle: int = Field(
         default=1,
         ge=1,
         le=30,
         alias="replayStepsPerCycle",
+    )
+    confidence_threshold_override: float | None = Field(
+        default=None,
+        ge=0.60,
+        le=0.70,
+        alias="confidenceThresholdOverride",
     )
     # Round 5 (session authority): the NestJS API forwards the TradingSession's
     # durable executionMode. "paper" is kept for backward compatibility with
@@ -64,6 +72,7 @@ class SessionSchedulerStatusResponse(BaseModel):
     model_mode: str | None = None
     model_loaded: bool | None = None
     last_market_data_at: str | None = None
+    last_market_data_close: str | None = None
     market_data_age_seconds: float | None = None
     market_data_cache_bypassed: bool = False
     last_publish_failed: bool = False

@@ -29,27 +29,7 @@ import { AuditAction } from '../../../common/enums/audit-action.enum';
 import { AuditSeverity } from '../../audit/entities/audit-log.entity';
 import { CreatePolicyDto } from '../dto/create-policy.dto';
 import { CreateLedgerEntryDto } from '../dto/create-ledger-entry.dto';
-
-/**
- * Compute fee amount using integer arithmetic to avoid floating-point errors.
- *
- * feePercent is a human-readable percentage (e.g. 20.0000 = 20%).
- * profitMinorUnits is the profit above HWM in minor currency units (as bigint string).
- *
- * Formula: feeAmount = floor(profit * feePercent / 100)
- *
- * Calculation avoids Number precision loss for large values by:
- *   1. Scaling feePercent to an integer (× 10000) for BigInt multiplication
- *   2. Dividing by 1000000 at the end (100 × 10000)
- */
-function computeFeeAmount(profitMinorUnits: string, feePercent: string): string {
-  const profit = BigInt(profitMinorUnits);
-  if (profit <= 0n) return '0';
-  // Scale feePercent to avoid fractional BigInt (4 decimal places → multiply by 10000)
-  const feePercentScaled = BigInt(Math.round(parseFloat(feePercent) * 10000));
-  const fee = (profit * feePercentScaled) / 1_000_000n; // divide by 100 * 10000
-  return fee.toString();
-}
+import { calculateHighWaterMarkFee } from './performance-fee-calculation';
 
 /**
  * GATE-3 BLOCKER 3 — validate and normalize a currency code for assessment.
@@ -168,6 +148,35 @@ export class PerformanceFeeService {
       severity: AuditSeverity.INFO,
     });
 
+    return saved;
+  }
+
+  async deactivatePolicy(
+    policyId: string,
+    adminId: string,
+    ipAddress?: string,
+  ): Promise<PerformanceFeePolicy> {
+    const policy = await this.policyRepo.findOne({ where: { id: policyId } });
+    if (!policy) throw new NotFoundException('Performance fee policy not found');
+    if (!policy.isActive) return policy;
+
+    policy.isActive = false;
+    const saved = await this.policyRepo.save(policy);
+
+    await this.auditService.log({
+      actorUserId: adminId,
+      actorType: 'ADMIN',
+      action: AuditAction.PERFORMANCE_FEE_POLICY_DEACTIVATED,
+      resourceType: 'PerformanceFeePolicy',
+      resourceId: saved.id,
+      ipAddress,
+      metadata: {
+        name: saved.name,
+        feePercent: saved.feePercent,
+        billingFrequency: saved.billingFrequency,
+      },
+      severity: AuditSeverity.INFO,
+    });
     return saved;
   }
 
@@ -326,15 +335,16 @@ export class PerformanceFeeService {
     const currentTotalRealised = BigInt(performance.totalRealisedProfit) + periodRealisedPnL;
     const startingHWM = BigInt(performance.currentHighWaterMark);
 
-    // 8. Profit above HWM is the only amount subject to fee
-    const profitAboveHWM = currentTotalRealised - startingHWM;
-    const realisedProfitForFee = profitAboveHWM > 0n ? profitAboveHWM : 0n;
-
-    // 9. Compute fee
-    const feeAmount =
-      realisedProfitForFee > 0n
-        ? computeFeeAmount(realisedProfitForFee.toString(), policy.feePercent)
-        : '0';
+    // 8–9. Profit above HWM is the only amount subject to fee.
+    // Shared with the PAPER/DEMO billing simulator so the test path exercises
+    // the exact same monetary formula as LIVE without touching the LIVE ledger.
+    const calculation = calculateHighWaterMarkFee({
+      cumulativeRealisedMinor: currentTotalRealised.toString(),
+      startingHighWaterMarkMinor: startingHWM.toString(),
+      feePercent: policy.feePercent,
+    });
+    const realisedProfitForFee = BigInt(calculation.realisedProfitForFeeMinor);
+    const feeAmount = calculation.feeAmountMinor;
 
     // 10. Create assessment (starts as DRAFT, promoted to ASSESSED if feeAmount > 0)
     const status = BigInt(feeAmount) > 0n ? AssessmentStatus.ASSESSED : AssessmentStatus.DRAFT;

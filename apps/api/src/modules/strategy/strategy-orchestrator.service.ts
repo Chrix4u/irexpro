@@ -141,6 +141,16 @@ export class StrategyOrchestratorService {
     }
   }
 
+  private async markSignalProcessed(userId: string, signalId: string): Promise<void> {
+    await this.signalIdentityGate
+      .markProcessed(userId, signalId)
+      .catch((err) =>
+        this.logger.warn(
+          `Signal ${signalId}: identity could not be marked PROCESSED (${(err as Error).message})`,
+        ),
+      );
+  }
+
   /**
    * Process an AI signal candidate through the full validation pipeline.
    *
@@ -177,11 +187,19 @@ export class StrategyOrchestratorService {
       candidate.metadata?.production_eligible === false;
 
     // ── Gate 2: Confidence threshold ──────────────────────────────────────────
-    // Normal AI signals remain hard-gated at 0.60. A Research PAPER UAT
-    // workflow probe may defer this rejection only until the authoritative
-    // PAPER_ONLY + internal-paper-broker boundary is proven below.
-    if (candidate.confidenceScore < CONFIDENCE_THRESHOLD && !uatWorkflowProbeRequested) {
-      const reason = `Confidence ${candidate.confidenceScore} below threshold ${CONFIDENCE_THRESHOLD}`;
+    // The scheduler carries the effective user/model execution threshold in
+    // signal metadata. The API independently clamps it to the LIVE-promotable
+    // 0.60–0.70 contract so Demo/PAPER/LIVE share one enforcement path and a
+    // downstream caller cannot weaken the production floor.
+    const metadataConfidenceThreshold = Number(candidate.metadata?.model_confidence_threshold);
+    const effectiveConfidenceThreshold = Number.isFinite(metadataConfidenceThreshold)
+      ? Math.min(0.7, Math.max(CONFIDENCE_THRESHOLD, metadataConfidenceThreshold))
+      : CONFIDENCE_THRESHOLD;
+
+    // Internal workflow probes are test evidence only; they never become
+    // production-eligible signals and remain separately authority-checked.
+    if (candidate.confidenceScore < effectiveConfidenceThreshold && !uatWorkflowProbeRequested) {
+      const reason = `Confidence ${candidate.confidenceScore} below threshold ${effectiveConfidenceThreshold}`;
       this.logger.log(`Signal ${signalId} ignored: ${reason}`);
       await this.recordIgnored(
         candidate,
@@ -227,6 +245,44 @@ export class StrategyOrchestratorService {
         'Trading session could not be verified',
       );
       return { outcome: 'SESSION_INACTIVE', signalId, reason };
+    }
+
+    // ── Gate 3.5: External-provider certification boundary ───────────────────
+    // External strategy feeds are admitted for evidence collection only. The
+    // provider relay key authenticates transport; it NEVER grants DEMO/LIVE
+    // trading authority. Until a future server-side provider certification
+    // record exists, these signals must bind to the internal PAPER_ONLY
+    // paper-broker DEMO session exactly.
+    const externalProviderPaperOnly =
+      candidate.metadata?.signal_source === 'EXTERNAL_PROVIDER' &&
+      candidate.metadata?.external_provider_paper_only === true;
+    if (externalProviderPaperOnly) {
+      let paperConnection;
+      try {
+        paperConnection = await this.brokerService.findConnectionById(
+          session.brokerConnectionId,
+          userId,
+        );
+      } catch {
+        paperConnection = null;
+      }
+      const exactPaperBoundary =
+        session.executionMode === ExecutionMode.PAPER_ONLY &&
+        candidate.brokerConnectionId === session.brokerConnectionId &&
+        paperConnection?.brokerId === 'paper-broker' &&
+        paperConnection?.accountType === BrokerMode.DEMO;
+      if (!exactPaperBoundary) {
+        const reason =
+          'External provider signal rejected: provider is PAPER_ONLY and requires the exact internal paper-broker DEMO session';
+        this.logger.warn(`Signal ${signalId} rejected: ${reason}`);
+        await this.recordIgnored(
+          candidate,
+          'SIGNAL_INVALID',
+          'EXTERNAL_PROVIDER_PAPER_ONLY',
+          reason,
+        );
+        return { outcome: 'SIGNAL_INVALID', signalId, reason };
+      }
     }
 
     // ── Gate 4: Broker connection active ──────────────────────────────────────
@@ -381,6 +437,7 @@ export class StrategyOrchestratorService {
         this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, {
           outcome: 'EXECUTION_FAILED',
         });
+        await this.markSignalProcessed(userId, signalId);
         return { outcome: 'EXECUTION_FAILED', signalId, reason };
       }
     }
@@ -417,6 +474,7 @@ export class StrategyOrchestratorService {
       this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, {
         outcome: 'EXECUTION_FAILED',
       });
+      await this.markSignalProcessed(userId, signalId);
       return { outcome: 'EXECUTION_FAILED', signalId, reason };
     }
 
@@ -446,15 +504,16 @@ export class StrategyOrchestratorService {
         brokerConnectionId: session.brokerConnectionId,
         instrument: executionCandidate.instrument,
         direction: executionCandidate.direction,
-        entryType: executionCandidate.suggestedEntryPrice != null ? 'LIMIT' : 'MARKET',
-        requestedEntryPrice:
-          executionCandidate.suggestedEntryPrice != null
-            ? String(executionCandidate.suggestedEntryPrice)
-            : null,
+        // The automated AI signal path dispatches MARKET orders only
+        // (ExecutionService normalizes them to OrderKind.MARKET). The model's
+        // suggested entry is provenance, never a LIMIT instruction.
+        entryType: 'MARKET',
+        requestedEntryPrice: null,
         stopLoss:
           executionCandidate.suggestedStopLoss != null
             ? String(executionCandidate.suggestedStopLoss)
             : null,
+        requestedLotUpperBound: String(executionCandidate.suggestedVolume),
       });
       await this.allocationService.resolveOrAllocate({
         intent: {
@@ -515,6 +574,7 @@ export class StrategyOrchestratorService {
           : METRIC_NAMES.SIZING_FAILURES,
         { code },
       );
+      await this.markSignalProcessed(userId, signalId);
       return { outcome: 'EXECUTION_FAILED', signalId, reason };
     }
 
@@ -535,10 +595,9 @@ export class StrategyOrchestratorService {
       // Round 6 §4: the SIZED volume (risk-budget-derived, instrument-
       // normalized) — never the raw AI suggestion.
       requestedLotSize: sized.lots,
-      entryPrice:
-        executionCandidate.suggestedEntryPrice != null
-          ? String(executionCandidate.suggestedEntryPrice)
-          : '0',
+      // MARKET sentinel: RiskService resolves an independent fresh,
+      // direction-aware quote and the final dispatch gate rechecks again.
+      entryPrice: '0',
       stopLoss: String(executionCandidate.suggestedStopLoss),
       takeProfit: String(executionCandidate.suggestedTakeProfit),
       idempotencyKey: `${candidate.userId}:${candidate.signalId}`,
@@ -582,6 +641,7 @@ export class StrategyOrchestratorService {
       this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, {
         outcome: 'RISK_REJECTED',
       });
+      await this.markSignalProcessed(userId, signalId);
       return { outcome: 'RISK_REJECTED', signalId, reason };
     }
 
@@ -629,6 +689,7 @@ export class StrategyOrchestratorService {
       this.metrics?.increment(METRIC_NAMES.INTENTS_REJECTED, {
         code: riskDecision.rejectionCode,
       });
+      await this.markSignalProcessed(userId, signalId);
       return {
         outcome,
         signalId,
@@ -676,6 +737,7 @@ export class StrategyOrchestratorService {
       this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, {
         outcome: 'EXECUTION_PENDING_CONFIRMATION',
       });
+      await this.markSignalProcessed(userId, signalId);
       return {
         outcome: 'EXECUTION_PENDING_CONFIRMATION',
         signalId,
@@ -727,6 +789,7 @@ export class StrategyOrchestratorService {
         this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, {
           outcome: 'EXECUTION_FAILED',
         });
+        await this.markSignalProcessed(userId, signalId);
         return { outcome: 'EXECUTION_FAILED', signalId, tradeId: trade.id, reason };
       }
 
@@ -747,6 +810,7 @@ export class StrategyOrchestratorService {
       this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, {
         outcome: 'EXECUTION_SUCCEEDED',
       });
+      await this.markSignalProcessed(userId, signalId);
       return { outcome: 'EXECUTION_SUCCEEDED', signalId, tradeId: trade.id };
     } catch (err) {
       const reason = `Execution failed: ${(err as Error).message}`;
@@ -766,6 +830,7 @@ export class StrategyOrchestratorService {
       this.metrics?.increment(METRIC_NAMES.AI_SIGNALS_RECEIVED, {
         outcome: 'EXECUTION_FAILED',
       });
+      await this.markSignalProcessed(userId, signalId);
       return { outcome: 'EXECUTION_FAILED', signalId, reason };
     }
   }
@@ -976,8 +1041,10 @@ export class StrategyOrchestratorService {
       instrument: candidate.instrument,
       direction: candidate.direction,
       requestedLotSize: String(candidate.suggestedVolume),
-      requestedEntryPrice:
-        candidate.suggestedEntryPrice != null ? String(candidate.suggestedEntryPrice) : null,
+      // The signal pipeline always executes MARKET. Preserve any model
+      // suggested reference in metadata instead of misclassifying it as a
+      // LIMIT instruction in the durable intent.
+      requestedEntryPrice: null,
       stopLoss: candidate.suggestedStopLoss != null ? String(candidate.suggestedStopLoss) : null,
       takeProfit:
         candidate.suggestedTakeProfit != null ? String(candidate.suggestedTakeProfit) : null,
@@ -987,6 +1054,11 @@ export class StrategyOrchestratorService {
         confidenceScore: candidate.confidenceScore,
         marketRegime: candidate.marketRegime ?? null,
         volatilityScore: candidate.volatilityScore ?? null,
+        execution_entry_type: 'MARKET',
+        signal_suggested_entry_price:
+          candidate.metadata?.['uat_replay_reference_price'] ??
+          candidate.suggestedEntryPrice ??
+          null,
         ...(candidate.metadata ?? {}),
       },
       authorityGeneration,

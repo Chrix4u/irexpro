@@ -28,6 +28,7 @@ export enum TradeCloseReason {
   AI_CLOSE_SIGNAL = 'AI_CLOSE_SIGNAL',
   KILL_SWITCH_FORCE_CLOSE = 'KILL_SWITCH_FORCE_CLOSE',
   BROKER_CLOSE = 'BROKER_CLOSE',
+  STRATEGY_CUTOVER = 'STRATEGY_CUTOVER',
   RECONCILIATION = 'RECONCILIATION',
 }
 
@@ -209,6 +210,34 @@ export class Trade {
    */
   @Column({ name: 'realised_pnl', type: 'numeric', precision: 18, scale: 8, nullable: true })
   realisedPnl: string | null;
+
+  /** Best observed unrealised P&L before closure, in account currency. */
+  @Column({ name: 'max_favorable_pnl', type: 'numeric', precision: 18, scale: 8, nullable: true })
+  maxFavorablePnl: string | null;
+
+  /** Worst observed unrealised P&L before closure, in account currency. */
+  @Column({ name: 'max_adverse_pnl', type: 'numeric', precision: 18, scale: 8, nullable: true })
+  maxAdversePnl: string | null;
+
+  /** Previously available positive P&L surrendered before the actual close. */
+  @Column({ name: 'profit_giveback', type: 'numeric', precision: 18, scale: 8, nullable: true })
+  profitGiveback: string | null;
+
+  @Column({ name: 'path_observation_count', type: 'integer', nullable: true })
+  pathObservationCount: number | null;
+
+  @Column({ name: 'path_peak_observed_at', type: 'timestamptz', nullable: true })
+  pathPeakObservedAt: Date | null;
+
+  @Column({ name: 'path_last_observed_at', type: 'timestamptz', nullable: true })
+  pathLastObservedAt: Date | null;
+
+  /** Closed-candle observations where both SL and TP were reachable in the same bar. */
+  @Column({ name: 'same_bar_protection_ambiguity_count', type: 'integer', nullable: true })
+  sameBarProtectionAmbiguityCount: number | null;
+
+  @Column({ name: 'last_same_bar_protection_ambiguity_at', type: 'timestamptz', nullable: true })
+  lastSameBarProtectionAmbiguityAt: Date | null;
 
   @Column({
     name: 'close_reason',

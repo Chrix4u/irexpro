@@ -35,6 +35,10 @@ import { ReconciliationDiscrepancyType, ReconciliationRunStatus } from './reconc
 import { ReconciliationPersistenceService } from './reconciliation-persistence.service';
 import { ReconciliationResolutionService } from './reconciliation-resolution.service';
 import { ProviderDispatchCertainty } from '../../broker/interfaces/provider-dispatch-certainty';
+import {
+  METAAPI_PROVIDER_QUOTA_COOLDOWN_MS,
+  isMetaApiQuotaError,
+} from '../../broker/utils/metaapi-quota';
 
 /** Public outcome of one reconciliation run (job aggregation + specs). */
 export interface ReconciliationRunOutcome {
@@ -200,6 +204,7 @@ function sanitizeReconciliationReason(reason: unknown): string {
 @Injectable()
 export class StateReconciliationService {
   private readonly logger = new Logger(StateReconciliationService.name);
+  private readonly providerQuotaCooldownUntilByConnection = new Map<string, number>();
 
   constructor(
     @InjectRepository(Trade)
@@ -225,6 +230,15 @@ export class StateReconciliationService {
     private readonly riskGrantRepo: Repository<RiskGrant>,
     private readonly allocationService: AllocationService,
   ) {}
+
+  getProviderQuotaCooldownUntil(connectionId: string, now = Date.now()): Date | null {
+    const cooldownUntil = this.providerQuotaCooldownUntilByConnection.get(connectionId) ?? 0;
+    if (cooldownUntil <= now) {
+      if (cooldownUntil) this.providerQuotaCooldownUntilByConnection.delete(connectionId);
+      return null;
+    }
+    return new Date(cooldownUntil);
+  }
 
   async runForConnection(connection: BrokerConnection): Promise<ReconciliationRunOutcome> {
     const run = await this.persistence.createRun({
@@ -839,6 +853,8 @@ export class StateReconciliationService {
         completedAt: new Date().toISOString(),
       });
 
+      this.providerQuotaCooldownUntilByConnection.delete(connection.id);
+
       return {
         runId: run.id,
         brokerConnectionId: connection.id,
@@ -850,8 +866,20 @@ export class StateReconciliationService {
         errors,
       };
     } catch (err) {
-      // Provider read failure or unexpected error → FAILED run, CRITICAL
-      // audit, surfaced error summary (§29 "failed jobs require visibility").
+      // Provider read failure or unexpected error → FAILED run. MetaAPI quota
+      // exhaustion is operational rather than state-corruption: record the
+      // failed run once, then cool down only the read-heavy reconciliation
+      // sweep for this connection. Stop-AI flattening and protective-order
+      // safety remain owned by the job and continue every cycle.
+      const metaApiQuotaLimited =
+        ['metatrader4', 'metatrader5'].includes(connection.brokerId) && isMetaApiQuotaError(err);
+      const cooldownUntil = metaApiQuotaLimited
+        ? Date.now() + METAAPI_PROVIDER_QUOTA_COOLDOWN_MS
+        : null;
+      if (cooldownUntil) {
+        this.providerQuotaCooldownUntilByConnection.set(connection.id, cooldownUntil);
+      }
+
       // Redact before the failure reaches any durable or observable sink.
       const message = sanitizeReconciliationReason(err);
       await this.persistence.failRun(run.id, message);
@@ -861,11 +889,25 @@ export class StateReconciliationService {
           action: AuditAction.RECONCILIATION_RUN_FAILED,
           resourceType: 'BrokerConnection',
           resourceId: connection.id,
-          severity: AuditSeverity.CRITICAL,
-          metadata: { runId: run.id, brokerId: connection.brokerId, reason: message },
+          severity: metaApiQuotaLimited ? AuditSeverity.WARNING : AuditSeverity.CRITICAL,
+          metadata: {
+            runId: run.id,
+            brokerId: connection.brokerId,
+            reason: message,
+            providerQuotaCooldownUntil: cooldownUntil
+              ? new Date(cooldownUntil).toISOString()
+              : null,
+          },
         })
         .catch(() => undefined);
-      this.logger.error(`Reconciliation run ${run.id} FAILED: ${message}`);
+      if (cooldownUntil) {
+        this.logger.warn(
+          `Reconciliation run ${run.id} quota-limited; connection=${connection.id} ` +
+            `full sweep cooling down until ${new Date(cooldownUntil).toISOString()}: ${message}`,
+        );
+      } else {
+        this.logger.error(`Reconciliation run ${run.id} FAILED: ${message}`);
+      }
       return {
         runId: run.id,
         brokerConnectionId: connection.id,
@@ -967,6 +1009,7 @@ export class StateReconciliationService {
   /** Best-effort provider closed-trade economics for external closes. */
   private async fetchClosedTrades(
     adapter: {
+      readonly brokerId?: string;
       getClosedTrades(
         from: Date,
         to: Date,
@@ -979,7 +1022,12 @@ export class StateReconciliationService {
         (min, t) => (t.openedAt && (!min || t.openedAt < min) ? t.openedAt : min),
         null,
       );
-      return await adapter.getClosedTrades(earliest ?? new Date(0), new Date());
+      // The PAPER_ONLY provider uses a deterministic/replay clock whose
+      // timestamps intentionally do not share wall-clock chronology with
+      // trading.trades.openedAt. Fetch its complete durable close history and
+      // match by provider id. Real brokers retain the bounded time window.
+      const from = adapter.brokerId === 'paper-broker' ? new Date(0) : (earliest ?? new Date(0));
+      return await adapter.getClosedTrades(from, new Date());
     } catch (err) {
       this.logger.warn(`Closed-trade lookup unavailable: ${sanitizeReconciliationReason(err)}`);
       return [];

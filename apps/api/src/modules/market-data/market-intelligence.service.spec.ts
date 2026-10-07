@@ -18,6 +18,7 @@ describe('MarketIntelligenceService', () => {
 
   const brokerService = {
     findActiveConnectionForUser: jest.fn(),
+    findConnectionById: jest.fn(),
     getCurrentPriceForConnection: jest.fn(),
     getOhlcvForConnection: jest.fn(),
   };
@@ -101,6 +102,131 @@ describe('MarketIntelligenceService', () => {
     expect(serialized).not.toContain(connection.id);
     expect(serialized).not.toContain('provider-account');
     expect(serialized).not.toContain('secret');
+  });
+
+  it('binds market intelligence to the exact broker selected by the trading workspace', async () => {
+    jest.spyOn(Date, 'now').mockReturnValue(new Date('2026-10-06T17:00:30.000Z').getTime());
+    const paperConnection = {
+      ...connection,
+      id: '00000000-0000-0000-0000-000000000099',
+      brokerId: 'paper-broker',
+      accountType: 'DEMO',
+      status: 'CONNECTED',
+      encryptedCredentials: null,
+      credentialIv: null,
+      credentialTag: null,
+    };
+    brokerService.findConnectionById.mockResolvedValue(paperConnection);
+    brokerService.getCurrentPriceForConnection.mockResolvedValue({
+      instrument: 'EURUSD',
+      bid: '1.17001',
+      ask: '1.17013',
+      spread: '0.00012',
+      timestamp: new Date('2026-10-06T17:00:15.000Z'),
+    });
+    brokerService.getOhlcvForConnection.mockResolvedValue([
+      {
+        timestamp: new Date('2026-10-06T17:00:00.000Z'),
+        open: '1.16980',
+        high: '1.17020',
+        low: '1.16970',
+        close: '1.17005',
+        volume: '1200',
+      },
+    ]);
+
+    const result = await createService().getSnapshot(userId, {
+      instrument: 'EURUSD',
+      timeframe: 'M1',
+      limit: 20,
+      brokerConnectionId: paperConnection.id,
+    });
+
+    expect(brokerService.findConnectionById).toHaveBeenCalledWith(paperConnection.id, userId);
+    expect(brokerService.findActiveConnectionForUser).not.toHaveBeenCalled();
+    expect(brokerService.getCurrentPriceForConnection).toHaveBeenCalledWith(
+      userId,
+      paperConnection.id,
+      'EURUSD',
+    );
+    expect(marketDataReader.getCurrentPrice).not.toHaveBeenCalled();
+    expect(result.instrument).toBe('EURUSD');
+  });
+
+  it('fails closed when an explicitly selected broker is not CONNECTED', async () => {
+    brokerService.findConnectionById.mockResolvedValue({
+      ...connection,
+      status: 'DISCONNECTED',
+    });
+
+    await expect(
+      createService().getSnapshot(userId, {
+        instrument: 'EURUSD',
+        timeframe: 'M5',
+        limit: 20,
+        brokerConnectionId: connection.id,
+      }),
+    ).rejects.toMatchObject({ status: 503 });
+
+    expect(brokerService.findActiveConnectionForUser).not.toHaveBeenCalled();
+    expect(marketDataReader.getCurrentPrice).not.toHaveBeenCalled();
+  });
+
+  it('normalizes malformed OHLC envelopes for browser-safe chart projection', async () => {
+    jest.spyOn(Date, 'now').mockReturnValue(new Date('2026-09-28T23:00:30.000Z').getTime());
+    brokerService.findActiveConnectionForUser.mockResolvedValue({
+      ...connection,
+      brokerId: 'paper-broker',
+      accountType: 'DEMO',
+    });
+    brokerService.getCurrentPriceForConnection.mockResolvedValue({
+      instrument: 'USDJPY',
+      bid: '157.398',
+      ask: '157.404',
+      spread: '0.006',
+      timestamp: new Date('2026-09-28T22:59:30.000Z'),
+    });
+    brokerService.getOhlcvForConnection.mockResolvedValue([
+      {
+        timestamp: new Date('2026-09-28T22:54:00.000Z'),
+        open: '157.4345',
+        high: '157.435',
+        low: '157.434',
+        close: '157.4355',
+        volume: '20',
+      },
+      {
+        timestamp: new Date('2026-09-28T22:55:00.000Z'),
+        open: '157.4345',
+        high: '157.437',
+        low: '157.434',
+        close: '157.4335',
+        volume: '17',
+      },
+    ]);
+
+    const result = await createService().getSnapshot(userId, {
+      instrument: 'USDJPY',
+      timeframe: 'M1',
+      limit: 60,
+    });
+
+    expect(result.candles[0]).toEqual(
+      expect.objectContaining({
+        open: '157.4345',
+        high: '157.4355',
+        low: '157.434',
+        close: '157.4355',
+      }),
+    );
+    expect(result.candles[1]).toEqual(
+      expect.objectContaining({
+        open: '157.4345',
+        high: '157.437',
+        low: '157.4335',
+        close: '157.4335',
+      }),
+    );
   });
 
   it('marks old broker evidence stale instead of presenting it as live', async () => {

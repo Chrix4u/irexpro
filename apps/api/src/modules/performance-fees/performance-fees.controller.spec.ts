@@ -1,6 +1,7 @@
 import { Reflector } from '@nestjs/core';
 import { PerformanceFeesController } from './performance-fees.controller';
 import { PerformanceFeeService } from './services/performance-fee.service';
+import { PerformanceFeeSimulationService } from './services/performance-fee-simulation.service';
 import { ROLES_KEY } from '../../common/constants/roles.constants';
 import { RoleName } from '../users/entities/role.entity';
 import { BillingFrequency } from './entities/performance-fee-policy.entity';
@@ -19,6 +20,7 @@ import { LedgerEntryType } from './entities/performance-fee-ledger-entry.entity'
 describe('PerformanceFeesController', () => {
   let controller: PerformanceFeesController;
   let svc: jest.Mocked<PerformanceFeeService>;
+  let simulation: jest.Mocked<PerformanceFeeSimulationService>;
   const reflector = new Reflector();
 
   const normalUserId = 'user-123';
@@ -28,6 +30,7 @@ describe('PerformanceFeesController', () => {
     svc = {
       getPolicies: jest.fn(),
       createPolicy: jest.fn(),
+      deactivatePolicy: jest.fn(),
       getUserSummary: jest.fn(),
       getAssessments: jest.fn(),
       calculateAssessment: jest.fn(),
@@ -35,7 +38,13 @@ describe('PerformanceFeesController', () => {
       recordLedgerEntry: jest.fn(),
     } as unknown as jest.Mocked<PerformanceFeeService>;
 
-    controller = new PerformanceFeesController(svc);
+    simulation = {
+      getUserSimulation: jest.fn(),
+      refresh: jest.fn(),
+      settleTestCharge: jest.fn(),
+    } as unknown as jest.Mocked<PerformanceFeeSimulationService>;
+
+    controller = new PerformanceFeesController(svc, simulation);
   });
 
   describe('me/summary scoping', () => {
@@ -45,6 +54,44 @@ describe('PerformanceFeesController', () => {
       // Must be called with the JWT user's OWN id — no way to pass another user's id
       expect(svc.getUserSummary).toHaveBeenCalledWith('user-123');
     });
+  });
+
+  describe('PAPER/DEMO simulation scoping', () => {
+    it('uses only the authenticated user id for simulation reads and writes', async () => {
+      simulation.getUserSimulation.mockResolvedValue({
+        mode: 'TEST_ONLY',
+        paymentEnabled: false,
+        accounts: [],
+      });
+      simulation.refresh.mockResolvedValue({} as never);
+      simulation.settleTestCharge.mockResolvedValue({} as never);
+
+      await controller.getMySimulation(normalUserId);
+      await controller.refreshMySimulation(normalUserId, '11111111-1111-4111-8111-111111111111');
+      await controller.settleMySimulationCharge(
+        normalUserId,
+        '22222222-2222-4222-8222-222222222222',
+      );
+
+      expect(simulation.getUserSimulation).toHaveBeenCalledWith(normalUserId);
+      expect(simulation.refresh).toHaveBeenCalledWith(
+        normalUserId,
+        '11111111-1111-4111-8111-111111111111',
+      );
+      expect(simulation.settleTestCharge).toHaveBeenCalledWith(
+        normalUserId,
+        '22222222-2222-4222-8222-222222222222',
+      );
+    });
+
+    it.each(['getMySimulation', 'refreshMySimulation', 'settleMySimulationCharge'] as const)(
+      '%s has no admin role restriction',
+      (method) => {
+        expect(
+          reflector.get<RoleName[]>(ROLES_KEY, controller[method] as unknown as () => void),
+        ).toBeUndefined();
+      },
+    );
   });
 
   describe('calculate uses the admin actor id', () => {
@@ -69,6 +116,7 @@ describe('PerformanceFeesController', () => {
     const adminEndpoints: Array<keyof PerformanceFeesController> = [
       'getPolicies',
       'createPolicy',
+      'deactivatePolicy',
       'getAssessments',
       'calculateAssessment',
       'invoiceAssessment',

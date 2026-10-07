@@ -63,8 +63,32 @@ INITIAL_FOREX_PRICE_DIGITS = {
 }
 _RECORD = struct.Struct(">IIIff")
 _NEW_YORK = ZoneInfo("America/New_York")
+_RECENT_404_GRACE = timedelta(hours=24)
 
 ProgressLogger = Callable[[str], None]
+
+
+def _is_durable_missing_hour(
+    hour: datetime,
+    *,
+    observed_now: datetime | None = None,
+) -> bool:
+    """Return True only when a provider 404 is old enough to persist.
+
+    Dukascopy can lag publication of very recent completed hours. Persisting a
+    `.missing` marker for those transient 404s would suppress all future
+    retries and can create a permanent artificial gap in a research corpus.
+    """
+    if hour.tzinfo is None:
+        hour = hour.replace(tzinfo=UTC)
+    else:
+        hour = hour.astimezone(UTC)
+    now = observed_now or datetime.now(UTC)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    else:
+        now = now.astimezone(UTC)
+    return now - (hour + timedelta(hours=1)) >= _RECENT_404_GRACE
 
 
 def _is_forex_market_closed_hour(hour: datetime) -> bool:
@@ -267,7 +291,11 @@ def _fetch_hour(
             telemetry["retry_events"] = telemetry.get("retry_events", 0) + 1
 
     if missing_marker is not None and missing_marker.is_file():
-        return hour, [], 0, True
+        if _is_durable_missing_hour(hour):
+            return hour, [], 0, True
+        # A recent 404 may only mean Dukascopy has not published the hour yet.
+        # Do not let that transient state permanently suppress future retries.
+        missing_marker.unlink(missing_ok=True)
 
     if cache_path is not None and cache_path.is_file():
         payload = cache_path.read_bytes()
@@ -298,10 +326,18 @@ def _fetch_hour(
             try:
                 response = client.get(url, headers=headers)
                 if response.status_code == 404:
-                    if missing_marker is not None:
-                        missing_marker.parent.mkdir(parents=True, exist_ok=True)
-                        missing_marker.touch(exist_ok=True)
-                    return hour, [], 0, True
+                    if _is_durable_missing_hour(hour):
+                        if missing_marker is not None:
+                            missing_marker.parent.mkdir(parents=True, exist_ok=True)
+                            missing_marker.touch(exist_ok=True)
+                        return hour, [], 0, True
+                    # Recent completed hours can be published with a delay.
+                    # Retry within this call, but never persist a recent 404.
+                    if attempt < max_retries:
+                        _record_retry()
+                        time.sleep(min(12.0, 1.0 * (2**attempt)))
+                        continue
+                    response.raise_for_status()
 
                 transient = response.status_code == 429 or response.status_code >= 500
                 if transient and attempt < max_retries:

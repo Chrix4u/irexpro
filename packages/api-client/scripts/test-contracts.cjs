@@ -507,6 +507,67 @@ async function testActiveTradingSessionContract() {
   assert.equal(init.headers['Content-Type'], 'application/json');
 }
 
+async function testAutomationRuntimeStatusContract() {
+  const calls = [];
+  const responseBody = {
+    enabled: true,
+    registered: true,
+    trading_session_id: 'sess/needs encoding-1',
+    active: true,
+    instruments: ['USDJPY'],
+    timeframe: 'H1',
+    interval_seconds: 10,
+    source: 'research_replay',
+    last_run_at: '2026-09-30T12:00:00.000Z',
+    next_run_at: '2026-09-30T12:00:10.000Z',
+    last_decision: 'NO_NEW_MARKET_DATA',
+    last_reason: 'market_data_unchanged',
+    last_confidence_score: 0.3376,
+    last_confidence_at: '2026-09-30T12:00:00.000Z',
+    confidence_threshold: 0.6,
+    model_version: 'fixture-v10',
+    model_mode: 'trained_xgboost_mtf',
+    model_loaded: true,
+    last_market_data_at: '2026-09-29T19:59:00.000Z',
+    last_market_data_close: '143.210',
+    market_data_age_seconds: 100,
+    market_data_cache_bypassed: false,
+    last_publish_failed: false,
+    research_uat: true,
+    replay_steps_total: 543,
+    signals_published_total: 0,
+    executions_succeeded_total: 0,
+    downstream_rejected_total: 0,
+  };
+  const fakeFetch = async (url, init) => {
+    calls.push({ url, init });
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => responseBody,
+    };
+  };
+
+  const { createApiClient } = loadApiClient(fakeFetch);
+  const client = createApiClient({
+    baseUrl: 'https://api.example.test/api/v1',
+    getAccessToken: () => 'fixture-access-token',
+  });
+
+  const result = await client.getAutomationRuntimeStatus('sess/needs encoding-1');
+  assert.deepEqual(result, responseBody);
+  assert.equal(calls.length, 1, 'automation runtime must issue exactly one request');
+  const [{ url, init }] = calls;
+  assert.equal(
+    url,
+    'https://api.example.test/api/v1/trading/sessions/sess%2Fneeds%20encoding-1/automation-status',
+  );
+  assert.equal(init.method ?? 'GET', 'GET');
+  assert.equal(init.headers.Authorization, 'Bearer fixture-access-token');
+  assert.equal(init.headers['Content-Type'], 'application/json');
+}
+
 async function testStartTradingSessionContract() {
   const calls = [];
   const responseBody = {
@@ -733,6 +794,86 @@ async function testConfirmExecutionConfirmation409Contract() {
 }
 
 
+async function testPositionCloseContracts() {
+  const calls = [];
+  const fakeFetch = async (url, init) => {
+    calls.push({ url, init });
+    const isCloseAll = url.endsWith('/execution/positions/close-all');
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () =>
+        isCloseAll
+          ? [{ tradeId: 'trade-1', closed: true, status: 'CLOSED' }]
+          : { id: 'trade/needs encoding', status: 'CLOSED' },
+    };
+  };
+
+  const { createApiClient } = loadApiClient(fakeFetch);
+  const client = createApiClient({
+    baseUrl: 'https://api.example.test/api/v1',
+    getAccessToken: () => 'fixture-access-token',
+  });
+
+  const one = await client.closePosition('trade/needs encoding');
+  const all = await client.closeAllAiPositions();
+
+  assert.equal(one.status, 'CLOSED');
+  assert.deepEqual(all, [{ tradeId: 'trade-1', closed: true, status: 'CLOSED' }]);
+  assert.equal(calls.length, 2);
+
+  assert.equal(
+    calls[0].url,
+    'https://api.example.test/api/v1/execution/positions/trade%2Fneeds%20encoding/close',
+  );
+  assert.equal(calls[0].init.method, 'POST');
+  assert.deepEqual(JSON.parse(calls[0].init.body), {});
+
+  assert.equal(
+    calls[1].url,
+    'https://api.example.test/api/v1/execution/positions/close-all',
+  );
+  assert.equal(calls[1].init.method, 'POST');
+  assert.deepEqual(JSON.parse(calls[1].init.body), {});
+
+  for (const { init } of calls) {
+    assert.equal(init.headers.Authorization, 'Bearer fixture-access-token');
+    assert.equal(init.headers['Content-Type'], 'application/json');
+  }
+}
+
+async function testBrokerDisconnect204Contract() {
+  const calls = [];
+  const fakeFetch = async (url, init) => {
+    calls.push({ url, init });
+    return {
+      ok: true,
+      status: 204,
+      statusText: 'No Content',
+      json: async () => {
+        throw new Error('204 responses must not be parsed as JSON');
+      },
+    };
+  };
+
+  const { createApiClient } = loadApiClient(fakeFetch);
+  const client = createApiClient({
+    baseUrl: 'https://api.example.test/api/v1',
+    getAccessToken: () => 'fixture-access-token',
+  });
+
+  const result = await client.disconnectBroker('conn/needs encoding');
+  assert.equal(result, undefined);
+  assert.equal(calls.length, 1);
+  assert.equal(
+    calls[0].url,
+    'https://api.example.test/api/v1/broker/connections/conn/needs encoding/disconnect',
+  );
+  assert.equal(calls[0].init.method, 'POST');
+  assert.equal(calls[0].init.headers.Authorization, 'Bearer fixture-access-token');
+}
+
 async function testUnauthorizedRecoveryIsSingleFlightAndRetriesOnce() {
   const calls = [];
   let token = 'expired-token';
@@ -816,6 +957,8 @@ async function main() {
   console.log('api-client oauth handoff contract test passed.');
   await testActiveTradingSessionContract();
   console.log('api-client active-trading-session contract test passed.');
+  await testAutomationRuntimeStatusContract();
+  console.log('api-client automation-runtime contract test passed.');
   await testStartTradingSessionContract();
   console.log('api-client trading-session start contract test passed.');
   await testChangeTradingSessionModeContract();
@@ -824,6 +967,10 @@ async function main() {
   console.log('api-client execution confirmations contract test passed.');
   await testConfirmExecutionConfirmation409Contract();
   console.log('api-client confirmation 409-failure contract test passed.');
+  await testPositionCloseContracts();
+  console.log('api-client position-close contracts test passed.');
+  await testBrokerDisconnect204Contract();
+  console.log('api-client broker-disconnect 204 contract test passed.');
   await testUnauthorizedRecoveryIsSingleFlightAndRetriesOnce();
   console.log('api-client single-flight unauthorized recovery test passed.');
 }

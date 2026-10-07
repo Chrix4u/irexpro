@@ -18,6 +18,10 @@ import { AllowedTradingMode } from '../risk/entities/risk-profile.entity';
 import { BrokerAccountSnapshotService } from '../broker/services/broker-account-snapshot.service';
 import { BrokerConnectionStatus, BrokerMode } from '../broker/interfaces/broker-adapter.interface';
 import { TradeCloseReason, TradeStatus } from '../execution/entities/trade.entity';
+import { AuthService } from '../auth/auth.service';
+import { AiRuntimePreference } from './entities/ai-runtime-preference.entity';
+import { getRepositoryToken } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
 
 /**
  * TradingService tests — Sprint 29 amendment + free-access regression +
@@ -96,6 +100,9 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
   let aiEngineClient: Record<string, jest.Mock>;
   let onboardingService: Record<string, jest.Mock>;
   let brokerAccountSnapshotService: Record<string, jest.Mock>;
+  let authService: Record<string, jest.Mock>;
+  let aiRuntimePreferenceRepo: Record<string, jest.Mock>;
+  let configService: { get: jest.Mock };
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -105,6 +112,7 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       // Round 5 (#295): kept as a NEVER-CALLED regression sentinel — session
       // start must bind the EXACT requested connection, never discovery.
       findActiveConnectionForUser: jest.fn(),
+      findConnectionsByUser: jest.fn().mockResolvedValue([buildHealthyConnection()]),
       findConnectionsByIds: jest.fn().mockResolvedValue([buildHealthyConnection()]),
       findConnectionById: jest.fn().mockResolvedValue(buildHealthyConnection()),
       getBrokerAccountState: jest.fn().mockResolvedValue({
@@ -179,6 +187,10 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
 
     auditService = { log: jest.fn().mockResolvedValue(undefined) };
     eventBus = { publish: jest.fn(), subscribe: jest.fn().mockReturnValue(() => {}) };
+    configService = {
+      get: jest.fn((_key: string, fallback?: unknown) => fallback),
+    };
+
     aiEngineClient = {
       isSchedulerIntegrationEnabled: jest.fn().mockReturnValue(true),
       notifySessionStarted: jest.fn().mockResolvedValue({
@@ -211,6 +223,16 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       getOnboardingStatus: jest.fn(),
     };
 
+    authService = {
+      verifyAdvancedControlsStepUpToken: jest.fn().mockResolvedValue(undefined),
+    };
+
+    aiRuntimePreferenceRepo = {
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn((value) => value),
+      save: jest.fn(async (value) => ({ id: 'pref-1', revision: 1, ...value })),
+    };
+
     module = await Test.createTestingModule({
       providers: [
         TradingService,
@@ -223,8 +245,11 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
         { provide: AuditService, useValue: auditService },
         { provide: DomainEventBus, useValue: eventBus },
         { provide: AiEngineClient, useValue: aiEngineClient },
+        { provide: ConfigService, useValue: configService },
         { provide: OnboardingService, useValue: onboardingService },
         { provide: BrokerAccountSnapshotService, useValue: brokerAccountSnapshotService },
+        { provide: AuthService, useValue: authService },
+        { provide: getRepositoryToken(AiRuntimePreference), useValue: aiRuntimePreferenceRepo },
       ],
     }).compile();
 
@@ -337,6 +362,79 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       expect(executionService.startSession).toHaveBeenCalled();
     });
 
+    it('does not register the legacy AI scheduler when the exact VPS scanner binding owns the PAPER session', async () => {
+      const values: Record<string, unknown> = {
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+      };
+      configService.get.mockImplementation((key: string, fallback?: unknown) =>
+        key in values ? values[key] : fallback,
+      );
+
+      const session = await service.startTradingSession('user-1', 'conn-1');
+
+      expect(session.id).toBe('session-1');
+      expect(executionService.startSession).toHaveBeenCalled();
+      expect(aiEngineClient.notifySessionStarted).not.toHaveBeenCalled();
+    });
+
+    it('does not register the legacy scheduler for a different DEMO broker owned by the multi-model user', async () => {
+      const values: Record<string, unknown> = {
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'paper-evidence-1',
+      };
+      configService.get.mockImplementation((key: string, fallback?: unknown) =>
+        key in values ? values[key] : fallback,
+      );
+      brokerService.findConnectionById.mockResolvedValue(
+        buildHealthyConnection({
+          id: 'conn-1',
+          brokerId: 'metatrader5',
+          brokerName: 'MetaTrader 5',
+        }),
+      );
+
+      const session = await service.startTradingSession(
+        'user-1',
+        'conn-1',
+        ExecutionMode.FULL_AUTO,
+      );
+
+      expect(session.id).toBe('session-1');
+      expect(executionService.startSession).toHaveBeenCalled();
+      expect(aiEngineClient.notifySessionStarted).not.toHaveBeenCalled();
+    });
+
+    it('keeps PAPER execution bound while using a connected MT5 DEMO account for market data', async () => {
+      brokerService.findConnectionsByUser.mockResolvedValue([
+        buildHealthyConnection(),
+        buildHealthyConnection({
+          id: 'market-data-1',
+          brokerId: 'metatrader5',
+          brokerName: 'MetaTrader 5',
+          accountType: BrokerMode.DEMO,
+          encryptedCredentials: 'ciphertext',
+          credentialIv: 'iv',
+          credentialTag: 'tag',
+        }),
+      ]);
+
+      await service.startTradingSession('user-1', 'conn-1');
+
+      expect(aiEngineClient.notifySessionStarted).toHaveBeenCalledWith(
+        expect.objectContaining({
+          brokerConnectionId: 'conn-1',
+          marketDataConnectionId: 'market-data-1',
+          brokerId: 'paper-broker',
+          researchUat: true,
+        }),
+      );
+    });
+
     it('registers only preferred instruments the bound broker actually supports', async () => {
       brokerService.getSupportedInstrumentsForConnection.mockResolvedValue([
         { symbol: 'EURUSD' },
@@ -354,7 +452,7 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
           instruments: ['EURUSD'],
           brokerId: 'paper-broker',
           researchUat: true,
-          replayStepsPerCycle: 12,
+          replayStepsPerCycle: 1,
           intervalSeconds: 10,
         }),
       );
@@ -921,6 +1019,110 @@ describe('TradingService (Sprint 29 amendment — centralized readiness gate)', 
       expect(status.registered).toBe(true);
       expect(status.active).toBe(true);
       expect(aiEngineClient.getSessionStatus).toHaveBeenCalledWith('session-1');
+    });
+
+    it('keeps the legacy scheduler stopped when the VPS scanner owns the exact PAPER binding', async () => {
+      const values: Record<string, unknown> = {
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+      };
+      configService.get.mockImplementation((key: string, fallback?: unknown) =>
+        key in values ? values[key] : fallback,
+      );
+      aiEngineClient.getSessionStatus.mockResolvedValue({
+        enabled: true,
+        registered: true,
+        trading_session_id: 'session-1',
+        active: true,
+        instruments: ['USDJPY'],
+        timeframe: 'M1',
+        interval_seconds: 10,
+        source: 'broker',
+        last_run_at: null,
+        next_run_at: null,
+        last_decision: null,
+        last_reason: null,
+        last_confidence_score: null,
+        confidence_threshold: 0.6,
+        last_publish_failed: false,
+      });
+
+      const status = await service.getAutomationRuntimeStatus('user-1', 'session-1');
+
+      expect(aiEngineClient.notifySessionStopped).toHaveBeenCalledWith({
+        tradingSessionId: 'session-1',
+      });
+      expect(aiEngineClient.notifySessionStarted).not.toHaveBeenCalled();
+      expect(status).toEqual(
+        expect.objectContaining({
+          registered: true,
+          active: true,
+          source: 'vps-twelvedata',
+          timeframe: 'M5',
+          interval_seconds: 600,
+          last_decision: 'MULTI_MODEL_SHADOW',
+          last_reason: 'multimodel_evidence_binding_owns_session',
+          model_version: 'irexpro-multimodel-ensemble-v1',
+          model_mode: 'PROSPECTIVE_SHADOW_ONLY',
+        }),
+      );
+      expect(status.instruments).toEqual([
+        'EURUSD',
+        'GBPUSD',
+        'USDJPY',
+        'AUDUSD',
+        'USDCAD',
+        'USDCHF',
+      ]);
+    });
+
+    it('reports multi-model shadow and suppresses legacy self-heal on a non-evidence DEMO broker session', async () => {
+      const values: Record<string, unknown> = {
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'paper-evidence-1',
+      };
+      configService.get.mockImplementation((key: string, fallback?: unknown) =>
+        key in values ? values[key] : fallback,
+      );
+      brokerService.findConnectionById.mockResolvedValue(
+        buildHealthyConnection({ brokerId: 'metatrader5', brokerName: 'MetaTrader 5' }),
+      );
+      aiEngineClient.getSessionStatus.mockResolvedValue({
+        enabled: true,
+        registered: false,
+        trading_session_id: 'session-1',
+        active: false,
+        instruments: [],
+        timeframe: null,
+        interval_seconds: null,
+        source: null,
+        last_run_at: null,
+        next_run_at: null,
+        last_decision: null,
+        last_reason: null,
+        last_confidence_score: null,
+        confidence_threshold: null,
+        last_publish_failed: false,
+      });
+
+      const status = await service.getAutomationRuntimeStatus('user-1', 'session-1');
+
+      expect(aiEngineClient.notifySessionStarted).not.toHaveBeenCalled();
+      expect(status).toEqual(
+        expect.objectContaining({
+          registered: true,
+          active: true,
+          source: 'vps-twelvedata+broker-mtf',
+          last_decision: 'MULTI_MODEL_SHADOW',
+          last_reason: 'multimodel_user_owns_broker_session',
+          model_version: 'irexpro-multimodel-ensemble-v1',
+          model_mode: 'PROSPECTIVE_SHADOW_ONLY',
+        }),
+      );
     });
 
     it('self-heals a missing scheduler job for an ACTIVE paper session', async () => {

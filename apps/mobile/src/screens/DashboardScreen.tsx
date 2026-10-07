@@ -1,101 +1,537 @@
-import { useEffect, useState } from 'react';
-import { StyleSheet, Text, View, ActivityIndicator } from 'react-native';
-import { useAuth } from '@/context/auth-context';
-import { api } from '../lib/api';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  ActivityIndicator,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 import type { OnboardingStatus } from '@irexpro/types';
+import { api } from '../lib/api';
+import {
+  ActionButton,
+  Banner,
+  Card,
+  SectionHeader,
+  StatusPill,
+  palette,
+} from '../components/ui';
 
-/**
- * Mobile dashboard — novice AI-first flow.
- *
- * Keeps eligibility and broker readiness visible without exposing strategy,
- * risk-parameter, or execution-mode configuration to novice users.
- */
-export default function DashboardScreen() {
-  const { user } = useAuth();
+export default function DashboardScreen({
+  onOpenProfile,
+  onOpenEligibility,
+  onOpenBroker,
+}: {
+  onOpenProfile: () => void;
+  onOpenEligibility: () => void;
+  onOpenBroker: () => void;
+}) {
+  const { width } = useWindowDimensions();
+  const compact = width < 390;
   const [onboarding, setOnboarding] = useState<OnboardingStatus | null>(null);
+  const [brokerTransportConnected, setBrokerTransportConnected] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const load = useCallback(async () => {
+    const [onboardingResult, brokerResult] = await Promise.allSettled([
+      api.getOnboardingStatus(),
+      api.listBrokerConnections(),
+    ]);
+
+    if (onboardingResult.status === 'fulfilled') {
+      setOnboarding(onboardingResult.value);
+      setError(null);
+    } else {
+      setError(
+        onboardingResult.reason instanceof Error
+          ? onboardingResult.reason.message
+          : 'Failed to load onboarding status',
+      );
+    }
+
+    if (brokerResult.status === 'fulfilled') {
+      setBrokerTransportConnected(
+        brokerResult.value.some((connection) => connection.status === 'CONNECTED'),
+      );
+    } else {
+      setBrokerTransportConnected(null);
+    }
+
+    setLoading(false);
+    setRefreshing(false);
+  }, []);
+
   useEffect(() => {
-    if (!user) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const status = await api.getOnboardingStatus();
-        if (!cancelled) setOnboarding(status);
-      } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load onboarding status');
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [user]);
+    void load();
+  }, [load]);
+
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    void load();
+  }, [load]);
+
+  const effectiveBrokerConnected =
+    brokerTransportConnected ?? onboarding?.brokerConnected ?? false;
+
+  const brokerReadinessMismatch =
+    onboarding !== null &&
+    brokerTransportConnected !== null &&
+    onboarding.brokerConnected !== brokerTransportConnected;
+
+  const nextAction = useMemo(() => {
+    if (!onboarding) return null;
+    if (onboarding.nextStep === 'PROFILE') {
+      return { label: 'Complete trader profile', action: onOpenProfile };
+    }
+    if (onboarding.nextStep === 'ELIGIBILITY') {
+      return { label: 'Complete eligibility', action: onOpenEligibility };
+    }
+    if (onboarding.nextStep === 'BROKER_CONNECTION') {
+      return {
+        label: effectiveBrokerConnected
+          ? 'Review broker readiness'
+          : 'Connect broker',
+        action: onOpenBroker,
+      };
+    }
+    return null;
+  }, [effectiveBrokerConnected, onOpenBroker, onOpenEligibility, onOpenProfile, onboarding]);
+
+  const completedSteps = onboarding
+    ? [
+        onboarding.profileCompleted,
+        onboarding.eligibilityCompleted,
+        effectiveBrokerConnected,
+      ].filter(Boolean).length
+    : 0;
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Home</Text>
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>Welcome back</Text>
-        <Text style={styles.muted}>{user ? user.email ?? user.phone ?? 'Trader' : 'Not signed in'}</Text>
+    <ScrollView
+      style={styles.screen}
+      contentContainerStyle={styles.container}
+      showsVerticalScrollIndicator={false}
+      keyboardShouldPersistTaps="handled"
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          tintColor={palette.accent}
+          colors={[palette.accent]}
+          progressBackgroundColor={palette.card}
+        />
+      }
+    >
+      <View style={styles.hero}>
+        <View style={styles.heroGlow} />
+        <Text style={styles.eyebrow}>IREXPRO · MOBILE</Text>
+        <Text style={styles.title}>Trading command center</Text>
+        <Text style={styles.subtitle}>
+          Setup status, broker readiness and AI trading access in one place.
+        </Text>
+
+        <View style={styles.heroStats}>
+          <View style={styles.heroStat}>
+            <Text style={styles.heroStatValue}>{completedSteps}/3</Text>
+            <Text style={styles.heroStatLabel}>Setup steps</Text>
+          </View>
+          <View style={styles.heroDivider} />
+          <View style={styles.heroStat}>
+            <Text
+              style={[
+                styles.heroStatValue,
+                onboarding?.canStartTrading
+                  ? styles.heroStatReady
+                  : styles.heroStatPending,
+              ]}
+            >
+              {onboarding?.canStartTrading ? 'READY' : 'CHECK'}
+            </Text>
+            <Text style={styles.heroStatLabel}>Trading gate</Text>
+          </View>
+        </View>
       </View>
 
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>Ready for AI Trading?</Text>
-        {loading ? (
-          <ActivityIndicator color="#14b8a6" />
-        ) : error ? (
-          <Text style={styles.errorText}>{error}</Text>
-        ) : onboarding ? (
-          <View>
-            <View style={styles.statusRow}>
-              <Text style={styles.statusText}>{onboarding.profileCompleted ? '✅' : '⬜'} Profile</Text>
-              <Text style={onboarding.profileCompleted ? styles.doneText : styles.pendingText}>
-                {onboarding.profileCompleted ? 'Done' : 'Pending'}
-              </Text>
-            </View>
-            <View style={styles.statusRow}>
-              <Text style={styles.statusText}>{onboarding.eligibilityCompleted ? '✅' : '⬜'} Eligibility</Text>
-              <Text style={onboarding.eligibilityCompleted ? styles.doneText : styles.pendingText}>
-                {onboarding.eligibilityCompleted ? 'Done' : 'Pending'}
-              </Text>
-            </View>
-            <View style={styles.statusRow}>
-              <Text style={styles.statusText}>{onboarding.brokerConnected ? '✅' : '⬜'} Broker</Text>
-              <Text style={onboarding.brokerConnected ? styles.doneText : styles.pendingText}>
-                {onboarding.brokerConnected ? 'Connected' : 'Pending'}
-              </Text>
-            </View>
-            <View style={[styles.statusRow, { marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#243049' }]}>
-              <Text style={styles.cardTitle}>Can start AI Trading</Text>
-              <Text style={onboarding.canStartTrading ? styles.doneText : styles.pendingText}>
-                {onboarding.canStartTrading ? 'Yes' : 'No'}
-              </Text>
-            </View>
-            {!onboarding.canStartTrading && onboarding.missingSteps.length > 0 && (
-              <Text style={styles.muted}>
-                Next step: {onboarding.nextStep.replace(/_/g, ' ').toLowerCase()}
-              </Text>
-            )}
-            <Text style={[styles.muted, { marginTop: 8, fontSize: 12 }]}>
-              Complete any missing profile or eligibility step on the web, then use the Broker and AI tabs here.
+      {error ? <Banner variant="error">{error}</Banner> : null}
+
+      {brokerReadinessMismatch ? (
+        <Banner variant="info">
+          {brokerTransportConnected
+            ? 'Broker transport is connected, but trading readiness has not reconciled yet. Trading remains blocked until the server readiness gate confirms it.'
+            : 'Trading readiness still references a broker connection, but the live broker list is not currently connected. Refresh Broker before starting AI Trading.'}
+        </Banner>
+      ) : null}
+
+      <Card style={styles.readinessCard}>
+        <View
+          style={[
+            styles.readinessHeader,
+            compact && styles.readinessHeaderCompact,
+          ]}
+        >
+          <View style={styles.readinessHeaderCopy}>
+            <Text style={styles.readinessTitle}>AI trading readiness</Text>
+            <Text style={styles.readinessDescription}>
+              Every gate is verified by the server. Mobile cannot bypass
+              profile, eligibility, broker or model controls.
             </Text>
           </View>
+          <View
+            style={[
+              styles.readinessStatusSlot,
+              compact && styles.readinessStatusSlotCompact,
+            ]}
+          >
+            <StatusPill
+              status={
+                loading
+                  ? 'CHECKING'
+                  : onboarding?.canStartTrading
+                    ? 'READY'
+                    : 'SETUP_REQUIRED'
+              }
+              tone={
+                loading
+                  ? 'neutral'
+                  : onboarding?.canStartTrading
+                    ? 'positive'
+                    : 'warning'
+              }
+            />
+          </View>
+        </View>
+
+        {loading ? (
+          <View style={styles.loadingRow}>
+            <ActivityIndicator color={palette.accent} />
+            <Text style={styles.muted}>Checking readiness…</Text>
+          </View>
+        ) : onboarding ? (
+          <>
+            <ReadinessRow
+              index="01"
+              label="Trader profile"
+              complete={onboarding.profileCompleted}
+              compact={compact}
+            />
+            <ReadinessRow
+              index="02"
+              label="Eligibility & disclosures"
+              complete={onboarding.eligibilityCompleted}
+              compact={compact}
+            />
+            <ReadinessRow
+              index="03"
+              label="Broker connection"
+              complete={effectiveBrokerConnected}
+              compact={compact}
+            />
+            <ReadinessRow
+              index="04"
+              label="Trading readiness"
+              complete={onboarding.canStartTrading}
+              compact={compact}
+              last
+            />
+
+            {nextAction ? (
+              <ActionButton
+                label={nextAction.label}
+                onPress={nextAction.action}
+              />
+            ) : (
+              <View style={styles.readyPanel}>
+                <Text style={styles.readyPanelTitle}>Setup gates complete</Text>
+                <Text style={styles.readyCopy}>
+                  Use the AI tab to manage server-approved AI Trading and view
+                  live runtime status.
+                </Text>
+              </View>
+            )}
+          </>
         ) : null}
+      </Card>
+
+      <SectionHeader
+        title="Account setup"
+        description="Manage the prerequisites that control broker and AI access."
+      />
+
+      <View style={styles.actionGrid}>
+        <QuickAction
+          kicker="IDENTITY"
+          title="Trader profile"
+          description="Personal details and account identity."
+          onPress={onOpenProfile}
+        />
+        <QuickAction
+          kicker="COMPLIANCE"
+          title="Eligibility"
+          description="Adult-age, KYC and disclosures."
+          onPress={onOpenEligibility}
+        />
+        <QuickAction
+          kicker="EXECUTION"
+          title="Broker"
+          description="Connect, verify or reconnect an account."
+          onPress={onOpenBroker}
+        />
       </View>
+
+      <View style={styles.bottomSpacer} />
+    </ScrollView>
+  );
+}
+
+function ReadinessRow({
+  index,
+  label,
+  complete,
+  compact = false,
+  last = false,
+}: {
+  index: string;
+  label: string;
+  complete: boolean;
+  compact?: boolean;
+  last?: boolean;
+}) {
+  return (
+    <View
+      style={[
+        styles.statusRow,
+        compact && styles.statusRowCompact,
+        last && styles.statusRowLast,
+      ]}
+    >
+      <View style={styles.statusLabelGroup}>
+        <View style={[styles.stepDot, complete && styles.stepDotComplete]}>
+          <Text style={[styles.stepDotText, complete && styles.stepDotTextComplete]}>
+            {complete ? '✓' : index}
+          </Text>
+        </View>
+        <Text style={styles.statusText}>{label}</Text>
+      </View>
+      <StatusPill
+        status={complete ? 'COMPLETE' : 'PENDING'}
+        tone={complete ? 'positive' : 'warning'}
+      />
+    </View>
+  );
+}
+
+function QuickAction({
+  kicker,
+  title,
+  description,
+  onPress,
+}: {
+  kicker: string;
+  title: string;
+  description: string;
+  onPress: () => void;
+}) {
+  return (
+    <View style={styles.quickCard}>
+      <Text style={styles.quickKicker}>{kicker}</Text>
+      <Text style={styles.quickTitle}>{title}</Text>
+      <Text style={styles.quickDescription}>{description}</Text>
+      <ActionButton label="Open" secondary onPress={onPress} />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0b1020', padding: 20 },
-  title: { fontSize: 24, fontWeight: '700', color: '#e8edff', marginTop: 12, marginBottom: 12 },
-  card: { backgroundColor: '#131a2e', borderColor: '#243049', borderWidth: 1, borderRadius: 12, padding: 16, marginBottom: 12 },
-  cardTitle: { fontSize: 16, fontWeight: '600', color: '#e8edff', marginBottom: 6 },
-  muted: { color: '#9aa7c7', fontSize: 14, lineHeight: 20 },
-  errorText: { color: '#ef4444', fontSize: 14 },
-  statusRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
-  statusText: { color: '#e8edff', fontSize: 14 },
-  doneText: { color: '#10b981', fontSize: 13, fontWeight: '600' },
-  pendingText: { color: '#f59e0b', fontSize: 13, fontWeight: '600' },
+  screen: { flex: 1, backgroundColor: palette.bg },
+  container: {
+    paddingHorizontal: 18,
+    paddingTop: 14,
+    paddingBottom: 26,
+  },
+  hero: {
+    overflow: 'hidden',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#1f6f69',
+    backgroundColor: '#0d1d27',
+    padding: 20,
+    marginBottom: 16,
+  },
+  heroGlow: {
+    position: 'absolute',
+    width: 150,
+    height: 150,
+    borderRadius: 75,
+    backgroundColor: '#123e42',
+    opacity: 0.7,
+    top: -65,
+    right: -45,
+  },
+  eyebrow: {
+    color: '#5eead4',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 1.4,
+  },
+  title: {
+    fontSize: 27,
+    fontWeight: '900',
+    color: palette.text,
+    marginTop: 8,
+    maxWidth: 300,
+  },
+  subtitle: {
+    color: palette.bodySoft,
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 7,
+    maxWidth: 330,
+  },
+  heroStats: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    borderRadius: 14,
+    backgroundColor: 'rgba(4, 15, 22, 0.55)',
+    marginTop: 18,
+    padding: 12,
+  },
+  heroStat: { flex: 1, gap: 3 },
+  heroStatValue: { color: palette.text, fontSize: 17, fontWeight: '900' },
+  heroStatReady: { color: '#5eead4' },
+  heroStatPending: { color: '#fde68a' },
+  heroStatLabel: { color: palette.helper, fontSize: 10, fontWeight: '700' },
+  heroDivider: { width: 1, backgroundColor: '#22404a', marginHorizontal: 14 },
+  readinessCard: { marginTop: 2 },
+  readinessHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 4,
+  },
+  readinessHeaderCompact: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    gap: 10,
+  },
+  readinessHeaderCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  readinessTitle: {
+    color: palette.text,
+    fontSize: 17,
+    fontWeight: '800',
+    lineHeight: 22,
+  },
+  readinessDescription: {
+    color: palette.muted,
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 5,
+  },
+  readinessStatusSlot: {
+    minHeight: 28,
+    minWidth: 102,
+    alignItems: 'flex-end',
+    justifyContent: 'flex-start',
+    flexShrink: 0,
+  },
+  readinessStatusSlotCompact: {
+    alignItems: 'flex-start',
+    minWidth: 0,
+  },
+  loadingRow: {
+    flexDirection: 'row',
+    gap: 10,
+    alignItems: 'center',
+    marginTop: 16,
+  },
+  muted: { color: palette.muted, fontSize: 13 },
+  statusRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: palette.cardBorder,
+  },
+  statusRowCompact: {
+    alignItems: 'flex-start',
+    flexWrap: 'wrap',
+    rowGap: 8,
+  },
+  statusRowLast: { borderBottomWidth: 0 },
+  statusLabelGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+    minWidth: 0,
+  },
+  stepDot: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: palette.inputBorder,
+    backgroundColor: palette.input,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stepDotComplete: {
+    borderColor: palette.success.border,
+    backgroundColor: palette.success.background,
+  },
+  stepDotText: { color: palette.muted, fontSize: 9, fontWeight: '900' },
+  stepDotTextComplete: { color: '#5eead4', fontSize: 13 },
+  statusText: {
+    color: palette.body,
+    fontSize: 13,
+    fontWeight: '700',
+    flexShrink: 1,
+    minWidth: 0,
+    lineHeight: 18,
+  },
+  readyPanel: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: palette.success.border,
+    backgroundColor: palette.success.background,
+    padding: 12,
+    marginTop: 12,
+  },
+  readyPanelTitle: { color: '#5eead4', fontSize: 12, fontWeight: '900' },
+  readyCopy: {
+    color: palette.success.text,
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 3,
+  },
+  actionGrid: { gap: 10, marginTop: 12 },
+  quickCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: palette.cardBorder,
+    backgroundColor: palette.card,
+    padding: 15,
+  },
+  quickKicker: {
+    color: palette.accent,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 1,
+  },
+  quickTitle: { color: palette.text, fontSize: 16, fontWeight: '800', marginTop: 5 },
+  quickDescription: {
+    color: palette.muted,
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 3,
+  },
+  bottomSpacer: { height: 12 },
 });

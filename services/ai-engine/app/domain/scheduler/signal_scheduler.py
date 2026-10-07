@@ -7,11 +7,13 @@ IMPORTANT:
 - Generates signal candidates and publishes via NestJsClient
 - Never executes trades directly
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
+from uuid import uuid4
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -29,6 +31,17 @@ logger = get_logger(__name__)
 MarketDataSource = Literal["mock", "broker"]
 
 
+@dataclass(frozen=True)
+class PendingHorizonExit:
+    trade_id: str
+    instrument: str
+    due_market_at: datetime
+    confidence_score: float
+    strategy_code: str
+    model_version: str
+    entry_signal_id: str
+
+
 @dataclass
 class ScheduledSessionJob:
     trading_session_id: str
@@ -38,6 +51,7 @@ class ScheduledSessionJob:
     timeframe: str
     source: MarketDataSource
     interval_seconds: int
+    market_data_connection_id: str | None = None
     active: bool = True
     last_run_at: datetime | None = None
     last_publish_failed: bool = False
@@ -47,12 +61,15 @@ class ScheduledSessionJob:
     last_confidence_at: datetime | None = None
     market_data_revisions: dict[str, str] = field(default_factory=dict)
     last_market_data_at: datetime | None = None
+    last_market_data_close: str | None = None
     model_version: str | None = None
     model_mode: str | None = None
     model_loaded: bool | None = None
     market_data_cache_bypassed: bool = False
     research_uat: bool = False
+    workflow_probe_enabled: bool = True
     replay_steps_per_cycle: int = 1
+    confidence_threshold_override: float | None = None
     replay_steps_last_cycle: int = 0
     replay_steps_total: int = 0
     signals_published_total: int = 0
@@ -62,6 +79,7 @@ class ScheduledSessionJob:
     executions_succeeded_total: int = 0
     downstream_rejected_total: int = 0
     last_uat_probe_at: datetime | None = None
+    pending_horizon_exits: dict[str, PendingHorizonExit] = field(default_factory=dict)
     registered_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -115,7 +133,11 @@ class SignalScheduler:
             logger.warning("Unsupported scheduler mode", mode=request.mode)
             return False
 
-        if request.source == "mock" and settings.is_production and not settings.ai_allow_mock_market_data:
+        if (
+            request.source == "mock"
+            and settings.is_production
+            and not settings.ai_allow_mock_market_data
+        ):
             logger.warning("Mock source blocked in production for scheduler")
             return False
 
@@ -153,8 +175,15 @@ class SignalScheduler:
             timeframe=request.timeframe.upper(),
             source=request.source,
             interval_seconds=interval,
+            market_data_connection_id=(
+                request.market_data_connection_id or request.broker_connection_id
+            ),
             research_uat=request.research_uat,
+            workflow_probe_enabled=request.workflow_probe_enabled,
             replay_steps_per_cycle=replay_steps,
+            confidence_threshold_override=(
+                request.confidence_threshold_override if request.research_uat else None
+            ),
         )
         self._jobs[session_id] = job
 
@@ -175,7 +204,9 @@ class SignalScheduler:
             interval_seconds=interval,
             source=request.source,
             research_uat=request.research_uat,
+            workflow_probe_enabled=request.workflow_probe_enabled,
             replay_steps_per_cycle=replay_steps,
+            confidence_threshold_override=job.confidence_threshold_override,
         )
         return True
 
@@ -226,7 +257,6 @@ class SignalScheduler:
 
         generator = self._get_signal_generator()
         job.replay_steps_last_cycle = 0
-        published_this_cycle = False
 
         scan_plan = (
             [
@@ -242,6 +272,7 @@ class SignalScheduler:
                 now = datetime.now(UTC)
                 probe_due = (
                     job.research_uat
+                    and job.workflow_probe_enabled
                     and scan_index == len(scan_plan) - 1
                     and (
                         job.last_uat_probe_at is None
@@ -252,11 +283,14 @@ class SignalScheduler:
                     user_id=job.user_id,
                     trading_session_id=job.trading_session_id,
                     broker_connection_id=job.broker_connection_id,
+                    market_data_connection_id=job.market_data_connection_id,
                     instrument=instrument,
                     timeframe=job.timeframe,
                     source=job.source,
                     bypass_market_data_cache=job.source == "broker",
                     uat_workflow_probe=probe_due,
+                    research_uat_authorized=job.research_uat,
+                    confidence_threshold_override=job.confidence_threshold_override,
                 )
 
                 job.replay_steps_last_cycle += 1
@@ -266,6 +300,7 @@ class SignalScheduler:
                 if telemetry is not None:
                     previous_revision = job.market_data_revisions.get(instrument)
                     job.last_market_data_at = telemetry.market_data_last_candle_at
+                    job.last_market_data_close = telemetry.market_data_last_close
                     job.model_version = telemetry.model_version
                     job.model_mode = telemetry.model_mode
                     job.model_loaded = telemetry.model_loaded
@@ -274,8 +309,21 @@ class SignalScheduler:
                     if previous_revision == telemetry.market_data_revision:
                         job.last_decision = "NO_NEW_MARKET_DATA"
                         job.last_reason = "market_data_unchanged"
-                        job.last_confidence_score = None
-                        job.last_confidence_at = None
+                        # Preserve the last evaluated confidence. After a scheduler restart
+                        # the in-memory value may be empty even though this same candle can
+                        # still be evaluated deterministically; hydrate it from the current
+                        # generation result without publishing a duplicate signal.
+                        if job.last_confidence_score is None:
+                            recovered_confidence = (
+                                result.signal.confidence_score
+                                if result.signal is not None
+                                else result.no_signal.confidence_score
+                                if result.no_signal is not None
+                                else None
+                            )
+                            if recovered_confidence is not None:
+                                job.last_confidence_score = recovered_confidence
+                                job.last_confidence_at = job.last_run_at
                         logger.debug(
                             "Market data revision unchanged — duplicate signal opportunity suppressed",
                             trading_session_id=trading_session_id,
@@ -286,17 +334,59 @@ class SignalScheduler:
 
                     job.market_data_revisions[instrument] = telemetry.market_data_revision
 
+                    pending_exit = job.pending_horizon_exits.get(instrument)
+                    if (
+                        job.research_uat
+                        and pending_exit is not None
+                        and telemetry.market_data_last_candle_at >= pending_exit.due_market_at
+                    ):
+                        exit_signal_id = str(uuid4())
+                        exit_result = await self._nestjs_client.publish_exit_signal(
+                            signal_id=exit_signal_id,
+                            user_id=job.user_id,
+                            trading_session_id=job.trading_session_id,
+                            instrument=pending_exit.instrument,
+                            trade_id=pending_exit.trade_id,
+                            confidence_score=pending_exit.confidence_score,
+                            strategy_code=pending_exit.strategy_code,
+                            model_version=pending_exit.model_version,
+                            rationale=(
+                                "Research PAPER horizon expiry: "
+                                f"{pending_exit.due_market_at.isoformat()} "
+                                f"from entry signal {pending_exit.entry_signal_id}"
+                            ),
+                        )
+                        outcome = (
+                            exit_result.get("outcome") if isinstance(exit_result, dict) else None
+                        )
+                        if outcome in {"EXIT_SUCCEEDED", "NO_OPEN_POSITION", "DUPLICATE_RECOVERED"}:
+                            job.pending_horizon_exits.pop(instrument, None)
+                        job.last_strategy_outcome = (
+                            str(outcome) if outcome is not None else "HORIZON_EXIT_SUBMITTED"
+                        )
+                        job.last_strategy_reason = "research_horizon_expired"
+                        logger.info(
+                            "Research PAPER horizon exit processed",
+                            trading_session_id=trading_session_id,
+                            instrument=instrument,
+                            trade_id=pending_exit.trade_id,
+                            due_market_at=pending_exit.due_market_at.isoformat(),
+                            market_data_last_candle_at=telemetry.market_data_last_candle_at.isoformat(),
+                            outcome=outcome,
+                        )
+                        # Do not open new exposure on the same replay step used
+                        # to close the expired research position.
+                        continue
+
                 if not result.generated or result.signal is None:
                     job.last_decision = "NO_TRADE"
-                    job.last_reason = (
-                        result.no_signal.reason if result.no_signal else "unknown"
-                    )
-                    job.last_confidence_score = (
+                    job.last_reason = result.no_signal.reason if result.no_signal else "unknown"
+                    evaluated_confidence = (
                         result.no_signal.confidence_score if result.no_signal else None
                     )
-                    job.last_confidence_at = (
-                        job.last_run_at if job.last_confidence_score is not None else None
-                    )
+                    if evaluated_confidence is not None:
+                        job.last_confidence_score = evaluated_confidence
+                        job.last_confidence_at = job.last_run_at
                     logger.debug(
                         "No signal to publish",
                         trading_session_id=trading_session_id,
@@ -307,12 +397,8 @@ class SignalScheduler:
                     continue
 
                 strategy_result = await self._nestjs_client.publish_signal(result.signal)
-                is_uat_probe = bool(
-                    result.signal.metadata.get("uat_workflow_probe")
-                )
-                job.last_decision = (
-                    "UAT_WORKFLOW_PROBE" if is_uat_probe else "SIGNAL_PUBLISHED"
-                )
+                is_uat_probe = bool(result.signal.metadata.get("uat_workflow_probe"))
+                job.last_decision = "UAT_WORKFLOW_PROBE" if is_uat_probe else "SIGNAL_PUBLISHED"
                 job.last_reason = (
                     "uat_workflow_probe_published"
                     if is_uat_probe
@@ -326,17 +412,42 @@ class SignalScheduler:
                     outcome = strategy_result.get("outcome")
                     reason = strategy_result.get("reason")
                     trade_id = strategy_result.get("tradeId")
-                    job.last_strategy_outcome = (
-                        str(outcome) if outcome is not None else None
-                    )
-                    job.last_strategy_reason = (
-                        str(reason) if reason is not None else None
-                    )
-                    job.last_trade_id = (
-                        str(trade_id) if trade_id is not None else None
-                    )
+                    job.last_strategy_outcome = str(outcome) if outcome is not None else None
+                    job.last_strategy_reason = str(reason) if reason is not None else None
+                    job.last_trade_id = str(trade_id) if trade_id is not None else None
                     if outcome == "EXECUTION_SUCCEEDED":
                         job.executions_succeeded_total += 1
+                        horizon_raw = result.signal.metadata.get("research_horizon_bars")
+                        if (
+                            job.research_uat
+                            and trade_id is not None
+                            and telemetry is not None
+                            and isinstance(horizon_raw, int)
+                            and horizon_raw >= 1
+                            and result.signal.timeframe.upper() == "M1"
+                        ):
+                            job.pending_horizon_exits[instrument] = PendingHorizonExit(
+                                trade_id=str(trade_id),
+                                instrument=instrument,
+                                due_market_at=(
+                                    telemetry.market_data_last_candle_at
+                                    + timedelta(minutes=horizon_raw)
+                                ),
+                                confidence_score=result.signal.confidence_score,
+                                strategy_code=result.signal.strategy_code,
+                                model_version=result.signal.model_version,
+                                entry_signal_id=result.signal.signal_id,
+                            )
+                            logger.info(
+                                "Research PAPER horizon exit scheduled",
+                                trading_session_id=trading_session_id,
+                                instrument=instrument,
+                                trade_id=str(trade_id),
+                                horizon_bars=horizon_raw,
+                                due_market_at=job.pending_horizon_exits[
+                                    instrument
+                                ].due_market_at.isoformat(),
+                            )
                     elif outcome in {
                         "SIGNAL_INVALID",
                         "LOW_CONFIDENCE",
@@ -350,8 +461,6 @@ class SignalScheduler:
 
                 if is_uat_probe:
                     job.last_uat_probe_at = job.last_run_at
-                published_this_cycle = True
-
                 # Research UAT intentionally publishes at most one signal per cycle.
                 if job.research_uat:
                     break
@@ -360,8 +469,9 @@ class SignalScheduler:
                 job.last_run_at = datetime.now(UTC)
                 job.last_decision = "ERROR"
                 job.last_reason = type(e).__name__
-                job.last_confidence_score = None
-                job.last_confidence_at = None
+                # A transient runtime/data error must not erase the most recent
+                # genuine model confidence already shown to the user. The error
+                # state remains explicit via last_decision/last_reason.
                 logger.warning(
                     "Scheduled signal generation failed",
                     trading_session_id=trading_session_id,
@@ -370,11 +480,3 @@ class SignalScheduler:
                     research_uat=job.research_uat,
                 )
                 break
-
-        if (
-            job.research_uat
-            and not published_this_cycle
-            and not job.last_publish_failed
-            and job.last_decision == "NO_TRADE"
-        ):
-            job.last_reason = "research_uat_replay_budget_exhausted"

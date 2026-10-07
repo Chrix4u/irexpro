@@ -3,7 +3,7 @@ import {
   gotoAsAdmin,
   assertNoHorizontalOverflow,
   assertNoConsoleErrors,
-  assertBoundingBoxInViewport,
+  assertBoundingBoxHorizontallyInViewport,
 } from './fixtures';
 
 /**
@@ -11,9 +11,9 @@ import {
  *
  * Verifies the remaining admin pages render without horizontal overflow at
  * every required viewport and that their content stays within bounds. The
- * Brokers, Payments and Audit pages are currently placeholder
- * pages (static explanatory text) — when real data tables are added later,
- * the same no-overflow + in-viewport assertions will catch regressions.
+ * Brokers and Audit retain lightweight content while Payments is data-driven.
+ * The same page-level no-horizontal-overflow invariant applies to all of them,
+ * while vertically tall cards remain valid scrollable page content.
  *
  * Required viewports: 360×800, 390×844, 430×932, 768×1024, 1440×900.
  *
@@ -43,10 +43,11 @@ for (const page of ADMIN_PAGES) {
       // No horizontal overflow (page-level invariant).
       await assertNoHorizontalOverflow(pwPage);
 
-      // The main content card must be within viewport bounds.
+      // The main content card must stay horizontally within the viewport.
+      // Tall cards may extend below the fold because the page scrolls vertically.
       const card = pwPage.locator('.card').first();
       if (await card.count() > 0) {
-        await assertBoundingBoxInViewport(card);
+        await assertBoundingBoxHorizontallyInViewport(card);
       }
     });
 

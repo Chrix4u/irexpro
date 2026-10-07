@@ -15,6 +15,13 @@ import type { AuthTokens } from '@irexpro/types';
 
 const ACCESS_TOKEN_KEY = 'irexpro-access-token';
 const REFRESH_TOKEN_KEY = 'irexpro-refresh-token';
+const BROKER_OAUTH_PENDING_KEY = 'irexpro-broker-oauth-pending';
+
+export interface PendingBrokerOAuthContext {
+  brokerId: string;
+  flowId: string;
+  createdAt: string;
+}
 
 export async function saveTokens(tokens: AuthTokens): Promise<void> {
   await SecureStore.setItemAsync(ACCESS_TOKEN_KEY, tokens.accessToken, {
@@ -44,4 +51,40 @@ export async function getRefreshToken(): Promise<string | null> {
 export async function clearTokens(): Promise<void> {
   await SecureStore.deleteItemAsync(ACCESS_TOKEN_KEY).catch(() => {});
   await SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY).catch(() => {});
+  // Pending OAuth context is user-bound. Never retain it across logout/account changes.
+  await SecureStore.deleteItemAsync(BROKER_OAUTH_PENDING_KEY).catch(() => {});
+}
+
+export async function savePendingBrokerOAuth(
+  context: PendingBrokerOAuthContext,
+): Promise<void> {
+  await SecureStore.setItemAsync(BROKER_OAUTH_PENDING_KEY, JSON.stringify(context), {
+    keychainAccessible: SecureStore.WHEN_UNLOCKED,
+  });
+}
+
+export async function getPendingBrokerOAuth(): Promise<PendingBrokerOAuthContext | null> {
+  try {
+    const raw = await SecureStore.getItemAsync(BROKER_OAUTH_PENDING_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<PendingBrokerOAuthContext>;
+    if (
+      typeof parsed.brokerId !== 'string' ||
+      typeof parsed.flowId !== 'string' ||
+      typeof parsed.createdAt !== 'string'
+    ) {
+      return null;
+    }
+    return {
+      brokerId: parsed.brokerId,
+      flowId: parsed.flowId,
+      createdAt: parsed.createdAt,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function clearPendingBrokerOAuth(): Promise<void> {
+  await SecureStore.deleteItemAsync(BROKER_OAUTH_PENDING_KEY).catch(() => {});
 }

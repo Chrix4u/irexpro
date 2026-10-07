@@ -3,6 +3,7 @@
  */
 import type { BrokerRegistryEntry } from "@irexpro/types";
 import {
+  brokerConnectionAction,
   buildConnectionRequest,
   credentialFields,
   isConnectableEntry,
@@ -32,6 +33,22 @@ const entry = (
   regions: [],
   adapterAvailable: true,
   ...overrides,
+});
+
+describe("brokerConnectionAction", () => {
+  it("uses disconnect only for an actually connected broker", () => {
+    expect(brokerConnectionAction("CONNECTED")).toBe("DISCONNECT");
+  });
+
+  it("uses reconnect for durable non-connected states", () => {
+    expect(brokerConnectionAction("DISCONNECTED")).toBe("RECONNECT");
+    expect(brokerConnectionAction("ERROR")).toBe("RECONNECT");
+    expect(brokerConnectionAction("SUSPENDED")).toBe("RECONNECT");
+  });
+
+  it("does not offer another action while the connection is still connecting", () => {
+    expect(brokerConnectionAction("CONNECTING")).toBe("WAIT");
+  });
 });
 
 describe("statusPresentation (§AB honesty)", () => {

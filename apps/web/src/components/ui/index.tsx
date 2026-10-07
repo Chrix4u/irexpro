@@ -144,12 +144,13 @@ function workspaceRouteTitle(activeRoute: string | undefined): string {
   if (activeRoute === '/trade') return 'AI Trading';
   if (activeRoute === '/trade/portfolio') return 'Portfolio';
   if (activeRoute === '/portfolio') return 'Portfolio & Risk';
+  if (activeRoute === '/settings/advanced-ai') return 'Advanced AI Controls';
   if (activeRoute === '/live-account' || activeRoute?.startsWith('/live-account/')) {
     return 'Positions & Activity';
   }
   if (activeRoute === '/onboarding/broker') return 'Broker Account';
   if (activeRoute === '/security') return 'Security';
-  if (activeRoute === '/payments/success' || activeRoute?.startsWith('/payments/success/')) {
+  if (activeRoute === '/payments' || activeRoute?.startsWith('/payments/')) {
     return 'Fees & Payments';
   }
   return 'Dashboard';

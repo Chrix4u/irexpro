@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   HttpCode,
   HttpStatus,
   Logger,
@@ -56,6 +57,8 @@ export class BrokerController {
   // ─── User connections CRUD ─────────────────────────────────────────────────
 
   @Get()
+  @Header('Cache-Control', 'no-store')
+  @Header('Pragma', 'no-cache')
   @SerializeOptions({ strategy: 'excludeAll' })
   @ApiOperation({ summary: 'List current user broker connections' })
   @ApiResponse({ status: 200, type: [BrokerConnectionResponseDto] })
@@ -65,6 +68,8 @@ export class BrokerController {
   }
 
   @Get(':connectionId')
+  @Header('Cache-Control', 'no-store')
+  @Header('Pragma', 'no-cache')
   @SerializeOptions({ strategy: 'excludeAll' })
   @ApiOperation({ summary: 'Get a specific broker connection' })
   @ApiParam({ name: 'connectionId', description: 'Broker connection UUID' })
@@ -182,6 +187,28 @@ export class BrokerController {
     @CurrentUserId() userId: string,
   ): Promise<BrokerDemoValidationResult> {
     return this.demoValidationService.validateDemoConnection(connectionId, userId);
+  }
+
+  // ─── DEMO automation gate ──────────────────────────────────────────────────
+
+  @Post(':connectionId/enable-demo-trading')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Enable automated execution for a validated DEMO connection',
+    description:
+      'Activates automation only inside the broker DEMO environment. ' +
+      'Requires CONNECTED + demoValidated and never enables LIVE trading.',
+  })
+  @ApiParam({ name: 'connectionId', description: 'Broker connection UUID (DEMO)' })
+  @ApiResponse({ status: 204, description: 'DEMO automation enabled' })
+  @ApiResponse({ status: 400, description: 'Connection is not DEMO' })
+  @ApiResponse({ status: 403, description: 'DEMO is not connected/validated/supported' })
+  @ApiResponse({ status: 409, description: 'Authorization state cannot become ACTIVE' })
+  async enableDemoTrading(
+    @Param('connectionId', ParseUUIDPipe) connectionId: string,
+    @CurrentUserId() userId: string,
+  ): Promise<void> {
+    await this.brokerService.enableDemoTrading(connectionId, userId);
   }
 
   // ─── Live trading gate ─────────────────────────────────────────────────────

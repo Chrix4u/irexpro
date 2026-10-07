@@ -57,7 +57,7 @@ export class RiskIntelligenceService {
         limits: {
           maxDailyLossPercent: profile.maxDailyLossPercent,
           maxDrawdownPercent: profile.maxDrawdownPercent,
-          maxOpenTrades: profile.maxOpenTrades,
+          positionCountPolicy: 'UNBOUNDED' as const,
           maxPositionSizeLot: profile.maxPositionSizeLot,
           minStopLossPips: profile.minStopLossPips,
           maxVolatilityScore: profile.maxVolatilityScore,
@@ -69,8 +69,7 @@ export class RiskIntelligenceService {
       },
       execution: {
         openPositions,
-        maxOpenPositions: profile.maxOpenTrades,
-        openPositionSlotsRemaining: Math.max(profile.maxOpenTrades - openPositions, 0),
+        positionCountPolicy: 'UNBOUNDED' as const,
         todayTrades,
         dailyTradeCountPolicy: 'UNBOUNDED' as const,
       },

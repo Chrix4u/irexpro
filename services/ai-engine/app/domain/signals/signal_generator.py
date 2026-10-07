@@ -29,7 +29,7 @@ from app.domain.models.multitimeframe_features import (
     build_multitimeframe_runtime_features,
 )
 from app.domain.models.registry import ModelRegistry
-from app.domain.signals.confidence import get_threshold, is_above_threshold
+from app.domain.signals.confidence import get_threshold
 from app.domain.signals.explainability import build_explainability_metadata
 from app.domain.signals.schemas import (
     AiSignalCandidate,
@@ -64,16 +64,26 @@ class SignalGenerator:
         broker_connection_id: str,
         instrument: str,
         timeframe: str = "H1",
+        market_data_connection_id: str | None = None,
         candles: list[OHLCVCandle] | None = None,
         source: MarketDataSource = "mock",
         bypass_market_data_cache: bool = False,
         uat_workflow_probe: bool = False,
+        research_uat_authorized: bool = False,
+        confidence_threshold_override: float | None = None,
     ) -> SignalGenerationResponse:
         """
         Full signal generation pipeline.
         Returns SignalGenerationResponse with either a candidate or a no-signal result.
         """
         settings = get_settings()
+        effective_confidence_threshold = get_threshold()
+        if (
+            research_uat_authorized
+            and confidence_threshold_override is not None
+            and 0.30 <= confidence_threshold_override <= 0.70
+        ):
+            effective_confidence_threshold = float(confidence_threshold_override)
 
         if settings.ai_signal_mode == "live":
             raise LiveModeNotSupportedError(
@@ -91,9 +101,15 @@ class SignalGenerator:
         governance = self._registry.get_governance(model.get_model_version())
 
         if not governance.approved_for_paper:
-            raise SignalGenerationError(
-                f"Model {model.get_model_version()} is not approved for paper mode"
+            research_uat_allowed = bool(
+                research_uat_authorized
+                and governance.extra_metadata.get("research_paper_uat_only", False)
+                and not governance.approved_for_live
             )
+            if not research_uat_allowed:
+                raise SignalGenerationError(
+                    f"Model {model.get_model_version()} is not approved for paper mode"
+                )
 
         runtime_profile = str(
             model_metadata.get("runtime_feature_profile", "single_timeframe_v1")
@@ -104,6 +120,7 @@ class SignalGenerator:
         )
 
         signal_timeframe = timeframe.upper()
+        data_connection_id = market_data_connection_id or broker_connection_id
         latest_candle: OHLCVCandle
         revision_parts: list[str] = [instrument.upper()]
 
@@ -126,7 +143,7 @@ class SignalGenerator:
                     timeframe=required_timeframe,
                     limit=100,
                     user_id=user_id,
-                    broker_connection_id=broker_connection_id,
+                    broker_connection_id=data_connection_id,
                     bypass_cache=True,
                     advance_simulation=(source == "broker" and index == 0),
                 )
@@ -168,7 +185,7 @@ class SignalGenerator:
                     timeframe=timeframe,
                     limit=100,
                     user_id=user_id,
-                    broker_connection_id=broker_connection_id,
+                    broker_connection_id=data_connection_id,
                     bypass_cache=bypass_market_data_cache,
                     advance_simulation=(source == "broker"),
                 )
@@ -203,6 +220,7 @@ class SignalGenerator:
             model_mode=str(model_metadata.get("mode", "unknown")),
             model_loaded=bool(model_metadata.get("loaded", False)),
             market_data_last_candle_at=latest_candle.timestamp,
+            market_data_last_close=str(latest_candle.close),
             market_data_revision=sha256(revision_material.encode("utf-8")).hexdigest(),
             market_data_cache_bypassed=(
                 True if mtf_runtime else bypass_market_data_cache
@@ -220,11 +238,24 @@ class SignalGenerator:
                     "model_policy_not_eligible",
                 )
             )
+            diagnostic_scores = (
+                prediction.raw_scores
+                if research_uat_authorized
+                else {}
+            )
             logger.info(
                 "Model-specific signal gate blocked publication",
                 instrument=instrument,
                 confidence=prediction.confidence_score,
                 reason=gate_reason,
+                market_data_last_candle_at=latest_candle.timestamp.isoformat(),
+                market_data_revision=telemetry.market_data_revision,
+                opportunity_probability=diagnostic_scores.get("opportunity_probability"),
+                long_action_probability=diagnostic_scores.get("long_action_probability"),
+                short_action_probability=diagnostic_scores.get("short_action_probability"),
+                action_probability_margin=diagnostic_scores.get("action_probability_margin"),
+                expected_selected_net_bps=diagnostic_scores.get("expected_selected_net_bps"),
+                expected_payoff_ratio=diagnostic_scores.get("expected_payoff_ratio"),
             )
             return SignalGenerationResponse(
                 generated=False,
@@ -232,7 +263,7 @@ class SignalGenerator:
                     reason=gate_reason,
                     instrument=instrument,
                     confidence_score=prediction.confidence_score,
-                    threshold=get_threshold(),
+                    threshold=effective_confidence_threshold,
                 ),
                 telemetry=telemetry,
                 mode=settings.ai_signal_mode,
@@ -243,13 +274,22 @@ class SignalGenerator:
         # confidence so the product workflow can be exercised. This does NOT
         # convert the score into a pass; NestJS independently proves the exact
         # PAPER_ONLY paper-broker boundary before accepting such a probe.
-        below_threshold = not is_above_threshold(prediction.confidence_score)
+        below_threshold = prediction.confidence_score < effective_confidence_threshold
         if below_threshold and not uat_workflow_probe:
+            diagnostic_scores = prediction.raw_scores if research_uat_authorized else {}
             logger.info(
                 "Signal below confidence threshold — no signal generated",
                 instrument=instrument,
                 confidence=prediction.confidence_score,
-                threshold=get_threshold(),
+                threshold=effective_confidence_threshold,
+                market_data_last_candle_at=latest_candle.timestamp.isoformat(),
+                market_data_revision=telemetry.market_data_revision,
+                opportunity_probability=diagnostic_scores.get("opportunity_probability"),
+                long_action_probability=diagnostic_scores.get("long_action_probability"),
+                short_action_probability=diagnostic_scores.get("short_action_probability"),
+                action_probability_margin=diagnostic_scores.get("action_probability_margin"),
+                expected_selected_net_bps=diagnostic_scores.get("expected_selected_net_bps"),
+                expected_payoff_ratio=diagnostic_scores.get("expected_payoff_ratio"),
             )
             return SignalGenerationResponse(
                 generated=False,
@@ -257,7 +297,7 @@ class SignalGenerator:
                     reason="confidence_below_threshold",
                     instrument=instrument,
                     confidence_score=prediction.confidence_score,
-                    threshold=get_threshold(),
+                    threshold=effective_confidence_threshold,
                 ),
                 telemetry=telemetry,
                 mode=settings.ai_signal_mode,
@@ -326,7 +366,8 @@ class SignalGenerator:
             "signal_mode": settings.ai_signal_mode,
             "uat_workflow_probe": bool(uat_workflow_probe and below_threshold),
             "production_eligible": not bool(uat_workflow_probe and below_threshold),
-            "model_confidence_threshold": get_threshold(),
+            "model_confidence_threshold": effective_confidence_threshold,
+            "research_horizon_bars": model_metadata.get("horizon_bars"),
         })
 
         model_mode = model_metadata.get("mode")

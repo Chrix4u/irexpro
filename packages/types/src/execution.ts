@@ -22,6 +22,7 @@ export type TradeExecutionCloseReason =
   | 'AI_CLOSE_SIGNAL'
   | 'KILL_SWITCH_FORCE_CLOSE'
   | 'BROKER_CLOSE'
+  | 'STRATEGY_CUTOVER'
   | 'RECONCILIATION';
 
 export interface UserCapitalAllocationView {
@@ -80,6 +81,15 @@ export interface TradeExecutionView {
   closedAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Result for one AI-position close attempt returned by close-all. */
+export interface AiPositionCloseResultView {
+  tradeId: string;
+  closed: boolean;
+  status: TradeExecutionStatus;
+  /** User-safe server detail when closure is unresolved or requires reconciliation. */
+  detail?: string;
 }
 
 // ─── Execution authority: trading session (Sprint 56 correction round 5) ─────
@@ -159,6 +169,43 @@ export interface TradingSessionView {
   authorityGeneration: number;
   status: TradingSessionStatus;
   startedAt: string;
+}
+
+/** Server-authoritative AI automation runtime attached to a trading session. */
+export interface AiAutomationRuntimeStatusView {
+  enabled: boolean;
+  registered: boolean;
+  trading_session_id: string;
+  active: boolean;
+  instruments: string[];
+  timeframe: string | null;
+  interval_seconds: number | null;
+  source: string | null;
+  last_run_at: string | null;
+  next_run_at: string | null;
+  last_decision: string | null;
+  last_reason: string | null;
+  last_confidence_score: number | null;
+  last_confidence_at: string | null;
+  confidence_threshold: number | null;
+  model_version: string | null;
+  model_mode: string | null;
+  model_loaded: boolean | null;
+  last_market_data_at: string | null;
+  last_market_data_close: string | null;
+  market_data_age_seconds: number | null;
+  market_data_cache_bypassed: boolean;
+  last_publish_failed: boolean;
+  research_uat?: boolean;
+  replay_steps_per_cycle?: number;
+  replay_steps_last_cycle?: number;
+  replay_steps_total?: number;
+  signals_published_total?: number;
+  last_strategy_outcome?: string | null;
+  last_strategy_reason?: string | null;
+  last_trade_id?: string | null;
+  executions_succeeded_total?: number;
+  downstream_rejected_total?: number;
 }
 
 /** GET /trading/sessions/active → 200 `{ session }`; session is null when stopped. */

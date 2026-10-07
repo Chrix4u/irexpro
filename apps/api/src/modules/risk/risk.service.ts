@@ -846,43 +846,15 @@ export class RiskService {
 
     // ── Step 4: Position-level checks ──────────────────────────────────────
 
-    // 4a. Max concurrent trades — Round 5 (#296): a failed count query
-    // REJECTS (sanitized); the rule is never SKIPPED.
-    let openCount: number;
-    try {
-      openCount = await this.executionService.countOpenTrades(userId);
-    } catch (err) {
-      this.logger.error(
-        `Open-trades count query failed for user ${userId}: ${(err as Error).message}`,
-      );
-      appliedRules.push('CONCURRENT_TRADES:QUERY_FAILED');
-      return this.rejectAndRecord(
-        userId,
-        trade,
-        RiskRejectionCode.RISK_ENGINE_QUERY_FAILED,
-        'Risk Engine could not verify the open-trade count — rejecting (fail-closed)',
-        contextSnapshot as RiskContextSnapshot,
-        evaluatedAt,
-      );
-    }
-    contextSnapshot.openTradesCount = openCount;
-    if (openCount >= profile.maxOpenTrades) {
-      appliedRules.push('CONCURRENT_TRADES');
-      return this.rejectAndRecord(
-        userId,
-        trade,
-        RiskRejectionCode.MAX_CONCURRENT_TRADES,
-        `Open trades (${openCount}) has reached maxOpenTrades limit (${profile.maxOpenTrades})`,
-        contextSnapshot as RiskContextSnapshot,
-        evaluatedAt,
-      );
-    }
-    appliedRules.push('CONCURRENT_TRADES:OK');
+    // 4a. Concurrent position COUNT is intentionally uncapped. Distinct,
+    // confirmed opportunities may open additional positions even on the same
+    // instrument and even in opposite directions. Safety is governed by real
+    // capital/risk constraints (margin, per-trade risk, total exposure, loss,
+    // drawdown, market safety and the kill switch), not an arbitrary slot count.
+    // The legacy maxOpenTrades database column is compatibility-only.
+    appliedRules.push('CONCURRENT_POSITION_COUNT:UNBOUNDED');
 
-    // 4b. Daily trade COUNT is intentionally uncapped.
-    // The AI may take every qualified opportunity. Safety is governed by
-    // concurrent-position limits, per-trade risk, margin/capital allocation,
-    // daily LOSS, drawdown, concentration, market safety and the kill switch.
+    // 4b. Daily trade COUNT is intentionally uncapped for the same reason.
     // Do not reintroduce a raw trade-count throttle here.
     appliedRules.push('DAILY_TRADE_COUNT:UNBOUNDED');
 
@@ -963,35 +935,44 @@ export class RiskService {
     }
     appliedRules.push('MANDATORY_TP:OK');
 
-    // 5c. Stop-loss distance check (minimum pips from entry) — EXACT (#313).
-    const slDistanceCheck = this.checkStopLossDistance(trade, profile);
-    if (slDistanceCheck) {
-      appliedRules.push('SL_DISTANCE');
-      return this.rejectAndRecord(
-        userId,
-        trade,
-        RiskRejectionCode.INVALID_SL_DISTANCE,
-        slDistanceCheck,
-        contextSnapshot as RiskContextSnapshot,
-        evaluatedAt,
-      );
-    }
-    appliedRules.push('SL_DISTANCE:OK');
+    // 5c/5d. LIMIT-style entries can be checked immediately against their
+    // requested price. MARKET entries deliberately carry the '0' sentinel;
+    // their SL distance + TP direction MUST be checked against the fresh,
+    // direction-aware execution quote resolved at Step 6c below — never
+    // against zero and never against a stale model reference.
+    const marketEntry = isMarketEntryPrice(trade.entryPrice);
+    if (marketEntry) {
+      appliedRules.push('SL_DISTANCE:DEFERRED_MARKET_QUOTE');
+      appliedRules.push('TP_DIRECTION:DEFERRED_MARKET_QUOTE');
+    } else {
+      const slDistanceCheck = this.checkStopLossDistance(trade, profile);
+      if (slDistanceCheck) {
+        appliedRules.push('SL_DISTANCE');
+        return this.rejectAndRecord(
+          userId,
+          trade,
+          RiskRejectionCode.INVALID_SL_DISTANCE,
+          slDistanceCheck,
+          contextSnapshot as RiskContextSnapshot,
+          evaluatedAt,
+        );
+      }
+      appliedRules.push('SL_DISTANCE:OK');
 
-    // 5d. Take-profit direction validity — EXACT (#313).
-    const tpDirectionCheck = this.checkTakeProfitDirection(trade);
-    if (tpDirectionCheck) {
-      appliedRules.push('TP_DIRECTION');
-      return this.rejectAndRecord(
-        userId,
-        trade,
-        RiskRejectionCode.INVALID_TP_DIRECTION,
-        tpDirectionCheck,
-        contextSnapshot as RiskContextSnapshot,
-        evaluatedAt,
-      );
+      const tpDirectionCheck = this.checkTakeProfitDirection(trade);
+      if (tpDirectionCheck) {
+        appliedRules.push('TP_DIRECTION');
+        return this.rejectAndRecord(
+          userId,
+          trade,
+          RiskRejectionCode.INVALID_TP_DIRECTION,
+          tpDirectionCheck,
+          contextSnapshot as RiskContextSnapshot,
+          evaluatedAt,
+        );
+      }
+      appliedRules.push('TP_DIRECTION:OK');
     }
-    appliedRules.push('TP_DIRECTION:OK');
 
     // ── Step 6: Volatility, regime and per-trade control checks ────────────
 
@@ -1069,6 +1050,7 @@ export class RiskService {
         connection,
         currentEquity,
         effectiveQuantity,
+        accountState.currency?.trim().toUpperCase() ?? '',
         appliedRules,
         contextSnapshot as RiskContextSnapshot,
         evaluatedAt,
@@ -1170,9 +1152,11 @@ export class RiskService {
       brokerConnectionId: session.brokerConnectionId,
       // Round 6 (#362): immutable per-trade provenance → the durable Trade
       // row (logical account, currency, daily-risk period). LIVE decisions
-      // carry the snapshot-bound values; PAPER carries the projected view's
-      // currency when the source provides one (never fabricated).
-      logicalAccountKey: liveSnapshotBinding?.logicalAccountKey,
+      // carry the snapshot-bound values; PAPER carries the connection's
+      // durable logical-account identity plus the projected account currency
+      // when the source provides one (never fabricated).
+      logicalAccountKey:
+        liveSnapshotBinding?.logicalAccountKey ?? connection.logicalAccountKey ?? undefined,
       accountCurrency: liveSnapshotBinding?.currency ?? accountState.currency ?? undefined,
       riskPeriodId: liveRiskPeriodId ?? undefined,
     };
@@ -1299,6 +1283,7 @@ export class RiskService {
     connection: BrokerConnection,
     equity: ExactDecimal,
     quantity: ExactDecimal,
+    accountCurrency: string,
     appliedRules: string[],
     contextSnapshot: RiskContextSnapshot,
     evaluatedAt: Date,
@@ -1308,6 +1293,7 @@ export class RiskService {
       userId,
       brokerConnectionId: session.brokerConnectionId,
       instrument: trade.instrument,
+      direction: trade.direction,
       needFreshQuote: marketEntry,
     });
 
@@ -1339,6 +1325,45 @@ export class RiskService {
       }
     } else {
       entry = this.parseOrderDecimal(trade.entryPrice, 'entryPrice');
+    }
+
+    // MARKET order integrity is evaluated against the SAME fresh executable
+    // side used by risk geometry. This closes the historical SELL-vs-zero bug
+    // and prevents stale closed-bar references from approving invalid SL/TP.
+    if (marketEntry && entry) {
+      const slDistanceCheck = this.checkStopLossDistance(trade, profile, entry);
+      if (slDistanceCheck) {
+        appliedRules.push('SL_DISTANCE:MARKET_QUOTE_REJECTED');
+        return {
+          rejection: await this.rejectAndRecord(
+            userId,
+            trade,
+            RiskRejectionCode.INVALID_SL_DISTANCE,
+            slDistanceCheck,
+            contextSnapshot,
+            evaluatedAt,
+          ),
+          quoteRef: geometry.quoteRef,
+        };
+      }
+      appliedRules.push('SL_DISTANCE:MARKET_QUOTE_OK');
+
+      const tpDirectionCheck = this.checkTakeProfitDirection(trade, entry);
+      if (tpDirectionCheck) {
+        appliedRules.push('TP_DIRECTION:MARKET_QUOTE_REJECTED');
+        return {
+          rejection: await this.rejectAndRecord(
+            userId,
+            trade,
+            RiskRejectionCode.INVALID_TP_DIRECTION,
+            tpDirectionCheck,
+            contextSnapshot,
+            evaluatedAt,
+          ),
+          quoteRef: geometry.quoteRef,
+        };
+      }
+      appliedRules.push('TP_DIRECTION:MARKET_QUOTE_OK');
     }
 
     // ── contract size ─────────────────────────────────────────────────────
@@ -1375,7 +1400,57 @@ export class RiskService {
     const stop = this.parseOrderDecimal(trade.stopLoss!, 'stopLoss');
 
     // ── maxTradeRiskPercent: risk at stop vs equity ───────────────────────
-    const riskAtStop = entry.sub(stop).abs().mul(quantity).mul(contractSize);
+    // Price-distance × quantity × contractSize is denominated in the
+    // instrument's QUOTE currency. Compare it with account equity only after
+    // proving a deterministic conversion into the broker account currency.
+    const normalizedInstrument = trade.instrument.trim().toUpperCase();
+    if (!/^[A-Z]{6}$/.test(normalizedInstrument) || !/^[A-Z]{3}$/.test(accountCurrency)) {
+      appliedRules.push('MAX_TRADE_RISK:CURRENCY_UNVERIFIED');
+      return {
+        rejection: await this.rejectAndRecord(
+          userId,
+          trade,
+          RiskRejectionCode.ACCOUNT_STATE_UNAVAILABLE,
+          'Cannot prove FX base/quote and account-currency units for ' +
+            trade.instrument +
+            ' — rejecting (fail-closed)',
+          contextSnapshot,
+          evaluatedAt,
+        ),
+        quoteRef: geometry.quoteRef,
+      };
+    }
+    const baseCurrency = normalizedInstrument.slice(0, 3);
+    const quoteCurrency = normalizedInstrument.slice(3, 6);
+    const riskAtStopQuote = entry.sub(stop).abs().mul(quantity).mul(contractSize);
+    let riskAtStop: ExactDecimal;
+    let notional: ExactDecimal;
+    if (accountCurrency === quoteCurrency) {
+      riskAtStop = riskAtStopQuote;
+      notional = entry.mul(quantity).mul(contractSize);
+    } else if (accountCurrency === baseCurrency) {
+      // divUp is deliberate: safety ratios must never understate risk/leverage.
+      riskAtStop = riskAtStopQuote.divUp(stop, 12);
+      const notionalQuote = entry.mul(quantity).mul(contractSize);
+      notional = notionalQuote.divUp(entry, 12);
+    } else {
+      appliedRules.push('MAX_TRADE_RISK:CURRENCY_UNVERIFIED');
+      return {
+        rejection: await this.rejectAndRecord(
+          userId,
+          trade,
+          RiskRejectionCode.ACCOUNT_STATE_UNAVAILABLE,
+          'Account currency ' +
+            accountCurrency +
+            ' matches neither leg of ' +
+            normalizedInstrument +
+            '; a trusted third-currency FX conversion is unavailable — rejecting (fail-closed)',
+          contextSnapshot,
+          evaluatedAt,
+        ),
+        quoteRef: geometry.quoteRef,
+      };
+    }
     const maxTradeRiskPercent = this.parseProfileDecimal(
       profile.maxTradeRiskPercent,
       'maxTradeRiskPercent',
@@ -1415,7 +1490,7 @@ export class RiskService {
     appliedRules.push('MAX_TRADE_RISK:OK');
 
     // ── maxLeverageAllowed: EFFECTIVE ORDER LEVERAGE = notional / equity ──
-    const notional = entry.mul(quantity).mul(contractSize);
+    // notional above is already denominated in account currency.
     const effectiveLeverage = notional.divUp(equity, LEVERAGE_SCALE);
     const maxLeverage = this.parseProfileDecimal(
       String(profile.maxLeverageAllowed),
@@ -1515,7 +1590,6 @@ export class RiskService {
     const riskProfileHash = await digestCanonicalPayload({
       maxDailyLossPercent: normalizeDecimalStringForDigest(profile.maxDailyLossPercent),
       maxDrawdownPercent: normalizeDecimalStringForDigest(profile.maxDrawdownPercent),
-      maxOpenTrades: profile.maxOpenTrades,
       maxPositionSizeLot: normalizeDecimalStringForDigest(profile.maxPositionSizeLot),
       minStopLossPips: normalizeDecimalStringForDigest(profile.minStopLossPips),
       allowedInstruments: profile.allowedInstruments ?? null,
@@ -1679,8 +1753,7 @@ export class RiskService {
       // Account-level limits
       maxDailyLossPercent: profile.maxDailyLossPercent,
       maxDrawdownPercent: profile.maxDrawdownPercent,
-      // Position-level limits
-      maxOpenTrades: profile.maxOpenTrades,
+      // Position-level monetary limits (position COUNT is unbounded)
       maxPositionSizeLot: profile.maxPositionSizeLot,
       minStopLossPips: profile.minStopLossPips,
       // Instrument / volatility controls
@@ -1789,7 +1862,8 @@ export class RiskService {
       profile.maxDailyLossPercent = dto.maxDailyLossPercent.toFixed(2);
     if (dto.maxDrawdownPercent !== undefined)
       profile.maxDrawdownPercent = dto.maxDrawdownPercent.toFixed(2);
-    if (dto.maxOpenTrades !== undefined) profile.maxOpenTrades = dto.maxOpenTrades;
+    // dto.maxOpenTrades is a legacy compatibility input and intentionally has
+    // no effect: concurrent position count is unbounded.
     if (dto.maxPositionSizeLot !== undefined)
       profile.maxPositionSizeLot = dto.maxPositionSizeLot.toFixed(4);
     if (dto.minStopLossPips !== undefined) profile.minStopLossPips = dto.minStopLossPips.toFixed(2);
@@ -1821,7 +1895,6 @@ export class RiskService {
     const materialFields: (keyof UpdateRiskProfileDto)[] = [
       'maxDailyLossPercent',
       'maxDrawdownPercent',
-      'maxOpenTrades',
       'maxPositionSizeLot',
       'allowedInstruments',
       'maxTradeRiskPercent',
@@ -2021,12 +2094,23 @@ export class RiskService {
   }
 
   /** EXACT stop-loss distance check in pips (#313 — no float arithmetic). */
-  private checkStopLossDistance(trade: ProposedTrade, profile: RiskProfile): string | null {
-    if (!trade.stopLoss || !trade.entryPrice) return null;
+  private checkStopLossDistance(
+    trade: ProposedTrade,
+    profile: RiskProfile,
+    entryOverride?: ExactDecimal,
+  ): string | null {
+    if (!trade.stopLoss || (!trade.entryPrice && !entryOverride)) return null;
 
-    const entry = this.parseOrderDecimal(trade.entryPrice, 'entryPrice');
+    const entry = entryOverride ?? this.parseOrderDecimal(trade.entryPrice, 'entryPrice');
     const sl = this.parseOrderDecimal(trade.stopLoss, 'stopLoss');
     const minPips = this.parseProfileDecimal(profile.minStopLossPips, 'minStopLossPips');
+
+    if (trade.direction === 'BUY' && sl.gte(entry)) {
+      return `Stop-loss ${sl.toString()} must be below entry ${entry.toString()} for BUY direction`;
+    }
+    if (trade.direction === 'SELL' && sl.lte(entry)) {
+      return `Stop-loss ${sl.toString()} must be above entry ${entry.toString()} for SELL direction`;
+    }
     const pipSize = ExactDecimal.parse(
       trade.instrument.includes('JPY') ? JPY_PIP_SIZE : DEFAULT_PIP_SIZE,
     );
@@ -2043,10 +2127,13 @@ export class RiskService {
   }
 
   /** EXACT take-profit direction check (#313 — no float arithmetic). */
-  private checkTakeProfitDirection(trade: ProposedTrade): string | null {
-    if (!trade.takeProfit || !trade.entryPrice) return null;
+  private checkTakeProfitDirection(
+    trade: ProposedTrade,
+    entryOverride?: ExactDecimal,
+  ): string | null {
+    if (!trade.takeProfit || (!trade.entryPrice && !entryOverride)) return null;
 
-    const entry = this.parseOrderDecimal(trade.entryPrice, 'entryPrice');
+    const entry = entryOverride ?? this.parseOrderDecimal(trade.entryPrice, 'entryPrice');
     const tp = this.parseOrderDecimal(trade.takeProfit, 'takeProfit');
 
     if (trade.direction === 'BUY' && tp.lte(entry)) {

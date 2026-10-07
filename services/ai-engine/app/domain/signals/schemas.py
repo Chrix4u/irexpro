@@ -98,6 +98,7 @@ class SignalEvaluationTelemetry(BaseModel):
     model_mode: str
     model_loaded: bool
     market_data_last_candle_at: datetime
+    market_data_last_close: str
     market_data_revision: str
     market_data_cache_bypassed: bool = False
 

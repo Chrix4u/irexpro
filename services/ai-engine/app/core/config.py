@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     # ─── NestJS integration ────────────────────────────────────────────────
     nestjs_api_base_url: str = "http://localhost:3000/api/v1"
     nestjs_ai_signal_endpoint: str = "/ai/internal/signals"
+    nestjs_ai_exit_signal_endpoint: str = "/ai/internal/exit-signals"
     nestjs_market_data_endpoint: str = "/market-data/internal/ohlcv"
     nestjs_internal_api_key: str = "dev_internal_key_change_me"
 
@@ -44,6 +45,10 @@ class Settings(BaseSettings):
     ai_min_confidence_score: float = 0.60
     ai_signal_mode: Literal["paper", "sandbox", "live"] = "paper"
     ai_allow_mock_market_data: bool = False
+    plan_b_v4_challenger_manifest: str = ""
+    plan_b_v4_challenger_manifest_sha256: str = ""
+    plan_b_v85_post_entry_manifest: str = ""
+    plan_b_v85_post_entry_manifest_sha256: str = ""
 
     # ─── Scheduler ────────────────────────────────────────────────────────
     ai_scheduler_enabled: bool = False
@@ -63,6 +68,10 @@ class Settings(BaseSettings):
     @property
     def nestjs_signal_url(self) -> str:
         return f"{self.nestjs_api_base_url}{self.nestjs_ai_signal_endpoint}"
+
+    @property
+    def nestjs_exit_signal_url(self) -> str:
+        return f"{self.nestjs_api_base_url}{self.nestjs_ai_exit_signal_endpoint}"
 
     @property
     def nestjs_market_data_url(self) -> str:

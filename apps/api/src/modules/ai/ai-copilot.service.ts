@@ -72,7 +72,8 @@ export class AiCopilotService {
             killSwitchActive: risk.engine.killSwitchActive,
             brokerConnected: risk.engine.brokerConnected,
             riskAcknowledgementAccepted: risk.policy.riskAcknowledgementAccepted,
-            openPositionSlotsRemaining: risk.execution.openPositionSlotsRemaining,
+            openPositions: risk.execution.openPositions,
+            positionCountPolicy: risk.execution.positionCountPolicy,
             todayTrades: risk.execution.todayTrades,
             dailyTradeCountPolicy: risk.execution.dailyTradeCountPolicy,
             stalePortfolioSnapshots: risk.portfolio.staleSnapshots,
@@ -177,8 +178,7 @@ export class AiCopilotService {
     if (
       risk.engine.killSwitchActive ||
       !risk.engine.brokerConnected ||
-      !risk.policy.riskAcknowledgementAccepted ||
-      risk.execution.openPositionSlotsRemaining <= 0
+      !risk.policy.riskAcknowledgementAccepted
     ) {
       return 'BLOCKED';
     }

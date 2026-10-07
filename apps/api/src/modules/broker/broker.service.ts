@@ -36,7 +36,7 @@ import {
   BrokerAccountSnapshotService,
   type ProviderAccountObservation,
 } from './services/broker-account-snapshot.service';
-import { BrokerAdapterError } from './interfaces/broker-adapter.errors';
+import { BrokerAdapterError, BrokerErrorCode } from './interfaces/broker-adapter.errors';
 import {
   BrokerAuthorizationStatus,
   BrokerAuthorizationStateMachine,
@@ -509,8 +509,13 @@ export class BrokerService {
     connectionId: string,
     userId: string,
     ipAddress?: string,
+    options: { preserveSuspendedOnFailure?: boolean } = {},
   ): Promise<BrokerConnection> {
     const connection = await this.findConnectionById(connectionId, userId);
+    const preserveSuspendedOnFailure =
+      options.preserveSuspendedOnFailure === true &&
+      connection.status === BrokerConnectionStatus.SUSPENDED &&
+      connection.authorizationStatus === BrokerAuthorizationStatus.SUSPENDED;
     // #291 / correction round 3: ONE mutable adapter context per persisted
     // BrokerConnection.id — concurrent operations on the same connection share
     // it; other connections can never observe its in-flight setMode/account
@@ -541,8 +546,15 @@ export class BrokerService {
       connectionId,
       connection.authorizationStatus,
       {
-        status: BrokerConnectionStatus.CONNECTING,
-        consecutiveFailureCount: 0,
+        // Automatic recovery probes must remain visibly SUSPENDED until the
+        // provider handshake actually succeeds. This prevents a transient
+        // retry from presenting an unsafe connection as CONNECTING/usable.
+        status: preserveSuspendedOnFailure
+          ? BrokerConnectionStatus.SUSPENDED
+          : BrokerConnectionStatus.CONNECTING,
+        consecutiveFailureCount: preserveSuspendedOnFailure
+          ? connection.consecutiveFailureCount
+          : 0,
         // State machine: CONNECTING is only valid from these states; when the
         // current state does not allow it (e.g. mid-reconnect), the existing
         // state is preserved and the terminal update below still applies.
@@ -608,10 +620,14 @@ export class BrokerService {
             connectionId,
             inFlightAuthorization,
             {
-              status: BrokerConnectionStatus.ERROR,
+              status: preserveSuspendedOnFailure
+                ? BrokerConnectionStatus.SUSPENDED
+                : BrokerConnectionStatus.ERROR,
               lastErrorMessage: failureError,
+              ...(preserveSuspendedOnFailure ? { lastHealthCheckAt: new Date() } : {}),
               consecutiveFailureCount: () => 'consecutive_failure_count + 1',
-              ...(BrokerAuthorizationStateMachine.canTransition(
+              ...(!preserveSuspendedOnFailure &&
+              BrokerAuthorizationStateMachine.canTransition(
                 inFlightAuthorization,
                 BrokerAuthorizationStatus.ERROR,
               )
@@ -789,6 +805,69 @@ export class BrokerService {
       this.logger.log(
         `Broker connected: id=${connectionId} account=${result.accountId} user=${userId}`,
       );
+    } catch (err) {
+      // Provider/SDK exceptions (timeouts, provisioning permission failures,
+      // transport errors, etc.) previously escaped through `finally` and left
+      // the durable connection row stuck in CONNECTING forever. Result-level
+      // broker failures above already persist their own terminal ERROR state
+      // before throwing BadRequestException, so only unhandled exceptions are
+      // normalized here.
+      if (!(err instanceof BadRequestException)) {
+        const failureError =
+          err instanceof Error ? err.message : 'Broker connection failed unexpectedly';
+        try {
+          await this.applyGuardedAuthorizationUpdate(
+            connectionId,
+            inFlightAuthorization,
+            {
+              status: preserveSuspendedOnFailure
+                ? BrokerConnectionStatus.SUSPENDED
+                : BrokerConnectionStatus.ERROR,
+              lastErrorMessage: failureError,
+              ...(preserveSuspendedOnFailure ? { lastHealthCheckAt: new Date() } : {}),
+              consecutiveFailureCount: () => 'consecutive_failure_count + 1',
+              ...(!preserveSuspendedOnFailure &&
+              BrokerAuthorizationStateMachine.canTransition(
+                inFlightAuthorization,
+                BrokerAuthorizationStatus.ERROR,
+              )
+                ? { authorizationStatus: BrokerAuthorizationStatus.ERROR }
+                : {}),
+            },
+            'connectBroker provider-exception ERROR transition',
+          );
+        } catch (transitionErr) {
+          this.logger.warn(
+            `connectBroker provider-exception transition lost a concurrent state race for ` +
+              `${connectionId}: ${(transitionErr as Error).message}`,
+          );
+        }
+
+        await this.auditService.log({
+          actorUserId: userId,
+          action: AuditAction.BROKER_CONNECT_FAILED,
+          resourceType: 'BrokerConnection',
+          resourceId: connectionId,
+          ipAddress,
+          metadata: { brokerId: connection.brokerId, error: failureError },
+          severity: AuditSeverity.WARNING,
+        });
+
+        const normalized = failureError.toLowerCase();
+        const publicMessage = normalized.includes('top up your account')
+          ? 'MetaApi could not deploy this trading account because the MetaApi account balance must be topped up.'
+          : normalized.includes('do not have access to') || normalized.includes('permission')
+            ? 'MetaApi rejected this connection because the API token is missing a required account-management permission.'
+            : normalized.includes('timed out') || normalized.includes('timeout')
+              ? 'MetaApi timed out while connecting to the trading account. Please verify the account is deployed and connected, then try again.'
+              : 'The broker provider could not complete the connection. Please check the provider account status and try again.';
+
+        throw new BadRequestException({
+          code: 'BROKER_CONNECTION_FAILED',
+          message: publicMessage,
+        });
+      }
+      throw err;
     } finally {
       // Explicitly zero out reference — decrypted credentials go out of scope here
       Object.keys(credentials).forEach((k) => {
@@ -939,6 +1018,78 @@ export class BrokerService {
       }
     }
     return evidence;
+  }
+
+  /**
+   * Enable automated execution for an already-validated DEMO connection.
+   *
+   * This is deliberately separate from enableLiveTrading(): it never changes
+   * accountType, never grants LIVE authority, and keeps liveTradingEnabled=false.
+   */
+  async enableDemoTrading(connectionId: string, userId: string, ipAddress?: string): Promise<void> {
+    const connection = await this.findConnectionById(connectionId, userId);
+
+    if (connection.accountType !== BrokerMode.DEMO) {
+      throw new BadRequestException(
+        'Only DEMO account connections can have DEMO automation enabled',
+      );
+    }
+    if (connection.status !== BrokerConnectionStatus.CONNECTED) {
+      throw new ForbiddenException('DEMO automation requires a CONNECTED broker connection');
+    }
+    if (!connection.demoValidated) {
+      throw new ForbiddenException(
+        'DEMO validation must pass before automated DEMO execution can be enabled',
+      );
+    }
+    if (!this.providerRegistry.supportsEnvironment(connection.brokerId, BrokerMode.DEMO)) {
+      throw new ForbiddenException(`Broker ${connection.brokerId} does not support DEMO execution`);
+    }
+
+    if (connection.authorizationStatus === BrokerAuthorizationStatus.ACTIVE) {
+      return;
+    }
+
+    if (!this.canTransitionTo(connection, BrokerAuthorizationStatus.ACTIVE)) {
+      throw new ConflictException(
+        `Connection authorization state ${connection.authorizationStatus} cannot become ACTIVE for DEMO automation`,
+      );
+    }
+
+    await this.applyGuardedAuthorizationUpdate(
+      connectionId,
+      connection.authorizationStatus,
+      {
+        authorizationStatus: BrokerAuthorizationStatus.ACTIVE,
+        authorizedAt: connection.authorizedAt ?? new Date(),
+        authorizationRevokedAt: null,
+        liveTradingEnabled: false,
+      },
+      'enableDemoTrading ACTIVE transition',
+    );
+
+    this.eventBus.publish(DomainEventType.BROKER_AUTHORIZATION_CHANGED, userId, {
+      userId,
+      connectionId,
+      brokerId: connection.brokerId,
+      previousStatus: connection.authorizationStatus,
+      status: BrokerAuthorizationStatus.ACTIVE,
+      environment: BrokerMode.DEMO,
+    });
+
+    await this.auditService.log({
+      actorUserId: userId,
+      action: AuditAction.BROKER_DEMO_TRADING_ENABLED,
+      resourceType: 'BrokerConnection',
+      resourceId: connectionId,
+      ipAddress,
+      metadata: {
+        brokerId: connection.brokerId,
+        accountType: BrokerMode.DEMO,
+        authorizationStatus: BrokerAuthorizationStatus.ACTIVE,
+      },
+      severity: AuditSeverity.INFO,
+    });
   }
 
   async enableLiveTrading(connectionId: string, userId: string, ipAddress?: string): Promise<void> {
@@ -1410,6 +1561,30 @@ export class BrokerService {
 
       return true;
     } catch (err) {
+      // The internal PAPER broker can be healthy while its external market-data
+      // cache is temporarily unavailable (for example a Twelve Data 429 during
+      // API restart). That is a MARKET-DATA degradation, not a broker/credential
+      // failure. Keep the connection CONNECTED so exits/marks can recover as soon
+      // as the cache refills; NEW exposure still fails closed at the fresh-quote
+      // and market-safety gates. Never apply this exemption to real providers.
+      const isTransientLivePaperMarketDataGap =
+        connection.brokerId === 'paper-broker' &&
+        err instanceof BrokerAdapterError &&
+        err.code === BrokerErrorCode.PROVIDER_UNAVAILABLE &&
+        err.isRetryable === true;
+      if (isTransientLivePaperMarketDataGap) {
+        await this.connectionRepo.update(connectionId, {
+          consecutiveFailureCount: 0,
+          lastErrorMessage: (err as Error).message,
+          lastHealthCheckAt: new Date(),
+        });
+        this.logger.warn(
+          `PAPER connection ${connectionId} market data temporarily unavailable; ` +
+            'retaining CONNECTED status while exposure remains fail-closed until quotes recover',
+        );
+        return false;
+      }
+
       const failureCount = (connection.consecutiveFailureCount ?? 0) + 1;
       const SUSPEND_THRESHOLD = 3;
 
@@ -1538,7 +1713,12 @@ export class BrokerService {
     adapter.setMode(connection.accountType);
 
     try {
-      await adapter.connect(credentials);
+      // Hot market-data reads must not repeat the provider account handshake
+      // when this connection-scoped adapter is already live. The candle read
+      // itself remains provider-fresh; only the redundant connect() call is
+      // skipped. Periodic broker health checks still re-verify account state.
+      const alreadyConnected = typeof adapter.isConnected === 'function' && adapter.isConnected();
+      if (!alreadyConnected) await adapter.connect(credentials);
       return await adapter.getOHLCV(instrument, timeframe, limit, before);
     } catch (err) {
       this.logger.warn(
@@ -1947,6 +2127,10 @@ export class BrokerService {
     userId: string,
     brokerConnectionId: string,
     instrument: string,
+    options?: {
+      advanceSimulation?: boolean;
+      propagateProviderError?: boolean;
+    },
   ): Promise<BrokerPrice | null> {
     const connection = await this.findConnectionById(brokerConnectionId, userId);
 
@@ -1974,8 +2158,14 @@ export class BrokerService {
     adapter.setMode(connection.accountType);
 
     try {
-      await adapter.connect(credentials);
-      const price = await adapter.getCurrentPrice(instrument);
+      // Keep the quote itself strictly fresh, but avoid an expensive provider
+      // account handshake before every quote when this scoped adapter is
+      // already connected. Health checks retain independent account/env checks.
+      const alreadyConnected = typeof adapter.isConnected === 'function' && adapter.isConnected();
+      if (!alreadyConnected) await adapter.connect(credentials);
+      const price = await adapter.getCurrentPrice(instrument, {
+        advanceSimulation: options?.advanceSimulation,
+      });
       if (
         !price ||
         !price.bid ||
@@ -1986,13 +2176,16 @@ export class BrokerService {
         return null; // §18 — unprovable is unprovable; never invented.
       }
       return price;
-    } catch {
-      // Quote failures are the gate's typed MARKET_DATA_UNAVAILABLE — a null
-      // return keeps the seam honest without swallowing the reason.
+    } catch (error) {
+      // Quote failures normally collapse to MARKET_DATA_UNAVAILABLE for the
+      // live safety gate. Internal collectors may opt into the original
+      // provider error so quota/cooldown protection can react to 429/CPU
+      // credit failures instead of accidentally retrying through them.
       this.logger.warn(
         `Fresh quote unavailable for ${instrument} on connection ${brokerConnectionId} — ` +
           'the market-safety gate will fail closed',
       );
+      if (options?.propagateProviderError) throw error;
       return null;
     }
   }

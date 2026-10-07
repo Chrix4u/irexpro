@@ -586,8 +586,36 @@ describe('PerformanceFeeService', () => {
     });
   });
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // ─────────────────────────────────────────────────────────────────────────
+  describe('deactivatePolicy', () => {
+    it('deactivates the policy and records an audit event', async () => {
+      const policy = makePolicy({ id: 'policy-active', isActive: true });
+      mockPolicyRepo.findOne.mockResolvedValue(policy);
+      mockPolicyRepo.save.mockImplementation(async (value) => value);
+
+      const result = await service.deactivatePolicy('policy-active', 'admin-1');
+
+      expect(result.isActive).toBe(false);
+      expect(mockPolicyRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'policy-active', isActive: false }),
+      );
+      expect(mockAuditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actorUserId: 'admin-1',
+          action: 'PERFORMANCE_FEE_POLICY_DEACTIVATED',
+          resourceId: 'policy-active',
+        }),
+      );
+    });
+
+    it('is idempotent for an already inactive policy', async () => {
+      const policy = makePolicy({ id: 'policy-old', isActive: false });
+      mockPolicyRepo.findOne.mockResolvedValue(policy);
+
+      await expect(service.deactivatePolicy('policy-old', 'admin-1')).resolves.toBe(policy);
+      expect(mockPolicyRepo.save).not.toHaveBeenCalled();
+      expect(mockAuditService.log).not.toHaveBeenCalled();
+    });
+  });
 
   // ─────────────────────────────────────────────────────────────────────────
   // Invoice integration

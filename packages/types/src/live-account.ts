@@ -279,7 +279,22 @@ export interface LivePositionRowView {
   fillPrice: string | null;
   accountCurrency: string | null;
   currentPrice: string | null;
+  markSource: 'STREAM' | 'REST_M5' | 'PROVIDER' | null;
+  markObservedAt: string | null;
+  /** Informational last-known mark. True means do not interpret it as execution-fresh market data. */
+  markIsStale: boolean;
   unrealisedPnl: string | null;
+  pathDiagnostics?: {
+    maxFavorablePnl: string;
+    maxAdversePnl: string;
+    latestUnrealisedPnl: string;
+    profitGiveback: string;
+    observationCount: number;
+    sameBarProtectionAmbiguityCount: number;
+    lastSameBarProtectionAmbiguityAt: string | null;
+    peakObservedAt: string | null;
+    lastObservedAt: string | null;
+  } | null;
   commission: string | null;
   swap: string | null;
   stopLoss: string;

@@ -25,7 +25,7 @@ import { BrokerMode, BrokerOrderRequest } from '../interfaces/broker-adapter.int
  * scripted falling walks exercise the mirrored SELL-side paths.
  *
  * MERGED FILL MODEL (documented): MARKET fills and manual closes execute at
- * the quote MID — the deterministic '1.10005' paper fill pinned by main's
+ * the executable quote side — BUY at ask / SELL at bid pinned by main's
  * historical specs. Working-order fills execute at the prevailing quote side
  * (BUY at ask, SELL at bid — never worse than a resting limit); SL/TP close
  * exactly at their level.
@@ -222,7 +222,7 @@ describe('PaperBrokerAdapter', () => {
     });
     expect(result.status).toBe('FILLED');
     expect(result.filledQuantity).toBe('0.02');
-    expect(result.filledPrice).toBe('1.10005');
+    expect(result.filledPrice).toBe('1.10010');
   });
 
   it('LIMIT orders are accepted as WORKING orders (never silently filled)', async () => {
@@ -432,16 +432,16 @@ describe('PaperBrokerAdapter', () => {
     await adapter.placeOrder(order({ idempotencyKey: 'snapshot-key' }));
     // No tick yet: valuation at the prevailing (base) quote.
     let info = await adapter.getAccountInfo();
-    expect(info.equity).toBe('9999.50');
+    expect(info.equity).toBe('9999.00');
     // Account reads do not advance the walk:
     await adapter.getAccountInfo();
     await adapter.getOpenPositions();
     info = await adapter.getAccountInfo();
-    expect(info.equity).toBe('9999.50');
+    expect(info.equity).toBe('9999.00');
     // One price poll = one tick: the revaluation follows the walk.
     await adapter.getCurrentPrice('EURUSD'); // bid → 1.10020
     info = await adapter.getAccountInfo();
-    expect(info.equity).toBe('10001.50'); // (1.10020 − 1.10005) × 10000 = 1.50
+    expect(info.equity).toBe('10001.00'); // (1.10020 − 1.10010) × 10000 = 1.00
   });
 
   it('getOHLCV candles are anchored to the simulated clock (deterministic)', async () => {
@@ -474,7 +474,7 @@ describe('PaperBrokerAdapter', () => {
     const resultA = await a.placeOrder(request);
     const resultB = await b.placeOrder(request);
     expect(resultA).toEqual(resultB); // same id, same fill, same timestamps
-    expect(resultA.filledPrice).toBe('1.10005');
+    expect(resultA.filledPrice).toBe('1.10010');
 
     const priceA = await a.getCurrentPrice('EURUSD');
     const priceB = await b.getCurrentPrice('EURUSD');
@@ -484,16 +484,16 @@ describe('PaperBrokerAdapter', () => {
     expect(positionsA).toEqual(positionsB);
   });
 
-  // ─── MARKET orders: mid fills, positions, balance/margin realism ──────────
+  // ─── MARKET orders: executable-side fills, positions, balance/margin realism ──
 
-  it('placeOrder MARKET BUY fills at the quote mid and creates a position', async () => {
+  it('placeOrder MARKET BUY fills at the ask and creates a position', async () => {
     await adapter.connect(dummyCreds);
     const result = await adapter.placeOrder(order({ idempotencyKey: 'market-buy-1' }));
     expect(result.success).toBe(true);
     expect(result.status).toBe('FILLED');
     expect(result.brokerMessage).toContain('PAPER_ONLY');
     expect(result.externalOrderId).toBe('paper-order-000001');
-    expect(result.filledPrice).toBe('1.10005');
+    expect(result.filledPrice).toBe('1.10010');
     expect(result.filledQuantity).toBe('0.10');
     expect(result.filledAt).toEqual(new Date(DEFAULT_CLOCK_EPOCH));
 
@@ -504,28 +504,28 @@ describe('PaperBrokerAdapter', () => {
       instrument: 'EURUSD',
       direction: 'BUY',
       lotSize: '0.10',
-      openPrice: '1.10005',
+      openPrice: '1.10010',
       currentPrice: '1.10000', // exit-side quote (bid for BUY)
       stopLoss: '0',
       takeProfit: '0',
-      unrealisedPnl: '-0.50', // (bid − mid) × 10000, exact
+      unrealisedPnl: '-1.00', // (bid − ask entry) × 10000, exact
       commission: '0',
       swap: '0',
     });
   });
 
-  it('placeOrder MARKET SELL fills at the quote mid (exit side is the ask)', async () => {
+  it('placeOrder MARKET SELL fills at the bid (exit side is the ask)', async () => {
     await adapter.connect(dummyCreds);
     const result = await adapter.placeOrder(
       order({ idempotencyKey: 'market-sell-1', direction: 'SELL' }),
     );
-    expect(result.filledPrice).toBe('1.10005');
+    expect(result.filledPrice).toBe('1.10000');
     const positions = await adapter.getOpenPositions();
     expect(positions[0]).toMatchObject({
       direction: 'SELL',
-      openPrice: '1.10005',
+      openPrice: '1.10000',
       currentPrice: '1.10010', // exit-side quote (ask for SELL)
-      unrealisedPnl: '-0.50',
+      unrealisedPnl: '-1.00',
     });
   });
 
@@ -533,7 +533,7 @@ describe('PaperBrokerAdapter', () => {
     await adapter.connect(dummyCreds);
     await adapter.placeOrder(order({ idempotencyKey: 'no-tick-a' }));
     const second = await adapter.placeOrder(order({ idempotencyKey: 'no-tick-b' }));
-    expect(second.filledPrice).toBe('1.10005'); // same prevailing quote
+    expect(second.filledPrice).toBe('1.10010'); // same prevailing ask for BUY
   });
 
   it('keeps legacy MARKET-only requests valid (orderKind omitted defaults to MARKET)', async () => {
@@ -542,7 +542,7 @@ describe('PaperBrokerAdapter', () => {
     delete legacy.orderKind;
     const result = await adapter.placeOrder(legacy as BrokerOrderRequest);
     expect(result.status).toBe('FILLED');
-    expect(result.filledPrice).toBe('1.10005');
+    expect(result.filledPrice).toBe('1.10010');
   });
 
   it('rejects unknown order kinds loudly (fail-closed, never a silent downgrade)', async () => {
@@ -584,10 +584,10 @@ describe('PaperBrokerAdapter', () => {
       currency: 'USD',
       leverage: 100,
       balance: '10000.00', // realized P&L only — unrealized does not touch balance
-      equity: '9999.50', // balance + rounded unrealized
-      margin: '110.01', // 10000 units × 1.10005 / 100, half-up at 2dp
-      freeMargin: '9889.49',
-      marginLevel: '9089.63', // equity / margin × 100
+      equity: '9999.00', // balance + rounded unrealized after paying the spread
+      margin: '110.01', // 10000 units × 1.10010 / 100
+      freeMargin: '9888.99',
+      marginLevel: '9089.17', // equity / margin × 100
     });
   });
 
@@ -643,7 +643,7 @@ describe('PaperBrokerAdapter', () => {
       () => adapter.placeOrder(order({ idempotencyKey: 'too-big', lotSize: '100.00' })),
       'INSUFFICIENT_MARGIN',
     );
-    expect(err.message).toContain('110005.00'); // required margin in the message
+    expect(err.message).toContain('110010.00'); // required margin in the message
     const positions = await adapter.getOpenPositions();
     expect(positions).toHaveLength(0);
   });
@@ -1003,15 +1003,15 @@ describe('PaperBrokerAdapter', () => {
       instrument: 'EURUSD',
       direction: 'BUY',
       lotSize: '0.10',
-      openPrice: '1.10005',
+      openPrice: '1.10010',
       closePrice: '1.10500',
-      realisedPnl: '49.50', // (1.10500 − 1.10005) × 10000
+      realisedPnl: '49.00', // (1.10500 − 1.10010) × 10000
       commission: '0',
       swap: '0',
       closeReason: 'TP',
     });
     const info = await sim.getAccountInfo();
-    expect(info.balance).toBe('10049.50'); // realized P&L adjusted the balance
+    expect(info.balance).toBe('10049.00'); // realized P&L adjusted the balance
     expect(info.margin).toBe('0.00');
   });
 
@@ -1024,11 +1024,11 @@ describe('PaperBrokerAdapter', () => {
     expect(trades).toHaveLength(1);
     expect(trades[0]).toMatchObject({
       closePrice: '1.09500',
-      realisedPnl: '-50.50', // (1.09500 − 1.10005) × 10000
+      realisedPnl: '-51.00', // (1.09500 − 1.10010) × 10000
       closeReason: 'SL',
     });
     const info = await sim.getAccountInfo();
-    expect(info.balance).toBe('9949.50');
+    expect(info.balance).toBe('9949.00');
   });
 
   it('SELL position TP closes when ask drops to the level', async () => {
@@ -1042,9 +1042,9 @@ describe('PaperBrokerAdapter', () => {
     expect(trades).toHaveLength(1);
     expect(trades[0]).toMatchObject({
       direction: 'SELL',
-      openPrice: '1.10005',
+      openPrice: '1.10000',
       closePrice: '1.09500',
-      realisedPnl: '50.50', // (1.10005 − 1.09500) × 10000
+      realisedPnl: '50.00', // (1.10000 − 1.09500) × 10000
       closeReason: 'TP',
     });
   });
@@ -1060,7 +1060,7 @@ describe('PaperBrokerAdapter', () => {
     expect(trades).toHaveLength(1);
     expect(trades[0]).toMatchObject({
       closePrice: '1.10500',
-      realisedPnl: '-49.50', // (1.10005 − 1.10500) × 10000
+      realisedPnl: '-50.00', // (1.10000 − 1.10500) × 10000
       closeReason: 'SL',
     });
   });
@@ -1154,7 +1154,56 @@ describe('PaperBrokerAdapter', () => {
 
   // ─── closeOrder (full / partial) ──────────────────────────────────────────
 
-  it('closeOrder closes a BUY fully at the mid (closeReason MANUAL, flat P&L)', async () => {
+  it('tracks peak P&L and profit give-back without changing execution', async () => {
+    const sim = scriptedAdapter([
+      BASE,
+      { bid: '1.10100', ask: '1.10110' },
+      { bid: '1.10020', ask: '1.10030' },
+    ]);
+    await sim.placeOrder(order({ idempotencyKey: 'path-giveback' }));
+
+    await sim.getCurrentPrice('EURUSD');
+    let [position] = await sim.getOpenPositions();
+    expect(position.pathDiagnostics).toMatchObject({
+      maxFavorablePnl: '9.00',
+      maxAdversePnl: '0.00',
+      latestUnrealisedPnl: '9.00',
+      profitGiveback: '0.00',
+    });
+
+    await sim.getCurrentPrice('EURUSD');
+    [position] = await sim.getOpenPositions();
+    expect(position.unrealisedPnl).toBe('1.00');
+    expect(position.pathDiagnostics).toMatchObject({
+      maxFavorablePnl: '9.00',
+      latestUnrealisedPnl: '1.00',
+      profitGiveback: '8.00',
+    });
+
+    await sim.closeOrder('paper-order-000001');
+    const [closed] = await sim.getClosedTrades(new Date(0), new Date(CLOCK_BASE_MS + 60_000));
+    expect(closed.realisedPnl).toBe('1.00');
+    expect(closed.pathDiagnostics).toMatchObject({
+      maxFavorablePnl: '9.00',
+      latestUnrealisedPnl: '1.00',
+      profitGiveback: '8.00',
+    });
+  });
+
+  it('does not label an always-losing path as profit give-back', async () => {
+    const sim = scriptedAdapter([BASE, { bid: '1.09980', ask: '1.09990' }]);
+    await sim.placeOrder(order({ idempotencyKey: 'path-no-profit' }));
+    await sim.getCurrentPrice('EURUSD');
+    const [position] = await sim.getOpenPositions();
+    expect(position.pathDiagnostics).toMatchObject({
+      maxFavorablePnl: '0.00',
+      maxAdversePnl: '-3.00',
+      latestUnrealisedPnl: '-3.00',
+      profitGiveback: '0.00',
+    });
+  });
+
+  it('closeOrder closes a BUY at the bid and books the spread (closeReason MANUAL)', async () => {
     await adapter.connect(dummyCreds);
     await adapter.placeOrder(order({ idempotencyKey: 'close-full' }));
     const result = await adapter.closeOrder('paper-order-000001');
@@ -1162,7 +1211,7 @@ describe('PaperBrokerAdapter', () => {
       success: true,
       externalOrderId: 'paper-order-000001',
       status: 'FILLED',
-      filledPrice: '1.10005',
+      filledPrice: '1.10000',
       filledQuantity: '0.10',
       brokerMessage: 'PAPER_ONLY simulated close',
     });
@@ -1171,13 +1220,13 @@ describe('PaperBrokerAdapter', () => {
     const trades = await adapter.getClosedTrades(new Date(0), new Date());
     expect(trades).toHaveLength(1);
     expect(trades[0]).toMatchObject({
-      openPrice: '1.10005',
-      closePrice: '1.10005',
+      openPrice: '1.10010',
+      closePrice: '1.10000',
       lotSize: '0.10',
-      realisedPnl: '0.00', // mid open, mid close, no intervening tick — flat
+      realisedPnl: '-1.00', // ask entry, bid exit — one spread
       closeReason: 'MANUAL',
     });
-    expect((await adapter.getAccountInfo()).balance).toBe('10000.00');
+    expect((await adapter.getAccountInfo()).balance).toBe('9999.00');
   });
 
   it('closeOrder partial close respects lotSize, books the reduced part, reduces margin', async () => {
@@ -1185,36 +1234,36 @@ describe('PaperBrokerAdapter', () => {
     await sim.placeOrder(order({ idempotencyKey: 'close-partial' }));
     await sim.getCurrentPrice('EURUSD'); // revalue at bid 1.10200
     const result = await sim.closeOrder('paper-order-000001', '0.04');
-    expect(result.filledPrice).toBe('1.10205'); // the mid of the prevailing quote
+    expect(result.filledPrice).toBe('1.10200'); // executable bid for a BUY close
 
     const positions = await sim.getOpenPositions();
     expect(positions).toHaveLength(1);
     expect(positions[0]).toMatchObject({
       lotSize: '0.06',
-      openPrice: '1.10005',
+      openPrice: '1.10010',
       currentPrice: '1.10200',
-      unrealisedPnl: '11.70', // (1.10200 − 1.10005) × 6000
+      unrealisedPnl: '11.40', // (1.10200 − 1.10010) × 6000
     });
 
     const trades = await sim.getClosedTrades(new Date(0), new Date(CLOCK_BASE_MS + 60_000));
     expect(trades).toHaveLength(1);
     expect(trades[0]).toMatchObject({
       lotSize: '0.04',
-      closePrice: '1.10205',
-      realisedPnl: '8.00', // (1.10205 − 1.10005) × 4000
+      closePrice: '1.10200',
+      realisedPnl: '7.60', // (1.10200 − 1.10010) × 4000
       closeReason: 'MANUAL',
     });
 
     const info = await sim.getAccountInfo();
-    expect(info.balance).toBe('10008.00');
-    expect(info.margin).toBe('66.00'); // 6000 units × 1.10005 / 100 = 66.003 → 66.00
+    expect(info.balance).toBe('10007.60');
+    expect(info.margin).toBe('66.01'); // 6000 units × 1.10010 / 100 = 66.006 → 66.01
 
     // Closing the remainder closes the position fully:
     await sim.closeOrder('paper-order-000001', '0.06');
     expect(await sim.getOpenPositions()).toHaveLength(0);
     const allTrades = await sim.getClosedTrades(new Date(0), new Date(CLOCK_BASE_MS + 60_000));
     expect(allTrades).toHaveLength(2);
-    expect(allTrades[1]).toMatchObject({ lotSize: '0.06', realisedPnl: '12.00' });
+    expect(allTrades[1]).toMatchObject({ lotSize: '0.06', realisedPnl: '11.40' });
   });
 
   it('closeOrder fails closed for excess/invalid partial sizes and unknown/working ids', async () => {
@@ -1252,9 +1301,9 @@ describe('PaperBrokerAdapter', () => {
     const position = await adapter.getPositionById('paper-order-000001');
     expect(position).toMatchObject({
       externalOrderId: 'paper-order-000001',
-      openPrice: '1.10005',
+      openPrice: '1.10010',
       currentPrice: '1.10000',
-      unrealisedPnl: '-0.50',
+      unrealisedPnl: '-1.00',
     });
     await adapter.closeOrder('paper-order-000001');
     expect(await adapter.getPositionById('paper-order-000001')).toBeNull();
@@ -1325,9 +1374,9 @@ describe('PaperBrokerAdapter', () => {
     const trades = await sim.getClosedTrades(new Date(0), new Date(CLOCK_BASE_MS + 60_000));
     expect(trades).toHaveLength(2);
     expect(trades.map((t) => t.closeReason)).toEqual(['SYSTEM', 'SYSTEM']);
-    // Symmetric book: BUY +20.00, SELL −20.00 (both closed at the mid 1.10205):
-    expect(trades.map((t) => t.realisedPnl)).toEqual(['20.00', '-20.00']);
-    expect((await sim.getAccountInfo()).balance).toBe('10000.00'); // net flat
+    // Both legs pay the spread: BUY +19.00, SELL −21.00.
+    expect(trades.map((t) => t.realisedPnl)).toEqual(['19.00', '-21.00']);
+    expect((await sim.getAccountInfo()).balance).toBe('9998.00');
   });
 
   // ─── Closed-trade history ─────────────────────────────────────────────────
@@ -1386,6 +1435,6 @@ describe('PaperBrokerAdapter', () => {
     expect(await adapter.listOrders()).toHaveLength(1);
     const info = await adapter.getAccountInfo();
     expect(info.balance).toBe('10000.00');
-    expect(info.equity).toBe('9999.50');
+    expect(info.equity).toBe('9999.00');
   });
 });

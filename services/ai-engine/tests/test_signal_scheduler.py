@@ -1,4 +1,5 @@
 """Tests for SignalScheduler."""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -13,6 +14,7 @@ from app.domain.scheduler.schemas import SessionStartRequest, SessionStatusReque
 from app.domain.scheduler.signal_scheduler import ScheduledSessionJob, SignalScheduler
 from app.domain.signals.schemas import (
     AiSignalCandidate,
+    NoSignalResult,
     SignalEvaluationTelemetry,
     SignalGenerationResponse,
 )
@@ -29,7 +31,6 @@ def make_start_request(session_id: str = "session-1") -> SessionStartRequest:
         accountType="DEMO",
         mode="paper",
     )
-
 
 
 @pytest.mark.asyncio
@@ -275,7 +276,6 @@ async def test_low_confidence_not_published():
     assert job.last_confidence_score == 0.2
 
 
-
 @pytest.mark.asyncio
 async def test_research_uat_replay_advances_until_one_signal_then_stops_cycle():
     settings = Settings(ai_scheduler_enabled=True, ai_signal_mode="paper")
@@ -343,7 +343,6 @@ async def test_research_uat_replay_advances_until_one_signal_then_stops_cycle():
     assert job.replay_steps_last_cycle == 3
     assert job.replay_steps_total == 3
     assert job.signals_published_total == 1
-
 
 
 @pytest.mark.asyncio
@@ -427,7 +426,6 @@ async def test_research_uat_probe_uses_real_confidence_and_obeys_one_minute_cool
     assert job.signals_published_total == 1
 
 
-
 @pytest.mark.asyncio
 async def test_research_uat_records_downstream_rejection_reason():
     settings = Settings(ai_scheduler_enabled=True, ai_signal_mode="paper")
@@ -493,6 +491,7 @@ class ScheduledSessionJobStub:
     user_id = "user-1"
     trading_session_id = "session-1"
     broker_connection_id = "conn-1"
+    market_data_connection_id = None
     timeframe = "H1"
     source = "mock"
     last_publish_failed = False
@@ -502,12 +501,15 @@ class ScheduledSessionJobStub:
     last_confidence_at = None
     market_data_revisions = {}
     last_market_data_at = None
+    last_market_data_close = None
     model_version = None
     model_mode = None
     model_loaded = None
     market_data_cache_bypassed = False
     research_uat = False
+    workflow_probe_enabled = True
     replay_steps_per_cycle = 1
+    confidence_threshold_override = None
     replay_steps_last_cycle = 0
     replay_steps_total = 0
     signals_published_total = 0
@@ -517,6 +519,7 @@ class ScheduledSessionJobStub:
     executions_succeeded_total = 0
     downstream_rejected_total = 0
     last_uat_probe_at = None
+    pending_horizon_exits = {}
 
 
 @pytest.mark.asyncio
@@ -545,6 +548,7 @@ async def test_unchanged_market_revision_suppresses_duplicate_signal_publish():
         model_mode="heuristic_placeholder",
         model_loaded=False,
         market_data_last_candle_at="2026-09-19T15:00:00Z",
+        market_data_last_close="1.1000",
         market_data_revision="same-market-revision",
         market_data_cache_bypassed=True,
     )
@@ -557,8 +561,8 @@ async def test_unchanged_market_revision_suppresses_duplicate_signal_publish():
     scheduler._signal_generator = mock_generator
     job = ScheduledSessionJobStub()
     job.market_data_revisions["EURUSD"] = "same-market-revision"
-    job.last_confidence_score = 0.0285
-    job.last_confidence_at = object()
+    job.last_confidence_score = None
+    job.last_confidence_at = None
     scheduler._jobs["session-1"] = job
 
     await scheduler._run_session_job("session-1")
@@ -566,14 +570,14 @@ async def test_unchanged_market_revision_suppresses_duplicate_signal_publish():
     scheduler._nestjs_client.publish_signal.assert_not_called()
     assert job.last_decision == "NO_NEW_MARKET_DATA"
     assert job.last_reason == "market_data_unchanged"
-    assert job.last_confidence_score is None
-    assert job.last_confidence_at is None
+    assert job.last_confidence_score == pytest.approx(0.8)
+    assert job.last_confidence_at is not None
     assert job.model_mode == "heuristic_placeholder"
     assert job.market_data_cache_bypassed is True
 
 
 @pytest.mark.asyncio
-async def test_scan_error_clears_previous_confidence_instead_of_reusing_it():
+async def test_scan_error_preserves_previous_confidence_while_reporting_error():
     settings = Settings(ai_scheduler_enabled=True, ai_signal_mode="paper")
     scheduler = SignalScheduler(nestjs_client=AsyncMock())
     scheduler._settings = settings
@@ -592,7 +596,108 @@ async def test_scan_error_clears_previous_confidence_instead_of_reusing_it():
 
     assert job.last_decision == "ERROR"
     assert job.last_reason == "MarketDataError"
-    assert job.last_confidence_score is None
-    assert job.last_confidence_at is None
+    assert job.last_confidence_score == pytest.approx(0.0285)
+    assert job.last_confidence_at is not None
     assert job.last_run_at is not None
     assert job.last_publish_failed is True
+
+
+@pytest.mark.asyncio
+async def test_research_uat_closes_successful_trade_at_exact_model_horizon():
+    settings = Settings(ai_scheduler_enabled=True, ai_signal_mode="paper")
+    client = AsyncMock()
+    scheduler = SignalScheduler(nestjs_client=client)
+    scheduler._settings = settings
+
+    candidate = AiSignalCandidate(
+        user_id="user-1",
+        trading_session_id="session-1",
+        broker_connection_id="conn-1",
+        instrument="USDJPY",
+        direction="BUY",
+        confidence_score=0.62,
+        suggested_entry_price=156.8795,
+        suggested_stop_loss=156.173,
+        suggested_take_profit=157.8215,
+        suggested_volume=0.01,
+        timeframe="M1",
+        strategy_code="xgboost-mtf-trained-m1",
+        model_version="qualified-v10",
+        metadata={"research_horizon_bars": 1, "uat_workflow_probe": False},
+    )
+    entry_telemetry = SignalEvaluationTelemetry(
+        model_version="qualified-v10",
+        model_mode="trained_xgboost_mtf",
+        model_loaded=True,
+        market_data_last_candle_at="2026-09-28T08:01:00Z",
+        market_data_last_close="156.8795",
+        market_data_revision="entry-revision",
+        market_data_cache_bypassed=True,
+    )
+    next_telemetry = SignalEvaluationTelemetry(
+        model_version="qualified-v10",
+        model_mode="trained_xgboost_mtf",
+        model_loaded=True,
+        market_data_last_candle_at="2026-09-28T08:02:00Z",
+        market_data_last_close="156.9000",
+        market_data_revision="next-revision",
+        market_data_cache_bypassed=True,
+    )
+    mock_generator = AsyncMock()
+    mock_generator.generate.side_effect = [
+        SignalGenerationResponse(
+            generated=True,
+            signal=candidate,
+            telemetry=entry_telemetry,
+            mode="paper",
+        ),
+        SignalGenerationResponse(
+            generated=False,
+            no_signal=NoSignalResult(
+                reason="action_probability_margin_below_floor",
+                instrument="USDJPY",
+                confidence_score=0.57,
+                threshold=0.6,
+            ),
+            telemetry=next_telemetry,
+            mode="paper",
+        ),
+    ]
+    scheduler._signal_generator = mock_generator
+    client.publish_signal.return_value = {
+        "outcome": "EXECUTION_SUCCEEDED",
+        "signalId": candidate.signal_id,
+        "tradeId": "11111111-1111-4111-8111-111111111111",
+    }
+    client.publish_exit_signal.return_value = {
+        "outcome": "EXIT_SUCCEEDED",
+        "signalId": "exit-1",
+        "trades": [{"tradeId": "11111111-1111-4111-8111-111111111111", "closed": True}],
+    }
+
+    job = ScheduledSessionJobStub()
+    job.instruments = ["USDJPY"]
+    job.source = "broker"
+    job.research_uat = True
+    job.replay_steps_per_cycle = 1
+    job.pending_horizon_exits = {}
+    job.market_data_revisions = {}
+    scheduler._jobs["session-1"] = job
+
+    await scheduler._run_session_job("session-1")
+
+    assert "USDJPY" in job.pending_horizon_exits
+    pending = job.pending_horizon_exits["USDJPY"]
+    assert pending.trade_id == "11111111-1111-4111-8111-111111111111"
+    assert pending.due_market_at.isoformat() == "2026-09-28T08:02:00+00:00"
+
+    await scheduler._run_session_job("session-1")
+
+    client.publish_exit_signal.assert_awaited_once()
+    kwargs = client.publish_exit_signal.await_args.kwargs
+    assert kwargs["trade_id"] == "11111111-1111-4111-8111-111111111111"
+    assert kwargs["confidence_score"] == 0.62
+    assert kwargs["instrument"] == "USDJPY"
+    assert "USDJPY" not in job.pending_horizon_exits
+    assert job.last_strategy_outcome == "EXIT_SUCCEEDED"
+    assert job.last_strategy_reason == "research_horizon_expired"

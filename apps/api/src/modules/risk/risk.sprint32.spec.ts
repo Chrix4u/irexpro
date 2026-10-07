@@ -584,7 +584,6 @@ describe('RiskService — Sprint 32 Production Hardening', () => {
         expect.objectContaining({
           maxDailyLossPercent: '5.00',
           maxDrawdownPercent: '10.00',
-          maxOpenTrades: 3,
           maxPositionSizeLot: '0.10',
           minStopLossPips: '5.00',
           maxVolatilityScore: '0.85',

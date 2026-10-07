@@ -112,8 +112,18 @@ class OHLCVService:
         else:
             raise MarketDataError(f"Unknown market data source: {source}")
 
+        cache_source = (
+            source
+            if source != "broker"
+            else f"broker:{broker_connection_id}"
+        )
+
         if not bypass_cache:
-            cached = await self._cache.get_cached_ohlcv(source, instrument, timeframe)
+            cached = await self._cache.get_cached_ohlcv(
+                cache_source,
+                instrument,
+                timeframe,
+            )
             if cached:
                 return self._validate_candles(cached[-limit:], instrument, timeframe, source)
 
@@ -130,7 +140,12 @@ class OHLCVService:
             )
 
         validated = self._validate_candles(candles, instrument, timeframe, source)
-        await self._cache.cache_ohlcv(source, instrument, timeframe, validated)
+        await self._cache.cache_ohlcv(
+            cache_source,
+            instrument,
+            timeframe,
+            validated,
+        )
         return validated
 
     async def get_candles(

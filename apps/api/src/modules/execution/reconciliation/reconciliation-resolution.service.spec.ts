@@ -1,6 +1,6 @@
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { Trade, TradeStatus } from '../entities/trade.entity';
+import { Trade, TradeCloseReason, TradeStatus } from '../entities/trade.entity';
 import { Order } from '../orders/order.entity';
 import { OrderStatus } from '../orders/order.enums';
 import { OrderService } from '../orders/order.service';
@@ -146,6 +146,17 @@ describe('ReconciliationResolutionService', () => {
         commission: '0.00',
         swap: '0.00',
         closeReason: 'TP',
+        pathDiagnostics: {
+          maxFavorablePnl: '31.00',
+          maxAdversePnl: '-4.00',
+          latestUnrealisedPnl: '20.00',
+          profitGiveback: '11.00',
+          observationCount: 17,
+          sameBarProtectionAmbiguityCount: 1,
+          lastSameBarProtectionAmbiguityAt: new Date('2026-10-02T12:34:00.000Z'),
+          peakObservedAt: new Date('2026-10-02T12:30:00.000Z'),
+          lastObservedAt: new Date('2026-10-02T12:35:00.000Z'),
+        },
       });
 
       expect(closed).toBe(true);
@@ -155,8 +166,37 @@ describe('ReconciliationResolutionService', () => {
           status: TradeStatus.CLOSED,
           exitPrice: '1.12000',
           realisedPnl: '20.00',
-          closeReason: 'BROKER_CLOSE',
+          closeReason: 'TAKE_PROFIT_HIT',
+          maxFavorablePnl: '31.00',
+          maxAdversePnl: '-4.00',
+          profitGiveback: '11.00',
+          pathObservationCount: 17,
+          sameBarProtectionAmbiguityCount: 1,
+          lastSameBarProtectionAmbiguityAt: new Date('2026-10-02T12:34:00.000Z'),
         }),
+      );
+    });
+
+    it('preserves provider SL provenance as STOP_LOSS_HIT', async () => {
+      await service.closeTradeFromProvider(baseTrade(), {
+        externalOrderId: 'pos-1',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        lotSize: '1.0000',
+        openPrice: '1.10000',
+        closePrice: '1.09000',
+        stopLoss: '1.09000',
+        takeProfit: '1.12000',
+        realisedPnl: '-10.00',
+        openedAt: new Date(),
+        closedAt: new Date(),
+        commission: '0.00',
+        swap: '0.00',
+        closeReason: 'SL',
+      });
+      expect(tradeRepo.update).toHaveBeenCalledWith(
+        { id: 'trade-1', status: TradeStatus.OPEN },
+        expect.objectContaining({ closeReason: TradeCloseReason.STOP_LOSS_HIT }),
       );
     });
 

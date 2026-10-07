@@ -12,6 +12,7 @@ import pytest
 from app.domain.training.collect_dukascopy import (
     _fetch_hour,
     _hour_url,
+    _is_durable_missing_hour,
     _is_forex_market_closed_hour,
     _raw_cache_path,
     aggregate_ticks_to_m1,
@@ -35,6 +36,19 @@ def test_hour_url_uses_dukascopy_zero_based_month():
     assert _hour_url("eurusd", hour).endswith(
         "/EURUSD/2026/08/20/14h_ticks.bi5"
     )
+
+
+def test_recent_404_is_not_durable_but_old_missing_hour_is():
+    hour = datetime(2026, 9, 30, 0, tzinfo=UTC)
+
+    assert _is_durable_missing_hour(
+        hour,
+        observed_now=datetime(2026, 9, 30, 14, tzinfo=UTC),
+    ) is False
+    assert _is_durable_missing_hour(
+        hour,
+        observed_now=datetime(2026, 10, 1, 1, tzinfo=UTC),
+    ) is True
 
 
 def test_decode_dukascopy_ticks_preserves_bid_ask_spread_and_volume():

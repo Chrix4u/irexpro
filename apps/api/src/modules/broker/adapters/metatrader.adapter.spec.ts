@@ -292,7 +292,9 @@ describe('MetaTraderAdapter', () => {
       expect(result.success).toBe(true);
       expect(result.currency).toBe('USD');
       expect(result.accountType).toBe(BrokerMode.DEMO);
-      expect(metaApiClient.getOrCreateConnection).toHaveBeenCalledWith('acc-uuid-123');
+      expect(metaApiClient.getOrCreateConnection).toHaveBeenCalledWith('acc-uuid-123', {
+        requireSynchronization: false,
+      });
     });
 
     it('resolves DEMO account type from MetaAPI mode string', async () => {

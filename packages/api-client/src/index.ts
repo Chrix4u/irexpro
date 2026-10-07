@@ -45,6 +45,8 @@ import type {
 } from '@irexpro/types';
 import type {
   ActiveTradingSessionResponse,
+  AiAutomationRuntimeStatusView,
+  AiPositionCloseResultView,
   ChangeTradingSessionModeRequest,
   ChangeTradingSessionModeResponse,
   ConfirmExecutionConfirmationResponse,
@@ -53,6 +55,7 @@ import type {
   StartTradingSessionResponse,
   StopTradingSessionResponse,
   SetUserCapitalAllocationRequest,
+  TradeExecutionView,
   UserCapitalAllocationView,
 } from '@irexpro/types/execution';
 
@@ -75,6 +78,37 @@ import type {
  * back via `getAccessToken`. `includeCredentials` is kept for same-origin
  * cookie scenarios but is not the primary auth mechanism.
  */
+export interface AdvancedAiStepUpRequest {
+  password: string;
+  mfaCode?: string;
+  riskAcknowledged: true;
+}
+
+export interface AdvancedAiStepUpResponse {
+  stepUpToken: string;
+  expiresInSeconds: number;
+  mfaRequired: boolean;
+}
+
+export interface AdvancedAiControlsResponse {
+  controls: {
+    executionConfidenceFloor: number;
+    executionConfidenceMin: number;
+    executionConfidenceMax: number;
+    qualifiedMinimumConfidence: number;
+    appliesTo: 'ALL_EXECUTION_MODES';
+    revision: number;
+  };
+  modelQualification: {
+    modelVersion: string | null;
+    passed: boolean;
+    thresholds: Record<string, number>;
+    observed: Record<string, number>;
+    checks: Record<string, boolean>;
+    editable: false;
+  } | null;
+}
+
 export interface CreateApiClientOptions {
   baseUrl: string;
   includeCredentials?: boolean;
@@ -156,6 +190,8 @@ export interface ApiClient {
    * MFA enrollment. Both fields are secrets — never log, persist, or cache them.
    */
   changePassword(body: ChangePasswordRequest): Promise<AuthActionResponse>;
+  /** Re-authenticate and accept the warning before Advanced AI Controls. */
+  stepUpAdvancedAiControls(body: AdvancedAiStepUpRequest): Promise<AdvancedAiStepUpResponse>;
   /**
    * POST /auth/sessions/revoke-others (requires Authorization: Bearer) →
    * { accessToken, refreshToken }. Revokes every session except the caller's
@@ -185,6 +221,13 @@ export interface ApiClient {
   getRiskProfile(): Promise<RiskProfile>;
   /** PATCH /risk/profile → update risk profile + risk acknowledgement. */
   updateRiskProfile(body: UpdateRiskProfileRequest): Promise<RiskProfile>;
+  /** Step-up protected Advanced AI Controls and active-model qualification evidence. */
+  getAdvancedAiControls(stepUpToken: string): Promise<AdvancedAiControlsResponse>;
+  /** Update the LIVE-promotable execution confidence preference. */
+  updateAdvancedAiControls(
+    stepUpToken: string,
+    body: { executionConfidenceFloor: number },
+  ): Promise<AdvancedAiControlsResponse>;
   /** GET /broker/connections/supported → list of supported brokers. */
   listSupportedBrokers(): Promise<SupportedBroker[]>;
   /** GET /broker/connections → user's broker connections (no credentials). */
@@ -229,6 +272,10 @@ export interface ApiClient {
   setCapitalAllocation(
     body: SetUserCapitalAllocationRequest,
   ): Promise<UserCapitalAllocationView>;
+  /** POST /execution/positions/:tradeId/close → request risk-reducing closure of one owned open position. */
+  closePosition(tradeId: string): Promise<TradeExecutionView>;
+  /** POST /execution/positions/close-all → request closure of all provably AI-opened positions. */
+  closeAllAiPositions(): Promise<AiPositionCloseResultView[]>;
 
   // ── Sprint 56 correction round 5: execution authority (issues #295/#298) ──
   /**
@@ -237,6 +284,8 @@ export interface ApiClient {
    * from connection.accountType; `session` is null when none is active).
    */
   getActiveTradingSession(): Promise<ActiveTradingSessionResponse>;
+  /** GET /trading/sessions/:id/automation-status → server-authoritative AI runtime. */
+  getAutomationRuntimeStatus(sessionId: string): Promise<AiAutomationRuntimeStatusView>;
   /** POST /trading/sessions/start → 201 `{ session }` (body binds the exact
    *  brokerConnectionId + executionMode; server-validated fail-closed). */
   startTradingSession(body: StartTradingSessionRequest): Promise<StartTradingSessionResponse>;
@@ -329,10 +378,15 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
+    const method = (init?.method ?? 'GET').toUpperCase();
+    const cache =
+      init?.cache ?? (method === 'GET' || method === 'HEAD' ? 'no-store' : undefined);
+
     let res: Response;
     try {
       res = await fetch(url, {
         ...init,
+        ...(cache ? { cache } : {}),
         headers,
         credentials: includeCredentials ? 'include' : 'same-origin',
       });
@@ -506,6 +560,12 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
         body: JSON.stringify(body),
       }),
 
+    stepUpAdvancedAiControls: (body) =>
+      request<AdvancedAiStepUpResponse>('/auth/step-up/advanced-ai-controls', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+
     revokeOtherSessions: () =>
       request<AuthTokens>('/auth/sessions/revoke-others', { method: 'POST' }),
 
@@ -542,6 +602,18 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
     updateRiskProfile: (body) =>
       request<RiskProfile>('/risk/profile', {
         method: 'PATCH',
+        body: JSON.stringify(body),
+      }),
+
+    getAdvancedAiControls: (stepUpToken) =>
+      request<AdvancedAiControlsResponse>('/trading/sessions/advanced-controls', {
+        headers: { 'x-irexpro-step-up': stepUpToken },
+      }),
+
+    updateAdvancedAiControls: (stepUpToken, body) =>
+      request<AdvancedAiControlsResponse>('/trading/sessions/advanced-controls', {
+        method: 'POST',
+        headers: { 'x-irexpro-step-up': stepUpToken },
         body: JSON.stringify(body),
       }),
 
@@ -611,6 +683,11 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
     getActiveTradingSession: () =>
       request<ActiveTradingSessionResponse>('/trading/sessions/active'),
 
+    getAutomationRuntimeStatus: (sessionId) =>
+      request<AiAutomationRuntimeStatusView>(
+        `/trading/sessions/${encodeURIComponent(sessionId)}/automation-status`,
+      ),
+
     startTradingSession: (body) =>
       request<StartTradingSessionResponse>('/trading/sessions/start', {
         method: 'POST',
@@ -641,6 +718,21 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
       request<UserCapitalAllocationView>('/execution/capital-allocation', {
         method: 'POST',
         body: JSON.stringify(body),
+      }),
+
+    closePosition: (tradeId) =>
+      request<TradeExecutionView>(
+        `/execution/positions/${encodeURIComponent(tradeId)}/close`,
+        {
+          method: 'POST',
+          body: JSON.stringify({}),
+        },
+      ),
+
+    closeAllAiPositions: () =>
+      request<AiPositionCloseResultView[]>('/execution/positions/close-all', {
+        method: 'POST',
+        body: JSON.stringify({}),
       }),
 
     listPendingExecutionConfirmations: () =>

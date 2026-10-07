@@ -1,0 +1,10 @@
+/* Preserve workspace entrance motion without fading readable content through low-contrast opacity states. */
+.dashboard-motion__card,
+.ai-explorer-motion__summary-card {
+  animation-name: workspace-rise-contrast-safe;
+}
+
+@keyframes workspace-rise-contrast-safe {
+  from { transform: translateY(10px); }
+  to { transform: translateY(0); }
+}

@@ -811,6 +811,10 @@ describe('RiskService', () => {
       const result = await service.validateProposedTrade('user-1', validTrade());
 
       expect(result.decision).toBe('APPROVED');
+      if (result.decision === 'APPROVED') {
+        expect(result.logicalAccountKey).toBe('metatrader5|MetaQuotes-Demo|12345');
+        expect(result.accountCurrency).toBe('USD');
+      }
       expect(dailyRiskPeriod.getTodayRealisedLossExact).toHaveBeenCalledWith({
         userId: 'user-1',
         logicalAccountKey: 'metatrader5|MetaQuotes-Demo|12345',
@@ -993,30 +997,30 @@ describe('RiskService', () => {
     });
   });
 
-  // ─── Step 4a: concurrent trades fail-closed (#296) ───────────────────────
+  // ─── Step 4a: concurrent position count is unbounded ────────────────────
 
-  describe('Step 4a — Max concurrent trades', () => {
-    it('REJECTS with MAX_CONCURRENT_TRADES at the limit', async () => {
-      executionService.countOpenTrades.mockResolvedValue(3);
+  describe('Step 4a — Unbounded concurrent position count', () => {
+    it('approves a qualified trade regardless of existing position count and never queries a slot cap', async () => {
+      executionService.countOpenTrades.mockResolvedValue(999);
 
       const result = await service.validateProposedTrade('user-1', validTrade());
 
-      expect(result.decision).toBe('REJECTED');
-      if (result.decision === 'REJECTED') {
-        expect(result.rejectionCode).toBe(RiskRejectionCode.MAX_CONCURRENT_TRADES);
+      expect(result.decision).toBe('APPROVED');
+      expect(executionService.countOpenTrades).not.toHaveBeenCalled();
+      if (result.decision === 'APPROVED') {
+        expect(result.appliedRules).toContain('CONCURRENT_POSITION_COUNT:UNBOUNDED');
       }
     });
 
-    it('REJECTS with RISK_ENGINE_QUERY_FAILED when the count query throws (never SKIPPED, #296)', async () => {
-      executionService.countOpenTrades.mockRejectedValue(new Error('pool exhausted'));
+    it('does not depend on the legacy open-position count query', async () => {
+      executionService.countOpenTrades.mockRejectedValue(
+        new Error('legacy count path must not run'),
+      );
 
       const result = await service.validateProposedTrade('user-1', validTrade());
 
-      expect(result.decision).toBe('REJECTED');
-      if (result.decision === 'REJECTED') {
-        expect(result.rejectionCode).toBe(RiskRejectionCode.RISK_ENGINE_QUERY_FAILED);
-        expect(result.rejectionReason).not.toContain('pool exhausted');
-      }
+      expect(result.decision).toBe('APPROVED');
+      expect(executionService.countOpenTrades).not.toHaveBeenCalled();
     });
   });
 
@@ -1283,6 +1287,54 @@ describe('RiskService', () => {
       expect(result.decision).toBe('APPROVED');
     });
 
+    it('converts USDJPY stop risk and notional into USD when the USD account is the base currency', async () => {
+      brokerService.getBrokerAccountState.mockResolvedValue({
+        balance: '10000.00',
+        equity: '10000.00',
+        freeMargin: '9900.00',
+        currency: 'USD',
+      });
+
+      const result = await service.validateProposedTrade(
+        'user-1',
+        validTrade({
+          instrument: 'USDJPY',
+          requestedLotSize: '0.10',
+          entryPrice: '156.8795',
+          stopLoss: '156.1730',
+          takeProfit: '157.5000',
+        }),
+      );
+
+      expect(result.decision).toBe('APPROVED');
+    });
+
+    it('fails closed when the account currency matches neither FX leg', async () => {
+      brokerService.getBrokerAccountState.mockResolvedValue({
+        balance: '10000.00',
+        equity: '10000.00',
+        freeMargin: '9900.00',
+        currency: 'USD',
+      });
+
+      const result = await service.validateProposedTrade(
+        'user-1',
+        validTrade({
+          instrument: 'GBPJPY',
+          requestedLotSize: '0.05',
+          entryPrice: '200.000',
+          stopLoss: '199.500',
+          takeProfit: '201.000',
+        }),
+      );
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.ACCOUNT_STATE_UNAVAILABLE);
+        expect(result.rejectionReason).toContain('matches neither leg');
+      }
+    });
+
     it('LIVE NEW exposure fails CLOSED with a typed code when contract size is unavailable', async () => {
       brokerService.findConnectionById.mockResolvedValue(
         defaultConnection({ accountType: 'LIVE' }),
@@ -1310,6 +1362,78 @@ describe('RiskService', () => {
       expect(result.decision).toBe('REJECTED');
       if (result.decision === 'REJECTED') {
         expect(result.rejectionCode).toBe(RiskRejectionCode.CONTRACT_SIZE_UNAVAILABLE);
+      }
+    });
+
+    it('MARKET SELL validates protection against the fresh BID instead of the zero sentinel', async () => {
+      orderGeometry.resolveOrderGeometry.mockResolvedValue({
+        contractSize: ExactDecimal.parse('100000'),
+        freshQuote: ExactDecimal.parse('1.08490'),
+        quoteRef: { price: '1.08490', direction: 'SELL', source: 'broker-current-price' },
+      });
+
+      const result = await service.validateProposedTrade(
+        'user-1',
+        validTrade({
+          direction: 'SELL',
+          entryPrice: '0',
+          stopLoss: '1.09500',
+          takeProfit: '1.07500',
+        }),
+      );
+
+      expect(result.decision).toBe('APPROVED');
+      if (result.decision === 'APPROVED') {
+        expect(result.appliedRules).toContain('SL_DISTANCE:MARKET_QUOTE_OK');
+        expect(result.appliedRules).toContain('TP_DIRECTION:MARKET_QUOTE_OK');
+      }
+      expect(orderGeometry.resolveOrderGeometry).toHaveBeenCalledWith(
+        expect.objectContaining({ direction: 'SELL', needFreshQuote: true }),
+      );
+    });
+
+    it('MARKET SELL rejects a take-profit above the fresh BID', async () => {
+      orderGeometry.resolveOrderGeometry.mockResolvedValue({
+        contractSize: ExactDecimal.parse('100000'),
+        freshQuote: ExactDecimal.parse('1.08490'),
+        quoteRef: { price: '1.08490', direction: 'SELL', source: 'broker-current-price' },
+      });
+
+      const result = await service.validateProposedTrade(
+        'user-1',
+        validTrade({
+          direction: 'SELL',
+          entryPrice: '0',
+          stopLoss: '1.09500',
+          takeProfit: '1.09000',
+        }),
+      );
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.INVALID_TP_DIRECTION);
+      }
+    });
+
+    it('MARKET BUY rejects a stop-loss above the fresh ASK', async () => {
+      orderGeometry.resolveOrderGeometry.mockResolvedValue({
+        contractSize: ExactDecimal.parse('100000'),
+        freshQuote: ExactDecimal.parse('1.08510'),
+        quoteRef: { price: '1.08510', direction: 'BUY', source: 'broker-current-price' },
+      });
+
+      const result = await service.validateProposedTrade(
+        'user-1',
+        validTrade({
+          entryPrice: '0',
+          stopLoss: '1.09000',
+          takeProfit: '1.09500',
+        }),
+      );
+
+      expect(result.decision).toBe('REJECTED');
+      if (result.decision === 'REJECTED') {
+        expect(result.rejectionCode).toBe(RiskRejectionCode.INVALID_SL_DISTANCE);
       }
     });
 

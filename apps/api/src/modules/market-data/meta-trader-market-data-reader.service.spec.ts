@@ -2,13 +2,11 @@ import { MetaTraderMarketDataReaderService } from './meta-trader-market-data-rea
 
 function createConnection(bid: number, ask: number) {
   return {
-    subscribeToMarketData: jest.fn().mockResolvedValue(undefined),
     getSymbolPrice: jest.fn().mockResolvedValue({
       bid,
       ask,
       time: new Date('2026-08-30T20:00:15.000Z'),
     }),
-    unsubscribeFromMarketData: jest.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -62,8 +60,12 @@ describe('MetaTraderMarketDataReaderService', () => {
     expect(quoteA.ask).toBe('1.17010000');
     expect(quoteB.bid).toBe('1.28000000');
     expect(quoteB.ask).toBe('1.28020000');
-    expect(metaApiClient.getOrCreateConnection).toHaveBeenCalledWith(accountA);
-    expect(metaApiClient.getOrCreateConnection).toHaveBeenCalledWith(accountB);
+    expect(metaApiClient.getOrCreateConnection).toHaveBeenCalledWith(accountA, {
+      requireSynchronization: false,
+    });
+    expect(metaApiClient.getOrCreateConnection).toHaveBeenCalledWith(accountB, {
+      requireSynchronization: false,
+    });
     expect(connectionA.getSymbolPrice).toHaveBeenCalledWith('EURUSD');
     expect(connectionB.getSymbolPrice).toHaveBeenCalledWith('EURUSD');
   });
@@ -92,11 +94,12 @@ describe('MetaTraderMarketDataReaderService', () => {
     );
   });
 
-  it('always unsubscribes from market data after a quote read', async () => {
+  it('reads quotes directly from the RPC connection without streaming subscription calls', async () => {
     const reader = new MetaTraderMarketDataReaderService(metaApiClient as never);
 
-    await reader.getCurrentPrice(accountA, 'EURUSD');
+    const quote = await reader.getCurrentPrice(accountA, 'EURUSD');
 
-    expect(connectionA.unsubscribeFromMarketData).toHaveBeenCalledWith('EURUSD');
+    expect(quote.bid).toBe('1.17000000');
+    expect(connectionA.getSymbolPrice).toHaveBeenCalledWith('EURUSD');
   });
 });

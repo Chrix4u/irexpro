@@ -35,7 +35,7 @@ import { BillingCycleStatus } from './entities/performance-fee-billing-cycle.ent
  * - No HWM updates here — those happen only after a verified payment webhook.
  * - No credentials, secrets, or raw payloads in any response.
  */
-@Controller('api/v1/performance-billing')
+@Controller('performance-billing')
 @UseGuards(RolesGuard)
 export class PerformanceBillingController {
   constructor(private readonly svc: PerformanceFeeBillingCycleService) {}

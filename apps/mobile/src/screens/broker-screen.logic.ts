@@ -17,6 +17,16 @@ import type {
 import type { ProviderVerificationLabel } from "@irexpro/types/provider-verification";
 import { assessProviderVerification } from "@irexpro/types/provider-verification";
 
+export type BrokerConnectionAction = 'DISCONNECT' | 'RECONNECT' | 'WAIT';
+
+export function brokerConnectionAction(
+  status: BrokerConnectionView['status'],
+): BrokerConnectionAction {
+  if (status === 'CONNECTED') return 'DISCONNECT';
+  if (status === 'CONNECTING') return 'WAIT';
+  return 'RECONNECT';
+}
+
 export interface BrokerStatusPresentation {
   label: string;
   color: string;

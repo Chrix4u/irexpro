@@ -12,6 +12,16 @@ const WORKFLOW_RULES = [
     ],
   },
   {
+    name: 'Strategy Promotion Integrity',
+    patterns: [
+      'strategy-artifacts/**',
+      'scripts/strategy/**',
+      'apps/api/src/modules/ai/vps-forex-signal-collector.service.ts',
+      'apps/api/src/modules/ai/v8-shadow-meta-scorer.ts',
+      '.github/workflows/strategy-promotion-integrity.yml',
+    ],
+  },
+  {
     name: 'API CI',
     patterns: [
       'apps/api/**',
@@ -149,6 +159,16 @@ export function runSelfTests() {
     requiredWorkflowNames(['apps/api/src/modules/auth/auth.service.ts']),
     ['Release Security', 'API CI', 'Risk Execution Concurrency'],
     'API change',
+  );
+  assertEqual(
+    requiredWorkflowNames(['scripts/strategy/frozen-artifact.mjs']),
+    ['Release Security', 'Strategy Promotion Integrity'],
+    'strategy artifact tooling change',
+  );
+  assertEqual(
+    requiredWorkflowNames(['apps/api/src/modules/ai/v8-shadow-meta-scorer.ts']),
+    ['Release Security', 'Strategy Promotion Integrity', 'API CI', 'Risk Execution Concurrency'],
+    'promotable strategy source change',
   );
   assertEqual(
     requiredWorkflowNames(['apps/api/src/database/migrations/123-example.ts']),

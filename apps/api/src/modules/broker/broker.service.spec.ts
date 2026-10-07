@@ -25,6 +25,7 @@ import { AuditAction } from '../../common/enums/audit-action.enum';
 import { BrokerConnectionStatus, BrokerMode } from './interfaces/broker-adapter.interface';
 import { BrokerAuthorizationStatus } from './authorization/broker-authorization-status';
 import { DomainEventBus } from '../events/event-bus.service';
+import { BrokerAdapterError, BrokerErrorCode } from './interfaces/broker-adapter.errors';
 
 // ─── Mock factories ───────────────────────────────────────────────────────────
 
@@ -562,6 +563,40 @@ describe('BrokerService', () => {
       );
     });
 
+    it('keeps an automatic recovery probe SUSPENDED when the provider is still unavailable', async () => {
+      const mockAdapter = {
+        setMode: jest.fn(),
+        connect: jest.fn().mockRejectedValue(new Error('temporary MetaApi timeout')),
+      };
+      registry.getAdapter.mockReturnValue(mockAdapter);
+
+      const mockConn = connectedConnection({
+        status: BrokerConnectionStatus.SUSPENDED,
+        authorizationStatus: BrokerAuthorizationStatus.SUSPENDED,
+        consecutiveFailureCount: 3,
+        lastErrorMessage: 'previous MetaApi timeout',
+      });
+      connectionRepo.findOne.mockResolvedValue(mockConn);
+      connectionRepo.update.mockResolvedValue({ affected: 1 });
+
+      await expect(
+        service.connectBroker('conn-1', 'user-1', undefined, {
+          preserveSuspendedOnFailure: true,
+        }),
+      ).rejects.toThrow();
+
+      const patches = connectionRepo.update.mock.calls.map((call) => call[1]);
+      expect(patches.some((patch) => patch.status === BrokerConnectionStatus.ERROR)).toBe(false);
+      expect(patches[0]).toMatchObject({
+        status: BrokerConnectionStatus.SUSPENDED,
+        consecutiveFailureCount: 3,
+      });
+      expect(patches.at(-1)).toMatchObject({
+        status: BrokerConnectionStatus.SUSPENDED,
+        lastErrorMessage: 'temporary MetaApi timeout',
+      });
+    });
+
     it('calls decrypt and adapter.connect with decrypted credentials', async () => {
       const mockAdapter = {
         setMode: jest.fn(),
@@ -869,6 +904,82 @@ describe('BrokerService', () => {
     });
   });
 
+  // ─── enableDemoTrading ────────────────────────────────────────────────────
+
+  describe('enableDemoTrading()', () => {
+    it('activates a connected validated MetaTrader DEMO connection without enabling LIVE', async () => {
+      connectionRepo.findOne.mockResolvedValueOnce({
+        id: 'conn-demo',
+        userId: 'user-1',
+        accountType: BrokerMode.DEMO,
+        brokerId: 'metatrader5',
+        status: BrokerConnectionStatus.CONNECTED,
+        demoValidated: true,
+        authorizationStatus: BrokerAuthorizationStatus.AUTHORIZED,
+        authorizedAt: new Date('2026-10-04T12:00:00Z'),
+      });
+      connectionRepo.update.mockResolvedValue({ affected: 1 });
+
+      await expect(service.enableDemoTrading('conn-demo', 'user-1')).resolves.not.toThrow();
+
+      expect(connectionRepo.update).toHaveBeenCalledWith(
+        { id: 'conn-demo', authorizationStatus: BrokerAuthorizationStatus.AUTHORIZED },
+        expect.objectContaining({
+          authorizationStatus: BrokerAuthorizationStatus.ACTIVE,
+          liveTradingEnabled: false,
+          authorizationRevokedAt: null,
+        }),
+      );
+    });
+
+    it('rejects LIVE rows from the DEMO activation endpoint', async () => {
+      connectionRepo.findOne.mockResolvedValueOnce({
+        id: 'conn-live',
+        userId: 'user-1',
+        accountType: BrokerMode.LIVE,
+        brokerId: 'metatrader5',
+        status: BrokerConnectionStatus.CONNECTED,
+        demoValidated: true,
+        authorizationStatus: BrokerAuthorizationStatus.AUTHORIZED,
+      });
+
+      await expect(service.enableDemoTrading('conn-live', 'user-1')).rejects.toThrow(
+        'Only DEMO account connections can have DEMO automation enabled',
+      );
+    });
+
+    it('rejects an unvalidated DEMO connection', async () => {
+      connectionRepo.findOne.mockResolvedValueOnce({
+        id: 'conn-demo',
+        userId: 'user-1',
+        accountType: BrokerMode.DEMO,
+        brokerId: 'metatrader5',
+        status: BrokerConnectionStatus.CONNECTED,
+        demoValidated: false,
+        authorizationStatus: BrokerAuthorizationStatus.AUTHORIZED,
+      });
+
+      await expect(service.enableDemoTrading('conn-demo', 'user-1')).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('is idempotent when DEMO automation is already ACTIVE', async () => {
+      connectionRepo.findOne.mockResolvedValueOnce({
+        id: 'conn-demo',
+        userId: 'user-1',
+        accountType: BrokerMode.DEMO,
+        brokerId: 'metatrader5',
+        status: BrokerConnectionStatus.CONNECTED,
+        demoValidated: true,
+        authorizationStatus: BrokerAuthorizationStatus.ACTIVE,
+      });
+
+      await expect(service.enableDemoTrading('conn-demo', 'user-1')).resolves.not.toThrow();
+      expect(connectionRepo.update).not.toHaveBeenCalled();
+    });
+  });
+
   // ─── enableLiveTrading ────────────────────────────────────────────────────
 
   describe('enableLiveTrading()', () => {
@@ -992,6 +1103,46 @@ describe('BrokerService', () => {
       // Status must NOT be set to SUSPENDED on success
       const updateCall = (connectionRepo.update as jest.Mock).mock.calls[0][1];
       expect(updateCall.status).toBeUndefined();
+    });
+
+    it('keeps the internal PAPER connection CONNECTED when only live market data is temporarily unavailable', async () => {
+      const adapter = {
+        setMode: jest.fn(),
+        connect: jest.fn().mockResolvedValue({ success: true, accountType: BrokerMode.DEMO }),
+        getAccountInfo: jest
+          .fn()
+          .mockRejectedValue(
+            new BrokerAdapterError(
+              BrokerErrorCode.PROVIDER_UNAVAILABLE,
+              'No live PAPER quote is cached yet for USDJPY.',
+              undefined,
+              true,
+            ),
+          ),
+      };
+      registry.getAdapter.mockReturnValue(adapter);
+      connectionRepo.findOne.mockResolvedValue(
+        connectedConnection({ brokerId: 'paper-broker', consecutiveFailureCount: 2 }),
+      );
+
+      const result = await service.healthCheck('conn-1');
+
+      expect(result).toBe(false);
+      expect(connectionRepo.update).toHaveBeenCalledWith(
+        'conn-1',
+        expect.objectContaining({
+          consecutiveFailureCount: 0,
+          lastErrorMessage: 'No live PAPER quote is cached yet for USDJPY.',
+        }),
+      );
+      expect(connectionRepo.update).not.toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.objectContaining({ status: BrokerConnectionStatus.SUSPENDED }),
+      );
+      expect(registry.releaseAdapterForConnection).not.toHaveBeenCalled();
+      expect(auditService.log).not.toHaveBeenCalledWith(
+        expect.objectContaining({ action: AuditAction.BROKER_SUSPENDED_HEALTH_FAILURE }),
+      );
     });
 
     it('1st failure: increments failureCount to 1 — does NOT suspend', async () => {
@@ -1664,6 +1815,49 @@ describe('BrokerService', () => {
     });
   });
 
+  describe('getOhlcvForConnection() — broker historical market-data seam', () => {
+    it('reuses an already-connected adapter without repeating the provider handshake', async () => {
+      const connectedConn = {
+        id: 'conn-1',
+        userId: 'user-1',
+        brokerId: 'metatrader5',
+        status: BrokerConnectionStatus.CONNECTED,
+        accountType: BrokerMode.DEMO,
+        credentialStatus: 'VERIFIED',
+        encryptedCredentials: 'ciphertext',
+        credentialIv: 'iv',
+        credentialTag: 'tag',
+        encryptionKeyId: 'env-key-v1',
+      };
+      const candles = [
+        {
+          timestamp: new Date('2026-10-06T20:00:00Z'),
+          open: '1.1000',
+          high: '1.1010',
+          low: '1.0990',
+          close: '1.1005',
+          volume: '10',
+        },
+      ];
+      connectionRepo.findOne.mockResolvedValue(connectedConn);
+      const adapter = {
+        setMode: jest.fn(),
+        isConnected: jest.fn().mockReturnValue(true),
+        connect: jest.fn().mockResolvedValue(undefined),
+        getOHLCV: jest.fn().mockResolvedValue(candles),
+      };
+      registry.getAdapterForConnection.mockReturnValue(adapter);
+      encryption.decrypt.mockReturnValue({ accountId: 'acc-1' });
+
+      await expect(
+        service.getOhlcvForConnection('user-1', 'conn-1', 'EURUSD', 'M5', 10),
+      ).resolves.toEqual(candles);
+      expect(adapter.isConnected).toHaveBeenCalledTimes(1);
+      expect(adapter.connect).not.toHaveBeenCalled();
+      expect(adapter.getOHLCV).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('getCurrentPriceForConnection() — the fresh-quote seam (§5/§18 market safety)', () => {
     const connectedConn = {
       id: 'conn-1',
@@ -1702,6 +1896,25 @@ describe('BrokerService', () => {
       expect(adapter.getCurrentPrice).toHaveBeenCalledTimes(1);
     });
 
+    it('reuses an already-connected adapter without repeating the provider handshake', async () => {
+      connectionRepo.findOne.mockResolvedValue(connectedConn);
+      const adapter = {
+        setMode: jest.fn(),
+        isConnected: jest.fn().mockReturnValue(true),
+        connect: jest.fn().mockResolvedValue(undefined),
+        getCurrentPrice: jest.fn().mockResolvedValue(priceFixture),
+      };
+      registry.getAdapterForConnection.mockReturnValue(adapter);
+      encryption.decrypt.mockReturnValue({ accountId: 'acc-1' });
+
+      await expect(
+        service.getCurrentPriceForConnection('user-1', 'conn-1', 'EURUSD'),
+      ).resolves.toEqual(priceFixture);
+      expect(adapter.isConnected).toHaveBeenCalledTimes(1);
+      expect(adapter.connect).not.toHaveBeenCalled();
+      expect(adapter.getCurrentPrice).toHaveBeenCalledTimes(1);
+    });
+
     it('rejects a non-active connection (tenant + lifecycle gated)', async () => {
       connectionRepo.findOne.mockResolvedValue({
         ...connectedConn,
@@ -1725,6 +1938,24 @@ describe('BrokerService', () => {
       await expect(
         service.getCurrentPriceForConnection('user-1', 'conn-1', 'EURUSD'),
       ).resolves.toBeNull();
+    });
+
+    it('can propagate a provider failure for internal quota-aware collectors only', async () => {
+      connectionRepo.findOne.mockResolvedValue(connectedConn);
+      const providerError = new Error('429 Too Many Requests');
+      const adapter = {
+        setMode: jest.fn(),
+        connect: jest.fn().mockResolvedValue(undefined),
+        getCurrentPrice: jest.fn().mockRejectedValue(providerError),
+      };
+      registry.getAdapterForConnection.mockReturnValue(adapter);
+      encryption.decrypt.mockReturnValue({ accountId: 'acc-1' });
+
+      await expect(
+        service.getCurrentPriceForConnection('user-1', 'conn-1', 'EURUSD', {
+          propagateProviderError: true,
+        }),
+      ).rejects.toBe(providerError);
     });
 
     it('returns null for a quote with an unparseable timestamp (unprovable is unprovable)', async () => {

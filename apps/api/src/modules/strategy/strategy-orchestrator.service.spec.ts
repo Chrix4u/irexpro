@@ -292,6 +292,36 @@ describe('StrategyOrchestratorService', () => {
       expect(riskService.validateProposedTrade).not.toHaveBeenCalled();
     });
 
+    it('enforces a higher scheduler-carried execution confidence floor', async () => {
+      const candidate = validCandidate({
+        confidenceScore: 0.65,
+        metadata: {
+          model_confidence_threshold: 0.7,
+        },
+      });
+
+      const result = await service.processSignal(candidate);
+
+      expect(result.outcome).toBe('LOW_CONFIDENCE');
+      expect(result.reason).toContain('threshold 0.7');
+      expect(riskService.validateProposedTrade).not.toHaveBeenCalled();
+    });
+
+    it('never allows metadata to lower the production confidence floor below 0.6', async () => {
+      const candidate = validCandidate({
+        confidenceScore: 0.59,
+        metadata: {
+          model_confidence_threshold: 0.3,
+        },
+      });
+
+      const result = await service.processSignal(candidate);
+
+      expect(result.outcome).toBe('LOW_CONFIDENCE');
+      expect(result.reason).toContain('threshold 0.6');
+      expect(riskService.validateProposedTrade).not.toHaveBeenCalled();
+    });
+
     it('accepts signal at confidence threshold (0.6)', async () => {
       const result = await service.processSignal(validCandidate({ confidenceScore: 0.6 }));
       expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
@@ -336,22 +366,26 @@ describe('StrategyOrchestratorService', () => {
       );
       expect(sizingMock.sizePosition).toHaveBeenCalledWith(
         expect.objectContaining({
-          requestedEntryPrice: '1.10005',
+          entryType: 'MARKET',
+          requestedEntryPrice: null,
           stopLoss: '1.09855',
+          requestedLotUpperBound: String(probeCandidate().suggestedVolume),
         }),
       );
       expect(riskService.validateProposedTrade).toHaveBeenCalledWith(
         'user-1',
         expect.objectContaining({
-          entryPrice: '1.10005',
+          entryPrice: '0',
           stopLoss: '1.09855',
           takeProfit: '1.10205',
         }),
       );
       expect(tradeIntentMock.recordOrReuseIntent).toHaveBeenCalledWith(
         expect.objectContaining({
-          requestedEntryPrice: '1.10005',
+          requestedEntryPrice: null,
           metadata: expect.objectContaining({
+            execution_entry_type: 'MARKET',
+            signal_suggested_entry_price: '1.2',
             uat_execution_probe_rebased: true,
             uat_replay_reference_price: '1.2',
             uat_execution_reference_price: '1.10005',
@@ -428,6 +462,83 @@ describe('StrategyOrchestratorService', () => {
       const result = await service.processSignal(probeCandidate());
 
       expect(result.outcome).toBe('LOW_CONFIDENCE');
+      expect(riskService.validateProposedTrade).not.toHaveBeenCalled();
+      expect(executionService.executeTrade).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('External provider PAPER-only boundary', () => {
+    const externalCandidate = () =>
+      validCandidate({
+        confidenceScore: 0.72,
+        strategyCode: 'external-tradingview-relay-trend-v1',
+        modelVersion: 'external-provider/tradingview-relay/paper-only-v1',
+        metadata: {
+          signal_source: 'EXTERNAL_PROVIDER',
+          external_provider_code: 'tradingview-relay',
+          external_provider_paper_only: true,
+          production_eligible: false,
+        },
+      });
+
+    it('allows a certified-shape external signal only on the exact internal PAPER broker', async () => {
+      (executionService.getActiveSession as jest.Mock).mockResolvedValue({
+        ...activeSession(),
+        executionMode: ExecutionMode.PAPER_ONLY,
+      });
+      (brokerService.findConnectionById as jest.Mock).mockResolvedValue({
+        id: 'conn-1',
+        userId: 'user-1',
+        brokerId: 'paper-broker',
+        accountType: BrokerMode.DEMO,
+        logicalAccountKey: 'paper-broker::demo::acct-1',
+      });
+
+      const result = await service.processSignal(externalCandidate());
+
+      expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
+      expect(riskService.validateProposedTrade).toHaveBeenCalled();
+      expect(executionService.executeTrade).toHaveBeenCalled();
+    });
+
+    it('rejects an external provider signal on FULL_AUTO even with a paper broker connection', async () => {
+      (executionService.getActiveSession as jest.Mock).mockResolvedValue({
+        ...activeSession(),
+        executionMode: ExecutionMode.FULL_AUTO,
+      });
+      (brokerService.findConnectionById as jest.Mock).mockResolvedValue({
+        id: 'conn-1',
+        userId: 'user-1',
+        brokerId: 'paper-broker',
+        accountType: BrokerMode.DEMO,
+        logicalAccountKey: 'paper-broker::demo::acct-1',
+      });
+
+      const result = await service.processSignal(externalCandidate());
+
+      expect(result.outcome).toBe('SIGNAL_INVALID');
+      expect(result.reason).toContain('PAPER_ONLY');
+      expect(riskService.validateProposedTrade).not.toHaveBeenCalled();
+      expect(executionService.executeTrade).not.toHaveBeenCalled();
+    });
+
+    it('rejects an external provider signal on a real-provider DEMO connection', async () => {
+      (executionService.getActiveSession as jest.Mock).mockResolvedValue({
+        ...activeSession(),
+        executionMode: ExecutionMode.PAPER_ONLY,
+      });
+      (brokerService.findConnectionById as jest.Mock).mockResolvedValue({
+        id: 'conn-1',
+        userId: 'user-1',
+        brokerId: 'metatrader5',
+        accountType: BrokerMode.DEMO,
+        logicalAccountKey: 'metatrader5::demo::acct-1',
+      });
+
+      const result = await service.processSignal(externalCandidate());
+
+      expect(result.outcome).toBe('SIGNAL_INVALID');
+      expect(result.reason).toContain('paper-broker');
       expect(riskService.validateProposedTrade).not.toHaveBeenCalled();
       expect(executionService.executeTrade).not.toHaveBeenCalled();
     });
@@ -586,6 +697,37 @@ describe('StrategyOrchestratorService', () => {
       brokerId: 'metatrader',
       accountType: BrokerMode.LIVE,
       logicalAccountKey: 'metatrader::live::acct-1',
+    });
+
+    it('treats a model suggested entry as provenance while the executable signal remains MARKET', async () => {
+      const result = await service.processSignal(
+        validCandidate({
+          suggestedEntryPrice: 1.0845,
+          suggestedStopLoss: 1.075,
+          suggestedTakeProfit: 1.095,
+        }),
+      );
+
+      expect(result.outcome).toBe('EXECUTION_SUCCEEDED');
+      expect(sizingMock.sizePosition).toHaveBeenCalledWith(
+        expect.objectContaining({
+          entryType: 'MARKET',
+          requestedEntryPrice: null,
+        }),
+      );
+      expect(riskService.validateProposedTrade).toHaveBeenCalledWith(
+        'user-1',
+        expect.objectContaining({ entryPrice: '0' }),
+      );
+      expect(tradeIntentMock.recordOrReuseIntent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requestedEntryPrice: null,
+          metadata: expect.objectContaining({
+            execution_entry_type: 'MARKET',
+            signal_suggested_entry_price: 1.0845,
+          }),
+        }),
+      );
     });
 
     it('the SIZED volume flows to the Risk Engine — never the AI suggestedVolume (mock-seam regression: the Round 7 P0 allocation bug hid behind this exact seam)', async () => {

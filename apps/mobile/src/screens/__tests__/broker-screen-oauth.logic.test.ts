@@ -12,6 +12,7 @@ import {
   BROKER_OAUTH_HANDOFF_PATH,
   brokerOAuthHandoffLinkBase,
   buildOAuthLinkRequest,
+  isPendingBrokerOAuthContextFresh,
   oauthAccountOptions,
   oauthDisplayName,
   parseBrokerOAuthHandoffLink,
@@ -93,6 +94,26 @@ describe("parseBrokerOAuthHandoffLink", () => {
     expect(
       parseBrokerOAuthHandoffLink("irexpro://broker/oauth/handoff?token=t&error=e"),
     ).toEqual({ token: "t" });
+  });
+});
+
+describe("cold-start pending OAuth context freshness", () => {
+  const now = Date.parse("2026-10-02T06:00:00.000Z");
+
+  it("accepts a recent pending context within the mobile return window", () => {
+    expect(
+      isPendingBrokerOAuthContextFresh("2026-10-02T05:55:00.000Z", now),
+    ).toBe(true);
+  });
+
+  it("rejects expired, malformed, and implausibly future pending contexts", () => {
+    expect(
+      isPendingBrokerOAuthContextFresh("2026-10-02T05:49:59.999Z", now),
+    ).toBe(false);
+    expect(isPendingBrokerOAuthContextFresh("not-a-date", now)).toBe(false);
+    expect(
+      isPendingBrokerOAuthContextFresh("2026-10-02T06:00:06.000Z", now),
+    ).toBe(false);
   });
 });
 

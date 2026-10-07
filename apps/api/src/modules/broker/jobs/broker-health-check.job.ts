@@ -6,10 +6,12 @@ import { Job } from 'bullmq';
 import { BrokerService } from '../broker.service';
 import { BrokerConnection } from '../entities/broker-connection.entity';
 import { BrokerConnectionStatus } from '../interfaces/broker-adapter.interface';
+import { BrokerAuthorizationStatus } from '../authorization/broker-authorization-status';
 import { BrokerLinkOutboxService } from '../services/broker-link-outbox.service';
 
 export const BROKER_HEALTH_QUEUE = 'broker-health-check';
 export const BROKER_HEALTH_JOB = 'health-check-all';
+const SUSPENDED_RECOVERY_BACKOFF_MS = 5 * 60_000;
 
 /**
  * Log-privacy helper (Phase F): account identifiers never reach the logs in
@@ -69,13 +71,41 @@ export class BrokerHealthCheckJob extends WorkerHost {
       where: { status: BrokerConnectionStatus.CONNECTED },
       select: ['id', 'userId', 'brokerId', 'accountId'],
     });
+    const suspendedConnections = await this.connectionRepo.find({
+      where: { status: BrokerConnectionStatus.SUSPENDED },
+      select: [
+        'id',
+        'userId',
+        'brokerId',
+        'accountId',
+        'authorizationStatus',
+        'consecutiveFailureCount',
+        'lastErrorMessage',
+        'updatedAt',
+      ],
+    });
+    const now = Date.now();
+    const recoveryCandidates = suspendedConnections.filter((connection) => {
+      const updatedAt = connection.updatedAt ? new Date(connection.updatedAt).getTime() : 0;
+      const securitySuspension = connection.lastErrorMessage
+        ?.toLowerCase()
+        .includes('environment mismatch');
+      return (
+        connection.authorizationStatus === BrokerAuthorizationStatus.SUSPENDED &&
+        connection.consecutiveFailureCount >= 3 &&
+        !securitySuspension &&
+        now - updatedAt >= SUSPENDED_RECOVERY_BACKOFF_MS
+      );
+    });
 
-    if (connections.length === 0) {
-      this.logger.debug('No active broker connections to health check');
+    if (connections.length === 0 && recoveryCandidates.length === 0) {
+      this.logger.debug('No active broker connections or transient suspensions to health check');
       return { checked: 0, failed: 0 };
     }
 
-    this.logger.log(`Health checking ${connections.length} active broker connection(s)`);
+    if (connections.length > 0) {
+      this.logger.log(`Health checking ${connections.length} active broker connection(s)`);
+    }
 
     let checked = 0;
     let failed = 0;
@@ -101,7 +131,38 @@ export class BrokerHealthCheckJob extends WorkerHost {
       }),
     );
 
-    this.logger.log(`Health check complete: ${checked} healthy, ${failed} failed`);
+    let recovered = 0;
+    let recoveryFailed = 0;
+    await Promise.allSettled(
+      recoveryCandidates.map(async (conn) => {
+        try {
+          // A health-failure suspension is fail-closed while unhealthy, but it
+          // must not become a permanent dead-end. Reuse the full provider
+          // handshake/environment validation. Failure remains SUSPENDED; a
+          // successful LIVE recovery returns only CONNECTED (never ACTIVE), so
+          // real-money execution authority is never silently restored.
+          await this.brokerService.connectBroker(conn.id, conn.userId, undefined, {
+            preserveSuspendedOnFailure: true,
+          });
+          recovered++;
+          this.logger.log(
+            `Recovered transiently suspended broker connection ${conn.id} ` +
+              `(broker=${conn.brokerId}, account=${maskLikeId(conn.accountId)})`,
+          );
+        } catch (err) {
+          recoveryFailed++;
+          this.logger.warn(
+            `Suspended broker recovery deferred for connection ${conn.id}: ` +
+              `${(err as Error).message}`,
+          );
+        }
+      }),
+    );
+
+    this.logger.log(
+      `Health check complete: ${checked} healthy, ${failed} failed; ` +
+        `${recovered} suspended recovered, ${recoveryFailed} recovery deferred`,
+    );
     return { checked, failed };
   }
 }

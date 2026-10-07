@@ -103,6 +103,74 @@ export const validationSchema = Joi.object({
   // In production: store in AWS Secrets Manager / HashiCorp Vault.
   NESTJS_INTERNAL_API_KEY: Joi.string().optional().allow(''),
 
+  // Generic external strategy/signal provider intake. It is fail-closed by
+  // default and PAPER_ONLY even when enabled. Provider secrets are supplied
+  // as a service header; never place them in TradingView webhook bodies.
+  EXTERNAL_SIGNAL_PROVIDER_ENABLED: Joi.string().valid('true', 'false').optional().allow(''),
+  EXTERNAL_SIGNAL_PROVIDER_KEY: Joi.when('EXTERNAL_SIGNAL_PROVIDER_ENABLED', {
+    is: 'true',
+    then: Joi.string().min(32).required(),
+    otherwise: Joi.string().min(32).optional().allow(''),
+  }),
+
+  // TradingView's public webhook route is authenticated at the network edge
+  // (Cloudflare origin + official TradingView source-IP allowlist). User and
+  // broker/session bindings stay server-side and never appear in the alert.
+  TRADINGVIEW_WEBHOOK_ENABLED: Joi.string().valid('true', 'false').optional().allow(''),
+  TRADINGVIEW_WEBHOOK_USER_ID: Joi.when('TRADINGVIEW_WEBHOOK_ENABLED', {
+    is: 'true',
+    then: Joi.string()
+      .guid({ version: ['uuidv4'] })
+      .required(),
+    otherwise: Joi.string()
+      .guid({ version: ['uuidv4'] })
+      .optional()
+      .allow(''),
+  }),
+
+  // VPS-native six-pair PAPER evidence. A real Twelve Data key is required
+  // when enabled; the shared demo key is intentionally rejected.
+  VPS_FOREX_SCANNER_ENABLED: Joi.string().valid('true', 'false').optional().allow(''),
+  TWELVEDATA_API_KEY: Joi.when('VPS_FOREX_SCANNER_ENABLED', {
+    is: 'true',
+    then: Joi.string().min(8).invalid('demo').required(),
+    otherwise: Joi.string().min(4).optional().allow(''),
+  }),
+  VPS_FOREX_SCANNER_USER_ID: Joi.when('VPS_FOREX_SCANNER_ENABLED', {
+    is: 'true',
+    then: Joi.string()
+      .guid({ version: ['uuidv4'] })
+      .required(),
+    otherwise: Joi.string()
+      .guid({ version: ['uuidv4'] })
+      .optional()
+      .allow(''),
+  }),
+  VPS_FOREX_SCANNER_BROKER_CONNECTION_ID: Joi.when('VPS_FOREX_SCANNER_ENABLED', {
+    is: 'true',
+    then: Joi.string()
+      .guid({ version: ['uuidv4'] })
+      .required(),
+    otherwise: Joi.string()
+      .guid({ version: ['uuidv4'] })
+      .optional()
+      .allow(''),
+  }),
+
+  // Read-only MetaTrader broker-native MTF source for the frozen
+  // high-conviction overlay. Enabling this never grants trade authority.
+  MULTIMODEL_BROKER_EXPERT_ENABLED: Joi.string().valid('true', 'false').optional().allow(''),
+  MULTIMODEL_BROKER_EXPERT_SOURCE_CONNECTION_ID: Joi.when('MULTIMODEL_BROKER_EXPERT_ENABLED', {
+    is: 'true',
+    then: Joi.string()
+      .guid({ version: ['uuidv4'] })
+      .required(),
+    otherwise: Joi.string()
+      .guid({ version: ['uuidv4'] })
+      .optional()
+      .allow(''),
+  }),
+
   // Python AI engine scheduler coordination (NestJS → AI engine)
   AI_ENGINE_BASE_URL: Joi.string().default('http://localhost:8001/api/v1'),
   AI_ENGINE_SCHEDULER_ENABLED: Joi.boolean().default(false),

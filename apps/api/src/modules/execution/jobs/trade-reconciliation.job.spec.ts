@@ -93,6 +93,7 @@ describe('TradeReconciliationJob', () => {
   let stateReconciliation: {
     findReconcilableConnections: jest.Mock;
     runForConnection: jest.Mock;
+    getProviderQuotaCooldownUntil: jest.Mock;
   };
   let protectiveOrderReconciliation: { reconcileProtectiveOrders: jest.Mock };
   let executionService: { closeStopRequestedAiPositions: jest.Mock };
@@ -101,6 +102,7 @@ describe('TradeReconciliationJob', () => {
     stateReconciliation = {
       findReconcilableConnections: jest.fn().mockResolvedValue([]),
       runForConnection: jest.fn(),
+      getProviderQuotaCooldownUntil: jest.fn().mockReturnValue(null),
     };
     protectiveOrderReconciliation = {
       reconcileProtectiveOrders: jest.fn().mockResolvedValue(makeProtectiveOutcome()),
@@ -216,6 +218,28 @@ describe('TradeReconciliationJob', () => {
   });
 
   // ─── Round 6 §8: the protective-order loop ─────────────────────────────
+
+  it('defers only the heavy sweep during provider quota cooldown and preserves safety follow-ups', async () => {
+    stateReconciliation.findReconcilableConnections.mockResolvedValue([makeConnection('conn-1')]);
+    stateReconciliation.getProviderQuotaCooldownUntil.mockReturnValue(
+      new Date('2026-10-04T18:30:00.000Z'),
+    );
+
+    const result = await job.process(fakeJob);
+
+    expect(stateReconciliation.runForConnection).not.toHaveBeenCalled();
+    expect(executionService.closeStopRequestedAiPositions).toHaveBeenCalledWith(
+      'user-conn-1',
+      'conn-1',
+    );
+    expect(protectiveOrderReconciliation.reconcileProtectiveOrders).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'conn-1' }),
+    );
+    expect(result).toMatchObject({
+      connectionsReconciled: 0,
+      failedConnections: 0,
+    });
+  });
 
   it('runs the protective-order loop AFTER each connection state sweep', async () => {
     const order: string[] = [];

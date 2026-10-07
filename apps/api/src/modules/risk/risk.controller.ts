@@ -119,7 +119,8 @@ export class RiskController {
       limits: {
         maxDailyLossPercent: profile.maxDailyLossPercent,
         maxDrawdownPercent: profile.maxDrawdownPercent,
-        maxOpenTrades: profile.maxOpenTrades,
+        positionCountPolicy: 'UNBOUNDED' as const,
+        dailyTradeCountPolicy: 'UNBOUNDED' as const,
         maxPositionSizeLot: profile.maxPositionSizeLot,
         allowedInstruments: profile.allowedInstruments ?? 'ALL',
         maxVolatilityScore: profile.maxVolatilityScore,

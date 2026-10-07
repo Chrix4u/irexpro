@@ -60,6 +60,7 @@ export interface PerformanceFeeCheckoutResult {
 
 export interface PerformanceFeeInvoiceView {
   invoiceId: string;
+  userId: string;
   invoiceNumber: string;
   status: InvoiceStatus;
   currency: string;
@@ -425,15 +426,16 @@ export class PerformanceFeePaymentService {
   // ── Listing ─────────────────────────────────────────────────────────────────
 
   async listUserPerformanceFeeInvoices(
-    userId: string,
+    userId: string | undefined,
     filters: { status?: InvoiceStatus; limit?: number } = {},
   ): Promise<PerformanceFeeInvoiceView[]> {
-    // metadata.type is jsonb; fetch the user's invoices and filter to PERFORMANCE_FEE
-    // in memory (invoice volume per user is small). Status filter applied if present.
+    // Normal callers always pass their own userId. Admin callers may omit it
+    // to operate the global payments workspace. metadata.type is jsonb, so
+    // filter PERFORMANCE_FEE in memory after the bounded query.
     const invoices = await this.invoiceRepo.find({
-      where: { userId },
+      ...(userId ? { where: { userId } } : {}),
       order: { createdAt: 'DESC' },
-      take: filters.limit ?? 100,
+      take: Math.min(filters.limit ?? (userId ? 100 : 200), 200),
     });
 
     const perfFeeInvoices = invoices.filter(
@@ -544,6 +546,7 @@ export class PerformanceFeePaymentService {
     const summary = transaction?.providerPayloadSummary ?? {};
     return {
       invoiceId: invoice.id,
+      userId: invoice.userId,
       invoiceNumber: invoice.invoiceNumber,
       status: invoice.status,
       currency: invoice.currency,

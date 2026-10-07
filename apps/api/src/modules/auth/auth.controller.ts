@@ -30,6 +30,7 @@ import { AuditService, UserSecurityEventPage } from '../audit/audit.service';
 import { AuthService } from './auth.service';
 import { AuthUserDto } from './dto/auth-user.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { AdvancedControlsStepUpDto } from './dto/advanced-controls-step-up.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { LoginDto } from './dto/login.dto';
 import { BeginMfaSetupDto, DisableMfaDto, MfaCodeDto } from './dto/mfa.dto';
@@ -379,6 +380,30 @@ export class AuthController {
   }
 
   // ── Sprint 55: account security center ─────────────────────────────────────
+
+  @Post('step-up/advanced-ai-controls')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
+  @HttpCode(HttpStatus.OK)
+  @Header('Cache-Control', 'no-store')
+  @Header('Pragma', 'no-cache')
+  @Throttle({ default: { ttl: 15 * 60 * 1000, limit: 10 } })
+  @ApiOperation({
+    summary: 'Re-authenticate before accessing Advanced AI Controls',
+  })
+  async stepUpAdvancedAiControls(
+    @CurrentUser() principal: AuthenticatedPrincipal,
+    @Body() dto: AdvancedControlsStepUpDto,
+    @Ip() ip: string,
+  ): Promise<{ stepUpToken: string; expiresInSeconds: number; mfaRequired: boolean }> {
+    return this.authService.issueAdvancedControlsStepUpToken(
+      principal.userId,
+      dto.password,
+      dto.mfaCode,
+      dto.riskAcknowledged,
+      ip,
+    );
+  }
 
   @Post('change-password')
   @UseGuards(JwtAuthGuard)

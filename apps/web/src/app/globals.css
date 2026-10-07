@@ -2375,3 +2375,106 @@ select.input {
   word-break: break-word;
   min-width: 0;
 }
+
+
+/* Fees & Payments — responsive invoice table. The container, never the page, scrolls. */
+.payments-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  margin-top: var(--space-3);
+}
+
+.payments-table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+  font-size: 0.86rem;
+}
+
+.payments-table th {
+  padding: var(--space-3);
+  text-align: left;
+  white-space: nowrap;
+  color: var(--text-muted);
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.payments-table td {
+  padding: var(--space-3);
+  vertical-align: middle;
+  border-bottom: 1px solid var(--border);
+}
+
+.payments-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.payments-table tbody tr:hover {
+  background: color-mix(in srgb, var(--brand) 5%, transparent);
+}
+
+
+.ai-shadow-calibration {
+  margin-top: 1.25rem;
+  padding-top: 1.1rem;
+  border-top: 1px solid var(--border);
+}
+
+.ai-shadow-calibration__header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  margin-bottom: 0.55rem;
+}
+
+.ai-shadow-calibration__header h3 {
+  margin: 0.15rem 0 0;
+}
+
+.ai-calibration-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  margin-top: 1rem;
+}
+
+.ai-calibration-table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.ai-calibration-table th {
+  padding: 0.7rem 0.8rem;
+  text-align: left;
+  white-space: nowrap;
+  color: var(--text-muted);
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.ai-calibration-table td {
+  padding: 0.7rem 0.8rem;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.ai-calibration-table tbody tr:last-child td {
+  border-bottom: 0;
+}

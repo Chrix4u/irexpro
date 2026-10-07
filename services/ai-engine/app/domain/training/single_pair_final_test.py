@@ -501,7 +501,6 @@ def evaluate_single_pair_future_holdout(
         commission_bps=0.0,
         slippage_bps=0.0,
     )
-    pooled = _ensure_actionable_target(pooled)
     qualified_frame_hash = research_provenance.get("qualification_frame_sha256")
     if not qualified_frame_hash:
         if dataset_hashes != research_hashes:
@@ -517,6 +516,10 @@ def evaluate_single_pair_future_holdout(
             raise ValueError(
                 "Future-holdout historical prefix row count does not match qualification"
             )
+
+    # Verify the frozen qualification frame before deriving any additional
+    # columns that were not present when the provenance hash was recorded.
+    pooled = _ensure_actionable_target(pooled)
 
     purge_boundary = holdout_start - pd.Timedelta(minutes=horizon_bars)
     train = pooled.loc[pooled["decision_time"] < purge_boundary].copy()

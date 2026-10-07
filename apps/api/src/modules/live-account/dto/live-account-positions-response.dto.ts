@@ -3,6 +3,21 @@ import { Trade, TradeDirection, TradeStatus } from '../../execution/entities/tra
 import { BrokerMode, type BrokerPosition } from '../../broker/interfaces/broker-adapter.interface';
 import { LiveAccountEnvironment, LivePositionStatus } from './live-account.enums';
 
+export class LiveTradePathDiagnosticsDto {
+  @ApiProperty() maxFavorablePnl: string;
+  @ApiProperty() maxAdversePnl: string;
+  @ApiProperty() latestUnrealisedPnl: string;
+  @ApiProperty() profitGiveback: string;
+  @ApiProperty({ minimum: 0 }) observationCount: number;
+  @ApiProperty({ minimum: 0 }) sameBarProtectionAmbiguityCount: number;
+  @ApiPropertyOptional({ nullable: true, type: String, format: 'date-time' })
+  lastSameBarProtectionAmbiguityAt: string | null;
+  @ApiPropertyOptional({ nullable: true, type: String, format: 'date-time' })
+  peakObservedAt: string | null;
+  @ApiPropertyOptional({ nullable: true, type: String, format: 'date-time' })
+  lastObservedAt: string | null;
+}
+
 /**
  * Live Account positions DTO (Sprint 50 PR-5 — Directive PHASE J).
  *
@@ -49,11 +64,32 @@ export class LivePositionRowViewDto {
   @ApiPropertyOptional({ nullable: true, description: 'Provider-reported current position price.' })
   currentPrice: string | null;
 
+  @ApiPropertyOptional({ nullable: true, enum: ['STREAM', 'REST_M5', 'PROVIDER'] })
+  markSource: 'STREAM' | 'REST_M5' | 'PROVIDER' | null;
+
+  @ApiPropertyOptional({ nullable: true, type: String, format: 'date-time' })
+  markObservedAt: string | null;
+
+  @ApiProperty({
+    description:
+      'True when currentPrice/P&L are based on the last known informational mark rather than execution-fresh market data.',
+    default: false,
+  })
+  markIsStale: boolean;
+
   @ApiPropertyOptional({
     nullable: true,
     description: 'Provider-reported unrealized P&L in account currency.',
   })
   unrealisedPnl: string | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    type: LiveTradePathDiagnosticsDto,
+    description:
+      'Optional broker/PAPER trade-path diagnostics. PAPER reports peak profit, worst adverse excursion and profit give-back.',
+  })
+  pathDiagnostics: LiveTradePathDiagnosticsDto | null;
 
   @ApiPropertyOptional({
     nullable: true,
@@ -129,7 +165,26 @@ export function toLivePositionRowView(
     fillPrice: trade.fillPrice ?? null,
     accountCurrency: trade.accountCurrency ?? null,
     currentPrice: providerPosition?.currentPrice ?? null,
+    markSource: providerPosition?.markSource ?? (providerPosition ? 'PROVIDER' : null),
+    markObservedAt: toIsoString(providerPosition?.markObservedAt ?? null),
+    markIsStale: providerPosition?.markIsStale ?? false,
     unrealisedPnl: trade.accountCurrency ? (providerPosition?.unrealisedPnl ?? null) : null,
+    pathDiagnostics: providerPosition?.pathDiagnostics
+      ? {
+          maxFavorablePnl: providerPosition.pathDiagnostics.maxFavorablePnl,
+          maxAdversePnl: providerPosition.pathDiagnostics.maxAdversePnl,
+          latestUnrealisedPnl: providerPosition.pathDiagnostics.latestUnrealisedPnl,
+          profitGiveback: providerPosition.pathDiagnostics.profitGiveback,
+          observationCount: providerPosition.pathDiagnostics.observationCount,
+          sameBarProtectionAmbiguityCount:
+            providerPosition.pathDiagnostics.sameBarProtectionAmbiguityCount,
+          lastSameBarProtectionAmbiguityAt: toIsoString(
+            providerPosition.pathDiagnostics.lastSameBarProtectionAmbiguityAt,
+          ),
+          peakObservedAt: toIsoString(providerPosition.pathDiagnostics.peakObservedAt),
+          lastObservedAt: toIsoString(providerPosition.pathDiagnostics.lastObservedAt),
+        }
+      : null,
     commission: trade.accountCurrency
       ? (providerPosition?.commission ?? trade.commission ?? null)
       : null,

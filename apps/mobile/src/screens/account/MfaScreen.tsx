@@ -1,6 +1,5 @@
 import { useReducer, useState } from 'react';
 import {
-  Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -13,6 +12,7 @@ import { ApiClientError } from '@irexpro/api-client';
 import { useAuth } from '@/context/auth-context';
 import {
   ActionButton,
+  ActionDialog,
   Banner,
   Card,
   LabeledInput,
@@ -40,6 +40,13 @@ const MFA_SETUP_EXPIRED_COPY =
 /** Static copy for the rare race where MFA was enabled from another device. */
 const MFA_ALREADY_ENABLED_COPY =
   'Multi-factor authentication is already enabled on your account.';
+
+type MfaDialogKind =
+  | 'DISCARD_SETUP'
+  | 'DISCARD_AND_BACK'
+  | 'DISABLE_MFA'
+  | 'MFA_ENABLED'
+  | 'MFA_DISABLED';
 
 /**
  * Two-Factor Authentication sub-screen of the Security hub (Sprint 55
@@ -92,6 +99,7 @@ export default function MfaScreen({
   const [disableBusy, setDisableBusy] = useState(false);
   const [disableError, setDisableError] = useState<string | null>(null);
   const [disableSucceeded, setDisableSucceeded] = useState(false);
+  const [dialog, setDialog] = useState<MfaDialogKind | null>(null);
 
   const beginningSetup = enrollment.status === 'enrolling';
 
@@ -144,19 +152,7 @@ export default function MfaScreen({
       await api.enableMfa(code);
       // CODE_ACCEPTED wipes the enrollment material at the logic level.
       dispatch({ type: 'CODE_ACCEPTED' });
-      Alert.alert(
-        'MFA enabled',
-        'Sign in again with your authenticator.',
-        [
-          {
-            text: 'Sign in',
-            onPress: () => {
-              void clearSession();
-            },
-          },
-        ],
-        { cancelable: false },
-      );
+      setDialog('MFA_ENABLED');
     } catch (error) {
       if (isMfaSetupExpiredRejection(error)) {
         // Terminal rejection: CODE_REJECTED wipes the material, RESTART
@@ -192,30 +188,14 @@ export default function MfaScreen({
 
   function requestCancelSetup(): void {
     if (beginningSetup || enableBusy) return;
-    Alert.alert(
-      'Discard enrollment?',
-      'The enrollment secret is cleared from memory and cannot be recovered. You would need to start setup again.',
-      [
-        { text: 'Keep going', style: 'cancel' },
-        { text: 'Discard enrollment', style: 'destructive', onPress: discardEnrollment },
-      ],
-      { cancelable: true },
-    );
+    setDialog('DISCARD_SETUP');
   }
 
   function requestDisable(): void {
     if (disableBusy || disableSucceeded) return;
     if (!disablePassword || !validateSixDigitCode(disableCode)) return;
 
-    Alert.alert(
-      'Disable MFA?',
-      'This removes authenticator protection and signs you out of all devices.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Disable MFA', style: 'destructive', onPress: () => void handleDisable() },
-      ],
-      { cancelable: true },
-    );
+    setDialog('DISABLE_MFA');
   }
 
   async function handleDisable(): Promise<void> {
@@ -232,19 +212,7 @@ export default function MfaScreen({
     try {
       await api.disableMfa(code, password);
       setDisableSucceeded(true);
-      Alert.alert(
-        'MFA disabled',
-        'All sessions have been revoked. Please sign in again.',
-        [
-          {
-            text: 'Sign in',
-            onPress: () => {
-              void clearSession();
-            },
-          },
-        ],
-        { cancelable: false },
-      );
+      setDialog('MFA_DISABLED');
     } catch (error) {
       setDisableError(accountSecurityError(error));
     } finally {
@@ -256,22 +224,7 @@ export default function MfaScreen({
     if (beginningSetup || enableBusy || disableBusy) return;
     if (enrollment.status === 'verifying') {
       // Live enrollment material: confirm, then wipe via CANCEL.
-      Alert.alert(
-        'Discard enrollment?',
-        'The enrollment secret is cleared from memory and cannot be recovered. You would need to start setup again.',
-        [
-          { text: 'Keep going', style: 'cancel' },
-          {
-            text: 'Discard enrollment',
-            style: 'destructive',
-            onPress: () => {
-              discardEnrollment();
-              onBack();
-            },
-          },
-        ],
-        { cancelable: true },
-      );
+      setDialog('DISCARD_AND_BACK');
       return;
     }
     // No live material: reset all local state on the way out.
@@ -299,9 +252,108 @@ export default function MfaScreen({
     </>
   );
 
+  const dialogContent =
+    dialog === 'DISCARD_SETUP' || dialog === 'DISCARD_AND_BACK'
+      ? {
+          kicker: 'MFA ENROLLMENT',
+          title: 'Discard enrollment?',
+          message:
+            'The one-time enrollment secret will be cleared from memory and cannot be recovered.',
+          detailLines: [
+            'Your account remains unchanged and MFA stays disabled.',
+            'To continue later, start setup again to receive a new secret.',
+          ],
+          confirmLabel: 'Discard enrollment',
+          cancelLabel: 'Keep going',
+          danger: true,
+        }
+      : dialog === 'DISABLE_MFA'
+        ? {
+            kicker: 'ACCOUNT SECURITY',
+            title: 'Disable MFA?',
+            message:
+              'Authenticator protection will be removed and the server will revoke all active sessions.',
+            detailLines: [
+              'You will need to sign in again on every device.',
+              'Your current password and authenticator code are required for this change.',
+            ],
+            confirmLabel: 'Disable MFA',
+            cancelLabel: 'Keep MFA enabled',
+            danger: true,
+          }
+        : dialog === 'MFA_ENABLED'
+          ? {
+              kicker: 'ACCOUNT SECURITY',
+              title: 'MFA enabled',
+              message:
+                'Authenticator protection is now active and all previous sessions have been revoked.',
+              detailLines: [
+                'Sign in again with your password and a fresh authenticator code.',
+                'The one-time enrollment secret has been cleared from app memory.',
+              ],
+              confirmLabel: 'Sign in again',
+              cancelLabel: null,
+              danger: false,
+            }
+          : dialog === 'MFA_DISABLED'
+            ? {
+                kicker: 'ACCOUNT SECURITY',
+                title: 'MFA disabled',
+                message:
+                  'Authenticator protection has been removed and all previous sessions have been revoked.',
+                detailLines: ['Sign in again with your password to continue.'],
+                confirmLabel: 'Sign in again',
+                cancelLabel: null,
+                danger: false,
+              }
+            : null;
+
+  async function handleDialogConfirm(): Promise<void> {
+    const current = dialog;
+    if (!current) return;
+    if (current === 'DISCARD_SETUP') {
+      discardEnrollment();
+      setDialog(null);
+      return;
+    }
+    if (current === 'DISCARD_AND_BACK') {
+      discardEnrollment();
+      setDialog(null);
+      onBack();
+      return;
+    }
+    if (current === 'DISABLE_MFA') {
+      setDialog(null);
+      await handleDisable();
+      return;
+    }
+    setDialog(null);
+    clearSession();
+  }
+
+  const dialogElement = dialogContent ? (
+    <ActionDialog
+      visible={dialog != null}
+      kicker={dialogContent.kicker}
+      title={dialogContent.title}
+      message={dialogContent.message}
+      detailLines={dialogContent.detailLines}
+      confirmLabel={dialogContent.confirmLabel}
+      cancelLabel={dialogContent.cancelLabel}
+      onConfirm={() => void handleDialogConfirm()}
+      onCancel={() => {
+        if (dialog === 'MFA_ENABLED' || dialog === 'MFA_DISABLED') return;
+        if (!disableBusy && !enableBusy && !beginningSetup) setDialog(null);
+      }}
+      busy={dialog === 'DISABLE_MFA' && disableBusy}
+      danger={dialogContent.danger}
+    />
+  ) : null;
+
   if (mfaEnabled) {
     return (
-      <KeyboardAvoidingView
+      <>
+        <KeyboardAvoidingView
         style={styles.container}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
@@ -375,13 +427,16 @@ export default function MfaScreen({
               />
             </Card>
           )}
-        </ScrollView>
-      </KeyboardAvoidingView>
+          </ScrollView>
+        </KeyboardAvoidingView>
+        {dialogElement}
+      </>
     );
   }
 
   return (
-    <KeyboardAvoidingView
+    <>
+      <KeyboardAvoidingView
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
@@ -525,8 +580,10 @@ export default function MfaScreen({
             />
           </Card>
         ) : null}
-      </ScrollView>
-    </KeyboardAvoidingView>
+        </ScrollView>
+      </KeyboardAvoidingView>
+      {dialogElement}
+    </>
   );
 }
 

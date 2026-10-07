@@ -12,6 +12,7 @@ import { OHLCV } from '../broker/interfaces/broker-adapter.interface';
 import { InternalOhlcvQueryDto } from './dto/internal-ohlcv-query.dto';
 import { InternalOhlcvResponseDto } from './dto/internal-ohlcv-response.dto';
 import { NormalizedOhlcvCandle } from './interfaces/ohlcv-candle.interface';
+import { ProviderQuoteCandleStoreService } from './services/provider-quote-candle-store.service';
 
 /**
  * MarketDataService — Internal OHLCV access for the Python AI engine.
@@ -28,6 +29,7 @@ export class MarketDataService {
   constructor(
     private readonly brokerService: BrokerService,
     private readonly auditService: AuditService,
+    private readonly providerQuoteStore: ProviderQuoteCandleStoreService,
   ) {}
 
   async getInternalOhlcv(query: InternalOhlcvQueryDto): Promise<InternalOhlcvResponseDto> {
@@ -36,27 +38,48 @@ export class MarketDataService {
 
     try {
       const connection = await this.brokerService.findConnectionById(brokerConnectionId, userId);
-      const source = connection.brokerId === 'paper-broker' ? 'paper-broker' : 'broker';
+      let source = connection.brokerId === 'paper-broker' ? 'paper-broker' : 'broker';
 
       if (source === 'paper-broker' && advanceSimulation && !before) {
         const heartbeat = await this.brokerService.getCurrentPriceForConnection(
           userId,
           brokerConnectionId,
           instrument,
+          { advanceSimulation: true },
         );
         if (!heartbeat) {
           throw new Error('Paper simulator heartbeat could not be advanced');
         }
       }
 
-      const rawCandles = await this.brokerService.getOhlcvForConnection(
-        userId,
-        brokerConnectionId,
-        instrument,
-        timeframe,
-        limit,
-        before ? new Date(before) : undefined,
-      );
+      let rawCandles: OHLCV[];
+      try {
+        rawCandles = await this.brokerService.getOhlcvForConnection(
+          userId,
+          brokerConnectionId,
+          instrument,
+          timeframe,
+          limit,
+          before ? new Date(before) : undefined,
+        );
+      } catch (providerError) {
+        const canUseLocalProviderSamples = connection.brokerId === 'metatrader5' && !before;
+        const local = canUseLocalProviderSamples
+          ? await this.providerQuoteStore.getCandles(
+              brokerConnectionId,
+              instrument.toUpperCase(),
+              timeframe.toUpperCase(),
+              limit,
+            )
+          : [];
+        if (local.length === 0) throw providerError;
+        rawCandles = local;
+        source = 'provider-sampled-local';
+        this.logger.warn(
+          `Using sampled provider candle fallback connection=${brokerConnectionId} ` +
+            `instrument=${instrument} timeframe=${timeframe} count=${local.length}`,
+        );
+      }
 
       const candles = rawCandles.map((c) =>
         this.normalizeCandle(c, instrument.toUpperCase(), timeframe.toUpperCase(), source),

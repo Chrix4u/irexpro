@@ -391,7 +391,7 @@ export class ExecutionService {
       // Round 7 (P1): for MARKET entries the validated entry price is the
       // '0' sentinel — the risk-validated reference the final deviation
       // check needs is the GEOMETRY QUOTE bound to the durable grant
-      // (quoteRef.price, the M1 close the risk engine validated). Without
+      // (quoteRef.price, the executable ASK for BUY / BID for SELL). Without
       // it PRICE_DEVIATION_EXCESSIVE was structurally inert for MARKET
       // orders (the gate skips non-positive references) — the 1% final-
       // horizon deviation control only ever fired for LIMIT signals, which
@@ -1569,7 +1569,10 @@ export class ExecutionService {
       throw new BrokerConnectionNotConnectedException(connection.status);
     }
     if (!this.brokerService.isConnectionExecutable(connection)) {
-      throw new BrokerConnectionNotExecutableException(connection.authorizationStatus);
+      throw new BrokerConnectionNotExecutableException(
+        connection.authorizationStatus,
+        connection.accountType,
+      );
     }
 
     // ── 3+4: idempotency / typed conflict against an existing ACTIVE session ─
@@ -1948,8 +1951,9 @@ export class ExecutionService {
    * Round 7 (P1 — MARKET reference propagation): the risk-validated
    * reference price for the final deviation check. LIMIT entries carry the
    * validated limit price; MARKET entries carry the '0' sentinel on the
-   * validated order, so the REAL reference is the geometry quote the risk
-   * engine validated — persisted on the durable grant as quoteRef.price.
+   * validated order, so the REAL reference is the executable-side geometry
+   * quote the risk engine validated — persisted on the durable grant as
+   * quoteRef.price.
    * When the grant carries no provable quote, the sentinel flows through
    * unchanged and the market-safety gate skips the deviation check exactly
    * as before (fail-open ONLY on unprovable reference, never on a fabricated
