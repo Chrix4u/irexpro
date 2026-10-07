@@ -15,6 +15,7 @@ export interface V8ShadowMetaInput {
   emaSeparation: number;
   mtfStrength: number;
   rsi14: number;
+  shortHorizonMomentumAtr?: number;
   scanTime: Date;
 }
 

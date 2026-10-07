@@ -2,12 +2,17 @@ import { scorePlanBShadowMeta, V8ShadowMetaInput } from './v8-shadow-meta-scorer
 
 export const PLAN_B_ENSEMBLE_ARTIFACT = 'plan-b-multimodel-shadow-v4';
 export const PLAN_B_ENSEMBLE_MODE = 'PROSPECTIVE_SHADOW_ONLY';
+export const PLAN_B_CANDIDATE_CONFIDENCE_FLOOR = 0.64;
 export const PLAN_B_GROSS_EXPECTED_R_FLOOR = 0.08;
+export const PLAN_B_REVERSAL_GROSS_EXPECTED_R_FLOOR = 0.18;
+export const PLAN_B_REVERSAL_MIN_MOMENTUM_ATR = 0.5;
+export const PLAN_B_REVERSAL_MAX_MOMENTUM_ATR = 1.5;
 
 export type PlanBRegime =
   | 'TREND_HEALTHY'
   | 'TREND_EXTENDED'
   | 'TREND_WEAK'
+  | 'REVERSAL_CONFIRMED'
   | 'VOLATILE'
   | 'ROLLOVER_RISK';
 
@@ -23,6 +28,7 @@ export interface PlanBEnsembleScore {
   modifiesExecution: false;
   regime: PlanBRegime;
   regimeAllowed: boolean;
+  strategyRoute: 'TREND_CONTINUATION' | 'CONFIRMED_REVERSAL';
   directionQuality: number;
   expectedR: number;
   tradeQuality: number;
@@ -66,6 +72,67 @@ function directionQuality(input: V8ShadowMetaInput): number {
       0.1 * rsiDirectional,
   );
 }
+function shortHorizonMomentum(input: V8ShadowMetaInput): number {
+  return Number.isFinite(input.shortHorizonMomentumAtr) ? input.shortHorizonMomentumAtr! : 0;
+}
+
+function reversalConfirmed(
+  input: V8ShadowMetaInput,
+  expectedR: number,
+  baseRegime: PlanBRegime,
+): boolean {
+  const momentum = shortHorizonMomentum(input);
+  return (
+    baseRegime === 'TREND_WEAK' &&
+    input.confidence >= PLAN_B_CANDIDATE_CONFIDENCE_FLOOR &&
+    input.extensionAtr <= 1.15 &&
+    input.volatilityScore <= 0.55 &&
+    momentum >= PLAN_B_REVERSAL_MIN_MOMENTUM_ATR &&
+    momentum <= PLAN_B_REVERSAL_MAX_MOMENTUM_ATR &&
+    expectedR >= PLAN_B_REVERSAL_GROSS_EXPECTED_R_FLOOR
+  );
+}
+
+function reversalDirectionQuality(input: V8ShadowMetaInput): number {
+  const momentumQuality = clamp01(shortHorizonMomentum(input) / 0.75);
+  const confidenceQuality = clamp01((input.confidence - 0.6) / 0.2);
+  const rsiDirectional =
+    input.direction === 'BUY' ? clamp01((input.rsi14 - 50) / 22) : clamp01((50 - input.rsi14) / 22);
+  const transitionQuality = 1 - clamp01(input.emaSeparation / 0.25);
+  return clamp01(
+    0.45 * momentumQuality +
+      0.2 * confidenceQuality +
+      0.2 * rsiDirectional +
+      0.15 * transitionQuality,
+  );
+}
+
+function reversalTradeQuality(input: V8ShadowMetaInput): number {
+  const extensionQuality = 1 - clamp01(input.extensionAtr / 1.5);
+  const volatilityQuality = 1 - clamp01(input.volatilityScore / 0.75);
+  const momentumQuality = clamp01(shortHorizonMomentum(input) / 0.75);
+  const transitionQuality = 1 - clamp01(input.emaSeparation / 0.25);
+  return clamp01(
+    0.25 * extensionQuality +
+      0.25 * volatilityQuality +
+      0.35 * momentumQuality +
+      0.15 * transitionQuality,
+  );
+}
+
+function reversalExitQuality(input: V8ShadowMetaInput): number {
+  const extensionQuality = 1 - clamp01(input.extensionAtr / 1.5);
+  const volatilityQuality = 1 - clamp01(input.volatilityScore / 0.75);
+  const momentumQuality = clamp01(shortHorizonMomentum(input) / 0.75);
+  const transitionQuality = 1 - clamp01(input.emaSeparation / 0.25);
+  return clamp01(
+    0.2 * extensionQuality +
+      0.25 * volatilityQuality +
+      0.35 * momentumQuality +
+      0.2 * transitionQuality,
+  );
+}
+
 function tradeQuality(input: V8ShadowMetaInput): number {
   const extensionQuality = 1 - clamp01(input.extensionAtr / 1.5);
   const volatilityQuality = 1 - clamp01(input.volatilityScore / 0.75);
@@ -164,11 +231,14 @@ export function scorePlanBMultimodelShadow(
   positions: PlanBPortfolioPosition[] = [],
 ): PlanBEnsembleScore {
   const meta = scorePlanBShadowMeta(input);
-  const regime = regimeOf(input);
-  const regimeAllowed = regime === 'TREND_HEALTHY';
-  const direction = directionQuality(input);
-  const quality = tradeQuality(input);
-  const exit = exitQuality(input);
+  const baseRegime = regimeOf(input);
+  const confirmedReversal = reversalConfirmed(input, meta.expectedR, baseRegime);
+  const regime: PlanBRegime = confirmedReversal ? 'REVERSAL_CONFIRMED' : baseRegime;
+  const strategyRoute = confirmedReversal ? 'CONFIRMED_REVERSAL' : 'TREND_CONTINUATION';
+  const regimeAllowed = regime === 'TREND_HEALTHY' || regime === 'REVERSAL_CONFIRMED';
+  const direction = confirmedReversal ? reversalDirectionQuality(input) : directionQuality(input);
+  const quality = confirmedReversal ? reversalTradeQuality(input) : tradeQuality(input);
+  const exit = confirmedReversal ? reversalExitQuality(input) : exitQuality(input);
   const pairSideRouteValue = pairSideRoute();
   const pairSide = pairSideQuality();
   const session = sessionQuality(input);
@@ -187,12 +257,16 @@ export function scorePlanBMultimodelShadow(
 
   const reasons: string[] = [];
   if (!regimeAllowed) reasons.push(`REGIME_${regime}`);
+  if (input.confidence < PLAN_B_CANDIDATE_CONFIDENCE_FLOOR) reasons.push('CONFIDENCE_FLOOR');
   if (!meta.admitted) reasons.push('META_EXPECTED_VALUE');
   if (direction < 0.55) reasons.push('DIRECTION_QUALITY');
   if (quality < 0.48) reasons.push('TRADE_QUALITY');
   if (exit < 0.48) reasons.push('EXIT_FEASIBILITY');
   if (session < 0.5) reasons.push('SESSION_QUALITY');
-  if (meta.expectedR < PLAN_B_GROSS_EXPECTED_R_FLOOR) reasons.push('EXPECTED_R');
+  const requiredGrossExpectedR = confirmedReversal
+    ? PLAN_B_REVERSAL_GROSS_EXPECTED_R_FLOOR
+    : PLAN_B_GROSS_EXPECTED_R_FLOOR;
+  if (meta.expectedR < requiredGrossExpectedR) reasons.push('EXPECTED_R');
   if (portfolio.quality < 0.35) reasons.push('PORTFOLIO_CONCENTRATION');
 
   const votes = [
@@ -201,7 +275,7 @@ export function scorePlanBMultimodelShadow(
     quality >= 0.48,
     exit >= 0.48,
     session >= 0.5,
-    meta.expectedR >= PLAN_B_GROSS_EXPECTED_R_FLOOR,
+    meta.expectedR >= requiredGrossExpectedR,
     portfolio.quality >= 0.35,
   ];
   const consensusPassed = votes.filter(Boolean).length;
@@ -212,8 +286,9 @@ export function scorePlanBMultimodelShadow(
 
   const coreAdmissionPassed =
     consensusPassed >= consensusRequired &&
+    input.confidence >= PLAN_B_CANDIDATE_CONFIDENCE_FLOOR &&
     meta.admitted &&
-    meta.expectedR >= PLAN_B_GROSS_EXPECTED_R_FLOOR;
+    meta.expectedR >= requiredGrossExpectedR;
   const admitted = regimeAllowed && coreAdmissionPassed;
   // PAPER execution must exercise a model-level decision that could later be
   // promoted to DEMO/LIVE. Research-only stretched regimes remain observable
@@ -227,6 +302,7 @@ export function scorePlanBMultimodelShadow(
     modifiesExecution: false,
     regime,
     regimeAllowed,
+    strategyRoute,
     directionQuality: direction,
     expectedR: meta.expectedR,
     tradeQuality: quality,

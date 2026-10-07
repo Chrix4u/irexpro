@@ -1,8 +1,9 @@
 import { PlanBEnsembleScore } from './plan-b-multimodel-shadow';
 
-export const ENSEMBLE_GOVERNANCE_VERSION = 'ensemble-governance-v2';
+export const ENSEMBLE_GOVERNANCE_VERSION = 'ensemble-governance-v3';
 export const ENSEMBLE_COST_MODEL_VERSION = 'paper-broker-p90-spread-plus-25pct-slippage-v2';
-export const ENSEMBLE_DRIFT_MODEL_VERSION = 'development-envelope-4599-v1';
+export const ENSEMBLE_DRIFT_MODEL_VERSION =
+  'dual-route-continuation-4599-plus-reversal-operational-v2';
 export const ENSEMBLE_NET_EXPECTED_R_FLOOR = 0.08;
 export const ENSEMBLE_PAPER_NET_EXPECTED_R_FLOOR = ENSEMBLE_NET_EXPECTED_R_FLOOR;
 export const ENSEMBLE_SLEEVE_CORE_MIN_CLOSED_TRADES = 100;
@@ -42,6 +43,7 @@ export interface EnsembleGovernanceInput {
   emaSeparation: number;
   mtfStrength: number;
   rsi14: number;
+  shortHorizonMomentumAtr?: number;
   eventRisk?: EnsembleEventRiskState;
   sleeveEvidence?: EnsembleSleeveEvidence | null;
   evaluatedAt?: Date;
@@ -123,7 +125,45 @@ function finite(value: number): number {
   return Number.isFinite(value) ? value : 0;
 }
 
+function reversalDriftOf(input: EnsembleGovernanceInput): {
+  state: EnsembleDriftState;
+  quality: number;
+} {
+  const momentum = finite(input.shortHorizonMomentumAtr ?? 0);
+  // PAPER reversal route uses an explicit operational envelope rather than the
+  // continuation-only 4,599-event MTF envelope. It stays fail-closed at the
+  // boundaries and remains subject to prospective sleeve qualification before
+  // any promotion beyond PAPER.
+  if (
+    input.confidence < 0.64 ||
+    input.confidence > 0.8 ||
+    input.extensionAtr < 0 ||
+    input.extensionAtr > 1.15 ||
+    input.volatilityScore < 0 ||
+    input.volatilityScore > 0.55 ||
+    input.emaSeparation < 0 ||
+    input.emaSeparation > 0.5 ||
+    input.mtfStrength < 0 ||
+    input.mtfStrength > 1 ||
+    input.rsi14 < 20 ||
+    input.rsi14 > 80 ||
+    momentum < 0.5 ||
+    momentum > 1.5
+  ) {
+    return { state: 'OUT_OF_DISTRIBUTION', quality: 0.1 };
+  }
+  const quality = Math.max(
+    0.6,
+    Math.min(
+      1,
+      0.65 + 0.2 * Math.min(1, momentum / 0.75) + 0.15 * (1 - input.volatilityScore / 0.55),
+    ),
+  );
+  return { state: 'NORMAL', quality };
+}
+
 function driftOf(input: EnsembleGovernanceInput): { state: EnsembleDriftState; quality: number } {
+  if (input.ensemble.regime === 'REVERSAL_CONFIRMED') return reversalDriftOf(input);
   const values = {
     confidence: finite(input.confidence),
     extensionAtr: finite(input.extensionAtr),

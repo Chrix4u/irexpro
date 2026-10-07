@@ -73,6 +73,9 @@ const SYMBOLS = Object.freeze([
   ['USDCHF', 'USD/CHF'],
 ] as const);
 const CONFIDENCE_FLOOR = 0.64;
+const COUNTERFACTUAL_MIN_EDGE_R = 0.02;
+const COUNTERFACTUAL_COST_UNCERTAINTY_FRACTION = 0.25;
+const ACTIVE_MODEL_POLICY_VERSION = `${PLAN_B_ENSEMBLE_ARTIFACT}-bidirectional-v1`;
 const STOP_ATR_MULTIPLIER = 1.5;
 const TARGET_ATR_MULTIPLIER = 2.5;
 const PAPER_BASE_LOT_UPPER_BOUND = 0.1;
@@ -172,6 +175,58 @@ export interface Candidate {
   emaSeparation: number;
   mtfStrength: number;
   rsi14: number;
+  shortHorizonMomentumAtr: number;
+}
+
+export interface CounterfactualExecutionOption {
+  candidate: Candidate;
+  paperExecutionEligible: boolean;
+  netExpectedR: number;
+  estimatedExecutionCostR: number;
+}
+
+export interface CounterfactualExecutionSelection {
+  selected: CounterfactualExecutionOption | null;
+  reason:
+    | 'NO_ELIGIBLE_DIRECTION'
+    | 'SINGLE_ELIGIBLE_DIRECTION'
+    | 'STRONGER_NET_EDGE'
+    | 'AMBIGUOUS_DUAL_EDGE';
+  requiredEdgeMarginR: number | null;
+}
+
+export function selectCounterfactualExecutionCandidate(
+  options: CounterfactualExecutionOption[],
+): CounterfactualExecutionSelection {
+  const eligible = options
+    .filter(
+      (option) =>
+        option.paperExecutionEligible &&
+        Number.isFinite(option.netExpectedR) &&
+        Number.isFinite(option.estimatedExecutionCostR),
+    )
+    .sort((a, b) => b.netExpectedR - a.netExpectedR);
+  if (eligible.length === 0) {
+    return { selected: null, reason: 'NO_ELIGIBLE_DIRECTION', requiredEdgeMarginR: null };
+  }
+  if (eligible.length === 1) {
+    return {
+      selected: eligible[0]!,
+      reason: 'SINGLE_ELIGIBLE_DIRECTION',
+      requiredEdgeMarginR: null,
+    };
+  }
+  const best = eligible[0]!;
+  const runnerUp = eligible[1]!;
+  const requiredEdgeMarginR = Math.max(
+    COUNTERFACTUAL_MIN_EDGE_R,
+    Math.max(best.estimatedExecutionCostR, runnerUp.estimatedExecutionCostR) *
+      COUNTERFACTUAL_COST_UNCERTAINTY_FRACTION,
+  );
+  if (best.netExpectedR - runnerUp.netExpectedR < requiredEdgeMarginR) {
+    return { selected: null, reason: 'AMBIGUOUS_DUAL_EDGE', requiredEdgeMarginR };
+  }
+  return { selected: best, reason: 'STRONGER_NET_EDGE', requiredEdgeMarginR };
 }
 
 export interface PublishedOpportunity {
@@ -269,13 +324,13 @@ export function atr(candles: LivePaperCandleInput[], period = 14): number {
   return value;
 }
 
-export function buildCandidate(
+export function buildDirectionalCandidates(
   instrument: string,
   candles: LivePaperCandleInput[],
-): Candidate | null {
-  if (candles.length < 55) return null;
+): Candidate[] {
+  if (candles.length < 55) return [];
   const closes = candles.map((c) => Number(c.close));
-  if (closes.some((x) => !Number.isFinite(x) || x <= 0)) return null;
+  if (closes.some((x) => !Number.isFinite(x) || x <= 0)) return [];
   const px = closes[closes.length - 1]!;
   const ema9 = ema(closes, 9);
   const ema21 = ema(closes, 21);
@@ -284,79 +339,94 @@ export function buildCandidate(
   const atr14 = atr(candles, 14);
   const m15 = aggregateCandles(candles, 15);
   const h1 = aggregateCandles(candles, 60);
-  if (m15.length < 30 || h1.length < 24) return null;
+  if (m15.length < 30 || h1.length < 24) return [];
   const m15Closes = m15.map((c) => Number(c.close));
   const h1Closes = h1.map((c) => Number(c.close));
   const m15Ema9 = ema(m15Closes, 9);
   const m15Ema21 = ema(m15Closes, 21);
   const h1Ema21 = ema(h1Closes, 21);
-  if (![ema9, ema21, ema50, rsi14, atr14].every(Number.isFinite) || atr14 <= 0) return null;
+  if (
+    ![ema9, ema21, ema50, rsi14, atr14, m15Ema9, m15Ema21, h1Ema21].every(Number.isFinite) ||
+    atr14 <= 0
+  ) {
+    return [];
+  }
 
-  const longTrend = ema9 > ema21 && ema21 > ema50;
-  const shortTrend = ema9 < ema21 && ema21 < ema50;
-  const longMtf = m15Ema9 > m15Ema21 && px > h1Ema21;
-  const shortMtf = m15Ema9 < m15Ema21 && px < h1Ema21;
-  const longSetup = longTrend && longMtf && rsi14 >= 55 && rsi14 <= 72;
-  const shortSetup = shortTrend && shortMtf && rsi14 <= 45 && rsi14 >= 28;
-  if (!longSetup && !shortSetup) return null;
-  const direction: 'BUY' | 'SELL' = longSetup ? 'BUY' : 'SELL';
-
-  // Avoid entering after price has already stretched too far from the M5
-  // mean. Persistent trends can still be traded, but late chasing tends to
-  // compress remaining upside/downside while leaving the full stop exposed.
+  // Common market-quality gates stay direction-neutral. Direction is decided
+  // later by comparing two independently scored counterfactuals from the same
+  // closed market snapshot.
   const extensionAtr = Math.abs(px - ema21) / atr14;
-  if (!Number.isFinite(extensionAtr) || extensionAtr > 1.5) return null;
-
+  if (!Number.isFinite(extensionAtr) || extensionAtr > 1.5) return [];
   const relativeAtr = atr14 / px;
   const volatilityScore = Math.max(0, Math.min(1, relativeAtr / 0.0015));
-  // Keep the collector out of genuinely high-volatility regimes. The Risk
-  // Engine still has its own independent volatility ceiling afterwards.
-  if (volatilityScore >= 0.75) return null;
+  if (volatilityScore >= 0.75) return [];
 
-  const emaSeparation = Math.max(0, Math.min(1, Math.abs(ema9 - ema21) / atr14 / 2));
-  const rsiStrength =
-    direction === 'BUY'
-      ? Math.max(0, Math.min(1, (rsi14 - 50) / 22))
-      : Math.max(0, Math.min(1, (50 - rsi14) / 22));
-  const confidence = Math.max(0.6, Math.min(0.8, 0.6 + 0.12 * emaSeparation + 0.08 * rsiStrength));
-  if (confidence < CONFIDENCE_FLOOR) return null;
-  const mtfStrength =
-    direction === 'BUY'
-      ? Math.min(1, Math.max(0, (m15Ema9 - m15Ema21) / atr14))
-      : Math.min(1, Math.max(0, (m15Ema21 - m15Ema9) / atr14));
-  const score =
-    confidence +
-    0.05 * emaSeparation +
-    0.03 * mtfStrength -
-    0.02 * volatilityScore -
-    0.02 * Math.min(1.5, extensionAtr);
   const barTime = new Date(candles[candles.length - 1]!.timestamp);
   const pipSize = instrument.endsWith('JPY') ? 0.01 : 0.0001;
-  // Candidate geometry should satisfy the platform's structural 5-pip minimum
-  // before the independent Risk Engine evaluates it. This does NOT weaken or
-  // bypass Risk; it prevents a low-ATR setup from being malformed by design.
   const stopDistance = Math.max(
     atr14 * STOP_ATR_MULTIPLIER,
     (MIN_STOP_LOSS_PIPS + STOP_FLOOR_BUFFER_PIPS) * pipSize,
   );
   const targetDistance = stopDistance * (TARGET_ATR_MULTIPLIER / STOP_ATR_MULTIPLIER);
+  const rawMomentumAtr = (px - closes[closes.length - 2]!) / atr14;
 
-  return {
-    instrument,
-    direction,
-    confidence,
-    volatilityScore,
-    entry: px,
-    stopLoss: direction === 'BUY' ? px - stopDistance : px + stopDistance,
-    takeProfit: direction === 'BUY' ? px + targetDistance : px - targetDistance,
-    barTime,
-    score,
-    atr: atr14,
-    extensionAtr,
-    emaSeparation,
-    mtfStrength,
-    rsi14,
-  };
+  return (['BUY', 'SELL'] as const).map((direction) => {
+    const sign = direction === 'BUY' ? 1 : -1;
+    // Preserve the historical feature scale for the trend-aligned side while
+    // giving the opposite side zero directional support instead of rejecting
+    // it before the ensemble can evaluate it.
+    const emaSeparation = Math.max(0, Math.min(1, (sign * (ema9 - ema21)) / atr14 / 2));
+    const mtfStrength = Math.min(1, Math.max(0, (sign * (m15Ema9 - m15Ema21)) / atr14));
+    const h1Alignment = Math.max(0, Math.min(1, (sign * (px - h1Ema21)) / atr14));
+    const rsiStrength =
+      direction === 'BUY'
+        ? Math.max(0, Math.min(1, (rsi14 - 50) / 22))
+        : Math.max(0, Math.min(1, (50 - rsi14) / 22));
+    const shortHorizonMomentumAtr = sign * rawMomentumAtr;
+    const momentumQuality = Math.max(0, Math.min(1, shortHorizonMomentumAtr / 0.5));
+    const confidence = Math.max(
+      0.6,
+      Math.min(0.8, 0.6 + 0.12 * emaSeparation + 0.08 * rsiStrength),
+    );
+    const score =
+      confidence +
+      0.05 * emaSeparation +
+      0.025 * mtfStrength +
+      0.015 * h1Alignment +
+      0.015 * momentumQuality -
+      0.02 * volatilityScore -
+      0.02 * Math.min(1.5, extensionAtr);
+
+    return {
+      instrument,
+      direction,
+      confidence,
+      volatilityScore,
+      entry: px,
+      stopLoss: direction === 'BUY' ? px - stopDistance : px + stopDistance,
+      takeProfit: direction === 'BUY' ? px + targetDistance : px - targetDistance,
+      barTime,
+      score,
+      atr: atr14,
+      extensionAtr,
+      emaSeparation,
+      mtfStrength,
+      rsi14,
+      shortHorizonMomentumAtr,
+    };
+  });
+}
+
+/** Backward-compatible single-candidate helper used by diagnostics/tests. */
+export function buildCandidate(
+  instrument: string,
+  candles: LivePaperCandleInput[],
+): Candidate | null {
+  return (
+    buildDirectionalCandidates(instrument, candles)
+      .filter((candidate) => candidate.confidence >= CONFIDENCE_FLOOR)
+      .sort((a, b) => b.score - a.score)[0] ?? null
+  );
 }
 
 @Injectable()
@@ -838,21 +908,21 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         );
       }
 
-      const candidates = [...seriesByInstrument.entries()]
-        .map(([instrument, candles]) => buildCandidate(instrument, candles))
-        .filter((candidate): candidate is Candidate => candidate !== null);
+      const candidates = [...seriesByInstrument.entries()].flatMap(([instrument, candles]) =>
+        buildDirectionalCandidates(instrument, candles),
+      );
       this.recordEvaluation(candidates);
 
-      const currentDirectionByInstrument = new Map(
-        candidates.map((candidate) => [candidate.instrument, candidate.direction] as const),
-      );
-      for (const [instrument, previous] of this.lastPublishedOpportunity.entries()) {
-        if (currentDirectionByInstrument.get(instrument) !== previous.direction) {
-          this.lastPublishedOpportunity.delete(instrument);
-        }
+      const currentInstruments = new Set(candidates.map((candidate) => candidate.instrument));
+      for (const instrument of this.lastPublishedOpportunity.keys()) {
+        if (!currentInstruments.has(instrument)) this.lastPublishedOpportunity.delete(instrument);
       }
 
-      // Every qualifying closed-bar candidate is independently evaluated. The
+      // Every closed-bar pair now enters a bidirectional counterfactual contest:
+      // BUY and SELL are scored independently from the same immutable market
+      // snapshot. Final execution is deferred until both directions have passed
+      // through ensemble + governance, so a rejected primary side can be rescued
+      // by a genuinely positive-edge opposite side.
       // scanner already runs once per 10-minute slot and the deterministic
       // signal id includes the market bar time, so an additional same-direction
       // freshness throttle can hide valid repeat opportunities without adding
@@ -860,64 +930,38 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       // controls remain authoritative for every candidate.
       const rankedCandidates = candidates.sort((a, b) => b.score - a.score);
       if (rankedCandidates.length === 0) {
-        this.logger.log('VPS six-pair scan: no qualifying setup');
+        this.logger.log('VPS six-pair scan: no qualifying market snapshot');
         return;
+      }
+
+      const candidatesByInstrument = new Map<string, Candidate[]>();
+      for (const candidate of rankedCandidates) {
+        const pair = candidatesByInstrument.get(candidate.instrument) ?? [];
+        pair.push(candidate);
+        candidatesByInstrument.set(candidate.instrument, pair);
       }
 
       let representativeSet = false;
       let representativeIsPaperEligible = false;
-      for (const best of rankedCandidates) {
-        const eventId = `${ACTIVE_ENGINE_CODE}|${best.instrument}|${best.barTime.toISOString()}|${best.direction}`;
-        const signalId = uuidv5(eventId, SIGNAL_NAMESPACE);
-        const digits = this.livePaperMarket.spec(best.instrument).digits;
-        const v8Shadow = scoreV8ShadowMeta({
-          instrument: best.instrument,
-          direction: best.direction,
-          confidence: best.confidence,
-          extensionAtr: best.extensionAtr,
-          volatilityScore: best.volatilityScore,
-          emaSeparation: best.emaSeparation,
-          mtfStrength: best.mtfStrength,
-          rsi14: best.rsi14,
-          // Historical v7 events define scan_time as the close of the selected
-          // M5 bar. Keep the prospective shadow feature clock identical.
-          scanTime: new Date(best.barTime.getTime() + BAR_MS),
-        });
-        const planBShadow = scorePlanBShadowMeta({
-          instrument: best.instrument,
-          direction: best.direction,
-          confidence: best.confidence,
-          extensionAtr: best.extensionAtr,
-          volatilityScore: best.volatilityScore,
-          emaSeparation: best.emaSeparation,
-          mtfStrength: best.mtfStrength,
-          rsi14: best.rsi14,
-          scanTime: new Date(best.barTime.getTime() + BAR_MS),
-        });
-        const portfolioPositions: PlanBPortfolioPosition[] = [];
-        let portfolioSnapshotAvailable = false;
-        try {
-          const getPositions = this.brokerService.getOpenPositionsForConnection?.bind(
-            this.brokerService,
-          );
-          if (getPositions) {
-            const snapshot = await getPositions(connectionId, userId);
-            portfolioPositions.push(
-              ...snapshot.positions.map((position) => ({
-                instrument: position.instrument,
-                direction: position.direction,
-                lotSize: position.lotSize,
-              })),
-            );
-            portfolioSnapshotAvailable = true;
-          }
-        } catch (error) {
-          this.logger.warn(
-            `Plan B portfolio shadow snapshot unavailable: ${(error as Error).message}`,
-          );
-        }
-        const planBEnsemble = scorePlanBMultimodelShadow(
-          {
+      for (const pairCandidates of candidatesByInstrument.values()) {
+        const executableCounterfactuals: Array<{
+          candidate: Candidate;
+          signalId: string;
+          digits: number;
+          v8Shadow: ReturnType<typeof scoreV8ShadowMeta>;
+          planBShadow: ReturnType<typeof scorePlanBShadowMeta>;
+          planBEnsemble: PlanBEnsembleScore;
+          portfolioSnapshotAvailable: boolean;
+          ensembleGovernance: EnsembleGovernanceDecision;
+          macroEventAssessment: MacroEventRiskAssessment;
+          highConvictionOverlay: HighConvictionOverlay;
+        }> = [];
+
+        for (const best of [...pairCandidates].sort((a, b) => b.score - a.score)) {
+          const eventId = `${ACTIVE_ENGINE_CODE}|${best.instrument}|${best.barTime.toISOString()}|${best.direction}`;
+          const signalId = uuidv5(eventId, SIGNAL_NAMESPACE);
+          const digits = this.livePaperMarket.spec(best.instrument).digits;
+          const v8Shadow = scoreV8ShadowMeta({
             instrument: best.instrument,
             direction: best.direction,
             confidence: best.confidence,
@@ -926,95 +970,215 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             emaSeparation: best.emaSeparation,
             mtfStrength: best.mtfStrength,
             rsi14: best.rsi14,
+            shortHorizonMomentumAtr: best.shortHorizonMomentumAtr,
+            // Historical v7 events define scan_time as the close of the selected
+            // M5 bar. Keep the prospective shadow feature clock identical.
             scanTime: new Date(best.barTime.getTime() + BAR_MS),
-          },
-          portfolioPositions,
-        );
-        const highConvictionOverlay = await this.evaluateHighConvictionOverlay(userId, best);
-        const sleeveEvidence = await this.loadEnsembleSleeveEvidence(
-          userId,
-          connectionId,
-          best.instrument,
-          best.direction,
-        );
-        const macroEventAssessment: MacroEventRiskAssessment = this.macroEventRisk
-          ? await this.macroEventRisk.assess(
-              best.instrument,
-              new Date(best.barTime.getTime() + BAR_MS),
-            )
-          : {
-              state: 'UNVERIFIED',
-              provider: 'NONE',
-              configured: false,
-              checkedAt: new Date().toISOString(),
+          });
+          const planBShadow = scorePlanBShadowMeta({
+            instrument: best.instrument,
+            direction: best.direction,
+            confidence: best.confidence,
+            extensionAtr: best.extensionAtr,
+            volatilityScore: best.volatilityScore,
+            emaSeparation: best.emaSeparation,
+            mtfStrength: best.mtfStrength,
+            rsi14: best.rsi14,
+            shortHorizonMomentumAtr: best.shortHorizonMomentumAtr,
+            scanTime: new Date(best.barTime.getTime() + BAR_MS),
+          });
+          const portfolioPositions: PlanBPortfolioPosition[] = [];
+          let portfolioSnapshotAvailable = false;
+          try {
+            const getPositions = this.brokerService.getOpenPositionsForConnection?.bind(
+              this.brokerService,
+            );
+            if (getPositions) {
+              const snapshot = await getPositions(connectionId, userId);
+              portfolioPositions.push(
+                ...snapshot.positions.map((position) => ({
+                  instrument: position.instrument,
+                  direction: position.direction,
+                  lotSize: position.lotSize,
+                })),
+              );
+              portfolioSnapshotAvailable = true;
+            }
+          } catch (error) {
+            this.logger.warn(
+              `Plan B portfolio shadow snapshot unavailable: ${(error as Error).message}`,
+            );
+          }
+          const planBEnsemble = scorePlanBMultimodelShadow(
+            {
               instrument: best.instrument,
-              relevantCountries: [],
-              blockWindowMinutesBefore: 30,
-              blockWindowMinutesAfter: 30,
-              blockingEvents: [],
-              reason: 'SERVICE_NOT_AVAILABLE',
-              attribution: null,
-            };
-        const evaluatedAt = new Date();
-        const executionSpreadEvidence = await this.loadExecutionSpreadEvidence(
-          best.instrument,
-          evaluatedAt,
-        );
-        const ensembleGovernance = evaluateEnsembleGovernance({
-          ensemble: planBEnsemble,
-          instrument: best.instrument,
-          entryPrice: best.entry,
-          stopLoss: best.stopLoss,
-          takeProfit: best.takeProfit,
-          confidence: best.confidence,
-          extensionAtr: best.extensionAtr,
-          volatilityScore: best.volatilityScore,
-          emaSeparation: best.emaSeparation,
-          mtfStrength: best.mtfStrength,
-          rsi14: best.rsi14,
-          eventRisk: macroEventAssessment.state,
-          sleeveEvidence,
-          evaluatedAt,
-          executionSpreadEvidence,
-        });
-        const decision = {
-          evaluatedAt,
-          instrument: best.instrument,
-          direction: best.direction,
-          paperAdmitted: planBEnsemble.paperAdmitted,
-          admitted: planBEnsemble.admitted,
-          candidateConfidence: best.confidence,
-          ensembleScore: planBEnsemble.ensembleScore,
-          metaProbability: planBEnsemble.metaProbability,
-          expectedR: planBEnsemble.expectedR,
-          consensusPassed: planBEnsemble.consensusPassed,
-          consensusRequired: planBEnsemble.consensusRequired,
-          regime: planBEnsemble.regime,
-          reasons: planBEnsemble.reasons,
-          governance: ensembleGovernance,
-          macroEventAssessment,
-          highConvictionOverlay,
-        };
-        if (
-          !representativeSet ||
-          (!representativeIsPaperEligible && ensembleGovernance.paperExecutionEligible)
-        ) {
-          this.lastEnsembleDecision = decision;
-          representativeSet = true;
-          representativeIsPaperEligible = ensembleGovernance.paperExecutionEligible;
+              direction: best.direction,
+              confidence: best.confidence,
+              extensionAtr: best.extensionAtr,
+              volatilityScore: best.volatilityScore,
+              emaSeparation: best.emaSeparation,
+              mtfStrength: best.mtfStrength,
+              rsi14: best.rsi14,
+              scanTime: new Date(best.barTime.getTime() + BAR_MS),
+            },
+            portfolioPositions,
+          );
+          const highConvictionOverlay = await this.evaluateHighConvictionOverlay(userId, best);
+          const sleeveEvidence = await this.loadEnsembleSleeveEvidence(
+            userId,
+            connectionId,
+            best.instrument,
+            best.direction,
+          );
+          const macroEventAssessment: MacroEventRiskAssessment = this.macroEventRisk
+            ? await this.macroEventRisk.assess(
+                best.instrument,
+                new Date(best.barTime.getTime() + BAR_MS),
+              )
+            : {
+                state: 'UNVERIFIED',
+                provider: 'NONE',
+                configured: false,
+                checkedAt: new Date().toISOString(),
+                instrument: best.instrument,
+                relevantCountries: [],
+                blockWindowMinutesBefore: 30,
+                blockWindowMinutesAfter: 30,
+                blockingEvents: [],
+                reason: 'SERVICE_NOT_AVAILABLE',
+                attribution: null,
+              };
+          const evaluatedAt = new Date();
+          const executionSpreadEvidence = await this.loadExecutionSpreadEvidence(
+            best.instrument,
+            evaluatedAt,
+          );
+          const ensembleGovernance = evaluateEnsembleGovernance({
+            ensemble: planBEnsemble,
+            instrument: best.instrument,
+            entryPrice: best.entry,
+            stopLoss: best.stopLoss,
+            takeProfit: best.takeProfit,
+            confidence: best.confidence,
+            extensionAtr: best.extensionAtr,
+            volatilityScore: best.volatilityScore,
+            emaSeparation: best.emaSeparation,
+            mtfStrength: best.mtfStrength,
+            rsi14: best.rsi14,
+            shortHorizonMomentumAtr: best.shortHorizonMomentumAtr,
+            eventRisk: macroEventAssessment.state,
+            sleeveEvidence,
+            evaluatedAt,
+            executionSpreadEvidence,
+          });
+          const decision = {
+            evaluatedAt,
+            instrument: best.instrument,
+            direction: best.direction,
+            paperAdmitted: planBEnsemble.paperAdmitted,
+            admitted: planBEnsemble.admitted,
+            candidateConfidence: best.confidence,
+            ensembleScore: planBEnsemble.ensembleScore,
+            metaProbability: planBEnsemble.metaProbability,
+            expectedR: planBEnsemble.expectedR,
+            consensusPassed: planBEnsemble.consensusPassed,
+            consensusRequired: planBEnsemble.consensusRequired,
+            regime: planBEnsemble.regime,
+            reasons: planBEnsemble.reasons,
+            governance: ensembleGovernance,
+            macroEventAssessment,
+            highConvictionOverlay,
+          };
+          if (
+            !representativeSet ||
+            (!representativeIsPaperEligible && ensembleGovernance.paperExecutionEligible)
+          ) {
+            this.lastEnsembleDecision = decision;
+            representativeSet = true;
+            representativeIsPaperEligible = ensembleGovernance.paperExecutionEligible;
+          }
+          await this.persistEnsembleShadowDecision(
+            userId,
+            paperSession?.id ?? null,
+            connectionId,
+            eventId,
+            best,
+            planBEnsemble,
+            portfolioSnapshotAvailable,
+            ensembleGovernance,
+            macroEventAssessment,
+            highConvictionOverlay,
+          );
+          if (!canExecuteMultiModelPaper(planBEnsemble, ensembleGovernance)) {
+            this.logger.log(
+              `Multi-model ensemble ${best.instrument} ${best.direction} ` +
+                `paperAdmitted=${planBEnsemble.paperAdmitted} admitted=${planBEnsemble.admitted} ` +
+                `consensusPassed=${planBEnsemble.consensusPassed} consensusRequired=${planBEnsemble.consensusRequired} ` +
+                `execution=SHADOW_ONLY legacyV7Frozen=${LEGACY_V7_EXECUTION_FROZEN} ` +
+                `netExpectedR=${ensembleGovernance.netExpectedR.toFixed(4)} ` +
+                `costSource=${ensembleGovernance.executionCostSource} ` +
+                `drift=${ensembleGovernance.driftState} sleeve=${ensembleGovernance.sleeveState} ` +
+                `highConviction=${highConvictionOverlay.state} ` +
+                `paperGovernance=${ensembleGovernance.paperExecutionBlockers.join(',') || 'PASS'} ` +
+                `promotionGovernance=${ensembleGovernance.blockers.join(',') || 'PASS'} ` +
+                `reasons=${planBEnsemble.reasons.join(',')}`,
+            );
+            continue;
+          }
+
+          executableCounterfactuals.push({
+            candidate: best,
+            signalId,
+            digits,
+            v8Shadow,
+            planBShadow,
+            planBEnsemble,
+            portfolioSnapshotAvailable,
+            ensembleGovernance,
+            macroEventAssessment,
+            highConvictionOverlay,
+          });
         }
-        await this.persistEnsembleShadowDecision(
-          userId,
-          paperSession?.id ?? null,
-          connectionId,
-          eventId,
-          best,
+
+        const selection = selectCounterfactualExecutionCandidate(
+          executableCounterfactuals.map((option) => ({
+            candidate: option.candidate,
+            paperExecutionEligible: true,
+            netExpectedR: option.ensembleGovernance.netExpectedR,
+            estimatedExecutionCostR: option.ensembleGovernance.estimatedExecutionCostR,
+          })),
+        );
+        if (!selection.selected) {
+          if (selection.reason === 'AMBIGUOUS_DUAL_EDGE') {
+            const edges = executableCounterfactuals
+              .map(
+                (option) =>
+                  `${option.candidate.direction}:${option.ensembleGovernance.netExpectedR.toFixed(4)}R`,
+              )
+              .join(' ');
+            this.logger.log(
+              `Counterfactual ${pairCandidates[0]!.instrument} execution=ABSTAIN reason=${selection.reason} ` +
+                `edges=${edges} requiredMargin=${selection.requiredEdgeMarginR?.toFixed(4) ?? 'n/a'}R`,
+            );
+          }
+          continue;
+        }
+
+        const chosen = executableCounterfactuals.find(
+          (option) => option.candidate === selection.selected!.candidate,
+        );
+        if (!chosen) continue;
+        const {
+          candidate: best,
+          signalId,
+          digits,
+          v8Shadow,
+          planBShadow,
           planBEnsemble,
           portfolioSnapshotAvailable,
           ensembleGovernance,
-          macroEventAssessment,
-          highConvictionOverlay,
-        );
+        } = chosen;
+
         this.lastPublishedOpportunity.set(best.instrument, {
           direction: best.direction,
           confidence: best.confidence,
@@ -1022,25 +1186,16 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           atr: best.atr,
           barTimeMs: best.barTime.getTime(),
         });
-        if (!canExecuteMultiModelPaper(planBEnsemble, ensembleGovernance)) {
-          this.logger.log(
-            `Multi-model ensemble ${best.instrument} ${best.direction} ` +
-              `paperAdmitted=${planBEnsemble.paperAdmitted} admitted=${planBEnsemble.admitted} ` +
-              `consensusPassed=${planBEnsemble.consensusPassed} consensusRequired=${planBEnsemble.consensusRequired} ` +
-              `execution=SHADOW_ONLY legacyV7Frozen=${LEGACY_V7_EXECUTION_FROZEN} ` +
-              `netExpectedR=${ensembleGovernance.netExpectedR.toFixed(4)} ` +
-              `costSource=${ensembleGovernance.executionCostSource} ` +
-              `drift=${ensembleGovernance.driftState} sleeve=${ensembleGovernance.sleeveState} ` +
-              `highConviction=${highConvictionOverlay.state} ` +
-              `paperGovernance=${ensembleGovernance.paperExecutionBlockers.join(',') || 'PASS'} ` +
-              `promotionGovernance=${ensembleGovernance.blockers.join(',') || 'PASS'} ` +
-              `reasons=${planBEnsemble.reasons.join(',')}`,
-          );
-          continue;
-        }
+
+        this.logger.log(
+          `Counterfactual ${best.instrument} execution=${best.direction} selection=${selection.reason} ` +
+            `netExpectedR=${ensembleGovernance.netExpectedR.toFixed(4)}R ` +
+            `shortHorizonMomentum=${best.shortHorizonMomentumAtr.toFixed(3)}ATR`,
+        );
+
         if (!paperSession) {
           this.logger.warn(
-            'Multi-model candidate passed model governance but PAPER execution authority is unavailable; retaining shadow-only decision',
+            'Multi-model counterfactual winner passed governance but PAPER execution authority is unavailable; retaining shadow-only decision',
           );
           continue;
         }
@@ -1131,9 +1286,15 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
               'PREEXISTING_WALK_FORWARD_THRESHOLD_NOT_TODAYS_PROSPECTIVE_RESULTS',
             plan_b_shadow_modifies_execution: false,
             plan_b_ensemble_artifact: planBEnsemble.artifact,
+            decision_policy_version: ACTIVE_MODEL_POLICY_VERSION,
+            counterfactual_scoring: true,
+            counterfactual_selection_reason: selection.reason,
+            counterfactual_required_edge_margin_r: selection.requiredEdgeMarginR,
+            feature_short_horizon_momentum_atr: best.shortHorizonMomentumAtr,
             plan_b_ensemble_mode: planBEnsemble.mode,
             plan_b_ensemble_modifies_execution: false,
             plan_b_ensemble_regime: planBEnsemble.regime,
+            plan_b_ensemble_strategy_route: planBEnsemble.strategyRoute,
             plan_b_ensemble_regime_allowed: planBEnsemble.regimeAllowed,
             plan_b_ensemble_direction_quality: planBEnsemble.directionQuality,
             plan_b_ensemble_expected_r: planBEnsemble.expectedR,
@@ -1180,7 +1341,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         this.logger.log(
           `Multi-model PAPER candidate ${best.instrument} ${best.direction} confidence=${best.confidence.toFixed(4)} ` +
             `lotTier=${dynamicLotSizing.tier} lotCap=${dynamicLotSizing.upperBound.toFixed(2)} ` +
-            `outcome=${outcome.outcome} signal=${signalId} cadence=independent-closed-bar`,
+            `outcome=${outcome.outcome} signal=${signalId} cadence=bidirectional-counterfactual`,
         );
       }
     } finally {
@@ -1334,7 +1495,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         ORDER BY evaluated_at ASC
         LIMIT 10000
       `,
-      [userId, connectionId, ACTIVE_ENGINE_CODE, PLAN_B_ENSEMBLE_ARTIFACT],
+      [userId, connectionId, ACTIVE_ENGINE_CODE, ACTIVE_MODEL_POLICY_VERSION],
     )) as Array<{
       instrument: string;
       direction: 'BUY' | 'SELL';
@@ -1746,7 +1907,14 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           AND components ? 'outcome'
         ORDER BY evaluated_at ASC
       `,
-      [userId, connectionId, ACTIVE_ENGINE_CODE, instrument, direction, PLAN_B_ENSEMBLE_ARTIFACT],
+      [
+        userId,
+        connectionId,
+        ACTIVE_ENGINE_CODE,
+        instrument,
+        direction,
+        ACTIVE_MODEL_POLICY_VERSION,
+      ],
     )) as Array<{ outcome: EnsembleShadowOutcome | null }>;
 
     const outcomes = rows
@@ -1810,7 +1978,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         tradingSessionId,
         connectionId,
         ACTIVE_ENGINE_CODE,
-        ensemble.artifact,
+        ACTIVE_MODEL_POLICY_VERSION,
         opportunityKey,
         candidate.instrument,
         candidate.direction,
@@ -1830,6 +1998,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         MULTI_MODEL_PAPER_EXECUTION_ENABLED && tradingSessionId ? 'PAPER_ONLY' : 'SHADOW_ONLY',
         JSON.stringify(ensemble.reasons),
         JSON.stringify({
+          strategyRoute: ensemble.strategyRoute,
           directionQuality: ensemble.directionQuality,
           tradeQuality: ensemble.tradeQuality,
           exitQuality: ensemble.exitQuality,
@@ -1848,6 +2017,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           emaSeparation: candidate.emaSeparation,
           mtfStrength: candidate.mtfStrength,
           rsi14: candidate.rsi14,
+          shortHorizonMomentumAtr: candidate.shortHorizonMomentumAtr,
+          decisionPolicyVersion: ACTIVE_MODEL_POLICY_VERSION,
           candidateScore: candidate.score,
           stopLoss: candidate.stopLoss,
           takeProfit: candidate.takeProfit,
@@ -1888,7 +2059,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           AND model_version = $4
         ORDER BY instrument ASC, evaluated_at DESC, id DESC
       `,
-      [userId, connectionId, ACTIVE_ENGINE_CODE, PLAN_B_ENSEMBLE_ARTIFACT],
+      [userId, connectionId, ACTIVE_ENGINE_CODE, ACTIVE_MODEL_POLICY_VERSION],
     )) as Array<{
       instrument: string;
       direction: 'BUY' | 'SELL';
