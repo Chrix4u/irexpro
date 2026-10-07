@@ -149,19 +149,38 @@ describe('Plan B multimodel prospective shadow', () => {
     expect(score.reasons.some((reason) => reason.startsWith('PAIR_SIDE_'))).toBe(false);
   });
 
-  it('requires broad model consensus and rejects rollover-quality sessions', () => {
+  it('requires broad model consensus and restricts only the DST-aware New York rollover hour', () => {
     const normal = scorePlanBMultimodelShadow(base);
     expect(normal.consensusRequired).toBe(6);
     expect(normal.consensusPassed).toBeGreaterThanOrEqual(0);
     expect(normal.consensusPassed).toBeLessThanOrEqual(7);
 
-    const rollover = scorePlanBMultimodelShadow({
+    const octoberRollover = scorePlanBMultimodelShadow({
       ...base,
-      scanTime: new Date('2026-10-02T22:20:00.000Z'),
+      scanTime: new Date('2026-10-07T21:20:00.000Z'),
     });
-    expect(rollover.sessionQuality).toBeLessThan(0.5);
-    expect(rollover.admitted).toBe(false);
-    expect(rollover.reasons).toContain('SESSION_QUALITY');
+    expect(octoberRollover.regime).toBe('ROLLOVER_RISK');
+    expect(octoberRollover.sessionQuality).toBeLessThan(0.5);
+    expect(octoberRollover.admitted).toBe(false);
+    expect(octoberRollover.reasons).toContain('SESSION_QUALITY');
+
+    const octoberAfterRollover = scorePlanBMultimodelShadow({
+      ...base,
+      scanTime: new Date('2026-10-07T22:20:00.000Z'),
+    });
+    expect(octoberAfterRollover.regime).not.toBe('ROLLOVER_RISK');
+
+    const decemberRollover = scorePlanBMultimodelShadow({
+      ...base,
+      scanTime: new Date('2026-12-02T22:20:00.000Z'),
+    });
+    expect(decemberRollover.regime).toBe('ROLLOVER_RISK');
+
+    const decemberAfterRollover = scorePlanBMultimodelShadow({
+      ...base,
+      scanTime: new Date('2026-12-02T23:20:00.000Z'),
+    });
+    expect(decemberAfterRollover.regime).not.toBe('ROLLOVER_RISK');
   });
 
   it('reduces portfolio quality for concentrated same-direction exposure', () => {

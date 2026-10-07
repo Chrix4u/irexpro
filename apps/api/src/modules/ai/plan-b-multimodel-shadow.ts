@@ -8,6 +8,12 @@ export const PLAN_B_REVERSAL_GROSS_EXPECTED_R_FLOOR = 0.18;
 export const PLAN_B_REVERSAL_MIN_MOMENTUM_ATR = 0.5;
 export const PLAN_B_REVERSAL_MAX_MOMENTUM_ATR = 1.5;
 
+const NEW_YORK_HOUR = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York',
+  hour: '2-digit',
+  hourCycle: 'h23',
+});
+
 export type PlanBRegime =
   | 'TREND_HEALTHY'
   | 'TREND_EXTENDED'
@@ -54,8 +60,8 @@ function clamp01(value: number): number {
 }
 
 function regimeOf(input: V8ShadowMetaInput): PlanBRegime {
-  const hour = input.scanTime.getUTCHours();
-  if (hour >= 21) return 'ROLLOVER_RISK';
+  const newYorkHour = Number(NEW_YORK_HOUR.format(input.scanTime));
+  if (newYorkHour === 17) return 'ROLLOVER_RISK';
   if (input.volatilityScore >= 0.65) return 'VOLATILE';
   if (input.extensionAtr > 1.15) return 'TREND_EXTENDED';
   if (input.emaSeparation < 0.16 || input.mtfStrength < 0.12) return 'TREND_WEAK';
