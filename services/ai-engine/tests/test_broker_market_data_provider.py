@@ -147,8 +147,35 @@ async def test_preserves_paper_simulator_provenance():
         )
 
     assert candles[0].source == "paper-broker"
-    requested_url = mock_client.get.await_args.args[0]
-    assert "advanceSimulation=true" in requested_url
+    assert mock_client.get.await_args.args[0] == TEST_SETTINGS.nestjs_market_data_url
+    assert mock_client.get.await_args.kwargs["params"]["advanceSimulation"] == "true"
+
+
+@pytest.mark.asyncio
+async def test_user_fields_are_query_data_not_request_target():
+    provider = BrokerMarketDataProvider(settings=TEST_SETTINGS)
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"candles": []}
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=mock_response)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    malicious_user_id = "//evil.example/%2F?redirect=https://evil.example"
+    with patch("app.domain.market_data.providers.broker_provider.httpx.AsyncClient", return_value=mock_client):
+        await provider.get_ohlcv(
+            "EUR/USD",
+            "M1",
+            100,
+            user_id=malicious_user_id,
+            broker_connection_id="conn&next=https://evil.example",
+        )
+
+    assert mock_client.get.await_args.args[0] == TEST_SETTINGS.nestjs_market_data_url
+    assert mock_client.get.await_args.kwargs["params"]["userId"] == malicious_user_id
+    assert mock_client.get.await_args.kwargs["params"]["brokerConnectionId"] == "conn&next=https://evil.example"
 
 
 @pytest.mark.asyncio

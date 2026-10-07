@@ -528,8 +528,8 @@ const pageCollectors = new WeakMap<Page, ErrorCollector>();
 // Playwright-started Next.js server (localhost) whose /api/v1/** calls are all
 // intercepted by setupAuthInterception().
 const FORBIDDEN_HOST_PATTERNS = [
-  /irexpro\.lightworldtech\.com/i,
-  /lightworldtech\.com/i,
+  /^irexpro\.lightworldtech\.com$/i,
+  /^(?:[^.]+\.)*lightworldtech\.com$/i,
   /metatrader/i,
   /mt[45]\./i,
   /broker/i,

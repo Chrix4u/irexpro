@@ -41,9 +41,12 @@ export class ExternalSignalApiKeyGuard implements CanActivate {
       throw new UnauthorizedException(`Missing required header: ${EXTERNAL_SIGNAL_API_KEY_HEADER}`);
     }
 
-    const digest = (value: string) =>
-      crypto.createHmac('sha256', 'irexpro-external-signal-key-compare').update(value).digest();
-    if (!crypto.timingSafeEqual(digest(providedKey), digest(expectedKey))) {
+    const providedBytes = Buffer.from(providedKey, 'utf8');
+    const expectedBytes = Buffer.from(expectedKey, 'utf8');
+    const keyMatches =
+      providedBytes.length === expectedBytes.length &&
+      crypto.timingSafeEqual(providedBytes, expectedBytes);
+    if (!keyMatches) {
       this.logger.warn('External signal endpoint called with invalid provider key — BLOCKED');
       throw new UnauthorizedException('Invalid external signal provider key');
     }
