@@ -22,9 +22,7 @@ describe('PaperBrokerAdapter replay parity', () => {
     dir = mkdtempSync(join(tmpdir(), 'irexpro-paper-replay-'));
     const csv = join(dir, 'USDJPY_M1.csv');
     const start = Date.parse('2026-09-27T16:00:00.000Z');
-    const rows = [
-      'timestamp,open,high,low,close,volume,tick_volume,spread_points,price_digits',
-    ];
+    const rows = ['timestamp,open,high,low,close,volume,tick_volume,spread_points,price_digits'];
     for (let minute = 0; minute <= 301; minute += 1) {
       const ts = new Date(start + minute * 60_000).toISOString();
       rows.push(`${ts},150.000,150.010,149.990,150.000,10,10,12,3`);

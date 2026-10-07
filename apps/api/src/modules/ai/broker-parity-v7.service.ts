@@ -54,7 +54,9 @@ export class BrokerParityV7Service implements OnModuleInit, OnModuleDestroy {
       this.logger.log('Broker-Parity v7 collector disabled (fail-closed default)');
       return;
     }
-    this.logger.log('Broker-Parity v7 collector enabled; broker-native data only, no Twelve fallback');
+    this.logger.log(
+      'Broker-Parity v7 collector enabled; broker-native data only, no Twelve fallback',
+    );
     this.timer = setInterval(() => void this.maybeCollect(), 15_000);
     this.timer.unref?.();
     setTimeout(() => void this.maybeCollect(), 2_000).unref?.();
@@ -79,8 +81,8 @@ export class BrokerParityV7Service implements OnModuleInit, OnModuleDestroy {
       const session = await this.executionService.getActiveSession(userId);
       activeTargetSession = Boolean(
         session &&
-          session.executionMode === ExecutionMode.PAPER_ONLY &&
-          session.brokerConnectionId === paperConnectionId,
+        session.executionMode === ExecutionMode.PAPER_ONLY &&
+        session.brokerConnectionId === paperConnectionId,
       );
     }
 
@@ -136,7 +138,9 @@ export class BrokerParityV7Service implements OnModuleInit, OnModuleDestroy {
       const sourceConnectionId = this.sourceConnectionId();
       const paperConnectionId = this.paperConnectionId();
       if (!userId || !sourceConnectionId || !paperConnectionId) {
-        throw new Error('Broker-Parity user, source broker connection and PAPER connection are required');
+        throw new Error(
+          'Broker-Parity user, source broker connection and PAPER connection are required',
+        );
       }
 
       const [source, target] = await Promise.all([
@@ -171,7 +175,9 @@ export class BrokerParityV7Service implements OnModuleInit, OnModuleDestroy {
             close: String(row.close),
           }));
         if (closed.length < 300) {
-          throw new Error(`Broker-native M5 history insufficient for ${instrument}: ${closed.length}`);
+          throw new Error(
+            `Broker-native M5 history insufficient for ${instrument}: ${closed.length}`,
+          );
         }
         series.set(instrument, closed);
       }
@@ -191,7 +197,9 @@ export class BrokerParityV7Service implements OnModuleInit, OnModuleDestroy {
       if (!this.signalExecutionEnabled()) return;
       const digest = this.artifactDigest();
       if (!/^sha256:[0-9a-f]{64}$/i.test(digest)) {
-        throw new Error('Broker-Parity execution requires a formally frozen qualified artifact digest');
+        throw new Error(
+          'Broker-Parity execution requires a formally frozen qualified artifact digest',
+        );
       }
       const session = await this.executionService.getActiveSession(userId);
       if (
@@ -204,7 +212,11 @@ export class BrokerParityV7Service implements OnModuleInit, OnModuleDestroy {
 
       this.paperMarket.registerLiveConnection(paperConnectionId);
       for (const instrument of PAIRS) {
-        await this.brokerService.getCurrentPriceForConnection(userId, paperConnectionId, instrument);
+        await this.brokerService.getCurrentPriceForConnection(
+          userId,
+          paperConnectionId,
+          instrument,
+        );
       }
 
       const currentDirection = new Map(candidates.map((c) => [c.instrument, c.direction] as const));

@@ -84,18 +84,14 @@ describe('PerformanceFeesController', () => {
       );
     });
 
-    it.each([
-      'getMySimulation',
-      'refreshMySimulation',
-      'settleMySimulationCharge',
-    ] as const)('%s has no admin role restriction', (method) => {
-      expect(
-        reflector.get<RoleName[]>(
-          ROLES_KEY,
-          controller[method] as unknown as () => void,
-        ),
-      ).toBeUndefined();
-    });
+    it.each(['getMySimulation', 'refreshMySimulation', 'settleMySimulationCharge'] as const)(
+      '%s has no admin role restriction',
+      (method) => {
+        expect(
+          reflector.get<RoleName[]>(ROLES_KEY, controller[method] as unknown as () => void),
+        ).toBeUndefined();
+      },
+    );
   });
 
   describe('calculate uses the admin actor id', () => {

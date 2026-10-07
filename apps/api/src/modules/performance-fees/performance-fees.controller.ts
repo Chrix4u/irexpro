@@ -56,10 +56,7 @@ export class PerformanceFeesController {
 
   @Post('policies/:id/deactivate')
   @Roles(RoleName.ADMIN, RoleName.SUPER_ADMIN)
-  deactivatePolicy(
-    @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUserId() adminId: string,
-  ) {
+  deactivatePolicy(@Param('id', ParseUUIDPipe) id: string, @CurrentUserId() adminId: string) {
     return this.svc.deactivatePolicy(id, adminId);
   }
 

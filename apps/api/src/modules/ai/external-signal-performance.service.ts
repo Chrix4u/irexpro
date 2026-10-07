@@ -5,10 +5,7 @@ import {
   V8_SHADOW_ARTIFACT,
   V8_SHADOW_MODE,
 } from './v8-shadow-meta-scorer';
-import {
-  PLAN_B_ENSEMBLE_ARTIFACT,
-  PLAN_B_ENSEMBLE_MODE,
-} from './plan-b-multimodel-shadow';
+import { PLAN_B_ENSEMBLE_ARTIFACT, PLAN_B_ENSEMBLE_MODE } from './plan-b-multimodel-shadow';
 
 const INSTRUMENTS = ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF'] as const;
 const MIN_CLOSED_TRADES = 100;
@@ -168,8 +165,7 @@ function buildDriftDiagnostics(rows: EvidenceRow[]) {
       ? recentSummary.profitFactor / referenceSummary.profitFactor
       : null;
 
-  let status: 'INSUFFICIENT_EVIDENCE' | 'STABLE' | 'WATCH' | 'DEGRADED' =
-    'INSUFFICIENT_EVIDENCE';
+  let status: 'INSUFFICIENT_EVIDENCE' | 'STABLE' | 'WATCH' | 'DEGRADED' = 'INSUFFICIENT_EVIDENCE';
   if (rows.length >= minimumClosedTrades) {
     const recentNegative = recentSummary.realisedPnl < 0;
     if (
@@ -205,7 +201,8 @@ function buildDriftDiagnostics(rows: EvidenceRow[]) {
 
 function buildProfitProtectionShadow(rows: EvidenceRow[]) {
   const observed = rows.filter(
-    (row) => (finite(row.path_observation_count) ?? 0) > 0 && finite(row.max_favorable_pnl) !== null,
+    (row) =>
+      (finite(row.path_observation_count) ?? 0) > 0 && finite(row.max_favorable_pnl) !== null,
   );
   const losers = observed.filter((row) => (finite(row.realised_pnl) ?? 0) < 0);
   const losersWithPositiveMfe = losers.filter((row) => (finite(row.max_favorable_pnl) ?? 0) > 0);
@@ -297,8 +294,7 @@ export function buildShadowCalibrationDiagnostics(rows: EvidenceRow[]) {
     win: row.pnl > 0 ? 1 : 0,
   }));
   const brierScore = scored.length
-    ? scored.reduce((sum, row) => sum + (row.confidence - row.win) ** 2, 0) /
-      scored.length
+    ? scored.reduce((sum, row) => sum + (row.confidence - row.win) ** 2, 0) / scored.length
     : null;
   const confidencePnlCorrelation = pearsonCorrelation(
     scored.map((row) => row.confidence),
@@ -328,9 +324,7 @@ export function buildShadowCalibrationDiagnostics(rows: EvidenceRow[]) {
       avgConfidence,
       observedWinRate,
       calibrationGap:
-        avgConfidence !== null && observedWinRate !== null
-          ? observedWinRate - avgConfidence
-          : null,
+        avgConfidence !== null && observedWinRate !== null ? observedWinRate - avgConfidence : null,
       averagePnl: bucket.length
         ? pnls.reduce((sum, value) => sum + value, 0) / bucket.length
         : null,
@@ -339,17 +333,11 @@ export function buildShadowCalibrationDiagnostics(rows: EvidenceRow[]) {
   });
   const expectedCalibrationError = scored.length
     ? bins.reduce((sum, bin) => {
-        if (
-          bin.count === 0 ||
-          bin.avgConfidence === null ||
-          bin.observedWinRate === null
-        ) {
+        if (bin.count === 0 || bin.avgConfidence === null || bin.observedWinRate === null) {
           return sum;
         }
         return (
-          sum +
-          (bin.count / scored.length) *
-            Math.abs(bin.observedWinRate - bin.avgConfidence)
+          sum + (bin.count / scored.length) * Math.abs(bin.observedWinRate - bin.avgConfidence)
         );
       }, 0)
     : null;
@@ -362,12 +350,8 @@ export function buildShadowCalibrationDiagnostics(rows: EvidenceRow[]) {
       const pnls = bucket.map((row) => row.pnl);
       const wins = pnls.filter((value) => value > 0).length;
       const losses = pnls.filter((value) => value < 0).length;
-      const grossProfit = pnls
-        .filter((value) => value > 0)
-        .reduce((a, b) => a + b, 0);
-      const grossLoss = -pnls
-        .filter((value) => value < 0)
-        .reduce((a, b) => a + b, 0);
+      const grossProfit = pnls.filter((value) => value > 0).reduce((a, b) => a + b, 0);
+      const grossLoss = -pnls.filter((value) => value < 0).reduce((a, b) => a + b, 0);
       const averageConfidence = bucket.length
         ? bucket.reduce((sum, row) => sum + row.confidence, 0) / bucket.length
         : null;
@@ -380,15 +364,9 @@ export function buildShadowCalibrationDiagnostics(rows: EvidenceRow[]) {
         winRate: bucket.length ? wins / bucket.length : null,
         smoothedWinRate: (wins + 2) / (bucket.length + 4),
         realisedPnl: pnls.reduce((a, b) => a + b, 0),
-        averagePnl: bucket.length
-          ? pnls.reduce((a, b) => a + b, 0) / bucket.length
-          : null,
-        averageWin: wins
-          ? grossProfit / wins
-          : null,
-        averageLoss: losses
-          ? -(grossLoss / losses)
-          : null,
+        averagePnl: bucket.length ? pnls.reduce((a, b) => a + b, 0) / bucket.length : null,
+        averageWin: wins ? grossProfit / wins : null,
+        averageLoss: losses ? -(grossLoss / losses) : null,
         profitFactor:
           bucket.length && grossLoss > 0
             ? grossProfit / grossLoss
@@ -642,9 +620,7 @@ export class ExternalSignalPerformanceService {
     // alter v7 admission, sizing, SL/TP or execution. Only signals tagged
     // after the artifact was frozen are counted; historical rows are never
     // backfilled into this prospective cohort.
-    const v8TaggedRows = rows.filter(
-      (row) => row.v8_shadow_artifact === V8_SHADOW_ARTIFACT,
-    );
+    const v8TaggedRows = rows.filter((row) => row.v8_shadow_artifact === V8_SHADOW_ARTIFACT);
     const v8AdmittedRows = v8TaggedRows.filter(
       (row) =>
         row.v8_shadow_admitted === true ||
@@ -709,9 +685,7 @@ export class ExternalSignalPerformanceService {
         const marketBar = row.market_data_bar_time
           ? new Date(row.market_data_bar_time).getTime()
           : Number.NaN;
-        return Number.isFinite(marketBar)
-          ? marketBar
-          : new Date(row.signal_generated_at).getTime();
+        return Number.isFinite(marketBar) ? marketBar : new Date(row.signal_generated_at).getTime();
       })
       .filter(Number.isFinite)
       .sort((a, b) => a - b);
@@ -730,12 +704,9 @@ export class ExternalSignalPerformanceService {
       ? Math.min(...v8AdmittedConfidences)
       : null;
     const v8ScreeningChecks = {
-      balancedAccuracy:
-        v8Ba !== null && v8Ba >= EXTERNAL_PROVIDER_REVIEW_GATES.minBalancedAccuracy,
-      sharpeRatio:
-        v8Sharpe !== null && v8Sharpe >= EXTERNAL_PROVIDER_REVIEW_GATES.minSharpeRatio,
-      profitFactor:
-        v8Pf !== null && v8Pf >= EXTERNAL_PROVIDER_REVIEW_GATES.minProfitFactor,
+      balancedAccuracy: v8Ba !== null && v8Ba >= EXTERNAL_PROVIDER_REVIEW_GATES.minBalancedAccuracy,
+      sharpeRatio: v8Sharpe !== null && v8Sharpe >= EXTERNAL_PROVIDER_REVIEW_GATES.minSharpeRatio,
+      profitFactor: v8Pf !== null && v8Pf >= EXTERNAL_PROVIDER_REVIEW_GATES.minProfitFactor,
       positiveWindowFraction:
         v8PositiveWindowFraction >= EXTERNAL_PROVIDER_REVIEW_GATES.minPositiveWindowFraction,
       positiveInstrumentFraction:
@@ -749,24 +720,20 @@ export class ExternalSignalPerformanceService {
         v8MedianGap !== null &&
         v8MedianGap <= EXTERNAL_PROVIDER_REVIEW_GATES.maxMedianMinutesBetweenSignals,
     };
-    const v8ScreeningReadyForDedicatedPaper =
-      Object.values(v8ScreeningChecks).every(Boolean);
+    const v8ScreeningReadyForDedicatedPaper = Object.values(v8ScreeningChecks).every(Boolean);
 
     const v8ProspectiveShadow = {
       artifact: V8_SHADOW_ARTIFACT,
       mode: V8_SHADOW_MODE,
       modifiesExecution: false,
       admissionThreshold: V8_SHADOW_ADMISSION_THRESHOLD,
-      trainingEvidence:
-        'HISTORICAL_DEVELOPMENT_ONLY_ALREADY_INSPECTED_NOT_QUALIFICATION',
+      trainingEvidence: 'HISTORICAL_DEVELOPMENT_ONLY_ALREADY_INSPECTED_NOT_QUALIFICATION',
       qualificationEvidence: false,
       maxDrawdownIsolated: false,
       taggedSignals: v8TaggedRows.length,
       admittedSignals: v8AdmittedRows.length,
       rejectedSignals: v8RejectedRows.length,
-      admittedFraction: v8TaggedRows.length
-        ? v8AdmittedRows.length / v8TaggedRows.length
-        : 0,
+      admittedFraction: v8TaggedRows.length ? v8AdmittedRows.length / v8TaggedRows.length : 0,
       executedTrades: v8AdmittedRows.filter((row) => row.trade_id != null).length,
       closedTrades: v8Closed.length,
       rejectedClosedTrades: v8RejectedClosed.length,
@@ -814,29 +781,21 @@ export class ExternalSignalPerformanceService {
         (row.close_reason === 'STOP_LOSS_HIT' || row.close_reason === 'TAKE_PROFIT_HIT'),
     );
     const ensemblePnls = ensembleClosedRows.map((row) => finite(row.realised_pnl) ?? 0);
-    const ensembleRegimes = ensembleTaggedRows.reduce<Record<string, number>>(
-      (acc, row) => {
-        const regime = row.plan_b_ensemble_regime ?? 'UNKNOWN';
-        acc[regime] = (acc[regime] ?? 0) + 1;
-        return acc;
-      },
-      {},
-    );
-    const pairSideRouteCounts = ensembleTaggedRows.reduce<Record<string, number>>(
-      (acc, row) => {
-        const route = row.plan_b_ensemble_pair_side_route ?? 'UNKNOWN';
-        acc[route] = (acc[route] ?? 0) + 1;
-        return acc;
-      },
-      {},
-    );
+    const ensembleRegimes = ensembleTaggedRows.reduce<Record<string, number>>((acc, row) => {
+      const regime = row.plan_b_ensemble_regime ?? 'UNKNOWN';
+      acc[regime] = (acc[regime] ?? 0) + 1;
+      return acc;
+    }, {});
+    const pairSideRouteCounts = ensembleTaggedRows.reduce<Record<string, number>>((acc, row) => {
+      const route = row.plan_b_ensemble_pair_side_route ?? 'UNKNOWN';
+      acc[route] = (acc[route] ?? 0) + 1;
+      return acc;
+    }, {});
     const ensembleAverage = (field: keyof EvidenceRow): number | null => {
       const values = ensembleTaggedRows
         .map((row) => finite(row[field]))
         .filter((value): value is number => value !== null);
-      return values.length
-        ? values.reduce((sum, value) => sum + value, 0) / values.length
-        : null;
+      return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
     };
     const planBEnsembleShadow = {
       artifact: PLAN_B_ENSEMBLE_ARTIFACT,
@@ -879,8 +838,8 @@ export class ExternalSignalPerformanceService {
           .filter((value): value is string => Boolean(value)),
       ),
     ];
-    const authorityTaggedSignals = rows.filter(
-      (row) => Boolean(row.market_data_authority?.trim()),
+    const authorityTaggedSignals = rows.filter((row) =>
+      Boolean(row.market_data_authority?.trim()),
     ).length;
     const evidenceCohortIntegrity =
       expectedMarketDataAuthority !== null
@@ -948,8 +907,7 @@ export class ExternalSignalPerformanceService {
           ? 'Six-Pair Forex v7'
           : providerCode,
         modelVersion,
-        marketDataAuthority:
-          expectedMarketDataAuthority ?? 'EXTERNAL_PROVIDER_UNSPECIFIED',
+        marketDataAuthority: expectedMarketDataAuthority ?? 'EXTERNAL_PROVIDER_UNSPECIFIED',
         evidenceCohortKey,
         evidenceIsolationApplied: true,
         evidenceCohortIntegrity,

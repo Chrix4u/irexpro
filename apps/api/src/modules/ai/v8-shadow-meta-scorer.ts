@@ -96,8 +96,7 @@ export function scoreV8ShadowMeta(input: V8ShadowMetaInput): V8ShadowMetaScore {
   const scanTime = new Date(input.scanTime);
   if (!Number.isFinite(scanTime.getTime())) throw new Error('v8 shadow scanTime must be valid');
 
-  const rsiStrength =
-    input.direction === 'BUY' ? rsi14 - 50 : 50 - rsi14;
+  const rsiStrength = input.direction === 'BUY' ? rsi14 - 50 : 50 - rsi14;
   const hour = scanTime.getUTCHours();
 
   const features: Record<string, number> = {
@@ -120,8 +119,7 @@ export function scoreV8ShadowMeta(input: V8ShadowMetaInput): V8ShadowMetaScore {
     0,
   );
   const probability = sigmoid(logit);
-  const expectedR =
-    probability * V8_SHADOW_TARGET_R_MULTIPLE - (1 - probability);
+  const expectedR = probability * V8_SHADOW_TARGET_R_MULTIPLE - (1 - probability);
   const admitted = probability >= V8_SHADOW_ADMISSION_THRESHOLD;
 
   return {
