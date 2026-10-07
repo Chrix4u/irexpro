@@ -32,6 +32,9 @@ __pycache__/
 *.log
 logs/
 
+# Runtime broker SDK state — never part of a release candidate
+apps/api/.metaapi/
+
 # Secrets / keys / certificates
 *.pem
 *.key
