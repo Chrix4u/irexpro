@@ -14,6 +14,8 @@ REAL_NODE="$(command -v node)"
 readonly REAL_NODE
 DEPLOY_NODE_MAJOR="$(sed -n 's/^readonly RELEASE_NODE_MAJOR="\([^"\]*\)"/\1/p' "$SCRIPT_DIR/deploy-staging.sh")"
 readonly DEPLOY_NODE_MAJOR
+DEPLOY_HEALTH_ATTEMPTS_DEFAULT="$(grep -E '^readonly MAX_HEALTH_ATTEMPTS=' "$SCRIPT_DIR/deploy-staging.sh" | grep -oE '[0-9]+' | head -n 1)"
+readonly DEPLOY_HEALTH_ATTEMPTS_DEFAULT
 TMP_ROOT="$(mktemp -d)"
 readonly TMP_ROOT
 readonly EXPECTED_HTTPS_ORIGIN="https://github.com/Chrix4u/irexpro.git"
@@ -36,6 +38,7 @@ fail() {
 [[ -n "$REAL_NODE" ]] || fail 'Node.js must be available to run deployment safety tests.'
 [[ -n "$DEPLOY_NODE_MAJOR" ]] || fail 'deploy-staging.sh must declare RELEASE_NODE_MAJOR.'
 [[ "$("$REAL_NODE" -p "process.versions.node.split('.')[0]")" == "$DEPLOY_NODE_MAJOR" ]] || fail "Deployment Node major (${DEPLOY_NODE_MAJOR}) does not match the CI validation runtime."
+[[ "$DEPLOY_HEALTH_ATTEMPTS_DEFAULT" == '60' ]] || fail 'deploy-staging.sh must allow 120 seconds by default for staging health recovery (60 attempts × 2 seconds).'
 
 expect_failure() {
   local expected="$1"
