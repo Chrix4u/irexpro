@@ -5,6 +5,10 @@ const GATE_PATH = 'scripts/security/required-ci-gate.mjs';
 export const WORKFLOW_FILES = new Map([
   ['Release Security', '.github/workflows/release-security.yml'],
   ['AI Engine CI', '.github/workflows/ai-engine-ci.yml'],
+  [
+    'Strategy Promotion Integrity',
+    '.github/workflows/strategy-promotion-integrity.yml',
+  ],
   ['API CI', '.github/workflows/api-ci.yml'],
   ['Risk Execution Concurrency', '.github/workflows/risk-concurrency.yml'],
   [
@@ -204,6 +208,11 @@ export function runSelfTests() {
   assert(
     WORKFLOW_FILES.get('AI Engine CI') === '.github/workflows/ai-engine-ci.yml',
     'AI Engine CI workflow mapping must remain canonical',
+  );
+  assert(
+    WORKFLOW_FILES.get('Strategy Promotion Integrity') ===
+      '.github/workflows/strategy-promotion-integrity.yml',
+    'Strategy Promotion Integrity workflow mapping must remain canonical',
   );
   assert(WORKFLOW_FILES.has('Mobile CI'), 'required workflow registry must include Mobile CI');
   assert(
