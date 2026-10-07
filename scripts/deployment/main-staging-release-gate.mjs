@@ -1,10 +1,10 @@
+import { execFileSync } from 'node:child_process';
 import { requiredWorkflowNames } from '../security/required-ci-gate.mjs';
 
 const FULL_SHA = /^[0-9a-f]{40}$/;
 const ZERO_SHA = /^0{40}$/;
 const DEFAULT_POLL_SECONDS = 15;
 const DEFAULT_TIMEOUT_SECONDS = 2700;
-const MAX_COMPARE_FILES = 300;
 
 function requiredEnvironment(name) {
   const value = process.env[name]?.trim();
@@ -94,19 +94,28 @@ async function resolveBeforeSha(repository, candidateSha, token, apiUrl) {
   return firstParent;
 }
 
-async function listChangedFiles(repository, beforeSha, candidateSha, token, apiUrl) {
-  const comparison = await githubJson(
-    `/repos/${repository}/compare/${encodeURIComponent(beforeSha)}...${encodeURIComponent(candidateSha)}`,
-    token,
-    apiUrl,
-  );
-  const files = comparison.files ?? [];
-  if (files.length >= MAX_COMPARE_FILES) {
+export function parseChangedFileList(output) {
+  return output.split('\0').filter((path) => path.length > 0);
+}
+
+function listChangedFiles(beforeSha, candidateSha) {
+  assertFullSha(beforeSha, 'before SHA');
+  assertFullSha(candidateSha, 'candidate SHA');
+  try {
+    const output = execFileSync(
+      'git',
+      ['diff', '--name-only', '--diff-filter=ACMR', '-z', beforeSha, candidateSha, '--'],
+      {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    return parseChangedFileList(output);
+  } catch {
     throw new Error(
-      `Main release diff reached the ${MAX_COMPARE_FILES}-file GitHub compare limit; refusing an incomplete release-policy decision`,
+      `Unable to derive the complete local release diff for ${beforeSha}...${candidateSha}; refusing an incomplete release-policy decision`,
     );
   }
-  return files.map((file) => file.filename);
 }
 
 async function listCandidateWorkflowRuns(repository, candidateSha, token, apiUrl) {
@@ -161,6 +170,12 @@ export function runSelfTests() {
     ['Release Security', 'Deployment Script Safety'],
     'main staging release gate policy',
   );
+  const largeDiff = Array.from({ length: 312 }, (_, index) => `apps/api/src/large-${index}.ts`);
+  assertEqual(
+    parseChangedFileList(`${largeDiff.join('\0')}\0`).length,
+    312,
+    'large local release diff must not truncate at the GitHub 300-file compare ceiling',
+  );
   console.log('Main staging release gate self-tests passed.');
 }
 
@@ -177,7 +192,7 @@ export async function runMainStagingReleaseGate() {
   await assertMergedPullRequestProvenance(repository, candidateSha, token, apiUrl);
 
   const beforeSha = await resolveBeforeSha(repository, candidateSha, token, apiUrl);
-  const changedPaths = await listChangedFiles(repository, beforeSha, candidateSha, token, apiUrl);
+  const changedPaths = listChangedFiles(beforeSha, candidateSha);
   const requiredNames = requiredWorkflowNames(changedPaths);
 
   console.log(`Main candidate: ${candidateSha}`);
