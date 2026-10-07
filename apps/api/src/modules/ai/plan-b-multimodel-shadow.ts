@@ -160,8 +160,9 @@ function pairSideQuality(): number {
 }
 
 function sessionQuality(input: V8ShadowMetaInput): number {
+  const newYorkHour = Number(NEW_YORK_HOUR.format(input.scanTime));
+  if (newYorkHour === 17) return 0.1;
   const hour = input.scanTime.getUTCHours();
-  if (hour >= 21 || hour < 1) return 0.1;
   if (hour >= 7 && hour < 16) return 0.9;
   if (hour >= 16 && hour < 20) return 0.72;
   return 0.52;
