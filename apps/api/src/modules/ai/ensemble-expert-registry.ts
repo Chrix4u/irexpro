@@ -108,6 +108,20 @@ export function buildEnsembleExpertRegistry(
         'Deterministic research policy combining regime, direction, quality, exit, session, EV and portfolio checks.',
     },
     {
+      code: 'early-transition-paper-policy',
+      label: 'Early-transition PAPER policy',
+      kind: 'HEURISTIC_POLICY',
+      lifecycle: 'COLLECTING',
+      trained: false,
+      artifact: 'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v1',
+      dataAuthority: 'BROKER_NATIVE_OR_TWELVE_DATA_CLOSED_M5_CAUSAL_TRANSITION_FEATURES',
+      executionAuthority: 'NONE',
+      modifiesExecution: false,
+      prospectiveEvidenceRequired: true,
+      description:
+        'PAPER-only transition route for strong net-edge TREND_WEAK setups before slower M15 alignment; promotion remains disabled pending independent episode evidence.',
+    },
+    {
       code: 'v8-fixed-meta-policy',
       label: 'Frozen v8 meta policy',
       kind: 'HEURISTIC_POLICY',

@@ -35,6 +35,7 @@ import {
 import { MacroEventRiskAssessment, MacroEventRiskService } from './macro-event-risk.service';
 import {
   EnsembleShadowOutcome,
+  collapseEnsembleOutcomeEpisodes,
   resolveEnsembleShadowOutcome,
   summarizeEnsembleSleeveOutcomes,
 } from './ensemble-shadow-outcome';
@@ -75,7 +76,7 @@ const SYMBOLS = Object.freeze([
 const CONFIDENCE_FLOOR = 0.64;
 const COUNTERFACTUAL_MIN_EDGE_R = 0.02;
 const COUNTERFACTUAL_COST_UNCERTAINTY_FRACTION = 0.25;
-const ACTIVE_MODEL_POLICY_VERSION = `${PLAN_B_ENSEMBLE_ARTIFACT}-bidirectional-v1`;
+const ACTIVE_MODEL_POLICY_VERSION = `${PLAN_B_ENSEMBLE_ARTIFACT}-bidirectional-v2-early-transition-v1`;
 const STOP_ATR_MULTIPLIER = 1.5;
 const TARGET_ATR_MULTIPLIER = 2.5;
 const PAPER_BASE_LOT_UPPER_BOUND = 0.1;
@@ -1892,7 +1893,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
 
     const rows = (await this.dataSource.query(
       `
-        SELECT components->'outcome' AS outcome
+        SELECT evaluated_at, components->'outcome' AS outcome
         FROM trading.ensemble_shadow_decisions
         WHERE user_id = $1
           AND broker_connection_id = $2
@@ -1915,15 +1916,19 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         direction,
         ACTIVE_MODEL_POLICY_VERSION,
       ],
-    )) as Array<{ outcome: EnsembleShadowOutcome | null }>;
+    )) as Array<{ evaluated_at: string | Date; outcome: EnsembleShadowOutcome | null }>;
 
-    const outcomes = rows
-      .map((row) => row.outcome)
-      .filter(
-        (outcome): outcome is EnsembleShadowOutcome =>
-          outcome != null && typeof outcome === 'object' && typeof outcome.status === 'string',
-      );
-    return summarizeEnsembleSleeveOutcomes(outcomes);
+    const episodes = collapseEnsembleOutcomeEpisodes(
+      rows
+        .filter(
+          (row) =>
+            row.outcome != null &&
+            typeof row.outcome === 'object' &&
+            typeof row.outcome.status === 'string',
+        )
+        .map((row) => ({ evaluatedAt: row.evaluated_at, outcome: row.outcome })),
+    );
+    return summarizeEnsembleSleeveOutcomes(episodes);
   }
 
   private async persistEnsembleShadowDecision(
