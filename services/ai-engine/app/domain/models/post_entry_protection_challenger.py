@@ -80,7 +80,7 @@ class PlanBV85PostEntryProtectionChallenger:
             "mode": EXPECTED_MODE,
             "configured": self._manifest_path is not None,
             "loaded": self._loaded,
-            "load_error": self._load_error,
+            "load_error": "CHALLENGER_LOAD_FAILED" if self._load_error else None,
             "manifest_path": str(self._manifest_path) if self._manifest_path else None,
             "manifest_sha256_pinned": self._expected_manifest_sha256 is not None,
             "manifest_sha256_verified": self._manifest_sha256_verified,
