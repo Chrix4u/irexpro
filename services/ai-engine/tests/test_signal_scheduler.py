@@ -1,4 +1,5 @@
 """Tests for SignalScheduler."""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -13,6 +14,7 @@ from app.domain.scheduler.schemas import SessionStartRequest, SessionStatusReque
 from app.domain.scheduler.signal_scheduler import ScheduledSessionJob, SignalScheduler
 from app.domain.signals.schemas import (
     AiSignalCandidate,
+    NoSignalResult,
     SignalEvaluationTelemetry,
     SignalGenerationResponse,
 )
@@ -29,7 +31,6 @@ def make_start_request(session_id: str = "session-1") -> SessionStartRequest:
         accountType="DEMO",
         mode="paper",
     )
-
 
 
 @pytest.mark.asyncio
@@ -275,7 +276,6 @@ async def test_low_confidence_not_published():
     assert job.last_confidence_score == 0.2
 
 
-
 @pytest.mark.asyncio
 async def test_research_uat_replay_advances_until_one_signal_then_stops_cycle():
     settings = Settings(ai_scheduler_enabled=True, ai_signal_mode="paper")
@@ -343,7 +343,6 @@ async def test_research_uat_replay_advances_until_one_signal_then_stops_cycle():
     assert job.replay_steps_last_cycle == 3
     assert job.replay_steps_total == 3
     assert job.signals_published_total == 1
-
 
 
 @pytest.mark.asyncio
@@ -425,7 +424,6 @@ async def test_research_uat_probe_uses_real_confidence_and_obeys_one_minute_cool
     assert mock_generator.generate.await_count == 24
     assert scheduler._nestjs_client.publish_signal.await_count == 1
     assert job.signals_published_total == 1
-
 
 
 @pytest.mark.asyncio
@@ -667,9 +665,7 @@ async def test_research_uat_closes_successful_trade_at_exact_model_horizon():
     client.publish_exit_signal.return_value = {
         "outcome": "EXIT_SUCCEEDED",
         "signalId": "exit-1",
-        "trades": [
-            {"tradeId": "11111111-1111-4111-8111-111111111111", "closed": True}
-        ],
+        "trades": [{"tradeId": "11111111-1111-4111-8111-111111111111", "closed": True}],
     }
 
     job = ScheduledSessionJobStub()

@@ -6,6 +6,7 @@ file with a valid sidecar metadata document and matching SHA-256 checksum.
 Without a verified artifact, the existing heuristic scaffold remains visible
 as such and is never presented as a trained model.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -42,7 +43,9 @@ EVENT_LABEL_POLICY_RUNTIME = "first_net_return_barrier_atr1_spread2_timeout_v1"
 EVENT_PAIR_REGIME_ROUTER_POLICY_RUNTIME = "pair_m1_volatility_spread_median_v1"
 EVENT_DUAL_ACTIONABILITY_EXPERIMENT_RUNTIME = "event_barrier_dual_actionability"
 EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_RUNTIME = "event_barrier_hybrid_opportunity_dual_direction"
-EVENT_HYBRID_PAYOFF_RISK_EXPERIMENT_RUNTIME = "event_barrier_hybrid_opportunity_dual_direction_payoff_risk"
+EVENT_HYBRID_PAYOFF_RISK_EXPERIMENT_RUNTIME = (
+    "event_barrier_hybrid_opportunity_dual_direction_payoff_risk"
+)
 DUAL_ACTION_MARGIN_FLOOR_RUNTIME = 0.10
 PAYOFF_RISK_RATIO_FLOOR_RUNTIME = 1.15
 
@@ -131,16 +134,13 @@ class BaselineXGBoostModel:
                 MULTITIMEFRAME_MODEL_TYPE,
                 EVENT_PAIR_BUNDLE_MODEL_TYPE,
             }
-            expected_features = (
-                MULTITIMEFRAME_FEATURE_COLUMNS if mtf_model else FEATURE_COLUMNS
-            )
+            expected_features = MULTITIMEFRAME_FEATURE_COLUMNS if mtf_model else FEATURE_COLUMNS
             if mtf_model and runtime_feature_profile != MULTITIMEFRAME_RUNTIME_PROFILE:
                 raise ValueError("MTF artifact runtime_feature_profile is unsupported")
 
             if (
                 model_type == MULTITIMEFRAME_MODEL_TYPE
-                and metadata.get("label_selection_policy")
-                != MULTITIMEFRAME_LABEL_SELECTION_POLICY
+                and metadata.get("label_selection_policy") != MULTITIMEFRAME_LABEL_SELECTION_POLICY
             ):
                 raise ValueError("MTF artifact label_selection_policy is unsupported")
             if (
@@ -151,8 +151,7 @@ class BaselineXGBoostModel:
 
             if (
                 mtf_model
-                and metadata.get("backtest_evaluation_policy")
-                != MULTITIMEFRAME_BACKTEST_POLICY
+                and metadata.get("backtest_evaluation_policy") != MULTITIMEFRAME_BACKTEST_POLICY
             ):
                 raise ValueError("MTF artifact backtest_evaluation_policy is unsupported")
 
@@ -176,7 +175,9 @@ class BaselineXGBoostModel:
                 raise ValueError("Model metadata is missing model_version")
 
             if bool(metadata.get("approved_for_live", False)):
-                raise ValueError("Live-approved artifacts are not accepted by this paper-mode loader")
+                raise ValueError(
+                    "Live-approved artifacts are not accepted by this paper-mode loader"
+                )
 
             import xgboost as xgb
 
@@ -210,30 +211,62 @@ class BaselineXGBoostModel:
                 experiment = str(manifest.get("experiment", "")).strip()
                 if experiment == EVENT_HYBRID_PAYOFF_RISK_EXPERIMENT_RUNTIME:
                     spec = manifest.get("hybrid_payoff_risk")
-                    if not isinstance(spec, dict) or spec.get("kind") != "xgboost_hybrid_opportunity_dual_direction_payoff_risk":
+                    if (
+                        not isinstance(spec, dict)
+                        or spec.get("kind")
+                        != "xgboost_hybrid_opportunity_dual_direction_payoff_risk"
+                    ):
                         raise ValueError("Hybrid payoff-risk bundle specification is invalid")
-                    if not math.isclose(float(spec.get("action_margin_floor")), DUAL_ACTION_MARGIN_FLOOR_RUNTIME, rel_tol=0.0, abs_tol=1e-12):
+                    if not math.isclose(
+                        float(spec.get("action_margin_floor")),
+                        DUAL_ACTION_MARGIN_FLOOR_RUNTIME,
+                        rel_tol=0.0,
+                        abs_tol=1e-12,
+                    ):
                         raise ValueError("Hybrid payoff-risk margin policy mismatch")
-                    if not math.isclose(float(spec.get("payoff_risk_ratio_floor")), PAYOFF_RISK_RATIO_FLOOR_RUNTIME, rel_tol=0.0, abs_tol=1e-12):
+                    if not math.isclose(
+                        float(spec.get("payoff_risk_ratio_floor")),
+                        PAYOFF_RISK_RATIO_FLOOR_RUNTIME,
+                        rel_tol=0.0,
+                        abs_tol=1e-12,
+                    ):
                         raise ValueError("Hybrid payoff-risk ratio policy mismatch")
                     classifiers = {}
                     for name in ("opportunity", "long_direction", "short_direction"):
                         item = spec.get(name)
                         if not isinstance(item, dict) or item.get("kind") != "xgboost_classifier":
                             raise ValueError(f"Hybrid payoff-risk classifier {name} is invalid")
-                        model = xgb.XGBClassifier(); model.load_model(str(component_path(item))); classifiers[name] = model
+                        model = xgb.XGBClassifier()
+                        model.load_model(str(component_path(item)))
+                        classifiers[name] = model
                     payoff = {}
-                    for name in ("payoff_long_upside", "payoff_long_downside", "payoff_short_upside", "payoff_short_downside"):
+                    for name in (
+                        "payoff_long_upside",
+                        "payoff_long_downside",
+                        "payoff_short_upside",
+                        "payoff_short_downside",
+                    ):
                         item = spec.get(name)
                         if not isinstance(item, dict) or item.get("kind") != "xgboost_regressor":
                             raise ValueError(f"Hybrid payoff-risk regressor {name} is invalid")
-                        model = xgb.XGBRegressor(); model.load_model(str(component_path(item))); payoff[name] = model
+                        model = xgb.XGBRegressor()
+                        model.load_model(str(component_path(item)))
+                        payoff[name] = model
                     self._bundle = {"manifest": manifest, **classifiers, **payoff}
                     self._model = classifiers["long_direction"]
-                    self._model_loaded = True; self._model_version = model_version
-                    self._feature_names = list(feature_names); self._artifact_metadata = metadata
-                    self._model_type = model_type; self._runtime_feature_profile = runtime_feature_profile
-                    logger.info("Verified trained XGBoost payoff-risk model loaded", path=str(model_path), metadata_path=str(metadata_path), version=self._model_version, approved_for_paper=bool(metadata.get("approved_for_paper", False)))
+                    self._model_loaded = True
+                    self._model_version = model_version
+                    self._feature_names = list(feature_names)
+                    self._artifact_metadata = metadata
+                    self._model_type = model_type
+                    self._runtime_feature_profile = runtime_feature_profile
+                    logger.info(
+                        "Verified trained XGBoost payoff-risk model loaded",
+                        path=str(model_path),
+                        metadata_path=str(metadata_path),
+                        version=self._model_version,
+                        approved_for_paper=bool(metadata.get("approved_for_paper", False)),
+                    )
                     return True
 
                 if experiment in {
@@ -246,14 +279,11 @@ class BaselineXGBoostModel:
                     if dual_spec.get("kind") != "xgboost_dual_actionability":
                         raise ValueError("Dual-actionability bundle kind is unsupported")
                     action_margin_floor = float(dual_spec.get("action_margin_floor"))
-                    if (
-                        not math.isfinite(action_margin_floor)
-                        or not math.isclose(
-                            action_margin_floor,
-                            DUAL_ACTION_MARGIN_FLOOR_RUNTIME,
-                            rel_tol=0.0,
-                            abs_tol=1e-12,
-                        )
+                    if not math.isfinite(action_margin_floor) or not math.isclose(
+                        action_margin_floor,
+                        DUAL_ACTION_MARGIN_FLOOR_RUNTIME,
+                        rel_tol=0.0,
+                        abs_tol=1e-12,
                     ):
                         raise ValueError("Dual-actionability margin policy mismatch")
 
@@ -261,13 +291,9 @@ class BaselineXGBoostModel:
                     for side in ("long", "short"):
                         side_spec = dual_spec.get(side)
                         if not isinstance(side_spec, dict):
-                            raise ValueError(
-                                f"Dual-actionability bundle is missing {side} model"
-                            )
+                            raise ValueError(f"Dual-actionability bundle is missing {side} model")
                         if side_spec.get("kind") != "xgboost_classifier":
-                            raise ValueError(
-                                f"Dual-actionability {side} model kind is unsupported"
-                            )
+                            raise ValueError(f"Dual-actionability {side} model kind is unsupported")
                         child = xgb.XGBClassifier()
                         child.load_model(str(component_path(side_spec)))
                         dual_models[side] = child
@@ -279,7 +305,9 @@ class BaselineXGBoostModel:
                     if experiment == EVENT_HYBRID_DUAL_DIRECTION_EXPERIMENT_RUNTIME:
                         opportunity_spec = manifest.get("opportunity")
                         if not isinstance(opportunity_spec, dict):
-                            raise ValueError("Hybrid dual-actionability bundle is missing opportunity model")
+                            raise ValueError(
+                                "Hybrid dual-actionability bundle is missing opportunity model"
+                            )
                         if opportunity_spec.get("kind") != "xgboost_classifier":
                             raise ValueError("Hybrid opportunity model kind is unsupported")
                         opportunity = xgb.XGBClassifier()
@@ -298,9 +326,7 @@ class BaselineXGBoostModel:
                         path=str(model_path),
                         metadata_path=str(metadata_path),
                         version=self._model_version,
-                        approved_for_paper=bool(
-                            metadata.get("approved_for_paper", False)
-                        ),
+                        approved_for_paper=bool(metadata.get("approved_for_paper", False)),
                     )
                     return True
 
@@ -317,9 +343,7 @@ class BaselineXGBoostModel:
                 for instrument in INITIAL_FOREX_UNIVERSE:
                     item = direction_specs.get(instrument)
                     if not isinstance(item, dict):
-                        raise ValueError(
-                            f"Event-pair bundle missing direction model {instrument}"
-                        )
+                        raise ValueError(f"Event-pair bundle missing direction model {instrument}")
                     kind = str(item.get("kind", ""))
                     if kind == "xgboost_regime_classifier_router":
                         router = item.get("router")
@@ -327,18 +351,11 @@ class BaselineXGBoostModel:
                             raise ValueError(
                                 f"Event-pair bundle missing regime router {instrument}"
                             )
-                        if (
-                            router.get("policy")
-                            != EVENT_PAIR_REGIME_ROUTER_POLICY_RUNTIME
-                        ):
+                        if router.get("policy") != EVENT_PAIR_REGIME_ROUTER_POLICY_RUNTIME:
                             raise ValueError("Unsupported event-pair regime router policy")
-                        volatility_cut = float(
-                            router.get("m1_volatility_20_median")
-                        )
+                        volatility_cut = float(router.get("m1_volatility_20_median"))
                         spread_cut = float(router.get("m1_spread_bps_median"))
-                        if not math.isfinite(volatility_cut) or not math.isfinite(
-                            spread_cut
-                        ):
+                        if not math.isfinite(volatility_cut) or not math.isfinite(spread_cut):
                             raise ValueError("Event-pair regime thresholds are non-finite")
 
                         fallback_spec = item.get("fallback")
@@ -362,9 +379,7 @@ class BaselineXGBoostModel:
                             if regime_spec.get("kind") != "xgboost_classifier":
                                 raise ValueError("Event-pair regime child kind is unsupported")
                             regime_child = xgb.XGBClassifier()
-                            regime_child.load_model(
-                                str(component_path(regime_spec))
-                            )
+                            regime_child.load_model(str(component_path(regime_spec)))
                             regime_models[str(regime)] = regime_child
 
                         direction_models[instrument] = {
@@ -379,9 +394,7 @@ class BaselineXGBoostModel:
                     elif kind == "xgboost_return_margin_regressor":
                         calibration = item.get("calibration")
                         if not isinstance(calibration, dict):
-                            raise ValueError(
-                                f"Event-pair bundle missing calibrator {instrument}"
-                            )
+                            raise ValueError(f"Event-pair bundle missing calibrator {instrument}")
                         coefficient = float(calibration.get("coefficient"))
                         intercept = float(calibration.get("intercept"))
                         if not math.isfinite(coefficient) or not math.isfinite(intercept):
@@ -512,9 +525,7 @@ class BaselineXGBoostModel:
             columns=self._feature_names,
         )
         opportunity_model = self._bundle["opportunity"]
-        opportunity_probability = float(
-            opportunity_model.predict_proba(frame)[0][1]
-        )
+        opportunity_probability = float(opportunity_model.predict_proba(frame)[0][1])
         manifest = self._bundle["manifest"]
         item = manifest["direction"][instrument]
         direction_model = self._bundle["direction"][instrument]
@@ -578,9 +589,7 @@ class BaselineXGBoostModel:
             "method": direction_method,
             "instrument_expert": instrument,
             "opportunity_gate": "pooled_event_opportunity_xgboost",
-            "research_experiment": self._artifact_metadata.get(
-                "research_experiment"
-            ),
+            "research_experiment": self._artifact_metadata.get("research_experiment"),
             "confidence_semantics": (
                 "Minimum of opportunity probability and pair-specific "
                 "direction confidence; not a probability of profit."
@@ -590,9 +599,7 @@ class BaselineXGBoostModel:
         if market_regime is not None:
             explainability["market_regime"] = market_regime
             explainability["regime_fallback_used"] = regime_fallback_used
-            explainability["regime_router_policy"] = (
-                EVENT_PAIR_REGIME_ROUTER_POLICY_RUNTIME
-            )
+            explainability["regime_router_policy"] = EVENT_PAIR_REGIME_ROUTER_POLICY_RUNTIME
 
         return ModelPrediction(
             direction=direction,
@@ -602,7 +609,6 @@ class BaselineXGBoostModel:
             raw_scores=raw_scores,
             explainability=explainability,
         )
-
 
     def _predict_with_event_hybrid_payoff_risk_bundle(
         self,
@@ -629,7 +635,9 @@ class BaselineXGBoostModel:
         direction_confidence = max(long_direction_probability, 1.0 - long_direction_probability)
         action_margin = abs(long_probability - short_probability)
         opportunity_probability = float(self._bundle["opportunity"].predict_proba(frame)[0][1])
-        direction: Literal["BUY", "SELL"] = "BUY" if long_probability >= short_probability else "SELL"
+        direction: Literal["BUY", "SELL"] = (
+            "BUY" if long_probability >= short_probability else "SELL"
+        )
         prefix = "long" if direction == "BUY" else "short"
         upside = max(0.0, float(self._bundle[f"payoff_{prefix}_upside"].predict(frame)[0]))
         downside = max(0.0, float(self._bundle[f"payoff_{prefix}_downside"].predict(frame)[0]))
@@ -706,9 +714,7 @@ class BaselineXGBoostModel:
         long_direction_probability = long_probability / total
         direction_confidence = max(long_direction_probability, 1.0 - long_direction_probability)
         action_margin = abs(long_probability - short_probability)
-        opportunity_probability = float(
-            self._bundle["opportunity"].predict_proba(frame)[0][1]
-        )
+        opportunity_probability = float(self._bundle["opportunity"].predict_proba(frame)[0][1])
         confidence = min(opportunity_probability, direction_confidence)
         direction: Literal["BUY", "SELL"] = (
             "BUY" if long_probability >= short_probability else "SELL"
@@ -754,9 +760,7 @@ class BaselineXGBoostModel:
             if float(features.get(f"instrument_{instrument}", 0.0)) >= 0.5
         ]
         if len(active_instruments) != 1:
-            raise ValueError(
-                "Dual-actionability runtime requires exactly one active instrument"
-            )
+            raise ValueError("Dual-actionability runtime requires exactly one active instrument")
         instrument = active_instruments[0]
 
         frame = pd.DataFrame(
@@ -791,14 +795,10 @@ class BaselineXGBoostModel:
             explainability={
                 "method": "dual_actionability_xgboost_predict_proba",
                 "instrument_expert": instrument,
-                "research_experiment": self._artifact_metadata.get(
-                    "research_experiment"
-                ),
+                "research_experiment": self._artifact_metadata.get("research_experiment"),
                 "signal_eligible": signal_eligible,
                 "signal_gate_reason": (
-                    "eligible"
-                    if signal_eligible
-                    else "action_probability_margin_below_floor"
+                    "eligible" if signal_eligible else "action_probability_margin_below_floor"
                 ),
                 "confidence_semantics": (
                     "Winning LONG/SHORT actionability probability. Signal publication "
@@ -862,15 +862,9 @@ class BaselineXGBoostModel:
                 "mode": "trained_xgboost_mtf" if mtf else "trained_xgboost",
                 "model_type": self._model_type,
                 "runtime_feature_profile": self._runtime_feature_profile,
-                "label_selection_policy": self._artifact_metadata.get(
-                    "label_selection_policy"
-                ),
-                "event_label_policy": self._artifact_metadata.get(
-                    "event_label_policy"
-                ),
-                "research_experiment": self._artifact_metadata.get(
-                    "research_experiment"
-                ),
+                "label_selection_policy": self._artifact_metadata.get("label_selection_policy"),
+                "event_label_policy": self._artifact_metadata.get("event_label_policy"),
+                "research_experiment": self._artifact_metadata.get("research_experiment"),
                 "backtest_evaluation_policy": self._artifact_metadata.get(
                     "backtest_evaluation_policy"
                 ),

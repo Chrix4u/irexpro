@@ -1,186 +1,370 @@
 from __future__ import annotations
-import argparse, json
+
+import argparse
+import json
 from pathlib import Path
-import numpy as np, pandas as pd
+
+import numpy as np
+import pandas as pd
 from xgboost import XGBClassifier
+
 from app.domain.models.quote_microstructure import QUOTE_MICROSTRUCTURE_FEATURE_COLUMNS
-from app.domain.training.train_multitimeframe import (
-    LONG_NET_RETURN_COLUMN, SHORT_NET_RETURN_COLUMN,
-    MULTITIMEFRAME_FEATURE_COLUMNS, load_and_prepare_corpora,
-    _split_internal_early_stopping_tail, _xgboost_n_jobs,
-)
 from app.domain.training.model_qualification import _summarize_predictions
+from app.domain.training.train_multitimeframe import (
+    LONG_NET_RETURN_COLUMN,
+    MULTITIMEFRAME_FEATURE_COLUMNS,
+    SHORT_NET_RETURN_COLUMN,
+    _split_internal_early_stopping_tail,
+    _xgboost_n_jobs,
+    load_and_prepare_corpora,
+)
 from app.domain.training.validation import iter_purged_walk_forward_time_splits
 
-PAIRS=("AUDUSD","EURUSD","GBPUSD","USDCAD","USDCHF","USDJPY")
-H=5; EXTRA_SLIPPAGE_BPS=.25; MIN_NET_BPS=.25
-CTX=[c for c in MULTITIMEFRAME_FEATURE_COLUMNS if c in {
-    "m1_simple_return","m1_atr_pct_14","m1_rsi_14","m1_momentum_3",
-    "m1_breakout_strength_20","m1_range_compression_5_20",
-    "m5_price_vs_ma20","m5_atr_pct_14","m5_momentum_3",
-    "m15_price_vs_ma20","m15_atr_pct_14","h1_price_vs_ma20",
-    "h1_atr_pct_14","h4_price_vs_ma20","h4_atr_pct_14",
-    "higher_timeframe_trend_score","spread_to_atr_ratio"
-}]
-FEATURES=[*QUOTE_MICROSTRUCTURE_FEATURE_COLUMNS,*CTX]
+PAIRS = ("AUDUSD", "EURUSD", "GBPUSD", "USDCAD", "USDCHF", "USDJPY")
+H = 5
+EXTRA_SLIPPAGE_BPS = 0.25
+MIN_NET_BPS = 0.25
+CTX = [
+    c
+    for c in MULTITIMEFRAME_FEATURE_COLUMNS
+    if c
+    in {
+        "m1_simple_return",
+        "m1_atr_pct_14",
+        "m1_rsi_14",
+        "m1_momentum_3",
+        "m1_breakout_strength_20",
+        "m1_range_compression_5_20",
+        "m5_price_vs_ma20",
+        "m5_atr_pct_14",
+        "m5_momentum_3",
+        "m15_price_vs_ma20",
+        "m15_atr_pct_14",
+        "h1_price_vs_ma20",
+        "h1_atr_pct_14",
+        "h4_price_vs_ma20",
+        "h4_atr_pct_14",
+        "higher_timeframe_trend_score",
+        "spread_to_atr_ratio",
+    }
+]
+FEATURES = [*QUOTE_MICROSTRUCTURE_FEATURE_COLUMNS, *CTX]
+
+
 def model(seed):
-    return XGBClassifier(objective="binary:logistic",eval_metric="logloss",
-        n_estimators=450,learning_rate=.025,max_depth=4,min_child_weight=10,
-        subsample=.82,colsample_bytree=.8,reg_alpha=.25,reg_lambda=3.0,
-        random_state=seed,n_jobs=_xgboost_n_jobs(),tree_method="hist",
-        early_stopping_rounds=40)
+    return XGBClassifier(
+        objective="binary:logistic",
+        eval_metric="logloss",
+        n_estimators=450,
+        learning_rate=0.025,
+        max_depth=4,
+        min_child_weight=10,
+        subsample=0.82,
+        colsample_bytree=0.8,
+        reg_alpha=0.25,
+        reg_lambda=3.0,
+        random_state=seed,
+        n_jobs=_xgboost_n_jobs(),
+        tree_method="hist",
+        early_stopping_rounds=40,
+    )
+
+
 def weights(y):
-    y=np.asarray(y,int); c=np.bincount(y,minlength=2).astype(float)
-    w=np.sqrt(len(y)/(2*np.maximum(c,1)))[y]
-    w=np.clip(w,.5,2.5); return w/w.mean()
+    y = np.asarray(y, int)
+    c = np.bincount(y, minlength=2).astype(float)
+    w = np.sqrt(len(y) / (2 * np.maximum(c, 1)))[y]
+    w = np.clip(w, 0.5, 2.5)
+    return w / w.mean()
+
+
 def attach(frame):
-    z=frame.copy(); floor=MIN_NET_BPS/10000
-    z["_long_y"]=(z[LONG_NET_RETURN_COLUMN].astype(float)>=floor).astype(int)
-    z["_short_y"]=(z[SHORT_NET_RETURN_COLUMN].astype(float)>=floor).astype(int)
+    z = frame.copy()
+    floor = MIN_NET_BPS / 10000
+    z["_long_y"] = (z[LONG_NET_RETURN_COLUMN].astype(float) >= floor).astype(int)
+    z["_short_y"] = (z[SHORT_NET_RETURN_COLUMN].astype(float) >= floor).astype(int)
     return z
-def fit_pair(train,seed):
-    train=attach(train)
-    fit,cal=_split_internal_early_stopping_tail(train,horizon_bars=H)
-    mods={}
-    for j,(side,target) in enumerate((("long","_long_y"),("short","_short_y"))):
-        m=model(seed+j); y=fit[target].to_numpy(int); ey=cal[target].to_numpy(int)
-        if len(np.unique(y))<2 or len(np.unique(ey))<2: raise ValueError("single class")
-        m.fit(fit[FEATURES],y,sample_weight=weights(y),
-              eval_set=[(cal[FEATURES],ey)],sample_weight_eval_set=[weights(ey)],
-              verbose=False); mods[side]=m
-    return mods,cal
-def score(frame,mods):
-    z=attach(frame)
-    pl=mods["long"].predict_proba(z[FEATURES])[:,1]
-    ps=mods["short"].predict_proba(z[FEATURES])[:,1]
-    z["_pl"]=pl; z["_ps"]=ps; z["_best"]=np.maximum(pl,ps)
-    z["_margin"]=np.abs(pl-ps); z["predicted_long"]=pl>=ps
-    z["selected_net_return"]=np.where(z["predicted_long"],
-        z[LONG_NET_RETURN_COLUMN],z[SHORT_NET_RETURN_COLUMN])
-    z["positive_probability"]=np.where(z["predicted_long"],pl,1-ps)
-    z["raw_positive_probability"]=z["positive_probability"]
-    z["direction_confidence"]=np.maximum(z["positive_probability"],1-z["positive_probability"])
-    z["opportunity_probability"]=z["_best"]; z["confidence"]=z["_best"]
+
+
+def fit_pair(train, seed):
+    train = attach(train)
+    fit, cal = _split_internal_early_stopping_tail(train, horizon_bars=H)
+    mods = {}
+    for j, (side, target) in enumerate((("long", "_long_y"), ("short", "_short_y"))):
+        m = model(seed + j)
+        y = fit[target].to_numpy(int)
+        ey = cal[target].to_numpy(int)
+        if len(np.unique(y)) < 2 or len(np.unique(ey)) < 2:
+            raise ValueError("single class")
+        m.fit(
+            fit[FEATURES],
+            y,
+            sample_weight=weights(y),
+            eval_set=[(cal[FEATURES], ey)],
+            sample_weight_eval_set=[weights(ey)],
+            verbose=False,
+        )
+        mods[side] = m
+    return mods, cal
+
+
+def score(frame, mods):
+    z = attach(frame)
+    pl = mods["long"].predict_proba(z[FEATURES])[:, 1]
+    ps = mods["short"].predict_proba(z[FEATURES])[:, 1]
+    z["_pl"] = pl
+    z["_ps"] = ps
+    z["_best"] = np.maximum(pl, ps)
+    z["_margin"] = np.abs(pl - ps)
+    z["predicted_long"] = pl >= ps
+    z["selected_net_return"] = np.where(
+        z["predicted_long"], z[LONG_NET_RETURN_COLUMN], z[SHORT_NET_RETURN_COLUMN]
+    )
+    z["positive_probability"] = np.where(z["predicted_long"], pl, 1 - ps)
+    z["raw_positive_probability"] = z["positive_probability"]
+    z["direction_confidence"] = np.maximum(z["positive_probability"], 1 - z["positive_probability"])
+    z["opportunity_probability"] = z["_best"]
+    z["confidence"] = z["_best"]
     return z
-def apply(z,pfloor,mfloor,cov_floor,spread_cap):
-    x=z.copy()
-    active=(x["_best"]>=pfloor)&(x["_margin"]>=mfloor)&(
-        x["quote_coverage_60s"]>=cov_floor)&(x["quote_spread_mean_bps_60s"]<=spread_cap)
-    x["active_trade"]=active; x["predicted_opportunity"]=active
-    x["decision_threshold"]=.5; x["confidence_floor"]=pfloor; x["fold"]=0
+
+
+def apply(z, pfloor, mfloor, cov_floor, spread_cap):
+    x = z.copy()
+    active = (
+        (x["_best"] >= pfloor)
+        & (x["_margin"] >= mfloor)
+        & (x["quote_coverage_60s"] >= cov_floor)
+        & (x["quote_spread_mean_bps_60s"] <= spread_cap)
+    )
+    x["active_trade"] = active
+    x["predicted_opportunity"] = active
+    x["decision_threshold"] = 0.5
+    x["confidence_floor"] = pfloor
+    x["fold"] = 0
     return x
+
+
 def density(x):
-    a=x[x.active_trade.astype(bool)].sort_values("decision_time")
-    if len(a)>1:
-        g=pd.to_datetime(a.decision_time,utc=True).diff().dropna().dt.total_seconds()/60
-        med=float(g.median())
-    else: med=None
-    return {"rows":len(x),"trades":len(a),"density":len(a)/len(x) if len(x) else 0,
-            "median_gap_minutes":med}
+    a = x[x.active_trade.astype(bool)].sort_values("decision_time")
+    if len(a) > 1:
+        g = pd.to_datetime(a.decision_time, utc=True).diff().dropna().dt.total_seconds() / 60
+        med = float(g.median())
+    else:
+        med = None
+    return {
+        "rows": len(x),
+        "trades": len(a),
+        "density": len(a) / len(x) if len(x) else 0,
+        "median_gap_minutes": med,
+    }
+
+
 def choose(cal):
-    spread_cap=float(cal["quote_spread_mean_bps_60s"].quantile(.90))
-    screened=[]
-    configs={}
-    for cov in (.25,.4,.55,.7):
-      for p in np.round(np.arange(.50,.711,.03),2):
-       for margin in (0,.03,.06,.10):
-        x=apply(cal,float(p),float(margin),float(cov),spread_cap)
-        den=density(x); a=x[x.active_trade.astype(bool)]
-        rr=a["selected_net_return"].astype(float)
-        gp=float(rr[rr>0].sum()); gl=float(-rr[rr<0].sum())
-        raw_pf=(gp/gl) if gl>0 else None
-        row={"p":float(p),"margin":float(margin),"coverage":float(cov),
-          "spread_cap":spread_cap,**den,"raw_pf":raw_pf,
-          "raw_return":float(rr.sum()),"eligible":False}
-        screened.append(row); configs[(float(p),float(margin),float(cov))]=x
-    shortlist=sorted(
-      [r for r in screened if r["trades"]>=20 and r["raw_pf"] is not None],
-      key=lambda r:(r["raw_pf"],r["raw_return"]),reverse=True)[:12]
-    evaluated=[]
+    spread_cap = float(cal["quote_spread_mean_bps_60s"].quantile(0.90))
+    screened = []
+    configs = {}
+    for cov in (0.25, 0.4, 0.55, 0.7):
+        for p in np.round(np.arange(0.50, 0.711, 0.03), 2):
+            for margin in (0, 0.03, 0.06, 0.10):
+                x = apply(cal, float(p), float(margin), float(cov), spread_cap)
+                den = density(x)
+                a = x[x.active_trade.astype(bool)]
+                rr = a["selected_net_return"].astype(float)
+                gp = float(rr[rr > 0].sum())
+                gl = float(-rr[rr < 0].sum())
+                raw_pf = (gp / gl) if gl > 0 else None
+                row = {
+                    "p": float(p),
+                    "margin": float(margin),
+                    "coverage": float(cov),
+                    "spread_cap": spread_cap,
+                    **den,
+                    "raw_pf": raw_pf,
+                    "raw_return": float(rr.sum()),
+                    "eligible": False,
+                }
+                screened.append(row)
+                configs[(float(p), float(margin), float(cov))] = x
+    shortlist = sorted(
+        [r for r in screened if r["trades"] >= 20 and r["raw_pf"] is not None],
+        key=lambda r: (r["raw_pf"], r["raw_return"]),
+        reverse=True,
+    )[:12]
+    evaluated = []
     for row in shortlist:
-      x=configs[(row["p"],row["margin"],row["coverage"])]
-      s=_summarize_predictions(x,horizon_bars=H,confidence_threshold=.60)["trading"]
-      pf=s["profit_factor"]
-      row={**row,"pf":pf,"sharpe":s["sharpe_ratio"],"return":s["total_return"],
-        "periods":s["non_overlapping_periods"]}
-      row["eligible"]=bool(row["periods"]>=20 and pf is not None and np.isfinite(pf)
-        and pf>=1.15 and s["sharpe_ratio"] is not None and s["sharpe_ratio"]>=.5
-        and s["total_return"]>0)
-      evaluated.append(row)
-    good=[r for r in evaluated if r["eligible"]]
+        x = configs[(row["p"], row["margin"], row["coverage"])]
+        s = _summarize_predictions(x, horizon_bars=H, confidence_threshold=0.60)["trading"]
+        pf = s["profit_factor"]
+        row = {
+            **row,
+            "pf": pf,
+            "sharpe": s["sharpe_ratio"],
+            "return": s["total_return"],
+            "periods": s["non_overlapping_periods"],
+        }
+        row["eligible"] = bool(
+            row["periods"] >= 20
+            and pf is not None
+            and np.isfinite(pf)
+            and pf >= 1.15
+            and s["sharpe_ratio"] is not None
+            and s["sharpe_ratio"] >= 0.5
+            and s["total_return"] > 0
+        )
+        evaluated.append(row)
+    good = [r for r in evaluated if r["eligible"]]
     if good:
-      chosen=max(good,key=lambda r:(r["pf"],r["sharpe"],r["trades"]))
-      return chosen,True,evaluated
+        chosen = max(good, key=lambda r: (r["pf"], r["sharpe"], r["trades"]))
+        return chosen, True, evaluated
     if evaluated:
-      return max(evaluated,key=lambda r:(r["pf"] if r["pf"] is not None else -99)),False,evaluated
-    return max(screened,key=lambda r:(r["raw_pf"] if r["raw_pf"] is not None else -99)),False,screened
+        return (
+            max(evaluated, key=lambda r: r["pf"] if r["pf"] is not None else -99),
+            False,
+            evaluated,
+        )
+    return (
+        max(screened, key=lambda r: r["raw_pf"] if r["raw_pf"] is not None else -99),
+        False,
+        screened,
+    )
+
+
 def pair_pf(x):
-    a=x[x.active_trade.astype(bool)]
-    if a.empty:return {}
-    out={}
-    for p,g in a.groupby("instrument"):
-        r=g.selected_net_return.astype(float); gp=r[r>0].sum(); gl=-r[r<0].sum()
-        out[p]={"n":len(g),"pf":float(gp/gl) if gl>0 else None,"return":float(r.sum())}
+    a = x[x.active_trade.astype(bool)]
+    if a.empty:
+        return {}
+    out = {}
+    for p, g in a.groupby("instrument"):
+        r = g.selected_net_return.astype(float)
+        gp = r[r > 0].sum()
+        gl = -r[r < 0].sum()
+        out[p] = {"n": len(g), "pf": float(gp / gl) if gl > 0 else None, "return": float(r.sum())}
     return out
-def run(corpus_dir,quote_dirs,output,max_splits=1):
-    datasets={p:corpus_dir/f"{p}_MTF.csv" for p in PAIRS}
-    pool,_=load_and_prepare_corpora(datasets,horizon_bars=H,min_net_return_bps=0,
-        commission_bps=0,slippage_bps=EXTRA_SLIPPAGE_BPS)
-    q=[]
+
+
+def run(corpus_dir, quote_dirs, output, max_splits=1):
+    datasets = {p: corpus_dir / f"{p}_MTF.csv" for p in PAIRS}
+    pool, _ = load_and_prepare_corpora(
+        datasets,
+        horizon_bars=H,
+        min_net_return_bps=0,
+        commission_bps=0,
+        slippage_bps=EXTRA_SLIPPAGE_BPS,
+    )
+    q = []
     for p in PAIRS:
-        root=quote_dirs[0] if p in ("AUDUSD","EURUSD","GBPUSD") else quote_dirs[1]
-        z=pd.read_csv(root/f"{p}_1S_M1_BOUNDARY.csv")
-        z["decision_time"]=pd.to_datetime(z.decision_time,utc=True); q.append(z)
-    quotes=pd.concat(q,ignore_index=True)
-    pool["decision_time"]=pd.to_datetime(pool.decision_time,utc=True)
-    joined=pool.merge(quotes,on=["decision_time","instrument"],how="inner",validate="one_to_one")
-    joined=joined.dropna(subset=FEATURES).sort_values("decision_time").reset_index(drop=True)
-    periods=joined.decision_time.nunique()
-    splits=list(iter_purged_walk_forward_time_splits(joined,time_column="decision_time",
-      min_train_periods=max(400,int(periods*.6)),validation_periods=max(150,int(periods*.12)),
-      purge_periods=H,embargo_periods=H,max_splits=max_splits))
-    folds=[]; allpred=[]
-    for fi,(train,valid) in enumerate(splits,1):
-      mods={}; pair_policy={}; pair_calibration={}
-      for ix,p in enumerate(PAIRS):
-        tr=train[train.instrument==p].sort_values("decision_time")
-        m,cal=fit_pair(tr,7500+fi*100+ix*10); mods[p]=m
-        scored=score(cal,m)
-        chosen,passed,candidates=choose(scored)
-        pair_policy[p]=chosen if passed else None
-        pair_calibration[p]={"passed":passed,"chosen":chosen,
-          "top":sorted(candidates,key=lambda r:(r["eligible"],r["pf"] or -99),reverse=True)[:8]}
-      vs=[]
-      for p in PAIRS:
-        v=valid[valid.instrument==p].sort_values("decision_time")
-        if not len(v): continue
-        base=score(v,mods[p]); pol=pair_policy[p]
-        if pol is None:
-          base["active_trade"]=False; base["predicted_opportunity"]=False
-          base["decision_threshold"]=.5; base["confidence_floor"]=1.0; base["fold"]=fi
-          vs.append(base)
-        else:
-          x=apply(base,pol["p"],pol["margin"],pol["coverage"],pol["spread_cap"]); x["fold"]=fi; vs.append(x)
-      pred=pd.concat(vs).sort_values("decision_time")
-      summ=_summarize_predictions(pred,horizon_bars=H,confidence_threshold=.60)
-      enabled=[p for p,v in pair_policy.items() if v is not None]
-      row={"fold":fi,"calibration_passed":len(enabled)>0,"enabled_pairs":enabled,
-           "pair_policy":pair_policy,"pair_calibration":pair_calibration,
-           "density":density(pred),"pair_results":pair_pf(pred),
-           "classification":summ["classification"],"trading":summ["trading"]}
-      print(json.dumps(row,indent=2),flush=True); folds.append(row); allpred.append(pred)
-    combined=pd.concat(allpred,ignore_index=True)
-    overall=_summarize_predictions(combined,horizon_bars=H,confidence_threshold=.60)
-    report={"experiment":"v75_quote_pair_sleeve_router","rows":len(joined),
-      "features":FEATURES,"sealed_future_holdout_touched":False,
-      "extra_slippage_bps":EXTRA_SLIPPAGE_BPS,"folds":folds,
-      "density":density(combined),"pair_results":pair_pf(combined),"overall":overall}
-    output.parent.mkdir(parents=True,exist_ok=True); output.write_text(json.dumps(report,indent=2,default=str))
+        root = quote_dirs[0] if p in ("AUDUSD", "EURUSD", "GBPUSD") else quote_dirs[1]
+        z = pd.read_csv(root / f"{p}_1S_M1_BOUNDARY.csv")
+        z["decision_time"] = pd.to_datetime(z.decision_time, utc=True)
+        q.append(z)
+    quotes = pd.concat(q, ignore_index=True)
+    pool["decision_time"] = pd.to_datetime(pool.decision_time, utc=True)
+    joined = pool.merge(
+        quotes, on=["decision_time", "instrument"], how="inner", validate="one_to_one"
+    )
+    joined = joined.dropna(subset=FEATURES).sort_values("decision_time").reset_index(drop=True)
+    periods = joined.decision_time.nunique()
+    splits = list(
+        iter_purged_walk_forward_time_splits(
+            joined,
+            time_column="decision_time",
+            min_train_periods=max(400, int(periods * 0.6)),
+            validation_periods=max(150, int(periods * 0.12)),
+            purge_periods=H,
+            embargo_periods=H,
+            max_splits=max_splits,
+        )
+    )
+    folds = []
+    allpred = []
+    for fi, (train, valid) in enumerate(splits, 1):
+        mods = {}
+        pair_policy = {}
+        pair_calibration = {}
+        for ix, p in enumerate(PAIRS):
+            tr = train[train.instrument == p].sort_values("decision_time")
+            m, cal = fit_pair(tr, 7500 + fi * 100 + ix * 10)
+            mods[p] = m
+            scored = score(cal, m)
+            chosen, passed, candidates = choose(scored)
+            pair_policy[p] = chosen if passed else None
+            pair_calibration[p] = {
+                "passed": passed,
+                "chosen": chosen,
+                "top": sorted(
+                    candidates, key=lambda r: (r["eligible"], r["pf"] or -99), reverse=True
+                )[:8],
+            }
+        vs = []
+        for p in PAIRS:
+            v = valid[valid.instrument == p].sort_values("decision_time")
+            if not len(v):
+                continue
+            base = score(v, mods[p])
+            pol = pair_policy[p]
+            if pol is None:
+                base["active_trade"] = False
+                base["predicted_opportunity"] = False
+                base["decision_threshold"] = 0.5
+                base["confidence_floor"] = 1.0
+                base["fold"] = fi
+                vs.append(base)
+            else:
+                x = apply(base, pol["p"], pol["margin"], pol["coverage"], pol["spread_cap"])
+                x["fold"] = fi
+                vs.append(x)
+        pred = pd.concat(vs).sort_values("decision_time")
+        summ = _summarize_predictions(pred, horizon_bars=H, confidence_threshold=0.60)
+        enabled = [p for p, v in pair_policy.items() if v is not None]
+        row = {
+            "fold": fi,
+            "calibration_passed": len(enabled) > 0,
+            "enabled_pairs": enabled,
+            "pair_policy": pair_policy,
+            "pair_calibration": pair_calibration,
+            "density": density(pred),
+            "pair_results": pair_pf(pred),
+            "classification": summ["classification"],
+            "trading": summ["trading"],
+        }
+        print(json.dumps(row, indent=2), flush=True)
+        folds.append(row)
+        allpred.append(pred)
+    combined = pd.concat(allpred, ignore_index=True)
+    overall = _summarize_predictions(combined, horizon_bars=H, confidence_threshold=0.60)
+    report = {
+        "experiment": "v75_quote_pair_sleeve_router",
+        "rows": len(joined),
+        "features": FEATURES,
+        "sealed_future_holdout_touched": False,
+        "extra_slippage_bps": EXTRA_SLIPPAGE_BPS,
+        "folds": folds,
+        "density": density(combined),
+        "pair_results": pair_pf(combined),
+        "overall": overall,
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(report, indent=2, default=str))
     return report
-if __name__=="__main__":
-    ap=argparse.ArgumentParser(); ap.add_argument("--corpus-dir",type=Path,required=True)
-    ap.add_argument("--quote-a",type=Path,required=True); ap.add_argument("--quote-b",type=Path,required=True)
-    ap.add_argument("--output",type=Path,required=True); ap.add_argument("--max-splits",type=int,default=1)
-    a=ap.parse_args(); r=run(a.corpus_dir,(a.quote_a,a.quote_b),a.output,a.max_splits)
-    print(json.dumps({"density":r["density"],"pair_results":r["pair_results"],
-      "trading":r["overall"]["trading"]},indent=2,default=str))
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--corpus-dir", type=Path, required=True)
+    ap.add_argument("--quote-a", type=Path, required=True)
+    ap.add_argument("--quote-b", type=Path, required=True)
+    ap.add_argument("--output", type=Path, required=True)
+    ap.add_argument("--max-splits", type=int, default=1)
+    a = ap.parse_args()
+    r = run(a.corpus_dir, (a.quote_a, a.quote_b), a.output, a.max_splits)
+    print(
+        json.dumps(
+            {
+                "density": r["density"],
+                "pair_results": r["pair_results"],
+                "trading": r["overall"]["trading"],
+            },
+            indent=2,
+            default=str,
+        )
+    )

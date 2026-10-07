@@ -29,7 +29,7 @@ from app.domain.models.multitimeframe_features import (
     build_multitimeframe_runtime_features,
 )
 from app.domain.models.registry import ModelRegistry
-from app.domain.signals.confidence import get_threshold, is_above_threshold
+from app.domain.signals.confidence import get_threshold
 from app.domain.signals.explainability import build_explainability_metadata
 from app.domain.signals.schemas import (
     AiSignalCandidate,

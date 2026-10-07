@@ -12,12 +12,12 @@ from app.core.security import validate_internal_api_key
 from app.domain.market_data.ohlcv_service import OHLCVService
 from app.domain.market_data.redis_cache import OHLCVRedisCache
 from app.domain.models.high_conviction_challenger import PlanBV4HighConvictionChallenger
-from app.domain.models.post_entry_protection_challenger import (
-    PlanBV85PostEntryProtectionChallenger,
-)
 from app.domain.models.multitimeframe_features import (
     RUNTIME_TIMEFRAMES,
     build_multitimeframe_runtime_features,
+)
+from app.domain.models.post_entry_protection_challenger import (
+    PlanBV85PostEntryProtectionChallenger,
 )
 from app.domain.models.registry import ModelRegistry
 
