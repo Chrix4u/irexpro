@@ -409,4 +409,3 @@ async def score_plan_b_v85_broker_checkpoint(
             "checkpoint_at": checkpoint_at.isoformat(),
             "score": None,
         }
-
