@@ -771,7 +771,11 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
   }
 
   private currentTime(): Date {
-    if (this.isLiveMarketMode()) return this.liveMarketData!.now(this._connectionId);
+    // Live PAPER order/position lifecycle timestamps are real execution events,
+    // not market-evidence timestamps. Closed-M5 quotes remain authoritative for
+    // fill prices and model evidence, while quote/candle timestamps separately
+    // govern whether a protection observation occurred before or after a fill.
+    if (this.isLiveMarketMode()) return new Date();
     return this._replayFeed ? this._replayFeed.now() : this._clock.now();
   }
 
@@ -1989,9 +1993,12 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     for (const position of Array.from(this._positions.values())) {
       if (position.instrument !== symbol) continue;
       for (const candle of candles) {
-        // Candle timestamps are bar-open times; only bars that CLOSED after
-        // the fill can contain post-entry price action.
+        // Candle timestamps are bar-open times. A candle that began before
+        // the fill contains an unknowable mix of pre/post-entry movement, so
+        // its OHLC cannot causally trigger protection. Only fully post-entry
+        // bars may drive the closed-candle SL/TP recovery path.
         const candleClosedAt = new Date(candle.timestamp.getTime() + 5 * 60_000);
+        if (candle.timestamp.getTime() < position.openedAt.getTime()) continue;
         if (candleClosedAt.getTime() <= position.openedAt.getTime()) continue;
         if (
           position.pathLastCandleClosedAt !== null &&
@@ -2117,6 +2124,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
             position.lotSize,
             position.stopLoss,
             'SL',
+            observedAt,
           );
           continue;
         }
@@ -2130,6 +2138,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
             position.lotSize,
             position.takeProfit,
             'TP',
+            observedAt,
           );
         }
       } else {
@@ -2143,6 +2152,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
             position.lotSize,
             position.stopLoss,
             'SL',
+            observedAt,
           );
           continue;
         }
@@ -2156,6 +2166,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
             position.lotSize,
             position.takeProfit,
             'TP',
+            observedAt,
           );
         }
       }

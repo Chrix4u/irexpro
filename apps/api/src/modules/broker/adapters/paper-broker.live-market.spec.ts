@@ -30,9 +30,12 @@ function series(base: number, digits: number) {
 
 function protectionBars(options?: { high?: number; low?: number; close?: number }) {
   const floor = Math.floor(Date.now() / 300000) * 300000;
-  const firstOpen = floor - 15 * 60_000;
-  const secondOpen = floor - 10 * 60_000;
-  const thirdOpen = floor - 5 * 60_000;
+  // Initial evidence ends at the current M5 boundary. The advanced fixture
+  // starts at the next boundary so its OHLC is fully post-fill for live orders
+  // created inside the current M5 window.
+  const firstOpen = floor - 10 * 60_000;
+  const secondOpen = floor - 5 * 60_000;
+  const thirdOpen = floor + 5 * 60_000;
   const row = (timestamp: number, open: number, high: number, low: number, close: number) => ({
     timestamp: new Date(timestamp),
     open: open.toFixed(5),
@@ -255,6 +258,125 @@ describe('PaperBrokerAdapter — scoped VPS live market mode', () => {
     expect(closed).toHaveLength(1);
     expect(closed[0]!.closeReason).toBe('SL');
     expect(closed[0]!.closePrice).toBe('1.09900');
+  });
+
+  it('ignores a fresh provider mark observed before the live PAPER position was actually filled', async () => {
+    const live = new LivePaperMarketDataService();
+    live.registerLiveConnection('conn-causal-fill');
+    const bars = protectionBars();
+    live.updateClosedCandles('EURUSD', bars.initial, 'conn-causal-fill');
+
+    // This broker mark is fresh enough to be protection-authoritative, but it
+    // was observed BEFORE the order below exists. Its bid is below the future
+    // stop, so treating the stale M5 evidence clock as the fill time would
+    // incorrectly stop the position immediately.
+    const preFillObservedAt = new Date(Date.now() - 2_000);
+    live.updateProviderQuote('EURUSD', '1.09890', '1.09900', preFillObservedAt, 'conn-causal-fill');
+
+    const adapter = new PaperBrokerAdapter(
+      undefined,
+      undefined,
+      undefined,
+      'conn-causal-fill',
+      live,
+    );
+    await adapter.connect({} as any);
+    await adapter.placeOrder({
+      idempotencyKey: 'causal-fill-buy',
+      instrument: 'EURUSD',
+      direction: 'BUY',
+      lotSize: '0.01',
+      stopLoss: '1.09900',
+      takeProfit: '1.10100',
+      orderKind: 'MARKET',
+    });
+
+    const positions = await adapter.getOpenPositions();
+    expect(positions).toHaveLength(1);
+    expect(positions[0]!.openedAt.getTime()).toBeGreaterThan(preFillObservedAt.getTime());
+  });
+
+  it('timestamps fast provider protection at the causal quote observation time', async () => {
+    const live = new LivePaperMarketDataService();
+    live.registerLiveConnection('conn-causal-close');
+    const bars = protectionBars();
+    live.updateClosedCandles('EURUSD', bars.initial, 'conn-causal-close');
+
+    const adapter = new PaperBrokerAdapter(
+      undefined,
+      undefined,
+      undefined,
+      'conn-causal-close',
+      live,
+    );
+    await adapter.connect({} as any);
+    await adapter.placeOrder({
+      idempotencyKey: 'causal-close-buy',
+      instrument: 'EURUSD',
+      direction: 'BUY',
+      lotSize: '0.01',
+      stopLoss: '1.09900',
+      takeProfit: '1.10100',
+      orderKind: 'MARKET',
+    });
+
+    const [opened] = await adapter.getOpenPositions();
+    expect(opened).toBeDefined();
+    // Make the protection observation deterministically later than the fill.
+    // The live-mark freshness path accepts up to 5s of positive clock skew.
+    const observedAt = new Date(opened!.openedAt.getTime() + 1_000);
+    live.updateProviderQuote('EURUSD', '1.09890', '1.09900', observedAt, 'conn-causal-close');
+
+    expect(await adapter.getOpenPositions()).toHaveLength(0);
+    const closed = await adapter.getClosedTrades(new Date(0), new Date(Date.now() + 60 * 60_000));
+    expect(closed).toHaveLength(1);
+    expect(closed[0]!.closedAt.toISOString()).toBe(observedAt.toISOString());
+    expect(closed[0]!.closedAt.getTime()).toBeGreaterThanOrEqual(opened!.openedAt.getTime());
+  });
+
+  it('ignores a closed M5 candle that started before the live PAPER fill', async () => {
+    const live = new LivePaperMarketDataService();
+    const connectionId = 'conn-straddling-candle';
+    live.registerLiveConnection(connectionId);
+    const floor = Math.floor(Date.now() / 300000) * 300000;
+    const row = (timestamp: number, high: number, low: number, close: number) => ({
+      timestamp: new Date(timestamp),
+      open: '1.10000',
+      high: high.toFixed(5),
+      low: low.toFixed(5),
+      close: close.toFixed(5),
+    });
+
+    live.updateClosedCandles(
+      'EURUSD',
+      [row(floor - 10 * 60_000, 1.1002, 1.0998, 1.1), row(floor - 5 * 60_000, 1.1002, 1.0998, 1.1)],
+      connectionId,
+    );
+    const adapter = new PaperBrokerAdapter(undefined, undefined, undefined, connectionId, live);
+    await adapter.connect({} as any);
+    await adapter.placeOrder({
+      idempotencyKey: 'straddling-candle-buy',
+      instrument: 'EURUSD',
+      direction: 'BUY',
+      lotSize: '0.01',
+      stopLoss: '1.09900',
+      takeProfit: '1.10100',
+      orderKind: 'MARKET',
+    });
+    const [opened] = await adapter.getOpenPositions();
+    expect(opened).toBeDefined();
+    expect(opened!.openedAt.getTime()).toBeGreaterThan(floor);
+
+    // This newly closed bar began before the fill. Its pre/post-fill path is
+    // unknowable from OHLC alone, so its target touch cannot be causal evidence.
+    live.updateClosedCandles(
+      'EURUSD',
+      [row(floor - 5 * 60_000, 1.1002, 1.0998, 1.1), row(floor, 1.1012, 1.0996, 1.1002)],
+      connectionId,
+    );
+    await adapter.getCurrentPrice('EURUSD');
+
+    expect(await adapter.getOpenPositions()).toHaveLength(1);
   });
 
   it('allows multiple distinct positions on the same instrument in both directions', async () => {
