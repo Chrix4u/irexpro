@@ -1,7 +1,4 @@
-import {
-  calculateHighWaterMarkFee,
-  computeFeeAmount,
-} from './performance-fee-calculation';
+import { calculateHighWaterMarkFee, computeFeeAmount } from './performance-fee-calculation';
 
 describe('performance fee calculation', () => {
   it('calculates the same 20% fee used by the LIVE engine', () => {

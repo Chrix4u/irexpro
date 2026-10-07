@@ -57,9 +57,7 @@ describe('ExternalSignalPerformanceService', () => {
     );
     expect(report.executionAuthority).toBe('PAPER_ONLY');
     expect(report.strategyIdentity.evidenceIsolationApplied).toBe(true);
-    expect(report.strategyIdentity.modelVersion).toBe(
-      'external-provider/provider-a/paper-only-v1',
-    );
+    expect(report.strategyIdentity.modelVersion).toBe('external-provider/provider-a/paper-only-v1');
     expect(report.demoReviewEligible).toBe(false);
     expect(report.automaticDemoPromotion).toBe(false);
     expect(report.automaticLivePromotion).toBe(false);
@@ -346,19 +344,14 @@ describe('ExternalSignalPerformanceService', () => {
         .fn()
         .mockImplementation((sql: string) =>
           Promise.resolve(
-            sql.includes('broker.broker_account_snapshots')
-              ? strongEquitySnapshots()
-              : legacyRows,
+            sql.includes('broker.broker_account_snapshots') ? strongEquitySnapshots() : legacyRows,
           ),
         ),
     } as unknown as DataSource;
 
     const legacyReport = await new ExternalSignalPerformanceService(
       dataSourceLegacy,
-    ).getProviderPerformance(
-      'user-1',
-      'vps-twelvedata-six-pair-v7',
-    );
+    ).getProviderPerformance('user-1', 'vps-twelvedata-six-pair-v7');
 
     expect(legacyReport.observed.closedTrades).toBe(120);
     expect(legacyReport.strategyIdentity.marketDataAuthority).toBe(
@@ -370,9 +363,7 @@ describe('ExternalSignalPerformanceService', () => {
     const conflictingRows = strongEvidenceRows().map((row, index) => ({
       ...row,
       market_data_authority:
-        index === 119
-          ? 'BROKER_NATIVE_METAAPI'
-          : 'PAPER_RESEARCH_EXTERNAL_TWELVE_DATA',
+        index === 119 ? 'BROKER_NATIVE_METAAPI' : 'PAPER_RESEARCH_EXTERNAL_TWELVE_DATA',
     }));
     const dataSourceConflict = {
       query: jest
@@ -388,18 +379,12 @@ describe('ExternalSignalPerformanceService', () => {
 
     const conflictReport = await new ExternalSignalPerformanceService(
       dataSourceConflict,
-    ).getProviderPerformance(
-      'user-1',
-      'vps-twelvedata-six-pair-v7',
-    );
+    ).getProviderPerformance('user-1', 'vps-twelvedata-six-pair-v7');
 
     expect(conflictReport.checks.evidenceCohortIntegrity).toBe(false);
     expect(conflictReport.demoReviewEligible).toBe(false);
     expect(conflictReport.strategyIdentity.observedMarketDataAuthorities).toEqual(
-      expect.arrayContaining([
-        'PAPER_RESEARCH_EXTERNAL_TWELVE_DATA',
-        'BROKER_NATIVE_METAAPI',
-      ]),
+      expect.arrayContaining(['PAPER_RESEARCH_EXTERNAL_TWELVE_DATA', 'BROKER_NATIVE_METAAPI']),
     );
   });
 
@@ -420,16 +405,15 @@ describe('ExternalSignalPerformanceService', () => {
         .fn()
         .mockImplementation((sql: string) =>
           Promise.resolve(
-            sql.includes('broker.broker_account_snapshots')
-              ? strongEquitySnapshots()
-              : rows,
+            sql.includes('broker.broker_account_snapshots') ? strongEquitySnapshots() : rows,
           ),
         ),
     } as unknown as DataSource;
 
-    const report = await new ExternalSignalPerformanceService(
-      dataSource,
-    ).getProviderPerformance('user-1', 'provider-a');
+    const report = await new ExternalSignalPerformanceService(dataSource).getProviderPerformance(
+      'user-1',
+      'provider-a',
+    );
 
     expect(report.v8ProspectiveShadow.modifiesExecution).toBe(false);
     expect(report.v8ProspectiveShadow.qualificationEvidence).toBe(false);
@@ -440,9 +424,7 @@ describe('ExternalSignalPerformanceService', () => {
     expect(report.v8ProspectiveShadow.rejectedClosedTrades).toBe(5);
     expect(report.v8ProspectiveShadow.rejectedRealisedPnl).toBeDefined();
     expect(report.v8ProspectiveShadow.admissionThreshold).toBe(0.46);
-    expect(report.v8ProspectiveShadow.nextStage).toBe(
-      'COLLECTING_PROSPECTIVE_SHADOW',
-    );
+    expect(report.v8ProspectiveShadow.nextStage).toBe('COLLECTING_PROSPECTIVE_SHADOW');
   });
 
   it('scopes the SQL query to the exact user and provider code', async () => {

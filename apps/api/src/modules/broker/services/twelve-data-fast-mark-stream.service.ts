@@ -152,9 +152,7 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
         this.logger.warn(
           `Fast-mark entitlement rejected ${this.preferredProviderSymbol}; falling back to EUR/USD`,
         );
-        this.socket.send(
-          JSON.stringify({ action: 'subscribe', params: { symbols: 'EUR/USD' } }),
-        );
+        this.socket.send(JSON.stringify({ action: 'subscribe', params: { symbols: 'EUR/USD' } }));
       }
       return;
     }
@@ -169,15 +167,8 @@ export class TwelveDataFastMarkStreamService implements OnModuleInit, OnModuleDe
         ? new Date(epochSeconds * 1000)
         : new Date();
     try {
-      const connectionId = this.config
-        .get<string>('vpsForexScanner.brokerConnectionId', '')
-        .trim();
-      this.market.updateStreamingMidQuote(
-        instrument,
-        price,
-        observedAt,
-        connectionId || undefined,
-      );
+      const connectionId = this.config.get<string>('vpsForexScanner.brokerConnectionId', '').trim();
+      this.market.updateStreamingMidQuote(instrument, price, observedAt, connectionId || undefined);
     } catch (error) {
       this.logger.warn(`Rejected fast mark for ${instrument}: ${(error as Error).message}`);
       return;

@@ -491,6 +491,7 @@ class ScheduledSessionJobStub:
     user_id = "user-1"
     trading_session_id = "session-1"
     broker_connection_id = "conn-1"
+    market_data_connection_id = None
     timeframe = "H1"
     source = "mock"
     last_publish_failed = False
@@ -500,12 +501,15 @@ class ScheduledSessionJobStub:
     last_confidence_at = None
     market_data_revisions = {}
     last_market_data_at = None
+    last_market_data_close = None
     model_version = None
     model_mode = None
     model_loaded = None
     market_data_cache_bypassed = False
     research_uat = False
+    workflow_probe_enabled = True
     replay_steps_per_cycle = 1
+    confidence_threshold_override = None
     replay_steps_last_cycle = 0
     replay_steps_total = 0
     signals_published_total = 0
@@ -544,6 +548,7 @@ async def test_unchanged_market_revision_suppresses_duplicate_signal_publish():
         model_mode="heuristic_placeholder",
         model_loaded=False,
         market_data_last_candle_at="2026-09-19T15:00:00Z",
+        market_data_last_close="1.1000",
         market_data_revision="same-market-revision",
         market_data_cache_bypassed=True,
     )
@@ -625,6 +630,7 @@ async def test_research_uat_closes_successful_trade_at_exact_model_horizon():
         model_mode="trained_xgboost_mtf",
         model_loaded=True,
         market_data_last_candle_at="2026-09-28T08:01:00Z",
+        market_data_last_close="156.8795",
         market_data_revision="entry-revision",
         market_data_cache_bypassed=True,
     )
@@ -633,6 +639,7 @@ async def test_research_uat_closes_successful_trade_at_exact_model_horizon():
         model_mode="trained_xgboost_mtf",
         model_loaded=True,
         market_data_last_candle_at="2026-09-28T08:02:00Z",
+        market_data_last_close="156.9000",
         market_data_revision="next-revision",
         market_data_cache_bypassed=True,
     )

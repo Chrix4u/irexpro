@@ -46,11 +46,7 @@ export class AdminSystemController {
         supportedCountries: [...provider.supportedCountries],
       }),
     );
-    const emailReady = Boolean(
-      smtpUrl.trim() &&
-        emailFrom.trim() &&
-        webBaseUrl.trim(),
-    );
+    const emailReady = Boolean(smtpUrl.trim() && emailFrom.trim() && webBaseUrl.trim());
     const mfaReady = this.usableSecret(mfaKey, 32) && this.usableSecret(verificationPepper, 32);
     const smsReady = smsProviders.some((provider) => provider.live);
 

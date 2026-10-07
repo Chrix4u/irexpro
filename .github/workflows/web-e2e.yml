@@ -55,6 +55,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Verify exact candidate checkout
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
       - name: Detect affected app
         id: scope
         shell: bash

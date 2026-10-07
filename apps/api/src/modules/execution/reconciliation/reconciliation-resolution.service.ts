@@ -127,8 +127,7 @@ export class ReconciliationResolutionService {
               maxAdversePnl: pathDiagnostics.maxAdversePnl,
               profitGiveback: pathDiagnostics.profitGiveback,
               observationCount: pathDiagnostics.observationCount,
-              sameBarProtectionAmbiguityCount:
-                pathDiagnostics.sameBarProtectionAmbiguityCount,
+              sameBarProtectionAmbiguityCount: pathDiagnostics.sameBarProtectionAmbiguityCount,
               lastSameBarProtectionAmbiguityAt:
                 pathDiagnostics.lastSameBarProtectionAmbiguityAt?.toISOString() ?? null,
               peakObservedAt: pathDiagnostics.peakObservedAt?.toISOString() ?? null,

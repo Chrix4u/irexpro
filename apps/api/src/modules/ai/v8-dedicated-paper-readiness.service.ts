@@ -32,9 +32,7 @@ export class V8DedicatedPaperReadinessService {
     const targetConnectionId = this.config
       .get<string>('v8DedicatedPaper.paperConnectionId', '')
       .trim();
-    const v7ConnectionId = this.config
-      .get<string>('vpsForexScanner.brokerConnectionId', '')
-      .trim();
+    const v7ConnectionId = this.config.get<string>('vpsForexScanner.brokerConnectionId', '').trim();
     const digest = this.config.get<string>('v8DedicatedPaper.artifactDigest', '').trim();
     const digestPresent = /^sha256:[0-9a-f]{64}$/i.test(digest);
     const configured = Boolean(userId && targetConnectionId && requestingUserId === userId);
@@ -61,8 +59,8 @@ export class V8DedicatedPaperReadinessService {
       const session = await this.executionService.getActiveSession(userId);
       activeTargetSession = Boolean(
         session &&
-          session.executionMode === ExecutionMode.PAPER_ONLY &&
-          session.brokerConnectionId === targetConnectionId,
+        session.executionMode === ExecutionMode.PAPER_ONLY &&
+        session.brokerConnectionId === targetConnectionId,
       );
     }
 

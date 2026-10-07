@@ -287,12 +287,20 @@ describe('BrokerService authorization transitions — real PostgreSQL concurrenc
     // transition; concurrently a revoke lands.
     adapter.connect.mockRejectedValue(new Error('provider down'));
 
-    const [healthResult] = await Promise.all([
+    const [healthResult, revokeResult] = await Promise.allSettled([
       service.healthCheck(LIVE_CONN),
       service.revokeAuthorization(LIVE_CONN, USER),
     ]);
 
-    expect(healthResult).toBe(false); // the health check itself failed
+    expect(healthResult.status).toBe('fulfilled');
+    if (healthResult.status === 'fulfilled') {
+      expect(healthResult.value).toBe(false); // the health check itself failed
+    }
+    if (revokeResult.status === 'rejected') {
+      // SUSPENDED won the guarded write. The stale revoke must fail closed
+      // instead of overwriting the authoritative concurrent state.
+      expect(revokeResult.reason).toBeInstanceOf(ConflictException);
+    }
 
     const row = await freshRow();
     // Whichever transition won, the state is EXACTLY one of the two — never

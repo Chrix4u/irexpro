@@ -11,10 +11,7 @@ export interface HighWaterMarkCalculationResult {
   feeAmountMinor: string;
 }
 
-export function computeFeeAmount(
-  profitMinorUnits: string,
-  feePercent: string,
-): string {
+export function computeFeeAmount(profitMinorUnits: string, feePercent: string): string {
   const profit = BigInt(profitMinorUnits);
   if (profit <= 0n) return '0';
 
@@ -38,9 +35,6 @@ export function calculateHighWaterMarkFee(
     cumulativeRealisedMinor: cumulativeRealised.toString(),
     startingHighWaterMarkMinor: startingHighWaterMark.toString(),
     realisedProfitForFeeMinor: realisedProfitForFee.toString(),
-    feeAmountMinor: computeFeeAmount(
-      realisedProfitForFee.toString(),
-      input.feePercent,
-    ),
+    feeAmountMinor: computeFeeAmount(realisedProfitForFee.toString(), input.feePercent),
   };
 }

@@ -1,8 +1,4 @@
-import {
-  BadRequestException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { BrokerConnection } from '../../broker/entities/broker-connection.entity';
@@ -79,10 +75,7 @@ export class PerformanceFeeSimulationService {
     }
     return { mode: 'TEST_ONLY', paymentEnabled: false, accounts };
   }
-  async refresh(
-    userId: string,
-    brokerConnectionId: string,
-  ): Promise<SimulationSnapshot> {
+  async refresh(userId: string, brokerConnectionId: string): Promise<SimulationSnapshot> {
     const connection = await this.requireDemoConnection(userId, brokerConnectionId);
     const before = await this.buildSnapshot(userId, connection);
 
@@ -131,18 +124,14 @@ export class PerformanceFeeSimulationService {
         policyName: before.policy.name,
         billingFrequency: before.policy.billingFrequency,
         calculationMode: before.policy.calculationMode,
-        note:
-          'PAPER/DEMO fee simulation only. No payment transaction or real debt is created.',
+        note: 'PAPER/DEMO fee simulation only. No payment transaction or real debt is created.',
       },
     });
     await this.chargeRepo.save(charge);
     return this.buildSnapshot(userId, connection);
   }
 
-  async settleTestCharge(
-    userId: string,
-    chargeId: string,
-  ): Promise<SimulationSnapshot> {
+  async settleTestCharge(userId: string, chargeId: string): Promise<SimulationSnapshot> {
     const charge = await this.chargeRepo.findOne({ where: { id: chargeId, userId } });
     if (!charge) throw new NotFoundException('Simulation charge not found');
     if (charge.status !== SimulationChargeStatus.DUE_TEST) {
@@ -242,8 +231,7 @@ export class PerformanceFeeSimulationService {
     const state = await this.stateRepo.findOne({
       where: { userId, brokerConnectionId: connection.id },
     });
-    const currentHighWaterMark =
-      state?.currentHighWaterMark ?? cumulative.toString();
+    const currentHighWaterMark = state?.currentHighWaterMark ?? cumulative.toString();
     const totalFeesSimulated = state?.totalFeesSimulated ?? '0';
 
     let policy: SimulationSnapshot['policy'] = null;
@@ -260,13 +248,14 @@ export class PerformanceFeeSimulationService {
       policy = null;
     }
 
-    const calculation = policy && state
-      ? calculateHighWaterMarkFee({
-          cumulativeRealisedMinor: cumulative.toString(),
-          startingHighWaterMarkMinor: currentHighWaterMark,
-          feePercent: policy.feePercent,
-        })
-      : null;
+    const calculation =
+      policy && state
+        ? calculateHighWaterMarkFee({
+            cumulativeRealisedMinor: cumulative.toString(),
+            startingHighWaterMarkMinor: currentHighWaterMark,
+            feePercent: policy.feePercent,
+          })
+        : null;
 
     const currentCharge = await this.chargeRepo.findOne({
       where: {
@@ -296,8 +285,7 @@ export class PerformanceFeeSimulationService {
       lastClosedAt: lastClosedAt?.toISOString() ?? null,
       cumulativeRealisedMinor: cumulative.toString(),
       currentHighWaterMarkMinor: currentHighWaterMark,
-      profitAboveHighWaterMarkMinor:
-        calculation?.realisedProfitForFeeMinor ?? '0',
+      profitAboveHighWaterMarkMinor: calculation?.realisedProfitForFeeMinor ?? '0',
       currentSimulatedFeeMinor: calculation?.feeAmountMinor ?? '0',
       totalFeesSimulatedMinor: totalFeesSimulated,
       policy,
