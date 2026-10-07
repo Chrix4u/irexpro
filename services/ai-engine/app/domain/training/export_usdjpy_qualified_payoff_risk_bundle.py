@@ -1,6 +1,9 @@
 """Export an exact qualified USDJPY v10 payoff-risk candidate for Research PAPER UAT."""
 from __future__ import annotations
-import argparse, hashlib, json
+
+import argparse
+import hashlib
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any

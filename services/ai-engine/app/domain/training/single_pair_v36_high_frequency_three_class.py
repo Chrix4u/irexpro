@@ -20,7 +20,6 @@ from xgboost import XGBClassifier
 from app.domain.models.multitimeframe_features import MULTITIMEFRAME_FEATURE_COLUMNS
 from app.domain.training.model_qualification import (
     ACTIONABLE_TARGET_COLUMN,
-    ModelVariant,
     _summarize_predictions,
 )
 from app.domain.training.train_multitimeframe import (

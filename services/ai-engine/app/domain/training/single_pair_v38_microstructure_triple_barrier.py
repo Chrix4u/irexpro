@@ -6,6 +6,7 @@ TP +1.0 bps, SL -1.5 bps; otherwise timeout at minute 10.
 The classification target is LONG/SHORT only when that side's first barrier is
 TP, otherwise NO_TRADE. Added lag features are strictly causal.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -214,15 +215,19 @@ def _fit(training: pd.DataFrame):
         sample_weight_eval_set=[_weights(early["v38_target"])],
         verbose=False,
     )
-    return model, features, {
-        "fit_rows": int(len(fit)),
-        "early_rows": int(len(early)),
-        "fit_class_counts": {
-            "SHORT": int((fit.v38_target == SHORT_CLASS).sum()),
-            "NO_TRADE": int((fit.v38_target == NO_TRADE_CLASS).sum()),
-            "LONG": int((fit.v38_target == LONG_CLASS).sum()),
+    return (
+        model,
+        features,
+        {
+            "fit_rows": int(len(fit)),
+            "early_rows": int(len(early)),
+            "fit_class_counts": {
+                "SHORT": int((fit.v38_target == SHORT_CLASS).sum()),
+                "NO_TRADE": int((fit.v38_target == NO_TRADE_CLASS).sum()),
+                "LONG": int((fit.v38_target == LONG_CLASS).sum()),
+            },
         },
-    }
+    )
 
 
 def _predict(source: pd.DataFrame, model, features: list[str], fold: int) -> pd.DataFrame:
@@ -238,10 +243,15 @@ def _predict(source: pd.DataFrame, model, features: list[str], fold: int) -> pd.
     active = (pred_class != NO_TRADE_CLASS) & (class_conf >= CLASS_CONFIDENCE_FLOOR)
 
     cols = [
-        "decision_time", "instrument",
-        EVENT_DIRECTION_TARGET_COLUMN, EVENT_ACTIONABLE_TARGET_COLUMN,
-        EVENT_LONG_NET_RETURN_COLUMN, EVENT_SHORT_NET_RETURN_COLUMN,
-        EVENT_STEP_COLUMN, EVENT_BARRIER_RETURN_COLUMN, "m1_spread_bps",
+        "decision_time",
+        "instrument",
+        EVENT_DIRECTION_TARGET_COLUMN,
+        EVENT_ACTIONABLE_TARGET_COLUMN,
+        EVENT_LONG_NET_RETURN_COLUMN,
+        EVENT_SHORT_NET_RETURN_COLUMN,
+        EVENT_STEP_COLUMN,
+        EVENT_BARRIER_RETURN_COLUMN,
+        "m1_spread_bps",
     ]
     cols += [c for c in QUALIFICATION_REGIME_COLUMNS if c in labeled.columns]
     out = labeled[cols].copy()
@@ -325,94 +335,123 @@ def run(dataset: Path, cutoff: str, output: Path) -> dict[str, Any]:
     periods = int(pooled.decision_time.nunique())
     min_train = max(250, int(periods * 0.60))
     validation = max(100, int(periods * 0.07))
-    splits = list(iter_purged_walk_forward_time_splits(
-        pooled,
-        time_column="decision_time",
-        min_train_periods=min_train,
-        validation_periods=validation,
-        purge_periods=HORIZON_BARS,
-        embargo_periods=HORIZON_BARS,
-        max_splits=3,
-    ))
+    splits = list(
+        iter_purged_walk_forward_time_splits(
+            pooled,
+            time_column="decision_time",
+            min_train_periods=min_train,
+            validation_periods=validation,
+            purge_periods=HORIZON_BARS,
+            embargo_periods=HORIZON_BARS,
+            max_splits=3,
+        )
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
     cp_dir = output.parent / "checkpoints"
     cp_dir.mkdir(parents=True, exist_ok=True)
 
-    folds=[]; all_pred=[]
-    for fold,(train,valid) in enumerate(splits,1):
-        model,features,counts=_fit(train)
-        pred=_predict(valid,model,features,fold)
-        cp=cp_dir/f"fold-{fold:02d}-v38.csv"
-        pred.to_csv(cp,index=False)
-        summary=_summarize_predictions(
-            pred,horizon_bars=HORIZON_BARS,
+    folds = []
+    all_pred = []
+    for fold, (train, valid) in enumerate(splits, 1):
+        model, features, counts = _fit(train)
+        pred = _predict(valid, model, features, fold)
+        cp = cp_dir / f"fold-{fold:02d}-v38.csv"
+        pred.to_csv(cp, index=False)
+        summary = _summarize_predictions(
+            pred,
+            horizon_bars=HORIZON_BARS,
             confidence_threshold=SUMMARY_CONFIDENCE_THRESHOLD,
         )
-        folds.append({
-            "fold":fold,
-            "training_counts":counts,
-            "density":_density(pred),
-            "trading":summary["trading"],
-            "classification":summary["classification"],
-            "checkpoint":str(cp),
-        })
+        folds.append(
+            {
+                "fold": fold,
+                "training_counts": counts,
+                "density": _density(pred),
+                "trading": summary["trading"],
+                "classification": summary["classification"],
+                "checkpoint": str(cp),
+            }
+        )
         all_pred.append(pred)
 
-    combined=pd.concat(all_pred,ignore_index=True)
-    overall=_summarize_predictions(
-        combined,horizon_bars=HORIZON_BARS,
+    combined = pd.concat(all_pred, ignore_index=True)
+    overall = _summarize_predictions(
+        combined,
+        horizon_bars=HORIZON_BARS,
         confidence_threshold=SUMMARY_CONFIDENCE_THRESHOLD,
     )
-    density=_density(combined); trading=overall["trading"]
-    pff=sum(float(f["trading"]["total_return"])>0 for f in folds)/len(folds)
-    checks={
-        "sharpe_ratio": trading["sharpe_ratio"] is not None and float(trading["sharpe_ratio"])>=GATE["min_sharpe_ratio"],
-        "profit_factor": trading["profit_factor"] is not None and float(trading["profit_factor"])>=GATE["min_profit_factor"],
-        "max_drawdown": float(trading["max_drawdown"])<=GATE["max_drawdown"],
-        "positive_fold_fraction": pff>=GATE["min_positive_fold_fraction"],
-        "minimum_trade_evidence": int(trading["trade_or_period_count"])>=GATE["min_trade_evidence"],
-        "trade_density": density["trade_density"]>=GATE["min_trade_density"],
-        "median_entry_interval": density["median_calendar_minutes_between_entries"] is not None and float(density["median_calendar_minutes_between_entries"])<=GATE["max_median_minutes_between_entries"],
-        "two_sided_execution": density["long_trades"]>0 and density["short_trades"]>0,
+    density = _density(combined)
+    trading = overall["trading"]
+    pff = sum(float(f["trading"]["total_return"]) > 0 for f in folds) / len(folds)
+    checks = {
+        "sharpe_ratio": trading["sharpe_ratio"] is not None
+        and float(trading["sharpe_ratio"]) >= GATE["min_sharpe_ratio"],
+        "profit_factor": trading["profit_factor"] is not None
+        and float(trading["profit_factor"]) >= GATE["min_profit_factor"],
+        "max_drawdown": float(trading["max_drawdown"]) <= GATE["max_drawdown"],
+        "positive_fold_fraction": pff >= GATE["min_positive_fold_fraction"],
+        "minimum_trade_evidence": int(trading["trade_or_period_count"])
+        >= GATE["min_trade_evidence"],
+        "trade_density": density["trade_density"] >= GATE["min_trade_density"],
+        "median_entry_interval": density["median_calendar_minutes_between_entries"] is not None
+        and float(density["median_calendar_minutes_between_entries"])
+        <= GATE["max_median_minutes_between_entries"],
+        "two_sided_execution": density["long_trades"] > 0 and density["short_trades"] > 0,
     }
-    report={
-        "experiment":EXPERIMENT,
-        "research_only":True,
-        "approved_for_paper":False,
-        "approved_for_live":False,
-        "dataset_sha256":hashes,
-        "qualification_decision_time_before":cutoff,
-        "horizon_bars":HORIZON_BARS,
-        "barriers":{"take_profit_bps":TP_BPS,"stop_loss_bps":SL_BPS},
-        "microstructure_features":[c for c in all_pred[0].columns if c.startswith("v38_")],
-        "policy":{"class_confidence_floor":CLASS_CONFIDENCE_FLOOR,"outer_validation_used_for_threshold_selection":False},
-        "folds":folds,
-        "overall":overall,
-        "density":density,
-        "positive_fold_fraction":pff,
-        "research_gate":{"thresholds":GATE,"checks":checks,"research_gate_passed":all(checks.values())},
+    report = {
+        "experiment": EXPERIMENT,
+        "research_only": True,
+        "approved_for_paper": False,
+        "approved_for_live": False,
+        "dataset_sha256": hashes,
+        "qualification_decision_time_before": cutoff,
+        "horizon_bars": HORIZON_BARS,
+        "barriers": {"take_profit_bps": TP_BPS, "stop_loss_bps": SL_BPS},
+        "microstructure_features": [c for c in all_pred[0].columns if c.startswith("v38_")],
+        "policy": {
+            "class_confidence_floor": CLASS_CONFIDENCE_FLOOR,
+            "outer_validation_used_for_threshold_selection": False,
+        },
+        "folds": folds,
+        "overall": overall,
+        "density": density,
+        "positive_fold_fraction": pff,
+        "research_gate": {
+            "thresholds": GATE,
+            "checks": checks,
+            "research_gate_passed": all(checks.values()),
+        },
     }
-    output.write_text(json.dumps(report,indent=2,default=str))
-    print(json.dumps({
-        "output":str(output),
-        "trading":trading,
-        "density":density,
-        "positive_fold_fraction":pff,
-        "folds":[{"fold":f["fold"],"density":f["density"],"trading":f["trading"]} for f in folds],
-        "research_gate":report["research_gate"],
-    },indent=2,default=str))
+    output.write_text(json.dumps(report, indent=2, default=str))
+    print(
+        json.dumps(
+            {
+                "output": str(output),
+                "trading": trading,
+                "density": density,
+                "positive_fold_fraction": pff,
+                "folds": [
+                    {"fold": f["fold"], "density": f["density"], "trading": f["trading"]}
+                    for f in folds
+                ],
+                "research_gate": report["research_gate"],
+            },
+            indent=2,
+            default=str,
+        )
+    )
     return report
 
 
-def main()->int:
-    parser=argparse.ArgumentParser()
-    parser.add_argument("--dataset",required=True)
-    parser.add_argument("--cutoff",required=True)
-    parser.add_argument("--output",required=True)
-    args=parser.parse_args()
-    run(Path(args.dataset),args.cutoff,Path(args.output))
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset", required=True)
+    parser.add_argument("--cutoff", required=True)
+    parser.add_argument("--output", required=True)
+    args = parser.parse_args()
+    run(Path(args.dataset), args.cutoff, Path(args.output))
     return 0
 
 
-if __name__=="__main__":
+if __name__ == "__main__":
     raise SystemExit(main())

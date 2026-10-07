@@ -17,9 +17,9 @@ from app.api.v1.routes import backtests, health, market_data, models, scheduler,
 from app.core.config import get_settings
 from app.core.logging import configure_logging, get_logger
 from app.domain.agents.context_service import AgentContextService
-from app.domain.models.registry import build_default_registry
 from app.domain.models.high_conviction_challenger import PlanBV4HighConvictionChallenger
 from app.domain.models.post_entry_protection_challenger import PlanBV85PostEntryProtectionChallenger
+from app.domain.models.registry import build_default_registry
 from app.domain.scheduler.signal_scheduler import SignalScheduler
 from app.integrations.redis_client import close_redis_client, get_redis_client
 

@@ -8,19 +8,19 @@ import numpy as np
 import pandas as pd
 
 from app.domain.training.model_qualification import _summarize_predictions
-from app.domain.training.train_multitimeframe import load_and_prepare_corpora
-from app.domain.training.validation import iter_purged_walk_forward_time_splits
 from app.domain.training.six_pair_v74_quote_profitability_router import (
     EXTRA_SLIPPAGE_BPS,
     FEATURES,
-    H,
     PAIRS,
+    H,
     apply,
     choose,
     density,
     fit_pair,
     score,
 )
+from app.domain.training.train_multitimeframe import load_and_prepare_corpora
+from app.domain.training.validation import iter_purged_walk_forward_time_splits
 
 OUTER_FOLDS_REQUIRED = 3
 MIN_OUTER_TRADES = 30

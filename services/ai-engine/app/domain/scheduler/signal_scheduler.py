@@ -7,6 +7,7 @@ IMPORTANT:
 - Generates signal candidates and publishes via NestJsClient
 - Never executes trades directly
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -132,7 +133,11 @@ class SignalScheduler:
             logger.warning("Unsupported scheduler mode", mode=request.mode)
             return False
 
-        if request.source == "mock" and settings.is_production and not settings.ai_allow_mock_market_data:
+        if (
+            request.source == "mock"
+            and settings.is_production
+            and not settings.ai_allow_mock_market_data
+        ):
             logger.warning("Mock source blocked in production for scheduler")
             return False
 
@@ -252,7 +257,6 @@ class SignalScheduler:
 
         generator = self._get_signal_generator()
         job.replay_steps_last_cycle = 0
-        published_this_cycle = False
 
         scan_plan = (
             [
@@ -353,9 +357,7 @@ class SignalScheduler:
                             ),
                         )
                         outcome = (
-                            exit_result.get("outcome")
-                            if isinstance(exit_result, dict)
-                            else None
+                            exit_result.get("outcome") if isinstance(exit_result, dict) else None
                         )
                         if outcome in {"EXIT_SUCCEEDED", "NO_OPEN_POSITION", "DUPLICATE_RECOVERED"}:
                             job.pending_horizon_exits.pop(instrument, None)
@@ -378,9 +380,7 @@ class SignalScheduler:
 
                 if not result.generated or result.signal is None:
                     job.last_decision = "NO_TRADE"
-                    job.last_reason = (
-                        result.no_signal.reason if result.no_signal else "unknown"
-                    )
+                    job.last_reason = result.no_signal.reason if result.no_signal else "unknown"
                     evaluated_confidence = (
                         result.no_signal.confidence_score if result.no_signal else None
                     )
@@ -397,12 +397,8 @@ class SignalScheduler:
                     continue
 
                 strategy_result = await self._nestjs_client.publish_signal(result.signal)
-                is_uat_probe = bool(
-                    result.signal.metadata.get("uat_workflow_probe")
-                )
-                job.last_decision = (
-                    "UAT_WORKFLOW_PROBE" if is_uat_probe else "SIGNAL_PUBLISHED"
-                )
+                is_uat_probe = bool(result.signal.metadata.get("uat_workflow_probe"))
+                job.last_decision = "UAT_WORKFLOW_PROBE" if is_uat_probe else "SIGNAL_PUBLISHED"
                 job.last_reason = (
                     "uat_workflow_probe_published"
                     if is_uat_probe
@@ -416,15 +412,9 @@ class SignalScheduler:
                     outcome = strategy_result.get("outcome")
                     reason = strategy_result.get("reason")
                     trade_id = strategy_result.get("tradeId")
-                    job.last_strategy_outcome = (
-                        str(outcome) if outcome is not None else None
-                    )
-                    job.last_strategy_reason = (
-                        str(reason) if reason is not None else None
-                    )
-                    job.last_trade_id = (
-                        str(trade_id) if trade_id is not None else None
-                    )
+                    job.last_strategy_outcome = str(outcome) if outcome is not None else None
+                    job.last_strategy_reason = str(reason) if reason is not None else None
+                    job.last_trade_id = str(trade_id) if trade_id is not None else None
                     if outcome == "EXECUTION_SUCCEEDED":
                         job.executions_succeeded_total += 1
                         horizon_raw = result.signal.metadata.get("research_horizon_bars")
@@ -454,7 +444,9 @@ class SignalScheduler:
                                 instrument=instrument,
                                 trade_id=str(trade_id),
                                 horizon_bars=horizon_raw,
-                                due_market_at=job.pending_horizon_exits[instrument].due_market_at.isoformat(),
+                                due_market_at=job.pending_horizon_exits[
+                                    instrument
+                                ].due_market_at.isoformat(),
                             )
                     elif outcome in {
                         "SIGNAL_INVALID",
@@ -469,8 +461,6 @@ class SignalScheduler:
 
                 if is_uat_probe:
                     job.last_uat_probe_at = job.last_run_at
-                published_this_cycle = True
-
                 # Research UAT intentionally publishes at most one signal per cycle.
                 if job.research_uat:
                     break

@@ -23,8 +23,8 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from xgboost import XGBClassifier
 from sklearn.linear_model import LogisticRegression
+from xgboost import XGBClassifier
 
 from app.domain.training.model_qualification import _summarize_predictions
 from app.domain.training.single_pair_v41_live_promotable_microstructure import (
