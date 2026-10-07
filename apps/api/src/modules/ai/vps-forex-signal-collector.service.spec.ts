@@ -4,6 +4,8 @@ import {
   VpsForexSignalCollectorService,
   canExecuteMultiModelPaper,
   buildCandidate,
+  buildDirectionalCandidates,
+  selectCounterfactualExecutionCandidate,
   dynamicPaperLotUpperBound,
   isFreshOpportunity,
 } from './vps-forex-signal-collector.service';
@@ -241,6 +243,64 @@ describe('VpsForexSignalCollectorService', () => {
     expect(status.skippedUtcHours).toEqual([]);
   });
 
+  it('builds BUY and SELL counterfactuals from the same market snapshot', () => {
+    const candidates = buildDirectionalCandidates('EURUSD', trendCandles());
+    expect(candidates).toHaveLength(2);
+    expect(new Set(candidates.map((candidate) => candidate.direction))).toEqual(
+      new Set(['BUY', 'SELL']),
+    );
+    const buy = candidates.find((candidate) => candidate.direction === 'BUY')!;
+    const sell = candidates.find((candidate) => candidate.direction === 'SELL')!;
+    expect(buy.entry).toBeCloseTo(sell.entry, 10);
+    expect(buy.barTime.toISOString()).toBe(sell.barTime.toISOString());
+    expect(buy.emaSeparation).toBeGreaterThan(sell.emaSeparation);
+    expect(buy.mtfStrength).toBeGreaterThan(sell.mtfStrength);
+  });
+
+  it('rescues to the opposite direction when only that counterfactual is executable', () => {
+    const [buy, sell] = buildDirectionalCandidates('EURUSD', trendCandles());
+    expect(buy).toBeDefined();
+    expect(sell).toBeDefined();
+    const byDirection = new Map([buy, sell].map((candidate) => [candidate.direction, candidate]));
+    const selection = selectCounterfactualExecutionCandidate([
+      {
+        candidate: byDirection.get('BUY')!,
+        paperExecutionEligible: false,
+        netExpectedR: -0.05,
+        estimatedExecutionCostR: 0.04,
+      },
+      {
+        candidate: byDirection.get('SELL')!,
+        paperExecutionEligible: true,
+        netExpectedR: 0.16,
+        estimatedExecutionCostR: 0.04,
+      },
+    ]);
+    expect(selection.reason).toBe('SINGLE_ELIGIBLE_DIRECTION');
+    expect(selection.selected?.candidate.direction).toBe('SELL');
+  });
+
+  it('abstains when both directions pass but their net edges are inside execution-cost uncertainty', () => {
+    const [buy, sell] = buildDirectionalCandidates('EURUSD', trendCandles());
+    const selection = selectCounterfactualExecutionCandidate([
+      {
+        candidate: buy!,
+        paperExecutionEligible: true,
+        netExpectedR: 0.14,
+        estimatedExecutionCostR: 0.08,
+      },
+      {
+        candidate: sell!,
+        paperExecutionEligible: true,
+        netExpectedR: 0.13,
+        estimatedExecutionCostR: 0.08,
+      },
+    ]);
+    expect(selection.reason).toBe('AMBIGUOUS_DUAL_EDGE');
+    expect(selection.selected).toBeNull();
+    expect(selection.requiredEdgeMarginR).toBeGreaterThanOrEqual(0.02);
+  });
+
   it('builds a deterministic qualifying trend candidate without claiming model qualification', () => {
     const candidate = buildCandidate('EURUSD', trendCandles());
     expect(candidate).not.toBeNull();
@@ -328,7 +388,7 @@ describe('VpsForexSignalCollectorService', () => {
       'user-1',
       'conn-1',
       'irexpro-multimodel-ensemble-v1',
-      'plan-b-multimodel-shadow-v4',
+      'plan-b-multimodel-shadow-v4-bidirectional-v1',
     ]);
     expect(restored).toBeDefined();
     expect(restored.direction).toBe(current!.direction);
@@ -371,7 +431,7 @@ describe('VpsForexSignalCollectorService', () => {
       'user-1',
       'conn-1',
       'irexpro-multimodel-ensemble-v1',
-      'plan-b-multimodel-shadow-v4',
+      'plan-b-multimodel-shadow-v4-bidirectional-v1',
     ]);
   });
 
@@ -508,7 +568,7 @@ describe('VpsForexSignalCollectorService', () => {
       'irexpro-multimodel-ensemble-v1',
       'USDJPY',
       'BUY',
-      'plan-b-multimodel-shadow-v4',
+      'plan-b-multimodel-shadow-v4-bidirectional-v1',
     ]);
   });
 
@@ -599,7 +659,14 @@ describe('VpsForexSignalCollectorService', () => {
     );
     expect(insertCalls.length).toBeGreaterThan(1);
     const persistedInstruments = new Set(insertCalls.map(([, params]) => params[6]));
-    expect(persistedInstruments.size).toBe(insertCalls.length);
+    expect(persistedInstruments.size).toBe(6);
+    expect(insertCalls).toHaveLength(12);
+    for (const instrument of persistedInstruments) {
+      const directions = insertCalls
+        .filter(([, params]) => params[6] === instrument)
+        .map(([, params]) => params[7]);
+      expect(new Set(directions)).toEqual(new Set(['BUY', 'SELL']));
+    }
   });
 
   it('persists shadow evidence without an active PAPER session and keeps execution disabled', async () => {

@@ -7,6 +7,7 @@ const ensemble: PlanBEnsembleScore = {
   modifiesExecution: false,
   regime: 'TREND_HEALTHY',
   regimeAllowed: true,
+  strategyRoute: 'TREND_CONTINUATION',
   directionQuality: 0.8,
   expectedR: 0.32,
   tradeQuality: 0.7,
@@ -153,6 +154,61 @@ describe('evaluateEnsembleGovernance', () => {
     expect(result.netExpectedR).toBeCloseTo(0.11375, 6);
     expect(result.paperNetExpectedRPassed).toBe(true);
     expect(result.paperExecutionEligible).toBe(true);
+  });
+
+  it('uses a dedicated fail-closed reversal envelope instead of the continuation drift envelope', () => {
+    const result = evaluateEnsembleGovernance({
+      ...base,
+      ensemble: {
+        ...ensemble,
+        regime: 'REVERSAL_CONFIRMED',
+        strategyRoute: 'CONFIRMED_REVERSAL',
+        expectedR: 0.55,
+      },
+      instrument: 'USDCAD',
+      entryPrice: 1.426,
+      stopLoss: 1.4245,
+      takeProfit: 1.4285,
+      confidence: 0.642,
+      extensionAtr: 1.047,
+      volatilityScore: 0.098,
+      emaSeparation: 0.153,
+      mtfStrength: 0,
+      rsi14: 43.5,
+      shortHorizonMomentumAtr: 0.789,
+      eventRisk: 'CLEAR',
+      executionSpreadEvidence: {
+        ...base.executionSpreadEvidence,
+        spreadPrice: 0.00003,
+      },
+    });
+    expect(result.driftState).toBe('NORMAL');
+    expect(result.paperDriftPassed).toBe(true);
+    expect(result.netExpectedR).toBeGreaterThan(0.08);
+    expect(result.paperExecutionEligible).toBe(true);
+  });
+
+  it('fails a reversal closed when its short-horizon impulse is outside the reversal envelope', () => {
+    const result = evaluateEnsembleGovernance({
+      ...base,
+      ensemble: {
+        ...ensemble,
+        regime: 'REVERSAL_CONFIRMED',
+        strategyRoute: 'CONFIRMED_REVERSAL',
+        expectedR: 0.55,
+      },
+      confidence: 0.66,
+      extensionAtr: 0.8,
+      volatilityScore: 0.2,
+      emaSeparation: 0.12,
+      mtfStrength: 0,
+      rsi14: 44,
+      shortHorizonMomentumAtr: 2.2,
+      eventRisk: 'CLEAR',
+    });
+    expect(result.driftState).toBe('OUT_OF_DISTRIBUTION');
+    expect(result.paperExecutionEligible).toBe(false);
+    expect(result.paperExecutionBlockers).toContain('DRIFT_OUT_OF_DISTRIBUTION');
   });
 
   it('fails PAPER execution closed when broker spread evidence is unavailable', () => {

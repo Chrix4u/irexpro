@@ -55,6 +55,64 @@ describe('Plan B multimodel prospective shadow', () => {
     expect(score.reasons).toContain('REGIME_TREND_EXTENDED');
   });
 
+  it('keeps the historical 64% candidate-confidence floor mandatory for continuation execution', () => {
+    const score = scorePlanBMultimodelShadow({
+      instrument: 'EURUSD',
+      direction: 'BUY',
+      confidence: 0.63,
+      extensionAtr: 0.35,
+      volatilityScore: 0.15,
+      emaSeparation: 0.9,
+      mtfStrength: 0.9,
+      rsi14: 68,
+      shortHorizonMomentumAtr: 0.25,
+      scanTime: new Date('2026-10-07T14:05:00.000Z'),
+    });
+    expect(score.regime).toBe('TREND_HEALTHY');
+    expect(score.reasons).toContain('CONFIDENCE_FLOOR');
+    expect(score.admitted).toBe(false);
+    expect(score.paperAdmitted).toBe(false);
+  });
+
+  it('admits a strong confirmed reversal before slower M15 trend alignment catches up', () => {
+    const score = scorePlanBMultimodelShadow({
+      instrument: 'USDCAD',
+      direction: 'SELL',
+      confidence: 0.642,
+      extensionAtr: 1.047,
+      volatilityScore: 0.098,
+      emaSeparation: 0.153,
+      mtfStrength: 0,
+      rsi14: 43.5,
+      shortHorizonMomentumAtr: 0.789,
+      scanTime: new Date('2026-10-07T19:05:00.000Z'),
+    });
+    expect(score.regime).toBe('REVERSAL_CONFIRMED');
+    expect(score.strategyRoute).toBe('CONFIRMED_REVERSAL');
+    expect(score.expectedR).toBeGreaterThanOrEqual(0.18);
+    expect(score.consensusPassed).toBeGreaterThanOrEqual(score.consensusRequired);
+    expect(score.paperAdmitted).toBe(true);
+    expect(score.admitted).toBe(true);
+  });
+
+  it('does not call a weak opposite move a reversal merely because the trend route fails', () => {
+    const score = scorePlanBMultimodelShadow({
+      instrument: 'USDCAD',
+      direction: 'SELL',
+      confidence: 0.642,
+      extensionAtr: 1.047,
+      volatilityScore: 0.098,
+      emaSeparation: 0.153,
+      mtfStrength: 0,
+      rsi14: 43.5,
+      shortHorizonMomentumAtr: 0.2,
+      scanTime: new Date('2026-10-07T19:05:00.000Z'),
+    });
+    expect(score.regime).toBe('TREND_WEAK');
+    expect(score.strategyRoute).toBe('TREND_CONTINUATION');
+    expect(score.admitted).toBe(false);
+  });
+
   it('rejects high-volatility conditions independently of meta probability', () => {
     const score = scorePlanBMultimodelShadow({
       ...base,
