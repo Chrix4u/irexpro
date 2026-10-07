@@ -283,6 +283,51 @@ export function resolveEnsembleShadowOutcome(
   };
 }
 
+export interface EnsembleOutcomeEpisodeObservation {
+  evaluatedAt: Date | string;
+  outcome: EnsembleShadowOutcome | null;
+}
+
+export function collapseEnsembleOutcomeEpisodes(
+  observations: EnsembleOutcomeEpisodeObservation[],
+): EnsembleShadowOutcome[] {
+  const valid = observations
+    .map((observation) => ({
+      evaluatedAt: new Date(observation.evaluatedAt),
+      outcome: observation.outcome,
+      resolvedAt: observation.outcome ? new Date(observation.outcome.resolvedAt) : null,
+    }))
+    .filter(
+      (
+        observation,
+      ): observation is {
+        evaluatedAt: Date;
+        outcome: EnsembleShadowOutcome;
+        resolvedAt: Date;
+      } =>
+        observation.outcome != null &&
+        observation.resolvedAt != null &&
+        Number.isFinite(observation.evaluatedAt.getTime()) &&
+        Number.isFinite(observation.resolvedAt.getTime()) &&
+        observation.resolvedAt.getTime() >= observation.evaluatedAt.getTime(),
+    )
+    .sort((a, b) => a.evaluatedAt.getTime() - b.evaluatedAt.getTime());
+
+  const episodes: EnsembleShadowOutcome[] = [];
+  let activeEpisodeEnd = Number.NEGATIVE_INFINITY;
+  for (const observation of valid) {
+    const evaluatedAt = observation.evaluatedAt.getTime();
+    const resolvedAt = observation.resolvedAt.getTime();
+    if (evaluatedAt > activeEpisodeEnd) {
+      episodes.push(observation.outcome);
+      activeEpisodeEnd = resolvedAt;
+      continue;
+    }
+    activeEpisodeEnd = Math.max(activeEpisodeEnd, resolvedAt);
+  }
+  return episodes;
+}
+
 function isoWeekKey(value: string): string {
   const date = new Date(value);
   const utc = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));

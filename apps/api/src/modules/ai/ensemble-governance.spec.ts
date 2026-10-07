@@ -211,6 +211,71 @@ describe('evaluateEnsembleGovernance', () => {
     expect(result.paperExecutionBlockers).toContain('DRIFT_OUT_OF_DISTRIBUTION');
   });
 
+  it('allows a PAPER-only early transition with strong net edge and route-specific drift', () => {
+    const result = evaluateEnsembleGovernance({
+      ...base,
+      ensemble: {
+        ...ensemble,
+        regime: 'TRANSITION_EARLY',
+        strategyRoute: 'EARLY_TRANSITION',
+        expectedR: 0.47546005,
+        paperAdmitted: true,
+        admitted: false,
+        reasons: ['PAPER_ADMIT_EARLY_TRANSITION'],
+      },
+      instrument: 'USDCAD',
+      entryPrice: 1.4,
+      stopLoss: 1.3985,
+      takeProfit: 1.4025,
+      confidence: 0.64115498,
+      extensionAtr: 0.5036534883754534,
+      volatilityScore: 0.08680744442421073,
+      emaSeparation: 0.18806938253200653,
+      mtfStrength: 0.0825608930811788,
+      rsi14: 44.88867106850082,
+      shortHorizonMomentumAtr: -0.10774705391807261,
+      eventRisk: 'CLEAR',
+      executionSpreadEvidence: { ...base.executionSpreadEvidence, spreadPrice: 0.00003 },
+    });
+    expect(result.driftState).toBe('NORMAL');
+    expect(result.netExpectedR).toBeGreaterThanOrEqual(0.2);
+    expect(result.paperExecutionEligible).toBe(true);
+    expect(result.paperExecutionBlockers).toEqual([]);
+    expect(result.paperPromotionEligible).toBe(false);
+    expect(result.blockers).toContain('ENSEMBLE_NOT_ADMITTED');
+  });
+
+  it('keeps early-transition PAPER execution blocked below its stronger 0.20R net floor', () => {
+    const result = evaluateEnsembleGovernance({
+      ...base,
+      ensemble: {
+        ...ensemble,
+        regime: 'TRANSITION_EARLY',
+        strategyRoute: 'EARLY_TRANSITION',
+        expectedR: 0.22,
+        paperAdmitted: true,
+        admitted: false,
+        reasons: ['PAPER_ADMIT_EARLY_TRANSITION'],
+      },
+      instrument: 'USDCAD',
+      entryPrice: 1.4,
+      stopLoss: 1.3985,
+      takeProfit: 1.4025,
+      confidence: 0.65,
+      extensionAtr: 0.5,
+      volatilityScore: 0.1,
+      emaSeparation: 0.18,
+      mtfStrength: 0.08,
+      rsi14: 44,
+      shortHorizonMomentumAtr: 0.2,
+      eventRisk: 'CLEAR',
+      executionSpreadEvidence: { ...base.executionSpreadEvidence, spreadPrice: 0.00003 },
+    });
+    expect(result.netExpectedR).toBeLessThan(0.2);
+    expect(result.paperExecutionEligible).toBe(false);
+    expect(result.paperExecutionBlockers).toContain('PAPER_NET_EXPECTED_R');
+  });
+
   it('fails PAPER execution closed when broker spread evidence is unavailable', () => {
     const result = evaluateEnsembleGovernance({
       ...base,

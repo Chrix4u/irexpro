@@ -3,9 +3,10 @@ import { PlanBEnsembleScore } from './plan-b-multimodel-shadow';
 export const ENSEMBLE_GOVERNANCE_VERSION = 'ensemble-governance-v3';
 export const ENSEMBLE_COST_MODEL_VERSION = 'paper-broker-p90-spread-plus-25pct-slippage-v2';
 export const ENSEMBLE_DRIFT_MODEL_VERSION =
-  'dual-route-continuation-4599-plus-reversal-operational-v2';
+  'triple-route-continuation-4599-reversal-plus-early-transition-v3';
 export const ENSEMBLE_NET_EXPECTED_R_FLOOR = 0.08;
 export const ENSEMBLE_PAPER_NET_EXPECTED_R_FLOOR = ENSEMBLE_NET_EXPECTED_R_FLOOR;
+export const ENSEMBLE_EARLY_TRANSITION_PAPER_NET_EXPECTED_R_FLOOR = 0.2;
 export const ENSEMBLE_SLEEVE_CORE_MIN_CLOSED_TRADES = 100;
 export const ENSEMBLE_EXECUTION_SPREAD_MIN_SAMPLES = 10;
 export const ENSEMBLE_EXECUTION_SPREAD_MAX_AGE_MS = 5 * 60_000;
@@ -162,8 +163,40 @@ function reversalDriftOf(input: EnsembleGovernanceInput): {
   return { state: 'NORMAL', quality };
 }
 
+function earlyTransitionDriftOf(input: EnsembleGovernanceInput): {
+  state: EnsembleDriftState;
+  quality: number;
+} {
+  const momentum = finite(input.shortHorizonMomentumAtr ?? 0);
+  if (
+    input.confidence < 0.64 ||
+    input.confidence > 0.8 ||
+    input.extensionAtr < 0 ||
+    input.extensionAtr > 0.9 ||
+    input.volatilityScore < 0 ||
+    input.volatilityScore > 0.55 ||
+    input.emaSeparation < 0.12 ||
+    input.emaSeparation > 0.5 ||
+    input.mtfStrength < 0 ||
+    input.mtfStrength >= 0.12 ||
+    input.rsi14 < 20 ||
+    input.rsi14 > 80 ||
+    momentum < -0.5 ||
+    momentum > 1.5
+  ) {
+    return { state: 'OUT_OF_DISTRIBUTION', quality: 0.1 };
+  }
+  const structureQuality = Math.min(1, input.emaSeparation / 0.2);
+  const volatilityQuality = 1 - Math.min(1, input.volatilityScore / 0.55);
+  return {
+    state: 'NORMAL',
+    quality: Math.max(0.6, Math.min(1, 0.55 + 0.25 * structureQuality + 0.2 * volatilityQuality)),
+  };
+}
+
 function driftOf(input: EnsembleGovernanceInput): { state: EnsembleDriftState; quality: number } {
   if (input.ensemble.regime === 'REVERSAL_CONFIRMED') return reversalDriftOf(input);
+  if (input.ensemble.strategyRoute === 'EARLY_TRANSITION') return earlyTransitionDriftOf(input);
   const values = {
     confidence: finite(input.confidence),
     extensionAtr: finite(input.extensionAtr),
@@ -270,8 +303,12 @@ export function evaluateEnsembleGovernance(
   const executionCost = executionCostR(input);
   const estimatedExecutionCostR = executionCost.costR;
   const netExpectedR = grossExpectedR - estimatedExecutionCostR;
+  const paperNetExpectedRFloor =
+    input.ensemble.strategyRoute === 'EARLY_TRANSITION'
+      ? ENSEMBLE_EARLY_TRANSITION_PAPER_NET_EXPECTED_R_FLOOR
+      : ENSEMBLE_PAPER_NET_EXPECTED_R_FLOOR;
   const paperNetExpectedRPassed =
-    Number.isFinite(netExpectedR) && netExpectedR > ENSEMBLE_PAPER_NET_EXPECTED_R_FLOOR;
+    Number.isFinite(netExpectedR) && netExpectedR >= paperNetExpectedRFloor;
   const netExpectedRPassed =
     Number.isFinite(netExpectedR) && netExpectedR >= ENSEMBLE_NET_EXPECTED_R_FLOOR;
   const drift = driftOf(input);
@@ -289,7 +326,8 @@ export function evaluateEnsembleGovernance(
   // CORE remains mandatory for promotion beyond PAPER.
   const paperExecutionBlockers: string[] = [];
   if (!input.ensemble.paperAdmitted) paperExecutionBlockers.push('ENSEMBLE_NOT_PAPER_ADMITTED');
-  if (!input.ensemble.admitted) paperExecutionBlockers.push('ENSEMBLE_NOT_PROMOTABLE_ADMISSION');
+  if (!input.ensemble.admitted && input.ensemble.strategyRoute !== 'EARLY_TRANSITION')
+    paperExecutionBlockers.push('ENSEMBLE_NOT_PROMOTABLE_ADMISSION');
   if (!executionCost.evidenceValid) paperExecutionBlockers.push('EXECUTION_SPREAD_UNAVAILABLE');
   if (!paperNetExpectedRPassed) paperExecutionBlockers.push('PAPER_NET_EXPECTED_R');
   if (!paperDriftPassed) paperExecutionBlockers.push(`DRIFT_${drift.state}`);

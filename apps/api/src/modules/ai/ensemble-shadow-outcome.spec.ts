@@ -1,4 +1,5 @@
 import {
+  collapseEnsembleOutcomeEpisodes,
   resolveEnsembleShadowOutcome,
   summarizeEnsembleSleeveOutcomes,
 } from './ensemble-shadow-outcome';
@@ -110,6 +111,41 @@ describe('ensemble shadow outcome', () => {
     expect(resolved?.status).toBe('EXPIRED');
     expect(resolved?.barsObserved).toBe(4);
     expect(resolved?.netR).toBeCloseTo(0.3, 8);
+  });
+
+  it('counts overlapping M5 shadow snapshots as one independent market episode', () => {
+    const makeOutcome = (resolvedAt: string, status: 'WIN' | 'LOSS', netR: number) => ({
+      version: 'm5-first-hit-72bar-net-r-path-v3' as const,
+      status,
+      resolvedAt,
+      barsObserved: 6,
+      exitPrice: 1,
+      grossR: netR,
+      netR,
+      reason: status === 'WIN' ? ('TAKE_PROFIT_HIT' as const) : ('STOP_LOSS_HIT' as const),
+      postEntryTelemetry: null,
+    });
+    const episodes = collapseEnsembleOutcomeEpisodes([
+      {
+        evaluatedAt: '2026-10-07T15:45:00Z',
+        outcome: makeOutcome('2026-10-07T16:20:00Z', 'WIN', 1.5),
+      },
+      {
+        evaluatedAt: '2026-10-07T15:50:00Z',
+        outcome: makeOutcome('2026-10-07T16:25:00Z', 'WIN', 1.6),
+      },
+      {
+        evaluatedAt: '2026-10-07T16:10:00Z',
+        outcome: makeOutcome('2026-10-07T16:30:00Z', 'LOSS', -1),
+      },
+      {
+        evaluatedAt: '2026-10-07T16:35:00Z',
+        outcome: makeOutcome('2026-10-07T17:00:00Z', 'WIN', 1.4),
+      },
+    ]);
+    expect(episodes).toHaveLength(2);
+    expect(episodes[0]?.netR).toBe(1.5);
+    expect(episodes[1]?.netR).toBe(1.4);
   });
 
   it('summarizes only non-ambiguous net-R outcomes', () => {

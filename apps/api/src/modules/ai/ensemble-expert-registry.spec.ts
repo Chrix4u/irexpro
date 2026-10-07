@@ -16,7 +16,7 @@ describe('buildEnsembleExpertRegistry', () => {
 
     expect(registry.policy).toBe('EXPLICIT_PROVENANCE_V1');
     expect(registry.trainedModelCount).toBe(2);
-    expect(registry.heuristicPolicyCount).toBe(2);
+    expect(registry.heuristicPolicyCount).toBe(3);
     expect(registry.riskGuardCount).toBe(4);
     expect(registry.frozenBaselineCount).toBe(1);
 
@@ -38,6 +38,31 @@ describe('buildEnsembleExpertRegistry', () => {
 
     const baseline = registry.entries.find((entry) => entry.code === 'legacy-v7-baseline');
     expect(baseline?.lifecycle).toBe('FROZEN');
+  });
+
+  it('exposes the PAPER-only early-transition policy as an explicit expert route', () => {
+    const registry = buildEnsembleExpertRegistry({
+      highConvictionArtifact: null,
+      highConvictionLoaded: false,
+      highConvictionBrokerDataReady: false,
+      postEntryArtifactReady: false,
+      postEntryBrokerDataReady: false,
+      postEntryShadowObservations: 0,
+      macroEventConfigured: true,
+      sleeveResolvedOutcomes: 0,
+      legacyBaselineFrozen: true,
+    });
+    const transition = registry.entries.find(
+      (entry) => entry.code === 'early-transition-paper-policy',
+    );
+    expect(transition).toMatchObject({
+      kind: 'HEURISTIC_POLICY',
+      lifecycle: 'COLLECTING',
+      trained: false,
+      executionAuthority: 'NONE',
+      modifiesExecution: false,
+      prospectiveEvidenceRequired: true,
+    });
   });
 
   it('promotes only lifecycle labels when required data/evidence becomes available', () => {

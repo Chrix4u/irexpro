@@ -113,6 +113,28 @@ describe('Plan B multimodel prospective shadow', () => {
     expect(score.admitted).toBe(false);
   });
 
+  it('paper-admits a strong early transition before M15 alignment fully catches up', () => {
+    const score = scorePlanBMultimodelShadow({
+      instrument: 'USDCAD',
+      direction: 'SELL',
+      confidence: 0.64115498,
+      extensionAtr: 0.5036534883754534,
+      volatilityScore: 0.08680744442421073,
+      emaSeparation: 0.18806938253200653,
+      mtfStrength: 0.0825608930811788,
+      rsi14: 44.88867106850082,
+      shortHorizonMomentumAtr: -0.10774705391807261,
+      scanTime: new Date('2026-10-07T22:50:00.000Z'),
+    });
+    expect(score.regime).toBe('TRANSITION_EARLY');
+    expect(score.strategyRoute).toBe('EARLY_TRANSITION');
+    expect(score.expectedR).toBeGreaterThanOrEqual(0.3);
+    expect(score.consensusPassed).toBeGreaterThanOrEqual(score.consensusRequired);
+    expect(score.paperAdmitted).toBe(true);
+    expect(score.admitted).toBe(false);
+    expect(score.reasons).toEqual(['PAPER_ADMIT_EARLY_TRANSITION']);
+  });
+
   it('rejects high-volatility conditions independently of meta probability', () => {
     const score = scorePlanBMultimodelShadow({
       ...base,

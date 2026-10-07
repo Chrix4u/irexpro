@@ -7,6 +7,12 @@ export const PLAN_B_GROSS_EXPECTED_R_FLOOR = 0.08;
 export const PLAN_B_REVERSAL_GROSS_EXPECTED_R_FLOOR = 0.18;
 export const PLAN_B_REVERSAL_MIN_MOMENTUM_ATR = 0.5;
 export const PLAN_B_REVERSAL_MAX_MOMENTUM_ATR = 1.5;
+export const PLAN_B_EARLY_TRANSITION_GROSS_EXPECTED_R_FLOOR = 0.3;
+export const PLAN_B_EARLY_TRANSITION_MAX_EXTENSION_ATR = 0.9;
+export const PLAN_B_EARLY_TRANSITION_MIN_EMA_SEPARATION = 0.12;
+export const PLAN_B_EARLY_TRANSITION_MAX_MTF_STRENGTH = 0.12;
+export const PLAN_B_EARLY_TRANSITION_MIN_MOMENTUM_ATR = -0.5;
+export const PLAN_B_EARLY_TRANSITION_MAX_MOMENTUM_ATR = 1.5;
 
 const NEW_YORK_HOUR = new Intl.DateTimeFormat('en-US', {
   timeZone: 'America/New_York',
@@ -19,6 +25,7 @@ export type PlanBRegime =
   | 'TREND_EXTENDED'
   | 'TREND_WEAK'
   | 'REVERSAL_CONFIRMED'
+  | 'TRANSITION_EARLY'
   | 'VOLATILE'
   | 'ROLLOVER_RISK';
 
@@ -34,7 +41,7 @@ export interface PlanBEnsembleScore {
   modifiesExecution: false;
   regime: PlanBRegime;
   regimeAllowed: boolean;
-  strategyRoute: 'TREND_CONTINUATION' | 'CONFIRMED_REVERSAL';
+  strategyRoute: 'TREND_CONTINUATION' | 'CONFIRMED_REVERSAL' | 'EARLY_TRANSITION';
   directionQuality: number;
   expectedR: number;
   tradeQuality: number;
@@ -96,6 +103,74 @@ function reversalConfirmed(
     momentum >= PLAN_B_REVERSAL_MIN_MOMENTUM_ATR &&
     momentum <= PLAN_B_REVERSAL_MAX_MOMENTUM_ATR &&
     expectedR >= PLAN_B_REVERSAL_GROSS_EXPECTED_R_FLOOR
+  );
+}
+
+function earlyTransitionCandidate(
+  input: V8ShadowMetaInput,
+  expectedR: number,
+  baseRegime: PlanBRegime,
+): boolean {
+  const momentum = shortHorizonMomentum(input);
+  const rsiDirectional =
+    input.direction === 'BUY' ? clamp01((input.rsi14 - 50) / 22) : clamp01((50 - input.rsi14) / 22);
+  return (
+    baseRegime === 'TREND_WEAK' &&
+    input.confidence >= PLAN_B_CANDIDATE_CONFIDENCE_FLOOR &&
+    input.extensionAtr <= PLAN_B_EARLY_TRANSITION_MAX_EXTENSION_ATR &&
+    input.volatilityScore <= 0.55 &&
+    input.emaSeparation >= PLAN_B_EARLY_TRANSITION_MIN_EMA_SEPARATION &&
+    input.emaSeparation <= 0.5 &&
+    input.mtfStrength >= 0 &&
+    input.mtfStrength < PLAN_B_EARLY_TRANSITION_MAX_MTF_STRENGTH &&
+    momentum >= PLAN_B_EARLY_TRANSITION_MIN_MOMENTUM_ATR &&
+    momentum <= PLAN_B_EARLY_TRANSITION_MAX_MOMENTUM_ATR &&
+    (rsiDirectional >= 0.12 || momentum >= 0.15) &&
+    expectedR >= PLAN_B_EARLY_TRANSITION_GROSS_EXPECTED_R_FLOOR
+  );
+}
+
+function earlyTransitionDirectionQuality(input: V8ShadowMetaInput): number {
+  const structureQuality = clamp01(input.emaSeparation / 0.2);
+  const rsiDirectional =
+    input.direction === 'BUY' ? clamp01((input.rsi14 - 50) / 22) : clamp01((50 - input.rsi14) / 22);
+  const confidenceQuality = clamp01((input.confidence - 0.6) / 0.2);
+  const momentumQuality = clamp01((shortHorizonMomentum(input) + 0.5) / 1.25);
+  return clamp01(
+    0.6 * structureQuality +
+      0.25 * rsiDirectional +
+      0.1 * confidenceQuality +
+      0.05 * momentumQuality,
+  );
+}
+
+function earlyTransitionTradeQuality(input: V8ShadowMetaInput): number {
+  const extensionQuality = 1 - clamp01(input.extensionAtr / 1.15);
+  const volatilityQuality = 1 - clamp01(input.volatilityScore / 0.55);
+  const structureQuality = clamp01(input.emaSeparation / 0.2);
+  const momentumQuality = clamp01((shortHorizonMomentum(input) + 0.5) / 1.25);
+  const rsiDirectional =
+    input.direction === 'BUY' ? clamp01((input.rsi14 - 50) / 22) : clamp01((50 - input.rsi14) / 22);
+  return clamp01(
+    0.25 * extensionQuality +
+      0.25 * volatilityQuality +
+      0.35 * structureQuality +
+      0.15 * Math.max(momentumQuality, rsiDirectional),
+  );
+}
+
+function earlyTransitionExitQuality(input: V8ShadowMetaInput): number {
+  const extensionQuality = 1 - clamp01(input.extensionAtr / 1.15);
+  const volatilityQuality = 1 - clamp01(input.volatilityScore / 0.55);
+  const structureQuality = clamp01(input.emaSeparation / 0.2);
+  const momentumQuality = clamp01((shortHorizonMomentum(input) + 0.5) / 1.25);
+  const rsiDirectional =
+    input.direction === 'BUY' ? clamp01((input.rsi14 - 50) / 22) : clamp01((50 - input.rsi14) / 22);
+  return clamp01(
+    0.3 * extensionQuality +
+      0.25 * volatilityQuality +
+      0.3 * structureQuality +
+      0.15 * Math.max(momentumQuality, rsiDirectional),
   );
 }
 
@@ -240,12 +315,35 @@ export function scorePlanBMultimodelShadow(
   const meta = scorePlanBShadowMeta(input);
   const baseRegime = regimeOf(input);
   const confirmedReversal = reversalConfirmed(input, meta.expectedR, baseRegime);
-  const regime: PlanBRegime = confirmedReversal ? 'REVERSAL_CONFIRMED' : baseRegime;
-  const strategyRoute = confirmedReversal ? 'CONFIRMED_REVERSAL' : 'TREND_CONTINUATION';
-  const regimeAllowed = regime === 'TREND_HEALTHY' || regime === 'REVERSAL_CONFIRMED';
-  const direction = confirmedReversal ? reversalDirectionQuality(input) : directionQuality(input);
-  const quality = confirmedReversal ? reversalTradeQuality(input) : tradeQuality(input);
-  const exit = confirmedReversal ? reversalExitQuality(input) : exitQuality(input);
+  const earlyTransition =
+    !confirmedReversal && earlyTransitionCandidate(input, meta.expectedR, baseRegime);
+  const regime: PlanBRegime = confirmedReversal
+    ? 'REVERSAL_CONFIRMED'
+    : earlyTransition
+      ? 'TRANSITION_EARLY'
+      : baseRegime;
+  const strategyRoute: PlanBEnsembleScore['strategyRoute'] = confirmedReversal
+    ? 'CONFIRMED_REVERSAL'
+    : earlyTransition
+      ? 'EARLY_TRANSITION'
+      : 'TREND_CONTINUATION';
+  const regimeAllowed =
+    regime === 'TREND_HEALTHY' || regime === 'REVERSAL_CONFIRMED' || regime === 'TRANSITION_EARLY';
+  const direction = confirmedReversal
+    ? reversalDirectionQuality(input)
+    : earlyTransition
+      ? earlyTransitionDirectionQuality(input)
+      : directionQuality(input);
+  const quality = confirmedReversal
+    ? reversalTradeQuality(input)
+    : earlyTransition
+      ? earlyTransitionTradeQuality(input)
+      : tradeQuality(input);
+  const exit = confirmedReversal
+    ? reversalExitQuality(input)
+    : earlyTransition
+      ? earlyTransitionExitQuality(input)
+      : exitQuality(input);
   const pairSideRouteValue = pairSideRoute();
   const pairSide = pairSideQuality();
   const session = sessionQuality(input);
@@ -272,7 +370,9 @@ export function scorePlanBMultimodelShadow(
   if (session < 0.5) reasons.push('SESSION_QUALITY');
   const requiredGrossExpectedR = confirmedReversal
     ? PLAN_B_REVERSAL_GROSS_EXPECTED_R_FLOOR
-    : PLAN_B_GROSS_EXPECTED_R_FLOOR;
+    : earlyTransition
+      ? PLAN_B_EARLY_TRANSITION_GROSS_EXPECTED_R_FLOOR
+      : PLAN_B_GROSS_EXPECTED_R_FLOOR;
   if (meta.expectedR < requiredGrossExpectedR) reasons.push('EXPECTED_R');
   if (portfolio.quality < 0.35) reasons.push('PORTFOLIO_CONCENTRATION');
 
@@ -296,12 +396,11 @@ export function scorePlanBMultimodelShadow(
     input.confidence >= PLAN_B_CANDIDATE_CONFIDENCE_FLOOR &&
     meta.admitted &&
     meta.expectedR >= requiredGrossExpectedR;
-  const admitted = regimeAllowed && coreAdmissionPassed;
-  // PAPER execution must exercise a model-level decision that could later be
-  // promoted to DEMO/LIVE. Research-only stretched regimes remain observable
-  // in shadow outcomes, but they must never gain execution authority merely to
-  // collect evidence. Sleeve maturity is handled separately by governance.
-  const paperAdmitted = admitted;
+  const paperAdmitted = regimeAllowed && coreAdmissionPassed;
+  // Early transitions are deliberately PAPER-only until their independent
+  // episode ledger qualifies them. Continuation and confirmed-reversal routes
+  // retain the existing promotable admission semantics.
+  const admitted = paperAdmitted && strategyRoute !== 'EARLY_TRANSITION';
 
   return {
     artifact: PLAN_B_ENSEMBLE_ARTIFACT,
@@ -328,6 +427,10 @@ export function scorePlanBMultimodelShadow(
     ensembleScore,
     paperAdmitted,
     admitted,
-    reasons: admitted ? ['ADMIT'] : reasons,
+    reasons: admitted
+      ? ['ADMIT']
+      : paperAdmitted && strategyRoute === 'EARLY_TRANSITION'
+        ? ['PAPER_ADMIT_EARLY_TRANSITION']
+        : reasons,
   };
 }
