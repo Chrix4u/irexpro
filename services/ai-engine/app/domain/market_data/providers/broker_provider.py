@@ -73,18 +73,24 @@ class BrokerMarketDataProvider(MarketDataProvider):
         if not user_id or not broker_connection_id:
             raise MarketDataError("Broker market data requires userId and brokerConnectionId")
 
-        url = self.build_request_url(
-            user_id,
-            broker_connection_id,
-            instrument,
-            timeframe,
-            limit,
-            advance_simulation=advance_simulation,
-        )
+        request_url = self._settings.nestjs_market_data_url
+        request_params = {
+            "userId": user_id,
+            "brokerConnectionId": broker_connection_id,
+            "instrument": instrument.upper(),
+            "timeframe": timeframe.upper(),
+            "limit": str(limit),
+        }
+        if advance_simulation:
+            request_params["advanceSimulation"] = "true"
 
         try:
             async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
-                response = await client.get(url, headers=self._get_headers())
+                response = await client.get(
+                    request_url,
+                    params=request_params,
+                    headers=self._get_headers(),
+                )
 
             if response.status_code in (401, 403):
                 raise MarketDataError("Market data access denied")
