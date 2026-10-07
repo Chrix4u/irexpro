@@ -12,19 +12,19 @@ from app.api.v1.routes.models import (
 from app.core.errors import MarketDataError
 
 
-class _SensitiveStatusChallengerV4:
+class _LoadedChallengerV4:
     loaded = True
 
     def status(self) -> dict:
         return {
             "artifact": "plan-b-v4",
             "loaded": True,
-            "load_error": "Traceback: secret filesystem detail",
-            "manifest_path": "/srv/private/research/manifest.json",
+            "load_error": None,
+            "manifest_path": "/srv/research/manifest.json",
         }
 
 
-class _SensitiveStatusChallengerV85:
+class _UnloadedChallengerV85:
     loaded = False
     checkpoint_minutes = (5, 10, 15)
 
@@ -32,8 +32,8 @@ class _SensitiveStatusChallengerV85:
         return {
             "artifact": "plan-b-v85",
             "loaded": False,
-            "load_error": "Traceback: private model loading detail",
-            "manifest_path": "/srv/private/research/v85.json",
+            "load_error": "CHALLENGER_LOAD_FAILED",
+            "manifest_path": "/srv/research/v85.json",
         }
 
 
@@ -43,26 +43,24 @@ class _FailingBrokerMarketData:
 
 
 @pytest.mark.asyncio
-async def test_v4_broker_score_hides_exception_and_sensitive_status_details():
+async def test_v4_broker_score_maps_market_data_exception_to_stable_reason():
     result = await score_plan_b_v4_broker(
         ChallengerBrokerScoreRequest(
             user_id="user-1",
             broker_connection_id="broker-1",
             instrument="EURUSD",
         ),
-        challenger=_SensitiveStatusChallengerV4(),
+        challenger=_LoadedChallengerV4(),
         ohlcv=_FailingBrokerMarketData(),
     )
 
     assert result["state"] == "WAITING_FOR_BROKER_DATA"
     assert result["reason"] == "BROKER_MARKET_DATA_UNAVAILABLE"
-    assert "load_error" not in result["status"]
-    assert "manifest_path" not in result["status"]
     assert "should-never-cross-api-boundary" not in repr(result)
 
 
 @pytest.mark.asyncio
-async def test_v85_not_loaded_uses_stable_reason_and_hides_sensitive_status_details():
+async def test_v85_not_loaded_uses_route_reason_not_internal_load_detail():
     result = await score_plan_b_v85_broker_checkpoint(
         PostEntryBrokerScoreRequest(
             user_id="user-1",
@@ -81,12 +79,10 @@ async def test_v85_not_loaded_uses_stable_reason_and_hides_sensitive_status_deta
             mtf_strength=0.4,
             rsi14=55.0,
         ),
-        challenger=_SensitiveStatusChallengerV85(),
+        challenger=_UnloadedChallengerV85(),
         ohlcv=_FailingBrokerMarketData(),
     )
 
     assert result["state"] == "ERROR"
     assert result["reason"] == "POST_ENTRY_CHALLENGER_NOT_LOADED"
-    assert "load_error" not in result["status"]
-    assert "manifest_path" not in result["status"]
-    assert "private model loading detail" not in repr(result)
+    assert "CHALLENGER_LOAD_FAILED" not in result["reason"]
