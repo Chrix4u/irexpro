@@ -28,6 +28,7 @@ import {
   ENSEMBLE_PAPER_NET_EXPECTED_R_FLOOR,
   ENSEMBLE_SLEEVE_CORE_MIN_CLOSED_TRADES,
   EnsembleGovernanceDecision,
+  ExecutionSpreadEvidence,
   classifyEnsembleSleeveEvidence,
   evaluateEnsembleGovernance,
 } from './ensemble-governance';
@@ -135,6 +136,7 @@ const MIN_STOP_LOSS_PIPS = 5;
 const STOP_FLOOR_BUFFER_PIPS = 0.1;
 const BAR_MS = 5 * 60_000;
 const COLLECTION_CADENCE_MINUTES = 5;
+const EXECUTION_SPREAD_WINDOW_MINUTES = 30;
 const FRESH_BREAKOUT_ATR = 0.5;
 const FRESH_CONFIDENCE_DELTA = 0.02;
 const MAX_CONFIDENCE_DECAY_ON_BREAKOUT = 0.015;
@@ -953,6 +955,11 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
               reason: 'SERVICE_NOT_AVAILABLE',
               attribution: null,
             };
+        const evaluatedAt = new Date();
+        const executionSpreadEvidence = await this.loadExecutionSpreadEvidence(
+          best.instrument,
+          evaluatedAt,
+        );
         const ensembleGovernance = evaluateEnsembleGovernance({
           ensemble: planBEnsemble,
           instrument: best.instrument,
@@ -967,9 +974,11 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           rsi14: best.rsi14,
           eventRisk: macroEventAssessment.state,
           sleeveEvidence,
+          evaluatedAt,
+          executionSpreadEvidence,
         });
         const decision = {
-          evaluatedAt: new Date(),
+          evaluatedAt,
           instrument: best.instrument,
           direction: best.direction,
           paperAdmitted: planBEnsemble.paperAdmitted,
@@ -1020,6 +1029,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
               `consensusPassed=${planBEnsemble.consensusPassed} consensusRequired=${planBEnsemble.consensusRequired} ` +
               `execution=SHADOW_ONLY legacyV7Frozen=${LEGACY_V7_EXECUTION_FROZEN} ` +
               `netExpectedR=${ensembleGovernance.netExpectedR.toFixed(4)} ` +
+              `costSource=${ensembleGovernance.executionCostSource} ` +
               `drift=${ensembleGovernance.driftState} sleeve=${ensembleGovernance.sleeveState} ` +
               `highConviction=${highConvictionOverlay.state} ` +
               `paperGovernance=${ensembleGovernance.paperExecutionBlockers.join(',') || 'PASS'} ` +
@@ -1086,7 +1096,11 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
               'DEMO/LIVE decisions must use broker-native market data via the active broker adapter; MetaTrader uses MetaApi as the broker-access bridge',
             market_data_bar_time: best.barTime.toISOString(),
             market_data_execution_model:
-              'closed-candle-mid-derived-bid-ask-with-conservative-fixed-paper-spread',
+              'closed-candle-mid-derived-bid-ask-with-broker-p90-spread-plus-25pct-buffer',
+            execution_cost_model_version: ensembleGovernance.costModelVersion,
+            execution_cost_source: ensembleGovernance.executionCostSource,
+            execution_spread_evidence_valid: ensembleGovernance.executionSpreadEvidenceValid,
+            execution_spread_evidence: ensembleGovernance.executionSpreadEvidence,
             calibration_mode: 'SHADOW_DIAGNOSTIC_ONLY',
             calibration_modifies_execution: false,
             feature_extension_atr: best.extensionAtr,
@@ -1649,6 +1663,62 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     if (resolvedCount > 0) {
       this.logger.log(`Multi-model shadow outcomes resolved count=${resolvedCount}`);
     }
+  }
+
+  private async loadExecutionSpreadEvidence(
+    instrument: string,
+    evaluatedAt: Date,
+  ): Promise<ExecutionSpreadEvidence | null> {
+    const sourceConnectionId = this.brokerExpertSourceConnectionId();
+    if (!this.dataSource || !sourceConnectionId) return null;
+
+    const rows = (await this.dataSource.query(
+      `
+        SELECT
+          COUNT(*)::int AS sample_count,
+          percentile_cont(0.90) WITHIN GROUP (
+            ORDER BY spread_close::double precision
+          ) AS spread_price,
+          MAX(last_sample_at) AS latest_sample_at
+        FROM market_data.provider_quote_candles
+        WHERE connection_id = $1
+          AND instrument = $2
+          AND timeframe = 'M1'
+          AND spread_close > 0
+          AND last_sample_at > ($3::timestamptz - interval '30 minutes')
+          AND last_sample_at <= $3::timestamptz
+      `,
+      [sourceConnectionId, instrument.trim().toUpperCase(), evaluatedAt.toISOString()],
+    )) as Array<{
+      sample_count: number | string | null;
+      spread_price: number | string | null;
+      latest_sample_at: string | Date | null;
+    }>;
+
+    const row = rows[0];
+    if (!row) return null;
+    const spreadPrice = Number(row.spread_price);
+    const sampleCount = Number(row.sample_count);
+    const latest = row.latest_sample_at ? new Date(row.latest_sample_at) : null;
+    if (
+      !Number.isFinite(spreadPrice) ||
+      spreadPrice <= 0 ||
+      !Number.isFinite(sampleCount) ||
+      sampleCount <= 0 ||
+      !latest ||
+      !Number.isFinite(latest.getTime())
+    ) {
+      return null;
+    }
+
+    return {
+      source: 'BROKER_OBSERVED_P90',
+      spreadPrice,
+      sampleCount,
+      percentile: 0.9,
+      windowMinutes: EXECUTION_SPREAD_WINDOW_MINUTES,
+      latestSampleAt: latest.toISOString(),
+    };
   }
 
   private async loadEnsembleSleeveEvidence(

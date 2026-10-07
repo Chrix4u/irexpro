@@ -444,6 +444,46 @@ describe('VpsForexSignalCollectorService', () => {
     });
   });
 
+  it('loads rolling broker P90 spread evidence from sampled MetaApi quotes', async () => {
+    const query = jest.fn().mockResolvedValue([
+      {
+        sample_count: 42,
+        spread_price: '0.00001000',
+        latest_sample_at: '2026-10-07T11:59:00.000Z',
+      },
+    ]);
+    const collector = new VpsForexSignalCollectorService(
+      config({
+        'multimodelBrokerExpert.sourceConnectionId': 'metaapi-source-1',
+      }),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      {} as unknown as ExecutionService,
+      {} as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+      { query } as any,
+    );
+
+    const evaluatedAt = new Date('2026-10-07T12:00:00.000Z');
+    const evidence = await (collector as any).loadExecutionSpreadEvidence('EURUSD', evaluatedAt);
+
+    expect(evidence).toEqual({
+      source: 'BROKER_OBSERVED_P90',
+      spreadPrice: 0.00001,
+      sampleCount: 42,
+      percentile: 0.9,
+      windowMinutes: 30,
+      latestSampleAt: '2026-10-07T11:59:00.000Z',
+    });
+    expect(String(query.mock.calls[0][0])).toContain('percentile_cont(0.90)');
+    expect(String(query.mock.calls[0][0])).toContain('market_data.provider_quote_candles');
+    expect(query).toHaveBeenCalledWith(expect.any(String), [
+      'metaapi-source-1',
+      'EURUSD',
+      evaluatedAt.toISOString(),
+    ]);
+  });
+
   it('builds sleeve qualification evidence from the actual PAPER execution policy cohort', async () => {
     const query = jest.fn().mockResolvedValue([]);
     const collector = new VpsForexSignalCollectorService(
