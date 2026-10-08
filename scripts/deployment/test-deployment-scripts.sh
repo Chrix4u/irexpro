@@ -40,6 +40,8 @@ fail() {
 [[ "$("$REAL_NODE" -p "process.versions.node.split('.')[0]")" == "$DEPLOY_NODE_MAJOR" ]] || fail "Deployment Node major (${DEPLOY_NODE_MAJOR}) does not match the CI validation runtime."
 [[ "$DEPLOY_HEALTH_ATTEMPTS_DEFAULT" == '60' ]] || fail 'deploy-staging.sh must allow 120 seconds by default for staging health recovery (60 attempts × 2 seconds).'
 
+grep -qxF 'apps/api/.metaapi/' "$REPO_ROOT/.gitignore" || fail 'Tracked root .gitignore must ignore MetaApi runtime cache so normal SDK state cannot block staging clean-tree preflight.'
+
 expect_failure() {
   local expected="$1"
   shift
