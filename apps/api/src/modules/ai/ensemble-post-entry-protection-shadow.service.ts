@@ -14,6 +14,9 @@ import { PLAN_B_V85_ARTIFACT, dueV85Checkpoints } from './post-entry-protection-
 const ACTIVE_ENGINE_CODE = 'irexpro-multimodel-ensemble-v1';
 export const POST_ENTRY_EVIDENCE_MIN_DISTINCT_DECISIONS = 100;
 export const POST_ENTRY_EVIDENCE_MIN_ELIGIBLE_PROFIT_DECISIONS = 30;
+export const REJECTED_EDGE_OUTCOME_SHADOW_ARTIFACT = 'plan-b-rejected-edge-outcome-shadow-v1';
+export const REJECTED_EDGE_MIN_NET_EXPECTED_R = 0.08;
+export const REJECTED_EDGE_EPISODE_GAP_MINUTES = 15;
 
 interface ShadowDecisionRow {
   shadow_decision_id: string;
@@ -24,6 +27,7 @@ interface ShadowDecisionRow {
   entry_price: string | number;
   confidence: string | number;
   components: Record<string, unknown> | null;
+  observation_artifact?: string;
 }
 
 interface ExistingObservation {
@@ -265,14 +269,43 @@ export class EnsemblePostEntryProtectionShadowService implements OnModuleInit, O
           evaluated_at,
           entry_price,
           confidence,
-          components
-        FROM trading.ensemble_shadow_decisions
+          components,
+          CASE
+            WHEN admitted = true OR components ->> 'paperAdmitted' = 'true'
+              THEN '${PLAN_B_V85_ARTIFACT}'
+            ELSE '${REJECTED_EDGE_OUTCOME_SHADOW_ARTIFACT}'
+          END AS observation_artifact
+        FROM trading.ensemble_shadow_decisions AS decision
         WHERE engine_code = $1
           AND model_version = $2
           AND user_id = $3
           AND (
             admitted = true
             OR components ->> 'paperAdmitted' = 'true'
+            OR (
+              COALESCE(NULLIF(components -> 'governance' ->> 'netExpectedR', '')::numeric, -999) >= ${REJECTED_EDGE_MIN_NET_EXPECTED_R}
+              AND COALESCE(NULLIF(components -> 'governance' ->> 'executionSpreadEvidenceValid', '')::boolean, false)
+              AND NOT EXISTS (
+                SELECT 1
+                FROM trading.ensemble_shadow_decisions AS prior
+                WHERE prior.engine_code = decision.engine_code
+                  AND prior.model_version = decision.model_version
+                  AND prior.user_id = decision.user_id
+                  AND prior.instrument = decision.instrument
+                  AND prior.direction = decision.direction
+                  AND (
+                    prior.evaluated_at < decision.evaluated_at
+                    OR (
+                      prior.evaluated_at = decision.evaluated_at
+                      AND prior.id < decision.id
+                    )
+                  )
+                  AND prior.evaluated_at >= decision.evaluated_at - interval '${REJECTED_EDGE_EPISODE_GAP_MINUTES} minutes'
+                  AND COALESCE(NULLIF(prior.components ->> 'paperAdmitted', '')::boolean, false) = false
+                  AND COALESCE(NULLIF(prior.components -> 'governance' ->> 'netExpectedR', '')::numeric, -999) >= ${REJECTED_EDGE_MIN_NET_EXPECTED_R}
+                  AND COALESCE(NULLIF(prior.components -> 'governance' ->> 'executionSpreadEvidenceValid', '')::boolean, false)
+              )
+            )
           )
           AND evaluated_at >= $4::timestamptz - interval '8 hours'
         ORDER BY evaluated_at ASC
@@ -296,6 +329,11 @@ export class EnsemblePostEntryProtectionShadowService implements OnModuleInit, O
         ? features.outcomeResolvedAt
         : now;
 
+    const observationArtifact =
+      row.observation_artifact === REJECTED_EDGE_OUTCOME_SHADOW_ARTIFACT
+        ? REJECTED_EDGE_OUTCOME_SHADOW_ARTIFACT
+        : PLAN_B_V85_ARTIFACT;
+
     const existing = (await this.dataSource.query(
       `
         SELECT checkpoint_minutes, state
@@ -303,7 +341,7 @@ export class EnsemblePostEntryProtectionShadowService implements OnModuleInit, O
         WHERE ensemble_shadow_decision_id = $1
           AND artifact = $2
       `,
-      [row.shadow_decision_id, PLAN_B_V85_ARTIFACT],
+      [row.shadow_decision_id, observationArtifact],
     )) as ExistingObservation[];
 
     const terminal = new Set(
@@ -352,6 +390,7 @@ export class EnsemblePostEntryProtectionShadowService implements OnModuleInit, O
 
       await this.persistObservation(
         row,
+        observationArtifact,
         checkpointMinutes,
         checkpointAt,
         marketDataConnectionId || null,
@@ -362,7 +401,8 @@ export class EnsemblePostEntryProtectionShadowService implements OnModuleInit, O
         this.lastScored += 1;
         this.logger.log(
           `v8.5 virtual shadow decision=${row.shadow_decision_id} ${row.instrument} checkpoint=${checkpointMinutes}m ` +
-            `action=${response.score?.action ?? 'UNKNOWN'} probability=${response.score?.probability ?? 'n/a'} authority=NONE`,
+            `artifact=${observationArtifact} action=${response.score?.action ?? 'UNKNOWN'} ` +
+            `probability=${response.score?.probability ?? 'n/a'} authority=NONE`,
         );
       }
     }
@@ -370,6 +410,7 @@ export class EnsemblePostEntryProtectionShadowService implements OnModuleInit, O
 
   private async persistObservation(
     row: ShadowDecisionRow,
+    observationArtifact: string,
     checkpointMinutes: number,
     checkpointAt: Date,
     marketDataConnectionId: string | null,
@@ -424,7 +465,7 @@ export class EnsemblePostEntryProtectionShadowService implements OnModuleInit, O
         row.user_id,
         row.shadow_decision_id,
         marketDataConnectionId,
-        PLAN_B_V85_ARTIFACT,
+        observationArtifact,
         checkpointMinutes,
         checkpointAt.toISOString(),
         response.state,

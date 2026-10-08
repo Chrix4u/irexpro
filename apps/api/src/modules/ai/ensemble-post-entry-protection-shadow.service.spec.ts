@@ -106,6 +106,12 @@ describe('EnsemblePostEntryProtectionShadowService', () => {
     const candidateSql = String(query.mock.calls[0]?.[0]);
     expect(candidateSql).toContain('admitted = true');
     expect(candidateSql).toContain("components ->> 'paperAdmitted' = 'true'");
+    expect(candidateSql).toContain("components -> 'governance' ->> 'netExpectedR'");
+    expect(candidateSql).toContain("components -> 'governance' ->> 'executionSpreadEvidenceValid'");
+    expect(candidateSql).toContain('NOT EXISTS');
+    expect(candidateSql).toContain("interval '15 minutes'");
+    expect(candidateSql).toContain('prior.evaluated_at = decision.evaluated_at');
+    expect(candidateSql).toContain('prior.id < decision.id');
 
     expect(aiEngineClient.scorePlanBV85PostEntryBrokerCheckpoint).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -144,6 +150,77 @@ describe('EnsemblePostEntryProtectionShadowService', () => {
       observedCheckpoints: 1,
       lastError: null,
     });
+  });
+
+  it('isolates strong rejected-edge outcome tracking from admitted post-entry evidence', async () => {
+    const now = new Date('2026-10-05T10:06:00Z');
+    const rejectedArtifact = 'plan-b-rejected-edge-outcome-shadow-v1';
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([
+        {
+          shadow_decision_id: '00000000-0000-0000-0000-000000000010',
+          user_id: '00000000-0000-0000-0000-000000000002',
+          instrument: 'GBPUSD',
+          direction: 'SELL',
+          evaluated_at: '2026-10-05T10:00:00Z',
+          entry_price: '1.33000000',
+          confidence: '0.67000000',
+          components: components(),
+          observation_artifact: rejectedArtifact,
+        },
+      ])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ count: 0 }]);
+
+    const dataSource = { query } as unknown as DataSource;
+    const config = {
+      get: jest.fn((key: string, defaultValue?: unknown) => {
+        if (key === 'vpsForexScanner.userId') return '00000000-0000-0000-0000-000000000002';
+        if (key === 'multimodelBrokerExpert.enabled') return true;
+        if (key === 'multimodelBrokerExpert.sourceConnectionId') {
+          return '00000000-0000-0000-0000-000000000099';
+        }
+        return defaultValue;
+      }),
+    } as unknown as ConfigService;
+    const aiEngineClient = {
+      scorePlanBV85PostEntryBrokerCheckpoint: jest.fn().mockResolvedValue({
+        state: 'READY',
+        reason: null,
+        status: null,
+        checkpoint_at: '2026-10-05T10:05:00Z',
+        market_data_sources: { M1: 'metaapi', M5: 'metaapi' },
+        score: {
+          artifact: 'plan-b-v85-profitable-state-giveback-classifier-v1',
+          mode: 'PROSPECTIVE_SHADOW_ONLY',
+          probability: 0.52,
+          threshold: 0.6,
+          current_r: 0.31,
+          eligible_profit_state: false,
+          action: 'OBSERVE',
+          modifies_execution: false,
+          execution_authority: 'NONE',
+          paper_promotion_eligible: false,
+        },
+      }),
+    } as unknown as AiEngineClient;
+
+    const service = new EnsemblePostEntryProtectionShadowService(
+      config,
+      dataSource,
+      aiEngineClient,
+    );
+    (service as unknown as { artifactReady: boolean }).artifactReady = true;
+    await service.runOnce(now);
+
+    expect(query.mock.calls[1]?.[1]?.[1]).toBe(rejectedArtifact);
+    expect(query.mock.calls[2]?.[1]?.[3]).toBe(rejectedArtifact);
+    expect(String(query.mock.calls[2]?.[0])).toContain("'NONE',false");
+    expect(query.mock.calls[3]?.[1]?.[0]).toBe(
+      'plan-b-v85-profitable-state-giveback-classifier-v1',
+    );
   });
 
   it('does not create checkpoints after the virtual position resolved', async () => {
