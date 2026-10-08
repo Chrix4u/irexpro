@@ -209,6 +209,31 @@ describe('Plan B multimodel prospective shadow', () => {
     expect(decemberAfterRollover.reasons).not.toContain('SESSION_QUALITY');
   });
 
+  it('hard-blocks PAPER admission when same-direction portfolio concentration fails', () => {
+    const score = scorePlanBMultimodelShadow(
+      {
+        instrument: 'EURUSD',
+        direction: 'SELL',
+        confidence: 0.66,
+        extensionAtr: 0.8,
+        volatilityScore: 0.1,
+        emaSeparation: 0.15,
+        mtfStrength: 0.05,
+        rsi14: 42,
+        shortHorizonMomentumAtr: 0.8,
+        scanTime: new Date('2026-10-08T12:05:00.000Z'),
+      },
+      [{ instrument: 'EURUSD', direction: 'SELL', lotSize: '0.10' }],
+    );
+
+    expect(score.regime).toBe('REVERSAL_CONFIRMED');
+    expect(score.portfolioQuality).toBeLessThan(0.35);
+    expect(score.reasons).toContain('PORTFOLIO_CONCENTRATION');
+    expect(score.consensusPassed).toBeGreaterThanOrEqual(score.consensusRequired);
+    expect(score.paperAdmitted).toBe(false);
+    expect(score.admitted).toBe(false);
+  });
+
   it('reduces portfolio quality for concentrated same-direction exposure', () => {
     const unexposed = scorePlanBMultimodelShadow(base);
     const concentrated = scorePlanBMultimodelShadow(base, [
