@@ -103,6 +103,10 @@ describe('EnsemblePostEntryProtectionShadowService', () => {
 
     await service.runOnce(now);
 
+    const candidateSql = String(query.mock.calls[0]?.[0]);
+    expect(candidateSql).toContain('admitted = true');
+    expect(candidateSql).toContain("components ->> 'paperAdmitted' = 'true'");
+
     expect(aiEngineClient.scorePlanBV85PostEntryBrokerCheckpoint).toHaveBeenCalledWith(
       expect.objectContaining({
         brokerConnectionId: '00000000-0000-0000-0000-000000000099',

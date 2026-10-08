@@ -270,7 +270,10 @@ export class EnsemblePostEntryProtectionShadowService implements OnModuleInit, O
         WHERE engine_code = $1
           AND model_version = $2
           AND user_id = $3
-          AND admitted = true
+          AND (
+            admitted = true
+            OR components ->> 'paperAdmitted' = 'true'
+          )
           AND evaluated_at >= $4::timestamptz - interval '8 hours'
         ORDER BY evaluated_at ASC
       `,
