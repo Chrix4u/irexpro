@@ -76,7 +76,7 @@ const SYMBOLS = Object.freeze([
 const CONFIDENCE_FLOOR = 0.64;
 const COUNTERFACTUAL_MIN_EDGE_R = 0.02;
 const COUNTERFACTUAL_COST_UNCERTAINTY_FRACTION = 0.25;
-const ACTIVE_MODEL_POLICY_VERSION = `${PLAN_B_ENSEMBLE_ARTIFACT}-bidirectional-v2-early-transition-v2-neutral-meta-v1`;
+const ACTIVE_MODEL_POLICY_VERSION = `${PLAN_B_ENSEMBLE_ARTIFACT}-bidirectional-v2-early-transition-v3-neutral-meta-momentum-v1`;
 const STOP_ATR_MULTIPLIER = 1.5;
 const TARGET_ATR_MULTIPLIER = 2.5;
 const PAPER_BASE_LOT_UPPER_BOUND = 0.1;
@@ -1020,6 +1020,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
               emaSeparation: best.emaSeparation,
               mtfStrength: best.mtfStrength,
               rsi14: best.rsi14,
+              shortHorizonMomentumAtr: best.shortHorizonMomentumAtr,
               scanTime: new Date(best.barTime.getTime() + BAR_MS),
             },
             portfolioPositions,

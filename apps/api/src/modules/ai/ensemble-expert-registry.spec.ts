@@ -61,6 +61,8 @@ describe('buildEnsembleExpertRegistry', () => {
       trained: false,
       executionAuthority: 'NONE',
       modifiesExecution: false,
+      artifact:
+        'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v3-neutral-meta-momentum-v1',
       prospectiveEvidenceRequired: true,
     });
   });

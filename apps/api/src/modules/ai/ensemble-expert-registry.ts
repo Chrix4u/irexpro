@@ -113,7 +113,8 @@ export function buildEnsembleExpertRegistry(
       kind: 'HEURISTIC_POLICY',
       lifecycle: 'COLLECTING',
       trained: false,
-      artifact: 'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v1',
+      artifact:
+        'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v3-neutral-meta-momentum-v1',
       dataAuthority: 'BROKER_NATIVE_OR_TWELVE_DATA_CLOSED_M5_CAUSAL_TRANSITION_FEATURES',
       executionAuthority: 'NONE',
       modifiesExecution: false,
