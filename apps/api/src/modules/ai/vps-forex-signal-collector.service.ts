@@ -41,6 +41,7 @@ import {
   summarizeEnsembleSleeveOutcomes,
 } from './ensemble-shadow-outcome';
 import { buildEnsembleExpertRegistry } from './ensemble-expert-registry';
+import { scoreExtensionExhaustionShadow } from './extension-exhaustion-shadow';
 import { EnsemblePostEntryProtectionShadowService } from './ensemble-post-entry-protection-shadow.service';
 import {
   HighConvictionOverlay,
@@ -1947,6 +1948,18 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
   ): Promise<void> {
     if (!this.dataSource) return;
 
+    const extensionExhaustionShadow = scoreExtensionExhaustionShadow({
+      regime: ensemble.regime,
+      driftState: governance.driftState,
+      confidence: candidate.confidence,
+      netExpectedR: governance.netExpectedR,
+      directionQuality: ensemble.directionQuality,
+      tradeQuality: ensemble.tradeQuality,
+      exitQuality: ensemble.exitQuality,
+      extensionAtr: candidate.extensionAtr,
+      executionSpreadEvidenceValid: governance.executionSpreadEvidenceValid,
+    });
+
     await this.dataSource.query(
       `
         INSERT INTO trading.ensemble_shadow_decisions (
@@ -2032,6 +2045,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           governance,
           macroEventRisk: macroEventAssessment,
           highConvictionOverlay,
+          extensionExhaustionShadow,
         }),
       ],
     );

@@ -122,6 +122,20 @@ export function buildEnsembleExpertRegistry(
         'PAPER-only transition route for strong net-edge TREND_WEAK setups before slower M15 alignment; promotion remains disabled pending independent episode evidence.',
     },
     {
+      code: 'extension-exhaustion-shadow',
+      label: 'Extension exhaustion shadow expert',
+      kind: 'HEURISTIC_POLICY',
+      lifecycle: 'COLLECTING',
+      trained: false,
+      artifact: 'extension-exhaustion-shadow-v1',
+      dataAuthority: 'BROKER_NATIVE_OR_TWELVE_DATA_CLOSED_M5_CAUSAL_EXTENSION_FEATURES',
+      executionAuthority: 'NONE',
+      modifiesExecution: false,
+      prospectiveEvidenceRequired: true,
+      description:
+        'Shadow-only observer for TREND_EXTENDED setups with NORMAL drift and positive net edge; collects independent episode evidence without changing PAPER admission or execution.',
+    },
+    {
       code: 'v8-fixed-meta-policy',
       label: 'Frozen v8 meta policy',
       kind: 'HEURISTIC_POLICY',
