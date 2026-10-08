@@ -1,7 +1,7 @@
 import { scorePlanBShadowMeta, V8ShadowMetaInput } from './v8-shadow-meta-scorer';
 
 export const PLAN_B_ENSEMBLE_ARTIFACT = 'plan-b-multimodel-shadow-v4';
-export const PLAN_B_ACTIVE_MODEL_POLICY_VERSION = `${PLAN_B_ENSEMBLE_ARTIFACT}-bidirectional-v2-early-transition-v2-neutral-meta-v1`;
+export const PLAN_B_ACTIVE_MODEL_POLICY_VERSION = `${PLAN_B_ENSEMBLE_ARTIFACT}-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v1`;
 export const PLAN_B_ENSEMBLE_MODE = 'PROSPECTIVE_SHADOW_ONLY';
 export const PLAN_B_CANDIDATE_CONFIDENCE_FLOOR = 0.64;
 export const PLAN_B_GROSS_EXPECTED_R_FLOOR = 0.08;
@@ -14,6 +14,7 @@ export const PLAN_B_EARLY_TRANSITION_MIN_EMA_SEPARATION = 0.12;
 export const PLAN_B_EARLY_TRANSITION_MAX_MTF_STRENGTH = 0.12;
 export const PLAN_B_EARLY_TRANSITION_MIN_MOMENTUM_ATR = -0.5;
 export const PLAN_B_EARLY_TRANSITION_MAX_MOMENTUM_ATR = 1.5;
+export const PLAN_B_PORTFOLIO_QUALITY_FLOOR = 0.35;
 
 const NEW_YORK_HOUR = new Intl.DateTimeFormat('en-US', {
   timeZone: 'America/New_York',
@@ -375,7 +376,7 @@ export function scorePlanBMultimodelShadow(
       ? PLAN_B_EARLY_TRANSITION_GROSS_EXPECTED_R_FLOOR
       : PLAN_B_GROSS_EXPECTED_R_FLOOR;
   if (meta.expectedR < requiredGrossExpectedR) reasons.push('EXPECTED_R');
-  if (portfolio.quality < 0.35) reasons.push('PORTFOLIO_CONCENTRATION');
+  if (portfolio.quality < PLAN_B_PORTFOLIO_QUALITY_FLOOR) reasons.push('PORTFOLIO_CONCENTRATION');
 
   const votes = [
     meta.admitted,
@@ -384,7 +385,7 @@ export function scorePlanBMultimodelShadow(
     exit >= 0.48,
     session >= 0.5,
     meta.expectedR >= requiredGrossExpectedR,
-    portfolio.quality >= 0.35,
+    portfolio.quality >= PLAN_B_PORTFOLIO_QUALITY_FLOOR,
   ];
   const consensusPassed = votes.filter(Boolean).length;
   // Equivalent strictness to the previous 7-of-8 rule after removing the
@@ -396,7 +397,8 @@ export function scorePlanBMultimodelShadow(
     consensusPassed >= consensusRequired &&
     input.confidence >= PLAN_B_CANDIDATE_CONFIDENCE_FLOOR &&
     meta.admitted &&
-    meta.expectedR >= requiredGrossExpectedR;
+    meta.expectedR >= requiredGrossExpectedR &&
+    portfolio.quality >= PLAN_B_PORTFOLIO_QUALITY_FLOOR;
   const paperAdmitted = regimeAllowed && coreAdmissionPassed;
   // Early transitions are deliberately PAPER-only until their independent
   // episode ledger qualifies them. Continuation and confirmed-reversal routes
