@@ -56,3 +56,6 @@ apps/web/.playwright/
 # AI training data and generated model artifacts
 services/ai-engine/data/
 services/ai-engine/models/*.json
+
+# MetaApi SDK runtime cache (never source-controlled)
+.metaapi/

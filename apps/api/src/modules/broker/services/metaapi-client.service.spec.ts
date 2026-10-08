@@ -70,4 +70,82 @@ describe('MetaApiClientService', () => {
     expect(connection.connect).toHaveBeenCalledTimes(1);
     expect(connection.waitSynchronized).toHaveBeenCalledTimes(1);
   });
+
+  it('closes an unsynchronized pooled RPC connection before replacing it', async () => {
+    await service.getOrCreateConnection(accountId);
+    connection.isSynchronized.mockReturnValue(false);
+
+    const replacement = {
+      connect: jest.fn().mockResolvedValue(undefined),
+      waitSynchronized: jest.fn().mockResolvedValue(undefined),
+      isSynchronized: jest.fn().mockReturnValue(true),
+      close: jest.fn().mockResolvedValue(undefined),
+    };
+    account.getRPCConnection.mockReturnValueOnce(replacement);
+
+    const result = await service.getOrCreateConnection(accountId);
+
+    expect(connection.close).toHaveBeenCalledTimes(1);
+    expect(result).toBe(replacement);
+    expect(replacement.connect).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes a half-open RPC connection when synchronization fails', async () => {
+    connection.waitSynchronized.mockRejectedValueOnce(new Error('sync timeout'));
+
+    await expect(service.getOrCreateConnection(accountId)).rejects.toThrow('sync timeout');
+
+    expect(connection.close).toHaveBeenCalledTimes(1);
+    expect(service.hasConnection(accountId)).toBe(false);
+  });
+
+  it('closes an unsynchronized shared in-flight connection when a synchronized waiter fails', async () => {
+    let releaseConnect!: () => void;
+    let markConnectStarted!: () => void;
+    const connectStarted = new Promise<void>((resolve) => {
+      markConnectStarted = resolve;
+    });
+    const connectGate = new Promise<void>((resolve) => {
+      releaseConnect = resolve;
+    });
+    connection.connect.mockImplementationOnce(async () => {
+      markConnectStarted();
+      await connectGate;
+    });
+    connection.isSynchronized.mockReturnValue(false);
+    connection.waitSynchronized.mockRejectedValueOnce(new Error('shared sync timeout'));
+
+    const unsynchronizedCaller = service.getOrCreateConnection(accountId, {
+      requireSynchronization: false,
+    });
+    await connectStarted;
+    const synchronizedCaller = service.getOrCreateConnection(accountId, {
+      requireSynchronization: true,
+    });
+    releaseConnect();
+
+    await expect(unsynchronizedCaller).resolves.toBe(connection);
+    await expect(synchronizedCaller).rejects.toThrow('shared sync timeout');
+    expect(connection.close).toHaveBeenCalledTimes(1);
+    expect(service.hasConnection(accountId)).toBe(false);
+  });
+
+  it('does not remove a newer pooled connection when asked to invalidate an older connection', async () => {
+    await service.getOrCreateConnection(accountId);
+    const oldConnection = connection;
+    oldConnection.isSynchronized.mockReturnValue(false);
+    const replacement = {
+      connect: jest.fn().mockResolvedValue(undefined),
+      waitSynchronized: jest.fn().mockResolvedValue(undefined),
+      isSynchronized: jest.fn().mockReturnValue(true),
+      close: jest.fn().mockResolvedValue(undefined),
+    };
+    account.getRPCConnection.mockReturnValueOnce(replacement);
+    await service.getOrCreateConnection(accountId);
+
+    await service.removeConnection(accountId, oldConnection);
+
+    expect(service.hasConnection(accountId)).toBe(true);
+    expect(replacement.close).not.toHaveBeenCalled();
+  });
 });
