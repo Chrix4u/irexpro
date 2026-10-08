@@ -13,6 +13,7 @@ import { ExecutionService } from '../execution/execution.service';
 import { ExecutionMode } from '../execution/interfaces/execution-authority';
 import { BrokerService } from '../broker/broker.service';
 import { LivePaperMarketDataService } from '../broker/services/live-paper-market-data.service';
+import * as planBShadowModule from './plan-b-multimodel-shadow';
 
 describe('dynamic PAPER lot ceiling', () => {
   const base = {
@@ -388,7 +389,7 @@ describe('VpsForexSignalCollectorService', () => {
       'user-1',
       'conn-1',
       'irexpro-multimodel-ensemble-v1',
-      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v1',
+      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v3-neutral-meta-momentum-v1',
     ]);
     expect(restored).toBeDefined();
     expect(restored.direction).toBe(current!.direction);
@@ -431,7 +432,7 @@ describe('VpsForexSignalCollectorService', () => {
       'user-1',
       'conn-1',
       'irexpro-multimodel-ensemble-v1',
-      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v1',
+      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v3-neutral-meta-momentum-v1',
     ]);
   });
 
@@ -568,7 +569,7 @@ describe('VpsForexSignalCollectorService', () => {
       'irexpro-multimodel-ensemble-v1',
       'USDJPY',
       'BUY',
-      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v1',
+      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v3-neutral-meta-momentum-v1',
     ]);
   });
 
@@ -621,6 +622,57 @@ describe('VpsForexSignalCollectorService', () => {
     expect((collector as any).lastEnsembleDecision.instrument).toBe('EURUSD');
     expect((collector as any).lastEnsembleDecision.consensusRequired).toBeGreaterThan(0);
     expect(live.getOHLCV('EURUSD', 'M5', 70, 'conn-1')).toHaveLength(70);
+  });
+
+  it('propagates direction-adjusted short-horizon momentum into the Plan B scorer', async () => {
+    const live = new LivePaperMarketDataService();
+    const shadowQuery = jest.fn().mockResolvedValue([]);
+    const scoreSpy = jest.spyOn(planBShadowModule, 'scorePlanBMultimodelShadow');
+    const collector = new VpsForexSignalCollectorService(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+      }),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      {
+        getActiveSession: jest.fn().mockResolvedValue({
+          id: 'session-1',
+          brokerConnectionId: 'conn-1',
+          executionMode: ExecutionMode.PAPER_ONLY,
+        }),
+      } as unknown as ExecutionService,
+      {
+        getCurrentPriceForConnection: jest.fn().mockResolvedValue({ bid: '1', ask: '1.1' }),
+      } as unknown as BrokerService,
+      live,
+      aiEngineClientMock(),
+      { query: shadowQuery } as any,
+    );
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => allTrendPayload() });
+
+    try {
+      await collector.collectOnce(fetchMock as unknown as typeof fetch);
+
+      const eurBuyCandidate = buildDirectionalCandidates('EURUSD', trendCandles()).find(
+        (candidate) => candidate.direction === 'BUY',
+      );
+      expect(eurBuyCandidate).toBeDefined();
+      expect(Math.abs(eurBuyCandidate!.shortHorizonMomentumAtr)).toBeGreaterThan(0);
+      const scorerCall = scoreSpy.mock.calls.find(
+        ([input]) => input.instrument === 'EURUSD' && input.direction === 'BUY',
+      );
+      expect(scorerCall).toBeDefined();
+      expect(scorerCall?.[0].shortHorizonMomentumAtr).toBeCloseTo(
+        eurBuyCandidate!.shortHorizonMomentumAtr,
+        10,
+      );
+    } finally {
+      scoreSpy.mockRestore();
+    }
   });
 
   it('evaluates every qualifying pair in the same scan instead of only the top-ranked pair', async () => {
