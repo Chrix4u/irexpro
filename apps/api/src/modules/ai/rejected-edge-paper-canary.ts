@@ -39,6 +39,27 @@ export interface RejectedEdgeCanaryDecision {
   reason: string;
 }
 
+export type RejectedEdgeCanaryEvaluationState =
+  | 'NORMAL_PAPER_EXECUTION'
+  | 'EVIDENCE_SERVICE_UNAVAILABLE'
+  | 'NET_EXPECTED_R_INVALID'
+  | 'NET_EXPECTED_R_BELOW_FLOOR'
+  | 'EVALUATED';
+
+export function rejectedEdgeCanaryEvaluationState(input: {
+  normalPaperExecution: boolean;
+  evidenceServiceAvailable: boolean;
+  netExpectedR: number;
+}): RejectedEdgeCanaryEvaluationState {
+  if (input.normalPaperExecution) return 'NORMAL_PAPER_EXECUTION';
+  if (!input.evidenceServiceAvailable) return 'EVIDENCE_SERVICE_UNAVAILABLE';
+  if (!Number.isFinite(input.netExpectedR)) return 'NET_EXPECTED_R_INVALID';
+  if (input.netExpectedR < REJECTED_EDGE_CANARY_MIN_NET_EXPECTED_R) {
+    return 'NET_EXPECTED_R_BELOW_FLOOR';
+  }
+  return 'EVALUATED';
+}
+
 const ALLOWED_RESEARCH_BLOCKERS = new Set([
   'ENSEMBLE_NOT_PAPER_ADMITTED',
   'ENSEMBLE_NOT_PROMOTABLE_ADMISSION',

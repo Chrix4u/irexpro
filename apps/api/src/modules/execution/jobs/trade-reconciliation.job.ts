@@ -167,7 +167,7 @@ export class TradeReconciliationJob extends WorkerHost {
       `Reconciliation cycle complete: ${connectionsReconciled} reconciled, ` +
         `${providerQuotaDeferredConnections} provider-quota deferred, ` +
         `${discrepanciesDetected} detected (${discrepanciesNew} new), ` +
-        `${discrepanciesAutoResolved} auto-resolved, ${discrepanciesOpen} open, ` +
+        `${discrepanciesAutoResolved} auto-resolved, ${discrepanciesOpen} open discrepancies, ` +
         `${failedConnections} failed; protective orders: ${protectiveOrdersChecked} ` +
         `checked, ${protectiveOrdersRepaired} repaired, ${protectiveRepairsFailed} ` +
         `repair failures`,

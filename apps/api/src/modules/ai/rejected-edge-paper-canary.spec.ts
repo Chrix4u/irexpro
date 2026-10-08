@@ -1,4 +1,7 @@
-import { evaluateRejectedEdgePaperCanary } from './rejected-edge-paper-canary';
+import {
+  evaluateRejectedEdgePaperCanary,
+  rejectedEdgeCanaryEvaluationState,
+} from './rejected-edge-paper-canary';
 
 describe('rejected-edge PAPER canary', () => {
   const evidence = {
@@ -75,6 +78,30 @@ describe('rejected-edge PAPER canary', () => {
         evidence,
       }).eligible,
     ).toBe(false);
+  });
+
+  it('explains why the canary was not evaluated instead of reporting an opaque state', () => {
+    expect(
+      rejectedEdgeCanaryEvaluationState({
+        normalPaperExecution: false,
+        evidenceServiceAvailable: true,
+        netExpectedR: 0.08,
+      }),
+    ).toBe('NET_EXPECTED_R_BELOW_FLOOR');
+    expect(
+      rejectedEdgeCanaryEvaluationState({
+        normalPaperExecution: false,
+        evidenceServiceAvailable: false,
+        netExpectedR: 0.2,
+      }),
+    ).toBe('EVIDENCE_SERVICE_UNAVAILABLE');
+    expect(
+      rejectedEdgeCanaryEvaluationState({
+        normalPaperExecution: false,
+        evidenceServiceAvailable: true,
+        netExpectedR: 0.2,
+      }),
+    ).toBe('EVALUATED');
   });
 
   it('does not reuse continuation evidence for early-transition or reversal execution', () => {
