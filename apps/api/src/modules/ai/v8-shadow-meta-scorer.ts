@@ -2,7 +2,7 @@ export const V8_SHADOW_ARTIFACT = 'v8-shadow-online-meta-v1';
 export const V8_SHADOW_MODE = 'PROSPECTIVE_SHADOW_ONLY';
 export const V8_SHADOW_ADMISSION_THRESHOLD = 0.46;
 export const V8_SHADOW_TARGET_R_MULTIPLE = 2.5 / 1.5;
-export const PLAN_B_SHADOW_ARTIFACT = 'plan-b-online-meta-v1';
+export const PLAN_B_SHADOW_ARTIFACT = 'plan-b-online-meta-v2-instrument-neutral';
 export const PLAN_B_SHADOW_MODE = 'PROSPECTIVE_SHADOW_ONLY';
 export const PLAN_B_SHADOW_ADMISSION_THRESHOLD = 0.40828402366863903;
 
@@ -136,13 +136,23 @@ export function scoreV8ShadowMeta(input: V8ShadowMetaInput): V8ShadowMetaScore {
 
 export function scorePlanBShadowMeta(input: V8ShadowMetaInput): PlanBShadowMetaScore {
   const base = scoreV8ShadowMeta(input);
-  const admitted = base.probability >= PLAN_B_SHADOW_ADMISSION_THRESHOLD;
+  const instrument = input.instrument.trim().toUpperCase();
+  const frozenInstrumentContribution =
+    (BASE_WEIGHTS[`sym_${instrument}`] ?? 0) +
+    (BASE_WEIGHTS[`ps_${instrument}_${input.direction}`] ?? 0);
+  const baseLogit = Math.log(base.probability / (1 - base.probability));
+  // Plan B governs pair/side authority prospectively. Remove the frozen
+  // development-era instrument and instrument×side effects while preserving
+  // the original v8 score unchanged as a comparison baseline.
+  const probability = sigmoid(baseLogit - frozenInstrumentContribution);
+  const expectedR = probability * V8_SHADOW_TARGET_R_MULTIPLE - (1 - probability);
+  const admitted = probability >= PLAN_B_SHADOW_ADMISSION_THRESHOLD;
   return {
     artifact: PLAN_B_SHADOW_ARTIFACT,
     mode: PLAN_B_SHADOW_MODE,
-    probability: base.probability,
+    probability,
     admissionThreshold: PLAN_B_SHADOW_ADMISSION_THRESHOLD,
-    expectedR: base.expectedR,
+    expectedR,
     admitted,
     reason: admitted ? 'ADMIT' : 'REJECT_EXPECTED_VALUE',
   };

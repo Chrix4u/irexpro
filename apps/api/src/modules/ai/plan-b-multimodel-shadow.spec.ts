@@ -76,16 +76,16 @@ describe('Plan B multimodel prospective shadow', () => {
 
   it('admits a strong confirmed reversal before slower M15 trend alignment catches up', () => {
     const score = scorePlanBMultimodelShadow({
-      instrument: 'USDCAD',
+      instrument: 'EURUSD',
       direction: 'SELL',
-      confidence: 0.642,
-      extensionAtr: 1.047,
-      volatilityScore: 0.098,
-      emaSeparation: 0.153,
-      mtfStrength: 0,
-      rsi14: 43.5,
-      shortHorizonMomentumAtr: 0.789,
-      scanTime: new Date('2026-10-07T19:05:00.000Z'),
+      confidence: 0.66,
+      extensionAtr: 0.8,
+      volatilityScore: 0.1,
+      emaSeparation: 0.15,
+      mtfStrength: 0.05,
+      rsi14: 42,
+      shortHorizonMomentumAtr: 0.8,
+      scanTime: new Date('2026-10-07T14:05:00.000Z'),
     });
     expect(score.regime).toBe('REVERSAL_CONFIRMED');
     expect(score.strategyRoute).toBe('CONFIRMED_REVERSAL');
@@ -115,16 +115,16 @@ describe('Plan B multimodel prospective shadow', () => {
 
   it('paper-admits a strong early transition before M15 alignment fully catches up', () => {
     const score = scorePlanBMultimodelShadow({
-      instrument: 'USDCAD',
+      instrument: 'EURUSD',
       direction: 'SELL',
-      confidence: 0.64115498,
-      extensionAtr: 0.5036534883754534,
-      volatilityScore: 0.08680744442421073,
-      emaSeparation: 0.18806938253200653,
-      mtfStrength: 0.0825608930811788,
-      rsi14: 44.88867106850082,
-      shortHorizonMomentumAtr: -0.10774705391807261,
-      scanTime: new Date('2026-10-07T22:50:00.000Z'),
+      confidence: 0.7,
+      extensionAtr: 0.55,
+      volatilityScore: 0.1,
+      emaSeparation: 0.19,
+      mtfStrength: 0.08,
+      rsi14: 43,
+      shortHorizonMomentumAtr: 0.2,
+      scanTime: new Date('2026-10-07T14:05:00.000Z'),
     });
     expect(score.regime).toBe('TRANSITION_EARLY');
     expect(score.strategyRoute).toBe('EARLY_TRANSITION');

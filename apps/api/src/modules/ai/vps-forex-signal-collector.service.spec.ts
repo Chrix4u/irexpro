@@ -388,7 +388,7 @@ describe('VpsForexSignalCollectorService', () => {
       'user-1',
       'conn-1',
       'irexpro-multimodel-ensemble-v1',
-      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v1',
+      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v1',
     ]);
     expect(restored).toBeDefined();
     expect(restored.direction).toBe(current!.direction);
@@ -431,7 +431,7 @@ describe('VpsForexSignalCollectorService', () => {
       'user-1',
       'conn-1',
       'irexpro-multimodel-ensemble-v1',
-      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v1',
+      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v1',
     ]);
   });
 
@@ -568,7 +568,7 @@ describe('VpsForexSignalCollectorService', () => {
       'irexpro-multimodel-ensemble-v1',
       'USDJPY',
       'BUY',
-      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v1',
+      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v1',
     ]);
   });
 
