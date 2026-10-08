@@ -42,6 +42,11 @@ import {
 } from './ensemble-shadow-outcome';
 import { buildEnsembleExpertRegistry } from './ensemble-expert-registry';
 import { scoreExtensionExhaustionShadow } from './extension-exhaustion-shadow';
+import {
+  evaluateRejectedEdgePaperCanary,
+  RejectedEdgeCanaryDecision,
+  RejectedEdgeCanaryEvidence,
+} from './rejected-edge-paper-canary';
 import { EnsemblePostEntryProtectionShadowService } from './ensemble-post-entry-protection-shadow.service';
 import {
   HighConvictionOverlay,
@@ -959,6 +964,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           ensembleGovernance: EnsembleGovernanceDecision;
           macroEventAssessment: MacroEventRiskAssessment;
           highConvictionOverlay: HighConvictionOverlay;
+          rejectedEdgeCanary: RejectedEdgeCanaryDecision | null;
+          rejectedEdgeCanaryEvidence: RejectedEdgeCanaryEvidence | null;
         }> = [];
 
         for (const best of [...pairCandidates].sort((a, b) => b.score - a.score)) {
@@ -1113,7 +1120,34 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             macroEventAssessment,
             highConvictionOverlay,
           );
-          if (!canExecuteMultiModelPaper(planBEnsemble, ensembleGovernance)) {
+          const normalPaperExecution = canExecuteMultiModelPaper(planBEnsemble, ensembleGovernance);
+          let rejectedEdgeCanary: RejectedEdgeCanaryDecision | null = null;
+          let rejectedEdgeCanaryEvidence: RejectedEdgeCanaryEvidence | null = null;
+          if (
+            !normalPaperExecution &&
+            this.ensemblePostEntryProtection &&
+            ensembleGovernance.netExpectedR >= 0.12
+          ) {
+            rejectedEdgeCanaryEvidence =
+              await this.ensemblePostEntryProtection.getRejectedEdgeCanaryEvidence(
+                userId,
+                best.instrument,
+                best.direction,
+              );
+            rejectedEdgeCanary = evaluateRejectedEdgePaperCanary({
+              candidate: {
+                confidence: best.confidence,
+                netExpectedR: ensembleGovernance.netExpectedR,
+                executionSpreadEvidenceValid: ensembleGovernance.executionSpreadEvidenceValid,
+                eventRisk: ensembleGovernance.eventRisk,
+                portfolioQuality: planBEnsemble.portfolioQuality,
+                strategyRoute: planBEnsemble.strategyRoute,
+                paperExecutionBlockers: ensembleGovernance.paperExecutionBlockers,
+              },
+              evidence: rejectedEdgeCanaryEvidence,
+            });
+          }
+          if (!normalPaperExecution && !rejectedEdgeCanary?.eligible) {
             this.logger.log(
               `Multi-model ensemble ${best.instrument} ${best.direction} ` +
                 `paperAdmitted=${planBEnsemble.paperAdmitted} admitted=${planBEnsemble.admitted} ` +
@@ -1123,11 +1157,20 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
                 `costSource=${ensembleGovernance.executionCostSource} ` +
                 `drift=${ensembleGovernance.driftState} sleeve=${ensembleGovernance.sleeveState} ` +
                 `highConviction=${highConvictionOverlay.state} ` +
+                `canary=${rejectedEdgeCanary?.reason ?? 'NOT_EVALUATED'} ` +
                 `paperGovernance=${ensembleGovernance.paperExecutionBlockers.join(',') || 'PASS'} ` +
                 `promotionGovernance=${ensembleGovernance.blockers.join(',') || 'PASS'} ` +
                 `reasons=${planBEnsemble.reasons.join(',')}`,
             );
             continue;
+          }
+          if (rejectedEdgeCanary?.eligible) {
+            this.logger.warn(
+              `Rejected-edge PAPER canary ${best.instrument} ${best.direction} execution=ELIGIBLE ` +
+                `netExpectedR=${ensembleGovernance.netExpectedR.toFixed(4)} ` +
+                `global30m=${rejectedEdgeCanaryEvidence?.global30m.positive ?? 0}/${rejectedEdgeCanaryEvidence?.global30m.samples ?? 0} ` +
+                `pairSide30m=${rejectedEdgeCanaryEvidence?.pairSide30m.positive ?? 0}/${rejectedEdgeCanaryEvidence?.pairSide30m.samples ?? 0}`,
+            );
           }
 
           executableCounterfactuals.push({
@@ -1141,6 +1184,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             ensembleGovernance,
             macroEventAssessment,
             highConvictionOverlay,
+            rejectedEdgeCanary,
+            rejectedEdgeCanaryEvidence,
           });
         }
 
@@ -1181,6 +1226,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           planBEnsemble,
           portfolioSnapshotAvailable,
           ensembleGovernance,
+          rejectedEdgeCanary,
+          rejectedEdgeCanaryEvidence,
         } = chosen;
 
         this.lastPublishedOpportunity.set(best.instrument, {
@@ -1204,14 +1251,16 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           continue;
         }
 
-        const dynamicLotSizing = dynamicPaperLotUpperBound({
-          confidence: best.confidence,
-          metaProbability: planBEnsemble.metaProbability,
-          netExpectedR: ensembleGovernance.netExpectedR,
-          consensusPassed: planBEnsemble.consensusPassed,
-          consensusRequired: planBEnsemble.consensusRequired,
-          volatilityScore: best.volatilityScore,
-        });
+        const dynamicLotSizing = rejectedEdgeCanary?.eligible
+          ? { upperBound: PAPER_BASE_LOT_UPPER_BOUND, tier: 'BASE' as const }
+          : dynamicPaperLotUpperBound({
+              confidence: best.confidence,
+              metaProbability: planBEnsemble.metaProbability,
+              netExpectedR: ensembleGovernance.netExpectedR,
+              consensusPassed: planBEnsemble.consensusPassed,
+              consensusRequired: planBEnsemble.consensusRequired,
+              volatilityScore: best.volatilityScore,
+            });
 
         const outcome = await this.aiSignalService.receiveSignal({
           signalId,
@@ -1234,7 +1283,9 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           marketRegime: 'TRENDING',
           volatilityScore: best.volatilityScore,
           generatedAt: new Date(),
-          modelVersion: `external-provider/${ACTIVE_ENGINE_CODE}/paper-only-v1`,
+          modelVersion: rejectedEdgeCanary?.eligible
+            ? `external-provider/${ACTIVE_ENGINE_CODE}/paper-rejected-edge-canary-v1`
+            : `external-provider/${ACTIVE_ENGINE_CODE}/paper-only-v1`,
           metadata: {
             signal_source: 'EXTERNAL_PROVIDER',
             external_provider_code: ACTIVE_ENGINE_CODE,
@@ -1243,6 +1294,12 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             multi_model_execution_authority: MULTI_MODEL_PAPER_EXECUTION_ENABLED,
             external_provider_paper_only: true,
             production_eligible: false,
+            rejected_edge_canary: rejectedEdgeCanary?.eligible ?? false,
+            rejected_edge_canary_artifact: rejectedEdgeCanary?.artifact ?? null,
+            rejected_edge_canary_reason: rejectedEdgeCanary?.reason ?? null,
+            rejected_edge_canary_global_30m: rejectedEdgeCanaryEvidence?.global30m ?? null,
+            rejected_edge_canary_pair_side_30m: rejectedEdgeCanaryEvidence?.pairSide30m ?? null,
+            main_strategy_qualification_evidence: !rejectedEdgeCanary?.eligible,
             source_reference:
               this.lastMarketDataAuthority === 'METAAPI_BROKER_FALLBACK'
                 ? 'MetaTrader broker-native M5 closed candles via MetaApi fallback'
