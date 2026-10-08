@@ -6,7 +6,9 @@ import { BrokerService } from '../broker/broker.service';
 import { LivePaperMarketDataService } from '../broker/services/live-paper-market-data.service';
 
 function config(): ConfigService {
-  return { get: jest.fn((_key: string, fallback?: unknown) => fallback) } as unknown as ConfigService;
+  return {
+    get: jest.fn((_key: string, fallback?: unknown) => fallback),
+  } as unknown as ConfigService;
 }
 
 function aiEngineClientMock() {
@@ -66,8 +68,9 @@ describe('full bidirectional shadow outcome learning', () => {
 
     await (collector as any).resolvePendingEnsembleShadowOutcomes('user-1', 'conn-1', candles);
 
-    const selectCall = query.mock.calls.find(([sql]) =>
-      String(sql).includes('SELECT') && String(sql).includes('ensemble_shadow_decisions'),
+    const selectCall = query.mock.calls.find(
+      ([sql]) =>
+        String(sql).includes('SELECT') && String(sql).includes('ensemble_shadow_decisions'),
     );
     expect(selectCall).toBeDefined();
     const selectSql = String(selectCall?.[0]);
