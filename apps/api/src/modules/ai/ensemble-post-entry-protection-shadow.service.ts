@@ -5,7 +5,10 @@ import {
   AiEngineClient,
   PlanBV85BrokerCheckpointResponse,
 } from '../ai-engine-client/ai-engine-client.service';
-import { PLAN_B_ENSEMBLE_ARTIFACT } from './plan-b-multimodel-shadow';
+import {
+  PLAN_B_ACTIVE_MODEL_POLICY_VERSION,
+  PLAN_B_ENSEMBLE_ARTIFACT,
+} from './plan-b-multimodel-shadow';
 import { PLAN_B_V85_ARTIFACT, dueV85Checkpoints } from './post-entry-protection-shadow.service';
 
 const ACTIVE_ENGINE_CODE = 'irexpro-multimodel-ensemble-v1';
@@ -129,6 +132,7 @@ export class EnsemblePostEntryProtectionShadowService implements OnModuleInit, O
       enabled: this.artifactReady,
       cohort: 'ENSEMBLE_SHADOW_DECISIONS' as const,
       sourceArtifact: PLAN_B_ENSEMBLE_ARTIFACT,
+      sourcePolicyVersion: PLAN_B_ACTIVE_MODEL_POLICY_VERSION,
       executionAuthority: 'NONE' as const,
       modifiesExecution: false,
       cadenceSeconds: 60,
@@ -187,7 +191,7 @@ export class EnsemblePostEntryProtectionShadowService implements OnModuleInit, O
           AND decision.engine_code = $3
           AND decision.model_version = $4
       `,
-      [userId, PLAN_B_V85_ARTIFACT, ACTIVE_ENGINE_CODE, PLAN_B_ENSEMBLE_ARTIFACT],
+      [userId, PLAN_B_V85_ARTIFACT, ACTIVE_ENGINE_CODE, PLAN_B_ACTIVE_MODEL_POLICY_VERSION],
     )) as Array<{
       observed_checkpoints: number | string;
       distinct_decisions_observed: number | string;
@@ -270,7 +274,7 @@ export class EnsemblePostEntryProtectionShadowService implements OnModuleInit, O
           AND evaluated_at >= $4::timestamptz - interval '8 hours'
         ORDER BY evaluated_at ASC
       `,
-      [ACTIVE_ENGINE_CODE, PLAN_B_ENSEMBLE_ARTIFACT, userId, now.toISOString()],
+      [ACTIVE_ENGINE_CODE, PLAN_B_ACTIVE_MODEL_POLICY_VERSION, userId, now.toISOString()],
     )) as ShadowDecisionRow[];
   }
 
@@ -445,7 +449,7 @@ export class EnsemblePostEntryProtectionShadowService implements OnModuleInit, O
           AND decision.model_version = $3
           AND observation.state IN ('READY', 'NOT_YET_ELIGIBLE')
       `,
-      [PLAN_B_V85_ARTIFACT, ACTIVE_ENGINE_CODE, PLAN_B_ENSEMBLE_ARTIFACT],
+      [PLAN_B_V85_ARTIFACT, ACTIVE_ENGINE_CODE, PLAN_B_ACTIVE_MODEL_POLICY_VERSION],
     )) as Array<{ count: number | string }>;
     this.observedCheckpoints = Number(rows[0]?.count ?? 0);
   }
