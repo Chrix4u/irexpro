@@ -44,6 +44,7 @@ import { buildEnsembleExpertRegistry } from './ensemble-expert-registry';
 import { scoreExtensionExhaustionShadow } from './extension-exhaustion-shadow';
 import {
   evaluateRejectedEdgePaperCanary,
+  rejectedEdgeCanaryEvaluationState,
   RejectedEdgeCanaryDecision,
   RejectedEdgeCanaryEvidence,
 } from './rejected-edge-paper-canary';
@@ -1122,13 +1123,25 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             highConvictionOverlay,
           );
           const normalPaperExecution = canExecuteMultiModelPaper(planBEnsemble, ensembleGovernance);
+          const canaryEvaluationState = rejectedEdgeCanaryEvaluationState({
+            normalPaperExecution,
+            evidenceServiceAvailable: Boolean(this.ensemblePostEntryProtection),
+            netExpectedR: ensembleGovernance.netExpectedR,
+          });
+          const extensionExhaustionDiagnostic = scoreExtensionExhaustionShadow({
+            regime: planBEnsemble.regime,
+            driftState: ensembleGovernance.driftState,
+            confidence: best.confidence,
+            netExpectedR: ensembleGovernance.netExpectedR,
+            directionQuality: planBEnsemble.directionQuality,
+            tradeQuality: planBEnsemble.tradeQuality,
+            exitQuality: planBEnsemble.exitQuality,
+            extensionAtr: best.extensionAtr,
+            executionSpreadEvidenceValid: ensembleGovernance.executionSpreadEvidenceValid,
+          });
           let rejectedEdgeCanary: RejectedEdgeCanaryDecision | null = null;
           let rejectedEdgeCanaryEvidence: RejectedEdgeCanaryEvidence | null = null;
-          if (
-            !normalPaperExecution &&
-            this.ensemblePostEntryProtection &&
-            ensembleGovernance.netExpectedR >= 0.12
-          ) {
+          if (canaryEvaluationState === 'EVALUATED' && this.ensemblePostEntryProtection) {
             rejectedEdgeCanaryEvidence =
               await this.ensemblePostEntryProtection.getRejectedEdgeCanaryEvidence(
                 userId,
@@ -1158,7 +1171,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
                 `costSource=${ensembleGovernance.executionCostSource} ` +
                 `drift=${ensembleGovernance.driftState} sleeve=${ensembleGovernance.sleeveState} ` +
                 `highConviction=${highConvictionOverlay.state} ` +
-                `canary=${rejectedEdgeCanary?.reason ?? 'NOT_EVALUATED'} ` +
+                `canary=${rejectedEdgeCanary?.reason ?? canaryEvaluationState} ` +
+                `extensionExhaustion=${extensionExhaustionDiagnostic.reason} ` +
                 `paperGovernance=${ensembleGovernance.paperExecutionBlockers.join(',') || 'PASS'} ` +
                 `promotionGovernance=${ensembleGovernance.blockers.join(',') || 'PASS'} ` +
                 `reasons=${planBEnsemble.reasons.join(',')}`,

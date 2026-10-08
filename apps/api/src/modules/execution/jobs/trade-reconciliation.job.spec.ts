@@ -317,4 +317,17 @@ describe('TradeReconciliationJob', () => {
     expect(result.protectiveOrdersChecked).toBe(1);
     expect(protectiveOrderReconciliation.reconcileProtectiveOrders).toHaveBeenCalledTimes(2);
   });
+
+  it('labels carried reconciliation state as open discrepancies, not open positions', async () => {
+    stateReconciliation.findReconcilableConnections.mockResolvedValue([makeConnection('conn-1')]);
+    stateReconciliation.runForConnection.mockResolvedValue(
+      makeOutcome('conn-1', { discrepanciesOpen: 11 }),
+    );
+    const logSpy = jest.spyOn((job as any).logger, 'log').mockImplementation(() => undefined);
+
+    await job.process(fakeJob);
+
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('11 open discrepancies'));
+    expect(logSpy).not.toHaveBeenCalledWith(expect.stringContaining('11 open, 0 failed'));
+  });
 });
