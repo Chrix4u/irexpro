@@ -17,6 +17,7 @@ import {
   scoreV8ShadowMeta,
 } from './v8-shadow-meta-scorer';
 import {
+  PLAN_B_ACTIVE_MODEL_POLICY_VERSION,
   PLAN_B_ENSEMBLE_ARTIFACT,
   PLAN_B_GROSS_EXPECTED_R_FLOOR,
   PlanBEnsembleScore,
@@ -76,7 +77,7 @@ const SYMBOLS = Object.freeze([
 const CONFIDENCE_FLOOR = 0.64;
 const COUNTERFACTUAL_MIN_EDGE_R = 0.02;
 const COUNTERFACTUAL_COST_UNCERTAINTY_FRACTION = 0.25;
-const ACTIVE_MODEL_POLICY_VERSION = `${PLAN_B_ENSEMBLE_ARTIFACT}-bidirectional-v2-early-transition-v2-neutral-meta-v1`;
+const ACTIVE_MODEL_POLICY_VERSION = PLAN_B_ACTIVE_MODEL_POLICY_VERSION;
 const STOP_ATR_MULTIPLIER = 1.5;
 const TARGET_ATR_MULTIPLIER = 2.5;
 const PAPER_BASE_LOT_UPPER_BOUND = 0.1;
@@ -692,6 +693,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           enabled: false,
           cohort: 'ENSEMBLE_SHADOW_DECISIONS' as const,
           sourceArtifact: PLAN_B_ENSEMBLE_ARTIFACT,
+          sourcePolicyVersion: PLAN_B_ACTIVE_MODEL_POLICY_VERSION,
           executionAuthority: 'NONE' as const,
           modifiesExecution: false,
           cadenceSeconds: 60,
