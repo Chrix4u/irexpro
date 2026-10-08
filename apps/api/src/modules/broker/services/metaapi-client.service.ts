@@ -85,6 +85,7 @@ export class MetaApiClientService implements OnModuleDestroy {
       }
       this.logger.warn(`Connection for account ${metaApiAccountId} lost sync — reconnecting`);
       this.connectionPool.delete(metaApiAccountId);
+      await this.closeConnectionQuietly(metaApiAccountId, conn, 'stale pooled connection');
     }
 
     const inFlight = this.connectionCreationPool.get(metaApiAccountId);
@@ -95,7 +96,12 @@ export class MetaApiClientService implements OnModuleDestroy {
         typeof connection.isSynchronized === 'function' &&
         !connection.isSynchronized()
       ) {
-        await connection.waitSynchronized(this.SYNC_TIMEOUT_SECONDS);
+        try {
+          await connection.waitSynchronized(this.SYNC_TIMEOUT_SECONDS);
+        } catch (err) {
+          await this.removeConnection(metaApiAccountId, connection);
+          throw err;
+        }
       }
       return connection;
     }
@@ -112,9 +118,18 @@ export class MetaApiClientService implements OnModuleDestroy {
       await account.waitDeployed();
 
       const connection = account.getRPCConnection();
-      await connection.connect();
-      if (requireSynchronization) {
-        await connection.waitSynchronized(this.SYNC_TIMEOUT_SECONDS);
+      try {
+        await connection.connect();
+        if (requireSynchronization) {
+          await connection.waitSynchronized(this.SYNC_TIMEOUT_SECONDS);
+        }
+      } catch (err) {
+        await this.closeConnectionQuietly(
+          metaApiAccountId,
+          connection,
+          'failed connection attempt',
+        );
+        throw err;
       }
 
       this.connectionPool.set(metaApiAccountId, {
@@ -225,22 +240,31 @@ export class MetaApiClientService implements OnModuleDestroy {
     }
   }
 
+  private async closeConnectionQuietly(
+    metaApiAccountId: string,
+    connection: any,
+    context: string,
+  ): Promise<void> {
+    try {
+      await connection.close();
+    } catch (err) {
+      this.logger.warn(
+        `Error closing ${context} for ${metaApiAccountId}: ${(err as Error).message}`,
+      );
+    }
+  }
+
   /**
    * Close and remove a connection from the pool.
    */
-  async removeConnection(metaApiAccountId: string): Promise<void> {
+  async removeConnection(metaApiAccountId: string, expectedConnection?: any): Promise<void> {
     const entry = this.connectionPool.get(metaApiAccountId);
-    if (entry) {
-      try {
-        await entry.connection.close();
-      } catch (err) {
-        this.logger.warn(
-          `Error closing connection for ${metaApiAccountId}: ${(err as Error).message}`,
-        );
-      }
-      this.connectionPool.delete(metaApiAccountId);
-      this.logger.log(`Removed MetaAPI connection for account: ${metaApiAccountId}`);
+    if (!entry || (expectedConnection && entry.connection !== expectedConnection)) {
+      return;
     }
+    this.connectionPool.delete(metaApiAccountId);
+    await this.closeConnectionQuietly(metaApiAccountId, entry.connection, 'connection');
+    this.logger.log(`Removed MetaAPI connection for account: ${metaApiAccountId}`);
   }
 
   /**

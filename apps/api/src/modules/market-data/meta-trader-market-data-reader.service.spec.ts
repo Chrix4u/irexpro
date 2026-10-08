@@ -38,6 +38,7 @@ describe('MetaTraderMarketDataReaderService', () => {
       if (accountId === accountB) return connectionB;
       throw new Error('unknown account');
     }),
+    removeConnection: jest.fn().mockResolvedValue(undefined),
     connectionPool: new Map([
       [accountA, { account: historicalA }],
       [accountB, { account: historicalB }],
@@ -61,10 +62,10 @@ describe('MetaTraderMarketDataReaderService', () => {
     expect(quoteB.bid).toBe('1.28000000');
     expect(quoteB.ask).toBe('1.28020000');
     expect(metaApiClient.getOrCreateConnection).toHaveBeenCalledWith(accountA, {
-      requireSynchronization: false,
+      requireSynchronization: true,
     });
     expect(metaApiClient.getOrCreateConnection).toHaveBeenCalledWith(accountB, {
-      requireSynchronization: false,
+      requireSynchronization: true,
     });
     expect(connectionA.getSymbolPrice).toHaveBeenCalledWith('EURUSD');
     expect(connectionB.getSymbolPrice).toHaveBeenCalledWith('EURUSD');
@@ -101,5 +102,23 @@ describe('MetaTraderMarketDataReaderService', () => {
 
     expect(quote.bid).toBe('1.17000000');
     expect(connectionA.getSymbolPrice).toHaveBeenCalledWith('EURUSD');
+  });
+
+  it('invalidates the pooled RPC connection when a quote read fails', async () => {
+    const reader = new MetaTraderMarketDataReaderService(metaApiClient as never);
+    connectionA.getSymbolPrice.mockRejectedValueOnce(new Error('quote timeout'));
+
+    await expect(reader.getCurrentPrice(accountA, 'EURUSD')).rejects.toThrow('quote timeout');
+
+    expect(metaApiClient.removeConnection).toHaveBeenCalledWith(accountA, connectionA);
+  });
+
+  it('does not invalidate an unrelated pool entry when connection acquisition itself fails', async () => {
+    const reader = new MetaTraderMarketDataReaderService(metaApiClient as never);
+    metaApiClient.getOrCreateConnection.mockRejectedValueOnce(new Error('connect timeout'));
+
+    await expect(reader.getCurrentPrice(accountA, 'EURUSD')).rejects.toThrow('connect timeout');
+
+    expect(metaApiClient.removeConnection).not.toHaveBeenCalled();
   });
 });

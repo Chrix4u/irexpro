@@ -44,28 +44,32 @@ export class MetaTraderMarketDataReaderService {
 
   async getCurrentPrice(accountId: string, instrument: string): Promise<BrokerPrice> {
     const connection = await this.metaApiClient.getOrCreateConnection(accountId, {
-      requireSynchronization: false,
+      requireSynchronization: true,
     });
+    try {
+      // RPC connections expose direct quote reads. subscribeToMarketData() is a
+      // streaming-connection API and is not available on MetaApi RPC connections.
+      const price = await connection.getSymbolPrice(instrument);
+      const bid = Number(price?.bid);
+      const ask = Number(price?.ask);
+      if (!Number.isFinite(bid) || !Number.isFinite(ask) || ask < bid) {
+        throw new BrokerAdapterError(
+          BrokerErrorCode.BROKER_SERVER_ERROR,
+          'Broker returned an invalid market quote',
+        );
+      }
 
-    // RPC connections expose direct quote reads. subscribeToMarketData() is a
-    // streaming-connection API and is not available on MetaApi RPC connections.
-    const price = await connection.getSymbolPrice(instrument);
-    const bid = Number(price?.bid);
-    const ask = Number(price?.ask);
-    if (!Number.isFinite(bid) || !Number.isFinite(ask) || ask < bid) {
-      throw new BrokerAdapterError(
-        BrokerErrorCode.BROKER_SERVER_ERROR,
-        'Broker returned an invalid market quote',
-      );
+      return {
+        instrument,
+        bid: this.toDecimalString(bid),
+        ask: this.toDecimalString(ask),
+        spread: this.toDecimalString(ask - bid),
+        timestamp: price.time instanceof Date ? price.time : new Date(price.time ?? Date.now()),
+      };
+    } catch (err) {
+      await this.metaApiClient.removeConnection(accountId, connection);
+      throw err;
     }
-
-    return {
-      instrument,
-      bid: this.toDecimalString(bid),
-      ask: this.toDecimalString(ask),
-      spread: this.toDecimalString(ask - bid),
-      timestamp: price.time instanceof Date ? price.time : new Date(price.time ?? Date.now()),
-    };
   }
 
   async getOHLCV(
