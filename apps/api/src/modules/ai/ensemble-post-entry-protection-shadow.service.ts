@@ -10,6 +10,7 @@ import {
   PLAN_B_ENSEMBLE_ARTIFACT,
 } from './plan-b-multimodel-shadow';
 import { PLAN_B_V85_ARTIFACT, dueV85Checkpoints } from './post-entry-protection-shadow.service';
+import { RejectedEdgeCanaryEvidence } from './rejected-edge-paper-canary';
 
 const ACTIVE_ENGINE_CODE = 'irexpro-multimodel-ensemble-v1';
 export const POST_ENTRY_EVIDENCE_MIN_DISTINCT_DECISIONS = 100;
@@ -100,6 +101,70 @@ export class EnsemblePostEntryProtectionShadowService implements OnModuleInit, O
     private readonly dataSource: DataSource,
     private readonly aiEngineClient: AiEngineClient,
   ) {}
+
+  async getRejectedEdgeCanaryEvidence(
+    userId: string,
+    instrument: string,
+    direction: 'BUY' | 'SELL',
+  ): Promise<RejectedEdgeCanaryEvidence> {
+    const rows = (await this.dataSource.query(
+      `
+        WITH rejected AS (
+          SELECT decision.instrument, decision.direction, observation.current_r
+          FROM trading.ensemble_post_entry_shadow_observations AS observation
+          INNER JOIN trading.ensemble_shadow_decisions AS decision
+            ON decision.id = observation.ensemble_shadow_decision_id
+          WHERE decision.engine_code = $1
+            AND decision.model_version = $2
+            AND decision.user_id = $3
+            AND observation.artifact = $6
+            AND observation.checkpoint_minutes = 30
+            AND observation.current_r IS NOT NULL
+        )
+        SELECT
+          COUNT(*)::int AS global_samples,
+          COUNT(*) FILTER (WHERE current_r > 0)::int AS global_positive,
+          COALESCE(AVG(current_r), 0)::numeric AS global_avg_r,
+          COALESCE(MIN(current_r), 0)::numeric AS global_min_r,
+          COALESCE(MAX(current_r), 0)::numeric AS global_max_r,
+          COUNT(*) FILTER (WHERE instrument = $4 AND direction = $5)::int AS pair_samples,
+          COUNT(*) FILTER (WHERE instrument = $4 AND direction = $5 AND current_r > 0)::int AS pair_positive,
+          COALESCE(AVG(current_r) FILTER (WHERE instrument = $4 AND direction = $5), 0)::numeric AS pair_avg_r,
+          COALESCE(MIN(current_r) FILTER (WHERE instrument = $4 AND direction = $5), 0)::numeric AS pair_min_r,
+          COALESCE(MAX(current_r) FILTER (WHERE instrument = $4 AND direction = $5), 0)::numeric AS pair_max_r
+        FROM rejected
+      `,
+      [
+        ACTIVE_ENGINE_CODE,
+        PLAN_B_ACTIVE_MODEL_POLICY_VERSION,
+        userId,
+        instrument,
+        direction,
+        REJECTED_EDGE_OUTCOME_SHADOW_ARTIFACT,
+      ],
+    )) as Array<Record<string, unknown>>;
+    const row = rows[0] ?? {};
+    const metric = (name: string): number => {
+      const value = Number(row[name] ?? 0);
+      return Number.isFinite(value) ? value : 0;
+    };
+    return {
+      global30m: {
+        samples: metric('global_samples'),
+        positive: metric('global_positive'),
+        avgR: metric('global_avg_r'),
+        minR: metric('global_min_r'),
+        maxR: metric('global_max_r'),
+      },
+      pairSide30m: {
+        samples: metric('pair_samples'),
+        positive: metric('pair_positive'),
+        avgR: metric('pair_avg_r'),
+        minR: metric('pair_min_r'),
+        maxR: metric('pair_max_r'),
+      },
+    };
+  }
 
   async onModuleInit(): Promise<void> {
     try {

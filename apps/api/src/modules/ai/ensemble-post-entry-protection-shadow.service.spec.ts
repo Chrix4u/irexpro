@@ -406,4 +406,45 @@ describe('EnsemblePostEntryProtectionShadowService', () => {
     expect(persistArgs).toContain('WAITING_FOR_BROKER_DATA');
     expect(persistArgs).toContain('BROKER_SOURCE_NOT_CONFIGURED');
   });
+  it('summarizes 30m rejected-edge evidence for PAPER canary qualification', async () => {
+    const query = jest.fn().mockResolvedValue([
+      {
+        global_samples: '15',
+        global_positive: '12',
+        global_avg_r: '1.088',
+        global_min_r: '-0.381',
+        global_max_r: '5.786',
+        pair_samples: '2',
+        pair_positive: '1',
+        pair_avg_r: '0.254',
+        pair_min_r: '-0.381',
+        pair_max_r: '0.888',
+      },
+    ]);
+    const service = new EnsemblePostEntryProtectionShadowService(
+      {} as unknown as ConfigService,
+      { query } as unknown as DataSource,
+      {} as unknown as AiEngineClient,
+    );
+
+    await expect(
+      service.getRejectedEdgeCanaryEvidence(
+        '00000000-0000-0000-0000-000000000002',
+        'GBPUSD',
+        'SELL',
+      ),
+    ).resolves.toEqual({
+      global30m: { samples: 15, positive: 12, avgR: 1.088, minR: -0.381, maxR: 5.786 },
+      pairSide30m: { samples: 2, positive: 1, avgR: 0.254, minR: -0.381, maxR: 0.888 },
+    });
+    expect(String(query.mock.calls[0]?.[0])).toContain('checkpoint_minutes = 30');
+    expect(query.mock.calls[0]?.[1]).toEqual([
+      'irexpro-multimodel-ensemble-v1',
+      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v1',
+      '00000000-0000-0000-0000-000000000002',
+      'GBPUSD',
+      'SELL',
+      'plan-b-rejected-edge-outcome-shadow-v1',
+    ]);
+  });
 });

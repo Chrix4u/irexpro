@@ -13,6 +13,8 @@ import { ExecutionService } from '../execution/execution.service';
 import { ExecutionMode } from '../execution/interfaces/execution-authority';
 import { BrokerService } from '../broker/broker.service';
 import { LivePaperMarketDataService } from '../broker/services/live-paper-market-data.service';
+import * as PlanBEnsembleModule from './plan-b-multimodel-shadow';
+import * as EnsembleGovernanceModule from './ensemble-governance';
 
 describe('dynamic PAPER lot ceiling', () => {
   const base = {
@@ -666,6 +668,157 @@ describe('VpsForexSignalCollectorService', () => {
         .filter(([, params]) => params[6] === instrument)
         .map(([, params]) => params[7]);
       expect(new Set(directions)).toEqual(new Set(['BUY', 'SELL']));
+    }
+  });
+
+  it('routes an evidence-qualified rejected-edge canary to PAPER with BASE sizing and research-only metadata', async () => {
+    const live = new LivePaperMarketDataService();
+    const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
+    const shadowQuery = jest.fn().mockResolvedValue([]);
+    const evidence = {
+      global30m: { samples: 15, positive: 12, avgR: 1.088, minR: -0.381, maxR: 5.786 },
+      pairSide30m: { samples: 2, positive: 1, avgR: 0.254, minR: -0.381, maxR: 0.888 },
+    };
+    const getRejectedEdgeCanaryEvidence = jest.fn().mockResolvedValue(evidence);
+    const actualPlanB = PlanBEnsembleModule.scorePlanBMultimodelShadow;
+    const planBSpy = jest
+      .spyOn(PlanBEnsembleModule, 'scorePlanBMultimodelShadow')
+      .mockImplementation((input, positions) => {
+        const base = actualPlanB(input, positions);
+        const canaryTarget = input.instrument === 'EURUSD' && input.direction === 'BUY';
+        return {
+          ...base,
+          strategyRoute: 'TREND_CONTINUATION',
+          portfolioQuality: 1,
+          paperAdmitted: false,
+          admitted: false,
+          consensusPassed: canaryTarget ? 5 : 3,
+          consensusRequired: 6,
+          metaProbability: canaryTarget ? 0.5 : 0.35,
+          expectedR: canaryTarget ? 0.25 : -0.2,
+          ensembleScore: canaryTarget ? 0.62 : 0.3,
+          reasons: canaryTarget ? ['ENSEMBLE_CONSENSUS'] : ['META_EXPECTED_VALUE'],
+        };
+      });
+    const governanceSpy = jest
+      .spyOn(EnsembleGovernanceModule, 'evaluateEnsembleGovernance')
+      .mockImplementation((input) => {
+        const canaryTarget = input.instrument === 'EURUSD' && input.ensemble.expectedR > 0;
+        return {
+          version: EnsembleGovernanceModule.ENSEMBLE_GOVERNANCE_VERSION,
+          costModelVersion: EnsembleGovernanceModule.ENSEMBLE_COST_MODEL_VERSION,
+          driftModelVersion: EnsembleGovernanceModule.ENSEMBLE_DRIFT_MODEL_VERSION,
+          grossExpectedR: canaryTarget ? 0.25 : -0.2,
+          estimatedExecutionCostR: 0.03,
+          executionCostSource: 'BROKER_OBSERVED_P90',
+          executionSpreadEvidenceValid: true,
+          executionSpreadEvidence: {
+            source: 'BROKER_OBSERVED_P90',
+            spreadPrice: 0.00001,
+            sampleCount: 30,
+            percentile: 0.9,
+            windowMinutes: 30,
+            latestSampleAt: new Date().toISOString(),
+          },
+          netExpectedR: canaryTarget ? 0.22 : -0.23,
+          paperNetExpectedRPassed: canaryTarget,
+          netExpectedRPassed: canaryTarget,
+          driftState: 'OUT_OF_DISTRIBUTION',
+          driftQuality: 0.2,
+          paperDriftPassed: false,
+          driftPassed: false,
+          sleeveState: 'COLLECTING',
+          sleeveEvidence: null,
+          eventRisk: 'CLEAR',
+          paperExecutionEligible: false,
+          paperExecutionBlockers: canaryTarget
+            ? [
+                'ENSEMBLE_NOT_PAPER_ADMITTED',
+                'ENSEMBLE_NOT_PROMOTABLE_ADMISSION',
+                'DRIFT_OUT_OF_DISTRIBUTION',
+              ]
+            : ['PAPER_NET_EXPECTED_R'],
+          paperPromotionEligible: false,
+          blockers: ['ENSEMBLE_NOT_ADMITTED', 'DRIFT_OUT_OF_DISTRIBUTION', 'SLEEVE_COLLECTING'],
+        };
+      });
+
+    const collector = new VpsForexSignalCollectorService(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+      }),
+      { receiveSignal } as unknown as AiSignalService,
+      {
+        getActiveSession: jest.fn().mockResolvedValue({
+          id: 'session-1',
+          brokerConnectionId: 'conn-1',
+          executionMode: ExecutionMode.PAPER_ONLY,
+        }),
+      } as unknown as ExecutionService,
+      {
+        getCurrentPriceForConnection: jest.fn().mockResolvedValue({ bid: '1', ask: '1.1' }),
+        getOpenPositionsForConnection: jest.fn().mockResolvedValue({ positions: [] }),
+      } as unknown as BrokerService,
+      live,
+      aiEngineClientMock(),
+      { query: shadowQuery } as any,
+      {
+        assess: jest.fn().mockResolvedValue({
+          state: 'CLEAR',
+          provider: 'TEST',
+          configured: true,
+          checkedAt: new Date().toISOString(),
+          instrument: 'EURUSD',
+          relevantCountries: [],
+          blockWindowMinutesBefore: 30,
+          blockWindowMinutesAfter: 30,
+          blockingEvents: [],
+          reason: null,
+          attribution: null,
+        }),
+      } as any,
+      { getRejectedEdgeCanaryEvidence } as any,
+    );
+    jest.spyOn(collector as any, 'loadEnsembleSleeveEvidence').mockResolvedValue(null);
+    jest.spyOn(collector as any, 'loadExecutionSpreadEvidence').mockResolvedValue({
+      source: 'BROKER_OBSERVED_P90',
+      spreadPrice: 0.00001,
+      sampleCount: 30,
+      percentile: 0.9,
+      windowMinutes: 30,
+      latestSampleAt: new Date().toISOString(),
+    });
+
+    try {
+      const fetchMock = jest
+        .fn()
+        .mockResolvedValue({ ok: true, status: 200, json: async () => allTrendPayload() });
+      await collector.collectOnce(fetchMock as unknown as typeof fetch);
+
+      expect(getRejectedEdgeCanaryEvidence).toHaveBeenCalledWith('user-1', 'EURUSD', 'BUY');
+      expect(receiveSignal).toHaveBeenCalledTimes(1);
+      expect(receiveSignal).toHaveBeenCalledWith(
+        expect.objectContaining({
+          instrument: 'EURUSD',
+          direction: 'BUY',
+          suggestedVolume: 0.1,
+          modelVersion:
+            'external-provider/irexpro-multimodel-ensemble-v1/paper-rejected-edge-canary-v1',
+          metadata: expect.objectContaining({
+            rejected_edge_canary: true,
+            rejected_edge_canary_artifact: 'rejected-edge-paper-canary-v1',
+            main_strategy_qualification_evidence: false,
+            production_eligible: false,
+            position_sizing_tier: 'BASE',
+          }),
+        }),
+      );
+    } finally {
+      planBSpy.mockRestore();
+      governanceSpy.mockRestore();
     }
   });
 
