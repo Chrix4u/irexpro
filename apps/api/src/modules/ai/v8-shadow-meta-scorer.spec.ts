@@ -1,4 +1,5 @@
 import {
+  scorePlanBShadowMeta,
   scoreV8ShadowMeta,
   V8_SHADOW_ADMISSION_THRESHOLD,
   V8_SHADOW_ARTIFACT,
@@ -54,6 +55,25 @@ describe('v8 shadow meta scorer', () => {
     });
 
     expect(cadSell.probability).toBeGreaterThan(chfSell.probability);
+  });
+
+  it('keeps Plan B meta scoring neutral to development-era instrument and pair-side fixed effects', () => {
+    const common = {
+      direction: 'SELL' as const,
+      confidence: 0.68,
+      extensionAtr: 0.6,
+      volatilityScore: 0.3,
+      emaSeparation: 0.5,
+      mtfStrength: 0.4,
+      rsi14: 40,
+      scanTime: new Date('2026-10-02T12:20:00.000Z'),
+    };
+
+    const cadSell = scorePlanBShadowMeta({ ...common, instrument: 'USDCAD' });
+    const chfSell = scorePlanBShadowMeta({ ...common, instrument: 'USDCHF' });
+
+    expect(cadSell.probability).toBeCloseTo(chfSell.probability, 12);
+    expect(cadSell.expectedR).toBeCloseTo(chfSell.expectedR, 12);
   });
 
   it('rejects invalid numeric inputs instead of inventing a score', () => {
