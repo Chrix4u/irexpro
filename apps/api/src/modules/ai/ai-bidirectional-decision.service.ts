@@ -36,7 +36,8 @@ function record(value: unknown): Record<string, unknown> | null {
 }
 
 function finiteNumber(value: unknown): number | null {
-  const parsed = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN;
+  const parsed =
+    typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN;
   return Number.isFinite(parsed) ? parsed : null;
 }
 
