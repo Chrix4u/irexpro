@@ -6,11 +6,15 @@ describe('AiBidirectionalDecisionService', () => {
     const query = jest
       .fn()
       .mockResolvedValueOnce([
-        { model_version: 'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v1' },
+        {
+          model_version:
+            'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v1',
+        },
       ])
       .mockResolvedValueOnce([
         {
-          model_version: 'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v1',
+          model_version:
+            'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v1',
           instrument: 'EURUSD',
           direction: 'BUY',
           market_bar_time: '2026-10-08T08:35:00.000Z',
@@ -37,7 +41,8 @@ describe('AiBidirectionalDecisionService', () => {
           },
         },
         {
-          model_version: 'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v1',
+          model_version:
+            'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v1',
           instrument: 'EURUSD',
           direction: 'SELL',
           market_bar_time: '2026-10-08T08:35:00.000Z',
