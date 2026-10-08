@@ -49,6 +49,7 @@ const activeSession = (): TradingSession =>
     userId: 'user-1',
     brokerConnectionId: 'conn-1',
     status: TradingSessionStatus.ACTIVE,
+    executionMode: ExecutionMode.PAPER_ONLY,
   }) as TradingSession;
 
 const approvedRiskDecision = () => ({
@@ -640,10 +641,12 @@ describe('StrategyOrchestratorService', () => {
       const call = allocationMock.resolveOrAllocate.mock.calls[0][0] as {
         intent: { logicalAccountKey: string | null };
         logicalAccountKey: string | null;
+        executionMode: ExecutionMode;
       };
       // The REAL per-account scope captured on the durable intent at creation.
       expect(call.logicalAccountKey).toBe('paper-broker::demo::acct-1');
       expect(call.intent.logicalAccountKey).toBe('paper-broker::demo::acct-1');
+      expect(call.executionMode).toBe(ExecutionMode.PAPER_ONLY);
     });
 
     it('returns EXECUTION_FAILED when ExecutionService throws', async () => {
