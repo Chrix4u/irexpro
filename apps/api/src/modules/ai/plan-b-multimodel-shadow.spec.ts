@@ -84,7 +84,7 @@ describe('Plan B multimodel prospective shadow', () => {
       emaSeparation: 0.15,
       mtfStrength: 0.05,
       rsi14: 42,
-      shortHorizonMomentumAtr: 0.8,
+      shortHorizonMomentumAtr: -0.8,
       scanTime: new Date('2026-10-07T14:05:00.000Z'),
     });
     expect(score.regime).toBe('REVERSAL_CONFIRMED');
@@ -123,7 +123,7 @@ describe('Plan B multimodel prospective shadow', () => {
       emaSeparation: 0.19,
       mtfStrength: 0.08,
       rsi14: 43,
-      shortHorizonMomentumAtr: 0.2,
+      shortHorizonMomentumAtr: -0.2,
       scanTime: new Date('2026-10-07T14:05:00.000Z'),
     });
     expect(score.regime).toBe('TRANSITION_EARLY');
@@ -220,7 +220,7 @@ describe('Plan B multimodel prospective shadow', () => {
         emaSeparation: 0.15,
         mtfStrength: 0.05,
         rsi14: 42,
-        shortHorizonMomentumAtr: 0.8,
+        shortHorizonMomentumAtr: -0.8,
         scanTime: new Date('2026-10-08T12:05:00.000Z'),
       },
       [{ instrument: 'EURUSD', direction: 'SELL', lotSize: '0.10' }],

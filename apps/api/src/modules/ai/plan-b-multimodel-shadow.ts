@@ -1,7 +1,7 @@
 import { scorePlanBShadowMeta, V8ShadowMetaInput } from './v8-shadow-meta-scorer';
 
 export const PLAN_B_ENSEMBLE_ARTIFACT = 'plan-b-multimodel-shadow-v4';
-export const PLAN_B_ACTIVE_MODEL_POLICY_VERSION = `${PLAN_B_ENSEMBLE_ARTIFACT}-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v1`;
+export const PLAN_B_ACTIVE_MODEL_POLICY_VERSION = `${PLAN_B_ENSEMBLE_ARTIFACT}-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v2-directional-momentum-v1`;
 export const PLAN_B_ENSEMBLE_MODE = 'PROSPECTIVE_SHADOW_ONLY';
 export const PLAN_B_CANDIDATE_CONFIDENCE_FLOOR = 0.64;
 export const PLAN_B_GROSS_EXPECTED_R_FLOOR = 0.08;
@@ -88,7 +88,10 @@ function directionQuality(input: V8ShadowMetaInput): number {
   );
 }
 function shortHorizonMomentum(input: V8ShadowMetaInput): number {
-  return Number.isFinite(input.shortHorizonMomentumAtr) ? input.shortHorizonMomentumAtr! : 0;
+  const rawMomentum = Number.isFinite(input.shortHorizonMomentumAtr)
+    ? input.shortHorizonMomentumAtr!
+    : 0;
+  return input.direction === 'SELL' ? -rawMomentum : rawMomentum;
 }
 
 function reversalConfirmed(
