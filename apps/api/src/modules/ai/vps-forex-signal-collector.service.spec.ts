@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { ConfigService } from '@nestjs/config';
 import { AiSignalService } from './ai-signal.service';
 import {
@@ -188,6 +189,13 @@ function config(values: Record<string, unknown>) {
     get: jest.fn((key: string, fallback?: unknown) => (key in values ? values[key] : fallback)),
   } as unknown as ConfigService;
 }
+
+describe('Plan B scorer wiring', () => {
+  it('forwards candidate short-horizon momentum into Plan B scoring', () => {
+    const source = readFileSync(require.resolve('./vps-forex-signal-collector.service'), 'utf8');
+    expect(source).toContain('shortHorizonMomentumAtr: best.shortHorizonMomentumAtr');
+  });
+});
 
 describe('multi-model PAPER execution gate', () => {
   it('allows an admitted setup when PAPER governance passes even while promotion remains separate', () => {
@@ -388,7 +396,7 @@ describe('VpsForexSignalCollectorService', () => {
       'user-1',
       'conn-1',
       'irexpro-multimodel-ensemble-v1',
-      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v1',
+      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v2-momentum-wiring-v1',
     ]);
     expect(restored).toBeDefined();
     expect(restored.direction).toBe(current!.direction);
@@ -431,7 +439,7 @@ describe('VpsForexSignalCollectorService', () => {
       'user-1',
       'conn-1',
       'irexpro-multimodel-ensemble-v1',
-      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v1',
+      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v2-momentum-wiring-v1',
     ]);
   });
 
@@ -568,7 +576,7 @@ describe('VpsForexSignalCollectorService', () => {
       'irexpro-multimodel-ensemble-v1',
       'USDJPY',
       'BUY',
-      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v1',
+      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v2-momentum-wiring-v1',
     ]);
   });
 
