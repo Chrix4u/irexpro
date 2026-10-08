@@ -540,6 +540,10 @@ export class StrategyOrchestratorService {
         // same typed code (no silent unseedable scoping).
         logicalAccountKey: tradeIntent.logicalAccountKey,
         sized,
+        // PAPER research is bounded by the explicit shared capital pool plus
+        // the downstream Risk Engine, not arbitrary per-strategy/instrument
+        // concentration percentages. Non-PAPER modes keep those caps.
+        executionMode: session.executionMode,
       });
     } catch (err) {
       // Round 7.1 (P1 — sizing input freshness): a LIVE freshness rejection

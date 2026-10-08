@@ -9,6 +9,7 @@ import { BrokerService } from '../../broker/broker.service';
 import { isUniqueViolation } from '../../broker/utils/db-unique-violation';
 import type { SizedPosition } from './position-sizing.service';
 import type { TradeIntent } from '../entities/trade-intent.entity';
+import { ExecutionMode } from '../interfaces/execution-authority';
 
 /**
  * Round 6 live-execution completion (§3) — typed failure codes for the
@@ -170,8 +171,11 @@ export class AllocationService {
     >;
     logicalAccountKey: string | null;
     sized: SizedPosition;
+    /** Authoritative trading-session mode. Missing mode fails safe by enforcing caps. */
+    executionMode?: ExecutionMode;
   }): Promise<CapitalAllocation> {
     const { intent, sized } = params;
+    const enforceConcentrationCaps = params.executionMode !== ExecutionMode.PAPER_ONLY;
     // Round 7 (P0 allocation-scope fix): the REAL per-account scope only.
     // Callers pass the intent's durable logical account key; when absent the
     // intent's own captured key is the fallback. A null key is a TYPED
@@ -261,7 +265,7 @@ export class AllocationService {
         }
 
         // 6. Concentration caps (explicit account policy; NULL = unenforced).
-        if (budget.maxInstrumentConcentration !== null) {
+        if (enforceConcentrationCaps && budget.maxInstrumentConcentration !== null) {
           const cap = total
             .mul(ExactDecimal.parse(budget.maxInstrumentConcentration))
             .divByPowerOfTen(2);
@@ -276,7 +280,11 @@ export class AllocationService {
             );
           }
         }
-        if (budget.maxStrategyConcentration !== null && intent.strategyCode) {
+        if (
+          enforceConcentrationCaps &&
+          budget.maxStrategyConcentration !== null &&
+          intent.strategyCode
+        ) {
           const cap = total
             .mul(ExactDecimal.parse(budget.maxStrategyConcentration))
             .divByPowerOfTen(2);

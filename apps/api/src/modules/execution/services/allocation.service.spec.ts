@@ -3,6 +3,7 @@ import { AllocationError, AllocationService } from './allocation.service';
 import { CapitalAllocationStatus } from '../entities/capital-allocation.entity';
 import { BrokerService } from '../../broker/broker.service';
 import type { PositionSizingInputs, SizedPosition } from './position-sizing.service';
+import { ExecutionMode } from '../interfaces/execution-authority';
 
 /**
  * AllocationService (Round 6 live-execution completion §3) — the
@@ -414,6 +415,71 @@ describe('AllocationService — server-side authoritative capital layer (Round 6
           sized: sized(),
         }),
       ).rejects.toMatchObject({ code: 'ALLOCATION_STRATEGY_CONCENTRATION' });
+    });
+
+    it('PAPER_ONLY bypasses fixed instrument concentration while preserving the shared allocation ceiling', async () => {
+      store.budgets[0].max_instrument_concentration = '50.00';
+      store.aggregateRows = [
+        joinRow({ allocated_capital: '25000', instrument: 'EURUSD', trade_status: 'OPEN' }),
+      ];
+
+      const alloc = await service.resolveOrAllocate({
+        intent: intent('intent-paper-instrument'),
+        logicalAccountKey: KEY,
+        sized: sized({ allocatedCapital: '10000' }),
+        executionMode: ExecutionMode.PAPER_ONLY,
+      });
+
+      expect(alloc.status).toBe(CapitalAllocationStatus.ACTIVE);
+    });
+
+    it('PAPER_ONLY bypasses fixed strategy concentration while preserving the shared allocation ceiling', async () => {
+      store.budgets[0].max_strategy_concentration = '60.00';
+      store.aggregateRows = [
+        joinRow({ allocated_capital: '30000', strategy_code: 'TREND_V1', trade_status: 'OPEN' }),
+      ];
+
+      const alloc = await service.resolveOrAllocate({
+        intent: intent('intent-paper-strategy'),
+        logicalAccountKey: KEY,
+        sized: sized({ allocatedCapital: '10000' }),
+        executionMode: ExecutionMode.PAPER_ONLY,
+      });
+
+      expect(alloc.status).toBe(CapitalAllocationStatus.ACTIVE);
+    });
+
+    it('PAPER_ONLY still rejects when the actual shared allocation pool is exhausted', async () => {
+      store.budgets[0].max_instrument_concentration = '50.00';
+      store.budgets[0].max_strategy_concentration = '60.00';
+      store.aggregateRows = [
+        joinRow({ allocated_capital: '45000', instrument: 'EURUSD', trade_status: 'OPEN' }),
+      ];
+
+      await expect(
+        service.resolveOrAllocate({
+          intent: intent('intent-paper-exhausted'),
+          logicalAccountKey: KEY,
+          sized: sized({ allocatedCapital: '10000' }),
+          executionMode: ExecutionMode.PAPER_ONLY,
+        }),
+      ).rejects.toMatchObject({ code: 'ALLOCATION_INSUFFICIENT_CAPITAL' });
+    });
+
+    it('non-PAPER execution continues to enforce the instrument concentration cap', async () => {
+      store.budgets[0].max_instrument_concentration = '50.00';
+      store.aggregateRows = [
+        joinRow({ allocated_capital: '25000', instrument: 'EURUSD', trade_status: 'OPEN' }),
+      ];
+
+      await expect(
+        service.resolveOrAllocate({
+          intent: intent('intent-live-instrument'),
+          logicalAccountKey: KEY,
+          sized: sized({ allocatedCapital: '10000' }),
+          executionMode: ExecutionMode.FULL_AUTO,
+        }),
+      ).rejects.toMatchObject({ code: 'ALLOCATION_INSTRUMENT_CONCENTRATION' });
     });
 
     it('a different instrument/strategy does not trip the caps', async () => {
