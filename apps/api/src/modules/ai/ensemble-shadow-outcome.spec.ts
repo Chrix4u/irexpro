@@ -34,6 +34,84 @@ describe('ensemble shadow outcome', () => {
     expect(result?.barsObserved).toBe(2);
   });
 
+  it('anchors outcome causality to decision evaluation time rather than the source bar open', () => {
+    const result = resolveEnsembleShadowOutcome(
+      {
+        ...base,
+        direction: 'SELL',
+        marketBarTime: new Date('2026-10-05T10:00:00Z'),
+        evaluatedAt: new Date('2026-10-05T10:05:30Z'),
+        entryPrice: 1.1,
+        stopLoss: 1.1005,
+        takeProfit: 1.099,
+        executionSpreadPrice: 0,
+      },
+      [candle(5, 1.0994, 1.1006), candle(10, 1.0989, 1.1002)],
+      1,
+    );
+
+    expect(result?.status).toBe('WIN');
+    expect(result?.reason).toBe('TAKE_PROFIT_HIT');
+    expect(result?.barsObserved).toBe(1);
+  });
+
+  it('uses the ask-side candle high when evaluating a SELL stop', () => {
+    const result = resolveEnsembleShadowOutcome(
+      {
+        ...base,
+        direction: 'SELL',
+        evaluatedAt: new Date('2026-10-05T10:00:30Z'),
+        entryPrice: 1.1,
+        stopLoss: 1.1005,
+        takeProfit: 1.099,
+        executionSpreadPrice: 0.00004,
+      },
+      [candle(5, 1.0995, 1.10049, 1.1001)],
+      1,
+    );
+
+    expect(result?.status).toBe('LOSS');
+    expect(result?.reason).toBe('STOP_LOSS_HIT');
+  });
+
+  it('reconstructs SELL ask barriers from broker-native BID candles using the full spread', () => {
+    const result = resolveEnsembleShadowOutcome(
+      {
+        ...base,
+        direction: 'SELL',
+        evaluatedAt: new Date('2026-10-05T10:00:30Z'),
+        entryPrice: 1.1,
+        stopLoss: 1.1005,
+        takeProfit: 1.099,
+        executionSpreadPrice: 0.00004,
+        candlePriceBasis: 'BID',
+      },
+      [candle(5, 1.0995, 1.10047, 1.1001)],
+      1,
+    );
+
+    expect(result?.status).toBe('LOSS');
+    expect(result?.reason).toBe('STOP_LOSS_HIT');
+  });
+
+  it('uses the bid-side candle low when evaluating a BUY stop', () => {
+    const result = resolveEnsembleShadowOutcome(
+      {
+        ...base,
+        evaluatedAt: new Date('2026-10-05T10:00:30Z'),
+        entryPrice: 1.1,
+        stopLoss: 1.0995,
+        takeProfit: 1.101,
+        executionSpreadPrice: 0.00004,
+      },
+      [candle(5, 1.09951, 1.1004, 1.1)],
+      1,
+    );
+
+    expect(result?.status).toBe('LOSS');
+    expect(result?.reason).toBe('STOP_LOSS_HIT');
+  });
+
   it('resolves stop loss before a later take profit', () => {
     const result = resolveEnsembleShadowOutcome(base, [
       candle(5, 1.0989, 1.1005),
@@ -115,7 +193,7 @@ describe('ensemble shadow outcome', () => {
 
   it('counts overlapping M5 shadow snapshots as one independent market episode', () => {
     const makeOutcome = (resolvedAt: string, status: 'WIN' | 'LOSS', netR: number) => ({
-      version: 'm5-first-hit-72bar-net-r-path-v3' as const,
+      version: 'm5-first-hit-72bar-side-aware-v4' as const,
       status,
       resolvedAt,
       barsObserved: 6,
@@ -151,7 +229,7 @@ describe('ensemble shadow outcome', () => {
   it('summarizes only non-ambiguous net-R outcomes', () => {
     const summary = summarizeEnsembleSleeveOutcomes([
       {
-        version: 'm5-first-hit-72bar-net-r-path-v3',
+        version: 'm5-first-hit-72bar-side-aware-v4',
         status: 'WIN',
         resolvedAt: '2026-10-05T10:10:00Z',
         barsObserved: 2,
@@ -162,7 +240,7 @@ describe('ensemble shadow outcome', () => {
         postEntryTelemetry: null,
       },
       {
-        version: 'm5-first-hit-72bar-net-r-path-v3',
+        version: 'm5-first-hit-72bar-side-aware-v4',
         status: 'LOSS',
         resolvedAt: '2026-10-06T10:10:00Z',
         barsObserved: 2,
@@ -173,7 +251,7 @@ describe('ensemble shadow outcome', () => {
         postEntryTelemetry: null,
       },
       {
-        version: 'm5-first-hit-72bar-net-r-path-v3',
+        version: 'm5-first-hit-72bar-side-aware-v4',
         status: 'AMBIGUOUS',
         resolvedAt: '2026-10-07T10:10:00Z',
         barsObserved: 1,

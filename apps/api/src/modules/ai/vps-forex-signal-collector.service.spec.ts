@@ -442,15 +442,17 @@ describe('VpsForexSignalCollectorService', () => {
           {
             id: 'paper-only-decision',
             instrument: 'EURUSD',
-            direction: 'BUY',
+            direction: 'SELL',
             market_bar_time: new Date('2026-10-05T10:00:00.000Z'),
+            evaluated_at: new Date('2026-10-05T10:00:30.000Z'),
             entry_price: '1.1000',
             components: {
-              stopLoss: 1.099,
-              takeProfit: 1.102,
+              stopLoss: 1.1005,
+              takeProfit: 1.099,
               governance: {
                 paperExecutionEligible: true,
                 estimatedExecutionCostR: 0.1,
+                executionSpreadEvidence: { spreadPrice: 0.00004 },
               },
             },
           },
@@ -467,6 +469,7 @@ describe('VpsForexSignalCollectorService', () => {
       aiEngineClientMock(),
       { query } as any,
     );
+    (collector as any).lastMarketDataAuthority = 'METAAPI_BROKER_FALLBACK';
     const candles = new Map([
       [
         'EURUSD',
@@ -474,9 +477,9 @@ describe('VpsForexSignalCollectorService', () => {
           {
             timestamp: new Date('2026-10-05T10:05:00.000Z'),
             open: '1.1000',
-            high: '1.1005',
-            low: '1.0988',
-            close: '1.0991',
+            high: '1.10047',
+            low: '1.0995',
+            close: '1.1001',
           },
         ],
       ],
@@ -562,6 +565,7 @@ describe('VpsForexSignalCollectorService', () => {
     expect(sql).toContain('paperExecutionEligible');
     expect(sql).not.toContain('AND admitted = true');
     expect(sql).toContain('model_version = $6');
+    expect(sql).toContain("components->'outcome'->>'version' = $7");
     expect(query).toHaveBeenCalledWith(expect.any(String), [
       'user-1',
       'conn-1',
@@ -569,6 +573,7 @@ describe('VpsForexSignalCollectorService', () => {
       'USDJPY',
       'BUY',
       'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v1',
+      'm5-first-hit-72bar-side-aware-v4',
     ]);
   });
 

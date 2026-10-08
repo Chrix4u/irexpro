@@ -34,6 +34,7 @@ import {
 } from './ensemble-governance';
 import { MacroEventRiskAssessment, MacroEventRiskService } from './macro-event-risk.service';
 import {
+  ENSEMBLE_OUTCOME_MODEL_VERSION,
   EnsembleShadowOutcome,
   collapseEnsembleOutcomeEpisodes,
   resolveEnsembleShadowOutcome,
@@ -1738,6 +1739,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           instrument,
           direction,
           market_bar_time,
+          evaluated_at,
           entry_price,
           components
         FROM trading.ensemble_shadow_decisions
@@ -1772,6 +1774,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       instrument: string;
       direction: 'BUY' | 'SELL';
       market_bar_time: string | Date;
+      evaluated_at: string | Date;
       entry_price: string | number;
       components: Record<string, unknown> | null;
     }>;
@@ -1789,6 +1792,16 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           ? (components.governance as Record<string, unknown>)
           : null;
       const estimatedExecutionCostR = Number(governance?.estimatedExecutionCostR ?? 0);
+      const spreadEvidence =
+        governance?.executionSpreadEvidence &&
+        typeof governance.executionSpreadEvidence === 'object'
+          ? (governance.executionSpreadEvidence as Record<string, unknown>)
+          : null;
+      const rawExecutionSpreadPrice = Number(spreadEvidence?.spreadPrice ?? 0);
+      const executionSpreadPrice =
+        Number.isFinite(rawExecutionSpreadPrice) && rawExecutionSpreadPrice >= 0
+          ? rawExecutionSpreadPrice
+          : 0;
       if (
         !Number.isFinite(stopLoss) ||
         !Number.isFinite(takeProfit) ||
@@ -1801,10 +1814,14 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         {
           direction: row.direction,
           marketBarTime: row.market_bar_time,
+          evaluatedAt: row.evaluated_at,
           entryPrice: Number(row.entry_price),
           stopLoss,
           takeProfit,
           estimatedExecutionCostR,
+          executionSpreadPrice,
+          candlePriceBasis:
+            this.lastMarketDataAuthority === 'METAAPI_BROKER_FALLBACK' ? 'BID' : 'MID',
         },
         candles,
       );
@@ -1906,6 +1923,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             false
           ) = true
           AND components ? 'outcome'
+          AND components->'outcome'->>'version' = $7
         ORDER BY evaluated_at ASC
       `,
       [
@@ -1915,6 +1933,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         instrument,
         direction,
         ACTIVE_MODEL_POLICY_VERSION,
+        ENSEMBLE_OUTCOME_MODEL_VERSION,
       ],
     )) as Array<{ evaluated_at: string | Date; outcome: EnsembleShadowOutcome | null }>;
 

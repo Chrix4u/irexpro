@@ -1,6 +1,6 @@
 import { EnsembleSleeveEvidence } from './ensemble-governance';
 
-export const ENSEMBLE_OUTCOME_MODEL_VERSION = 'm5-first-hit-72bar-net-r-path-v3';
+export const ENSEMBLE_OUTCOME_MODEL_VERSION = 'm5-first-hit-72bar-side-aware-v4';
 export const ENSEMBLE_OUTCOME_HORIZON_BARS = 72;
 
 export interface EnsembleShadowCandle {
@@ -13,10 +13,13 @@ export interface EnsembleShadowCandle {
 export interface EnsembleShadowDecisionGeometry {
   direction: 'BUY' | 'SELL';
   marketBarTime: Date | string;
+  evaluatedAt?: Date | string;
   entryPrice: number;
   stopLoss: number;
   takeProfit: number;
   estimatedExecutionCostR: number;
+  executionSpreadPrice?: number;
+  candlePriceBasis?: 'MID' | 'BID';
 }
 
 export interface EnsembleProfitProtectionCounterfactual {
@@ -81,12 +84,17 @@ export function resolveEnsembleShadowOutcome(
   horizonBars = ENSEMBLE_OUTCOME_HORIZON_BARS,
 ): EnsembleShadowOutcome | null {
   const marketBarTime = new Date(decision.marketBarTime);
+  const evaluatedAt = new Date(decision.evaluatedAt ?? decision.marketBarTime);
   const entry = finiteNumber(decision.entryPrice);
   const stop = finiteNumber(decision.stopLoss);
   const target = finiteNumber(decision.takeProfit);
   const costR = finiteNumber(decision.estimatedExecutionCostR) ?? 0;
+  const spreadPrice = Math.max(0, finiteNumber(decision.executionSpreadPrice) ?? 0);
+  const halfSpread = spreadPrice / 2;
+  const candlePriceBasis = decision.candlePriceBasis ?? 'MID';
   if (
     !Number.isFinite(marketBarTime.getTime()) ||
+    !Number.isFinite(evaluatedAt.getTime()) ||
     entry == null ||
     stop == null ||
     target == null ||
@@ -108,7 +116,7 @@ export function resolveEnsembleShadowOutcome(
     .filter(
       (candle) =>
         Number.isFinite(candle.timestamp.getTime()) &&
-        candle.timestamp.getTime() > marketBarTime.getTime() &&
+        candle.timestamp.getTime() > evaluatedAt.getTime() &&
         candle.high != null &&
         candle.low != null &&
         candle.close != null,
@@ -218,9 +226,25 @@ export function resolveEnsembleShadowOutcome(
 
   for (let index = 0; index < future.length; index += 1) {
     const candle = future[index]!;
-    const stopTouched = decision.direction === 'BUY' ? candle.low! <= stop : candle.high! >= stop;
+    // Reconstruct the executable close side only for SL/TP barrier touches.
+    // Twelve Data candles are treated as midpoint observations, while MetaTrader
+    // fallback OHLC is Bid. BUY exits execute on Bid; SELL exits execute on Ask.
+    // Keep R accounting on the existing geometry because costR already prices
+    // broker spread/slippage; applying spread again to R would double count it.
+    const quoteOffset =
+      candlePriceBasis === 'BID'
+        ? decision.direction === 'BUY'
+          ? 0
+          : spreadPrice
+        : decision.direction === 'BUY'
+          ? -halfSpread
+          : halfSpread;
+    const executableHigh = candle.high! + quoteOffset;
+    const executableLow = candle.low! + quoteOffset;
+    const stopTouched =
+      decision.direction === 'BUY' ? executableLow <= stop : executableHigh >= stop;
     const targetTouched =
-      decision.direction === 'BUY' ? candle.high! >= target : candle.low! <= target;
+      decision.direction === 'BUY' ? executableHigh >= target : executableLow <= target;
 
     if (stopTouched && targetTouched) {
       return {
