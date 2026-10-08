@@ -26,11 +26,7 @@ export interface AiBidirectionalComparisonDto {
   instrument: string;
   marketBarTime: string;
   decisionPolicyVersion: string;
-  selectionStatus:
-    | 'BUY_ELIGIBLE'
-    | 'SELL_ELIGIBLE'
-    | 'BOTH_ELIGIBLE'
-    | 'NO_ELIGIBLE_DIRECTION';
+  selectionStatus: 'BUY_ELIGIBLE' | 'SELL_ELIGIBLE' | 'BOTH_ELIGIBLE' | 'NO_ELIGIBLE_DIRECTION';
   selectedDirection: AiBidirectionalDirection | null;
   buy: AiBidirectionalSideDto | null;
   sell: AiBidirectionalSideDto | null;
