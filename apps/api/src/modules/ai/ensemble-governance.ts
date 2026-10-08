@@ -2,8 +2,7 @@ import { PlanBEnsembleScore } from './plan-b-multimodel-shadow';
 
 export const ENSEMBLE_GOVERNANCE_VERSION = 'ensemble-governance-v3';
 export const ENSEMBLE_COST_MODEL_VERSION = 'paper-broker-p90-spread-plus-25pct-slippage-v2';
-export const ENSEMBLE_DRIFT_MODEL_VERSION =
-  'triple-route-continuation-4599-reversal-plus-early-transition-v3';
+export const ENSEMBLE_DRIFT_MODEL_VERSION = 'triple-route-direction-aligned-momentum-v4';
 export const ENSEMBLE_NET_EXPECTED_R_FLOOR = 0.08;
 export const ENSEMBLE_PAPER_NET_EXPECTED_R_FLOOR = ENSEMBLE_NET_EXPECTED_R_FLOOR;
 export const ENSEMBLE_EARLY_TRANSITION_PAPER_NET_EXPECTED_R_FLOOR = 0.2;
@@ -35,6 +34,7 @@ export interface ExecutionSpreadEvidence {
 export interface EnsembleGovernanceInput {
   ensemble: PlanBEnsembleScore;
   instrument: string;
+  direction: 'BUY' | 'SELL';
   entryPrice: number;
   stopLoss: number;
   takeProfit: number;
@@ -126,11 +126,16 @@ function finite(value: number): number {
   return Number.isFinite(value) ? value : 0;
 }
 
+function directionalMomentum(input: EnsembleGovernanceInput): number {
+  const rawMomentum = finite(input.shortHorizonMomentumAtr ?? 0);
+  return input.direction === 'SELL' ? -rawMomentum : rawMomentum;
+}
+
 function reversalDriftOf(input: EnsembleGovernanceInput): {
   state: EnsembleDriftState;
   quality: number;
 } {
-  const momentum = finite(input.shortHorizonMomentumAtr ?? 0);
+  const momentum = directionalMomentum(input);
   // PAPER reversal route uses an explicit operational envelope rather than the
   // continuation-only 4,599-event MTF envelope. It stays fail-closed at the
   // boundaries and remains subject to prospective sleeve qualification before
@@ -167,7 +172,7 @@ function earlyTransitionDriftOf(input: EnsembleGovernanceInput): {
   state: EnsembleDriftState;
   quality: number;
 } {
-  const momentum = finite(input.shortHorizonMomentumAtr ?? 0);
+  const momentum = directionalMomentum(input);
   if (
     input.confidence < 0.64 ||
     input.confidence > 0.8 ||

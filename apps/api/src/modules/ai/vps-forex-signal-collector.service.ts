@@ -1067,6 +1067,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           const ensembleGovernance = evaluateEnsembleGovernance({
             ensemble: planBEnsemble,
             instrument: best.instrument,
+            direction: best.direction,
             entryPrice: best.entry,
             stopLoss: best.stopLoss,
             takeProfit: best.takeProfit,
