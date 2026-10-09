@@ -43,6 +43,11 @@ import {
 import { buildEnsembleExpertRegistry } from './ensemble-expert-registry';
 import { scoreExtensionExhaustionShadow } from './extension-exhaustion-shadow';
 import {
+  PAPER_RESEARCH_THROUGHPUT_LOT_CAP,
+  PaperResearchThroughputDecision,
+  evaluatePaperResearchThroughput,
+} from './paper-research-throughput';
+import {
   evaluateRejectedEdgePaperCanary,
   rejectedEdgeCanaryEvaluationState,
   RejectedEdgeCanaryDecision,
@@ -967,6 +972,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           highConvictionOverlay: HighConvictionOverlay;
           rejectedEdgeCanary: RejectedEdgeCanaryDecision | null;
           rejectedEdgeCanaryEvidence: RejectedEdgeCanaryEvidence | null;
+          paperResearchThroughput: PaperResearchThroughputDecision;
         }> = [];
 
         for (const best of [...pairCandidates].sort((a, b) => b.score - a.score)) {
@@ -1162,7 +1168,20 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
               evidence: rejectedEdgeCanaryEvidence,
             });
           }
-          if (!normalPaperExecution && !rejectedEdgeCanary?.eligible) {
+          const paperResearchThroughput = evaluatePaperResearchThroughput({
+            normalPaperExecution: normalPaperExecution || Boolean(rejectedEdgeCanary?.eligible),
+            confidence: best.confidence,
+            netExpectedR: ensembleGovernance.netExpectedR,
+            executionSpreadEvidenceValid: ensembleGovernance.executionSpreadEvidenceValid,
+            eventRisk: ensembleGovernance.eventRisk,
+            strategyRoute: planBEnsemble.strategyRoute,
+            paperExecutionBlockers: ensembleGovernance.paperExecutionBlockers,
+          });
+          if (
+            !normalPaperExecution &&
+            !rejectedEdgeCanary?.eligible &&
+            !paperResearchThroughput.eligible
+          ) {
             this.logger.log(
               `Multi-model ensemble ${best.instrument} ${best.direction} ` +
                 `paperAdmitted=${planBEnsemble.paperAdmitted} admitted=${planBEnsemble.admitted} ` +
@@ -1187,6 +1206,12 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
                 `global30m=${rejectedEdgeCanaryEvidence?.global30m.positive ?? 0}/${rejectedEdgeCanaryEvidence?.global30m.samples ?? 0} ` +
                 `pairSide30m=${rejectedEdgeCanaryEvidence?.pairSide30m.positive ?? 0}/${rejectedEdgeCanaryEvidence?.pairSide30m.samples ?? 0}`,
             );
+          } else if (paperResearchThroughput.eligible) {
+            this.logger.warn(
+              `PAPER research-throughput ${best.instrument} ${best.direction} execution=ELIGIBLE ` +
+                `netExpectedR=${ensembleGovernance.netExpectedR.toFixed(4)} ` +
+                `lotCap=${PAPER_RESEARCH_THROUGHPUT_LOT_CAP.toFixed(2)} qualificationEvidence=false`,
+            );
           }
 
           executableCounterfactuals.push({
@@ -1202,6 +1227,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             highConvictionOverlay,
             rejectedEdgeCanary,
             rejectedEdgeCanaryEvidence,
+            paperResearchThroughput,
           });
         }
 
@@ -1244,6 +1270,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           ensembleGovernance,
           rejectedEdgeCanary,
           rejectedEdgeCanaryEvidence,
+          paperResearchThroughput,
         } = chosen;
 
         this.lastPublishedOpportunity.set(best.instrument, {
@@ -1267,16 +1294,18 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           continue;
         }
 
-        const dynamicLotSizing = rejectedEdgeCanary?.eligible
-          ? { upperBound: PAPER_BASE_LOT_UPPER_BOUND, tier: 'BASE' as const }
-          : dynamicPaperLotUpperBound({
-              confidence: best.confidence,
-              metaProbability: planBEnsemble.metaProbability,
-              netExpectedR: ensembleGovernance.netExpectedR,
-              consensusPassed: planBEnsemble.consensusPassed,
-              consensusRequired: planBEnsemble.consensusRequired,
-              volatilityScore: best.volatilityScore,
-            });
+        const dynamicLotSizing = paperResearchThroughput.eligible
+          ? { upperBound: PAPER_RESEARCH_THROUGHPUT_LOT_CAP, tier: 'BASE' as const }
+          : rejectedEdgeCanary?.eligible
+            ? { upperBound: PAPER_BASE_LOT_UPPER_BOUND, tier: 'BASE' as const }
+            : dynamicPaperLotUpperBound({
+                confidence: best.confidence,
+                metaProbability: planBEnsemble.metaProbability,
+                netExpectedR: ensembleGovernance.netExpectedR,
+                consensusPassed: planBEnsemble.consensusPassed,
+                consensusRequired: planBEnsemble.consensusRequired,
+                volatilityScore: best.volatilityScore,
+              });
 
         const outcome = await this.aiSignalService.receiveSignal({
           signalId,
@@ -1299,9 +1328,11 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           marketRegime: 'TRENDING',
           volatilityScore: best.volatilityScore,
           generatedAt: new Date(),
-          modelVersion: rejectedEdgeCanary?.eligible
-            ? `external-provider/${ACTIVE_ENGINE_CODE}/paper-rejected-edge-canary-v1`
-            : `external-provider/${ACTIVE_ENGINE_CODE}/paper-only-v1`,
+          modelVersion: paperResearchThroughput.eligible
+            ? `external-provider/${ACTIVE_ENGINE_CODE}/paper-research-throughput-v1`
+            : rejectedEdgeCanary?.eligible
+              ? `external-provider/${ACTIVE_ENGINE_CODE}/paper-rejected-edge-canary-v1`
+              : `external-provider/${ACTIVE_ENGINE_CODE}/paper-only-v1`,
           metadata: {
             signal_source: 'EXTERNAL_PROVIDER',
             external_provider_code: ACTIVE_ENGINE_CODE,
@@ -1315,7 +1346,15 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             rejected_edge_canary_reason: rejectedEdgeCanary?.reason ?? null,
             rejected_edge_canary_global_30m: rejectedEdgeCanaryEvidence?.global30m ?? null,
             rejected_edge_canary_pair_side_30m: rejectedEdgeCanaryEvidence?.pairSide30m ?? null,
-            main_strategy_qualification_evidence: !rejectedEdgeCanary?.eligible,
+            paper_research_throughput: paperResearchThroughput.eligible,
+            paper_research_throughput_artifact: paperResearchThroughput.artifact,
+            paper_research_throughput_reason: paperResearchThroughput.reason,
+            paper_research_throughput_qualification_evidence:
+              paperResearchThroughput.qualificationEvidence,
+            paper_research_throughput_execution_authority:
+              paperResearchThroughput.executionAuthority,
+            main_strategy_qualification_evidence:
+              !rejectedEdgeCanary?.eligible && !paperResearchThroughput.eligible,
             source_reference:
               this.lastMarketDataAuthority === 'METAAPI_BROKER_FALLBACK'
                 ? 'MetaTrader broker-native M5 closed candles via MetaApi fallback'
