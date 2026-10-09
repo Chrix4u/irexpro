@@ -85,22 +85,37 @@ export class TradeExecutionResponseDto {
   @ApiPropertyOptional({ nullable: true })
   exitPrice: string | null;
 
-  @ApiPropertyOptional({ nullable: true, description: 'Latest executable PAPER mark for an open position.' })
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Latest executable PAPER mark for an open position.',
+  })
   currentPrice: string | null;
 
   @ApiPropertyOptional({ nullable: true, type: String, format: 'date-time' })
   markObservedAt: Date | null;
 
-  @ApiPropertyOptional({ nullable: true, description: 'Latest unrealized P&L in account currency.' })
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Latest unrealized P&L in account currency.',
+  })
   unrealisedPnl: string | null;
 
-  @ApiPropertyOptional({ nullable: true, description: 'Best observed open-position P&L in account currency.' })
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Best observed open-position P&L in account currency.',
+  })
   maxFavorablePnl: string | null;
 
-  @ApiPropertyOptional({ nullable: true, description: 'Worst observed open-position P&L in account currency.' })
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Worst observed open-position P&L in account currency.',
+  })
   maxAdversePnl: string | null;
 
-  @ApiPropertyOptional({ nullable: true, description: 'Observed give-back from peak P&L in account currency.' })
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Observed give-back from peak P&L in account currency.',
+  })
   profitGiveback: string | null;
 
   @ApiPropertyOptional({ nullable: true, type: Number })
