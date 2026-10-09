@@ -15,7 +15,16 @@ permissions:
 jobs:
   patch-and-verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
+    env:
+      NODE_ENV: test
+      JWT_SECRET: test_jwt_secret_minimum_32_characters_long
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_NAME: irexpro_test
+      DB_USER: irexpro
+      DB_PASSWORD: test_password
+      COOKIE_SECRET: test_cookie_secret_min_16
     steps:
       - name: Checkout feature branch
         uses: actions/checkout@v4
@@ -26,7 +35,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -73,7 +82,7 @@ jobs:
             echo 'Scorer momentum wiring is already present; skipping mutation and keeping verification only.'
           else
             set +e
-            pnpm --filter @irexpro/api exec jest vps-forex-signal-collector.momentum-wiring.spec.ts --runInBand > /tmp/momentum-red.log 2>&1
+            pnpm --filter @irexpro/api exec jest vps-forex-signal-collector.momentum-wiring.spec.ts --runInBand --forceExit > /tmp/momentum-red.log 2>&1
             status=$?
             set -e
             cat /tmp/momentum-red.log
@@ -136,12 +145,12 @@ jobs:
             plan-b-multimodel-shadow.spec.ts \
             ensemble-governance.spec.ts \
             ensemble-post-entry-protection-shadow.service.spec.ts \
-            --runInBand
+            --runInBand --forceExit
 
       - name: Verify API lint, full tests and production build
         run: |
           pnpm --filter @irexpro/api run lint:check
-          pnpm --filter @irexpro/api exec jest --runInBand
+          pnpm --filter @irexpro/api exec jest --forceExit
           pnpm api:build
           git diff --check
 
