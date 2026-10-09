@@ -105,7 +105,8 @@ export function selectPaperExecutionRoute(input: {
 }): PaperExecutionRoute {
   if (input.normalPaperExecution) return 'NORMAL_PAPER';
   if (input.rejectedEdgeCanaryEligible) return 'REJECTED_EDGE_CANARY';
-  if (input.paperResearchExecutionEligible) return 'PAPER_RESEARCH_THROUGHPUT';
+  // Research-throughput is evidence collection only. Shadow outcomes continue to be
+  // persisted, but this route must never create a PAPER order.
   return 'NONE';
 }
 
@@ -195,7 +196,7 @@ export interface PaperResearchThroughputDecision {
   route: 'PAPER_RESEARCH_THROUGHPUT';
   reason: string;
   qualificationEvidence: false;
-  executionAuthority: 'PAPER_ONLY';
+  executionAuthority: 'SHADOW_ONLY';
 }
 
 export function evaluatePaperResearchThroughput(
@@ -250,6 +251,6 @@ export function evaluatePaperResearchThroughput(
     route: 'PAPER_RESEARCH_THROUGHPUT',
     reason,
     qualificationEvidence: false,
-    executionAuthority: 'PAPER_ONLY',
+    executionAuthority: 'SHADOW_ONLY',
   };
 }

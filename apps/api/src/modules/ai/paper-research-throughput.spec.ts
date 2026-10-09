@@ -24,14 +24,14 @@ describe('evaluatePaperResearchThroughput', () => {
     paperExecutionBlockers: ['ENSEMBLE_NOT_PAPER_ADMITTED', 'ENSEMBLE_NOT_PROMOTABLE_ADMISSION'],
   };
 
-  it('admits a positive-EV candidate into research PAPER without granting qualification authority', () => {
+  it('keeps a positive-EV research candidate shadow-only without granting execution or qualification authority', () => {
     expect(evaluatePaperResearchThroughput(base)).toEqual({
       eligible: true,
       artifact: 'paper-research-throughput-v4-pair-side-reliability',
       route: 'PAPER_RESEARCH_THROUGHPUT',
       reason: 'RESEARCH_EVIDENCE_CANDIDATE',
       qualificationEvidence: false,
-      executionAuthority: 'PAPER_ONLY',
+      executionAuthority: 'SHADOW_ONLY',
     });
   });
 
@@ -121,6 +121,16 @@ describe('PAPER execution route provenance', () => {
         paperResearchExecutionEligible: true,
       }),
     ).toBe('NORMAL_PAPER');
+  });
+
+  it('keeps research-throughput shadow-only even when its evidence filters qualify', () => {
+    expect(
+      selectPaperExecutionRoute({
+        normalPaperExecution: false,
+        rejectedEdgeCanaryEligible: false,
+        paperResearchExecutionEligible: true,
+      }),
+    ).toBe('NONE');
   });
 });
 

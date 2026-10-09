@@ -1,10 +1,17 @@
 import {
+  PLAN_B_ACTIVE_MODEL_POLICY_VERSION,
   PLAN_B_ENSEMBLE_ARTIFACT,
   PLAN_B_ENSEMBLE_MODE,
   scorePlanBMultimodelShadow,
 } from './plan-b-multimodel-shadow';
 
 describe('Plan B multimodel prospective shadow', () => {
+  it('isolates the throughput-shadow-only execution cohort in policy provenance', () => {
+    expect(PLAN_B_ACTIVE_MODEL_POLICY_VERSION).toBe(
+      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1-throughput-shadow-only-v1',
+    );
+  });
+
   const base = {
     instrument: 'EURUSD',
     direction: 'BUY' as const,
