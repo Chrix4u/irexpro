@@ -2,6 +2,7 @@ import {
   PAPER_RESEARCH_THROUGHPUT_EPISODE_COOLDOWN_MINUTES,
   PAPER_RESEARCH_THROUGHPUT_LOT_CAP,
   PAPER_RESEARCH_THROUGHPUT_RELIABILITY_MIN_SAMPLES,
+  PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS,
   evaluatePaperResearchEpisodeGuard,
   evaluatePaperResearchPairSideReliability,
   evaluatePaperResearchThroughput,
@@ -135,6 +136,12 @@ describe('PAPER execution route provenance', () => {
 });
 
 describe('PAPER research-throughput provenance and pair-side reliability', () => {
+  it('inherits reliability evidence from the deployed v2 episode-guarded artifact', () => {
+    expect(PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS).toContain(
+      'paper-research-throughput-v2-episode-guarded',
+    );
+  });
+
   it('derives the emitted model version from the active research artifact', () => {
     expect(paperResearchThroughputModelVersion('irexpro-multimodel-ensemble-v1')).toBe(
       'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v4-pair-side-reliability',

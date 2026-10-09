@@ -1,6 +1,7 @@
 export const PAPER_RESEARCH_THROUGHPUT_ARTIFACT =
   'paper-research-throughput-v4-pair-side-reliability';
 export const PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS = Object.freeze([
+  'paper-research-throughput-v2-episode-guarded',
   'paper-research-throughput-v3-episode-guarded',
   PAPER_RESEARCH_THROUGHPUT_ARTIFACT,
 ]);
