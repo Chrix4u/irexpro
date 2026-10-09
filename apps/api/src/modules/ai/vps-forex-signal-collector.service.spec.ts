@@ -953,6 +953,39 @@ describe('VpsForexSignalCollectorService', () => {
     }
   });
 
+  it('loads pair-side research reliability only from the active episode-guarded research artifact', async () => {
+    const query = jest.fn().mockResolvedValue([{ wins: '1', losses: '5' }]);
+    const collector = new VpsForexSignalCollectorService(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+      }),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      { getActiveSession: jest.fn() } as unknown as ExecutionService,
+      { getCurrentPriceForConnection: jest.fn() } as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+      { query } as any,
+    );
+
+    await expect(
+      (collector as any).loadPaperResearchPairSideEvidence('user-1', 'conn-1', 'GBPUSD', 'SELL'),
+    ).resolves.toEqual({ wins: 1, losses: 5 });
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('paper_research_throughput_artifact'),
+      expect.arrayContaining([
+        'user-1',
+        'conn-1',
+        'GBPUSD',
+        'SELL',
+        'paper-research-throughput-v3-episode-guarded',
+        'paper-research-throughput-v4-pair-side-reliability',
+      ]),
+    );
+  });
+
   it('persists shadow evidence without an active PAPER session and keeps execution disabled', async () => {
     const live = new LivePaperMarketDataService();
     const receiveSignal = jest.fn();

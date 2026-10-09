@@ -1,4 +1,9 @@
-export const PAPER_RESEARCH_THROUGHPUT_ARTIFACT = 'paper-research-throughput-v3-episode-guarded';
+export const PAPER_RESEARCH_THROUGHPUT_ARTIFACT =
+  'paper-research-throughput-v4-pair-side-reliability';
+export const PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS = Object.freeze([
+  'paper-research-throughput-v3-episode-guarded',
+  PAPER_RESEARCH_THROUGHPUT_ARTIFACT,
+]);
 export const PAPER_RESEARCH_THROUGHPUT_LOT_CAP = 0.01;
 export const PAPER_RESEARCH_THROUGHPUT_MIN_NET_EXPECTED_R = 0.08;
 export const PAPER_RESEARCH_THROUGHPUT_MIN_CONFIDENCE = 0.64;
@@ -7,6 +12,102 @@ export const PAPER_RESEARCH_THROUGHPUT_MIN_TRADE_QUALITY = 0.48;
 export const PAPER_RESEARCH_THROUGHPUT_MIN_EXIT_QUALITY = 0.48;
 
 export const PAPER_RESEARCH_THROUGHPUT_EPISODE_COOLDOWN_MINUTES = 30;
+
+export const PAPER_RESEARCH_THROUGHPUT_RELIABILITY_MIN_SAMPLES = 5;
+const PAPER_RESEARCH_THROUGHPUT_RELIABILITY_PRIOR_WINS = 1;
+const PAPER_RESEARCH_THROUGHPUT_RELIABILITY_PRIOR_LOSSES = 1;
+const PAPER_RESEARCH_THROUGHPUT_TARGET_R_MULTIPLE = 2.5 / 1.5;
+
+export interface PaperResearchPairSideReliabilityInput {
+  wins: number;
+  losses: number;
+}
+
+export interface PaperResearchPairSideReliabilityDecision {
+  eligible: boolean;
+  samples: number;
+  wins: number;
+  losses: number;
+  smoothedWinRate: number;
+  smoothedExpectedR: number;
+  reason:
+    | 'INSUFFICIENT_EVIDENCE'
+    | 'POSITIVE_PAIR_SIDE_EXPECTANCY'
+    | 'NEGATIVE_PAIR_SIDE_EXPECTANCY'
+    | 'INVALID_EVIDENCE';
+}
+
+export function evaluatePaperResearchPairSideReliability(
+  input: PaperResearchPairSideReliabilityInput,
+): PaperResearchPairSideReliabilityDecision {
+  const wins = input.wins;
+  const losses = input.losses;
+  const valid = Number.isInteger(wins) && Number.isInteger(losses) && wins >= 0 && losses >= 0;
+  if (!valid) {
+    return {
+      eligible: false,
+      samples: 0,
+      wins: 0,
+      losses: 0,
+      smoothedWinRate: 0,
+      smoothedExpectedR: -1,
+      reason: 'INVALID_EVIDENCE',
+    };
+  }
+
+  const samples = wins + losses;
+  const smoothedWinRate =
+    (wins + PAPER_RESEARCH_THROUGHPUT_RELIABILITY_PRIOR_WINS) /
+    (samples +
+      PAPER_RESEARCH_THROUGHPUT_RELIABILITY_PRIOR_WINS +
+      PAPER_RESEARCH_THROUGHPUT_RELIABILITY_PRIOR_LOSSES);
+  const smoothedExpectedR =
+    smoothedWinRate * PAPER_RESEARCH_THROUGHPUT_TARGET_R_MULTIPLE - (1 - smoothedWinRate);
+
+  if (samples < PAPER_RESEARCH_THROUGHPUT_RELIABILITY_MIN_SAMPLES) {
+    return {
+      eligible: true,
+      samples,
+      wins,
+      losses,
+      smoothedWinRate,
+      smoothedExpectedR,
+      reason: 'INSUFFICIENT_EVIDENCE',
+    };
+  }
+
+  const eligible = smoothedExpectedR > 0;
+  return {
+    eligible,
+    samples,
+    wins,
+    losses,
+    smoothedWinRate,
+    smoothedExpectedR,
+    reason: eligible ? 'POSITIVE_PAIR_SIDE_EXPECTANCY' : 'NEGATIVE_PAIR_SIDE_EXPECTANCY',
+  };
+}
+
+export function paperResearchThroughputModelVersion(engineCode: string): string {
+  return `external-provider/${engineCode}/${PAPER_RESEARCH_THROUGHPUT_ARTIFACT}`;
+}
+
+export type PaperExecutionRoute =
+  | 'NORMAL_PAPER'
+  | 'REJECTED_EDGE_CANARY'
+  | 'PAPER_RESEARCH_THROUGHPUT'
+  | 'NONE';
+
+export function selectPaperExecutionRoute(input: {
+  normalPaperExecution: boolean;
+  rejectedEdgeCanaryEligible: boolean;
+  paperResearchExecutionEligible: boolean;
+}): PaperExecutionRoute {
+  if (input.normalPaperExecution) return 'NORMAL_PAPER';
+  if (input.rejectedEdgeCanaryEligible) return 'REJECTED_EDGE_CANARY';
+  if (input.paperResearchExecutionEligible) return 'PAPER_RESEARCH_THROUGHPUT';
+  return 'NONE';
+}
 
 export interface PaperResearchEpisodeGuardInput {
   currentEpisodeKey: string;
