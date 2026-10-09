@@ -1,12 +1,14 @@
-export const PAPER_RESEARCH_THROUGHPUT_ARTIFACT = 'paper-research-throughput-v1';
+export const PAPER_RESEARCH_THROUGHPUT_ARTIFACT = 'paper-research-throughput-v2-quality-gated';
 export const PAPER_RESEARCH_THROUGHPUT_LOT_CAP = 0.01;
 export const PAPER_RESEARCH_THROUGHPUT_MIN_NET_EXPECTED_R = 0.08;
+export const PAPER_RESEARCH_THROUGHPUT_MIN_CONFIDENCE = 0.64;
+export const PAPER_RESEARCH_THROUGHPUT_MIN_DIRECTION_QUALITY = 0.55;
+export const PAPER_RESEARCH_THROUGHPUT_MIN_TRADE_QUALITY = 0.48;
+export const PAPER_RESEARCH_THROUGHPUT_MIN_EXIT_QUALITY = 0.48;
 
 const ALLOWED_RESEARCH_BLOCKERS = new Set([
   'ENSEMBLE_NOT_PAPER_ADMITTED',
   'ENSEMBLE_NOT_PROMOTABLE_ADMISSION',
-  'DRIFT_OUT_OF_DISTRIBUTION',
-  'DRIFT_STRESSED',
 ]);
 
 export interface PaperResearchThroughputInput {
@@ -16,6 +18,10 @@ export interface PaperResearchThroughputInput {
   executionSpreadEvidenceValid: boolean;
   eventRisk: string;
   strategyRoute: string;
+  driftState: string;
+  directionQuality: number;
+  tradeQuality: number;
+  exitQuality: number;
   paperExecutionBlockers: string[];
 }
 
@@ -37,6 +43,28 @@ export function evaluatePaperResearchThroughput(
     reason = 'NORMAL_PAPER_EXECUTION';
   } else if (input.strategyRoute !== 'TREND_CONTINUATION') {
     reason = 'ROUTE_NOT_VALIDATED';
+  } else if (
+    !Number.isFinite(input.confidence) ||
+    input.confidence < PAPER_RESEARCH_THROUGHPUT_MIN_CONFIDENCE
+  ) {
+    reason = 'CONFIDENCE_TOO_LOW';
+  } else if (input.driftState !== 'NORMAL') {
+    reason = 'DRIFT_NOT_NORMAL';
+  } else if (
+    !Number.isFinite(input.directionQuality) ||
+    input.directionQuality < PAPER_RESEARCH_THROUGHPUT_MIN_DIRECTION_QUALITY
+  ) {
+    reason = 'DIRECTION_QUALITY_TOO_LOW';
+  } else if (
+    !Number.isFinite(input.tradeQuality) ||
+    input.tradeQuality < PAPER_RESEARCH_THROUGHPUT_MIN_TRADE_QUALITY
+  ) {
+    reason = 'TRADE_QUALITY_TOO_LOW';
+  } else if (
+    !Number.isFinite(input.exitQuality) ||
+    input.exitQuality < PAPER_RESEARCH_THROUGHPUT_MIN_EXIT_QUALITY
+  ) {
+    reason = 'EXIT_QUALITY_TOO_LOW';
   } else if (!input.executionSpreadEvidenceValid) {
     reason = 'SPREAD_EVIDENCE_INVALID';
   } else if (input.eventRisk !== 'CLEAR') {

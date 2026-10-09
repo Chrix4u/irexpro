@@ -6,26 +6,58 @@ import {
 describe('evaluatePaperResearchThroughput', () => {
   const base = {
     normalPaperExecution: false,
-    confidence: 0.6,
+    confidence: 0.68,
     netExpectedR: 0.16,
     executionSpreadEvidenceValid: true,
     eventRisk: 'CLEAR',
     strategyRoute: 'TREND_CONTINUATION',
-    paperExecutionBlockers: [
-      'ENSEMBLE_NOT_PAPER_ADMITTED',
-      'ENSEMBLE_NOT_PROMOTABLE_ADMISSION',
-      'DRIFT_OUT_OF_DISTRIBUTION',
-    ],
+    driftState: 'NORMAL',
+    directionQuality: 0.62,
+    tradeQuality: 0.58,
+    exitQuality: 0.56,
+    paperExecutionBlockers: ['ENSEMBLE_NOT_PAPER_ADMITTED', 'ENSEMBLE_NOT_PROMOTABLE_ADMISSION'],
   };
 
   it('admits a positive-EV candidate into research PAPER without granting qualification authority', () => {
     expect(evaluatePaperResearchThroughput(base)).toEqual({
       eligible: true,
-      artifact: 'paper-research-throughput-v1',
+      artifact: 'paper-research-throughput-v2-quality-gated',
       route: 'PAPER_RESEARCH_THROUGHPUT',
       reason: 'RESEARCH_EVIDENCE_CANDIDATE',
       qualificationEvidence: false,
       executionAuthority: 'PAPER_ONLY',
+    });
+  });
+
+  it('rejects research throughput below the normal confidence floor', () => {
+    expect(evaluatePaperResearchThroughput({ ...base, confidence: 0.6399 })).toMatchObject({
+      eligible: false,
+      reason: 'CONFIDENCE_TOO_LOW',
+    });
+  });
+
+  it('rejects stressed or out-of-distribution drift', () => {
+    expect(evaluatePaperResearchThroughput({ ...base, driftState: 'STRESSED' })).toMatchObject({
+      eligible: false,
+      reason: 'DRIFT_NOT_NORMAL',
+    });
+    expect(
+      evaluatePaperResearchThroughput({ ...base, driftState: 'OUT_OF_DISTRIBUTION' }),
+    ).toMatchObject({ eligible: false, reason: 'DRIFT_NOT_NORMAL' });
+  });
+
+  it('rejects weak direction, trade, or exit quality', () => {
+    expect(evaluatePaperResearchThroughput({ ...base, directionQuality: 0.5499 })).toMatchObject({
+      eligible: false,
+      reason: 'DIRECTION_QUALITY_TOO_LOW',
+    });
+    expect(evaluatePaperResearchThroughput({ ...base, tradeQuality: 0.4799 })).toMatchObject({
+      eligible: false,
+      reason: 'TRADE_QUALITY_TOO_LOW',
+    });
+    expect(evaluatePaperResearchThroughput({ ...base, exitQuality: 0.4799 })).toMatchObject({
+      eligible: false,
+      reason: 'EXIT_QUALITY_TOO_LOW',
     });
   });
 
