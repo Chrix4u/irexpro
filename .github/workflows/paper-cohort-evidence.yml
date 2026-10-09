@@ -64,136 +64,167 @@ jobs:
             "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
             'bash -s' <<'REMOTE'
           set -Eeuo pipefail
+          readonly API_ROOT=/home/lightworld/webapps/irexpro-staging/apps/api
+          [[ -d "$API_ROOT" ]] || { echo 'ERROR: staging API root missing' >&2; exit 2; }
+          [[ -f "$API_ROOT/.env" ]] || { echo 'ERROR: staging API environment missing' >&2; exit 3; }
+          cd "$API_ROOT"
 
-          if command -v psql >/dev/null 2>&1; then
-            PSQL="$(command -v psql)"
-          elif [[ -x /usr/pgsql-18/bin/psql ]]; then
-            PSQL=/usr/pgsql-18/bin/psql
-          else
-            echo 'ERROR: psql not found' >&2
-            exit 2
-          fi
+          DOTENV_CONFIG_PATH="$API_ROOT/.env" node -r dotenv/config <<'NODE'
+          const { Client } = require('pg');
 
-          target_db=''
-          while IFS= read -r db; do
-            [[ -n "$db" ]] || continue
-            has_table="$(sudo -u postgres "$PSQL" -X -d "$db" -Atqc \
-              "SELECT CASE WHEN to_regclass('trading.ensemble_shadow_decisions') IS NULL THEN 'f' ELSE 't' END;" \
-              2>/dev/null || true)"
-            if [[ "$has_table" == 't' ]]; then
-              target_db="$db"
-              break
-            fi
-          done < <(sudo -u postgres "$PSQL" -X -d postgres -Atqc \
-            "SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate ORDER BY datname;")
+          const engine = 'irexpro-multimodel-ensemble-v1';
+          const policy = 'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1';
+          const oldPolicy = 'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v2-directional-momentum-v1';
+          const cutoff = '2026-10-09T02:30:14Z';
 
-          if [[ -z "$target_db" ]]; then
-            echo 'ERROR: application decision ledger was not found in any local connectable database' >&2
-            exit 3
-          fi
+          const required = ['DB_HOST', 'DB_NAME', 'DB_USER', 'DB_PASSWORD'];
+          for (const key of required) {
+            if (!process.env[key]) throw new Error(`Missing required staging database configuration: ${key}`);
+          }
 
-          echo '=== iRexPro prospective PAPER cohort evidence ==='
-          printf 'observed_at_utc=%s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          echo 'database=application-ledger-located'
-          echo 'engine=irexpro-multimodel-ensemble-v1'
-          echo 'policy=plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1'
-          echo 'deployment_cutoff_utc=2026-10-09T02:30:14Z'
-          echo
+          const client = new Client({
+            host: process.env.DB_HOST,
+            port: Number(process.env.DB_PORT || 5432),
+            database: process.env.DB_NAME,
+            user: process.env.DB_USER,
+            password: process.env.DB_PASSWORD,
+            ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
+            connectionTimeoutMillis: 10000,
+            statement_timeout: 20000,
+            application_name: 'irexpro-paper-cohort-readonly-diagnostic',
+          });
 
-          sudo -u postgres "$PSQL" -X -v ON_ERROR_STOP=1 -d "$target_db" -At -F '|' <<'SQL'
-          BEGIN TRANSACTION READ ONLY;
-          SET LOCAL statement_timeout = '20s';
+          function iso(value) {
+            return value ? new Date(value).toISOString() : 'NONE';
+          }
 
-          SELECT 'post_deploy_rows=' || COUNT(*)
-          FROM trading.ensemble_shadow_decisions
-          WHERE engine_code = 'irexpro-multimodel-ensemble-v1'
-            AND model_version = 'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1'
-            AND evaluated_at >= TIMESTAMPTZ '2026-10-09 02:30:14+00';
+          async function main() {
+            await client.connect();
+            await client.query('BEGIN READ ONLY');
+            try {
+              const summary = await client.query(
+                `SELECT
+                   COUNT(*)::int AS post_deploy_rows,
+                   MAX(evaluated_at) AS latest_evaluated_at,
+                   MAX(market_bar_time) AS latest_market_bar,
+                   COUNT(DISTINCT instrument)::int AS distinct_instruments,
+                   COUNT(*) FILTER (
+                     WHERE components ? 'shortHorizonMomentumAtr'
+                       AND components->>'shortHorizonMomentumAtr' IS NOT NULL
+                   )::int AS momentum_present,
+                   COUNT(*) FILTER (
+                     WHERE lower(COALESCE(components->>'paperAdmitted', 'false')) = 'true'
+                   )::int AS paper_admitted,
+                   COUNT(*) FILTER (WHERE admitted)::int AS promotable_admitted,
+                   COUNT(*) FILTER (
+                     WHERE lower(COALESCE(components->'governance'->>'paperExecutionEligible', 'false')) = 'true'
+                   )::int AS paper_execution_eligible
+                 FROM trading.ensemble_shadow_decisions
+                 WHERE engine_code = $1
+                   AND model_version = $2
+                   AND evaluated_at >= $3::timestamptz`,
+                [engine, policy, cutoff],
+              );
 
-          SELECT 'old_policy_rows_post_deploy=' || COUNT(*)
-          FROM trading.ensemble_shadow_decisions
-          WHERE engine_code = 'irexpro-multimodel-ensemble-v1'
-            AND model_version = 'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v2-directional-momentum-v1'
-            AND evaluated_at >= TIMESTAMPTZ '2026-10-09 02:30:14+00';
+              const oldRows = await client.query(
+                `SELECT COUNT(*)::int AS count
+                 FROM trading.ensemble_shadow_decisions
+                 WHERE engine_code = $1
+                   AND model_version = $2
+                   AND evaluated_at >= $3::timestamptz`,
+                [engine, oldPolicy, cutoff],
+              );
 
-          SELECT 'latest_evaluated_at_utc=' || COALESCE(to_char(MAX(evaluated_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), 'NONE')
-          FROM trading.ensemble_shadow_decisions
-          WHERE engine_code = 'irexpro-multimodel-ensemble-v1'
-            AND model_version = 'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1'
-            AND evaluated_at >= TIMESTAMPTZ '2026-10-09 02:30:14+00';
+              const regimes = await client.query(
+                `SELECT COALESCE(regime, 'NULL') AS regime, COUNT(*)::int AS count
+                 FROM trading.ensemble_shadow_decisions
+                 WHERE engine_code = $1
+                   AND model_version = $2
+                   AND evaluated_at >= $3::timestamptz
+                 GROUP BY regime
+                 ORDER BY COUNT(*) DESC, regime`,
+                [engine, policy, cutoff],
+              );
 
-          SELECT 'latest_market_bar_utc=' || COALESCE(to_char(MAX(market_bar_time) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), 'NONE')
-          FROM trading.ensemble_shadow_decisions
-          WHERE engine_code = 'irexpro-multimodel-ensemble-v1'
-            AND model_version = 'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1'
-            AND evaluated_at >= TIMESTAMPTZ '2026-10-09 02:30:14+00';
+              const instruments = await client.query(
+                `SELECT instrument,
+                        COUNT(*)::int AS count,
+                        COUNT(*) FILTER (WHERE direction = 'BUY')::int AS buy,
+                        COUNT(*) FILTER (WHERE direction = 'SELL')::int AS sell
+                 FROM trading.ensemble_shadow_decisions
+                 WHERE engine_code = $1
+                   AND model_version = $2
+                   AND evaluated_at >= $3::timestamptz
+                 GROUP BY instrument
+                 ORDER BY instrument`,
+                [engine, policy, cutoff],
+              );
 
-          SELECT 'freshness_seconds=' || COALESCE(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - MAX(evaluated_at)))::bigint::text, 'NONE')
-          FROM trading.ensemble_shadow_decisions
-          WHERE engine_code = 'irexpro-multimodel-ensemble-v1'
-            AND model_version = 'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1'
-            AND evaluated_at >= TIMESTAMPTZ '2026-10-09 02:30:14+00';
+              const directions = await client.query(
+                `SELECT direction,
+                        COUNT(*)::int AS count,
+                        ROUND(AVG(
+                          CASE
+                            WHEN (components->>'shortHorizonMomentumAtr') ~ '^-?[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$'
+                            THEN CASE
+                              WHEN direction = 'SELL' THEN -(components->>'shortHorizonMomentumAtr')::numeric
+                              ELSE (components->>'shortHorizonMomentumAtr')::numeric
+                            END
+                            ELSE NULL
+                          END
+                        ), 4) AS avg_directional_momentum_atr
+                 FROM trading.ensemble_shadow_decisions
+                 WHERE engine_code = $1
+                   AND model_version = $2
+                   AND evaluated_at >= $3::timestamptz
+                 GROUP BY direction
+                 ORDER BY direction`,
+                [engine, policy, cutoff],
+              );
 
-          SELECT 'distinct_instruments=' || COUNT(DISTINCT instrument)
-          FROM trading.ensemble_shadow_decisions
-          WHERE engine_code = 'irexpro-multimodel-ensemble-v1'
-            AND model_version = 'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1'
-            AND evaluated_at >= TIMESTAMPTZ '2026-10-09 02:30:14+00';
+              const row = summary.rows[0];
+              const latest = row.latest_evaluated_at ? new Date(row.latest_evaluated_at) : null;
+              const freshnessSeconds = latest ? Math.max(0, Math.round((Date.now() - latest.getTime()) / 1000)) : null;
 
-          SELECT 'momentum_present=' || COUNT(*)
-          FROM trading.ensemble_shadow_decisions
-          WHERE engine_code = 'irexpro-multimodel-ensemble-v1'
-            AND model_version = 'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1'
-            AND evaluated_at >= TIMESTAMPTZ '2026-10-09 02:30:14+00'
-            AND components ? 'shortHorizonMomentumAtr'
-            AND components->>'shortHorizonMomentumAtr' IS NOT NULL;
+              console.log('=== iRexPro prospective PAPER cohort evidence ===');
+              console.log(`observed_at_utc=${new Date().toISOString()}`);
+              console.log(`engine=${engine}`);
+              console.log(`policy=${policy}`);
+              console.log(`deployment_cutoff_utc=${cutoff}`);
+              console.log(`post_deploy_rows=${row.post_deploy_rows}`);
+              console.log(`old_policy_rows_post_deploy=${oldRows.rows[0].count}`);
+              console.log(`latest_evaluated_at_utc=${iso(row.latest_evaluated_at)}`);
+              console.log(`latest_market_bar_utc=${iso(row.latest_market_bar)}`);
+              console.log(`freshness_seconds=${freshnessSeconds ?? 'NONE'}`);
+              console.log(`distinct_instruments=${row.distinct_instruments}`);
+              console.log(`momentum_present=${row.momentum_present}`);
+              console.log(`paper_admitted=${row.paper_admitted}|promotable_admitted=${row.promotable_admitted}|paper_execution_eligible=${row.paper_execution_eligible}`);
+              for (const item of regimes.rows) {
+                console.log(`regime=${item.regime}|count=${item.count}`);
+              }
+              for (const item of instruments.rows) {
+                console.log(`instrument=${item.instrument}|count=${item.count}|buy=${item.buy}|sell=${item.sell}`);
+              }
+              for (const item of directions.rows) {
+                console.log(`direction=${item.direction}|count=${item.count}|avg_directional_momentum_atr=${item.avg_directional_momentum_atr ?? 'NONE'}`);
+              }
 
-          SELECT 'paper_admitted=' || COUNT(*) FILTER (WHERE COALESCE((components->>'paperAdmitted')::boolean, false))
-                 || '|promotable_admitted=' || COUNT(*) FILTER (WHERE admitted)
-                 || '|paper_execution_eligible=' || COUNT(*) FILTER (
-                      WHERE COALESCE((components->'governance'->>'paperExecutionEligible')::boolean, false)
-                    )
-          FROM trading.ensemble_shadow_decisions
-          WHERE engine_code = 'irexpro-multimodel-ensemble-v1'
-            AND model_version = 'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1'
-            AND evaluated_at >= TIMESTAMPTZ '2026-10-09 02:30:14+00';
+              await client.query('COMMIT');
+            } catch (error) {
+              await client.query('ROLLBACK').catch(() => {});
+              throw error;
+            }
+          }
 
-          SELECT 'regime=' || COALESCE(regime, 'NULL') || '|count=' || COUNT(*)
-          FROM trading.ensemble_shadow_decisions
-          WHERE engine_code = 'irexpro-multimodel-ensemble-v1'
-            AND model_version = 'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1'
-            AND evaluated_at >= TIMESTAMPTZ '2026-10-09 02:30:14+00'
-          GROUP BY regime
-          ORDER BY COUNT(*) DESC, regime;
-
-          SELECT 'instrument=' || instrument || '|count=' || COUNT(*)
-                 || '|buy=' || COUNT(*) FILTER (WHERE direction = 'BUY')
-                 || '|sell=' || COUNT(*) FILTER (WHERE direction = 'SELL')
-          FROM trading.ensemble_shadow_decisions
-          WHERE engine_code = 'irexpro-multimodel-ensemble-v1'
-            AND model_version = 'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1'
-            AND evaluated_at >= TIMESTAMPTZ '2026-10-09 02:30:14+00'
-          GROUP BY instrument
-          ORDER BY instrument;
-
-          SELECT 'direction=' || direction || '|count=' || COUNT(*)
-                 || '|avg_directional_momentum_atr=' || ROUND(AVG(
-                      CASE
-                        WHEN direction = 'SELL' THEN -(components->>'shortHorizonMomentumAtr')::numeric
-                        ELSE (components->>'shortHorizonMomentumAtr')::numeric
-                      END
-                    ), 4)
-          FROM trading.ensemble_shadow_decisions
-          WHERE engine_code = 'irexpro-multimodel-ensemble-v1'
-            AND model_version = 'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1'
-            AND evaluated_at >= TIMESTAMPTZ '2026-10-09 02:30:14+00'
-            AND components ? 'shortHorizonMomentumAtr'
-            AND components->>'shortHorizonMomentumAtr' IS NOT NULL
-          GROUP BY direction
-          ORDER BY direction;
-
-          COMMIT;
-          SQL
+          main()
+            .catch((error) => {
+              console.error(`ERROR: ${error instanceof Error ? error.message : String(error)}`);
+              process.exitCode = 1;
+            })
+            .finally(async () => {
+              await client.end().catch(() => {});
+            });
+          NODE
           REMOTE
 
       - name: Remove ephemeral SSH material
