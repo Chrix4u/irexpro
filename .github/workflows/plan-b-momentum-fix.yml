@@ -95,6 +95,16 @@ jobs:
               raise SystemExit(f'Expected exactly one scorer wiring anchor, found {text.count(old)}')
           collector.write_text(text.replace(old, new, 1))
 
+          policy_file = Path('apps/api/src/modules/ai/plan-b-multimodel-shadow.ts')
+          policy_text = policy_file.read_text()
+          old_suffix = 'bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v2-directional-momentum-v1'
+          new_suffix = 'bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1'
+          if policy_text.count(old_suffix) != 1:
+              raise SystemExit(
+                  f'Expected exactly one active policy source suffix, found {policy_text.count(old_suffix)}'
+              )
+          policy_file.write_text(policy_text.replace(old_suffix, new_suffix, 1))
+
           root = Path('apps/api/src/modules/ai')
           old_policy = 'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v2-directional-momentum-v1'
           new_policy = 'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1'
@@ -107,7 +117,7 @@ jobs:
                   replacements += count
           if replacements < 4:
               raise SystemExit(f'Policy cohort replacement count unexpectedly low: {replacements}')
-          print(f'Updated {replacements} active-policy references to the clean momentum-wiring cohort.')
+          print(f'Updated active policy source plus {replacements} literal cohort references.')
           PY
           fi
 
