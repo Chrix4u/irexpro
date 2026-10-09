@@ -1,5 +1,7 @@
 import {
+  PAPER_RESEARCH_THROUGHPUT_EPISODE_COOLDOWN_MINUTES,
   PAPER_RESEARCH_THROUGHPUT_LOT_CAP,
+  evaluatePaperResearchEpisodeGuard,
   evaluatePaperResearchThroughput,
 } from './paper-research-throughput';
 
@@ -21,7 +23,7 @@ describe('evaluatePaperResearchThroughput', () => {
   it('admits a positive-EV candidate into research PAPER without granting qualification authority', () => {
     expect(evaluatePaperResearchThroughput(base)).toEqual({
       eligible: true,
-      artifact: 'paper-research-throughput-v2-quality-gated',
+      artifact: 'paper-research-throughput-v3-episode-guarded',
       route: 'PAPER_RESEARCH_THROUGHPUT',
       reason: 'RESEARCH_EVIDENCE_CANDIDATE',
       qualificationEvidence: false,
@@ -93,5 +95,73 @@ describe('evaluatePaperResearchThroughput', () => {
         paperExecutionBlockers: [...base.paperExecutionBlockers, 'PAPER_NET_EXPECTED_R'],
       }),
     ).toMatchObject({ eligible: false, reason: 'UNSAFE_BLOCKER' });
+  });
+});
+
+describe('evaluatePaperResearchEpisodeGuard', () => {
+  const evaluatedAt = new Date('2026-10-09T05:00:00.000Z');
+  const episodeKey = 'USDCHF|BUY|TREND_HEALTHY|TREND_CONTINUATION';
+
+  it('blocks a duplicate research sample while the same pair-side episode is still open', () => {
+    expect(
+      evaluatePaperResearchEpisodeGuard({
+        currentEpisodeKey: episodeKey,
+        previousEpisodeKey: episodeKey,
+        previousTradeStatus: 'OPEN',
+        previousClosedAt: null,
+        evaluatedAt,
+      }),
+    ).toEqual({ eligible: false, reason: 'ACTIVE_RESEARCH_SAMPLE' });
+  });
+
+  it.each(['REJECTED', 'CANCELLED'] as const)(
+    'does not let an unsuccessful terminal %s trade block future research samples',
+    (previousTradeStatus) => {
+      expect(
+        evaluatePaperResearchEpisodeGuard({
+          currentEpisodeKey: episodeKey,
+          previousEpisodeKey: episodeKey,
+          previousTradeStatus,
+          previousClosedAt: null,
+          evaluatedAt,
+        }),
+      ).toEqual({ eligible: true, reason: 'TERMINAL_RESEARCH_SAMPLE' });
+    },
+  );
+
+  it('keeps the same resolved episode in cooldown before collecting another live sample', () => {
+    expect(
+      evaluatePaperResearchEpisodeGuard({
+        currentEpisodeKey: episodeKey,
+        previousEpisodeKey: episodeKey,
+        previousTradeStatus: 'CLOSED',
+        previousClosedAt: new Date(evaluatedAt.getTime() - 15 * 60_000),
+        evaluatedAt,
+      }),
+    ).toEqual({ eligible: false, reason: 'EPISODE_COOLDOWN' });
+  });
+
+  it('allows a materially changed episode immediately and the same episode after cooldown', () => {
+    expect(
+      evaluatePaperResearchEpisodeGuard({
+        currentEpisodeKey: 'USDCHF|BUY|TREND_WEAK|TREND_CONTINUATION',
+        previousEpisodeKey: episodeKey,
+        previousTradeStatus: 'CLOSED',
+        previousClosedAt: new Date(evaluatedAt.getTime() - 5 * 60_000),
+        evaluatedAt,
+      }),
+    ).toEqual({ eligible: true, reason: 'EPISODE_CHANGED' });
+
+    expect(
+      evaluatePaperResearchEpisodeGuard({
+        currentEpisodeKey: episodeKey,
+        previousEpisodeKey: episodeKey,
+        previousTradeStatus: 'CLOSED',
+        previousClosedAt: new Date(
+          evaluatedAt.getTime() - (PAPER_RESEARCH_THROUGHPUT_EPISODE_COOLDOWN_MINUTES + 1) * 60_000,
+        ),
+        evaluatedAt,
+      }),
+    ).toEqual({ eligible: true, reason: 'EPISODE_COOLDOWN_ELAPSED' });
   });
 });
