@@ -2052,8 +2052,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             AND ti.direction = $4
             AND ti.status = 'EXECUTED'
             AND ti.metadata->>'paper_research_throughput' = 'true'
-            AND ti.metadata->>'paper_research_throughput_artifact' IN ($5, $6)
-            AND ti.metadata->>'decision_policy_version' = $7
+            AND ti.metadata->>'paper_research_throughput_artifact' = ANY($5::text[])
+            AND ti.metadata->>'decision_policy_version' = $6
             AND t.status = 'CLOSED'
             AND t.realised_pnl IS NOT NULL
             AND t.closed_at >= NOW() - INTERVAL '24 hours'
@@ -2066,8 +2066,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         connectionId,
         instrument.trim().toUpperCase(),
         direction,
-        PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS[0],
-        PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS[1],
+        [...PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS],
         ACTIVE_MODEL_POLICY_VERSION,
       ],
     )) as Array<{ wins: number | string | null; losses: number | string | null }>;

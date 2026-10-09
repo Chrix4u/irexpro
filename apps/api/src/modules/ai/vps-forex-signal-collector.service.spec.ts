@@ -974,15 +974,19 @@ describe('VpsForexSignalCollectorService', () => {
       (collector as any).loadPaperResearchPairSideEvidence('user-1', 'conn-1', 'GBPUSD', 'SELL'),
     ).resolves.toEqual({ wins: 1, losses: 5 });
     expect(query).toHaveBeenCalledWith(
-      expect.stringContaining('paper_research_throughput_artifact'),
-      expect.arrayContaining([
+      expect.stringContaining("paper_research_throughput_artifact' = ANY($5::text[])"),
+      [
         'user-1',
         'conn-1',
         'GBPUSD',
         'SELL',
-        'paper-research-throughput-v3-episode-guarded',
-        'paper-research-throughput-v4-pair-side-reliability',
-      ]),
+        [
+          'paper-research-throughput-v2-episode-guarded',
+          'paper-research-throughput-v3-episode-guarded',
+          'paper-research-throughput-v4-pair-side-reliability',
+        ],
+        expect.any(String),
+      ],
     );
   });
 
