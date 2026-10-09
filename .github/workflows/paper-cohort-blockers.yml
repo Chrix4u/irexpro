@@ -1,0 +1,218 @@
+name: PAPER Cohort Blockers
+
+on:
+  push:
+    branches:
+      - 'ops/paper-cohort-evidence-20261009'
+    paths:
+      - '.github/workflows/paper-cohort-blockers.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: paper-cohort-blockers-20261009
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    name: Aggregate PAPER admission blockers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: staging
+    env:
+      STAGING_SSH_HOST: vps.lightworldtech.com
+      STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
+      STAGING_SSH_USER: ${{ vars.STAGING_SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+
+    steps:
+      - name: Validate and configure pinned SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$STAGING_SSH_HOST"
+          test -n "$STAGING_SSH_PORT"
+          test -n "$STAGING_SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          [[ "$STAGING_SSH_PORT" =~ ^[0-9]+$ ]]
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Aggregate blocker evidence
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh \
+            -i "$HOME/.ssh/irexpro_staging" \
+            -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            'bash -s' <<'REMOTE'
+          set -Eeuo pipefail
+          readonly API_ROOT=/home/lightworld/webapps/irexpro-staging/apps/api
+          cd "$API_ROOT"
+          DOTENV_CONFIG_PATH="$API_ROOT/.env" node -r dotenv/config <<'NODE'
+          const { Client } = require('pg');
+
+          const engine = 'irexpro-multimodel-ensemble-v1';
+          const policy = 'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1';
+          const cutoff = '2026-10-09T02:30:14Z';
+          const client = new Client({
+            host: process.env.DB_HOST,
+            port: Number(process.env.DB_PORT || 5432),
+            database: process.env.DB_NAME,
+            user: process.env.DB_USER,
+            password: process.env.DB_PASSWORD,
+            ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
+            connectionTimeoutMillis: 10000,
+            statement_timeout: 20000,
+            application_name: 'irexpro-paper-blocker-readonly-diagnostic',
+          });
+
+          const inc = (map, key) => map.set(key, (map.get(key) || 0) + 1);
+          const finite = (v) => Number.isFinite(Number(v)) ? Number(v) : null;
+          const stats = (values) => {
+            const xs = values.map(finite).filter((v) => v !== null);
+            if (!xs.length) return 'NONE';
+            const sum = xs.reduce((a, b) => a + b, 0);
+            return `min=${Math.min(...xs).toFixed(4)}|avg=${(sum / xs.length).toFixed(4)}|max=${Math.max(...xs).toFixed(4)}`;
+          };
+          const printCounts = (prefix, map) => {
+            [...map.entries()].sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])))
+              .forEach(([key, count]) => console.log(`${prefix}=${key}|count=${count}`));
+          };
+
+          async function main() {
+            await client.connect();
+            await client.query('BEGIN READ ONLY');
+            try {
+              const result = await client.query(
+                `SELECT direction,
+                        confidence,
+                        ensemble_score,
+                        meta_probability,
+                        expected_r,
+                        consensus_passed,
+                        consensus_required,
+                        regime,
+                        reasons,
+                        components
+                 FROM trading.ensemble_shadow_decisions
+                 WHERE engine_code = $1
+                   AND model_version = $2
+                   AND evaluated_at >= $3::timestamptz
+                 ORDER BY evaluated_at ASC`,
+                [engine, policy, cutoff],
+              );
+
+              const scorerReasons = new Map();
+              const consensus = new Map();
+              const paperBlockers = new Map();
+              const promotionBlockers = new Map();
+              const driftStates = new Map();
+              const costSources = new Map();
+              const spreadValidity = new Map();
+              const eventRisks = new Map();
+              const paperNetExpectedRPass = new Map();
+              const routeCounts = new Map();
+              const confidence = [];
+              const expectedR = [];
+              const metaProbability = [];
+              const ensembleScore = [];
+              const directionQuality = [];
+              const tradeQuality = [];
+              const exitQuality = [];
+              const sessionQuality = [];
+              const portfolioQuality = [];
+              const netExpectedR = [];
+              const executionCostR = [];
+              const directionalMomentum = [];
+
+              for (const row of result.rows) {
+                const reasons = Array.isArray(row.reasons) ? row.reasons : [];
+                reasons.forEach((reason) => inc(scorerReasons, String(reason)));
+                inc(consensus, `${row.consensus_passed}/${row.consensus_required}`);
+                confidence.push(row.confidence);
+                expectedR.push(row.expected_r);
+                metaProbability.push(row.meta_probability);
+                ensembleScore.push(row.ensemble_score);
+
+                const c = row.components && typeof row.components === 'object' ? row.components : {};
+                const governance = c.governance && typeof c.governance === 'object' ? c.governance : {};
+                const paper = Array.isArray(governance.paperExecutionBlockers) ? governance.paperExecutionBlockers : [];
+                const promotion = Array.isArray(governance.blockers) ? governance.blockers : [];
+                paper.forEach((reason) => inc(paperBlockers, String(reason)));
+                promotion.forEach((reason) => inc(promotionBlockers, String(reason)));
+                inc(driftStates, String(governance.driftState ?? 'MISSING'));
+                inc(costSources, String(governance.executionCostSource ?? 'MISSING'));
+                inc(spreadValidity, String(governance.executionSpreadEvidenceValid ?? 'MISSING'));
+                inc(eventRisks, String(governance.eventRisk ?? 'MISSING'));
+                inc(paperNetExpectedRPass, String(governance.paperNetExpectedRPassed ?? 'MISSING'));
+                inc(routeCounts, String(c.strategyRoute ?? c.route ?? 'MISSING'));
+                directionQuality.push(c.directionQuality);
+                tradeQuality.push(c.tradeQuality);
+                exitQuality.push(c.exitQuality);
+                sessionQuality.push(c.sessionQuality);
+                portfolioQuality.push(c.portfolioQuality);
+                netExpectedR.push(governance.netExpectedR);
+                executionCostR.push(governance.estimatedExecutionCostR);
+
+                const rawMomentum = finite(c.shortHorizonMomentumAtr);
+                if (rawMomentum !== null) directionalMomentum.push(row.direction === 'SELL' ? -rawMomentum : rawMomentum);
+              }
+
+              console.log('=== iRexPro PAPER admission blocker evidence ===');
+              console.log(`observed_at_utc=${new Date().toISOString()}`);
+              console.log(`rows=${result.rowCount}`);
+              console.log(`confidence|${stats(confidence)}`);
+              console.log(`expected_r|${stats(expectedR)}`);
+              console.log(`meta_probability|${stats(metaProbability)}`);
+              console.log(`ensemble_score|${stats(ensembleScore)}`);
+              console.log(`direction_quality|${stats(directionQuality)}`);
+              console.log(`trade_quality|${stats(tradeQuality)}`);
+              console.log(`exit_quality|${stats(exitQuality)}`);
+              console.log(`session_quality|${stats(sessionQuality)}`);
+              console.log(`portfolio_quality|${stats(portfolioQuality)}`);
+              console.log(`net_expected_r|${stats(netExpectedR)}`);
+              console.log(`execution_cost_r|${stats(executionCostR)}`);
+              console.log(`directional_momentum_atr|${stats(directionalMomentum)}`);
+              printCounts('scorer_reason', scorerReasons);
+              printCounts('consensus', consensus);
+              printCounts('paper_blocker', paperBlockers);
+              printCounts('promotion_blocker', promotionBlockers);
+              printCounts('drift_state', driftStates);
+              printCounts('cost_source', costSources);
+              printCounts('spread_evidence_valid', spreadValidity);
+              printCounts('event_risk', eventRisks);
+              printCounts('paper_net_expected_r_passed', paperNetExpectedRPass);
+              printCounts('strategy_route', routeCounts);
+
+              await client.query('COMMIT');
+            } catch (error) {
+              await client.query('ROLLBACK').catch(() => {});
+              throw error;
+            }
+          }
+
+          main()
+            .catch((error) => {
+              console.error(`ERROR: ${error instanceof Error ? error.message : String(error)}`);
+              process.exitCode = 1;
+            })
+            .finally(async () => client.end().catch(() => {}));
+          NODE
+          REMOTE
+
+      - name: Remove ephemeral SSH material
+        if: ${{ always() }}
+        shell: bash
+        run: rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
