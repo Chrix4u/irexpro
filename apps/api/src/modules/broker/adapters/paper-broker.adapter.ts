@@ -574,6 +574,65 @@ function lotSizeToUnits(lotSize: string): bigint {
   return units;
 }
 
+export interface PaperProfitLockDecision {
+  armed: boolean;
+  shouldClose: boolean;
+  retentionFraction: string | null;
+  protectedFloorPnl: string | null;
+}
+
+/**
+ * PAPER-only dynamic profit lock expressed in initial-risk (R) terms.
+ *
+ * The lock arms only after a meaningful favorable excursion (0.30R). Once
+ * armed it protects a progressively larger share of the best executable P&L:
+ *   0.30R–<0.60R peak -> retain 40%
+ *   0.60R–<1.00R peak -> retain 55%
+ *   1.00R–<1.50R peak -> retain 65%
+ *   >=1.50R peak       -> retain 75%
+ *
+ * Invalid/unprovable risk fails closed: no automatic profit-lock exit.
+ */
+export function evaluatePaperProfitLock(input: {
+  maxFavorablePnl: string;
+  currentPnl: string;
+  initialRiskPnl: string;
+}): PaperProfitLockDecision {
+  const disabled: PaperProfitLockDecision = {
+    armed: false,
+    shouldClose: false,
+    retentionFraction: null,
+    protectedFloorPnl: null,
+  };
+  try {
+    if (compareDecimalStrings(input.initialRiskPnl, '0') <= 0) return disabled;
+    if (compareDecimalStrings(input.maxFavorablePnl, '0') <= 0) return disabled;
+
+    const armFloor = multiplyDecimalStrings(input.initialRiskPnl, '0.30');
+    if (compareDecimalStrings(input.maxFavorablePnl, armFloor) < 0) return disabled;
+
+    const peak = input.maxFavorablePnl;
+    const risk = input.initialRiskPnl;
+    const retentionFraction =
+      compareDecimalStrings(peak, multiplyDecimalStrings(risk, '0.60')) < 0
+        ? '0.40'
+        : compareDecimalStrings(peak, risk) < 0
+          ? '0.55'
+          : compareDecimalStrings(peak, multiplyDecimalStrings(risk, '1.50')) < 0
+            ? '0.65'
+            : '0.75';
+    const protectedFloorPnl = toMoney(multiplyDecimalStrings(peak, retentionFraction));
+    return {
+      armed: true,
+      shouldClose: compareDecimalStrings(input.currentPnl, protectedFloorPnl) <= 0,
+      retentionFraction,
+      protectedFloorPnl,
+    };
+  } catch {
+    return disabled;
+  }
+}
+
 // ─── Internal simulation records ──────────────────────────────────────────────
 
 type PaperOrderStatus = 'WORKING' | 'TRIGGERED' | 'FILLED' | 'REJECTED' | 'CANCELLED';
@@ -612,6 +671,8 @@ interface PaperPosition {
   stopLoss: string;
   takeProfit: string;
   openedAt: Date;
+  /** Initial SL risk in account currency; fixed at fill for R-normalized profit locking. */
+  profitLockInitialRiskPnl: string | null;
   pathMaxFavorablePnl: string;
   pathMaxAdversePnl: string;
   pathLatestUnrealisedPnl: string;
@@ -640,7 +701,7 @@ interface PaperClosedTrade {
   closedAt: Date;
   commission: string;
   swap: string;
-  closeReason: 'TP' | 'SL' | 'MANUAL' | 'SYSTEM';
+  closeReason: 'TP' | 'SL' | 'MANUAL' | 'SYSTEM' | 'PROFIT_LOCK';
   pathMaxFavorablePnl: string;
   pathMaxAdversePnl: string;
   pathLatestUnrealisedPnl: string;
@@ -777,6 +838,61 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
     // govern whether a protection observation occurred before or after a fill.
     if (this.isLiveMarketMode()) return new Date();
     return this._replayFeed ? this._replayFeed.now() : this._clock.now();
+  }
+
+  private paperProfitLockEnabled(): boolean {
+    const configured = (process.env.PAPER_PROFIT_LOCK_ENABLED ?? '').trim().toLowerCase();
+    if (configured === '0' || configured === 'false' || configured === 'off') return false;
+    if (configured === '1' || configured === 'true' || configured === 'on') return true;
+    // Default-on only for the VPS live PAPER adapter. Replay/unit simulation and
+    // every non-paper broker retain their historical behavior unless explicitly enabled.
+    return this.isLiveMarketMode();
+  }
+
+  private initialRiskPnlForPosition(position: PaperPosition): string | null {
+    if (isZeroLevel(position.stopLoss)) return null;
+    try {
+      const stopPnl = toMoney(this.pnlAtExitPriceExact(position, position.stopLoss));
+      if (compareDecimalStrings(stopPnl, '0') >= 0) return null;
+      return toMoney(subtractDecimalStrings('0', stopPnl));
+    } catch {
+      return null;
+    }
+  }
+
+  private maybeCloseForProfitLock(
+    position: PaperPosition,
+    exitPrice: string,
+    observedAt: Date,
+  ): boolean {
+    if (!this.paperProfitLockEnabled()) return false;
+    const initialRiskPnl =
+      position.profitLockInitialRiskPnl ?? this.initialRiskPnlForPosition(position);
+    if (!initialRiskPnl) return false;
+    position.profitLockInitialRiskPnl = initialRiskPnl;
+
+    const currentPnl = toMoney(this.pnlAtExitPriceExact(position, exitPrice));
+    const decision = evaluatePaperProfitLock({
+      maxFavorablePnl: position.pathMaxFavorablePnl,
+      currentPnl,
+      initialRiskPnl,
+    });
+    if (!decision.shouldClose) return false;
+
+    this.logger.log(
+      `PaperBrokerAdapter: PROFIT_LOCK id=${position.positionId} instrument=${position.instrument} ` +
+        `peak=${position.pathMaxFavorablePnl} current=${currentPnl} risk=${initialRiskPnl} ` +
+        `floor=${decision.protectedFloorPnl} retain=${decision.retentionFraction} [PAPER_ONLY]`,
+    );
+    this.closePositionUnits(
+      position,
+      position.units,
+      position.lotSize,
+      exitPrice,
+      'PROFIT_LOCK',
+      observedAt,
+    );
+    return true;
   }
 
   private quoteForInstrument(instrument: string): PaperQuote {
@@ -1678,6 +1794,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       stopLoss,
       takeProfit,
       openedAt: this.currentTime(),
+      profitLockInitialRiskPnl: null,
       pathMaxFavorablePnl: '0.00',
       pathMaxAdversePnl: '0.00',
       pathLatestUnrealisedPnl: '0.00',
@@ -1690,6 +1807,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
       pathSameBarProtectionAmbiguityCount: 0,
       pathLastSameBarProtectionAmbiguityAt: null,
     };
+    position.profitLockInitialRiskPnl = this.initialRiskPnlForPosition(position);
     this._positions.set(orderId, position);
     return position;
   }
@@ -2052,6 +2170,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
             );
             break;
           }
+          if (this.maybeCloseForProfitLock(position, bidClose, candleClosedAt)) break;
         } else {
           const askHigh = (high + halfSpread).toFixed(spec.digits);
           const askLow = (low + halfSpread).toFixed(spec.digits);
@@ -2090,6 +2209,7 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
             );
             break;
           }
+          if (this.maybeCloseForProfitLock(position, askClose, candleClosedAt)) break;
         }
       }
     }
@@ -2140,7 +2260,9 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
             'TP',
             observedAt,
           );
+          continue;
         }
+        this.maybeCloseForProfitLock(position, quote.bid, observedAt);
       } else {
         if (
           !isZeroLevel(position.stopLoss) &&
@@ -2168,7 +2290,9 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
             'TP',
             observedAt,
           );
+          continue;
         }
+        this.maybeCloseForProfitLock(position, quote.ask, observedAt);
       }
     }
   }
@@ -2377,6 +2501,13 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         remainingUnits,
         totalUnitsBeforeClose,
       );
+      if (position.profitLockInitialRiskPnl) {
+        position.profitLockInitialRiskPnl = this.scaledPathMoney(
+          position.profitLockInitialRiskPnl,
+          remainingUnits,
+          totalUnitsBeforeClose,
+        );
+      }
       position.pathMaxAdversePnl = this.scaledPathMoney(
         position.pathMaxAdversePnl,
         remainingUnits,
@@ -2505,6 +2636,10 @@ export class PaperBrokerAdapter implements IBrokerAdapter {
         ...position,
         units: BigInt(position.units),
         openedAt,
+        profitLockInitialRiskPnl:
+          typeof position.profitLockInitialRiskPnl === 'string'
+            ? position.profitLockInitialRiskPnl
+            : null,
         pathMaxFavorablePnl:
           typeof position.pathMaxFavorablePnl === 'string' ? position.pathMaxFavorablePnl : '0.00',
         pathMaxAdversePnl:

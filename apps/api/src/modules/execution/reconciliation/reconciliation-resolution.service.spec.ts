@@ -200,6 +200,29 @@ describe('ReconciliationResolutionService', () => {
       );
     });
 
+    it('preserves PAPER profit-lock provenance as PROFIT_PROTECTION', async () => {
+      await service.closeTradeFromProvider(baseTrade(), {
+        externalOrderId: 'pos-1',
+        instrument: 'EURUSD',
+        direction: 'BUY',
+        lotSize: '1.0000',
+        openPrice: '1.10000',
+        closePrice: '1.10600',
+        stopLoss: '1.09000',
+        takeProfit: '1.12000',
+        realisedPnl: '6.00',
+        openedAt: new Date(),
+        closedAt: new Date(),
+        commission: '0.00',
+        swap: '0.00',
+        closeReason: 'PROFIT_LOCK',
+      });
+      expect(tradeRepo.update).toHaveBeenCalledWith(
+        { id: 'trade-1', status: TradeStatus.OPEN },
+        expect.objectContaining({ closeReason: TradeCloseReason.PROFIT_PROTECTION }),
+      );
+    });
+
     it('closes with NULL economics when the provider close is unknown', async () => {
       await service.closeTradeFromProvider(baseTrade(), null);
       expect(tradeRepo.update).toHaveBeenCalledWith(
