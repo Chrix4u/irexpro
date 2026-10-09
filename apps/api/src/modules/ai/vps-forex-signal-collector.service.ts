@@ -45,6 +45,7 @@ import { scoreExtensionExhaustionShadow } from './extension-exhaustion-shadow';
 import {
   PAPER_RESEARCH_THROUGHPUT_LOT_CAP,
   PaperResearchThroughputDecision,
+  evaluatePaperResearchEpisodeGuard,
   evaluatePaperResearchThroughput,
 } from './paper-research-throughput';
 import {
@@ -973,6 +974,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           rejectedEdgeCanary: RejectedEdgeCanaryDecision | null;
           rejectedEdgeCanaryEvidence: RejectedEdgeCanaryEvidence | null;
           paperResearchThroughput: PaperResearchThroughputDecision;
+          paperResearchEpisodeKey: string;
+          paperResearchEpisodeGuard: ReturnType<typeof evaluatePaperResearchEpisodeGuard> | null;
         }> = [];
 
         for (const best of [...pairCandidates].sort((a, b) => b.score - a.score)) {
@@ -1181,10 +1184,37 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             exitQuality: planBEnsemble.exitQuality,
             paperExecutionBlockers: ensembleGovernance.paperExecutionBlockers,
           });
+          const paperResearchEpisodeKey = `${best.instrument}|${best.direction}|${planBEnsemble.regime}|${planBEnsemble.strategyRoute}`;
+          let paperResearchEpisodeGuard: ReturnType<
+            typeof evaluatePaperResearchEpisodeGuard
+          > | null = null;
+          if (paperResearchThroughput.eligible) {
+            const previousEpisode = await this.loadPaperResearchEpisodeState(
+              userId,
+              connectionId,
+              best.instrument,
+              best.direction,
+            );
+            paperResearchEpisodeGuard = evaluatePaperResearchEpisodeGuard({
+              currentEpisodeKey: paperResearchEpisodeKey,
+              previousEpisodeKey: previousEpisode.previousEpisodeKey,
+              previousTradeStatus: previousEpisode.previousTradeStatus,
+              previousClosedAt: previousEpisode.previousClosedAt,
+              evaluatedAt: new Date(),
+            });
+            if (!paperResearchEpisodeGuard.eligible) {
+              this.logger.log(
+                `PAPER research-throughput ${best.instrument} ${best.direction} execution=SHADOW_ONLY ` +
+                  `reason=${paperResearchEpisodeGuard.reason} episode=${paperResearchEpisodeKey}`,
+              );
+            }
+          }
+          const paperResearchExecutionEligible =
+            paperResearchThroughput.eligible && Boolean(paperResearchEpisodeGuard?.eligible);
           if (
             !normalPaperExecution &&
             !rejectedEdgeCanary?.eligible &&
-            !paperResearchThroughput.eligible
+            !paperResearchExecutionEligible
           ) {
             this.logger.log(
               `Multi-model ensemble ${best.instrument} ${best.direction} ` +
@@ -1210,7 +1240,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
                 `global30m=${rejectedEdgeCanaryEvidence?.global30m.positive ?? 0}/${rejectedEdgeCanaryEvidence?.global30m.samples ?? 0} ` +
                 `pairSide30m=${rejectedEdgeCanaryEvidence?.pairSide30m.positive ?? 0}/${rejectedEdgeCanaryEvidence?.pairSide30m.samples ?? 0}`,
             );
-          } else if (paperResearchThroughput.eligible) {
+          } else if (paperResearchExecutionEligible) {
             this.logger.warn(
               `PAPER research-throughput ${best.instrument} ${best.direction} execution=ELIGIBLE ` +
                 `netExpectedR=${ensembleGovernance.netExpectedR.toFixed(4)} ` +
@@ -1232,6 +1262,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             rejectedEdgeCanary,
             rejectedEdgeCanaryEvidence,
             paperResearchThroughput,
+            paperResearchEpisodeKey,
+            paperResearchEpisodeGuard,
           });
         }
 
@@ -1275,6 +1307,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           rejectedEdgeCanary,
           rejectedEdgeCanaryEvidence,
           paperResearchThroughput,
+          paperResearchEpisodeKey,
+          paperResearchEpisodeGuard,
         } = chosen;
 
         this.lastPublishedOpportunity.set(best.instrument, {
@@ -1333,7 +1367,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           volatilityScore: best.volatilityScore,
           generatedAt: new Date(),
           modelVersion: paperResearchThroughput.eligible
-            ? `external-provider/${ACTIVE_ENGINE_CODE}/paper-research-throughput-v1`
+            ? `external-provider/${ACTIVE_ENGINE_CODE}/paper-research-throughput-v2-episode-guarded`
             : rejectedEdgeCanary?.eligible
               ? `external-provider/${ACTIVE_ENGINE_CODE}/paper-rejected-edge-canary-v1`
               : `external-provider/${ACTIVE_ENGINE_CODE}/paper-only-v1`,
@@ -1357,6 +1391,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
               paperResearchThroughput.qualificationEvidence,
             paper_research_throughput_execution_authority:
               paperResearchThroughput.executionAuthority,
+            paper_research_episode_key: paperResearchEpisodeKey,
+            paper_research_episode_guard_reason: paperResearchEpisodeGuard?.reason ?? null,
             main_strategy_qualification_evidence:
               !rejectedEdgeCanary?.eligible && !paperResearchThroughput.eligible,
             source_reference:
@@ -1944,6 +1980,73 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     if (resolvedCount > 0) {
       this.logger.log(`Multi-model shadow outcomes resolved count=${resolvedCount}`);
     }
+  }
+
+  private async loadPaperResearchEpisodeState(
+    userId: string,
+    connectionId: string,
+    instrument: string,
+    direction: 'BUY' | 'SELL',
+  ): Promise<{
+    previousEpisodeKey: string | null;
+    previousTradeStatus: string | null;
+    previousClosedAt: Date | null;
+  }> {
+    const empty = {
+      previousEpisodeKey: null,
+      previousTradeStatus: null,
+      previousClosedAt: null,
+    };
+    if (!this.dataSource) return empty;
+
+    const rows = (await this.dataSource.query(
+      `
+        SELECT
+          ti.metadata->>'paper_research_episode_key' AS episode_key,
+          t.status AS trade_status,
+          t.closed_at
+        FROM trading.trade_intents ti
+        JOIN trading.trades t ON t.trade_intent_id = ti.id
+        WHERE ti.user_id = $1
+          AND ti.broker_connection_id = $2
+          AND ti.instrument = $3
+          AND ti.direction = $4
+          AND ti.status = 'EXECUTED'
+          AND ti.model_version LIKE $5
+          AND t.status IN ('PENDING', 'OPEN', 'RECONCILIATION_PENDING', 'CLOSED')
+        ORDER BY
+          CASE
+            WHEN t.status IN ('PENDING', 'OPEN', 'RECONCILIATION_PENDING') THEN 0
+            ELSE 1
+          END,
+          CASE
+            WHEN t.status IN ('PENDING', 'OPEN', 'RECONCILIATION_PENDING') THEN ti.created_at
+            ELSE NULL
+          END DESC,
+          COALESCE(t.closed_at, ti.created_at) DESC
+        LIMIT 1
+      `,
+      [
+        userId,
+        connectionId,
+        instrument.trim().toUpperCase(),
+        direction,
+        `external-provider/${ACTIVE_ENGINE_CODE}/paper-research-throughput-%`,
+      ],
+    )) as Array<{
+      episode_key: string | null;
+      trade_status: string | null;
+      closed_at: string | Date | null;
+    }>;
+
+    const row = rows[0];
+    if (!row) return empty;
+    const closedAt = row.closed_at ? new Date(row.closed_at) : null;
+    return {
+      previousEpisodeKey: row.episode_key ?? null,
+      previousTradeStatus: row.trade_status ?? null,
+      previousClosedAt: closedAt && Number.isFinite(closedAt.getTime()) ? closedAt : null,
+    };
   }
 
   private async loadExecutionSpreadEvidence(

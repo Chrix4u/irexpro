@@ -822,6 +822,137 @@ describe('VpsForexSignalCollectorService', () => {
     }
   });
 
+  it('keeps duplicate research-throughput samples shadow-only while the same pair-side sample is open', async () => {
+    const live = new LivePaperMarketDataService();
+    const receiveSignal = jest.fn().mockResolvedValue({ outcome: 'EXECUTION_SUCCEEDED' });
+    const shadowQuery = jest.fn().mockResolvedValue([]);
+    const actualPlanB = PlanBEnsembleModule.scorePlanBMultimodelShadow;
+    const planBSpy = jest
+      .spyOn(PlanBEnsembleModule, 'scorePlanBMultimodelShadow')
+      .mockImplementation((input, positions) => {
+        const base = actualPlanB(input, positions);
+        const target = input.instrument === 'EURUSD' && input.direction === 'BUY';
+        return {
+          ...base,
+          strategyRoute: 'TREND_CONTINUATION',
+          portfolioQuality: 1,
+          paperAdmitted: false,
+          admitted: false,
+          consensusPassed: target ? 5 : 3,
+          consensusRequired: 6,
+          directionQuality: target ? 0.65 : 0.2,
+          tradeQuality: target ? 0.6 : 0.2,
+          exitQuality: target ? 0.6 : 0.2,
+          metaProbability: target ? 0.5 : 0.35,
+          expectedR: target ? 0.25 : -0.2,
+          ensembleScore: target ? 0.62 : 0.3,
+          reasons: target ? ['ENSEMBLE_CONSENSUS'] : ['META_EXPECTED_VALUE'],
+        };
+      });
+    const governanceSpy = jest
+      .spyOn(EnsembleGovernanceModule, 'evaluateEnsembleGovernance')
+      .mockImplementation((input) => {
+        const target = input.instrument === 'EURUSD' && input.ensemble.expectedR > 0;
+        return {
+          version: EnsembleGovernanceModule.ENSEMBLE_GOVERNANCE_VERSION,
+          costModelVersion: EnsembleGovernanceModule.ENSEMBLE_COST_MODEL_VERSION,
+          driftModelVersion: EnsembleGovernanceModule.ENSEMBLE_DRIFT_MODEL_VERSION,
+          grossExpectedR: target ? 0.25 : -0.2,
+          estimatedExecutionCostR: 0.03,
+          executionCostSource: 'BROKER_OBSERVED_P90',
+          executionSpreadEvidenceValid: true,
+          executionSpreadEvidence: {
+            source: 'BROKER_OBSERVED_P90',
+            spreadPrice: 0.00001,
+            sampleCount: 30,
+            percentile: 0.9,
+            windowMinutes: 30,
+            latestSampleAt: new Date().toISOString(),
+          },
+          netExpectedR: target ? 0.22 : -0.23,
+          paperNetExpectedRPassed: target,
+          netExpectedRPassed: target,
+          driftState: target ? 'NORMAL' : 'OUT_OF_DISTRIBUTION',
+          driftQuality: target ? 1 : 0.2,
+          paperDriftPassed: target,
+          driftPassed: target,
+          sleeveState: 'COLLECTING',
+          sleeveEvidence: null,
+          eventRisk: 'CLEAR',
+          paperExecutionEligible: false,
+          paperExecutionBlockers: target
+            ? ['ENSEMBLE_NOT_PAPER_ADMITTED', 'ENSEMBLE_NOT_PROMOTABLE_ADMISSION']
+            : ['PAPER_NET_EXPECTED_R'],
+          paperPromotionEligible: false,
+          blockers: ['ENSEMBLE_NOT_ADMITTED', 'SLEEVE_COLLECTING'],
+        };
+      });
+
+    const collector = new VpsForexSignalCollectorService(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+      }),
+      { receiveSignal } as unknown as AiSignalService,
+      {
+        getActiveSession: jest.fn().mockResolvedValue({
+          id: 'session-1',
+          brokerConnectionId: 'conn-1',
+          executionMode: ExecutionMode.PAPER_ONLY,
+        }),
+      } as unknown as ExecutionService,
+      {
+        getCurrentPriceForConnection: jest.fn().mockResolvedValue({ bid: '1', ask: '1.1' }),
+        getOpenPositionsForConnection: jest.fn().mockResolvedValue({ positions: [] }),
+      } as unknown as BrokerService,
+      live,
+      aiEngineClientMock(),
+      { query: shadowQuery } as any,
+      {
+        assess: jest.fn().mockResolvedValue({
+          state: 'CLEAR',
+          provider: 'TEST',
+          configured: true,
+          checkedAt: new Date().toISOString(),
+          instrument: 'EURUSD',
+          relevantCountries: [],
+          blockWindowMinutesBefore: 30,
+          blockWindowMinutesAfter: 30,
+          blockingEvents: [],
+          reason: null,
+          attribution: null,
+        }),
+      } as any,
+    );
+    jest.spyOn(collector as any, 'loadEnsembleSleeveEvidence').mockResolvedValue(null);
+    jest.spyOn(collector as any, 'loadExecutionSpreadEvidence').mockResolvedValue({
+      source: 'BROKER_OBSERVED_P90',
+      spreadPrice: 0.00001,
+      sampleCount: 30,
+      percentile: 0.9,
+      windowMinutes: 30,
+      latestSampleAt: new Date().toISOString(),
+    });
+    jest.spyOn(collector as any, 'loadPaperResearchEpisodeState').mockResolvedValue({
+      previousEpisodeKey: 'EURUSD|BUY|TREND_HEALTHY|TREND_CONTINUATION',
+      previousTradeStatus: 'OPEN',
+      previousClosedAt: null,
+    });
+
+    try {
+      const fetchMock = jest
+        .fn()
+        .mockResolvedValue({ ok: true, status: 200, json: async () => allTrendPayload() });
+      await collector.collectOnce(fetchMock as unknown as typeof fetch);
+      expect(receiveSignal).not.toHaveBeenCalled();
+    } finally {
+      planBSpy.mockRestore();
+      governanceSpy.mockRestore();
+    }
+  });
+
   it('persists shadow evidence without an active PAPER session and keeps execution disabled', async () => {
     const live = new LivePaperMarketDataService();
     const receiveSignal = jest.fn();
