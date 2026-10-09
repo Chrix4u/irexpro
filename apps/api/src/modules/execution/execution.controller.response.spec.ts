@@ -155,7 +155,9 @@ describe('ExecutionController frontend-safe responses', () => {
   });
 
   it('fails soft to persisted open-position data when PAPER telemetry cannot be loaded', async () => {
-    paperStateService.loadOpenPositionTelemetry.mockRejectedValueOnce(new Error('state unavailable'));
+    paperStateService.loadOpenPositionTelemetry.mockRejectedValueOnce(
+      new Error('state unavailable'),
+    );
 
     const [response] = await controller.listOpenPositions(USER_ID);
     const live = response as unknown as Record<string, unknown>;
