@@ -55,4 +55,46 @@ describe('PaperBrokerStateService', () => {
     expect(sql).toContain("jsonb_array_length(EXCLUDED.state -> 'closedTrades')");
     expect(sql).toContain("jsonb_array_length(EXCLUDED.state -> 'resultsByDedupeKey')");
   });
+
+  it('projects bounded open-position telemetry from durable PAPER state', async () => {
+    const repository = {
+      findOne: jest.fn().mockResolvedValue({
+        state: {
+          version: 1,
+          positions: [
+            {
+              positionId: 'paper-position-1',
+              pathLastMarkPrice: '1.42613000',
+              pathLastMarkObservedAt: '2026-10-09T20:16:01.076Z',
+              pathMaxFavorablePnl: '4.20',
+              pathMaxAdversePnl: '-1.10',
+              pathLatestUnrealisedPnl: '3.10',
+              pathObservationCount: 42,
+              pathPeakObservedAt: '2026-10-09T20:15:00.000Z',
+              pathLastObservedAt: '2026-10-09T20:16:01.076Z',
+            },
+          ],
+        },
+      }),
+      query: jest.fn(),
+    };
+    const service = new PaperBrokerStateService(repository as never);
+
+    await expect(
+      service.loadOpenPositionTelemetry('11111111-1111-4111-8111-111111111111'),
+    ).resolves.toEqual([
+      {
+        externalPositionId: 'paper-position-1',
+        currentPrice: '1.42613000',
+        markObservedAt: new Date('2026-10-09T20:16:01.076Z'),
+        unrealisedPnl: '3.10',
+        maxFavorablePnl: '4.20',
+        maxAdversePnl: '-1.10',
+        profitGiveback: '1.10',
+        observationCount: 42,
+        peakObservedAt: new Date('2026-10-09T20:15:00.000Z'),
+        lastObservedAt: new Date('2026-10-09T20:16:01.076Z'),
+      },
+    ]);
+  });
 });

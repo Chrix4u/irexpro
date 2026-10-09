@@ -12,6 +12,18 @@ import { Trade, TradeCloseReason, TradeDirection, TradeStatus } from '../entitie
  * account currency provenance.
  */
 
+export interface TradeExecutionLiveTelemetry {
+  currentPrice: string | null;
+  markObservedAt: Date | null;
+  unrealisedPnl: string | null;
+  maxFavorablePnl: string | null;
+  maxAdversePnl: string | null;
+  profitGiveback: string | null;
+  observationCount: number | null;
+  peakObservedAt: Date | null;
+  lastObservedAt: Date | null;
+}
+
 const KNOWN_EXECUTION_REASON_CODES = [
   'MARKET_SAFETY_MARKET_DATA_UNAVAILABLE',
   'MARKET_SAFETY_STALE_PRICE',
@@ -73,6 +85,48 @@ export class TradeExecutionResponseDto {
   @ApiPropertyOptional({ nullable: true })
   exitPrice: string | null;
 
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Latest executable PAPER mark for an open position.',
+  })
+  currentPrice: string | null;
+
+  @ApiPropertyOptional({ nullable: true, type: String, format: 'date-time' })
+  markObservedAt: Date | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Latest unrealized P&L in account currency.',
+  })
+  unrealisedPnl: string | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Best observed open-position P&L in account currency.',
+  })
+  maxFavorablePnl: string | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Worst observed open-position P&L in account currency.',
+  })
+  maxAdversePnl: string | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Observed give-back from peak P&L in account currency.',
+  })
+  profitGiveback: string | null;
+
+  @ApiPropertyOptional({ nullable: true, type: Number })
+  pathObservationCount: number | null;
+
+  @ApiPropertyOptional({ nullable: true, type: String, format: 'date-time' })
+  pathPeakObservedAt: Date | null;
+
+  @ApiPropertyOptional({ nullable: true, type: String, format: 'date-time' })
+  pathLastObservedAt: Date | null;
+
   @ApiPropertyOptional({ nullable: true, example: 'USD' })
   accountCurrency: string | null;
 
@@ -108,7 +162,11 @@ export class TradeExecutionResponseDto {
   updatedAt: Date;
 }
 
-export function toTradeExecutionResponse(trade: Trade): TradeExecutionResponseDto {
+export function toTradeExecutionResponse(
+  trade: Trade,
+  liveTelemetry: TradeExecutionLiveTelemetry | null = null,
+): TradeExecutionResponseDto {
+  const exposeMoney = trade.accountCurrency !== null;
   return {
     id: trade.id,
     instrument: trade.instrument,
@@ -121,6 +179,21 @@ export function toTradeExecutionResponse(trade: Trade): TradeExecutionResponseDt
     trailingStopPips: trade.trailingStopPips,
     status: trade.status,
     exitPrice: trade.exitPrice,
+    currentPrice: liveTelemetry?.currentPrice ?? null,
+    markObservedAt: liveTelemetry?.markObservedAt ?? null,
+    unrealisedPnl: exposeMoney ? (liveTelemetry?.unrealisedPnl ?? null) : null,
+    maxFavorablePnl: exposeMoney
+      ? (liveTelemetry?.maxFavorablePnl ?? trade.maxFavorablePnl ?? null)
+      : null,
+    maxAdversePnl: exposeMoney
+      ? (liveTelemetry?.maxAdversePnl ?? trade.maxAdversePnl ?? null)
+      : null,
+    profitGiveback: exposeMoney
+      ? (liveTelemetry?.profitGiveback ?? trade.profitGiveback ?? null)
+      : null,
+    pathObservationCount: liveTelemetry?.observationCount ?? trade.pathObservationCount ?? null,
+    pathPeakObservedAt: liveTelemetry?.peakObservedAt ?? trade.pathPeakObservedAt ?? null,
+    pathLastObservedAt: liveTelemetry?.lastObservedAt ?? trade.pathLastObservedAt ?? null,
     accountCurrency: trade.accountCurrency,
     realisedPnl: trade.accountCurrency ? trade.realisedPnl : null,
     commission: trade.accountCurrency ? trade.commission : null,

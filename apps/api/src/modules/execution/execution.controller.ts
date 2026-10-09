@@ -11,6 +11,10 @@ import {
 } from '@nestjs/common';
 import { ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUserId } from '../../common/decorators/current-user.decorator';
+import {
+  PaperBrokerStateService,
+  type PaperOpenPositionTelemetry,
+} from '../broker/services/paper-broker-state.service';
 import { ExecutionReadService } from './execution-read.service';
 import { ExecutionService } from './execution.service';
 import { TradeCloseReason } from './entities/trade.entity';
@@ -39,6 +43,7 @@ export class ExecutionController {
     private readonly executionReadService: ExecutionReadService,
     private readonly allocationService: AllocationService,
     private readonly executionService: ExecutionService,
+    private readonly paperBrokerStateService: PaperBrokerStateService,
   ) {}
 
   @Get('capital-allocation')
@@ -83,7 +88,31 @@ export class ExecutionController {
   @ApiResponse({ status: 200, type: TradeExecutionResponseDto, isArray: true })
   async listOpenPositions(@CurrentUserId() userId: string): Promise<TradeExecutionResponseDto[]> {
     const trades = await this.executionReadService.listOpenPositions(userId);
-    return trades.map(toTradeExecutionResponse);
+    const telemetryByPosition = new Map<string, PaperOpenPositionTelemetry>();
+    const connectionIds = [...new Set(trades.map((trade) => trade.brokerConnectionId))];
+
+    await Promise.all(
+      connectionIds.map(async (connectionId) => {
+        try {
+          const telemetry =
+            await this.paperBrokerStateService.loadOpenPositionTelemetry(connectionId);
+          for (const position of telemetry) {
+            telemetryByPosition.set(`${connectionId}:${position.externalPositionId}`, position);
+          }
+        } catch {
+          // UI telemetry is best-effort only. Persisted trade state remains the
+          // authoritative fallback and no provider/broker call is attempted here.
+        }
+      }),
+    );
+
+    return trades.map((trade) => {
+      const externalPositionId = trade.externalPositionId ?? trade.externalOrderId;
+      const telemetry = externalPositionId
+        ? (telemetryByPosition.get(`${trade.brokerConnectionId}:${externalPositionId}`) ?? null)
+        : null;
+      return toTradeExecutionResponse(trade, telemetry);
+    });
   }
 
   @Post('positions/close-all')
@@ -118,7 +147,7 @@ export class ExecutionController {
     @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
   ): Promise<TradeExecutionResponseDto[]> {
     const trades = await this.executionReadService.listClosedExecutions(userId, limit);
-    return trades.map(toTradeExecutionResponse);
+    return trades.map((trade) => toTradeExecutionResponse(trade));
   }
 
   @Get('trades/recent')
@@ -130,6 +159,6 @@ export class ExecutionController {
     @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
   ): Promise<TradeExecutionResponseDto[]> {
     const trades = await this.executionReadService.listRecentExecutions(userId, limit);
-    return trades.map(toTradeExecutionResponse);
+    return trades.map((trade) => toTradeExecutionResponse(trade));
   }
 }
