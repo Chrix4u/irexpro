@@ -94,12 +94,10 @@ export class ExecutionController {
     await Promise.all(
       connectionIds.map(async (connectionId) => {
         try {
-          const telemetry = await this.paperBrokerStateService.loadOpenPositionTelemetry(connectionId);
+          const telemetry =
+            await this.paperBrokerStateService.loadOpenPositionTelemetry(connectionId);
           for (const position of telemetry) {
-            telemetryByPosition.set(
-              `${connectionId}:${position.externalPositionId}`,
-              position,
-            );
+            telemetryByPosition.set(`${connectionId}:${position.externalPositionId}`, position);
           }
         } catch {
           // UI telemetry is best-effort only. Persisted trade state remains the
