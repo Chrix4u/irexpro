@@ -1,0 +1,136 @@
+name: PAPER Current Gate Intersection
+
+on:
+  push:
+    branches:
+      - 'ops/paper-cohort-evidence-20261009'
+    paths:
+      - '.github/workflows/paper-current-intersection.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    name: Read-only current policy gate intersection
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: staging
+    env:
+      STAGING_SSH_HOST: vps.lightworldtech.com
+      STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
+      STAGING_SSH_USER: ${{ vars.STAGING_SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+    steps:
+      - name: Configure SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$STAGING_SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Collect current policy intersections
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i "$HOME/.ssh/irexpro_staging" -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" 'bash -s' <<'REMOTE'
+          set -Eeuo pipefail
+          readonly API_ROOT=/home/lightworld/webapps/irexpro-staging/apps/api
+          cd "$API_ROOT"
+          DOTENV_CONFIG_PATH="$API_ROOT/.env" node -r dotenv/config <<'NODE'
+          const { Client } = require('pg');
+          const policy='plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1';
+          const client=new Client({host:process.env.DB_HOST,port:Number(process.env.DB_PORT||5432),database:process.env.DB_NAME,user:process.env.DB_USER,password:process.env.DB_PASSWORD,ssl:process.env.DB_SSL==='true'?{rejectUnauthorized:false}:false,connectionTimeoutMillis:10000,statement_timeout:20000,application_name:'irexpro-current-gate-intersection-readonly'});
+          const f=v=>v==null?'NONE':Number(v).toFixed(4);
+          async function main(){
+            await client.connect(); await client.query('BEGIN READ ONLY');
+            try {
+              const q=await client.query(`
+                WITH cohort AS (
+                  SELECT * FROM trading.ensemble_shadow_decisions
+                  WHERE engine_code='irexpro-multimodel-ensemble-v1'
+                    AND model_version=$1
+                ), passed_direction AS (
+                  SELECT * FROM cohort WHERE (components->>'directionQuality')::numeric >= 0.55
+                )
+                SELECT
+                  (SELECT COUNT(*) FROM cohort)::int AS total,
+                  (SELECT COUNT(*) FROM passed_direction)::int AS dir_pass,
+                  COUNT(*) FILTER (WHERE regime='TREND_HEALTHY')::int AS healthy,
+                  COUNT(*) FILTER (WHERE regime='TREND_EXTENDED')::int AS extended,
+                  COUNT(*) FILTER (WHERE regime='TREND_WEAK')::int AS weak,
+                  COUNT(*) FILTER (WHERE confidence>=0.64)::int AS confidence_pass,
+                  COUNT(*) FILTER (WHERE (components->>'tradeQuality')::numeric>=0.48)::int AS trade_pass,
+                  COUNT(*) FILTER (WHERE (components->>'exitQuality')::numeric>=0.48)::int AS exit_pass,
+                  COUNT(*) FILTER (WHERE (components->>'sessionQuality')::numeric>=0.5)::int AS session_pass,
+                  COUNT(*) FILTER (WHERE (components->>'portfolioQuality')::numeric>=0.35)::int AS portfolio_pass,
+                  COUNT(*) FILTER (WHERE expected_r>=0.08)::int AS gross_er_008,
+                  COUNT(*) FILTER (WHERE lower(COALESCE(components->>'paperAdmitted','false'))='true')::int AS paper_admitted,
+                  COUNT(*) FILTER (WHERE lower(COALESCE(components->'governance'->>'paperNetExpectedRPassed','false'))='true')::int AS net_er_pass,
+                  COUNT(*) FILTER (WHERE lower(COALESCE(components->'governance'->>'paperDriftPassed','false'))='true')::int AS drift_pass,
+                  MIN(confidence) AS min_conf, AVG(confidence) AS avg_conf, MAX(confidence) AS max_conf,
+                  MIN(expected_r) AS min_er, AVG(expected_r) AS avg_er, MAX(expected_r) AS max_er,
+                  MIN((components->>'directionQuality')::numeric) AS min_dq,
+                  AVG((components->>'directionQuality')::numeric) AS avg_dq,
+                  MAX((components->>'directionQuality')::numeric) AS max_dq
+                FROM passed_direction
+              `,[policy]);
+              const r=q.rows[0];
+              console.log('=== Current corrected policy: rows that pass direction quality ===');
+              console.log(`observed_at_utc=${new Date().toISOString()}`);
+              console.log(`total=${r.total}|direction_pass=${r.dir_pass}|healthy=${r.healthy}|extended=${r.extended}|weak=${r.weak}`);
+              console.log(`within_direction_pass=confidence:${r.confidence_pass}|trade:${r.trade_pass}|exit:${r.exit_pass}|session:${r.session_pass}|portfolio:${r.portfolio_pass}|gross_er_008:${r.gross_er_008}|paper_admitted:${r.paper_admitted}|net_er:${r.net_er_pass}|drift:${r.drift_pass}`);
+              console.log(`confidence=min:${f(r.min_conf)}|avg:${f(r.avg_conf)}|max:${f(r.max_conf)}|expected_r=min:${f(r.min_er)}|avg:${f(r.avg_er)}|max:${f(r.max_er)}|direction_quality=min:${f(r.min_dq)}|avg:${f(r.avg_dq)}|max:${f(r.max_dq)}`);
+
+              const reasons=await client.query(`
+                SELECT reason,COUNT(*)::int AS count
+                FROM trading.ensemble_shadow_decisions d
+                CROSS JOIN LATERAL jsonb_array_elements_text(CASE WHEN jsonb_typeof(d.reasons::jsonb)='array' THEN d.reasons::jsonb ELSE '[]'::jsonb END) reason
+                WHERE d.engine_code='irexpro-multimodel-ensemble-v1' AND d.model_version=$1
+                  AND (d.components->>'directionQuality')::numeric>=0.55
+                GROUP BY reason ORDER BY COUNT(*) DESC,reason
+              `,[policy]);
+              for(const x of reasons.rows) console.log(`direction_pass_reason=${x.reason}|count=${x.count}`);
+
+              const blockers=await client.query(`
+                SELECT blocker,COUNT(*)::int AS count
+                FROM trading.ensemble_shadow_decisions d
+                CROSS JOIN LATERAL jsonb_array_elements_text(CASE WHEN jsonb_typeof(d.components->'governance'->'paperExecutionBlockers')='array' THEN d.components->'governance'->'paperExecutionBlockers' ELSE '[]'::jsonb END) blocker
+                WHERE d.engine_code='irexpro-multimodel-ensemble-v1' AND d.model_version=$1
+                  AND (d.components->>'directionQuality')::numeric>=0.55
+                GROUP BY blocker ORDER BY COUNT(*) DESC,blocker
+              `,[policy]);
+              for(const x of blockers.rows) console.log(`direction_pass_governance_blocker=${x.blocker}|count=${x.count}`);
+
+              const regimes=await client.query(`
+                SELECT regime,COALESCE(components->>'strategyRoute','NULL') AS route,COUNT(*)::int AS count,
+                       ROUND(AVG(confidence)::numeric,4) AS avg_conf,
+                       ROUND(AVG(expected_r)::numeric,4) AS avg_er,
+                       ROUND(AVG((components->>'directionQuality')::numeric),4) AS avg_dq
+                FROM trading.ensemble_shadow_decisions
+                WHERE engine_code='irexpro-multimodel-ensemble-v1' AND model_version=$1
+                  AND (components->>'directionQuality')::numeric>=0.55
+                GROUP BY regime,components->>'strategyRoute'
+                ORDER BY count DESC,regime
+              `,[policy]);
+              for(const x of regimes.rows) console.log(`direction_pass_regime=${x.regime}|route=${x.route}|count=${x.count}|avg_conf=${x.avg_conf}|avg_expected_r=${x.avg_er}|avg_direction_quality=${x.avg_dq}`);
+              await client.query('COMMIT');
+            } catch(e){ await client.query('ROLLBACK').catch(()=>{}); throw e; }
+          }
+          main().catch(e=>{console.error(`ERROR: ${e.message}`);process.exitCode=1;}).finally(()=>client.end().catch(()=>{}));
+          NODE
+          REMOTE
+      - name: Remove SSH material
+        if: ${{ always() }}
+        shell: bash
+        run: rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
