@@ -21,6 +21,7 @@ function makeTrade(overrides: Partial<Trade> = {}): Trade {
     takeProfit: '1.11000000',
     trailingStopPips: null,
     externalOrderId: 'broker-order-secret-ish-id',
+    externalPositionId: 'paper-position-1',
     status: TradeStatus.OPEN,
     exitPrice: null,
     accountCurrency: 'USD',
@@ -41,6 +42,7 @@ function makeTrade(overrides: Partial<Trade> = {}): Trade {
 describe('ExecutionController frontend-safe responses', () => {
   let controller: ExecutionController;
   let readService: Record<string, jest.Mock>;
+  let paperStateService: Record<string, jest.Mock>;
 
   const USER_ID = '11111111-1111-4111-8111-111111111111';
 
@@ -66,13 +68,32 @@ describe('ExecutionController frontend-safe responses', () => {
         }),
       ]),
     };
-    controller = new ExecutionController(
+    paperStateService = {
+      loadOpenPositionTelemetry: jest.fn().mockResolvedValue([
+        {
+          externalPositionId: 'paper-position-1',
+          currentPrice: '1.10300000',
+          markObservedAt: new Date('2026-10-09T20:16:01.076Z'),
+          unrealisedPnl: '29.00',
+          maxFavorablePnl: '45.00',
+          maxAdversePnl: '-12.00',
+          profitGiveback: '16.00',
+          observationCount: 42,
+          peakObservedAt: new Date('2026-10-09T20:15:00.000Z'),
+          lastObservedAt: new Date('2026-10-09T20:16:01.076Z'),
+        },
+      ]),
+    };
+    controller = new (ExecutionController as unknown as new (
+      ...args: unknown[]
+    ) => ExecutionController)(
       readService as unknown as ExecutionReadService,
       {} as AllocationService,
       {
         closeTrade: jest.fn(),
         closeAllAiOpenPositions: jest.fn(),
       } as unknown as ExecutionService,
+      paperStateService,
     );
   });
 
@@ -100,6 +121,7 @@ describe('ExecutionController frontend-safe responses', () => {
     expect(keys).not.toContain('signalId');
     expect(keys).not.toContain('idempotencyKey');
     expect(keys).not.toContain('externalOrderId');
+    expect(keys).not.toContain('externalPositionId');
     expect(keys).not.toContain('brokerRejectionReason');
 
     expect(response).toMatchObject({
@@ -110,6 +132,38 @@ describe('ExecutionController frontend-safe responses', () => {
       accountCurrency: 'USD',
       realisedPnl: null,
     });
+  });
+
+  it('enriches PAPER open positions with bounded live path telemetry from durable state', async () => {
+    const [response] = await controller.listOpenPositions(USER_ID);
+
+    expect(paperStateService.loadOpenPositionTelemetry).toHaveBeenCalledWith(
+      '33333333-3333-4333-8333-333333333333',
+    );
+    expect(response).toMatchObject({
+      currentPrice: '1.10300000',
+      unrealisedPnl: '29.00',
+      maxFavorablePnl: '45.00',
+      maxAdversePnl: '-12.00',
+      profitGiveback: '16.00',
+      pathObservationCount: 42,
+      markObservedAt: new Date('2026-10-09T20:16:01.076Z'),
+      pathPeakObservedAt: new Date('2026-10-09T20:15:00.000Z'),
+      pathLastObservedAt: new Date('2026-10-09T20:16:01.076Z'),
+    });
+    expect(JSON.stringify(response)).not.toContain('paper-position-1');
+  });
+
+  it('fails soft to persisted open-position data when PAPER telemetry cannot be loaded', async () => {
+    paperStateService.loadOpenPositionTelemetry.mockRejectedValueOnce(new Error('state unavailable'));
+
+    const [response] = await controller.listOpenPositions(USER_ID);
+    const live = response as unknown as Record<string, unknown>;
+
+    expect(live.currentPrice).toBeNull();
+    expect(live.unrealisedPnl).toBeNull();
+    expect(live.maxFavorablePnl).toBeNull();
+    expect(live.profitGiveback).toBeNull();
   });
 
   it('exposes only a bounded execution reason classification for rejected trades', async () => {
