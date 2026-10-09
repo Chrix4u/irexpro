@@ -1,0 +1,123 @@
+name: PAPER Edge Segments
+
+on:
+  push:
+    branches:
+      - 'ops/paper-cohort-evidence-20261009'
+    paths:
+      - '.github/workflows/paper-edge-segments.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    name: Read-only prospective edge segmentation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: staging
+    env:
+      STAGING_SSH_HOST: vps.lightworldtech.com
+      STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
+      STAGING_SSH_USER: ${{ vars.STAGING_SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+    steps:
+      - name: Configure SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$STAGING_SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Segment resolved prospective edge
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i "$HOME/.ssh/irexpro_staging" -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" 'bash -s' <<'REMOTE'
+          set -Eeuo pipefail
+          readonly API_ROOT=/home/lightworld/webapps/irexpro-staging/apps/api
+          cd "$API_ROOT"
+          DOTENV_CONFIG_PATH="$API_ROOT/.env" node -r dotenv/config <<'NODE'
+          const { Client } = require('pg');
+          const client = new Client({host:process.env.DB_HOST,port:Number(process.env.DB_PORT||5432),database:process.env.DB_NAME,user:process.env.DB_USER,password:process.env.DB_PASSWORD,ssl:process.env.DB_SSL==='true'?{rejectUnauthorized:false}:false,connectionTimeoutMillis:10000,statement_timeout:20000,application_name:'irexpro-edge-segments-readonly'});
+          const finite=v=>Number.isFinite(Number(v))?Number(v):null;
+          const mean=xs=>xs.length?xs.reduce((a,b)=>a+b,0)/xs.length:null;
+          const fmt=v=>v==null||!Number.isFinite(v)?'NONE':v.toFixed(4);
+          function collapse(rows){
+            const groups=new Map();
+            for(const r of rows){const k=`${r.model_version}|${r.instrument}|${r.direction}`;const a=groups.get(k)||[];a.push(r);groups.set(k,a);}
+            const out=[];
+            for(const a of groups.values()){
+              a.sort((x,y)=>new Date(x.evaluated_at)-new Date(y.evaluated_at));
+              let end=-Infinity;
+              for(const r of a){
+                const o=r.outcome; if(!o||o.status==='AMBIGUOUS')continue;
+                const gross=finite(o.grossR),net=finite(o.netR),ev=new Date(r.evaluated_at).getTime(),res=new Date(o.resolvedAt).getTime();
+                if(gross==null||net==null||!Number.isFinite(ev)||!Number.isFinite(res)||res<ev)continue;
+                if(ev>end){out.push({...r,grossR:gross,netR:net});end=res;}else end=Math.max(end,res);
+              }
+            }
+            return out;
+          }
+          function stats(label,rows){
+            const wins=rows.filter(r=>r.outcome.status==='WIN').length;
+            const losses=rows.filter(r=>r.outcome.status==='LOSS').length;
+            const gross=rows.map(r=>r.grossR),net=rows.map(r=>r.netR),pred=rows.map(r=>finite(r.expected_r)).filter(v=>v!=null);
+            const gp=net.filter(v=>v>0).reduce((a,b)=>a+b,0),gl=Math.abs(net.filter(v=>v<0).reduce((a,b)=>a+b,0));
+            console.log(`${label}|episodes=${rows.length}|wins=${wins}|losses=${losses}|avg_pred=${fmt(mean(pred))}|avg_gross=${fmt(mean(gross))}|avg_net=${fmt(mean(net))}|net_sum=${fmt(net.reduce((a,b)=>a+b,0))}|profit_factor=${gl>0?fmt(gp/gl):'NONE'}`);
+          }
+          async function main(){
+            await client.connect(); await client.query('BEGIN READ ONLY');
+            try{
+              const q=await client.query(`
+                SELECT model_version,instrument,direction,evaluated_at,regime,expected_r,
+                       COALESCE(components->>'strategyRoute','TREND_CONTINUATION') AS route,
+                       components->'governance'->>'driftState' AS drift_state,
+                       components->'governance'->>'paperExecutionEligible' AS paper_execution_eligible,
+                       components->>'paperAdmitted' AS paper_admitted,
+                       components->'outcome' AS outcome
+                FROM trading.ensemble_shadow_decisions
+                WHERE engine_code='irexpro-multimodel-ensemble-v1'
+                  AND evaluated_at>=CURRENT_TIMESTAMP-INTERVAL '7 days'
+                  AND model_version LIKE '%bidirectional-v2%'
+                  AND components ? 'outcome'
+                ORDER BY evaluated_at
+                LIMIT 10000
+              `);
+              const ep=collapse(q.rows);
+              console.log('=== iRexPro prospective edge segmentation: bidirectional-v2 ===');
+              console.log(`observed_at_utc=${new Date().toISOString()}|episodes=${ep.length}`);
+              stats('all',ep);
+              stats('pred_ge_008',ep.filter(r=>finite(r.expected_r)>=0.08));
+              stats('pred_lt_008',ep.filter(r=>finite(r.expected_r)<0.08));
+              stats('paper_admitted_true',ep.filter(r=>String(r.paper_admitted)==='true'));
+              stats('paper_execution_eligible_true',ep.filter(r=>String(r.paper_execution_eligible)==='true'));
+              const routes=[...new Set(ep.map(r=>r.route))].sort();
+              for(const route of routes){
+                const rows=ep.filter(r=>r.route===route); stats(`route=${route}`,rows); stats(`route=${route}|pred_ge_008`,rows.filter(r=>finite(r.expected_r)>=0.08));
+              }
+              const regimes=[...new Set(ep.map(r=>r.regime))].sort();
+              for(const regime of regimes){
+                const rows=ep.filter(r=>r.regime===regime); stats(`regime=${regime}`,rows); stats(`regime=${regime}|pred_ge_008`,rows.filter(r=>finite(r.expected_r)>=0.08));
+              }
+              for(const direction of ['BUY','SELL']) stats(`direction=${direction}|pred_ge_008`,ep.filter(r=>r.direction===direction&&finite(r.expected_r)>=0.08));
+              await client.query('COMMIT');
+            }catch(e){await client.query('ROLLBACK').catch(()=>{});throw e;}
+          }
+          main().catch(e=>{console.error(`ERROR: ${e.message}`);process.exitCode=1;}).finally(()=>client.end().catch(()=>{}));
+          NODE
+          REMOTE
+      - name: Remove SSH material
+        if: ${{ always() }}
+        shell: bash
+        run: rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
