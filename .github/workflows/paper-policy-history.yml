@@ -1,0 +1,132 @@
+name: PAPER Policy History
+
+on:
+  push:
+    branches:
+      - 'ops/paper-cohort-evidence-20261009'
+    paths:
+      - '.github/workflows/paper-policy-history.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    name: Read-only Plan B policy history
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: staging
+    env:
+      STAGING_SSH_HOST: vps.lightworldtech.com
+      STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
+      STAGING_SSH_USER: ${{ vars.STAGING_SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+    steps:
+      - name: Configure SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$STAGING_SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Collect aggregate policy history
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i "$HOME/.ssh/irexpro_staging" -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" 'bash -s' <<'REMOTE'
+          set -Eeuo pipefail
+          readonly API_ROOT=/home/lightworld/webapps/irexpro-staging/apps/api
+          cd "$API_ROOT"
+          DOTENV_CONFIG_PATH="$API_ROOT/.env" node -r dotenv/config <<'NODE'
+          const { Client } = require('pg');
+          const required = ['DB_HOST', 'DB_NAME', 'DB_USER', 'DB_PASSWORD'];
+          for (const key of required) if (!process.env[key]) throw new Error(`Missing ${key}`);
+          const client = new Client({
+            host: process.env.DB_HOST,
+            port: Number(process.env.DB_PORT || 5432),
+            database: process.env.DB_NAME,
+            user: process.env.DB_USER,
+            password: process.env.DB_PASSWORD,
+            ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
+            connectionTimeoutMillis: 10000,
+            statement_timeout: 20000,
+            application_name: 'irexpro-plan-b-history-readonly',
+          });
+          const n = (v) => v == null ? 'NONE' : Number(v).toFixed(4);
+          async function main() {
+            await client.connect();
+            await client.query('BEGIN READ ONLY');
+            try {
+              const versions = await client.query(`
+                SELECT model_version,
+                       COUNT(*)::int AS rows,
+                       COUNT(*) FILTER (WHERE admitted)::int AS admitted,
+                       COUNT(*) FILTER (WHERE lower(COALESCE(components->>'paperAdmitted','false'))='true')::int AS paper_admitted,
+                       COUNT(*) FILTER (WHERE (components->>'directionQuality')::numeric >= 0.55)::int AS direction_passed,
+                       MIN((components->>'directionQuality')::numeric) AS min_direction,
+                       AVG((components->>'directionQuality')::numeric) AS avg_direction,
+                       MAX((components->>'directionQuality')::numeric) AS max_direction,
+                       MIN((components->>'emaSeparation')::numeric) AS min_ema,
+                       AVG((components->>'emaSeparation')::numeric) AS avg_ema,
+                       MAX((components->>'emaSeparation')::numeric) AS max_ema,
+                       MIN((components->>'mtfStrength')::numeric) AS min_mtf,
+                       AVG((components->>'mtfStrength')::numeric) AS avg_mtf,
+                       MAX((components->>'mtfStrength')::numeric) AS max_mtf,
+                       MIN(confidence) AS min_confidence,
+                       AVG(confidence) AS avg_confidence,
+                       MAX(confidence) AS max_confidence
+                FROM trading.ensemble_shadow_decisions
+                WHERE engine_code='irexpro-multimodel-ensemble-v1'
+                  AND evaluated_at >= CURRENT_TIMESTAMP - INTERVAL '24 hours'
+                  AND components ? 'directionQuality'
+                GROUP BY model_version
+                ORDER BY MAX(evaluated_at) DESC
+              `);
+              const continuation = await client.query(`
+                SELECT COUNT(*)::int AS rows,
+                       COUNT(*) FILTER (WHERE (components->>'directionQuality')::numeric >= 0.55)::int AS direction_passed,
+                       COUNT(*) FILTER (WHERE confidence >= 0.64)::int AS confidence_passed,
+                       COUNT(*) FILTER (WHERE regime='TREND_HEALTHY')::int AS healthy,
+                       MIN((components->>'directionQuality')::numeric) AS min_direction,
+                       AVG((components->>'directionQuality')::numeric) AS avg_direction,
+                       MAX((components->>'directionQuality')::numeric) AS max_direction,
+                       MIN(confidence) AS min_confidence,
+                       AVG(confidence) AS avg_confidence,
+                       MAX(confidence) AS max_confidence
+                FROM trading.ensemble_shadow_decisions
+                WHERE engine_code='irexpro-multimodel-ensemble-v1'
+                  AND evaluated_at >= CURRENT_TIMESTAMP - INTERVAL '24 hours'
+                  AND COALESCE(components->>'strategyRoute','TREND_CONTINUATION')='TREND_CONTINUATION'
+                  AND components ? 'directionQuality'
+              `);
+              console.log('=== iRexPro Plan B 24h aggregate history ===');
+              console.log(`observed_at_utc=${new Date().toISOString()}`);
+              for (const r of versions.rows) {
+                console.log(`policy=${r.model_version}|rows=${r.rows}|paper_admitted=${r.paper_admitted}|admitted=${r.admitted}|direction_passed=${r.direction_passed}|direction_min=${n(r.min_direction)}|direction_avg=${n(r.avg_direction)}|direction_max=${n(r.max_direction)}|ema_avg=${n(r.avg_ema)}|ema_max=${n(r.max_ema)}|mtf_avg=${n(r.avg_mtf)}|mtf_max=${n(r.max_mtf)}|confidence_avg=${n(r.avg_confidence)}|confidence_max=${n(r.max_confidence)}`);
+              }
+              const c = continuation.rows[0];
+              console.log(`all_continuation_24h=rows:${c.rows}|direction_passed:${c.direction_passed}|confidence_passed:${c.confidence_passed}|healthy:${c.healthy}|direction_min:${n(c.min_direction)}|direction_avg:${n(c.avg_direction)}|direction_max:${n(c.max_direction)}|confidence_min:${n(c.min_confidence)}|confidence_avg:${n(c.avg_confidence)}|confidence_max:${n(c.max_confidence)}`);
+              await client.query('COMMIT');
+            } catch (e) {
+              await client.query('ROLLBACK').catch(() => {});
+              throw e;
+            }
+          }
+          main().catch(e => { console.error(`ERROR: ${e.message}`); process.exitCode=1; }).finally(() => client.end().catch(()=>{}));
+          NODE
+          REMOTE
+
+      - name: Remove SSH material
+        if: ${{ always() }}
+        shell: bash
+        run: rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
