@@ -1175,6 +1175,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             executionSpreadEvidenceValid: ensembleGovernance.executionSpreadEvidenceValid,
             eventRisk: ensembleGovernance.eventRisk,
             strategyRoute: planBEnsemble.strategyRoute,
+            driftState: ensembleGovernance.driftState,
+            directionQuality: planBEnsemble.directionQuality,
+            tradeQuality: planBEnsemble.tradeQuality,
+            exitQuality: planBEnsemble.exitQuality,
             paperExecutionBlockers: ensembleGovernance.paperExecutionBlockers,
           });
           if (
