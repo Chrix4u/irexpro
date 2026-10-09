@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import {
   DeterministicPaperClock,
   DeterministicPaperPriceFeed,
+  evaluatePaperProfitLock,
   PaperBrokerAdapter,
   PaperClock,
   PaperPriceFeed,
@@ -119,6 +120,69 @@ async function expectAdapterError(
   expect((err as BrokerAdapterError).code).toBe(code);
   return err as BrokerAdapterError;
 }
+
+describe('PAPER profit-lock policy', () => {
+  it('stays disarmed below a 0.30R favorable peak', () => {
+    expect(
+      evaluatePaperProfitLock({
+        maxFavorablePnl: '2.99',
+        currentPnl: '-1.00',
+        initialRiskPnl: '10.00',
+      }),
+    ).toMatchObject({ armed: false, shouldClose: false });
+  });
+
+  it('protects progressively more of the peak as R grows', () => {
+    expect(
+      evaluatePaperProfitLock({
+        maxFavorablePnl: '3.00',
+        currentPnl: '1.10',
+        initialRiskPnl: '10.00',
+      }),
+    ).toMatchObject({
+      armed: true,
+      shouldClose: true,
+      retentionFraction: '0.40',
+      protectedFloorPnl: '1.20',
+    });
+
+    expect(
+      evaluatePaperProfitLock({
+        maxFavorablePnl: '7.00',
+        currentPnl: '3.80',
+        initialRiskPnl: '10.00',
+      }),
+    ).toMatchObject({
+      armed: true,
+      shouldClose: true,
+      retentionFraction: '0.55',
+      protectedFloorPnl: '3.85',
+    });
+
+    expect(
+      evaluatePaperProfitLock({
+        maxFavorablePnl: '12.00',
+        currentPnl: '8.00',
+        initialRiskPnl: '10.00',
+      }),
+    ).toMatchObject({
+      armed: true,
+      shouldClose: false,
+      retentionFraction: '0.65',
+      protectedFloorPnl: '7.80',
+    });
+  });
+
+  it('fails closed when initial risk cannot be proven', () => {
+    expect(
+      evaluatePaperProfitLock({
+        maxFavorablePnl: '9.00',
+        currentPnl: '-3.00',
+        initialRiskPnl: '0.00',
+      }),
+    ).toMatchObject({ armed: false, shouldClose: false });
+  });
+});
 
 // ─── Core adapter surface (Nest-instantiated, like production) ───────────────
 
@@ -1188,6 +1252,45 @@ describe('PaperBrokerAdapter', () => {
       latestUnrealisedPnl: '1.00',
       profitGiveback: '8.00',
     });
+  });
+
+  it('actively locks PAPER profit after an armed peak gives back beyond its R-tier floor', async () => {
+    const previous = process.env.PAPER_PROFIT_LOCK_ENABLED;
+    process.env.PAPER_PROFIT_LOCK_ENABLED = 'true';
+    try {
+      const sim = scriptedAdapter([
+        BASE,
+        { bid: '1.10100', ask: '1.10110' },
+        { bid: '1.10040', ask: '1.10050' },
+      ]);
+      await sim.placeOrder(
+        order({
+          idempotencyKey: 'profit-lock-active',
+          stopLoss: '1.09910',
+          takeProfit: '1.11000',
+        }),
+      );
+
+      await sim.getCurrentPrice('EURUSD');
+      expect(await sim.getOpenPositions()).toHaveLength(1);
+
+      await sim.getCurrentPrice('EURUSD');
+      expect(await sim.getOpenPositions()).toHaveLength(0);
+
+      const [closed] = await sim.getClosedTrades(new Date(0), new Date(CLOCK_BASE_MS + 60_000));
+      expect(closed).toMatchObject({
+        closePrice: '1.10040',
+        closeReason: 'PROFIT_LOCK',
+        realisedPnl: '3.00',
+      });
+      expect(closed.pathDiagnostics).toMatchObject({
+        maxFavorablePnl: '9.00',
+        profitGiveback: '6.00',
+      });
+    } finally {
+      if (previous === undefined) delete process.env.PAPER_PROFIT_LOCK_ENABLED;
+      else process.env.PAPER_PROFIT_LOCK_ENABLED = previous;
+    }
   });
 
   it('does not label an always-losing path as profit give-back', async () => {

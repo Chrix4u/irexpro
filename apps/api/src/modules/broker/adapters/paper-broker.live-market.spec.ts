@@ -230,6 +230,48 @@ describe('PaperBrokerAdapter — scoped VPS live market mode', () => {
     expect(position!.currentPrice).not.toBe(result.filledPrice);
   });
 
+  it('locks an armed live-PAPER profit on a fresh streaming give-back before M5 close', async () => {
+    const live = new LivePaperMarketDataService();
+    live.registerLiveConnection('conn-profit-lock');
+    const bars = protectionBars();
+    live.updateClosedCandles('EURUSD', bars.initial, 'conn-profit-lock');
+    const adapter = new PaperBrokerAdapter(
+      undefined,
+      undefined,
+      undefined,
+      'conn-profit-lock',
+      live,
+    );
+    await adapter.connect({} as any);
+    await adapter.placeOrder({
+      idempotencyKey: 'live-profit-lock',
+      instrument: 'EURUSD',
+      direction: 'BUY',
+      lotSize: '0.01',
+      stopLoss: '1.09900',
+      takeProfit: '1.10500',
+      orderKind: 'MARKET',
+    });
+
+    // Arm above 0.60R without touching TP. Fixed 1-pip spread => bid 1.10075.
+    live.updateStreamingMidQuote('EURUSD', 1.1008, new Date(), 'conn-profit-lock');
+    let positions = await adapter.getOpenPositions();
+    expect(positions).toHaveLength(1);
+    expect(Number(positions[0]!.pathDiagnostics?.maxFavorablePnl)).toBeGreaterThan(0.6);
+
+    // Retreat below the 55%-of-peak retention floor. Fresh mark protection
+    // must close immediately instead of waiting for TP, SL or M5 close.
+    live.updateStreamingMidQuote('EURUSD', 1.1003, new Date(), 'conn-profit-lock');
+    positions = await adapter.getOpenPositions();
+    expect(positions).toHaveLength(0);
+
+    const closed = await adapter.getClosedTrades(new Date(0), new Date(Date.now() + 60 * 60_000));
+    expect(closed).toHaveLength(1);
+    expect(closed[0]!.closeReason).toBe('PROFIT_LOCK');
+    expect(Number(closed[0]!.realisedPnl)).toBeGreaterThan(0);
+    expect(Number(closed[0]!.pathDiagnostics?.profitGiveback)).toBeGreaterThan(0);
+  });
+
   it('closes a BUY at TP from a fresh streaming bid before the M5 candle closes', async () => {
     const live = new LivePaperMarketDataService();
     const adapter = await openProtectedBuy(live);
