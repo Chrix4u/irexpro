@@ -1,8 +1,12 @@
 import {
   PAPER_RESEARCH_THROUGHPUT_EPISODE_COOLDOWN_MINUTES,
   PAPER_RESEARCH_THROUGHPUT_LOT_CAP,
+  PAPER_RESEARCH_THROUGHPUT_RELIABILITY_MIN_SAMPLES,
   evaluatePaperResearchEpisodeGuard,
+  evaluatePaperResearchPairSideReliability,
   evaluatePaperResearchThroughput,
+  paperResearchThroughputModelVersion,
+  selectPaperExecutionRoute,
 } from './paper-research-throughput';
 
 describe('evaluatePaperResearchThroughput', () => {
@@ -23,7 +27,7 @@ describe('evaluatePaperResearchThroughput', () => {
   it('admits a positive-EV candidate into research PAPER without granting qualification authority', () => {
     expect(evaluatePaperResearchThroughput(base)).toEqual({
       eligible: true,
-      artifact: 'paper-research-throughput-v3-episode-guarded',
+      artifact: 'paper-research-throughput-v4-pair-side-reliability',
       route: 'PAPER_RESEARCH_THROUGHPUT',
       reason: 'RESEARCH_EVIDENCE_CANDIDATE',
       qualificationEvidence: false,
@@ -95,6 +99,61 @@ describe('evaluatePaperResearchThroughput', () => {
         paperExecutionBlockers: [...base.paperExecutionBlockers, 'PAPER_NET_EXPECTED_R'],
       }),
     ).toMatchObject({ eligible: false, reason: 'UNSAFE_BLOCKER' });
+  });
+});
+
+describe('PAPER execution route provenance', () => {
+  it('gives rejected-edge canary precedence when both research routes qualify', () => {
+    expect(
+      selectPaperExecutionRoute({
+        normalPaperExecution: false,
+        rejectedEdgeCanaryEligible: true,
+        paperResearchExecutionEligible: true,
+      }),
+    ).toBe('REJECTED_EDGE_CANARY');
+  });
+
+  it('keeps normal PAPER execution authoritative over research routes', () => {
+    expect(
+      selectPaperExecutionRoute({
+        normalPaperExecution: true,
+        rejectedEdgeCanaryEligible: true,
+        paperResearchExecutionEligible: true,
+      }),
+    ).toBe('NORMAL_PAPER');
+  });
+});
+
+describe('PAPER research-throughput provenance and pair-side reliability', () => {
+  it('derives the emitted model version from the active research artifact', () => {
+    expect(paperResearchThroughputModelVersion('irexpro-multimodel-ensemble-v1')).toBe(
+      'external-provider/irexpro-multimodel-ensemble-v1/paper-research-throughput-v4-pair-side-reliability',
+    );
+  });
+
+  it('keeps collecting while pair-side evidence is still sparse', () => {
+    expect(evaluatePaperResearchPairSideReliability({ wins: 0, losses: 4 })).toMatchObject({
+      eligible: true,
+      samples: 4,
+      reason: 'INSUFFICIENT_EVIDENCE',
+    });
+    expect(PAPER_RESEARCH_THROUGHPUT_RELIABILITY_MIN_SAMPLES).toBe(5);
+  });
+
+  it('quarantines a sufficiently observed pair-side with negative smoothed expectancy', () => {
+    expect(evaluatePaperResearchPairSideReliability({ wins: 0, losses: 5 })).toMatchObject({
+      eligible: false,
+      samples: 5,
+      reason: 'NEGATIVE_PAIR_SIDE_EXPECTANCY',
+    });
+  });
+
+  it('keeps a sufficiently observed positive pair-side eligible', () => {
+    expect(evaluatePaperResearchPairSideReliability({ wins: 6, losses: 0 })).toMatchObject({
+      eligible: true,
+      samples: 6,
+      reason: 'POSITIVE_PAIR_SIDE_EXPECTANCY',
+    });
   });
 });
 
