@@ -75,7 +75,7 @@ jobs:
           const engine = 'irexpro-multimodel-ensemble-v1';
           const policy = 'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1';
           const oldPolicy = 'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v2-directional-momentum-v1';
-          const cutoff = '2026-10-09T02:30:14Z';
+          const cutoff = '2026-10-09T02:42:29Z';
 
           const required = ['DB_HOST', 'DB_NAME', 'DB_USER', 'DB_PASSWORD'];
           for (const key of required) {
@@ -98,10 +98,17 @@ jobs:
             return value ? new Date(value).toISOString() : 'NONE';
           }
 
+          function formatNumber(value) {
+            if (value == null) return 'NONE';
+            const n = Number(value);
+            return Number.isFinite(n) ? n.toFixed(4) : 'NONE';
+          }
+
           async function main() {
             await client.connect();
             await client.query('BEGIN READ ONLY');
             try {
+              const params = [engine, policy, cutoff];
               const summary = await client.query(
                 `SELECT
                    COUNT(*)::int AS post_deploy_rows,
@@ -123,7 +130,7 @@ jobs:
                  WHERE engine_code = $1
                    AND model_version = $2
                    AND evaluated_at >= $3::timestamptz`,
-                [engine, policy, cutoff],
+                params,
               );
 
               const oldRows = await client.query(
@@ -143,7 +150,18 @@ jobs:
                    AND evaluated_at >= $3::timestamptz
                  GROUP BY regime
                  ORDER BY COUNT(*) DESC, regime`,
-                [engine, policy, cutoff],
+                params,
+              );
+
+              const routes = await client.query(
+                `SELECT COALESCE(components->>'strategyRoute', 'NULL') AS route, COUNT(*)::int AS count
+                 FROM trading.ensemble_shadow_decisions
+                 WHERE engine_code = $1
+                   AND model_version = $2
+                   AND evaluated_at >= $3::timestamptz
+                 GROUP BY components->>'strategyRoute'
+                 ORDER BY COUNT(*) DESC, route`,
+                params,
               );
 
               const instruments = await client.query(
@@ -157,7 +175,7 @@ jobs:
                    AND evaluated_at >= $3::timestamptz
                  GROUP BY instrument
                  ORDER BY instrument`,
-                [engine, policy, cutoff],
+                params,
               );
 
               const directions = await client.query(
@@ -179,10 +197,100 @@ jobs:
                    AND evaluated_at >= $3::timestamptz
                  GROUP BY direction
                  ORDER BY direction`,
-                [engine, policy, cutoff],
+                params,
+              );
+
+              const ensembleReasons = await client.query(
+                `SELECT reason, COUNT(*)::int AS count
+                 FROM trading.ensemble_shadow_decisions d
+                 CROSS JOIN LATERAL jsonb_array_elements_text(
+                   CASE
+                     WHEN jsonb_typeof(d.reasons::jsonb) = 'array' THEN d.reasons::jsonb
+                     ELSE '[]'::jsonb
+                   END
+                 ) AS reason
+                 WHERE d.engine_code = $1
+                   AND d.model_version = $2
+                   AND d.evaluated_at >= $3::timestamptz
+                 GROUP BY reason
+                 ORDER BY COUNT(*) DESC, reason`,
+                params,
+              );
+
+              const governanceBlockers = await client.query(
+                `SELECT blocker, COUNT(*)::int AS count
+                 FROM trading.ensemble_shadow_decisions d
+                 CROSS JOIN LATERAL jsonb_array_elements_text(
+                   CASE
+                     WHEN jsonb_typeof(d.components->'governance'->'paperExecutionBlockers') = 'array'
+                     THEN d.components->'governance'->'paperExecutionBlockers'
+                     ELSE '[]'::jsonb
+                   END
+                 ) AS blocker
+                 WHERE d.engine_code = $1
+                   AND d.model_version = $2
+                   AND d.evaluated_at >= $3::timestamptz
+                 GROUP BY blocker
+                 ORDER BY COUNT(*) DESC, blocker`,
+                params,
+              );
+
+              const governanceGates = await client.query(
+                `SELECT
+                   COUNT(*) FILTER (
+                     WHERE lower(COALESCE(components->'governance'->>'executionSpreadEvidenceValid', 'false')) = 'true'
+                   )::int AS spread_valid,
+                   COUNT(*) FILTER (
+                     WHERE lower(COALESCE(components->'governance'->>'paperNetExpectedRPassed', 'false')) = 'true'
+                   )::int AS paper_net_expected_r_passed,
+                   COUNT(*) FILTER (
+                     WHERE lower(COALESCE(components->'governance'->>'paperDriftPassed', 'false')) = 'true'
+                   )::int AS paper_drift_passed,
+                   COUNT(*) FILTER (
+                     WHERE COALESCE(components->'governance'->>'eventRisk', 'UNVERIFIED') = 'CLEAR'
+                   )::int AS event_risk_clear,
+                   COUNT(*) FILTER (
+                     WHERE COALESCE(components->'governance'->>'sleeveState', 'NULL') = 'COLLECTING'
+                   )::int AS sleeve_collecting,
+                   COUNT(*) FILTER (
+                     WHERE COALESCE(components->'governance'->>'sleeveState', 'NULL') = 'CORE'
+                   )::int AS sleeve_core,
+                   MIN((components->'governance'->>'netExpectedR')::numeric) AS min_net_expected_r,
+                   AVG((components->'governance'->>'netExpectedR')::numeric) AS avg_net_expected_r,
+                   MAX((components->'governance'->>'netExpectedR')::numeric) AS max_net_expected_r
+                 FROM trading.ensemble_shadow_decisions
+                 WHERE engine_code = $1
+                   AND model_version = $2
+                   AND evaluated_at >= $3::timestamptz`,
+                params,
+              );
+
+              const ensembleGates = await client.query(
+                `SELECT
+                   COUNT(*) FILTER (WHERE (components->>'directionQuality')::numeric >= 0.55)::int AS direction_passed,
+                   COUNT(*) FILTER (WHERE (components->>'tradeQuality')::numeric >= 0.48)::int AS trade_passed,
+                   COUNT(*) FILTER (WHERE (components->>'exitQuality')::numeric >= 0.48)::int AS exit_passed,
+                   COUNT(*) FILTER (WHERE (components->>'sessionQuality')::numeric >= 0.50)::int AS session_passed,
+                   COUNT(*) FILTER (WHERE (components->>'portfolioQuality')::numeric >= 0.35)::int AS portfolio_passed,
+                   MIN((components->>'directionQuality')::numeric) AS min_direction_quality,
+                   AVG((components->>'directionQuality')::numeric) AS avg_direction_quality,
+                   MAX((components->>'directionQuality')::numeric) AS max_direction_quality,
+                   MIN((components->>'tradeQuality')::numeric) AS min_trade_quality,
+                   AVG((components->>'tradeQuality')::numeric) AS avg_trade_quality,
+                   MAX((components->>'tradeQuality')::numeric) AS max_trade_quality,
+                   MIN((components->>'exitQuality')::numeric) AS min_exit_quality,
+                   AVG((components->>'exitQuality')::numeric) AS avg_exit_quality,
+                   MAX((components->>'exitQuality')::numeric) AS max_exit_quality
+                 FROM trading.ensemble_shadow_decisions
+                 WHERE engine_code = $1
+                   AND model_version = $2
+                   AND evaluated_at >= $3::timestamptz`,
+                params,
               );
 
               const row = summary.rows[0];
+              const governance = governanceGates.rows[0];
+              const ensemble = ensembleGates.rows[0];
               const latest = row.latest_evaluated_at ? new Date(row.latest_evaluated_at) : null;
               const freshnessSeconds = latest ? Math.max(0, Math.round((Date.now() - latest.getTime()) / 1000)) : null;
 
@@ -199,8 +307,23 @@ jobs:
               console.log(`distinct_instruments=${row.distinct_instruments}`);
               console.log(`momentum_present=${row.momentum_present}`);
               console.log(`paper_admitted=${row.paper_admitted}|promotable_admitted=${row.promotable_admitted}|paper_execution_eligible=${row.paper_execution_eligible}`);
+              console.log(`ensemble_gate_passes=direction:${ensemble.direction_passed}|trade:${ensemble.trade_passed}|exit:${ensemble.exit_passed}|session:${ensemble.session_passed}|portfolio:${ensemble.portfolio_passed}`);
+              console.log(`direction_quality=min:${formatNumber(ensemble.min_direction_quality)}|avg:${formatNumber(ensemble.avg_direction_quality)}|max:${formatNumber(ensemble.max_direction_quality)}`);
+              console.log(`trade_quality=min:${formatNumber(ensemble.min_trade_quality)}|avg:${formatNumber(ensemble.avg_trade_quality)}|max:${formatNumber(ensemble.max_trade_quality)}`);
+              console.log(`exit_quality=min:${formatNumber(ensemble.min_exit_quality)}|avg:${formatNumber(ensemble.avg_exit_quality)}|max:${formatNumber(ensemble.max_exit_quality)}`);
+              console.log(`governance_gate_passes=spread_valid:${governance.spread_valid}|paper_net_expected_r:${governance.paper_net_expected_r_passed}|paper_drift:${governance.paper_drift_passed}|event_risk_clear:${governance.event_risk_clear}|sleeve_collecting:${governance.sleeve_collecting}|sleeve_core:${governance.sleeve_core}`);
+              console.log(`net_expected_r=min:${formatNumber(governance.min_net_expected_r)}|avg:${formatNumber(governance.avg_net_expected_r)}|max:${formatNumber(governance.max_net_expected_r)}`);
+              for (const item of ensembleReasons.rows) {
+                console.log(`ensemble_reason=${item.reason}|count=${item.count}`);
+              }
+              for (const item of governanceBlockers.rows) {
+                console.log(`governance_blocker=${item.blocker}|count=${item.count}`);
+              }
               for (const item of regimes.rows) {
                 console.log(`regime=${item.regime}|count=${item.count}`);
+              }
+              for (const item of routes.rows) {
+                console.log(`strategy_route=${item.route}|count=${item.count}`);
               }
               for (const item of instruments.rows) {
                 console.log(`instrument=${item.instrument}|count=${item.count}|buy=${item.buy}|sell=${item.sell}`);
