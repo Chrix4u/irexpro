@@ -56,7 +56,9 @@ describe('scoreTrendPersistenceShadow', () => {
       candidate: false,
       reason: 'NET_EXPECTED_R_TOO_LOW',
     });
-    expect(scoreTrendPersistenceShadow({ ...base, driftState: 'OUT_OF_DISTRIBUTION' })).toMatchObject({
+    expect(
+      scoreTrendPersistenceShadow({ ...base, driftState: 'OUT_OF_DISTRIBUTION' }),
+    ).toMatchObject({
       candidate: false,
       reason: 'DRIFT_NOT_NORMAL',
     });
