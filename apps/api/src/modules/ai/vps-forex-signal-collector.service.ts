@@ -1031,6 +1031,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
               emaSeparation: best.emaSeparation,
               mtfStrength: best.mtfStrength,
               rsi14: best.rsi14,
+              shortHorizonMomentumAtr: best.shortHorizonMomentumAtr,
               scanTime: new Date(best.barTime.getTime() + BAR_MS),
             },
             portfolioPositions,
