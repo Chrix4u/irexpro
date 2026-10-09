@@ -1,25 +1,48 @@
 name: UAT Runtime Smoke
 
 on:
-  push:
-    branches:
-      - 'fix/uat-ai-trading-core-read-retry'
-    paths:
-      - '.github/workflows/uat-runtime-smoke.yml'
+  workflow_run:
+    workflows: ['Staging Deploy']
+    types: [completed]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: irexpro-uat-runtime-smoke
+  cancel-in-progress: true
+
 jobs:
   probe:
     name: Probe live UAT web/API routing
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
       APP_ORIGIN: https://irexpro.lightworldtech.com
       API_BASE: https://irexpro.lightworldtech.com/api/v1
+
     steps:
+      - name: Verify deployment trigger provenance
+        if: ${{ github.event_name == 'workflow_run' }}
+        shell: bash
+        env:
+          DEPLOY_WORKFLOW: ${{ github.event.workflow_run.name }}
+          DEPLOY_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          DEPLOY_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -Eeuo pipefail
+          test "$DEPLOY_WORKFLOW" = 'Staging Deploy'
+          test "$DEPLOY_CONCLUSION" = 'success'
+          test "$DEPLOY_BRANCH" = 'main'
+          [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
+          printf 'Probing verified staging deployment sha=%s\n' "$DEPLOY_SHA"
+
       - name: Verify public web and health endpoints
         shell: bash
         run: |
@@ -60,7 +83,11 @@ jobs:
             local path="$1"
             local headers
             headers="$(mktemp)"
-            curl --silent --show-error --output /dev/null --dump-header "$headers" --request OPTIONS --max-time 15               --header "Origin: $APP_ORIGIN"               --header 'Access-Control-Request-Method: GET'               --header 'Access-Control-Request-Headers: authorization,content-type'               "$API_BASE/$path"
+            curl --silent --show-error --output /dev/null --dump-header "$headers" --request OPTIONS --max-time 15 \
+              --header "Origin: $APP_ORIGIN" \
+              --header 'Access-Control-Request-Method: GET' \
+              --header 'Access-Control-Request-Headers: authorization,content-type' \
+              "$API_BASE/$path"
             grep -qi '^access-control-allow-origin: https://irexpro\.lightworldtech\.com' "$headers"
             grep -qi '^access-control-allow-credentials: true' "$headers"
             grep -qi '^access-control-allow-methods:.*GET' "$headers"
