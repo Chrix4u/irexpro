@@ -18,6 +18,7 @@ import {
 } from './v8-shadow-meta-scorer';
 import {
   PLAN_B_ACTIVE_MODEL_POLICY_VERSION,
+  PLAN_B_ROUTE_RELIABILITY_EVIDENCE_POLICY_VERSIONS,
   PLAN_B_ENSEMBLE_ARTIFACT,
   PLAN_B_GROSS_EXPECTED_R_FLOOR,
   PlanBEnsembleScore,
@@ -28,6 +29,7 @@ import {
   ENSEMBLE_NET_EXPECTED_R_FLOOR,
   ENSEMBLE_PAPER_NET_EXPECTED_R_FLOOR,
   ENSEMBLE_SLEEVE_CORE_MIN_CLOSED_TRADES,
+  EnsembleSleeveEvidence,
   EnsembleGovernanceDecision,
   ExecutionSpreadEvidence,
   classifyEnsembleSleeveEvidence,
@@ -60,6 +62,10 @@ import {
   RejectedEdgeCanaryEvidence,
 } from './rejected-edge-paper-canary';
 import { EnsemblePostEntryProtectionShadowService } from './ensemble-post-entry-protection-shadow.service';
+import {
+  PaperTrendRouteReliabilityDecision,
+  evaluatePaperTrendRouteReliability,
+} from './paper-route-reliability';
 import {
   HighConvictionOverlay,
   HighConvictionOverlayState,
@@ -980,6 +986,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           rejectedEdgeCanaryEvidence: RejectedEdgeCanaryEvidence | null;
           paperResearchThroughput: PaperResearchThroughputDecision;
           paperResearchPairSideReliability: PaperResearchPairSideReliabilityDecision | null;
+          paperTrendRouteReliability: PaperTrendRouteReliabilityDecision | null;
+          routeReliabilityDemoted: boolean;
           paperExecutionRoute: ReturnType<typeof selectPaperExecutionRoute>;
           paperResearchEpisodeKey: string;
           paperResearchEpisodeGuard: ReturnType<typeof evaluatePaperResearchEpisodeGuard> | null;
@@ -1139,9 +1147,38 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             macroEventAssessment,
             highConvictionOverlay,
           );
-          const normalPaperExecution = canExecuteMultiModelPaper(planBEnsemble, ensembleGovernance);
+          const normalPaperExecutionCandidate = canExecuteMultiModelPaper(
+            planBEnsemble,
+            ensembleGovernance,
+          );
+          let paperTrendRouteReliability: PaperTrendRouteReliabilityDecision | null = null;
+          let normalPaperExecution = normalPaperExecutionCandidate;
+          if (
+            normalPaperExecutionCandidate &&
+            planBEnsemble.strategyRoute === 'TREND_CONTINUATION'
+          ) {
+            const routeEvidence = await this.loadPaperTrendRouteReliabilityEvidence(
+              userId,
+              connectionId,
+            );
+            paperTrendRouteReliability = evaluatePaperTrendRouteReliability({
+              strategyRoute: planBEnsemble.strategyRoute,
+              evidence: routeEvidence,
+            });
+            if (!paperTrendRouteReliability.fullSizeEligible) {
+              normalPaperExecution = false;
+              this.logger.warn(
+                `PAPER trend-route reliability ${best.instrument} ${best.direction} fullSize=DEMOTED ` +
+                  `state=${paperTrendRouteReliability.state} reason=${paperTrendRouteReliability.reason} ` +
+                  `episodes=${paperTrendRouteReliability.episodes} ` +
+                  `profitFactor=${paperTrendRouteReliability.profitFactor ?? 'n/a'} ` +
+                  `maxDrawdown=${paperTrendRouteReliability.maxDrawdown ?? 'n/a'}`,
+              );
+            }
+          }
+          const routeReliabilityDemoted = normalPaperExecutionCandidate && !normalPaperExecution;
           const canaryEvaluationState = rejectedEdgeCanaryEvaluationState({
-            normalPaperExecution,
+            normalPaperExecution: normalPaperExecutionCandidate,
             evidenceServiceAvailable: Boolean(this.ensemblePostEntryProtection),
             netExpectedR: ensembleGovernance.netExpectedR,
           });
@@ -1190,6 +1227,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             tradeQuality: planBEnsemble.tradeQuality,
             exitQuality: planBEnsemble.exitQuality,
             paperExecutionBlockers: ensembleGovernance.paperExecutionBlockers,
+            routeReliabilityDemoted,
           });
           const paperResearchEpisodeKey = `${best.instrument}|${best.direction}|${planBEnsemble.regime}|${planBEnsemble.strategyRoute}`;
           let paperResearchPairSideReliability: PaperResearchPairSideReliabilityDecision | null =
@@ -1292,6 +1330,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             rejectedEdgeCanaryEvidence,
             paperResearchThroughput,
             paperResearchPairSideReliability,
+            paperTrendRouteReliability,
+            routeReliabilityDemoted,
             paperExecutionRoute,
             paperResearchEpisodeKey,
             paperResearchEpisodeGuard,
@@ -1339,6 +1379,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           rejectedEdgeCanaryEvidence,
           paperResearchThroughput,
           paperResearchPairSideReliability,
+          paperTrendRouteReliability,
+          routeReliabilityDemoted,
           paperExecutionRoute,
           paperResearchEpisodeKey,
           paperResearchEpisodeGuard,
@@ -1441,6 +1483,15 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
               paperResearchPairSideReliability?.smoothedExpectedR ?? null,
             paper_research_episode_key: paperResearchEpisodeKey,
             paper_research_episode_guard_reason: paperResearchEpisodeGuard?.reason ?? null,
+            paper_trend_route_reliability_artifact: paperTrendRouteReliability?.artifact ?? null,
+            paper_trend_route_reliability_state: paperTrendRouteReliability?.state ?? null,
+            paper_trend_route_reliability_reason: paperTrendRouteReliability?.reason ?? null,
+            paper_trend_route_reliability_episodes: paperTrendRouteReliability?.episodes ?? null,
+            paper_trend_route_reliability_profit_factor:
+              paperTrendRouteReliability?.profitFactor ?? null,
+            paper_trend_route_reliability_max_drawdown:
+              paperTrendRouteReliability?.maxDrawdown ?? null,
+            paper_trend_route_reliability_demoted: routeReliabilityDemoted,
             main_strategy_qualification_evidence: paperExecutionRoute === 'NORMAL_PAPER',
             source_reference:
               this.lastMarketDataAuthority === 'METAAPI_BROKER_FALLBACK'
@@ -2027,6 +2078,66 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     if (resolvedCount > 0) {
       this.logger.log(`Multi-model shadow outcomes resolved count=${resolvedCount}`);
     }
+  }
+
+  private async loadPaperTrendRouteReliabilityEvidence(
+    userId: string,
+    connectionId: string,
+  ): Promise<EnsembleSleeveEvidence | null> {
+    if (!this.dataSource) return null;
+
+    const rows = (await this.dataSource.query(
+      `
+        SELECT instrument, direction, evaluated_at, components->'outcome' AS outcome
+        FROM trading.ensemble_shadow_decisions
+        WHERE user_id = $1
+          AND broker_connection_id = $2
+          AND engine_code = $3
+          AND model_version = ANY($4::text[])
+          AND components->>'strategyRoute' = 'TREND_CONTINUATION'
+          AND COALESCE((components->>'paperAdmitted')::boolean, false) = true
+          AND COALESCE(
+            (components->'governance'->>'paperExecutionEligible')::boolean,
+            false
+          ) = true
+          AND components ? 'outcome'
+        ORDER BY evaluated_at ASC
+      `,
+      [
+        userId,
+        connectionId,
+        ACTIVE_ENGINE_CODE,
+        [...PLAN_B_ROUTE_RELIABILITY_EVIDENCE_POLICY_VERSIONS],
+      ],
+    )) as Array<{
+      instrument: string;
+      direction: 'BUY' | 'SELL';
+      evaluated_at: string | Date;
+      outcome: EnsembleShadowOutcome | null;
+    }>;
+
+    const byPairSide = new Map<
+      string,
+      Array<{ evaluatedAt: string | Date; outcome: EnsembleShadowOutcome }>
+    >();
+    for (const row of rows) {
+      if (
+        !row.outcome ||
+        typeof row.outcome !== 'object' ||
+        typeof row.outcome.status !== 'string'
+      ) {
+        continue;
+      }
+      const key = `${row.instrument}|${row.direction}`;
+      const observations = byPairSide.get(key) ?? [];
+      observations.push({ evaluatedAt: row.evaluated_at, outcome: row.outcome });
+      byPairSide.set(key, observations);
+    }
+
+    const episodes = [...byPairSide.values()]
+      .flatMap((observations) => collapseEnsembleOutcomeEpisodes(observations))
+      .sort((a, b) => new Date(a.resolvedAt).getTime() - new Date(b.resolvedAt).getTime());
+    return summarizeEnsembleSleeveOutcomes(episodes);
   }
 
   private async loadPaperResearchPairSideEvidence(

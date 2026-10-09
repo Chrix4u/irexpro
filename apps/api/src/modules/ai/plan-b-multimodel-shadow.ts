@@ -1,7 +1,14 @@
 import { scorePlanBShadowMeta, V8ShadowMetaInput } from './v8-shadow-meta-scorer';
 
 export const PLAN_B_ENSEMBLE_ARTIFACT = 'plan-b-multimodel-shadow-v4';
-export const PLAN_B_ACTIVE_MODEL_POLICY_VERSION = `${PLAN_B_ENSEMBLE_ARTIFACT}-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1-throughput-shadow-only-v1`;
+export const PLAN_B_PRE_THROUGHPUT_SHADOW_POLICY_VERSION = `${PLAN_B_ENSEMBLE_ARTIFACT}-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1`;
+export const PLAN_B_PRE_ROUTE_RELIABILITY_POLICY_VERSION = `${PLAN_B_PRE_THROUGHPUT_SHADOW_POLICY_VERSION}-throughput-shadow-only-v1`;
+export const PLAN_B_ACTIVE_MODEL_POLICY_VERSION = `${PLAN_B_PRE_ROUTE_RELIABILITY_POLICY_VERSION}-trend-route-reliability-v1`;
+export const PLAN_B_ROUTE_RELIABILITY_EVIDENCE_POLICY_VERSIONS = Object.freeze([
+  PLAN_B_PRE_THROUGHPUT_SHADOW_POLICY_VERSION,
+  PLAN_B_PRE_ROUTE_RELIABILITY_POLICY_VERSION,
+  PLAN_B_ACTIVE_MODEL_POLICY_VERSION,
+]);
 export const PLAN_B_ENSEMBLE_MODE = 'PROSPECTIVE_SHADOW_ONLY';
 export const PLAN_B_CANDIDATE_CONFIDENCE_FLOOR = 0.64;
 export const PLAN_B_GROSS_EXPECTED_R_FLOOR = 0.08;

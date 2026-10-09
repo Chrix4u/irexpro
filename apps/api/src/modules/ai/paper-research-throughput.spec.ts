@@ -240,4 +240,40 @@ describe('evaluatePaperResearchEpisodeGuard', () => {
       }),
     ).toEqual({ eligible: true, reason: 'EPISODE_COOLDOWN_ELAPSED' });
   });
+  it('keeps a reliability-demoted continuation eligible only for shadow research collection', () => {
+    expect(
+      evaluatePaperResearchThroughput({
+        normalPaperExecution: false,
+        routeReliabilityDemoted: true,
+        confidence: 0.7,
+        netExpectedR: 0.2,
+        executionSpreadEvidenceValid: true,
+        eventRisk: 'CLEAR',
+        strategyRoute: 'TREND_CONTINUATION',
+        driftState: 'NORMAL',
+        directionQuality: 0.65,
+        tradeQuality: 0.6,
+        exitQuality: 0.6,
+        paperExecutionBlockers: [],
+      }),
+    ).toMatchObject({ eligible: true, route: 'PAPER_RESEARCH_THROUGHPUT' });
+  });
+
+  it('still rejects zero-blocker research candidates when no route demotion occurred', () => {
+    expect(
+      evaluatePaperResearchThroughput({
+        normalPaperExecution: false,
+        confidence: 0.7,
+        netExpectedR: 0.2,
+        executionSpreadEvidenceValid: true,
+        eventRisk: 'CLEAR',
+        strategyRoute: 'TREND_CONTINUATION',
+        driftState: 'NORMAL',
+        directionQuality: 0.65,
+        tradeQuality: 0.6,
+        exitQuality: 0.6,
+        paperExecutionBlockers: [],
+      }),
+    ).toMatchObject({ eligible: false, reason: 'UNSAFE_BLOCKER' });
+  });
 });
