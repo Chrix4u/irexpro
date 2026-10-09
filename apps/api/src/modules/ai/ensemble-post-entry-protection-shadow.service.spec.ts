@@ -131,19 +131,19 @@ describe('EnsemblePostEntryProtectionShadowService', () => {
     expect(refreshSql).toContain('decision.model_version = $3');
     expect(query.mock.calls[0]?.[1]).toEqual([
       'irexpro-multimodel-ensemble-v1',
-      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1',
+      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1-throughput-shadow-only-v1',
       '00000000-0000-0000-0000-000000000002',
       now.toISOString(),
     ]);
     expect(query.mock.calls[3]?.[1]).toEqual([
       'plan-b-v85-profitable-state-giveback-classifier-v1',
       'irexpro-multimodel-ensemble-v1',
-      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1',
+      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1-throughput-shadow-only-v1',
     ]);
     expect(service.getStatus()).toMatchObject({
       cohort: 'ENSEMBLE_SHADOW_DECISIONS',
       sourcePolicyVersion:
-        'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1',
+        'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1-throughput-shadow-only-v1',
       modifiesExecution: false,
       lastScored: 1,
       lastCandidates: 1,
@@ -324,7 +324,7 @@ describe('EnsemblePostEntryProtectionShadowService', () => {
       '00000000-0000-0000-0000-000000000002',
       'plan-b-v85-profitable-state-giveback-classifier-v1',
       'irexpro-multimodel-ensemble-v1',
-      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1',
+      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1-throughput-shadow-only-v1',
     ]);
   });
 
@@ -440,7 +440,7 @@ describe('EnsemblePostEntryProtectionShadowService', () => {
     expect(String(query.mock.calls[0]?.[0])).toContain('checkpoint_minutes = 30');
     expect(query.mock.calls[0]?.[1]).toEqual([
       'irexpro-multimodel-ensemble-v1',
-      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1',
+      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1-throughput-shadow-only-v1',
       '00000000-0000-0000-0000-000000000002',
       'GBPUSD',
       'SELL',
