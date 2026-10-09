@@ -1,0 +1,93 @@
+name: PAPER Regime Counterfactual
+
+on:
+  push:
+    branches:
+      - 'ops/paper-cohort-evidence-20261009'
+    paths:
+      - '.github/workflows/paper-regime-counterfactual.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    name: Read-only regime-only blocker counterfactual
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: staging
+    env:
+      STAGING_SSH_HOST: vps.lightworldtech.com
+      STAGING_SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
+      STAGING_SSH_USER: ${{ vars.STAGING_SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+    steps:
+      - name: Configure SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$STAGING_SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/irexpro_staging"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
+
+      - name: Evaluate current non-regime gates on resolved episodes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i "$HOME/.ssh/irexpro_staging" -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" 'bash -s' <<'REMOTE'
+          set -Eeuo pipefail
+          readonly API_ROOT=/home/lightworld/webapps/irexpro-staging/apps/api
+          cd "$API_ROOT"
+          DOTENV_CONFIG_PATH="$API_ROOT/.env" node -r dotenv/config <<'NODE'
+          const { Client } = require('pg');
+          const client=new Client({host:process.env.DB_HOST,port:Number(process.env.DB_PORT||5432),database:process.env.DB_NAME,user:process.env.DB_USER,password:process.env.DB_PASSWORD,ssl:process.env.DB_SSL==='true'?{rejectUnauthorized:false}:false,connectionTimeoutMillis:10000,statement_timeout:20000,application_name:'irexpro-regime-counterfactual-readonly'});
+          const finite=v=>Number.isFinite(Number(v))?Number(v):null;
+          const fmt=v=>v==null||!Number.isFinite(v)?'NONE':v.toFixed(4);
+          const mean=xs=>xs.length?xs.reduce((a,b)=>a+b,0)/xs.length:null;
+          function collapse(rows){const g=new Map(),out=[];for(const r of rows){const k=`${r.model_version}|${r.instrument}|${r.direction}`;const a=g.get(k)||[];a.push(r);g.set(k,a);}for(const a of g.values()){a.sort((x,y)=>new Date(x.evaluated_at)-new Date(y.evaluated_at));let end=-Infinity;for(const r of a){const o=r.outcome;if(!o||o.status==='AMBIGUOUS')continue;const gr=finite(o.grossR),nr=finite(o.netR),ev=new Date(r.evaluated_at).getTime(),res=new Date(o.resolvedAt).getTime();if(gr==null||nr==null||!Number.isFinite(ev)||!Number.isFinite(res)||res<ev)continue;if(ev>end){out.push({...r,grossR:gr,netR:nr});end=res;}else end=Math.max(end,res);}}return out;}
+          function stats(label,rows){const net=rows.map(r=>r.netR),gross=rows.map(r=>r.grossR);const gp=net.filter(v=>v>0).reduce((a,b)=>a+b,0),gl=Math.abs(net.filter(v=>v<0).reduce((a,b)=>a+b,0));console.log(`${label}|episodes=${rows.length}|wins=${rows.filter(r=>r.outcome.status==='WIN').length}|losses=${rows.filter(r=>r.outcome.status==='LOSS').length}|avg_gross=${fmt(mean(gross))}|avg_net=${fmt(mean(net))}|net_sum=${fmt(net.reduce((a,b)=>a+b,0))}|pf=${gl>0?fmt(gp/gl):'NONE'}`);}
+          async function main(){await client.connect();await client.query('BEGIN READ ONLY');try{
+            const q=await client.query(`
+              SELECT model_version,instrument,direction,evaluated_at,regime,confidence,expected_r,
+                     components->>'directionQuality' AS dq,
+                     components->>'tradeQuality' AS tq,
+                     components->>'exitQuality' AS xq,
+                     components->>'sessionQuality' AS sq,
+                     components->>'portfolioQuality' AS pq,
+                     components->'governance'->>'paperNetExpectedRPassed' AS net_er_pass,
+                     components->'governance'->>'paperDriftPassed' AS drift_pass,
+                     components->'governance'->>'executionSpreadEvidenceValid' AS spread_pass,
+                     components->'governance'->>'eventRisk' AS event_risk,
+                     components->'outcome' AS outcome
+              FROM trading.ensemble_shadow_decisions
+              WHERE engine_code='irexpro-multimodel-ensemble-v1'
+                AND evaluated_at>=CURRENT_TIMESTAMP-INTERVAL '7 days'
+                AND model_version LIKE '%bidirectional-v2%'
+                AND components ? 'outcome'
+              ORDER BY evaluated_at LIMIT 10000
+            `);
+            const ep=collapse(q.rows);
+            const core=ep.filter(r=>r.confidence>=0.64&&finite(r.expected_r)>=0.08&&finite(r.dq)>=0.55&&finite(r.tq)>=0.48&&finite(r.xq)>=0.48&&finite(r.sq)>=0.5&&finite(r.pq)>=0.35);
+            const operational=core.filter(r=>String(r.net_er_pass)==='true'&&String(r.drift_pass)==='true'&&String(r.spread_pass)==='true'&&r.event_risk==='CLEAR');
+            console.log('=== Regime-only blocker counterfactual, prospective non-overlap ===');
+            console.log(`observed_at_utc=${new Date().toISOString()}|all_episodes=${ep.length}|all_core_non_regime=${core.length}|all_operational_non_regime=${operational.length}`);
+            for(const regime of ['TREND_EXTENDED','TREND_WEAK','TREND_HEALTHY']){stats(`core_non_regime|regime=${regime}`,core.filter(r=>r.regime===regime));stats(`operational_non_regime|regime=${regime}`,operational.filter(r=>r.regime===regime));}
+            for(const regime of ['TREND_EXTENDED','TREND_WEAK']){for(const dir of ['BUY','SELL'])stats(`operational_non_regime|regime=${regime}|direction=${dir}`,operational.filter(r=>r.regime===regime&&r.direction===dir));}
+            await client.query('COMMIT');
+          }catch(e){await client.query('ROLLBACK').catch(()=>{});throw e;}}
+          main().catch(e=>{console.error(`ERROR: ${e.message}`);process.exitCode=1;}).finally(()=>client.end().catch(()=>{}));
+          NODE
+          REMOTE
+      - name: Remove SSH material
+        if: ${{ always() }}
+        shell: bash
+        run: rm -f "$HOME/.ssh/irexpro_staging" "$HOME/.ssh/known_hosts"
