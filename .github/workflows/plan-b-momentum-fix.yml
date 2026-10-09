@@ -1,9 +1,13 @@
 name: Plan B live momentum wiring fix
 
 on:
-  push:
+  pull_request:
     branches:
-      - fix/plan-b-live-momentum-wiring-20261009
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
 
 permissions:
   contents: write
@@ -13,9 +17,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Checkout branch
+      - name: Checkout feature branch
         uses: actions/checkout@v4
         with:
+          ref: fix/plan-b-live-momentum-wiring-20261009
           fetch-depth: 0
 
       - name: Set up Node
@@ -32,9 +37,10 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Add regression test and prove RED
+      - name: Prove RED then apply the minimal fix when still missing
         shell: bash
         run: |
+          set -Eeuo pipefail
           cat > apps/api/src/modules/ai/vps-forex-signal-collector.momentum-wiring.spec.ts <<'EOF'
           import { readFileSync } from 'node:fs';
 
@@ -56,22 +62,29 @@ jobs:
           });
           EOF
 
-          set +e
-          pnpm --filter @irexpro/api exec jest vps-forex-signal-collector.momentum-wiring.spec.ts --runInBand > /tmp/momentum-red.log 2>&1
-          status=$?
-          set -e
-          cat /tmp/momentum-red.log
-          if [ "$status" -eq 0 ]; then
-            echo 'Regression test unexpectedly passed before implementation.' >&2
-            exit 1
-          fi
-          grep -q 'shortHorizonMomentumAtr: best.shortHorizonMomentumAtr' /tmp/momentum-red.log
-          echo 'RED confirmed: live Plan B scorer input omits short-horizon momentum.'
+          if python - <<'PY'
+          from pathlib import Path
+          import re
+          source = Path('apps/api/src/modules/ai/vps-forex-signal-collector.service.ts').read_text()
+          match = re.search(r'scorePlanBMultimodelShadow\(\s*\{([\s\S]*?)\},\s*portfolioPositions,\s*\)', source)
+          raise SystemExit(0 if match and 'shortHorizonMomentumAtr: best.shortHorizonMomentumAtr' in match.group(1) else 1)
+          PY
+          then
+            echo 'Scorer momentum wiring is already present; skipping mutation and keeping verification only.'
+          else
+            set +e
+            pnpm --filter @irexpro/api exec jest vps-forex-signal-collector.momentum-wiring.spec.ts --runInBand > /tmp/momentum-red.log 2>&1
+            status=$?
+            set -e
+            cat /tmp/momentum-red.log
+            if [ "$status" -eq 0 ]; then
+              echo 'Regression test unexpectedly passed before implementation.' >&2
+              exit 1
+            fi
+            grep -q 'shortHorizonMomentumAtr: best.shortHorizonMomentumAtr' /tmp/momentum-red.log
+            echo 'RED confirmed: live Plan B scorer input omits short-horizon momentum.'
 
-      - name: Apply minimal production fix and isolate evidence cohort
-        shell: bash
-        run: |
-          python - <<'PY'
+            python - <<'PY'
           from pathlib import Path
 
           collector = Path('apps/api/src/modules/ai/vps-forex-signal-collector.service.ts')
@@ -96,6 +109,7 @@ jobs:
               raise SystemExit(f'Policy cohort replacement count unexpectedly low: {replacements}')
           print(f'Updated {replacements} active-policy references to the clean momentum-wiring cohort.')
           PY
+          fi
 
           pnpm --filter @irexpro/api exec prettier --write \
             src/modules/ai/vps-forex-signal-collector.service.ts \
@@ -121,13 +135,17 @@ jobs:
           pnpm api:build
           git diff --check
 
-      - name: Commit verified fix and remove temporary workflow
+      - name: Commit verified code changes when needed
         shell: bash
         run: |
-          rm -f .github/workflows/plan-b-momentum-fix.yml
+          set -Eeuo pipefail
+          if git diff --quiet -- apps/api/src/modules/ai; then
+            echo 'No uncommitted API changes remain.'
+            exit 0
+          fi
           git config user.name 'iRexPro Engineering'
           git config user.email 'actions@users.noreply.github.com'
-          git add -A
+          git add apps/api/src/modules/ai
           git status --short
           git commit -m 'Fix live Plan B momentum scorer wiring'
           git push origin HEAD:fix/plan-b-live-momentum-wiring-20261009
