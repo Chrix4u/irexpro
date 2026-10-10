@@ -5,6 +5,78 @@ export const PAPER_TREND_ROUTE_RELIABILITY_MIN_EPISODES = 20;
 export const PAPER_TREND_ROUTE_RELIABILITY_MIN_PROFIT_FACTOR = 1.0;
 export const PAPER_TREND_ROUTE_RELIABILITY_MAX_DRAWDOWN = 0.12;
 
+export const PAPER_TREND_PAIR_SIDE_RELIABILITY_SHADOW_ARTIFACT =
+  'paper-trend-pair-side-reliability-shadow-v1';
+export const PAPER_TREND_PAIR_SIDE_RELIABILITY_MIN_EPISODES = 8;
+
+export type PaperTrendPairSideReliabilityShadowState =
+  | 'NOT_APPLICABLE'
+  | 'COLLECTING'
+  | 'HEALTHY'
+  | 'WEAK';
+
+export interface PaperTrendPairSideReliabilityShadowDecision {
+  artifact: typeof PAPER_TREND_PAIR_SIDE_RELIABILITY_SHADOW_ARTIFACT;
+  state: PaperTrendPairSideReliabilityShadowState;
+  modifiesExecution: false;
+  executionAuthority: 'NONE';
+  episodes: number;
+  profitFactor: number | null;
+  sharpe: number | null;
+  maxDrawdown: number | null;
+  positiveWindowFraction: number | null;
+  reason:
+    | 'NON_CONTINUATION_ROUTE'
+    | 'INSUFFICIENT_PAIR_SIDE_EVIDENCE'
+    | 'PAIR_SIDE_HEALTHY'
+    | 'PAIR_SIDE_PROFIT_FACTOR_BELOW_ONE'
+    | 'PAIR_SIDE_DRAWDOWN_EXCEEDED';
+}
+
+export function evaluatePaperTrendPairSideReliabilityShadow(input: {
+  strategyRoute: string;
+  evidence?: EnsembleSleeveEvidence | null;
+}): PaperTrendPairSideReliabilityShadowDecision {
+  const evidence = input.evidence ?? null;
+  const episodes = Math.max(0, Math.trunc(evidence?.closedTrades ?? 0));
+  const profitFactor = evidence?.profitFactor ?? null;
+  const sharpe = evidence?.sharpe ?? null;
+  const maxDrawdown = evidence?.maxDrawdown ?? null;
+  const positiveWindowFraction = evidence?.positiveWindowFraction ?? null;
+  const base: Omit<PaperTrendPairSideReliabilityShadowDecision, 'state' | 'reason'> = {
+    artifact: PAPER_TREND_PAIR_SIDE_RELIABILITY_SHADOW_ARTIFACT,
+    modifiesExecution: false as const,
+    executionAuthority: 'NONE' as const,
+    episodes,
+    profitFactor,
+    sharpe,
+    maxDrawdown,
+    positiveWindowFraction,
+  };
+
+  if (input.strategyRoute !== 'TREND_CONTINUATION') {
+    return { ...base, state: 'NOT_APPLICABLE', reason: 'NON_CONTINUATION_ROUTE' };
+  }
+
+  if (episodes < PAPER_TREND_PAIR_SIDE_RELIABILITY_MIN_EPISODES) {
+    return { ...base, state: 'COLLECTING', reason: 'INSUFFICIENT_PAIR_SIDE_EVIDENCE' };
+  }
+
+  if (maxDrawdown != null && maxDrawdown > PAPER_TREND_ROUTE_RELIABILITY_MAX_DRAWDOWN) {
+    return { ...base, state: 'WEAK', reason: 'PAIR_SIDE_DRAWDOWN_EXCEEDED' };
+  }
+
+  if (
+    profitFactor != null &&
+    Number.isFinite(profitFactor) &&
+    profitFactor < PAPER_TREND_ROUTE_RELIABILITY_MIN_PROFIT_FACTOR
+  ) {
+    return { ...base, state: 'WEAK', reason: 'PAIR_SIDE_PROFIT_FACTOR_BELOW_ONE' };
+  }
+
+  return { ...base, state: 'HEALTHY', reason: 'PAIR_SIDE_HEALTHY' };
+}
+
 export type PaperTrendRouteReliabilityState =
   | 'NOT_APPLICABLE'
   | 'COLLECTING'

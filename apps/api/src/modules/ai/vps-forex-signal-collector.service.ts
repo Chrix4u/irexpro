@@ -63,7 +63,9 @@ import {
 } from './rejected-edge-paper-canary';
 import { EnsemblePostEntryProtectionShadowService } from './ensemble-post-entry-protection-shadow.service';
 import {
+  PaperTrendPairSideReliabilityShadowDecision,
   PaperTrendRouteReliabilityDecision,
+  evaluatePaperTrendPairSideReliabilityShadow,
   evaluatePaperTrendRouteReliability,
 } from './paper-route-reliability';
 import {
@@ -1004,6 +1006,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           paperResearchThroughput: PaperResearchThroughputDecision;
           paperResearchPairSideReliability: PaperResearchPairSideReliabilityDecision | null;
           paperTrendRouteReliability: PaperTrendRouteReliabilityDecision | null;
+          paperTrendPairSideReliabilityShadow: PaperTrendPairSideReliabilityShadowDecision | null;
           routeReliabilityDemoted: boolean;
           paperExecutionRoute: ReturnType<typeof selectPaperExecutionRoute>;
           paperResearchEpisodeKey: string;
@@ -1169,6 +1172,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             ensembleGovernance,
           );
           let paperTrendRouteReliability: PaperTrendRouteReliabilityDecision | null = null;
+          let paperTrendPairSideReliabilityShadow: PaperTrendPairSideReliabilityShadowDecision | null =
+            null;
           let normalPaperExecution = normalPaperExecutionCandidate;
           if (
             normalPaperExecutionCandidate &&
@@ -1182,6 +1187,24 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
               strategyRoute: planBEnsemble.strategyRoute,
               evidence: routeEvidence,
             });
+            const pairSideEvidence = await this.loadPaperTrendPairSideReliabilityEvidence(
+              userId,
+              connectionId,
+              best.instrument,
+              best.direction,
+            );
+            paperTrendPairSideReliabilityShadow = evaluatePaperTrendPairSideReliabilityShadow({
+              strategyRoute: planBEnsemble.strategyRoute,
+              evidence: pairSideEvidence,
+            });
+            this.logger.log(
+              `PAPER pair-side reliability shadow ${best.instrument} ${best.direction} ` +
+                `state=${paperTrendPairSideReliabilityShadow.state} ` +
+                `episodes=${paperTrendPairSideReliabilityShadow.episodes} ` +
+                `profitFactor=${paperTrendPairSideReliabilityShadow.profitFactor ?? 'n/a'} ` +
+                `maxDrawdown=${paperTrendPairSideReliabilityShadow.maxDrawdown ?? 'n/a'} ` +
+                `executionAuthority=${paperTrendPairSideReliabilityShadow.executionAuthority}`,
+            );
             if (!paperTrendRouteReliability.fullSizeEligible) {
               normalPaperExecution = false;
               this.logger.warn(
@@ -1348,6 +1371,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             paperResearchThroughput,
             paperResearchPairSideReliability,
             paperTrendRouteReliability,
+            paperTrendPairSideReliabilityShadow,
             routeReliabilityDemoted,
             paperExecutionRoute,
             paperResearchEpisodeKey,
@@ -1397,6 +1421,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           paperResearchThroughput,
           paperResearchPairSideReliability,
           paperTrendRouteReliability,
+          paperTrendPairSideReliabilityShadow,
           routeReliabilityDemoted,
           paperExecutionRoute,
           paperResearchEpisodeKey,
@@ -1509,6 +1534,26 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             paper_trend_route_reliability_max_drawdown:
               paperTrendRouteReliability?.maxDrawdown ?? null,
             paper_trend_route_reliability_demoted: routeReliabilityDemoted,
+            paper_trend_pair_side_reliability_shadow_artifact:
+              paperTrendPairSideReliabilityShadow?.artifact ?? null,
+            paper_trend_pair_side_reliability_shadow_state:
+              paperTrendPairSideReliabilityShadow?.state ?? null,
+            paper_trend_pair_side_reliability_shadow_reason:
+              paperTrendPairSideReliabilityShadow?.reason ?? null,
+            paper_trend_pair_side_reliability_shadow_episodes:
+              paperTrendPairSideReliabilityShadow?.episodes ?? null,
+            paper_trend_pair_side_reliability_shadow_profit_factor:
+              paperTrendPairSideReliabilityShadow?.profitFactor ?? null,
+            paper_trend_pair_side_reliability_shadow_sharpe:
+              paperTrendPairSideReliabilityShadow?.sharpe ?? null,
+            paper_trend_pair_side_reliability_shadow_max_drawdown:
+              paperTrendPairSideReliabilityShadow?.maxDrawdown ?? null,
+            paper_trend_pair_side_reliability_shadow_positive_window_fraction:
+              paperTrendPairSideReliabilityShadow?.positiveWindowFraction ?? null,
+            paper_trend_pair_side_reliability_shadow_modifies_execution:
+              paperTrendPairSideReliabilityShadow?.modifiesExecution ?? false,
+            paper_trend_pair_side_reliability_shadow_execution_authority:
+              paperTrendPairSideReliabilityShadow?.executionAuthority ?? 'NONE',
             main_strategy_qualification_evidence: paperExecutionRoute === 'NORMAL_PAPER',
             source_reference:
               this.lastMarketDataAuthority === 'METAAPI_BROKER_FALLBACK'
@@ -2165,6 +2210,52 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     const episodes = [...byPairSide.values()]
       .flatMap((observations) => collapseEnsembleOutcomeEpisodes(observations))
       .sort((a, b) => new Date(a.resolvedAt).getTime() - new Date(b.resolvedAt).getTime());
+    return summarizeEnsembleSleeveOutcomes(episodes);
+  }
+
+  private async loadPaperTrendPairSideReliabilityEvidence(
+    userId: string,
+    connectionId: string,
+    instrument: string,
+    direction: 'BUY' | 'SELL',
+  ): Promise<EnsembleSleeveEvidence | null> {
+    if (!this.dataSource) return null;
+
+    const rows = (await this.dataSource.query(
+      `
+        SELECT evaluated_at, components->'outcome' AS outcome
+        FROM trading.ensemble_shadow_decisions
+        WHERE user_id = $1
+          AND broker_connection_id = $2
+          AND engine_code = $3
+          AND model_version = ANY($4::text[])
+          AND instrument = $5
+          AND direction = $6
+          AND components->>'strategyRoute' = 'TREND_CONTINUATION'
+          AND COALESCE((components->>'paperAdmitted')::boolean, false) = true
+          AND COALESCE(
+            (components->'governance'->>'paperExecutionEligible')::boolean,
+            false
+          ) = true
+          AND components ? 'outcome'
+        ORDER BY evaluated_at ASC
+      `,
+      [
+        userId,
+        connectionId,
+        ACTIVE_ENGINE_CODE,
+        [...PLAN_B_ROUTE_RELIABILITY_EVIDENCE_POLICY_VERSIONS],
+        instrument,
+        direction,
+      ],
+    )) as Array<{
+      evaluated_at: string | Date;
+      outcome: EnsembleShadowOutcome | null;
+    }>;
+
+    const episodes = collapseEnsembleOutcomeEpisodes(
+      rows.map((row) => ({ evaluatedAt: row.evaluated_at, outcome: row.outcome })),
+    );
     return summarizeEnsembleSleeveOutcomes(episodes);
   }
 
