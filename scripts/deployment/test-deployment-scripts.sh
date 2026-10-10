@@ -179,6 +179,14 @@ if [[ "$url" == 'http://local.test/admin' && "$admin_failures" =~ ^[0-9]+$ ]]; t
     exit 7
   fi
 fi
+public_web_failures="${FAKE_PUBLIC_WEB_CONNECT_FAILURES:-0}"
+if [[ "$url" == 'https://public.test/web' && "$public_web_failures" =~ ^[0-9]+$ ]]; then
+  public_web_attempts="$(grep -F -c 'https://public.test/web' "$COMMAND_LOG" || true)"
+  if (( public_web_attempts <= public_web_failures )); then
+    printf 'simulated public web connection refused\n' >&2
+    exit 7
+  fi
+fi
 ai_failures="${FAKE_AI_CONNECT_FAILURES:-0}"
 if [[ "$url" == 'http://local.test/ai/health' && "$ai_failures" =~ ^[0-9]+$ ]]; then
   ai_attempts="$(grep -F -c 'http://local.test/ai/health' "$COMMAND_LOG" || true)"
@@ -457,6 +465,16 @@ if grep -q 'https://public.test' "$COMMAND_LOG"; then
 fi
 admin_exhausted_ai_checks="$(grep -F -c 'ai/health' "$COMMAND_LOG" || true)"
 [[ "$admin_exhausted_ai_checks" -eq 2 ]] || fail 'Admin readiness exhaustion must not run the later AI post-smoke verification.'
+
+
+# Public proxy propagation can lag the local PM2 restart. A transient public
+# Web failure must be recovered by the same bounded smoke retry contract.
+make_fixture 'public-web-startup-retry'
+git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
+public_web_retry_output="$(run_deploy "$FIXTURE_CANDIDATE_SHA" FAKE_PUBLIC_WEB_CONNECT_FAILURES=1 MAX_HEALTH_ATTEMPTS=2)"
+[[ "$public_web_retry_output" == *'STAGING DEPLOYMENT VERIFIED'* ]] || fail 'Transient public web failure was not recovered by bounded smoke retries.'
+public_web_attempts="$(grep -F -c 'https://public.test/web' "$COMMAND_LOG" || true)"
+[[ "$public_web_attempts" -eq 2 ]] || fail 'Transient public web regression test did not exercise exactly one retry.'
 
 make_fixture 'successful-deploy'
 git -C "$FIXTURE_REPO" switch --quiet --detach "$FIXTURE_PRIOR_SHA"
