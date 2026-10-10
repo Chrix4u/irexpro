@@ -32,9 +32,13 @@ import { compareDecimal } from './reconciliation-comparator';
  *   EXPIRED): the order follows the provider state through the
  *   OrderStateMachine (fills applied atomically with exact-decimal math).
  *
- * NEVER AUTO-RESOLVES (surfaced only — human/admin decision):
+ * NEVER AUTO-RESOLVES WHILE THE EXTERNAL ACTIVITY IS STILL PRESENT
+ * (surfaced only — human/admin decision):
  * - MISSING_INTERNAL_ORDER / UNKNOWN_PROVIDER_POSITION (externally-placed
- *   activity: importing it would fabricate internal history).
+ *   activity: importing it would fabricate internal history). A historical
+ *   UNKNOWN_PROVIDER_POSITION alert may be marked RESOLVED only after a later
+ *   complete provider snapshot proves that provider position ref is absent;
+ *   this closes stale alert state and never fabricates internal history.
  * - MISSING_PROVIDER_ORDER when the provider cannot be queried for the id
  *   (transient provider outages must not close live positions).
  * - UNKNOWN provider order states (fail-closed: never guess).

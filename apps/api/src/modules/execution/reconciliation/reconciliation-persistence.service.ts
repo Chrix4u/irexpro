@@ -287,6 +287,56 @@ export class ReconciliationPersistenceService {
     return resolved;
   }
 
+  /**
+   * Resolve historical provider-only position discrepancies once a complete
+   * provider snapshot proves those position refs no longer exist. This does
+   * not import, close, or fabricate any internal trade history; it only
+   * closes stale reconciliation alerts. Current provider refs remain OPEN.
+   */
+  async resolveAbsentUnknownProviderPositions(
+    brokerConnectionId: string,
+    currentProviderPositionRefs: string[],
+    providerSnapshotStartedAt: Date,
+  ): Promise<
+    Array<{ id: string; type: string; internalRefId: string | null; providerRef: string | null }>
+  > {
+    const lockKey = this.connectionLockKey(brokerConnectionId);
+    let resolved: Array<{
+      id: string;
+      type: string;
+      internalRefId: string | null;
+      providerRef: string | null;
+    }> = [];
+
+    await this.dataSource.transaction(async (manager) => {
+      await manager.query('SELECT pg_advisory_xact_lock($1)', [lockKey]);
+      const result = await manager.query(
+        `UPDATE reconciliation.discrepancies
+         SET status = 'RESOLVED',
+             resolved_at = now(),
+             resolution = 'Provider position no longer present in successful broker snapshot',
+             resolved_by = 'AUTO',
+             updated_at = now()
+         WHERE broker_connection_id = $1
+           AND discrepancy_type = 'UNKNOWN_PROVIDER_POSITION'
+           AND status = 'OPEN'
+           AND provider_ref IS NOT NULL
+           AND provider_ref <> ALL($2::varchar[])
+           AND last_seen_at < $3
+         RETURNING id, discrepancy_type, internal_ref_id, provider_ref`,
+        [brokerConnectionId, currentProviderPositionRefs, providerSnapshotStartedAt],
+      );
+      resolved = this.unwrapQueryRows(result).map((row) => ({
+        id: String(row.id),
+        type: String(row.discrepancy_type),
+        internalRefId: (row.internal_ref_id as string | null) ?? null,
+        providerRef: (row.provider_ref as string | null) ?? null,
+      }));
+    });
+
+    return resolved;
+  }
+
   /** Count OPEN discrepancies for a connection (run outcome classification). */
   async countOpenDiscrepancies(brokerConnectionId: string): Promise<number> {
     const rows = await this.discrepancyRepo

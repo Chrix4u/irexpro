@@ -286,6 +286,10 @@ export class StateReconciliationService {
       }
 
       // ── Phase 3: provider state (fail loudly — never fabricate) ────────
+      // Capture the cutoff BEFORE snapshot acquisition. Cleanup later may only
+      // resolve discrepancies last seen before this point, so a newer concurrent
+      // run refreshing a provider position can never be erased by this snapshot.
+      const providerSnapshotStartedAt = new Date();
       const [providerOrders, providerPositions, providerAccount] = await Promise.all([
         adapter.listOrders(),
         adapter.getOpenPositions(),
@@ -760,11 +764,24 @@ export class StateReconciliationService {
         });
       }
 
-      // ── Resolve the discrepancy rows this run actually converged ────────
-      const resolvedRows = await this.persistence.resolveDiscrepanciesByRef(
+      // A provider-only position discrepancy remains CRITICAL while the
+      // provider still reports that position. Once a complete successful
+      // provider snapshot no longer contains the provider ref, only the stale
+      // alert is converged to RESOLVED — no internal trade/order is invented.
+      const currentProviderPositionRefs = providerPositions
+        .map((position) => position.externalOrderId)
+        .filter((ref): ref is string => typeof ref === 'string' && ref.length > 0);
+      const staleUnknownProviderRows = await this.persistence.resolveAbsentUnknownProviderPositions(
         connection.id,
-        resolutionRefs,
+        currentProviderPositionRefs,
+        providerSnapshotStartedAt,
       );
+
+      // ── Resolve the discrepancy rows this run actually converged ────────
+      const resolvedRows = [
+        ...(await this.persistence.resolveDiscrepanciesByRef(connection.id, resolutionRefs)),
+        ...staleUnknownProviderRows,
+      ];
       autoResolvedCount = resolvedRows.length;
 
       for (const row of resolvedRows) {
