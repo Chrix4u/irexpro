@@ -77,6 +77,79 @@ export function evaluatePaperTrendPairSideReliabilityShadow(input: {
   return { ...base, state: 'HEALTHY', reason: 'PAIR_SIDE_HEALTHY' };
 }
 
+export const PAPER_TREND_PAIR_SIDE_RELIABILITY_ARTIFACT = 'paper-trend-pair-side-reliability-v1';
+
+export type PaperTrendPairSideReliabilityState =
+  | 'NOT_APPLICABLE'
+  | 'COLLECTING'
+  | 'HEALTHY'
+  | 'RESEARCH_ONLY';
+
+export interface PaperTrendPairSideReliabilityDecision {
+  artifact: typeof PAPER_TREND_PAIR_SIDE_RELIABILITY_ARTIFACT;
+  state: PaperTrendPairSideReliabilityState;
+  fullSizeEligible: boolean;
+  researchFallbackRequested: boolean;
+  episodes: number;
+  profitFactor: number | null;
+  sharpe: number | null;
+  maxDrawdown: number | null;
+  positiveWindowFraction: number | null;
+  reason: PaperTrendPairSideReliabilityShadowDecision['reason'];
+}
+
+export function evaluatePaperTrendPairSideReliability(input: {
+  strategyRoute: string;
+  evidence?: EnsembleSleeveEvidence | null;
+}): PaperTrendPairSideReliabilityDecision {
+  const shadow = evaluatePaperTrendPairSideReliabilityShadow(input);
+  const base = {
+    artifact: PAPER_TREND_PAIR_SIDE_RELIABILITY_ARTIFACT,
+    episodes: shadow.episodes,
+    profitFactor: shadow.profitFactor,
+    sharpe: shadow.sharpe,
+    maxDrawdown: shadow.maxDrawdown,
+    positiveWindowFraction: shadow.positiveWindowFraction,
+    reason: shadow.reason,
+  } as const;
+
+  if (shadow.state === 'WEAK') {
+    return {
+      ...base,
+      state: 'RESEARCH_ONLY',
+      fullSizeEligible: false,
+      researchFallbackRequested: true,
+    };
+  }
+
+  return {
+    ...base,
+    state: shadow.state,
+    fullSizeEligible: true,
+    researchFallbackRequested: false,
+  };
+}
+
+export interface PaperTrendReliabilityExecutionGateDecision {
+  fullSizeEligible: boolean;
+  pairSideDemoted: boolean;
+  routeDiagnosticOnly: true;
+}
+
+export function evaluatePaperTrendReliabilityExecutionGate(input: {
+  route: PaperTrendRouteReliabilityDecision;
+  pairSide: PaperTrendPairSideReliabilityDecision;
+}): PaperTrendReliabilityExecutionGateDecision {
+  // Route-wide reliability stays visible as portfolio-level telemetry. Execution
+  // selectivity is pair/side-specific so a weak sleeve cannot suppress unrelated
+  // profitable continuation sleeves.
+  return {
+    fullSizeEligible: input.pairSide.fullSizeEligible,
+    pairSideDemoted: !input.pairSide.fullSizeEligible,
+    routeDiagnosticOnly: true,
+  };
+}
+
 export type PaperTrendRouteReliabilityState =
   | 'NOT_APPLICABLE'
   | 'COLLECTING'
