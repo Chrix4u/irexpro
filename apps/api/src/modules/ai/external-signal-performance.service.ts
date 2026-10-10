@@ -5,7 +5,11 @@ import {
   V8_SHADOW_ARTIFACT,
   V8_SHADOW_MODE,
 } from './v8-shadow-meta-scorer';
-import { PLAN_B_ENSEMBLE_ARTIFACT, PLAN_B_ENSEMBLE_MODE } from './plan-b-multimodel-shadow';
+import {
+  PLAN_B_ACTIVE_MODEL_POLICY_VERSION,
+  PLAN_B_ENSEMBLE_ARTIFACT,
+  PLAN_B_ENSEMBLE_MODE,
+} from './plan-b-multimodel-shadow';
 
 const INSTRUMENTS = ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF'] as const;
 const MIN_CLOSED_TRADES = 100;
@@ -409,14 +413,34 @@ export class ExternalSignalPerformanceService {
     // One provider family may eventually have multiple execution/data-source
     // cohorts. Qualification must never silently aggregate across them.
     const modelVersion = `external-provider/${providerCode}/paper-only-v1`;
-    const expectedMarketDataAuthority = providerCode.startsWith('vps-twelvedata-six-pair-')
-      ? 'PAPER_RESEARCH_EXTERNAL_TWELVE_DATA'
+    const isMultimodelProvider = providerCode.startsWith('irexpro-multimodel-ensemble-');
+    const expectedDecisionPolicyVersion = isMultimodelProvider
+      ? PLAN_B_ACTIVE_MODEL_POLICY_VERSION
       : null;
+    const expectedMarketDataAuthority =
+      providerCode.startsWith('vps-twelvedata-six-pair-') || isMultimodelProvider
+        ? 'PAPER_RESEARCH_EXTERNAL_TWELVE_DATA'
+        : null;
     const evidenceCohortKey = [
       providerCode,
       modelVersion,
+      expectedDecisionPolicyVersion ?? 'UNSPECIFIED_POLICY',
       expectedMarketDataAuthority ?? 'UNSPECIFIED_AUTHORITY',
     ].join('|');
+    const strictMultimodelCohortFilter = isMultimodelProvider
+      ? `
+          AND ti.metadata->>'decision_policy_version' = $4
+          AND ti.metadata->>'market_data_authority' = $5`
+      : '';
+    const evidenceQueryParams = isMultimodelProvider
+      ? [
+          userId,
+          providerCode,
+          modelVersion,
+          expectedDecisionPolicyVersion,
+          expectedMarketDataAuthority,
+        ]
+      : [userId, providerCode, modelVersion];
 
     const rows = (await this.dataSource.query(
       `
@@ -473,10 +497,10 @@ export class ExternalSignalPerformanceService {
         WHERE ti.user_id = $1
           AND ti.metadata->>'signal_source' = 'EXTERNAL_PROVIDER'
           AND ti.metadata->>'external_provider_code' = $2
-          AND ti.model_version = $3
+          AND ti.model_version = $3${strictMultimodelCohortFilter}
         ORDER BY ti.signal_generated_at ASC, ti.id ASC
       `,
-      [userId, providerCode, modelVersion],
+      evidenceQueryParams,
     )) as EvidenceRow[];
 
     const signalTimes = rows
@@ -907,6 +931,7 @@ export class ExternalSignalPerformanceService {
           ? 'Six-Pair Forex v7'
           : providerCode,
         modelVersion,
+        decisionPolicyVersion: expectedDecisionPolicyVersion,
         marketDataAuthority: expectedMarketDataAuthority ?? 'EXTERNAL_PROVIDER_UNSPECIFIED',
         evidenceCohortKey,
         evidenceIsolationApplied: true,

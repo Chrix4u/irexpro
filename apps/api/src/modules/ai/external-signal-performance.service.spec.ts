@@ -3,6 +3,7 @@ import {
   EXTERNAL_PROVIDER_REVIEW_GATES,
   ExternalSignalPerformanceService,
 } from './external-signal-performance.service';
+import { PLAN_B_ACTIVE_MODEL_POLICY_VERSION } from './plan-b-multimodel-shadow';
 
 function strongEvidenceRows() {
   const rows: any[] = [];
@@ -425,6 +426,30 @@ describe('ExternalSignalPerformanceService', () => {
     expect(report.v8ProspectiveShadow.rejectedRealisedPnl).toBeDefined();
     expect(report.v8ProspectiveShadow.admissionThreshold).toBe(0.46);
     expect(report.v8ProspectiveShadow.nextStage).toBe('COLLECTING_PROSPECTIVE_SHADOW');
+  });
+
+  it('isolates multimodel qualification to the active policy and primary PAPER market-data authority', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const service = new ExternalSignalPerformanceService({ query } as unknown as DataSource);
+
+    const report = await service.getProviderPerformance('user-1', 'irexpro-multimodel-ensemble-v1');
+
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining("ti.metadata->>'decision_policy_version' = $4"),
+      [
+        'user-1',
+        'irexpro-multimodel-ensemble-v1',
+        'external-provider/irexpro-multimodel-ensemble-v1/paper-only-v1',
+        PLAN_B_ACTIVE_MODEL_POLICY_VERSION,
+        'PAPER_RESEARCH_EXTERNAL_TWELVE_DATA',
+      ],
+    );
+    expect((query.mock.calls[0]?.[0] as string) ?? '').toContain(
+      "ti.metadata->>'market_data_authority' = $5",
+    );
+    expect(report.strategyIdentity.decisionPolicyVersion).toBe(PLAN_B_ACTIVE_MODEL_POLICY_VERSION);
+    expect(report.strategyIdentity.marketDataAuthority).toBe('PAPER_RESEARCH_EXTERNAL_TWELVE_DATA');
+    expect(report.strategyIdentity.evidenceCohortKey).toContain(PLAN_B_ACTIVE_MODEL_POLICY_VERSION);
   });
 
   it('scopes the SQL query to the exact user and provider code', async () => {
