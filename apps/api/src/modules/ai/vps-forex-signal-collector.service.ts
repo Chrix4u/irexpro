@@ -44,6 +44,7 @@ import {
 } from './ensemble-shadow-outcome';
 import { buildEnsembleExpertRegistry } from './ensemble-expert-registry';
 import { scoreExtensionExhaustionShadow } from './extension-exhaustion-shadow';
+import { scoreTrendPersistenceShadow } from './trend-persistence-shadow';
 import {
   PAPER_RESEARCH_THROUGHPUT_LOT_CAP,
   PAPER_RESEARCH_THROUGHPUT_RELIABILITY_SOURCE_ARTIFACTS,
@@ -2121,6 +2122,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
                 'ABSTAIN'
               )
             )
+            OR COALESCE(
+              (components->'trendPersistenceShadow'->>'candidate')::boolean,
+              false
+            ) = true
           )
           AND NOT (components ? 'outcome')
         ORDER BY evaluated_at ASC
@@ -2539,6 +2544,21 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
       executionSpreadEvidenceValid: governance.executionSpreadEvidenceValid,
     });
 
+    const trendPersistenceShadow = scoreTrendPersistenceShadow({
+      regime: ensemble.regime,
+      driftState: governance.driftState,
+      confidence: candidate.confidence,
+      grossExpectedR: ensemble.expectedR,
+      netExpectedR: governance.netExpectedR,
+      directionQuality: ensemble.directionQuality,
+      tradeQuality: ensemble.tradeQuality,
+      exitQuality: ensemble.exitQuality,
+      portfolioQuality: ensemble.portfolioQuality,
+      extensionAtr: candidate.extensionAtr,
+      shortHorizonMomentumAtr: candidate.shortHorizonMomentumAtr,
+      executionSpreadEvidenceValid: governance.executionSpreadEvidenceValid,
+    });
+
     await this.dataSource.query(
       `
         INSERT INTO trading.ensemble_shadow_decisions (
@@ -2625,6 +2645,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           macroEventRisk: macroEventAssessment,
           highConvictionOverlay,
           extensionExhaustionShadow,
+          trendPersistenceShadow,
         }),
       ],
     );

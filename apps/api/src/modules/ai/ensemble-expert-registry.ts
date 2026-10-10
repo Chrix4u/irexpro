@@ -136,6 +136,20 @@ export function buildEnsembleExpertRegistry(
         'Shadow-only observer for TREND_EXTENDED setups with NORMAL drift and positive net edge; collects independent episode evidence without changing PAPER admission or execution.',
     },
     {
+      code: 'trend-persistence-shadow',
+      label: 'Weak-trend persistence shadow expert',
+      kind: 'HEURISTIC_POLICY',
+      lifecycle: 'COLLECTING',
+      trained: false,
+      artifact: 'trend-persistence-shadow-v1',
+      dataAuthority: 'BROKER_NATIVE_OR_TWELVE_DATA_CLOSED_M5_CAUSAL_WEAK_TREND_FEATURES',
+      executionAuthority: 'NONE',
+      modifiesExecution: false,
+      prospectiveEvidenceRequired: true,
+      description:
+        'Shadow-only observer for TREND_WEAK setups with trusted spread, normal drift and positive net edge; it collects outcomes without changing PAPER admission or execution.',
+    },
+    {
       code: 'v8-fixed-meta-policy',
       label: 'Frozen v8 meta policy',
       kind: 'HEURISTIC_POLICY',
