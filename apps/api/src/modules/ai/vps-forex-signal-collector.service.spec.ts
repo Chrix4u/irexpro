@@ -1007,6 +1007,60 @@ describe('VpsForexSignalCollectorService', () => {
       'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1-throughput-shadow-only-v1-trend-route-reliability-v1',
     ]);
   });
+  it('loads pair-side continuation reliability from independent episode-collapsed shadow evidence', async () => {
+    const row = (status: 'WIN' | 'LOSS', evaluatedAt: string, resolvedAt: string) => ({
+      instrument: 'EURUSD',
+      direction: 'SELL',
+      evaluated_at: evaluatedAt,
+      outcome: {
+        version: 'test',
+        status,
+        resolvedAt,
+        barsObserved: 1,
+        exitPrice: 1,
+        grossR: status === 'WIN' ? 1.5 : -1,
+        netR: status === 'WIN' ? 1.45 : -1.05,
+        reason: status === 'WIN' ? 'TAKE_PROFIT_HIT' : 'STOP_LOSS_HIT',
+        postEntryTelemetry: null,
+      },
+    });
+    const query = jest
+      .fn()
+      .mockResolvedValue([
+        row('WIN', '2026-10-09T10:00:00Z', '2026-10-09T10:20:00Z'),
+        row('WIN', '2026-10-09T10:05:00Z', '2026-10-09T10:25:00Z'),
+        row('LOSS', '2026-10-09T10:30:00Z', '2026-10-09T10:40:00Z'),
+      ]);
+    const collector = new VpsForexSignalCollectorService(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+      }),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      { getActiveSession: jest.fn() } as unknown as ExecutionService,
+      { getCurrentPriceForConnection: jest.fn() } as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+      { query } as any,
+    );
+
+    const result = await (collector as any).loadPaperTrendPairSideReliabilityEvidence(
+      'user-1',
+      'conn-1',
+      'EURUSD',
+      'SELL',
+    );
+    expect(result.closedTrades).toBe(2);
+    const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('instrument = $5');
+    expect(sql).toContain('direction = $6');
+    expect(params.slice(0, 3)).toEqual(['user-1', 'conn-1', 'irexpro-multimodel-ensemble-v1']);
+    expect(params[4]).toBe('EURUSD');
+    expect(params[5]).toBe('SELL');
+  });
+
   it('loads pair-side research reliability only from the active episode-guarded research artifact', async () => {
     const query = jest.fn().mockResolvedValue([{ wins: '1', losses: '5' }]);
     const collector = new VpsForexSignalCollectorService(
