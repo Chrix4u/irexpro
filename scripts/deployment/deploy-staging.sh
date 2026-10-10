@@ -388,8 +388,8 @@ STAGE="local-smoke"
 wait_for_http_status "$LOCAL_WEB_URL" 200
 wait_for_http_status "$LOCAL_ADMIN_URL" "$ADMIN_EXPECTED_STATUSES"
 STAGE="public-smoke"
-require_http_status "$PUBLIC_WEB_URL" 200
-require_http_status "$PUBLIC_ADMIN_URL" "$ADMIN_EXPECTED_STATUSES"
+wait_for_http_status "$PUBLIC_WEB_URL" 200
+wait_for_http_status "$PUBLIC_ADMIN_URL" "$ADMIN_EXPECTED_STATUSES"
 require_health_field "$PUBLIC_API_LIVE_URL" status alive
 require_health_field "$PUBLIC_API_READY_URL" status ready
 
