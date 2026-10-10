@@ -63,9 +63,12 @@ import {
 } from './rejected-edge-paper-canary';
 import { EnsemblePostEntryProtectionShadowService } from './ensemble-post-entry-protection-shadow.service';
 import {
+  PaperTrendPairSideReliabilityDecision,
   PaperTrendPairSideReliabilityShadowDecision,
   PaperTrendRouteReliabilityDecision,
+  evaluatePaperTrendPairSideReliability,
   evaluatePaperTrendPairSideReliabilityShadow,
+  evaluatePaperTrendReliabilityExecutionGate,
   evaluatePaperTrendRouteReliability,
 } from './paper-route-reliability';
 import {
@@ -1006,8 +1009,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           paperResearchThroughput: PaperResearchThroughputDecision;
           paperResearchPairSideReliability: PaperResearchPairSideReliabilityDecision | null;
           paperTrendRouteReliability: PaperTrendRouteReliabilityDecision | null;
+          paperTrendPairSideReliability: PaperTrendPairSideReliabilityDecision | null;
           paperTrendPairSideReliabilityShadow: PaperTrendPairSideReliabilityShadowDecision | null;
-          routeReliabilityDemoted: boolean;
           paperExecutionRoute: ReturnType<typeof selectPaperExecutionRoute>;
           paperResearchEpisodeKey: string;
           paperResearchEpisodeGuard: ReturnType<typeof evaluatePaperResearchEpisodeGuard> | null;
@@ -1172,6 +1175,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             ensembleGovernance,
           );
           let paperTrendRouteReliability: PaperTrendRouteReliabilityDecision | null = null;
+          let paperTrendPairSideReliability: PaperTrendPairSideReliabilityDecision | null = null;
           let paperTrendPairSideReliabilityShadow: PaperTrendPairSideReliabilityShadowDecision | null =
             null;
           let normalPaperExecution = normalPaperExecutionCandidate;
@@ -1197,6 +1201,10 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
               strategyRoute: planBEnsemble.strategyRoute,
               evidence: pairSideEvidence,
             });
+            paperTrendPairSideReliability = evaluatePaperTrendPairSideReliability({
+              strategyRoute: planBEnsemble.strategyRoute,
+              evidence: pairSideEvidence,
+            });
             this.logger.log(
               `PAPER pair-side reliability shadow ${best.instrument} ${best.direction} ` +
                 `state=${paperTrendPairSideReliabilityShadow.state} ` +
@@ -1205,18 +1213,31 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
                 `maxDrawdown=${paperTrendPairSideReliabilityShadow.maxDrawdown ?? 'n/a'} ` +
                 `executionAuthority=${paperTrendPairSideReliabilityShadow.executionAuthority}`,
             );
+            const reliabilityExecutionGate = evaluatePaperTrendReliabilityExecutionGate({
+              route: paperTrendRouteReliability,
+              pairSide: paperTrendPairSideReliability,
+            });
             if (!paperTrendRouteReliability.fullSizeEligible) {
-              normalPaperExecution = false;
               this.logger.warn(
-                `PAPER trend-route reliability ${best.instrument} ${best.direction} fullSize=DEMOTED ` +
+                `PAPER trend-route reliability ${best.instrument} ${best.direction} execution=DIAGNOSTIC_ONLY ` +
                   `state=${paperTrendRouteReliability.state} reason=${paperTrendRouteReliability.reason} ` +
                   `episodes=${paperTrendRouteReliability.episodes} ` +
                   `profitFactor=${paperTrendRouteReliability.profitFactor ?? 'n/a'} ` +
                   `maxDrawdown=${paperTrendRouteReliability.maxDrawdown ?? 'n/a'}`,
               );
             }
+            if (!reliabilityExecutionGate.fullSizeEligible) {
+              normalPaperExecution = false;
+              this.logger.warn(
+                `PAPER pair-side reliability ${best.instrument} ${best.direction} fullSize=DEMOTED ` +
+                  `state=${paperTrendPairSideReliability.state} reason=${paperTrendPairSideReliability.reason} ` +
+                  `episodes=${paperTrendPairSideReliability.episodes} ` +
+                  `profitFactor=${paperTrendPairSideReliability.profitFactor ?? 'n/a'} ` +
+                  `maxDrawdown=${paperTrendPairSideReliability.maxDrawdown ?? 'n/a'}`,
+              );
+            }
           }
-          const routeReliabilityDemoted = normalPaperExecutionCandidate && !normalPaperExecution;
+          const pairSideReliabilityDemoted = normalPaperExecutionCandidate && !normalPaperExecution;
           const canaryEvaluationState = rejectedEdgeCanaryEvaluationState({
             normalPaperExecution: normalPaperExecutionCandidate,
             evidenceServiceAvailable: Boolean(this.ensemblePostEntryProtection),
@@ -1267,7 +1288,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             tradeQuality: planBEnsemble.tradeQuality,
             exitQuality: planBEnsemble.exitQuality,
             paperExecutionBlockers: ensembleGovernance.paperExecutionBlockers,
-            routeReliabilityDemoted,
+            routeReliabilityDemoted: pairSideReliabilityDemoted,
           });
           const paperResearchEpisodeKey = `${best.instrument}|${best.direction}|${planBEnsemble.regime}|${planBEnsemble.strategyRoute}`;
           let paperResearchPairSideReliability: PaperResearchPairSideReliabilityDecision | null =
@@ -1371,8 +1392,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
             paperResearchThroughput,
             paperResearchPairSideReliability,
             paperTrendRouteReliability,
+            paperTrendPairSideReliability,
             paperTrendPairSideReliabilityShadow,
-            routeReliabilityDemoted,
             paperExecutionRoute,
             paperResearchEpisodeKey,
             paperResearchEpisodeGuard,
@@ -1421,8 +1442,8 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
           paperResearchThroughput,
           paperResearchPairSideReliability,
           paperTrendRouteReliability,
+          paperTrendPairSideReliability,
           paperTrendPairSideReliabilityShadow,
-          routeReliabilityDemoted,
           paperExecutionRoute,
           paperResearchEpisodeKey,
           paperResearchEpisodeGuard,
@@ -1533,7 +1554,20 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
               paperTrendRouteReliability?.profitFactor ?? null,
             paper_trend_route_reliability_max_drawdown:
               paperTrendRouteReliability?.maxDrawdown ?? null,
-            paper_trend_route_reliability_demoted: routeReliabilityDemoted,
+            paper_trend_route_reliability_demoted: false,
+            paper_trend_route_reliability_modifies_execution: false,
+            paper_trend_pair_side_reliability_artifact:
+              paperTrendPairSideReliability?.artifact ?? null,
+            paper_trend_pair_side_reliability_state: paperTrendPairSideReliability?.state ?? null,
+            paper_trend_pair_side_reliability_reason: paperTrendPairSideReliability?.reason ?? null,
+            paper_trend_pair_side_reliability_episodes:
+              paperTrendPairSideReliability?.episodes ?? null,
+            paper_trend_pair_side_reliability_profit_factor:
+              paperTrendPairSideReliability?.profitFactor ?? null,
+            paper_trend_pair_side_reliability_max_drawdown:
+              paperTrendPairSideReliability?.maxDrawdown ?? null,
+            paper_trend_pair_side_reliability_demoted:
+              paperTrendPairSideReliability?.fullSizeEligible === false,
             paper_trend_pair_side_reliability_shadow_artifact:
               paperTrendPairSideReliabilityShadow?.artifact ?? null,
             paper_trend_pair_side_reliability_shadow_state:

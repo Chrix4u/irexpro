@@ -1,7 +1,9 @@
 import {
   PAPER_TREND_PAIR_SIDE_RELIABILITY_MIN_EPISODES,
   PAPER_TREND_ROUTE_RELIABILITY_MIN_EPISODES,
+  evaluatePaperTrendPairSideReliability,
   evaluatePaperTrendPairSideReliabilityShadow,
+  evaluatePaperTrendReliabilityExecutionGate,
   evaluatePaperTrendRouteReliability,
 } from './paper-route-reliability';
 
@@ -144,6 +146,112 @@ describe('PAPER trend pair-side reliability shadow', () => {
       modifiesExecution: false,
       executionAuthority: 'NONE',
       reason: 'PAIR_SIDE_HEALTHY',
+    });
+  });
+});
+
+describe('PAPER trend pair-side reliability execution gate', () => {
+  it('demotes a mature weak continuation pair-side to research-only', () => {
+    expect(
+      evaluatePaperTrendPairSideReliability({
+        strategyRoute: 'TREND_CONTINUATION',
+        evidence: evidence({
+          closedTrades: PAPER_TREND_PAIR_SIDE_RELIABILITY_MIN_EPISODES,
+          profitFactor: 0.72,
+          maxDrawdown: 0.05,
+        }),
+      }),
+    ).toMatchObject({
+      state: 'RESEARCH_ONLY',
+      fullSizeEligible: false,
+      researchFallbackRequested: true,
+      reason: 'PAIR_SIDE_PROFIT_FACTOR_BELOW_ONE',
+    });
+  });
+
+  it('keeps insufficient pair-side evidence eligible for normal PAPER', () => {
+    expect(
+      evaluatePaperTrendPairSideReliability({
+        strategyRoute: 'TREND_CONTINUATION',
+        evidence: evidence({
+          closedTrades: PAPER_TREND_PAIR_SIDE_RELIABILITY_MIN_EPISODES - 1,
+          profitFactor: 0.2,
+          maxDrawdown: 0.3,
+        }),
+      }),
+    ).toMatchObject({
+      state: 'COLLECTING',
+      fullSizeEligible: true,
+      researchFallbackRequested: false,
+    });
+  });
+
+  it('keeps mature healthy pair-side evidence eligible for normal PAPER', () => {
+    expect(
+      evaluatePaperTrendPairSideReliability({
+        strategyRoute: 'TREND_CONTINUATION',
+        evidence: evidence({
+          closedTrades: PAPER_TREND_PAIR_SIDE_RELIABILITY_MIN_EPISODES,
+          profitFactor: 1.25,
+          maxDrawdown: 0.04,
+        }),
+      }),
+    ).toMatchObject({ state: 'HEALTHY', fullSizeEligible: true });
+  });
+
+  it('does not constrain non-continuation routes', () => {
+    expect(
+      evaluatePaperTrendPairSideReliability({
+        strategyRoute: 'EARLY_TRANSITION',
+        evidence: evidence({
+          closedTrades: PAPER_TREND_PAIR_SIDE_RELIABILITY_MIN_EPISODES,
+          profitFactor: 0.1,
+          maxDrawdown: 0.4,
+        }),
+      }),
+    ).toMatchObject({ state: 'NOT_APPLICABLE', fullSizeEligible: true });
+  });
+});
+
+describe('PAPER trend reliability execution composition', () => {
+  it('keeps a healthy pair-side executable even when aggregate route telemetry is weak', () => {
+    const route = evaluatePaperTrendRouteReliability({
+      strategyRoute: 'TREND_CONTINUATION',
+      evidence: evidence({ profitFactor: 0.7, maxDrawdown: 0.05 }),
+    });
+    const pairSide = evaluatePaperTrendPairSideReliability({
+      strategyRoute: 'TREND_CONTINUATION',
+      evidence: evidence({
+        closedTrades: PAPER_TREND_PAIR_SIDE_RELIABILITY_MIN_EPISODES,
+        profitFactor: 1.4,
+        maxDrawdown: 0.04,
+      }),
+    });
+    expect(route.fullSizeEligible).toBe(false);
+    expect(evaluatePaperTrendReliabilityExecutionGate({ route, pairSide })).toEqual({
+      fullSizeEligible: true,
+      pairSideDemoted: false,
+      routeDiagnosticOnly: true,
+    });
+  });
+
+  it('demotes only when the exact pair-side evidence is weak', () => {
+    const route = evaluatePaperTrendRouteReliability({
+      strategyRoute: 'TREND_CONTINUATION',
+      evidence: evidence({ profitFactor: 1.4, maxDrawdown: 0.04 }),
+    });
+    const pairSide = evaluatePaperTrendPairSideReliability({
+      strategyRoute: 'TREND_CONTINUATION',
+      evidence: evidence({
+        closedTrades: PAPER_TREND_PAIR_SIDE_RELIABILITY_MIN_EPISODES,
+        profitFactor: 0.7,
+        maxDrawdown: 0.05,
+      }),
+    });
+    expect(evaluatePaperTrendReliabilityExecutionGate({ route, pairSide })).toEqual({
+      fullSizeEligible: false,
+      pairSideDemoted: true,
+      routeDiagnosticOnly: true,
     });
   });
 });
