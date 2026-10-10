@@ -491,6 +491,7 @@ describe('VpsForexSignalCollectorService', () => {
     expect(selectSql).toContain('paperExecutionEligible');
     expect(selectSql).toContain('OR COALESCE');
     expect(selectSql).toContain('highConvictionOverlay');
+    expect(selectSql).toContain('trendPersistenceShadow');
     expect(selectSql).toContain('allBrokerNative');
     expect(selectSql).toContain("'CONFIRM'");
     expect(selectSql).toContain("'CONFLICT'");
@@ -668,6 +669,14 @@ describe('VpsForexSignalCollectorService', () => {
         .filter(([, params]) => params[6] === instrument)
         .map(([, params]) => params[7]);
       expect(new Set(directions)).toEqual(new Set(['BUY', 'SELL']));
+    }
+    for (const [, params] of insertCalls) {
+      const components = JSON.parse(String(params[23]));
+      expect(components.trendPersistenceShadow).toMatchObject({
+        artifact: 'trend-persistence-shadow-v1',
+        executionAuthority: 'NONE',
+        modifiesExecution: false,
+      });
     }
   });
 

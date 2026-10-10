@@ -16,7 +16,7 @@ describe('buildEnsembleExpertRegistry', () => {
 
     expect(registry.policy).toBe('EXPLICIT_PROVENANCE_V1');
     expect(registry.trainedModelCount).toBe(2);
-    expect(registry.heuristicPolicyCount).toBe(4);
+    expect(registry.heuristicPolicyCount).toBe(5);
     expect(registry.riskGuardCount).toBe(4);
     expect(registry.frozenBaselineCount).toBe(1);
 
@@ -83,6 +83,30 @@ describe('buildEnsembleExpertRegistry', () => {
       kind: 'HEURISTIC_POLICY',
       lifecycle: 'COLLECTING',
       artifact: 'extension-exhaustion-shadow-v1',
+      executionAuthority: 'NONE',
+      modifiesExecution: false,
+      prospectiveEvidenceRequired: true,
+    });
+  });
+
+  it('exposes weak-trend persistence as shadow-only evidence collection', () => {
+    const registry = buildEnsembleExpertRegistry({
+      highConvictionArtifact: null,
+      highConvictionLoaded: false,
+      highConvictionBrokerDataReady: false,
+      postEntryArtifactReady: false,
+      postEntryBrokerDataReady: false,
+      postEntryShadowObservations: 0,
+      macroEventConfigured: true,
+      sleeveResolvedOutcomes: 0,
+      legacyBaselineFrozen: true,
+    });
+    expect(
+      registry.entries.find((entry) => entry.code === 'trend-persistence-shadow'),
+    ).toMatchObject({
+      kind: 'HEURISTIC_POLICY',
+      lifecycle: 'COLLECTING',
+      artifact: 'trend-persistence-shadow-v1',
       executionAuthority: 'NONE',
       modifiesExecution: false,
       prospectiveEvidenceRequired: true,
