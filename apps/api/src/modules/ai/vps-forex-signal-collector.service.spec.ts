@@ -1242,6 +1242,21 @@ describe('VpsForexSignalCollectorService', () => {
     expect((collector as any).marketSchedule(new Date('2026-10-09T21:00:00.000Z')).paused).toBe(
       true,
     );
+
+    // New York switches back to EST in November. Weekly open/close must
+    // continue to follow 17:00 America/New_York instead of a fixed UTC hour.
+    expect((collector as any).marketSchedule(new Date('2026-12-06T21:55:00.000Z')).paused).toBe(
+      true,
+    );
+    expect((collector as any).marketSchedule(new Date('2026-12-06T22:00:00.000Z')).paused).toBe(
+      false,
+    );
+    expect((collector as any).marketSchedule(new Date('2026-12-11T21:55:00.000Z')).paused).toBe(
+      false,
+    );
+    expect((collector as any).marketSchedule(new Date('2026-12-11T22:00:00.000Z')).paused).toBe(
+      true,
+    );
   });
 
   it('fails over to broker-native MetaTrader candles after Twelve Data exhausts the daily quota', async () => {
