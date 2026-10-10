@@ -106,6 +106,23 @@ const STOP_ATR_MULTIPLIER = 1.5;
 const TARGET_ATR_MULTIPLIER = 2.5;
 const PAPER_BASE_LOT_UPPER_BOUND = 0.1;
 
+const NEW_YORK_MARKET_CLOCK = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York',
+  weekday: 'short',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+const NEW_YORK_WEEKDAY_INDEX: Record<string, number> = {
+  Sun: 0,
+  Mon: 1,
+  Tue: 2,
+  Wed: 3,
+  Thu: 4,
+  Fri: 5,
+  Sat: 6,
+};
+
 export interface DynamicPaperLotSizingInput {
   confidence: number;
   metaProbability: number;
@@ -1603,18 +1620,33 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
     }
   }
 
+  private isFxWeeklySessionOpen(now: Date): boolean {
+    const parts = Object.fromEntries(
+      NEW_YORK_MARKET_CLOCK.formatToParts(now).map((part) => [part.type, part.value]),
+    );
+    const day = NEW_YORK_WEEKDAY_INDEX[parts.weekday ?? ''];
+    const hour = Number(parts.hour);
+    const minute = Number(parts.minute);
+    if (!Number.isInteger(day) || !Number.isFinite(hour) || !Number.isFinite(minute)) return false;
+
+    const minutesSinceMidnight = hour * 60 + minute;
+    const weeklyBoundaryMinutes = 17 * 60;
+    if (day === 0) return minutesSinceMidnight >= weeklyBoundaryMinutes;
+    if (day >= 1 && day <= 4) return true;
+    if (day === 5) return minutesSinceMidnight < weeklyBoundaryMinutes;
+    return false;
+  }
+
   private marketSchedule(now: Date): {
     paused: boolean;
     reason: 'WEEKEND' | 'ROLLOVER_LOW_LIQUIDITY' | null;
     nextEligibleScanAt: string;
   } {
-    const day = now.getUTCDay();
-    const hour = now.getUTCHours();
-    // FX session: Sunday >=21:00 UTC, Monday-Thursday 24h, Friday <21:00 UTC.
+    const marketOpen = this.isFxWeeklySessionOpen(now);
+    // FX weekly boundary is 17:00 America/New_York. Using the broker-market
+    // timezone keeps Sunday open / Friday close correct across EDT and EST.
     // Do not impose a blanket nightly shutdown; spread, regime and governance
     // gates decide whether low-liquidity rollover conditions are tradable.
-    const marketOpen =
-      (day === 0 && hour >= 21) || (day >= 1 && day <= 4) || (day === 5 && hour < 21);
     const paused = !marketOpen;
     const reason = paused ? 'WEEKEND' : null;
     return {
@@ -1633,11 +1665,7 @@ export class VpsForexSignalCollectorService implements OnModuleInit, OnModuleDes
         (remainder === 0 ? COLLECTION_CADENCE_MINUTES : COLLECTION_CADENCE_MINUTES - remainder),
     );
     for (let i = 0; i < 7 * 24 * 6 + 12; i += 1) {
-      const day = candidate.getUTCDay();
-      const hour = candidate.getUTCHours();
-      const marketOpen =
-        (day === 0 && hour >= 21) || (day >= 1 && day <= 4) || (day === 5 && hour < 21);
-      if (marketOpen) return candidate;
+      if (this.isFxWeeklySessionOpen(candidate)) return candidate;
       candidate.setUTCMinutes(candidate.getUTCMinutes() + COLLECTION_CADENCE_MINUTES);
     }
     return candidate;
