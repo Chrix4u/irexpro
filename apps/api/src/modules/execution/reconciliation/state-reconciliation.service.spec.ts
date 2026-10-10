@@ -80,6 +80,7 @@ describe('StateReconciliationService — Phase E: credential lifecycle + securit
     failRun: jest.Mock;
     persistDiscrepancies: jest.Mock;
     resolveDiscrepanciesByRef: jest.Mock;
+    resolveAbsentUnknownProviderPositions: jest.Mock;
     countOpenDiscrepancies: jest.Mock;
   };
   let adapter: { setMode: jest.Mock; connect: jest.Mock; listOrders: jest.Mock };
@@ -99,6 +100,7 @@ describe('StateReconciliationService — Phase E: credential lifecycle + securit
       failRun: jest.fn().mockResolvedValue(undefined),
       persistDiscrepancies: jest.fn().mockResolvedValue({ inserted: 0, refreshed: 0, newRows: [] }),
       resolveDiscrepanciesByRef: jest.fn().mockResolvedValue([]),
+      resolveAbsentUnknownProviderPositions: jest.fn().mockResolvedValue([]),
       countOpenDiscrepancies: jest.fn().mockResolvedValue(0),
     };
     auditService = { log: jest.fn().mockResolvedValue(undefined) };
@@ -206,6 +208,7 @@ describe('StateReconciliationService', () => {
     failRun: jest.Mock;
     persistDiscrepancies: jest.Mock;
     resolveDiscrepanciesByRef: jest.Mock;
+    resolveAbsentUnknownProviderPositions: jest.Mock;
     countOpenDiscrepancies: jest.Mock;
   };
   let resolution: {
@@ -286,6 +289,7 @@ describe('StateReconciliationService', () => {
       failRun: jest.fn().mockResolvedValue(undefined),
       persistDiscrepancies: jest.fn().mockResolvedValue({ inserted: 0, refreshed: 0, newRows: [] }),
       resolveDiscrepanciesByRef: jest.fn().mockResolvedValue([]),
+      resolveAbsentUnknownProviderPositions: jest.fn().mockResolvedValue([]),
       countOpenDiscrepancies: jest.fn().mockResolvedValue(0),
     };
     resolution = {
@@ -396,6 +400,56 @@ describe('StateReconciliationService', () => {
         DomainEventType.RECONCILIATION_RUN_COMPLETED,
         'user-1',
         expect.objectContaining({ runId: 'run-1', status: 'COMPLETED' }),
+      );
+    });
+
+    it('resolves stale provider-only position alerts only after a successful complete provider snapshot', async () => {
+      adapter.getOpenPositions.mockResolvedValue([
+        {
+          externalOrderId: 'current-provider-position',
+          instrument: 'EURUSD',
+          direction: 'BUY',
+          lotSize: '1.0000',
+          openPrice: '1.10000',
+          currentPrice: '1.10500',
+          stopLoss: '0',
+          takeProfit: '0',
+          unrealisedPnl: '0.00',
+          openedAt: new Date(),
+          commission: '0.00',
+          swap: '0.00',
+        },
+      ]);
+      persistence.resolveAbsentUnknownProviderPositions.mockResolvedValue([
+        {
+          id: 'stale-disc-1',
+          type: ReconciliationDiscrepancyType.UNKNOWN_PROVIDER_POSITION,
+          internalRefId: null,
+          providerRef: 'old-provider-position',
+        },
+      ]);
+
+      await service.runForConnection(connection());
+
+      expect(persistence.resolveAbsentUnknownProviderPositions).toHaveBeenCalledWith(
+        'conn-1',
+        ['current-provider-position'],
+        expect.any(Date),
+      );
+      expect(persistence.completeRun).toHaveBeenCalledWith(
+        'run-1',
+        expect.objectContaining({
+          counters: expect.objectContaining({ discrepanciesAutoResolved: 1 }),
+        }),
+      );
+      expect(eventBus.publish).toHaveBeenCalledWith(
+        DomainEventType.RECONCILIATION_DISCREPANCY_RESOLVED,
+        'user-1',
+        expect.objectContaining({
+          discrepancyId: 'stale-disc-1',
+          type: ReconciliationDiscrepancyType.UNKNOWN_PROVIDER_POSITION,
+          providerRef: 'old-provider-position',
+        }),
       );
     });
 
@@ -620,6 +674,7 @@ describe('StateReconciliationService', () => {
         }),
       );
       expect(brokerService.applyProviderAccountSnapshot).not.toHaveBeenCalled();
+      expect(persistence.resolveAbsentUnknownProviderPositions).not.toHaveBeenCalled();
     });
 
     it('fails closed when a restarted paper simulator would overwrite a durable non-pristine balance', async () => {

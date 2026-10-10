@@ -242,6 +242,7 @@ describe('Uncertain-write reconciliation convergence (Sprint 56 correction round
           .fn()
           .mockResolvedValue({ inserted: 0, refreshed: 0, newRows: [] }),
         resolveDiscrepanciesByRef: jest.fn().mockResolvedValue([]),
+        resolveAbsentUnknownProviderPositions: jest.fn().mockResolvedValue([]),
         countOpenDiscrepancies: jest.fn().mockResolvedValue(0),
       };
       const auditMock = { log: jest.fn().mockResolvedValue(undefined) };

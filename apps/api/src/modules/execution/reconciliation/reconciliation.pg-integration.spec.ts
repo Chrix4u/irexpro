@@ -433,6 +433,86 @@ describe('State reconciliation persistence — real PostgreSQL', () => {
     ).rejects.toThrow(/chk_reconciliation_discrepancy_resolved_shape/);
   });
 
+  it('auto-resolves stale UNKNOWN_PROVIDER_POSITION rows absent from a complete provider snapshot while keeping current ones open', async () => {
+    const runId = await makeRun();
+    await service.persistDiscrepancies({ userId, brokerConnectionId: connectionId }, runId, [
+      candidate({
+        type: ReconciliationDiscrepancyType.UNKNOWN_PROVIDER_POSITION,
+        severity: ReconciliationDiscrepancySeverity.CRITICAL,
+        internalRefType: null,
+        internalRefId: null,
+        providerRef: 'stale-position',
+        details: { instrument: 'EURUSD' },
+      }),
+      candidate({
+        type: ReconciliationDiscrepancyType.UNKNOWN_PROVIDER_POSITION,
+        severity: ReconciliationDiscrepancySeverity.CRITICAL,
+        internalRefType: null,
+        internalRefId: null,
+        providerRef: 'still-open-position',
+        details: { instrument: 'GBPUSD' },
+      }),
+      candidate({
+        type: ReconciliationDiscrepancyType.UNKNOWN_PROVIDER_POSITION,
+        severity: ReconciliationDiscrepancySeverity.CRITICAL,
+        internalRefType: null,
+        internalRefId: null,
+        providerRef: 'concurrent-position',
+        details: { instrument: 'USDJPY' },
+      }),
+    ]);
+
+    const snapshotStartedAt = new Date();
+    await dataSource.query(
+      `UPDATE reconciliation.discrepancies
+       SET last_seen_at = $1
+       WHERE broker_connection_id = $2
+         AND provider_ref IN ('still-open-position', 'concurrent-position')`,
+      [new Date(snapshotStartedAt.getTime() + 1000), connectionId],
+    );
+    const resolved = await service.resolveAbsentUnknownProviderPositions(
+      connectionId,
+      ['still-open-position'],
+      snapshotStartedAt,
+    );
+
+    expect(resolved).toEqual([
+      expect.objectContaining({
+        type: ReconciliationDiscrepancyType.UNKNOWN_PROVIDER_POSITION,
+        internalRefId: null,
+        providerRef: 'stale-position',
+      }),
+    ]);
+
+    const rows = await dataSource.query(
+      `SELECT provider_ref, status, resolved_by, resolution
+       FROM reconciliation.discrepancies
+       WHERE broker_connection_id = $1
+       ORDER BY provider_ref`,
+      [connectionId],
+    );
+    expect(rows).toEqual([
+      expect.objectContaining({
+        provider_ref: 'concurrent-position',
+        status: 'OPEN',
+        resolved_by: null,
+        resolution: null,
+      }),
+      expect.objectContaining({
+        provider_ref: 'stale-position',
+        status: 'RESOLVED',
+        resolved_by: 'AUTO',
+        resolution: expect.stringContaining('no longer present'),
+      }),
+      expect.objectContaining({
+        provider_ref: 'still-open-position',
+        status: 'OPEN',
+        resolved_by: null,
+        resolution: null,
+      }),
+    ]);
+  });
+
   it('counts OPEN discrepancies per connection', async () => {
     const runId = await makeRun();
     await service.persistDiscrepancies({ userId, brokerConnectionId: connectionId }, runId, [

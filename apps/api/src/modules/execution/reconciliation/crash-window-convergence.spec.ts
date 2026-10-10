@@ -123,6 +123,7 @@ describe('StateReconciliationService — §12/§19 crash-window convergence (Rou
     failRun: jest.Mock;
     persistDiscrepancies: jest.Mock;
     resolveDiscrepanciesByRef: jest.Mock;
+    resolveAbsentUnknownProviderPositions: jest.Mock;
     countOpenDiscrepancies: jest.Mock;
   };
   let resolution: {
@@ -203,6 +204,7 @@ describe('StateReconciliationService — §12/§19 crash-window convergence (Rou
       failRun: jest.fn().mockResolvedValue(undefined),
       persistDiscrepancies: jest.fn().mockResolvedValue({ inserted: 0, refreshed: 0, newRows: [] }),
       resolveDiscrepanciesByRef: jest.fn().mockResolvedValue([]),
+      resolveAbsentUnknownProviderPositions: jest.fn().mockResolvedValue([]),
       countOpenDiscrepancies: jest.fn().mockResolvedValue(0),
     };
     resolution = {

@@ -226,6 +226,7 @@ describe('Round 7.1 (P0-5): crash/restart recovery — pre-commitment convergenc
               .fn()
               .mockResolvedValue({ inserted: 0, refreshed: 0, newRows: [] }),
             resolveDiscrepanciesByRef: jest.fn().mockResolvedValue([]),
+            resolveAbsentUnknownProviderPositions: jest.fn().mockResolvedValue([]),
             countOpenDiscrepancies: jest.fn().mockResolvedValue(0),
           },
         },
@@ -539,6 +540,7 @@ describe('Round 7.1 (P0-5): crash/restart recovery — pre-commitment convergenc
               .fn()
               .mockResolvedValue({ inserted: 0, refreshed: 0, newRows: [] }),
             resolveDiscrepanciesByRef: jest.fn().mockResolvedValue([]),
+            resolveAbsentUnknownProviderPositions: jest.fn().mockResolvedValue([]),
             countOpenDiscrepancies: jest.fn().mockResolvedValue(0),
           },
         },
