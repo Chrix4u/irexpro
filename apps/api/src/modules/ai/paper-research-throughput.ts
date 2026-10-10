@@ -189,6 +189,7 @@ export interface PaperResearchThroughputInput {
   tradeQuality: number;
   exitQuality: number;
   paperExecutionBlockers: string[];
+  routeReliabilityDemoted?: boolean;
 }
 
 export interface PaperResearchThroughputDecision {
@@ -240,7 +241,7 @@ export function evaluatePaperResearchThroughput(
   } else if (input.netExpectedR < PAPER_RESEARCH_THROUGHPUT_MIN_NET_EXPECTED_R) {
     reason = 'NET_EXPECTED_R_TOO_LOW';
   } else if (
-    input.paperExecutionBlockers.length === 0 ||
+    (!input.routeReliabilityDemoted && input.paperExecutionBlockers.length === 0) ||
     input.paperExecutionBlockers.some((blocker) => !ALLOWED_RESEARCH_BLOCKERS.has(blocker))
   ) {
     reason = 'UNSAFE_BLOCKER';

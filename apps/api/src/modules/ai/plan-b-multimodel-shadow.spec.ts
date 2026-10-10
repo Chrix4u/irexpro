@@ -6,9 +6,9 @@ import {
 } from './plan-b-multimodel-shadow';
 
 describe('Plan B multimodel prospective shadow', () => {
-  it('isolates the throughput-shadow-only execution cohort in policy provenance', () => {
+  it('preserves throughput-shadow-only provenance under the route-reliability cohort', () => {
     expect(PLAN_B_ACTIVE_MODEL_POLICY_VERSION).toBe(
-      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1-throughput-shadow-only-v1',
+      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1-throughput-shadow-only-v1-trend-route-reliability-v1',
     );
   });
 

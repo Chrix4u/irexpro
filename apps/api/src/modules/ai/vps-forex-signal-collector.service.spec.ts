@@ -390,7 +390,7 @@ describe('VpsForexSignalCollectorService', () => {
       'user-1',
       'conn-1',
       'irexpro-multimodel-ensemble-v1',
-      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1-throughput-shadow-only-v1',
+      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1-throughput-shadow-only-v1-trend-route-reliability-v1',
     ]);
     expect(restored).toBeDefined();
     expect(restored.direction).toBe(current!.direction);
@@ -433,7 +433,7 @@ describe('VpsForexSignalCollectorService', () => {
       'user-1',
       'conn-1',
       'irexpro-multimodel-ensemble-v1',
-      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1-throughput-shadow-only-v1',
+      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1-throughput-shadow-only-v1-trend-route-reliability-v1',
     ]);
   });
 
@@ -570,7 +570,7 @@ describe('VpsForexSignalCollectorService', () => {
       'irexpro-multimodel-ensemble-v1',
       'USDJPY',
       'BUY',
-      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1-throughput-shadow-only-v1',
+      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1-throughput-shadow-only-v1-trend-route-reliability-v1',
     ]);
   });
 
@@ -953,6 +953,60 @@ describe('VpsForexSignalCollectorService', () => {
     }
   });
 
+  it('loads trend-route reliability from episode-collapsed predecessor/current policy shadow evidence', async () => {
+    const outcome = (status: 'WIN' | 'LOSS', evaluatedAt: string, resolvedAt: string) => ({
+      instrument: status === 'WIN' ? 'EURUSD' : 'USDJPY',
+      direction: 'BUY',
+      evaluated_at: evaluatedAt,
+      outcome: {
+        version: 'test',
+        status,
+        resolvedAt,
+        barsObserved: 1,
+        exitPrice: 1,
+        grossR: status === 'WIN' ? 1.5 : -1,
+        netR: status === 'WIN' ? 1.45 : -1.05,
+        reason: status === 'WIN' ? 'TAKE_PROFIT_HIT' : 'STOP_LOSS_HIT',
+        postEntryTelemetry: null,
+      },
+    });
+    const query = jest
+      .fn()
+      .mockResolvedValue([
+        outcome('WIN', '2026-10-09T10:00:00Z', '2026-10-09T10:20:00Z'),
+        outcome('WIN', '2026-10-09T10:05:00Z', '2026-10-09T10:25:00Z'),
+        outcome('LOSS', '2026-10-09T10:02:00Z', '2026-10-09T10:10:00Z'),
+      ]);
+    const collector = new VpsForexSignalCollectorService(
+      config({
+        'vpsForexScanner.enabled': true,
+        'vpsForexScanner.apiKey': 'real-key-123456',
+        'vpsForexScanner.userId': 'user-1',
+        'vpsForexScanner.brokerConnectionId': 'conn-1',
+      }),
+      { receiveSignal: jest.fn() } as unknown as AiSignalService,
+      { getActiveSession: jest.fn() } as unknown as ExecutionService,
+      { getCurrentPriceForConnection: jest.fn() } as unknown as BrokerService,
+      new LivePaperMarketDataService(),
+      aiEngineClientMock(),
+      { query } as any,
+    );
+
+    const result = await (collector as any).loadPaperTrendRouteReliabilityEvidence(
+      'user-1',
+      'conn-1',
+    );
+    expect(result.closedTrades).toBe(2);
+    const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain("components->>'strategyRoute' = 'TREND_CONTINUATION'");
+    expect(sql).toContain('model_version = ANY($4::text[])');
+    expect(params.slice(0, 3)).toEqual(['user-1', 'conn-1', 'irexpro-multimodel-ensemble-v1']);
+    expect(params[3]).toEqual([
+      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1',
+      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1-throughput-shadow-only-v1',
+      'plan-b-multimodel-shadow-v4-bidirectional-v2-early-transition-v2-neutral-meta-v2-hard-portfolio-v3-directional-momentum-wiring-v1-throughput-shadow-only-v1-trend-route-reliability-v1',
+    ]);
+  });
   it('loads pair-side research reliability only from the active episode-guarded research artifact', async () => {
     const query = jest.fn().mockResolvedValue([{ wins: '1', losses: '5' }]);
     const collector = new VpsForexSignalCollectorService(
